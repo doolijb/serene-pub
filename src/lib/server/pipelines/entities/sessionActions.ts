@@ -50,7 +50,7 @@
  *
  * Not availability — `enabledSessionFunctions` and `resolveMessageVerbs`
  * decide that, and this reads them. Not permission at the fire: the handlers
- * (`sessions:triggerFunction`, the `sessionMessages:*` verbs) check again,
+ * (`sessions:fireAction`, the `sessionMessages:*` verbs) check again,
  * because a list is presentation and a refusal is the law.
  */
 
@@ -60,6 +60,7 @@ import {
 	CORE_ACTIONS,
 	LISTED_VENUE_KINDS,
 	audienceHolds,
+	evaluateEnabledWhen,
 	genreEnabledWhen,
 	i18nText,
 	localeMapOf,
@@ -68,6 +69,10 @@ import {
 	parseParticipantRef,
 	partitionEnabledWhen,
 	renderStatusText,
+	resolveTurnControls,
+	turnControlPresent,
+	TURN_CONTROLS,
+	type TurnControl,
 	sentenceText,
 	// The SDK's verdicts (01 §13), aliased because this file's
 	// `audienceVerdict` and `enablementVerdict` are the app's DOORS — they
@@ -88,6 +93,7 @@ import {
 	publishedValues,
 	type PublishedValues
 } from "$lib/server/pipelines/entities/publishedValues"
+import type { ListedCollects } from "$lib/shared/actions/collects"
 import type { RunLineage } from "$lib/server/pipelines/runtime/lineage"
 import { resolveMessageVerbs } from "$lib/server/messages/verbs"
 import { resolvePortrayals } from "$lib/server/pipelines/runtime/portrayals"
@@ -112,10 +118,19 @@ export interface SessionAction {
 	/** The contributing spec's slug, or `core` for a message verb. */
 	specSlug: string
 	name: string
+	/**
+	 * What the action does, one sentence (the legend, 2026-09-28): every
+	 * contributed and core action declares one, so the composer, message and
+	 * extra venues always carry it; a widget-venue annex field may not.
+	 */
 	description?: string
 	icon?: string
+	/** The accessible name of the icon standing alone — the declaration's `iconAlt`; absent: `name`. */
+	iconAlt?: string
 	slash: string
 	quick: boolean
+	/** What a press collects before it fires, in the collect modal (lair pass R3) — the declaration's `collects`. */
+	collects?: ListedCollects
 	audience: Audience
 	venue: ListedVenueKind
 	/** The channel this listing is for, when the venue named one. */
@@ -252,7 +267,9 @@ const venueOnChannel = (
  * `channel` defaults to `main`. The contributed set is read once and placed
  * into each of its venues; core's verbs come from `CORE_ACTIONS`, filtered by
  * the genre's `messageVerbs` (the floors are not in that map and always
- * pass). Placement is `quick` → primary, else overflow; the *new* mark is the
+ * pass) and, for the turn controls (`advance`, `pick`, `narrate`,
+ * `retake`), their presence under the genre's `turnControls`.
+ * Placement is `quick` → primary, else overflow; the *new* mark is the
  * viewer's `seen_actions`.
  *
  * `offered` is the session's function list when the caller has already
@@ -289,9 +306,24 @@ export async function listSessionActions(
 			: await enabledSessionFunctions(db, sessionId, genreId, viewer.userId)
 	).filter((a) => !off.ownsId(a.specSlug))
 	const genre = await getSessionGenre(db, genreId)
+	// Message verbs answer to `messageVerbs`, the turn controls (`advance`,
+	// `pick`, `narrate`) to `turnControls` (B7, B8) — two declarations, so a
+	// genre can switch the prefill extend off and keep the turn control.
+	// A turn control is listed only where it is PRESENT: offered, and its
+	// present-when holds over the published values. Absent is hidden, not
+	// grey — a control with no meaning in this mode has nothing to grey. The
+	// fire's door (`turnControlRefusal`) reads the same verdict.
 	const verbs = resolveMessageVerbs(genre?.shape)
-	const core = CORE_ACTIONS.filter(
-		(a) => a.floor || (verbs as Record<string, boolean>)[a.key] !== false
+	// Per channel (R6): a channel's declared `turnControls` win over the
+	// genre's — the Lair's Sanctum offers no Pick and no Regenerate.
+	const turnControls = resolveTurnControls(genre?.shape, channel)
+	const values = await publishedValues(db, sessionId)
+	const core = CORE_ACTIONS.filter((a) =>
+		a.floor
+			? true
+			: isTurnControl(a.key)
+				? turnControlPresent(turnControls, a.key, values).present
+				: (verbs as Record<string, boolean>)[a.key] !== false
 	)
 
 	// 2. Audience, resolved once for every reference any of them names.
@@ -310,7 +342,6 @@ export async function listSessionActions(
 	// 4. Enablement (U5e): the published values once, the session's overrides
 	//    once, then each action's effective predicate set against them. The
 	//    `item.*` half rides to the client.
-	const values = await publishedValues(db, sessionId)
 	const overrides = await sessionEnabledWhenOverrides(db, sessionId, genreId)
 	const enablement = (
 		identity: string,
@@ -354,6 +385,9 @@ export async function listSessionActions(
 
 	for (const a of contributed) {
 		if (!audienceHolds(a.audience.see, portrayals, viewer)) continue
+		// Present-when (W-GATE D3): an action with nothing to act on is left
+		// out, not greyed — the same verdict the door reads (`absentRefusal`).
+		if (!actionPresent(a, values)) continue
 		const itemGated = a.audience.act.includes("item")
 		place(
 			{
@@ -362,8 +396,10 @@ export async function listSessionActions(
 				name: a.name,
 				...(a.description ? { description: a.description } : {}),
 				...(a.icon ? { icon: a.icon } : {}),
+				...(a.iconAlt ? { iconAlt: a.iconAlt } : {}),
 				slash: a.slash,
 				quick: a.quick,
+				...(a.collects ? { collects: a.collects } : {}),
 				audience: a.audience,
 				origin: a.origin,
 				floor: false,
@@ -376,15 +412,26 @@ export async function listSessionActions(
 		)
 	}
 
+	// Where the genre's Regenerate is the whole turn (`retake`, R2), the row
+	// regenerate leaves the extra venue: one genre never shows two
+	// _Regenerate_ chips. It stays on the message venue, where a delver's
+	// row keeps it (`retakeRowRefusal`).
+	const retakeHere = core.some((a) => a.key === "retake")
 	for (const a of core) {
 		const audience = a.audience!
 		if (!audienceHolds(audience.see, portrayals, viewer)) continue
+		const venue =
+			retakeHere && a.key === "retry"
+				? a.venue.filter((v) => v.kind !== "extra")
+				: a.venue
 		place(
 			{
 				key: a.key,
 				specSlug: CORE_ACTION_SPEC,
 				name: en(a.label) || a.key,
+				...(en(a.description) ? { description: en(a.description) } : {}),
 				...(a.icon ? { icon: a.icon } : {}),
+				...(a.iconAlt ? { iconAlt: en(a.iconAlt) } : {}),
 				slash: a.slash ?? a.key,
 				quick: a.quick === true,
 				audience,
@@ -395,12 +442,65 @@ export async function listSessionActions(
 				isNew: false,
 				...enablement(actionIdentity({ specSlug: CORE_ACTION_SPEC, key: a.key }), a.enabledWhen)
 			},
-			a.venue
+			venue
 		)
 	}
 
 	return venues
 }
+
+/**
+ * What a press of a **form-venue** action collects, by identity (lair pass
+ * R9, 2026-09-28). A form-venue action is listed in no venue (S1) — it is
+ * pressed from its block alone — so the client had no listing entry to read
+ * its `collects` off, and a block press could never open the collect modal
+ * for it (R3's note). This carries exactly what that press needs — the
+ * modal's title, description and fields — for every enabled contributed
+ * action offered on the `form` venue that collects something and that the
+ * viewer may see. It lists nothing: no chip, no palette entry.
+ */
+export interface FormCollects {
+	name: string
+	description?: string
+	collects: ListedCollects
+}
+
+export async function formCollectsOf(
+	db: Db,
+	sessionId: number,
+	viewer: ActionViewer
+): Promise<Record<string, FormCollects>> {
+	const [session] = await db
+		.select({ genreId: schema.sessions.genreId })
+		.from(schema.sessions)
+		.where(eq(schema.sessions.id, sessionId))
+		.limit(1)
+	if (!session) return {}
+	const genreId = session.genreId ?? STANDARD_GENRE_ID
+	const collecting = (
+		await enabledSessionFunctions(db, sessionId, genreId, viewer.userId)
+	).filter((a) => a.collects && a.venues.some((v) => v.kind === "form"))
+	if (!collecting.length) return {}
+	const portrayals = await resolveAudiences(
+		db,
+		sessionId,
+		viewer,
+		collecting.map((a) => a.audience)
+	)
+	const out: Record<string, FormCollects> = {}
+	for (const a of collecting) {
+		if (!audienceHolds(a.audience.see, portrayals, viewer)) continue
+		out[actionIdentity(a)] = {
+			name: a.name,
+			...(a.description ? { description: a.description } : {}),
+			collects: a.collects!
+		}
+	}
+	return out
+}
+
+const isTurnControl = (key: string): key is TurnControl =>
+	(TURN_CONTROLS as readonly string[]).includes(key)
 
 /** Display text in `en` through the SDK's one resolver (R-20); blank for a value publish never let in. */
 const en = (v: unknown): string => i18nText(v as I18n | undefined) ?? ""
@@ -578,6 +678,38 @@ export function enablementOf(
 		...(heard.ok ? {} : { reason: { i18n: localeMapOf(heard.sentence) } }),
 		itemPredicates: under
 	}
+}
+
+/**
+ * Is a contributed action **present** (W-GATE D3, 2026-09-27) — its
+ * declared `presentWhen` holding over the published values? Absent is
+ * hidden: the listing leaves it out, and the door refuses a press made
+ * without a form (`absentRefusal`). One reading for both, as enabled-when
+ * has.
+ */
+export function actionPresent(
+	action: { presentWhen?: ReadonlyArray<EnabledWhen> | null },
+	values: PublishedValues
+): boolean {
+	return !action.presentWhen?.length || evaluateEnabledWhen(action.presentWhen, values).enabled
+}
+
+/**
+ * The door's sentence for a press on an action that is not present, or
+ * null when it is. The failing predicate's reason, else a plain one.
+ */
+export async function absentRefusal(
+	db: Db,
+	sessionId: number,
+	action: { name: string; presentWhen?: ReadonlyArray<EnabledWhen> | null },
+	actor: { userId: number },
+	opts: { lineage?: RunLineage } = {}
+): Promise<string | null> {
+	if (!action.presentWhen?.length) return null
+	const verdict = evaluateEnabledWhen(action.presentWhen, await publishedValues(db, sessionId, opts))
+	if (verdict.enabled) return null
+	const reason = verdict.reason ? await reasonSentence({ i18n: verdict.reason }, actor) : ""
+	return reason || `'${action.name}' has nothing to act on right now.`
 }
 
 /**

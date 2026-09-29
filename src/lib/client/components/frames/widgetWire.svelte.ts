@@ -21,12 +21,20 @@ import { getContext } from "svelte"
 import { SvelteSet } from "svelte/reactivity"
 import {
 	WIDGET_REQUEST_KINDS,
+	projectMessageRow,
+	widgetEventHeard,
+	widgetReads,
+	widgetRequestRefusal,
 	type HostFrameMessage,
 	type MessageV1,
 	type SessionV1,
 	type TurnOrderV1,
 	type ViewerV1,
-	type WidgetRequestKind
+	type WidgetBaseSection,
+	type WidgetRequestKind,
+	type WidgetScopedSectionName,
+	type WidgetScopedSectionValues,
+	type WidgetSectionScope
 } from "@serene-pub/sdk"
 import { t } from "$lib/client/i18n/state.svelte"
 import {
@@ -60,8 +68,27 @@ import {
 
 /** The sections a widget is fed — read live, so a change re-pushes. */
 export interface WireInputs {
-	/** Scoped sections this widget was granted, by name (C0b) — posted as `scoped`. */
-	scoped?: Partial<Record<"persona" | "characters" | "lore" | "session_full", unknown>>
+	/**
+	 * Scoped sections this widget was granted, by the name each is posted
+	 * under (C0b; the SDK's one table, `WIDGET_SCOPED_SECTIONS`) — posted as
+	 * `scoped`, withdrawn (`null`) when one goes.
+	 */
+	scoped?: Partial<WidgetScopedSectionValues>
+	/**
+	 * The base sections this widget reads (`WidgetDecl.reads`, R75) — absent
+	 * reads all. One it does not read is never posted: a widget that does not
+	 * read `messages` is not sent the log, nor anything on a token.
+	 */
+	reads?: readonly WidgetBaseSection[]
+	/**
+	 * The scopes this widget was granted, BARE (`lore`, never `widget:lore`):
+	 * carried on every request it makes (F9), so a kind that reads scoped data
+	 * is answered only for a widget holding its scope — and TOLD to the widget
+	 * (`grants`), on ready and on every change, so it can say "not granted"
+	 * rather than wait for a section that will never come. Absent, nothing is
+	 * told: a frame, whose page passes none, is left as it was.
+	 */
+	grants?: readonly WidgetSectionScope[]
 	session?: SessionV1
 	messages?: unknown[]
 	channels?: string[]
@@ -86,7 +113,7 @@ export interface WireInputs {
 	 */
 	onInvoke?: (
 		key: string,
-		args: { messageId?: number; payload?: Record<string, unknown>; blockId?: string },
+		args: { messageId?: number; payload?: Record<string, unknown>; blockId?: string; text?: string },
 		/** The document's own live check (`WidgetWireOptions.personBehind`) passed. */
 		personBehind: boolean
 	) => void
@@ -110,6 +137,12 @@ export interface WidgetWireOptions {
 	onFatal?: (message: string) => void
 	/** Is a person pressing inside this document right now? Read for a relayed (`onInvoke`) press. */
 	personBehind?: () => boolean
+	/**
+	 * The mount runs core's own code (`ComponentMount` decides, never a
+	 * manifest): as trusted as its native copy, so no confirm stands in front
+	 * of its `edit`. A frame or a plugin's component never is.
+	 */
+	trusted?: () => boolean
 }
 
 export interface WidgetWire {
@@ -117,6 +150,12 @@ export interface WidgetWire {
 	attach(port: MessagePort): void
 	/** Stop speaking; the port is closed. */
 	detach(): void
+	/**
+	 * A message the widget sent that arrived by another road — a remote's
+	 * worker channel (`{ k: "wire" }`), ordered after the DOM it drew that
+	 * turn. Handled as if it came on the port; ignored while none is attached.
+	 */
+	receive(data: unknown): void
 	/** Has the widget said `ready` on the current port? */
 	readonly ready: boolean
 }
@@ -124,19 +163,61 @@ export interface WidgetWire {
 export function createWidgetWire(opts: WidgetWireOptions): WidgetWire {
 	let port: MessagePort | null = null
 	let ready = $state(false)
-	/** What each scoped section was last posted as (JSON), on the current port. */
-	const sentScoped = new Map<string, string>()
+	/**
+	 * What the widget holds of each section, on the current port: the JSON it
+	 * was last DELIVERED as, by the key `postChanged` files it under. Every
+	 * section but the log is diffed (F4): the page re-runs `push` whenever
+	 * any input moves, and a section that did not move is not sent again. The
+	 * log is not (see `push`). Cleared on a new port and on every `ready` — a
+	 * widget saying ready again has nothing, and is sent everything.
+	 */
+	const sent = new Map<string, string>()
+	/** Filed for a section that went out but could not be compared (a cycle): never equal to a later post. */
+	const UNCOMPARED = "\u0000uncompared"
 	const input = () => opts.inputs()
+	/**
+	 * Rows as they may cross to ANY widget — a plugin's, an authored one,
+	 * core's own: the host's bookkeeping (`MESSAGE_HOST_FIELDS` — `debugMeta`'s
+	 * compiled prompt, the `embedding` vector, `userId`, …) stripped. Every
+	 * road a row takes out of this wire goes through here: the `messages`
+	 * post, the `channel` posts, a `messages` page. A shallow copy per row,
+	 * never a serialisation, so a token costs no JSON of the log (F4).
+	 * Core's conversation reads a recorded prompt's presence off its dossier
+	 * line (`promptDetails`) and the prompt through `prompt-details`.
+	 */
+	const project = (rows: readonly unknown[]): MessageV1[] => rows.map(projectMessageRow) as MessageV1[]
 
-	function post(msg: HostFrameMessage) {
+	/** Post one message; whether it went out. */
+	function post(msg: HostFrameMessage): boolean {
+		if (!port) return false
 		try {
 			// A snapshot, not the value: a section read off `$state` is a
 			// proxy, which `postMessage` cannot clone — `actions` was dropped
 			// that way on every push until the relay was shared (C2).
-			port?.postMessage($state.snapshot(msg))
+			port.postMessage($state.snapshot(msg))
+			return true
 		} catch (e) {
 			console.warn(`${opts.label()}: dropped uncloneable "${msg.t}" payload`, e)
+			return false
 		}
+	}
+
+	/**
+	 * Post `msg` unless the widget already holds what it says. Recorded only
+	 * once it went out: one `post` dropped (uncloneable) is not held, and is
+	 * tried again on the next push; one that went out but cannot be compared
+	 * (a cycle) is recorded as held-but-uncompared, so a withdrawal of it is
+	 * still sent.
+	 */
+	function postChanged(key: string, msg: HostFrameMessage) {
+		let json: string | null
+		try {
+			json = JSON.stringify(msg)
+		} catch {
+			json = null
+		}
+		if (json !== null && sent.get(key) === json) return
+		if (post(msg)) sent.set(key, json ?? UNCOMPARED)
 	}
 
 	/**
@@ -173,44 +254,65 @@ export function createWidgetWire(opts: WidgetWireOptions): WidgetWire {
 		return () => mo.disconnect()
 	})
 
+	/** The base sections this widget reads (R75) — the SDK's one clamp; absent reads all. */
+	const readsOf = (i: WireInputs) => new Set<WidgetBaseSection>(widgetReads({ reads: i.reads as WidgetBaseSection[] | undefined }))
+
 	function push() {
 		if (!port || !ready) return
 		const i = input()
-		if (i.session !== undefined) post({ t: "session", session: i.session })
-		// The rows as the page holds them, narrowed at this one seam.
-		const held = (i.messages ?? []) as MessageV1[]
-		if (i.channels && i.channels.length) {
-			// Panel scoping: only this widget's lanes, one post each.
-			for (const ch of i.channels)
-				post({ t: "channel", channel: ch, messages: held.filter((m) => (m?.channel ?? "main") === ch) })
-		} else if (i.messages !== undefined) {
-			post({ t: "messages", messages: held })
+		const reads = readsOf(i)
+		// What it holds, before any section it covers: a scope not listed
+		// here will never be posted, and the widget may say so.
+		if (i.grants !== undefined) postChanged("grants", { t: "grants", grants: [...i.grants] })
+		if (reads.has("session") && i.session !== undefined) postChanged("session", { t: "session", session: i.session })
+		if (reads.has("messages")) {
+			// The rows as the page holds them, narrowed at this one seam.
+			// Posted as they are, never diffed: the log is the section that
+			// moves on every token, so a comparison could never skip it —
+			// it would be one more whole serialisation of the log per token.
+			const held = project(i.messages ?? [])
+			if (i.channels && i.channels.length) {
+				// Panel scoping: only this widget's lanes, one post each.
+				for (const ch of i.channels)
+					post({
+						t: "channel",
+						channel: ch,
+						messages: held.filter((m) => (m?.channel ?? "main") === ch)
+					})
+			} else if (i.messages !== undefined) {
+				post({ t: "messages", messages: held })
+			}
 		}
-		if (i.props !== undefined) post({ t: "props", props: i.props })
-		if (i.settings !== undefined) post({ t: "settings", settings: i.settings })
-		if (i.actions !== undefined) post({ t: "actions", actions: projectActions(i.actions) })
+		if (reads.has("props") && i.props !== undefined) postChanged("props", { t: "props", props: i.props })
+		if (reads.has("settings") && i.settings !== undefined)
+			postChanged("settings", { t: "settings", settings: i.settings })
+		if (reads.has("actions") && i.actions !== undefined)
+			postChanged("actions", { t: "actions", actions: projectActions(i.actions) })
 		// A document NESTED in a component (`onInvoke`) is handed what its
 		// component forwards — never the page's own sections besides.
 		const nested = !!i.onInvoke
-		if (annexCtx && !nested) post({ t: "annex", annex: JSON.parse(JSON.stringify(annexCtx.current)) })
+		if (reads.has("annex") && annexCtx && !nested)
+			postChanged("annex", { t: "annex", annex: JSON.parse(JSON.stringify(annexCtx.current)) })
 		// An EMPTY skin is still posted: taking a style off has to arrive too.
-		if (i.skin !== undefined) post(buildStyleMessage(i.skin))
-		if (i.placement !== undefined) post(buildLayoutMessage(i.placement))
-		if (theme) post({ t: "theme", theme: theme.theme, mode: theme.mode })
-		post({ t: "locale", locale: localeCtx?.current ?? "en" })
-		if (viewerCtx && !nested) post({ t: "viewer", viewer: { ...viewerCtx.current } })
-		if (turnOrderCtx && !nested) post({ t: "turn-order", turnOrder: JSON.parse(JSON.stringify(turnOrderCtx.current)) })
-		// Scoped sections are large (the dossier) and change less often than
-		// the rows: posted when they change, and withdrawn (`null`) when a
-		// grant goes away — a worker keeps nothing it may not see.
-		const scoped = i.scoped ?? {}
-		for (const section of new Set([...Object.keys(scoped), ...sentScoped.keys()])) {
-			const value = (scoped as Record<string, unknown>)[section]
-			const json = value === undefined ? null : JSON.stringify(value)
-			if (sentScoped.get(section) === json) continue
-			if (json === null) sentScoped.delete(section)
-			else sentScoped.set(section, json)
-			post({ t: "scoped", section: section as "session_full", value: json === null ? null : JSON.parse(json) })
+		if (i.skin !== undefined) postChanged("style", buildStyleMessage(i.skin))
+		if (reads.has("layout") && i.placement !== undefined) postChanged("layout", buildLayoutMessage(i.placement))
+		if (theme) postChanged("theme", { t: "theme", theme: theme.theme, mode: theme.mode })
+		if (reads.has("locale")) postChanged("locale", { t: "locale", locale: localeCtx?.current ?? "en" })
+		if (reads.has("viewer") && viewerCtx && !nested)
+			postChanged("viewer", { t: "viewer", viewer: { ...viewerCtx.current } })
+		if (reads.has("turnOrder") && turnOrderCtx && !nested)
+			postChanged("turn-order", { t: "turn-order", turnOrder: JSON.parse(JSON.stringify(turnOrderCtx.current)) })
+		// Scoped sections: posted when they change, and withdrawn (`null`)
+		// when a grant goes away — a worker keeps nothing it may not see.
+		// Only a name the SDK's table carries is a section at all.
+		const scoped = (i.scoped ?? {}) as Record<string, unknown>
+		const postedScoped = [...sent.keys()].filter((k) => k.startsWith("scoped:")).map((k) => k.slice("scoped:".length))
+		for (const section of new Set([...Object.keys(scoped), ...postedScoped]) as Set<WidgetScopedSectionName>) {
+			const value = scoped[section]
+			if (value === undefined) {
+				if (!sent.has(`scoped:${section}`)) continue
+				if (post({ t: "scoped", section, value: null })) sent.delete(`scoped:${section}`)
+			} else postChanged(`scoped:${section}`, { t: "scoped", section, value })
 		}
 	}
 
@@ -225,6 +327,17 @@ export function createWidgetWire(opts: WidgetWireOptions): WidgetWire {
 		}
 		if (!WIDGET_REQUEST_KINDS.includes(what)) return decline(`'${String(m.what)}' is not something this host answers`)
 		if (i.onInvoke) return decline("a document inside a component asks its component, not the page")
+		// Who asks, with what it was granted (F9): the page's handler judges
+		// by the same, and a kind this widget may not ask is declined here
+		// before any page code runs — core's writes to core's widgets, a
+		// scoped read to a widget holding its scope.
+		const from = {
+			widgetId: i.widgetId ?? opts.label(),
+			owner: i.owner ?? "unknown",
+			grants: [...(i.grants ?? [])]
+		}
+		const refused = widgetRequestRefusal(what, from)
+		if (refused) return decline(refused)
 		if (what === "messages") {
 			const params = {
 				channel: typeof m.channel === "string" ? m.channel : undefined,
@@ -237,23 +350,23 @@ export function createWidgetWire(opts: WidgetWireOptions): WidgetWire {
 			if (!requests) {
 				const page = pageOf({ messages: (i.messages ?? []) as FrameRow[], channels: i.channels }, params)
 				if (page.refused) return decline(page.refused)
-				return post(buildPageMessage(m.requestId, page))
+				return post(buildPageMessage(m.requestId, { ...page, rows: project(page.rows) as FrameRow[] }))
 			}
-			requests("messages", params, { widgetId: i.widgetId ?? opts.label(), owner: i.owner ?? "unknown" }).then(
+			requests("messages", params, from).then(
 				(page) => {
 					// The page answers for the session; this widget sees its lanes only.
 					const lanes = i.channels?.length ? new Set(i.channels) : null
 					const rows = (page.rows as FrameRow[]).filter(
 						(r) => !lanes || lanes.has(((r as { channel?: string }).channel ?? "main") as string)
 					)
-					post(buildPageMessage(m.requestId, { rows, nextCursor: page.nextCursor }))
+					post(buildPageMessage(m.requestId, { rows: project(rows) as FrameRow[], nextCursor: page.nextCursor }))
 				},
 				(e) => decline((e as Error).message)
 			)
 			return
 		}
 		if (!requests) return decline(`this page answers no '${what}' request`)
-		requests(what, (m.params ?? {}) as never, { widgetId: i.widgetId ?? opts.label(), owner: i.owner ?? "unknown" }).then(
+		requests(what, (m.params ?? {}) as never, from).then(
 			(result) => post({ t: "response", requestId: m.requestId, ok: true, result }),
 			(e) => decline((e as Error).message)
 		)
@@ -268,14 +381,19 @@ export function createWidgetWire(opts: WidgetWireOptions): WidgetWire {
 		post({ t: "strings", strings })
 	})
 
-	function onMessage(e: MessageEvent) {
+	/** One message from the widget — off the port, or relayed (`receive`). */
+	function handle(data: unknown) {
 		// What arrives is whatever the other side chose to post: untyped, and
 		// every field tested before it is used.
-		const m = e.data
+		const m = data as Record<string, any> | null
 		if (!m || typeof m !== "object") return
 		const i = input()
 		if (m.t === "ready") {
 			ready = true
+			// A widget saying ready holds nothing yet — a replayed `ready` on
+			// the same port included (the SDK's contract, `surfaces.ts`): it
+			// is sent every section it reads again, not only what moved.
+			sent.clear()
 			// Saved state BEFORE the first push: a remount is exactly when a
 			// widget has forgotten.
 			const held = savedFrameState.get(i.stateKey)
@@ -310,7 +428,9 @@ export function createWidgetWire(opts: WidgetWireOptions): WidgetWire {
 				{
 					messageId: typeof m.messageId === "number" ? m.messageId : undefined,
 					payload: m.payload && typeof m.payload === "object" ? (m.payload as Record<string, unknown>) : undefined,
-					blockId: typeof m.blockId === "string" ? m.blockId : undefined
+					blockId: typeof m.blockId === "string" ? m.blockId : undefined,
+					// The text the press supplies — a slash argument (S2).
+					...(typeof m.text === "string" ? { text: m.text } : {})
 				},
 				opts.personBehind?.() ?? false
 			)
@@ -333,8 +453,10 @@ export function createWidgetWire(opts: WidgetWireOptions): WidgetWire {
 					}
 					// `edit` commits text (C0b): a widget that is not core's does not
 					// rewrite a line the person has not read — they see the new text.
+					// Core's own component edits as its native copy does: unasked.
 					const content = (m.payload as { content?: unknown } | undefined)?.content
 					if (
+						!opts.trusted?.() &&
 						resolved.specSlug === "core" &&
 						resolved.key === "edit" &&
 						typeof content === "string" &&
@@ -353,7 +475,8 @@ export function createWidgetWire(opts: WidgetWireOptions): WidgetWire {
 				)(m.key, {
 					messageId: typeof m.messageId === "number" ? m.messageId : undefined,
 					payload: m.payload && typeof m.payload === "object" ? m.payload : undefined,
-					blockId: typeof m.blockId === "string" ? m.blockId : undefined
+					blockId: typeof m.blockId === "string" ? m.blockId : undefined,
+					...(typeof m.text === "string" ? { text: m.text } : {})
 				})
 			} catch (err) {
 				console.warn(`${opts.label()}: ${(err as Error).message}`)
@@ -378,6 +501,8 @@ export function createWidgetWire(opts: WidgetWireOptions): WidgetWire {
 		void viewerCtx?.current
 		void turnOrderCtx?.current
 		void i.scoped
+		void i.grants
+		void i.reads
 		push()
 	})
 
@@ -386,9 +511,12 @@ export function createWidgetWire(opts: WidgetWireOptions): WidgetWire {
 
 	// `message:created`, scoped as the `channel` posts are; the feed seeds
 	// silently, so a widget mounted onto a loaded session hears arrivals only.
+	// A widget that does not read `messages` (R75) is told of no arrival:
+	// it could never find the row it was told about.
 	const feed = new WidgetMessageFeed()
 	$effect(() => {
 		const i = input()
+		if (!readsOf(i).has("messages")) return
 		const list = (i.messages ?? []) as SurfaceMessage[]
 		for (const e of feed.take(scopeMessages(list, i.channels ?? []))) emit(e)
 	})
@@ -397,8 +525,11 @@ export function createWidgetWire(opts: WidgetWireOptions): WidgetWire {
 	// is what it mounted with, not a change.
 	let lastLayout: string | null = null
 	$effect(() => {
-		const placement = input().placement
-		if (placement === undefined) return
+		const i = input()
+		const placement = i.placement
+		// Not read (R75), not reported: a widget that does not read its layout
+		// is told nothing of it.
+		if (placement === undefined || !readsOf(i).has("layout")) return
 		const key = JSON.stringify(buildLayoutMessage(placement).layout)
 		if (key === lastLayout) return
 		const first = lastLayout === null
@@ -406,14 +537,19 @@ export function createWidgetWire(opts: WidgetWireOptions): WidgetWire {
 		if (!first) emit({ kind: "layout:changed", layout: buildLayoutMessage(placement).layout })
 	})
 
-	// The session-level fan-out, narrowed to the widget's declared channels.
+	// The session-level fan-out, narrowed to the widget's declared channels —
+	// and to what it may read: a kind about scoped data (`lore:ranked`, R81)
+	// reaches core's widget, or a plugin's granted its scope, as of now.
 	$effect(() => {
 		const i = input()
 		const src = i.source
 		if (!src) return
 		const declared = [...(i.channels ?? [])]
 		return src.subscribe((e) => {
-			if (eventInScope(e, declared)) emit(e)
+			if (!eventInScope(e, declared)) return
+			const now = input()
+			if (!widgetEventHeard(e.kind, { owner: now.owner ?? "unknown", grants: [...(now.grants ?? [])] })) return
+			emit(e)
 		})
 	})
 
@@ -432,14 +568,18 @@ export function createWidgetWire(opts: WidgetWireOptions): WidgetWire {
 		attach(p: MessagePort) {
 			port?.close()
 			ready = false
-			sentScoped.clear()
+			sent.clear()
 			port = p
-			port.onmessage = onMessage
+			port.onmessage = (e) => handle(e.data)
 		},
 		detach() {
 			port?.close()
 			port = null
 			ready = false
+		},
+		receive(data: unknown) {
+			// The same rule a port message meets: no port, no widget to answer.
+			if (port) handle(data)
 		},
 		get ready() {
 			return ready

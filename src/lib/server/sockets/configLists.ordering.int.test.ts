@@ -1,20 +1,12 @@
 /**
- * EVERY config list is ordered built-ins first, then alphabetical.
+ * The sampling config list is ordered built-ins first, then alphabetical.
  *
  * samplingConfigsList had no `orderBy` at all, so rows came back in whatever
  * order Postgres returned them. SamplingSidebar hides that — it renders two
  * `{#each}` blocks filtered on isImmutable — but the same response also feeds
- * EditSessionForm and every per-task override selector in PromptsSidebar, which
- * render it flat and so interleaved presets with the user's own configs.
- * Ordering once at the source fixes all of them, and sorts within the
- * sidebar's two groups as well (its filters preserve input order).
- *
- * The convention was split for a while: samplingConfigs and graphBuildConfigs
- * ordered built-ins first (`desc`), while contextConfigs, promptConfigs,
- * narratorPromptConfigs and the three summarize lists ordered them LAST
- * (`asc`). Every sidebar happens to regroup with its own isImmutable filters,
- * so the split was invisible in the UI and would have stayed that way — hence
- * pinning it here across all of them rather than per handler.
+ * EditSessionForm, which renders it flat and so interleaved presets with the
+ * user's own configs. Ordering once at the source fixes both, and sorts within
+ * the sidebar's two groups as well (its filters preserve input order).
  */
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest"
 import fs from "fs/promises"
@@ -87,70 +79,5 @@ describe("config list ordering", () => {
 			rows.filter((r) => r.isImmutable === immutable).map((r) => r.name)
 		expect(names(true)).toEqual(["Default", "Precise (Extraction)"])
 		expect(names(false)).toEqual(["Aardvark (mine)", "Zephyr (mine)"])
-	})
-
-	test("every other config list follows the same convention", async () => {
-		// One assertion per handler rather than one shared helper: the point is
-		// that a NEW config type is easy to get wrong, and a reader adding one
-		// should see the list they need to join.
-		const [{ contextConfigsListHandler }, { promptConfigsListHandler }] =
-			await Promise.all([
-				import("./contextConfigs"),
-				import("./promptConfigs")
-			])
-		const { narratorPromptConfigsListHandler } = await import(
-			"./narratorPromptConfigs"
-		)
-		const [admin] = await testDb
-			.insert(schema.users)
-			.values({ username: "config-order-user", isAdmin: true })
-			.returning()
-
-		await testDb.insert(schema.contextConfigs).values([
-			{ name: "Zed ctx", isImmutable: false },
-			{ name: "Built ctx", isImmutable: true }
-		])
-		await testDb.insert(schema.promptConfigs).values([
-			{ name: "Zed prompt", isImmutable: false, systemPrompt: "x" },
-			{ name: "Built prompt", isImmutable: true, systemPrompt: "y" }
-		])
-		await testDb.insert(schema.narratorPromptConfigs).values([
-			{
-				name: "Zed narrator",
-				isImmutable: false,
-				systemPrompt: "x"
-			},
-			{
-				name: "Built narrator",
-				isImmutable: true,
-				systemPrompt: "y"
-			}
-		])
-
-		const socket = fakeSocket(admin.id)
-		const builtInsFirst = (
-			rows: Array<{ isImmutable?: boolean | null }>
-		) => {
-			const flags = rows.map((r) => !!r.isImmutable)
-			expect(flags.lastIndexOf(true)).toBeLessThan(flags.indexOf(false))
-		}
-
-		builtInsFirst(
-			(await contextConfigsListHandler.handler(socket, {}, () => {}))
-				.contextConfigsList
-		)
-		builtInsFirst(
-			(await promptConfigsListHandler.handler(socket, {}, () => {}))
-				.promptConfigsList
-		)
-		builtInsFirst(
-			(
-				await narratorPromptConfigsListHandler.handler(
-					socket,
-					{},
-					() => {}
-				)
-			).narratorPromptConfigsList
-		)
 	})
 })

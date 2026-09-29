@@ -34,11 +34,14 @@ import {
 export type NodeState = "active" | "deceased" | "missing" | "departed"
 export type NodeVisibility = "normal" | "legendary" | "hidden"
 export type RelationshipVisibility = "secret" | "acknowledged" | "public"
-import { SessionCharacterVisibility } from "../../shared/constants/SessionCharacterVisibility"
 import { SessionTypes } from "../../shared/constants/SessionTypes"
 import type { ConnectionIdentity } from "../../shared/connections/identity"
 import type { MediaFrame } from "../../shared/media/frame"
-import type { EnabledWhen, LayoutDoc, StatusText } from "@serene-pub/sdk"
+import type {
+	EnabledWhen,
+	StatusText,
+	StoryCalendar
+} from "@serene-pub/sdk"
 import type {
 	TunnelMode,
 	TunnelProvider,
@@ -393,7 +396,7 @@ export const samplingRelations = relations(samplingConfigs, () => ({}))
  * compute is a template that could be made to do something other than format,
  * and these are admin-authored.
  *
- * That closure is what keeps the one dangerous format safe. `split_session`
+ * That closure is what keeps the one dangerous format safe. `split_chat`
  * emits `<@role:user>` markers and PARSES THEM BACK OUT, neutralising literal
  * markers in user content on the way — a guard that only holds while the
  * emitter, the pattern and the parser stay in step by hand. Its row therefore
@@ -432,7 +435,7 @@ export const completionTemplates = pgTable(
 		isImmutable: boolean("is_immutable").notNull().default(false),
 		/**
 		 * `flat` — one completion string. `role_array` — the legacy
-		 * split-session bridge, retired once chat wire mode builds `messages[]`
+		 * split-chat bridge, retired once chat wire mode builds `messages[]`
 		 * structurally.
 		 *
 		 * ⚠ An explicit column, not inferred from `promptFormat` by a substring
@@ -455,7 +458,7 @@ export const completionTemplates = pgTable(
 		 * stays closed where closure is enforceable — in `CompletionTemplate`
 		 * and at the save boundary — rather than in the column list.
 		 *
-		 * ⚠ EMPTY for `split_session`, which is not an oversight. See the
+		 * ⚠ EMPTY for `split_chat`, which is not an oversight. See the
 		 * docblock above this table.
 		 */
 		roles: json("roles")
@@ -620,13 +623,13 @@ export const connections = pgTable("connections", {
  * required: connections have no default model.
  *
  * Rows, not a JSON array on the connection: `connection_defaults.connection_model_id`
- * and the pipeline config's provider slot both REFERENCE a model, and a
+ * and the pipeline config's connection slot both REFERENCE a model, and a
  * reference needs an id a foreign key can clear — an array index cannot fill
  * that role.
  *
  * `prompt_format`, `token_counter` and `context_window` are OVERRIDES: NULL
  * means "whatever the endpoint says". `capabilities` is the same shape
- * `connections.capabilities` uses — see `resolveModelCapabilities` for how
+ * `connections.capabilities` uses — see `layerCapabilities` (connections/models.ts) for how
  * the model's `{overrides, probe}` layer over the endpoint's.
  *
  * See docs/data-model-notes.md#connection_models for the full split rationale.
@@ -723,6 +726,23 @@ export const connectionModels = pgTable(
 			.notNull()
 			.default({})
 			.$type<Record<string, unknown>>(),
+		/**
+		 * What this model is FOR — `text-gen`, `embeddings`, `image-gen` — as
+		 * the host said, or NULL when it said nothing. The same vocabulary as
+		 * `connections.modality` and `local_models.modality` (NOMENCLATURE §10).
+		 *
+		 * Unlike `facts`, this one IS routed on: one endpoint can serve several
+		 * modalities (an Ollama host chats and embeds; a managed KoboldCPP chats
+		 * and draws), and the endpoint's capability layers answer for the HOST.
+		 * `capabilityRefusal` refuses a transform of another modality, so an
+		 * embedding model is never offered for chat. NULL is ungated.
+		 *
+		 * Written by `syncConnectionModels` from the adapter's listing (replaced
+		 * on every successful re-listing, like `facts`), and by
+		 * `ensureConnectionModel` for a caller that reads the same registry the
+		 * listing does — the managed KoboldCPP's Use-for handlers. Never by a person.
+		 */
+		modality: text("modality"),
 		/**
 		 * This model's completion template, overriding the endpoint's.
 		 *
@@ -1439,6 +1459,52 @@ export const graphBuildConfigsRelations = relations(
 	})
 )
 
+/**
+ * The shape rules a stored story clock obeys, on every table that carries the
+ * five `story_clock_*` columns (`lorebooks`, `lorebook_branches`, `sessions`).
+ *
+ * They are `clockColumns` / `clockProblem` (`state/storyTime.ts`) said to the
+ * database, so a writer that skips those helpers is refused rather than
+ * storing a clock no reader can order: the calendar narrows left to right (a
+ * day needs a month, a month or a time of day needs a year — no year is no
+ * clock at all), a time of day is 24-hour, and a minute needs an hour. The
+ * same discipline as `entry_amendments_date_check` and the presence checks.
+ *
+ * ⚠ Calendar fit (a month 13, a day 31 in a 30-day month) is NOT here and
+ * cannot be: it depends on the book's declared calendar, which is a JSON
+ * column on another row. `assertDateLands` owns that half.
+ */
+function storyClockChecks(
+	table: string,
+	t: Record<
+		| "storyClockYear"
+		| "storyClockMonth"
+		| "storyClockDay"
+		| "storyClockHour"
+		| "storyClockMinute",
+		AnyPgColumn
+	>
+) {
+	return [
+		check(
+			`${table}_story_clock_day_check`,
+			sql`(${t.storyClockMonth} IS NOT NULL OR ${t.storyClockDay} IS NULL)`
+		),
+		check(
+			`${table}_story_clock_year_check`,
+			sql`(${t.storyClockYear} IS NOT NULL OR (${t.storyClockMonth} IS NULL AND ${t.storyClockHour} IS NULL))`
+		),
+		check(
+			`${table}_story_clock_hour_check`,
+			sql`(${t.storyClockHour} IS NULL OR ${t.storyClockHour} BETWEEN 0 AND 23)`
+		),
+		check(
+			`${table}_story_clock_minute_check`,
+			sql`(${t.storyClockMinute} IS NULL OR (${t.storyClockHour} IS NOT NULL AND ${t.storyClockMinute} BETWEEN 0 AND 59))`
+		)
+	]
+}
+
 export const lorebooks = pgTable(
 	"lorebooks",
 	{
@@ -1469,6 +1535,33 @@ export const lorebooks = pgTable(
 		// as the insert — see deriveNextBindingToken() in
 		// lorebookBindingToken.ts.
 		nextBindingNumber: integer("next_binding_number").notNull().default(1),
+		/**
+		 * The book's declared story calendar (`StoryCalendar`, SDK
+		 * `storyTime.ts`): month names and lengths, weekdays, a leap rule, eras
+		 * and a year label. NULL = **free-form**, the bottom rung and every
+		 * book's default — dates are labels that sort, spelled as they always
+		 * were, and nothing rolls over (DESIGN-story-time §0, P5).
+		 *
+		 * ⚠ Spelling and stepping only. Ordering never reads it: dates are
+		 * validated against it at entry, so the parts' own order is the order
+		 * of days and there is still one comparator.
+		 */
+		storyCalendar: json("story_calendar").$type<StoryCalendar | null>(),
+		/** Main's clock. A branch's is on `lorebook_branches`. */
+		/**
+		 * The story's clock — where the story currently stands on this line
+		 * (DESIGN-story-time §3), in the book's own calendar. All NULL = no
+		 * stored clock: the present is the newest history entry on the line,
+		 * which is what it always was. A pin is a history entry; the clock is
+		 * not a pin and is never drawn as one. ⚠ A branch never inherits
+		 * main's clock (`state/storyTime.ts`).
+		 */
+		storyClockYear: integer("story_clock_year"),
+		storyClockMonth: integer("story_clock_month"),
+		storyClockDay: integer("story_clock_day"),
+		/** Optional time of day on the clock, 24-hour. */
+		storyClockHour: integer("story_clock_hour"),
+		storyClockMinute: integer("story_clock_minute"),
 		createdAt: date("created_at")
 			.notNull()
 			.default(sql`(CURRENT_TIMESTAMP)`),
@@ -1482,7 +1575,8 @@ export const lorebooks = pgTable(
 		// Unique per-owner, not globally — two different users legitimately
 		// importing the same shared lorebook file must each be able to own a
 		// row stamped with that file's uuid.
-		uniqueIndex("lorebooks_uuid_idx").on(table.userId, table.uuid)
+		uniqueIndex("lorebooks_uuid_idx").on(table.userId, table.uuid),
+		...storyClockChecks("lorebooks", table)
 	]
 )
 
@@ -2504,6 +2598,12 @@ export const sessions = pgTable(
 	{
 		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
 		name: text("name"), // Optional session/group name
+		/**
+		 * Starred by its owner: the Sessions view's Favourites chip. The
+		 * owner's own mark (like `characters.is_favorite`), not shared with
+		 * guests.
+		 */
+		isFavorite: boolean("is_favorite").notNull().default(false),
 		isGroup: boolean("is_group").notNull(), // 1 for group session, 0 for 1:1
 		/**
 		 * The session's genre (24 §3) — a genre id (`core:genre/chat`), or
@@ -2515,6 +2615,15 @@ export const sessions = pgTable(
 		genreId: text("genre_id").notNull().default("core:genre/chat"),
 		/** The session preset this session was born from (23 §9); null = ad-hoc. */
 		presetId: integer("preset_id"),
+		/**
+		 * 🚧 Whether this session reads its **world attributes** — the stats
+		 * its lorebook and cast members bring (sheets on them, and every slot
+		 * the world's timeline holds values for). On by default: a world's
+		 * attributes are an opt-in that starts ticked (ruled 2026-09-25).
+		 * Read only when the genre allows custom attributes; per-slot picks
+		 * (`session_attribute_picks`) refine it.
+		 */
+		worldAttributes: boolean("world_attributes").notNull().default(true),
 		/**
 		 * Values for the genre's declared `fields` (19 §1), keyed by field
 		 * name. Rendered in session settings from the shape's SettingsSchema and
@@ -2570,8 +2679,8 @@ export const sessions = pgTable(
 		 * Who, besides pipelines, may see each annex value (R57, V1): owner →
 		 * key → participant references. A key with no entry is pipelines
 		 * only (R59). Beside `annex` rather than inside it, so every pipeline
-		 * reads the values exactly as before; written by `set-session-annex`
-		 * from its `see` literal, and read per reader — a person's screen and
+		 * reads the bare values; written by `set-session-annex` from the key's
+		 * annex declaration (its `see`), and read per reader — a person's screen and
 		 * widgets, or the AI's view — through `visibleTo`. Never sent raw.
 		 */
 		annexAudiences: jsonb("annex_audiences")
@@ -2597,6 +2706,29 @@ export const sessions = pgTable(
 			(): AnyPgColumn => lorebookBranches.id,
 			{ onDelete: "set null" }
 		),
+		/**
+		 * The session's **story clock** (DESIGN-story-time P3, 2026-09-28;
+		 * owner ruling 15 before it): the session's own now on its line. The
+		 * same five columns the book and each branch carry, so `clockOf` /
+		 * `clockColumns` read and write all three.
+		 *
+		 * All NULL = no clock of its own: the session **follows its line's
+		 * present** (the line's clock, else its newest history entry), which
+		 * is what a session always read. Stored only when the owner sets it in
+		 * session settings or a pipeline advances it (`advance-story-clock`);
+		 * the first set or step starts FROM the line's present.
+		 *
+		 * A stored clock is where the session's story stands: the durable
+		 * stats it inherits are those dated at or before it (the day; a time
+		 * of day cuts nothing), and the story's now — the prompt's current
+		 * date, `age` — IS it. Moving it never moves the book's or the line's
+		 * present: a session travelling back must not drag the line with it.
+		 */
+		storyClockYear: integer("story_clock_year"),
+		storyClockMonth: integer("story_clock_month"),
+		storyClockDay: integer("story_clock_day"),
+		storyClockHour: integer("story_clock_hour"),
+		storyClockMinute: integer("story_clock_minute"),
 		samplingConfigId: integer("sampling_config_id").references(
 			() => samplingConfigs.id,
 			{ onDelete: "set null" }
@@ -2620,11 +2752,19 @@ export const sessions = pgTable(
 		 * writers landing together get two numbers — turn order, as a
 		 * number. A proposal carries the version it was made against
 		 * (`state_proposals.base_version`); accept compares. Stamped on every
-		 * `attribute_values` / `session_possessions` row the write makes.
+		 * `attribute_values` row the write makes.
 		 */
 		stateVersion: integer("state_version").notNull().default(0)
 	},
-	(table) => [index("sessions_user_id_idx").on(table.userId)]
+	(table) => [
+		index("sessions_user_id_idx").on(table.userId),
+		// A branch delete sets this NULL on every session played on the line;
+		// partial because almost every session is on main.
+		index("sessions_lorebook_branch_id_idx")
+			.on(table.lorebookBranchId)
+			.where(sql`${table.lorebookBranchId} IS NOT NULL`),
+		...storyClockChecks("sessions", table)
+	]
 )
 
 export const sessionsRelations = relations(sessions, ({ one, many }) => ({
@@ -2693,7 +2833,8 @@ export const sessionMessages = pgTable(
 		 * Filter lane within a session (20 §7, R6) — mirrored to
 		 * `messages.channel`, which this row is now authoritative for.
 		 *
-		 * Every message ever written before 0200 is on `main`, and every genre
+		 * Every message written before channels existed (pre-squash
+		 * `0200_message_channels`, now in `0094_baseline_0_6`) is on `main`, and every genre
 		 * that declares no extra lanes keeps writing there, so a history read
 		 * scoped to `main` returns exactly what an unscoped read returned. The
 		 * column exists on the legacy table because the legacy table is what
@@ -3431,10 +3572,6 @@ export const sessionCharacters = pgTable(
 		envoySlug: text("envoy_slug"),
 		position: integer("position").default(0), // Position in the session
 		isActive: boolean("is_active").notNull().default(true), // 1 if active in session, 0 if not
-		// Character visibility optimization setting
-		visibility: text("visibility")
-			.notNull()
-			.default(SessionCharacterVisibility.VISIBLE), // Controls how much character info is shown when not responding
 		// Soft-delete: set when this participant is removed from the session so
 		// past messages can still resolve a speaker name. Null = active.
 		removedAt: timestamp("removed_at"),
@@ -3477,7 +3614,21 @@ export const sessionCharactersRelations = relations(
 	})
 )
 
-// Many-to-many: sessions <-> lorebooks
+/**
+ * @deprecated **Legacy, KEPT for data migration — never read or write it.**
+ *
+ * 0.5's `chat_lorebooks` junction, renamed by the 0.6 baseline. 0.5.3 declared
+ * it and never wrote it, so it is empty on every install; a session's book is
+ * `sessions.lorebook_id` (one book per session, `state/resolve.ts`).
+ *
+ * ⚠ Kept, not dropped (owner ruling 2026-09-26/27, the legacy keep-list beside
+ * `world_lore_entries`, `character_lore_entries` and `history_entries`): the
+ * post-0.5.3 migrations are rebuilt and the 0.5.3 → current data-migration
+ * script written first, and only then do the legacy tables go, together.
+ *
+ * ⚠ No primary key, unique or index, deliberately — nothing queries it, so an
+ * index would be maintenance on a table with no reader.
+ */
 export const sessionLorebooks = pgTable(
 	"session_lorebooks",
 	{
@@ -3673,21 +3824,6 @@ export const systemSettings = pgTable("system_settings", {
 	 * Nothing new should branch on it.
 	 */
 	pipelinesEnabled: boolean("pipelines_enabled").notNull().default(false),
-	/**
-	 * Show the legacy Prompt Configs sidebar, read-only.
-	 *
-	 * The one toggle that survives the changeover. Configuration moves to the
-	 * pipeline view, but a user who spent a year tuning prompt configs needs to
-	 * be able to *read* what they had — during the migration to check it landed,
-	 * and afterwards to consult a wording they have not re-created yet.
-	 *
-	 * Defaults on, because the alternative is that upgrading hides a year of
-	 * someone's work behind a setting they do not know exists. The legacy tables
-	 * themselves go in 0.8.0; this is what keeps them legible until then.
-	 */
-	legacyPromptConfigsVisible: boolean("legacy_prompt_configs_visible")
-		.notNull()
-		.default(true),
 	/**
 	 * ⚠ Superseded by `pipeline_config_selections` at instance scope.
 	 *
@@ -4170,7 +4306,12 @@ export const scenes = pgTable(
 	(table) => [
 		index("scenes_lorebook_id_idx").on(table.lorebookId),
 		index("scenes_session_id_idx").on(table.sessionId),
-		index("scenes_history_entry_id_idx").on(table.historyEntryId)
+		index("scenes_history_entry_id_idx").on(table.historyEntryId),
+		// Branch deletes cascade through this; partial because shared rows
+		// (NULL = main) are the great majority and are never looked up by it.
+		index("scenes_branch_id_idx")
+			.on(table.branchId)
+			.where(sql`${table.branchId} IS NOT NULL`)
 	]
 )
 
@@ -4357,6 +4498,10 @@ export const narrativeRelationships = pgTable(
 		),
 		index("narrative_relationships_to_entry_id_idx").on(table.toEntryId),
 		index("narrative_relationships_lorebook_id_idx").on(table.lorebookId),
+		// Branch deletes cascade through this; partial, as on `scenes`.
+		index("narrative_relationships_branch_id_idx")
+			.on(table.branchId)
+			.where(sql`${table.branchId} IS NOT NULL`),
 		// Exactly one endpoint kind per side. Without it a row could name a
 		// binding AND an entry — two answers to "what is this end of the edge"
 		// — or neither, which is an edge attached to nothing.
@@ -4620,6 +4765,12 @@ export const pipelineClauses = pgTable(
 		kind: text("kind").notNull(), // gather | each | loop | junction
 		/** Nesting: a clause inside a clause. NULL at the spine. */
 		parentClauseId: text("parent_clause_id"),
+		/**
+		 * Which of the parent's chains it sits in — the document's `clauseChain`.
+		 * NULL at the spine. Without it a nested clause matches no level in the
+		 * executor and never runs (lair pass F2).
+		 */
+		parentClauseChain: text("parent_clause_chain"),
 		mode: text("mode"), // parallel | sequential, for gather
 		/** Mandatory for each and loop — repetition without a bound is not expressible (F9). */
 		max: integer("max"),
@@ -4856,7 +5007,7 @@ export const pipelinePresetValues = pgTable("pipeline_preset_values", {
  * session-scoped prompt edits — to whoever they sent a pipeline to. Two tables make
  * *"does this travel with the document"* a structural fact rather than a clause
  * somebody has to remember. Resolution reads both and projects preset rows in at
- * `scopeKind: 'preset'`, so the five-layer chain is still one ordered walk (see
+ * `scopeKind: 'config'` (spelled `'preset'` until 2026-09-26), so the five-layer chain is still one ordered walk (see
  * `pipelines/config.ts`).
  *
  * **Keyed on the spec, not the spec version.** F21 makes node keys explicit and
@@ -5795,7 +5946,10 @@ export const pipelineConfigNotices = pgTable(
 		 * `culled` — a value this version does not declare, removed;
 		 * `backfilled` — a value that arrived at the shipped default; `unbound`
 		 * — a placed node whose definition this build does not run, removed or
-		 * provisional (plans/29 R-2), nothing deleted.
+		 * provisional (plans/29 R-2), nothing deleted; `misfit` — a selected
+		 * context template that names something its step does not supply
+		 * (typed templates P5), nothing refused or changed, cleared once it
+		 * fits again.
 		 */
 		kind: text("kind").notNull(),
 		nodeKey: text("node_key").notNull(),
@@ -5822,7 +5976,7 @@ export const pipelineConfigNotices = pgTable(
 		index("pipeline_config_notices_config_idx").on(t.configId),
 		check(
 			"pipeline_config_notices_kind_check",
-			sql`${t.kind} IN ('culled', 'backfilled', 'unbound')`
+			sql`${t.kind} IN ('culled', 'backfilled', 'unbound', 'misfit')`
 		)
 	]
 )
@@ -6259,6 +6413,16 @@ export const plugins = pgTable(
 			.notNull()
 			.default({})
 			.$type<Record<string, unknown>>(),
+		/**
+		 * The version a reinstall replaced, held until the new bundle's
+		 * `update` lifecycle callback has been fired (null = nothing pending).
+		 * A changed bundle arrives disabled, so the callback cannot fire at
+		 * install: it fires on the new bundle's first run — its first enable,
+		 * or the boot after one — and this column is what carries the old
+		 * version across. Two reinstalls before that run keep the OLDEST
+		 * version, so the callback is told what it is actually upgrading from.
+		 */
+		updateFromVersion: text("update_from_version"),
 		installedAt: timestamp("installed_at").notNull().defaultNow(),
 		updatedAt: timestamp("updated_at").notNull().defaultNow()
 	},
@@ -6382,6 +6546,48 @@ export const pluginRows = pgTable(
 		 * extension's data off disk to find its own.
 		 */
 		uniqueIndex("plugin_rows_plugin_key_unique").on(t.pluginId, t.key)
+	]
+)
+
+/**
+ * One person's own values for a plugin's **user-scoped** settings — the
+ * fields its manifest declares with `scope: 'user'` (SDK `FieldDecl.scope`).
+ *
+ * `plugins.settings` holds the instance's values, which an administrator
+ * writes; this holds what each person chose for themselves. A hook acting for
+ * a user reads that user's value, then the instance's, then the declared
+ * default (`settingsHost.ts`). Only user-scoped fields are ever written here:
+ * the write path refuses the rest, so an instance field cannot be overridden
+ * per person by writing it into this table.
+ *
+ * Values only, in the same stored form as `plugins.settings` (a secret is the
+ * encrypted `{$secret, value}` envelope). Both FKs cascade: uninstalling the
+ * plugin or deleting the account removes the row with nothing to remember.
+ */
+export const pluginUserSettings = pgTable(
+	"plugin_user_settings",
+	{
+		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+		pluginId: text("plugin_id")
+			.notNull()
+			.references(() => plugins.pluginId, {
+				onDelete: "cascade",
+				onUpdate: "cascade"
+			}),
+		userId: integer("user_id")
+			.notNull()
+			.references(() => users.id, { onDelete: "cascade" }),
+		settings: json("settings")
+			.notNull()
+			.default({})
+			.$type<Record<string, unknown>>(),
+		updatedAt: timestamp("updated_at").notNull().defaultNow()
+	},
+	(t) => [
+		uniqueIndex("plugin_user_settings_plugin_user_unique").on(
+			t.pluginId,
+			t.userId
+		)
 	]
 )
 
@@ -6523,8 +6729,6 @@ export const pipelineDefinitionRegistry = pgTable(
 		 * a row read back must reproduce its own hash.
 		 */
 		causesEventFrom: text("causes_event_from"),
-		/** The in-port whose literal is the audience of what a write stores (R57) — hashed with the contract. */
-		audienceFrom: text("audience_from"),
 		/**
 		 * Inlet only: the event payload shapes it reads (R33) — which events one
 		 * `events` lock may list. Part of the contract hash since the modder
@@ -6765,16 +6969,14 @@ export const pipelinePresetValuesRelations = relations(
 )
 
 /**
- * Per-user, per-session surface-grid layout (21 §10). Availability is
- * declaration (the mode's `SessionShape.panels` + plugin `surfaces.panels[]`),
- * recomputed and never stored; only *activation + placement* live here, and
- * only for the panels a user has actually touched or that a `surface:open`
- * intent activated for them. No row → the client derives defaults from the
- * mode's declared panels. One row per (user, session).
+ * A person's **session layout** for one session (NOMENCLATURE §9), one row per
+ * (user, session). Availability is declaration (the genre's widgets + plugin
+ * `surfaces.panels[]`), recomputed and never stored; only the arrangement and
+ * activation live here.
  *
- * `layout` stores **relative** order/priority + sparse per-tier size overrides,
- * never absolute grid columns, so a hand-tuned wide layout degrades sanely when
- * the content box narrows a tier (21 §5).
+ * `layout` holds the ONE live format, stored verbatim. The retired layout
+ * document (LayoutDoc v2) and its `document` column were dropped in brief 2 of
+ * `PLAN-layout-one-format-2026-09-28`.
  */
 export const sessionPanelLayouts = pgTable(
 	"session_panel_layouts",
@@ -6787,44 +6989,37 @@ export const sessionPanelLayouts = pgTable(
 			.notNull()
 			.references(() => users.id, { onDelete: "cascade" }),
 		/**
-		 * `{ active: [{ id, order, span, collapsed, drawered }],
-		 *    tierSizeOverrides: { [tier]: { [panelId]: fr } } }`.
-		 * Shape owned by the client surface manager (21); the server stores it
-		 * verbatim and never interprets it — a forward-compatible blob.
+		 * The session layout: `{ zoneLayout?, widgetGrid?, arrangedGrid?,
+		 * active?, tierSizeOverrides? }`. ⏳ Its types are the app client's
+		 * (`LayoutBlob`) until brief 1 declares it in the SDK; the server
+		 * stores it verbatim and never interprets it.
 		 */
 		layout: json("layout")
 			.notNull()
 			.default({})
 			.$type<Record<string, unknown>>(),
 		/**
-		 * ⏳ TRANSITIONAL SIBLING of `layout` — the v2 **layout document**
-		 * (session layout v2, P3). NULL means "follow the preset", which is
-		 * what every row says until somebody edits a layout under the v2
-		 * stage.
-		 *
-		 * Two columns rather than a reinterpretation of one, until P6: the
-		 * legacy renderer still reads `layout` as its `{ zoneLayout?,
-		 * widgetGrid?, arrangedGrid? }` blob, and a document written into that
-		 * column would make every un-migrated client render nothing. P6 drops
-		 * the blob and renames this one; nothing but the v2 stage writes here
-		 * before then.
+		 * **Started from** (NOMENCLATURE §9): which session layout preset this
+		 * session's layout was last copied from. Provenance, never a base — read
+		 * only to label, to offer "Start again from", and to notice the source
+		 * changed since the copy. NULL after "Start from scratch", or once that
+		 * row is deleted (`SET NULL`). The SQL column keeps its old name.
+		 * ⏳ Until brief 3 the page still draws this session over the row it
+		 * names (`presetBase`).
 		 */
-		document: json("document").$type<LayoutDoc>(),
-		/**
-		 * The user's ACTIVE layout selection for this session (PLAN 25 redesign,
-		 * 2026-08-30): which saved preset they've applied. NULL = the genre
-		 * default. The preset DEFINITION lives in `session_layout_presets`; this
-		 * row holds only the reference + the per-widget settings below — the
-		 * active selection, never the preset itself.
-		 */
-		layoutPresetId: integer("layout_preset_id").references(
+		startedFromLayoutPresetId: integer("layout_preset_id").references(
 			() => sessionLayoutPresets.id,
 			{ onDelete: "set null" }
 		),
 		/**
-		 * Per-widget settings that are the USER's, not the preset's — arbitrary
-		 * per-component config a preset shouldn't carry (a background-image
-		 * reference, etc.), keyed by widget id. Stored verbatim.
+		 * When `layout` was last copied in from a source (see
+		 * `startedFromLayoutPresetId`). NULL means a row written before the copy
+		 * model, which brief 3's boot step has not yet made whole.
+		 */
+		layoutCopiedAt: timestamp("layout_copied_at"),
+		/**
+		 * This person's own per-session layout settings, stored verbatim:
+		 * `widgetStyles` style pins (`{ [widget instance id]: { id, slug } }`).
 		 */
 		layoutSettings: json("layout_settings")
 			.notNull()
@@ -6845,13 +7040,10 @@ export const sessionPanelLayouts = pgTable(
 )
 
 /**
- * Saved layout presets (PLAN 25 redesign, ruled 2026-08-30; ownership made
- * explicit by session layout v2 §4.1, 2026-09-17). A **session layout preset**
- * is a reusable **layout document** scoped to one genre and owned by core, a
- * plugin or a person. The user's ACTIVE choice and their per-widget settings
- * ride the per-user `session_panel_layouts` row (layoutPresetId /
- * layoutSettings) — this table is only the definitions, never the active
- * selection.
+ * **Session layout presets** (NOMENCLATURE §9): named, copyable **session
+ * layouts**, each scoped to one genre and owned by core, a plugin or a person.
+ * A session never references one to draw; its own `session_panel_layouts` row
+ * says which one it **started from**.
  *
  * ## `origin` is the ownership fact, and every other column follows it
  *
@@ -6895,31 +7087,24 @@ export const sessionLayoutPresets = pgTable(
 		/** `shared` · `private`. Core and plugin rows are always shared. */
 		visibility: text("visibility").notNull().default("private"),
 		/**
-		 * ⏳ LEGACY arrangement, stored verbatim: `{ zoneLayout?, widgetGrid?,
-		 * arrangedGrid? }` — the blob the pre-v2 client layout editor produces,
-		 * and still the only thing that client reads. Kept, and still written
-		 * by the core reconciler, until P6 retires the legacy renderer.
+		 * The session layout, stored verbatim: the arrangement (`zoneLayout?`,
+		 * `widgetGrid?`, `arrangedGrid?`) plus the `widgetSettings` and
+		 * `widgetStyles` slots, keyed by widget instance id — one blob, so
+		 * share, clone and re-capture move all of it together. `{}` means "no
+		 * overrides". The v2 `document`, `widget_settings` and `widget_styles`
+		 * columns were dropped in brief 2 of `PLAN-layout-one-format-2026-09-28`.
 		 */
 		layout: json("layout")
 			.notNull()
 			.default({})
 			.$type<Record<string, unknown>>(),
 		/**
-		 * The v2 **layout document** (`LayoutDoc`). NULL means this row has
-		 * none yet — a legacy user save, or a genre that ships no document —
-		 * and the resolution chain falls through it.
+		 * When `layout` last changed. Moves only with the layout's content —
+		 * never with `updated_at`, which every boot re-force, rename and share
+		 * bumps — so a session can tell its source was **Updated** since the
+		 * copy (`session_panel_layouts.layout_copied_at`).
 		 */
-		document: json("document").$type<LayoutDoc>(),
-		/** `{ [instanceKey]: { [field]: value } }`, pinned under a person's own. */
-		widgetSettings:
-			json("widget_settings").$type<
-				Record<string, Record<string, unknown>>
-			>(),
-		/** `{ [instanceKey]: { id, slug } }` style pins. */
-		widgetStyles:
-			json("widget_styles").$type<
-				Record<string, { id: number; slug: string }>
-			>(),
+		layoutUpdatedAt: timestamp("layout_updated_at").notNull().defaultNow(),
 		/** Provenance: the app/plugin version that last seeded a shipped row. */
 		seededByVersion: text("seeded_by_version"),
 		createdAt: timestamp("created_at").notNull().defaultNow(),
@@ -6962,15 +7147,15 @@ export const sessionLayoutPresets = pgTable(
 )
 
 /**
- * A person's chosen **session layout preset** per genre (session layout v2
- * §4.2): "use this one for my new Adventure sessions". One row per
- * (user, genre); absent means the genre's own default — the third tier of the
- * resolution chain, under the session's own document and the preset it names.
+ * A person's **new-session layout** per genre (NOMENCLATURE §9): "use this one
+ * for my new Adventure sessions". One row per (user, genre); absent means new
+ * sessions start from the **genre default layout**. The table keeps its name,
+ * translated at the seam (R5).
  *
  * `layout_preset_id` is `ON DELETE SET NULL` rather than cascade: deleting a
- * preset somebody defaulted to falls them through to the genre default, which
- * is the same thing that happens to a session pinned to it. A row whose preset
- * is null answers nothing and is harmless; the next `setDefault` rewrites it.
+ * preset somebody chose falls them through to the genre default layout. A row
+ * whose preset is null answers nothing and is harmless; the next set rewrites
+ * it.
  */
 export const userLayoutDefaults = pgTable(
 	"user_layout_defaults",
@@ -7605,7 +7790,9 @@ export const lorebookEntries = pgTable(
 			.notNull()
 			.default(sql`ARRAY[]::text[]`),
 		/*
-		 * ⚠ **`retrievalStrategy` was here and is gone (migration 0204).**
+		 * ⚠ **`retrievalStrategy` was here and is gone** (pre-squash migration
+		 * `0204_retrieval_strategy_cull`, now folded into `0094_baseline_0_6`;
+		 * its prose is kept in `ARCHIVE-migration-prose-0094-0204.md`).
 		 *
 		 * `keyword` / `rag` / `both`, NULL meaning `rag`. It was the last
 		 * exclusive routing in the retrieval path: an entry set to `keyword`
@@ -7613,7 +7800,8 @@ export const lorebookEntries = pgTable(
 		 * That is the shape the retrieval plan's second governing rule forbids
 		 * — *an unavailable mechanism subtracts a signal; it never reroutes,
 		 * disables a path, or excludes a candidate* — one scope down from the
-		 * node-level `retrievalMode` migration 0203 culled for the same reason.
+		 * node-level `retrievalMode` that pre-squash `0203_retrieval_mode_cull`
+		 * culled for the same reason.
 		 * Two of its three values had also stopped differing, `both`'s fusion
 		 * having been removed in respond 1.17.0.
 		 *
@@ -7633,9 +7821,11 @@ export const lorebookEntries = pgTable(
 		 * another name.
 		 *
 		 * The three legacy tables above keep their copies. Nothing reads or
-		 * writes them, 0188's backfill SQL still selects them, and the test
-		 * that replays that SQL is the proof the data came across — see the
-		 * residue note in the entries ledger.
+		 * writes them; they are kept (owner ruling 2026-09-26) as the source
+		 * shape for the 0.5.3 → current data-migration script still to be
+		 * written. The pre-squash `0188_lorebook_entries` backfill that once
+		 * copied them across, and the replay test that proved it, went with
+		 * the squash into `0094_baseline_0_6`.
 		 */
 		/**
 		 * `substring` / `word` / `regex`. NULL falls back to `useRegex`, which
@@ -7847,7 +8037,22 @@ export const lorebookEntries = pgTable(
 			t.typeId,
 			t.position
 		),
-		index("lorebook_entries_book_type_idx").on(t.lorebookId, t.typeId)
+		index("lorebook_entries_book_type_idx").on(t.lorebookId, t.typeId),
+		// The FK columns a delete elsewhere has to look up. Partial: each is
+		// NULL on most rows (shared line, no parent, no anchor), and a NULL is
+		// never what a cascade or `set null` searches for.
+		// A branch delete cascades through `branch_id`.
+		index("lorebook_entries_branch_id_idx")
+			.on(t.branchId)
+			.where(sql`${t.branchId} IS NOT NULL`),
+		// An entry delete cascades to its children through `anchor_entry_id`.
+		index("lorebook_entries_anchor_entry_id_idx")
+			.on(t.anchorEntryId)
+			.where(sql`${t.anchorEntryId} IS NOT NULL`),
+		// A cast member delete sets their private lore's anchor NULL.
+		index("lorebook_entries_anchor_binding_id_idx")
+			.on(t.anchorBindingId)
+			.where(sql`${t.anchorBindingId} IS NOT NULL`)
 	]
 )
 
@@ -7900,6 +8105,20 @@ export const lorebookBranches = pgTable(
 		forkYear: integer("fork_year"),
 		forkMonth: integer("fork_month"),
 		forkDay: integer("fork_day"),
+		/**
+		 * The story's clock — where the story currently stands on this branch
+		 * (DESIGN-story-time §3), in the book's own calendar. All NULL = no
+		 * stored clock: the present is the newest history entry on the line,
+		 * which is what it always was. A pin is a history entry; the clock is
+		 * not a pin and is never drawn as one. ⚠ A branch never inherits
+		 * main's clock (`state/storyTime.ts`).
+		 */
+		storyClockYear: integer("story_clock_year"),
+		storyClockMonth: integer("story_clock_month"),
+		storyClockDay: integer("story_clock_day"),
+		/** Optional time of day on the clock, 24-hour. */
+		storyClockHour: integer("story_clock_hour"),
+		storyClockMinute: integer("story_clock_minute"),
 		createdAt: timestamp("created_at").notNull().defaultNow(),
 		updatedAt: timestamp("updated_at")
 			.notNull()
@@ -7913,7 +8132,18 @@ export const lorebookBranches = pgTable(
 		check(
 			"lorebook_branches_name_check",
 			sql`lower(${t.name}) <> 'main' AND ${t.name} <> ''`
-		)
+		),
+		// The fork date narrows left to right, and is all-or-nothing on the
+		// year — the same pair `cast_presences` states for its window's end.
+		check(
+			"lorebook_branches_fork_check",
+			sql`(${t.forkMonth} IS NOT NULL OR ${t.forkDay} IS NULL)`
+		),
+		check(
+			"lorebook_branches_fork_year_check",
+			sql`(${t.forkYear} IS NOT NULL OR (${t.forkMonth} IS NULL AND ${t.forkDay} IS NULL))`
+		),
+		...storyClockChecks("lorebook_branches", t)
 	]
 )
 
@@ -7991,6 +8221,14 @@ export const entryAmendments = pgTable(
 			t.month,
 			t.day
 		),
+		// Branch deletes cascade through this; partial, NULL being main.
+		index("entry_amendments_branch_id_idx")
+			.on(t.branchId)
+			.where(sql`${t.branchId} IS NOT NULL`),
+		// A history entry delete sets this NULL on the overlays it recorded.
+		index("entry_amendments_history_entry_id_idx")
+			.on(t.historyEntryId)
+			.where(sql`${t.historyEntryId} IS NOT NULL`),
 		// A month cannot be named without a year, nor a day without a month:
 		// the calendar narrows left to right or the comparator has no order.
 		check(
@@ -8067,6 +8305,10 @@ export const castPresences = pgTable(
 	(t) => [
 		index("cast_presences_member_idx").on(t.lorebookBindingId),
 		index("cast_presences_book_idx").on(t.lorebookId),
+		// Branch deletes cascade through this; partial, NULL being main.
+		index("cast_presences_branch_id_idx")
+			.on(t.branchId)
+			.where(sql`${t.branchId} IS NOT NULL`),
 		// The calendar narrows left to right, at both ends of the window.
 		check(
 			"cast_presences_from_check",
@@ -8165,6 +8407,14 @@ export const castAmendments = pgTable(
 			t.day
 		),
 		index("cast_amendments_book_idx").on(t.lorebookId),
+		// Branch deletes cascade through this; partial, NULL being main.
+		index("cast_amendments_branch_id_idx")
+			.on(t.branchId)
+			.where(sql`${t.branchId} IS NOT NULL`),
+		// A history entry delete sets this NULL on the overlays it recorded.
+		index("cast_amendments_history_entry_id_idx")
+			.on(t.historyEntryId)
+			.where(sql`${t.historyEntryId} IS NOT NULL`),
 		check(
 			"cast_amendments_date_check",
 			sql`(${t.month} IS NOT NULL OR ${t.day} IS NULL)`
@@ -8653,8 +8903,10 @@ export const bindingSuggestionsRelations = relations(
 // | `lorebook` | `lorebooks.id` — the world itself | null |
 // | `session` | `sessions.id` — this run's world | the same id |
 // | `session_cast` | `characters.id` — this run's cast member | the session |
+// | `location` 🚧 | `lorebook_entries.id` — a place in this world (phase 4) | null |
+// | `session_location` 🚧 | `lorebook_entries.id` — this run's place | the session |
 //
-// No foreign key on `owner_id`: it points at five different tables depending on
+// No foreign key on `owner_id`: it points at six different tables depending on
 // the row beside it, which is the one thing a foreign key cannot express.
 // `session_id` **is** a key, and it is what makes the session layer disappear
 // with its session instead of outliving it.
@@ -8715,15 +8967,22 @@ export const attributeConfigs = pgTable(
 		/** `user` · `run:<id>` · `script:<id>` · `session:<id>`. Provenance, free text by design. */
 		updatedBy: text("updated_by").notNull().default("user"),
 		/**
-		 * Which branch of the world's history this row belongs to.
+		 * Which line of the world's history this row belongs to. NULL = main,
+		 * the shared line (see `lorebook_branches`).
 		 *
-		 * ⚠ **No foreign key, and deliberately**: `lorebook_branches` does not
-		 * exist yet (R8). The column is here because the durable writers fill
-		 * it the moment it does, and a nullable int nobody constrains is
-		 * cheaper than the migration that would add it to rows already written.
-		 * Null is "the trunk", which is every row today.
+		 * Written by the durable writer (`state/durable.ts`) from the line the
+		 * session plays on (`sessions.lorebook_branch_id`), and read through
+		 * the shared line rule (`state/reading.ts`, `rowReadsOnLine`) like
+		 * every other branched row.
+		 *
+		 * CASCADE, as the line's amendments, entries, scenes and links do: a
+		 * branch-only fact goes with its branch. `set null` would move it onto
+		 * main — onto every line — which is the leak a branch exists to stop.
 		 */
-		branchId: integer("branch_id"),
+		branchId: integer("branch_id").references(
+			(): AnyPgColumn => lorebookBranches.id,
+			{ onDelete: "cascade" }
+		),
 		/**
 		 * The story-clock anchor: which history entry this configuration holds
 		 * from. `SET NULL` rather than cascade — deleting the entry loses the
@@ -8758,6 +9017,10 @@ export const attributeConfigs = pgTable(
 		),
 		// `stateFor(sessionId)` is one query over this.
 		index("attribute_configs_session_idx").on(t.sessionId),
+		// Branch deletes cascade through this; partial, NULL being main.
+		index("attribute_configs_branch_id_idx")
+			.on(t.branchId)
+			.where(sql`${t.branchId} IS NOT NULL`),
 		// The timeline read: "what did this owner carry at this moment".
 		index("attribute_configs_moment_idx").on(
 			t.ownerKind,
@@ -8766,7 +9029,7 @@ export const attributeConfigs = pgTable(
 		),
 		check(
 			"attribute_configs_owner_kind_check",
-			sql`${t.ownerKind} IN ('card', 'cast_member', 'lorebook', 'session', 'session_cast')`
+			sql`${t.ownerKind} IN ('card', 'cast_member', 'lorebook', 'session', 'session_cast', 'location', 'session_location')`
 		)
 	]
 )
@@ -8805,12 +9068,13 @@ export const attributeValues = pgTable(
 		),
 		updatedBy: text("updated_by").notNull().default("user"),
 		/**
-		 * Which branch of the world's history this row belongs to.
-		 *
-		 * ⚠ **No foreign key, and deliberately**: `lorebook_branches` does not
-		 * exist yet (R8). Null is "the trunk", which is every row today.
+		 * Which line of the world's history this row belongs to. NULL = main.
+		 * Written and cascaded exactly as on `attribute_configs` — see there.
 		 */
-		branchId: integer("branch_id"),
+		branchId: integer("branch_id").references(
+			(): AnyPgColumn => lorebookBranches.id,
+			{ onDelete: "cascade" }
+		),
 		/**
 		 * The story-clock anchor. A character's attributes live with the
 		 * versioned cast member *along the timeline*, and this is the position
@@ -8849,6 +9113,10 @@ export const attributeValues = pgTable(
 			t.slotId
 		),
 		index("attribute_values_session_idx").on(t.sessionId),
+		// Branch deletes cascade through this; partial, NULL being main.
+		index("attribute_values_branch_id_idx")
+			.on(t.branchId)
+			.where(sql`${t.branchId} IS NOT NULL`),
 		// The timeline read: "what did this owner carry at this moment".
 		index("attribute_values_moment_idx").on(
 			t.ownerKind,
@@ -8857,87 +9125,7 @@ export const attributeValues = pgTable(
 		),
 		check(
 			"attribute_values_owner_kind_check",
-			sql`${t.ownerKind} IN ('card', 'cast_member', 'lorebook', 'session', 'session_cast')`
-		)
-	]
-)
-
-/**
- * Who is carrying what — an inventory, which is **not** a slot.
- *
- * An inventory is possession *edges* to entries, and the distinction is the
- * classic RPG-modelling trap: a rusty key is a named topic with prose worth
- * retrieving, so it is a lorebook entry; "Verity has it" is an edge; only
- * `health: 12` is an attribute. Storing an inventory as a slot would flatten a
- * thing with keywords, an embedding and a history into a string in a list.
- *
- * Session-scoped only. What a character owns *in the world* is a lorebook-layer
- * question the entries spine will answer; what they are carrying *this run* is
- * this table, and it diverges from message 1.
- */
-export const sessionPossessions = pgTable(
-	"session_possessions",
-	{
-		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
-		sessionId: integer("session_id")
-			.notNull()
-			.references(() => sessions.id, { onDelete: "cascade" }),
-		/**
-		 * `session_cast` — a character in this session, by `characters.id` — or
-		 * `session`, the world owner that holds what nobody is carrying ("on
-		 * the table"), by `sessions.id`.
-		 */
-		ownerKind: text("owner_kind").notNull(),
-		ownerId: integer("owner_id").notNull(),
-		entryId: integer("entry_id")
-			.notNull()
-			.references((): AnyPgColumn => lorebookEntries.id, {
-				onDelete: "cascade"
-			}),
-		/**
-		 * How many. Zero is a real row and not a deletion: "Verity has no
-		 * arrows left" is a fact the ledger showed and a swipe must be able to
-		 * take back, which a deleted row could not be.
-		 */
-		quantity: integer("quantity").notNull().default(1),
-		validFromMessageId: integer("valid_from_message_id").references(
-			(): AnyPgColumn => messages.id,
-			{ onDelete: "cascade" }
-		),
-		updatedBy: text("updated_by").notNull().default("user"),
-		/** The trunk today; no FK until `lorebook_branches` exists (R8). */
-		branchId: integer("branch_id"),
-		/** The story-clock anchor, on the same terms as an attribute value's. */
-		historyEntryId: integer("history_entry_id").references(
-			(): AnyPgColumn => lorebookEntries.id,
-			{ onDelete: "set null" }
-		),
-		sceneId: integer("scene_id").references((): AnyPgColumn => scenes.id, {
-			onDelete: "set null"
-		}),
-		/** Plain ints with no key, so a recorded row outlives its session. */
-		sourceSessionId: integer("source_session_id"),
-		sourceMessageId: integer("source_message_id"),
-		/** The state version this edge landed at (U5f) — see `attribute_values.state_version`. */
-		stateVersion: integer("state_version"),
-		createdAt: timestamp("created_at").notNull().defaultNow()
-	},
-	(t) => [
-		index("session_possessions_session_idx").on(t.sessionId),
-		index("session_possessions_owner_idx").on(
-			t.sessionId,
-			t.ownerKind,
-			t.ownerId
-		),
-		// The timeline read: "who was carrying what at this moment".
-		index("session_possessions_moment_idx").on(
-			t.ownerKind,
-			t.ownerId,
-			t.historyEntryId
-		),
-		check(
-			"session_possessions_owner_kind_check",
-			sql`${t.ownerKind} IN ('session_cast', 'session')`
+			sql`${t.ownerKind} IN ('card', 'cast_member', 'lorebook', 'session', 'session_cast', 'location', 'session_location')`
 		)
 	]
 )
@@ -8965,12 +9153,17 @@ export const stateProposals = pgTable(
 			(): AnyPgColumn => messages.id,
 			{ onDelete: "cascade" }
 		),
-		/** `value` — an attribute change — or `possession` — an item moving. */
+		/**
+		 * `value` — an attribute change, the only kind. `possession` (an item
+		 * moving as an edge) was retired in phase 3b and the CHECK narrowed on
+		 * 2026-09-27 with the edge table's drop; an item moving is a `value`
+		 * list change on the owner's inventory stat.
+		 */
 		kind: text("kind").notNull(),
 		/**
 		 * The change, in the same shape `core:task/set-state@1` takes on its
-		 * `changes` port: `{ owner, slotId, value }` or `{ owner, entryId,
-		 * delta }`. One shape either side of the gate, so accepting a proposal
+		 * `changes` port: `{ owner, slotId, value }`, or a list op `{ owner,
+		 * slotId, op, items }`. One shape either side of the gate, so accepting a proposal
 		 * is the same write the script writer makes.
 		 */
 		payload: jsonb("payload").notNull().$type<Record<string, unknown>>(),
@@ -8999,7 +9192,7 @@ export const stateProposals = pgTable(
 		index("state_proposals_message_idx").on(t.messageId),
 		check(
 			"state_proposals_kind_check",
-			sql`${t.kind} IN ('value', 'possession')`
+			sql`${t.kind} IN ('value')`
 		),
 		check(
 			"state_proposals_status_check",
@@ -9029,7 +9222,7 @@ export const stateProposals = pgTable(
  * `origin` is three values here where the SDK's is two, and the extra one is
  * not a third kind of declaration — `code` and `plugin` are both `code` to the
  * registry. It is recorded because *who* last declared it is the question a
- * stale row has to answer ("the plugin that is no longer installed"), and a
+ * stale row has to answer ("the plugin that is not installed"), and a
  * row that only said `code` could not.
  */
 export const attributeDeclarations = pgTable(
@@ -9168,7 +9361,252 @@ export const ownerSheets = pgTable(
 		),
 		check(
 			"owner_sheets_owner_kind_check",
-			sql`${t.ownerKind} IN ('card', 'cast_member', 'lorebook', 'session', 'session_cast')`
+			sql`${t.ownerKind} IN ('card', 'cast_member', 'lorebook', 'session', 'session_cast', 'location', 'session_location')`
+		)
+	]
+)
+
+/**
+ * 🚧 A session's **attribute picks** (ruled 2026-09-25): its deviations from
+ * the vocabulary its genre and its world give it, one row per slot. `enabled`
+ * false drops a world attribute the session would otherwise read; `enabled`
+ * true adds one of the session's own (or brings a dropped one back). No row is
+ * the default. Honoured only when the session's genre allows custom
+ * attributes; a genre's baseline slots are never dropped.
+ *
+ * The row in force is the latest, from now on: values already stored stay,
+ * later writes follow the picks, and write-back records only what is picked.
+ */
+export const sessionAttributePicks = pgTable(
+	"session_attribute_picks",
+	{
+		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+		sessionId: integer("session_id")
+			.notNull()
+			.references(() => sessions.id, { onDelete: "cascade" }),
+		slotId: text("slot_id").notNull(),
+		enabled: boolean("enabled").notNull(),
+		createdAt: timestamp("created_at").notNull().defaultNow()
+	},
+	(t) => [uniqueIndex("session_attribute_picks_session_slot_uq").on(t.sessionId, t.slotId)]
+)
+
+/**
+ * The widget half of an **authored component** (C6): what `sessions:view`
+ * offers it as. The subset of the SDK's `WidgetDecl` an admin authors — never
+ * `id` (the widget id is composed from the owner and the slug), `role` (an
+ * authored component is never the primary) or `component` (it IS the
+ * component). `scopes` are requests, granted only once reviewed
+ * (`authored_components.admin_denied`).
+ */
+export interface AuthoredWidgetShape {
+	title: import("@serene-pub/sdk").I18n
+	icon?: string
+	scopes?: string[]
+	reads?: string[]
+	channels?: string[]
+	cells?: { minW?: number; maxW?: number; minH?: number; maxH?: number }
+	settings?: Record<string, unknown>
+	defaultActive?: boolean
+}
+
+/**
+ * **Authored components** (C6): components an admin writes or clones in the
+ * app — artifacts of THIS instance, owned by no plugin and never packaged.
+ * Each row is its own owner, `authored.<id>` (`shared/widgets/authoredOwner`):
+ * its own UI worker, its own grants, its own enable switch.
+ *
+ * The SOURCE is durable here (`files`); the compiled module (the artifact)
+ * lives in the component cache on disk, keyed by `artifact_hash`, and is
+ * rebuilt from this source on a miss (P3). A row is offered to sessions only
+ * while enabled, compiled (`artifact_hash`) and clean (`last_error` null) —
+ * "not offered rather than offered broken".
+ *
+ * `updated_at` is the optimistic-concurrency token: every write names the one
+ * it read, and a stale one loses (`components/store.ts`).
+ */
+export const authoredComponents = pgTable(
+	"authored_components",
+	{
+		/** The authored id — ten of `[a-z0-9]`, random, minted at creation. */
+		id: text("id").primaryKey(),
+		/** Unique on this instance; the widget id is `authored.<id>:<slug>`. */
+		slug: text("slug").notNull(),
+		/** What an admin sees it called — a string or a locale map (R-20). */
+		label: jsonb("label").notNull().$type<import("@serene-pub/sdk").I18n>(),
+		framework: text("framework").notNull(), // svelte | vanilla
+		/** The entry file, a key of `files`. */
+		entry: text("entry").notNull(),
+		/** The source: relative path → text. Never served. */
+		files: jsonb("files").notNull().default({}).$type<Record<string, string>>(),
+		widget: jsonb("widget").notNull().$type<AuthoredWidgetShape>(),
+		/** Its upstream, for a clone (`ComponentDecl.basedOn`). Null for one written from scratch. */
+		basedOn: jsonb("based_on").$type<{
+			component: string
+			version: string
+			sourceHash?: string
+		} | null>(),
+		/** `componentSourceHash(files)` — what a compile is FOR; a compile of older source never lands. */
+		sourceHash: text("source_hash").notNull(),
+		/** The toolchain fingerprint the artifact was built under; null until compiled. */
+		fingerprint: text("fingerprint"),
+		/** The compiled module's hash (its cache key and URL); null until compiled. */
+		artifactHash: text("artifact_hash"),
+		/** The last compile's failure, for the editor; a row with one is not offered. */
+		lastError: text("last_error"),
+		/**
+		 * The **component draft**: the latest source an admin saved that did
+		 * NOT compile, kept beside the saved version (the columns above —
+		 * the last source that compiled, what sessions run and export ships)
+		 * so a broken save never takes a working widget away. All five are
+		 * null together when there is none; a save that compiles, or a
+		 * revert, clears them. A component that has never compiled has no
+		 * saved version to protect and no draft: its broken source is stored
+		 * as the source, and it is not offered (`components/store.ts`).
+		 */
+		draftFiles: jsonb("draft_files").$type<Record<string, string> | null>(),
+		draftEntry: text("draft_entry"),
+		draftFramework: text("draft_framework"), // svelte | vanilla
+		/** The draft's compile errors, located: `{ file, line, column, text }[]`. */
+		draftErrors: jsonb("draft_errors").$type<{ file: string; line: number; column: number; text: string }[] | null>(),
+		draftUpdatedAt: timestamp("draft_updated_at"),
+		enabled: boolean("enabled").notNull().default(false),
+		/**
+		 * Scope review, in the plugin permission model's own record
+		 * (`plugins/permissions.ts`): denials plus one `__reviewed:` mark per
+		 * decided scope. A scope with no mark is refused — a request, not a grant.
+		 */
+		adminDenied: jsonb("admin_denied").notNull().default([]).$type<string[]>(),
+		createdBy: integer("created_by").references(() => users.id, { onDelete: "set null" }),
+		createdAt: timestamp("created_at").notNull().defaultNow(),
+		updatedAt: timestamp("updated_at").notNull().defaultNow()
+	},
+	(t) => [
+		uniqueIndex("authored_components_slug_uq").on(t.slug),
+		check("authored_components_id_check", sql`${t.id} ~ '^[a-z0-9]{10}$'`),
+		check("authored_components_framework_check", sql`${t.framework} IN ('svelte', 'vanilla')`),
+		check(
+			"authored_components_draft_framework_check",
+			sql`${t.draftFramework} IS NULL OR ${t.draftFramework} IN ('svelte', 'vanilla')`
+		)
+	]
+)
+
+/**
+ * The **admin logbook** — who changed what on this instance, and when
+ * (Django admin's History). One **logbook record** per successful admin
+ * change, written by the socket wrapper from the declarative table in
+ * `server/adminLogbook/events.ts`; read by Admin → History.
+ *
+ * ⚠ Deliberately NO foreign keys. A record outlives its object (a deletion is
+ * the record most worth keeping) and its actor (a deleted admin's changes must
+ * still say who made them) — so the actor's name is SNAPSHOT into
+ * `actor_name`, and `object_id` is text because objects are keyed by integer
+ * ids, component ids, plugin slugs, genre ids and capability ids alike.
+ *
+ * `changes` is already redacted (`adminLogbook/diff.ts`): a secret field that
+ * changed is a line with `redacted: true` and no values. Pruned by age and by
+ * count (`adminLogbook/record.ts`), never by hand.
+ *
+ * Not `binding_merge_logs` (the graph absorb's undo record) and not the lore
+ * history — see `shared/adminLogbook.ts`.
+ */
+export const adminLogbook = pgTable(
+	"admin_logbook",
+	{
+		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+		createdAt: timestamp("created_at").notNull().defaultNow(),
+		actorUserId: integer("actor_user_id"),
+		actorName: text("actor_name").notNull(),
+		/** The socket event that made the change: `connections:update`. */
+		event: text("event").notNull(),
+		/** A key of `LOGBOOK_OBJECT_TYPES`. */
+		objectType: text("object_type").notNull(),
+		objectId: text("object_id"),
+		/** The object's name when it happened. */
+		objectLabel: text("object_label").notNull().default(""),
+		action: text("action")
+			.notNull()
+			.$type<import("../../shared/adminLogbook").LogbookAction>(),
+		summary: text("summary").notNull(),
+		changes: jsonb("changes")
+			.notNull()
+			.default([])
+			.$type<import("../../shared/adminLogbook").LogbookChange[]>()
+	},
+	(t) => [
+		index("admin_logbook_created_idx").on(t.createdAt),
+		index("admin_logbook_object_idx").on(t.objectType, t.objectId),
+		index("admin_logbook_actor_idx").on(t.actorUserId),
+		check(
+			"admin_logbook_action_check",
+			sql`${t.action} IN ('add', 'change', 'delete', 'other')`
+		)
+	]
+)
+
+/**
+ * **Notifications** — one per-user list of things that happened to a person or
+ * are waiting on them (plan: `PLAN-notifications-2026-09-28`; vocabulary in
+ * `shared/notifications/kinds.ts`). Raised and cleared by
+ * `server/notifications/store.ts` at the server's decision points, never from
+ * socket events (which are interest-gated and dropped when nobody watches).
+ *
+ * `kind` carries NO CHECK constraint: kinds are a registry, validated
+ * at raise time, and a CHECK would need a migration per kind.
+ *
+ * One OPEN row per (user, regarding): the partial unique index is what makes a
+ * raise an upsert. Cleared rows stay for the retention window and are pruned
+ * by age and count, never by hand.
+ *
+ * ⚠ Not the admin **Needs you** list — that one is derived and never stored.
+ */
+export const notifications = pgTable(
+	"notifications",
+	{
+		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
+		userId: integer("user_id")
+			.notNull()
+			.references(() => users.id, { onDelete: "cascade" }),
+		/** A notification kind id: `core:notification/your-move@1`. */
+		kind: text("kind").notNull(),
+		/** The per-user dedupe key: `session:42/move`. */
+		regarding: text("regarding").notNull(),
+		level: text("level")
+			.notNull()
+			.$type<import("../../shared/notifications/kinds").NotificationLevel>(),
+		/** Where the call to action goes — a view address. */
+		href: text("href").notNull(),
+		/** Substitution values for the kind's text. */
+		vars: jsonb("vars")
+			.notNull()
+			.default({})
+			.$type<import("../../shared/notifications/kinds").NotificationVars>(),
+		raisedAt: timestamp("raised_at").notNull().defaultNow(),
+		lastRaisedAt: timestamp("last_raised_at").notNull().defaultNow(),
+		readAt: timestamp("read_at"),
+		clearedAt: timestamp("cleared_at"),
+		clearedHow: text("cleared_how").$type<
+			import("../../shared/notifications/kinds").NotificationClearedHow
+		>()
+	},
+	(t) => [
+		uniqueIndex("notifications_open_regarding_idx")
+			.on(t.userId, t.regarding)
+			.where(sql`"cleared_at" IS NULL`),
+		index("notifications_user_idx").on(
+			t.userId,
+			t.clearedAt,
+			t.lastRaisedAt
+		),
+		index("notifications_cleared_idx").on(t.clearedAt),
+		check(
+			"notifications_level_check",
+			sql`${t.level} IN ('error', 'attention', 'info')`
+		),
+		check(
+			"notifications_cleared_how_check",
+			sql`${t.clearedHow} IS NULL OR ${t.clearedHow} IN ('viewed', 'acted', 'superseded', 'dismissed', 'lapsed')`
 		)
 	]
 )

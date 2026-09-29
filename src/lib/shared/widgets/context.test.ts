@@ -1,22 +1,21 @@
 import { describe, expect, it, test } from "vitest"
-import { FRAME_PROTOCOL, parseChannel, WIDGET_PROTOCOL } from "@serene-pub/sdk"
+import { parseChannel, WIDGET_SCOPED_SECTIONS } from "@serene-pub/sdk"
 import {
-	buildNativeContext,
-	createWidgetEventBus,
 	deriveChrome,
 	eventInScope,
 	findAction,
-	projectLayout,
-	projectWidgetData,
+	makeInvoke,
+	projectActions,
+	SCOPED_SECTION_CONTEXT_KEYS,
 	scopeMessages,
 	WidgetMessageFeed,
 	type ActionsV1,
 	type PlacementInput,
-	type ProjectInput,
 	type WidgetAction,
 	type WidgetEvent,
 	type WidgetVerbs
 } from "./context"
+import type { ActionDispatch } from "./invokeAction"
 
 const placement = (over: Partial<PlacementInput> = {}): PlacementInput => ({
 	zone: { columns: 3, column: 1, rows: 1, row: 1 },
@@ -29,14 +28,6 @@ const placement = (over: Partial<PlacementInput> = {}): PlacementInput => ({
 	pinned: false,
 	collapsed: false,
 	drawered: false,
-	...over
-})
-
-const base = (over: Partial<ProjectInput> = {}): ProjectInput => ({
-	session: { id: 42, name: "Test" },
-	channels: [],
-	messages: [{ id: 1 }, { id: 2, channel: "map" }, { id: 3, channel: "main" }],
-	placement: placement(),
 	...over
 })
 
@@ -95,7 +86,8 @@ describe("deriveChrome", () => {
 			background: false,
 			wrapper: false,
 			titleBar: false,
-			padding: false
+			padding: false,
+			card: false
 		})
 	})
 	test("pinned ⇒ host paints background + wrapper", () => {
@@ -115,220 +107,9 @@ describe("deriveChrome", () => {
 	})
 })
 
-describe("projectWidgetData", () => {
-	test("base sections are always present and versioned under v1", () => {
-		const d = projectWidgetData(base())
-		expect(d.session.v1).toEqual({ id: 42, name: "Test" })
-		expect(d.channels.v1).toEqual([])
-		expect(d.messages.v1).toHaveLength(3)
-		expect(d.layout.v1.tier).toBe("cozy")
-		expect(d.props.v1).toEqual({})
-		expect(d.settings.v1).toEqual({})
-	})
-
-	test("settings reach the widget as a base section of their own", () => {
-		const d = projectWidgetData(base({ settings: { lane: 3 } }))
-		expect(d.settings.v1).toEqual({ lane: 3 })
-		// A detached copy: the host goes on owning its object.
-		expect(d.settings.v1).not.toBe(base().settings)
-	})
-
-	test("messages are channel-scoped to the widget's lanes", () => {
-		const d = projectWidgetData(base({ channels: ["map"] }))
-		expect(d.messages.v1.map((m) => m.id)).toEqual([2])
-	})
-
-	test("null session name is normalized", () => {
-		const d = projectWidgetData(base({ session: { id: 7 } }))
-		expect(d.session.v1.name).toBeNull()
-	})
-
-	test("a scoped section is ABSENT without the grant", () => {
-		const d = projectWidgetData(
-			base({ scoped: { persona: { name: "P" } } }) // no grants
-		)
-		expect(d.persona).toBeUndefined()
-	})
-
-	test("a scoped section is ABSENT when granted but no source data", () => {
-		const d = projectWidgetData(base({ grants: ["persona"] }))
-		expect(d.persona).toBeUndefined()
-	})
-
-	test("a scoped section is present only when granted AND supplied", () => {
-		const d = projectWidgetData(
-			base({ grants: ["persona", "characters"], scoped: { persona: { name: "P" } } })
-		)
-		expect(d.persona?.v1).toEqual({ name: "P" })
-		// characters granted but not supplied → still absent
-		expect(d.characters).toBeUndefined()
-	})
-
-	test("projection is a copy — mutating inputs later can't leak in", () => {
-		const input = base()
-		const d = projectWidgetData(input)
-		;(input.channels as string[]).push("map")
-		input.placement.zone.column = 99
-		expect(d.channels.v1).toEqual([])
-		expect(d.layout.v1.zone.column).toBe(1)
-	})
-})
-
-describe("buildNativeContext", () => {
-	test("wraps data with identity + verbs", () => {
-		const calls: string[] = []
-		const ctx = buildNativeContext(
-			base(),
-			{ id: "messages", instanceId: "messages#1", title: "Messages" },
-			{
-				action: (fn) => calls.push(fn),
-				request: (async () => undefined) as WidgetVerbs["request"],
-				t: (source) => source,
-				menu: async () => null,
-				on: () => () => {}
-			}
-		)
-		// ONE number with the frame lane (`FRAME_PROTOCOL`): native is frame
-		// minus the iframe, so a second clock here would be a second
-		// contract by accident.
-		expect(ctx.protocol).toBe(WIDGET_PROTOCOL)
-		expect(ctx.protocol).toBe(FRAME_PROTOCOL)
-		expect(ctx.widget.id).toBe("messages")
-		expect(ctx.session.v1.id).toBe(42)
-		ctx.action("delete", 1)
-		expect(calls).toEqual(["delete"])
-	})
-})
-
 /* ── real placement (the grid threads geometry now) ──────────────────────── */
 
-describe("projectWidgetData — a REAL placement", () => {
-	/** Map in the right zone: 4 cols × 20 rows, sitting at row 15, 5 tall. */
-	const map = placement({
-		zone: { columns: 4, column: 1, rows: 20, row: 15 },
-		box: {
-			cols: 4,
-			rows: 5,
-			edges: { top: false, right: true, bottom: false, left: true }
-		},
-		tier: "compact"
-	})
-
-	it("carries the widget's own cell geometry, not a single-widget default", () => {
-		const l = projectWidgetData(base({ placement: map })).layout.v1
-		expect(l.zone).toEqual({ columns: 4, column: 1, rows: 20, row: 15 })
-		expect(l.box.cols).toBe(4)
-		expect(l.box.rows).toBe(5)
-	})
-
-	it("edges say which zone edges the box touches", () => {
-		const l = projectWidgetData(base({ placement: map })).layout.v1
-		expect(l.box.edges).toEqual({
-			top: false,
-			right: true,
-			bottom: false,
-			left: true
-		})
-	})
-
-	it("tier is the width class of THIS widget's box", () => {
-		expect(
-			projectWidgetData(base({ placement: map })).layout.v1.tier
-		).toBe("compact")
-		expect(
-			projectWidgetData(
-				base({ placement: placement({ tier: "wide" }) })
-			).layout.v1.tier
-		).toBe("wide")
-	})
-
-	it("projectLayout is the ONE builder both deliveries feed from", () => {
-		// Field-for-field identity is the contract (native == frame minus the
-		// iframe), so the frame's `{t:"layout"}` must not be a second copy of
-		// this maths.
-		expect(projectLayout(map)).toEqual(
-			projectWidgetData(base({ placement: map })).layout.v1
-		)
-	})
-})
-
 /* ── the event bus ───────────────────────────────────────────────────────── */
-
-describe("createWidgetEventBus", () => {
-	const created = (id: number): WidgetEvent => ({
-		kind: "message:created",
-		channel: "main",
-		slug: "main",
-		lane: 1,
-		messageId: id
-	})
-
-	it("delivers to subscribers of that kind only", () => {
-		const bus = createWidgetEventBus()
-		const got: WidgetEvent[] = []
-		const other: WidgetEvent[] = []
-		bus.on("message:created", (e) => got.push(e))
-		bus.on("channel:activated", (e) => other.push(e))
-		bus.emit(created(1))
-		expect(got).toHaveLength(1)
-		expect(other).toHaveLength(0)
-	})
-
-	it("`*` receives every kind", () => {
-		const bus = createWidgetEventBus()
-		const all: string[] = []
-		bus.on("*", (e) => all.push(e.kind))
-		bus.emit(created(1))
-		bus.emit({ kind: "channel:activated", channel: "map", slug: "map", lane: 1 })
-		expect(all).toEqual(["message:created", "channel:activated"])
-	})
-
-	it("returns an unsubscribe that actually stops delivery", () => {
-		const bus = createWidgetEventBus()
-		const got: number[] = []
-		const off = bus.on("message:created", (e) => got.push((e as any).messageId))
-		bus.emit(created(1))
-		off()
-		bus.emit(created(2))
-		expect(got).toEqual([1])
-	})
-
-	it("unsubscribing twice is a no-op, and never removes someone else", () => {
-		const bus = createWidgetEventBus()
-		const a: number[] = []
-		const b: number[] = []
-		const offA = bus.on("message:created", (e) => a.push((e as any).messageId))
-		bus.on("message:created", (e) => b.push((e as any).messageId))
-		offA()
-		offA()
-		bus.emit(created(3))
-		expect(a).toEqual([])
-		expect(b).toEqual([3])
-	})
-
-	it("a subscriber that throws cannot stop the others", () => {
-		const bus = createWidgetEventBus()
-		const got: number[] = []
-		bus.on("message:created", () => {
-			throw new Error("widget blew up")
-		})
-		bus.on("message:created", (e) => got.push((e as any).messageId))
-		expect(() => bus.emit(created(4))).not.toThrow()
-		expect(got).toEqual([4])
-	})
-
-	it("unsubscribing DURING an emit doesn't skip the next subscriber", () => {
-		const bus = createWidgetEventBus()
-		const got: string[] = []
-		const off = bus.on("message:created", () => {
-			got.push("a")
-			off()
-		})
-		bus.on("message:created", () => got.push("b"))
-		bus.emit(created(5))
-		expect(got).toEqual(["a", "b"])
-	})
-})
 
 /* ── message:created, per widget ─────────────────────────────────────────── */
 
@@ -456,40 +237,31 @@ describe("actions.v1 and invoke", () => {
 		widget: { primary: [], overflow: [roll] },
 		message: { primary: [edit], overflow: [] }
 	}
-	const verbs = (calls: unknown[][]): Omit<WidgetVerbs, "invoke"> => ({
-		action: (...a) => calls.push(a),
-		request: async () => {
-			throw new Error("no")
-		},
-		t: (source) => source,
-		menu: async () => null,
-		on: () => () => {}
-	})
+	/** The widget "dice"'s `invoke` over these venues, as the wire derives it. */
+	const invokeOf = (
+		actions: ActionsV1,
+		calls: unknown[][],
+		dispatch?: Partial<ActionDispatch>
+	): WidgetVerbs["invoke"] =>
+		makeInvoke(() => projectActions(actions), (...a) => calls.push(a), "dice", dispatch)
 
-	it("is a base section — present and empty when the host has no list", () => {
-		expect(projectWidgetData(base()).actions).toEqual({ v1: {} })
+	it("is empty when the host has no list", () => {
+		expect(projectActions(undefined)).toEqual({})
 	})
 
 	it("projects a detached copy of every venue, primary and overflow", () => {
-		const data = projectWidgetData(base({ actions: venues }))
-		expect(data.actions.v1).toEqual(venues)
-		expect(data.actions.v1.widget!.overflow[0]).not.toBe(roll)
-		expect(findAction(data.actions.v1, "roll")?.specSlug).toBe("acme:spec/roll")
-		expect(findAction(data.actions.v1, "nope")).toBeUndefined()
+		const projected = projectActions(venues)
+		expect(projected).toEqual(venues)
+		expect(projected.widget!.overflow[0]).not.toBe(roll)
+		expect(findAction(projected, "roll")?.specSlug).toBe("acme:spec/roll")
+		expect(findAction(projected, "nope")).toBeUndefined()
 	})
 
 	it("invoke resolves a key to its declaration and routes it through action, identity in hand (W1)", () => {
 		const calls: unknown[][] = []
-		const ctx = buildNativeContext(
-			base({ actions: venues }),
-			{ id: "dice", instanceId: "dice", title: "Dice" },
-			verbs(calls)
-		)
-		// The section a widget reads, off the full envelope and not the bare
-		// projection: a host that threads venues in gets them on `ctx`.
-		expect(ctx.actions.v1).toEqual(venues)
-		ctx.invoke("roll")
-		ctx.invoke("acme:spec/roll#roll", { messageId: 7, payload: { text: "x" } })
+		const invoke = invokeOf(venues, calls)
+		invoke("roll")
+		invoke("acme:spec/roll#roll", { messageId: 7, payload: { text: "x" } })
 		expect(calls).toEqual([
 			["roll", undefined, undefined, "acme:spec/roll#roll", undefined],
 			["roll", 7, { text: "x" }, "acme:spec/roll#roll", undefined]
@@ -498,12 +270,7 @@ describe("actions.v1 and invoke", () => {
 
 	it("invoke carries the block a form's press answers through to the fire (U5d)", () => {
 		const calls: unknown[][] = []
-		const ctx = buildNativeContext(
-			base({ actions: venues }),
-			{ id: "dice", instanceId: "dice", title: "Dice" },
-			verbs(calls)
-		)
-		ctx.invoke("roll", { messageId: 7, blockId: "blk-2" })
+		invokeOf(venues, calls)("roll", { messageId: 7, blockId: "blk-2" })
 		// Fifth argument, the same slot `action`'s `blockId` has occupied all
 		// along: a widget drawing a message's form presses it by identity like
 		// any other action instead of dropping back to the deprecated verb.
@@ -512,66 +279,48 @@ describe("actions.v1 and invoke", () => {
 		])
 	})
 
-	it("invoke('continue') routes to the host's continue handler, never to the function fire (W4)", () => {
+	it("invoke('extend') routes to the host's extend handler, never to the function fire (W4)", () => {
 		const cont: WidgetAction = {
 			...edit,
-			key: "continue",
-			name: "Continue",
-			slash: "continue",
+			key: "extend",
+			name: "Extend",
+			slash: "extend",
 			venue: "extra"
 		}
 		const calls: unknown[][] = []
-		const continued: unknown[] = []
-		const ctx = buildNativeContext(
-			base({
-				actions: { ...venues, extra: { primary: [], overflow: [cont] } }
-			}),
-			{ id: "dice", instanceId: "dice", title: "Dice" },
-			{
-				...verbs(calls),
-				actionDispatch: {
-					core: { continue: (args) => continued.push(args) }
-				}
-			}
-		)
-		ctx.invoke("continue", { messageId: 9 })
-		ctx.invoke("core#continue")
-		expect(continued).toEqual([{ messageId: 9 }, undefined])
-		// `sessions:triggerFunction` refuses `continue` by name; nothing
+		const extended: unknown[] = []
+		const invoke = invokeOf({ ...venues, extra: { primary: [], overflow: [cont] } }, calls, {
+			core: { extend: (args) => extended.push(args) }
+		})
+		invoke("extend", { messageId: 9 })
+		invoke("core#extend")
+		expect(extended).toEqual([{ messageId: 9 }, undefined])
+		// `sessions:fireAction` refuses `extend` by name; nothing
 		// reached `action`.
 		expect(calls).toEqual([])
 	})
 
 	it("a contributed action goes to the host's OWN fire, with the subject, the values and the block", () => {
 		// The one route: a widget's press is handed to the dispatch the page
-		// threaded down — whose `fire` is the page's own `fireTrigger`, which
+		// threaded down — whose `fire` is the page's own `fireOfferedAction`, which
 		// names the run and opens the narrator's modal — and NOT to a second
 		// fire derived from `action` here. A press inside a widget is the same
 		// press as the chip beside it or it is a lesser one.
 		const calls: unknown[][] = []
 		const fired: unknown[][] = []
-		const continued: unknown[] = []
+		const extended: unknown[] = []
 		const cont: WidgetAction = {
 			...edit,
-			key: "continue",
-			name: "Continue",
-			slash: "continue",
+			key: "extend",
+			name: "Extend",
+			slash: "extend",
 			venue: "extra"
 		}
-		const ctx = buildNativeContext(
-			base({
-				actions: { ...venues, extra: { primary: [], overflow: [cont] } }
-			}),
-			{ id: "dice", instanceId: "dice", title: "Dice" },
-			{
-				...verbs(calls),
-				actionDispatch: {
-					core: { continue: (args) => continued.push(args) },
-					fire: (a, args) => fired.push([a, args])
-				}
-			}
-		)
-		ctx.invoke("roll", {
+		const invoke = invokeOf({ ...venues, extra: { primary: [], overflow: [cont] } }, calls, {
+			core: { extend: (args) => extended.push(args) },
+			fire: (a, args) => fired.push([a, args])
+		})
+		invoke("roll", {
 			messageId: 7,
 			payload: { text: "x" },
 			blockId: "blk-2"
@@ -585,8 +334,8 @@ describe("actions.v1 and invoke", () => {
 			]
 		])
 		// A core verb still goes to the core half of the same bag.
-		ctx.invoke("core#continue", { messageId: 9 })
-		expect(continued).toEqual([{ messageId: 9 }])
+		invoke("core#extend", { messageId: 9 })
+		expect(extended).toEqual([{ messageId: 9 }])
 		expect(fired).toHaveLength(1)
 		// Neither half touched the generic `action` verb.
 		expect(calls).toEqual([])
@@ -594,12 +343,7 @@ describe("actions.v1 and invoke", () => {
 
 	it("a core verb the host wired no handler for is refused by name, not fired as a function", () => {
 		const calls: unknown[][] = []
-		const ctx = buildNativeContext(
-			base({ actions: venues }),
-			{ id: "dice", instanceId: "dice", title: "Dice" },
-			verbs(calls)
-		)
-		expect(() => ctx.invoke("edit", { messageId: 7 })).toThrow(
+		expect(() => invokeOf(venues, calls)("edit", { messageId: 7 })).toThrow(
 			/'core#edit' is one of core's verbs and this host wired no handler for it/
 		)
 		expect(calls).toEqual([])
@@ -623,25 +367,18 @@ describe("actions.v1 and invoke", () => {
 
 	it("invoke refuses a key no venue lists — a widget cannot fire what the session does not offer", () => {
 		const calls: unknown[][] = []
-		const ctx = buildNativeContext(
-			base({ actions: venues }),
-			{ id: "dice", instanceId: "dice", title: "Dice" },
-			verbs(calls)
-		)
-		expect(() => ctx.invoke("summon-dragon")).toThrow(
+		expect(() => invokeOf(venues, calls)("summon-dragon")).toThrow(
 			/widget "dice" invoked action "summon-dragon", which no venue of this session lists/
 		)
 		expect(calls).toEqual([])
 	})
 
-	it("a host may supply its own invoke, and it wins", () => {
-		const own: unknown[][] = []
-		const ctx = buildNativeContext(
-			base({ actions: venues }),
-			{ id: "dice", instanceId: "dice", title: "Dice" },
-			{ ...verbs([]), invoke: (...a) => own.push(a) }
-		)
-		ctx.invoke("anything")
-		expect(own).toEqual([["anything"]])
+})
+
+describe("scoped sections come off the SDK's one table", () => {
+	test("every scope in the table but lore and persona has a page context to supply it", () => {
+		expect(Object.keys(SCOPED_SECTION_CONTEXT_KEYS).sort()).toEqual(["characters", "session:full", "session:state"])
+		for (const scope of Object.keys(SCOPED_SECTION_CONTEXT_KEYS))
+			expect(Object.hasOwn(WIDGET_SCOPED_SECTIONS, scope)).toBe(true)
 	})
 })

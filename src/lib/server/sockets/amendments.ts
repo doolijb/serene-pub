@@ -31,9 +31,25 @@ import {
 	compareDates,
 	type StoryDate
 } from "$lib/shared/lorebooks/storyDate"
-import { castAsOf } from "$lib/shared/lorebooks/amendments"
+import {
+	amendmentsForAppearance,
+	castAsOf,
+	NEVER_AMENDED,
+	type AsOf
+} from "$lib/shared/lorebooks/amendments"
 import { appearancesOf } from "$lib/shared/lorebooks/presence"
 import type { Handler } from "$lib/shared/events"
+import { assertDateLands } from "$lib/server/state/storyTime"
+import {
+	assertDeclaredFields,
+	keysToArray
+} from "$lib/server/utils/lorebookEntries"
+import type { KeyList } from "$lib/server/pipelines/ranking/signals"
+import { verifyBindingTargetAccess } from "./lorebooks"
+import { HISTORY_TYPE_ID } from "$lib/shared/entries/types"
+import { sessionEvents } from "@serene-pub/sdk"
+import { broadcastToSessionUsers } from "./utils/broadcastHelpers"
+import { broadcastSessionRow } from "$lib/server/sessions/rowPush"
 
 /** The book, only if this user owns it. The one gate every handler passes. */
 async function findOwnedBook(lorebookId: number, userId: number) {
@@ -109,6 +125,9 @@ export async function buildAmendmentsList(
 			day: a.day ?? null,
 			fields: (a.fields ?? {}) as Record<string, unknown>,
 			historyEntryId: a.historyEntryId ?? null,
+			// The personal axis: a change dated against her life applies
+			// only to appearances at or past this point (design §4d).
+			personalPosition: a.personalPosition ?? null,
 			createdAt: iso(a.createdAt),
 			updatedAt: iso(a.updatedAt)
 		})),
@@ -161,7 +180,12 @@ export async function castMemberAsOf(
 	params: {
 		lorebookId: number
 		characterId: number
-		at?: { moment?: StoryDate | null; branchId?: number | null }
+		/**
+		 * The line and moment — `AsOf`, so a caller holding a session's
+		 * reading passes its `line` (ancestor chain and every fork cut) and
+		 * the resolver and the presences cut the same way (finding #39).
+		 */
+		at?: AsOf
 	}
 ): Promise<{
 	member: Record<string, unknown>
@@ -224,7 +248,7 @@ export async function castMemberAsOf(
 			personalPosition: a.personalPosition,
 			// ⚠ An appearance resolves AGAIN at its own point of her life: two
 			// of her at one world moment may legitimately read differently,
-			// which is the whole reason this returns a list.
+			// which is why this returns a list.
 			member:
 				a.personalPosition == null
 					? resolved
@@ -234,12 +258,9 @@ export async function castMemberAsOf(
 							// personally-dated ones only up to this point of
 							// her life. That is what lets the fifty-year-old
 							// and the thirty-four-year-old read differently at
-							// one world moment.
-							amendments.filter(
-								(m) =>
-									m.personalPosition == null ||
-									m.personalPosition <= a.personalPosition!
-							),
+							// one world moment. The workspace's roster calls
+							// the same helper.
+							amendmentsForAppearance(amendments, a.personalPosition),
 							at
 						)
 		}))
@@ -247,7 +268,6 @@ export async function castMemberAsOf(
 }
 
 /**
- * A date the calendar can order./**
  * A date the calendar can order.
  *
  * ⚠ The CHECK constraint refuses a day with no month, but it cannot refuse a
@@ -277,6 +297,71 @@ function assertDate(params: {
 			"A day needs a month: the calendar narrows left to right."
 		)
 	return { year, month, day }
+}
+
+/**
+ * An amendment's `fields`, as the server stores them.
+ *
+ * ⚠ Identity and bookkeeping columns (`NEVER_AMENDED`: id, book, type, branch,
+ * position, timestamps) are DROPPED, matching `changedFields` on the client —
+ * an overlay that re-pointed `branchId` or `lorebookId` would make a row read
+ * as another line's or another book's at one date. A cast overlay naming a
+ * card (`characterId`) must name one the caller could bind as a member; an
+ * entry overlay's declared fields must be their declared type.
+ */
+async function cleanFields(
+	raw: unknown,
+	subject: { kind: "entry"; typeId: string } | { kind: "cast" },
+	userId: number
+): Promise<Record<string, unknown>> {
+	const fields: Record<string, unknown> = {}
+	if (raw && typeof raw === "object" && !Array.isArray(raw))
+		for (const [key, value] of Object.entries(raw as Record<string, unknown>))
+			if (!NEVER_AMENDED.has(key)) fields[key] = value
+	if (subject.kind === "entry") {
+		// Keys are stored as the list the column holds (finding #146): a list
+		// is kept element for element, so a regex `\w{2,4}` stays one key; only
+		// a legacy comma string is split, once, here at the boundary.
+		for (const key of ["keys", "secondaryKeys"] as const)
+			if (key in fields) fields[key] = keysToArray(fields[key] as KeyList)
+		assertDeclaredFields(subject.typeId, fields)
+	} else if (fields.characterId != null) {
+		const characterId = Number(fields.characterId)
+		if (
+			!Number.isInteger(characterId) ||
+			!(await verifyBindingTargetAccess({ characterId }, userId))
+		)
+			throw new Error("That card is not one this cast member can be drawn with.")
+		fields.characterId = characterId
+	}
+	return fields
+}
+
+/** The event an amendment hangs from must be a history entry of this book. */
+async function assertHistoryEvent(
+	historyEntryId: number | null | undefined,
+	lorebookId: number
+): Promise<number | null> {
+	if (historyEntryId == null) return null
+	const event = await db.query.lorebookEntries.findFirst({
+		where: (e, { and: a, eq: q }) =>
+			a(q(e.id, historyEntryId), q(e.lorebookId, lorebookId)),
+		columns: { id: true, typeId: true }
+	})
+	if (!event || event.typeId !== HISTORY_TYPE_ID)
+		throw new Error("That event is not in this lorebook.")
+	return event.id
+}
+
+/** A point in a member's own life: a whole number, or none. */
+function assertPersonalPosition(raw: unknown): number | null {
+	if (raw == null) return null
+	const position = Number(raw)
+	if (!Number.isInteger(position))
+		throw new Error(
+			"A point in their life is a number you count in: a whole number."
+		)
+	return position
 }
 
 /** A branch, only if it belongs to this book. */
@@ -323,8 +408,14 @@ export const amendmentsCreateHandler: Handler<
 			)
 
 		const { year, month, day } = assertDate(params)
+		// Validated at entry against the book's calendar, when it declares
+		// one (DESIGN-story-time §0), so the preflight list cannot refill.
+		await assertDateLands(db, params.lorebookId, { year, month, day })
 		const branchId = await assertBranch(params.branchId, params.lorebookId)
-		const fields = (params.fields ?? {}) as Record<string, unknown>
+		const historyEntryId = await assertHistoryEvent(
+			params.historyEntryId,
+			params.lorebookId
+		)
 
 		// Exactly one subject. Both, or neither, is a row no reader could place.
 		const hasEntry = params.entryId != null
@@ -343,9 +434,14 @@ export const amendmentsCreateHandler: Handler<
 						q(e.id, params.entryId!),
 						q(e.lorebookId, params.lorebookId)
 					),
-				columns: { id: true }
+				columns: { id: true, typeId: true }
 			})
 			if (!entry) throw new Error("That entry is not in this lorebook.")
+			const fields = await cleanFields(
+				params.fields,
+				{ kind: "entry", typeId: entry.typeId },
+				userId
+			)
 			await db.insert(schema.entryAmendments).values({
 				lorebookId: params.lorebookId,
 				entryId: entry.id,
@@ -354,7 +450,7 @@ export const amendmentsCreateHandler: Handler<
 				month,
 				day,
 				fields,
-				historyEntryId: params.historyEntryId ?? null
+				historyEntryId
 			})
 		} else {
 			// ⚠ The member must be IN this book, exactly as an entry must be.
@@ -372,18 +468,19 @@ export const amendmentsCreateHandler: Handler<
 			})
 			if (!member)
 				throw new Error("That cast member is not in this lorebook.")
+			const fields = await cleanFields(params.fields, { kind: "cast" }, userId)
 			await db.insert(schema.castAmendments).values({
 				lorebookBindingId: member.id,
 				lorebookId: params.lorebookId,
 				// The personal axis, when the author dated it against her life
 				// rather than against the world (design §4d).
-				personalPosition: params.personalPosition ?? null,
+				personalPosition: assertPersonalPosition(params.personalPosition),
 				branchId,
 				year,
 				month,
 				day,
 				fields,
-				historyEntryId: params.historyEntryId ?? null
+				historyEntryId
 			})
 		}
 
@@ -406,46 +503,70 @@ export const amendmentsUpdateHandler: Handler<
 				"Lorebook not found or you do not have permission to amend it."
 			)
 
-		const patch: Record<string, unknown> = {}
-		if (
-			params.year != null ||
-			params.month !== undefined ||
-			params.day !== undefined
-		)
-			Object.assign(
-				patch,
-				assertDate({
-					year: params.year,
-					month: params.month,
-					day: params.day
-				})
-			)
-		if (params.fields) patch.fields = params.fields
-		if (!Object.keys(patch).length) throw new Error("Nothing to change.")
-
 		// ⚠ Scoped by lorebook as well as id: the id alone would let one book's
 		// amendment be edited from another book's screen.
-		if (params.subject === "entry") {
-			await db
-				.update(schema.entryAmendments)
-				.set(patch)
-				.where(
-					and(
-						eq(schema.entryAmendments.id, params.id),
-						eq(schema.entryAmendments.lorebookId, params.lorebookId)
-					)
-				)
-		} else {
-			await db
-				.update(schema.castAmendments)
-				.set(patch)
-				.where(
-					and(
-						eq(schema.castAmendments.id, params.id),
-						eq(schema.castAmendments.lorebookId, params.lorebookId)
-					)
-				)
+		const table =
+			params.subject === "entry"
+				? schema.entryAmendments
+				: schema.castAmendments
+		const [stored] = await db
+			.select({
+				year: table.year,
+				month: table.month,
+				day: table.day
+			})
+			.from(table)
+			.where(and(eq(table.id, params.id), eq(table.lorebookId, params.lorebookId)))
+			.limit(1)
+		if (!stored) throw new Error("That amendment is not in this lorebook.")
+
+		const patch: Record<string, unknown> = {}
+		// A re-date is merged over the stored date, part by part: a year-only
+		// patch keeps the month and day it had, a month-only patch keeps the
+		// year. Clearing the month clears the day with it — the calendar
+		// narrows left to right, so a day cannot outlive its month.
+		if (
+			params.year !== undefined ||
+			params.month !== undefined ||
+			params.day !== undefined
+		) {
+			const month = params.month !== undefined ? params.month : stored.month
+			const day =
+				params.day !== undefined
+					? params.day
+					: params.month === null
+						? null
+						: stored.day
+			Object.assign(
+				patch,
+				assertDate({ year: params.year ?? stored.year, month, day })
+			)
+			await assertDateLands(db, params.lorebookId, patch as any)
 		}
+		if (params.fields !== undefined) {
+			let subject: { kind: "entry"; typeId: string } | { kind: "cast" } = {
+				kind: "cast"
+			}
+			if (params.subject === "entry") {
+				const [row] = await db
+					.select({ typeId: schema.lorebookEntries.typeId })
+					.from(schema.entryAmendments)
+					.innerJoin(
+						schema.lorebookEntries,
+						eq(schema.lorebookEntries.id, schema.entryAmendments.entryId)
+					)
+					.where(eq(schema.entryAmendments.id, params.id))
+					.limit(1)
+				subject = { kind: "entry", typeId: row?.typeId ?? "" }
+			}
+			patch.fields = await cleanFields(params.fields, subject, userId)
+		}
+		if (!Object.keys(patch).length) throw new Error("Nothing to change.")
+
+		await db
+			.update(table)
+			.set(patch)
+			.where(and(eq(table.id, params.id), eq(table.lorebookId, params.lorebookId)))
 
 		const res = await buildAmendmentsList(userId, params.lorebookId)
 		emitToUser("amendments:list", res)
@@ -466,25 +587,17 @@ export const amendmentsDeleteHandler: Handler<
 				"Lorebook not found or you do not have permission to amend it."
 			)
 
-		if (params.subject === "entry") {
-			await db
-				.delete(schema.entryAmendments)
-				.where(
-					and(
-						eq(schema.entryAmendments.id, params.id),
-						eq(schema.entryAmendments.lorebookId, params.lorebookId)
-					)
-				)
-		} else {
-			await db
-				.delete(schema.castAmendments)
-				.where(
-					and(
-						eq(schema.castAmendments.id, params.id),
-						eq(schema.castAmendments.lorebookId, params.lorebookId)
-					)
-				)
-		}
+		const table =
+			params.subject === "entry"
+				? schema.entryAmendments
+				: schema.castAmendments
+		const gone = await db
+			.delete(table)
+			.where(and(eq(table.id, params.id), eq(table.lorebookId, params.lorebookId)))
+			.returning({ id: table.id })
+		// A delete that found nothing is not a success: an id from another
+		// book, or one already gone.
+		if (!gone.length) throw new Error("That amendment is not in this lorebook.")
 
 		const res = await buildAmendmentsList(userId, params.lorebookId)
 		emitToUser("amendments:list", res)
@@ -547,6 +660,9 @@ export const amendmentsForkHandler: Handler<
 						month: params.forkMonth,
 						day: params.forkDay
 					})
+
+		if (dated.year != null)
+			await assertDateLands(db, params.lorebookId, dated as any, "The fork date")
 
 		await db.insert(schema.lorebookBranches).values({
 			lorebookId: params.lorebookId,
@@ -620,11 +736,19 @@ export const amendmentsDeleteBranchHandler: Handler<
 			)
 		await assertBranch(params.id, params.lorebookId)
 
+		// The sessions on this line, asked BEFORE the delete: the cascade
+		// nulls their column, after which nothing can say who moved (#136).
+		const movedSessions = await db
+			.select({ id: schema.sessions.id })
+			.from(schema.sessions)
+			.where(eq(schema.sessions.lorebookBranchId, params.id))
+
 		// ⚠ The line's OWN rows go with it, by cascade: its amendments, the
-		// entries written on it, its scenes and its edges. Shared rows have a
-		// NULL `branch_id` and are untouched. Sessions played on it fall back
-		// to main (`set null`), and branches forked FROM it become children of
-		// main rather than vanishing — both are declared on the columns.
+		// entries written on it, its scenes, its edges, its placements and
+		// its recorded stats. Shared rows have a NULL `branch_id` and are
+		// untouched. Sessions played on it fall back to main (`set null`), and
+		// branches forked FROM it become children of main rather than
+		// vanishing — both are declared on the columns.
 		await db
 			.delete(schema.lorebookBranches)
 			.where(
@@ -636,7 +760,51 @@ export const amendmentsDeleteBranchHandler: Handler<
 
 		const res = await buildAmendmentsList(userId, params.lorebookId)
 		emitToUser("amendments:list", res)
+		await announceSessionsMovedToMain(
+			(socket as any).io,
+			movedSessions.map((s) => s.id),
+			userId
+		)
 		return res
+	}
+}
+
+/**
+ * Tell every tab of the sessions a deleted line took back to main that their
+ * line moved (#136) — the same `state:changed` + settings `session-updated`
+ * pair `sessions:setLorebook` announces, and the session row for the lists.
+ * Open settings forms and the lorebook workspace then stop holding a dead
+ * line id. Best-effort: the delete has already landed.
+ */
+async function announceSessionsMovedToMain(
+	io: any,
+	sessionIds: readonly number[],
+	userId: number
+): Promise<void> {
+	if (!io || sessionIds.length === 0) return
+	for (const sessionId of sessionIds) {
+		try {
+			await broadcastToSessionUsers(io, sessionId, "state:changed", {
+				sessionId
+			} satisfies Sockets.State.Changed.Response)
+			const { emitSessionEvent } = await import(
+				"$lib/server/pipelines/runtime/sessionEvents"
+			)
+			await emitSessionEvent(db, {
+				sessionId,
+				userId,
+				event: sessionEvents.sessionUpdated,
+				payload: {
+					sessionId,
+					changed: ["lorebookBranchId"],
+					cause: { kind: "settings", userId }
+				},
+				io
+			})
+		} catch (err) {
+			console.warn("[amendments:deleteBranch] session-updated emit failed:", err)
+		}
+		broadcastSessionRow(io, sessionId)
 	}
 }
 
@@ -689,6 +857,9 @@ export const amendmentsPlaceHandler: Handler<
 			: null
 		if (!hasUntil && (params.untilMonth != null || params.untilDay != null))
 			throw new Error("An end needs a year to be an end.")
+		await assertDateLands(db, params.lorebookId, from, "The arrival")
+		if (until)
+			await assertDateLands(db, params.lorebookId, until, "The departure")
 		// ⚠ `compareDates`, not `dateValue`: the packed scalar is a PLACEMENT
 		// value and lies about order once a month or a day passes 100, which
 		// a book numbering days of the year does on day 100.

@@ -26,7 +26,12 @@ import path from "node:path"
 import { sql } from "drizzle-orm"
 import { createTestDb, type TestDb } from "$lib/server/utils/testDb"
 import { listBackups, recoveryPaths } from "$lib/server/db/recovery"
-import { BACKUP_AGE_MS, maybeTakeDailyBackup } from "./dailyBackup"
+import {
+	BACKUP_AGE_MS,
+	lastDailyBackupFailure,
+	maybeTakeDailyBackup
+} from "./dailyBackup"
+import { installAdminOverviewStale } from "$lib/server/admin/overviewStale"
 
 vi.mock("$lib/server/embedding", () => ({
 	isModelReady: () => false,
@@ -235,5 +240,76 @@ describe("when the daily check takes a backup", () => {
 		})
 
 		expect(outcome).toBe("failed")
+	})
+})
+
+describe("the last failure, for the admin Overview", () => {
+	it("is kept until the next backup, and each flip tells the connected admins", async () => {
+		// A stand-in for the socket server: one admin (two tabs) and one
+		// member. The push is what `connectSockets` would bind.
+		const push = vi.fn()
+		installAdminOverviewStale(
+			{
+				sockets: {
+					sockets: {
+						values: () =>
+							[
+								{ user: { id: 1, isAdmin: true } },
+								{ user: { id: 1, isAdmin: true } },
+								{ user: { id: 2, isAdmin: false } }
+							].values()
+					}
+				}
+			},
+			push,
+			0
+		)
+		/** Past the push's coalescing timer. */
+		const settle = () => new Promise((r) => setTimeout(r, 20))
+
+		const notADir = path.join(root, "another-file-not-a-directory")
+		fs.writeFileSync(notADir, "not a directory")
+		const at = Date.parse("2026-09-28T03:00:00Z")
+		expect(
+			await maybeTakeDailyBackup({
+				db,
+				paths: recoveryPaths(notADir),
+				activeRuns: () => 0,
+				now: () => at
+			})
+		).toBe("failed")
+		const failure = lastDailyBackupFailure()
+		expect(failure?.at).toBe(new Date(at).toISOString())
+		expect(failure?.message).toBeTruthy()
+		// Once per admin, not per socket; never the member.
+		await settle()
+		expect(push.mock.calls).toEqual([[1, "admin:overviewStale", {}]])
+
+		// The next backup taken clears it — and that is news too.
+		push.mockClear()
+		const dataDir = makeDataDir("recovers")
+		expect(
+			await maybeTakeDailyBackup({
+				db,
+				paths: recoveryPaths(dataDir),
+				activeRuns: () => 0
+			})
+		).toBe("taken")
+		expect(lastDailyBackupFailure()).toBeNull()
+		await settle()
+		expect(push).toHaveBeenCalledTimes(1)
+
+		// Nothing was failing, so a fresh check says nothing.
+		push.mockClear()
+		expect(
+			await maybeTakeDailyBackup({
+				db,
+				paths: recoveryPaths(dataDir),
+				activeRuns: () => 0
+			})
+		).toBe("fresh")
+		await settle()
+		expect(push).not.toHaveBeenCalled()
+		installAdminOverviewStale({ sockets: { sockets: { values: () => [] } } }, () => {})
 	})
 })

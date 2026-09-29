@@ -2,6 +2,7 @@
 	import * as Icons from "@lucide/svelte"
 	import { Popover, Portal } from "@skeletonlabs/skeleton-svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
+	import { useInterest } from "$lib/client/sockets/interest.svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 	import { formatDate } from "../sections/historyDates"
 	import { momentLabel, parseMoment } from "./moment"
@@ -18,8 +19,13 @@
 	 * asked for twice. Forking while reading as of Y3 parts the two lines at
 	 * Y3: from then on main's changes are not this line's (ruled 2026-09-23).
 	 * Forking at NOW stores no date at all, which is not the same thing — that
-	 * line keeps following main, and the list says so rather than calling it a
-	 * fork "from the start".
+	 * line keeps following the line it left, and the list says so rather than
+	 * calling it a fork "from the start".
+	 *
+	 * ⚠ A fork of a BRANCH reads through it (owner ruling 5, 2026-09-28):
+	 * the parent's own rows and amendments up to this fork's date, and the
+	 * grandparent's up to the earlier of the two cuts — `lineOf` in
+	 * `$lib/shared/lorebooks/lineReading.ts`, which the server reads by too.
 	 */
 	interface Props {
 		lorebookId: number
@@ -66,8 +72,8 @@
 	 * 2026-09-23): a line forked at Year 3 never reads a change on main dated
 	 * Year 4, whether that change was written before the fork or long after.
 	 * A line with NO fork date was never cut off from anything, so it keeps
-	 * following main — the opposite of "from the start", which is what this
-	 * said until the ruling.
+	 * following the line it left (main or, by ruling 5, a branch) — the
+	 * opposite of "from the start", which is what this said until the ruling.
 	 */
 	function forkedAt(b: Sockets.Amendments.Branch): string {
 		const from = b.forkedFromBranchId
@@ -90,9 +96,30 @@
 		confirmingDelete = null
 	}
 
+	/**
+	 * The fork waiting on the server, by name. The success toast waits for
+	 * the reply — the new line arriving in `branches` — so a refused fork
+	 * (a name clash, a date off the calendar) never announces itself as done.
+	 * The refusal is toasted by the shell's `:error` listener.
+	 */
+	let pendingFork = $state<string | null>(null)
+
+	$effect(() => {
+		const name = pendingFork
+		if (name && branches.some((b) => b.name === name)) {
+			toaster.success({ title: `Forked ${name}` })
+			pendingFork = null
+		}
+	})
+
+	useInterest<"amendments:fork:error">("amendments:fork:error", () => {
+		pendingFork = null
+	})
+
 	function fork() {
 		const name = newName.trim()
 		if (!name) return
+		pendingFork = name
 		socket.emit("amendments:fork", {
 			lorebookId,
 			name,
@@ -101,7 +128,6 @@
 			forkMonth: forkDate?.month ?? null,
 			forkDay: forkDate?.day ?? null
 		} satisfies Sockets.Amendments.Fork.Params)
-		toaster.success({ title: `Forked ${name}` })
 		reset()
 		open = false
 	}
@@ -158,8 +184,10 @@
 					<p class="text-surface-700-300 text-xs leading-relaxed">
 						Before the fork date both lines read the same entries.
 						After it, each keeps its own amendments, scenes and cast
-						states — a change on one is not a change on the other.
-						Nothing merges back.
+						states — a change on one is not a change on the other,
+						and a shared entry dated after the fork stays on the
+						line it was written for. Undated shared entries read
+						the same on every line. Nothing merges back.
 					</p>
 				</div>
 
@@ -168,7 +196,7 @@
 						<button
 							class="btn btn-sm w-full justify-start {branchId ===
 							null
-								? 'preset-filled-primary-500'
+								? 'preset-tonal-primary'
 								: 'preset-filled-surface-400-600'}"
 							type="button"
 							role="menuitem"
@@ -209,11 +237,13 @@
 									<p
 										class="text-surface-700-300 text-xs leading-relaxed"
 									>
-										Deleting <strong>{b.name}</strong>
-										removes what was written on it — its amendments,
-										its own entries and its scenes. Shared entries
-										stay. Sessions played on it fall back to
-										main.
+										Deleting <strong>{b.name}</strong> removes
+										everything written on it: its amendments, its
+										own entries, its scenes, the relationships drawn
+										on it and the placements made on it. Shared
+										entries stay. Sessions played on it move to main
+										at the same point in the story, and lines forked
+										from it become lines off main.
 									</p>
 									<div class="flex gap-1">
 										<button
@@ -238,7 +268,7 @@
 									<button
 										class="btn btn-sm min-w-0 flex-1 justify-start {branchId ===
 										b.id
-											? 'preset-filled-primary-500'
+											? 'preset-tonal-primary'
 											: 'preset-filled-surface-400-600'}"
 										type="button"
 										role="menuitem"
@@ -287,7 +317,7 @@
 									</button>
 								</div>
 								<span
-									class="text-surface-600-400 pl-2 text-[0.68rem]"
+									class="text-surface-600-400 pl-2 text-[11px]"
 								>
 									{forkedAt(b)}
 								</span>
@@ -327,14 +357,14 @@
 						<p class="text-surface-700-300 text-xs leading-relaxed">
 							It leaves <strong>{label}</strong>
 							{#if forkDate}
-								at <strong>{momentLabel(moment)}</strong>
-								, the moment you are reading. Everything before that
-								date stays shared.
+								at <strong>{momentLabel(moment)}</strong>, the
+								moment you are reading. Everything {label} holds
+								up to that date stays shared.
 							{:else}
-								<strong>with no fork date</strong>
-								, so it keeps following {label}: a change made
-								there reads on this line too. Move the moment
-								first if the two should part at a date.
+								<strong>with no fork date</strong>, so it keeps
+								following {label}: a change made there reads on
+								this line too. Move the moment first if the two
+								should part at a date.
 							{/if}
 						</p>
 						<div class="flex gap-1">

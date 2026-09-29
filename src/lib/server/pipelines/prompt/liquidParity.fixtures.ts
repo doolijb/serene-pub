@@ -275,12 +275,19 @@ export const LIQUID_LAYOUTS: Record<string, string> = {
 	// `pad` and presence-not-truthiness: a story with a zeroth month is a thing
 	// somebody will build, so `!= nil` rather than a truth test.
 	"currentDate/content":
+		"{% if currentDate.label %}{{ currentDate.label }}{% else %}" +
 		"{{ currentDate.year }}" +
 		"{% if currentDate.month != nil %}-{{ currentDate.month | pad: 2 }}{% endif %}" +
-		"{% if currentDate.day != nil %}-{{ currentDate.day | pad: 2 }}{% endif %}",
+		"{% if currentDate.day != nil %}-{{ currentDate.day | pad: 2 }}{% endif %}" +
+		"{% if currentDate.hour != nil %} {{ currentDate.hour | pad: 2 }}:{{ currentDate.minute | pad: 2 }}{% endif %}" +
+		"{% endif %}",
 
 	"currentDate/wrapped":
-		"The current date in the story is {{ currentDate.year }}" +
+		"The current date in the story is " +
+		"{% if currentDate.label %}{{ currentDate.label }}{% else %}" +
+		"{{ currentDate.year }}" +
 		"{% if currentDate.month != nil %}-{{ currentDate.month | pad: 2 }}{% endif %}" +
-		"{% if currentDate.day != nil %}-{{ currentDate.day | pad: 2 }}{% endif %}."
+		"{% if currentDate.day != nil %}-{{ currentDate.day | pad: 2 }}{% endif %}" +
+		"{% if currentDate.hour != nil %} {{ currentDate.hour | pad: 2 }}:{{ currentDate.minute | pad: 2 }}{% endif %}" +
+		"{% endif %}."
 }

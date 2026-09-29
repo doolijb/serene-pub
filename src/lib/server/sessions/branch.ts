@@ -73,6 +73,15 @@ export async function branchSession(
 				isGroup: original.isGroup,
 				metadata: original.metadata,
 				lorebookId: original.lorebookId,
+				// The same line of the book, its clock where the parent's
+				// stands (ruling 15, story-time P3): a branched session plays
+				// on from where its parent read — then keeps its own clock.
+				lorebookBranchId: original.lorebookBranchId,
+				storyClockYear: original.storyClockYear,
+				storyClockMonth: original.storyClockMonth,
+				storyClockDay: original.storyClockDay,
+				storyClockHour: original.storyClockHour,
+				storyClockMinute: original.storyClockMinute,
 				// The same genre, preset and genre fields: the copies keep
 				// their channels, and the new session has to have them to
 				// keep them on. ⚠ The handler this replaced said as much and
@@ -81,6 +90,9 @@ export async function branchSession(
 				genreId: original.genreId,
 				presetId: original.presetId,
 				genreFields: original.genreFields,
+				// Which world attributes it reads comes along with what it
+				// tracks (its picks, below): a branch tracks what its parent did.
+				worldAttributes: original.worldAttributes,
 				// The state version comes along (U5f): the copied value and
 				// possession rows keep the versions they landed at, and a
 				// branch that restarted at zero would read every one of them
@@ -110,8 +122,7 @@ export async function branchSession(
 					characterId: sc.characterId ?? null,
 					envoySlug: sc.envoySlug ?? null,
 					position: sc.position,
-					isActive: sc.isActive,
-					visibility: sc.visibility
+					isActive: sc.isActive
 				}))
 			)
 
@@ -203,15 +214,16 @@ export async function branchSession(
 /**
  * Copy a session's state rows into its branch, anchors remapped.
  *
- * Values, configurations and possessions — the three session-layer tables —
- * and the sheets its owners have, which is what the branch *tracks* rather than
+ * Values and configurations — the session-layer tables (an inventory is a
+ * value since phase 3b; the retired possession edges are not copied) — and
+ * the sheets its owners have, which is what the branch *tracks* rather than
  * what it holds. Rows anchored after the fork are left behind: a branch is the
  * conversation up to a point, and carrying a change made three replies later
  * would be carrying a fact from a future the branch never had.
  *
  * A null anchor is "from the beginning" and always comes across.
  *
- * ⚠ **Proposals are deliberately not copied.** A pending decision belongs to
+ * ⚠ **Proposals are never copied, on purpose.** A pending decision belongs to
  * the person who was asked, in the session they were asked in; two sessions
  * each holding the same undecided line is two chances to answer one question,
  * and no way to say which answer was meant.
@@ -263,21 +275,6 @@ async function copyStateRows(
 		})
 	}
 
-	const possessions = await tx
-		.select()
-		.from(schema.sessionPossessions)
-		.where(eq(schema.sessionPossessions.sessionId, sessionId))
-	for (const row of possessions) {
-		const at = anchor(row.validFromMessageId)
-		if (at === undefined) continue
-		const { id: _id, createdAt: _createdAt, ...rest } = row
-		await tx.insert(schema.sessionPossessions).values({
-			...rest,
-			sessionId: created,
-			validFromMessageId: at
-		})
-	}
-
 	// What the branch TRACKS, as opposed to what it holds: the session's own
 	// sheets and its cast's. Both are keyed by `session_id`, so both are found
 	// by one predicate and both are remapped the same way — the `session_cast`
@@ -294,5 +291,16 @@ async function copyStateRows(
 			sessionId: created,
 			sheetId: row.sheetId,
 			position: row.position
+		})
+	// …and its attribute picks, the rest of what it tracks.
+	const picks = await tx
+		.select()
+		.from(schema.sessionAttributePicks)
+		.where(eq(schema.sessionAttributePicks.sessionId, sessionId))
+	for (const row of picks)
+		await tx.insert(schema.sessionAttributePicks).values({
+			sessionId: created,
+			slotId: row.slotId,
+			enabled: row.enabled
 		})
 }

@@ -92,7 +92,7 @@ export function validateCompletionTemplate(
 	if (draft.renderMode != null && draft.renderMode !== "flat")
 		return (
 			`Render mode '${draft.renderMode}' cannot be set here. Templates you author are ` +
-			`flat completion text: the role-array mode is the internal split-session bridge, ` +
+			`flat completion text: the role-array mode is the internal split-chat bridge, ` +
 			`whose markers are emitted by hand-written code precisely so that no row can ` +
 			`define one the marker neutraliser has never heard of.`
 		)
@@ -129,7 +129,7 @@ export function validateCompletionTemplate(
 			if (marker.test(text))
 				return (
 					`The ${role} ${what} contains a reserved role marker. ` +
-					`'<@role:…>' is how the internal split-session bridge tags a message ` +
+					`'<@role:…>' is how the internal split-chat bridge tags a message ` +
 					`before parsing it back out, and a template that emits one could put a ` +
 					`system-role message into a prompt from anywhere text is quoted.`
 				)

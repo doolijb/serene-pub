@@ -94,11 +94,27 @@ export interface StatusRelayOptions {
 	userId?: number
 	/** The caller's seam — handed the filled text, in order. */
 	onStatus?: (nodeKey: string, text: StatusText) => void
+	/**
+	 * Each node's declared **step status** (`expose.status`, lair pass B18,
+	 * owner D5) — *Planning the turn*. For a node listed here the declaration
+	 * is what shows, whatever its handler sets: a planner's *{speaker} is
+	 * thinking* is the handler's generic voice, and the spec knows better
+	 * what the step is. `stepStatuses(doc)`.
+	 */
+	declared?: ReadonlyMap<string, StatusText>
 }
 
 export interface StatusRelay {
-	/** The executor's `onStatus`: a node set its status. Sync; ordered. */
+	/**
+	 * The executor's `onStatus`: a node set its status. Sync; ordered. A node
+	 * with a declared step status shows the declaration instead.
+	 */
 	set(nodeKey: string, text: StatusText): void
+	/**
+	 * A node started: its declared step status, if it has one, shows now —
+	 * before its handler says anything, and whether or not it ever does.
+	 */
+	started(nodeKey: string): void
 	/** The LLM queue's status for this run's oracle call. */
 	queue(status: LLMQueueStatus): void
 	/** The current filled status, if the run has set one. */
@@ -112,7 +128,7 @@ export interface StatusRelay {
 /**
  * The speaker's display name for a run: the side character's, an envoy's
  * declared name in the run owner's language, a character's nickname-or-name,
- * else the narrator's configured name. Undefined when the run has nobody to
+ * else — `null`, the own voice's turn — `ownVoiceName`'s (R5). Undefined when the run has nobody to
  * name — a summary, a graph build — and a status mentioning `{speaker}` then
  * keeps its placeholder rather than inventing one.
  */
@@ -130,7 +146,7 @@ export async function speakerDisplayName(
 	// `null` and `undefined` are NOT the same "no speaker" (ruled
 	// 2026-09-16): `null` is a narrator turn, which does have a name to
 	// give — the session's configured narrator — while `undefined` is a
-	// run that never had a speaker port at all (`sessions:triggerFunction`,
+	// run that never had a speaker port at all (`sessions:fireAction`,
 	// summarize, a scene). The latter falls out here rather than reaching
 	// the narrator branch below, so its status keeps `{speaker}` unfilled.
 	if (ref === undefined) return undefined
@@ -168,12 +184,28 @@ export async function speakerDisplayName(
 		}
 		return undefined
 	}
-	// A narrator turn: the session's configured narrator name, as the row
-	// it fills was labelled — the same chain the placeholder outlet walks.
-	const { narratorNameFor } = await import(
-		"$lib/server/pipelines/runtime/host"
+	// The own voice's turn (`ref: null`, lair re-plan R5): named by the one
+	// rule every reader of it goes through — the genre's fallback envoy (the
+	// Lair's Castellan), else the session's narrator name, else
+	// `UNCLAIMED_LINE_NAME` — in the run owner's language, as an envoy is.
+	const [{ narratorNameFor }, { sessionDeclaredEnvoys }, { ownVoiceName }] =
+		await Promise.all([
+			import("$lib/server/pipelines/runtime/host"),
+			import("$lib/server/pipelines/entities/envoys"),
+			import("$lib/shared/sessions/ownVoiceName")
+		])
+	let language: string | undefined
+	if (opts.userId != null) {
+		const { resolveUserLanguage } = await import("$lib/server/i18n")
+		language = (await resolveUserLanguage(opts.userId)).code
+	}
+	return ownVoiceName(
+		{
+			envoys: await sessionDeclaredEnvoys(db, opts.sessionId),
+			narratorName: await narratorNameFor(db, opts.sessionId, opts.userId)
+		},
+		language
 	)
-	return (await narratorNameFor(db, opts.sessionId, opts.userId)) ?? undefined
 }
 
 export function createStatusRelay(opts: StatusRelayOptions): StatusRelay {
@@ -207,14 +239,16 @@ export function createStatusRelay(opts: StatusRelayOptions): StatusRelay {
 	 * speaker, and it arrives on the request — so `opts.speaker` is known
 	 * before the first node, and the `onOpened` relay that waited for the
 	 * placeholder to say who has gone with the node that made it necessary.
-	 * A run that names nobody is a narrator turn or a run with no speaker
-	 * at all (a summary, a scene); both are unfilled throughout, without a
-	 * read, exactly as before.
+	 * `null` is the own voice's turn — a fired `{ ref: null }` entry — and
+	 * is named (`speakerDisplayName`, lair re-plan R5). A run with no
+	 * speaker at all (`undefined`: a summary, a scene) is unfilled
+	 * throughout, without a read, exactly as before.
 	 */
+	const hasNobody = () =>
+		opts.speaker === undefined && !opts.sideCharacterName?.trim()
 	const speakerName = (): Promise<string | undefined> => {
 		if (speaker) return speaker
-		if (opts.speaker == null && !opts.sideCharacterName?.trim())
-			return Promise.resolve(undefined)
+		if (hasNobody()) return Promise.resolve(undefined)
 		return (speaker = speakerDisplayName(db, {
 			sessionId,
 			speaker: opts.speaker,
@@ -271,29 +305,33 @@ export function createStatusRelay(opts: StatusRelayOptions): StatusRelay {
 		get current() {
 			return current
 		},
-		set(nodeKey, text) {
+		set(nodeKey, said) {
+			const text = opts.declared?.get(nodeKey) ?? said
 			enqueue(async () => {
 				/**
 				 * A status that says *{speaker} is thinking* with nobody to
 				 * put in it is withheld rather than shown mangled.
 				 *
 				 * Since A7 this is only ever a run with no speaker at all —
-				 * a narrator turn, a summary, a scene — because the entry
-				 * being fired names the speaker before the first node, so
-				 * there is no window in which a character's turn has nobody
-				 * to name.
+				 * a summary, a scene — because the entry being fired names
+				 * the speaker before the first node, so there is no window in
+				 * which a character's turn has nobody to name. The own
+				 * voice's turn (`null`) has a name since R5.
 				 */
 				if (
 					statusVarsMentioned(text).includes("speaker") &&
 					text.vars?.speaker === undefined &&
-					opts.speaker == null &&
-					!opts.sideCharacterName?.trim()
+					hasNobody()
 				)
 					return
 				const filled = await fill(text)
 				current = filled
 				await show(nodeKey, filled)
 			})
+		},
+		started(nodeKey) {
+			const declared = opts.declared?.get(nodeKey)
+			if (declared) this.set(nodeKey, declared)
 		},
 		queue(status) {
 			const text = QUEUE_STATUS[status]

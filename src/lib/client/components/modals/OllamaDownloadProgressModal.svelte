@@ -92,7 +92,7 @@
 >
 	<Portal>
 		<Dialog.Backdrop
-			class="bg-surface-50-950/50 fixed inset-0 z-50 bg-black/20 backdrop-blur-md"
+			class="bg-surface-950/60 fixed inset-0 z-50 backdrop-blur-md"
 		/>
 		<Dialog.Positioner
 			class="fixed inset-0 z-50 flex items-center justify-center p-4"
@@ -109,7 +109,7 @@
 							/>
 						</div>
 						<div>
-							<h2 class="h3 font-bold">Model Downloads</h2>
+							<h2 class="h3 font-bold">Model downloads</h2>
 							<p class="text-surface-700-300 text-sm">
 								{Object.keys(downloadingQuants).length} model{Object.keys(
 									downloadingQuants
@@ -200,7 +200,7 @@
 																{fileName}
 															</span>
 															<span
-																class="text-surface-400 font-mono"
+																class="text-surface-600-400 font-mono"
 															>
 																{fileProgress.total >
 																0
@@ -224,7 +224,7 @@
 														</div>
 														{#if fileProgress.total > 0}
 															<div
-																class="text-surface-400 flex justify-end font-mono text-[10px]"
+																class="text-surface-600-400 flex justify-end font-mono text-[11px]"
 															>
 																{(
 																	fileProgress.completed /

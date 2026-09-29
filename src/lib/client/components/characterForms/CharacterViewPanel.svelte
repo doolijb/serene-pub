@@ -10,6 +10,7 @@
 	import EntityGalleryTab from "$lib/client/components/gallery/EntityGalleryTab.svelte"
 	import SpritesTab from "$lib/client/components/sprites/SpritesTab.svelte"
 	import PanelNavHeader from "$lib/client/components/panels/PanelNavHeader.svelte"
+	import DetailHero from "$lib/client/components/panels/DetailHero.svelte"
 	import PanelTabStrip from "$lib/client/components/panels/PanelTabStrip.svelte"
 
 	// embedding/embeddingModel/vectorizedAt are deliberately excluded from
@@ -171,10 +172,23 @@
 	<!-- Header -->
 	<div class="shrink-0 pb-3">
 		<PanelNavHeader
-			title={character?.nickname || character?.name || ""}
+			title={character?.isPersona ? "Persona" : "Character"}
 			{onBack}
 			backLabel="Back to list"
 			actionsLabel="Character"
+			menuItems={[
+				{
+					label: "View sessions",
+					icon: Icons.MessageSquare,
+					onSelect: onSession
+				},
+				character?.isOwner &&
+					onExport && {
+						label: "Export character",
+						icon: Icons.Download,
+						onSelect: () => onExport?.(character!)
+					}
+			]}
 		>
 			{#snippet primaryAction()}
 				{#if character?.isOwner}
@@ -189,103 +203,29 @@
 					</button>
 				{/if}
 			{/snippet}
-			{#snippet actions()}
-				<button
-					class="btn btn-sm popover-menu-btn hover:preset-filled-primary-500"
-					onclick={onSession}
-					type="button"
-				>
-					<Icons.MessageSquare size={16} aria-hidden="true" />
-					<span>View Sessions</span>
-				</button>
-				{#if character?.isOwner && onExport}
-					<button
-						class="btn btn-sm popover-menu-btn hover:preset-filled-primary-500"
-						onclick={() => onExport?.(character!)}
-						type="button"
-					>
-						<Icons.Download size={16} aria-hidden="true" />
-						<span>Export character</span>
-					</button>
-				{/if}
-			{/snippet}
 		</PanelNavHeader>
 	</div>
 
 	{#if isLoading}
 		<div class="flex flex-1 items-center justify-center">
-			<Icons.Loader2 size={24} class="text-surface-400 animate-spin" />
+			<Icons.Loader2 size={24} class="text-surface-600-400 animate-spin" />
 		</div>
 	{:else if character}
 		<!-- Hero: the one place this panel says who it is showing, above the
 		     tabs so it holds for the gallery as well as the details. -->
-		<div class="flex shrink-0 items-start gap-3 pb-4">
-			{#if avatarSrc(character, { full: true })}
-				<img
-					src={avatarSrc(character, { full: true })}
-					alt=""
-					class="h-[88px] w-[88px] shrink-0 rounded-[14px] object-cover object-top"
-				/>
-			{:else}
-				<span
-					class="bg-surface-800 grid h-[88px] w-[88px] shrink-0 place-items-center rounded-[14px]"
-				>
-					<Icons.UsersRound
-						size={40}
-						class="text-surface-400"
-						aria-hidden="true"
-					/>
-				</span>
-			{/if}
-			<div class="min-w-0 flex-1">
-				<!-- The heading font without a heading element: PanelNavHeader
-				     above already owns this panel's heading, and a second one
-				     saying the same name would put two entries in the outline
-				     for one thing. -->
-				<p class="funnel-display truncate text-lg font-semibold">
-					{character.nickname || character.name}
-				</p>
-				{#if character.nickname && character.name !== character.nickname}
-					<p class="text-surface-400 truncate text-sm">
-						{character.name}
-					</p>
-				{/if}
-				{#if heroMeta.length}
-					<p class="text-surface-500 truncate text-xs">
-						{heroMeta.join(" · ")}
-					</p>
-				{/if}
-				{#if libraryChips.length}
-					<div class="mt-1.5 flex flex-wrap items-center gap-1">
-						{#each libraryChips as chip (chip.label)}
-							<span
-								class="bg-surface-800 text-surface-300 flex max-w-full items-center gap-1 rounded px-2 py-0.5 text-xs"
-							>
-								<chip.icon
-									size={12}
-									class="shrink-0"
-									aria-hidden="true"
-								/>
-								<span class="truncate">{chip.label}</span>
-							</span>
-						{/each}
-					</div>
-				{/if}
-				{#if tags.length > 0}
-					<div class="mt-1.5 flex flex-wrap gap-1">
-						{#each tags as tag}
-							<span
-								class="rounded px-2 py-0.5 text-xs {tagColorPreset(
-									tag
-								)}"
-							>
-								{tag.name}
-							</span>
-						{/each}
-					</div>
-				{/if}
-			</div>
-		</div>
+		<DetailHero
+			class="pb-4"
+			title={character.nickname || character.name}
+			subtitle={character.nickname && character.name !== character.nickname
+				? character.name
+				: undefined}
+			meta={heroMeta.length ? heroMeta.join(" · ") : undefined}
+			image={avatarSrc(character, { full: true })}
+			icon={Icons.UsersRound}
+			chips={libraryChips.length || tags.length > 0
+				? heroChips
+				: undefined}
+		/>
 		<div class="flex min-h-0 flex-1 flex-col">
 			<!-- The same strip the character EDIT screen wears, so the two are
 			     one idiom rather than two that resemble each other. -->
@@ -317,11 +257,11 @@
 				<div class="flex flex-col gap-3 pt-3">
 					{#if character.description}
 						<section class="panel-card">
-							<p class="text-surface-500 mb-1.5 text-xs">
+							<p class="text-surface-600-400 mb-1.5 text-xs">
 								Description
 							</p>
 							<p
-								class="text-surface-200 text-sm leading-relaxed whitespace-pre-wrap"
+								class="text-surface-800-200 text-sm leading-relaxed whitespace-pre-wrap"
 							>
 								{character.description}
 							</p>
@@ -330,11 +270,11 @@
 
 					{#if character.personality}
 						<section class="panel-card">
-							<p class="text-surface-500 mb-1.5 text-xs">
+							<p class="text-surface-600-400 mb-1.5 text-xs">
 								Personality
 							</p>
 							<p
-								class="text-surface-200 text-sm leading-relaxed whitespace-pre-wrap"
+								class="text-surface-800-200 text-sm leading-relaxed whitespace-pre-wrap"
 							>
 								{character.personality}
 							</p>
@@ -343,11 +283,11 @@
 
 					{#if character.scenario}
 						<section class="panel-card">
-							<p class="text-surface-500 mb-1.5 text-xs">
+							<p class="text-surface-600-400 mb-1.5 text-xs">
 								Scenario
 							</p>
 							<p
-								class="text-surface-200 text-sm leading-relaxed whitespace-pre-wrap"
+								class="text-surface-800-200 text-sm leading-relaxed whitespace-pre-wrap"
 							>
 								{character.scenario}
 							</p>
@@ -356,11 +296,11 @@
 
 					{#if character.firstMessage}
 						<section class="panel-card">
-							<p class="text-surface-500 mb-1.5 text-xs">
+							<p class="text-surface-600-400 mb-1.5 text-xs">
 								First message
 							</p>
 							<p
-								class="text-surface-200 text-sm leading-relaxed whitespace-pre-wrap"
+								class="text-surface-800-200 text-sm leading-relaxed whitespace-pre-wrap"
 							>
 								{character.firstMessage}
 							</p>
@@ -369,7 +309,7 @@
 
 					{#if character.alternateGreetings?.length}
 						<section class="panel-card">
-							<p class="text-surface-500 mb-1.5 text-xs">
+							<p class="text-surface-600-400 mb-1.5 text-xs">
 								Alternate greetings ({character
 									.alternateGreetings.length})
 							</p>
@@ -377,12 +317,12 @@
 								{#each character.alternateGreetings as greeting, i}
 									<details>
 										<summary
-											class="text-surface-400 cursor-pointer text-xs"
+											class="text-surface-600-400 cursor-pointer text-xs"
 										>
 											Greeting {i + 1}
 										</summary>
 										<p
-											class="text-surface-200 mt-1 text-sm leading-relaxed whitespace-pre-wrap"
+											class="text-surface-800-200 mt-1 text-sm leading-relaxed whitespace-pre-wrap"
 										>
 											{greeting}
 										</p>
@@ -394,11 +334,11 @@
 
 					{#if character.creatorNotes}
 						<section class="panel-card">
-							<p class="text-surface-500 mb-1.5 text-xs">
+							<p class="text-surface-600-400 mb-1.5 text-xs">
 								Creator notes
 							</p>
 							<p
-								class="text-surface-200 text-sm leading-relaxed whitespace-pre-wrap"
+								class="text-surface-800-200 text-sm leading-relaxed whitespace-pre-wrap"
 							>
 								{character.creatorNotes}
 							</p>
@@ -446,3 +386,19 @@
 		</p>
 	{/if}
 </div>
+
+{#snippet heroChips()}
+	{#each libraryChips as chip (chip.label)}
+		<span
+			class="bg-surface-200-800 text-surface-800-200 flex max-w-full items-center gap-1 rounded px-2 py-0.5 text-xs"
+		>
+			<chip.icon size={12} class="shrink-0" aria-hidden="true" />
+			<span class="truncate">{chip.label}</span>
+		</span>
+	{/each}
+	{#each tags as tag}
+		<span class="rounded px-2 py-0.5 text-xs {tagColorPreset(tag)}">
+			{tag.name}
+		</span>
+	{/each}
+{/snippet}

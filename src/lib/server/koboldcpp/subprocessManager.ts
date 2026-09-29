@@ -131,10 +131,9 @@ process.on("exit", () => {
 // subprocess doesn't outlive a shutdown that had every opportunity to clean
 // up after itself. Still can't do anything about SIGKILL/power loss; that
 // residue is what checkForOrphanOnBoot() exists to sweep up on next start.
-// Signal handling moved to $lib/server/services: this module used to install
-// its own SIGINT/SIGTERM handler that called process.exit(0) when it was done
-// stopping. Node runs every listener for a signal, so that exit cut short any
-// other cleanup still in flight — the db module's lock release, and now the
+// Signal handling lives in $lib/server/services, never here: a module-owned
+// SIGINT/SIGTERM handler that calls process.exit(0) when done stopping cuts
+// short (Node runs every listener for a signal) any other cleanup in flight — the db module's lock release, and now the
 // tunnel teardown. The registry waits for all of them, then exits once.
 //
 // `stop()` is what it calls; nothing else about this module's shutdown changed.
@@ -632,10 +631,10 @@ async function doStart(): Promise<void> {
 		// chat template — which it already auto-extracts from the GGUF on
 		// every model load (handle.get_chat_template(), unconditional, no
 		// extra config needed) but silently never uses without this flag.
-		// Scoped to the session-completions endpoint only (koboldcpp's own
+		// Scoped to the chat-completions endpoint only (koboldcpp's own
 		// docs: "Other endpoints are unaffected. Tool calls are done
 		// without jinja."), so this only matters for connections with "Use
-		// Session Mode" on — which is this app's own default. Model-specific
+		// Chat Mode" on — which is this app's own default. Model-specific
 		// template behavior (eg. Gemma 4's <|think|> enable_thinking
 		// token) is otherwise completely inert regardless of what this app
 		// sends in the request body.
@@ -744,7 +743,7 @@ export async function stop(): Promise<void> {
 	// against.
 	if (!state.process && state.isExternal) {
 		throw new Error(
-			"This KoboldCPP instance is running externally and wasn't started by Serene Pub's Manager, so it can't be stopped from here. Stop it manually, or point the Manager at a different port."
+			"This KoboldCPP instance is running externally and wasn't started by Serene Pub, so it can't be stopped from here. Stop it manually, or point Serene Pub's KoboldCPP at a different port."
 		)
 	}
 

@@ -1,0 +1,6 @@
+ALTER TABLE "attribute_configs" DROP CONSTRAINT "attribute_configs_owner_kind_check";--> statement-breakpoint
+ALTER TABLE "attribute_values" DROP CONSTRAINT "attribute_values_owner_kind_check";--> statement-breakpoint
+ALTER TABLE "owner_sheets" DROP CONSTRAINT "owner_sheets_owner_kind_check";--> statement-breakpoint
+ALTER TABLE "attribute_configs" ADD CONSTRAINT "attribute_configs_owner_kind_check" CHECK ("attribute_configs"."owner_kind" IN ('card', 'cast_member', 'lorebook', 'session', 'session_cast', 'location', 'session_location'));--> statement-breakpoint
+ALTER TABLE "attribute_values" ADD CONSTRAINT "attribute_values_owner_kind_check" CHECK ("attribute_values"."owner_kind" IN ('card', 'cast_member', 'lorebook', 'session', 'session_cast', 'location', 'session_location'));--> statement-breakpoint
+ALTER TABLE "owner_sheets" ADD CONSTRAINT "owner_sheets_owner_kind_check" CHECK ("owner_sheets"."owner_kind" IN ('card', 'cast_member', 'lorebook', 'session', 'session_cast', 'location', 'session_location'));

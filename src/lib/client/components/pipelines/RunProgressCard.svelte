@@ -130,7 +130,7 @@
 			{#if outcomeIcon(outcomeOf(ended)) === "check"}
 				<Icons.Check size={14} class="text-success-500 shrink-0" />
 			{:else if outcomeIcon(outcomeOf(ended)) === "ban"}
-				<Icons.Ban size={14} class="text-muted-foreground shrink-0" />
+				<Icons.Ban size={14} class="text-surface-600-400 shrink-0" />
 			{:else}
 				<!-- `err` and `halt` alike — neither produced a reply, and a
 				     check mark on either is the defect this fixes. -->
@@ -138,7 +138,7 @@
 			{/if}
 			<span class="min-w-0 flex-1 truncate text-sm capitalize">
 				{title(ended)}
-				<span class="text-muted-foreground text-xs lowercase">
+				<span class="text-surface-600-400 text-xs lowercase">
 					{outcomeCaption(ended)}
 				</span>
 			</span>
@@ -147,7 +147,7 @@
 					type="button"
 					class="btn btn-sm preset-tonal-surface shrink-0"
 					onclick={() => runInspector.open(ended.runId)}
-					title="See what this run did, stage by stage"
+					title="See what this run did, step by step"
 				>
 					<Icons.Receipt size={14} /> Inspect
 				</button>
@@ -166,7 +166,7 @@
 			     whose frame carries none. Already redacted server-side
 			     (`redactConnections`, applied at every `emitToUser`) — shown as
 			     it arrived. -->
-			<p class="text-muted-foreground mt-1 pl-6 text-xs">
+			<p class="text-surface-600-400 mt-1 pl-6 text-xs">
 				{ended.error}
 			</p>
 		{/if}
@@ -188,7 +188,7 @@
 						{title(run)}
 					</span>
 					<span
-						class="text-muted-foreground min-w-0 truncate text-xs"
+						class="text-surface-600-400 min-w-0 truncate text-xs"
 						data-run-status={status(run) ? "" : undefined}
 					>
 						{#if status(run)}
@@ -221,13 +221,14 @@
 				class="btn btn-sm preset-tonal-error shrink-0"
 				onclick={() => cancel(run.runId)}
 				title="Stop this run"
+				aria-label="Stop this run"
 			>
 				<Icons.X size={14} />
 			</button>
 		</div>
 
 		{#if run.message}
-			<p class="text-muted-foreground mt-1 pl-6 text-xs">{run.message}</p>
+			<p class="text-surface-600-400 mt-1 pl-6 text-xs">{run.message}</p>
 		{/if}
 
 		{#if preview(run)}

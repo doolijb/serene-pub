@@ -40,7 +40,7 @@ const BUNDLE = "module.exports = { hooks: { v: (i) => ({ echo: i.n }) } }"
 describe("plugin store", () => {
 	it("upserts, enables, and projects an installed plugin to a descriptor", async () => {
 		await upsertPlugin(db, {
-			pluginId: "acme/hello",
+			pluginId: "acme.hello",
 			name: "Hello",
 			bundleSource: BUNDLE,
 			bundleHash: "hash-1",
@@ -49,11 +49,11 @@ describe("plugin store", () => {
 		// disabled by default → not projected
 		expect(await loadEnabledPlugins(db)).toHaveLength(0)
 
-		await setEnabled(db, "acme/hello", true)
+		await setEnabled(db, "acme.hello", true)
 		const enabled = await loadEnabledPlugins(db)
 		expect(enabled).toHaveLength(1)
 		expect(enabled[0]).toMatchObject({
-			id: "acme/hello",
+			id: "acme.hello",
 			name: "Hello",
 			backends: ["quickjs", "ses"],
 			backend: "quickjs",
@@ -64,7 +64,7 @@ describe("plugin store", () => {
 	it("a manifest whose name has no en, or is blank, is refused at install with the sentence; a string or a map with en installs (R-20, U5i)", async () => {
 		const install = (manifest: Record<string, unknown>) =>
 			upsertPlugin(db, {
-				pluginId: "acme/i18n",
+				pluginId: "acme.i18n",
 				name: "I18n",
 				bundleSource: BUNDLE,
 				bundleHash: "hash-i18n",
@@ -72,7 +72,7 @@ describe("plugin store", () => {
 				manifest
 			})
 		await expect(install({ name: { fr: "x" } })).rejects.toThrow(
-			/plugin 'acme\/i18n' cannot be installed: manifest\.name: a locale map with a required 'en' \(R-20\) — got an object without 'en'; write 'Title'/
+			/plugin 'acme\.i18n' cannot be installed: manifest\.name: a locale map with a required 'en' \(R-20\) — got an object without 'en'; write 'Title'/
 		)
 		await expect(install({ name: "Dice", description: "   " })).rejects.toThrow(
 			/manifest\.description is empty — give it text a person reads/
@@ -81,72 +81,72 @@ describe("plugin store", () => {
 		expect(manifestDisplayTextFindings({ name: { en: "Dice", fr: "Dés" } })).toEqual([])
 		expect(manifestDisplayTextFindings(null)).toEqual([])
 		await install({ name: { en: "Dice", fr: "Dés" } })
-		const rows = await db.select().from(plugins).where(eq(plugins.pluginId, "acme/i18n"))
+		const rows = await db.select().from(plugins).where(eq(plugins.pluginId, "acme.i18n"))
 		expect(rows).toHaveLength(1)
-		await removePlugin(db, "acme/i18n")
+		await removePlugin(db, "acme.i18n")
 	})
 
 	it("upsert replaces bundle + hash on reinstall", async () => {
 		await upsertPlugin(db, {
-			pluginId: "acme/hello",
+			pluginId: "acme.hello",
 			name: "Hello v2",
 			bundleSource: BUNDLE,
 			bundleHash: "hash-2",
 			backends: ["quickjs"]
 		})
 		const rows = await loadEnabledPlugins(db)
-		const row = rows.find((r) => r.id === "acme/hello")
+		const row = rows.find((r) => r.id === "acme.hello")
 		// re-install disables until re-enabled (a fresh review of new bytes)
 		expect(row).toBeUndefined()
 	})
 
 	it("the backend dial persists (store is dumb — the manager validates)", async () => {
-		await setEnabled(db, "acme/hello", true) // hash-2 reinstall had disabled it
-		await setBackendPref(db, "acme/hello", "ses")
+		await setEnabled(db, "acme.hello", true) // hash-2 reinstall had disabled it
+		await setBackendPref(db, "acme.hello", "ses")
 		const row = (await loadEnabledPlugins(db)).find(
-			(r) => r.id === "acme/hello"
+			(r) => r.id === "acme.hello"
 		)
 		expect(row?.backend).toBe("ses")
 	})
 
 	it("an admin storage-quota override supersedes the manifest quota (and clears back)", async () => {
 		await upsertPlugin(db, {
-			pluginId: "acme/store",
+			pluginId: "acme.store",
 			name: "Store",
 			bundleSource: BUNDLE,
 			bundleHash: "hash-store",
 			backends: ["ses"],
 			manifest: { permissions: { storage: { quotaBytes: 4096 } } }
 		})
-		await setEnabled(db, "acme/store", true)
+		await setEnabled(db, "acme.store", true)
 		// Consent: a declared quota is a request until an admin reviews it
 		// (permissions.ts), so nothing below would derive a grant without this.
 		await setAdminDenied(
 			db,
-			"acme/store",
+			"acme.store",
 			approved({ permissions: { storage: { quotaBytes: 4096 } } })
 		)
 		const find = async () =>
-			(await loadEnabledPlugins(db)).find((r) => r.id === "acme/store")
+			(await loadEnabledPlugins(db)).find((r) => r.id === "acme.store")
 
 		// manifest quota by default
 		expect((await find())?.storageQuotaBytes).toBe(4096)
 		// an override raises it beyond the 256 MB author ceiling (trusted admin act)
-		await setStorageQuotaOverride(db, "acme/store", 512 * 1024 * 1024)
+		await setStorageQuotaOverride(db, "acme.store", 512 * 1024 * 1024)
 		expect((await find())?.storageQuotaBytes).toBe(512 * 1024 * 1024)
 		// clearing reverts to the manifest quota
-		await setStorageQuotaOverride(db, "acme/store", null)
+		await setStorageQuotaOverride(db, "acme.store", null)
 		expect((await find())?.storageQuotaBytes).toBe(4096)
 	})
 
 	it("denial beats the override — a denied storage permission cannot be revived", async () => {
-		await setStorageQuotaOverride(db, "acme/store", 100 * 1024 * 1024)
-		await setAdminDenied(db, "acme/store", [
+		await setStorageQuotaOverride(db, "acme.store", 100 * 1024 * 1024)
+		await setAdminDenied(db, "acme.store", [
 			...approved({ permissions: { storage: { quotaBytes: 4096 } } }),
 			"storage"
 		])
 		const row = (await loadEnabledPlugins(db)).find(
-			(r) => r.id === "acme/store"
+			(r) => r.id === "acme.store"
 		)
 		expect(row?.storageQuotaBytes).toBeUndefined()
 	})
@@ -164,17 +164,17 @@ describe("plugin store", () => {
 				catch (e) { return { stored: false, err: String((e && e.message) || e) }; }
 			} } }`
 			await upsertPlugin(db, {
-				pluginId: "acme/quota-live",
+				pluginId: "acme.quota-live",
 				name: "Quota Live",
 				bundleSource: PUT,
 				bundleHash: "h-live",
 				backends: ["ses"],
 				manifest: { permissions: { storage: { quotaBytes: 2048 } } }
 			})
-			await setEnabled(db, "acme/quota-live", true)
+			await setEnabled(db, "acme.quota-live", true)
 			await setAdminDenied(
 				db,
-				"acme/quota-live",
+				"acme.quota-live",
 				approved({ permissions: { storage: { quotaBytes: 2048 } } })
 			)
 
@@ -182,14 +182,14 @@ describe("plugin store", () => {
 			// staleness eagerly, so a changed quota drops the warm copy here.
 			const reproject = async () => {
 				const row = (await loadEnabledPlugins(db)).find(
-					(r) => r.id === "acme/quota-live"
+					(r) => r.id === "acme.quota-live"
 				)
 				if (!row) throw new Error("plugin was not projected")
 				mgr.register(row)
 			}
 			const put = async (n: number): Promise<boolean | null> => {
 				const r = await mgr.callHook(
-					"acme/quota-live",
+					"acme.quota-live",
 					"put",
 					{ n },
 					{ kind: "oracle", timeoutMs: 5000 }
@@ -205,12 +205,12 @@ describe("plugin store", () => {
 
 			// raise the ceiling to 100 KB → the same 5 KB write now fits, which can
 			// only happen if the live copy reloaded with the new grant
-			await setStorageQuotaOverride(db, "acme/quota-live", 100 * 1024)
+			await setStorageQuotaOverride(db, "acme.quota-live", 100 * 1024)
 			await reproject()
 			expect(await put(5000)).toBe(true)
 
 			// drop it back to 1 KB → the next write is refused again
-			await setStorageQuotaOverride(db, "acme/quota-live", 1024)
+			await setStorageQuotaOverride(db, "acme.quota-live", 1024)
 			await reproject()
 			expect(await put(2000)).toBe(false)
 		} finally {
@@ -242,7 +242,7 @@ describe("plugin store", () => {
 				return out;
 			} } }`
 			await upsertPlugin(db, {
-				pluginId: "acme/consent",
+				pluginId: "acme.consent",
 				name: "Consent",
 				bundleSource: PROBE,
 				bundleHash: "h-consent",
@@ -254,11 +254,11 @@ describe("plugin store", () => {
 					}
 				}
 			})
-			await setEnabled(db, "acme/consent", true)
+			await setEnabled(db, "acme.consent", true)
 
 			const reproject = async () => {
 				const row = (await loadEnabledPlugins(db)).find(
-					(r) => r.id === "acme/consent"
+					(r) => r.id === "acme.consent"
 				)
 				if (!row) throw new Error("plugin was not projected")
 				mgr.register(row)
@@ -266,7 +266,7 @@ describe("plugin store", () => {
 			}
 			const probe = async () => {
 				const r = await mgr.callHook(
-					"acme/consent",
+					"acme.consent",
 					"probe",
 					{},
 					{
@@ -292,7 +292,7 @@ describe("plugin store", () => {
 			// An admin reviews and approves. Now the same plugin has both.
 			await setAdminDenied(
 				db,
-				"acme/consent",
+				"acme.consent",
 				approved({
 					permissions: {
 						storage: { quotaBytes: 4096 },
@@ -324,7 +324,7 @@ describe("plugin store", () => {
 		})
 		try {
 			mgr.register({
-				id: "acme/logme",
+				id: "acme.logme",
 				name: "Log Me",
 				bundleSource: BUNDLE,
 				bundleHash: "h-log",
@@ -334,7 +334,7 @@ describe("plugin store", () => {
 			})
 			mgr.markReady()
 			await mgr.callHook(
-				"acme/logme",
+				"acme.logme",
 				"v",
 				{ n: 5 },
 				{
@@ -346,7 +346,7 @@ describe("plugin store", () => {
 			await Promise.all(writes)
 
 			const logged = await db.select().from(pluginHookInvocations)
-			const row = logged.find((r: any) => r.pluginId === "acme/logme")
+			const row = logged.find((r: any) => r.pluginId === "acme.logme")
 			if (!row) throw new Error("invocation was not logged")
 			expect(row).toMatchObject({
 				pluginName: "Log Me",
@@ -366,13 +366,13 @@ describe("plugin store", () => {
 	})
 
 	it("a logged invocation survives its plugin's uninstall (denormalized identity)", async () => {
-		await removePlugin(db, "acme/logme")
+		await removePlugin(db, "acme.logme")
 		// the plugin row is gone…
 		const remaining = await loadEnabledPlugins(db)
-		expect(remaining.find((r) => r.id === "acme/logme")).toBeUndefined()
+		expect(remaining.find((r) => r.id === "acme.logme")).toBeUndefined()
 		// …but its history is intact — no FK cascaded it away
 		const logged = await db.select().from(pluginHookInvocations)
-		expect(logged.some((r: any) => r.pluginId === "acme/logme")).toBe(true)
+		expect(logged.some((r: any) => r.pluginId === "acme.logme")).toBe(true)
 	})
 })
 

@@ -258,7 +258,9 @@ export function modelFact(model: SummaryModel): string {
 	// host's own facts go first because those are what a choice turns on; the
 	// state follows, and is dropped once there is anything better to say than
 	// "the host still lists it".
-	const facts = modelFactLine(model as { facts?: ModelFacts | null })
+	const facts =
+		modelFactLine(model as { facts?: ModelFacts | null }) ||
+		localCatalogLine(model.local)
 	if (!facts) return state
 	return state === "listed" ? facts : `${facts} · ${state}`
 }
@@ -286,6 +288,28 @@ export function modelFactLine(model: {
 	if (price) parts.push(price === "Free" ? "Free" : `${price} in`)
 	const size = formatSize(model.facts?.sizeBytes)
 	if (size) parts.push(size)
+	return parts.join(" · ")
+}
+
+/**
+ * Size and dimensions for a local ONNX model, from its catalogue entry.
+ *
+ * A local model has no host to report `facts`, so without this the row read as
+ * a bare state word ("on disk") beside every other row's context and price.
+ */
+export function localCatalogLine(local: SummaryLocalState | undefined): string {
+	const catalog = local?.catalog
+	if (!catalog) return ""
+	const parts: string[] = []
+	const bytes =
+		local?.state === "on_disk" && local.sizeBytes
+			? local.sizeBytes
+			: catalog.sizeMb != null
+				? Math.round(catalog.sizeMb * 1e6)
+				: null
+	const size = formatSize(bytes)
+	if (size) parts.push(size)
+	if (catalog.dimensions) parts.push(`${catalog.dimensions} dimensions`)
 	return parts.join(" · ")
 }
 
@@ -372,15 +396,27 @@ export interface CandidateRow {
 	modelName: string
 	/** The second line's last clause: loaded · on disk · listed · … */
 	fact: string
+	/**
+	 * Whether **Use** may be offered. False for a local file that is still
+	 * arriving or failed: the server refuses to register a local ONNX model
+	 * that is not on disk, and a button the server will refuse is a lie.
+	 */
+	usable: boolean
 }
 
 export interface CandidateList {
 	rows: CandidateRow[]
 	/**
-	 * Models on these connections that are switched off or no longer listed.
+	 * Models on these connections that are switched off or missing from the host's list.
 	 * A count, never rows — see the module header for why it cannot be a list.
 	 */
 	hidden: number
+	/**
+	 * Local models this capability could use once downloaded. A count, never
+	 * rows: this view chooses between what is HERE, and the finder is where a
+	 * download is chosen — the two lists stay apart (plan 2026-09-24 C2).
+	 */
+	toDownload: number
 }
 
 /** Rows past this are behind the "Show all N" toggle. */
@@ -411,6 +447,7 @@ export function candidateRows(
 
 	const rows: CandidateRow[] = []
 	let hidden = 0
+	let toDownload = 0
 	for (const connection of ordered) {
 		const title = connection.name ?? "Untitled connection"
 		const icon = kindIcon(connection.type)
@@ -429,17 +466,29 @@ export function candidateRows(
 			}
 			if (!(model.satisfiableCapabilities ?? []).includes(capability))
 				continue
+			const localState = model.local?.state
+			if (localState === "not_downloaded") {
+				toDownload++
+				continue
+			}
 			rows.push({
 				connectionId: connection.id,
 				connectionTitle: title,
 				icon,
 				modelId: model.id,
 				modelName: model.name,
-				fact: modelFact(model)
+				fact: modelFact(model),
+				usable: localState == null || localState === "on_disk"
 			})
 		}
 	}
-	return { rows, hidden }
+	return { rows, hidden, toDownload }
+}
+
+/** "5 more can be downloaded", or null at zero. */
+export function toDownloadSentence(count: number): string | null {
+	if (!count) return null
+	return `${count} more ${count === 1 ? "is" : "are"} available to download`
 }
 
 /** "2 more are switched off or not listed", or null at zero. */

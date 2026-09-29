@@ -10,6 +10,11 @@
 
 /** The participant links a session view holds. Structural, so both the full
  *  `sessions:get` payload and a test fixture satisfy it. */
+import { messageEnvoySlug } from "@serene-pub/core-catalog/conversation"
+
+/** The slug of an envoy's message — core's conversation reads it the same way. */
+export { messageEnvoySlug }
+
 export interface MessageSpeakerSource {
 	sessionCharacters?: {
 		characterId?: number | null
@@ -33,18 +38,12 @@ export interface MessageSpeakerSource {
 		name: string
 		description?: string
 		image?: string
+		/**
+		 * The genre's fallback envoy: the pipeline's own voice, whose name a
+		 * line nobody claims renders under (`ownVoiceName`, R5).
+		 */
+		fallback?: boolean
 	}[]
-}
-
-/** The slug of an envoy's message — `metadata.speaker` as `envoy:<slug>` — or null. */
-export function messageEnvoySlug(msg: {
-	metadata?: unknown
-}): string | null {
-	const ref = (msg.metadata as { speaker?: unknown } | null | undefined)
-		?.speaker
-	return typeof ref === "string" && ref.startsWith("envoy:")
-		? ref.slice("envoy:".length)
-		: null
 }
 
 /**
@@ -72,7 +71,7 @@ export function messageSpeaker(
 	// — synthesised in the character's shape so every render site reads it
 	// as it reads a character. `avatar` is a URL or data: URI `avatarSrc`
 	// hands back verbatim. A slug absent from the view's list (the genre
-	// stopped declaring it) renders under its slug rather than as "Unknown".
+	// stopped declaring it) renders under its slug — never a placeholder.
 	const envoySlug = messageEnvoySlug(msg)
 	if (envoySlug) {
 		const envoy = session?.envoys?.find((e) => e.slug === envoySlug)
@@ -103,4 +102,31 @@ export function messageSpeaker(
 				: undefined)
 		)
 	}
+}
+
+/**
+ * The name a person's own line takes when no persona speaks for it (lair
+ * re-plan R4): the genre's `playerLabel` — "Dungeon Master", or the session's
+ * override, already resolved (`resolvePlayerLabel`) — with the member's own
+ * name as `member` only when the session has more than one member, so a
+ * shared table can still tell whose line it is ("Dungeon Master · jody").
+ * With no label, the member's name, as before (B11). Undefined when there is
+ * nothing to name it by.
+ *
+ * Never stamped on the row: the page calls this at render, so a rename
+ * relabels every line.
+ */
+export function personLineName(opts: {
+	playerLabel?: string | null
+	memberName?: string | null
+	/** The session's members: its owner plus its guests. */
+	memberCount: number
+}): { name: string; member?: string } | undefined {
+	const label = opts.playerLabel?.trim()
+	const member = opts.memberName?.trim()
+	if (label)
+		return opts.memberCount > 1 && member
+			? { name: label, member }
+			: { name: label }
+	return member ? { name: member } : undefined
 }

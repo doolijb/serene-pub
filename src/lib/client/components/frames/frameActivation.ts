@@ -4,7 +4,7 @@
  *
  * A plugin frame is an opaque-origin iframe that may `{ t: "invoke" }` one
  * of core's verbs. The verbs that **change** a message — hide, retry,
- * continue, delete, edit, swipe — are things a person does; a frame doing
+ * extend, delete, edit, swipe — are things a person does; a frame doing
  * them on its own, on a timer or on load, would be a script rewriting the
  * transcript with the person's authority. So such an invoke is honoured only
  * while a person is **currently in the frame**: the browser's own transient
@@ -32,7 +32,7 @@
  * complaint about `userActivation` alone, W3).
  *
  * Three verbs are further **confirm-gated**: `delete` by the host's own
- * modal (the same one the message row opens), and `retry` and `continue`
+ * modal (the same one the message row opens), and `retry` and `extend`
  * here — the first spends tokens, the second re-drives generation, and
  * neither press is the person's own — with a question the component puts to
  * the person before dispatch. Stop and branch are not gated at all: stop is
@@ -42,15 +42,19 @@
  * the live `navigator`/`document` reads, and hands the two facts in.
  */
 
-/** Core's verbs that alter a message, and so need a person behind them. */
-export const STATE_CHANGING_CORE_VERBS: ReadonlySet<string> = new Set([
-	"hide",
-	"retry",
-	"continue",
-	"delete",
-	"edit",
-	"swipe"
-])
+import {
+	PERSON_GATED_CORE_VERBS,
+	PERSON_PRESS_WINDOW_MS,
+	isPersonGatedAction,
+	personPressCurrent
+} from "@serene-pub/sdk"
+
+/**
+ * Core's verbs that alter a message, and so need a person behind them — the
+ * SDK's one table (`PERSON_GATED_CORE_VERBS`), which the component harness
+ * judges by too.
+ */
+export const STATE_CHANGING_CORE_VERBS: ReadonlySet<string> = PERSON_GATED_CORE_VERBS
 
 /**
  * Core's verbs a frame may invoke only after the person is asked — beyond
@@ -60,7 +64,12 @@ export const STATE_CHANGING_CORE_VERBS: ReadonlySet<string> = new Set([
  */
 export const FRAME_CONFIRM_QUESTIONS: Readonly<Record<string, string>> = {
 	retry: "A widget asks to regenerate a reply, which spends tokens. Go ahead?",
-	continue: "A widget asks to continue generating, which spends tokens. Go ahead?"
+	extend: "A widget asks to extend a reply, which spends tokens. Go ahead?",
+	// The composer's Continue (B7): it starts a turn, so it spends tokens too.
+	advance: "A widget asks to take the next turn, which spends tokens. Go ahead?",
+	// The narrator's turn (B8) starts one too. `pick` is not listed: it opens
+	// the host's own picker, which is the asking.
+	narrate: "A widget asks the narrator to take a turn, which spends tokens. Go ahead?"
 }
 export const CONFIRMED_FRAME_VERBS: ReadonlySet<string> = new Set(
 	Object.keys(FRAME_CONFIRM_QUESTIONS)
@@ -70,8 +79,9 @@ export const CONFIRMED_FRAME_VERBS: ReadonlySet<string> = new Set(
  * How long a person having entered the frame vouches for an invoke — the
  * third pass's fixed window, kept only as the fallback for a browser with no
  * `navigator.userActivation` (Firefox, as of writing). See `hasRecentActivation`.
+ * The SDK's `PERSON_PRESS_WINDOW_MS`, the component harness's window too.
  */
-export const FRAME_ACTIVATION_WINDOW_MS = 5_000
+export const FRAME_ACTIVATION_WINDOW_MS = PERSON_PRESS_WINDOW_MS
 
 export interface FrameActivation {
 	/**
@@ -124,11 +134,7 @@ export function hasRecentActivation(
 ): boolean {
 	if (live && live.userActivationActive !== undefined)
 		return live.userActivationActive && live.frameIsActiveElement
-	return (
-		state.lastInteractionAt !== null &&
-		now - state.lastInteractionAt >= 0 &&
-		now - state.lastInteractionAt <= FRAME_ACTIVATION_WINDOW_MS
-	)
+	return personPressCurrent(state.lastInteractionAt, now)
 }
 
 export type FrameInvokeVerdict =
@@ -152,8 +158,7 @@ export function frameInvokeVerdict(
 	now: number = Date.now(),
 	live?: LiveFrameActivation
 ): FrameInvokeVerdict {
-	if (action.specSlug !== "core" || !needsActivation(action.key))
-		return { allowed: true }
+	if (!isPersonGatedAction(action)) return { allowed: true }
 	if (!hasRecentActivation(state, now, live))
 		return {
 			allowed: false,

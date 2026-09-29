@@ -15,7 +15,7 @@
 	 *
 	 * The two *policies* — daily on/off, include user files — are not here.
 	 * They are instance-wide settings and live with the rest of those in
-	 * /admin/settings; what this panel carries of them is the one-shot
+	 * /admin/data; what this panel carries of them is the one-shot
 	 * override beside Back up now, which is a decision about this backup
 	 * rather than about every future one.
 	 *
@@ -52,7 +52,7 @@
 	 * Deliberately not seeded from the stored setting and deliberately reset
 	 * after each press: it means "include user files in *this* backup", and a
 	 * checkbox that silently stayed ticked would quietly turn a per-backup
-	 * choice into the policy that lives in /admin/settings.
+	 * choice into the policy that lives in /admin/data.
 	 */
 	let includeUserFilesOnce = $state(false)
 
@@ -161,20 +161,20 @@
 
 <div class="flex flex-col gap-4">
 	{#if !userCtx.user?.isAdmin}
-		<div class="card preset-filled-surface-100-900 p-4">
+		<div class="panel-card">
 			<p class="text-surface-700-300 text-sm">
 				Backups are managed by an administrator.
 			</p>
 		</div>
 	{:else}
-		<div class="card preset-filled-surface-100-900 p-4">
-			<h3 class="mb-2 text-lg font-semibold">Backups</h3>
+		<div class="panel-card">
+			<h3 id="backups-list" class="mb-2 text-sm font-medium">Backups</h3>
 			<p class="text-surface-700-300 mb-3 text-sm">
 				A backup is a copy of the whole database. One is taken daily,
 				and one before a version upgrade changes anything — nothing is
 				ever deleted on its own, so these stay until you remove them.
 				Whether backups happen daily, and whether they carry your media
-				and avatars, are set in Admin → Settings.
+				and avatars, are set in Admin › Data and backups.
 			</p>
 			<p class="text-surface-700-300 mb-3 text-sm">
 				To put one of these back, Serene Pub has to be stopped: run
@@ -197,13 +197,14 @@
 
 			<button
 				type="button"
+				data-field="backup-now"
 				class="btn preset-filled-primary-500 w-fit"
 				onclick={backUpNow}
 				disabled={busy}
 			>
 				{#if busy}
 					<Icons.Loader2 size={16} class="animate-spin" />
-					Working...
+					Working…
 				{:else}
 					<Icons.DatabaseBackup size={16} />
 					Back up now
@@ -211,7 +212,7 @@
 			</button>
 
 			{#if loading}
-				<p class="text-surface-700-300 mt-4 text-sm">Loading...</p>
+				<p class="text-surface-700-300 mt-4 text-sm">Loading…</p>
 			{:else if listing && listing.backups.length === 0}
 				<p class="text-surface-700-300 mt-4 text-sm italic">
 					There are no backups yet.
@@ -220,7 +221,7 @@
 				<ul class="mt-4 flex flex-col gap-2">
 					{#each listing.backups as backup (backup.name)}
 						<li
-							class="border-surface-300-700 flex flex-wrap items-center justify-between gap-2 rounded border p-2"
+							class="bg-surface-50-950 flex flex-wrap items-center justify-between gap-2 rounded-[10px] px-3 py-2"
 						>
 							<div class="min-w-0">
 								<div class="font-mono text-xs break-all">
@@ -266,8 +267,8 @@
 		</div>
 
 		{#if listing && listing.setAside.length > 0}
-			<div class="card preset-filled-surface-100-900 p-4">
-				<h3 class="mb-2 text-lg font-semibold">Databases set aside</h3>
+			<div class="panel-card">
+				<h3 id="set-aside" class="mb-2 text-sm font-medium">Databases set aside</h3>
 				<p class="text-surface-700-300 mb-3 text-sm">
 					When a database will not open, Serene Pub moves it aside
 					rather than deleting it. These are those copies. They may
@@ -277,7 +278,7 @@
 				<ul class="flex flex-col gap-2">
 					{#each listing.setAside as dir (dir.name)}
 						<li
-							class="border-surface-300-700 flex flex-wrap items-center justify-between gap-2 rounded border p-2"
+							class="bg-surface-50-950 flex flex-wrap items-center justify-between gap-2 rounded-[10px] px-3 py-2"
 						>
 							<div class="min-w-0">
 								<div class="font-mono text-xs break-all">

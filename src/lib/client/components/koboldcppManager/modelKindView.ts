@@ -1,5 +1,5 @@
 /**
- * View-side rules for the Manager's Text | Image split.
+ * View-side rules for the managed KoboldCPP's Text | Image split.
  *
  * These live out here rather than inside the .svelte files because every one of
  * them fails SILENTLY. A wrong list predicate hides a file the user can see
@@ -14,12 +14,12 @@ type ModelKind = Sockets.KoboldCPP.ModelKind
 type ModelKindFilter = Sockets.KoboldCPP.ModelKindFilter
 
 /**
- * Is a row with this `kind` shown while the Manager is listing `listing`?
+ * Is a row with this `kind` shown while the managed KoboldCPP is listing `listing`?
  *
  * "unknown" is admitted into BOTH lists deliberately. The classifier gives up
  * on a truncated download, an unreadable file, or an architecture nobody has
  * added to the allowlists yet — and a file the user can see on disk but not in
- * the Manager reads as the scan being broken, not as the file being
+ * the managed KoboldCPP reads as the scan being broken, not as the file being
  * unclassifiable. It appears in both, wearing an Unverified badge, with the
  * two-button override as the way out.
  *
@@ -136,7 +136,7 @@ export function imageModelStatus(
 }
 
 /**
- * Which directory the Manager means while listing or downloading `kind`, or
+ * Which directory the managed KoboldCPP means while listing or downloading `kind`, or
  * null when it has none.
  *
  * The image directory is nullable and NULL means "the text one" — for reads and

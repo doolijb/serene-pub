@@ -337,6 +337,10 @@ export async function seedCoreSpecs(db: Db): Promise<SpecSeedReport[]> {
 			// would leave its nodes un-swappable forever. Healed here, only
 			// where a stored node disagrees with the document.
 			await healNodeExpose(db, current!.id, doc)
+			// `pipeline_clauses.parent_clause_chain` (0184, lair pass F2)
+			// likewise: a version stored before it is "present" with every
+			// nested clause's chain NULL, and such a clause never runs.
+			await healClauseChains(db, current!.id, doc)
 		}
 
 		out.push({
@@ -562,6 +566,27 @@ async function healNodeExpose(db: Db, specVersionId: number, doc: SpecDocument):
 				.update(schema.pipelineNodes)
 				.set({ expose })
 				.where(eq(schema.pipelineNodes.id, row.id))
+	}
+}
+
+/** Bring a present version's `pipeline_clauses.parent_clause_chain` into line with its document. */
+async function healClauseChains(db: Db, specVersionId: number, doc: SpecDocument): Promise<void> {
+	const stored = await db
+		.select({
+			id: schema.pipelineClauses.id,
+			clauseId: schema.pipelineClauses.clauseId,
+			parentClauseChain: schema.pipelineClauses.parentClauseChain
+		})
+		.from(schema.pipelineClauses)
+		.where(eq(schema.pipelineClauses.specVersionId, specVersionId))
+	const want = new Map(doc.clauses.map((c) => [c.id, c.clauseChain ?? null]))
+	for (const row of stored) {
+		const chain = want.get(row.clauseId) ?? null
+		if ((row.parentClauseChain ?? null) !== chain)
+			await db
+				.update(schema.pipelineClauses)
+				.set({ parentClauseChain: chain })
+				.where(eq(schema.pipelineClauses.id, row.id))
 	}
 }
 

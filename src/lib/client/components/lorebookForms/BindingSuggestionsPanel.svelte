@@ -201,14 +201,14 @@
 <div class="mt-4">
 	<div class="mb-2 flex items-center justify-between gap-2">
 		<p
-			class="text-surface-600-400 flex items-center gap-1.5 text-xs font-semibold tracking-wide uppercase"
+			class="text-surface-600-400 flex items-center gap-1.5 text-xs font-semibold"
 		>
 			<Icons.Sparkles size={13} aria-hidden="true" />
 			Suggested cast members{pending.length ? ` (${pending.length})` : ""}
 		</p>
 		<button
 			type="button"
-			class="text-surface-500 flex shrink-0 items-center gap-1 text-xs hover:underline"
+			class="text-surface-600-400 flex shrink-0 items-center gap-1 text-xs hover:underline"
 			onclick={refresh}
 			title="Re-scan this lorebook for names that don't resolve to anything"
 		>
@@ -218,7 +218,7 @@
 	</div>
 
 	{#if !loaded}
-		<p class="text-surface-500 text-xs">Looking…</p>
+		<p class="text-surface-600-400 text-xs">Looking…</p>
 	{:else if scanned === false}
 		<!--
 			⚠ NOT an empty list. Nothing has been read yet, so "no suggestions"
@@ -247,7 +247,7 @@
 		</div>
 	{:else}
 		{#if outstanding > 0}
-			<p class="text-surface-500 mb-2 flex items-center gap-1.5 text-xs">
+			<p class="text-surface-600-400 mb-2 flex items-center gap-1.5 text-xs">
 				<Icons.Clock size={12} aria-hidden="true" />
 				{outstanding}
 				{outstanding === 1 ? "source has" : "sources have"} not been scanned
@@ -256,7 +256,7 @@
 		{/if}
 
 		{#if pending.length === 0}
-			<p class="text-surface-500 text-xs">
+			<p class="text-surface-600-400 text-xs">
 				Every name this lorebook uses already resolves to a cast member
 				or an entry.
 			</p>
@@ -272,7 +272,7 @@
 							<span class="font-semibold">
 								{s.surface || s.name}
 							</span>
-							<span class="text-surface-500">
+							<span class="text-surface-600-400">
 								{evidenceLine(s)}
 							</span>
 						</div>
@@ -314,7 +314,7 @@
 								</button>
 								<button
 									type="button"
-									class="text-surface-500 shrink-0 hover:underline"
+									class="text-surface-600-400 shrink-0 hover:underline"
 									onclick={() => (renamingId = null)}
 								>
 									Cancel
@@ -332,7 +332,7 @@
 								</button>
 								<button
 									type="button"
-									class="text-surface-500 hover:underline disabled:opacity-40"
+									class="text-surface-600-400 hover:underline disabled:opacity-40"
 									disabled={busy.has(s.id)}
 									onclick={() => ignore(s.id)}
 									title="Keep it in the log below. This can be undone"
@@ -355,7 +355,7 @@
 			<div class="mt-3">
 				<button
 					type="button"
-					class="text-surface-500 flex items-center gap-1 text-xs hover:underline"
+					class="text-surface-600-400 flex items-center gap-1 text-xs hover:underline"
 					aria-expanded={showLog}
 					onclick={() => (showLog = !showLog)}
 				>
@@ -393,7 +393,7 @@
 											that the story still says it does
 											not.
 										-->
-										<span class="text-surface-500 italic">
+										<span class="text-surface-600-400 italic">
 											(no longer in the text)
 										</span>
 									{/if}

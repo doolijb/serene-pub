@@ -275,7 +275,7 @@ describe("lore retrieval in a pipeline", () => {
 					kind: "query"
 				}
 			)
-		).rejects.toThrow(/may only read the session it was triggered in/)
+		).rejects.toThrow(/may only read the session it was started in/)
 	})
 })
 

@@ -232,6 +232,31 @@ describe("what the scan finds", () => {
 		expect((await vectorRow(entryId))!.model).toBe(MODEL)
 	}, 60_000)
 
+	test("names places and items too, and indexes them with their title (finding #150)", async () => {
+		const { lorebook, session } = await makeBook("places", 1)
+		const { scopedMissingVectors, promoteScopedVectors } = await import(
+			"./vectorizationQueue"
+		)
+		const [place, item] = await testDb
+			.insert(schema.lorebookEntries)
+			.values([
+				{ lorebookId: lorebook.id, typeId: "core:entry/location", typeVersion: 1, position: 1, title: "The Docks", content: "Salt." },
+				{ lorebookId: lorebook.id, typeId: "core:entry/item", typeVersion: 1, position: 1, title: "Rusty key", content: "Iron." }
+			] as any)
+			.returning()
+		const context = contextFor(session.id, lorebook.id)
+		const missing = await scopedMissingVectors(context, MODEL)
+		expect(missing).toEqual(
+			expect.arrayContaining([
+				{ source: "worldLore", id: place!.id },
+				{ source: "worldLore", id: item!.id }
+			])
+		)
+		await promoteScopedVectors(context, MODEL)
+		expect((await vectorRow(place!.id))?.model).toBe(MODEL)
+		expect((await vectorRow(item!.id))?.model).toBe(MODEL)
+	}, 60_000)
+
 	test("ignores a disabled entry — the search would not have looked at it", async () => {
 		const { lorebook, entries, session } = await makeBook("disabled", 2)
 		const { scopedMissingVectors } = await import("./vectorizationQueue")

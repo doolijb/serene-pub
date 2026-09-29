@@ -52,6 +52,18 @@ export class InterpolationEngine {
 	constructor(handlebarsInstance?: typeof Handlebars) {
 		this.handlebars = handlebarsInstance || Handlebars.create()
 		registerCardMacroHelpers(this.handlebars)
+		/**
+		 * The comparison helpers the assembly template already has
+		 * (`contextHandlebarsHelpers.ts`), for a prompt FIELD too (lair pass
+		 * B14, 2026-09-27): a field may branch on a value, as in
+		 * `{{#if (eq tone "grim")}}`. Without them the whole field failed to
+		 * compile and reached the model as raw template.
+		 */
+		const h = this.handlebars
+		if (!h.helpers.eq) h.registerHelper("eq", (a: unknown, b: unknown) => a === b)
+		if (!h.helpers.ne) h.registerHelper("ne", (a: unknown, b: unknown) => a !== b)
+		if (!h.helpers.and) h.registerHelper("and", (a: unknown, b: unknown) => a && b)
+		if (!h.helpers.or) h.registerHelper("or", (a: unknown, b: unknown) => a || b)
 	}
 
 	/**

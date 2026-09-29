@@ -183,10 +183,10 @@
 </script>
 
 <svelte:head>
-	<title>New Session — Document View — Serene Pub</title>
+	<title>New session — Document View — Serene Pub</title>
 </svelte:head>
 
-<h1>New Session</h1>
+<h1>New session</h1>
 <p><a href="/document-view/sessions">Back to Sessions</a></p>
 
 {#if error}
@@ -197,7 +197,7 @@
 
 <form onsubmit={submit}>
 	<div class="a11y-field">
-		<label for="a11y-session-name">Session Name</label>
+		<label for="a11y-session-name">Session name</label>
 		<input
 			id="a11y-session-name"
 			type="text"
@@ -243,7 +243,7 @@
 								disabled={i === 0}
 								aria-label="Move {c.name} up"
 							>
-								Move Up
+								Move up
 							</button>
 							<button
 								type="button"
@@ -252,7 +252,7 @@
 								disabled={i === selectedCharacters.length - 1}
 								aria-label="Move {c.name} down"
 							>
-								Move Down
+								Move down
 							</button>
 							<button
 								type="button"
@@ -306,7 +306,7 @@
 								disabled={i === 0}
 								aria-label="Move {p.name} up"
 							>
-								Move Up
+								Move up
 							</button>
 							<button
 								type="button"
@@ -315,7 +315,7 @@
 								disabled={i === selectedPersonas.length - 1}
 								aria-label="Move {p.name} down"
 							>
-								Move Down
+								Move down
 							</button>
 							<button
 								type="button"
@@ -387,6 +387,6 @@
 	</div>
 
 	<button type="submit" class="a11y-btn" disabled={saving}>
-		{saving ? "Creating…" : "Create Session"}
+		{saving ? "Creating…" : "Create session"}
 	</button>
 </form>

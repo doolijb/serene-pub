@@ -300,20 +300,21 @@
 
 <div class="flex h-full flex-col gap-3">
 	<div class="flex items-center gap-2">
-		{#if mode === "compact"}
-			<button
-				type="button"
-				class="btn btn-sm preset-filled-surface-400-600 p-2"
-				onclick={onBack}
-				title="Back"
-				aria-label="Back"
-			>
-				<Icons.ChevronLeft size={16} />
-			</button>
-		{/if}
+		<!-- At every width: at full page this view is reached from the
+		     endpoint table or a capability, and the list row is not a way
+		     back to either (plan 2026-09-24 B9). -->
+		<button
+			type="button"
+			class="btn btn-sm preset-filled-surface-400-600 p-2"
+			onclick={onBack}
+			title="Back"
+			aria-label="Back"
+		>
+			<Icons.ChevronLeft size={16} />
+		</button>
 		<div class="min-w-0 flex-1">
 			<h2 class="truncate text-sm font-semibold">{model.name}</h2>
-			<p class="text-muted truncate text-xs">
+			<p class="text-surface-600-400 truncate text-xs">
 				on {connection.name}{model.model && model.model !== model.name
 					? ` · ${model.model}`
 					: ""}
@@ -339,7 +340,7 @@
 				<span class="text-sm font-semibold">{headline.text}</span>
 				{#if isActive && section}
 					<span
-						class="preset-filled-primary-500 inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium"
+						class="preset-tonal-primary inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium"
 						title={`The instance default for ${section.starVerb}`}
 					>
 						<Icons.Star size={9} aria-hidden="true" />
@@ -349,7 +350,7 @@
 			</div>
 
 			{#if isActive}
-				<p class="text-muted text-xs">{activeSentence}</p>
+				<p class="text-surface-600-400 text-xs">{activeSentence}</p>
 
 				{#if loaded || (isEmbeddings && onDisk)}
 					<div class="flex flex-wrap gap-2">
@@ -389,12 +390,12 @@
 							></span>
 						</span>
 						{#if progressText}
-							<span class="text-muted text-[11px]">
+							<span class="text-surface-600-400 text-[11px]">
 								{progressText}
 							</span>
 						{/if}
 						{#if cancelling}
-							<span class="text-muted text-[11px]">
+							<span class="text-surface-600-400 text-[11px]">
 								Cancelling — the current file finishes first.
 							</span>
 						{/if}
@@ -438,7 +439,7 @@
 				{#if lane.status}
 					<dl class="grid grid-cols-2 gap-2 text-xs">
 						<div class="flex flex-col">
-							<dt class="text-muted">
+							<dt class="text-surface-600-400">
 								{isEmbeddings ? "Queue" : "Annotated"}
 							</dt>
 							<dd class="font-medium">
@@ -455,7 +456,7 @@
 							</dd>
 						</div>
 						<div class="flex flex-col">
-							<dt class="text-muted">Last used</dt>
+							<dt class="text-surface-600-400">Last used</dt>
 							<dd class="font-medium">
 								{timeAgo(lane.status.lastUsedAt)}
 							</dd>
@@ -485,12 +486,12 @@
 							></span>
 						</span>
 						{#if progressText}
-							<span class="text-muted text-[11px]">
+							<span class="text-surface-600-400 text-[11px]">
 								{progressText}
 							</span>
 						{/if}
 						{#if cancelling}
-							<span class="text-muted text-[11px]">
+							<span class="text-surface-600-400 text-[11px]">
 								Cancelling — the current file finishes first.
 							</span>
 						{/if}
@@ -520,7 +521,7 @@
 						<p
 							class="{lane.cost?.rows
 								? 'preset-tonal-warning'
-								: 'text-muted'} rounded-lg p-2 text-xs"
+								: 'text-surface-600-400'} rounded-lg p-2 text-xs"
 						>
 							{switchCost}
 						</p>
@@ -564,7 +565,7 @@
 			<div class="flex flex-col gap-1.5">
 				<span class="text-xs font-semibold">On this machine</span>
 				<div class="flex flex-wrap items-center gap-2">
-					<span class="text-muted min-w-0 flex-1 text-xs">
+					<span class="text-surface-600-400 min-w-0 flex-1 text-xs">
 						{local.state === "on_disk"
 							? "On disk"
 							: "Partly fetched"}{sizeLabel
@@ -578,11 +579,11 @@
 						onclick={removeFiles}
 					>
 						<Icons.Trash2 size={14} aria-hidden="true" />
-						Remove
+						Delete from disk
 					</button>
 				</div>
 				{#if isActive}
-					<p class="text-muted text-xs">
+					<p class="text-surface-600-400 text-xs">
 						The active model can't be removed from disk. Make
 						another model active first.
 					</p>
@@ -609,13 +610,13 @@
 		<div class="flex flex-col gap-2">
 			<span class="text-xs font-semibold">About</span>
 			{#if catalog?.description}
-				<p class="text-muted text-xs">{catalog.description}</p>
+				<p class="text-surface-600-400 text-xs">{catalog.description}</p>
 			{/if}
 			{#if facts.length}
 				<dl class="grid grid-cols-2 gap-2 text-xs">
 					{#each facts as fact (fact.label)}
 						<div class="flex min-w-0 flex-col">
-							<dt class="text-muted">{fact.label}</dt>
+							<dt class="text-surface-600-400">{fact.label}</dt>
 							<dd class="font-medium break-words">
 								{fact.value}
 							</dd>
@@ -623,7 +624,7 @@
 					{/each}
 				</dl>
 			{:else if !catalog?.description}
-				<p class="text-muted text-xs">
+				<p class="text-surface-600-400 text-xs">
 					The recommended list says nothing about this one — it was
 					added by Hugging Face id.
 				</p>
@@ -643,12 +644,12 @@
 			<div class="flex flex-col gap-2">
 				<span class="text-xs font-semibold">Lane</span>
 				<div class="flex items-center justify-between gap-4 text-xs">
-					<span class="text-muted">Unload after idle</span>
+					<span class="text-surface-600-400">Unload after idle</span>
 					<span class="font-medium">
 						{ttl != null ? `${ttl} min` : "—"}
 					</span>
 				</div>
-				<p class="text-muted text-xs">Set on the connection.</p>
+				<p class="text-surface-600-400 text-xs">Set on the connection.</p>
 
 				<Switch
 					name="onnx-model-enabled"
@@ -668,7 +669,7 @@
 					<Switch.HiddenInput />
 				</Switch>
 
-				<p class="text-muted text-xs">{laneFooter}</p>
+				<p class="text-surface-600-400 text-xs">{laneFooter}</p>
 			</div>
 		{/if}
 	</div>

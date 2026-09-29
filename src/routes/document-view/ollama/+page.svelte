@@ -304,18 +304,18 @@
 </script>
 
 <svelte:head>
-	<title>Ollama Manager — Document View — Serene Pub</title>
+	<title>Ollama, managed — Document View — Serene Pub</title>
 </svelte:head>
 
-<h1>Ollama Manager</h1>
+<h1>Ollama, managed</h1>
 
 {#if !userCtx.user?.isAdmin}
 	<p>Admin access required.</p>
 {:else if !ollamaSettingsCtx.settings?.ollamaManagerEnabled}
 	<p>
-		The Ollama Manager is turned off. Enable it from System Settings first.
+		Ollama, managed, is turned off. Enable it from System settings first.
 	</p>
-	<p><a href="/document-view/settings/system">Go to System Settings</a></p>
+	<p><a href="/document-view/settings/system">Go to System settings</a></p>
 {:else}
 	{#if error}
 		<div class="a11y-status a11y-status-error" role="alert">
@@ -325,7 +325,7 @@
 
 	<form onsubmit={saveBaseUrl}>
 		<div class="a11y-field">
-			<label for="a11y-ollama-base-url">Ollama Server URL</label>
+			<label for="a11y-ollama-base-url">Ollama server URL</label>
 			<input
 				id="a11y-ollama-base-url"
 				type="text"
@@ -348,7 +348,7 @@
 	<h2>Download a Model</h2>
 	<form onsubmit={pullModel}>
 		<div class="a11y-field">
-			<label for="a11y-ollama-pull-name">Model Name</label>
+			<label for="a11y-ollama-pull-name">Model name</label>
 			<p class="a11y-hint">
 				E.g. "llama3.1" or "qwen2.5:7b" — see Ollama's model library.
 			</p>
@@ -384,7 +384,7 @@
 		</div>
 	{/if}
 
-	<h2>Recommended Models</h2>
+	<h2>Recommended models</h2>
 	{#if !recommendedLoaded}
 		<p>Loading…</p>
 	{:else if recommendedModels.length === 0}
@@ -418,7 +418,7 @@
 	<h2>Search Hugging Face for Models</h2>
 	<form onsubmit={searchHuggingFace}>
 		<div class="a11y-field">
-			<label for="a11y-ollama-search">Search Term</label>
+			<label for="a11y-ollama-search">Search term</label>
 			<input
 				id="a11y-ollama-search"
 				type="text"
@@ -459,7 +459,7 @@
 		{/if}
 	{/if}
 
-	<h2>Installed Models</h2>
+	<h2>Installed models</h2>
 	{#if !loaded}
 		<p>Loading…</p>
 	{:else if models.length === 0}
@@ -495,7 +495,7 @@
 		</ul>
 	{/if}
 
-	<h2>Currently Running</h2>
+	<h2>Currently running</h2>
 	{#if runningModels.length === 0}
 		<p>No models are currently loaded in memory.</p>
 	{:else}

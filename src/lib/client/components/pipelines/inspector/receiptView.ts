@@ -82,8 +82,76 @@ export interface NodeRow {
 	recoveredAsEmpty: boolean
 	hasWire: boolean
 	hasPrompt: boolean
+	/**
+	 * The layer each resolved config value won at (`NodeReceipt.configLayers`),
+	 * in the chain's order. Empty on a receipt from before 2026-09-26.
+	 */
+	layers: ValueLayerRow[]
+	/** The swap that ran here (`NodeReceipt.swap`), or null. */
+	swap: { pin: string; by: string } | null
+	/** The receipt says outright that the pin ran (`swap: null`). */
+	pinned: boolean
+	/**
+	 * What the node refused and still finished `ok` over (`refusedOf`): a
+	 * refusal is a result, not a failure, so the row carries it beside the
+	 * outcome rather than in it. Empty for nearly every node.
+	 */
+	refused: string[]
 	/** The node as the receipt holds it, for the detail pane's own readers. */
 	raw: ReceiptNode
+}
+
+/** One config value's layer, as the detail pane lists it. */
+export interface ValueLayerRow {
+	slot: string
+	path: string
+	/** The SDK `ScopeKind`, or the raw word when this build does not know it. */
+	layer: string
+	label: string
+}
+
+/**
+ * The four layers, in the SDK's `SCOPE_ORDER`, as a person reads them. Spelled
+ * out here rather than imported: a receipt is stored JSON and the reader must
+ * say something sensible about a word this build has never heard of.
+ */
+const LAYER_LABEL: Record<string, string> = {
+	session: "session override",
+	config: "selected config",
+	defaults: "instance defaults",
+	author: "node default"
+}
+const LAYER_ORDER = Object.keys(LAYER_LABEL)
+
+/**
+ * `NodeReceipt.configLayers`, flattened. `preset` is the pre-2026-09-26
+ * spelling of `config` — no receipt was written with it, but a stored blob is
+ * nobody's guarantee, so it reads as what it meant.
+ */
+function layersOf(node: ReceiptNode): ValueLayerRow[] {
+	const out: ValueLayerRow[] = []
+	for (const [slot, paths] of Object.entries(asRecord(node.configLayers) ?? {}))
+		for (const [path, raw] of Object.entries(asRecord(paths) ?? {})) {
+			if (typeof raw !== "string") continue
+			const layer = raw === "preset" ? "config" : raw
+			out.push({ slot, path, layer, label: LAYER_LABEL[layer] ?? layer })
+		}
+	const rank = (l: string) => {
+		const i = LAYER_ORDER.indexOf(l)
+		return i < 0 ? LAYER_ORDER.length : i
+	}
+	return out
+		.map((r, i) => ({ r, i }))
+		.sort((a, b) => rank(a.r.layer) - rank(b.r.layer) || a.i - b.i)
+		.map(({ r }) => r)
+}
+
+/** `NodeReceipt.swap`, checked rather than cast. */
+function swapOf(node: ReceiptNode): { pin: string; by: string } | null {
+	const swap = asRecord(node.swap)
+	const pin = asString(swap?.pin)
+	const by = asString(swap?.by)
+	return pin && by ? { pin, by } : null
 }
 
 const asRecord = (v: unknown): Record<string, any> | null =>
@@ -159,11 +227,40 @@ export function nodeRows(receipt: unknown): NodeRow[] {
 				recoveredAsEmpty: raw?.recoveredAsEmpty === true,
 				hasWire: wireView(raw) !== null,
 				hasPrompt: promptView(raw, receipt) !== null,
+				layers: layersOf(raw ?? {}),
+				swap: swapOf(raw ?? {}),
+				pinned: raw?.swap === null,
+				refused: refusedOf(raw?.output),
 				raw: raw ?? {}
 			}
 		})
 		.sort((a, b) => a.seq - b.seq)
 }
+
+/**
+ * The sentences a node's output says it refused, on any node type.
+ *
+ * A node that refuses part of its input and carries on — `core:task/set-state`
+ * turning down one change of five (`bindings.state.ts`) — finishes `ok`,
+ * because the refusal is a result: the other four were legitimate. That leaves
+ * the outcome silent about it, so the inspector reads the convention instead:
+ * a `refused` list of sentences on the output, or on its `main` port. Anything
+ * that is not a non-blank string is not a sentence and is not counted.
+ */
+export function refusedOf(output: unknown): string[] {
+	const record = asRecord(output)
+	if (!record) return []
+	const list = Array.isArray(record.refused)
+		? record.refused
+		: asArray(asRecord(record.main)?.refused)
+	return list.filter(
+		(s: unknown): s is string => typeof s === "string" && s.trim() !== ""
+	)
+}
+
+/** How many refusals `refusedOf` finds — the number the step row shows. */
+export const refusedCount = (output: unknown): number =>
+	refusedOf(output).length
 
 /**
  * The node a reply adapter sent for, where the receipt says one.
@@ -434,7 +531,7 @@ export interface BlockRow {
 	name: string
 	tokens: number
 	included: boolean
-	/** Each stage's line about this block, in order. */
+	/** Each step's line about this block, in order. */
 	why: string[]
 }
 
@@ -739,7 +836,7 @@ function replyNote(reply: Record<string, any>): string | undefined {
 /**
  * Split an output into the part to read and the part to inspect.
  *
- * ⚠ **`reply` is the stage's text whatever its length.** It is a record rather
+ * ⚠ **`reply` is the step's text whatever its length.** It is a record rather
  * than a string — the reply the adapter sent, beside what the service said
  * about it — so the prose test above answers no for the one field the tab is
  * most often opened for, and a one-word answer is still the answer.

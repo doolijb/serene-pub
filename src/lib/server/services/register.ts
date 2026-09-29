@@ -26,6 +26,17 @@ export async function registerCoreServices() {
 		shutdown: () => dbModule.closeDatabase()
 	})
 
+	// After the database, so it stops before the database closes: a plugin's
+	// `shutdown` callback is recorded in the invocation log and may write its
+	// own rows. Its callbacks are bounded well inside the shared deadline
+	// (plugins/lifecycle.ts), so a hung plugin cannot cost the others theirs.
+	const plugins = await import("$lib/server/plugins")
+	registerService({
+		id: "plugins",
+		label: "Plugins",
+		shutdown: () => plugins.shutdownPluginsGracefully()
+	})
+
 	const tunnels = await import("$lib/server/tunnels/supervisor")
 	registerService({
 		id: "tunnels",
@@ -69,6 +80,16 @@ export async function registerCoreServices() {
 		id: "localOnnxModels",
 		label: "Local ONNX models",
 		reconcileOnBoot: () => onnxDownloads.reconcileOnnxDownloadsOnBoot()
+	})
+
+	// Open notification rows can outlive their facts: a restart drops every
+	// in-memory park they point at. Lapses those, runs each producer's
+	// re-check against stored state, and prunes (notifications/service.ts).
+	const notifications = await import("$lib/server/notifications/service")
+	registerService({
+		id: "notifications",
+		label: "Notifications",
+		reconcileOnBoot: () => notifications.reconcileNotificationsOnBoot()
 	})
 
 	const koboldcpp = await import("$lib/server/koboldcpp/subprocessManager")

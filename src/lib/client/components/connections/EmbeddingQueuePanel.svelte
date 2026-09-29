@@ -153,7 +153,7 @@
 			? "text-success-500"
 			: vectorizationCtx.status === "paused"
 				? "text-warning-500"
-				: "text-surface-400"
+				: "text-surface-600-400"
 	)
 	const statusLabel = $derived(
 		vectorizationCtx.status === "running"
@@ -199,7 +199,7 @@
 	</span>
 
 	{#if !isStarred}
-		<p class="text-muted text-xs">
+		<p class="text-surface-600-400 text-xs">
 			There is one embedding queue and it runs on whichever connection is
 			in use. Press "Use for embeddings" above to see its progress here.
 		</p>
@@ -229,7 +229,7 @@
 						disabled={loadingModel}
 					>
 						{#if loadingModel}
-							<Icons.Loader
+							<Icons.Loader2
 								size={12}
 								class="animate-spin"
 								aria-hidden="true"
@@ -282,7 +282,7 @@
 			<div class="flex items-center justify-between">
 				<div class="flex items-center gap-2">
 					{#if vectorizationCtx.status === "running"}
-						<Icons.Loader
+						<Icons.Loader2
 							size={16}
 							class="text-success-500 animate-spin"
 							aria-hidden="true"
@@ -296,7 +296,7 @@
 					{:else}
 						<Icons.Circle
 							size={16}
-							class="text-surface-400"
+							class="text-surface-600-400"
 							aria-hidden="true"
 						/>
 					{/if}
@@ -311,7 +311,7 @@
 							title="Stop queue"
 						>
 							{#if stoppingQueue}
-								<Icons.Loader
+								<Icons.Loader2
 									size={12}
 									class="animate-spin"
 									aria-hidden="true"
@@ -329,7 +329,7 @@
 							title="Start queue"
 						>
 							{#if startingQueue}
-								<Icons.Loader
+								<Icons.Loader2
 									size={12}
 									class="animate-spin"
 									aria-hidden="true"
@@ -358,13 +358,13 @@
 				class="text-surface-700-300 mt-2 grid grid-cols-1 gap-2 text-xs @lg/view:grid-cols-2"
 			>
 				<div>
-					<span class="text-surface-400">Completed</span>
+					<span class="text-surface-600-400">Completed</span>
 					<span class="ml-1 font-mono font-medium">
 						{vectorizationCtx.completed}
 					</span>
 				</div>
 				<div>
-					<span class="text-surface-400">Queued</span>
+					<span class="text-surface-600-400">Queued</span>
 					<span class="ml-1 font-mono font-medium">
 						{vectorizationCtx.priorityQueue.length}
 					</span>
@@ -375,14 +375,14 @@
 		<!-- Queue list -->
 		<section>
 			<h3
-				class="text-surface-400 mb-2 text-xs font-semibold tracking-wider uppercase"
+				class="text-surface-600-400 mb-2 text-xs font-semibold"
 			>
 				Queue ({vectorizationCtx.priorityQueue.length})
 			</h3>
 
 			{#if vectorizationCtx.priorityQueue.length === 0}
 				<div
-					class="text-surface-400 flex flex-col items-center gap-2 py-6 text-center text-sm"
+					class="text-surface-600-400 flex flex-col items-center gap-2 py-6 text-center text-sm"
 				>
 					<Icons.Inbox
 						size={28}
@@ -399,7 +399,7 @@
 							class="preset-tonal-surface flex items-start gap-2 rounded-lg p-2.5 text-xs"
 						>
 							<span
-								class="bg-surface-300-700 mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[10px] font-bold"
+								class="bg-surface-300-700 mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[11px] font-bold"
 							>
 								{i + 1}
 							</span>
@@ -414,7 +414,7 @@
 									{group.ownerDisplayName}
 								</p>
 								{#if summary}
-									<p class="text-surface-400 mt-0.5">
+									<p class="text-surface-600-400 mt-0.5">
 										{summary}
 									</p>
 								{/if}
@@ -467,7 +467,7 @@
 		{#if vectorizationCtx.history.length > 0}
 			<section>
 				<h3
-					class="text-surface-400 mb-2 text-xs font-semibold tracking-wider uppercase"
+					class="text-surface-600-400 mb-2 text-xs font-semibold"
 				>
 					Recent ({vectorizationCtx.history.length})
 				</h3>
@@ -496,13 +496,13 @@
 									{item.ownerDisplayName}
 								</p>
 								{#if summary}
-									<p class="text-surface-400 mt-0.5">
+									<p class="text-surface-600-400 mt-0.5">
 										{summary}
 									</p>
 								{/if}
 							</div>
 							<span
-								class="text-surface-400 shrink-0 tabular-nums"
+								class="text-surface-600-400 shrink-0 tabular-nums"
 							>
 								{timeAgo(item.completedAt)}
 							</span>

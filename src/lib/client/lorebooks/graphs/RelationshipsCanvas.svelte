@@ -60,7 +60,7 @@
 				<button
 					type="button"
 					class="btn btn-sm {layout === option
-						? 'preset-filled-primary-500'
+						? 'preset-tonal-primary'
 						: 'preset-tonal-surface'}"
 					aria-pressed={layout === option}
 					onclick={() => (layout = option)}

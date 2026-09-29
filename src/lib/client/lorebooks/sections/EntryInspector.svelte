@@ -101,7 +101,7 @@
 							{child.name}
 						</span>
 						<span
-							class="text-surface-600-400 shrink-0 text-[0.68rem] tracking-wider uppercase"
+							class="text-surface-600-400 shrink-0 text-xs"
 						>
 							{kindLabel(child.kind)}
 						</span>
@@ -111,7 +111,7 @@
 		</ul>
 		<!-- Said here, because the confirmation is not where a reader should
 		     first learn what a delete takes with it. -->
-		<p class="text-surface-600-400 text-[0.68rem]">
+		<p class="text-surface-600-400 text-[11px]">
 			Deleting this entry deletes what is filed under it.
 		</p>
 	{:else}
@@ -137,7 +137,7 @@
 					aria-controls="{uid}-panel"
 					data-lore-inspector-tab={tab.id}
 					class="btn btn-sm {selected === tab.id && showBody
-						? 'preset-filled-primary-500'
+						? 'preset-tonal-primary'
 						: 'preset-tonal-surface'}"
 					onclick={() => loreRoute.openInspector(tab.id)}
 				>

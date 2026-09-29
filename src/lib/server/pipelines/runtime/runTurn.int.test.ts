@@ -181,7 +181,6 @@ beforeAll(async () => {
 		sessionId,
 		characterId,
 		isActive: true,
-		visibility: "visible"
 	})
 	personaId = persona.id
 	await db
@@ -540,7 +539,6 @@ describe("who portrays whom on a turn", () => {
 			sessionId,
 			characterId: theirs.id,
 			isActive: false,
-			visibility: "visible"
 		})
 		/**
 		 * What the resolver would answer at the moment the join landed —

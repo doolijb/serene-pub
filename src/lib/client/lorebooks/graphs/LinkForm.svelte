@@ -1,4 +1,5 @@
 <script lang="ts">
+	import Select from "$lib/client/components/inputs/Select.svelte"
 	import * as Icons from "@lucide/svelte"
 	import type { GraphNode } from "./graphModel"
 	import {
@@ -21,12 +22,28 @@
 		/** Every node on the canvas, so the far end can be corrected here. */
 		nodes: GraphNode[]
 		saving: boolean
+		/**
+		 * The When picker's options ("No date" + the book's history entries,
+		 * spelled through its calendar). Empty hides the picker.
+		 */
+		whenOptions?: { value: string; label: string }[]
+		/** What went wrong with the last Name it, said here; null when nothing. */
+		error?: string | null
 		onChange: (draft: LinkDraft) => void
 		onSubmit: () => void
 		onCancel: () => void
 	}
 
-	let { draft, nodes, saving, onChange, onSubmit, onCancel }: Props = $props()
+	let {
+		draft,
+		nodes,
+		saving,
+		whenOptions = [],
+		error = null,
+		onChange,
+		onSubmit,
+		onCancel
+	}: Props = $props()
 
 	let others = $derived(nodes.filter((n) => n.key !== draft.from.key))
 	let suggestions = $derived(suggestionsFor(draft.from, draft.to))
@@ -54,27 +71,24 @@
 		</button>
 	</div>
 
-	<label class="sr-only" for="linkTarget">The other end</label>
-	<select
-		id="linkTarget"
-		class="select text-sm"
+	<Select
+		label="The other end"
+		labelHidden
+		class="text-sm"
+		options={others.map((other) => ({ value: other.key, label: other.name }))}
 		value={draft.to.key}
-		onchange={(e) => {
-			const next = others.find((n) => n.key === e.currentTarget.value)
+		onValueChange={(v) => {
+			const next = others.find((n) => n.key === v)
 			if (next) onChange({ ...draft, to: next })
 		}}
-	>
-		{#each others as other (other.key)}
-			<option value={other.key}>{other.name}</option>
-		{/each}
-	</select>
+	/>
 
 	<div class="flex flex-wrap gap-1">
 		{#each suggestions as suggestion (suggestion.type)}
 			<button
 				type="button"
 				class="chip {draft.relationshipType === suggestion.type
-					? 'preset-filled-primary-500'
+					? 'preset-tonal-primary'
 					: 'preset-tonal-surface'}"
 				aria-pressed={draft.relationshipType === suggestion.type}
 				title={suggestion.note}
@@ -112,6 +126,26 @@
 		oninput={(e) =>
 			onChange({ ...draft, description: e.currentTarget.value })}
 	></textarea>
+
+	{#if whenOptions.length > 1}
+		<Select
+			label="When"
+			class="text-xs"
+			options={whenOptions}
+			value={draft.historyEntryId == null ? "" : String(draft.historyEntryId)}
+			onValueChange={(v) =>
+				onChange({
+					...draft,
+					historyEntryId: v ? Number(v) : null
+				})}
+		/>
+	{/if}
+
+	{#if error}
+		<p class="text-error-500 text-xs" role="alert" data-link-form-error>
+			{error}
+		</p>
+	{/if}
 
 	<div class="flex justify-end gap-2">
 		<button

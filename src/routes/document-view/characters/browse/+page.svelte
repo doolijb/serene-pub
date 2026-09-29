@@ -17,8 +17,8 @@
 	const PAGE_SIZE = 20
 
 	const SORT_OPTIONS: { value: CardSourceSort; label: string }[] = [
-		{ value: "top_rated", label: "Top Rated" },
-		{ value: "most_downloaded", label: "Most Downloaded" },
+		{ value: "top_rated", label: "Top rated" },
+		{ value: "most_downloaded", label: "Most downloaded" },
 		{ value: "newest", label: "Newest" },
 		{ value: "oldest", label: "Oldest" },
 		{ value: "name_asc", label: "Name (A–Z)" },
@@ -37,7 +37,7 @@
 
 	let results: LibraryCatalogItem[] = $state([])
 	let loading = $state(false)
-	// A "Load More" click made while one is already in flight is remembered
+	// A "Load more" click made while one is already in flight is remembered
 	// instead of silently dropped — fires immediately once the in-flight one
 	// settles rather than requiring the user to notice and re-click.
 	let loadMoreQueued = $state(false)
@@ -258,10 +258,10 @@
 </script>
 
 <svelte:head>
-	<title>Browse Character Library — Document View — Serene Pub</title>
+	<title>Browse character library — Document View — Serene Pub</title>
 </svelte:head>
 
-<h1>Browse Character Library</h1>
+<h1>Browse character library</h1>
 <p><a href="/document-view/characters">Back to Characters</a></p>
 <p class="a11y-hint">
 	Browse and download ready-made characters from the Serene Pub community
@@ -393,7 +393,7 @@
 				>
 					{loadingDetail && detailsFor === item
 						? "Loading…"
-						: "View Full Description"}
+						: "View full description"}
 				</button>
 				<button
 					type="button"
@@ -417,6 +417,6 @@
 		onclick={loadMore}
 		disabled={loading}
 	>
-		{loading ? (stillFiltering ? "Filtering…" : "Loading…") : "Load More"}
+		{loading ? (stillFiltering ? "Filtering…" : "Loading…") : "Load more"}
 	</button>
 {/if}

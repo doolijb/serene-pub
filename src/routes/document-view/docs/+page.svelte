@@ -76,7 +76,7 @@
 </div>
 
 {#if query.trim()}
-	<h2>Matching Sections</h2>
+	<h2>Matching sections</h2>
 	{#if matchingSections.length === 0}
 		<p>No sections matched "{query}".</p>
 	{:else}
@@ -96,10 +96,12 @@
 {/if}
 
 {#if matchingPages.length === 0}
-	<h2>All Pages</h2>
+	<h2>All pages</h2>
 	<p>No documentation pages matched "{query}".</p>
 {:else}
-	{#each matchingPages as group (group.source)}
+	<!-- Keyed by source AND group: the guides are one source filling several
+	     groups (Start here, Guides, …), so a source alone repeats. -->
+	{#each matchingPages as group (group.source + ":" + group.group)}
 		<h2>{group.group}</h2>
 		{#if group.meta?.banner}
 			<p>

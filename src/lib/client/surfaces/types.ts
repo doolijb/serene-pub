@@ -4,9 +4,15 @@
  * a *view onto channels*; the grid is *placement by CSS var only*; the tier is
  * chosen by the **content box** width, not the viewport.
  */
-import type { PanelDecl, SettingsSchema, WidgetSurface } from "@serene-pub/sdk"
+import type {
+	WidgetDecl,
+	SettingsSchema,
+	WidgetBaseSection,
+	WidgetSectionScope,
+	WidgetSurface
+} from "@serene-pub/sdk"
 
-export type { PanelDecl }
+export type { WidgetDecl }
 
 /**
  * Container-width tiers (21 §3). The names, not pixels, are the contract; the
@@ -53,8 +59,14 @@ export interface PanelInstance {
 	surface: WidgetSurface
 	/** Resolved frame document URL (frame surfaces only). */
 	src?: string
-	/** The scoped data a remote was granted (`ModePanel.grants`). */
-	grants?: Array<"persona" | "characters" | "lore" | "session:full">
+	/**
+	 * The scoped data this widget was granted (`ModePanel.grants`): a
+	 * plugin's, what an admin granted of what it declared; core's own, every
+	 * scope it declares.
+	 */
+	grants?: WidgetSectionScope[]
+	/** The base sections it reads (`ModePanel.reads`, R75); absent reads all. */
+	reads?: WidgetBaseSection[]
 	channels: string[]
 	/** The per-instance settings this panel declares (shared/widgets/settings). */
 	settings?: SettingsSchema
@@ -138,9 +150,9 @@ export interface LayoutBlob {
 	arrangedGrid?: unknown
 }
 
-/** Normalize a raw `PanelDecl.layout` to the fully-defaulted instance shape. */
+/** Normalize a raw `WidgetDecl.layout` to the fully-defaulted instance shape. */
 export function normalizeLayout(
-	l: PanelDecl["layout"],
+	l: WidgetDecl["layout"],
 	role: "primary" | "secondary"
 ): PanelInstance["layout"] {
 	const span = l?.span ?? {}
@@ -155,8 +167,11 @@ export function normalizeLayout(
 		minInline: l?.minInline ?? (role === "primary" ? 360 : 220),
 		minBlock: l?.minBlock ?? 120,
 		collapsible: l?.collapsible ?? role !== "primary",
-		// Primary is never closable — the anchor guarantee (21 §5).
-		closable: role === "primary" ? false : (l?.closable ?? true),
+		// Its declaration's, whatever the role: whether the layout may lose it
+		// is the primary floor's question (sessionLayout/primaryFloor — the
+		// last placed instance of the genre's primary stays), asked over the
+		// whole layout rather than answered here by role (brief 7a).
+		closable: l?.closable ?? true,
 		prefer: l?.prefer ?? "grid"
 	}
 }

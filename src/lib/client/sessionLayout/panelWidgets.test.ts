@@ -5,7 +5,8 @@
  */
 import { describe, expect, it } from "vitest"
 import type { PanelInstance } from "../surfaces/types"
-import { widgetsFromSideZones } from "./panelWidgets"
+import { widgetsFromSideZones, zoneEntries } from "./panelWidgets"
+import { isInstanceOf } from "$lib/shared/widgets/instanceId"
 import type { ResolvedZone, ZoneDef } from "./schema"
 
 function panel(id: string, over: Partial<PanelInstance> = {}): PanelInstance {
@@ -13,7 +14,7 @@ function panel(id: string, over: Partial<PanelInstance> = {}): PanelInstance {
 		id,
 		title: id,
 		role: "secondary",
-		surface: { kind: "native", component: "x" } as any,
+		surface: { kind: "remote", owner: "core", component: "x" } as any,
 		channels: [],
 		layout: {
 			span: { ideal: 1, min: 1, max: 1 },
@@ -140,12 +141,14 @@ describe("widgetsFromSideZones — exclusions", () => {
 		expect(widgetsFromSideZones(zones, [panel("tasks")], 44)).toEqual([])
 	})
 
-	it("a primary-role instance is never emitted as a side widget", () => {
+	it("a genre's own primary placed in a side IS emitted, and grows (brief 7a)", () => {
+		// Placement is free: an R71 genre's board may sit in a rail.
 		const zones = [
 			zone("right", { side: "right", widgets: ["main"] }, "rail")
 		]
 		const instances = [panel("main", { role: "primary" })]
-		expect(widgetsFromSideZones(zones, instances, 44)).toEqual([])
+		const widgets = widgetsFromSideZones(zones, instances, 44)
+		expect(widgets.map((w) => [w.id, w.size.h])).toEqual([["main", "grow"]])
 	})
 
 	it("a stale zone widget id with no matching instance is skipped, not thrown", () => {
@@ -158,5 +161,53 @@ describe("widgetsFromSideZones — exclusions", () => {
 		]
 		const widgets = widgetsFromSideZones(zones, [panel("tasks")], 44)
 		expect(widgets.map((w) => w.id)).toEqual(["tasks"])
+	})
+})
+
+/**
+ * A conversation in a side (brief 7a): the rail renderer used to keep panel
+ * instances alone, so a side holding only a Messages widget — the bare log
+ * moved there, or a copy like the Lair's Sanctum — drew nothing on the
+ * desktop and opened a blank sheet on the phone.
+ */
+describe("a Messages widget in a side draws, counts and is listed", () => {
+	const isConversation = (id: string) => isInstanceOf(id, "messages")
+
+	it("the rail emits the bare log and a copy, both GROWING down it", () => {
+		const zones = [
+			zone("left", { side: "left", widgets: ["tasks", "messages"] }, "rail"),
+			zone("right", { side: "right", widgets: ["messages#sanctum"] }, "rail")
+		]
+		const widgets = widgetsFromSideZones(zones, [panel("tasks")], 44, isConversation)
+		expect(widgets.map((w) => [w.id, w.zone, w.size.h])).toEqual([
+			["tasks", "left", "fixed"],
+			["messages", "left", "grow"],
+			["messages#sanctum", "right", "grow"]
+		])
+	})
+
+	it("one reader lists it for the rail, the counts and the phone's panels menu", () => {
+		const entries = zoneEntries(
+			["messages#sanctum"],
+			[],
+			isConversation,
+			() => "Sanctum"
+		)
+		expect(entries).toEqual([
+			{ id: "messages#sanctum", title: "Sanctum", icon: "MessagesSquare", panel: null }
+		])
+	})
+
+	it("keeps the list's order, and skips an id that names nothing", () => {
+		const entries = zoneEntries(
+			["ghost", "messages", "tasks"],
+			[panel("tasks")],
+			isConversation,
+			() => "Messages"
+		)
+		expect(entries.map((e) => [e.id, e.panel?.id ?? null])).toEqual([
+			["messages", null],
+			["tasks", "tasks"]
+		])
 	})
 })

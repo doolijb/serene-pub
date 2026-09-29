@@ -10,7 +10,7 @@ import {
 	resolveCharacterRefs
 } from "$lib/server/utils/summarizer/availableSceneCast"
 import { relistBindings } from "./lorebooks"
-import { withSessionTriggerLock } from "$lib/server/utils/sessionTriggerLock"
+import { withSessionGenerationLock } from "$lib/server/utils/sessionGenerationLock"
 import { checkSessionAccess } from "$lib/server/utils/sessionAccess"
 import { DEFAULT_CHANNEL, channelWhere } from "$lib/server/messages/channels"
 import { activityError, activityStore } from "$lib/server/utils/activityStore"
@@ -18,6 +18,90 @@ import {
 	loreWriteRefusal,
 	sceneWriteRefusal
 } from "$lib/server/messages/writes"
+import { sessionEvents } from "@serene-pub/sdk"
+import { broadcastToSessionUsers } from "./utils/broadcastHelpers"
+import { broadcastSessionRow } from "$lib/server/sessions/rowPush"
+
+/** The columns that say where a session reads its book, as one row has them. */
+type SessionLine = {
+	lorebookId: number | null
+	lorebookBranchId: number | null
+	storyClockYear: number | null
+	storyClockMonth: number | null
+	storyClockDay: number | null
+	storyClockHour: number | null
+	storyClockMinute: number | null
+}
+
+/**
+ * Which of a session's line columns moved, named the way `sessions:update`'s
+ * `session-updated` names them — `lorebookId`, `lorebookBranchId` and the five
+ * clock columns as one `storyClock`, in that order.
+ */
+export function sessionLineChanges(
+	before: SessionLine,
+	after: SessionLine
+): string[] {
+	const changed: string[] = []
+	if ((before.lorebookId ?? null) !== (after.lorebookId ?? null))
+		changed.push("lorebookId")
+	if ((before.lorebookBranchId ?? null) !== (after.lorebookBranchId ?? null))
+		changed.push("lorebookBranchId")
+	const clock = (r: SessionLine) =>
+		JSON.stringify([
+			r.storyClockYear ?? null,
+			r.storyClockMonth ?? null,
+			r.storyClockDay ?? null,
+			r.storyClockHour ?? null,
+			r.storyClockMinute ?? null
+		])
+	if (clock(before) !== clock(after)) changed.push("storyClock")
+	return changed
+}
+
+/**
+ * Tell every tab that the session now reads its book somewhere else.
+ *
+ * `sessions:setLorebook` moves the book, the line and the clock — the same
+ * three things `sessions:update` announces with `state:changed` (so every tab
+ * reads its state afresh) and a `session-updated` under the person's
+ * `settings` cause (which never fires a turn). It announced neither, so other
+ * tabs and the session lists kept the old book until a reload. Best-effort, as
+ * there: an emitter failing must not fail the write that already landed.
+ */
+async function announceSessionLineMoved(
+	io: any,
+	sessionId: number,
+	userId: number,
+	before: SessionLine,
+	after: SessionLine
+): Promise<void> {
+	const changed = sessionLineChanges(before, after)
+	if (changed.length === 0) return
+	try {
+		await broadcastToSessionUsers(io, sessionId, "state:changed", {
+			sessionId
+		} satisfies Sockets.State.Changed.Response)
+		const { emitSessionEvent } = await import(
+			"$lib/server/pipelines/runtime/sessionEvents"
+		)
+		await emitSessionEvent(db, {
+			sessionId,
+			userId,
+			event: sessionEvents.sessionUpdated,
+			payload: {
+				sessionId,
+				changed,
+				cause: { kind: "settings", userId }
+			},
+			io
+		})
+	} catch (err) {
+		console.warn("[sessions:setLorebook] session-updated emit failed:", err)
+	}
+	// The session lists show which book a session reads.
+	broadcastSessionRow(io, sessionId)
+}
 
 export const sessionsSummarizeHandler: Handler<
 	Sockets.Sessions.Summarize.Params,
@@ -158,7 +242,7 @@ export const sessionsSummarizeHandler: Handler<
 								inArray(schema.sessionMessages.id, messageIds)
 							)
 
-				const rawMessages = await withSessionTriggerLock(
+				const rawMessages = await withSessionGenerationLock(
 					sessionId,
 					async () =>
 						db.query.sessionMessages.findMany({
@@ -552,9 +636,20 @@ export const sessionsSetLorebookHandler: Handler<
 			}
 		}
 
+		// A new book starts at its most recently used line, the session's
+		// clock at that line's present (ruling 15, story-time P3) — the one
+		// rule `sessionLinePatch` keeps for every path.
+		const { sessionLinePatch } = await import("./sessions")
+		const linePatch = await sessionLinePatch({
+			before: {
+				lorebookId: session.lorebookId ?? null,
+				lorebookBranchId: session.lorebookBranchId ?? null
+			},
+			lorebookId
+		})
 		const [updated] = await db
 			.update(schema.sessions)
-			.set({ lorebookId })
+			.set({ lorebookId, ...linePatch })
 			.where(eq(schema.sessions.id, sessionId))
 			.returning()
 
@@ -572,6 +667,14 @@ export const sessionsSetLorebookHandler: Handler<
 				emitToUser
 			).catch(console.error)
 		}
+
+		await announceSessionLineMoved(
+			socket.io,
+			sessionId,
+			userId,
+			session,
+			updated
+		)
 
 		const response: Sockets.Sessions.SetLorebook.Response = {
 			session: updated

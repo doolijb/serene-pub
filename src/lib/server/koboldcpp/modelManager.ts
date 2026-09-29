@@ -12,11 +12,11 @@ import { MODEL_EXTENSION_RE } from "./modelKind"
 import { pollUntilReady } from "./pollUntilReady"
 
 /**
- * One model, named by one connection.
+ * One model, named by one request.
  *
- * A connection row names exactly ONE model and its type says which kind that is:
- * a `koboldcpp_managed` row names a text GGUF, a `koboldcpp_managed_image` row
- * names an image model. Nothing above this file asserts anything about what is
+ * The managed endpoint carries text and image models, each with its
+ * `modality`, and a request names ONE of them and says which kind it is.
+ * Nothing above this file asserts anything about what is
  * loaded — a request says WHICH model it needs, and {@link planResidency} below
  * decides what ends up resident.
  *

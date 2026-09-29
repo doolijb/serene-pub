@@ -213,3 +213,18 @@ describe("documentation route mapping", () => {
 		expect(m.mapToStandardRoute("/document-view/docs")).toBe("/docs")
 	})
 })
+
+describe("character library route mapping", () => {
+	it("maps the Library view's address, and the page it replaced, to the browse page", async () => {
+		const m = await loadModule()
+		expect(m.mapToAccessibleRoute("/library")).toBe(
+			"/document-view/characters/browse"
+		)
+		expect(m.mapToAccessibleRoute("/library/characters")).toBe(
+			"/document-view/characters/browse"
+		)
+		expect(m.mapToStandardRoute("/document-view/characters/browse")).toBe(
+			"/library"
+		)
+	})
+})

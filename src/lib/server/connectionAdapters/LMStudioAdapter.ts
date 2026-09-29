@@ -244,18 +244,18 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 		 * `.respond()` (messages) or `.complete()` (one prompt) — the connection's
 		 * own answer, not an `extraJson` flag of this adapter's.
 		 *
-		 * This read `extraJson.useSession ?? true` while the payload was built
+		 * This read `extraJson.useChat ?? true` while the payload was built
 		 * from a flag the pipeline never set, so a chat-mode connection reached
 		 * the `&& compiledPrompt.messages` half, found none, and silently fell
 		 * through to the completion branch. That degradation is why LM Studio
 		 * never showed the defect the way Anthropic and KoboldCPP did — the
 		 * prompt still went out, in the wrong shape, with nothing to say so.
 		 */
-		const useSession = this.isChatWire
+		const useChat = this.isChatWire
 		let prompt: string = ""
 		let messages: any[] | undefined = undefined
 
-		if (useSession) {
+		if (useChat) {
 			// Checked rather than silently degraded — see above. Not rebuilt
 			// through `promptTextFor`: that is the local decision this change
 			// removes, and it is what hid the fault here for a release.
@@ -275,7 +275,7 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 
 		const options: LLMPredictionOpts<unknown> = {
 			stopStrings: stop,
-			// One fallback now covers both cases the ternary here used to split:
+			// One fallback covers both cases:
 			// a switched-off Response Tokens leaves no key at all, and an
 			// enabled-but-zero one is still the "no usable limit" it always was.
 			maxTokens: this.sampling.responseTokens || 250,
@@ -308,10 +308,10 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 			url:
 				normalizeBaseUrl(this.connection.baseUrl) ||
 				CONNECTION_DEFAULTS[CONNECTION_TYPE.LM_STUDIO].baseUrl,
-			method: useSession ? "respond" : "complete",
+			method: useChat ? "respond" : "complete",
 			body: {
 				model: modelName,
-				...(useSession ? { messages } : { prompt }),
+				...(useChat ? { messages } : { prompt }),
 				options
 			}
 		})
@@ -349,7 +349,7 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 						}
 					}
 					try {
-						if (useSession && messages) {
+						if (useChat && messages) {
 							this.prediction = modelClient.respond(
 								messages,
 								options
@@ -405,7 +405,7 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 					this.prediction?.cancel()
 				}, LLM_NONSTREAMING_TIMEOUT_MS)
 				try {
-					if (useSession && messages) {
+					if (useChat && messages) {
 						this.prediction = modelClient.respond(messages, options)
 						const result = await this.prediction
 						wire.received(result)
@@ -545,8 +545,8 @@ async function listModels(
 			// adapter shares; the rest of the SDK's descriptor rides along
 			// untouched so `readModelFacts` can read the context window,
 			// parameter string, quantisation and size it already holds. Mapping
-			// to two fields here is what used to lose them before the shared
-			// normalizer ever saw the entry.
+			// to two fields here would lose them before the shared normalizer
+			// ever saw the entry.
 			const models = res.map((model) => {
 				const { modelKey, displayName, ...rest } =
 					model as unknown as Record<string, unknown> & {

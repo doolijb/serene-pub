@@ -12,7 +12,7 @@
  * (`hookKinds`) and for the same reason: the manifest is the one source of
  * truth core can read without executing the plugin (F6, 13 §10c).
  *
- *     "engines": { "acme.x:template/mustache@1": "renderMustache" }
+ *     "templateEngines": { "acme.x:template/mustache@1": "renderMustache" }
  *
  * At sync, each declared engine gets a forwarding renderer that calls the
  * plugin's exported hook through the `SandboxManager` — permission-checked,
@@ -37,7 +37,7 @@
  * "work", emitting the foreign syntax intact into somebody's prompt.
  */
 
-import { eq } from "drizzle-orm"
+import { and, eq } from "drizzle-orm"
 import { plugins } from "$lib/server/db/schema"
 import {
 	registerRenderer,
@@ -46,6 +46,7 @@ import {
 	type RenderContext
 } from "$lib/server/pipelines/prompt/renderers"
 import type { SandboxManager } from "./SandboxManager"
+import { notCoreRow } from "./frameHost"
 
 /**
  * Generous against the in-process default (250ms) because a plugin engine is a
@@ -74,17 +75,20 @@ const ENGINE_ID = /^([a-z0-9][a-z0-9.-]*):template\/([a-z0-9][a-z0-9-]*)@(\d+)$/
 export const engineNamespaceOf = (pluginId: string): string =>
 	pluginId.replace("/", ".")
 
-/** Read `engines` off a stored manifest, tolerant of its json being anything. */
+/**
+ * Read the template engines off a stored manifest, tolerant of its json being
+ * anything.
+ *
+ * The map is `templateEngines` — `{ "<ns>:template/<name>@N": hookName }`,
+ * what the SDK packager writes. `engines` means one thing only: npm-style
+ * version ranges (`{ "serene-pub": ">=0.7 <0.8" }`), never read here.
+ */
 export function engineTypesOf(manifest: unknown): Record<string, string> {
-	const raw =
-		manifest && typeof manifest === "object"
-			? (manifest as any).engines
-			: undefined
+	if (!manifest || typeof manifest !== "object") return {}
+	const raw = (manifest as any).templateEngines
 	if (!raw || typeof raw !== "object") return {}
 	const out: Record<string, string> = {}
-	for (const [engineId, hook] of Object.entries(
-		raw as Record<string, unknown>
-	))
+	for (const [engineId, hook] of Object.entries(raw as Record<string, unknown>))
 		if (typeof hook === "string" && hook) out[engineId] = hook
 	return out
 }
@@ -202,7 +206,8 @@ export async function syncPluginEngines(
 			manifest: plugins.manifest
 		})
 		.from(plugins)
-		.where(eq(plugins.enabled, true))
+		// A row stored as `core` registers nothing in core's namespace.
+		.where(and(eq(plugins.enabled, true), notCoreRow()))
 
 	const desired = new Map<string, { pluginId: string; hookName: string }>()
 	for (const row of rows)

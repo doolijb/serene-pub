@@ -13,6 +13,7 @@
 	import { requestWithInterest, useInterest } from "$lib/client/sockets/interest.svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { toaster } from "$lib/client/utils/toaster"
+	import Select from "$lib/client/components/inputs/Select.svelte"
 
 	interface Props {
 		sessionId: number
@@ -77,7 +78,7 @@
 	const changed = (c: Card) => (draft[keyOf(c)] ?? DEFAULT) !== stored(c)
 	/**
 	 * The options a card lists: the offered swaps, plus the stored choice
-	 * when it is no longer offered (its plugin was switched off) — shown as
+	 * when it is not offered (e.g. its plugin is switched off) — shown as
 	 * such, so the select never lands on nothing.
 	 */
 	const choices = (c: Card) => {
@@ -92,6 +93,7 @@
 {#each cards as c (keyOf(c))}
 	{@const id = `pipeline-card-${keyOf(c).replace(/[^a-z0-9]+/gi, "-")}`}
 	{#if variant === "document"}
+		<!-- Document View keeps its plain native controls on purpose. -->
 		<div class="a11y-field">
 			<label for={id}>{c.specName}: {nodeLabel(c.nodeKey)}</label>
 			<div class="a11y-inline-add">
@@ -115,21 +117,22 @@
 		</div>
 	{:else}
 		<section class={cardClass}>
-			<label class="text-surface-600-400 mb-1.5 block text-xs" for={id}>
+			<!-- Visual only: the Select names itself with the same words. -->
+			<p class="text-surface-600-400 mb-1.5 block text-xs" aria-hidden="true">
 				{c.specName} · {nodeLabel(c.nodeKey)}
-			</label>
+			</p>
 			<div class="flex items-center gap-2">
-				<select
-					{id}
-					class="select rounded-[10px]"
+				<Select
+					label="{c.specName} · {nodeLabel(c.nodeKey)}"
+					labelHidden
+					class="min-w-0 flex-1"
+					options={[
+						{ value: DEFAULT, label: `Pipeline default (${defaultName(c)})` },
+						...choices(c).map((o) => ({ value: o.definitionId, label: o.name }))
+					]}
 					bind:value={draft[keyOf(c)]}
 					disabled={!canEdit}
-				>
-					<option value={DEFAULT}>Pipeline default ({defaultName(c)})</option>
-					{#each choices(c) as o (o.definitionId)}
-						<option value={o.definitionId}>{o.name}</option>
-					{/each}
-				</select>
+				/>
 				{#if canEdit}
 					<button
 						type="button"

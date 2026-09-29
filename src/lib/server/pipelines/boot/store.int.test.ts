@@ -346,6 +346,7 @@ describe("envoys are checked where a document lands (U5g review, W4, S5)", () =>
 		genre: GENRE,
 		venue: { kind: "composer" },
 		label: { en: key },
+		description: { en: "A test action." },
 		envoy: { key: envoyKey, name: { en: envoyKey }, ...extra }
 	})
 
@@ -504,13 +505,15 @@ describe("saveDocument runs validate() (U5d review, W9)", () => {
 				errors.push(`${doc.id} · [${f.law}] ${f.nodeKey ?? ""}: ${f.message}`)
 		}
 		expect(errors).toEqual([])
-		// A world-in-message forgery is what the line refuses; a shape
+		// A world-in-widget forgery is what the line refuses; a shape
 		// forgery is what the laws refuse — both at the same door.
 		const { bootstrapPipelines } = await import("$lib/server/pipelines/boot/bootstrap")
 		await expect(bootstrapPipelines(db as any)).resolves.toBeDefined()
 	}, 120_000)
 
-	it("a forged document — a world action in a message venue — is refused at saveDocument by validate()", async () => {
+	// A widget venue since 2026-09-28: a message's own ⋮ is the owner's side of
+	// the line (lair re-plan R11, File as a room).
+	it("a forged document — a world action in a widget venue — is refused at saveDocument by validate()", async () => {
 		const { chatGenre } = await import("@serene-pub/core-catalog")
 		const doc = compile(
 			spec("core:spec/test-forged-world", {
@@ -520,9 +523,9 @@ describe("saveDocument runs validate() (U5d review, W9)", () => {
 					actions: [
 						{
 							key: "grant",
-							function: "grant",
 							venue: { kind: "composer" },
-							label: { en: "Grant" }
+							label: { en: "Grant" },
+							description: { en: "A test action." }
 						}
 					]
 				}
@@ -539,13 +542,13 @@ describe("saveDocument runs validate() (U5d review, W9)", () => {
 		const forged: SpecDocument = {
 			...doc,
 			contributes: {
-				actions: [{ ...action, effects: "world", venue: [{ kind: "message" }] }]
+				actions: [{ ...action, effects: "world", venue: [{ kind: "widget" }] }]
 			}
 		}
 		// Labelled with the line's own law, F41 (U7 review, W3) — the sentence
 		// still cites R-15, where the line is ruled.
 		await expect(saveDocument(db, forged, { publish: true })).rejects.toThrow(
-			/does not validate — \[F41\].*'world' action may not appear in the 'message' venue/
+			/does not validate — \[F41\].*'world' action may not appear in the 'widget' venue/
 		)
 	})
 

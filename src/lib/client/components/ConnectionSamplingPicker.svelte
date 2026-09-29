@@ -1,6 +1,9 @@
 <script lang="ts">
 	import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 	import { notePreview } from "$lib/shared/utils/connectionNotes"
+	import Select, {
+		type SelectOption
+	} from "$lib/client/components/inputs/Select.svelte"
 
 	interface Props {
 		label?: string
@@ -60,37 +63,61 @@
 		}
 		return [...groups.entries()].sort((a, b) => a[0].localeCompare(b[0]))
 	})
+
+	// "System default" first and ungrouped, then one heading per service.
+	// `notePreview` keeps a pasted note from making a row run on; the old
+	// native option also carried the whole note as a `title`, which Select
+	// rows do not take.
+	const connectionOptions: SelectOption[] = $derived([
+		{ value: "", label: "System default" },
+		...byService.flatMap(([service, conns]) =>
+			conns.map((c) => {
+				const preview = notePreview(c.notes)
+				return {
+					value: String(c.id),
+					label: `${c.name ?? c.id}${preview ? ` — ${preview}` : ""}`,
+					group: service
+				}
+			})
+		)
+	])
+	const samplingOptions: SelectOption[] = $derived([
+		{ value: "", label: "System default" },
+		...samplingList
+			.filter((s) => s.id != null)
+			.map((s) => ({ value: String(s.id), label: `${s.name ?? s.id}` }))
+	])
 </script>
 
 {#if label}
 	<p class="text-sm font-semibold">{label}</p>
 {/if}
+<!-- The visible column labels are visual only; each Select names itself,
+     prefixed with the picker's own label so two pickers on one form stay
+     distinguishable to a screen reader. -->
 <div class="grid grid-cols-[5.5rem_1fr] items-center gap-x-2 gap-y-1.5">
-	<span class="text-muted-foreground text-xs">Connection</span>
-	<select class="select text-xs" bind:value={connectionId} {disabled}>
-		<option value={null}>System default</option>
-		{#each byService as [service, conns] (service)}
-			<optgroup label={service}>
-				{#each conns as c (c.id)}
-					{@const preview = notePreview(c.notes)}
-					<!-- A native `<option>` takes one line of plain text, so the
-					     note joins it rather than sitting under it, and
-					     `notePreview` is what stops a pasted note from making
-					     this dropdown wider than the panel. The whole note is on
-					     `title` — the same answer /admin/defaults already gives
-					     an option row that has more to say than fits. -->
-					<option value={c.id} title={c.notes ?? undefined}>
-						{c.name ?? c.id}{preview ? ` — ${preview}` : ""}
-					</option>
-				{/each}
-			</optgroup>
-		{/each}
-	</select>
-	<span class="text-muted-foreground text-xs">Sampling</span>
-	<select class="select text-xs" bind:value={samplingConfigId} {disabled}>
-		<option value={null}>System default</option>
-		{#each samplingList.filter((s) => s.id != null) as s (s.id)}
-			<option value={s.id}>{s.name ?? s.id}</option>
-		{/each}
-	</select>
+	<span class="text-surface-600-400 text-xs" aria-hidden="true">Connection</span>
+	<Select
+		label={label ? `${label} connection` : "Connection"}
+		labelHidden
+		class="min-w-0 text-xs"
+		{disabled}
+		options={connectionOptions}
+		bind:value={
+			() => (connectionId == null ? "" : String(connectionId)),
+			(v) => (connectionId = v ? Number(v) : null)
+		}
+	/>
+	<span class="text-surface-600-400 text-xs" aria-hidden="true">Sampling</span>
+	<Select
+		label={label ? `${label} sampling` : "Sampling"}
+		labelHidden
+		class="min-w-0 text-xs"
+		{disabled}
+		options={samplingOptions}
+		bind:value={
+			() => (samplingConfigId == null ? "" : String(samplingConfigId)),
+			(v) => (samplingConfigId = v ? Number(v) : null)
+		}
+	/>
 </div>

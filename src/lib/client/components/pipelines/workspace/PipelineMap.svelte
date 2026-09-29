@@ -3,8 +3,7 @@
 	 * The whole pipeline on a real graph canvas — Svelte Flow rendering, ELK
 	 * layered layout (see flow/layout.ts). Every node, every construct —
 	 * gathers, for-eaches, loops, junctions, nested clauses — with pan/zoom, fit-view,
-	 * and a minimap, in either direction. The previous hand-built flex/grid
-	 * map lives on as PipelineMapLegacy.svelte, unused.
+	 * and a minimap, in either direction.
 	 *
 	 * The map owns its presentation (direction, viewport); selection is the
 	 * page's — clicking a node or a block header calls `onSelect` with its
@@ -264,7 +263,7 @@
 	}
 
 	const LEGEND =
-		"text-surface-600-400 text-[10px] font-bold tracking-[.15em] uppercase"
+		"text-surface-600-400 text-xs font-medium"
 </script>
 
 <div class="flex h-full min-h-0 flex-col">
@@ -272,7 +271,7 @@
 		class="border-surface-300-700 flex flex-wrap items-center gap-2 border-b px-3 py-2"
 	>
 		<span class={LEGEND}>Signal path</span>
-		<span class="text-surface-600-400 font-mono text-[10.5px]">
+		<span class="text-surface-600-400 font-mono text-[11px]">
 			{countLine}
 		</span>
 		<span class="flex-1"></span>
@@ -284,10 +283,11 @@
 			<button
 				type="button"
 				class="btn btn-sm rounded-none {direction === 'DOWN'
-					? 'preset-filled-primary-500'
+					? 'preset-tonal-primary'
 					: 'preset-tonal-surface'}"
 				aria-pressed={direction === "DOWN"}
 				title="Top to bottom"
+				aria-label="Top to bottom"
 				onclick={() => rememberDirection("DOWN")}
 			>
 				<Icons.ArrowDown size={15} />
@@ -295,10 +295,11 @@
 			<button
 				type="button"
 				class="btn btn-sm rounded-none {direction === 'RIGHT'
-					? 'preset-filled-primary-500'
+					? 'preset-tonal-primary'
 					: 'preset-tonal-surface'}"
 				aria-pressed={direction === "RIGHT"}
 				title="Left to right"
+				aria-label="Left to right"
 				onclick={() => rememberDirection("RIGHT")}
 			>
 				<Icons.ArrowRight size={15} />

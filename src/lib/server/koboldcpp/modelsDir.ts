@@ -141,7 +141,7 @@ export async function resolveModelPath(
 	const primary = modelsDirFor(kind, settings)
 	if (!primary) {
 		throw new Error(
-			`No ${kind === "text" ? "" : "image "}models directory is configured — set one in the KoboldCPP Manager's Settings tab.`
+			`No ${kind === "text" ? "" : "image "}models directory is configured — set one in the Settings tab of KoboldCPP, run by Serene Pub.`
 		)
 	}
 	const primaryPath = containedPath(primary, filename)
@@ -155,7 +155,7 @@ export async function resolveModelPath(
 	}
 
 	throw new Error(
-		`Model file "${filename}" is not in ${primary}. It may have been moved or deleted outside the app — re-download it, or pick another model in the KoboldCPP Manager.`
+		`Model file "${filename}" is not in ${primary}. It may have been moved or deleted outside the app — re-download it, or pick another model in the Models tab of KoboldCPP, run by Serene Pub.`
 	)
 }
 

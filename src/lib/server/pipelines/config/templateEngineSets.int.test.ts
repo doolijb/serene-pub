@@ -147,7 +147,7 @@ describe("the panel's template setting", () => {
 			admin(),
 			templateOption()
 		)
-		expect(gate.engines).toEqual(BOTH)
+		expect(gate.acceptedEngines).toEqual(BOTH)
 		// The single-engine field stays the slot's DEFAULT, so every caller
 		// that never learned about sets keeps writing Handlebars.
 		expect(gate.engine).toBe(CORE_TEMPLATE_ENGINE)
@@ -165,12 +165,12 @@ describe("the panel's template setting", () => {
 			nodeDefinitionId: gate.nodeDefinitionId,
 			name: unique("From the panel"),
 			source: "{% if scenario %}{{ scenario }}{% endif %}",
-			engine: assertEngineAccepted(gate.engines, CORE_LIQUID_ENGINE),
+			engine: assertEngineAccepted(gate.acceptedEngines, CORE_LIQUID_ENGINE),
 			createdForSpecId: gate.specId
 		})
 		expect(created.engine).toBe(CORE_LIQUID_ENGINE)
 		await expect(
-			assertSelectable(db, gate.nodeDefinitionId, created.id, gate.engines)
+			assertSelectable(db, gate.nodeDefinitionId, created.id, gate.acceptedEngines)
 		).resolves.toMatchObject({ engine: CORE_LIQUID_ENGINE })
 	})
 })
@@ -189,7 +189,7 @@ describe("the picker the panel renders", () => {
 	}
 
 	it("carries the accepted languages so the create button can offer them", async () => {
-		expect((await templateSetting()).templateEngines).toEqual(BOTH)
+		expect((await templateSetting()).acceptedEngines).toEqual(BOTH)
 	})
 
 	it("offers rows from every accepted engine, each naming its language", async () => {

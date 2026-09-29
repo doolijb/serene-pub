@@ -25,7 +25,7 @@
 >
 	<div class="w-full max-w-lg space-y-4 text-center">
 		<p class="text-6xl font-bold opacity-30">{status}</p>
-		<h1 class="text-2xl font-bold">
+		<h1 class="[font-family:var(--typo-heading--font-family,inherit)] text-2xl font-semibold">
 			{isNotFound ? "That page doesn't exist" : "Something went wrong"}
 		</h1>
 		{#if !isNotFound}

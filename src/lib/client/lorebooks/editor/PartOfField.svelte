@@ -1,4 +1,5 @@
 <script lang="ts">
+	import Select from "$lib/client/components/inputs/Select.svelte"
 	import type { PoolItem } from "../poolFilter"
 	import { anchorCandidates } from "./partOf"
 
@@ -16,16 +17,26 @@
 		draft: Record<string, any>
 		/** Every row in the book, which is where a parent is resolved. */
 		pool: readonly PoolItem[]
-		idPrefix: string
+		/**
+		 * The line a NEW row will land on, so its picker never offers
+		 * another line's own entry. Unused for a saved row, whose own line
+		 * decides.
+		 */
+		newRowBranchId?: number | null
+		/** Accepted for parity with the other entry fields; the picker names
+		 *  itself through its own label, so no id is derived from it. */
+		idPrefix?: string
 	}
 
-	let { draft = $bindable(), pool, idPrefix }: Props = $props()
+	let { draft = $bindable(), pool, newRowBranchId }: Props = $props()
 
 	let subjectKey = $derived(
 		typeof draft.id === "number" ? `entry#${draft.id}` : null
 	)
 	let current = $derived<number | null>(draft.anchorEntryId ?? null)
-	let candidates = $derived(anchorCandidates(subjectKey, pool))
+	let candidates = $derived(
+		anchorCandidates(subjectKey, pool, newRowBranchId)
+	)
 	/** The parent, when the pool holds it. */
 	let parent = $derived(
 		current === null
@@ -39,25 +50,21 @@
 </script>
 
 <div class="flex flex-col gap-1">
-	<label class="text-sm font-semibold" for="{idPrefix}PartOf">Part of</label>
-	<select
-		id="{idPrefix}PartOf"
-		class="select preset-filled-surface-200-800 w-full rounded-lg"
+	<Select
+		label="Part of"
+		class="w-full text-sm [&_input]:text-base"
+		options={[
+			{ value: "", label: "top level" },
+			...(stray && current !== null
+				? [{ value: String(current), label: parent?.name || `#${current}` }]
+				: []),
+			...candidates.map((candidate) => ({
+				value: String(candidate.id),
+				label: candidate.name
+			}))
+		]}
 		value={current === null ? "" : String(current)}
-		onchange={(e) => {
-			const v = e.currentTarget.value
-			draft.anchorEntryId = v === "" ? null : Number(v)
-		}}
-	>
-		<option value="">top level</option>
-		{#if stray && current !== null}
-			<option value={String(current)}>
-				{parent?.name || `#${current}`}
-			</option>
-		{/if}
-		{#each candidates as candidate (candidate.key)}
-			<option value={String(candidate.id)}>{candidate.name}</option>
-		{/each}
-	</select>
+		onValueChange={(v) => (draft.anchorEntryId = v === "" ? null : Number(v))}
+	/>
 	<p class="text-surface-700-300 text-xs">or drag this row onto another</p>
 </div>

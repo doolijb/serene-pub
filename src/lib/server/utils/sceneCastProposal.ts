@@ -11,9 +11,15 @@
  * genre wanting physical presence should hold structured state rather than parse
  * prose for it.
  *
- * The output is a **proposal**. It pre-fills the Review & Save screen with its
- * evidence visible; a person accepts, edits or drops each row, and only then is
- * anything written. Nothing here writes.
+ * The output is a **proposal**, and nothing here writes.
+ *
+ * 🚧 **Not wired yet.** The plan is for it to pre-fill the Review & Save screen
+ * with its evidence visible, a person accepting, editing or dropping each row
+ * before anything is written (PLAN-scene-cast-and-suggestions §2, §3, §5.1).
+ * Today NOTHING calls it outside its tests: `scenes:process` still takes its
+ * cast from the summarize pipeline's LLM `extract-cast` node (`scenes.ts`, the
+ * `cast` node output). Wiring it is its own piece of work — an SDK node type,
+ * surfacing the evidence, and icing the LLM step — not a one-line swap.
  *
  * ## Two tiers that fail in opposite directions
  *

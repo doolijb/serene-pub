@@ -1,10 +1,10 @@
 // characterBindingSync.ts
 // Decision-2 helper (see lorebookBindings/narrativeNodes merge plan): a
-// lorebookBindings row's name/aliases are a stored snapshot of its bound
-// character/persona, kept in sync one-directionally — the entity is always
-// the source of truth. Editing a bound row's name/aliases directly is
-// rejected elsewhere (narrativeGraphUpdateNodeHandler); this is the only
-// path that's allowed to write those two columns on a bound row.
+// lorebookBindings row's NAME is a stored snapshot of its bound
+// character/persona, kept in sync one-directionally — the card is the source
+// of truth for it. Its ALIASES are the member's own (cast-first, #114, ruled
+// 2026-09-28): the sync merges the card's names in and never removes one, and
+// `lorebooks:updateBinding` lets the author edit them on a carded member.
 //
 // THIS MODULE MUST NOT STATICALLY IMPORT `$lib/server/db`. It is imported by
 // db/defaults.ts, whose sync() runs at module scope of db/index.ts — a static
@@ -41,6 +41,14 @@ async function defaultDb(): Promise<Db> {
  * lorebook it's bound in, not just one) with the character's current
  * name/aliases. Call after any character update that could have changed
  * name, nickname, or aliases — cheap no-op if nothing is bound.
+ *
+ * ⚠ **The name is the card's; the aliases are the member's** (#114,
+ * cast-first, ruled 2026-09-28). `name` is replaced with the card's
+ * projection. `aliases` are MERGED: the card's names (and its real name,
+ * below) are added to whatever the member already answers to, never written
+ * over it — an alias the author gave the member, or one the member had before
+ * a card was linked, survives every sync. The cost is deliberate: a name the
+ * card later drops stays on the member until the author removes it there.
  *
  * Round-12 audit fix (MEDIUM): reads the character then writes every bound
  * row, with no lock — two near-simultaneous edits to the same character
@@ -84,12 +92,8 @@ export async function syncLorebookBindingsForCharacter(
 		// Deriving it HERE, rather than seeding characters.aliases at save
 		// time, is deliberate. A first attempt did the latter and it was a
 		// side-effect: it silently edited a user-owned field during a save the
-		// user made for another reason, and then needed change-detection
-		// bookkeeping so a deletion would stick. None of that arises for a
-		// projection — this column is a full REPLACE target recomputed on
-		// every sync, exactly like `name` above, so there is nothing to
-		// remember and nothing to fight. Identities that must SURVIVE a sync
-		// go in absorbedAliases; that is what that column is for.
+		// user made for another reason. The card's names are MERGED into the
+		// member's aliases below (#114) — `name` is still a full replace.
 		const derived = character.aliases ?? []
 		const realName = character.name?.trim()
 		const aliases =
@@ -97,14 +101,42 @@ export async function syncLorebookBindingsForCharacter(
 				? [...derived, realName]
 				: derived
 
-		await tx
-			.update(schema.lorebookBindings)
-			.set({
-				name: resolveCharacterName(character),
-				aliases
+		const name = resolveCharacterName(character)
+		const bound = await tx
+			.select({
+				id: schema.lorebookBindings.id,
+				aliases: schema.lorebookBindings.aliases
 			})
+			.from(schema.lorebookBindings)
 			.where(eq(schema.lorebookBindings.characterId, characterId))
+		for (const row of bound)
+			await tx
+				.update(schema.lorebookBindings)
+				.set({ name, aliases: mergeAliases(row.aliases, aliases, name) })
+				.where(eq(schema.lorebookBindings.id, row.id))
 	})
+}
+
+/**
+ * The member's aliases with the card's merged in: the member's own first, in
+ * their order, then any card name they do not already carry (case-insensitive,
+ * trimmed). The member's display name is never also an alias of itself.
+ */
+export function mergeAliases(
+	member: readonly string[] | null | undefined,
+	card: readonly string[],
+	name: string
+): string[] {
+	const out: string[] = []
+	const seen = new Set<string>([name.trim().toLowerCase()])
+	for (const alias of [...(member ?? []), ...card]) {
+		const trimmed = (alias ?? "").trim()
+		const key = trimmed.toLowerCase()
+		if (!trimmed || seen.has(key)) continue
+		seen.add(key)
+		out.push(trimmed)
+	}
+	return out
 }
 
 // ⚠ There is no persona variant of the sync above, and adding one would be a

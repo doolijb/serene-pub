@@ -13,7 +13,7 @@ import { OPENAI_COMPATIBLE_PRESETS } from "./connectionDefaults"
 describe("buildConnectionServiceItems", () => {
 	const items = buildConnectionServiceItems()
 
-	test("has one item per native type (except OPENAI and the Manager-owned types) plus one per preset", () => {
+	test("has one item per native type (except OPENAI and the managed types) plus one per preset", () => {
 		const expectedCount =
 			CONNECTION_TYPES.length -
 			1 -
@@ -22,11 +22,11 @@ describe("buildConnectionServiceItems", () => {
 		expect(items.length).toBe(expectedCount)
 	})
 
-	// Both of them, not just the text one. A manually-created image Manager
+	// Both of them, not just the text one. A manually-created managed image
 	// connection would look plausible in the picker and then fail at render
-	// time with a base URL and a model the Manager never agreed to — the
-	// Manager is the only thing that knows which files are actually on disk.
-	test("neither KoboldCPP Manager type is manually creatable — both are made from the Manager page", () => {
+	// time with a base URL and a model the managed KoboldCPP never agreed to — the
+	// the managed KoboldCPP is the only thing that knows which files are actually on disk.
+	test("neither managed KoboldCPP type is manually creatable — both are made by Add → KoboldCPP, run by Serene Pub", () => {
 		expect(
 			items.find((i) => i.type === CONNECTION_TYPE.KOBOLDCPP_MANAGED)
 		).toBeUndefined()
@@ -46,13 +46,41 @@ describe("buildConnectionServiceItems", () => {
 	})
 
 	test("no two items in the same category share a label (picker must disambiguate collisions)", () => {
+		// Keyed by SECTION as well as category, because the picker never shows
+		// two sections at once: `ConnectionServicePicker` always holds a
+		// modality (defaulting to text generation) and filters by it before it
+		// groups. So a type listed under two sections — Ollama under text AND
+		// embeddings (owner ruling 2026-09-25) — shares a label with itself
+		// without the two ever being on screen together. Two items in ONE
+		// section with one label would still be indistinguishable, and still fail.
 		const seen = new Map<string, Set<string>>()
 		for (const item of items) {
-			const labels = seen.get(item.category) ?? new Set<string>()
-			expect(labels.has(item.label)).toBe(false)
+			const bucket = `${item.category}::${item.modality}`
+			const labels = seen.get(bucket) ?? new Set<string>()
+			expect(labels.has(item.label), `${item.label} in ${bucket}`).toBe(false)
 			labels.add(item.label)
-			seen.set(item.category, labels)
+			seen.set(bucket, labels)
 		}
+	})
+
+	test("Ollama is offered under Embeddings, and creates the same plain connection", () => {
+		// One Ollama connection per host serves every modality it has, so the
+		// type that used to answer under Embeddings is gone — and without this
+		// entry that section would have no Ollama at all.
+		const embed = items.find(
+			(i) => i.type === CONNECTION_TYPE.OLLAMA && i.modality === "embeddings"
+		)
+		expect(embed).toBeDefined()
+		expect(embed!.presetValue).toBeUndefined()
+		// Its own key: a duplicate `type:ollama` is a duplicate-key crash.
+		expect(embed!.key).not.toBe(`type:${CONNECTION_TYPE.OLLAMA}`)
+		expect(new Set(items.map((i) => i.key)).size).toBe(items.length)
+	})
+
+	test("the merged ollama-embeddings type is never offered", () => {
+		expect(
+			items.find((i) => i.type === CONNECTION_TYPE.OLLAMA_EMBEDDINGS)
+		).toBeUndefined()
 	})
 
 	test("the bare OPENAI type is not present on its own — represented via the Empty preset", () => {
@@ -73,11 +101,14 @@ describe("buildConnectionServiceItems", () => {
 		expect(custom!.presetValue).toBe(0)
 	})
 
-	test("every native adapter type (other than OPENAI and the Manager-owned types) is present with type === its own value and no presetValue", () => {
+	test("every native adapter type (other than OPENAI and the managed types) is present with type === its own value and no presetValue", () => {
 		for (const t of CONNECTION_TYPES) {
 			if (
 				t.value === CONNECTION_TYPE.OPENAI ||
-				isKoboldCppManagedType(t.value)
+				isKoboldCppManagedType(t.value) ||
+				// Merged into `ollama` (2026-09-25): never created by hand, for
+				// the same reason the managed types above are not.
+				t.value === CONNECTION_TYPE.OLLAMA_EMBEDDINGS
 			)
 				continue
 			const item = items.find((i) => i.key === `type:${t.value}`)

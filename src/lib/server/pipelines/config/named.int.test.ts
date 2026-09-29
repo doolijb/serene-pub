@@ -114,7 +114,7 @@ describe("the shipped default", () => {
 					)?.value
 			)
 		expect(await at("planWrite", "path")).toBe("speakers")
-		expect(await at("keeperWrite", "path")).toBe("values,possessions")
+		expect(await at("keeperWrite", "path")).toBe("values,inventory")
 	})
 
 	it("is created once, not once per boot", async () => {

@@ -1,0 +1,1237 @@
+<script lang="ts">
+	/**
+	 * The pipeline workspace (22, rebuilt): one pipeline, and the
+	 * configurations written against it.
+	 *
+	 * The page is a shell now — the map, step list, and the tab panels live in
+	 * `$lib/client/components/pipelines/workspace/` — and it owns exactly the
+	 * things that have to be one thing: the draft (nothing writes until Save
+	 * all, 22 §2.1), the configuration verbs (New / Duplicate / Rename /
+	 * Delete), the seat's URL mirror (tab, step, configuration), and the
+	 * socket wiring.
+	 *
+	 * The pipeline itself is the *backbone* — a fixed sequence a published
+	 * version freezes. What people tune and keep is a **configuration**: a
+	 * named set of values against that backbone. Shipped configurations
+	 * refuse edits; Save all offers a copy instead. Structural editing —
+	 * swapping a node, reordering, publishing — is the lens view (05 §1–§5)
+	 * and remains undrafted: this page configures the published backbone.
+	 */
+	import { getContext, onMount, tick, untrack } from "svelte"
+	import * as Icons from "@lucide/svelte"
+	import AdminPageHeader from "$lib/client/components/admin/AdminPageHeader.svelte"
+	import { adminRouter, adminUnsavedEdits, adminGoto as goto, adminReplaceState as replaceState } from "$lib/client/admin/adminRouter.svelte"
+	import { sameFormValue } from "$lib/client/forms/sameFormValue"
+	import { adminPage as page } from "$lib/client/admin/adminRouter.svelte"
+	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import { getInterestContext } from "$lib/client/sockets/interest.svelte"
+	import { toaster } from "$lib/client/utils/toaster"
+	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
+	import PipelineConfigOptions from "$lib/client/components/pipelines/PipelineConfigOptions.svelte"
+	import ConfigNotices from "$lib/client/components/pipelines/ConfigNotices.svelte"
+	import PipelineMap from "$lib/client/components/pipelines/workspace/PipelineMap.svelte"
+	import StepList from "$lib/client/components/pipelines/workspace/StepList.svelte"
+	import RunsPanel from "$lib/client/components/pipelines/workspace/RunsPanel.svelte"
+	import VersionsPanel from "$lib/client/components/pipelines/workspace/VersionsPanel.svelte"
+	import ChangesPanel, {
+		type ChangeRow
+	} from "$lib/client/components/pipelines/workspace/ChangesPanel.svelte"
+	import PresetPanel from "$lib/client/components/pipelines/workspace/PresetPanel.svelte"
+	import Select from "$lib/client/components/inputs/Select.svelte"
+	import PanelTabStrip, {
+		type PanelTab as PanelTabDef
+	} from "$lib/client/components/panels/PanelTabStrip.svelte"
+
+	const userCtx: { user: SelectUser } = getContext("userCtx")
+	const socket = useTypedSocket()
+	const interest = getInterestContext()
+
+	const slug = $derived(decodeURIComponent(page.params.slug ?? ""))
+
+	let spec: Sockets.Pipelines.Detail.Response["spec"] | null = $state(null)
+	let detail = $state<Sockets.Pipelines.NamespaceDetail | null>(null)
+	let loading = $state(true)
+	let selectedStep = $state<string | null>(null)
+
+	/** Type names, so "mode: core:spec/create-chat" reads as "type: Chat". */
+	let genreNames = $state<Map<string, string>>(new Map())
+	const onModes = (res: Sockets.Sessions.Genres.Response) => {
+		genreNames = new Map(res.genres.map((m) => [m.genreId, m.name]))
+	}
+
+	/**
+	 * How wide the workspace actually is, measured — not a viewport
+	 * breakpoint: this page sits inside a centre column whose width depends on
+	 * which sidebars are open, so the window says almost nothing about the
+	 * room this layout has.
+	 */
+	let workspaceEl = $state<HTMLElement | null>(null)
+	let workspaceWidth = $state(0)
+	$effect(() => {
+		const el = workspaceEl
+		if (!el || typeof ResizeObserver === "undefined") return
+		const ro = new ResizeObserver(([entry]) => {
+			workspaceWidth = Math.round(entry.contentRect.width)
+		})
+		ro.observe(el)
+		return () => ro.disconnect()
+	})
+
+	const steps = $derived(detail?.steps ?? [])
+	const active = $derived(
+		steps.find((s) => s.key === selectedStep) ?? steps[0] ?? null
+	)
+	const graph = $derived.by(() => (spec ? (spec.graph ?? null) : null))
+	const activeVersion = $derived.by(() => {
+		const versions = spec ? spec.versions : []
+		return versions.find((v) => v.isActive) ?? null
+	})
+
+	function selectStep(key: string) {
+		selectedStep = key
+	}
+
+	/**
+	 * A canvas click in the stacked layout selects a step whose inspector
+	 * sits below the tall map — invisible, so the click reads as ignored.
+	 * Bring the answer to the click.
+	 */
+	let inspectorEl = $state<HTMLElement | null>(null)
+	function selectStepFromMap(key: string) {
+		selectStep(key)
+		if (!sideBySide)
+			inspectorEl?.scrollIntoView({ behavior: "smooth", block: "start" })
+	}
+
+	/* ── configurations ─────────────────────────────────────────────── */
+
+	let renaming = $state<{ id: number; name: string } | null>(null)
+	let creating = $state<{ name: string; fromConfigId?: number } | null>(null)
+
+	const selected = $derived(
+		detail?.configs.find((c) => c.id === detail?.selectedConfig?.id) ?? null
+	)
+
+	function chooseConfig(value: string) {
+		const configId = Number(value)
+		if (!Number.isFinite(configId)) return
+		socket.emit("pipelines:selectConfig", { slug, configId })
+	}
+
+	function startNew(duplicate: boolean) {
+		const base = duplicate
+			? `${selected?.name ?? "Configuration"} copy`
+			: ""
+		creating = {
+			name: base,
+			...(duplicate && selected ? { fromConfigId: selected.id } : {})
+		}
+	}
+
+	function commitNew() {
+		if (!creating?.name.trim()) return
+		socket.emit("pipelines:createConfig", {
+			slug,
+			name: creating.name.trim(),
+			...(creating.fromConfigId != null
+				? { fromConfigId: creating.fromConfigId }
+				: {})
+		})
+		creating = null
+	}
+
+	function commitRename() {
+		if (!renaming?.name.trim()) return
+		socket.emit("pipelines:renameConfig", {
+			slug,
+			configId: renaming.id,
+			name: renaming.name.trim()
+		})
+		renaming = null
+	}
+
+	/**
+	 * Withdraw a configuration from the set people may choose, or put it back.
+	 *
+	 * The half of R8 that makes "users choose among them" mean anything: an
+	 * administrator decides what the list contains. Withdrawing is deliberately
+	 * NOT deletion — sessions already on it keep running, it simply stops being
+	 * offered — so it is a switch here and not a second confirm dialog.
+	 *
+	 * The shipped configuration has no switch: it is the fallback everything
+	 * else resolves through, so withdrawing it would leave a scope resolving to
+	 * something it may not choose. `setPresetActions` refuses an immutable row
+	 * for the same reason.
+	 */
+	function setAvailability(enabled: boolean) {
+		if (!selected || selected.readOnly) return
+		socket.emit("pipelines:setPresetActions", {
+			slug,
+			configId: selected.id,
+			enabled
+		})
+	}
+
+	function removeConfig() {
+		if (!selected) return
+		const ok = confirm(
+			`Delete the configuration "${selected.name}"?\n\n` +
+				`Anything currently using it falls back to this pipeline's ` +
+				`default. This cannot be undone.`
+		)
+		if (!ok) return
+		socket.emit("pipelines:deleteConfig", { slug, configId: selected.id })
+	}
+
+	/* ── wiring ─────────────────────────────────────────────────────── */
+
+	const onDetail = (res: Sockets.Pipelines.Detail.Response) => {
+		spec = res.spec ?? null
+		loading = false
+	}
+	const onDetailError = (res: { error?: string }) => {
+		loading = false
+		if (res?.error) toaster.error({ title: res.error })
+	}
+	const onConfigError = (res: { error?: string }) => {
+		if (res?.error) toaster.error({ title: res.error })
+	}
+
+	/**
+	 * A configuration you just made is the one you want to be editing — the
+	 * handler answers with the new id, and the client selects it.
+	 */
+	const onConfigCreated = (res: Sockets.Pipelines.CreateConfig.Response) => {
+		if (res.error || res.configId == null) return
+		if (res.pipeline && res.pipeline.slug !== slug) return
+		socket.emit("pipelines:selectConfig", { slug, configId: res.configId })
+		// The shipped-save path (22 §2.1): the draft was waiting for this
+		// configuration to exist — land it there now.
+		if (applyToCreated) {
+			applyToCreated = false
+			applyPending(res.configId)
+		}
+	}
+
+	onMount(() => {
+		if (!userCtx.user?.isAdmin) {
+			goto("/")
+			return
+		}
+	})
+
+	/**
+	 * Everything this workspace reads, each key declared before the request
+	 * that needs it goes out.
+	 *
+	 * The writes' answers stand — a configuration create, rename, delete,
+	 * reset, availability switch or option batch arrives whenever the person
+	 * presses the button, not in reply to anything asked here — while `detail`
+	 * and `runs` have one request site each and are asked for and listened for
+	 * in one. All BARE: a pipeline workspace is not one session's anything.
+	 *
+	 * The app-wide interest context, not `adminInterest`: `pipelines:` is a
+	 * MIXED family — most of its handlers answer every user — so these are
+	 * ordinary keys, and the admin check here is the same one the redirect
+	 * above makes. "sessions:genres" is asked for by the interest below.
+	 *
+	 * `slug` is read untracked: the original asked once, on mount, and
+	 * re-pointing the request at a new slug without resetting this page's
+	 * drafts is a change this conversion is not making.
+	 */
+	$effect(() => {
+		if (!userCtx.user?.isAdmin) return
+		const initialSlug = untrack(() => slug)
+		const releases = [
+			interest.declareInterest<"pipelines:detail:error">(
+				"pipelines:detail:error",
+				onDetailError
+			),
+			interest.declareInterest<"pipelines:createConfig">(
+				"pipelines:createConfig",
+				onConfigCreated
+			),
+			interest.declareInterest<"pipelines:createConfig:error">(
+				"pipelines:createConfig:error",
+				onConfigError
+			),
+			interest.declareInterest<"pipelines:renameConfig:error">(
+				"pipelines:renameConfig:error",
+				onConfigError
+			),
+			interest.declareInterest<"pipelines:deleteConfig:error">(
+				"pipelines:deleteConfig:error",
+				onConfigError
+			),
+			interest.declareInterest<"pipelines:setPresetActions:error">(
+				"pipelines:setPresetActions:error",
+				onConfigError
+			),
+			interest.declareInterest<"pipelines:setOptions:error">(
+				"pipelines:setOptions:error",
+				onBatchError
+			),
+			interest.declareInterest<"pipelines:resetConfig:error">(
+				"pipelines:resetConfig:error",
+				onConfigError
+			),
+			interest.requestWithInterest(
+				"pipelines:detail",
+				{ slug: initialSlug },
+				onDetail
+			),
+			interest.requestWithInterest(
+				"pipelines:runs",
+				{ limit: 100, specSlug: initialSlug },
+				onRuns
+			)
+		]
+		return () => {
+			for (const release of releases) release()
+		}
+	})
+
+	/**
+	 * The genre list this workspace labels the spec with, asked for and listened
+	 * for in one. BARE — the registry of types, not one session's anything.
+	 *
+	 * The app-wide interest context, not `adminInterest`: `sessions:` is not a
+	 * restricted interest family, so this is an ordinary key, and the admin
+	 * check is the same one the redirect above makes.
+	 */
+	$effect(() => {
+		if (!userCtx.user?.isAdmin) return
+		return interest.requestWithInterest("sessions:genres", {}, onModes)
+	})
+
+	/* ── the workspace tabs + URL state (22) ────────────────────────── */
+
+	type Tab = "configure" | "changes" | "runs" | "versions" | "preset"
+	const TAB_IDS: Tab[] = [
+		"configure",
+		"changes",
+		"runs",
+		"versions",
+		"preset"
+	]
+	const initialParams =
+		typeof window !== "undefined"
+			? new URLSearchParams(page.url.search)
+			: new URLSearchParams()
+	const urlTab = initialParams.get("tab")
+	let tab = $state<Tab>(
+		TAB_IDS.includes(urlTab as Tab) ? (urlTab as Tab) : "configure"
+	)
+	// ?step= wins over "first step" — onLoaded only fills selectedStep when it
+	// is still empty, so seeding it here is enough for deep links.
+	if (initialParams.get("step")) selectedStep = initialParams.get("step")
+	/** ?config= applied once, after the first view arrives. */
+	let urlConfigId: number | null = Number(initialParams.get("config")) || null
+
+	/**
+	 * The address bar mirrors the seat — tab, step, configuration — without
+	 * touching history (replaceState): back/forward should leave the page,
+	 * not replay every step click.
+	 */
+	$effect(() => {
+		if (typeof window === "undefined") return
+		const p = new URLSearchParams(page.url.search)
+		if (tab === "configure") p.delete("tab")
+		else p.set("tab", tab)
+		if (selectedStep) p.set("step", selectedStep)
+		else p.delete("step")
+		if (detail?.selectedConfig)
+			p.set("config", String(detail.selectedConfig.id))
+		const q = p.toString()
+		try {
+			replaceState(q ? `?${q}` : page.url.pathname, {})
+		} catch {
+			// Router not ready yet (first tick) — the next change syncs it.
+		}
+	})
+
+	/* ── the draft (22 §2.1): nothing writes until Save ─────────────── */
+
+	let pending = $state<Record<string, unknown>>({})
+	let pendingClears = $state<string[]>([])
+	const pendingCount = $derived(
+		Object.keys(pending).length + pendingClears.length
+	)
+
+	/** The raw (un-overlaid) option row, for "was it truly overridden". */
+	const rawOption = (id: string) =>
+		detail?.steps
+			.flatMap((s) => [...s.options, ...s.advanced])
+			.find((o) => o.id === id)
+
+	/**
+	 * A value put back to what the configuration holds is no edit: it leaves
+	 * the draft rather than counting as a pending change (a slider dragged
+	 * away and back, `"5"` typed over `5`).
+	 */
+	function draftSet(option: Sockets.Pipelines.Option, value: unknown) {
+		pendingClears = pendingClears.filter((x) => x !== option.id)
+		const raw = rawOption(option.id)
+		if (raw && sameFormValue(value, raw.value)) {
+			delete pending[option.id]
+			return
+		}
+		pending[option.id] = value
+	}
+
+	function draftClear(option: Sockets.Pipelines.Option) {
+		delete pending[option.id]
+		// Only a value the server actually holds needs a clear write; dropping
+		// a pending edit that never landed is just forgetting it.
+		if (rawOption(option.id)?.overriddenHere) {
+			if (!pendingClears.includes(option.id))
+				pendingClears = [...pendingClears, option.id]
+		}
+	}
+
+	function discardAll() {
+		pending = {}
+		pendingClears = []
+	}
+
+	/**
+	 * Reset the whole configuration — every deviation at once (ruled
+	 * 2026-09-10).
+	 *
+	 * ⚠ **This writes immediately, where an option edit drafts.** Deliberate,
+	 * and it follows the page's existing line rather than crossing it: choosing,
+	 * creating, renaming and deleting a configuration all write straight
+	 * through, because they are acts on the configuration itself; only edits to
+	 * a SETTING draft. Emptying a configuration belongs on the first side.
+	 *
+	 * And it is one server-side delete rather than a queue of clears over the
+	 * rows on screen. A client-side loop can only reach the deviations this view
+	 * loaded, which is the half a person means least to keep — the addresses
+	 * they cannot see.
+	 *
+	 * Refused server-side for a shipped configuration, which has nothing to
+	 * reset because it IS the reset.
+	 */
+	function resetAll() {
+		const config = selected
+		if (!config || config.readOnly) return
+		const n = changeRows.filter((r) => r.state === "saved").length
+		if (!n) return
+		if (
+			!confirm(
+				`Reset ${n} change${n === 1 ? "" : "s"} in “${config.name}”? ` +
+					`Every setting goes back to what this pipeline ships, and ` +
+					`that cannot be undone.`
+			)
+		)
+			return
+		// A draft over rows that are about to be deleted would apply on top of
+		// the reset and half-undo it.
+		discardAll()
+		socket.emit("pipelines:resetConfig", { slug, configId: config.id })
+	}
+
+	/** Unsaved edits waiting on a step — the amber dot in both navigators. */
+	const stepPendingByKey = (stepKey: string) => {
+		const step = steps.find((s) => s.key === stepKey)
+		if (!step) return 0
+		return [...step.options, ...step.advanced].filter(
+			(o) => o.id in pending || pendingClears.includes(o.id)
+		).length
+	}
+
+	/**
+	 * The whole draft in one request (22 §3): sets and clears together,
+	 * answered with one refreshed view. A refusal mid-batch stops it and
+	 * names what landed.
+	 */
+	function applyPending(configId?: number) {
+		const n = pendingCount
+		socket.emit("pipelines:setOptions", {
+			slug,
+			...(configId != null ? { configId } : {}),
+			set: Object.entries(pending).map(([optionId, value]) => ({
+				optionId,
+				value
+			})),
+			clear: [...pendingClears]
+		})
+		pending = {}
+		pendingClears = []
+		toaster.success({
+			title: `Saving ${n} change${n === 1 ? "" : "s"}…`
+		})
+	}
+
+	const onBatchError = (res: Sockets.Pipelines.SetOptions.Response) => {
+		if (res.error)
+			toaster.error({
+				title: "Save stopped by a refusal",
+				description: `${res.applied ?? 0} change${
+					(res.applied ?? 0) === 1 ? "" : "s"
+				} landed before: ${res.error}`
+			})
+	}
+
+	/** The shipped-configuration question, asked at save time (22 §2.1). */
+	let shippedDialog = $state(false)
+	let shippedNewName = $state("")
+	/** Apply the draft into the configuration this id names, once it exists. */
+	let applyToCreated = false
+
+	function saveAll() {
+		if (!pendingCount || !selected) return
+		if (selected.readOnly) {
+			shippedNewName = `${selected.name} copy`
+			shippedDialog = true
+			return
+		}
+		applyPending(selected.id)
+	}
+
+	function saveAsNewConfig() {
+		if (!shippedNewName.trim() || !selected) return
+		applyToCreated = true
+		socket.emit("pipelines:createConfig", {
+			slug,
+			name: shippedNewName.trim(),
+			fromConfigId: selected.id
+		})
+		shippedDialog = false
+	}
+
+	/** Leaving with a draft is asked about, through the Admin view's dialog. */
+	adminUnsavedEdits(() => pendingCount > 0)
+
+	/** A different configuration is a different draft: the same question. */
+	async function chooseConfigGuarded(value: string) {
+		if (!(await adminRouter.confirmDiscard())) return
+		discardAll()
+		chooseConfig(value)
+	}
+
+	/* ── the Changes rows (22 §2.2) ─────────────────────────────────── */
+
+	const changeRows = $derived.by((): ChangeRow[] => {
+		if (!detail) return []
+		const out: ChangeRow[] = []
+		for (const s of detail.steps)
+			for (const o of [...s.options, ...s.advanced]) {
+				const isPend = o.id in pending
+				const isClear = pendingClears.includes(o.id)
+				// `changed`, not `overriddenHere` (ruled 2026-09-10). The two
+				// coincide on this page — the builder writes at config scope,
+				// where a row in the configuration IS the thing an edit lands
+				// in — but they answer different questions, and this list is
+				// asking the configuration's: what does it depart from the
+				// shipped default by. `overriddenHere` follows the write scope
+				// and would start describing a session's overrides the day this
+				// panel is opened from inside one.
+				if (!o.changed && !isPend && !isClear) continue
+				out.push({
+					option: o,
+					stepKey: s.key,
+					stepLabel: s.label,
+					state: isClear
+						? "pending-reset"
+						: isPend
+							? "pending"
+							: "saved",
+					current: isClear
+						? (o.authorDefault ?? null)
+						: isPend
+							? pending[o.id]
+							: o.value
+				})
+			}
+		return out
+	})
+
+	/* ── find a setting (22 §2.3) ───────────────────────────────────── */
+
+	let optionQuery = $state("")
+	const searchResults = $derived.by(() => {
+		const q = optionQuery.trim().toLowerCase()
+		if (!q || !detail) return []
+		const out: {
+			stepKey: string
+			stepLabel: string
+			option: Sockets.Pipelines.Option
+		}[] = []
+		for (const s of detail.steps)
+			for (const o of [...s.options, ...s.advanced])
+				if (
+					o.label.toLowerCase().includes(q) ||
+					(o.description ?? "").toLowerCase().includes(q) ||
+					o.facet.toLowerCase().includes(q)
+				)
+					out.push({ stepKey: s.key, stepLabel: s.label, option: o })
+		return out.slice(0, 30)
+	})
+
+	/** Land on the exact option: right tab, right step, scrolled and lit. */
+	async function jumpToOption(stepKey: string, optionId: string) {
+		tab = "configure"
+		selectStep(stepKey)
+		optionQuery = ""
+		await tick()
+		const el = document.querySelector(`[data-option-id="${optionId}"]`)
+		if (el instanceof HTMLElement) {
+			el.scrollIntoView({ block: "center", behavior: "smooth" })
+			el.classList.add("option-flash")
+			setTimeout(() => el.classList.remove("option-flash"), 1600)
+		}
+	}
+
+	/* ── runs (shared by the tab count and the panel) ───────────────── */
+
+	type Run = Sockets.Pipelines.Runs.Response["runs"][number]
+	let allRuns = $state<Run[]>([])
+	let runsLoading = $state(true)
+	const pipelineRuns = $derived(allRuns.filter((r) => r.specSlug === slug))
+	const onRuns = (res: Sockets.Pipelines.Runs.Response) => {
+		allRuns = res.runs
+		runsLoading = false
+	}
+
+	/* ── nav view: compact list by default, the map on request ──────── */
+
+	const NAV_VIEW_KEY = "serene-pub:pipeline-nav-view"
+	let navView = $state<"list" | "map">("list")
+	onMount(() => {
+		try {
+			const savedNav = localStorage.getItem(NAV_VIEW_KEY)
+			if (savedNav === "list" || savedNav === "map") navView = savedNav
+		} catch {}
+	})
+	function rememberNavView(next: "list" | "map") {
+		navView = next
+		try {
+			localStorage.setItem(NAV_VIEW_KEY, next)
+		} catch {}
+	}
+
+	/**
+	 * Below this the map and the inspector cannot both be useful side by
+	 * side: the map is the subject and takes the remainder; the inspector is
+	 * a fixed accessory at 25rem.
+	 */
+	const SPLIT_AT = 400 + 460
+	const sideBySide = $derived(navView === "map" && workspaceWidth >= SPLIT_AT)
+
+	const LEGEND =
+		"text-surface-600-400 text-xs font-medium"
+
+	const TABS: { id: Tab; label: string; icon: keyof typeof Icons }[] = [
+		{ id: "configure", label: "Configure", icon: "SlidersHorizontal" },
+		{ id: "changes", label: "Changes", icon: "Diff" },
+		{ id: "runs", label: "Runs", icon: "History" },
+		{ id: "versions", label: "Versions", icon: "GitCommitHorizontal" },
+		{ id: "preset", label: "Used by", icon: "Ticket" }
+	]
+	const workspaceTabs: PanelTabDef[] = $derived(
+		TABS.map((t) => ({
+			value: t.id,
+			label: t.label,
+			icon: Icons[t.icon] as any,
+			count:
+				t.id === "changes"
+					? changeRows.length || undefined
+					: t.id === "runs"
+						? pipelineRuns.length || undefined
+						: undefined
+		}))
+	)
+</script>
+
+<div class="flex flex-col gap-4">
+	<div class="flex flex-col gap-1">
+		<a
+			class="text-surface-600-400 hover:text-surface-800-200 inline-flex items-center gap-1 self-start text-[13px]"
+			href="/admin/pipelines"
+		>
+			<Icons.ChevronLeft size={14} /> Back to pipelines
+		</a>
+		<!-- The workspace is a two-pane tool; in the dock it stacks and still
+		     works, and this says where the room is. -->
+		<p class="text-surface-600-400 text-[13px] @min-[700px]/content:hidden">
+			Wider is easier: press the Focus button above.
+		</p>
+	</div>
+	<AdminPageHeader title={spec?.name ?? slug}>
+			<p
+				class="text-surface-600-400 flex flex-wrap items-center gap-1.5 font-mono text-xs"
+			>
+				<span class="truncate">
+					{slug}{activeVersion ? ` · v${activeVersion.semver}` : ""}
+				</span>
+				<!-- The catalogue claims (23 §4), worn where the version is. -->
+				{#if detail?.taxonomy?.zone}
+					<span
+						class="preset-tonal-surface rounded-full px-1.5 py-0.5 font-sans text-[11px]"
+					>
+						{detail.taxonomy.zone}
+					</span>
+				{/if}
+				{#if detail?.taxonomy?.role}
+					<span
+						class="{detail.taxonomy.role === 'primary'
+							? 'preset-tonal-primary'
+							: detail.taxonomy.role === 'action'
+								? 'preset-tonal-secondary'
+								: detail.taxonomy.role === 'create'
+									? 'preset-tonal-tertiary'
+									: 'preset-tonal-surface'} rounded-full px-1.5 py-0.5 font-sans text-[11px]"
+					>
+						{detail.taxonomy.role}
+					</span>
+				{/if}
+				{#if detail?.taxonomy?.role === "create" && detail?.taxonomy?.genre}
+					<!-- A create pipeline is its genre's required member (24 §3). -->
+					<a
+						class="preset-tonal-primary rounded-full px-1.5 py-0.5 font-sans text-[11px] hover:underline"
+						href="/admin/session-genres/{encodeURIComponent(
+							detail.taxonomy.genre
+						)}"
+						title="This pipeline creates sessions of this genre"
+					>
+						genre: {genreNames.get(detail.taxonomy.genre) ??
+							detail.taxonomy.genre}
+					</a>
+				{:else if detail?.taxonomy?.genre}
+					<span
+						class="preset-tonal-surface rounded-full px-1.5 py-0.5 font-sans text-[11px]"
+						title={detail.taxonomy.genre}
+					>
+						{genreNames.get(detail.taxonomy.genre) ??
+							detail.taxonomy.genre}
+					</span>
+				{/if}
+			</p>
+	</AdminPageHeader>
+
+	{#if loading}
+		<p class="text-surface-600-400 text-sm">Loading…</p>
+	{:else if !spec}
+		<p class="text-surface-600-400 text-sm">
+			There is no pipeline called <code class="font-mono">{slug}</code>
+			on this instance.
+		</p>
+	{:else}
+		<!-- ── configuration bar ─────────────────────────────────────── -->
+		<section
+			class="panel-card flex flex-wrap items-end gap-2"
+			aria-label="Configuration"
+		>
+			<Select
+				label="Configuration"
+				class="min-w-[14rem] flex-1 text-sm"
+				options={(detail?.configs ?? []).map((c) => ({
+					value: String(c.id),
+					label: `${c.isDefault ? "★ " : ""}${c.name}${
+						c.readOnly ? " (shipped)" : ""
+					}${c.enabled ? "" : " (withdrawn)"}`
+				}))}
+				value={detail?.selectedConfig
+					? String(detail.selectedConfig.id)
+					: ""}
+				onValueChange={(v) => {
+					// A clear is not a choice: the native select never offered one.
+					if (v) chooseConfigGuarded(v)
+				}}
+			/>
+
+			<!-- What the instance offers. Only an admin sees a withdrawn
+			     configuration at all — everyone else's list is the offered set,
+			     and the server refuses a selection outside it. -->
+			<label
+				class="flex items-center gap-1.5 pb-2 text-xs"
+				title={selected?.readOnly
+					? "The shipped configuration is the fallback everything else resolves through, so it is always offered"
+					: "Whether people may choose this configuration. Withdrawing it leaves sessions already on it running."}
+			>
+				<input
+					type="checkbox"
+					class="checkbox"
+					checked={selected ? selected.enabled : true}
+					disabled={!selected || selected.readOnly}
+					onchange={(e) => setAvailability(e.currentTarget.checked)}
+				/>
+				{selected && !selected.enabled ? "Withdrawn" : "Offered"}
+			</label>
+
+			<div class="flex flex-wrap items-center gap-1">
+				<button
+					type="button"
+					class="btn btn-sm preset-tonal-primary"
+					onclick={() => startNew(false)}
+				>
+					<Icons.Plus size={16} /> New
+				</button>
+				<button
+					type="button"
+					class="btn btn-sm preset-tonal-surface"
+					disabled={!selected}
+					title="Copy this configuration, values and all"
+					onclick={() => startNew(true)}
+				>
+					<Icons.Copy size={16} /> Duplicate
+				</button>
+				<button
+					type="button"
+					class="btn btn-sm preset-tonal-surface"
+					disabled={!selected || selected.readOnly}
+					title={selected?.readOnly
+						? "Shipped configurations keep their name"
+						: "Rename"}
+					onclick={() =>
+						selected &&
+						(renaming = { id: selected.id, name: selected.name })}
+				>
+					<Icons.Pencil size={16} /> Rename
+				</button>
+				<button
+					type="button"
+					class="btn btn-sm preset-tonal-error"
+					disabled={!selected || selected.readOnly}
+					title={selected?.readOnly
+						? "Shipped configurations stay — duplicate one instead"
+						: "Delete"}
+					onclick={removeConfig}
+				>
+					<Icons.Trash2 size={16} /> Delete
+				</button>
+			</div>
+		</section>
+
+		<!-- What the last published version did to the configuration named
+		     above: a setting it removed takes the value somebody set with it,
+		     and this is the only place that says so. -->
+		<ConfigNotices {slug} configId={selected?.id ?? null} />
+
+		{#if creating}
+			<div
+				class="panel-card flex flex-wrap gap-2"
+			>
+				<label class="min-w-[14rem] flex-1">
+					<span class="mb-1 block text-xs font-semibold">
+						{creating.fromConfigId != null
+							? "Name for the copy"
+							: "Name the new configuration"}
+					</span>
+					<!-- svelte-ignore a11y_autofocus -->
+					<input
+						class="input w-full"
+						autofocus
+						bind:value={creating.name}
+						onkeydown={(e) => e.key === "Enter" && commitNew()}
+					/>
+				</label>
+				<div class="flex items-end gap-1">
+					<button
+						class="btn btn-sm preset-filled-primary-500"
+						onclick={commitNew}
+					>
+						Create
+					</button>
+					<button
+						class="btn btn-sm preset-tonal-surface"
+						onclick={() => (creating = null)}
+					>
+						Cancel
+					</button>
+				</div>
+			</div>
+		{/if}
+
+		{#if renaming}
+			<div
+				class="panel-card flex flex-wrap gap-2"
+			>
+				<label class="min-w-[14rem] flex-1">
+					<span class="mb-1 block text-xs font-semibold">
+						Rename configuration
+					</span>
+					<!-- svelte-ignore a11y_autofocus -->
+					<input
+						class="input w-full"
+						autofocus
+						bind:value={renaming.name}
+						onkeydown={(e) => e.key === "Enter" && commitRename()}
+					/>
+				</label>
+				<div class="flex items-end gap-1">
+					<button
+						class="btn btn-sm preset-filled-primary-500"
+						onclick={commitRename}
+					>
+						Save
+					</button>
+					<button
+						class="btn btn-sm preset-tonal-surface"
+						onclick={() => (renaming = null)}
+					>
+						Cancel
+					</button>
+				</div>
+			</div>
+		{/if}
+
+		<!-- ── the workspace tabs (22) ───────────────────────────────── -->
+		<!-- Five labelled tabs share the row. Below ~560px of `content` (the
+		     400px dock) the icons drop so every label reads in full. -->
+		<PanelTabStrip
+			bind:value={tab}
+			tabs={workspaceTabs}
+			ariaLabel="Pipeline workspace sections"
+			panelIdPrefix="pipeline-workspace"
+			class="[&_[role=tab]>svg]:hidden @min-[560px]/content:[&_[role=tab]>svg]:block"
+		/>
+		<div
+			id="pipeline-workspace-{tab}"
+			role="tabpanel"
+			aria-labelledby="pipeline-workspace-{tab}-tab"
+			class="flex flex-col gap-4"
+		>
+
+		{#if tab === "configure"}
+			<!-- ── configure toolbar: find a setting, choose the navigator ── -->
+			<div class="flex flex-wrap items-center gap-2">
+				<div class="relative max-w-md min-w-0 flex-1 basis-48">
+					<Icons.Search
+						size={14}
+						class="text-surface-600-400 absolute top-1/2 left-2.5 -translate-y-1/2"
+					/>
+					<input
+						class="input pl-8 text-sm"
+						placeholder="Find a setting across every step…"
+						bind:value={optionQuery}
+						aria-label="Find a setting"
+					/>
+					{#if searchResults.length}
+						<div
+							class="bg-surface-50-950 border-surface-200-800 absolute top-full right-0 left-0 z-30 mt-1 max-h-80 overflow-y-auto rounded-[10px] border p-1"
+						>
+							{#each searchResults as r (r.option.id)}
+								<button
+									type="button"
+									class="hover:bg-surface-200-800 flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm"
+									onclick={() =>
+										jumpToOption(r.stepKey, r.option.id)}
+								>
+									<span class="min-w-0 flex-1 truncate">
+										{r.option.label}
+									</span>
+									<span
+										class="text-surface-600-400 shrink-0 text-xs"
+									>
+										{r.stepLabel} · {r.option.facet}
+									</span>
+								</button>
+							{/each}
+						</div>
+					{:else if optionQuery.trim()}
+						<div
+							class="bg-surface-50-950 border-surface-200-800 text-surface-600-400 absolute top-full right-0 left-0 z-30 mt-1 rounded-[10px] border p-3 text-sm"
+						>
+							Nothing matches.
+						</div>
+					{/if}
+				</div>
+
+				<div
+					class="border-surface-300-700 ml-auto flex overflow-hidden rounded-md border"
+					role="group"
+					aria-label="Step navigator"
+				>
+					<button
+						type="button"
+						class="btn btn-sm rounded-none {navView === 'list'
+							? 'preset-tonal-primary'
+							: 'preset-tonal-surface'}"
+						aria-pressed={navView === "list"}
+						title="Compact step list"
+						onclick={() => rememberNavView("list")}
+					>
+						<Icons.List size={15} /> List
+					</button>
+					<button
+						type="button"
+						class="btn btn-sm rounded-none {navView === 'map'
+							? 'preset-tonal-primary'
+							: 'preset-tonal-surface'}"
+						aria-pressed={navView === "map"}
+						title="The full signal-path map"
+						onclick={() => rememberNavView("map")}
+					>
+						<Icons.Network size={15} /> Map
+					</button>
+				</div>
+			</div>
+
+			<!-- ── backbone + inspector ──────────────────────────────────
+			     List mode gives the inspector the width (the rail is a
+			     navigator); map mode gives the map the width (the map is
+			     the subject there). -->
+			<div
+				bind:this={workspaceEl}
+				class="items-start gap-4 {navView === 'list'
+					? workspaceWidth >= 720
+						? 'grid grid-cols-[17rem_minmax(0,1fr)]'
+						: 'flex flex-col'
+					: sideBySide
+						? 'grid grid-cols-[minmax(0,1fr)_25rem]'
+						: 'flex flex-col'}"
+			>
+				<section
+					aria-label="Steps"
+					class="panel-card min-w-0 overflow-hidden !p-0"
+				>
+					{#if navView === "map"}
+						<PipelineMap
+							{graph}
+							{steps}
+							activeKey={active?.key ?? null}
+							pendingFor={stepPendingByKey}
+							onSelect={selectStepFromMap}
+						/>
+					{:else}
+						<div
+							class="border-surface-300-700 flex items-baseline gap-2 border-b px-3 py-2"
+						>
+							<span class={LEGEND}>Steps</span>
+						</div>
+						<StepList
+							{steps}
+							activeKey={active?.key ?? null}
+							pendingFor={stepPendingByKey}
+							onSelect={selectStep}
+						/>
+					{/if}
+				</section>
+
+				<!-- Sticky: the inspector is a reference surface; one that
+				     scrolls away while you read the graph it belongs to is one
+				     you keep scrolling back to. -->
+				<section
+					bind:this={inspectorEl}
+					aria-label="Settings"
+					class="min-w-0 scroll-mt-4 {sideBySide
+						? 'sticky top-4'
+						: ''}"
+				>
+					<div
+						class="border-surface-300-700 mb-2 flex items-baseline gap-2 border-b pb-1"
+					>
+						<span class={LEGEND}>Step configuration</span>
+					</div>
+
+					{#if active}
+						<div class="mb-2 flex items-baseline gap-2">
+							<h2 class="text-lg font-semibold">
+								{active.label}
+							</h2>
+							<span class="text-surface-600-400 text-xs">
+								step {steps.findIndex(
+									(s) => s.key === active.key
+								) + 1} of {steps.length}
+							</span>
+						</div>
+					{:else}
+						<div
+							class="panel-card text-surface-600-400 flex flex-col items-center gap-1 text-center text-sm"
+						>
+							<Icons.MousePointerClick
+								size={20}
+								class="opacity-60"
+							/>
+							<span class="text-base font-medium">
+								No step selected
+							</span>
+							<span class="max-w-[40ch]">
+								Pick any card in the signal path.
+							</span>
+						</div>
+					{/if}
+
+					{#if selected?.readOnly}
+						<p
+							class="text-surface-600-400 mb-2 flex items-center gap-1.5 text-xs"
+						>
+							<Icons.Lock size={12} class="shrink-0" />
+							<span>
+								<strong>{selected.name}</strong>
+								 is shipped — Save all will ask where your changes
+								land.
+							</span>
+						</p>
+					{/if}
+					<PipelineConfigOptions
+						{slug}
+						stepKey={active?.key}
+						granular
+						showConfigPicker={false}
+						showScopeNote={false}
+						editsConfigId={selected && !selected.readOnly
+							? selected.id
+							: undefined}
+						{pending}
+						{pendingClears}
+						onDraftSet={draftSet}
+						onDraftClear={draftClear}
+						onLoaded={(d) => {
+							detail = d
+							if (!selectedStep && d.steps.length)
+								selectedStep = d.steps[0].key
+							// ?config= deep link: applied once, then forgotten.
+							if (
+								urlConfigId != null &&
+								d.selectedConfig?.id !== urlConfigId &&
+								d.configs.some((c) => c.id === urlConfigId)
+							) {
+								const id = urlConfigId
+								urlConfigId = null
+								socket.emit("pipelines:selectConfig", {
+									slug,
+									configId: id
+								})
+							} else {
+								urlConfigId = null
+							}
+						}}
+					/>
+				</section>
+			</div>
+
+			<p class="text-surface-600-400 flex items-start gap-2 text-xs">
+				<Icons.Construction size={14} class="mt-0.5 shrink-0" />
+				<span>
+					Changing what a pipeline <em>does</em>
+					— swapping a node, reordering, publishing a new version — is
+					the lens view and is not drafted yet. This page configures the
+					published backbone.
+				</span>
+			</p>
+		{:else if tab === "changes"}
+			<ChangesPanel
+				rows={changeRows}
+				configName={selected?.name}
+				canResetAll={!!selected &&
+					!selected.readOnly &&
+					changeRows.some((r) => r.state === "saved")}
+				onJump={jumpToOption}
+				onQueueReset={draftClear}
+				onResetAll={resetAll}
+			/>
+		{:else if tab === "runs"}
+			<p class="text-surface-600-400 text-sm">
+				This pipeline's recent run receipts. A halt is not a failure —
+				an aborted generation and an empty completion both halt, with
+				the reason recorded.
+			</p>
+			<RunsPanel runs={pipelineRuns} loading={runsLoading} />
+		{:else if tab === "versions"}
+			<VersionsPanel versions={spec.versions} />
+		{:else if tab === "preset"}
+			<PresetPanel {slug} {detail} {selected} />
+		{/if}
+		</div>
+	{/if}
+
+	<!-- ── the draft bar: sticky, on every tab (22 §2.1) ──────────────────
+	     A draft off-screen is a draft forgotten; the bar rides the bottom of the
+	     section's scroller (sticky, not fixed: the `content` container is
+	     the containing block for anything fixed inside it) whichever tab is open, and nothing writes until Save all. -->
+	{#if pendingCount}
+		<div
+			class="draft-bar bg-surface-50-950 border-warning-500 flex flex-wrap items-center gap-2 rounded-[12px] border px-3 py-2"
+			role="status"
+		>
+			<Icons.CircleDot size={15} class="text-warning-500 shrink-0" />
+			<span class="text-sm font-semibold">
+				{pendingCount} pending change{pendingCount === 1 ? "" : "s"}
+			</span>
+			<button
+				class="btn btn-sm preset-tonal-surface"
+				onclick={() => (tab = "changes")}
+			>
+				Review
+			</button>
+			<button class="btn btn-sm preset-filled-primary-500" onclick={saveAll}>
+				<Icons.Save size={14} /> Save all
+			</button>
+			<button class="btn btn-sm preset-tonal-surface" onclick={discardAll}>
+				Discard
+			</button>
+		</div>
+	{/if}
+</div>
+
+<!-- ── the shipped-configuration question, at save time (22 §2.1) ────── -->
+<Dialog open={shippedDialog} onOpenChange={(e) => (shippedDialog = e.open)}>
+	<Portal>
+		<Dialog.Backdrop class="bg-surface-950/60 fixed inset-0 z-50" />
+		<Dialog.Positioner
+			class="fixed inset-0 z-50 flex items-center justify-center p-4"
+		>
+			<Dialog.Content
+				class="bg-surface-100-900 border-surface-200-800 flex w-[28rem] max-w-full flex-col gap-3 rounded-[12px] border p-4"
+			>
+				<Dialog.Title class="text-base font-semibold">
+					{selected?.name ?? "This configuration"} is shipped
+				</Dialog.Title>
+				<Dialog.Description class="text-surface-600-400 text-sm">
+					Shipped configurations stay as written — the server refuses
+					edits into them. Your {pendingCount}
+					change{pendingCount === 1 ? "" : "s"} land in a copy, which becomes
+					the selected configuration:
+				</Dialog.Description>
+				<label class="flex flex-col gap-1 text-sm">
+					<span class="font-medium">Name the new configuration</span>
+					<input
+						class="input"
+						bind:value={shippedNewName}
+						onkeydown={(e) => e.key === "Enter" && saveAsNewConfig()}
+					/>
+				</label>
+				<button
+					class="btn btn-sm preset-filled-primary-500"
+					disabled={!shippedNewName.trim()}
+					onclick={saveAsNewConfig}
+				>
+					<Icons.Copy size={14} /> Create and save there
+				</button>
+				<button
+					class="btn btn-sm preset-tonal-surface"
+					onclick={() => (shippedDialog = false)}
+				>
+					Cancel
+				</button>
+			</Dialog.Content>
+		</Dialog.Positioner>
+	</Portal>
+</Dialog>
+
+<style>
+	/* The landing flash for a search/diff jump (22 §2.3). */
+	:global(.option-flash) {
+		animation: option-flash 1.5s ease-out;
+		border-radius: 0.375rem;
+	}
+	@keyframes option-flash {
+		0%,
+		40% {
+			box-shadow: 0 0 0 2px var(--color-primary-500);
+		}
+		100% {
+			box-shadow: 0 0 0 2px transparent;
+		}
+	}
+	.draft-bar {
+		position: sticky;
+		bottom: 1rem;
+		z-index: 40;
+		align-self: center;
+		max-width: 100%;
+	}
+</style>

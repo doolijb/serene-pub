@@ -37,6 +37,11 @@
 		onKeep: (edge: GraphEdge) => void
 		onEdgeClick: (edge: GraphEdge) => void
 		onDeleteEdge: (edge: GraphEdge) => void
+		/**
+		 * Why an edge cannot be changed from here, or null when it can — a
+		 * link another line owns is read, not written, while reading a branch.
+		 */
+		lockedReason?: (edge: GraphEdge) => string | null
 		onOpenScene: (sceneId: number) => void
 		onRaiseCeiling: () => void
 		onClose: () => void
@@ -54,10 +59,27 @@
 		onKeep,
 		onEdgeClick,
 		onDeleteEdge,
+		lockedReason = () => null,
 		onOpenScene,
 		onRaiseCeiling,
 		onClose
 	}: Props = $props()
+
+	/**
+	 * The edge whose delete is waiting on a second press. A delete is
+	 * permanent, so the first press only asks; opening another node lets go.
+	 */
+	let confirmingDelete = $state<number | null>(null)
+	$effect(() => {
+		void node.key
+		confirmingDelete = null
+	})
+
+	const STATUS_BADGE: Record<string, string> = {
+		resolved: "preset-tonal-surface",
+		broken: "preset-tonal-error",
+		evolved: "preset-tonal-warning"
+	}
 
 	/** What opening this node means, which is a different page for each kind. */
 	let openLabel = $derived(
@@ -70,7 +92,7 @@
 	data-node-panel
 >
 	<div class="flex items-center gap-2">
-		<span class="badge preset-tonal-surface shrink-0 text-[10px] uppercase">
+		<span class="badge preset-tonal-surface shrink-0 text-[11px] capitalize">
 			{node.kind}
 		</span>
 		<span class="min-w-0 flex-1 truncate font-semibold">{node.name}</span>
@@ -93,11 +115,11 @@
 	</div>
 
 	<div class="border-border flex items-center gap-2 border-t pt-2">
-		<p class="flex-1 text-xs font-semibold uppercase">
+		<p class="flex-1 text-xs font-semibold">
 			Relationships {edges.length}
 		</p>
 		<button
-			class="btn btn-sm preset-filled-success-500 shrink-0"
+			class="btn btn-sm preset-filled-primary-500 shrink-0"
 			type="button"
 			disabled={!canAdd}
 			title={canAdd
@@ -110,7 +132,7 @@
 	</div>
 
 	{#if edges.length === 0}
-		<p class="text-surface-400 text-xs italic">
+		<p class="text-surface-600-400 text-xs italic">
 			Nothing joins this to anything yet. ⌥-drag from it on the canvas, or
 			press Add.
 		</p>
@@ -118,6 +140,7 @@
 
 	<ul class="flex flex-col gap-1.5">
 		{#each edges as row (row.edge.id)}
+			{@const locked = lockedReason(row.edge)}
 			<li
 				class="bg-surface-100-900 border-border flex flex-col gap-1 rounded-lg border p-2.5"
 				data-node-edge={row.edge.id}
@@ -129,17 +152,18 @@
 						onclick={() => onEdgeClick(row.edge)}
 					>
 						{row.edge.label}
-						<span class="text-surface-400">{row.arrow}</span>
+						<span class="text-surface-600-400">{row.arrow}</span>
 						{row.otherName}
 					</button>
 					<span class="text-surface-600-400 shrink-0 text-[11px]">
 						{row.provenanceWord}
 					</span>
-					{#if row.cut}
+					{#if row.statusWord}
 						<span
-							class="badge preset-tonal-error shrink-0 text-[10px]"
+							class="badge {STATUS_BADGE[row.statusWord] ??
+								'preset-tonal-surface'} shrink-0 text-[11px]"
 						>
-							cut
+							{row.cut ? "cut" : row.statusWord}
 						</span>
 					{/if}
 				</div>
@@ -163,15 +187,40 @@
 							Keep
 						</button>
 					{/if}
-					<button
-						class="btn btn-sm preset-tonal-error shrink-0 p-1"
-						type="button"
-						title="Delete relationship"
-						aria-label="Delete relationship"
-						onclick={() => onDeleteEdge(row.edge)}
-					>
-						<Icons.Trash2 size={11} aria-hidden="true" />
-					</button>
+					{#if confirmingDelete === row.edge.id}
+						<span class="text-error-500 shrink-0 text-xs">
+							Delete for good?
+						</span>
+						<button
+							class="btn btn-sm preset-filled-error-500 shrink-0 text-xs"
+							type="button"
+							data-confirm-delete-edge
+							onclick={() => {
+								confirmingDelete = null
+								onDeleteEdge(row.edge)
+							}}
+						>
+							Delete
+						</button>
+						<button
+							class="btn btn-sm preset-tonal-surface shrink-0 text-xs"
+							type="button"
+							onclick={() => (confirmingDelete = null)}
+						>
+							Cancel
+						</button>
+					{:else}
+						<button
+							class="btn btn-sm preset-tonal-error shrink-0 p-1"
+							type="button"
+							disabled={!!locked}
+							title={locked ?? "Delete relationship"}
+							aria-label="Delete relationship"
+							onclick={() => (confirmingDelete = row.edge.id)}
+						>
+							<Icons.Trash2 size={11} aria-hidden="true" />
+						</button>
+					{/if}
 				</div>
 			</li>
 		{/each}
@@ -188,7 +237,7 @@
 
 	{#if notDrawn.length > 0}
 		<div class="border-border flex flex-col gap-2 border-t pt-2">
-			<p class="text-xs font-semibold uppercase">Not drawn</p>
+			<p class="text-xs font-semibold">Not drawn</p>
 			{#each notDrawn as row (row.otherId)}
 				<button
 					type="button"

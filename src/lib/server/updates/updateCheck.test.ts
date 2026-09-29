@@ -15,6 +15,13 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest"
 
 let fetchMock: ReturnType<typeof vi.fn>
 
+// The notification side is its own int test; here it is a spy, so this file
+// never opens a database.
+const { syncSpy } = vi.hoisted(() => ({ syncSpy: vi.fn() }))
+vi.mock("$lib/server/notifications/updateAvailable", () => ({
+	syncUpdateNotifications: syncSpy
+}))
+
 async function loadModule() {
 	vi.resetModules()
 	return await import("./updateCheck")
@@ -29,6 +36,7 @@ function releasesResponse(tags: string[]) {
 }
 
 beforeEach(() => {
+	syncSpy.mockReset()
 	fetchMock = vi.fn()
 	vi.stubGlobal("fetch", fetchMock)
 	// The check logs on every path; keep the suite output readable.
@@ -130,5 +138,40 @@ describe("maybeCheckForUpdates on a release build", () => {
 
 		expect(fetchMock).toHaveBeenCalledTimes(1)
 		expect(getUpdateState().isNewerReleaseAvailable).toBeUndefined()
+	})
+})
+
+describe("the update-available notification", () => {
+	test("a successful check hands admins the notifiable tag", async () => {
+		const { maybeCheckForUpdates } = await loadModule()
+		fetchMock.mockResolvedValue(releasesResponse(["v0.7.0", "v0.5.0"]))
+
+		await maybeCheckForUpdates("0.6.0")
+
+		expect(syncSpy).toHaveBeenCalledExactlyOnceWith("v0.7.0")
+	})
+
+	test("a check that finds nothing newer says so, which clears open rows", async () => {
+		const { maybeCheckForUpdates } = await loadModule()
+		fetchMock.mockResolvedValue(releasesResponse(["v0.5.0"]))
+
+		await maybeCheckForUpdates("0.6.0")
+
+		expect(syncSpy).toHaveBeenCalledExactlyOnceWith(null)
+	})
+
+	test("a failed check proves nothing and touches no rows", async () => {
+		const { maybeCheckForUpdates } = await loadModule()
+		fetchMock.mockRejectedValue(new Error("getaddrinfo ENOTFOUND"))
+
+		await maybeCheckForUpdates("0.6.0")
+
+		expect(syncSpy).not.toHaveBeenCalled()
+	})
+
+	test("a pre-release never notifies", async () => {
+		const { maybeCheckForUpdates } = await loadModule()
+		expect(maybeCheckForUpdates("0.6.0-pr-1")).toBeNull()
+		expect(syncSpy).not.toHaveBeenCalled()
 	})
 })

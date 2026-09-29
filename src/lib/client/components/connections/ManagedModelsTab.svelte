@@ -22,9 +22,9 @@
 	 * The connection's own `models[]` off the list, which since 2026-09-23
 	 * carries `facts` — quantisation, size, context — so a row can say
 	 * `Q4_K_M · 7 GB · 32k context` without a second request. The managers' own
-	 * `ollama:modelsList` / `koboldcpp:listModels` are no longer read HERE: they
-	 * answered the same question a sync already answered, from a different
-	 * shape, which is how the two lists could disagree about what was installed.
+	 * `ollama:modelsList` / `koboldcpp:listModels` are never read HERE: they
+	 * answer the same question a sync already answers, from a different shape,
+	 * and two sources let two lists disagree about what is installed.
 	 *
 	 * ⚠ **Delete lives in the `⋯` menu and nowhere else.** It is the one
 	 * irreversible thing on this screen; a red filled button on every row put it
@@ -44,23 +44,27 @@
 
 	interface Props {
 		kind: "koboldcpp" | "ollama"
-		/** The text connection. KoboldCPP's image row comes in beside it. */
+		/** The runtime's one endpoint. Its models carry their own modality. */
 		connection: Row | undefined
-		/** KoboldCPP's image connection, when there is one. */
-		imageConnection?: Row | undefined
 		capabilityDefaults: Record<string, CapabilityDefaultRef | undefined>
 		isAdmin: boolean
 		onOpenModel: (connectionId: number, modelId: number) => void
+		/** Register a default through the panel's flow (it confirms a reindex). */
+		onSetDefault: (
+			capability: string,
+			connectionId: number,
+			model: { id: number; name: string }
+		) => void
 		onGetModels: () => void
 		onRefresh: () => void
 	}
 	let {
 		kind,
 		connection,
-		imageConnection,
 		capabilityDefaults,
 		isAdmin,
 		onOpenModel,
+		onSetDefault,
 		onGetModels,
 		onRefresh
 	}: Props = $props()
@@ -82,8 +86,51 @@
 		)
 	}
 
-	const textModels = $derived((connection?.models ?? []).filter(match))
-	const imageModels = $derived((imageConnection?.models ?? []).filter(match))
+	/**
+	 * What a model is listed under. One endpoint serves several modalities —
+	 * a KoboldCPP chats and draws, an Ollama chats and embeds — and each
+	 * model's own `modality` (from the host's listing) says which it is for.
+	 * A model the host said nothing about is listed as text, the lane every
+	 * such model was in before modality was recorded.
+	 */
+	type Lane = "text" | "image" | "embeddings"
+	interface LaneSpec {
+		lane: Lane
+		heading: string
+		useLabel: string
+		capability: string
+	}
+	const LANES: Record<"koboldcpp" | "ollama", LaneSpec[]> = {
+		koboldcpp: [
+			{ lane: "text", heading: "Text models", useLabel: "Use for chat", capability: "text->text" },
+			{ lane: "image", heading: "Image models", useLabel: "Use for images", capability: "text->image" }
+		],
+		ollama: [
+			{ lane: "text", heading: "Chat models", useLabel: "Use for chat", capability: "text->text" },
+			{ lane: "embeddings", heading: "Embedding models", useLabel: "Use for embeddings", capability: "text->embedding" }
+		]
+	}
+	const laneOf = (m: ModelOf): Lane =>
+		m.modality === "image-gen"
+			? "image"
+			: m.modality === "embeddings"
+				? "embeddings"
+				: "text"
+
+	const lanes = $derived(
+		LANES[kind]
+			.map((spec) => ({
+				...spec,
+				models: (connection?.models ?? []).filter(
+					(m) => laneOf(m) === spec.lane && match(m)
+				)
+			}))
+			.filter((l) => l.models.length)
+	)
+	/** Headings only when there is more than one lane to tell apart. */
+	const showHeadings = $derived(
+		new Set((connection?.models ?? []).map(laneOf)).size > 1
+	)
 
 	function defaultsFor(connectionId: number, model: ModelOf): string[] {
 		return systemCapabilitiesForModel(
@@ -102,11 +149,11 @@
 	 * and for KoboldCPP, which it also did. Nothing gained a confirmation it
 	 * lacked and nothing lost one.
 	 */
-	function actionsFor(lane: "text" | "image"): ModelRowAction[] {
+	function actionsFor(lane: Lane): ModelRowAction[] {
 		const items: ModelRowAction[] = [
 			{ id: "open", label: "Model settings", icon: "Settings2" }
 		]
-		if (kind === "koboldcpp")
+		if (kind === "koboldcpp" && lane !== "embeddings")
 			items.push({
 				id: lane === "text" ? "toImage" : "toText",
 				label:
@@ -134,8 +181,7 @@
 	function run(
 		id: string,
 		connectionId: number,
-		model: ModelOf,
-		lane: "text" | "image"
+		model: ModelOf
 	) {
 		switch (id) {
 			case "open":
@@ -161,14 +207,27 @@
 		}
 	}
 
-	function use(lane: "text" | "image", model: ModelOf) {
-		if (kind === "ollama") {
-			socket.emit("ollama:connectModel", {
-				modelName: model.model
-			} as any)
+	function use(spec: LaneSpec, model: ModelOf) {
+		// Embeddings go through the panel's own default flow: switching the
+		// embedding model rebuilds the index, and that flow asks first.
+		if (spec.lane === "embeddings") {
+			if (connection)
+				onSetDefault(spec.capability, connection.id, {
+					id: model.id,
+					name: model.name
+				})
 			return
 		}
-		if (lane === "image")
+		if (kind === "ollama") {
+			// On THIS connection — the legacy call made a one-model endpoint
+			// at the adapter's default address (plan 2026-09-24 B4).
+			socket.emit("ollama:connectModel", {
+				modelName: model.model,
+				connectionId: connection?.id
+			})
+			return
+		}
+		if (spec.lane === "image")
 			socket.emit("koboldcpp:connectImageModel", {
 				filename: model.model
 			} as any)
@@ -184,7 +243,8 @@
 		if (!target) return
 		if (kind === "ollama")
 			socket.emit("ollama:deleteModel", {
-				modelName: target.model.model
+				modelName: target.model.model,
+				connectionId: target.connectionId
 			})
 		else
 			socket.emit("koboldcpp:deleteModel", {
@@ -192,10 +252,7 @@
 			})
 	}
 
-	const total = $derived(
-		(connection?.models?.length ?? 0) +
-			(imageConnection?.models?.length ?? 0)
-	)
+	const total = $derived(connection?.models?.length ?? 0)
 </script>
 
 <div class="flex flex-col gap-3 py-3">
@@ -240,53 +297,32 @@
 			</button>
 		</div>
 	{:else}
-		{#if textModels.length}
-			<section class="flex flex-col gap-1">
-				{#if kind === "koboldcpp"}
-					<h3 class="text-surface-600-400 px-0.5 text-xs font-medium">
-						Text models
-					</h3>
-				{/if}
-				{#each textModels as model (model.id)}
-					{@const defaults = defaultsFor(connection!.id, model)}
-					<ModelRow
-						{model}
-						defaultFor={defaults}
-						canUse={!defaults.length}
-						useLabel="Use for chat"
-						actions={actionsFor("text")}
-						onOpen={() => onOpenModel(connection!.id, model.id)}
-						onUse={() => use("text", model)}
-						onAction={(id) =>
-							run(id, connection!.id, model, "text")}
-					/>
-				{/each}
-			</section>
+		{#if connection}
+			{#each lanes as spec (spec.lane)}
+				<section class="flex flex-col gap-3">
+					{#if showHeadings}
+						<h3 class="text-surface-600-400 px-0.5 text-xs font-medium">
+							{spec.heading}
+						</h3>
+					{/if}
+					{#each spec.models as model (model.id)}
+						{@const defaults = defaultsFor(connection.id, model)}
+						<ModelRow
+							{model}
+							defaultFor={defaults}
+							canUse={!defaults.length}
+							useLabel={spec.useLabel}
+							actions={actionsFor(spec.lane)}
+							onOpen={() => onOpenModel(connection.id, model.id)}
+							onUse={() => use(spec, model)}
+							onAction={(id) => run(id, connection.id, model)}
+						/>
+					{/each}
+				</section>
+			{/each}
 		{/if}
 
-		{#if imageConnection && imageModels.length}
-			<section class="flex flex-col gap-1">
-				<h3 class="text-surface-600-400 px-0.5 text-xs font-medium">
-					Image models
-				</h3>
-				{#each imageModels as model (model.id)}
-					{@const defaults = defaultsFor(imageConnection.id, model)}
-					<ModelRow
-						{model}
-						defaultFor={defaults}
-						canUse={!defaults.length}
-						useLabel="Use for images"
-						actions={actionsFor("image")}
-						onOpen={() => onOpenModel(imageConnection.id, model.id)}
-						onUse={() => use("image", model)}
-						onAction={(id) =>
-							run(id, imageConnection.id, model, "image")}
-					/>
-				{/each}
-			</section>
-		{/if}
-
-		{#if query && !textModels.length && !imageModels.length}
+		{#if query && !lanes.length}
 			<p class="text-surface-600-400 px-0.5 text-sm">Nothing matches.</p>
 		{/if}
 
@@ -334,7 +370,7 @@
 				class="card bg-surface-100-900 w-full max-w-md space-y-4 p-6 shadow-xl"
 				role="alertdialog"
 			>
-				<h2 class="funnel-display text-lg font-semibold">
+				<h2 class="[font-family:var(--typo-heading--font-family)] text-lg font-semibold">
 					Delete this model?
 				</h2>
 				<p class="text-surface-600-400 text-sm">

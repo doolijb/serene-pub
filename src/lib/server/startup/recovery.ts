@@ -146,7 +146,7 @@ async function maybeEnableAccounts(): Promise<void> {
 		console.error(
 			`[recovery] ${ENV_ENABLE_ACCOUNTS} was set but user accounts were NOT enabled: ` +
 				`the system settings row was not updated (${updated.length} row(s) matched). ` +
-				`Enable accounts from Admin → Settings, or restart with the variable still set.`
+				`Enable accounts from Admin › General, or restart with the variable still set.`
 		)
 		return
 	}

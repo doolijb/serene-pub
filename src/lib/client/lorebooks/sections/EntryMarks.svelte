@@ -81,7 +81,7 @@
 {/if}
 {#if !vectorizationEnabled && entry.useRegex}
 	<span
-		class="preset-filled-primary-500 rounded {pad} text-xs"
+		class="preset-tonal-primary rounded {pad} text-xs"
 		title="Regex keywords"
 	>
 		<Icons.Regex size={icon} class="inline" />
@@ -90,6 +90,6 @@
 {/if}
 {#if size === "lg" && !vectorizationEnabled && entry.caseSensitive}
 	<span class="preset-tonal-surface rounded {pad} text-xs">
-		Case Sensitive
+		Case sensitive
 	</span>
 {/if}

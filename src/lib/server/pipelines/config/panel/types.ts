@@ -14,6 +14,8 @@
  * exist"* — and only the first is true.
  */
 
+import type { TemplateScope } from "@serene-pub/sdk"
+
 /** Who is asking, and from where. `sessionId` is set only for a session they own. */
 export interface Viewer {
 	userId: number
@@ -24,12 +26,13 @@ export interface Viewer {
 /** Where a value won. `author` means nothing overrode the declared default. */
 /**
  * Where a resolved value came from (12 §2 as simplified 2026-08-24): the
- * session's override, the selected config ("preset" kept as the wire literal so
- * clients need no migration), or the author's declared default.
+ * session's override, the selected config, or the author's declared default.
+ * The SDK's `ScopeKind` spelling. Never stored: the panel computes it per
+ * read.
  */
-export type OptionSource = "session" | "preset" | "author"
+export type OptionSource = "session" | "config" | "author"
 
-/** The scopes a person writes at. `preset` and `author` are not writable here. */
+/** The scopes a person writes at. `author` is not writable here. */
 /**
  * Where an edit lands: the session's override row, or the selected config's own
  * value ("config"). The former instance/user scopes are gone — an admin's
@@ -196,6 +199,8 @@ export interface ConfigOption {
 		group?: string
 		/** The pipeline it was written in, when that is not this one. */
 		origin?: string
+		/** The template engine id it is written in (P7). */
+		engine?: string
 	}
 	/**
 	 * For a `context-template-ref` option: every language this slot renders,
@@ -206,7 +211,29 @@ export interface ConfigOption {
 	 * selected. A slot that accepts one language sends the one, so a client can
 	 * treat "more than one entry" as "offer a choice" without a second flag.
 	 */
-	templateEngines?: string[]
+	acceptedEngines?: string[]
+	/**
+	 * For a `context-template-ref` option: what the template can reference at
+	 * this node, typed (typed templates P3, SDK `templateScopeAt` over the
+	 * stored document) — the node's own names, its prompts, the context
+	 * builder's declared keys, the bands declared upstream, `annex.<owner>.<key>`
+	 * and `state`. For the editor's completion, hover and lint (P7).
+	 *
+	 * Template names and their descriptions only — public vocabulary, the
+	 * same words a template author types — never a node key or a declarer.
+	 */
+	scope?: TemplateScope
+	/**
+	 * For a `context-template-ref` option: who supplies each root of `scope`
+	 * — a type's display name and a ranking group, never a node key (P7).
+	 */
+	scopeDeclarers?: Record<string, { label: string; group: string }>
+	/**
+	 * For a `context-template-ref` option: producers feeding the template
+	 * with no declared types, by label. Non-empty = an unknown name may still
+	 * arrive, so the editor warns instead of refusing (P7).
+	 */
+	scopeUntyped?: Array<{ label: string }>
 	/**
 	 * For a `share` or `per-member` control: the bands, in render order.
 	 *
@@ -542,8 +569,8 @@ export interface Decl {
 	 * registered engine id. Carried through so a stored value keeps its engine
 	 * rather than inheriting whatever core happens to render with today.
 	 *
-	 * The one-element spelling of `engines`. Resolve both through
-	 * `acceptedEngines`, never either alone.
+	 * The one-element spelling of `acceptedEngines`. Resolve both through
+	 * `acceptedEnginesOf`, never either alone.
 	 */
 	engine?: string
 	/**
@@ -554,7 +581,7 @@ export interface Decl {
 	 * entry, and collapsing at projection time would leave the second caller
 	 * unable to reconstruct the first.
 	 */
-	engines?: readonly string[]
+	acceptedEngines?: readonly string[]
 	/**
 	 * For a prompts slot: the text fields the node declares.
 	 *
@@ -571,6 +598,25 @@ export interface Decl {
 	 * nothing else. Server-side only — see `ConfigOption.variableTemplate`.
 	 */
 	variableId?: string
+	/**
+	 * For a variables slot: this key is a **band** declared upstream of the
+	 * node (typed templates P2, `SlotDecl.rendersBands`) rather than one of the
+	 * node's own `renders`. `world.ts` resolves every band key even with no
+	 * layout selected, because the resolved keys are how Assemble learns which
+	 * bands to render at the top level. Server-side only.
+	 */
+	band?: true
+	/**
+	 * For a `context-template-ref`: the template's typed scope at this node
+	 * (typed templates P3). Surfaced on the option as `scope`.
+	 */
+	templateScope?: TemplateScope
+	/** Who supplies each root of `templateScope`, as labels (P7). */
+	templateDeclarers?: Record<string, { label: string; group: string }>
+	/** Producers feeding the template untyped, as labels (P7). */
+	templateUntyped?: string[]
+	/** The template slot's own declared names — the definition's static scope (P7). */
+	templateStaticScope?: TemplateScope
 	/**
 	 * The node definition this option's row pool is keyed by, version stripped.
 	 *

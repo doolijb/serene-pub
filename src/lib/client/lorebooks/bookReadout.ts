@@ -36,7 +36,7 @@ export interface BookReadoutInput {
 	nested: number
 	/** How deep the deepest chain of them goes. */
 	depth: number
-	/** Every branch the book has. `main` and nothing else, for now. */
+	/** Every line the book has, by name: "main" first, then its branches. */
 	branches: string[]
 }
 
@@ -128,17 +128,27 @@ export function bookReadout(input: BookReadoutInput): ReadoutLine[] {
 		},
 		{
 			id: "branches",
-			label: "Branches",
+			label: "Lines",
 			count: input.branches.length,
-			detail: [input.branches.join(", "), "branching is not built yet"]
+			detail: [branchesDetail(input.branches)]
 		},
 		{
 			id: "places",
 			label: "Places",
 			count: places,
-			detail: places === 0 ? ["nothing mapped yet"] : []
+			detail: places === 0 ? ["no Location entries yet"] : []
 		}
 	]
+}
+
+/**
+ * The lines, said out loud: main alone, or main and its branches by name.
+ * `main` is implicit — a book with no branches still has one line.
+ */
+function branchesDetail(branches: readonly string[]): string {
+	const named = branches.filter((b) => b !== "main")
+	if (named.length === 0) return "main only"
+	return ["main", ...named].join(", ")
 }
 
 /**

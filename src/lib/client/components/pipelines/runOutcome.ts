@@ -12,7 +12,7 @@
  * `receipt.outcome` of `err` or `halt` whose frame never set `error`
  * ("Progress card says 'Respond finished ✓' on an errored run"). So every
  * terminal frame carries its own `outcome` (`runReply.ts`, `sockets/sessions.ts`'s
- * `sessions:triggerFunction` — the only two callers of `pipelines:progress`);
+ * `sessions:fireAction` — the only two callers of `pipelines:progress`);
  * `outcomeOf` keeps the two-flag reading only as the fallback for a future
  * caller of this same event that has not been taught to say which yet. Image
  * generation is NOT such a caller: `images:progress` is a different wire

@@ -398,14 +398,41 @@ export const charactersTestSprite: Handler<
 			].sort()
 			if (!set || labels.length === 0)
 				return reply({ reason: "This set has no sprites with images yet." })
-			const { getLoadedModelId, batchEmbed } = await import("$lib/server/embedding")
+			const {
+				getLoadedModelId,
+				batchEmbed,
+				getConfiguredEmbeddingTarget,
+				loadConfiguredEmbeddingModel,
+				isModelCached
+			} = await import("$lib/server/embedding")
 			const { spriteVectors } = await import("$lib/server/sprites/vectors")
-			const modelId = getLoadedModelId()
-			if (!modelId)
-				return reply({
-					reason:
-						"No embedding model is loaded, so sprites can't be chosen automatically. Load one in Connections."
-				})
+			const { testerGate, LOAD_FAILED_REASON } = await import(
+				"$lib/server/sprites/testerGate"
+			)
+
+			/**
+			 * ⚠ **Enabled is not resident.** Gating on residency refuses
+			 * whenever no model happens to be loaded, which on a machine with
+			 * nothing pending to vectorize is always. The policy lives in `testerGate`; this gathers the
+			 * three facts it decides between.
+			 */
+			let modelId = getLoadedModelId()
+			const target = modelId ? null : await getConfiguredEmbeddingTarget()
+			const gate = testerGate({
+				loadedModelId: modelId,
+				target,
+				localCached:
+					target?.mode === "local" && target.localModelName
+						? await isModelCached(target.localModelName)
+						: null
+			})
+			if (gate.kind === "refuse") return reply({ reason: gate.reason })
+			if (gate.kind === "load") {
+				await loadConfiguredEmbeddingModel()
+				modelId = getLoadedModelId()
+				if (!modelId) return reply({ reason: LOAD_FAILED_REASON })
+			}
+
 			const vectors = await spriteVectors(params.text, labels, { modelId, batchEmbed })
 			const { pickSpriteBySimilarity } = await import("$lib/shared/sprites/pick")
 			const pick = pickSpriteBySimilarity(

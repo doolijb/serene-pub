@@ -4,9 +4,14 @@
  *
  * The invariants that matter here are the ones a package could otherwise break
  * for everybody: it marks rather than deletes (a session names its layout
- * preset), it refuses a document that does not validate rather than storing
- * one, it cannot claim the genre owner's slug on a genre it does not own, and
- * it never writes over a row another package owns.
+ * preset), it refuses a declared document that does not validate rather than
+ * projecting it, it cannot claim the genre owner's slug on a genre it does not
+ * own, and it never writes over a row another package owns.
+ *
+ * ⏳ A manifest still declares a retired layout document (LayoutDoc v2) until
+ * brief 1 of `PLAN-layout-one-format-2026-09-28`; since brief 2 a row stores
+ * only the session layout in `layout`, which stays `{}` for a plugin's row
+ * until then.
  */
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest"
 import { eq } from "drizzle-orm"
@@ -141,15 +146,11 @@ describe("projecting a package's layouts", () => {
 			expect(row.visibility).toBe("shared")
 			expect(row.withdrawnAt).toBeNull()
 			expect(row.seededByVersion).toBe("2.1.0")
-			expect((row.document as any).zones.middle.units[0].key).toBe(
-				"cinematic"
-			)
-			expect(row.widgetSettings).toEqual({
-				messages: { composer: "writer" }
-			})
-			// ⏳ "No overrides" for the pre-v2 renderer, which has never heard
-			// of this row's document.
+			// ⏳ "No overrides" until brief 1: the declared document is
+			// validated, never stored, and no v2 column is left to hold it.
 			expect(row.layout).toEqual({})
+			expect(row).not.toHaveProperty("document")
+			expect(row).not.toHaveProperty("widgetSettings")
 		},
 		60_000
 	)
@@ -190,9 +191,7 @@ describe("projecting a package's layouts", () => {
 			const second = await rowByKey(key)
 			expect(second.id).toBe(first.id)
 			expect(second.name).toBe("Taller")
-			expect((second.document as any).zones.middle.units[0].key).toBe(
-				"taller"
-			)
+			expect(second.layout).toEqual({})
 		},
 		60_000
 	)
@@ -375,7 +374,7 @@ describe("what it refuses", () => {
 				slug: "shared-slug",
 				name: "First's",
 				visibility: "shared",
-				document: docNaming("first")
+				layout: { first: true }
 			})
 			// A second package whose id + slug spell the same key.
 			await installPlugin("acme", [
@@ -393,9 +392,8 @@ describe("what it refuses", () => {
 			const row = await rowByKey(key)
 			expect(row.pluginId).toBe("acme/first")
 			expect(row.withdrawnAt).toBeNull()
-			expect((row.document as any).zones.middle.units[0].key).toBe(
-				"first"
-			)
+			expect(row.name).toBe("First's")
+			expect(row.layout).toEqual({ first: true })
 		},
 		60_000
 	)

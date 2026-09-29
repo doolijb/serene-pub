@@ -7,8 +7,8 @@
 	 * The scrim, the simulator's frame and the `{#if placing && !mobileEdit}`
 	 * that decides whether there is a canvas at all stay in SessionLayout: the
 	 * frame wraps both this and the phone preview, so it cannot live in either.
-	 * This component is drawn in both of the places that used to render the
-	 * `editCanvas` snippet, and it renders nothing on its own behalf.
+	 * SessionLayout draws this component in both of those places, and it
+	 * renders nothing on its own behalf.
 	 */
 	import type { Snippet } from "svelte"
 	import * as Icons from "@lucide/svelte"
@@ -134,8 +134,12 @@
 		groupRail
 	}: Props = $props()
 
+	// The floor's note is part of the key: removing one of two Messages cards
+	// makes the other the last, and its × has to go — gridstack builds a
+	// card's HTML once, at seed, so the zone re-seeds (from its working frame,
+	// so nothing arranged is lost).
 	function gsKey(items: GsItem[]): string {
-		return items.map((i) => i.id).join(",")
+		return items.map((i) => (i.floorNote ? `${i.id}!` : i.id)).join(",")
 	}
 </script>
 
@@ -212,7 +216,6 @@
 				<GridStackZone
 					items={gsItems}
 					{frame}
-					acceptsRequired={isMiddle}
 					pinned={zoneId && showZonePin(frame)
 						? layout.zones[zoneId]?.pinned !== false
 						: undefined}

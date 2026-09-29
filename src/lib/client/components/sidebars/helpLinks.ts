@@ -1,15 +1,14 @@
 /**
  * Where a link inside the **Help** sidebar view goes (NOMENCLATURE §27).
  *
- * The docs compiler rewrites every link between pages to `/docs/<slug>`, which
- * is the right href for the full page and the wrong DESTINATION for the sidebar
- * view: following it navigates the whole window away from whatever the reader
- * was doing, which is the one thing reading the documentation beside your work
- * exists to avoid. So the view intercepts the links it can answer itself, and
+ * The docs compiler rewrites every link between pages to `/docs/<slug>` — the
+ * Help view's own address in Focus — and following it as a link would load
+ * the whole window, away from whatever the reader was doing, which is the one
+ * thing reading the documentation beside your work exists to avoid. So the view intercepts the links it can answer itself, and
  * this is the rule it intercepts by.
  *
  * `helpAnchorId` below is the other half of the same seam: the view renames the
- * ids inside its own article so they cannot collide with `/docs`, and every
+ * ids inside its own article so they cannot collide with the app's, and every
  * anchor it is handed has to be read against the renamed ones.
  *
  * Pure, and in its own module, because it is the whole of that decision and the
@@ -68,14 +67,10 @@ export function resolveInViewLink(
 /**
  * The prefix this view puts in front of every id inside its article.
  *
- * `/docs/[...slug]` renders the same compiled page from the same docs-dist,
- * and the sidebar can be open beside it — so without a prefix the document
- * carries two `#the-rail` elements. That is an a11y defect on its own, and it
- * also hands the wrong element to `:target` and to the route's own
- * `getElementById` (`routes/docs/[...slug]/+page.svelte`), which resolve to the
- * FIRST match: the sidebar, which comes before `<main>` in the shell's markup.
- * `/docs` keeps the bare ids — it is the page that owns them, and its URL
- * fragments have to keep working.
+ * The article shares one document with the whole app, so a compiled id such
+ * as `#sessions` could name the app's own element as well as the heading —
+ * an a11y defect on its own, and `:target` and `getElementById` resolve to
+ * the FIRST match. The prefix keeps the article's ids its own.
  *
  * A colon and not `help-`, because a compiled id can already begin with the
  * word: `help-and-about` is a real heading in the getting-started guide today.

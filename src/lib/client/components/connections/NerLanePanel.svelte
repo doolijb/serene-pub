@@ -54,42 +54,42 @@
 	</span>
 
 	{#if !isStarred}
-		<p class="text-muted text-xs">
+		<p class="text-surface-600-400 text-xs">
 			There is one entity scan and it runs on whichever connection is in
 			use. Press "Use for entity extraction" above to see its state here.
 		</p>
 	{:else}
-		<p class="text-muted text-xs">
+		<p class="text-surface-600-400 text-xs">
 			New and edited lore and messages are scanned in the background.
 			Names the model finds are stored beside the ones your lorebook
 			already declares, so an entry can be matched by what a scene calls
 			it.
 		</p>
 		{#if status === null}
-			<p class="text-muted text-xs">Reading the lane…</p>
+			<p class="text-surface-600-400 text-xs">Reading the lane…</p>
 		{:else}
 			<dl
 				class="grid grid-cols-1 gap-x-4 gap-y-1 text-xs @lg/view:grid-cols-2"
 			>
-				<dt class="text-muted">Model</dt>
+				<dt class="text-surface-600-400">Model</dt>
 				<dd class="truncate font-medium">
 					{status.modelId ?? "None"}
 				</dd>
-				<dt class="text-muted">State</dt>
+				<dt class="text-surface-600-400">State</dt>
 				<dd
 					class="font-medium {status.modelReady
 						? 'text-success-500'
-						: 'text-surface-400'}"
+						: 'text-surface-600-400'}"
 				>
 					{status.modelReady ? "Loaded" : "Not loaded"}
 				</dd>
-				<dt class="text-muted">Scanned rows</dt>
+				<dt class="text-surface-600-400">Scanned rows</dt>
 				<dd class="font-medium">
 					{status.annotatedRows.toLocaleString()}
 				</dd>
 			</dl>
 			{#if !status.modelReady}
-				<p class="text-muted text-xs">
+				<p class="text-surface-600-400 text-xs">
 					The model loads when there is something to scan, and unloads
 					again after the idle timeout above.
 				</p>

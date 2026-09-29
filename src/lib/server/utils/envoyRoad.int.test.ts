@@ -26,7 +26,8 @@
  *     byte for byte on the next reply.
  *  5. **The fired turn drives the envoy.** Turn order is state (A7): the
  *     guide defers the turn-order binding, so its stored order stays empty and
- *     Continue says "Nothing is prepared to take a turn." — and an order-less
+ *     Continue is refused in a sentence (the Guide offers no Continue turn
+ *     control, lair pass B8) — and an order-less
  *     session is still playable because the owner's press is the pick (§4.7),
  *     firing the seated envoy by entry. Picking somebody out of turn is
  *     owner-only, and firing reads the order, not the seat.
@@ -476,9 +477,10 @@ describe("a guide reply", () => {
 		expect((context.output as any).seedName).toBe("Guide")
 		// Pinned once at run start (R-21 (4)).
 		expect(receipt.portrayals?.["envoy:mascot"]).toEqual({ by: "ai" })
-		// The docs are the lore: the search ran, published its band intent
-		// first, and — with the docs compiled — found the connections page
-		// for a question about connections, in the `worldLore` band.
+		// The docs are the guide's knowledge: the search ran, published its
+		// band intent first, and — with the docs compiled — found the
+		// connections page for a question about connections, in its own
+		// declared `docsExcerpts` band (2026-09-27; `worldLore` before).
 		const docs = receipt.nodes.find(
 			(n) => n.nodeKey === "gather.docs.read"
 		)!
@@ -486,10 +488,10 @@ describe("a guide reply", () => {
 		const published = (docs.output as any).main as Array<
 			Record<string, unknown>
 		>
-		expect(published[0]).toMatchObject({ band: "worldLore" })
+		expect(published[0]).toMatchObject({ band: "docsExcerpts" })
 		const hits = published.slice(1)
 		if (hits.length) {
-			expect(hits.every((h) => h.source === "worldLore")).toBe(true)
+			expect(hits.every((h) => h.source === "docsExcerpts")).toBe(true)
 			expect(
 				hits.some((h) =>
 					/connect/i.test(String((h.payload as any)?.name ?? ""))
@@ -499,7 +501,7 @@ describe("a guide reply", () => {
 			const rank = receipt.nodes.find((n) => n.nodeKey === "rank")!
 			expect(
 				((rank.output as any).candidates as any[]).some(
-					(c) => c?.source === "worldLore"
+					(c) => c?.source === "docsExcerpts"
 				)
 			).toBe(true)
 		}
@@ -583,7 +585,7 @@ describe("a guide reply", () => {
 			.find((s) => s.label === "Envoy · Guide")!
 			.options.find((o) => o.label === "System prompt")!
 		expect(tunedOption.value).toBe(TUNED)
-		expect(tunedOption.source).toBe("preset")
+		expect(tunedOption.source).toBe("config")
 		expect(tunedOption.changed).toBe(true)
 		// The row is where the config stores it: the envoy's address.
 		const stored = await db
@@ -638,13 +640,18 @@ describe("a guide reply", () => {
 
 		// The question was written straight to the table (no event), so the
 		// guide's turn order has not run yet and its stored order is empty:
-		// Continue is "Nothing is prepared", in a sentence.
+		// Continue is refused in a sentence.
+		// Lair pass B7/B8: the Guide has no character system, so it offers no
+		// Continue turn control (`turnControlDefault`) and an entry-less fire
+		// is refused by the turn-control door, still in a sentence.
 		const nothing: any = await sessionsFireTurnHandler.handler(
 			fakeSocket(userId),
 			{ sessionId },
 			emit
 		)
-		expect(nothing.error).toBe("Nothing is prepared to take a turn.")
+		expect(nothing.error).toBe(
+			"This session's genre ('Guide') does not offer Continue — send a line to move the story on."
+		)
 		expect((await messagesOf(sessionId)).length).toBe(1)
 
 		// …which is how an order-less session is still playable (§4.7): the
@@ -672,7 +679,9 @@ describe("a guide reply", () => {
 			{ sessionId },
 			emit
 		)
-		expect(quiet.error).toBe("Nothing is prepared to take a turn.")
+		expect(quiet.error).toBe(
+			"This session's genre ('Guide') does not offer Continue — send a line to move the story on."
+		)
 		expect((await messagesOf(sessionId)).length).toBe(rows.length)
 
 		// A regenerate reads the row's reference and re-drives the envoy's
@@ -787,8 +796,11 @@ describe("the fired turn's explicit pick (U5g review, W1) and an answerless sess
 			{ sessionId, entry: { ref: "character:1", via: "pick" } },
 			emit
 		)
+		// Lair pass B8: a `character:` pick presses the Pick turn control,
+		// which a genre with no character system does not offer — refused
+		// before the owner check, on the same error channel.
 		expect(guest.error).toBe(
-			"Only the session owner can take somebody else's turn out of order."
+			"This session's genre ('Guide') does not offer Pick who speaks."
 		)
 		expect(events.at(-1)?.event).toBe("sessions:fireTurn:error")
 		expect((await messagesOf(sessionId)).length).toBe(before)
@@ -820,7 +832,9 @@ describe("the fired turn's explicit pick (U5g review, W1) and an answerless sess
 			{ sessionId },
 			emit
 		)
-		expect(beyond.error).toBe("Nothing is prepared to take a turn.")
+		expect(beyond.error).toBe(
+			"This session's genre ('Guide') does not offer Continue — send a line to move the story on."
+		)
 		expect((await messagesOf(sessionId)).length).toBe(1)
 
 		// The owner fires the seated envoy: the answer lands.

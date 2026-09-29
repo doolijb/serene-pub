@@ -1096,7 +1096,7 @@ describe("the generate-text binding", () => {
 	 * The send shape, from the node's `params` slot to the adapter.
 	 *
 	 * This is the FULL-RUN road — binding, host, dispatch — and the one a
-	 * multi-stage spec takes. The reply road reads the same parameter off the
+	 * multi-step spec takes. The reply road reads the same parameter off the
 	 * receipt instead, because it halts before any binding runs; both have to
 	 * work or the control is live on one kind of pipeline and dead on the
 	 * other.
@@ -1141,7 +1141,7 @@ describe("the generate-text binding", () => {
 /**
  * The debug panel's retrieval trail.
  *
- * This replaced `meta.rag`, which reported the legacy infill engine's internal
+ * This replaced `meta.rag`, which reported the legacy 0.5 retrieval path's internal
  * phase counters — a guaranteed window, a RAG pass, a fill pass. The pipeline
  * runs none of those phases, so porting the numbers would have meant inventing
  * them. What it does have is a decision per block, which answers the question

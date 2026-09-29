@@ -9,6 +9,13 @@
 		useInterest
 	} from "$lib/client/sockets/interest.svelte"
 	import { interestKey } from "$lib/shared/sockets/interest"
+	import { changedFields } from "$lib/shared/lorebooks/amendments"
+	import { awaitReply, isReplyTimeout } from "$lib/client/utils/awaitReply"
+	import { fileEntryAmendments } from "$lib/client/lorebooks/editor/entrySave"
+	import {
+		formatDate,
+		type StoryDate
+	} from "$lib/client/lorebooks/sections/historyDates"
 	import AiTaskModal, { type AiTaskStep } from "./AiTaskModal.svelte"
 	import {
 		HISTORY_TYPE_ID,
@@ -24,7 +31,17 @@
 		activityId?: string | null
 		pendingResult?: { content: string } | null
 		initialStep?: "review" | "running"
-		onSaved: (updated: History) => void
+		/**
+		 * The date being read, when one is. A compile saved at a moment is an
+		 * AMENDMENT dated then, exactly as the entry editor's Save as of is;
+		 * at now it is a write of the changed fields to the entry.
+		 */
+		moment?: StoryDate | null
+		/** The line being read. `null` is main. */
+		branchId?: number | null
+		/** The overlay ids already known for this entry, to spot the new one. */
+		knownAmendmentIds?: number[]
+		onSaved?: (updated: History) => void
 		onDiscarded?: (activityId: string) => void
 	}
 
@@ -35,6 +52,9 @@
 		activityId = null,
 		pendingResult = null,
 		initialStep,
+		moment = null,
+		branchId = null,
+		knownAmendmentIds = [],
 		onSaved,
 		onDiscarded
 	}: Props = $props()
@@ -88,7 +108,11 @@
 				: "Starting…"
 	)
 
-	let canSave = $derived(editableContent.trim().length > 0)
+	/** A save is on its way; the modal stays until the server has it. */
+	let saving = $state(false)
+	let saveError = $state("")
+
+	let canSave = $derived(editableContent.trim().length > 0 && !saving)
 
 	$effect(() => {
 		if (!pendingResult) return
@@ -170,23 +194,87 @@
 		}
 	})
 
-	function save() {
-		const updated = {
-			...historyEntry,
-			content: editableContent.trim(),
-			isCompleted: true
+	/**
+	 * The entry editor's rule, for the compile (ruled 2026-09-28).
+	 *
+	 * ⚠ Only what the compile CHANGED is written — never the row spread whole.
+	 * `historyEntry` is the row as it READS (amendments resolved in), so
+	 * spreading it into an update baked every amendment into the base. At a
+	 * moment the change is filed as an amendment dated then, on the line being
+	 * read; at now it patches the entry.
+	 *
+	 * ⚠ Nothing is claimed until the server answers: the toast, the activity's
+	 * dismissal and the close all wait, so a refusal leaves the compiled text
+	 * here to retry.
+	 */
+	async function save() {
+		if (saving) return
+		const content = editableContent.trim()
+		const fields = changedFields(
+			{ content, isCompleted: true },
+			{
+				content: historyEntry.content ?? "",
+				isCompleted: !!historyEntry.isCompleted
+			}
+		)
+		saving = true
+		saveError = ""
+		try {
+			if (!Object.keys(fields).length) {
+				// Already says this: nothing to write, the review is done.
+			} else if (moment) {
+				await fileEntryAmendments(
+					socket,
+					{
+						lorebookId: historyEntry.lorebookId,
+						entryId: historyEntry.id,
+						branchId
+					},
+					[{ ...moment, fields }],
+					knownAmendmentIds
+				)
+			} else {
+				await awaitReply({
+					socket,
+					event: "entries:update",
+					params: {
+						entry: {
+							...fields,
+							id: historyEntry.id,
+							typeId: HISTORY_TYPE_ID
+						} as any
+					},
+					replyKey: interestKey(
+						"entries:update",
+						historyEntry.lorebookId
+					),
+					errorEvent: "entries:update:error",
+					fallbackError: "The history entry could not be saved.",
+					match: (data) => data.entry?.id === historyEntry.id
+				})
+			}
+		} catch (err) {
+			saving = false
+			saveError =
+				err instanceof Error && err.message
+					? isReplyTimeout(err)
+						? "The server did not answer in time. The compiled text is still here."
+						: err.message
+					: "The history entry could not be saved."
+			return
 		}
-		socket.emit("entries:update", {
-			entry: { ...updated, typeId: HISTORY_TYPE_ID }
-		})
+		saving = false
 		if (internalActivityId)
-			socket.emit("activity:dismiss", { id: internalActivityId })
-		toaster.success({ title: "History entry updated" })
-		onSaved({
-			...historyEntry,
-			content: editableContent.trim(),
-			isCompleted: true
+			socket.emit("activity:dismiss", {
+				id: internalActivityId,
+				how: "acted"
+			})
+		toaster.success({
+			title: moment
+				? `History amended as of ${formatDate(moment)}`
+				: "History entry updated"
 		})
+		onSaved?.({ ...historyEntry, content, isCompleted: true })
 		onOpenChange({ open: false })
 	}
 
@@ -218,7 +306,7 @@
 	{#if genPartial.content || genPartial.raw}
 		<div class="space-y-1">
 			<p
-				class="text-surface-700-300 text-xs font-semibold tracking-wide uppercase"
+				class="text-surface-600-400 text-xs font-semibold"
 			>
 				{genPhase === "synthesizing"
 					? "Synthesizing"
@@ -255,7 +343,7 @@
 		{#if hasExistingContent && hasDiff}
 			<div class="space-y-1">
 				<p
-					class="text-surface-700-300 text-xs font-semibold tracking-wide uppercase"
+					class="text-surface-600-400 text-xs font-semibold"
 				>
 					Changes
 				</p>
@@ -288,6 +376,15 @@
 				bind:value={editableContent}
 			></textarea>
 		</div>
+		{#if moment}
+			<p class="text-surface-700-300 text-xs">
+				Saved as an amendment dated {formatDate(moment)}: the entry
+				reads this way from then on, and as it was before.
+			</p>
+		{/if}
+		{#if saveError}
+			<p class="text-error-700-300 text-sm" role="alert">{saveError}</p>
+		{/if}
 	</div>
 {/snippet}
 
@@ -295,9 +392,9 @@
 	{open}
 	{onOpenChange}
 	title="Compile to Entry"
-	runningTitle="Compiling Scenes…"
-	reviewTitle="Review Compiled Entry"
-	badge="History Entry"
+	runningTitle="Compiling scenes…"
+	reviewTitle="Review compiled entry"
+	badge="History entry"
 	{step}
 	{progressPercent}
 	{progressLabel}

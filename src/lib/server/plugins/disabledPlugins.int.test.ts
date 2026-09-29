@@ -6,7 +6,7 @@
  * through) still has them.
  */
 
-import { describe, it, expect, beforeAll } from "vitest"
+import { describe, it, expect, beforeAll, afterAll } from "vitest"
 import { eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import { createTestDb, type TestDb } from "$lib/server/utils/testDb"
@@ -27,6 +27,16 @@ beforeAll(async () => {
 }, 60_000)
 
 describe("a disabled plugin in the listings (R67)", () => {
+	// A plugin's own switch only means something with the subsystem on.
+	let was: string | undefined
+	beforeAll(() => {
+		was = process.env.SP_PLUGINS_ENABLED
+		process.env.SP_PLUGINS_ENABLED = "1"
+	})
+	afterAll(() => {
+		if (was === undefined) delete process.env.SP_PLUGINS_ENABLED
+		else process.env.SP_PLUGINS_ENABLED = was
+	})
 	it("hides its genre and pipelines from listings, never from resolution", async () => {
 		const [plugin] = await db
 			.insert(schema.plugins)
@@ -115,5 +125,39 @@ describe("a disabled plugin in the listings (R67)", () => {
 		expect(off.ownsId("acme.dark:spec/x")).toBe(true)
 		expect(off.ownsId("acme.darker:spec/x")).toBe(false)
 		expect(off.ownsId("core:spec/respond")).toBe(false)
+	})
+})
+
+describe("the subsystem switched off", () => {
+	it("counts every plugin as switched off for listings, enabled or not", async () => {
+		const [on] = await db
+			.insert(schema.plugins)
+			.values({
+				pluginId: "acme.on",
+				name: "On",
+				version: "1.0.0",
+				bundleSource: "// none",
+				bundleHash: "r67-flag",
+				enabled: true,
+				manifest: {} as any
+			})
+			.returning({ id: schema.plugins.id })
+		const was = process.env.SP_PLUGINS_ENABLED
+		try {
+			process.env.SP_PLUGINS_ENABLED = "1"
+			const lit = await disabledPlugins(db)
+			expect(lit.owns(on.id)).toBe(false)
+			expect(lit.ownsId("acme.on:genre/x@1")).toBe(false)
+
+			delete process.env.SP_PLUGINS_ENABLED
+			const dark = await disabledPlugins(db)
+			expect(dark.owns(on.id)).toBe(true)
+			expect(dark.ownsId("acme.on:genre/x@1")).toBe(true)
+			// Core is never a plugin's, flag or no flag.
+			expect(dark.ownsId("core:genre/chat")).toBe(false)
+		} finally {
+			if (was === undefined) delete process.env.SP_PLUGINS_ENABLED
+			else process.env.SP_PLUGINS_ENABLED = was
+		}
 	})
 })

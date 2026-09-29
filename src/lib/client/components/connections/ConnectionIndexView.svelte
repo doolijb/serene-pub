@@ -10,10 +10,12 @@
 	 * this panel is asking one of two questions — "can this thing reply yet"
 	 * and "what have I plugged in" — and a list of forty model names answers
 	 * neither. Models moved to the capability view and the model finder; what
-	 * is left here is a readiness card and a list of connections.
+	 * is left here is readiness (the status strip and, in a column, the jobs
+	 * grid) and a list of connections.
 	 *
-	 * Top to bottom: the Add row, the filter row, the readiness card, the
-	 * connections, and the downloads tray while anything is arriving.
+	 * Top to bottom: the Add row, the filter row, the status strip and jobs
+	 * grid, the connections, and the downloads tray while anything is
+	 * arriving.
 	 *
 	 * ## The filter's unit is the connection now
 	 *
@@ -26,7 +28,7 @@
 	 *
 	 * ## Defaults is not a filter over the list
 	 *
-	 * It swaps the list for the ledger, with the readiness card still above it.
+	 * It swaps the list for the ledger, with the status strip still above it.
 	 * See `DefaultsLedger`'s header for why.
 	 *
 	 * ## Live status, asked for only where it applies
@@ -41,7 +43,8 @@
 	 * The view decides no sentences and no filtering: `connectionIndexFilter`,
 	 * `readiness` and `connectionRowStatus` are pure and have their own tests.
 	 */
-	import { getContext } from "svelte"
+	import { getContext, untrack } from "svelte"
+	import { SvelteMap } from "svelte/reactivity"
 	import * as Icons from "@lucide/svelte"
 	import { capabilityLabel, capabilityTagline } from "@serene-pub/sdk"
 	import { Dialog, Popover, Portal } from "@skeletonlabs/skeleton-svelte"
@@ -51,6 +54,7 @@
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 	import { declareInterest } from "$lib/client/sockets/interest.svelte"
 	import AddMenu from "./AddMenu.svelte"
+	import { canRunLocalRuntimes } from "./addMenuItems"
 	import ConnectionRow from "./ConnectionRow.svelte"
 	import DefaultsLedger from "./DefaultsLedger.svelte"
 	import DownloadsTray from "./DownloadsTray.svelte"
@@ -59,7 +63,6 @@
 	import {
 		countConnections,
 		filterConnections,
-		foldManagedImage,
 		indexTotals,
 		parseIndexFilter,
 		serviceLabel,
@@ -89,6 +92,7 @@
 	import { downloads } from "./downloads.svelte"
 	import type { CapabilityDefaultRef } from "./modelSystemDefaults"
 	import { buildJobTiles, chatFacts, type JobTile } from "./jobTile"
+	import { kcppInstallState } from "./managedConnectionView"
 
 	type Row = Sockets.Connections.List.Row & { id: number }
 	type ModelOf = Row["models"][number]
@@ -97,11 +101,6 @@
 		connectionsList: Sockets.Connections.List.Row[]
 		capabilityDefaults?: Record<string, CapabilityDefaultRef | undefined>
 		isLoading: boolean
-		/**
-		 * The managed KoboldCPP cannot run at all with its flag off, which is
-		 * a sentence on the row rather than a badge — see `connectionRowStatus`.
-		 */
-		koboldCppManagerEnabled: boolean
 		/** Connection ids with a sync in flight. */
 		syncingIds: ReadonlySet<number>
 		/** Every connection is being checked (the open-time sweep). */
@@ -123,7 +122,16 @@
 		 * grid a few hundred pixels apart is not emphasis.
 		 */
 		mode?: "compact" | "desk"
-		onAddNew: () => void
+		/**
+		 * Something is open in the detail pane beside this list (desk only).
+		 * The full jobs grid lives in the EMPTY pane, so once a connection is
+		 * open the jobs need a way back from here (plan 2026-09-24 C7).
+		 */
+		detailOpen?: boolean
+		/** Close the detail pane, which at desk IS the full jobs grid. */
+		onShowAllJobs?: () => void
+		/** Open Add; a door may narrow the service picker to one category. */
+		onAddNew: (opts?: { category?: "cloud" | "local" | "custom" }) => void
 		/** Switch a manager on and open its connection. */
 		onEnableManager: (kind: "koboldcpp" | "ollama") => void
 		onOpenConnection: (connection: Row) => void
@@ -159,13 +167,14 @@
 		connectionsList,
 		capabilityDefaults = {},
 		isLoading,
-		koboldCppManagerEnabled,
 		syncingIds,
 		syncingAll,
 		initialFilter = null,
 		focusConnectionId = null,
 		selectedConnectionId = null,
 		mode = "compact",
+		detailOpen = false,
+		onShowAllJobs,
 		onAddNew,
 		onEnableManager,
 		onOpenConnection,
@@ -182,20 +191,32 @@
 	const socket = useTypedSocket()
 	const userCtx: { user?: SelectUser } = getContext("userCtx")
 	// Provided by `Layout` unconditionally (see ManagedConnectionView): the
-	// managed KoboldCPP row needs to know whether a mode and binary exist
-	// before it can honestly call the process "stopped".
+	// managed KoboldCPP row reads its install the same way the view does —
+	// `kcppInstallState`, one reading for both (plan 2026-09-24 A2).
 	const koboldCppSettingsCtx: KoboldCppSettingsCtx = $state(
 		getContext("koboldCppSettingsCtx") ?? { settings: undefined }
 	)
-	const kcppSetUp = $derived.by((): boolean | undefined => {
-		const settings = koboldCppSettingsCtx.settings
-		if (!settings) return undefined
-		const mode = settings.koboldCppManagedMode ?? null
-		if (mode === null) return false
-		if (mode === "managed") return !!settings.koboldCppManagedBinaryVariant
-		return true
-	})
+	const kcppInstall = $derived(
+		kcppInstallState(koboldCppSettingsCtx.settings)
+	)
+	/** The flag for the readiness rows; unknown until settings arrive. */
+	const koboldCppManagerEnabled = $derived(
+		kcppInstall === "loading"
+			? undefined
+			: !!koboldCppSettingsCtx.settings?.koboldCppManagerEnabled
+	)
 	const isAdmin = $derived(!!userCtx?.user?.isAdmin)
+	/** Android hides the local-runtime Add items, as the setup wizard does. */
+	const systemSettingsCtx: SystemSettingsCtx | undefined =
+		getContext("systemSettingsCtx")
+	/**
+	 * False in the Android app, where the server refuses to switch either
+	 * manager on: the Add menu's local-runtime items and the first-run
+	 * "On this machine" door both hide on it.
+	 */
+	const localRuntimes = $derived(
+		canRunLocalRuntimes(systemSettingsCtx?.settings)
+	)
 
 	let query = $state("")
 	/**
@@ -207,25 +228,12 @@
 	let filterOpen = $state(false)
 
 	/** List rows always carry ids; the guard is for the type. */
-	const allRows = $derived(
+	const rows = $derived(
 		connectionsList.filter((c): c is Row => c.id != null)
 	)
-	/**
-	 * ⚠ The LIST is folded; the summary is not. A capability default may name
-	 * the managed image connection, which this list hides inside its sibling —
-	 * resolving the summary against the folded rows would report that default
-	 * as unset.
-	 */
-	const rows = $derived(
-		foldManagedImage(
-			allRows,
-			(t) => t === CONNECTION_TYPE.KOBOLDCPP_MANAGED,
-			(t) => t === CONNECTION_TYPE.KOBOLDCPP_MANAGED_IMAGE
-		)
-	)
 	const totals = $derived(indexTotals(rows))
-	const summary = $derived(defaultsSummary(allRows, capabilityDefaults))
-	const byId = $derived(new Map(allRows.map((c) => [c.id, c])))
+	const summary = $derived(defaultsSummary(rows, capabilityDefaults))
+	const byId = $derived(new Map(rows.map((c) => [c.id, c])))
 
 	/**
 	 * The two kinds whose chip is TEAL: a runtime this pub manages, rather
@@ -333,20 +341,32 @@
 	// asks the manager anything, and an install with no local ONNX connection
 	// never wakes an embedding lane to ask whether it is resident.
 	const hasKcpp = $derived(
-		allRows.some((c) => endpointKind(c.type) === "koboldcpp-managed")
+		rows.some((c) => endpointKind(c.type) === "koboldcpp-managed")
 	)
 	const hasOllama = $derived(
-		allRows.some((c) => endpointKind(c.type) === "ollama")
+		rows.some((c) => endpointKind(c.type) === "ollama")
 	)
 	const hasOnnxEmbeddings = $derived(
-		allRows.some((c) => c.type === CONNECTION_TYPE.LOCAL_ONNX_EMBEDDINGS)
+		rows.some((c) => c.type === CONNECTION_TYPE.LOCAL_ONNX_EMBEDDINGS)
 	)
 	const hasOnnxNer = $derived(
-		allRows.some((c) => c.type === CONNECTION_TYPE.LOCAL_ONNX_NER)
+		rows.some((c) => c.type === CONNECTION_TYPE.LOCAL_ONNX_NER)
 	)
 
 	let kcpp = $state<KcppStatus | null>(null)
-	let ollama = $state<OllamaStatus | null>(null)
+	/**
+	 * Each Ollama connection's own host status, by connection id. One shared
+	 * status painted every Ollama row with the manager's answer (plan
+	 * 2026-09-24 B4); each answer now carries the connection it was for.
+	 */
+	const ollamaById = new SvelteMap<number, OllamaStatus>()
+	const ollamaIds = $derived(
+		rows
+			.filter((c) => endpointKind(c.type) === "ollama")
+			.map((c) => c.id)
+	)
+	/** Stable while the set of Ollama rows is, so the asks do not repeat. */
+	const ollamaIdsKey = $derived(ollamaIds.join(","))
 	let embeddingLane = $state<LaneStatus | null>(null)
 	let entityLane = $state<LaneStatus | null>(null)
 
@@ -387,29 +407,36 @@
 	}
 
 	function handleOllamaVersion(msg: Sockets.Ollama.Version.Response) {
-		ollama = {
+		const id = msg.connectionId
+		if (id == null) return
+		ollamaById.set(id, {
 			reachable: true,
-			version: (msg as any)?.version ?? null,
-			running: ollama?.running ?? []
-		}
+			version: msg.version ?? null,
+			running: ollamaById.get(id)?.running ?? []
+		})
 	}
-	function handleOllamaUnreachable() {
-		ollama = {
+	function handleOllamaUnreachable(msg: Sockets.ErrorResponse) {
+		const id = (msg as { connectionId?: number | null }).connectionId
+		if (id == null) return
+		ollamaById.set(id, {
 			reachable: false,
 			version: null,
-			running: ollama?.running ?? []
-		}
+			running: ollamaById.get(id)?.running ?? []
+		})
 	}
 	function handleOllamaRunning(
 		msg: Sockets.Ollama.ListRunningModels.Response
 	) {
-		ollama = {
-			reachable: ollama?.reachable ?? null,
-			version: ollama?.version ?? null,
+		const id = msg.connectionId
+		if (id == null) return
+		const previous = ollamaById.get(id)
+		ollamaById.set(id, {
+			reachable: previous?.reachable ?? null,
+			version: previous?.version ?? null,
 			running: (msg.runningModels ?? [])
 				.map((m: any) => m?.name)
 				.filter((n: unknown): n is string => typeof n === "string")
-		}
+		})
 	}
 
 	function handleVectorizationStatus(
@@ -555,7 +582,7 @@
 	 * same event arriving twice.
 	 */
 	$effect(() => downloads.subscribe({ admin: isAdmin }))
-	$effect(() => downloads.setOnnx(allRows))
+	$effect(() => downloads.setOnnx(rows))
 	const trayCount = $derived(downloads.inFlight)
 	const trayPercent = $derived(downloads.percent)
 
@@ -566,9 +593,11 @@
 		socket.emit("koboldcpp:getLoadedConfig", {})
 	})
 	$effect(() => {
-		if (!hasOllama || !isAdmin) return
-		socket.emit("ollama:version", {})
-		socket.emit("ollama:listRunningModels", {})
+		if (!ollamaIdsKey || !isAdmin) return
+		for (const id of untrack(() => ollamaIds)) {
+			socket.emit("ollama:version", { connectionId: id })
+			socket.emit("ollama:listRunningModels", { connectionId: id })
+		}
 	})
 	$effect(() => {
 		if (!hasOnnxEmbeddings || !isAdmin) return
@@ -593,15 +622,12 @@
 		return connectionRowStatus(connection as any, {
 			kind,
 			kcpp: kind === "koboldcpp-managed" ? kcpp : null,
-			ollama: kind === "ollama" ? ollama : null,
+			ollama:
+				kind === "ollama"
+					? (ollamaById.get(connection.id) ?? null)
+					: null,
 			lane: laneFor(connection),
-			// Only the managed KoboldCPP is DISABLED by its flag; an Ollama
-			// connection reaches its host whether the manager is on or not.
-			managerEnabled:
-				kind === "koboldcpp-managed"
-					? koboldCppManagerEnabled
-					: undefined,
-			kcppSetUp: kind === "koboldcpp-managed" ? kcppSetUp : undefined,
+			kcppInstall: kind === "koboldcpp-managed" ? kcppInstall : undefined,
 			syncing: syncingAll || syncingIds.has(connection.id),
 			timeAgo
 		})
@@ -611,6 +637,11 @@
 		switch (verb) {
 			case "start":
 				socket.emit("koboldcpp:startSubprocess", {})
+				return
+			case "start-offline":
+				// Switched off with the install kept: one call turns it back
+				// on and starts it (ruled 2026-09-24).
+				socket.emit("koboldcpp:startSubprocess", { enable: true })
 				return
 			case "stop":
 				socket.emit("koboldcpp:stopSubprocess", {})
@@ -630,7 +661,7 @@
 		}
 	}
 
-	// ── The readiness card ──────────────────────────────────────────────────
+	// ── Readiness (the status strip and jobs grid) ─────────────────────────
 	/**
 	 * What the summary could not know about a pair: whether its files are
 	 * here, whether the process holding it is up, and whether the manager that
@@ -668,7 +699,7 @@
 		buildJobTiles(summary.entries, readiness, sectionOrder)
 	)
 	$effect(() => {
-		onFacts?.({ chat, tiles: jobTiles, connectionCount: allRows.length })
+		onFacts?.({ chat, tiles: jobTiles, connectionCount: rows.length })
 	})
 
 	/**
@@ -705,7 +736,7 @@
 				if (
 					row.capability === "text->text" &&
 					row.state === "unset" &&
-					!allRows.some((c) =>
+					!rows.some((c) =>
 						servesCapability(c as any, "text->text")
 					)
 				) {
@@ -849,6 +880,7 @@
 			onGetModel={() => onGetModel()}
 			onAddByName={openAddByName}
 			canAddByName={addByNameTargets.length > 0}
+			canRunLocalRuntimes={localRuntimes}
 		/>
 		<div class="flex-1"></div>
 		<!--
@@ -932,7 +964,7 @@
 										</span>
 										{#if option.count !== undefined}
 											<span
-												class="text-surface-500 shrink-0 text-[11px]"
+												class="text-surface-600-400 shrink-0 text-[11px]"
 											>
 												{option.count}
 											</span>
@@ -974,9 +1006,10 @@
 			<p class="text-surface-600-400 text-sm">Loading connections…</p>
 		{:else if !rows.length}
 			<!-- Nothing is connected. The whole pane becomes the question that
-			     matters, and the three doors are the three answers. -->
+			     matters, and the doors are the answers (three; two on Android, which cannot
+			     run a local runtime). -->
 			<section class="panel-card flex flex-col gap-2">
-				<h3 class="funnel-display text-lg font-semibold">
+				<h3 class="[font-family:var(--typo-heading--font-family)] text-lg font-semibold">
 					Where should the writing happen?
 				</h3>
 				<p class="text-surface-600-400 text-sm">
@@ -986,22 +1019,24 @@
 				<!--
 					Each door names what it COSTS, in three chips.
 
-					The doors used to describe themselves ("Already installed
-					here or on another machine") and left the actual decision —
-					privacy, money, memory — unstated, so the one question a
-					first-timer is really asking had no answer on the screen
-					they were asked it on.
+					A door that describes itself ("Already installed here or on
+					another machine") leaves the actual decision — privacy,
+					money, memory — unstated, so the one question a first-timer
+					is really asking has no answer on the screen they are asked
+					it on.
 				-->
 				<div class="flex flex-col gap-1">
-					{@render doorRow(
-						Icons.Cpu,
-						"On this machine",
-						"KoboldCPP, installed and run by Serene Pub.",
-						"preset-tonal-primary",
-						"size-10",
-						onSetUpChat,
-						["Private", "Free", "Needs ~8 GB"]
-					)}
+					{#if localRuntimes}
+						{@render doorRow(
+							Icons.Cpu,
+							"On this machine",
+							"KoboldCPP, installed and run by Serene Pub.",
+							"preset-tonal-primary",
+							"size-10",
+							onSetUpChat,
+							["Private", "Free", "Needs ~8 GB"]
+						)}
+					{/if}
 					{@render doorRow(
 						Icons.Cloud,
 						"A service",
@@ -1014,24 +1049,31 @@
 					{@render doorRow(
 						Icons.Server,
 						"Something I already run",
-						"Ollama, LM Studio, llama.cpp — here or on another machine.",
+						"Ollama, LM Studio, llama.cpp, KoboldCPP — here or on another machine.",
 						"preset-tonal-surface",
 						"size-10",
-						() => onEnableManager("ollama"),
+						// The picker, narrowed to local servers — this door once
+						// switched the Ollama manager on whichever of the three
+						// the person ran (ruled 2026-09-24).
+						() => onAddNew({ category: "local" }),
 						["Private", "Free"]
 					)}
 				</div>
 				<hr class="border-surface-300-700 my-1" />
 				<p class="text-surface-600-400 text-xs">
 					Know what you want?
-					<button type="button" class="anchor" onclick={onAddNew}>
+					<button
+						type="button"
+						class="anchor"
+						onclick={() => onAddNew()}
+					>
 						Add a connection
 					</button>
 					lists every service and preset.
 				</p>
 			</section>
 			<section class="panel-card flex flex-col gap-1">
-				<h3 class="text-surface-500 mb-1 text-xs">Later, optionally</h3>
+				<h3 class="text-surface-600-400 mb-1 text-xs">Later, optionally</h3>
 				{@render doorRow(
 					Icons.Image,
 					"Images",
@@ -1072,14 +1114,54 @@
 				}}
 			/>
 
-			<!-- Dock only: the detail pane carries it at desk. -->
+			<!-- The dock carries the grid. At desk the empty detail pane does,
+			     and while something else is open there the jobs are a strip
+			     of chips here instead — never out of reach. -->
 			{#if mode !== "desk"}
 				<JobsGrid tiles={jobTiles} onOpen={onOpenCapability} />
+			{:else if detailOpen && jobTiles.length}
+				<nav class="flex flex-wrap gap-1.5" aria-label="Other jobs">
+					{#each jobTiles.slice(0, 4) as tile (tile.capability)}
+						{@const TileIcon =
+							((Icons as any)[tile.icon ?? ""] as any) ??
+							Icons.Cable}
+						<button
+							type="button"
+							class="bg-surface-200-800 hover:preset-tonal-primary flex min-h-8 items-center gap-1.5 rounded-full px-2.5 text-xs"
+							onclick={() => onOpenCapability(tile.capability)}
+							title={tile.problem ??
+								tile.modelName ??
+								`${tile.label}: not set up`}
+						>
+							<span
+								class="size-1.5 shrink-0 rounded-full {tile.problem
+									? 'bg-warning-500'
+									: tile.modelName
+										? 'bg-success-500'
+										: 'bg-surface-400-600'}"
+								aria-hidden="true"
+							></span>
+							<TileIcon size={12} aria-hidden="true" />
+							{tile.label}
+						</button>
+					{/each}
+					{#if jobTiles.length > 4 && onShowAllJobs}
+						<!-- The same cap the dock grid keeps: four, then the
+						     rest behind one press — the full grid in the pane. -->
+						<button
+							type="button"
+							class="text-surface-600-400 hover:preset-tonal-primary flex min-h-8 items-center rounded-full px-2.5 text-xs"
+							onclick={onShowAllJobs}
+						>
+							{jobTiles.length - 4} more
+						</button>
+					{/if}
+				</nav>
 			{/if}
 
 			{#if filter === "defaults"}
 				<DefaultsLedger
-					rows={allRows}
+					rows={rows}
 					{capabilityDefaults}
 					onOpenModel={(connection, model) =>
 						onOpenModel(connection as Row, model as ModelOf)}
@@ -1193,7 +1275,7 @@
 			<Dialog.Content
 				class="card bg-surface-100-900 w-full max-w-md space-y-4 p-6 shadow-xl"
 			>
-				<h2 class="funnel-display text-lg font-semibold">
+				<h2 class="[font-family:var(--typo-heading--font-family)] text-lg font-semibold">
 					Add a model by name
 				</h2>
 				<p class="text-surface-600-400 text-xs">
@@ -1217,7 +1299,7 @@
 						placeholder="Pick a connection"
 					/>
 					<label class="flex flex-col gap-1">
-						<span class="text-surface-500 text-xs">
+						<span class="text-surface-600-400 text-xs">
 							Model identifier
 						</span>
 						<input
@@ -1227,7 +1309,7 @@
 						/>
 					</label>
 					<label class="flex flex-col gap-1">
-						<span class="text-surface-500 text-xs">
+						<span class="text-surface-600-400 text-xs">
 							Display name (optional)
 						</span>
 						<input

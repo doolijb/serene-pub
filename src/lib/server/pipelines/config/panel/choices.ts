@@ -25,7 +25,7 @@ import { promptPoolKeyFor } from "$lib/server/pipelines/entities/promptPool"
 import { storedCapabilities } from "$lib/server/pipelines/runtime/capabilityGuard"
 import { contextPoolKeyFor } from "$lib/shared/pipelines/poolKey"
 import {
-	acceptedEngines,
+	acceptedEnginesOf,
 	languageOf
 } from "$lib/shared/pipelines/templateEngines"
 import { type Decl } from "$lib/server/pipelines/config/panel/types"
@@ -370,7 +370,7 @@ function contextChoices(
 	d: Decl,
 	nodeDefinitionId: string
 ): ChoiceList {
-	const engines = acceptedEngines(d)
+	const engines = acceptedEnginesOf(d)
 	const POOL_ORDER = { usedHere: 0, shipped: 1, alsoFits: 2 } as const
 	const rank = (g: unknown) =>
 		POOL_ORDER[g as keyof typeof POOL_ORDER] ?? POOL_ORDER.alsoFits

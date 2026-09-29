@@ -24,6 +24,9 @@ export interface SetupChatConnection {
 		id: number
 		name: string
 		missingSince?: string | null
+		enabled?: boolean
+		/** The server's pair judgement, off the list row. */
+		satisfiableCapabilities?: readonly string[] | null
 	}[]
 }
 
@@ -58,6 +61,26 @@ export function presentModels(
 }
 
 /**
+ * Present models the server judges able to chat, switched on. A model the
+ * list says nothing about (no judgement yet) is not ruled out.
+ *
+ * ⚠ The managed KoboldCPP lists its image and embedding models beside the
+ * chat ones, and "the first present model" was sometimes one of those; the
+ * server refused registering it for chat, which surfaced as a failure toast
+ * on the step that had just succeeded.
+ */
+export function chatModels(
+	connection: SetupChatConnection | null
+): SetupChatConnection["models"] {
+	return presentModels(connection).filter(
+		(m) =>
+			m.enabled !== false &&
+			(m.satisfiableCapabilities == null ||
+				m.satisfiableCapabilities.includes("text->text"))
+	)
+}
+
+/**
  * The runtime is ready when it can be asked to load something: the flow
  * chooses managed mode itself, so external mode also counts once chosen — a
  * person who picked it in the managed view is past this step.
@@ -76,14 +99,14 @@ export function setupChatStep(facts: SetupChatFacts): SetupChatStep {
 
 /**
  * The pair to register as the chat default, or null: the connection's first
- * present model, only while nothing is registered at all.
+ * present CHAT model, only while nothing is registered at all.
  */
 export function firstModelToRegister(
 	facts: SetupChatFacts
 ): { connectionId: number; model: { id: number; name: string } } | null {
 	if (facts.chatDefault) return null
 	if (!facts.connection) return null
-	const [first] = presentModels(facts.connection)
+	const [first] = chatModels(facts.connection)
 	if (!first) return null
 	return {
 		connectionId: facts.connection.id,

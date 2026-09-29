@@ -13,7 +13,7 @@
  *       "panels": [ { "id": "map", "entry": "ui/map.html", "title": "Map" } ]
  *     }
  *
- * Read tolerantly like `engines`/`nodeDefinitions` — the stored manifest is the one
+ * Read tolerantly like `templateEngines`/`nodeDefinitions` — the stored manifest is the one
  * source of truth (F6), and a malformed declaration is a missing surface, not
  * a crash.
  *
@@ -33,7 +33,8 @@
  * vocabulary. No grant, no network: the frame cannot phone anywhere.
  */
 
-import { eq, and } from "drizzle-orm"
+import { eq, and, ne, notLike, type SQL } from "drizzle-orm"
+import { AUTHORED_OWNER_LABEL } from "$lib/shared/widgets/authoredOwner"
 import {
 	panelToWidgetDecl,
 	pluginWidgetId,
@@ -219,7 +220,7 @@ export async function enabledPluginWidgetIds(db: Db): Promise<Set<string>> {
 			manifest: schema.plugins.manifest
 		})
 		.from(schema.plugins)
-		.where(eq(schema.plugins.enabled, true))
+		.where(and(eq(schema.plugins.enabled, true), notCoreRow()))
 	const ids = new Set<string>()
 	for (const r of rows)
 		for (const w of surfacesOf(r.manifest, r.pluginId).panels)
@@ -261,6 +262,9 @@ export async function seatableWidgetIds(
 		for (const p of declared)
 			if (p && typeof p.id === "string") ids.add(p.id)
 	for (const id of await enabledPluginWidgetIds(db)) ids.add(id)
+	// And every offered authored component's (C6), which a session seats too.
+	const { offeredAuthoredWidgetIds } = await import("$lib/server/components/offer")
+	for (const id of await offeredAuthoredWidgetIds(db)) ids.add(id)
 	return ids
 }
 
@@ -280,6 +284,31 @@ export async function seatableWidgetIds(
 const PLUGIN_SLUG = /^[a-z0-9]+([.-][a-z0-9]+)*$/
 
 export const isPluginSlug = (id: string): boolean => PLUGIN_SLUG.test(id)
+
+/**
+ * The reserved id's filter, for EVERY read that turns `plugins` rows into
+ * something the app serves, offers or registers — a frame document, a widget,
+ * a page, an engine, a subscription, a layout, a preset, a template, a tool,
+ * a swap: a row stored under `core` before installs refused it
+ * (`pluginIdFindings`) is invisible to all of them, so nothing answers as the
+ * app's own owner — which a page trusts — that is not core. The plugins page
+ * still lists the row, for an administrator to remove.
+ *
+ * Here, beside the slug grammar, because this module is light enough for
+ * every reader to import (the store reaches the database module).
+ * `and(eq(plugins.enabled, true), notCoreRow())` where a read takes the
+ * enabled set.
+ */
+export function notCoreRow(): SQL {
+	// And never an `authored` id (C6): that namespace is the owner of an
+	// authored component, so a row stored under it before installs refused it
+	// would share that component's UI worker. One filter, both reserved ids.
+	return and(
+		ne(schema.plugins.pluginId, "core"),
+		ne(schema.plugins.pluginId, AUTHORED_OWNER_LABEL),
+		notLike(schema.plugins.pluginId, `${AUTHORED_OWNER_LABEL}.%`)
+	)!
+}
 
 /** The frame document URL for a stored surface entry. */
 export const frameSrc = (pluginId: string, entry: string): string =>

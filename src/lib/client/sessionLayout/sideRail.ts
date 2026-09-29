@@ -328,3 +328,34 @@ export function collapsedOrder(units: OrderUnit[]): string[] {
 		)
 		.map((u) => u.key)
 }
+
+/**
+ * Roving focus over a rail of icons (ported from the retired v2 stage,
+ * 2026-09-27): a rail is ONE tab stop, and the arrow keys, Home and End move
+ * within it — the WAI-ARIA toolbar pattern, instead of one tab stop per icon.
+ * Both arrow axes step, so the same rail reads the same whether it is drawn
+ * as a column or, on a phone, as a row. Wraps at both ends.
+ *
+ * Returns the index to focus, or `null` for a key the rail does not handle
+ * (which the caller must then leave alone, so Tab and Enter still work).
+ */
+export function rovingStep(
+	key: string,
+	index: number,
+	count: number
+): number | null {
+	if (count <= 0) return null
+	let next: number
+	if (key === "ArrowDown" || key === "ArrowRight") next = index + 1
+	else if (key === "ArrowUp" || key === "ArrowLeft") next = index - 1
+	else if (key === "Home") next = 0
+	else if (key === "End") next = count - 1
+	else return null
+	return (next + count) % count
+}
+
+/** The index that holds a rail's tab stop, kept inside a rail that shrank. */
+export function rovingStop(remembered: number | undefined, count: number): number {
+	if (count <= 0) return 0
+	return Math.min(Math.max(0, remembered ?? 0), count - 1)
+}

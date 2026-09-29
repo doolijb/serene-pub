@@ -37,7 +37,6 @@
 	import { getContext } from "svelte"
 	import { useInterest } from "$lib/client/sockets/interest.svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
-	import { toaster } from "$lib/client/utils/toaster"
 	import { entryTypeScope } from "$lib/client/lorebooks/entrySections"
 
 	type Explanation = NonNullable<
@@ -91,16 +90,6 @@
 	>()
 
 	/**
-	 * A lever was refused. The entry handlers refuse by throwing, so this is
-	 * `register()`'s synthesised `entries:update:error` — and it is shown
-	 * rather than swallowed, because the button will otherwise sit at its old
-	 * value with no account of why.
-	 */
-	const showWriteRefusal = (res: { error?: string }) => {
-		if (res?.error) toaster.error({ title: res.error })
-	}
-
-	/**
 	 * A lever landed. The row is patched from the answer rather than from what
 	 * was asked for: the handler is what decides, and a button that painted
 	 * itself green before the write returned would be the panel disagreeing
@@ -117,18 +106,18 @@
 	}
 
 	/**
-	 * Both BARE, deliberately. `entries:update` IS scoped — on the entry's
+	 * BARE, deliberately. `entries:update` IS scoped — on the entry's
 	 * `lorebookId` — and this panel does not know one: it is handed an
 	 * explanation whose rows carry `typeId:id` and nothing else, so there is no
 	 * book to key on. The reply is matched by the `typeId:id` it comes back
-	 * with, which is what `onEntryUpdate` does. `entries:update:error` has no
-	 * scope at all and is never gated (plan ruling 2).
+	 * with, which is what `onEntryUpdate` does.
+	 *
+	 * ⚠ No `entries:update:error` listener. A refused lever is toasted by
+	 * Layout's catch-all (the event is not in HANDLED_ERROR_EVENTS), and a
+	 * listener here toasted it a second time — and toasted every other
+	 * caller's refused entry write too, since the error carries no row.
 	 */
 	useInterest<"entries:update">("entries:update", onEntryUpdate)
-	useInterest<"entries:update:error">(
-		"entries:update:error",
-		showWriteRefusal
-	)
 
 	// A new explanation is a new set of facts: nothing carried over from the
 	// last one is true of this one, least of all a lever recorded against a
@@ -369,9 +358,7 @@
 							: STOP_KIND[stop.kind]}
 					>
 						<code class="font-mono">{stop.value}</code>
-						<span
-							class="text-[0.62rem] tracking-wider uppercase opacity-70"
-						>
+						<span class="text-xs opacity-70">
 							{stop.kind}
 						</span>
 					</span>
@@ -384,7 +371,7 @@
 						)}"
 					>
 						<code class="font-mono">{stop.value}</code>
-						<span class="text-[0.62rem] tracking-wider uppercase">
+						<span class="text-xs">
 							{stop.kind}
 						</span>
 					</span>
@@ -448,7 +435,7 @@
 							type="button"
 							class="chip rounded-full px-2.5 py-1 text-xs {outcomeFilter ===
 							o.key
-								? 'preset-filled-primary-500'
+								? 'preset-tonal-primary'
 								: 'preset-tonal-surface'}"
 							onclick={() =>
 								(outcomeFilter =
@@ -519,9 +506,7 @@
 									<span class="text-sm font-medium">
 										{row.title}
 									</span>
-									<span
-										class="text-surface-600-400 text-[0.68rem] tracking-wider uppercase"
-									>
+									<span class="text-surface-600-400 text-xs">
 										{row.sourceLabel}
 									</span>
 									<span
@@ -529,7 +514,7 @@
 											? 'preset-tonal-primary'
 											: row.markerKind === 'none'
 												? 'preset-tonal-surface opacity-70'
-												: 'preset-tonal-surface'} rounded-full px-2 py-0.5 text-[0.68rem]"
+												: 'preset-tonal-surface'} rounded-full px-2 py-0.5 text-[11px]"
 									>
 										{row.marker}
 									</span>
@@ -545,13 +530,13 @@
 									     badge nothing verified. -->
 									{#if row.provenance === "changed"}
 										<span
-											class="preset-tonal-warning rounded-full px-2 py-0.5 text-[0.68rem]"
+											class="preset-tonal-warning rounded-full px-2 py-0.5 text-[11px]"
 										>
 											Edited since
 										</span>
 									{:else if row.provenance === "deleted"}
 										<span
-											class="preset-tonal-error rounded-full px-2 py-0.5 text-[0.68rem]"
+											class="preset-tonal-error rounded-full px-2 py-0.5 text-[11px]"
 										>
 											Gone since
 										</span>
@@ -630,7 +615,7 @@
 												</span>
 												{#if c.value != null}
 													<span
-														class="text-surface-600-400 font-mono text-[0.68rem]"
+														class="text-surface-600-400 font-mono text-[11px]"
 													>
 														{c.value.toFixed(3)}
 													</span>
@@ -646,7 +631,7 @@
 
 								{#if row.why?.length || row.reason}
 									<p
-										class="text-surface-600-400 font-mono text-[0.68rem]"
+										class="text-surface-600-400 font-mono text-[11px]"
 									>
 										{[...(row.why ?? []), row.reason]
 											.filter(Boolean)
@@ -669,7 +654,7 @@
 										<button
 											type="button"
 											class="btn btn-sm {st.constant
-												? 'preset-filled-primary-500'
+												? 'preset-tonal-primary'
 												: 'preset-tonal-surface'}"
 											title="An always-included entry goes in every time, without being judged"
 											onclick={() =>
@@ -745,7 +730,7 @@
 						>
 							<thead>
 								<tr
-									class="text-surface-600-400 border-surface-300-700 border-b text-left text-[0.68rem] tracking-wider uppercase"
+									class="text-surface-600-400 border-surface-300-700 border-b text-left text-xs"
 								>
 									<th class="px-2 py-1.5">Source</th>
 									<th class="px-2 py-1.5 text-right">

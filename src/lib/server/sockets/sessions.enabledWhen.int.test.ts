@@ -206,14 +206,25 @@ async function character(userId: number, name: string) {
 	return row!.id
 }
 
+/**
+ * A session tracks only what its genre enables (ruled 2026-09-25), and Chat
+ * enables nothing and denies anything more: a test whose run moves the
+ * weather runs as an Adventure, whose baseline carries Weather — or the
+ * write is refused and nothing moves.
+ */
+async function weatherWhenGenre() {
+	const { adventureGenre } = await import("@serene-pub/core-catalog")
+	return adventureGenre
+}
+
 /** A chat session with an owner, a guest, and a cast character Tom nobody portrays. */
-async function sessionWithTom(tag: string) {
+async function sessionWithTom(tag: string, genreId: string = CHAT) {
 	const schema = await import("$lib/server/db/schema")
 	const owner = await makeUser(`${tag}-owner`)
 	const guest = await makeUser(`${tag}-guest`)
 	const [session] = await testDb
 		.insert(schema.sessions)
-		.values({ userId: owner.id, isGroup: false, genreId: CHAT })
+		.values({ userId: owner.id, isGroup: false, genreId })
 		.returning()
 	await testDb
 		.insert(schema.sessionGuests)
@@ -223,7 +234,6 @@ async function sessionWithTom(tag: string) {
 		sessionId: session!.id,
 		characterId: tom,
 		isActive: true,
-		visibility: "visible"
 	})
 	return { owner, guest, session: session!, tom }
 }
@@ -279,7 +289,8 @@ async function publishAskAndAnswer(tag: string, tom: number) {
 					{
 						key: askFn,
 						venue: { kind: "composer" },
-						label: { en: "Ask" }
+						label: { en: "Ask" },
+						description: { en: "A test action." }
 					}
 				]
 			}
@@ -311,6 +322,7 @@ async function publishAskAndAnswer(tag: string, tom: number) {
 							act: ["participant"]
 						},
 						label: { en: "Answer" },
+						description: { en: "A test action." },
 						enabledWhen: {
 							on: "session.generating",
 							equals: false,
@@ -370,7 +382,7 @@ const all = (v?: { primary: any[]; overflow: any[] }) => [
 describe("W1 · the oracle road", () => {
 	test("a form's answer with a session.generating predicate is admitted while its own tree runs, and refused beside a second root", async () => {
 		const schema = await import("$lib/server/db/schema")
-		const { sessionsTriggerFunctionHandler } = await import("./sessions")
+		const { sessionsFireActionHandler } = await import("./sessions")
 		const runRegistry = await import(
 			"$lib/server/pipelines/runtime/runRegistry"
 		)
@@ -381,7 +393,7 @@ describe("W1 · the oracle road", () => {
 		)
 		modelAnswer = '{"choice":"maybe"}'
 
-		const asked = await sessionsTriggerFunctionHandler.handler(
+		const asked = await sessionsFireActionHandler.handler(
 			fakeSocket(owner.id),
 			{
 				sessionId: session.id,
@@ -428,7 +440,7 @@ describe("W1 · the oracle road", () => {
 			kind: "action"
 		})
 		try {
-			const again = await sessionsTriggerFunctionHandler.handler(
+			const again = await sessionsFireActionHandler.handler(
 				fakeSocket(owner.id),
 				{
 					sessionId: session.id,
@@ -558,7 +570,7 @@ describe("S-A2 / W-A2 · a parked run pushes when it settles, and never while it
 		decide: (reviewId: string, ownerId: number, runId: string) => void,
 		ended: "ok" | "halt" | "cancelled"
 	) {
-		const { sessionsTriggerFunctionHandler } = await import("./sessions")
+		const { sessionsFireActionHandler } = await import("./sessions")
 		const { pendingReviewsFor } = await import(
 			"$lib/server/pipelines/runtime/reviewGate"
 		)
@@ -572,7 +584,7 @@ describe("S-A2 / W-A2 · a parked run pushes when it settles, and never while it
 			emitted.filter((e) => e.event === "sessions:actions")
 		const runId = `echo-${tag}`
 
-		const ack = await sessionsTriggerFunctionHandler.handler(
+		const ack = await sessionsFireActionHandler.handler(
 			fakeSocket(owner.id, io),
 			{
 				sessionId: session.id,
@@ -662,7 +674,7 @@ describe("S-A2 / W-A2 · a parked run pushes when it settles, and never while it
 
 	test("a grandchild parked at review pushes from its own settle, after every root has pushed (W-A2)", async () => {
 		const schema = await import("$lib/server/db/schema")
-		const { sessionsTriggerFunctionHandler } = await import("./sessions")
+		const { sessionsFireActionHandler } = await import("./sessions")
 		const { pendingReviewsFor, resolveReview } = await import(
 			"$lib/server/pipelines/runtime/reviewGate"
 		)
@@ -677,7 +689,7 @@ describe("S-A2 / W-A2 · a parked run pushes when it settles, and never while it
 		const pushes = () =>
 			emitted.filter((e) => e.event === "sessions:actions")
 
-		const asked = await sessionsTriggerFunctionHandler.handler(
+		const asked = await sessionsFireActionHandler.handler(
 			fakeSocket(owner.id, io),
 			{
 				sessionId: session.id,
@@ -730,9 +742,9 @@ describe("W-A3 · a reply that moves state announces it after the list", () => {
 		const { saveDocument } = await import(
 			"$lib/server/pipelines/boot/store"
 		)
-		const { triggerGenerateMessageHandler } = await import("./sessions")
-		const { owner, guest, session, tom } =
-			await sessionWithTom("state-reply")
+		const { sessionsFireTurnHandler } = await import("./sessions")
+		const weather = await weatherWhenGenre()
+		const { owner, guest, session, tom } = await sessionWithTom("state-reply", weather.id)
 
 		// A reply spec of the test's own: it moves state (a proposal for the
 		// world's weather), then writes Tom's line — bound for this session.
@@ -743,7 +755,7 @@ describe("W-A3 · a reply that moves state announces it after the list", () => {
 				taxonomy: { role: "primary"}
 			})
 				.inlet("input", C.userMessage.v1(), {
-					genre: chatGenre,
+					genre: weather,
 					event: sessionEvents.messageRespond
 				})
 				.task("state", ($) =>
@@ -778,7 +790,7 @@ describe("W-A3 · a reply that moves state announces it after the list", () => {
 		await testDb.insert(schema.pipelineBindings).values({
 			scopeKind: "session",
 			scopeId: session.id,
-			genreId: CHAT,
+			genreId: weather.id,
 			subject: "core:event/message-respond@1",
 			specId: specRow!.id,
 			updatedBy: owner.id
@@ -787,15 +799,19 @@ describe("W-A3 · a reply that moves state announces it after the list", () => {
 		const { io, emitted } = recordingIo([owner.id, guest.id], session.id)
 		const ownEmit = (event: string, payload: any) =>
 			emitted.push({ room: "caller", event, payload })
-		const res = await triggerGenerateMessageHandler.handler(
+		const res = await sessionsFireTurnHandler.handler(
 			fakeSocket(owner.id, io),
-			{ sessionId: session.id, characterId: tom, once: true } as any,
+			{
+				sessionId: session.id,
+				entry: { ref: `character:${tom}`, via: "pick" }
+			} as any,
 			ownEmit
 		)
 		expect((res as any)?.error).toBeUndefined()
 		expect(
 			(await runsOf(session.id)).map((r) => `${r.specSlug}:${r.outcome}`).sort()
-		).toEqual(["core:spec/chat-turn-order:ok", `${specId}:ok`].sort())
+			// The genre's own turn-order spec runs beside the test's (an Adventure's).
+		).toEqual(["core:spec/adventure-turn-order:ok", `${specId}:ok`].sort())
 
 		// The state moved and was announced — after the run left the
 		// registry and the list went out, never before.
@@ -836,8 +852,9 @@ describe("pass 3 · the trigger road announces state whatever the outcome", () =
 		const { saveDocument } = await import(
 			"$lib/server/pipelines/boot/store"
 		)
-		const { sessionsTriggerFunctionHandler } = await import("./sessions")
-		const { owner, guest, session } = await sessionWithTom("state-halt")
+		const { sessionsFireActionHandler } = await import("./sessions")
+		const weather = await weatherWhenGenre()
+		const { owner, guest, session } = await sessionWithTom("state-halt", weather.id)
 
 		// Moves the weather, writes a line, then reads a form's answer a
 		// composer press never carries — the run halts at its last node
@@ -856,13 +873,14 @@ describe("pass 3 · the trigger road announces state whatever the outcome", () =
 						{
 							key: fn,
 							venue: { kind: "composer" },
-							label: { en: "Halt" }
+							label: { en: "Halt" },
+							description: { en: "A test action." }
 						}
 					]
 				}
 			})
 				.inlet("input", C.userMessage.v1(), {
-					genre: chatGenre,
+					genre: weather,
 					event: sessionEvents.sessionAction
 				})
 				.task("state", ($) =>
@@ -900,7 +918,7 @@ describe("pass 3 · the trigger road announces state whatever the outcome", () =
 		const { io, emitted } = recordingIo([owner.id, guest.id], session.id)
 		const ownEmit = (event: string, payload: any) =>
 			emitted.push({ room: "caller", event, payload })
-		const res = await sessionsTriggerFunctionHandler.handler(
+		const res = await sessionsFireActionHandler.handler(
 			fakeSocket(owner.id, io),
 			{ sessionId: session.id, action: `${specId}#${fn}` },
 			ownEmit

@@ -112,7 +112,7 @@
 			<button
 				class="chip rounded-full px-2.5 py-1 text-xs {outcomeFilter ===
 				o
-					? 'preset-filled-primary-500'
+					? 'preset-tonal-primary'
 					: 'preset-tonal-surface'}"
 				onclick={() => (outcomeFilter = outcomeFilter === o ? null : o)}
 			>
@@ -176,7 +176,7 @@
 
 {#if openRunId}
 	<section
-		class="card preset-filled-surface-100-900 flex flex-col gap-2 p-3"
+		class="panel-card flex flex-col gap-2"
 		aria-label="Run receipt"
 	>
 		<div class="flex items-baseline gap-2">
@@ -197,7 +197,7 @@
 
 		<!-- The candidate-level half of the same receipt. The inspector says
 		     which nodes ran; this says what they decided about each entry,
-		     which is the question the stage rows cannot answer (design §9). -->
+		     which is the question the step rows cannot answer (design §9). -->
 		<RetrievalPanel runId={openRunId} />
 		<!-- And the same question asked of the whole session rather than of
 		     this turn: which entries have ever reached a prompt here. A

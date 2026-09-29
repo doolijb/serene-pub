@@ -13,6 +13,7 @@
 		stageFilesToServer,
 		type FolderPickResult
 	} from "$lib/client/utils/sillyTavernFolderImport"
+	import { SILLYTAVERN_DIRS } from "$lib/shared/utils/sillyTavernPaths"
 
 	const userCtx: UserCtx = getContext("userCtx")
 	const socket = useTypedSocket()
@@ -271,19 +272,24 @@
 			lorebooks: scanResults.lorebooks.filter((l) => l.selected)
 		}
 
-		// Only now upload session history — individual sessions the user selected,
-		// plus all group session history if any group session is selected (mapping
-		// a selected group to its exact history filename requires re-parsing
-		// its JSON, so we just upload the whole small "group sessions/" set).
+		// Only now upload SillyTavern chat history — the chats (under ST's own
+		// `chats/` folder) the user selected, plus all of ST's `group chats/`
+		// if any group is selected (mapping a selected group to its exact
+		// history filename requires re-parsing its JSON, so we just upload
+		// the whole small set). The folder names are SillyTavern's (R5).
 		const selectedSessionPaths = new Set(
-			selectedData.sessions.map((c) => `sessions/${c.filename}`)
+			selectedData.sessions.map(
+				(c) => `${SILLYTAVERN_DIRS.chats}/${c.filename}`
+			)
 		)
 		const wantsGroupSessionHistory = selectedData.groupSessions.length > 0
 		const filesToUpload = pickedFolder.deferredFiles.filter(
 			(f) =>
 				selectedSessionPaths.has(f.relativePath) ||
 				(wantsGroupSessionHistory &&
-					f.relativePath.startsWith("group sessions/"))
+					f.relativePath.startsWith(
+						`${SILLYTAVERN_DIRS.groupChats}/`
+					))
 		)
 
 		try {
@@ -420,7 +426,7 @@
 				<Icons.ArrowLeft size={20} />
 			</button>
 			<div class="flex-1">
-				<h1 class="text-2xl font-bold">Import from SillyTavern</h1>
+				<h1 class="[font-family:var(--typo-heading--font-family)] text-2xl font-semibold">Import from SillyTavern</h1>
 				<p class="text-surface-700-300 mt-1 text-sm">
 					Import your characters, personas, sessions, and lorebooks
 					from SillyTavern.
@@ -430,13 +436,13 @@
 
 		<div class="flex flex-col gap-6">
 			{#if importComplete}
-				<!-- Import Complete Confirmation -->
+				<!-- Import complete Confirmation -->
 				<div class="rounded p-6 text-center">
 					<Icons.CheckCircle
 						size={48}
 						class="text-success-500 mx-auto mb-4"
 					/>
-					<h2 class="mb-2 text-xl font-bold">Import Complete</h2>
+					<h2 class="mb-2 text-xl font-bold">Import complete</h2>
 					<p class="text-surface-700-300 mb-4 text-sm">
 						{importComplete.message}
 					</p>
@@ -474,7 +480,7 @@
 							onclick={importAnother}
 						>
 							<Icons.FolderOpen size={16} />
-							Import Another Folder
+							Import another folder
 						</button>
 					</div>
 				</div>
@@ -488,24 +494,27 @@
 							size={20}
 							class="text-warning-500"
 						/>
-						Important Information
+						Important information
 					</h3>
 					<ul
 						class="text-surface-700 dark:text-surface-300 list-inside list-disc space-y-1 text-sm"
 					>
 						<li>
 							<strong>What's imported:</strong>
-							Characters and their expression sprites, personas, sessions
-							(including group sessions), and lorebooks
+							Characters and their expression sprites, personas and
+							their avatars, chats (including group chats), and
+							lorebooks (SillyTavern's World Info)
 						</li>
 						<li>
 							<strong>What's NOT imported:</strong>
-							Branching narratives/session trees, session backgrounds,
-							user avatars, extensions data
+							The links between chat branches and checkpoints (each
+							branch imports as its own session), a group's earlier
+							chats (only its current one imports), chat backgrounds,
+							extensions data
 						</li>
 						<li>
-							<strong>Session format:</strong>
-							Both individual and group sessions are imported into
+							<strong>Chats become sessions:</strong>
+							Both individual and group chats are imported into
 							Serene Pub's unified session system
 						</li>
 						<li>
@@ -535,7 +544,7 @@
 					>
 						<Icons.FolderOpen size={16} />
 						{pickedFolder
-							? "Change Folder"
+							? "Change folder"
 							: "Choose SillyTavern Folder"}
 					</button>
 					{#if pickedFolder}
@@ -544,7 +553,7 @@
 								.files.length !== 1
 								? "s"
 								: ""} ({pickedFolder.scanFiles.length} to scan now,
-							{pickedFolder.deferredFiles.length} session log file{pickedFolder
+							{pickedFolder.deferredFiles.length} chat history file{pickedFolder
 								.deferredFiles.length !== 1
 								? "s"
 								: ""} uploaded only for what you select to import)
@@ -592,15 +601,15 @@
 							{uploadProgress ? "Uploading..." : "Processing..."}
 						{:else}
 							<Icons.Brain size={16} />
-							Process Data
+							Process data
 						{/if}
 					</button>
 				</div>
 
-				<!-- Scan Results -->
+				<!-- Scan results -->
 				{#if scanResults}
 					<div class="bg-surface-200-800 rounded p-4">
-						<h3 class="mb-4 text-lg font-semibold">Scan Results</h3>
+						<h3 class="mb-4 text-lg font-semibold">Scan results</h3>
 
 						<!-- Characters -->
 						<div class="mb-6">
@@ -616,7 +625,7 @@
 									onclick={() =>
 										toggleAllInCategory("characters")}
 								>
-									Toggle All
+									Toggle all
 								</button>
 							</div>
 							<div class="max-h-48 space-y-1 overflow-y-auto">
@@ -661,7 +670,7 @@
 									onclick={() =>
 										toggleAllInCategory("personas")}
 								>
-									Toggle All
+									Toggle all
 								</button>
 							</div>
 							<div class="max-h-48 space-y-1 overflow-y-auto">
@@ -687,11 +696,11 @@
 							</div>
 						</div>
 
-						<!-- Individual Sessions -->
+						<!-- Individual sessions -->
 						<div class="mb-6">
 							<div class="mb-2 flex items-center justify-between">
 								<h4 class="font-semibold">
-									Individual Sessions ({scanResults.sessions.filter(
+									Individual sessions ({scanResults.sessions.filter(
 										(c) => c.selected
 									).length}/{scanResults.sessions.length})
 								</h4>
@@ -701,7 +710,7 @@
 									onclick={() =>
 										toggleAllInCategory("sessions")}
 								>
-									Toggle All
+									Toggle all
 								</button>
 							</div>
 							<div class="max-h-48 space-y-1 overflow-y-auto">
@@ -746,11 +755,11 @@
 							</div>
 						</div>
 
-						<!-- Group Sessions -->
+						<!-- Group sessions -->
 						<div class="mb-6">
 							<div class="mb-2 flex items-center justify-between">
 								<h4 class="font-semibold">
-									Group Sessions ({scanResults.groupSessions.filter(
+									Group sessions ({scanResults.groupSessions.filter(
 										(g) => g.selected
 									).length}/{scanResults.groupSessions
 										.length})
@@ -761,7 +770,7 @@
 									onclick={() =>
 										toggleAllInCategory("groupSessions")}
 								>
-									Toggle All
+									Toggle all
 								</button>
 							</div>
 							<div class="max-h-48 space-y-1 overflow-y-auto">
@@ -820,7 +829,7 @@
 									onclick={() =>
 										toggleAllInCategory("lorebooks")}
 								>
-									Toggle All
+									Toggle all
 								</button>
 							</div>
 							<div class="max-h-48 space-y-1 overflow-y-auto">
@@ -875,7 +884,7 @@
 
 							<button
 								type="button"
-								class="btn preset-filled-success-500"
+								class="btn preset-filled-primary-500"
 								onclick={importData}
 								disabled={!confirmImport || isImporting}
 							>
@@ -889,7 +898,7 @@
 										: "Importing..."}
 								{:else}
 									<Icons.Download size={16} />
-									Import Selected Data
+									Import selected data
 								{/if}
 							</button>
 						</div>

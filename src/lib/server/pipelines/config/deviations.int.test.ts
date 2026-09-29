@@ -234,7 +234,7 @@ describe("a config with no row resolves the CURRENT declaration", () => {
 		expect(await rowAt(mine.id), "a deviation was swept").toBeTruthy()
 		expect(await resolvedLimit()).toEqual({
 			value: 42,
-			scopeKind: "preset"
+			scopeKind: "config"
 		})
 
 		// Put the instance back on the shipped config for the writes below.

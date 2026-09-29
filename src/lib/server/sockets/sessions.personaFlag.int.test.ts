@@ -167,4 +167,51 @@ describe("sessions:addPersona — the auto-flag (PGlite integration)", () => {
 		expect(await isPersona(first.id)).toBe(true)
 		expect(await isPersona(second.id)).toBe(true)
 	})
+
+	test("the start form's create: a non-persona character as the player, a typed name", async () => {
+		// The body StartSessionForm sends (buildCreatePayload) when the person
+		// has no personas yet and picks an ordinary character to play as.
+		const { sessionsCreateHandler } = await import("./sessions")
+		const user = await makeUser("createsession-startform-user")
+		const cast = await makeCharacter(user.id, "Mara")
+		const player = await makeCharacter(user.id, "Aldo")
+
+		const res = await sessionsCreateHandler.handler(
+			fakeSocket(user.id),
+			{
+				session: {
+					name: "Night walk",
+					scenario: "",
+					lorebookId: null,
+					genreId: "core:genre/chat",
+					presetId: null,
+					genreFields: {}
+				} as any,
+				characterIds: [cast.id],
+				personaIds: [player.id],
+				characterPositions: { [cast.id]: 0 },
+				tags: []
+			},
+			noopEmit
+		)
+		expect((res as any).error).toBeUndefined()
+		const sessionId = res.session!.id
+
+		const row = await testDb.query.sessions.findFirst({
+			where: eq(schema.sessions.id, sessionId)
+		})
+		expect(row?.name).toBe("Night walk")
+
+		// Seated as the player, not as cast — and flagged in the library.
+		const seat = await testDb.query.sessionPersonas.findMany({
+			where: eq(schema.sessionPersonas.sessionId, sessionId)
+		})
+		expect(seat.map((s) => s.personaId)).toEqual([player.id])
+		const castRows = await testDb.query.sessionCharacters.findMany({
+			where: eq(schema.sessionCharacters.sessionId, sessionId)
+		})
+		expect(castRows.map((c) => c.characterId)).toEqual([cast.id])
+		expect(await isPersona(player.id)).toBe(true)
+		expect(await isPersona(cast.id)).toBe(false)
+	}, 60_000)
 })

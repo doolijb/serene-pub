@@ -10,6 +10,7 @@
 	import { toaster } from "$lib/client/utils/toaster"
 	import { z } from "zod"
 	import type { SocketEventMap } from "$lib/client/sockets/typedSocket"
+	import { sameFormValue } from "$lib/client/forms/sameFormValue"
 
 	// Zod validation schema
 	const lorebookSchema = z.object({
@@ -38,9 +39,8 @@
 	let tagSearchInput = $state("")
 	let showTagSuggestions = $state(false)
 
-	// "lorebooks:get" always includes `tags`, but "lorebooks:update" returns
-	// the raw updated row without it (see lorebooksUpdateHandler in
-	// lorebooks.ts) — so locally `tags` is only guaranteed after a fresh Get.
+	// Both "lorebooks:get" and "lorebooks:update" carry `tags`; optional here
+	// because a draft is built before either has answered.
 	type EditableLorebook = Omit<
 		NonNullable<Sockets.Lorebooks.Get.Response["lorebook"]>,
 		"tags"
@@ -52,9 +52,25 @@
 	let isLoading = $state(true)
 	let loadError = $state("")
 
+	/**
+	 * The three fields this form edits, compared the forgiving way
+	 * (`sameFormValue`): a description typed and cleared is `""` where the
+	 * row held `null`, and tags are a set. The rest of the row is not the
+	 * form's, so a push that moves it (a stamp, a count) is not an edit.
+	 */
+	const editedFields = (l: EditableLorebook | undefined) =>
+		l ? { name: l.name, description: l.description, tags: l.tags } : null
+	let isDirty = $derived(
+		!!editLorebook &&
+			!!originalLorebook &&
+			!sameFormValue(
+				$state.snapshot(editedFields(editLorebook)),
+				$state.snapshot(editedFields(originalLorebook)),
+				{ unordered: ["tags"] }
+			)
+	)
 	$effect(() => {
-		hasUnsavedChanges =
-			JSON.stringify(editLorebook) !== JSON.stringify(originalLorebook)
+		hasUnsavedChanges = isDirty
 	})
 
 	// Filtered tags for suggestions
@@ -148,7 +164,10 @@
 
 	async function handleLorebooksGet(msg: Sockets.Lorebooks.Get.Response) {
 		if (msg.lorebook && msg.lorebook.id === lorebookId) {
-			editLorebook = { ...msg.lorebook }
+			// A re-read while edits are open keeps them: the row underneath
+			// moves, the three fields being typed in do not.
+			const held = isDirty ? editedFields(editLorebook) : null
+			editLorebook = held ? { ...msg.lorebook, ...held } : { ...msg.lorebook }
 			originalLorebook = { ...msg.lorebook }
 			isLoading = false
 			loadError = ""
@@ -163,15 +182,18 @@
 		msg: Sockets.Lorebooks.Update.Response
 	) {
 		if (msg.lorebook && msg.lorebook.id === lorebookId) {
-			// The update response carries the row, and `tags` is not on it —
-			// so the ones on screen are kept rather than blanked by a write
-			// that never touched them.
-			const kept = { ...msg.lorebook, tags: editLorebook?.tags }
+			// The update response carries the row AND its tags as saved
+			// (findings #12/#107); an older server's reply without them keeps
+			// the ones on screen rather than blanking them.
+			const kept = {
+				...msg.lorebook,
+				tags: msg.lorebook.tags ?? editLorebook?.tags
+			}
 			editLorebook = kept
 			originalLorebook = { ...kept }
 			mode = "view"
 			toaster.success({
-				title: "Lorebook Updated",
+				title: "Lorebook updated",
 				description: `Lorebook "${msg.lorebook.name}" updated successfully.`
 			})
 		}
@@ -232,7 +254,7 @@
 {#if isLoading}
 	<div class="flex items-center justify-center p-4">
 		<div class="text-center">
-			<Icons.Loader size={24} class="mx-auto mb-2 animate-spin" />
+			<Icons.Loader2 size={24} class="mx-auto mb-2 animate-spin" />
 			<p>Loading lorebook...</p>
 		</div>
 	</div>
@@ -261,7 +283,7 @@
 			     tabs — repeating it here would just be noise. -->
 			<section class="card preset-filled-surface-100-900 space-y-1 p-3">
 				<p
-					class="text-primary-700-300 flex items-center gap-1.5 text-xs font-semibold tracking-wide uppercase"
+					class="text-primary-700-300 flex items-center gap-1.5 text-xs font-semibold"
 				>
 					<Icons.FileText size={13} />
 					Description
@@ -302,7 +324,7 @@
 					Cancel
 				</button>
 				<button
-					class="btn btn-sm preset-filled-success-500 w-full"
+					class="btn btn-sm preset-filled-primary-500 w-full"
 					onclick={handleSave}
 					disabled={!hasUnsavedChanges}
 				>
@@ -382,7 +404,7 @@
 									</span>
 									{#if tag.description}
 										<span
-											class="text-muted-foreground text-sm"
+											class="text-surface-600-400 text-sm"
 										>
 											- {tag.description}
 										</span>

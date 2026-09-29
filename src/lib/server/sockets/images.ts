@@ -73,12 +73,12 @@ async function readyManagedTarget(
 	signal: AbortSignal,
 	onProgress: (p: ImageGenProgress) => void
 ): Promise<unknown> {
-	if (connection.type !== CONNECTION_TYPE.KOBOLDCPP_MANAGED_IMAGE)
+	if (!CONNECTION_TYPE.isManagedKoboldCpp(connection.type))
 		return decrypted
 
 	if (!connection.model)
 		throw new Error(
-			`"${connection.name}" has no image model selected. Pick one in its connection settings, or use "Use for image generation" in the KoboldCPP Manager.`
+			`"${connection.name}" has no image model selected. Pick one in its connection settings, or use "Use for images" in the Models tab of KoboldCPP, run by Serene Pub.`
 		)
 
 	const [{ ensureManagedReady }, { sdQuantToInt }] = await Promise.all([
@@ -280,7 +280,7 @@ export const imagesGenerate: Handler<
 			// FOURTH entry point into image generation and it has now been the
 			// last one converted twice running, so it is worth saying plainly:
 			// the row's own `baseUrl` is not authoritative for a managed
-			// connection (the Manager's settings are), and in managed mode the
+			// connection (the managed KoboldCPP's settings are), and in managed mode the
 			// subprocess is usually not running or is holding the chat LLM, so
 			// rendering without the load gets ECONNREFUSED or draws with
 			// whatever happened to be resident.

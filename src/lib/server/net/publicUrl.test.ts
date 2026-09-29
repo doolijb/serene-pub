@@ -1,7 +1,7 @@
 /**
  * The load-bearing test in this file is "serves the tunnel and localhost
- * simultaneously". PUBLIC_SOCKETS_ENDPOINT — the thing PUBLIC_URL replaces —
- * passed the tunnel case and the localhost case when each was checked on its
+ * simultaneously". PUBLIC_SOCKETS_ENDPOINT — the global override PUBLIC_URL
+ * replaced — passed the tunnel case and the localhost case when each was checked on its
  * own, and failed the moment both had to be true of the same running process.
  * Asserting them in one body is what makes a regression to global-override
  * semantics impossible to miss.
@@ -64,76 +64,6 @@ function eventWith(
 	}
 }
 
-describe("getPublicSocketsEndpoint", () => {
-	test("unset — auto-detects per request, exactly as before", async () => {
-		const { getPublicSocketsEndpoint } = await import("./publicUrl")
-		expect(getPublicSocketsEndpoint(eventWith("localhost:3000"))).toBe(
-			"http://localhost:3001"
-		)
-	})
-
-	test("serves the tunnel and localhost SIMULTANEOUSLY from one variable", async () => {
-		process.env.PUBLIC_URL = "https://tunnel.example.com"
-		const { getPublicSocketsEndpoint } = await import("./publicUrl")
-
-		// Through the proxy: same origin, no port — the proxy routes
-		// /socket.io/ to SOCKETS_PORT on the public port.
-		const viaTunnel = getPublicSocketsEndpoint(
-			eventWith("tunnel.example.com")
-		)
-		expect(viaTunnel).toBe("https://tunnel.example.com")
-		expect(viaTunnel).not.toContain("3001")
-
-		// Direct, same process, same env, same tick: unchanged behavior.
-		expect(getPublicSocketsEndpoint(eventWith("localhost:3000"))).toBe(
-			"http://localhost:3001"
-		)
-
-		// ...and back again, to catch any caching that latches on first use.
-		expect(getPublicSocketsEndpoint(eventWith("tunnel.example.com"))).toBe(
-			"https://tunnel.example.com"
-		)
-	})
-
-	test("an explicit port in PUBLIC_URL is preserved", async () => {
-		process.env.PUBLIC_URL = "https://x.example.com:8443"
-		const { getPublicSocketsEndpoint } = await import("./publicUrl")
-		expect(getPublicSocketsEndpoint(eventWith("x.example.com:8443"))).toBe(
-			"https://x.example.com:8443"
-		)
-	})
-
-	test("SOCKETS_ENDPOINT and the legacy PUBLIC_SOCKETS_ENDPOINT still win outright", async () => {
-		process.env.PUBLIC_URL = "https://tunnel.example.com"
-		process.env.PUBLIC_SOCKETS_ENDPOINT = "https://sockets.example.com"
-		let mod = await import("./publicUrl")
-		expect(mod.getPublicSocketsEndpoint(eventWith("localhost:3000"))).toBe(
-			"https://sockets.example.com"
-		)
-		process.env.SOCKETS_ENDPOINT = "https://newer.example.com"
-		mod = await import("./publicUrl")
-		expect(mod.getPublicSocketsEndpoint(eventWith("localhost:3000"))).toBe(
-			"https://newer.example.com"
-		)
-	})
-
-	test("honors SOCKETS_PORT when auto-detecting", async () => {
-		process.env.SOCKETS_PORT = "9999"
-		const { getPublicSocketsEndpoint } = await import("./publicUrl")
-		expect(getPublicSocketsEndpoint(eventWith("localhost:3000"))).toBe(
-			"http://localhost:9999"
-		)
-	})
-
-	test("legacy SOCKETS_HTTPS_HOSTS still produces an https endpoint (with port)", async () => {
-		process.env.SOCKETS_HTTPS_HOSTS = "legacy.example.com"
-		const { getPublicSocketsEndpoint } = await import("./publicUrl")
-		expect(getPublicSocketsEndpoint(eventWith("legacy.example.com"))).toBe(
-			"https://legacy.example.com:3001"
-		)
-	})
-})
-
 describe("getConfiguredPublicUrl", () => {
 	test("falls back to ORIGIN, which already means the same thing", async () => {
 		process.env.ORIGIN = "https://origin.example.com"
@@ -156,14 +86,13 @@ describe("getConfiguredPublicUrl", () => {
 		// CRA/Vite/Next vocabulary, so someone will eventually set "/serene".
 		const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
 		process.env.PUBLIC_URL = "/serene"
-		const { getConfiguredPublicUrl, getPublicSocketsEndpoint } =
-			await import("./publicUrl")
+		const { getConfiguredPublicUrl, isRequestHttps } = await import(
+			"./publicUrl"
+		)
 		expect(getConfiguredPublicUrl()).toBeNull()
 		expect(warn).toHaveBeenCalled()
 		// ...and the app still works, falling back to auto-detection.
-		expect(getPublicSocketsEndpoint(eventWith("localhost:3000"))).toBe(
-			"http://localhost:3001"
-		)
+		expect(isRequestHttps(eventWith("localhost:3000"))).toBe(false)
 	})
 
 	test("a non-http scheme is rejected", async () => {
@@ -195,6 +124,16 @@ describe("isRequestHttps", () => {
 				eventWith("localhost:3000", { urlProtocol: "https:" })
 			)
 		).toBe(false)
+	})
+
+	test("serves the tunnel and localhost SIMULTANEOUSLY from one variable", async () => {
+		process.env.PUBLIC_URL = "https://tunnel.example.com"
+		const { isRequestHttps } = await import("./publicUrl")
+		expect(isRequestHttps(eventWith("tunnel.example.com"))).toBe(true)
+		// Direct, same process, same env, same tick: unchanged behavior.
+		expect(isRequestHttps(eventWith("localhost:3000"))).toBe(false)
+		// ...and back again, to catch any caching that latches on first use.
+		expect(isRequestHttps(eventWith("tunnel.example.com"))).toBe(true)
 	})
 
 	test("true for a request on the configured https PUBLIC_URL host", async () => {
@@ -305,11 +244,11 @@ describe("partial events", () => {
 	})
 
 	test("tolerates an event with neither request nor url", async () => {
-		const { isRequestHttps, getPublicSocketsEndpoint } = await import(
+		const { isRequestHttps, resolveRequestPublicHost } = await import(
 			"./publicUrl"
 		)
 		expect(isRequestHttps({})).toBe(false)
-		expect(() => getPublicSocketsEndpoint({})).not.toThrow()
+		expect(() => resolveRequestPublicHost({})).not.toThrow()
 	})
 })
 
@@ -347,14 +286,14 @@ describe("resolveRequestPublicHost", () => {
 
 	test("a spoofed x-forwarded-host cannot activate PUBLIC_URL from an untrusted peer", async () => {
 		process.env.PUBLIC_URL = "https://tunnel.example.com"
-		const { getPublicSocketsEndpoint } = await import("./publicUrl")
+		const { isRequestHttps } = await import("./publicUrl")
 		expect(
-			getPublicSocketsEndpoint(
+			isRequestHttps(
 				eventWith("localhost:3000", {
 					peer: "203.0.113.7",
 					headers: { "x-forwarded-host": "tunnel.example.com" }
 				})
 			)
-		).toBe("http://localhost:3001")
+		).toBe(false)
 	})
 })

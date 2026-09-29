@@ -36,3 +36,10 @@ export const castKey = (name: string): string =>
 		.toLowerCase()
 		.replace(/[^a-z0-9]+/g, "_")
 		.replace(/^_+|_+$/g, "") || "unnamed"
+
+/**
+ * 🚧 A location's key as a widget and the ledger address its owner (phase 4):
+ * `location:harbor`. Prefixed so a place and a character that slug alike
+ * stay two owners; a template reads the bare slug, `state.locations.harbor`.
+ */
+export const locationOwnerKey = (name: string): string => `location:${castKey(name)}`

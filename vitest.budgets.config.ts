@@ -18,6 +18,10 @@ export default defineConfig({
 	test: {
 		include: ["src/**/*.budgets.test.ts"],
 		environment: "node",
+		// The same stale-leftover pass as the main config: this run hands out
+		// throwaway data directories through the same setup file, so a killed
+		// budgets run leaks the same way (see scripts/testTempDirs.ts).
+		globalSetup: ["./scripts/testTempDirs.ts"],
 		setupFiles: ["./vitest.setup.ts"],
 		fileParallelism: false
 	}

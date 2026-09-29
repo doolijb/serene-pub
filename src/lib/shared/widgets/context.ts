@@ -4,36 +4,26 @@
  * The contract itself — the sections, the verbs, the event union, the protocol
  * number — is declared in `@serene-pub/sdk` (`widgets.ts`), so a plugin
  * compiles against the same shapes this file produces. What lives here is what
- * only a host can own: the grid facts it measures (`PlacementInput`), the
- * projection that turns them plus a session into the sections
- * (`projectWidgetData`), the grant gate, the channel scoping, and the event bus
- * behind the `on` verb.
- *
- * `projectWidgetData` is transport-neutral and is fed to BOTH deliveries.
- * `buildNativeContext` wraps it with the verbs for the in-document consumer; a
- * frame host posts the same sections over its port and implements the verbs
- * there. Field-for-field identical: reactivity is the native analog of a push.
+ * only a host can own: the grid facts it measures (`PlacementInput`) and their
+ * `layout.v1`, the channel scoping, the actions section and its `invoke`, and
+ * the page contexts that supply the scoped sections. The widget wire
+ * (`widgetWire.svelte.ts`) posts them to every widget — a frame over its port,
+ * a remote over its own (R79: no widget runs in the page's tree).
  *
  * ## Base vs scoped
  *
- * Base sections (layout/session/channels/messages/props/settings/actions) are
- * always present. Scoped sections (persona/characters/lore/…) appear ONLY when
- * the widget declared the scope AND it was granted — the same deny-by-default a
- * frame gets, applied here at projection so a native widget is no more
- * privileged. Absence means "not granted", never a silent empty.
+ * Base sections (layout/session/channels/messages/props/settings/actions/…)
+ * are delivered to a widget that READS them (`WidgetDecl.reads`, R75; absent
+ * reads all): one that does not is handed the empty value, never the host's
+ * data, so it is not re-projected on every token. Scoped sections
+ * (session_full/session_state/persona/characters/lore — the SDK's one table,
+ * `WIDGET_SCOPED_SECTIONS`) appear ONLY when the widget declared the scope AND
+ * it was granted — deny by default. Absence means "not granted", never a
+ * silent empty.
  */
-import { getContext } from "svelte"
-import {
-	EMPTY_TURN_ORDER,
-	formatChannel,
-	parseChannel,
-	WIDGET_PROTOCOL,
-	type TurnOrderV1,
-	type WidgetProtocolVersion
-} from "@serene-pub/sdk"
+import { formatChannel, parseChannel, type WidgetSectionScope } from "@serene-pub/sdk"
 import { actionIdentity, parseActionIdentity } from "$lib/shared/actions/identity"
 import { dispatchAction, type ActionDispatch } from "./invokeAction"
-import type { WidgetScope } from "./types"
 
 /**
  * The envelope's own shapes are the SDK's (`@serene-pub/sdk`, `widgets.ts`) —
@@ -57,34 +47,22 @@ export type {
 	WidgetRequests,
 	WidgetTier,
 	WidgetVerbs,
-	ViewerV1
+	ViewerV1,
+	SessionCharactersV1,
+	SessionStateV1
 } from "@serene-pub/sdk"
 
 import type {
-	ViewerV1,
 	WidgetRequestKind,
 	WidgetRequests,
 	ActionsV1,
 	LayoutV1,
 	MessageV1,
 	WidgetAction,
-	WidgetData,
 	WidgetEvent,
-	WidgetEventKind,
-	WidgetPayload,
 	WidgetTier,
 	WidgetVerbs
 } from "@serene-pub/sdk"
-
-/**
- * ⏳ The app's spelling of the envelope's free-form bag.
- *
- * @deprecated Use `WidgetPayload` — the name the SDK publishes. A bare
- * `Payload` cannot say whose (R2/R3), and the SDK's barrel is shared with
- * every other payload in the system. Kept one release so app call sites move
- * on their own schedule.
- */
-export type Payload = WidgetPayload
 
 /**
  * A message as the HOST holds it, on its way to becoming a `MessageV1`.
@@ -93,25 +71,12 @@ export type Payload = WidgetPayload
  * `scopeMessages` and `WidgetMessageFeed` run over whatever list the page has
  * in hand — a row mid-flight, a fixture, a row a socket has not finished
  * enriching — and their job is to skip what they cannot read rather than to
- * refuse it. `MessageV1` is what a widget is promised once the projection has
- * run. Two types because there are two jobs, reconciled at `projectWidgetData`
- * and nowhere else.
+ * refuse it. `MessageV1` is what a widget is promised once the wire has posted
+ * it. Two types because there are two jobs.
  */
 export interface SurfaceMessage {
 	channel?: string
 	[k: string]: unknown
-}
-
-/** The full native envelope: identity + data sections + verbs. */
-export interface WidgetContext extends WidgetData, WidgetVerbs {
-	/**
-	 * The widget contract's version — the SDK's one number, shared with the
-	 * frame lane's `FRAME_PROTOCOL`. Native is frame minus the iframe, so the
-	 * two deliveries report the same contract rather than two clocks that
-	 * agree until one is bumped.
-	 */
-	protocol: WidgetProtocolVersion
-	widget: { id: string; instanceId: string; title: string }
 }
 
 // ─── Projection ───────────────────────────────────────────────────────────────
@@ -142,29 +107,26 @@ export interface PlacementInput {
 	chrome?: Partial<LayoutV1["chrome"]>
 }
 
-export interface ProjectInput {
-	session: { id: number; name?: string | null } & Record<string, unknown>
-	channels: string[]
-	messages: SurfaceMessage[]
-	props?: Payload
-	/** The widget's effective settings; defaulted+overridden by the host. */
-	settings?: Payload
-	/** The session's action venues (`sessions:actions`), as the host holds them. */
-	actions?: ActionsV1
-	/** The viewer's view of the session annex (R57), as the page holds it — already the viewer's. */
-	annex?: Record<string, Record<string, unknown>>
-	/** The viewer's language code — `locale.v1`; `en` when the host has none. */
-	locale?: string
-	/** Who is looking — `viewer.v1`; nobody in particular when the host has no one. */
-	viewer?: ViewerV1
-	/** The session's stored turn order — `turnOrder.v1`; empty when the host has none. */
-	turnOrder?: TurnOrderV1
-	placement: PlacementInput
-	/** The effective granted scopes (declared − admin-denied). Default none. */
-	grants?: WidgetScope[]
-	/** Source data for scoped sections; projected only when granted. */
-	scoped?: { persona?: unknown; characters?: unknown[]; lore?: unknown; sessionFull?: unknown }
-}
+/**
+ * The placement of a widget NOBODY placed: one widget, one cell, touching
+ * every edge of a zone of one — so `chrome` derives to "the widget owns its
+ * own backdrop", the correct no-op. `tier` is the one field with nothing
+ * behind it (there is no box to measure), so it stays the middling default.
+ *
+ * What `RemoteWidget` posts for a mount no zone placed (a pop-over flyout).
+ */
+export const UNPLACED: PlacementInput = Object.freeze({
+	zone: Object.freeze({ columns: 1, column: 1, rows: 1, row: 1 }),
+	box: Object.freeze({
+		cols: 1,
+		rows: null,
+		edges: Object.freeze({ top: true, right: true, bottom: true, left: true })
+	}),
+	tier: "cozy",
+	pinned: false,
+	collapsed: false,
+	drawered: false
+}) as PlacementInput
 
 /**
  * Host-provided chrome policy: the host owns the backdrop/card when a widget is
@@ -177,7 +139,38 @@ export function deriveChrome(p: PlacementInput): LayoutV1["chrome"] {
 		background: p.chrome?.background ?? hostManaged,
 		wrapper: p.chrome?.wrapper ?? hostManaged,
 		titleBar: p.chrome?.titleBar ?? p.drawered,
-		padding: p.chrome?.padding ?? false
+		padding: p.chrome?.padding ?? false,
+		// Never derived: only the host that draws the card knows it does
+		// (ruled 2026-09-27 — `withHostCard`). Unsaid is flush.
+		card: p.chrome?.card ?? false
+	}
+}
+
+/**
+ * A placement as the host that DRAWS it tells it (ruled 2026-09-27): whether
+ * its card is on, and so whether it paints the backdrop, the wrapper and a
+ * title bar. Carded, the three are true (a title bar unless the host says it
+ * drew none — a tab group's member); flush, all three are false, because the
+ * host paints nothing around the widget at all.
+ *
+ * Absent placement is `UNPLACED` — a mount no zone placed, which is exactly
+ * the pop-over case that is always carded.
+ */
+export function withHostCard(
+	p: PlacementInput | undefined,
+	card: boolean,
+	titleBar = true
+): PlacementInput {
+	const base = p ?? UNPLACED
+	return {
+		...base,
+		chrome: {
+			...base.chrome,
+			card,
+			background: card,
+			wrapper: card,
+			titleBar: card && titleBar
+		}
 	}
 }
 
@@ -241,62 +234,10 @@ export function eventInScope(e: WidgetEvent, channels: string[]): boolean {
 
 // ─── Events ───────────────────────────────────────────────────────────────────
 
-/**
- * The per-widget event bus behind the `on` verb.
- *
- * Deliberately tiny and transport-neutral: `WidgetHost` owns one per native
- * widget and `PluginFrame` owns one per frame, so the two lanes deliver the
- * same events from the same code and a frame is once again a native widget
- * minus the iframe.
- *
- * `"*"` is a SUBSCRIPTION, not a kind — it receives every event, which is what
- * lets the frame lane forward the lot over the port without enumerating a union
- * it would then have to keep in step. Nothing is ever emitted carrying
- * `kind: "*"`, which is why it sits on `on` and not in `WidgetEvent`.
- */
-export interface WidgetEventBus {
-	/** Subscribe to one kind, or `"*"` for all. Returns an unsubscribe. */
-	on(kind: WidgetEventKind | "*", cb: (e: WidgetEvent) => void): () => void
-	emit(e: WidgetEvent): void
-}
-
 /** Anything a widget host can hang its bus off — the session-level fan-out. */
 export interface WidgetEventSource {
 	/** Subscribe to every session-level event. Returns an unsubscribe. */
 	subscribe(cb: (e: WidgetEvent) => void): () => void
-}
-
-export function createWidgetEventBus(): WidgetEventBus {
-	const byKind = new Map<string, Set<(e: WidgetEvent) => void>>()
-	return {
-		on(kind, cb) {
-			const set = byKind.get(kind) ?? new Set()
-			byKind.set(kind, set)
-			set.add(cb)
-			// Idempotent by construction: a second call removes an already-absent
-			// member, and a re-subscribed identical callback is a different
-			// closure. Unsubscribing yours can never take someone else's off.
-			return () => set.delete(cb)
-		},
-		emit(e) {
-			// Copied before iterating: a subscriber that unsubscribes (or
-			// subscribes) inside its own callback must not perturb THIS delivery
-			// — a widget tearing itself down on the first event it sees is
-			// ordinary, and it must not swallow its neighbour's.
-			for (const set of [byKind.get(e.kind), byKind.get("*")]) {
-				if (!set) continue
-				for (const cb of [...set]) {
-					try {
-						cb(e)
-					} catch (err) {
-						// One widget's bad listener is not the host's problem, and
-						// certainly not the next widget's. Loud, but contained.
-						console.error("widget event listener threw", e.kind, err)
-					}
-				}
-			}
-		}
-	}
 }
 
 /** A stored message → its `message:created` event, or null if it has no id. */
@@ -322,7 +263,7 @@ export function messageCreatedEvent(
  * events — the diff that says which of them are NEW.
  *
  * Stateful but not reactive: the host drives it from wherever its message list
- * changes, native or frame, and both lanes get the same events from the same
+ * changes, a frame or a remote, and both get the same events from the same
  * code. Two properties it exists to guarantee:
  *
  *  - the FIRST list seeds silently. A widget mounted onto a session with a
@@ -357,10 +298,10 @@ export class WidgetMessageFeed {
  * host that keeps mutating its geometry object cannot reach into a projection
  * it already handed out (or into a message already posted to a frame).
  *
- * Exported because the frame lane needs exactly this and nothing else: its
- * `{ t: "layout" }` push is this function's output, so native `ctx.layout.v1`
- * and the frame's layout are one projection with two deliveries rather than two
- * implementations that agree until they don't.
+ * Exported because the wire needs exactly this and nothing else: its
+ * `{ t: "layout" }` push is this function's output, so a frame's layout and a
+ * remote's are one projection rather than two implementations that agree
+ * until they don't.
  */
 export function projectLayout(p: PlacementInput): LayoutV1 {
 	return {
@@ -377,50 +318,6 @@ export function projectLayout(p: PlacementInput): LayoutV1 {
 		drawered: p.drawered,
 		chrome: deriveChrome(p)
 	}
-}
-
-/**
- * Build the transport-neutral data sections. Pure — no reactivity, no port —
- * so both the native context and the frame push feed from ONE projection, and
- * scoping/gating is provably identical for both.
- */
-export function projectWidgetData(input: ProjectInput): WidgetData {
-	const grants = new Set(input.grants ?? [])
-
-	const data: WidgetData = {
-		layout: { v1: projectLayout(input.placement) },
-		session: {
-			v1: { id: input.session.id, name: input.session.name ?? null }
-		},
-		channels: { v1: [...input.channels] },
-		// The one seam between what the host HOLDS and what a widget is
-		// PROMISED (see `SurfaceMessage`). The host's list is rows off the
-		// wire; a row that reached the page without an id or a body is a row
-		// the socket layer should not have produced, and narrowing here — or
-		// dropping it — would hide that in the one place a widget could still
-		// see it.
-		messages: { v1: scopeMessages(input.messages, input.channels) as MessageV1[] },
-		props: { v1: { ...(input.props ?? {}) } },
-		settings: { v1: { ...(input.settings ?? {}) } },
-		actions: { v1: projectActions(input.actions) },
-		// Detached, like every section: a widget cannot reach into the page's copy.
-		annex: { v1: JSON.parse(JSON.stringify(input.annex ?? {})) },
-		locale: { v1: input.locale ?? "en" },
-		viewer: { v1: { ...NOBODY, ...(input.viewer ?? {}) } },
-		turnOrder: { v1: JSON.parse(JSON.stringify(input.turnOrder ?? EMPTY_TURN_ORDER)) }
-	}
-
-	// Scoped sections — present iff granted AND source data supplied.
-	const s = input.scoped ?? {}
-	if (grants.has("persona") && s.persona !== undefined)
-		data.persona = { v1: s.persona }
-	if (grants.has("characters") && s.characters !== undefined)
-		data.characters = { v1: s.characters }
-	if (grants.has("lore") && s.lore !== undefined) data.lore = { v1: s.lore }
-	if (grants.has("session:full") && s.sessionFull !== undefined)
-		data.session_full = { v1: s.sessionFull }
-
-	return data
 }
 
 /**
@@ -472,7 +369,7 @@ export function findAction(
 
 /**
  * The `invoke` verb, derived from `action`, the host's action dispatch and
- * the projected venues — ONE implementation for both lanes, so a native
+ * the projected venues — ONE implementation for every lane, so a remote
  * widget's `invoke('roll')` and a frame's `{ t: "invoke", key: "roll" }`
  * resolve the same reference to the same declaration through the same path
  * (`dispatchAction`): core's verbs to `actionDispatch.core`, everything else
@@ -484,7 +381,7 @@ export function findAction(
  * widget's press earns both by taking the same function the chips take.
  * A host that threads no dispatch keeps the fallback — the generic `action`
  * verb, identity in hand — because a mount outside a session has no fire to
- * lend; and one that threads no `core` still refuses `invoke('continue')`
+ * lend; and one that threads no `core` still refuses `invoke('extend')`
  * loudly rather than firing it as a function the server cannot serve.
  */
 export function makeInvoke(
@@ -524,56 +421,21 @@ export function makeInvoke(
 }
 
 /**
- * Wrap the projected data with identity + verbs for a native consumer.
- *
- * `invoke` is optional on the way in: a host supplying `action` gets the
- * derived one (`makeInvoke`) over the projection it just made, so no host
- * has to implement the key→function walk twice. `actionDispatch` is the
- * host's own routing — its handlers for core's verbs and its fire for
- * everything else (U5c review, W4) — so a widget's press lands where the
- * chips' presses land; a host that has none gets an `invoke` that refuses
- * core's verbs by name and falls back to the generic `action` verb.
- */
-export function buildNativeContext(
-	input: ProjectInput,
-	widget: WidgetContext["widget"],
-	verbs: Omit<WidgetVerbs, "invoke"> &
-		Partial<Pick<WidgetVerbs, "invoke">> & {
-			actionDispatch?: Partial<ActionDispatch>
-		}
-): WidgetContext {
-	const data = projectWidgetData(input)
-	const { actionDispatch, ...rest } = verbs
-	return {
-		protocol: WIDGET_PROTOCOL,
-		widget,
-		...data,
-		...rest,
-		invoke:
-			verbs.invoke ??
-			makeInvoke(
-				() => data.actions.v1,
-				verbs.action,
-				widget.id,
-				actionDispatch
-			)
-	}
-}
-
-/** The viewer a host with no one to name reports: not an admin, not a guest. */
-const NOBODY: ViewerV1 = { userId: null, isAdmin: false, isGuest: false }
-
-/**
  * What a host answers a widget's `request` with (C0b) — the session page
- * provides one under {@link WIDGET_REQUESTS_KEY}; the native host and the
- * widget wire both read it, so a native widget, a frame and a remote ask the
- * same handler. Rejects to decline.
+ * provides one under {@link WIDGET_REQUESTS_KEY}; the widget wire reads it,
+ * so a frame and a remote ask the same handler. Rejects to decline.
  */
 export type WidgetRequestHandler = <K extends WidgetRequestKind>(
 	kind: K,
 	params: WidgetRequests[K]["params"],
-	/** Which widget asks, and whose it is — `core`, or the plugin's id. */
-	from: { widgetId: string; owner: string }
+	/**
+	 * Which widget asks, whose it is — `core`, or the plugin's id — and the
+	 * scopes it was granted (F9), BARE (`lore`, `session:state`), never the
+	 * permission keys they are reviewed as (`widget:lore`): what the SDK's
+	 * `widgetRequestRefusal` judges a request by. Core's widgets hold every
+	 * scope, so theirs may be absent.
+	 */
+	from: { widgetId: string; owner: string; grants?: readonly string[] }
 ) => Promise<WidgetRequests[K]["result"]>
 
 /** The Svelte context keys a session page provides beside the annex. */
@@ -582,26 +444,31 @@ export const SESSION_VIEWER_KEY = "sessionViewer"
 export const SESSION_TURN_ORDER_KEY = "sessionTurnOrder"
 /** The conversation dossier (`session_full.v1`), for a widget granted `session:full`. */
 export const SESSION_DOSSIER_KEY = "sessionDossier"
-
-/** The Svelte context key native widgets read their ctx from. */
-export const WIDGET_CONTEXT_KEY = "widget"
+/**
+ * 🚧 The session's stats and states as a widget reads them (`session_state.v1`,
+ * R72), for a widget granted `session:state`: `{ current: SessionStateV1 }`.
+ */
+export const SESSION_STATE_KEY = "sessionStateSection"
+/**
+ * 🚧 The session's cast, cast over card, with its scene images
+ * (`characters.v1`, R76), for a widget granted `characters`:
+ * `{ current: SessionCharactersV1 }`. The session page provides it
+ * (`sessionPage/projections/characters.ts`).
+ */
+export const SESSION_CHARACTERS_KEY = "sessionCharactersSection"
 
 /**
- * A stable handle a widget reads its (reactive) context through. The provider
- * (`WidgetHost`) puts one in Svelte context whose `current` getter returns the
- * live `$derived` ctx, so a consumer that reads `ref.current.session.v1` inside
- * its own `$derived`/template stays reactive across host re-projections — the
- * in-document analog of a frame's push.
+ * 🚧 Which page context supplies each scoped section — scope → the key its
+ * `{ current }` handle is set under. A host reads a granted scope's section
+ * off that handle and nowhere else. A scope with no entry has no page
+ * context: its section is never projected, which a widget reads as "not
+ * granted". `lore` is absent on purpose: the lore is paged by request
+ * (`session-entries`), and the scope is the grant to ask; `persona` has no
+ * supplier yet.
  */
-export interface WidgetContextRef {
-	readonly current: WidgetContext
-}
+export const SCOPED_SECTION_CONTEXT_KEYS: Readonly<Partial<Record<WidgetSectionScope, string>>> = Object.freeze({
+	"session:full": SESSION_DOSSIER_KEY,
+	"session:state": SESSION_STATE_KEY,
+	characters: SESSION_CHARACTERS_KEY
+})
 
-/**
- * Read the widget context, if a `WidgetHost` provides one. Returns undefined
- * when a component renders outside a host (standalone, tests, a not-yet-wired
- * site), so a native widget must degrade gracefully — never assume presence.
- */
-export function useWidgetContext(): WidgetContextRef | undefined {
-	return getContext<WidgetContextRef | undefined>(WIDGET_CONTEXT_KEY)
-}

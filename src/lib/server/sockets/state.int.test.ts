@@ -12,6 +12,7 @@ import { afterAll, beforeAll, describe, expect, test, vi } from "vitest"
 import fs from "fs/promises"
 import os from "os"
 import path from "path"
+import { eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import {
 	defineAttributeSlot,
@@ -27,6 +28,12 @@ vi.mock("$lib/server/db", async () => {
 	const { createTestDb } = await import("$lib/server/utils/testDb")
 	const db = await createTestDb()
 	return { db }
+})
+
+// The real resolver, behind a spy one test can make fail once.
+vi.mock("$lib/server/state/resolve", async (importOriginal) => {
+	const real = await importOriginal<typeof import("$lib/server/state/resolve")>()
+	return { ...real, stateFor: vi.fn(real.stateFor) }
 })
 
 beforeAll(async () => {
@@ -178,8 +185,10 @@ async function world() {
 			.insert(schema.sessionCharacters)
 			.values({ sessionId: session.id, characterId: c.id })
 	await testDb
-		.insert(schema.sessionLorebooks)
-		.values({ sessionId: session.id, lorebookId: lorebook.id })
+		// The real shape: the lorebook is the session row's own binding.
+		.update(schema.sessions)
+		.set({ lorebookId: lorebook.id })
+		.where(eq(schema.sessions.id, session.id))
 	const [key] = await testDb
 		.insert(schema.lorebookEntries)
 		.values({
@@ -244,7 +253,7 @@ describe("a user's edit", () => {
 			},
 			() => {}
 		)
-		expect(res.state.cast[castKey(w.verity.name)]?.hp).toBe(14)
+		expect(res.state?.cast[castKey(w.verity.name)]?.hp).toBe(14)
 	})
 
 	test("is refused against the configuration in force, in a sentence", async () => {
@@ -291,7 +300,7 @@ describe("a user's edit", () => {
 			},
 			() => {}
 		)
-		expect(res.state.cast[castKey(w.verity.name)]?.hp).toBe(35)
+		expect(res.state?.cast[castKey(w.verity.name)]?.hp).toBe(35)
 	})
 
 	test("tells the rest of the session that something moved", async () => {
@@ -316,53 +325,22 @@ describe("a user's edit", () => {
 	})
 })
 
-describe("possessions", () => {
-	test("give, take and transfer move the edge and nothing else", async () => {
-		declareSlots()
-		const w = await world()
-		const { stateGive, stateTake, stateTransfer } = await import("./state")
-		const socket = fakeSocket(w.user.id)
-		const verity = castKey(w.verity.name)
-		const marrow = castKey(w.marrow.name)
-
-		let res = await stateGive.handler(
-			socket,
-			{
-				sessionId: w.session.id,
-				owner: { kind: "session_cast", id: w.verity.id },
-				entryId: w.key.id,
-				quantity: 2
-			},
-			() => {}
-		)
-		expect(res.state.possessions[verity]).toEqual([
-			{ entryId: w.key.id, name: "A rusty key", quantity: 2 }
-		])
-
-		res = await stateTransfer.handler(
-			socket,
-			{
-				sessionId: w.session.id,
-				from: { kind: "session_cast", id: w.verity.id },
-				to: { kind: "session_cast", id: w.marrow.id },
-				entryId: w.key.id
-			},
-			() => {}
-		)
-		expect(res.state.possessions[verity]?.[0]?.quantity).toBe(1)
-		expect(res.state.possessions[marrow]?.[0]?.quantity).toBe(1)
-
-		res = await stateTake.handler(
-			socket,
-			{
-				sessionId: w.session.id,
-				owner: { kind: "session_cast", id: w.marrow.id },
-				entryId: w.key.id
-			},
-			() => {}
-		)
-		// Zero is a row, not a deletion — so the owner simply carries nothing.
-		expect(res.state.possessions[marrow]).toBeUndefined()
+describe("the retired possession sockets (phase 3b)", () => {
+	test("state:give, state:take and state:transfer have no handler and no gate entry", async () => {
+		const mod = await import("./state")
+		const registered: string[] = []
+		mod.registerStateHandlers({} as any, () => {}, (_s, handler) => {
+			registered.push(handler.event)
+		})
+		for (const event of ["state:give", "state:take", "state:transfer"]) {
+			expect(registered).not.toContain(event)
+			expect(Object.values(mod).some((h: any) => h?.event === event)).toBe(false)
+		}
+		// Still a real registrar: the writes that remain are there.
+		expect(registered).toContain("state:set")
+		const { GATED_EVENTS } = await import("$lib/shared/sockets/interest")
+		for (const event of ["state:give", "state:take", "state:transfer"])
+			expect(GATED_EVENTS.has(event)).toBe(false)
 	})
 })
 
@@ -507,4 +485,313 @@ describe("R-15 · staleness and order over the wire (U5f)", () => {
 		expect(decided.state.version).toBe(2)
 		expect(decided.proposals.find((p) => p.id === id)).toBeUndefined()
 	}, 60_000)
+})
+
+// ── K1: a reply names the write it answers ──────────────────────────────────
+
+describe("a write's reply and refusal carry the writer's requestId, unchanged", () => {
+	test("on the reply", async () => {
+		declareSlots()
+		const w = await world()
+		const { stateSet } = await import("./state")
+		const cap = capture()
+		await stateSet.handler(
+			fakeSocket(w.user.id),
+			{
+				sessionId: w.session.id,
+				owner: { kind: "session", id: w.session.id },
+				slotId: WEATHER,
+				value: "fog",
+				requestId: "set-abc-1"
+			},
+			cap.emit
+		)
+		expect(cap.events.find((e) => e.event === "state:set")?.data).toMatchObject({
+			sessionId: w.session.id,
+			requestId: "set-abc-1"
+		})
+	}, 60_000)
+
+	test("on a refusal in words, and on one nobody put into words", async () => {
+		declareSlots()
+		const w = await world()
+		const { stateSet } = await import("./state")
+		const refused = capture()
+		await expect(
+			stateSet.handler(
+				fakeSocket(w.user.id),
+				{
+					sessionId: w.session.id,
+					owner: { kind: "session_cast", id: w.verity.id },
+					slotId: HP,
+					value: 35,
+					requestId: "set-abc-2"
+				},
+				refused.emit
+			)
+		).rejects.toThrow(/does not go above 20/)
+		expect(refused.events.filter((e) => e.event === "state:set:error").map((e) => e.data)).toEqual([
+			{ error: expect.stringMatching(/does not go above 20/), requestId: "set-abc-2" }
+		])
+
+		// A failure with no sentence of its own (here: no user on the socket)
+		// still answers the writer by its id — once.
+		const broken = capture()
+		await expect(
+			stateSet.handler(
+				{ user: undefined, io: interestedIo() } as any,
+				{
+					sessionId: w.session.id,
+					owner: { kind: "session", id: w.session.id },
+					slotId: WEATHER,
+					value: "fog",
+					requestId: "set-abc-3"
+				},
+				broken.emit
+			)
+		).rejects.toThrow()
+		expect(broken.events.filter((e) => e.event === "state:set:error").map((e) => e.data)).toEqual([
+			{ error: "An error occurred while processing your request.", requestId: "set-abc-3" }
+		])
+	}, 60_000)
+
+	/**
+	 * The reply went out, then telling the session's other tabs failed. The
+	 * write landed: it is not refused by id, and the handler does not throw —
+	 * a throw is what makes `register()` send its id-less refusal to every
+	 * tab of the user, which a store files as a store-wide error.
+	 */
+	test("a failure after the reply went out is never reported as a refusal of the write", async () => {
+		declareSlots()
+		const w = await world()
+		const { stateSet } = await import("./state")
+		const cap = capture()
+		const io = interestedIo()
+		const socket = {
+			user: { id: w.user.id },
+			io: {
+				...io,
+				to: () => ({
+					emit: () => {
+						throw new Error("the broadcast fell over")
+					}
+				})
+			}
+		} as any
+		const logged = vi.spyOn(console, "error").mockImplementation(() => {})
+		try {
+			const res = await stateSet.handler(
+				socket,
+				{
+					sessionId: w.session.id,
+					owner: { kind: "session", id: w.session.id },
+					slotId: WEATHER,
+					value: "storm",
+					requestId: "set-abc-5"
+				},
+				cap.emit
+			)
+			expect(res.sessionId).toBe(w.session.id)
+			expect(logged).toHaveBeenCalled()
+		} finally {
+			logged.mockRestore()
+		}
+		expect(cap.events.filter((e) => e.event === "state:set:error")).toEqual([])
+		expect(cap.events.filter((e) => e.event === "state:set").map((e) => e.data.requestId)).toEqual([
+			"set-abc-5"
+		])
+	}, 60_000)
+
+	/**
+	 * The write committed, then re-reading the state for its reply failed.
+	 * It landed, so it is answered by its id without the state, and the
+	 * session is told something moved — never refused.
+	 */
+	test("a write that landed is answered, never refused, when re-reading it fails", async () => {
+		declareSlots()
+		const w = await world()
+		broadcasts.length = 0
+		const { stateSet } = await import("./state")
+		const { stateFor } = await import("$lib/server/state/resolve")
+		vi.mocked(stateFor).mockRejectedValueOnce(new Error("the re-read fell over"))
+		const cap = capture()
+		const logged = vi.spyOn(console, "error").mockImplementation(() => {})
+		try {
+			const res = await stateSet.handler(
+				fakeSocket(w.user.id),
+				{
+					sessionId: w.session.id,
+					owner: { kind: "session", id: w.session.id },
+					slotId: WEATHER,
+					value: "storm",
+					requestId: "set-abc-6"
+				},
+				cap.emit
+			)
+			expect(res).toEqual({ sessionId: w.session.id })
+			expect(logged).toHaveBeenCalled()
+		} finally {
+			logged.mockRestore()
+		}
+		expect(cap.events.filter((e) => e.event === "state:set:error")).toEqual([])
+		expect(cap.events.filter((e) => e.event === "state:set").map((e) => e.data)).toEqual([
+			{ sessionId: w.session.id, requestId: "set-abc-6" }
+		])
+		expect(broadcasts).toContainEqual({ event: "state:changed", sessionId: w.session.id })
+		expect((await stateFor(testDb as any, w.session.id)).world.weather).toBe("storm")
+	}, 60_000)
+
+	test("a refusal about a session names it, so another tab can tell it is not about its own", async () => {
+		declareSlots()
+		const w = await world()
+		const { stateGet, stateSet } = await import("./state")
+		const read = capture()
+		await expect(
+			stateGet.handler(fakeSocket(w.stranger.id), { sessionId: w.session.id }, read.emit)
+		).rejects.toThrow(/Session not found/)
+		expect(read.events.find((e) => e.event === "state:get:error")?.data).toEqual({
+			error: "Session not found.",
+			sessionId: w.session.id
+		})
+		const write = capture()
+		await expect(
+			stateSet.handler(
+				fakeSocket(w.stranger.id),
+				{
+					sessionId: w.session.id,
+					owner: { kind: "session", id: w.session.id },
+					slotId: WEATHER,
+					value: "fog",
+					requestId: "set-abc-4"
+				},
+				write.emit
+			)
+		).rejects.toThrow(/Session not found/)
+		expect(write.events.find((e) => e.event === "state:set:error")?.data).toEqual({
+			error: "Session not found.",
+			sessionId: w.session.id,
+			requestId: "set-abc-4"
+		})
+	}, 60_000)
+})
+
+// ── what a surface is told of a slot ────────────────────────────────────────
+
+describe("a slot's descriptor says what the session's vocabulary says of it", () => {
+	test("retired, required and the sheet that named it reach the read — each only when it holds", async () => {
+		declareSlots()
+		const w = await world()
+		const { defineAttributeSheet, defineStoredAttributeSlot, retireAttributeSlot, getAttributeSlot } =
+			await import("@serene-pub/sdk")
+		const dread = `somebody${n}:slot/dread@1`
+		defineStoredAttributeSlot(
+			dread,
+			{
+				type: "integer",
+				descriptor: "How frightened they are.",
+				appliesTo: ["cast"],
+				config: { min: 0, max: 10 }
+			},
+			{ userId: w.user.id }
+		)
+		retireAttributeSlot(dread)
+		const sheetId = `test:sheet/vitals-${n}@1`
+		const sheet = defineAttributeSheet(sheetId as never, {
+			label: { en: "Vitals" },
+			slots: [{ id: HP, required: true }]
+		})
+		const genreId = `test:genre/sheeted-${n}`
+		genre(genreId, {
+			name: { en: "Sheeted" },
+			family: "test",
+			slots: [getAttributeSlot(WEATHER)!, getAttributeSlot(dread)!],
+			sheets: [sheet],
+			events: {}
+		})
+		const { eq } = await import("drizzle-orm")
+		await testDb.update(schema.sessions).set({ genreId }).where(eq(schema.sessions.id, w.session.id))
+
+		const { stateGet } = await import("./state")
+		const res = await stateGet.handler(fakeSocket(w.user.id), { sessionId: w.session.id }, () => {})
+		const of = (id: string) => res.slots.find((s) => s.slotId === id)
+		expect(of(HP)).toMatchObject({ required: true, sheetId })
+		expect(of(HP)).not.toHaveProperty("retired")
+		expect(of(dread)).toMatchObject({ retired: true })
+		expect(of(dread)).not.toHaveProperty("required")
+		expect(of(WEATHER)).not.toHaveProperty("retired")
+		expect(of(WEATHER)).not.toHaveProperty("required")
+		expect(of(WEATHER)).not.toHaveProperty("sheetId")
+		// Phase 2: what the value IS rides the read — the field always, the
+		// catalogue shape when the slot names one (these declare `type` alone).
+		expect(of(HP)).toMatchObject({ field: { type: "integer" } })
+		expect(of(HP)).not.toHaveProperty("shape")
+		expect(of(WEATHER)?.field?.type).toBe("enum")
+	}, 60_000)
+
+	test("a slot shaped from the catalogue carries its shape id and field to the read", async () => {
+		declareSlots()
+		const w = await world()
+		await import("@serene-pub/core-catalog")
+		const { defineAttributeSlot: define, getAttributeSlot } = await import("@serene-pub/sdk")
+		const clock = `test:slot/clock-${n}@1`
+		define(clock, {
+			shape: "core:stat-shape/story-time@1",
+			descriptor: "Where the story clock stands.",
+			appliesTo: ["world"]
+		})
+		const genreId = `test:genre/clocked-${n}`
+		genre(genreId, { name: { en: "Clocked" }, family: "test", slots: [getAttributeSlot(clock)!], events: {} })
+		const { eq } = await import("drizzle-orm")
+		await testDb.update(schema.sessions).set({ genreId }).where(eq(schema.sessions.id, w.session.id))
+		const { stateGet } = await import("./state")
+		const res = await stateGet.handler(fakeSocket(w.user.id), { sessionId: w.session.id }, () => {})
+		expect(res.slots.find((s) => s.slotId === clock)).toMatchObject({
+			type: "text",
+			shape: "core:stat-shape/story-time@1",
+			field: { type: "string", format: "story-time" }
+		})
+	}, 60_000)
+})
+
+// Attributes phase 4 (2026-09-26): a location lore entry holds state. The read
+// lists each place of the world as an owner keyed `location:<slug>`, a write
+// names it like any session-layer owner, and the ledger names its rows.
+describe("places", () => {
+	const STASH = "test:slot/place-stash@1"
+	const PLACES = "test:genre/stats-places"
+
+	test("a location is an owner the read lists, a write reaches, and the ledger names", async () => {
+		_clearAttributeSlots()
+		const stash = defineAttributeSlot(STASH, {
+			shape: "core:stat-shape/list@1",
+			label: { en: "Stash" },
+			descriptor: "What is lying there.",
+			appliesTo: ["world", "location"]
+		})
+		genre(PLACES, { name: { en: "Places" }, family: "test", slots: [stash], events: {} })
+		const w = await world()
+		await testDb.update(schema.sessions).set({ genreId: PLACES }).where(eq(schema.sessions.id, w.session.id))
+		const [crypt] = await testDb
+			.insert(schema.lorebookEntries)
+			.values({ lorebookId: w.lorebook.id, typeId: "core:entry/location", typeVersion: 1, position: 1, title: "The Crypt", content: "…" })
+			.returning()
+		const { stateGet, stateSet, stateLedger } = await import("./state")
+		const socket = fakeSocket(w.user.id)
+
+		const res = await stateSet.handler(
+			socket,
+			{ sessionId: w.session.id, owner: { kind: "session_location", id: crypt.id }, slotId: STASH, value: ["lantern"] },
+			() => {}
+		)
+		const places = (res.state as unknown as { locations: { byId: Record<string, Record<string, unknown>> } }).locations
+		expect(places.byId[String(crypt.id)]?.["place-stash"]).toEqual(["lantern"])
+
+		const read = await stateGet.handler(socket, { sessionId: w.session.id }, () => {})
+		const owner = read.owners.find((o) => o.kind === "session_location")
+		expect(owner).toMatchObject({ key: "location:the_crypt", id: crypt.id, label: "The Crypt" })
+		expect(Object.keys(owner!.configs)).toEqual([STASH])
+
+		const ledger = await stateLedger.handler(socket, { sessionId: w.session.id }, () => {})
+		expect(ledger.rows.find((r) => r.slotId === STASH)).toMatchObject({ ownerKey: "location:the_crypt", ownerLabel: "The Crypt" })
+	})
 })

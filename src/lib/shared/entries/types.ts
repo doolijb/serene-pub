@@ -60,10 +60,20 @@ export const HISTORY_TYPE_ID = "core:entry/history"
  * map" is a question a reader can finally ask.
  */
 export const LOCATION_TYPE_ID = "core:entry/location"
+/**
+ * 🚧 A thing in the world somebody can hold (attributes phase 3a, 2026-09-26).
+ *
+ * World lore's shape plus a **supply** — `unique`, `limited` (`supplyLimit` of
+ * them) or `unlimited`. The other half of the count is on the holder: a list
+ * item referencing the entry carries a held count (`{ entryId, count }`).
+ * Nothing in core enforces the supply; genre pipelines read
+ * `core:query/item-supply@1` and decide.
+ */
+export const ITEM_TYPE_ID = "core:entry/item"
 
 /**
  * In the order the tabs read, which is also the order a mixed read returns —
- * world, then character, then history, then locations. Nothing downstream is
+ * world, then character, then history, then locations, then items. Nothing downstream is
  * documented to depend on it, which is exactly why it is written down rather
  * than rebuilt per caller.
  */
@@ -71,7 +81,8 @@ export const ENTRY_TYPE_IDS = [
 	WORLD_LORE_TYPE_ID,
 	CHARACTER_LORE_TYPE_ID,
 	HISTORY_TYPE_ID,
-	LOCATION_TYPE_ID
+	LOCATION_TYPE_ID,
+	ITEM_TYPE_ID
 ] as const
 
 export type EntryTypeId = (typeof ENTRY_TYPE_IDS)[number]
@@ -136,6 +147,13 @@ export interface EntryFieldsByType {
 		category: string | null
 		priority: number
 	}
+	/** World lore's field half plus the supply (`core-catalog` `itemEntryType`). */
+	[ITEM_TYPE_ID]: {
+		category: string | null
+		priority: number
+		supply: "unique" | "limited" | "unlimited"
+		supplyLimit: number | null
+	}
 }
 
 /** The columns the engine reads for every type, whatever it declares. */
@@ -151,15 +169,20 @@ export interface EntryColumns {
 	 * `NOT NULL` columns this replaces produced.
 	 */
 	name: string | null
-	/** Comma-delimited, as authored. `text[]` in storage since 0188. */
-	keys: string
 	/**
-	 * The condition keys, comma-delimited like `keys`. `text[]` in storage.
+	 * One element per key, exactly as the `text[]` column stores it (finding
+	 * #146). A list end to end — column, wire, editor — so a regex key such as
+	 * `\w{2,4}` or a literal "Smith, John" is never torn at a comma. Nothing
+	 * between the editor and the matcher joins or re-splits it.
+	 */
+	keys: string[]
+	/**
+	 * The condition keys, a list like `keys`. `text[]` in storage.
 	 *
 	 * Empty when the entry has no condition, which is every entry that has
 	 * never been given one.
 	 */
-	secondaryKeys: string
+	secondaryKeys: string[]
 	/**
 	 * `andAny` / `andAll` / `notAny` / `notAll`, or null for no condition.
 	 *
@@ -351,5 +374,6 @@ export const ENTRY_TYPE_LABEL = {
 	[WORLD_LORE_TYPE_ID]: "World Lore",
 	[CHARACTER_LORE_TYPE_ID]: "Character Lore",
 	[HISTORY_TYPE_ID]: "History",
-	[LOCATION_TYPE_ID]: "Places"
+	[LOCATION_TYPE_ID]: "Places",
+	[ITEM_TYPE_ID]: "Items"
 } as const satisfies Record<EntryTypeId, string>

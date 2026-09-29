@@ -1,14 +1,14 @@
 /**
  * Round-9 audit fix (MEDIUM): sessionMessagesSwipeLeftHandler was the only one
  * of Regenerate/Continue/SwipeRight/SwipeLeft that didn't wrap its mutation
- * in withSessionTriggerLock (the per-session mutex the others already share) — it
+ * in withSessionGenerationLock (the per-session mutex the others already share) — it
  * read the message, then wrote back a whole-row snapshot taken before that
  * read, with no serialization against a concurrent Regenerate/Continue/
  * SwipeRight on the same message. A generation starting in one of those
  * handlers while an unlocked SwipeLeft was mid-flight could have its
  * isGenerating/queueItemId state clobbered back to SwipeLeft's stale
  * pre-read values. Fixed by wrapping SwipeLeft's body in the same
- * withSessionTriggerLock(message.sessionId, ...) call, matching SwipeRight's
+ * withSessionGenerationLock(message.sessionId, ...) call, matching SwipeRight's
  * structure. This test proves SwipeLeft now actually goes through that
  * shared per-session lock: a held lock for the session blocks SwipeLeft's write
  * until released, and the write only lands afterward.
@@ -66,10 +66,10 @@ function fakeSocket(userId: number) {
 const noopEmit = () => {}
 
 describe("sessionMessages:swipeLeft — generation lock (PGlite integration)", () => {
-	test("waits for an in-flight withSessionTriggerLock holder on the same session before writing", async () => {
+	test("waits for an in-flight withSessionGenerationLock holder on the same session before writing", async () => {
 		const { sessionMessagesSwipeLeftHandler } = await import("./sessions")
-		const { withSessionTriggerLock } = await import(
-			"$lib/server/utils/sessionTriggerLock"
+		const { withSessionGenerationLock } = await import(
+			"$lib/server/utils/sessionGenerationLock"
 		)
 
 		const user = await makeUser("swipeleft-lock-user")
@@ -98,7 +98,7 @@ describe("sessionMessages:swipeLeft — generation lock (PGlite integration)", (
 
 		// Hold the session's trigger lock, simulating a concurrent Regenerate/
 		// Continue/SwipeRight already in flight for this session.
-		const lockHolder = withSessionTriggerLock(session.id, async () => {
+		const lockHolder = withSessionGenerationLock(session.id, async () => {
 			order.push("lock-holder-start")
 			await lockHeld
 			order.push("lock-holder-end")

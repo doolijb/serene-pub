@@ -6,11 +6,11 @@
  * message's ⋮ menu, a widget's `invoke(key)` and a frame's `{ t: "invoke" }`:
  *
  * - **Core's verbs** (`specSlug === "core"` — stop · edit · branch · retry ·
- *   continue · swipe · hide · delete) go to the host's *real* handlers. They
+ *   extend · swipe · hide · delete) go to the host's *real* handlers. They
  *   are built-ins with lifecycles of their own (`sessionMessages:*`,
- *   `sessions:triggerGenerateMessage`); `sessions:triggerFunction` refuses
- *   `continue` by name and serves none of the rest, so a widget that fired
- *   `invoke('continue')` through the generic fire got a refusal for doing
+ *   `sessions:fireTurn`); `sessions:fireAction` refuses
+ *   `extend` by name and serves none of the rest, so a widget that fired
+ *   `invoke('extend')` through the generic fire got a refusal for doing
  *   exactly what the envelope invited.
  * - **Everything else** is the audited fire, carrying the action's
  *   **identity** (`<spec slug>#<key>`) so the server checks *that*
@@ -21,15 +21,8 @@
  * restates it.
  */
 
-import type { WidgetInvokeArgs, WidgetPayload } from "@serene-pub/sdk"
+import type { WidgetInvokeArgs } from "@serene-pub/sdk"
 import { CORE_ACTION_SPEC, actionIdentity } from "$lib/shared/actions/identity"
-
-/**
- * ⏳ The app's spelling of an invocation's payload.
- *
- * @deprecated Use `WidgetPayload` — the name the SDK publishes.
- */
-export type InvokePayload = WidgetPayload
 
 /**
  * What rides beside an invocation: the subject message, entered values.

@@ -22,7 +22,7 @@
 		class="sticky top-0 hidden min-w-0 self-start py-1 [overflow-wrap:anywhere] @min-[48rem]/docs:block"
 	>
 		<p
-			class="text-surface-600-400 mb-2 text-xs font-medium tracking-wide uppercase"
+			class="text-surface-600-400 mb-2 text-xs font-medium"
 		>
 			On this page
 		</p>

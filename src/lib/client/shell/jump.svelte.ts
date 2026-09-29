@@ -17,7 +17,8 @@
  * A **scope** is what the next keystroke searches. It is resolved, not stored,
  * so it follows the view and the route by itself — except when a person has
  * said otherwise, which is what `source: "manual"` records. A manual scope
- * (the chip backspaced away, or a `kind:` prefix typed) sticks until the
+ * (the scope widened by Backspace or the chip's ×, or a `kind:` prefix typed)
+ * sticks until the
  * overlay closes, because the alternative is a scope that snaps back under the
  * cursor.
  *
@@ -81,8 +82,8 @@ export type JumpKindScopeKey = AnyJumpKind | typeof ADMIN_SCOPE_KEY
  * What a `kind:` scope is called on the chip.
  *
  * Plural, because a scope is a set of things rather than one of them, and each
- * word is the one its own family already uses. "Lorebooks" and not the rail's
- * "Lorebooks+" — the suffix is that nav entry's badge, not the noun.
+ * word is the one its own family already uses, and the same word the rail
+ * item says.
  *
  * "Documentation" is the one mass noun: the plural rule asks for the SET, and
  * the set of docs is called the documentation everywhere else in the app
@@ -150,7 +151,8 @@ export function isAdminPath(pathname: string): boolean {
 }
 
 /**
- * `/docs`, `/docs/getting-around`, … — the documentation read as a full page.
+ * `/docs`, `/docs/getting-around`, … — the Help view's addresses
+ * (`helpRouter.svelte.ts`).
  *
  * Not `/document-view/docs`: that mirror is its own surface with its own
  * inline search, and it does not carry the shell (there is no Jump on it).
@@ -187,8 +189,8 @@ export function resolveScope(input: {
 			label: ADMIN_SCOPE_LABEL,
 			source: "route"
 		}
-	// Reading the documentation as a full page is the same standing as having
-	// the Help view open, which registers this label for itself.
+	// On a Help address with the view not open (closed on a phone, say):
+	// the same standing as having it open, which registers this label itself.
 	if (isDocsPath(input.pathname))
 		return {
 			key: "doc",
@@ -224,6 +226,12 @@ export interface JumpCtx {
 	close: () => void
 	/** Pin the scope by hand (a `kind:` prefix, or the chip's ×, which passes null). */
 	setScope: (key: string | null) => void
+	/**
+	 * Widen the scope one step — Backspace on an empty box. The current scope
+	 * gives way to the ROUTE's scope (Admin over /admin, Documentation over
+	 * /docs), and the route's scope to Everywhere. A no-op on Everywhere.
+	 */
+	widen: () => void
 }
 
 class JumpController implements JumpCtx {
@@ -321,6 +329,30 @@ class JumpController implements JumpCtx {
 			return
 		}
 		this.#manual = { key: null, label: EVERYWHERE_LABEL, source: "manual" }
+	}
+
+	widen(): void {
+		const current = this.#scope
+		if (current.key === null) return
+		// What the page alone would scope to — no view, nothing chosen.
+		const route = resolveScope({
+			manual: null,
+			activeView: null,
+			viewLabel: null,
+			pathname: this.#deps.getPathname()
+		})
+		// A step only when the route's scope is somewhere NEW: already on it
+		// (by the route, or by a hand that picked the same key), the next step
+		// out is Everywhere.
+		if (
+			route.key !== null &&
+			route.key !== current.key &&
+			current.source !== "route"
+		) {
+			this.#manual = { ...route, source: "manual" }
+			return
+		}
+		this.setScope(null)
 	}
 
 	open(opts: { scope?: string | null } = {}): void {

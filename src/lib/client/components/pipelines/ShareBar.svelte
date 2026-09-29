@@ -44,18 +44,16 @@
 	/**
 	 * One colour per band, by index, wrapping.
 	 *
-	 * Fixed hues at a single lightness/chroma so no band shouts louder than
-	 * another — a band's colour is an identity, not a severity. Stated in
-	 * `oklch` so the set stays evenly spaced perceptually rather than in the
-	 * RGB cube, and legible against both themes without a second palette.
+	 * The theme's role colours at their 500 stop, so no band shouts louder
+	 * than another — a band's colour is an identity, not a severity — and
+	 * every theme restyles them (STYLE-GUIDE §2.7: no oklch in a component).
 	 */
 	const TONES = [
-		"oklch(0.72 0.13 250)",
-		"oklch(0.72 0.13 160)",
-		"oklch(0.72 0.13 60)",
-		"oklch(0.72 0.13 20)",
-		"oklch(0.72 0.13 310)",
-		"oklch(0.72 0.13 200)"
+		"var(--color-primary-500)",
+		"var(--color-secondary-500)",
+		"var(--color-tertiary-500)",
+		"var(--color-success-500)",
+		"var(--color-surface-500)"
 	]
 	const toneOf = (m: Member, i: number) => TONES[(m.tone ?? i) % TONES.length]
 
@@ -161,6 +159,7 @@
 						: 'transparent'}; border:1px solid {toneOf(m, i)}"
 					disabled={readonly}
 					aria-pressed={(shares[m.key] ?? 0) > 0}
+					aria-label={`Include ${m.label ?? m.key}`}
 					title={(shares[m.key] ?? 0) > 0
 						? `Leave ${m.label ?? m.key} out`
 						: `Include ${m.label ?? m.key}`}

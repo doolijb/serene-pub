@@ -3,6 +3,7 @@
 	import { Avatar } from "@skeletonlabs/skeleton-svelte"
 	import * as Icons from "@lucide/svelte"
 	import PanelNavHeader from "$lib/client/components/panels/PanelNavHeader.svelte"
+	import DetailHero from "$lib/client/components/panels/DetailHero.svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 	import { declareInterest } from "$lib/client/sockets/interest.svelte"
 	import { interestKey } from "$lib/shared/sockets/interest"
@@ -22,6 +23,9 @@
 		onViewLorebook?: (lorebookId: number) => void
 		/** Hand the id to the list's own delete flow, confirmation and all. */
 		onDelete?: (id: number) => void
+		/** Star or unstar it (owner only); `isFavorite` comes from the list row. */
+		onToggleFavorite?: (id: number, isFavorite: boolean) => void
+		isFavorite?: boolean
 		/** Whether this user may change the session. The list row knows; ask it. */
 		canEdit?: boolean
 		/** Whether this user owns the session — the one who may delete it. */
@@ -44,6 +48,8 @@
 		onOpen,
 		onViewLorebook,
 		onDelete,
+		onToggleFavorite,
+		isFavorite = false,
 		canEdit = false,
 		isOwner = false,
 		genreName,
@@ -149,10 +155,38 @@
 	     that repeats its buttons at the foot makes the reader check both. -->
 	<div class="shrink-0 pb-3">
 		<PanelNavHeader
-			title={session?.name || "Session"}
+			title="Session"
 			{onBack}
 			backLabel="Back to sessions"
 			actionsLabel="Session"
+			menuItems={[
+				canEdit && {
+					label: "Edit session",
+					icon: Icons.Pencil,
+					onSelect: onEdit
+				},
+				lorebookId != null &&
+					onViewLorebook && {
+						label: "View lorebook",
+						icon: Icons.BookMarked,
+						onSelect: () => onViewLorebook?.(lorebookId)
+					},
+				isOwner &&
+					onToggleFavorite && {
+						label: isFavorite ? "Unstar" : "Star",
+						icon: isFavorite ? Icons.StarOff : Icons.Star,
+						onSelect: () =>
+							onToggleFavorite?.(sessionId, !isFavorite)
+					},
+				isOwner && onDelete && { separator: true },
+				isOwner &&
+					onDelete && {
+						label: "Delete session",
+						icon: Icons.Trash2,
+						destructive: true,
+						onSelect: () => onDelete?.(sessionId)
+					}
+			]}
 		>
 			{#snippet primaryAction()}
 				<button
@@ -165,116 +199,26 @@
 					<Icons.ArrowRight size={16} aria-hidden="true" />
 				</button>
 			{/snippet}
-			<!-- The {#if} lives INSIDE the snippet: a snippet passed as a prop
-			     must be a direct child of the component tag. -->
-			{#snippet actions()}
-				{#if canEdit}
-					<button
-						class="btn btn-sm popover-menu-btn hover:preset-filled-primary-500"
-						onclick={onEdit}
-						type="button"
-					>
-						<Icons.Pencil size={16} aria-hidden="true" />
-						<span>Edit session</span>
-					</button>
-				{/if}
-				{#if lorebookId != null && onViewLorebook}
-					<button
-						class="btn btn-sm popover-menu-btn hover:preset-filled-primary-500"
-						onclick={() => onViewLorebook?.(lorebookId)}
-						type="button"
-					>
-						<Icons.BookMarked size={16} aria-hidden="true" />
-						<span>View lorebook</span>
-					</button>
-				{/if}
-				{#if isOwner && onDelete}
-					<button
-						class="btn btn-sm popover-menu-btn hover:preset-filled-error-500"
-						onclick={() => onDelete?.(sessionId)}
-						type="button"
-					>
-						<Icons.Trash2 size={16} aria-hidden="true" />
-						<span>Delete session</span>
-					</button>
-				{/if}
-			{/snippet}
 		</PanelNavHeader>
 	</div>
 
 	{#if isLoading}
 		<div class="flex flex-1 items-center justify-center">
-			<Icons.Loader2 size={24} class="text-surface-400 animate-spin" />
+			<Icons.Loader2 size={24} class="text-surface-600-400 animate-spin" />
 		</div>
 	{:else if session}
 		<div class="flex min-h-0 flex-1 flex-col overflow-y-auto">
 			<!-- Hero: the one place this panel says which session it is
 			     showing, in the same shape the row used, scaled up. -->
-			<div class="flex shrink-0 items-start gap-3 pb-4">
-				<span class="relative block size-[88px] shrink-0">
-					{#if coverSrc}
-						<img
-							src={coverSrc}
-							alt=""
-							class="size-[88px] rounded-[14px] object-cover object-top"
-						/>
-					{:else}
-						<span
-							class="bg-surface-200-800 grid size-[88px] place-items-center rounded-[14px]"
-						>
-							<Icons.MessageSquare
-								size={40}
-								class="text-surface-600-400"
-								aria-hidden="true"
-							/>
-						</span>
-					{/if}
-					{#if isGroup}
-						{#if badgeSrc}
-							<img
-								src={badgeSrc}
-								alt=""
-								class="ring-surface-100-900 absolute -right-1 -bottom-1 size-11 rounded-[10px] object-cover object-top ring-2"
-							/>
-						{:else}
-							<span
-								class="bg-surface-300-700 ring-surface-100-900 absolute -right-1 -bottom-1 grid size-11 place-items-center rounded-[10px] ring-2"
-							>
-								<Icons.UsersRound
-									size={20}
-									class="text-surface-600-400"
-									aria-hidden="true"
-								/>
-							</span>
-						{/if}
-					{/if}
-				</span>
-				<div class="min-w-0 flex-1">
-					<!-- The heading font without a heading element:
-					     PanelNavHeader above already owns this panel's heading,
-					     and a second one saying the same name would put two
-					     entries in the outline for one thing. -->
-					<p class="funnel-display truncate text-lg font-semibold">
-						{session.name || "Untitled Session"}
-					</p>
-					{#if heroMeta.length}
-						<p class="text-surface-500 truncate text-xs">
-							{heroMeta.join(" · ")}
-						</p>
-					{/if}
-					{#if tags.length > 0}
-						<div class="mt-1.5 flex flex-wrap gap-1">
-							{#each tags as tag}
-								<span
-									class="preset-tonal-surface rounded px-2 py-0.5 text-xs"
-								>
-									{tag}
-								</span>
-							{/each}
-						</div>
-					{/if}
-				</div>
-			</div>
+			<DetailHero
+				class="pb-4"
+				title={session.name || "Untitled session"}
+				image={coverSrc}
+				icon={Icons.MessageSquare}
+				subtitle={heroMeta.length ? heroMeta.join(" · ") : undefined}
+				badge={isGroup ? groupBadge : undefined}
+				chips={tags.length > 0 ? tagChips : undefined}
+			/>
 
 			<!-- One card per section. A section whose fact this session has
 			     none of is not rendered at all: an empty card states a blank
@@ -283,7 +227,7 @@
 			<div class="flex flex-col gap-3 pb-3">
 				{#if characters.length > 0 || personas.length > 0}
 					<section class="panel-card">
-						<p class="text-surface-500 mb-1.5 text-xs">Cast</p>
+						<p class="text-surface-600-400 mb-1.5 text-xs">Cast</p>
 						<div class="flex flex-col gap-2">
 							{#each characters as c}
 								<div class="flex items-center gap-2">
@@ -304,7 +248,7 @@
 							{/each}
 						</div>
 						{#if personas.length > 0}
-							<p class="text-surface-500 mt-3 mb-1.5 text-xs">
+							<p class="text-surface-600-400 mt-3 mb-1.5 text-xs">
 								You
 							</p>
 							<div class="flex flex-col gap-2">
@@ -334,7 +278,7 @@
 
 				{#if lastMessage}
 					<section class="panel-card">
-						<p class="text-surface-500 mb-1.5 text-xs">Last line</p>
+						<p class="text-surface-600-400 mb-1.5 text-xs">Last line</p>
 						<p class="text-sm leading-relaxed">
 							{#if lastMessage.speakerName}
 								<span class="text-surface-700-300">
@@ -350,7 +294,7 @@
 
 				{#if session.scenario}
 					<section class="panel-card">
-						<p class="text-surface-500 mb-1.5 text-xs">Scenario</p>
+						<p class="text-surface-600-400 mb-1.5 text-xs">Scenario</p>
 						<p class="text-sm leading-relaxed whitespace-pre-wrap">
 							{session.scenario}
 						</p>
@@ -359,7 +303,7 @@
 
 				{#if lorebookId != null}
 					<section class="panel-card">
-						<p class="text-surface-500 mb-1.5 text-xs">Lorebook</p>
+						<p class="text-surface-600-400 mb-1.5 text-xs">Lorebook</p>
 						<div class="flex min-w-0 items-center gap-2">
 							<Icons.BookMarked
 								size={16}
@@ -386,7 +330,7 @@
 
 				{#if guests.length > 0}
 					<section class="panel-card">
-						<p class="text-surface-500 mb-1.5 text-xs">
+						<p class="text-surface-600-400 mb-1.5 text-xs">
 							Shared with
 						</p>
 						<div class="flex flex-col gap-2">
@@ -413,3 +357,31 @@
 		</p>
 	{/if}
 </div>
+
+{#snippet groupBadge()}
+	{#if badgeSrc}
+		<img
+			src={badgeSrc}
+			alt=""
+			class="ring-surface-100-900 block size-9 rounded-[10px] object-cover object-top ring-2"
+		/>
+	{:else}
+		<span
+			class="bg-surface-300-700 ring-surface-100-900 grid size-9 place-items-center rounded-[10px] ring-2"
+		>
+			<Icons.UsersRound
+				size={18}
+				class="text-surface-600-400"
+				aria-hidden="true"
+			/>
+		</span>
+	{/if}
+{/snippet}
+
+{#snippet tagChips()}
+	{#each tags as tag}
+		<span class="preset-tonal-surface rounded px-2 py-0.5 text-xs">
+			{tag}
+		</span>
+	{/each}
+{/snippet}

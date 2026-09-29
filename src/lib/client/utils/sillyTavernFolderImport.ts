@@ -3,7 +3,8 @@ import type { SocketEventMap } from "$lib/client/sockets/typedSocket"
 import {
 	resolveSillyTavernDataRoot,
 	relativeToDataRoot,
-	isRelevantImportPath
+	isRelevantImportPath,
+	isSillyTavernChatHistoryPath
 } from "$lib/shared/utils/sillyTavernPaths"
 
 export interface PickedFile {
@@ -17,15 +18,8 @@ export interface FolderPickResult {
 	files: PickedFile[]
 	/** Files scan needs to read (characters, settings.json, groups, worlds). */
 	scanFiles: PickedFile[]
-	/** Session/group-session history — only uploaded for what the user selects to import. */
+	/** SillyTavern chat/group-chat history (`chats/`, `group chats/`) — only uploaded for what the user selects to import. */
 	deferredFiles: PickedFile[]
-}
-
-function isSessionHistoryPath(relativePath: string): boolean {
-	return (
-		relativePath.startsWith("sessions/") ||
-		relativePath.startsWith("group sessions/")
-	)
 }
 
 /**
@@ -55,8 +49,12 @@ export function resolvePickedFolder(
 
 	return {
 		files,
-		scanFiles: files.filter((f) => !isSessionHistoryPath(f.relativePath)),
-		deferredFiles: files.filter((f) => isSessionHistoryPath(f.relativePath))
+		scanFiles: files.filter(
+			(f) => !isSillyTavernChatHistoryPath(f.relativePath)
+		),
+		deferredFiles: files.filter((f) =>
+			isSillyTavernChatHistoryPath(f.relativePath)
+		)
 	}
 }
 

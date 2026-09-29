@@ -12,7 +12,7 @@
 	 *
 	 * A tile is the button. Two words and a state fit in half a column, so two
 	 * fit across the dock and four across the page, and there is no per-row
-	 * button to truncate around. Nine tiles take the room three rows used to.
+	 * button to truncate around.
 	 *
 	 * ## The labels are the SDK's, not ours
 	 *

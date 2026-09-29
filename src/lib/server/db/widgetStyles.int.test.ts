@@ -47,7 +47,7 @@ const sync = async (
 const widget = (id: string, presets: WidgetDecl["presets"]): WidgetDecl => ({
 	id,
 	title: id,
-	surface: { kind: "native", component: id },
+	component: id,
 	presets
 })
 

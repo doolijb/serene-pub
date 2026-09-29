@@ -218,7 +218,7 @@
 			</span>
 			{#if row.assumed}
 				<span
-					class="text-muted border-b border-dotted text-[10px]"
+					class="text-surface-600-400 border-b border-dotted text-[11px]"
 					title="Nothing has tested this connection, so this is the connection type's own guess."
 				>
 					Assumed
@@ -243,9 +243,9 @@
 			</div>
 		</div>
 		{#if row.tagline}
-			<p class="text-muted text-xs">{row.tagline}</p>
+			<p class="text-surface-600-400 text-xs">{row.tagline}</p>
 		{/if}
-		<p class="text-muted text-xs">{row.provenance}</p>
+		<p class="text-surface-600-400 text-xs">{row.provenance}</p>
 		{#if row.derived}
 			<p
 				class="text-warning-700 dark:text-warning-400 text-xs {row.contested
@@ -263,26 +263,26 @@
 		<Icons.ToggleRight size={14} aria-hidden="true" />
 		What this connection can do
 	</span>
-	<p class="text-muted text-xs">
+	<p class="text-surface-600-400 text-xs">
 		Auto follows this service's preset and the last successful test. Switch
 		one by hand only when you know better than the backend does — a hand-set
 		value outranks every test that comes after it.
 	</p>
-	<p class="text-muted text-xs">{rows.testedText}</p>
+	<p class="text-surface-600-400 text-xs">{rows.testedText}</p>
 	<!-- Which of the two wire switches is in effect. Above the Advanced
 	     disclosure the switches themselves live behind, because the outcome is
 	     what a person needs and the pair of switches is where they would go
 	     looking for it. -->
 	{#if rows.wireModeText}
-		<p class="text-muted text-xs">{rows.wireModeText}</p>
+		<p class="text-surface-600-400 text-xs">{rows.wireModeText}</p>
 	{/if}
 	<div aria-live="polite" aria-atomic="true" class="sr-only">
 		{announcement}
 	</div>
 	{#if loading}
-		<p class="text-muted text-xs">Loading…</p>
+		<p class="text-surface-600-400 text-xs">Loading…</p>
 	{:else if !rows.declared}
-		<p class="text-muted text-xs italic">
+		<p class="text-surface-600-400 text-xs italic">
 			Nothing is declared for this connection type, so there is nothing to
 			switch.
 		</p>

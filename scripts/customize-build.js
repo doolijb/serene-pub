@@ -150,19 +150,36 @@ replaceOrFail(
 			console.log(\`🌐 Launch Serene Pub in your browser at http://localhost:\${port} or http://127.0.0.1:\${port}\`);
 			console.log(\`\`);
 			
-			// Auto-open browser if SERENE_AUTO_OPEN is not disabled
-			if (process.env.SERENE_AUTO_OPEN !== '1' && process.env.SERENE_AUTO_OPEN !== 'true') {
+			// AUTO_OPEN_CLIENT: 1 (default) opens the client on start, 0 does
+			// not. SERENE_AUTO_OPEN is its deprecated, inverted predecessor
+			// ("1" meant DON'T open) — still honoured, silently, when the new
+			// one is unset. DEFAULT_CLIENT (window|browser) is the desktop
+			// launcher's to read: this server can only open a browser, and
+			// the launcher starts it with AUTO_OPEN_CLIENT=0 and opens its own.
+			// In a container none of these apply — there is nothing to open.
+			const fs = process.getBuiltinModule('node:fs');
+			const inContainer = ['/.dockerenv', '/run/.containerenv'].some((f) => fs.existsSync(f));
+			const openSetting = process.env.AUTO_OPEN_CLIENT?.trim().toLowerCase();
+			const autoOpen = !inContainer && (openSetting
+				? !['0', 'false', 'no', 'off'].includes(openSetting)
+				: process.env.SERENE_AUTO_OPEN !== '1' && process.env.SERENE_AUTO_OPEN !== 'true');
+			if (autoOpen) {
 				setTimeout(() => {
-					import('open').then(({ default: open }) => {
-						open(\`http://localhost:\${port}\`);
+					import('open').then(async ({ default: open }) => {
+						const child = await open(\`http://localhost:\${port}\`);
+						// A missing opener (no xdg-open on a minimal host) arrives
+						// as an 'error' event; unhandled, it takes the server down.
+						child.on('error', (err) => {
+							console.warn(\`⚠️  Could not auto-open browser: \${err.message}\`);
+						});
 						console.log(\`🚀 Opening Serene Pub in your default browser...\`);
 					}).catch((err) => {
 						console.warn(\`⚠️  Could not auto-open browser: \${err.message}\`);
 						console.log(\`💡 You can manually open http://localhost:\${port} in your browser\`);
 					});
 				}, 1000);
-			} else {
-				console.log(\`ℹ️  Auto-open browser disabled (SERENE_AUTO_OPEN=\${process.env.SERENE_AUTO_OPEN})\`);
+			} else if (!inContainer) {
+				console.log(\`ℹ️  Auto-open disabled\`);
 			}
 		}`,
 	"Branded the listening message and injected the startup banner + browser auto-open"

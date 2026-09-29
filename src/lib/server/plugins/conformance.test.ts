@@ -120,7 +120,7 @@ describe("conformance harness — the task reach", () => {
 		// A render is pure — template and variables in, a string out — so the
 		// engine host dispatches it as a task (R-3).
 		const r = await checkConformance(REACHES, {
-			engines: { "acme:template/mustache@1": "t" }
+			templateEngines: { "acme:template/mustache@1": "t" }
 		})
 		expect(r.backends).toEqual([])
 		expect(r.issues.quickjs).toMatch(/template engine acme:template\/mustache@1/)
@@ -130,7 +130,7 @@ describe("conformance harness — the task reach", () => {
 	it("a pure link and a pure renderer pass", async () => {
 		const r = await checkConformance(REACHES, {
 			hookKinds: { "core:script:text/transform@1": "pure" },
-			engines: { "acme:template/mustache@1": "pure" }
+			templateEngines: { "acme:template/mustache@1": "pure" }
 		})
 		expect(r.backends.sort()).toEqual(["quickjs", "ses"])
 		expect(r.issues).toEqual({})

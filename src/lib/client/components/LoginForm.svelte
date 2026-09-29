@@ -96,7 +96,7 @@
 
 			if (!response.ok) {
 				toaster.error({
-					title: "Login Failed",
+					title: "Sign-in failed",
 					description: data.error || "Invalid username or passphrase"
 				})
 				isLoading = false
@@ -104,8 +104,8 @@
 			}
 
 			toaster.success({
-				title: "Login Successful",
-				description: "Welcome back!"
+				title: "Signed in",
+				description: "Welcome back."
 			})
 
 			// Refresh authentication to load user context.
@@ -121,7 +121,7 @@
 		} catch (error) {
 			console.error("Login error:", error)
 			toaster.error({
-				title: "Login Error",
+				title: "Sign-in error",
 				description: "An unexpected error occurred. Please try again."
 			})
 			isLoading = false
@@ -156,7 +156,13 @@
 		aria-label="Sign in"
 	>
 		<div class="flex items-center gap-3">
-			<img src="/logo.png" alt="" width="34" class="h-auto w-[34px]" />
+			<img
+				src="/icon-x48.png"
+				srcset="/icon-x48.png 1x, /icon-x256.png 2x"
+				alt=""
+				width="34"
+				class="h-auto w-[34px]"
+			/>
 			<span
 				class="text-surface-950 dark:text-surface-50 [font-family:var(--typo-heading--font-family)] text-[20px] leading-tight font-semibold tracking-[-0.01em]"
 			>
@@ -176,7 +182,7 @@
 		</div>
 
 		<div class="grid gap-1.5">
-			<label for="username" class="text-surface-500 text-xs">
+			<label for="username" class="text-surface-600-400 text-xs">
 				Username
 			</label>
 			<input
@@ -201,7 +207,7 @@
 		</div>
 
 		<div class="grid gap-1.5">
-			<label for="passphrase" class="text-surface-500 text-xs">
+			<label for="passphrase" class="text-surface-600-400 text-xs">
 				Passphrase
 			</label>
 			<div class="relative">
@@ -259,7 +265,7 @@
 		</button>
 
 		<div
-			class="text-surface-500 mt-0.5 flex items-center justify-between text-xs"
+			class="text-surface-600-400 mt-0.5 flex items-center justify-between text-xs"
 		>
 			<!-- Also disabled mid-submit: this navigates to a different shell,
 			     and a successful login is already on its way to reloading

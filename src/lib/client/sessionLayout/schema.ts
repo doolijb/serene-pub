@@ -22,6 +22,7 @@
  * Strips are horizontal (top/bottom of the core) and scroll sideways when
  * tight.
  */
+import { isRetiredWidget } from "./widgetGrid"
 
 export type ZoneKind = "side" | "strip"
 export type SideMode = "drawer" | "rail" | "icons" | "hidden"
@@ -184,6 +185,12 @@ export function resolveZone(
  * Accept whatever the blob holds and return a usable layout — unknown
  * fields survive verbatim (it is the user's template), missing structure
  * gets defaults, and non-layouts fall back wholesale.
+ *
+ * A RETIRED widget id (`RETIRED_WIDGET_IDS` — `inventory` since R79) leaves a
+ * zone's list here, the same way `loadArranged` drops it from an arrangement:
+ * a zone that held only the retired widget is an empty zone, never a zone of
+ * nothing drawn — so the editor offers it as a drop target and a first drop
+ * pins it, as it does any empty zone.
  */
 export function normalizeZoneLayout(
 	raw: unknown,
@@ -205,7 +212,9 @@ export function normalizeZoneLayout(
 			...def,
 			kind: def.kind === "strip" ? "strip" : "side",
 			widgets: Array.isArray(def.widgets)
-				? def.widgets.filter((w) => typeof w === "string")
+				? def.widgets.filter(
+						(w) => typeof w === "string" && !isRetiredWidget(w)
+					)
 				: []
 		}
 	}

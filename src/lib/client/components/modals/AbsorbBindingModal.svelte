@@ -134,6 +134,7 @@
 						Absorb "{node.name}" into…
 					</h2>
 					<button
+						aria-label="Close"
 						class="btn btn-sm preset-tonal"
 						onclick={() => onOpenChange({ open: false })}
 					>
@@ -150,6 +151,7 @@
 					</p>
 
 					<input
+						aria-label="Search characters"
 						class="input text-sm"
 						type="text"
 						placeholder="Search characters…"
@@ -166,7 +168,7 @@
 						{/if}
 						{#each filtered as candidate}
 							<button
-								class="preset-outlined-surface-300-700 hover:preset-filled-surface-500 btn w-full justify-start gap-3 text-left text-sm"
+								class="preset-outlined-surface-300-700 hover:bg-surface-200-800 btn w-full justify-start gap-3 text-left text-sm"
 								onclick={() => selectTarget(candidate)}
 							>
 								<Icons.User
@@ -204,7 +206,7 @@
 							class="bg-surface-200-800 space-y-2 rounded-lg p-4 text-sm"
 						>
 							<p
-								class="text-surface-700-300 text-xs font-semibold tracking-wide uppercase"
+								class="text-surface-600-400 text-xs font-semibold"
 							>
 								Absorbing
 							</p>
@@ -213,7 +215,7 @@
 									<div class="font-medium">
 										"{absorbed.name}"
 									</div>
-									<div class="text-surface-400 text-xs">
+									<div class="text-surface-600-400 text-xs">
 										deleted, becomes an alias
 									</div>
 								</div>
@@ -225,7 +227,7 @@
 									<div class="font-medium">
 										"{survivor.name}"
 									</div>
-									<div class="text-surface-400 text-xs">
+									<div class="text-surface-600-400 text-xs">
 										survives
 									</div>
 								</div>
@@ -245,8 +247,8 @@
 									above.
 								</p>
 							{/if}
-							<p class="text-surface-500 text-xs">
-								This can be undone from the Recent Merges list
+							<p class="text-surface-600-400 text-xs">
+								This can be undone from the recent merges list
 								in the Bindings tab, as long as "{survivor.name}"
 								hasn't since been absorbed elsewhere too.
 							</p>
@@ -268,11 +270,11 @@
 								<Icons.ArrowLeft size={16} /> Back
 							</button>
 							<button
-								class="btn preset-filled-warning-500"
+								class="btn preset-filled-primary-500"
 								disabled={isMerging}
 								onclick={confirm}
 							>
-								<Icons.GitMerge size={16} /> Confirm Absorb
+								<Icons.GitMerge size={16} /> Absorb
 							</button>
 						</div>
 					</div>

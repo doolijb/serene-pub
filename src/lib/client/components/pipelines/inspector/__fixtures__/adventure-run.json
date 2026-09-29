@@ -1939,7 +1939,7 @@
 								"content": "Wren: I set my lantern on the table and shut the harbour door behind me. \"Verity, the bell rang three times tonight. Tell me what it means, and I'll help you search.\""
 							}
 						],
-						"promptFormat": "split_session",
+						"promptFormat": "split_chat",
 						"usedVariables": [
 							"systemBlock",
 							"currentDate",
@@ -2037,7 +2037,7 @@
 								"content": "Wren: I set my lantern on the table and shut the harbour door behind me. \"Verity, the bell rang three times tonight. Tell me what it means, and I'll help you search.\""
 							}
 						],
-						"promptFormat": "split_session",
+						"promptFormat": "split_chat",
 						"usedVariables": [
 							"systemBlock",
 							"currentDate",
@@ -2171,7 +2171,7 @@
 								"content": "Wren: I set my lantern on the table and shut the harbour door behind me. \"Verity, the bell rang three times tonight. Tell me what it means, and I'll help you search.\""
 							}
 						],
-						"promptFormat": "split_session",
+						"promptFormat": "split_chat",
 						"usedVariables": [
 							"systemBlock",
 							"currentDate",
@@ -2407,7 +2407,7 @@
 								"content": "Wren: I set my lantern on the table and shut the harbour door behind me. \"Verity, the bell rang three times tonight. Tell me what it means, and I'll help you search.\""
 							}
 						],
-						"promptFormat": "split_session",
+						"promptFormat": "split_chat",
 						"usedVariables": [
 							"systemBlock",
 							"currentDate",
@@ -3623,7 +3623,7 @@
 								"content": "\n\n# What this turn is about\n[object Object]\n\n# The world as it stands\n[object Object]\n\nAssistant Characters (AI-controlled):\n```json\n[\n  {\n    \"name\": \"Verity\",\n    \"description\": \"A quiet archivist who remembers everything.\"\n  }\n]\n```\n\nWorld lore: \n```json\n{\"The Drowned Bell\":\"A bronze bell sunk in the harbour of Umber City. Locals say it rings before a storm.\"}\n```\n\n\n[object Object]\n"
 							}
 						],
-						"promptFormat": "split_session",
+						"promptFormat": "split_chat",
 						"usedVariables": [
 							"system",
 							"plan",
@@ -3697,7 +3697,7 @@
 								"content": "\n\n# What this turn is about\n[object Object]\n\n# The world as it stands\n[object Object]\n\nAssistant Characters (AI-controlled):\n```json\n[\n  {\n    \"name\": \"Verity\",\n    \"description\": \"A quiet archivist who remembers everything.\"\n  }\n]\n```\n\nWorld lore: \n```json\n{\"The Drowned Bell\":\"A bronze bell sunk in the harbour of Umber City. Locals say it rings before a storm.\"}\n```\n\n\n[object Object]\n"
 							}
 						],
-						"promptFormat": "split_session",
+						"promptFormat": "split_chat",
 						"usedVariables": [
 							"system",
 							"plan",
@@ -3807,7 +3807,7 @@
 								"content": "\n\n# What this turn is about\n[object Object]\n\n# The world as it stands\n[object Object]\n\nAssistant Characters (AI-controlled):\n```json\n[\n  {\n    \"name\": \"Verity\",\n    \"description\": \"A quiet archivist who remembers everything.\"\n  }\n]\n```\n\nWorld lore: \n```json\n{\"The Drowned Bell\":\"A bronze bell sunk in the harbour of Umber City. Locals say it rings before a storm.\"}\n```\n\n\n[object Object]\n"
 							}
 						],
-						"promptFormat": "split_session",
+						"promptFormat": "split_chat",
 						"usedVariables": [
 							"system",
 							"plan",
@@ -3950,7 +3950,7 @@
 								"content": "\n\n# What this turn is about\n[object Object]\n\n# The world as it stands\n[object Object]\n\nAssistant Characters (AI-controlled):\n```json\n[\n  {\n    \"name\": \"Verity\",\n    \"description\": \"A quiet archivist who remembers everything.\"\n  }\n]\n```\n\nWorld lore: \n```json\n{\"The Drowned Bell\":\"A bronze bell sunk in the harbour of Umber City. Locals say it rings before a storm.\"}\n```\n\n\n[object Object]\n"
 							}
 						],
-						"promptFormat": "split_session",
+						"promptFormat": "split_chat",
 						"usedVariables": [
 							"system",
 							"plan",
@@ -4834,7 +4834,7 @@
 								"content": "Verity:"
 							}
 						],
-						"promptFormat": "split_session",
+						"promptFormat": "split_chat",
 						"usedVariables": [
 							"systemBlock",
 							"currentDate",
@@ -4936,7 +4936,7 @@
 								"content": "Verity:"
 							}
 						],
-						"promptFormat": "split_session",
+						"promptFormat": "split_chat",
 						"usedVariables": [
 							"systemBlock",
 							"currentDate",
@@ -5076,7 +5076,7 @@
 								"content": "Verity:"
 							}
 						],
-						"promptFormat": "split_session",
+						"promptFormat": "split_chat",
 						"usedVariables": [
 							"systemBlock",
 							"currentDate",
@@ -5246,7 +5246,7 @@
 								"content": "Verity:"
 							}
 						],
-						"promptFormat": "split_session",
+						"promptFormat": "split_chat",
 						"usedVariables": [
 							"systemBlock",
 							"currentDate",
@@ -6175,7 +6175,7 @@
 								"content": "Wren: I set my lantern on the table and shut the harbour door behind me. \"Verity, the bell rang three times tonight. Tell me what it means, and I'll help you search.\""
 							}
 						],
-						"promptFormat": "split_session",
+						"promptFormat": "split_chat",
 						"usedVariables": [
 							"systemBlock",
 							"currentDate",
@@ -6273,7 +6273,7 @@
 								"content": "Wren: I set my lantern on the table and shut the harbour door behind me. \"Verity, the bell rang three times tonight. Tell me what it means, and I'll help you search.\""
 							}
 						],
-						"promptFormat": "split_session",
+						"promptFormat": "split_chat",
 						"usedVariables": [
 							"systemBlock",
 							"currentDate",
@@ -6407,7 +6407,7 @@
 								"content": "Wren: I set my lantern on the table and shut the harbour door behind me. \"Verity, the bell rang three times tonight. Tell me what it means, and I'll help you search.\""
 							}
 						],
-						"promptFormat": "split_session",
+						"promptFormat": "split_chat",
 						"usedVariables": [
 							"systemBlock",
 							"currentDate",
@@ -6627,7 +6627,7 @@
 								"content": "Wren: I set my lantern on the table and shut the harbour door behind me. \"Verity, the bell rang three times tonight. Tell me what it means, and I'll help you search.\""
 							}
 						],
-						"promptFormat": "split_session",
+						"promptFormat": "split_chat",
 						"usedVariables": [
 							"systemBlock",
 							"currentDate",

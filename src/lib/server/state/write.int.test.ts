@@ -1,5 +1,5 @@
 /**
- * Writing state: possessions, the review gate, and retraction.
+ * Writing state: items, the review gate, and retraction.
  *
  * ## Retraction is two mechanisms, because a message dies two ways
  *
@@ -17,11 +17,13 @@ import path from "path"
 import { eq, inArray } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import {
+	attributeSlots,
 	defineAttributeSlot,
 	genre,
 	getAttributeSlot,
 	_clearAttributeSlots
 } from "@serene-pub/sdk"
+import "@serene-pub/core-catalog"
 import type { TestDb } from "$lib/server/utils/testDb"
 
 let testDb: TestDb
@@ -53,6 +55,16 @@ afterAll(async () => {
 })
 
 const HP = "core:slot/hp@1"
+const INVENTORY = "core:slot/inventory@1"
+
+/** Phase 3b: an item moving is a list change on this stat, not an edge. */
+function declareInventory() {
+	defineAttributeSlot(INVENTORY, {
+		shape: "core:stat-shape/list@1",
+		descriptor: "What they carry.",
+		appliesTo: ["cast", "world"]
+	})
+}
 
 function declareSlots() {
 	_clearAttributeSlots()
@@ -84,17 +96,23 @@ async function world() {
 		.insert(schema.lorebooks)
 		.values({ userId: user.id, name: `World ${suffix}` })
 		.returning()
+	// A session tracks what its genre enables, and a write outside that is
+	// refused: so the world's genre brings every slot this test declared.
+	const WORLD_GENRE = `test:genre/write-${suffix}`
+	genre(WORLD_GENRE, { name: { en: "Write" }, family: "test", slots: attributeSlots(), events: {} })
 	const [session] = await testDb
 		.insert(schema.sessions)
-		.values({ userId: user.id, isGroup: true, name: `Run ${suffix}` })
+		.values({ userId: user.id, isGroup: true, name: `Run ${suffix}`, genreId: WORLD_GENRE })
 		.returning()
 	for (const c of [verity, marrow])
 		await testDb
 			.insert(schema.sessionCharacters)
 			.values({ sessionId: session.id, characterId: c.id })
 	await testDb
-		.insert(schema.sessionLorebooks)
-		.values({ sessionId: session.id, lorebookId: lorebook.id })
+		// The real shape: the lorebook is the session row's own binding.
+		.update(schema.sessions)
+		.set({ lorebookId: lorebook.id })
+		.where(eq(schema.sessions.id, session.id))
 	const [key] = await testDb
 		.insert(schema.lorebookEntries)
 		.values({
@@ -148,73 +166,45 @@ const anchoredValues = async (messageId: number) =>
 		.from(schema.attributeValues)
 		.where(eq(schema.attributeValues.validFromMessageId, messageId))
 
-describe("possessions", () => {
-	test("a transfer is a take and a give, on one anchor", async () => {
+describe("items move as inventory list changes (phase 3b)", () => {
+	test("a hand-over is a remove and an add, counted", async () => {
 		declareSlots()
+		declareInventory()
 		const w = await world()
-		const m = await message(w.session.id)
-		const { heldQuantity, movePossession, transferPossession } =
-			await import("$lib/server/state/write")
+		await message(w.session.id)
+		const { applyChange } = await import("$lib/server/state/write")
+		const { valueOf } = await import("$lib/server/state/resolve")
+		const db = testDb as unknown as Db
 		const ctx = { sessionId: w.session.id, updatedBy: "user" }
 		const verity = { kind: "session_cast" as const, id: w.verity.id }
 		const marrow = { kind: "session_cast" as const, id: w.marrow.id }
+		const inv = (owner: typeof verity) => valueOf(db, { sessionId: w.session.id, owner, slotId: INVENTORY })
 
-		await movePossession(testDb as unknown as Db, ctx, {
-			owner: verity,
-			entryId: w.key.id,
-			delta: 2
-		})
-		expect(
-			await heldQuantity(
-				testDb as unknown as Db,
-				w.session.id,
-				verity,
-				w.key.id
-			)
-		).toBe(2)
-
-		await transferPossession(testDb as unknown as Db, ctx, {
-			from: verity,
-			to: marrow,
-			entryId: w.key.id,
-			quantity: 1
-		})
-		expect(
-			await heldQuantity(
-				testDb as unknown as Db,
-				w.session.id,
-				verity,
-				w.key.id
-			)
-		).toBe(1)
-		expect(
-			await heldQuantity(
-				testDb as unknown as Db,
-				w.session.id,
-				marrow,
-				w.key.id
-			)
-		).toBe(1)
-		expect(m.id).toBeGreaterThan(0)
+		await applyChange(db, ctx, { owner: verity, slotId: INVENTORY, op: "add", items: [{ entryId: w.key.id, count: 2 }] })
+		await applyChange(db, ctx, { owner: verity, slotId: INVENTORY, op: "remove", items: [{ entryId: w.key.id, count: 1 }] })
+		await applyChange(db, ctx, { owner: marrow, slotId: INVENTORY, op: "add", items: [{ entryId: w.key.id, count: 1 }] })
+		// One held is stored bare (phase 4) — the one spelling of a single item.
+		expect(await inv(verity)).toEqual([{ entryId: w.key.id }])
+		expect(await inv(marrow)).toEqual([{ entryId: w.key.id }])
 	})
 
-	test("giving what nobody is carrying is refused by name", async () => {
+	test("the retired possession arm is refused at both doors, and writes nothing", async () => {
 		declareSlots()
 		const w = await world()
-		const { StateRefusal, transferPossession } = await import(
-			"$lib/server/state/write"
-		)
-		await expect(
-			transferPossession(
-				testDb as unknown as Db,
-				{ sessionId: w.session.id, updatedBy: "user" },
-				{
-					from: { kind: "session_cast", id: w.verity.id },
-					to: { kind: "session_cast", id: w.marrow.id },
-					entryId: w.key.id
-				}
-			)
-		).rejects.toBeInstanceOf(StateRefusal)
+		const { applyChange, proposeChange, StateRefusal } = await import("$lib/server/state/write")
+		const db = testDb as unknown as Db
+		const ctx = { sessionId: w.session.id, updatedBy: "user" }
+		const legacy = { owner: { kind: "session_cast", id: w.verity.id }, entryId: w.key.id, delta: 1 } as never
+		await expect(applyChange(db, ctx, legacy)).rejects.toBeInstanceOf(StateRefusal)
+		await expect(proposeChange(db, ctx, legacy)).rejects.toBeInstanceOf(StateRefusal)
+		// Nothing was written anywhere the gate keeps (the edge table itself
+		// was dropped 2026-09-27).
+		expect(
+			(await testDb.select().from(schema.attributeValues)).filter((r) => r.sessionId === w.session.id)
+		).toEqual([])
+		expect(
+			(await testDb.select().from(schema.stateProposals)).filter((r) => r.sessionId === w.session.id)
+		).toEqual([])
 	})
 })
 
@@ -428,6 +418,7 @@ describe("R-15 · staleness and order (state version)", () => {
 
 	test("every applied change moves the version by one and stamps the row; concurrent applies are monotonic", async () => {
 		declareTwo()
+		declareInventory()
 		const w = await world()
 		await message(w.session.id)
 		const { applyChange } = await import("$lib/server/state/write")
@@ -445,14 +436,19 @@ describe("R-15 · staleness and order (state version)", () => {
 			.where(eq(schema.attributeValues.id, first))
 		expect(row!.v).toBe(1)
 
-		// A possession edge is a change too.
-		const edge = await applyChange(db, ctx, { owner, entryId: w.key.id, delta: 1 })
+		// An item moving is a change too (an inventory list op, phase 3b).
+		const moved = await applyChange(db, ctx, {
+			owner,
+			slotId: INVENTORY,
+			op: "add",
+			items: [{ entryId: w.key.id, count: 1 }]
+		})
 		expect(await versionOf(w.session.id)).toBe(2)
-		const [possession] = await testDb
-			.select({ v: schema.sessionPossessions.stateVersion })
-			.from(schema.sessionPossessions)
-			.where(eq(schema.sessionPossessions.id, edge))
-		expect(possession!.v).toBe(2)
+		const [held] = await testDb
+			.select({ v: schema.attributeValues.stateVersion })
+			.from(schema.attributeValues)
+			.where(eq(schema.attributeValues.id, moved))
+		expect(held!.v).toBe(2)
 
 		// Turn order: two applies landing together take two numbers. (Under
 		// PGlite's one connection the lock is not what serialises them — see
@@ -749,38 +745,24 @@ describe("R-15 · staleness and order (state version)", () => {
 		expect(await versionOf(w.session.id)).toBe(2)
 	}, 60_000)
 
-	test("two transfers of the last item landing together: one succeeds, the other is refused, the item never duplicates — the held check is under the lock", async () => {
+	test("two item grants landing together both count — the held read is under the lock", async () => {
 		declareTwo()
+		declareInventory()
 		const w = await world()
 		await message(w.session.id)
-		const { applyChange, heldQuantity, transferPossession, StateRefusal } =
-			await import("$lib/server/state/write")
+		const { applyChange } = await import("$lib/server/state/write")
+		const { valueOf } = await import("$lib/server/state/resolve")
 		const db = testDb as unknown as Db
 		const verity = { kind: "session_cast" as const, id: w.verity.id }
-		const marrow = { kind: "session_cast" as const, id: w.marrow.id }
 		const user = { sessionId: w.session.id, updatedBy: "user" }
-		const held = (owner: typeof verity) =>
-			heldQuantity(db, w.session.id, owner, w.key.id)
-
-		// Verity holds the one key (v1).
-		await applyChange(db, user, { owner: verity, entryId: w.key.id, delta: 1 })
-		const results = await Promise.allSettled([
-			transferPossession(db, user, { from: verity, to: marrow, entryId: w.key.id }),
-			transferPossession(db, user, { from: verity, to: marrow, entryId: w.key.id })
+		const grant = () =>
+			applyChange(db, user, { owner: verity, slotId: INVENTORY, op: "add", items: [{ entryId: w.key.id, count: 1 }] })
+		await Promise.all([grant(), grant()])
+		// Neither read the other's "held" and overwrote it: two keys, not one.
+		expect(await valueOf(db, { sessionId: w.session.id, owner: verity, slotId: INVENTORY })).toEqual([
+			{ entryId: w.key.id, count: 2 }
 		])
-		const done = results.filter((r) => r.status === "fulfilled")
-		const refused = results.filter(
-			(r): r is PromiseRejectedResult => r.status === "rejected"
-		)
-		expect(done, "both transfers of one key went through").toHaveLength(1)
-		expect(refused).toHaveLength(1)
-		expect(refused[0]!.reason).toBeInstanceOf(StateRefusal)
-		expect(refused[0]!.reason.message).toBe("that owner is not carrying that.")
-		// Conserved: one key in the world, in Marrow's hands.
-		expect(await held(verity)).toBe(0)
-		expect(await held(marrow), "the key was duplicated").toBe(1)
-		// The take and the give each took a number, and landed together: v3.
-		expect(await versionOf(w.session.id)).toBe(3)
+		expect(await versionOf(w.session.id)).toBe(2)
 	}, 60_000)
 })
 
@@ -814,24 +796,26 @@ describe("the turn lock", () => {
 
 	test("the world follows the newest message, whoever wrote it", async () => {
 		declareSlots()
+		declareInventory()
 		const w = await world()
 		await message(w.session.id, "…", w.verity.id)
 		const newest = await message(w.session.id, "The sky opens.")
 
-		const { movePossession } = await import("$lib/server/state/write")
-		const id = await movePossession(
+		const { applyChange } = await import("$lib/server/state/write")
+		const id = await applyChange(
 			testDb as unknown as Db,
 			{ sessionId: w.session.id, updatedBy: "user" },
 			{
 				owner: { kind: "session", id: w.session.id },
-				entryId: w.key.id,
-				delta: 1
+				slotId: INVENTORY,
+				op: "add",
+				items: [{ entryId: w.key.id }]
 			}
 		)
 		const [row] = await testDb
 			.select()
-			.from(schema.sessionPossessions)
-			.where(eq(schema.sessionPossessions.id, id))
+			.from(schema.attributeValues)
+			.where(eq(schema.attributeValues.id, id))
 		expect(row.validFromMessageId).toBe(newest.id)
 	})
 

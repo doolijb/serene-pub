@@ -165,11 +165,111 @@ describe("KoboldCppAdapter — base URL trailing-slash normalization", () => {
 		const result = await exportsDefault.listModels(
 			makeConnection({ baseUrl: "http://localhost:5001/" })
 		)
-		expect(fetchMock).toHaveBeenLastCalledWith(
+		expect(fetchMock).toHaveBeenCalledWith(
 			"http://localhost:5001/api/v1/model",
 			expect.anything()
 		)
 		expect(result.models[0].name).toContain("loaded-model")
+	})
+
+	describe("listModels() — only the loaded models koboldcpp names", () => {
+		// The shapes below are koboldcpp 1.119's own answers, recorded live.
+		const SD = [
+			{
+				title: "sdxs-512-tinySDdistilled_Q8_0",
+				model_name: "sdxs-512-tinySDdistilled_Q8_0",
+				filename: "/models/sdxs-512-tinySDdistilled_Q8_0.gguf",
+				config: null
+			}
+		]
+		function answer(
+			text: string,
+			sd: { status: number; body?: unknown },
+			embedding: string | null = null
+		) {
+			fetchMock.mockImplementation(async (url: string) => {
+				if (url.endsWith("/api/v1/model"))
+					return { ok: true, status: 200, json: async () => ({ result: text }) }
+				if (url.endsWith("/api/extra/version"))
+					return {
+						ok: true,
+						status: 200,
+						json: async () => ({ embeddings: embedding != null })
+					}
+				if (url.endsWith("/v1/embeddings"))
+					return {
+						ok: true,
+						status: 200,
+						json: async () => ({ model: embedding, data: [] })
+					}
+				return {
+					ok: sd.status >= 200 && sd.status < 300,
+					status: sd.status,
+					json: async () => sd.body
+				}
+			})
+		}
+
+		test("text and image, each with its modality", async () => {
+			answer("koboldcpp/gemma-4-E4B-it-Q4_K_M", { status: 200, body: SD })
+			const result = await exportsDefault.listModels(makeConnection())
+			expect(result.error).toBeUndefined()
+			expect(result.models).toEqual([
+				{
+					model: "koboldcpp/gemma-4-E4B-it-Q4_K_M",
+					name: "koboldcpp/gemma-4-E4B-it-Q4_K_M",
+					modality: "text-gen"
+				},
+				{
+					model: "sdxs-512-tinySDdistilled_Q8_0",
+					name: "sdxs-512-tinySDdistilled_Q8_0",
+					modality: "image-gen"
+				}
+			])
+		})
+
+		test("an image-only instance's \"inactive\" is not a text model", async () => {
+			answer("inactive", { status: 200, body: SD })
+			const result = await exportsDefault.listModels(makeConnection())
+			expect(result.models.map((m: any) => m.modality)).toEqual(["image-gen"])
+		})
+
+		test("no image model — an empty list or a 404 — lists the text model alone", async () => {
+			answer("koboldcpp/x", { status: 200, body: [] })
+			expect(
+				(await exportsDefault.listModels(makeConnection())).models.length
+			).toBe(1)
+			answer("koboldcpp/x", { status: 404 })
+			expect(
+				(await exportsDefault.listModels(makeConnection())).models.length
+			).toBe(1)
+		})
+
+		test("the loaded embedding model is listed, named by the probe", async () => {
+			answer("koboldcpp/x", { status: 200, body: [] }, "nomic-embed-text-v1.5.Q4_K_M")
+			const result = await exportsDefault.listModels(makeConnection())
+			expect(result.models.map((m: any) => [m.model, m.modality])).toEqual([
+				["koboldcpp/x", "text-gen"],
+				["nomic-embed-text-v1.5.Q4_K_M", "embeddings"]
+			])
+		})
+
+		test("no embedding model loaded: the probe is never sent", async () => {
+			answer("koboldcpp/x", { status: 200, body: [] })
+			await exportsDefault.listModels(makeConnection())
+			expect(
+				fetchMock.mock.calls.some((call: unknown[]) =>
+					String(call[0]).endsWith("/v1/embeddings")
+				)
+			).toBe(false)
+		})
+
+		test("an image answer that says nothing is an ERROR, never half a listing", async () => {
+			answer("koboldcpp/x", { status: 503 })
+			const result = await exportsDefault.listModels(makeConnection())
+			expect(result.models).toEqual([])
+			expect(result.error).toMatch(/image model/)
+		})
 	})
 
 	test("generateText()'s abort() targets the normalized URL", async () => {
@@ -247,7 +347,7 @@ describe("KoboldCppAdapter — enable_thinking request gating", () => {
 		expect(findGenerateCallBody()).not.toHaveProperty("grammar")
 	})
 
-	test('responseFormat "json" sends a GBNF grammar in session mode', async () => {
+	test('responseFormat "json" sends a GBNF grammar in chat mode', async () => {
 		const adapter = makeAdapter({ extraJson: { stream: false } })
 		mockCompilePrompt(adapter)
 		adapter.responseFormat = "json"
@@ -318,7 +418,7 @@ describe("KoboldCppAdapter — enable_thinking request gating", () => {
 	// request — every occurrence of that key in koboldcpp's own source is
 	// inside its Tkinter GUI's launch-config code. The real per-request path
 	// only reads a nested chat_template_kwargs object.
-	test("includes enable_thinking nested in chat_template_kwargs in session mode when explicitly set", async () => {
+	test("includes enable_thinking nested in chat_template_kwargs in chat mode when explicitly set", async () => {
 		const adapter = makeAdapter(
 			{ wireMode: "chat", extraJson: { stream: false } },
 			{ reasoning: "low" }
@@ -331,7 +431,7 @@ describe("KoboldCppAdapter — enable_thinking request gating", () => {
 		expect(body.chat_template_kwargs?.enable_thinking).toBe(true)
 	})
 
-	test("omits chat_template_kwargs in session mode when the sampler is off", async () => {
+	test("omits chat_template_kwargs in chat mode when the sampler is off", async () => {
 		// The vocabulary's "say nothing" is the field being SWITCHED OFF, which
 		// is the state the connection's old Auto/On/Off control spelled `null`.
 		const adapter = makeAdapter({
@@ -412,7 +512,7 @@ describe("KoboldCppAdapter — native reasoning_content readback", () => {
 		expect(thinking).toBe("Pondering deeply.")
 	})
 
-	test("non-streaming: populates thinkingContent from message.reasoning_content in session mode", async () => {
+	test("non-streaming: populates thinkingContent from message.reasoning_content in chat mode", async () => {
 		fetchMock = vi.fn(async () => ({
 			ok: true,
 			json: async () => ({
@@ -722,7 +822,7 @@ describe("KoboldCppAdapter — generation writes nothing to the server log", () 
  *
  * KoboldCPP's own default is `?? true`, which makes it the adapter where `auto`
  * meaning "true" would be invisible — it already is true — and where `off` is
- * worth the most: a background stage gets one POST instead of a frame feed
+ * worth the most: a background step gets one POST instead of a frame feed
  * nobody reads. Read off `completionResult`, because that is the fact the
  * dispatch branches on.
  */

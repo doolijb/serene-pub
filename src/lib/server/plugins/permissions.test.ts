@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest"
 import {
 	declaredPermissions,
 	effectivePermissions,
+	isRefusedPermissionKey,
 	isReviewMark,
 	needsReview,
 	pendingPermissions,
@@ -14,8 +15,10 @@ import {
 	grantedWidgetScopes,
 	reviewMark,
 	type Permission,
-	MAX_ADMIN_STORAGE_QUOTA
+	MAX_ADMIN_STORAGE_QUOTA,
+	WIDGET_SCOPE_LABELS
 } from "./permissions"
+import { WIDGET_SCOPED_SECTIONS } from "@serene-pub/sdk"
 
 const manifest = {
 	permissions: {
@@ -476,7 +479,39 @@ describe("widget scopes (C5): a widget's data request is a reviewed permission",
 		const reviewed = reviewMarks(declaredPermissions(withPanels))
 		expect(grantedWidgetScopes(withPanels, reviewed)).toEqual(["session:full"])
 		expect(grantedWidgetScopes(withPanels, [...reviewed, "widget:session:full"])).toEqual([])
-		expect(reviewed).toContain(reviewMark("widget:session:full"))
+		// Reviewed AS a scope: the mark says so (see the carry-over test below).
+		expect(reviewed).toContain("__reviewed:widget:session:full#scope")
+	})
+
+	it("grants only a scope this build knows — an unknown 'widget:x' reviewed as a declared permission grants nothing", () => {
+		const unknown = { permissions: ["widget:made-up"], genres: [{ shape: { panels: [{ id: "a", scopes: ["made-up"] }] } }] }
+		const declared = declaredPermissions(unknown)
+		// Still shown, so an admin sees (and can deny) everything declared…
+		expect(declared.map((p) => p.key)).toContain("widget:made-up")
+		const reviewed = reviewMarks(declared)
+		// …but approving it hands out no scope.
+		expect(grantedWidgetScopes(unknown, reviewed)).toEqual([])
+		expect(panelGrants(["made-up"], unknown, reviewed)).toEqual([])
+	})
+
+	it("a review given while a scope was unknown is not consent once the build learns it — the admin is asked again", () => {
+		// What an admin reviewed before this build knew 'session:state': the
+		// compiled key, shown as "Declared permission: widget:session:state"
+		// (no data behind it), and the bare mark that review stored.
+		const reviewedWhileUnknown = [reviewMark("widget:session:state")]
+		const statsy = {
+			permissions: ["widget:session:state"],
+			genres: [{ shape: { panels: [{ id: "hud", scopes: ["session:state"] }] } }]
+		}
+		const now = declaredPermissions(statsy).find((p) => p.key === "widget:session:state")!
+		expect(now.kind).toBe("resource")
+		expect(pendingPermissions(declaredPermissions(statsy), reviewedWhileUnknown).map((p) => p.key)).toEqual([
+			"widget:session:state"
+		])
+		expect(grantedWidgetScopes(statsy, reviewedWhileUnknown)).toEqual([])
+		expect(panelGrants(["session:state"], statsy, reviewedWhileUnknown)).toEqual([])
+		// Reviewed under its own sentence, it is granted.
+		expect(grantedWidgetScopes(statsy, reviewMarks(declaredPermissions(statsy)))).toEqual(["session:state"])
 	})
 
 	it("is not doubled by the CLI's compiled echo of the same request", () => {
@@ -498,5 +533,135 @@ describe("widget scopes (C5): a widget's data request is a reviewed permission",
 		// A scope no panel of the plugin declared was never granted.
 		expect(panelGrants(["characters"], two, reviewed)).toEqual([])
 		expect(panelGrants(undefined, two, reviewed)).toEqual([])
+	})
+})
+
+describe("widget scopes (R71): a package widget's scopes are declared, reviewed and granted like a panel's", () => {
+	// No genres, no compiled echo: only a top-level widget asks.
+	const widgetOnly = {
+		permissions: ["event:core:event/message-respond@1"],
+		widgets: [
+			{ id: "question-log", component: "question-log", scopes: ["session:full", "session:state", "made-up"] },
+			{ id: "tally", component: "tally" }
+		]
+	}
+
+	it("is read off the widgets themselves and pending review", () => {
+		expect(declaredWidgetScopes(widgetOnly)).toEqual(["session:full", "session:state"])
+		const declared = declaredPermissions(widgetOnly)
+		expect(declared.map((p) => p.key)).not.toContain("widget:made-up")
+		expect(pendingPermissions(declared, []).map((p) => p.key)).toEqual(
+			expect.arrayContaining(["widget:session:full", "widget:session:state"])
+		)
+		expect(needsReview(widgetOnly, [])).toBe(true)
+		const states = permissionStates(widgetOnly, [])
+		const full = states.find((s) => s.key === "widget:session:full")!
+		expect(full.label).toBe(WIDGET_SCOPE_LABELS["session:full"])
+		expect(full.granted).toBe(false)
+	})
+
+	it("is granted once reviewed, carries the same scope mark, and a denied scope stays out", () => {
+		const reviewed = reviewMarks(declaredPermissions(widgetOnly))
+		expect(reviewed).toContain("__reviewed:widget:session:state#scope")
+		expect(grantedWidgetScopes(widgetOnly, reviewed)).toEqual(["session:full", "session:state"])
+		expect(panelGrants(["session:full", "session:state"], widgetOnly, reviewed)).toEqual([
+			"session:full",
+			"session:state"
+		])
+		const denied = [...reviewed, "widget:session:full"]
+		expect(grantedWidgetScopes(widgetOnly, denied)).toEqual(["session:state"])
+		expect(panelGrants(["session:full", "session:state"], widgetOnly, denied)).toEqual(["session:state"])
+	})
+
+	it("a widget cannot get a scope its plugin was not granted", () => {
+		const reviewed = reviewMarks(declaredPermissions(widgetOnly))
+		expect(panelGrants(["session:full"], widgetOnly, [])).toEqual([])
+		expect(panelGrants(["characters", "lore"], widgetOnly, reviewed)).toEqual([])
+	})
+
+	it("is not doubled by the CLI's compiled echo of the same request", () => {
+		const echoed = { ...widgetOnly, permissions: [...widgetOnly.permissions, "widget:session:full"] }
+		expect(declaredPermissions(echoed).filter((p) => p.key === "widget:session:full")).toHaveLength(1)
+	})
+})
+
+describe("widget scope labels follow the SDK's one table of scoped sections", () => {
+	it("every scope in the table has a sentence, so every one can be reviewed and granted", () => {
+		expect(Object.keys(WIDGET_SCOPE_LABELS).sort()).toEqual(Object.keys(WIDGET_SCOPED_SECTIONS).sort())
+	})
+
+	it("'session:state' (R72) is a reviewed permission of its own, granted only once an admin has looked", () => {
+		const statsy = { genres: [{ shape: { panels: [{ id: "bars", scopes: ["session:state"] }] } }] }
+		expect(declaredWidgetScopes(statsy)).toEqual(["session:state"])
+		const declared = declaredPermissions(statsy).find((p) => p.key === "widget:session:state")
+		expect(declared?.label).toBe("Its widgets see the session's stats and states")
+		expect(panelGrants(["session:state"], statsy, [])).toEqual([])
+		expect(panelGrants(["session:state"], statsy, reviewMarks(declaredPermissions(statsy)))).toEqual(["session:state"])
+	})
+})
+
+/**
+ * `#` separates a key from what it was reviewed as, so a declared key that
+ * carries one can spell another permission's mark. Deciding the decoy — even
+ * DENYING it, since the socket write adds the mark either way — must not
+ * review, and so grant, the permission it imitates.
+ */
+describe("a declared key containing '#' is refused, so it can never spell another permission's mark", () => {
+	const decoyed = {
+		permissions: ["widget:lore", "widget:lore#scope"],
+		genres: [{ shape: { panels: [{ id: "a", scopes: ["lore"] }] } }]
+	}
+	// What the socket write does for one decided key: the denial (or not),
+	// plus the key's review mark.
+	const decide = (key: string, granted: boolean): string[] => {
+		const p = declaredPermissions(decoyed).find((d) => d.key === key)
+		if (!p) return []
+		return granted ? [reviewMark(p)] : [key, reviewMark(p)]
+	}
+
+	it("is never listed, reviewed, pending or granted", () => {
+		const keys = declaredPermissions(decoyed).map((p) => p.key)
+		expect(keys).toEqual(["widget:lore"])
+		expect(permissionStates(decoyed, []).map((s) => s.key)).toEqual(["widget:lore"])
+		expect(reviewMarks(declaredPermissions(decoyed))).toEqual(["__reviewed:widget:lore#scope"])
+		expect(isRefusedPermissionKey("widget:lore#scope")).toBe(true)
+		expect(isRefusedPermissionKey("widget:lore")).toBe(false)
+	})
+
+	it("denying or granting the decoy does not grant the real scope — 'lore' stays pending", () => {
+		for (const granted of [false, true]) {
+			const stored = decide("widget:lore#scope", granted)
+			expect(grantedWidgetScopes(decoyed, stored)).toEqual([])
+			expect(panelGrants(["lore"], decoyed, stored)).toEqual([])
+			expect(permissionStates(decoyed, stored).find((s) => s.key === "widget:lore")).toMatchObject({
+				pending: true,
+				granted: false
+			})
+		}
+		// The real scope reviewed under its own sentence is still grantable.
+		expect(grantedWidgetScopes(decoyed, decide("widget:lore", true))).toEqual(["lore"])
+	})
+
+	it("closes the same collision for a payload mark — a decoy shaped like storage's reviewed quota", () => {
+		const realMark = reviewMarks(declaredPermissions({ permissions: ["storage"] }))[0]
+		expect(realMark).toBe('__reviewed:storage#{"quotaBytes":5242880}')
+		const storagey = { permissions: ["storage", realMark.slice("__reviewed:".length)] }
+		const declared = declaredPermissions(storagey)
+		expect(declared.map((p) => p.key)).toEqual(["storage"])
+		// The only mark a full review could write is the real one's; nothing
+		// declared can put it there on a denial.
+		expect(pendingPermissions(declared, []).map((p) => p.key)).toEqual(["storage"])
+		expect(storageGrant(effectivePermissions(declared, []))).toBeUndefined()
+	})
+
+	it("is refused in the object form too — resources, events and hosts name keys freely", () => {
+		const keys = declaredPermissions({
+			permissions: {
+				network: { hosts: ["a.com", "b.com#x"] },
+				resources: ["lore:read", "lore#scope"],
+				events: ["e#1", "e"]
+			}
+		}).map((p) => p.key)
+		expect(keys).toEqual(["network:a.com", "resource:lore:read", "event:e"])
 	})
 })

@@ -8,7 +8,7 @@
  * falls, the state-keeper's writes land, a reply becomes the newest row.
  * The **server** is the authority for when a verdict has moved, so every
  * road a run takes — the reply road (`runReply`), a fired action
- * (`sessions:triggerFunction`, its parked settle included) — calls this
+ * (`sessions:fireAction`, its parked settle included) — calls this
  * once per **root** after `runRegistry.start` and once after
  * `runRegistry.finish`. Children dispatched under a root end inside the
  * root's await and are covered by its pushes; a child parked at review and

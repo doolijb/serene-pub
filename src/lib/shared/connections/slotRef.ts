@@ -1,5 +1,5 @@
 /**
- * What a provider node's Connection slot STORES, now that a choice is a pair.
+ * What an oracle's connection slot STORES, now that a choice is a pair.
  *
  * ## Why the SHAPE moved, and what is left here
  *

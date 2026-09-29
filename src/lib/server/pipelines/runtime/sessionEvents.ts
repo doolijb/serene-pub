@@ -200,6 +200,23 @@ export async function emitSessionEvent(
 		}
 	}
 
+	// (b4) A line landed, was rewritten or went — so a form someone was told
+	// about may now be answered, overtaken or gone. Staleness is computed,
+	// never stored, so the open-form notifications are re-checked here
+	// (PLAN-notifications §5). One read when the session has none.
+	if (
+		opts.event === sdkSessionEvents.messageCompleted ||
+		opts.event === sdkSessionEvents.messageDeleted ||
+		opts.event === "core:event/message-updated@1"
+	) {
+		try {
+			const { settleOpenForms } = await import("$lib/server/notifications/openForm")
+			await settleOpenForms(db, opts.sessionId)
+		} catch (err) {
+			console.warn(`[sessionEvents] the open-form re-check after ${opts.event} failed:`, err)
+		}
+	}
+
 	// (c) and (d) run after the writer returns, on the session's queue —
 	// unless the caller asked to wait (see `wait` above).
 	const rest = () => settleRest(db, opts, payload, cause, at)
@@ -302,21 +319,33 @@ async function settleRest(
 	 * (c) The core-internal listeners for `turn-order-changed` (§4.6, §4.7):
 	 * the `sessions:turnOrder` push, so every open client renders the order
 	 * the moment it is written, and auto-advance, which may fire the head
-	 * turn. In that order, deliberately: the person sees whose turn it is
-	 * before the turn starts, rather than after it has streamed.
+	 * turn. The push precedes the fire, deliberately: the person sees whose
+	 * turn it is before the turn starts, rather than after it has streamed.
 	 *
 	 * Both are core's own, not plugin listeners — a plugin subscribes
 	 * through (b) and cannot fire a turn.
 	 */
 	if (opts.event === "core:event/turn-order-changed@1") {
 		const order = (payload as { turnOrder?: unknown }).turnOrder
-		try {
-			const { pushTurnOrder } = await import(
-				"$lib/server/sessions/turnOrderPush"
-			)
-			await pushTurnOrder(opts.io, opts.sessionId, order)
-		} catch (err) {
-			console.warn("[sessionEvents] the turn-order push failed:", err)
+		/**
+		 * The push goes out once auto-advance has decided — still before
+		 * the fire — carrying that decision as `autoAdvancing` (lair pass
+		 * B9). A client that has just sent learns at once whether a reply is
+		 * coming, rather than hiding its next-speaker block until a backstop.
+		 */
+		let pushed = false
+		const push = async (autoAdvancing: boolean) => {
+			pushed = true
+			try {
+				const { pushTurnOrder } = await import(
+					"$lib/server/sessions/turnOrderPush"
+				)
+				await pushTurnOrder(opts.io, opts.sessionId, order, {
+					autoAdvancing
+				})
+			} catch (err) {
+				console.warn("[sessionEvents] the turn-order push failed:", err)
+			}
 		}
 		try {
 			const { onTurnOrderChanged } = await import(
@@ -327,10 +356,24 @@ async function settleRest(
 				userId: opts.userId,
 				cause,
 				turnOrder: order,
-				io: opts.io
+				io: opts.io,
+				announce: push
 			})
 		} catch (err) {
 			console.warn("[sessionEvents] auto-advance failed:", err)
+		}
+		// The order is pushed whatever became of the listener.
+		if (!pushed) await push(false)
+		// `your-move` (notifications §5, Q1): the stored head is somebody's
+		// own entry, or nobody's move. After the push and the fire, so it
+		// never delays either; `settleYourMove` never throws.
+		try {
+			const { settleYourMove } = await import(
+				"$lib/server/notifications/yourMove"
+			)
+			await settleYourMove(db, { sessionId: opts.sessionId, cause })
+		} catch (err) {
+			console.warn("[sessionEvents] the your-move settle failed:", err)
 		}
 	}
 

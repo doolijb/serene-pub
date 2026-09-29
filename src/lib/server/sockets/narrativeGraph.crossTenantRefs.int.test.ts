@@ -1,6 +1,6 @@
 /**
- * Round-6 audit fix: narrativeGraphCreateNodeHandler and
- * narrativeGraphApplyProposalHandler inserted client-supplied
+ * Round-6 audit fix: narrativeGraphApplyProposalHandler (and the since-retired
+ * narrativeGraph:createNode) inserted client-supplied
  * sceneId/historyEntryId (and, for applyProposal, relationship sceneId/
  * historyEntryId too) with no check they belonged to the target lorebook —
  * unlike updateNode/createRelationship/updateRelationship, which already
@@ -52,69 +52,6 @@ function fakeSocket(userId: number) {
 }
 
 const noopEmit = () => {}
-
-describe("narrativeGraph:createNode — historyEntryId scoping (PGlite integration)", () => {
-	test("rejects a historyEntryId from a foreign lorebook", async () => {
-		const { narrativeGraphCreateNodeHandler } = await import(
-			"./narrativeGraph"
-		)
-		const attacker = await makeUser("createnode-attacker")
-		const victim = await makeUser("createnode-victim")
-
-		const [attackerLorebook] = await testDb
-			.insert(schema.lorebooks)
-			.values({ name: "Attacker's Book", userId: attacker.id })
-			.returning()
-		const [victimLorebook] = await testDb
-			.insert(schema.lorebooks)
-			.values({ name: "Victim's Book", userId: victim.id })
-			.returning()
-		const [victimHistoryEntry] = await testDb
-			.insert(schema.lorebookEntries)
-			.values(historyValues([{ lorebookId: victimLorebook.id }]))
-			.returning()
-
-		await expect(
-			narrativeGraphCreateNodeHandler.handler(
-				fakeSocket(attacker.id),
-				{
-					lorebookId: attackerLorebook.id,
-					name: "Injected node",
-					historyEntryId: victimHistoryEntry.id
-				} as any,
-				noopEmit
-			)
-		).rejects.toThrow()
-	})
-
-	test("accepts a historyEntryId from the same lorebook", async () => {
-		const { narrativeGraphCreateNodeHandler } = await import(
-			"./narrativeGraph"
-		)
-		const owner = await makeUser("createnode-owner")
-
-		const [lorebook] = await testDb
-			.insert(schema.lorebooks)
-			.values({ name: "Owner's Book", userId: owner.id })
-			.returning()
-		const [historyEntry] = await testDb
-			.insert(schema.lorebookEntries)
-			.values(historyValues([{ lorebookId: lorebook.id }]))
-			.returning()
-
-		const res = await narrativeGraphCreateNodeHandler.handler(
-			fakeSocket(owner.id),
-			{
-				lorebookId: lorebook.id,
-				name: "Legit node",
-				historyEntryId: historyEntry.id
-			} as any,
-			noopEmit
-		)
-
-		expect(res.node.historyEntryId).toBe(historyEntry.id)
-	})
-})
 
 describe("narrativeGraph:applyProposal — sceneId/historyEntryId scoping (PGlite integration)", () => {
 	test("rejects a proposal node referencing a foreign lorebook's history entry", async () => {

@@ -36,7 +36,7 @@
  * admin API cannot be reached, rather than with an empty list.
  *
  * There is deliberately no per-type policy in here about which endpoints may
- * gain rows. The managed KoboldCPP type lists the ggufs in the Manager's
+ * gain rows. The managed KoboldCPP type lists the ggufs in its own
  * models directory (never koboldcpp's --admindir, which is the binary's);
  * Ollama lists what it has pulled; the local ONNX backends list their
  * catalogue plus the registry. Those are all "what this endpoint can serve",
@@ -65,6 +65,7 @@ import { getImageAdapter } from "../utils/getImageAdapter"
 import { getEmbeddingAdapter } from "../utils/getEmbeddingAdapter"
 import { getNerAdapter } from "../utils/getNerAdapter"
 import { connectionModels } from "./models"
+import { markAdminOverviewStale } from "$lib/server/admin/overviewStale"
 
 /** What an adapter's `listModels` answers, in the shape every family shares. */
 export interface ModelListing {
@@ -159,12 +160,21 @@ export async function syncConnectionModels(
 ): Promise<ModelSyncResult> {
 	const rows = await connectionModels(db, connectionId)
 	const missingBefore = rows.filter((r) => r.missingSince != null).length
+	// Whether the sync error flips, for the admin Overview's
+	// `connections:syncError` (a sync repeats; only a change is worth a push).
+	const [before] = await db
+		.select({ error: schema.connections.modelsSyncError })
+		.from(schema.connections)
+		.where(eq(schema.connections.id, connectionId))
+		.limit(1)
+	const hadError = before?.error != null
 
 	if (listing.error) {
 		await db
 			.update(schema.connections)
 			.set({ modelsSyncedAt: now, modelsSyncError: listing.error })
 			.where(eq(schema.connections.id, connectionId))
+		if (!hadError) markAdminOverviewStale()
 		return {
 			connectionId,
 			added: 0,
@@ -223,7 +233,8 @@ export async function syncConnectionModels(
 					model: m.model,
 					name: m.name || m.model,
 					enabled: true,
-					facts: m.facts ?? {}
+					facts: m.facts ?? {},
+					modality: m.modality ?? null
 				}))
 			)
 			.onConflictDoNothing({
@@ -254,8 +265,8 @@ export async function syncConnectionModels(
 	// The facts ride along in the same UPDATE. They are the host's claim and
 	// the host is re-stating it right now, so a listing that revises a price or
 	// widens a context window REPLACES the bag wholesale rather than merging
-	// into it: a field the host has stopped sending is a field it no longer
-	// claims, and keeping the old value would be this app quoting a number
+	// into it: a field the host has stopped sending is a field it has stopped
+	// claiming, and keeping the old value would be this app quoting a number
 	// nobody stands behind. Nothing a person set lives in here — that is
 	// `context_window`, two columns away, and this write never touches it.
 	const byId = new Map(listed.map((m) => [m.model, m]))
@@ -269,12 +280,17 @@ export async function syncConnectionModels(
 		// bag that differs is worth a write on every ten-minute sync.
 		const factsChanged =
 			JSON.stringify(nextFacts) !== JSON.stringify(r.facts ?? {})
-		if (!renaming && !factsChanged) continue
+		// Replaced like the facts, for the same reason: a host that stops
+		// saying what a model is for has stopped claiming it.
+		const nextModality = offered.modality ?? null
+		const modalityChanged = nextModality !== (r.modality ?? null)
+		if (!renaming && !factsChanged && !modalityChanged) continue
 		await db
 			.update(schema.connectionModels)
 			.set({
 				...(renaming ? { name: offered.name } : {}),
-				...(factsChanged ? { facts: nextFacts } : {})
+				...(factsChanged ? { facts: nextFacts } : {}),
+				...(modalityChanged ? { modality: nextModality } : {})
 			})
 			.where(eq(schema.connectionModels.id, r.id))
 	}
@@ -292,6 +308,7 @@ export async function syncConnectionModels(
 		.update(schema.connections)
 		.set({ modelsSyncedAt: now, modelsSyncError: null })
 		.where(eq(schema.connections.id, connectionId))
+	if (hadError) markAdminOverviewStale()
 
 	const stillMissing = rows.filter(
 		(r) => !listedIds.has(r.model) && r.missingSince != null

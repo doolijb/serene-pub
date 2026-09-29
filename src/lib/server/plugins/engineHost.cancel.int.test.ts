@@ -69,7 +69,7 @@ beforeAll(async () => {
 		bundleSource: BUNDLE,
 		bundleHash: "h-engine-cancel-test",
 		enabled: true,
-		manifest: { engines: { [WINDS]: "winds", [DEAF]: "deaf" } }
+		manifest: { templateEngines: { [WINDS]: "winds", [DEAF]: "deaf" } }
 	})
 	mgr.register({
 		id: "acme/x",

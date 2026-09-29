@@ -8,7 +8,7 @@ import { resolveMessageVerbs, verbRefusal } from "./verbs"
  * and the floors (stop, branch, edit) are unrepresentable — nothing here can
  * turn them off, which is the enforcement, not a rule somebody checks. The
  * opt-in built-ins (delete, hide, swipe) and the content actions (retry,
- * continue, stepBack) are the forbiddable set.
+ * extend, stepBack) are the forbiddable set.
  */
 
 let db: TestDb
@@ -119,7 +119,7 @@ describe("resolveMessageVerbs", () => {
 	it("absent means all on; declared false forbids; unknown keys ignored", () => {
 		expect(resolveMessageVerbs(undefined)).toEqual({
 			retry: true,
-			continue: true,
+			extend: true,
 			stepBack: true,
 			delete: true,
 			hide: true,
@@ -127,7 +127,7 @@ describe("resolveMessageVerbs", () => {
 		})
 		expect(
 			resolveMessageVerbs({ messageVerbs: { retry: false, hide: false } })
-		).toMatchObject({ retry: false, continue: true, hide: false, delete: true })
+		).toMatchObject({ retry: false, extend: true, hide: false, delete: true })
 	})
 
 	it("the floors are not in the map: a stored `edit: false` is ignored, not honoured", () => {
@@ -149,7 +149,7 @@ describe("verbRefusal", () => {
 		expect(retry).toMatch(/retry/)
 		// The floors are always named in the refusal.
 		expect(retry).toMatch(/Stopping, branching and editing are always yours/)
-		expect(await verbRefusal(db, hardcoreSessionId, "continue")).toBeNull()
+		expect(await verbRefusal(db, hardcoreSessionId, "extend")).toBeNull()
 	})
 
 	it("an opt-in built-in switched off is refused; one left on is not", async () => {

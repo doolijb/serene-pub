@@ -17,9 +17,11 @@ WORKDIR /app
 COPY package.json ./
 RUN npm install --fetch-retries=5 --fetch-retry-mintimeout=20000 --fetch-retry-maxtimeout=120000
 
-# Copy source and build
+# Copy source and build. The client+SSR build needs more than the ~2 GB heap
+# Node derives from a typical Docker memory limit (it OOMs at ~2 GB); the
+# release workflow sets the same value.
 COPY . .
-RUN npm run build
+RUN NODE_OPTIONS=--max-old-space-size=4096 npm run build
 
 # Prune to production-only node_modules
 RUN npm prune --production
@@ -38,9 +40,7 @@ WORKDIR /app
 # Defaults — all overridable at runtime via environment variables
 ENV NODE_ENV=production \
     PORT=3000 \
-    SERENE_PUB_DATA_DIR=/data \
-    # Disable auto-open in container environments
-    SERENE_AUTO_OPEN=1
+    SERENE_PUB_DATA_DIR=/data
 
 # Copy only what's needed to run
 COPY --from=builder /app/build        ./build

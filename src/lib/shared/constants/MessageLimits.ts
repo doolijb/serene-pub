@@ -1,5 +1,5 @@
 // Any session participant can send content that lands in the "always-included
-// recent messages" window every infill engine re-renders/re-tokenizes on
+// recent messages" window every 0.5 retrieval path re-renders/re-tokenizes on
 // every candidate it evaluates — an oversized message blocks the whole
 // single-threaded process for every user on the instance, not just the
 // sender's own session.

@@ -16,7 +16,6 @@ import {
 	widgetsInZone,
 	withGridMembership,
 	withGridWidget,
-	withoutGridRequired,
 	withoutGridWidget,
 	zoneGridStyle,
 	type WidgetConfig
@@ -36,13 +35,15 @@ const wid = (over: Partial<WidgetConfig> = {}): WidgetConfig => ({
 })
 
 describe("the normal chat falls out of the model", () => {
-	it("is ONE required widget in the middle zone", () => {
+	it("is ONE widget in the middle zone, and nothing marks it required", () => {
 		// The conversation — the log and the field you write into — is one
-		// widget, so the middle has one anchor to guarantee rather than two.
+		// widget. Placement is free (brief 7a): the widget grid's `required`
+		// flag retired, and the primary floor (./primaryFloor) is a rule about
+		// the whole layout, never a field on a widget.
 		const l = defaultChatLayout()
 		const mid = widgetsInZone(l, "middle")
 		expect(mid.map((w) => w.id)).toEqual(["messages"])
-		expect(mid.every((w) => w.required)).toBe(true)
+		expect(mid.every((w) => !("required" in w))).toBe(true)
 		expect(widgetsInZone(l, "left")).toEqual([])
 		expect(widgetsInZone(l, "right")).toEqual([])
 	})
@@ -161,15 +162,18 @@ describe("updateWidget — immutable edit", () => {
 })
 
 describe("loadChatLayout — defensive rehydrate", () => {
-	it("falls back to the default for junk / wrong-version / non-object input", () => {
+	it("reads junk / wrong-version / non-object input as a grid that places nothing", () => {
+		// Nothing injects the conversation any more: the primary floor, one
+		// level up (./primaryFloor `withPrimaryFloor`), seats it — and only
+		// when no zone, list or arrangement already places one.
 		for (const junk of [undefined, null, 42, "x", {}, { version: 2 }, {
 			version: 1
 		}]) {
-			expect(loadChatLayout(junk)).toEqual(defaultChatLayout())
+			expect(loadChatLayout(junk).widgets).toEqual([])
 		}
 	})
 
-	it("round-trips a saved min-height while keeping the required widget", () => {
+	it("round-trips a saved min-height", () => {
 		const saved = updateWidget(defaultChatLayout(), "messages", {
 			size: { w: "grow", h: { minCells: 4 } }
 		})
@@ -178,7 +182,6 @@ describe("loadChatLayout — defensive rehydrate", () => {
 			(w) => w.id === "messages"
 		)!
 		expect(messages.size.h).toEqual({ minCells: 4 })
-		expect(messages.required).toBe(true) // identity kept from the default
 		expect(widgetsInZone(loaded, "middle").map((w) => w.id)).toEqual([
 			"messages"
 		])
@@ -196,7 +199,35 @@ describe("loadChatLayout — defensive rehydrate", () => {
 		expect(messages.size.h).toBe("grow") // default preserved
 	})
 
-	it("guarantees the required widget even if the blob dropped it", () => {
+	it("honours a saved SIDE zone for Messages rather than putting it back in the middle", () => {
+		// The owner's report (2026-09-29): "I can't move the messages widget
+		// to a different column". The loader copied only size/anchor/order
+		// from the blob and put the conversation back in the middle on every
+		// read.
+		const loaded = loadChatLayout({
+			version: 1,
+			cell: 44,
+			widgets: [
+				{
+					id: "messages",
+					zone: "left",
+					order: 0,
+					size: { w: "grow", h: "grow" },
+					anchor: { top: true, bottom: true, left: true, right: true }
+				},
+				{
+					id: "world-state",
+					zone: "middle",
+					order: 0,
+					size: { w: "grow", h: "fixed" }
+				}
+			]
+		})
+		expect(widgetsInZone(loaded, "left").map((w) => w.id)).toEqual(["messages"])
+		expect(widgetsInZone(loaded, "middle").map((w) => w.id)).toEqual(["world-state"])
+	})
+
+	it("never injects the conversation a saved blob does not name", () => {
 		const loaded = loadChatLayout({
 			version: 1,
 			cell: 44,
@@ -209,9 +240,7 @@ describe("loadChatLayout — defensive rehydrate", () => {
 				}
 			]
 		})
-		expect(widgetsInZone(loaded, "middle").map((w) => w.id)).toContain(
-			"messages"
-		)
+		expect(loaded.widgets.map((w) => w.id)).toEqual(["world-state"])
 	})
 
 	it("drops a retired widget id rather than placing it beside the conversation", () => {
@@ -252,7 +281,6 @@ describe("preset → effective middle zone", () => {
 		])
 		const strip = widgetsInZone(loaded, "middle")[0]
 		expect(strip.size).toEqual({ w: "grow", h: "fixed" })
-		expect(strip.required).toBeUndefined()
 	})
 
 	it("admits an unknown widget into the zone the blob names", () => {
@@ -272,10 +300,8 @@ describe("preset → effective middle zone", () => {
 		expect(widgetsInZone(loaded, "right").map((w) => w.id)).toEqual([
 			"plugin:widget/tracker"
 		])
-		// The anchor guarantee is untouched by a newcomer.
-		expect(widgetsInZone(loaded, "middle").map((w) => w.id)).toEqual([
-			"messages"
-		])
+		// Read as saved: no conversation is injected beside it.
+		expect(widgetsInZone(loaded, "middle").map((w) => w.id)).toEqual([])
 	})
 
 	it("ignores an entry that names neither a real zone nor a real size", () => {
@@ -287,7 +313,7 @@ describe("preset → effective middle zone", () => {
 				{ id: "sizeless", zone: "middle" }
 			]
 		})
-		expect(loaded.widgets.map((w) => w.id)).toEqual(["messages"])
+		expect(loaded.widgets.map((w) => w.id)).toEqual([])
 	})
 })
 
@@ -525,10 +551,10 @@ describe("preset → the right column opens docked", () => {
 
 	it("ships an arrangement for the side it docks", () => {
 		const right = arranged().right
+		// Two, not three: R79 removed the Inventory widget for now.
 		expect(right?.items.map((i) => i.id)).toEqual([
 			"scene-portraits",
-			"stats",
-			"inventory"
+			"stats"
 		])
 		expect(right?.cols).toBe(1)
 	})
@@ -540,7 +566,7 @@ describe("preset → the right column opens docked", () => {
 			expect(unitPinned(unit.members), unit.key).toBe(true)
 	})
 
-	it("expands all three in a column tall enough to hold them", () => {
+	it("expands both in a column tall enough to hold them", () => {
 		const right = arranged().right!
 		const units = unitsOf(right.items)
 		const placed = resolveRailColumn({
@@ -553,11 +579,7 @@ describe("preset → the right column opens docked", () => {
 				open: unitPinned(u.members)
 			}))
 		})
-		expect(placed.map((p) => p.state)).toEqual([
-			"expanded",
-			"expanded",
-			"expanded"
-		])
+		expect(placed.map((p) => p.state)).toEqual(["expanded", "expanded"])
 	})
 })
 
@@ -579,13 +601,6 @@ describe("withGridWidget / withoutGridWidget", () => {
 		})
 	})
 
-	it("never claims `required` — that is the default layout's guarantee", () => {
-		const next = withGridWidget(defaultChatLayout(), "stats", "middle")
-		expect(next.widgets.find((w) => w.id === "stats")!.required).toBe(
-			undefined
-		)
-	})
-
 	it("moves rather than doubles a widget already in the grid", () => {
 		const once = withGridWidget(defaultChatLayout(), "stats", "middle")
 		const twice = withGridWidget(once, "stats", "left")
@@ -601,9 +616,11 @@ describe("withGridWidget / withoutGridWidget", () => {
 		expect(withoutGridWidget(with_, "inventory")).toBe(with_)
 	})
 
-	it("keeps a required widget: the conversation moves, it never leaves", () => {
+	it("takes the conversation out too — whether it MAY go is the floor's question", () => {
+		// It may be going to a side (brief 7a). The editor asks the primary
+		// floor (./primaryFloor `floorKeeps`) before it gets here.
 		const base = defaultChatLayout()
-		expect(withoutGridWidget(base, "messages")).toBe(base)
+		expect(withoutGridWidget(base, "messages").widgets).toEqual([])
 	})
 })
 
@@ -655,14 +672,11 @@ describe("withGridMembership — the middle, reconciled against its frame", () =
 		})
 	})
 
-	it("keeps a required widget the frame does not name", () => {
-		// Messages is draggable (it is only not REMOVABLE), so a frame can come
-		// back without it. The conversation is not a thing a frame may drop.
+	it("the conversation obeys the frame like any card: dragged to a side, it leaves the grid", () => {
+		// It used to be kept whatever the frame said (`required`), so Done put
+		// it straight back in the middle.
 		const next = withGridMembership(withMap(), "middle", framed("map"))
-		expect(widgetsInZone(next, "middle").map((w) => w.id)).toEqual([
-			"messages",
-			"map"
-		])
+		expect(widgetsInZone(next, "middle").map((w) => w.id)).toEqual(["map"])
 	})
 
 	it("adds and removes in one pass", () => {
@@ -677,58 +691,22 @@ describe("withGridMembership — the middle, reconciled against its frame", () =
 		])
 	})
 
-	it("an empty frame is not an absent one: it empties what it may", () => {
+	it("an empty frame is not an absent one: it empties the middle", () => {
+		// Whether Done may COMMIT an empty middle is QF's (./placementRules),
+		// asked before this is written.
 		const next = withGridMembership(withMap(), "middle", [])
-		expect(widgetsInZone(next, "middle").map((w) => w.id)).toEqual([
-			"messages"
-		])
-	})
-})
-
-describe("withoutGridRequired — a side list may not seat the conversation", () => {
-	it("refuses a required id and keeps the rest, in order", () => {
-		// The shape a blob written before the drop refused this could carry:
-		// the right zone's frame naming `messages`.
-		const out = withoutGridRequired(defaultChatLayout(), [
-			"stats",
-			"messages",
-			"inventory"
-		])
-		expect(out.ids).toEqual(["stats", "inventory"])
-		expect(out.refused).toEqual(["messages"])
-	})
-
-	it("refuses every required id the grid holds, not just the conversation", () => {
-		const grid = updateWidget(
-			withGridWidget(defaultChatLayout(), "map", "middle"),
-			"map",
-			{ required: true }
-		)
-		expect(withoutGridRequired(grid, ["map", "stats"])).toEqual({
-			ids: ["stats"],
-			refused: ["map"]
-		})
-	})
-
-	it("leaves an ordinary middle widget alone — it may move to a side", () => {
-		const grid = withGridWidget(defaultChatLayout(), "map", "middle")
-		expect(withoutGridRequired(grid, ["map"])).toEqual({
-			ids: ["map"],
-			refused: []
-		})
-	})
-
-	it("refuses nothing when nothing required is named", () => {
-		expect(
-			withoutGridRequired(defaultChatLayout(), ["stats", "inventory"])
-		).toEqual({ ids: ["stats", "inventory"], refused: [] })
+		expect(widgetsInZone(next, "middle").map((w) => w.id)).toEqual([])
 	})
 })
 
 describe("a genre's own middle (R71)", () => {
-	it("puts the genre's primary widget where the conversation would be, required", () => {
+	it("reads nothing saved as nothing placed — the floor seats the genre's primary", () => {
 		const grid = loadChatLayout({}, "acme.game:board", new Set(["messages"]))
-		expect(grid.widgets.map((w) => [w.id, w.zone, w.required])).toEqual([["acme.game:board", "middle", true]])
+		expect(grid.widgets).toEqual([])
+		// …in the floor's shape, which is the genre default's.
+		expect(defaultChatLayout("acme.game:board").widgets.map((w) => [w.id, w.zone])).toEqual([
+			["acme.game:board", "middle"]
+		])
 	})
 
 	it("drops a saved placement of what the genre withholds", () => {
@@ -740,10 +718,15 @@ describe("a genre's own middle (R71)", () => {
 			]
 		}
 		const grid = loadChatLayout(saved, "acme.game:board", new Set(["messages", "stats"]))
-		expect(grid.widgets.map((w) => w.id)).toEqual(["acme.game:board"])
+		expect(grid.widgets.map((w) => w.id)).toEqual([])
 	})
 
-	it("is unchanged for a genre that withholds nothing", () => {
-		expect(loadChatLayout({})).toEqual(defaultChatLayout())
+	it("honours a saved side zone for the genre's own primary too", () => {
+		const saved = {
+			version: 1,
+			widgets: [{ id: "acme.game:board", zone: "right", order: 0, size: { w: "grow", h: "grow" } }]
+		}
+		const grid = loadChatLayout(saved, "acme.game:board", new Set(["messages"]))
+		expect(grid.widgets.map((w) => [w.id, w.zone])).toEqual([["acme.game:board", "right"]])
 	})
 })

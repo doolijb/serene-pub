@@ -1,152 +1,136 @@
 # Getting Started
 
-Serene Pub walks you through a short setup wizard the first time you sign in, then quietly turns into your home dashboard once everything is configured. This page explains exactly what each step does and how to get back to it later.
+The first time you open Serene Pub, a short setup wizard asks a few questions and then drops you straight into your first session. It takes a few minutes. This page walks through each screen and says what to pick if you're not sure.
 
-## Overview
+Never used an AI chat app before? That's fine. Nothing here needs any technical knowledge. If you'd like the background first, read [What is Serene Pub?](./what-is-serene-pub.md), then [Install Serene Pub](./install.md) and [Connect a model](./connect-a-model.md).
 
-The very first screen you see in Serene Pub (the app's home route) is a step-by-step wizard. It appears automatically whenever any required piece of your setup is missing — a connection to an AI service, a character, a persona, or a first session — and walks you through fixing that one thing at a time.
+## The wizard at a glance
 
-Once every required step is complete, the exact same screen switches to a normal home dashboard showing your characters and recent sessions. There's no separate "setup mode" you have to exit; the page just notices you're done and changes what it shows. If you later delete your only character or persona, or the wizard otherwise detects something incomplete, this same screen will show the relevant step again the next time you land on it.
+The wizard shows one question per screen. A bar across the top shows how many screens there are and which one you're on; click a finished one to go back to it, or use **Back** at the bottom.
 
-The wizard adapts to who you are:
+1. **Get started**: a welcome, and the language you'd like to use.
+2. **Choose an LLM**: the AI that writes the replies. Only the person who runs the pub (the admin) sees this screen.
+3. **What would you like to do?**: **Talk to an AI**, or **Play with characters**.
+4. **Pick a character** and **Who are you in the story?**: only if you chose **Play with characters**.
 
-- The **first admin** to set up a brand-new server sees the full wizard, including connecting an AI service.
-- An **admin logging in after the server is already configured** sees a shorter welcome message but still gets the connection and RAG steps if those aren't done yet.
-- **Non-admin users** never see the connection or RAG steps at all — those are server-wide settings an admin controls. Non-admins only go through Welcome, Persona, Character, and Create Session. See [Users and Accounts](./users-and-accounts.md) for how admin vs. non-admin roles work.
+When you finish, the wizard opens your new session. From then on, the same page is your home screen.
 
-## Step 1: Welcome
+<!-- SHOT: the wizard's progress bar and the Choose an LLM screen -->
 
-The wizard opens with a simple welcome screen and a single **Get Started** button. The heading and description change depending on your situation:
+## 1. Get started
 
-- If you're the admin setting up a brand-new server: "Welcome to Serene Pub! Let's get your server set up and ready to session. This only takes a few minutes."
-- If you're an admin but the server is already configured (e.g., a second admin account): "Welcome, Admin! The server is already configured. Let's get your personal account set up so you can start sessionting."
-- If you're a non-admin user: "Welcome! An administrator has already set up the server. Let's get your account ready so you can start sessionting."
+The welcome screen says what's about to happen and has one choice on it: your **Language**. Everything after this is shown in the language you pick. If you're the admin, it also becomes the default for everyone on your pub; anyone can change their own later in **Settings**. See [Languages](./languages.md).
 
-This step never counts as "complete" on its own — it's just an entry point. Clicking **Get Started** moves you to the next step.
+Click **Get started** to carry on.
 
-## Connecting to an AI Service
+<!-- SHOT: the Get started screen with the Language picker -->
 
-This step is only shown to admins (non-admins skip straight from Welcome to the Character step, since a shared connection is already configured for the server). It's the first thing an admin must set up, because nothing else in the app works without an active AI connection.
+## 2. Choose an LLM
 
-If you already have an active connection, this step just shows a "Connected!" confirmation with the connection's name and a **Continue** button — you can skip the rest of this section.
+An **LLM** (large language model) is the AI that actually writes. Serene Pub doesn't include one; it connects to one. This screen asks where yours should run.
 
-Otherwise you're offered three choices, each as a large clickable card:
+It starts by looking for model servers already running on this computer: **Ollama**, **LM Studio**, **llama.cpp** and **KoboldCPP**. Anything it finds is listed first, under **Found on this computer**, as a card with the program's name, its address and how many chat models it has; the first card with a model is marked **Recommended**. Click a card, pick a model, and click **Use this model**. That's the whole setup. If you start one of those programs while the wizard is open, **Scan again** looks once more.
 
-- **KoboldCPP — Easy**: "A highly performant engine fine-tuned for storytelling and roleplay. Download and manage automatically with Serene Pub." Choosing this enables Serene Pub's built-in KoboldCPP manager.
-- **Ollama — Easy**: "Incredibly easy to install, seamless and managed entirely within Serene Pub. Search, download, and activate models in a few simple clicks." Choosing this enables the built-in Ollama manager and checks whether Ollama is already reachable.
-- **Manual Setup — Advanced**: "Configure OpenAI, LM Studio, Claude, LlamaCpp, or any other service yourself." Choosing this disables both managers and opens the Connections panel directly.
+Below that, under **Or set one up**, are the ways to get a model when nothing is running yet. Each lists what it costs you in a few short tags.
 
-Full details on connection types, managers, and configuration options live in [Connections](./connections.md). The sections below only describe what happens inside the wizard itself.
+- **KoboldCPP, run by Serene Pub** (_Private · Free · Needs about 8 GB of memory_). Serene Pub downloads a program called KoboldCPP and a model that suits your computer, and runs them for you. When nothing was found, this is the **Recommended** choice on a reasonably strong computer.
+- **Ollama, managed by Serene Pub** (_Private · Free_). For a computer with Ollama installed: Serene Pub connects to it and downloads models into it for you.
+- **An online service** (_Fast · Nothing to install · Costs per message_). OpenAI, Anthropic, OpenRouter, Groq and more. You need an account with the service and an API key (a long password the service gives you).
+- **A custom connection**. A server on another computer, or one on an unusual address. You type its address in Connections.
 
-### Setting up with KoboldCPP
+On the Android app there is no scan and nothing runs locally, so the list is headed **Where it runs** and offers only **An online service** and **A custom connection**.
 
-If the KoboldCPP manager is enabled, the wizard tells you to open the **KoboldCPP Manager** (via the footer button of the same name) to download and load a model — the wizard automatically advances once a model connects successfully.
+Not sure which? [Connect a model](./connect-a-model.md) explains the trade in plain terms and walks through each one.
 
-If you turn the manager off, the wizard instead walks you through a manual setup:
+<!-- SHOT: the Choose an LLM screen with one Found on this computer card marked Recommended, and the Or set one up options below -->
 
-1. Download KoboldCPP from GitHub.
-2. Download a GGUF model (a Hugging Face link is provided).
-3. Launch KoboldCPP and load your model.
-4. Enter your KoboldCPP URL (defaults to `http://localhost:5001`) and click **Detect**.
+What happens next depends on your choice:
 
-Once detected, a dropdown lists the models currently loaded in KoboldCPP so you can pick one, then click **Connect** in the footer.
+- **A card under Found on this computer** shows that program's chat models. Pick one and click **Use this model**; the wizard moves on as soon as it is registered. If the program is running but has no chat model loaded, load one (for Ollama, **Get a model** opens it in Connections so you can download one there) and click **Check again**.
+- **KoboldCPP, run by Serene Pub** opens the **Connections** panel on the KoboldCPP setup: pick the download that suits your computer, then a model. Downloads can take a while. The wizard waits, and moves on by itself once the model is ready. **Open the setup again** reopens the panel if you closed it.
+- **Ollama, managed by Serene Pub** opens the Connections panel on Ollama: download a model there and choose it for chat. The wizard moves on by itself once it can reply.
+- **An online service** opens the **New connection** window in the Connections panel. Choose your service, paste its API key and pick a model. The wizard moves on by itself once a model can reply. If you've added it and the wizard is still waiting, click **Choose which model replies**.
+- **A custom connection** opens the same window, narrowed to programs you run yourself. Pick the program from the **Service** list and give its address. The wizard moves on by itself once a model can reply.
 
-### Setting up with Ollama
+You never need to come back and press anything: as soon as your pub can reply, the wizard goes to the next screen. If you return to this step later, it simply reads **Your pub can reply** and names the connection, with a **Continue** button.
 
-If an Ollama connection is already managed by this pub, the wizard tells you to open it in the Connections sidebar and use **Get models** to pull one; the wizard advances automatically once a model connects.
+:::note Embeddings are optional
+Earlier versions asked about embeddings (smarter lore search, also called RAG) during setup. The wizard no longer does: your pub works without them. Turn them on whenever you like in **Connections**. See [Embeddings & RAG](./embeddings-and-rag.md).
+:::
 
-With the manager off, you get manual instructions instead:
+## 3. What would you like to do?
 
-1. Download and install Ollama from ollama.com.
-2. Run `ollama pull llama3.2` in a terminal.
-3. Come back and pick a model from the dropdown — the wizard offers Llama 3.2 (Recommended), Llama 3.2 1B (faster/lighter), Qwen 2.5, and Mistral 7B as quick-pick options.
+Two big choices. You can do both later; this is just where to start.
 
-Selecting a model enables a **Connect** button in the footer, which creates the connection and activates it.
+- **Talk to an AI** starts a conversation with the **Guide**, an AI helper that knows Serene Pub and its documentation. Ask it anything, including how to do something in the app. Clicking it starts the session straight away; there are no more screens.
+- **Play with characters** is for stories: the AI plays a character, and you play yourself (or someone you make up). It adds two more screens, below.
 
-### Manual Setup for advanced users
+If the admin has switched the Guide off, **Talk to an AI** says so and can't be chosen.
 
-Choosing **Manual Setup** disables both built-in managers and opens the Connections panel with a tutorial flag set, so you can configure any OpenAI-compatible endpoint, LM Studio, Claude, LlamaCpp, or another custom service yourself. The wizard shows a "Waiting for Connection" message and automatically detects and advances once you've created and activated a connection — you don't need to come back and click anything.
+<!-- SHOT: the What would you like to do screen with its two choices -->
 
-## Embeddings (RAG) Setup
+## 4. Pick a character
 
-Admin-only (reachable on Android too, where only the External API option applies — see [Android App](./android.md)). This introduces retrieval-augmented generation (RAG) for lorebooks and session history:
+Only if you chose **Play with characters**. The AI plays the character you pick here.
 
-- **What it does**: "A small AI model understands the meaning of your lore. When you session, Serene Pub finds the most relevant entries and quietly adds them to every message."
-- **Resource usage**: "CPU only — runs a small model locally in the background. One-time download, then works silently without extra AI calls."
+Any characters you already have are listed; click one to select it (it gets a gold outline and a tick). Or add one:
 
-Unlike the connection setup steps, this step has no inline configuration UI. Its footer's **Open Embedding Connections** button opens the Embeddings section of the Connections sidebar (described in [Embeddings & RAG](./embeddings-and-rag.md)), and the wizard waits for a starred embedding connection to report ready before advancing, updating live with no page reload:
+- **Create one**: a name, a picture and a personality, in a few short steps. The new character is selected for you.
+- **Browse the library**: ready-made characters from the community. The **Library** opens beside the wizard; a character you import there shows up in the list here, ready to pick.
+- **Import a card**: drop a character card file (`.png`, `.json` or `.charx`, as used by SillyTavern and other apps) or click **Browse**. The imported character is selected for you.
 
-- No starred connection: **Skip for now** and **Open Embedding Connections** are both offered.
-- Starred but not ready yet (still loading or misconfigured): a status message points you back to the sidebar.
-- Starred and ready: the footer's button becomes **Continue**.
+Coming from SillyTavern with a whole library? The admin sees a link to **Import your characters and personas** (not on the Android app). See [Importing from SillyTavern](./importing-from-sillytavern.md).
 
-See [Embeddings & RAG](./embeddings-and-rag.md) for the three services and how moving the star later re-indexes.
+Click **Continue** once a character is selected. See [Characters](./characters.md) for everything a character can hold.
 
-## Creating Your First Persona
+## 5. Who are you in the story?
 
-For every user, and — note the order — this comes **before** the Character step, not after it. The heading reads "Set Up Your Identity," and you're given four ways to get one:
+Your **persona** is the character you play. The AI sees its name and description, so it knows who it's talking to. If you already have personas, your default one is selected; click another to change it. Or add one:
 
-- **Browse Library** — opens the built-in persona library to pick a ready-made persona.
-- **Import from SillyTavern** — leaves the wizard and takes you to the app's import page for pulling personas (and characters/sessions) from an existing SillyTavern install. Unlike the same option on the Character step, this one is **not** admin-gated — any user can reach it from here, admin or not. See [Importing from SillyTavern](./importing-from-sillytavern.md).
-- **Import from File** — drag-and-drop or browse for a persona card file (`.png`, `.apng`, `.jpeg`, `.jpg`, `.webp`, or `.json`).
-- **Create from Scratch** — opens the persona creator to build one manually.
+- **Just call me "You"**: the quickest start. It makes a simple persona named "You" that you can fill in later.
+- **Create one**: your name, a picture and a few lines about you.
+- **Import a card**: a persona is just a character card you play, so any card works.
 
-Plus one extra shortcut at the bottom:
+Click **Start the session**. The wizard opens your new session with the character you picked, and you can write your first message. See [Personas](./personas.md) and [Sessions](./sessions.md).
 
-> **Use a "You" placeholder persona** — instantly creates a default persona named "You" with a generic description you can edit later.
+<!-- SHOT: the Who are you in the story screen with a persona selected and Start the session -->
 
-Any of these completing successfully advances the wizard automatically, and a **Skip for now** button is available if you'd rather come back later. See [Personas](./personas.md) for everything a persona can contain.
-
-## Creating Your First Character
-
-Immediately follows the Persona step, for every user. The heading reads "Add Your First Character," with the same four options as the persona step (Browse Library, Import from File — same accepted file types, Create from Scratch), plus **Import from SillyTavern**, which — unlike on the Persona step — _is_ admin-only here.
-
-As with the persona step, any successful creation or import advances the wizard, and a **Skip for now** button is available. Full character-building details are covered in [Characters](./characters.md).
-
-## Starting Your First Session
-
-The final step, titled "Start Your First Session." It shows up to six of your characters as clickable cards (avatar, name, and description). Clicking one immediately creates a new one-on-one session named "Session with `<character>`," attaches your first persona if you have one, and takes you straight into that session.
-
-If you haven't created a character yet, this step shows a reminder to go back and add one first. The footer also has an **Open Sessions Panel** button if you'd rather browse or manage sessions instead of starting one right here. See [Sessions](./sessions.md) for everything you can do once you're in a conversation.
-
-## The Home Dashboard After Setup
+## The home screen after setup
 
 Once every required step is complete, this same screen stops showing the wizard and answers one
 question instead: what were you doing?
 
-- A **greeting** for the time of day, with how many sessions are waiting on your reply, and a
-  **Start a session** button.
+- A **greeting** for the time of day, with how many sessions are waiting on your reply, an
+  **Import a card** button that imports a character card straight from a file, and a
+  **New session** button.
 - **Pick up where you left off**: up to four sessions with messages, newest first. Each card shows
-  the genre, who is in the scene, when it was last active, the last line that was said, and whose
-  turn it is. **Continue** opens the session.
-- A **Characters** shelf of what you have created or imported, with an **All** link that opens the
-  Characters view, and a **New or import** tile.
-- A **Personas** row. Clicking one opens it in the Personas view.
+  the cast's faces, the genre and when it was last active, and who said the last line and what
+  they said. A **Your turn** chip marks a session waiting on you. **Continue** opens the session.
+  On a phone the cards stack one to a row.
+- A **Characters** shelf of portrait cards, with an **All** link that opens the Characters view,
+  and a **New or import** tile. On a phone it shows two cards to a row; on a wide screen it is a
+  single row of as many as fit.
+- A **Playing as** row of your personas. Clicking one opens it in the Characters view.
 - At the foot, quiet links to the **Documentation** and to **Document View**.
 
 A quiet one-line notice at the top of the home reminds you the app is in beta and under active
 development.
 
-## Returning to This Screen Later
+## When the wizard comes back
 
-Because the wizard and the home dashboard are the same page, there's nothing special to "exit" — the page simply re-evaluates what's missing every time you load it.
+The home page shows the wizard instead of the home screen while something you need is missing:
 
-### How the wizard decides where to start
+- **For the admin:** the pub can't reply yet (no model is set to answer sessions), or
+- **For everyone:** you haven't started a session yet.
 
-When you land on this screen, Serene Pub checks, per step: do you have an active connection, has RAG been marked complete, do you have at least one character, at least one persona, and at least one session. If everything required for your role is already true, you get the dashboard. If anything is missing, you get the wizard — and if some steps are already done (for example you have a connection and a character but no persona yet), the wizard skips the Welcome screen entirely and opens directly on the first incomplete step instead of making you click through steps you've already finished.
+Having a character or a persona is not required, since a Guide session needs neither. If the pub can already reply, the admin's wizard skips straight to **What would you like to do?**.
 
-### Revisiting completed steps
+Leaving the wizard partway through is safe. Anything you created (a connection, a character, a persona) is kept, and the next visit to the home page starts where the facts say you are.
 
-While the wizard is open, the step indicator at the top is a row of numbered circles connected by a progress line. Completed steps show a checkmark and can be clicked to jump back to them; the current step is highlighted; steps you haven't reached yet are dimmed and disabled. You can't skip ahead by clicking — only backward navigation through already-completed steps is allowed, in addition to the **Back**/step-specific action buttons in the footer.
+### If you're not the admin
 
-### Skipping steps
+Connecting a model is the pub's business, so people who join someone else's pub never see **Choose an LLM**: their wizard is **Get started**, then **What would you like to do?**, and the character screens if they choose them. See [Users and Accounts](./users-and-accounts.md).
 
-RAG, persona, and character can all be explicitly skipped with a **Skip for now** button without actually completing the underlying setup. Skipping RAG simply records that step as acknowledged on your account (so the wizard won't nag you again) without turning the feature on. Skipping persona or character just moves you forward — since the dashboard view requires an actual character/persona/session to appear, skipping those steps means you'll see the wizard again next time until you actually create one.
+### On the Android app
 
-### What non-admin users see
-
-Because connecting an AI service and configuring RAG are server-wide settings, they only ever appear for admin accounts. A non-admin user's wizard is just four steps: Welcome, Persona, Character, Create Session. Everything else about how the wizard behaves — auto-skipping, step indicators, the dashboard hand-off — works identically for admins and non-admins alike.
-
-### Android differences
-
-On the Android app build, the AI Service step's **KoboldCPP — Easy** and **Ollama — Easy** cards aren't offered at all — only **Manual Setup** is shown, taking you straight to the Connections panel. See [Android App](./android.md) for the full list of Android-specific limitations.
+**Choose an LLM** has no scan on the Android app, and nothing runs on the phone itself: pick **An online service**, or **A custom connection** to point it at a server on another computer (see [2. Choose an LLM](#2-choose-an-llm)). See [Android App](./android.md).

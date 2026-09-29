@@ -8,6 +8,7 @@ import {
 } from "$lib/server/utils/testDb"
 import {
 	backfillMissingBindingNames,
+	mergeAliases,
 	resolveOrCreateBinding,
 	syncLorebookBindingsForCharacter
 } from "./characterBindingSync"
@@ -23,6 +24,15 @@ async function getBinding(id: number) {
 		where: eq(schema.lorebookBindings.id, id)
 	})
 }
+
+describe("mergeAliases — the member's names, with the card's added (#114)", () => {
+	test("keeps the member's own first, adds the card's it lacks, never the name itself", () => {
+		expect(
+			mergeAliases(["the innkeeper", "Mar"], ["mar", "Maren Thorne"], "Maren")
+		).toEqual(["the innkeeper", "Mar", "Maren Thorne"])
+		expect(mergeAliases(null, ["Maren", " "], "Maren")).toEqual([])
+	})
+})
 
 describe("syncLorebookBindingsForCharacter", () => {
 	test("propagates a character's current name/aliases to every bound row across multiple lorebooks", async () => {
@@ -93,10 +103,14 @@ describe("syncLorebookBindingsForCharacter", () => {
 		// aliases so it stays matchable. See characterBindingSync.ts and
 		// characterBindingSync.nicknameAlias.int.test.ts: without it a scene
 		// referring to the character by their real name matches nothing.
+		//
+		// ⚠ The aliases are the MEMBER's (#114, cast-first): the card's names
+		// are merged in and the member's own "Old Alias" is kept, never
+		// written over.
 		expect(afterA?.name).toBe("Newt")
-		expect(afterA?.aliases).toEqual(["New Alias", "New Name"])
+		expect(afterA?.aliases).toEqual(["Old Alias", "New Alias", "New Name"])
 		expect(afterB?.name).toBe("Newt")
-		expect(afterB?.aliases).toEqual(["New Alias", "New Name"])
+		expect(afterB?.aliases).toEqual(["Old Alias", "New Alias", "New Name"])
 
 		expect(afterUnrelated?.name).toBe("Unrelated NPC")
 		expect(afterUnrelated?.aliases).toEqual(["NPC Alias"])

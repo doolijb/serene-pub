@@ -1,7 +1,7 @@
 // See https://svelte.dev/docs/kit/types#app.d.ts
 
 import type { Component } from "@lucide/svelte"
-import type { LoreRoute } from "$lib/client/lorebooks/loreRoute"
+import type { LoreRoute } from "$lib/shared/lorebooks/loreRoute"
 import * as schema from "$lib/server/db/schema"
 import type { Schema } from "inspector/promises"
 import type { P } from "ollama/dist/shared/ollama.d792a03f.mjs"
@@ -32,7 +32,22 @@ declare global {
 			 * suppresses every update notice. */
 			isPrerelease?: boolean
 		}
-		// interface PageState {}
+		/**
+		 * Shallow-routing state (`pushState`). `focus` is the view focused
+		 * over the page this entry was pushed from; `from` is the width it was
+		 * focused from, so Back steps down to it.
+		 */
+		interface PageState {
+			focus?: string
+			from?: "dock" | "half"
+			/**
+			 * How many history entries deep in Focus this entry is: 1 for the
+			 * entry that entered Focus, +1 for each page a focused view pushes
+			 * (Admin sections, Help pages). Stepping down goes back this many,
+			 * so it leaves Focus rather than stepping back a page.
+			 */
+			depth?: number
+		}
 		// interface Platform {}
 	}
 
@@ -65,6 +80,24 @@ declare global {
 		 * context access, e.g. a view button that navigates to another page.
 		 */
 		fullPageView: string | null
+		/**
+		 * The width the active view is shown at: `dock` (400px beside the
+		 * page), `half` (half the room right of the rail, beside the page) or
+		 * `focus` (over the page, which stays mounted; `fullPageView` is the
+		 * view in focus). Focus carries the view's own address when it has one
+		 * (`$lib/client/shell/viewRoutes`). Below `lg` a view is a sheet and
+		 * this reads `dock`.
+		 */
+		readonly viewWidth: "dock" | "half" | "focus"
+		/** Show the active view at a width. A no-op with no active view. */
+		setViewWidth: (width: "dock" | "half" | "focus") => void
+		/**
+		 * Stage only: the rail, the sidebar and the page's own chrome step
+		 * aside so a session is just its story and its composer. The shell
+		 * hides its half; `data-stage-only` on the shell root is the flag a
+		 * page reads to hide its own (a session's side zones).
+		 */
+		stageOnly: boolean
 		/**
 		 * Open a view in the sidebar and make it active.
 		 *
@@ -176,16 +209,19 @@ declare global {
 			/** Where the lorebook workspace should open — one address for the
 			 * book, the section, the entry and how it is presented. */
 			lore?: LoreRoute
-			/**
-			 * Open the Help view on one documentation page, and at one heading
-			 * inside it. The slug is the address — the docs are the one jump
-			 * kind whose rows are not integer-keyed.
-			 */
-			help?: { slug: string; anchor?: string }
 			/** Open the connections sidebar and select a specific connection */
 			connectionId?: number
 			/** Open the connections sidebar straight to one modality's section. */
 			connectionsModality?: string
+			/**
+			 * Open the connections sidebar through one of its first-run doors:
+			 * `setup-chat` the Set up chat flow (KoboldCPP run by this pub),
+			 * `service` the Add picker narrowed to online services, `local`
+			 * narrowed to servers the person already runs, `chat` the chat
+			 * capability view (which model answers). The home wizard's
+			 * Choose an LLM step is the caller; the sidebar consumes it.
+			 */
+			connectionsDoor?: "setup-chat" | "service" | "local" | "chat"
 		}
 		leftNavOrder: string[]
 		rightNavOrder: string[]
@@ -304,7 +340,19 @@ declare global {
 		 * `lorebookId` is here.
 		 */
 		lorebookBranchId: number | null
+		/**
+		 * The session's own story clock (year/month/day), or null when it
+		 * follows its line's present. Retrieval reads the book AT this date
+		 * (owner ruling 3, 2026-09-28), so the lorebook workspace needs it to
+		 * say — and to stand at — what the session reads.
+		 */
+		storyClock: { year: number; month: number | null; day: number | null } | null
 		isOwner: boolean
+		/**
+		 * A reply is being written. Read by the shell's spine, which keeps
+		 * the session in view while a view is focused over it.
+		 */
+		isGenerating: boolean
 	}
 
 	interface GraphBuildState {
@@ -344,7 +392,8 @@ declare global {
 			mode: "replace" | "extend"
 			lorebookLabel?: string
 		}) => void
-		clearBuild: () => void
+		/** `"acted"` when the build was applied; absent is a dismiss. */
+		clearBuild: (how?: "acted") => void
 	}
 
 	interface SceneSummarizeState {

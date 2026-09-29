@@ -47,6 +47,36 @@ async function makeUser(username: string) {
 	return createTestUser(testDb, username)
 }
 
+/**
+ * Export is disabled (owner ruling 2026-09-28) and its handler refuses; these
+ * round trips drive the dormant builder directly, which is the half the import's
+ * unchanged-vs-conflict check still uses.
+ */
+async function dormantExport(
+	socket: { user: { id: number } },
+	params: {
+		id: number
+		includeCharacters?: boolean
+		includePersonas?: boolean
+		includeNarrativeGraph?: boolean
+	},
+	_emit?: unknown
+) {
+	const { buildLorebookExportData } = await import(
+		"$lib/server/utils/lorebookExportBuilder"
+	)
+	const { id, ...options } = params
+	const { name, specBookWithGraph } = await buildLorebookExportData(
+		id,
+		socket.user.id,
+		options
+	)
+	return {
+		blob: Buffer.from(JSON.stringify(specBookWithGraph, null, 2), "utf-8"),
+		filename: `${name}.v3.json`
+	}
+}
+
 const fakeSocket = (userId: number) => ({ user: { id: userId } }) as any
 const noopEmit = () => {}
 
@@ -168,7 +198,7 @@ const LINKED_BOOK_EDGES = [
 
 describe("entry endpoints and anchors across an export (PGlite integration)", () => {
 	test("a book with a cast edge, an entry edge, a cast-to-entry edge and a nested entry round trips", async () => {
-		const { lorebookExportHandler, lorebookImportHandler } = await import(
+		const { lorebookImportHandler } = await import(
 			"./lorebooks"
 		)
 		const author = await makeUser("edges-author")
@@ -177,7 +207,7 @@ describe("entry endpoints and anchors across an export (PGlite integration)", ()
 		const seeded = await seedLinkedBook(author.id, "Linked Book")
 		expect(await edgeSummary(seeded.lorebook.id)).toEqual(LINKED_BOOK_EDGES)
 
-		const exported = await lorebookExportHandler.handler(
+		const exported = await dormantExport(
 			fakeSocket(author.id),
 			{ id: seeded.lorebook.id },
 			noopEmit

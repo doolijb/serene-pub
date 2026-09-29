@@ -278,7 +278,6 @@ describe("the document and its widget projection (§4.12)", () => {
 			sessionId: session.id,
 			characterId: character!.id,
 			isActive: true,
-			visibility: "visible"
 		})
 		const doc = (await resolveSessionSettings(db, session.id))!
 		expect(doc.cast.sessionCharacters.map((c) => c.character.name)).toEqual(
@@ -303,5 +302,68 @@ describe("the document and its widget projection (§4.12)", () => {
 		})
 		expect(extras.session).toBe(doc)
 		expect((extras.session as any).title).toBe("Scripted")
+	})
+})
+
+/**
+ * `playerLabel` (lair re-plan R4): the session's override on `metadata`, else
+ * the genre's, else absent — and a genre that declares none (Chat, a persona
+ * genre) has none whatever the row holds, so its document and its cast read
+ * are the objects they were.
+ */
+describe("playerLabel", () => {
+	async function labelChat(label: unknown) {
+		const row = await chatGenreRow()
+		const genre = { ...(row.genre as Record<string, any>) }
+		if (label === undefined) delete genre.playerLabel
+		else genre.playerLabel = label
+		await db
+			.update(schema.pipelineSpecVersions)
+			.set({ genre })
+			.where(eq(schema.pipelineSpecVersions.id, row.id))
+	}
+
+	it("a genre that declares none: absent from the document and the cast, even with a stored value", async () => {
+		await labelChat(undefined)
+		const session = await makeSession({ metadata: { playerLabel: "Game Master" } })
+		const doc = (await resolveSessionSettings(db, session.id))!
+		expect("playerLabel" in doc).toBe(false)
+		expect("playerLabel" in doc.cast).toBe(false)
+	})
+
+	it("the genre's label, then the session's override over it", async () => {
+		await labelChat({ en: "Dungeon Master" })
+		try {
+			const plain = await makeSession()
+			const doc = (await resolveSessionSettings(db, plain.id))!
+			expect(doc.playerLabel).toBe("Dungeon Master")
+			expect((doc.cast as any).playerLabel).toBe("Dungeon Master")
+
+			const renamed = await makeSession({
+				metadata: { playerLabel: "Game Master" }
+			})
+			const over = (await resolveSessionSettings(db, renamed.id))!
+			expect(over.playerLabel).toBe("Game Master")
+			expect((over.cast as any).playerLabel).toBe("Game Master")
+		} finally {
+			await labelChat(undefined)
+		}
+	})
+
+	it("the override is written as its own metadata key, leaving the rest alone", async () => {
+		const { writePlayerLabel } = await import("./playerLabel")
+		const session = await makeSession({ metadata: { note: "kept" } })
+		await writePlayerLabel(db, session.id, "  Game Master ")
+		let [row] = await db
+			.select({ metadata: schema.sessions.metadata })
+			.from(schema.sessions)
+			.where(eq(schema.sessions.id, session.id))
+		expect(row!.metadata).toEqual({ note: "kept", playerLabel: "Game Master" })
+		await writePlayerLabel(db, session.id, " ")
+		;[row] = await db
+			.select({ metadata: schema.sessions.metadata })
+			.from(schema.sessions)
+			.where(eq(schema.sessions.id, session.id))
+		expect(row!.metadata).toEqual({ note: "kept" })
 	})
 })

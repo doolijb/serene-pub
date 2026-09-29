@@ -263,25 +263,86 @@ describe("manual and narrator", () => {
 		})
 		expect(ordered(out)).toEqual([])
 	})
+
+	/**
+	 * The entry spans channels (lair re-plan R5): one per channel whose
+	 * newest visible row is a person's, newest line first, so a line on a
+	 * side channel puts its entry at the head and auto-advance answers it.
+	 * `main`'s entry carries no `channel`, so a history that reads only
+	 * `main` (Adventure, Whodunit) gets the order it always got.
+	 */
+	describe("on more than one channel (R5)", () => {
+		const on = (channel: string, row: Record<string, unknown>) => ({ ...row, channel })
+
+		it("one entry per channel whose newest row is a person's, newest line first", async () => {
+			const out = await run("core:task/turn-narrator@1", {
+				candidates: [],
+				messages: [
+					on("main", user()),
+					on("sanctum", { role: "assistant", speaker: "envoy:castellan" }),
+					on("sanctum", user())
+				]
+			})
+			expect(ordered(out)).toEqual([
+				{ ref: null, via: "voice", channel: "sanctum" },
+				{ ref: null, via: "voice" }
+			])
+		})
+
+		it("a main line newer than the side channel's heads the order", async () => {
+			const out = await run("core:task/turn-narrator@1", {
+				candidates: [],
+				messages: [on("sanctum", user()), on("main", user())]
+			})
+			expect(ordered(out)).toEqual([
+				{ ref: null, via: "voice" },
+				{ ref: null, via: "voice", channel: "sanctum" }
+			])
+		})
+
+		it("an answered channel prepares nothing, and a hidden line counts for nobody", async () => {
+			const out = await run("core:task/turn-narrator@1", {
+				candidates: [],
+				messages: [
+					on("main", user()),
+					on("main", { role: "assistant", isNarratorResponse: true }),
+					on("sanctum", user()),
+					on("sanctum", { role: "assistant", isHidden: true })
+				]
+			})
+			// The hidden reply is not an answer: the Sanctum line is still due.
+			expect(ordered(out)).toEqual([
+				{ ref: null, via: "voice", channel: "sanctum" }
+			])
+		})
+
+		it("a row with no channel is main's, and main's entry never names it", async () => {
+			const out = await run("core:task/turn-narrator@1", {
+				candidates: [],
+				messages: [user(), on("main:1", user())]
+			})
+			expect(ordered(out)).toEqual([{ ref: null, via: "voice" }])
+		})
+	})
 })
 
 describe("the pool", () => {
 	const cast = {
 		sessionCharacters: [
 			{
-				isActive: true,
+				enabled: true,
 				position: 0,
 				removedAt: null,
 				character: { id: 11, name: "Alice", userId: 1 }
 			},
 			{
-				isActive: false,
+				enabled: false,
 				position: 1,
 				removedAt: null,
 				character: { id: 12, name: "Bram", userId: 2 }
 			},
 			{
-				isActive: true,
+				enabled: true,
 				position: 2,
 				removedAt: new Date(),
 				character: { id: 13, name: "Gone", userId: 1 }

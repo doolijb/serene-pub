@@ -39,6 +39,8 @@ import {
 	type SQL
 } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
+import { onLineSql } from "$lib/server/state/lineSql"
+import { MAIN_LINE } from "$lib/shared/lorebooks/lineReading"
 import type { Handler } from "$lib/shared/events"
 import { withSupersession } from "$lib/server/cardSources/inFlightRequests"
 import { SessionTypes } from "$lib/shared/constants/SessionTypes"
@@ -326,9 +328,13 @@ async function searchLorebooks(
  *
  * `keys` is a `text[]` (28's escape-free keywords), so it is flattened for the
  * match the way the client's own pool filter flattens it
- * (`lorebooks/poolFilter.ts:134`). Archived entries are NOT excluded: `archived`
- * is a shelf, not a delete, and a person searching for a name they remember is
- * exactly who wants what was shelved.
+ * (`lorebooks/poolFilter.ts:134`).
+ *
+ * ⚠ **What the workspace a jump opens would list** (2026-09-28): a jump opens
+ * the book on main (the hit names no line), and the default list shows
+ * neither archived rows nor another line's own. So both are out here too — a
+ * hit that opens onto a list without it is a jump to nowhere. A line-aware
+ * jump needs the hit to carry the line it was found on.
  */
 async function searchEntries(
 	userId: number,
@@ -353,6 +359,9 @@ async function searchEntries(
 		.where(
 			and(
 				eq(schema.lorebooks.userId, userId),
+				eq(schema.lorebookEntries.archived, false),
+				// Main's line: shared rows only (`onLineSql(…, MAIN_LINE)`).
+				onLineSql(schema.lorebookEntries.branchId, MAIN_LINE),
 				everyTermMatches(patterns, (pattern) => [
 					ilike(schema.lorebookEntries.title, pattern),
 					ilike(keysAsText, pattern)

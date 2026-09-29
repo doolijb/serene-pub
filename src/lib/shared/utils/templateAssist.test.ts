@@ -39,9 +39,16 @@ function at(marked: string) {
 		offset
 	}
 }
+/**
+ * The PATH completions — names and fields. Helpers, `this` and the loop data
+ * (typed templates P7) are pinned in templateCompletions.test.ts; here the
+ * question is only which names the schema offers where.
+ */
 const labels = (marked: string, scope: TemplateScope = SCOPE) => {
 	const { source, offset } = at(marked)
-	return completionsAt(source, offset, scope).map((c) => c.label)
+	return completionsAt(source, offset, scope)
+		.filter((c) => c.kind === "field" || c.kind === "variable")
+		.map((c) => c.label)
 }
 
 describe("completions", () => {
@@ -59,8 +66,12 @@ describe("completions", () => {
 	})
 
 	test("`{{#` offers the block helpers", () => {
-		expect(labels("{{#‸")).toContain("each")
-		expect(labels("{{#ea‸")).toEqual(["each"])
+		const blocks = (m: string) => {
+			const { source, offset } = at(m)
+			return completionsAt(source, offset, SCOPE).map((c) => c.label)
+		}
+		expect(blocks("{{#‸")).toContain("each")
+		expect(blocks("{{#ea‸")).toEqual(["each"])
 	})
 
 	test("a helper's argument completes as a path", () => {
@@ -150,9 +161,14 @@ describe("completions", () => {
 	})
 
 	// A record's keys are whoever wrote the data's business. An empty list here
-	// would read as "this has no fields", which is the opposite of the truth.
-	test("a record offers nothing rather than an empty field set", () => {
+	// would read as "this has no fields", which is the opposite of the truth —
+	// so it offers one placeholder to type over, never invented names (P7).
+	test("a record offers a key placeholder rather than an empty field set", () => {
 		expect(labels("{{worldLore.‸")).toEqual([])
+		const { source, offset } = at("{{worldLore.‸")
+		expect(completionsAt(source, offset, SCOPE).map((c) => c.kind)).toEqual([
+			"placeholder"
+		])
 	})
 
 	test("a name needing brackets is inserted with them", () => {

@@ -1,0 +1,1 @@
+ALTER TABLE "plugins" ADD COLUMN "update_from_version" text;

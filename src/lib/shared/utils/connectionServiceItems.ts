@@ -1,9 +1,9 @@
 /**
  * Flattens CONNECTION_TYPES (native adapters) and OPENAI_COMPATIBLE_PRESETS (all
- * backed by the generic OpenAI Session adapter) into one list of pickable
+ * backed by the generic OpenAI Chat adapter) into one list of pickable
  * "services" for the New Connection modal's searchable picker — so a user
  * looking for Groq/Mistral/DeepSeek/etc. sees them directly instead of
- * having to first guess that they live two levels deep under "OpenAI Session".
+ * having to first guess that they live two levels deep under "OpenAI Chat".
  */
 import { CONNECTION_TYPE, CONNECTION_TYPES } from "../constants/ConnectionTypes"
 import { OPENAI_COMPATIBLE_PRESETS } from "./connectionDefaults"
@@ -39,16 +39,12 @@ export interface ConnectionServiceItem {
 }
 
 /**
- * The KoboldCPP Manager's own connection types — the text one and the image one.
+ * The connection types of KoboldCPP, run by Serene Pub.
  *
- * A set rather than a comparison spelled out at each call site, because every
- * consumer asks the same question of both and a third type must not be able to
- * be half-added. Both are created FROM the Manager (Models tab → Set Default,
- * or → Use for image generation), never from the generic New Connection picker,
- * and neither is usable while the Manager is switched off.
- *
- * Two types and not one flag, because a connection names exactly ONE model and
- * a text GGUF is not an image one.
+ * The managed endpoint is created FROM the managed KoboldCPP (Models tab → Use for chat
+ * or Use for images), never from the generic New Connection picker, and is not
+ * usable while the managed KoboldCPP is switched off. ⏳ Two ids until the boot fold has
+ * retired `KOBOLDCPP_MANAGED_IMAGE`; a set, so every consumer asks of both.
  */
 export const KOBOLDCPP_MANAGED_TYPES: readonly string[] = [
 	CONNECTION_TYPE.KOBOLDCPP_MANAGED,
@@ -91,12 +87,16 @@ export function buildConnectionServiceItems(): ConnectionServiceItem[] {
 		// Represented below by the "Empty" preset (identical connectionDefaults)
 		// as the single "Custom (OpenAI-Compatible)" entry instead.
 		if (t.value === CONNECTION_TYPE.OPENAI) continue
-		// KoboldCPP Manager connections are never manually created — they're
+		// Connections of KoboldCPP, run by Serene Pub, are never manually created — they're
 		// auto-created by koboldcpp:connectModel / koboldcpp:connectImageModel
-		// when a model is activated from the KoboldCPP Manager page
+		// when a model is activated from the page of KoboldCPP, run by Serene Pub
 		// (src/lib/server/sockets/koboldcpp.ts), same reasoning
 		// /document-view/connections/new already excludes them for.
 		if (isKoboldCppManagedType(t.value)) continue
+		// Merged into `ollama` (owner ruling 2026-09-25): one Ollama connection
+		// per host serves every modality it has, and the boot sync renames any
+		// old row. Its option entry stays so a straggler still has a label.
+		if (t.value === CONNECTION_TYPE.OLLAMA_EMBEDDINGS) continue
 		items.push({
 			key: `type:${t.value}`,
 			label: t.label,
@@ -107,6 +107,31 @@ export function buildConnectionServiceItems(): ConnectionServiceItem[] {
 			modality: t.modality ?? "text-gen"
 		})
 	}
+
+	// Ollama under Embeddings too. The picker shows one section at a time and
+	// Ollama's own entry files under text generation, so without this a person
+	// who opened Embeddings to add Ollama would find nothing there. It creates the SAME plain `ollama`
+	// connection; only the section it is listed under differs.
+	//
+	// ⚠ Its own key. Two items keyed `type:ollama` is the duplicate-key crash
+	// an `{#each}` throws, whichever section renders them together.
+	const ollamaType = CONNECTION_TYPES.find(
+		(t) => t.value === CONNECTION_TYPE.OLLAMA
+	)
+	if (ollamaType)
+		items.push({
+			key: `type:${CONNECTION_TYPE.OLLAMA}@embeddings`,
+			label: ollamaType.label,
+			category: ollamaType.category,
+			type: CONNECTION_TYPE.OLLAMA,
+			difficulty: ollamaType.difficulty,
+			description:
+				"<p>Ollama's own embedding route, <b>POST /api/embed</b>, on the " +
+				"same connection that serves chat — one per host.</p>" +
+				"<p>Pull an embedding model (<code>ollama pull nomic-embed-text</code>) " +
+				"and pick it. Ollama loads and unloads it for you.</p>",
+			modality: "embeddings"
+		})
 
 	const openaiType = CONNECTION_TYPES.find(
 		(t) => t.value === CONNECTION_TYPE.OPENAI

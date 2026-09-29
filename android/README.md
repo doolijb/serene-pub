@@ -45,7 +45,7 @@ rm release.keystore release.keystore.base64
 
 ### Prerequisites
 
-- Node.js 20+
+- Node.js 24+
 - Java JDK 17+ (needed to run `./gradlew`)
 - Android SDK with the NDK (`25.2.9519653`) and CMake (`3.22.1`) components
   installed — needed to compile `src/main/cpp/node-bridge.cpp`, the JNI bridge
@@ -218,21 +218,21 @@ picker actually needs it.
   from source with a 16 KB-aware toolchain (a multi-hour native build, not
   attempted here). Revisit if this ever causes an actual crash rather than a
   notice, or once upstream ships an aligned build.
-- **Ollama Manager and KoboldCPP Manager are hidden entirely in this build** —
-  not offered in the setup wizard, not shown in the sidebar nav, not
-  toggleable from System Settings, and rejected server-side if triggered
-  directly. Reasons:
-    - **KoboldCPP Manager's managed/local-subprocess mode** can't work regardless of
+- **KoboldCPP run by Serene Pub (managed mode) and Ollama managed by Serene Pub
+  are unavailable in this build** — the setup wizard offers neither (nor the
+  scan for model servers on this machine), and enabling Ollama, managed, is
+  rejected server-side. Reasons:
+    - **KoboldCPP's managed/local-subprocess mode** can't work regardless of
       engineering effort here — upstream `LostRuins/koboldcpp` only publishes
       `linux-x64`/`mac-arm64`/Windows release binaries, no `linux-arm64` exists to
       download and run on-device.
-    - **Ollama Manager** has no local-subprocess story in this codebase at all (it's
+    - **Managed Ollama** has no local-subprocess story in this codebase at all (it's
       always been a pure HTTP client to an already-running Ollama server) — hidden
       here as a scope decision to keep the Android build simple, not a hard technical
       blocker. A remote Ollama instance running on another machine can still be
       reached via a plain connection in the Connections panel.
     - Remote/external KoboldCPP and Ollama **connections** (as opposed to the
-      Manager sub-systems) are unaffected — configure them manually via the
+      managed modes) are unaffected — configure them manually via the
       Connections panel, same as any other provider.
 - **Local vectorization (the in-process ONNX embedding model) is disabled on
   Android** — confirmed via `readelf` that `onnxruntime-node`'s prebuilt Linux
@@ -243,8 +243,9 @@ picker actually needs it.
   plain OpenAI-compatible `/embeddings` HTTP call (see
   `src/lib/server/embedding/index.ts`'s `activateApiEmbedding`), so it's
   usable with OpenAI itself, or a self-hosted Ollama/LM Studio/llama.cpp
-  server instance elsewhere on the network. Configure it from the
-  Vectorization sidebar's Settings tab → External API.
+  server instance elsewhere on the network. Add it as a connection in
+  **Connections** and make its model the Embeddings default
+  (**Admin › Models › Defaults**).
 - **nodejs-mobile's V8 build lacks full ICU/Unicode support** — any regex
   using a Unicode property escape (`\p{L}`, `\p{N}`, `\p{Lu}`, etc.) throws a
   `SyntaxError` while the containing module is _parsed_, not run. This isn't

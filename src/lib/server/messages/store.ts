@@ -24,11 +24,10 @@
  * legacy table goes read-only.
  */
 
-import { and, eq, gt, inArray, lte, sql, type SQL } from "drizzle-orm"
+import { and, eq, gt, inArray, lt, sql, type SQL } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import {
 	projectLegacy,
-	ORDINAL_MARKDOWN,
 	type LegacyMessageRow,
 	type NewMessage,
 	type NewPart
@@ -172,7 +171,9 @@ export async function mirrorRow(
 
 /**
  * The parts-address armistice (20 §13): the legacy mirror owns **step 0,
- * ordinals 0–2** — exactly the slots `projectLegacy` generates — and native
+ * ordinals below `NATIVE_ORDINAL_BASE`** — the slots `projectLegacy`
+ * generates: 0–2, or up to 2 + `MAX_FOLDED_SECTIONS` for a revision carrying
+ * folded sections (B4) — and native
  * writes own everything else (steps ≥ 1, and ordinals ≥ `NATIVE_ORDINAL_BASE`
  * at step 0). Neither side ever touches the other's coordinates, so a legacy
  * swipe cannot delete a plugin's appended parts and a native append cannot
@@ -241,8 +242,8 @@ async function upsertProjection(
 				updatedAt: message.updatedAt
 			}
 		})
-	// Reconcile the mirror's own address space (step 0, ordinals ≤ MARKDOWN,
-	// every revision), and do it **concurrency-safely**. Streaming fires
+	// Reconcile the mirror's own address space (step 0, ordinals below the
+	// native base, every revision), and do it **concurrency-safely**. Streaming fires
 	// overlapping `updateLegacyWhere` calls on one message, so two
 	// re-projections can interleave (delete A, delete B, insert A, insert B);
 	// a plain delete-then-insert makes B collide on the address index. So:
@@ -261,7 +262,7 @@ async function upsertProjection(
 			and(
 				eq(schema.messageParts.messageId, message.id),
 				eq(schema.messageParts.step, 0),
-				lte(schema.messageParts.ordinal, ORDINAL_MARKDOWN)
+				lt(schema.messageParts.ordinal, NATIVE_ORDINAL_BASE)
 			)
 		)
 	for (const e of existingParts)

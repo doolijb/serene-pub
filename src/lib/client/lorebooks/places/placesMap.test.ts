@@ -70,6 +70,16 @@ describe("buildPlacesMap — regions come from what is filed under what", () => 
 		expect(map.regions).toEqual([])
 	})
 
+	it("draws a declared place even when nothing joins it yet (#117)", () => {
+		const map = buildPlacesMap({
+			entries: [{ id: 1, name: "The Archive", parentId: null, place: true }],
+			relationships: [],
+			castNames: new Map()
+		})
+		expect(map.regions.map((r) => r.id)).toEqual([1])
+		expect(map.mapped).toBe(1)
+	})
+
 	it("draws a parent whose own parent is off the map as a root", () => {
 		const map = buildPlacesMap({
 			entries: [entry(2, "The Archive", 99)],
@@ -116,18 +126,58 @@ describe("buildPlacesMap — pins are who is standing in the room", () => {
 		})
 		expect(map.pins).toEqual([
 			{
+				key: "1@2",
 				castId: 1,
 				name: "Verity",
 				entryId: 2,
 				relationshipType: "keeper of"
 			},
 			{
+				key: "2@1",
 				castId: 2,
 				name: "Marrow",
 				entryId: 1,
 				relationshipType: "lives in"
 			}
 		])
+	})
+
+	it("folds two pin edges from one member to one place into one pin", () => {
+		const map = buildPlacesMap({
+			entries: [entry(1, "The Reach")],
+			relationships: [
+				pin(10, 1, 1, "lives in"),
+				pin(11, 1, 1, "keeper of"),
+				// The same link recorded twice folds too.
+				pin(12, 1, 1, "Lives in")
+			],
+			castNames
+		})
+		expect(map.pins).toEqual([
+			{
+				key: "1@1",
+				castId: 1,
+				name: "Verity",
+				entryId: 1,
+				relationshipType: "lives in, keeper of"
+			}
+		])
+		expect(map.regions[0].pins).toHaveLength(1)
+	})
+
+	it("gives every pin in a region a distinct key", () => {
+		const map = buildPlacesMap({
+			entries: [entry(1, "The Reach")],
+			relationships: [
+				pin(10, 1, 1, "lives in"),
+				pin(11, 2, 1, "keeper of"),
+				pin(12, 1, 1, "keeper of")
+			],
+			castNames
+		})
+		const keys = map.regions[0].pins.map((p) => p.key)
+		expect(new Set(keys).size).toBe(keys.length)
+		expect(keys).toHaveLength(2)
 	})
 
 	it("hangs each pin off the region it is in", () => {

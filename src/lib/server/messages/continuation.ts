@@ -20,7 +20,7 @@
  *   (`contextHandlebarsHelpers.ts`, keyed on the `-2` id), so the prompt ends
  *   `…<assistant-open>Alice: the rain had just` with nothing after it and the
  *   model continues the string. This is the case the join is written for.
- * - **Chat wire mode, OpenAI-compatible** (OpenAI, KoboldCPP's session mode,
+ * - **Chat wire mode, OpenAI-compatible** (OpenAI, KoboldCPP's chat mode,
  *   LM Studio, Ollama, llama.cpp) — the seed arrives as a trailing
  *   `{role: "assistant"}` message and is forwarded verbatim. The Chat
  *   Completions API has no prefill concept: whether the server continues that

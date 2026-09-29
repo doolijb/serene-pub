@@ -8,6 +8,7 @@ import {
 	secondaryKeysOf,
 	selectiveLogicOf,
 	useRegexOf,
+	importedKeyColumns,
 	hasLorebookEntries,
 	normalizeLegacyLorebookData,
 	normalizeNativeWorldInfoEntry,
@@ -727,15 +728,38 @@ describe("useRegexOf", () => {
 		expect(useRegexOf(entry({ use_regex: true }))).toBe(false)
 	})
 
-	test("does not exempt an entry carrying our own serenepub marker", () => {
-		// The shape is the one rule, for every file. Our exporter holds up its
-		// end by writing regex keys delimited (see toDelimitedRegexKey), so a
-		// bare key in a serenepub-marked file is a literal like any other —
-		// which is also the honest answer for a hand-edited or forged bag.
+	test("reads a Serene Pub 0.5.x regex entry (bare keys, honest use_regex) as a regex", () => {
+		// 0.5 wrote a regex entry's keys bare beside its own `use_regex: true`
+		// (0.6 delimits them). Owner ruling 2026-09-28: import reads 0.5
+		// exports, so the marker + flag + compilable keys make it a regex.
 		expect(
 			useRegexOf(
 				entry({
 					keys: ["a.b"],
+					use_regex: true,
+					extensions: { serenepub: { entryType: "world" } }
+				})
+			)
+		).toBe(true)
+		// Without the marker it is SillyTavern's constant flag: a literal.
+		expect(useRegexOf(entry({ keys: ["a.b"], use_regex: true }))).toBe(
+			false
+		)
+		// With the marker but the flag off: a literal.
+		expect(
+			useRegexOf(
+				entry({
+					keys: ["a.b"],
+					use_regex: false,
+					extensions: { serenepub: { entryType: "world" } }
+				})
+			)
+		).toBe(false)
+		// A key that does not compile keeps the whole entry literal.
+		expect(
+			useRegexOf(
+				entry({
+					keys: ["a(b"],
 					use_regex: true,
 					extensions: { serenepub: { entryType: "world" } }
 				})
@@ -750,6 +774,29 @@ describe("useRegexOf", () => {
 				})
 			)
 		).toBe(true)
+	})
+})
+
+describe("importedKeyColumns — one file key, one stored key (finding #146)", () => {
+	const entry = (extra: Record<string, any> = {}) => ({
+		keys: [],
+		content: "",
+		enabled: true,
+		...extra
+	})
+
+	test("a regex quantifier and a literal comma survive", () => {
+		expect(
+			importedKeyColumns(entry({ keys: ["/(a|b){1,2}/"] })).keys
+		).toEqual(["(a|b){1,2}"])
+		expect(
+			importedKeyColumns(entry({ keys: ["Smith, John", " Jo "] })).keys
+		).toEqual(["Smith, John", "Jo"])
+		expect(
+			importedKeyColumns(
+				entry({ keys: ["/x/"], secondary_keys: ["/y{1,3}/"] })
+			).secondaryKeys
+		).toEqual(["y{1,3}"])
 	})
 })
 

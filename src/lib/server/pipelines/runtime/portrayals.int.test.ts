@@ -76,12 +76,11 @@ beforeAll(async () => {
 		.insert(schema.sessionGuests)
 		.values({ sessionId, userId: guestId })
 	await db.insert(schema.sessionCharacters).values([
-		{ sessionId, characterId: castId, isActive: true, visibility: "visible" },
+		{ sessionId, characterId: castId, isActive: true },
 		{
 			sessionId,
 			characterId: removedId,
 			isActive: true,
-			visibility: "visible",
 			removedAt: new Date(),
 			removedName: "Departed"
 		}

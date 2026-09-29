@@ -13,7 +13,12 @@
  */
 
 import { HISTORY_TYPE_ID } from "$lib/shared/entries/types"
-import { dateValue, formatDate, type StoryDate } from "../sections/historyDates"
+import {
+	compareDates,
+	dateValue,
+	formatDate,
+	type StoryDate
+} from "../sections/historyDates"
 
 /** What one thing on the line is. */
 export type TimeItemKind = "history" | "scene" | "world" | "session"
@@ -27,7 +32,10 @@ export interface TimeItem {
 	label: string
 	/** Where it sits, or null for the session, which sits at now. */
 	date: StoryDate | null
-	/** The date as the axis's own unit, or null at now. */
+	/**
+	 * The date as the axis's own unit, or null at now. PLACEMENT ONLY — the
+	 * line is ordered by `date` through `compareDates`, never by this.
+	 */
 	value: number | null
 	/** What it reads under its kind: a scene's messages, and so on. */
 	note: string
@@ -119,11 +127,18 @@ const dateOf = (row: TimeEntryRow): StoryDate => ({
 	day: row.day ?? null
 })
 
-/** The order the line reads in: oldest first, and now last. */
+/**
+ * The order the line reads in: oldest first, and now last.
+ *
+ * ⚠ By `compareDates`, never the packed `value`: that collides once a month
+ * or a day passes 100 (a book numbering days of the year) and would put
+ * day 150 of Year 1 after Year 2.
+ */
 function compareItems(a: TimeItem, b: TimeItem): number {
-	if (a.value === null || b.value === null)
-		return (a.value === null ? 1 : 0) - (b.value === null ? 1 : 0)
-	if (a.value !== b.value) return a.value - b.value
+	if (a.date === null || b.date === null)
+		return (a.date === null ? 1 : 0) - (b.date === null ? 1 : 0)
+	const byDate = compareDates(a.date, b.date)
+	if (byDate !== 0) return byDate
 	// An entry stands before the scenes it was compiled from: the entry is
 	// what the date belongs to, and the scenes hang off it.
 	const rank = (item: TimeItem) => (item.kind === "scene" ? 1 : 0)
@@ -246,12 +261,18 @@ export function buildLanes(
 			items: items.filter((i) => i.present.includes(member.id))
 		}))
 		.filter((lane) => lane.items.length > 0)
-		.sort(
-			(a, b) =>
-				(a.items[0].value ?? Infinity) -
-					(b.items[0].value ?? Infinity) ||
-				a.label.localeCompare(b.label)
-		)
+		.sort((a, b) => {
+			// Earliest first appearance first, by the calendar; an undated
+			// first item (the session, at now) sorts last.
+			const da = a.items[0].date
+			const db = b.items[0].date
+			if (da === null || db === null)
+				return (
+					(da === null ? 1 : 0) - (db === null ? 1 : 0) ||
+					a.label.localeCompare(b.label)
+				)
+			return compareDates(da, db) || a.label.localeCompare(b.label)
+		})
 	return [story, ...castLanes, world]
 }
 
@@ -263,13 +284,19 @@ export function buildLanes(
  * between "arrives later" and "the book does not say".
  */
 export function castArrivals(items: readonly TimeItem[]): Map<number, number> {
-	const arrivals = new Map<number, number>()
+	// ⚠ The earliest by `compareDates`, whatever order the items come in —
+	// the map's value is the arrival's placement on the axis, never the key
+	// it was chosen by.
+	const first = new Map<number, TimeItem>()
 	for (const item of items) {
-		if (item.value == null) continue
-		for (const id of item.present)
-			if (!arrivals.has(id)) arrivals.set(id, item.value)
+		if (item.date == null || item.value == null) continue
+		for (const id of item.present) {
+			const was = first.get(id)
+			if (!was || compareDates(item.date, was.date!) < 0)
+				first.set(id, item)
+		}
 	}
-	return arrivals
+	return new Map([...first].map(([id, item]) => [id, item.value!]))
 }
 
 /** The entries carrying no date, in the order the pool holds them. */

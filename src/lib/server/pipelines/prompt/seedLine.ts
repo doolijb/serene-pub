@@ -23,6 +23,7 @@
  */
 
 import type { ChannelVoice } from "$lib/server/messages/channels"
+import { ownVoiceName } from "$lib/shared/sessions/ownVoiceName"
 
 export interface SeedLineInput {
 	/**
@@ -43,8 +44,14 @@ export interface SeedLineInput {
 	characterName?: string | null
 	/** A side character's or an envoy's name, when one is speaking. */
 	speakerName?: string | null
-	/** Narrator mode's configured display name. */
-	narratorName?: string
+	/**
+	 * The pipeline's own voice, named (lair re-plan R5; `ownVoiceName`): the
+	 * genre's fallback envoy, else the prompt's narrator name. A
+	 * narrator-voice channel seeds under it, and so does a turn nobody in the
+	 * cast speaks — the null turn entry's, whose lines are exactly the
+	 * unclaimed ones that name carries.
+	 */
+	ownVoiceName?: string
 }
 
 export interface SeedLine {
@@ -63,13 +70,14 @@ export interface SeedLine {
 }
 
 export function resolveSeedLine(input: SeedLineInput): SeedLine {
+	const own = input.ownVoiceName || ownVoiceName(null)
 	const name =
-		// A channel that narrates seeds under the narrator's name whoever is
-		// seated: the cast is still there, the turn is simply not theirs.
+		// A channel that narrates seeds under the own voice's name whoever
+		// is seated: the cast is still there, the turn is simply not theirs.
 		input.voice === "narrator"
-			? input.narratorName || "Narrator"
+			? own
 			: input.characterName != null
 				? input.characterName
-				: input.speakerName || input.narratorName || "Narrator"
+				: input.speakerName || own
 	return { seed: input.voice !== "none", name }
 }

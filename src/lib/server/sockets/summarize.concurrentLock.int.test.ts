@@ -1,7 +1,7 @@
 /**
  * Round-10 audit fix (MEDIUM): sessionsSummarizeHandler ran unguarded, unlike
  * every other LLM-triggering handler in sessions.ts (regenerate/continue/
- * swipeRight, all wrapped in withSessionTriggerLock) — concurrent
+ * swipeRight, all wrapped in withSessionGenerationLock) — concurrent
  * sessions:summarize requests for the same session (double-click, multiple tabs)
  * each independently ran the full batch+synthesis LLM pipeline, multiplying
  * cost/latency. Fixed by rejecting a second concurrent request outright rather

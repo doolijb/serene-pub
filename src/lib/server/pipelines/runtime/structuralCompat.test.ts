@@ -129,13 +129,18 @@ describe("normaliseSupplies", () => {
 		expect(s.id).toBe("core:query/session-history@1")
 		// `share`, `maxEntries`, `minEntries` joined `priority` on 2026-09-16
 		// (R-7 P5): the conversation's band intent, declared on the source.
+		// `unplayedOnly` 2026-09-28 (lair re-plan R13): a side channel's talk
+		// since the story's last line. `talkOnly` 2026-09-28 (lair re-plan
+		// R10's fold-in): off `main`, only the talk — never a beats row.
 		expect(s.params.sort()).toEqual([
 			"channel",
 			"limit",
 			"maxEntries",
 			"minEntries",
 			"priority",
-			"share"
+			"share",
+			"talkOnly",
+			"unplayedOnly"
 		])
 	})
 

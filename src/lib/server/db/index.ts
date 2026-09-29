@@ -201,6 +201,13 @@ async function acquireDatabaseLock(): Promise<void> {
 		console.log(
 			`Reclaiming a database lock left behind by ${describeLockHolder(result.evaluation)} — that process is gone.`
 		)
+	} else if (state === "self" && reason === "delegated") {
+		// Launched by `scripts/check-db-lock.js` (e.g. `plugin:install`), which
+		// took the lock for us and named itself our holder. Its lock is the
+		// reason nobody else is in here, not a reason to refuse ourselves.
+		console.log(
+			`Database lock is held for this command by ${describeLockHolder(result.evaluation)}. Continuing...`
+		)
 	} else if (state === "self") {
 		// Vite re-executed this module in place: same process, so the lock we
 		// are looking at is our own and cannot be a reason to refuse ourselves.

@@ -526,19 +526,40 @@ export function parseDelimitedRegexKey(key: unknown): string | null {
  *     consistent). The cost is that a keyless entry's meaningless
  *     `use_regex: true` does not survive a re-export.
  *
- * There is deliberately no exemption for a file Serene Pub itself wrote. One
- * rule, applied to every entry, is the only way the shape stays a real
- * declaration — an `extensions.serenepub` bag is trivially forgeable and,
- * being part of the file, would have made "is this a regex?" answerable two
- * different ways for the same bytes. What the exemption used to buy is now
- * bought at the other end instead: lorebookExportMapper.ts writes a regex
- * entry's keys in `/pattern/flags` form, so our own export re-reads as a regex
- * on shape alone (and, as a bonus, is finally read as one by SillyTavern too).
+ * Our own exports re-read as regex on shape alone: lorebookExportMapper.ts
+ * writes a regex entry's keys in `/pattern/flags` form (and, as a bonus, they
+ * are finally read as one by SillyTavern too).
+ *
+ * ⚠ **One exemption: a Serene Pub 0.5.x export.** 0.5 wrote a regex entry's
+ * keys BARE beside an honest `use_regex: true` (its `use_regex` was the row's
+ * own column, never SillyTavern's constant), so on shape alone every 0.5 regex
+ * entry imported as a literal and silently stopped matching. An entry carrying
+ * Serene Pub's own `extensions.serenepub.entryType` marker AND `use_regex:
+ * true` is therefore a regex when every key compiles as a bare pattern. The
+ * marker is forgeable, but forging it can only change how the forger's own
+ * file reads — and SillyTavern never writes it, so the constant-`true` problem
+ * above cannot reach this branch.
  */
 export function useRegexOf(entry: LorebookEntryLike): boolean {
 	const keys = entry.keys ?? []
 	if (keys.length === 0) return false
-	return keys.every((key) => parseDelimitedRegexKey(key) !== null)
+	if (keys.every((key) => parseDelimitedRegexKey(key) !== null)) return true
+	return isSerenePubBareRegexEntry(entry)
+}
+
+/** A 0.5.x Serene Pub regex entry: marker, honest flag, bare compilable keys. */
+function isSerenePubBareRegexEntry(entry: LorebookEntryLike): boolean {
+	if (entry.use_regex !== true) return false
+	if (typeof entry.extensions?.serenepub?.entryType !== "string") return false
+	return (entry.keys ?? []).every((key) => {
+		if (typeof key !== "string" || key.length === 0) return false
+		try {
+			new RegExp(key)
+			return true
+		} catch {
+			return false
+		}
+	})
 }
 
 /**
@@ -556,10 +577,43 @@ export function useRegexOf(entry: LorebookEntryLike): boolean {
  * silently never hold.
  */
 function importedKeyList(keys: string[], useRegex: boolean): string {
-	if (!useRegex) return keys.join(", ") || ""
-	return (
-		keys.map((key) => parseDelimitedRegexKey(key) ?? key).join(", ") || ""
+	return importedKeyArray(keys, useRegex).join(", ") || ""
+}
+
+/**
+ * The same keys, NOT joined — what the `keys` / `secondary_keys` text[] columns
+ * should hold.
+ *
+ * ⚠ The joined string above is re-split on every `,` when it is written
+ * (`entryInsert` → `keysToArray`), which tears a regex quantifier `{1,3}` and a
+ * literal key "Smith, John" in two (finding #146). The importer writes these
+ * arrays straight into the columns instead, so one file key stays one stored
+ * key. The joined form stays for callers that still speak the comma wire.
+ */
+export function importedKeyArray(keys: string[], useRegex: boolean): string[] {
+	const list = (keys ?? []).filter(
+		(key): key is string => typeof key === "string" && key.trim().length > 0
 	)
+	return useRegex
+		? list.map((key) => parseDelimitedRegexKey(key) ?? key)
+		: list.map((key) => key.trim())
+}
+
+/**
+ * An entry's primary and condition keys as the text[] columns should store
+ * them — one file key, one element, stripped of delimiters on a regex entry
+ * exactly as `sharedEntryFields` strips them. For writers that store straight
+ * into the columns rather than through the comma-joined wire (finding #146).
+ */
+export function importedKeyColumns(entry: LorebookEntryLike): {
+	keys: string[]
+	secondaryKeys: string[]
+} {
+	const useRegex = useRegexOf(entry)
+	return {
+		keys: importedKeyArray(entry.keys ?? [], useRegex),
+		secondaryKeys: importedKeyArray(secondaryKeysOf(entry), useRegex)
+	}
 }
 
 /** The entry's own keys, read as the entry's own regex-ness decides. */

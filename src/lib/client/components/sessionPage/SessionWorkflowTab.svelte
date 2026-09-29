@@ -1,18 +1,30 @@
 <script lang="ts">
 	import * as Icons from "@lucide/svelte"
+	import GraphBuildModal from "$lib/client/components/modals/GraphBuildModal.svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { declareInterest } from "$lib/client/sockets/interest.svelte"
 	import { interestKey } from "$lib/shared/sockets/interest"
-	import { compareDates } from "$lib/shared/lorebooks/storyDate"
+	import {
+		compareDates,
+		formatDate as spellDate,
+		readStoryCalendar
+	} from "$lib/shared/lorebooks/storyDate"
 	import {
 		HISTORY_TYPE_ID,
 		type LorebookEntry
 	} from "$lib/shared/entries/types"
+	import { lineOf, rowsReadingOnLine } from "$lib/shared/lorebooks/lineReading"
 
 	type History = LorebookEntry<typeof HISTORY_TYPE_ID>
 
 	interface Props {
 		lorebookId: number
+		/**
+		 * The line of that book the session reads (null = main). "Start new
+		 * history entry" writes on it, and the latest entry is the latest
+		 * this line reads — not another line's.
+		 */
+		branchId?: number | null
 		sceneList: Sockets.Scenes.List.SceneWithEntry[]
 		onOpenEntry: (lorebookId: number, historyEntryId: number) => void
 		onEnterSummarizationMode?: () => void
@@ -20,6 +32,7 @@
 
 	let {
 		lorebookId,
+		branchId = null,
 		sceneList,
 		onOpenEntry,
 		onEnterSummarizationMode
@@ -34,15 +47,59 @@
 	// radix-100 collision as the original. Deleted 2026-09-24; the shared
 	// `compareDates` is the ordering everywhere.
 
+	/** The book's calendar, or null for free-form (`lorebooks:storyTime`). */
+	let calendar = $state<ReturnType<typeof readStoryCalendar>>(null)
+
+	$effect(() => {
+		const id = lorebookId
+		if (!id) return
+		const release = declareInterest<"lorebooks:storyTime">(
+			interestKey("lorebooks:storyTime", id),
+			(res) => {
+				if (res.lorebookId !== id) return
+				calendar = readStoryCalendar(res.calendar ?? null)
+			}
+		)
+		socket.emit("lorebooks:storyTime", { lorebookId: id })
+		return release
+	})
+
+	/** Spelled through the book's calendar, like every other dated heading. */
 	function formatDate(e: History): string {
-		let s = `Yr. ${e.year}`
-		if (e.month != null) s += ` Mo. ${e.month}`
-		if (e.day != null) s += ` Day ${e.day}`
-		return s
+		return spellDate(e, calendar)
 	}
 
+	/**
+	 * The book's lines, for reading the session's one — its ancestor chain
+	 * and fork cuts (ruling 5). Asked for only when the session is on a
+	 * branch: main needs no chain, and this tab is the owner's alone.
+	 */
+	let branches = $state<Sockets.Amendments.Branch[]>([])
+	$effect(() => {
+		const id = lorebookId
+		if (!id || branchId == null) return
+		const release = declareInterest<"amendments:list">(
+			interestKey("amendments:list", id),
+			(res) => {
+				if (res.lorebookId !== id) return
+				branches = res.branches ?? []
+			}
+		)
+		socket.emit("amendments:list", { lorebookId: id })
+		return release
+	})
+
+	/** The history this session's line reads, fork cut included. */
+	let lineHistory = $derived(
+		rowsReadingOnLine(
+			historyEntryList as (History & { branchId?: number | null })[],
+			lineOf(branchId, branches),
+			(e) => (typeof e.year === "number" ? e : null)
+		)
+	)
+
 	let sortedEntries = $derived(
-		[...historyEntryList].sort((a, b) => compareDates(b, a))
+		[...lineHistory].sort((a, b) => compareDates(b, a))
 	)
 
 	let latestEntry = $derived(sortedEntries[0])
@@ -62,12 +119,28 @@
 		sceneList.filter((s) => !s.graphed).length
 	)
 
+	/**
+	 * "Extend Graph" reads THIS session's scenes only (#51): the scenes here
+	 * are the session's own, so their session is the scope.
+	 */
+	let sessionId = $derived(
+		sceneList.find((s) => s.sessionId != null)?.sessionId ?? null
+	)
+	let readyToGraph = $derived(
+		sceneList.filter((s) => !s.graphed && !!s.summary?.trim()).length
+	)
+	let showGraphBuild = $state(false)
+
 	function handleNewEntry() {
 		if (!latestEntry || isCreatingEntry) return
 		isCreatingEntry = true
 		socket.emit("entries:iterateNext", {
 			id: latestEntry.id,
-			typeId: HISTORY_TYPE_ID
+			typeId: HISTORY_TYPE_ID,
+			// The session's line, not the source entry's: a session on a
+			// branch continuing from a shared entry writes the next one on
+			// its branch.
+			branchId
 		} satisfies Sockets.Entries.IterateNext.Params)
 	}
 
@@ -223,13 +296,11 @@
 			{#if ungraphedSceneCount > 0}
 				<button
 					class="btn btn-sm preset-tonal-warning"
-					title="Extend graph with {ungraphedSceneCount} ungraphed scene{ungraphedSceneCount ===
+					title="Graph this session's {ungraphedSceneCount} ungraphed scene{ungraphedSceneCount ===
 					1
 						? ''
-						: 's'}"
-					onclick={() => {
-						if (latestEntry) onOpenEntry(lorebookId, latestEntry.id)
-					}}
+						: 's'} into the lorebook's graph"
+					onclick={() => (showGraphBuild = true)}
 				>
 					<Icons.Network size={13} />
 					Extend Graph ({ungraphedSceneCount})
@@ -268,3 +339,19 @@
 		</div>
 	{/if}
 </div>
+
+<GraphBuildModal
+	open={showGraphBuild}
+	onOpenChange={(e) => (showGraphBuild = e.open)}
+	{lorebookId}
+	mode="extend"
+	{sessionId}
+	readySceneCount={readyToGraph}
+	skippedSceneCount={ungraphedSceneCount - readyToGraph}
+	ungraphedHistoryEntryCount={0}
+	onApplied={() => {
+		// The scenes it read are graphed now; ask for the list again so the
+		// count on the button follows.
+		if (sessionId != null) socket.emit("scenes:list", { sessionId })
+	}}
+/>

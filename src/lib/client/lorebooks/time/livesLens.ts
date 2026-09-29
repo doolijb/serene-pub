@@ -15,6 +15,11 @@ import {
 	type StoryDate
 } from "$lib/shared/lorebooks/storyDate"
 import type { Presence } from "$lib/shared/lorebooks/presence"
+import {
+	lineFromFork,
+	rowReadsOnLine,
+	type Line
+} from "$lib/shared/lorebooks/lineReading"
 
 export interface LaneRun {
 	presenceId: number
@@ -42,6 +47,45 @@ export interface Axis {
 	lanes: Lane[]
 	/** Where the moment being read sits, or null at now. */
 	cursor: number | null
+}
+
+/** One event diamond on the axis. */
+export interface PinMark {
+	/** The placement value — also the `{#each}` key, unique by construction. */
+	key: number
+	date: StoryDate
+	/** 0…100, a CSS percentage. */
+	left: number
+}
+
+/**
+ * The event diamonds, one per distinct date.
+ *
+ * ⚠ **Deduplicated by placement value**, which is also the key. Two history
+ * entries on one date are one diamond — they would be drawn on top of each
+ * other anyway — and keying on the position (or on the date) without folding
+ * them first handed Svelte a duplicate key and crashed the lens.
+ */
+export function pinMarksOf(
+	pins: readonly StoryDate[],
+	axis: Pick<Axis, "min" | "max">
+): PinMark[] {
+	if (!(axis.max > axis.min)) return []
+	const seen = new Set<number>()
+	const marks: PinMark[] = []
+	for (const date of pins) {
+		if (typeof date?.year !== "number" || !Number.isFinite(date.year))
+			continue
+		const value = dateValue(date)
+		if (seen.has(value)) continue
+		seen.add(value)
+		marks.push({
+			key: value,
+			date,
+			left: ((value - axis.min) / (axis.max - axis.min)) * 100
+		})
+	}
+	return marks
 }
 
 /** Where a value sits along the axis. A zero span puts everything mid-line. */
@@ -80,12 +124,22 @@ export function buildAxis(
 	members: readonly { id: number; name: string }[],
 	presences: readonly Presence[],
 	pins: readonly StoryDate[],
-	at: { moment?: StoryDate | null; branchId?: number | null } = {}
+	at: {
+		moment?: StoryDate | null
+		branchId?: number | null
+		/**
+		 * The line being read, with its ancestor chain and fork cuts
+		 * (`lineOf`, ruling 5). Authoritative when given; a bare `branchId`
+		 * reads as a one-level fork of main with no cut.
+		 */
+		line?: Line
+	} = {}
 ): Axis {
-	const branchId = at.branchId ?? null
-	const mine = presences.filter(
-		(p) => p.branchId == null || p.branchId === branchId
-	)
+	const line = at.line ?? lineFromFork(at.branchId ?? null, null)
+	// ⚠ The presence rule `appearancesOf` reads by: the line's own and its
+	// ancestors' presences, an ancestor's only when it began by that line's
+	// fork cut — so the weave and the World bar name the same people.
+	const mine = presences.filter((p) => rowReadsOnLine(p, line, dateOf(p)))
 
 	const values: number[] = pins.map(dateValue)
 	for (const p of mine) {

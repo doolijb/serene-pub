@@ -10,14 +10,32 @@
 	import HandlebarsLint from "$lib/client/utils/tiptapHandlebarsLint"
 	import { INSERTABLE_MACRO_OPTIONS } from "$lib/shared/utils/handlebarsLint"
 	import type { EditorView } from "prosemirror-view"
+	import {
+		castMemberLabel,
+		castTagKind,
+		castTagLabel,
+		castTagTitle
+	} from "$lib/client/utils/castTag"
 
 	interface Props {
 		content: string
 		lorebookBindingList: Sockets.Lorebooks.BindingList.Response["lorebookBindingList"]
+		/**
+		 * The id of the visible element that names this field. The editor is
+		 * a contenteditable `div`, which a `<label for>` cannot target, so
+		 * the name is wired through `aria-labelledby` instead.
+		 */
+		labelledBy?: string
+		/** The accessible name when there is no visible label to point at. */
+		label?: string
 	}
 
-	let { content = $bindable(), lorebookBindingList = $bindable() }: Props =
-		$props()
+	let {
+		content = $bindable(),
+		lorebookBindingList = $bindable(),
+		labelledBy,
+		label = "Content"
+	}: Props = $props()
 
 	let editor: Editor
 	let editorEl: HTMLDivElement
@@ -28,22 +46,33 @@
 	let addMacroOpenState = $state(false)
 
 	function getLabel(tag: string) {
-		const binding = lorebookBindingList.find((b) => b.binding == tag)
-		return (
-			binding?.character?.nickname || binding?.character?.name || tag
-		)
+		return castTagLabel(lorebookBindingList ?? [], tag)
 	}
 
 	/**
-	 * A tag names a character card or nothing. A persona is a character, so
-	 * "persona" is a card the reader has flagged as one of their own rather
-	 * than a different kind of binding.
+	 * A tag names a cast member: one with a character card (a persona is a
+	 * card the reader has flagged as their own), a **background** member with
+	 * no card, or — only when no row matches — nobody.
 	 */
-	function getCharType(tag: string): "character" | "persona" | "unknown" {
-		const binding = lorebookBindingList.find((b) => b.binding == tag)
-		if (!binding?.characterId) return "unknown"
-		return binding.character?.isPersona ? "persona" : "character"
+	function getCharType(tag: string) {
+		return castTagKind(lorebookBindingList ?? [], tag)
 	}
+
+	const CHIP_PRESET = {
+		character: "preset-filled-primary-500",
+		persona: "preset-filled-secondary-500",
+		background: "preset-filled-surface-500",
+		unknown: "preset-filled-warning-500"
+	} as const
+
+	/**
+	 * The last text this editor wrote into `content`. A `content` that differs
+	 * from it came from outside — another entry selected, an amendment
+	 * resolved, the moment moved — and the editor must show it. Comparing
+	 * against what the editor itself emitted is what keeps typing from
+	 * resetting the document (and the cursor) on every keystroke.
+	 */
+	let lastEmitted: string | undefined
 
 	function updateToolbarStates() {
 		if (!editor) return
@@ -133,10 +162,30 @@
 		}
 	}
 
+	$effect(() => {
+		const next = content ?? ""
+		if (!editor || next === lastEmitted) return
+		lastEmitted = next
+		// `false`: no onUpdate — this is not an edit, and emitting would write
+		// the parsed-and-reserialised text back over the parent's value.
+		editor.commands.setContent(parseCharTagsToTiptapDoc(next), false)
+		updateToolbarStates()
+	})
+
 	onMount(() => {
+		lastEmitted = content ?? ""
 		editor = new Editor({
 			element: editorEl,
-			content: parseCharTagsToTiptapDoc(content),
+			content: parseCharTagsToTiptapDoc(content ?? ""),
+			editorProps: {
+				attributes: {
+					role: "textbox",
+					"aria-multiline": "true",
+					...(labelledBy
+						? { "aria-labelledby": labelledBy }
+						: { "aria-label": label })
+				}
+			},
 			extensions: [
 				StarterKit,
 				LorebookBindingTag.configure({ getLabel, getCharType }),
@@ -147,7 +196,9 @@
 				// }),
 			],
 			onUpdate: ({ editor }) => {
-				content = getContentWithCharTags(editor)
+				const next = getContentWithCharTags(editor)
+				lastEmitted = next
+				content = next
 				updateToolbarStates()
 			}
 		})
@@ -155,7 +206,15 @@
 		updateToolbarStates()
 
 		// Ensure copying from tiptap always copies the raw textarea content
-		forceRawContentCopy(editor.view, () => content)
+		const removeCopyListener = forceRawContentCopy(
+			editor.view,
+			() => content
+		)
+
+		return () => {
+			removeCopyListener()
+			editor.destroy()
+		}
 	})
 </script>
 
@@ -186,29 +245,26 @@
 							<div class="mb-2 text-sm font-semibold">
 								Insert a cast member
 							</div>
-							{#each lorebookBindingList as binding}
-								{@const char = binding.character}
+							{#each lorebookBindingList as binding (binding.id)}
+								{@const kind = castTagKind(
+									lorebookBindingList,
+									binding.binding
+								)}
+								{@const memberLabel = castMemberLabel(
+									binding,
+									binding.binding
+								)}
 								<button
-									class="btn"
-									class:preset-filled-primary-500={!!binding.characterId &&
-										!char?.isPersona}
-									class:preset-filled-surface-500={!!char?.isPersona}
-									class:preset-filled-warning-500={!char}
+									class="btn {CHIP_PRESET[kind]}"
 									onclick={() => {
 										editor.commands.insertLorebookBindingTag(
 											binding.binding
 										)
 										addBindingOpenState = false
 									}}
-									title={char
-										? `${("nickname" in char && char.nickname) || char.name}`
-										: binding.binding}
+									title={castTagTitle(kind, memberLabel)}
 								>
-									{char
-										? ("nickname" in char &&
-												char.nickname) ||
-											char.name
-										: binding.binding}
+									{memberLabel}
 								</button>
 							{/each}
 						</div>
@@ -258,6 +314,7 @@
 			</Portal>
 		</Popover>
 		<button
+			aria-label="Undo"
 			class="btn btn-sm preset-filled-surface-500"
 			title="Undo"
 			onclick={() => editor && editor.chain().focus().undo().run()}
@@ -266,6 +323,7 @@
 			<Icons.Undo size={16} />
 		</button>
 		<button
+			aria-label="Redo"
 			class="btn btn-sm preset-filled-surface-500"
 			title="Redo"
 			onclick={() => editor && editor.chain().focus().redo().run()}
@@ -293,7 +351,7 @@
 
 	:global {
 		.handlebars-lint-issue {
-			text-decoration: underline wavy #dc2626;
+			text-decoration: underline wavy var(--color-error-500);
 			text-underline-offset: 3px;
 			cursor: help;
 		}

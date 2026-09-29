@@ -33,7 +33,12 @@ import { broadcastToSessionUsers } from "$lib/server/sockets/utils/broadcastHelp
 export async function pushTurnOrder(
 	io: SessionIo,
 	sessionId: number,
-	turnOrder?: unknown
+	turnOrder?: unknown,
+	/**
+	 * Whether auto-advance is about to fire the head (lair pass B9) — set
+	 * only by the push that answers a write, never by the view's.
+	 */
+	opts?: { autoAdvancing?: boolean }
 ): Promise<void> {
 	if (!io) return
 	let document: TurnOrderV1
@@ -50,6 +55,9 @@ export async function pushTurnOrder(
 	}
 	await broadcastToSessionUsers(io, sessionId, "sessions:turnOrder", {
 		sessionId,
-		turnOrder: document
+		turnOrder: document,
+		...(opts?.autoAdvancing !== undefined
+			? { autoAdvancing: opts.autoAdvancing }
+			: {})
 	})
 }

@@ -80,7 +80,7 @@
 				</p>
 			</div>
 			<span
-				class="bg-primary-500 mt-auto rounded px-2 py-0.5 text-xs font-medium text-white"
+				class="preset-filled-primary-500 mt-auto rounded px-2 py-0.5 text-xs font-medium"
 			>
 				Recommended
 			</span>

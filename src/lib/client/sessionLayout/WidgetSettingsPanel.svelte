@@ -1,6 +1,6 @@
 <script lang="ts">
 	/**
-	 * One widget's settings, inside its overlay card (PLAN 25; ruled
+	 * One widget's settings, inside its settings modal (PLAN 25; ruled
 	 * 2026-09-10).
 	 *
 	 * Exposure is progressive and declaration-driven. Core's own `title` and
@@ -13,8 +13,10 @@
 	 * `SchemaForm` renders the fields — the same renderer node params and plugin
 	 * settings use, so a control fixed there is fixed here.
 	 *
-	 * Values are written on `change` rather than per keystroke: the form is
-	 * bound to a local copy, the wrapper hears the commit, and every field that
+	 * Values are written on commit rather than per keystroke: the form is
+	 * bound to a local copy, `SchemaForm` reports each commit (`oncommit` — a
+	 * box's `change`, a choice list's pick, which fires no DOM `change` event
+	 * at all), and every field that
 	 * differs from what is stored is written through the store (which coerces,
 	 * prunes to deviations, and persists). Writes are not optimistic, so the
 	 * copy is re-seeded when — and only when — the persisted answer actually
@@ -85,7 +87,7 @@
 </script>
 
 {#if decl}
-	<div class="wsx" onchange={commit}>
+	<div class="wsx">
 		<div class="wsx-head">
 			<span class="wsx-head-label">Settings</span>
 			{#if overridden}
@@ -100,10 +102,18 @@
 			{/if}
 		</div>
 
-		<SchemaForm schema={schemaOf(sections.basic)} bind:values />
+		<SchemaForm
+			schema={schemaOf(sections.basic)}
+			bind:values
+			oncommit={commit}
+		/>
 
 		{#if sections.declared.length}
-			<SchemaForm schema={schemaOf(sections.declared)} bind:values />
+			<SchemaForm
+				schema={schemaOf(sections.declared)}
+				bind:values
+				oncommit={commit}
+			/>
 		{/if}
 
 		{#if sections.behaviour.length}
@@ -116,6 +126,7 @@
 					<SchemaForm
 						schema={schemaOf(sections.behaviour)}
 						bind:values
+						oncommit={commit}
 					/>
 				</div>
 			</details>

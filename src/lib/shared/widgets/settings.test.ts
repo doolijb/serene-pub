@@ -69,7 +69,7 @@ describe("widgetSettingsSchema — core keys plus what the widget declares", () 
 describe("settingsSections — progressive exposure", () => {
 	it("shows only the core fields for a widget that declares none", () => {
 		const s = settingsSections(plain)
-		expect(s.basic.map((f) => f.key)).toEqual(["title"])
+		expect(s.basic.map((f) => f.key)).toEqual(["title", "hostCard"])
 		expect(s.declared).toEqual([])
 		expect(s.behaviour).toEqual([])
 	})
@@ -138,6 +138,7 @@ describe("effectiveWidgetSettings — the complete object a widget reads", () =>
 		expect(effectiveWidgetSettings(phone, { lane: 2 })).toEqual({
 			title: "Cell Phone",
 			lane: 2,
+			hostCard: false,
 			density: "cosy",
 			autoscroll: true
 		})
@@ -145,7 +146,8 @@ describe("effectiveWidgetSettings — the complete object a widget reads", () =>
 
 	it("ignores a stored value the descriptor stopped declaring", () => {
 		expect(effectiveWidgetSettings(plain, { gone: 1 })).toEqual({
-			title: "Notes"
+			title: "Notes",
+			hostCard: false
 		})
 	})
 })
@@ -189,6 +191,7 @@ describe("resolveWidgetInstance — the one triple a host threads", () => {
 			settings: {
 				title: "Cell Phone",
 				lane: 1,
+				hostCard: false,
 				density: "cosy",
 				autoscroll: true
 			}
@@ -210,7 +213,7 @@ describe("resolveWidgetInstance — the one triple a host threads", () => {
 	it("ignores a lane stored against a widget that declares no channels", () => {
 		const r = resolveWidgetInstance(plain, { lane: 4 })
 		expect(r.channels).toEqual([])
-		expect(r.settings).toEqual({ title: "Notes" })
+		expect(r.settings).toEqual({ title: "Notes", hostCard: false })
 	})
 })
 

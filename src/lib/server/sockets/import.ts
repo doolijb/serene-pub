@@ -7,6 +7,7 @@ import {
 	inBookOfType
 } from "$lib/server/utils/lorebookEntries"
 import {
+	importedKeyColumns,
 	mapImportedEntry,
 	normalizeNativeWorldInfoEntry
 } from "$lib/server/utils/lorebookImportMapper"
@@ -22,17 +23,19 @@ import { createMedia } from "$lib/server/media"
 import {
 	extractCharacterFromPNG,
 	readCharacterFile,
-	parseSessionFile,
+	parseSillyTavernChatFile,
+	listSillyTavernPersonas,
 	normalizeTimestamp,
 	mapGroupReplyStrategy,
 	type CharacterCardV2,
 	type CharacterBook,
-	type SessionMessage,
-	type SessionHeader,
-	type GroupSession,
+	type SillyTavernGroup,
 	type WorldInfo
 } from "$lib/server/utils/sillyTavernParsers"
-import { resolveSillyTavernDataRoot } from "$lib/shared/utils/sillyTavernPaths"
+import {
+	resolveSillyTavernDataRoot,
+	SILLYTAVERN_DIRS
+} from "$lib/shared/utils/sillyTavernPaths"
 import { characterFieldsFromParsedData } from "./characters"
 import { personaFieldsFromParsedData } from "$lib/server/utils/personaCard"
 import { markCharacterAsPersona } from "$lib/server/utils/markCharacterAsPersona"
@@ -136,13 +139,6 @@ function getImportSession(sessionId: string, userId: number): ImportSession {
 	return session
 }
 
-/** Resolves a client-supplied relative path to a safe location inside
- * `root` — rejects traversal and absolute paths. Shared by the staging
- * write path (root = session dir) and the execute-phase reads (root = the
- * relevant SillyTavern subdirectory) — the latter's accepted relative
- * paths can legitimately contain one subdirectory segment (eg. a session's
- * "CharacterName/session.jsonl"), so this only rejects genuine traversal
- * (".."/absolute), not slashes in general. */
 const SPRITE_FILE = /\.(png|apng|jpe?g|webp|gif|avif)$/i
 
 /**
@@ -158,7 +154,7 @@ async function importSillyTavernSprites(
 	userId: number,
 	characterId: number
 ): Promise<number> {
-	const charactersRoot = path.join(dataDir, "characters")
+	const charactersRoot = path.join(dataDir, SILLYTAVERN_DIRS.characters)
 	let root: string
 	try {
 		root = resolveSafePath(charactersRoot, folder)
@@ -196,6 +192,13 @@ async function importSillyTavernSprites(
 	return result.added
 }
 
+/** Resolves a client-supplied relative path to a safe location inside
+ * `root` — rejects traversal and absolute paths. Shared by the staging
+ * write path (root = import staging dir) and the execute-phase reads (root =
+ * the relevant SillyTavern subdirectory) — the latter's accepted relative
+ * paths can legitimately contain one subdirectory segment (eg. a SillyTavern
+ * chat's "CharacterName/CharacterName - 2024-01-01@12h00m00s.jsonl"), so this
+ * only rejects genuine traversal (".."/absolute), not slashes in general. */
 function resolveSafePath(root: string, relativePath: string): string {
 	const normalized = relativePath.replace(/\\/g, "/")
 	if (
@@ -374,7 +377,7 @@ export const importScanSillyTavern: Handler<
 			const dataDir = await resolveStagedDataDir(session)
 
 			// Scan characters
-			const charactersDir = path.join(dataDir, "characters")
+			const charactersDir = path.join(dataDir, SILLYTAVERN_DIRS.characters)
 			const characters: Array<{
 				filename: string
 				name: string
@@ -416,30 +419,22 @@ export const importScanSillyTavern: Handler<
 				)
 				const settings = JSON.parse(settingsContent)
 
-				if (settings.power_user?.persona_descriptions) {
-					for (const [name, description] of Object.entries(
-						settings.power_user.persona_descriptions
-					)) {
-						if (
-							typeof description === "object" &&
-							description !== null
-						) {
-							personas.push({
-								name: name,
-								selected: true
-							})
-						}
-					}
+				// ST keys a persona by its avatar file; the name the user
+				// knows it by is `power_user.personas[file]`.
+				for (const persona of listSillyTavernPersonas(settings)) {
+					personas.push({ name: persona.name, selected: true })
 				}
 			} catch (error) {
 				console.log("No personas found in settings.json")
 			}
 
-			// Scan individual sessions. These files are deliberately never staged
-			// to disk at scan time (see deferredSessionPaths on the Params type) —
-			// only their relative paths are sent, so list what's available from
-			// that instead of reading the (nonexistent, at this point) sessions/
-			// directory on disk.
+			// Scan SillyTavern's individual chats (each imports as a session).
+			// These files are deliberately never staged to disk at scan time
+			// (see deferredSessionPaths on the Params type) — only their
+			// relative paths are sent, so list what's available from that
+			// instead of reading the (nonexistent, at this point) `chats/`
+			// directory on disk. The folder is SillyTavern's, under
+			// SillyTavern's name (R5): `chats/<character file>/<chat>.jsonl`.
 			const sessions: Array<{
 				filename: string
 				name: string
@@ -452,15 +447,17 @@ export const importScanSillyTavern: Handler<
 
 			try {
 				for (const relativePath of message.deferredSessionPaths ?? []) {
-					const match = relativePath.match(
-						/^sessions\/([^/]+)\/(.+\.jsonl)$/
-					)
+					const prefix = `${SILLYTAVERN_DIRS.chats}/`
+					if (!relativePath.startsWith(prefix)) continue
+					const match = relativePath
+						.slice(prefix.length)
+						.match(/^([^/]+)\/(.+\.jsonl)$/)
 					if (!match) continue
-					const [, characterName, sessionFile] = match
-					const sessionName = sessionFile.replace(/\.jsonl$/, "")
+					const [, characterName, chatFile] = match
+					const chatName = chatFile.replace(/\.jsonl$/, "")
 					sessions.push({
-						filename: `${characterName}/${sessionFile}`,
-						name: sessionName,
+						filename: `${characterName}/${chatFile}`,
+						name: chatName,
 						characterNames: [characterName],
 						isGroup: false,
 						selected: true,
@@ -468,11 +465,11 @@ export const importScanSillyTavern: Handler<
 					})
 				}
 			} catch (error) {
-				console.log("No sessions directory found or empty")
+				console.log("No SillyTavern chats found")
 			}
 
-			// Scan group sessions
-			const groupsDir = path.join(dataDir, "groups")
+			// Scan SillyTavern groups (each group's chat imports as a session)
+			const groupsDir = path.join(dataDir, SILLYTAVERN_DIRS.groups)
 			const groupSessions: Array<{
 				filename: string
 				name: string
@@ -492,7 +489,7 @@ export const importScanSillyTavern: Handler<
 							groupPath,
 							"utf8"
 						)
-						const group = JSON.parse(groupContent) as GroupSession
+						const group = JSON.parse(groupContent) as SillyTavernGroup
 
 						groupSessions.push({
 							filename: groupFile,
@@ -510,7 +507,7 @@ export const importScanSillyTavern: Handler<
 			}
 
 			// Scan lorebooks/world info
-			const worldsDir = path.join(dataDir, "worlds")
+			const worldsDir = path.join(dataDir, SILLYTAVERN_DIRS.worlds)
 			const lorebooks: Array<{
 				filename: string
 				name: string
@@ -699,7 +696,7 @@ export const importExecuteSillyTavern: Handler<
 			for (const charItem of selectedData.characters) {
 				try {
 					const filePath = resolveSafePath(
-						path.join(dataDir, "characters"),
+						path.join(dataDir, SILLYTAVERN_DIRS.characters),
 						charItem.filename
 					)
 					const card = await readCharacterFile(filePath)
@@ -724,7 +721,7 @@ export const importExecuteSillyTavern: Handler<
 						.returning()
 
 					characterNameToId.set(d.name, newChar.id)
-					// Also key by filename basename — SillyTavern names session folders after the
+					// Also key by filename basename — SillyTavern names chat folders after the
 					// character file (without extension), which may differ from the card name.
 					const fileBasename = charItem.filename.replace(
 						/\.(png|json)$/i,
@@ -829,6 +826,12 @@ export const importExecuteSillyTavern: Handler<
 											// type).
 											position++
 										) as any),
+										// One file key, one stored key: the
+										// mapper's joined string would be
+										// re-split on every comma, tearing a
+										// regex `{1,3}` or "Smith, John" in
+										// two (finding #146).
+										...importedKeyColumns(entry),
 										lorebookId: lbId
 									})
 								)
@@ -854,16 +857,15 @@ export const importExecuteSillyTavern: Handler<
 				/* no settings.json */
 			}
 
+			// ST keys each persona by its avatar file (`User Avatars/<file>`),
+			// the scan by the name ST shows — so find the file by name here.
+			const stPersonas = listSillyTavernPersonas(settingsData)
 			for (const personaItem of selectedData.personas) {
 				try {
-					const pd =
-						settingsData?.power_user?.persona_descriptions?.[
-							personaItem.name
-						]
-					const description =
-						typeof pd === "object" && pd !== null
-							? (pd.description ?? "")
-							: ""
+					const stPersona = stPersonas.find(
+						(p) => p.name === personaItem.name
+					)
+					const description = stPersona?.description ?? ""
 
 					// `personaFieldsFromParsedData` carries `isPersona: true` —
 					// an ST persona import is the user saying they play it.
@@ -881,10 +883,12 @@ export const importExecuteSillyTavern: Handler<
 					personaNameToId.set(personaItem.name, newPersona.id)
 					stats.personas++
 
-					// Copy persona avatar if present in ST avatars directory
-					const avatarFilename = `${personaItem.name}.png`
+					// Copy the persona's avatar from ST's `User Avatars/`
+					// if it was uploaded.
+					const avatarFilename =
+						stPersona?.avatar ?? `${personaItem.name}.png`
 					const avatarSrc = resolveSafePath(
-						path.join(dataDir, "User Avatars"),
+						path.join(dataDir, SILLYTAVERN_DIRS.userAvatars),
 						avatarFilename
 					)
 					try {
@@ -913,7 +917,7 @@ export const importExecuteSillyTavern: Handler<
 			for (const lbItem of selectedData.lorebooks) {
 				try {
 					const worldPath = resolveSafePath(
-						path.join(dataDir, "worlds"),
+						path.join(dataDir, SILLYTAVERN_DIRS.worlds),
 						lbItem.filename
 					)
 					const content = await fsPromises.readFile(worldPath, "utf8")
@@ -947,6 +951,7 @@ export const importExecuteSillyTavern: Handler<
 						)
 						let position = 0
 						for (const entry of entries) {
+							const normalized = normalizeNativeWorldInfoEntry(entry)
 							await db.insert(schema.lorebookEntries).values(
 								entryInsert({
 									typeId: WORLD_LORE_TYPE_ID,
@@ -968,10 +973,13 @@ export const importExecuteSillyTavern: Handler<
 									// what the same book already gets
 									// through `lorebooks:import`.
 									...(mapImportedEntry(
-										normalizeNativeWorldInfoEntry(entry),
+										normalized,
 										WORLD_LORE_TYPE_ID,
 										position++
 									) as any),
+									// One file key, one stored key (finding
+									// #146) — see the character book above.
+									...importedKeyColumns(normalized),
 									lorebookId: lbId
 								})
 							)
@@ -1003,14 +1011,14 @@ export const importExecuteSillyTavern: Handler<
 					)
 				}))
 
-			// ── Phase 4: Individual sessions ────────────────────────────────────────
+			// ── Phase 4: SillyTavern chats → sessions ───────────────────────────
 			for (const sessionItem of selectedData.sessions) {
 				try {
-					const sessionPath = resolveSafePath(
-						path.join(dataDir, "sessions"),
+					const chatPath = resolveSafePath(
+						path.join(dataDir, SILLYTAVERN_DIRS.chats),
 						sessionItem.filename
 					)
-					const parsed = await parseSessionFile(sessionPath)
+					const parsed = await parseSillyTavernChatFile(chatPath)
 					if (!parsed) continue
 
 					const charName = sessionItem.characterNames[0]
@@ -1018,7 +1026,7 @@ export const importExecuteSillyTavern: Handler<
 						characterNameToId.get(charName) ??
 						(await findCharacterId(charName))
 
-					// Resolve lorebook: prefer explicit world_info from session metadata,
+					// Resolve lorebook: prefer explicit world_info from the chat's metadata,
 					// fall back to the character's embedded lorebook
 					const worldInfoName =
 						parsed.header.chat_metadata?.world_info
@@ -1046,7 +1054,7 @@ export const importExecuteSillyTavern: Handler<
 						})
 					}
 
-					// Resolve persona from the session's user_name header, fall back to default
+					// Resolve persona from the chat's user_name header, fall back to default
 					const sessionPersonaName = parsed.header.user_name
 					const sessionPersonaId = sessionPersonaName
 						? (personaNameToId.get(sessionPersonaName) ??
@@ -1105,19 +1113,19 @@ export const importExecuteSillyTavern: Handler<
 				}
 			}
 
-			// ── Phase 5: Group sessions ─────────────────────────────────────────────
+			// ── Phase 5: SillyTavern group chats → group sessions ───────────────
 			for (const groupItem of selectedData.groupSessions) {
 				try {
-					// Re-read group JSON to get the id used for the session file
+					// Re-read group JSON to get the id of its chat file
 					const groupPath = resolveSafePath(
-						path.join(dataDir, "groups"),
+						path.join(dataDir, SILLYTAVERN_DIRS.groups),
 						groupItem.filename
 					)
 					const groupContent = await fsPromises.readFile(
 						groupPath,
 						"utf8"
 					)
-					const groupData = JSON.parse(groupContent) as GroupSession
+					const groupData = JSON.parse(groupContent) as SillyTavernGroup
 
 					const memberIds: (number | null)[] = await Promise.all(
 						groupItem.memberNames.map(
@@ -1127,22 +1135,27 @@ export const importExecuteSillyTavern: Handler<
 						)
 					)
 
-					// Group session history is parsed later; read the file now so we can check
-					// the world_info in the header before inserting the session.
-					// groupId can come from groupData.id — parsed JSON content, not
-					// re-validated like groupItem.filename above — so it needs the
-					// same traversal guard before being used in a path.
-					const groupId =
-						groupData.id || groupItem.filename.replace(".json", "")
-					const groupSessionFile = resolveSafePath(
-						path.join(dataDir, "group sessions"),
-						`${groupId}.jsonl`
+					// The group's chat history is parsed later; read the file now so we
+					// can check the world_info in the header before inserting the
+					// session. SillyTavern names the file after the group's CURRENT
+					// chat, `group chats/<chat_id>.jsonl` — not the group's own id,
+					// which only matches for a group made before `chat_id` existed.
+					// Both come from parsed JSON content, not re-validated like
+					// groupItem.filename above, so they need the same traversal
+					// guard before being used in a path.
+					const groupChatId =
+						groupData.chat_id ||
+						groupData.id ||
+						groupItem.filename.replace(".json", "")
+					const groupChatFile = resolveSafePath(
+						path.join(dataDir, SILLYTAVERN_DIRS.groupChats),
+						`${groupChatId}.jsonl`
 					)
 					let groupParsed: Awaited<
-						ReturnType<typeof parseSessionFile>
+						ReturnType<typeof parseSillyTavernChatFile>
 					> = null
 					try {
-						groupParsed = await parseSessionFile(groupSessionFile)
+						groupParsed = await parseSillyTavernChatFile(groupChatFile)
 					} catch {
 						/* no history file */
 					}

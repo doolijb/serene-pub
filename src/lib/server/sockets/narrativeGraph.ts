@@ -46,14 +46,8 @@ import {
 } from "$lib/server/connections/capabilityTarget"
 import { activityError, activityStore } from "$lib/server/utils/activityStore"
 import { deriveNextBindingToken } from "$lib/server/utils/lorebookBindingToken"
-import { syncLorebookBindingsForCharacter } from "$lib/server/utils/characterBindingSync"
-import {
-	buildSceneCastList,
-	collectAliases,
-	resolveCharacterNamesToBindingIds,
-	entryMatches,
-	type ExtractedCastRef
-} from "$lib/server/utils/summarizer/availableSceneCast"
+import { assertValidParentNode } from "$lib/server/utils/bindingParent"
+import { collectAliases } from "$lib/server/utils/summarizer/availableSceneCast"
 import { findDuplicateCandidates } from "$lib/server/utils/duplicateBindingDetection"
 import {
 	castFor,
@@ -71,10 +65,16 @@ import {
 	sanitizeRelationshipVisibility,
 	type ObjectPresence
 } from "$lib/server/utils/relationshipVisibility"
-import { verifyBindingTargetAccess } from "./lorebooks"
 
 // Resume states saved before each scene — keyed by "userId:lorebookId"
 const buildResumeStates = new Map<string, GraphBuilderResumeState>()
+/**
+ * The session a build was scoped to, by the same key as its checkpoint. A
+ * resume's scene index counts into the list the build FIRST read, so a resume
+ * must re-read that same list — a scoped build resumed unscoped would skip
+ * into another session's scenes.
+ */
+const buildResumeSessions = new Map<string, number | null>()
 
 // ─── Endpoints ────────────────────────────────────────────────────────────────
 
@@ -247,6 +247,160 @@ async function wireRelationships(
 
 // ─── List ─────────────────────────────────────────────────────────────────────
 
+/**
+ * What a Rebuild (replace) would delete, counted.
+ *
+ * A rebuild wipes EVERY link in the book and puts back only what the builder
+ * derives — cast-to-cast links read out of scenes. Anything with an entry at
+ * either end (a road between two places, the keeper of a shrine) is never
+ * re-derived, so the confirmation has to say how many there are before it runs
+ * (owner ruling 6). Counted off the rows the list already carries, so it costs
+ * no query.
+ *
+ * ⚠ There is no count of links "drawn by hand": nothing records where a link
+ * came from. A hand-drawn link and a built one look the same, `historyEntryId`
+ * included, and guessing would make a warning that is sometimes wrong.
+ */
+function relationshipCountsOf(
+	rows: readonly {
+		fromEntryId: number | null
+		toEntryId: number | null
+	}[]
+): Sockets.NarrativeGraph.RelationshipCounts {
+	let entryToEntry = 0
+	let castToEntry = 0
+	for (const row of rows) {
+		const ends = (row.fromEntryId != null ? 1 : 0) + (row.toEntryId != null ? 1 : 0)
+		if (ends === 2) entryToEntry++
+		else if (ends === 1) castToEntry++
+	}
+	return { total: rows.length, entryToEntry, castToEntry }
+}
+
+/**
+ * The graph list for one book — the handler's reply and the apply cascade's.
+ *
+ * ONE builder, so the two cannot drift: the cascade never spells the six
+ * counting scans out a second time. `known` is the nodes and wired links a
+ * caller has already read, so the cascade does not read them twice.
+ *
+ * ⚠ Read-only: never write inside this read. In particular it must not stamp
+ * scenes as `graphed` — on a book with a cast and no graph that marks EVERY
+ * summarized scene graphed, and Extend then has nothing to read.
+ */
+async function buildGraphList(
+	lorebookId: number,
+	known?: {
+		nodes: SelectLorebookBinding[]
+		relationships: Sockets.NarrativeGraph.NarrativeRelationship[]
+	}
+): Promise<Sockets.NarrativeGraph.List.Response> {
+	const hasContent = and(
+		inBookOfType(lorebookId, HISTORY_TYPE_ID),
+		gt(sql`length(trim(${schema.lorebookEntries.content}))`, 0),
+		notExists(
+			db
+				.select({ _: sql`1` })
+				.from(schema.scenes)
+				.where(eq(schema.scenes.historyEntryId, schema.lorebookEntries.id))
+		)
+	)
+	const [
+		nodes,
+		relationships,
+		ungraphedScenes,
+		unresolvedCastScenes,
+		ungraphedUnsummarizedScenes,
+		allSummarizedScenes,
+		ungraphedDirectEntries,
+		allDirectEntries
+	] = await Promise.all([
+		known
+			? known.nodes
+			: db.query.lorebookBindings.findMany({
+					where: eq(schema.lorebookBindings.lorebookId, lorebookId),
+					orderBy: asc(schema.lorebookBindings.id)
+				}),
+		known
+			? known.relationships
+			: db.query.narrativeRelationships
+					.findMany({
+						where: eq(
+							schema.narrativeRelationships.lorebookId,
+							lorebookId
+						),
+						orderBy: asc(schema.narrativeRelationships.id)
+					})
+					.then(wireRelationships),
+		// Ungraphed with summary — ready to extend
+		db.query.scenes.findMany({
+			where: and(
+				eq(schema.scenes.lorebookId, lorebookId),
+				eq(schema.scenes.graphed, false),
+				isNotNull(schema.scenes.summary)
+			),
+			columns: { id: true }
+		}),
+		// Summarized scenes whose cast has never been resolved — each costs
+		// one extraction call on the next build. A plain marker check, not a
+		// scan of the cast columns' shapes.
+		db.query.scenes.findMany({
+			where: and(
+				eq(schema.scenes.lorebookId, lorebookId),
+				isNotNull(schema.scenes.summary),
+				isNull(schema.scenes.castResolvedAt)
+			),
+			columns: { id: true }
+		}),
+		// Ungraphed without summary — need summarising first
+		db.query.scenes.findMany({
+			where: and(
+				eq(schema.scenes.lorebookId, lorebookId),
+				eq(schema.scenes.graphed, false),
+				isNull(schema.scenes.summary)
+			),
+			columns: { id: true }
+		}),
+		// All scenes with summary — for replace-mode preflight
+		db.query.scenes.findMany({
+			where: and(
+				eq(schema.scenes.lorebookId, lorebookId),
+				isNotNull(schema.scenes.summary)
+			),
+			columns: { id: true }
+		}),
+		// History entries with content, no scenes, not yet graphed
+		db
+			.select({ id: schema.lorebookEntries.id })
+			.from(schema.lorebookEntries)
+			.where(and(hasContent, eq(fieldIsTrue("graphed"), false))),
+		// All history entries with content and no scenes — for replace-mode preflight
+		db
+			.select({ id: schema.lorebookEntries.id })
+			.from(schema.lorebookEntries)
+			.where(hasContent)
+	])
+
+	return {
+		// The scope the gate reads. See the Response type.
+		lorebookId,
+		nodes,
+		// Entries are on the graph too: an entry with an edge is a node, and
+		// the endpoint carries what it takes to draw one.
+		relationships,
+		relationshipCounts: relationshipCountsOf(relationships),
+		ungraphedSceneCount: ungraphedScenes.length,
+		unresolvedCastSceneCount: unresolvedCastScenes.length,
+		namelessBindingCount: nodes.filter(
+			(n) => !n.name.trim() && n.parentNodeId === null
+		).length,
+		ungraphedUnsummarizedCount: ungraphedUnsummarizedScenes.length,
+		totalSummarizedCount: allSummarizedScenes.length,
+		ungraphedHistoryEntryCount: ungraphedDirectEntries.length,
+		totalDirectHistoryEntryCount: allDirectEntries.length
+	}
+}
+
 export const narrativeGraphListHandler: Handler<
 	Sockets.NarrativeGraph.List.Params,
 	Sockets.NarrativeGraph.List.Response
@@ -261,161 +415,7 @@ export const narrativeGraphListHandler: Handler<
 		})
 		if (!lorebook) throw new Error("Lorebook not found or access denied.")
 
-		const [
-			nodes,
-			relationships,
-			ungraphedScenes,
-			unresolvedCastScenes,
-			ungraphedUnsummarizedScenes,
-			allSummarizedScenes,
-			ungraphedDirectEntries,
-			allDirectEntries
-		] = await Promise.all([
-			db.query.lorebookBindings.findMany({
-				where: eq(
-					schema.lorebookBindings.lorebookId,
-					params.lorebookId
-				),
-				orderBy: asc(schema.lorebookBindings.id)
-			}),
-			db.query.narrativeRelationships.findMany({
-				where: eq(
-					schema.narrativeRelationships.lorebookId,
-					params.lorebookId
-				),
-				orderBy: asc(schema.narrativeRelationships.id)
-			}),
-			// Ungraphed with summary — ready to extend
-			db.query.scenes.findMany({
-				where: and(
-					eq(schema.scenes.lorebookId, params.lorebookId),
-					eq(schema.scenes.graphed, false),
-					isNotNull(schema.scenes.summary)
-				),
-				columns: { id: true }
-			}),
-			// Summarized scenes whose cast has never been resolved — each costs
-			// one extraction call on the next build. A plain marker check, not
-			// a scan of the cast columns' shapes.
-			db.query.scenes.findMany({
-				where: and(
-					eq(schema.scenes.lorebookId, params.lorebookId),
-					isNotNull(schema.scenes.summary),
-					isNull(schema.scenes.castResolvedAt)
-				),
-				columns: { id: true }
-			}),
-			// Ungraphed without summary — need summarising first
-			db.query.scenes.findMany({
-				where: and(
-					eq(schema.scenes.lorebookId, params.lorebookId),
-					eq(schema.scenes.graphed, false),
-					isNull(schema.scenes.summary)
-				),
-				columns: { id: true }
-			}),
-			// All scenes with summary — for replace-mode preflight
-			db.query.scenes.findMany({
-				where: and(
-					eq(schema.scenes.lorebookId, params.lorebookId),
-					isNotNull(schema.scenes.summary)
-				),
-				columns: { id: true }
-			}),
-			// History entries with content, no scenes, not yet graphed
-			db
-				.select({ id: schema.lorebookEntries.id })
-				.from(schema.lorebookEntries)
-				.where(
-					and(
-						inBookOfType(params.lorebookId, HISTORY_TYPE_ID),
-						eq(fieldIsTrue("graphed"), false),
-						gt(
-							sql`length(trim(${schema.lorebookEntries.content}))`,
-							0
-						),
-						notExists(
-							db
-								.select({ _: sql`1` })
-								.from(schema.scenes)
-								.where(
-									eq(
-										schema.scenes.historyEntryId,
-										schema.lorebookEntries.id
-									)
-								)
-						)
-					)
-				),
-			// All history entries with content and no scenes — for replace-mode preflight
-			db
-				.select({ id: schema.lorebookEntries.id })
-				.from(schema.lorebookEntries)
-				.where(
-					and(
-						inBookOfType(params.lorebookId, HISTORY_TYPE_ID),
-						gt(
-							sql`length(trim(${schema.lorebookEntries.content}))`,
-							0
-						),
-						notExists(
-							db
-								.select({ _: sql`1` })
-								.from(schema.scenes)
-								.where(
-									eq(
-										schema.scenes.historyEntryId,
-										schema.lorebookEntries.id
-									)
-								)
-						)
-					)
-				)
-		])
-
-		// Bootstrap: if a graph exists but no scenes are marked as graphed yet
-		// (built before tracking was introduced), silently mark all summarized
-		// scenes as graphed so extend only picks up genuinely new future scenes.
-		let ungraphedSceneCount = ungraphedScenes.length
-		if (nodes.length > 0 && ungraphedScenes.length > 0) {
-			const anyGraphed = await db.query.scenes.findFirst({
-				where: and(
-					eq(schema.scenes.lorebookId, params.lorebookId),
-					eq(schema.scenes.graphed, true)
-				),
-				columns: { id: true }
-			})
-			if (!anyGraphed) {
-				await db
-					.update(schema.scenes)
-					.set({ graphed: true })
-					.where(
-						and(
-							eq(schema.scenes.lorebookId, params.lorebookId),
-							isNotNull(schema.scenes.summary)
-						)
-					)
-				ungraphedSceneCount = 0
-			}
-		}
-
-		const res: Sockets.NarrativeGraph.List.Response = {
-			// The scope the gate reads. See the Response type.
-			lorebookId: params.lorebookId,
-			nodes,
-			// Entries are on the graph too: an entry with an edge is a node,
-			// and the endpoint carries what it takes to draw one.
-			relationships: await wireRelationships(relationships),
-			ungraphedSceneCount,
-			unresolvedCastSceneCount: unresolvedCastScenes.length,
-			namelessBindingCount: nodes.filter(
-				(n) => !n.name.trim() && n.parentNodeId === null
-			).length,
-			ungraphedUnsummarizedCount: ungraphedUnsummarizedScenes.length,
-			totalSummarizedCount: allSummarizedScenes.length,
-			ungraphedHistoryEntryCount: ungraphedDirectEntries.length,
-			totalDirectHistoryEntryCount: allDirectEntries.length
-		}
+		const res = await buildGraphList(params.lorebookId)
 		emitToUser("narrativeGraph:list", res)
 		return res
 	}
@@ -449,6 +449,7 @@ export const narrativeGraphBuildHandler: Handler<
 		let mode: "replace" | "extend"
 		let resumeKey: string
 		let resumeState: GraphBuilderResumeState | undefined
+		let scopeSessionId: number | null
 		let activityId: string
 		try {
 			lorebook = await db.query.lorebooks.findFirst({
@@ -463,6 +464,15 @@ export const narrativeGraphBuildHandler: Handler<
 			resumeState = params.resume
 				? buildResumeStates.get(resumeKey)
 				: undefined
+			// Extend from one session reads that session alone. Replace
+			// re-reads the whole book by definition, so it takes no scope.
+			scopeSessionId =
+				mode !== "extend"
+					? null
+					: params.resume && buildResumeSessions.has(resumeKey)
+						? buildResumeSessions.get(resumeKey)!
+						: (params.sessionId ?? null)
+			buildResumeSessions.set(resumeKey, scopeSessionId)
 
 			activityId = activityStore.start({
 				userId,
@@ -559,14 +569,26 @@ export const narrativeGraphBuildHandler: Handler<
 			return out
 		}
 
-		// In extend mode, only process scenes not yet graphed
+		// In extend mode, only process scenes not yet graphed — and, when the
+		// extend was started from a session, only that session's.
 		const filteredRawScenes =
-			mode === "extend" ? rawScenes.filter((s) => !s.graphed) : rawScenes
+			mode === "extend"
+				? rawScenes.filter(
+						(s) =>
+							!s.graphed &&
+							(scopeSessionId === null ||
+								s.sessionId === scopeSessionId)
+					)
+				: rawScenes
 
-		// In extend mode, only process direct entries not yet graphed
+		// In extend mode, only process direct entries not yet graphed. A
+		// direct entry has no scene and so no session: a session-scoped
+		// extend reads none of them.
 		const filteredDirectEntries =
 			mode === "extend"
-				? rawDirectEntries.filter((e) => !e.fields?.graphed)
+				? scopeSessionId !== null
+					? []
+					: rawDirectEntries.filter((e) => !e.fields?.graphed)
 				: rawDirectEntries
 
 		if (
@@ -577,7 +599,9 @@ export const narrativeGraphBuildHandler: Handler<
 			activityStore.update(activityId, {
 				status: "error",
 				errorMessage:
-					"No new content to process. All scenes and history entries have already been graphed."
+					scopeSessionId !== null
+						? "No new content to process. Every summarized scene in this session has already been graphed."
+						: "No new content to process. All scenes and history entries have already been graphed."
 			})
 			return {
 				proposal: { nodes: [], relationships: [] },
@@ -1070,6 +1094,7 @@ export const narrativeGraphBuildHandler: Handler<
 
 			// Build completed — clear any saved checkpoint for this lorebook
 			buildResumeStates.delete(resumeKey)
+			buildResumeSessions.delete(resumeKey)
 
 			// Guard: if the user cancelled while the last LLM call was still completing,
 			// the abort signal may have fired after buildGraphFromScenes returned normally.
@@ -1127,7 +1152,11 @@ export const narrativeGraphBuildHandler: Handler<
 				seedTempIdMap: result.seedTempIdMap,
 				seedNodeNames: result.seedNodeNames,
 				relationshipDiagnostics: result.relationshipDiagnostics,
-				filteredWorldLoreNames: result.filteredWorldLoreNames
+				filteredWorldLoreNames: result.filteredWorldLoreNames,
+				processedSceneIds: filteredRawScenes
+					.filter((s) => s.summary != null)
+					.map((s) => s.id),
+				processedHistoryEntryIds: filteredDirectEntries.map((e) => e.id)
 			})
 			return {
 				proposal,
@@ -1284,10 +1313,11 @@ export const narrativeGraphApplyProposalHandler: Handler<
 		// silent, unrecoverable data loss (a real merge hierarchy in
 		// parentNodeId, a past merge's restorable relationship content) with
 		// no compensating benefit: the "crash-prone otherwise" justification
-		// for clearing the merge-log fields didn't hold up either — both of
-		// narrativeGraphUndoMergeHandler's restore loops are no-ops (not
-		// errors) against a relationship id that no longer exists, so
-		// leaving them populated is strictly safe, not just less destructive.
+		// for clearing the merge-log fields didn't hold up either: undo's
+		// rewrite-restore loop is a no-op against a relationship id that no
+		// longer exists, and its re-insert loop skips (and counts) any
+		// snapshotted link whose endpoints are gone, so leaving them
+		// populated is strictly safe, not just less destructive.
 		// bindingMergeLogs also has no real FK protection on the node ids it
 		// stores (aside from survivorId's onDelete: "set null"), which is
 		// why a rebuild never deletes a lorebookBindings row at all — a
@@ -1297,11 +1327,18 @@ export const narrativeGraphApplyProposalHandler: Handler<
 		// undo with no visible error until someone tried it. Manual
 		// per-node deletion is still available via
 		// narrativeGraphDeleteNodeHandler for a user who actually wants a
-		// ghost row gone. Relationships alone are always safe to wipe
-		// wholesale and rebuild from the fresh proposal — bindingMergeLogs
-		// keeps referencing them by id from the log's own JSON snapshot/
-		// rewrite records, not a live FK, so the wipe below doesn't orphan
-		// anything a future undo depends on.
+		// ghost row gone. Relationships are wiped wholesale and rebuilt from
+		// the fresh proposal — bindingMergeLogs keeps referencing them by id
+		// from the log's own JSON snapshot/rewrite records, not a live FK, so
+		// the wipe below doesn't orphan anything a future undo depends on.
+		//
+		// ⚠ "Wholesale" means EVERY link in the book, and that is the ruled
+		// behaviour (owner ruling 6, 2026-09-28), not an oversight: links with
+		// an entry at either end, and links drawn by hand, go too, and the
+		// builder never puts them back (it derives cast-to-cast links only).
+		// What makes that acceptable is the confirmation: it warns with
+		// `narrativeGraph:list`'s `relationshipCounts` — total links, entry-to-entry,
+		// cast-to-entry — before the person runs it.
 		// NOTE: the replace-mode wipe used to run right here, OUTSIDE the
 		// transaction below. Any failure between it and the re-insert left the
 		// graph deleted with nothing put back — which is exactly how the
@@ -1442,13 +1479,37 @@ export const narrativeGraphApplyProposalHandler: Handler<
 			}
 		}
 
+		/**
+		 * What the build being applied actually read, from its own activity —
+		 * the server's record, never the client's say-so. `null` when there is
+		 * no such build to ask (see the fallback at the graphed stamp).
+		 */
+		const readByBuild = (() => {
+			if (!params.activityId) return null
+			const build = activityStore.getById(params.activityId)
+			if (
+				build?.kind !== "graph_build" ||
+				build.userId !== userId ||
+				build.lorebookId !== lorebookId ||
+				!build.processedSceneIds ||
+				!build.processedHistoryEntryIds
+			)
+				return null
+			return {
+				sceneIds: build.processedSceneIds,
+				historyEntryIds: build.processedHistoryEntryIds
+			}
+		})()
+
 		// Everything below builds/updates the graph for this lorebook in one
 		// pass — wrapped in a transaction so a crash or thrown error partway
 		// through (e.g. after some nodes are inserted but before their
 		// relationships are) can't leave a half-applied graph.
 		await db.transaction(async (tx) => {
-			// Replace mode wipes relationships and rebuilds them from the
-			// proposal. Inside the transaction so any failure below (an
+			// Replace mode wipes EVERY relationship in the book — entry
+			// endpoints and hand-drawn links included, as ruled (see the note
+			// above) — and rebuilds from the proposal. Inside the transaction
+			// so any failure below (an
 			// unresolved endpoint, an FK violation from a concurrently deleted
 			// binding) rolls the delete back instead of leaving the graph
 			// emptied with nothing put back.
@@ -1625,6 +1686,32 @@ export const narrativeGraphApplyProposalHandler: Handler<
 				return present.has(objectId) ? "present" : "absent"
 			}
 
+			/**
+			 * The date a link version is filed at, as the history entry that
+			 * carries it — a scene's date is its history entry's. `null` for a
+			 * version with neither: an undated link.
+			 *
+			 * The history entry stands in for the date on purpose: two versions
+			 * under one entry are one dated state, and comparing ids needs no
+			 * calendar. Cached, since every candidate version asks.
+			 */
+			const historyOfScene = new Map<number, number | null>()
+			const dateKeyOf = async (
+				historyEntryId: number | null,
+				sceneId: number | null
+			): Promise<number | null> => {
+				if (historyEntryId != null) return historyEntryId
+				if (sceneId == null) return null
+				if (!historyOfScene.has(sceneId)) {
+					const scene = await tx.query.scenes.findFirst({
+						where: eq(schema.scenes.id, sceneId),
+						columns: { historyEntryId: true }
+					})
+					historyOfScene.set(sceneId, scene?.historyEntryId ?? null)
+				}
+				return historyOfScene.get(sceneId) ?? null
+			}
+
 			// Insert (or update) relationships
 			for (const rel of proposal.relationships) {
 				const fromId = tempIdMap.get(rel.fromTempId)
@@ -1656,8 +1743,11 @@ export const narrativeGraphApplyProposalHandler: Handler<
 					// Exact direction only — A→B and B→A are distinct perspective entries and
 					// must never be collapsed into one row. A new type between existing nodes
 					// that has no exact-match row falls through to INSERT below.
-					const existing =
-						await tx.query.narrativeRelationships.findFirst({
+					//
+					// Main's rows only: an apply is a person at the book, which writes
+					// main, and a fork's own version of a link is the fork's.
+					const versions =
+						await tx.query.narrativeRelationships.findMany({
 							where: and(
 								eq(
 									schema.narrativeRelationships.lorebookId,
@@ -1675,9 +1765,49 @@ export const narrativeGraphApplyProposalHandler: Handler<
 									schema.narrativeRelationships
 										.relationshipType,
 									rel.relationshipType ?? "neutral"
-								)
-							)
+								),
+								isNull(schema.narrativeRelationships.branchId)
+							),
+							orderBy: desc(schema.narrativeRelationships.id)
 						})
+
+					/**
+					 * WHICH version the proposal speaks about.
+					 *
+					 * A link can hold several dated versions. Never take
+					 * whichever `findFirst` happens to return and rewrite it in
+					 * place — that keeps its old date, so "Y5: they fell out"
+					 * silently becomes the text of the Y2 version. Instead:
+					 *
+					 * - a proposal with a date updates only the version filed
+					 *   at that same date, and otherwise INSERTS a new dated row
+					 *   (falls through below) — an old version is never
+					 *   rewritten;
+					 * - a proposal with no date updates the newest version,
+					 *   preferring one still active — deterministically.
+					 */
+					const proposedAt = await dateKeyOf(
+						rel.historyEntryId ?? null,
+						rel.sceneId ?? null
+					)
+					let existing: (typeof versions)[number] | undefined
+					if (proposedAt === null) {
+						existing =
+							versions.find((v) => v.status === "active") ??
+							versions[0]
+					} else {
+						for (const version of versions) {
+							if (
+								(await dateKeyOf(
+									version.historyEntryId,
+									version.sceneId
+								)) === proposedAt
+							) {
+								existing = version
+								break
+							}
+						}
+					}
 
 					if (existing) {
 						/**
@@ -1828,9 +1958,12 @@ export const narrativeGraphApplyProposalHandler: Handler<
 				// resolved-marker follow-up.
 			}
 
-			// Mark scenes as graphed — entirely server-side, no client round-trip needed.
-			// Replace: reset all scenes for this lorebook, then mark all summarized scenes as graphed.
-			// Extend: mark all currently-ungraphed summarized scenes as graphed (those were the ones processed).
+			// Mark what the build READ as graphed — entirely server-side.
+			// Replace resets the whole book first, since a rebuild re-reads it
+			// all; either mode then stamps exactly the scenes and direct history
+			// entries the build fed the builder (`readByBuild`), so a scene
+			// summarized while the build was running stays ungraphed and the
+			// next Extend reads it.
 			if (mode === "replace") {
 				await tx
 					.update(schema.scenes)
@@ -1845,41 +1978,67 @@ export const narrativeGraphApplyProposalHandler: Handler<
 					.set({ fields: mergeFields({ graphed: false }) })
 					.where(inBookOfType(lorebookId, HISTORY_TYPE_ID))
 			}
-			await tx
-				.update(schema.scenes)
-				.set({ graphed: true })
-				.where(
-					and(
-						eq(schema.scenes.lorebookId, lorebookId),
-						eq(schema.scenes.graphed, false),
-						isNotNull(schema.scenes.summary)
-					)
+			const directEntryOnly = and(
+				inBookOfType(lorebookId, HISTORY_TYPE_ID),
+				gt(sql`length(trim(${schema.lorebookEntries.content}))`, 0),
+				notExists(
+					tx
+						.select({ _: sql`1` })
+						.from(schema.scenes)
+						.where(
+							eq(
+								schema.scenes.historyEntryId,
+								schema.lorebookEntries.id
+							)
+						)
 				)
-			// Mark direct history entries (with content, no scenes) as graphed.
-			// ⚠ Merged, for the same reason as the reset above.
-			await tx
-				.update(schema.lorebookEntries)
-				.set({ fields: mergeFields({ graphed: true }) })
-				.where(
-					and(
-						inBookOfType(lorebookId, HISTORY_TYPE_ID),
-						gt(
-							sql`length(trim(${schema.lorebookEntries.content}))`,
-							0
-						),
-						notExists(
-							tx
-								.select({ _: sql`1` })
-								.from(schema.scenes)
-								.where(
-									eq(
-										schema.scenes.historyEntryId,
-										schema.lorebookEntries.id
-									)
+			)
+			if (readByBuild) {
+				if (readByBuild.sceneIds.length > 0)
+					await tx
+						.update(schema.scenes)
+						.set({ graphed: true })
+						.where(
+							and(
+								eq(schema.scenes.lorebookId, lorebookId),
+								inArray(schema.scenes.id, readByBuild.sceneIds),
+								isNotNull(schema.scenes.summary)
+							)
+						)
+				// ⚠ Merged, for the same reason as the reset above.
+				if (readByBuild.historyEntryIds.length > 0)
+					await tx
+						.update(schema.lorebookEntries)
+						.set({ fields: mergeFields({ graphed: true }) })
+						.where(
+							and(
+								directEntryOnly,
+								inArray(
+									schema.lorebookEntries.id,
+									readByBuild.historyEntryIds
 								)
+							)
+						)
+			} else {
+				// No build on record to ask — an apply with no `activityId`, or
+				// one whose review has already gone. The old rule, which
+				// over-stamps anything summarized during the build: every
+				// summarized scene and direct entry not yet graphed.
+				await tx
+					.update(schema.scenes)
+					.set({ graphed: true })
+					.where(
+						and(
+							eq(schema.scenes.lorebookId, lorebookId),
+							eq(schema.scenes.graphed, false),
+							isNotNull(schema.scenes.summary)
 						)
 					)
-				)
+				await tx
+					.update(schema.lorebookEntries)
+					.set({ fields: mergeFields({ graphed: true }) })
+					.where(directEntryOnly)
+			}
 		})
 
 		// The two reads this handler's OWN reply is made of. They stay eager:
@@ -1900,117 +2059,19 @@ export const narrativeGraphApplyProposalHandler: Handler<
 			relationships: wiredRelationships
 		}
 
-		// The six COUNT reads the refreshed graph list is made of, and nothing
+		// The COUNT reads the refreshed graph list is made of, and nothing
 		// else — LAZY (socket-interest plan, ruling 4). A proposal applied from
 		// a surface with no graph list open pays for none of them; the reply
 		// above is unaffected either way. Skipping the emit alone would save
-		// nothing; these six scans are the cost.
-		await emitToUser("narrativeGraph:list", async () => {
-			const [
-				ungraphedScenes,
-				ungraphedUnsummarized,
-				allSummarized,
-				ungraphedDirectEntries,
-				allDirectEntries
-			] = await Promise.all([
-				db.query.scenes.findMany({
-					where: and(
-						eq(schema.scenes.lorebookId, lorebookId),
-						eq(schema.scenes.graphed, false),
-						isNotNull(schema.scenes.summary)
-					),
-					columns: { id: true }
-				}),
-				db.query.scenes.findMany({
-					where: and(
-						eq(schema.scenes.lorebookId, lorebookId),
-						eq(schema.scenes.graphed, false),
-						isNull(schema.scenes.summary)
-					),
-					columns: { id: true }
-				}),
-				db.query.scenes.findMany({
-					where: and(
-						eq(schema.scenes.lorebookId, lorebookId),
-						isNotNull(schema.scenes.summary)
-					),
-					columns: { id: true }
-				}),
-				db
-					.select({ id: schema.lorebookEntries.id })
-					.from(schema.lorebookEntries)
-					.where(
-						and(
-							inBookOfType(lorebookId, HISTORY_TYPE_ID),
-							eq(fieldIsTrue("graphed"), false),
-							gt(
-								sql`length(trim(${schema.lorebookEntries.content}))`,
-								0
-							),
-							notExists(
-								db
-									.select({ _: sql`1` })
-									.from(schema.scenes)
-									.where(
-										eq(
-											schema.scenes.historyEntryId,
-											schema.lorebookEntries.id
-										)
-									)
-							)
-						)
-					),
-				db
-					.select({ id: schema.lorebookEntries.id })
-					.from(schema.lorebookEntries)
-					.where(
-						and(
-							inBookOfType(lorebookId, HISTORY_TYPE_ID),
-							gt(
-								sql`length(trim(${schema.lorebookEntries.content}))`,
-								0
-							),
-							notExists(
-								db
-									.select({ _: sql`1` })
-									.from(schema.scenes)
-									.where(
-										eq(
-											schema.scenes.historyEntryId,
-											schema.lorebookEntries.id
-										)
-									)
-							)
-						)
-					)
-			])
-
-			// The apply we just committed wrote castResolvedAt back onto every
-			// scene it resolved, so this count is re-derived here rather than
-			// carried over — it should normally have dropped to 0.
-			const unresolvedAfterApply = await db.query.scenes.findMany({
-				where: and(
-					eq(schema.scenes.lorebookId, lorebookId),
-					isNotNull(schema.scenes.summary),
-					isNull(schema.scenes.castResolvedAt)
-				),
-				columns: { id: true }
-			})
-			return {
-				lorebookId,
+		// nothing; these scans are the cost. The cast count is re-derived
+		// rather than carried over: the apply just wrote castResolvedAt onto
+		// every scene it resolved, so it should normally have dropped to 0.
+		await emitToUser("narrativeGraph:list", () =>
+			buildGraphList(lorebookId, {
 				nodes,
-				relationships: wiredRelationships,
-				ungraphedSceneCount: ungraphedScenes.length,
-				unresolvedCastSceneCount: unresolvedAfterApply.length,
-				namelessBindingCount: nodes.filter(
-					(n) => !n.name.trim() && n.parentNodeId === null
-				).length,
-				ungraphedUnsummarizedCount: ungraphedUnsummarized.length,
-				totalSummarizedCount: allSummarized.length,
-				ungraphedHistoryEntryCount: ungraphedDirectEntries.length,
-				totalDirectHistoryEntryCount: allDirectEntries.length
-			} satisfies Sockets.NarrativeGraph.List.Response
-		})
+				relationships: wiredRelationships
+			})
+		)
 		emitToUser("narrativeGraph:applyProposal", res)
 
 		// Proactive duplicate review — surface likely-duplicate pairs right
@@ -2074,12 +2135,14 @@ export const narrativeGraphUpdateNodeHandler: Handler<
 			if (n.parentNodeId === null) {
 				fields.parentNodeId = null
 			} else {
-				const parent = await db.query.lorebookBindings.findFirst({
-					where: eq(schema.lorebookBindings.id, n.parentNodeId)
-				})
-				if (!parent || parent.lorebookId !== existing.lorebookId) {
-					throw new Error("Parent node not found.")
-				}
+				// Same book, not itself, two levels at most — the one rule
+				// lorebooks:updateBinding applies too (finding #22).
+				await assertValidParentNode(
+					db,
+					existing.id,
+					n.parentNodeId,
+					existing.lorebookId
+				)
 				fields.parentNodeId = n.parentNodeId
 			}
 		}
@@ -2165,24 +2228,69 @@ export const narrativeGraphDeleteNodeHandler: Handler<
 		})
 		if (!lorebook) throw new Error("Access denied.")
 
+		/**
+		 * Their private lore: the character-lore entries anchored to them.
+		 *
+		 * The anchor is `ON DELETE SET NULL`, so lore left behind becomes
+		 * UNASSIGNED — and unassigned lore is narrator-visible. That is a
+		 * disclosure, not a tidy-up, so the person decides (owner ruling 4):
+		 * `"keep"` (the default, and what every caller got before this
+		 * choice existed) leaves the lore in the book unassigned; `"delete"`
+		 * removes every entry anchored to them, archived ones included — an
+		 * archived private entry left unassigned would go narrator-visible
+		 * the day it is restored. `checkNodeMergeReferences` counts them for
+		 * the dialog before it asks.
+		 */
+		const privateLore = params.privateLore ?? "keep"
+		if (privateLore !== "keep" && privateLore !== "delete")
+			throw new Error('privateLore must be "keep" or "delete".')
+
 		// Scene cast cleanup used to live here: cast was a plain JSON int array
 		// with no FK, so deleting a binding would leave a permanent dangling id
 		// unless every scene in the lorebook was loaded and both arrays
 		// rewritten by hand. scene_characters.binding_id is a real FK with
 		// ON DELETE cascade, so the database does it — correctly, and without
-		// a full-table scan.
-		await db
-			.delete(schema.lorebookBindings)
-			.where(eq(schema.lorebookBindings.id, params.id))
+		// a full-table scan. Their amendments and presences cascade the same
+		// way; their attribute rows have no key to cascade on, so they are
+		// removed by hand in the same transaction.
+		const deletedLoreCount = await db.transaction(async (tx) => {
+			let deleted = 0
+			if (privateLore === "delete") {
+				const gone = await tx
+					.delete(schema.lorebookEntries)
+					.where(
+						and(
+							eq(schema.lorebookEntries.anchorBindingId, params.id),
+							eq(
+								schema.lorebookEntries.typeId,
+								CHARACTER_LORE_TYPE_ID
+							)
+						)
+					)
+					.returning({ id: schema.lorebookEntries.id })
+				deleted = gone.length
+			}
+			await deleteMemberAttributes(tx, params.id)
+			await tx
+				.delete(schema.lorebookBindings)
+				.where(eq(schema.lorebookBindings.id, params.id))
+			return deleted
+		})
 
-		const res = { success: "Node deleted." }
+		const res: Sockets.NarrativeGraph.DeleteNode.Response = {
+			success: "Node deleted.",
+			id: params.id,
+			lorebookId: existing.lorebookId,
+			deletedLoreCount
+		}
 		emitToUser("narrativeGraph:deleteNode", res)
 		return res
 	}
 }
 
 /**
- * Read-only pre-check for narrativeGraph:deleteNode's confirmation UI.
+ * Read-only pre-check for narrativeGraph:deleteNode's confirmation UI: whether
+ * a merge log still names the member, and how much private lore they anchor.
  * bindingMergeLogs references node ids as plain JSON, not real FKs — a
  * node that's a past merge's survivorId or a relationship endpoint in some
  * log's relationshipRewrites/deletedRelationships gets silently orphaned
@@ -2228,8 +2336,25 @@ export const narrativeGraphCheckNodeMergeReferencesHandler: Handler<
 				)
 		)
 
+		// The member's private lore, for the delete dialog's keep-or-delete
+		// question (see `narrativeGraph:deleteNode`'s `privateLore`). Archived
+		// rows are counted apart, matching the default entry list, so the
+		// headline figure is what the person can see in the book.
+		const anchored = await db
+			.select({ archived: schema.lorebookEntries.archived })
+			.from(schema.lorebookEntries)
+			.where(
+				and(
+					eq(schema.lorebookEntries.anchorBindingId, nodeId),
+					eq(schema.lorebookEntries.typeId, CHARACTER_LORE_TYPE_ID)
+				)
+			)
+
 		const res: Sockets.NarrativeGraph.CheckNodeMergeReferences.Response = {
-			referencedByMergeLog: referenced
+			nodeId: params.nodeId,
+			referencedByMergeLog: referenced,
+			privateLoreCount: anchored.filter((e) => !e.archived).length,
+			archivedPrivateLoreCount: anchored.filter((e) => e.archived).length
 		}
 		emitToUser("narrativeGraph:checkNodeMergeReferences", res)
 		return res
@@ -2380,7 +2505,14 @@ export const narrativeGraphDeleteRelationshipHandler: Handler<
 			.delete(schema.narrativeRelationships)
 			.where(eq(schema.narrativeRelationships.id, params.id))
 
-		const res = { success: "Relationship deleted." }
+		// The id and book ride the reply so an open canvas drops the one edge
+		// in place (no reload, the layout stays) and a canvas on another book
+		// ignores it — the write is bare, so the listener filters.
+		const res: Sockets.NarrativeGraph.DeleteRelationship.Response = {
+			success: "Relationship deleted.",
+			id: existing.id,
+			lorebookId: existing.lorebookId
+		}
 		emitToUser("narrativeGraph:deleteRelationship", res)
 		return res
 	}
@@ -2438,10 +2570,27 @@ export const narrativeGraphCreateRelationshipHandler: Handler<
 			}
 		}
 
+		/**
+		 * The line the link is drawn on. A link drawn while reading a fork is
+		 * that fork's, exactly as an entry written there is — so the branch
+		 * must be one of THIS book's (a foreign id is refused, never clamped to
+		 * main). Absent or null is main.
+		 */
+		const branchId = params.branchId ?? null
+		if (branchId != null) {
+			const branch = await db.query.lorebookBranches.findFirst({
+				where: eq(schema.lorebookBranches.id, branchId),
+				columns: { lorebookId: true }
+			})
+			if (!branch || branch.lorebookId !== lorebookId)
+				throw new Error("Branch not found in this lorebook.")
+		}
+
 		const [inserted] = await db
 			.insert(schema.narrativeRelationships)
 			.values({
 				lorebookId,
+				branchId,
 				fromNodeId: from.nodeId,
 				fromEntryId: from.entryId,
 				toNodeId: to.nodeId,
@@ -2467,429 +2616,223 @@ export const narrativeGraphCreateRelationshipHandler: Handler<
 	}
 }
 
-// ─── Create node (manual) ─────────────────────────────────────────────────────
+// ─── A cast member's own story (absorb / undo) ────────────────────────────────
 
-export const narrativeGraphCreateNodeHandler: Handler<
-	Sockets.NarrativeGraph.CreateNode.Params,
-	Sockets.NarrativeGraph.CreateNode.Response
-> = {
-	event: "narrativeGraph:createNode",
-	handler: async (socket, params, emitToUser) => {
-		const userId = socket.user!.id
-		const {
-			lorebookId,
-			name,
-			nodeState,
-			nodeVisibility,
-			summary,
-			historyEntryId
-		} = params
+/**
+ * Where an absorb files the absorbed member's dated story inside the log's
+ * `absorbedSnapshot`.
+ *
+ * A key no binding column can ever be spelled as, so the snapshot stays "the
+ * row, verbatim" for everything else and undo can take this off before it
+ * re-inserts the row. Kept in the snapshot rather than a column of its own
+ * because it IS the absorbed member's — their amendments, their presences,
+ * their attribute rows — and a new column is a migration for no gain.
+ */
+const MEMBER_STORY_KEY = "$memberStory"
 
-		const lorebook = await db.query.lorebooks.findFirst({
-			where: (l, { and, eq }) =>
-				and(eq(l.id, lorebookId), eq(l.userId, userId))
-		})
-		if (!lorebook) throw new Error("Lorebook not found or access denied.")
+/** The rows that belong to one cast member and go when the member does. */
+type MemberStory = {
+	castAmendments: Record<string, unknown>[]
+	castPresences: Record<string, unknown>[]
+	attributeValues: Record<string, unknown>[]
+	attributeConfigs: Record<string, unknown>[]
+}
 
-		// Without this, a client-supplied historyEntryId could belong to a
-		// different user's lorebook — same check updateNode already requires
-		// for this exact field.
-		if (historyEntryId != null) {
-			const [historyEntry] = await db
-				.select({ lorebookId: schema.lorebookEntries.lorebookId })
-				.from(schema.lorebookEntries)
-				.where(
-					and(
-						eq(schema.lorebookEntries.id, historyEntryId),
-						eq(schema.lorebookEntries.typeId, HISTORY_TYPE_ID)
-					)
-				)
-			if (!historyEntry || historyEntry.lorebookId !== lorebookId) {
-				throw new Error("History entry not found.")
-			}
-		}
-
-		// Creates an unbound lorebookBindings row (characterId/personaId
-		// null) — this handler's ongoing necessity is superseded by the UI
-		// consolidation (LorebookBindingsManager gains this "background
-		// character" flow directly), but is kept working here in the
-		// meantime. Token derived from the lorebook's own per-lorebook
-		// counter (decision 1).
-		const [node] = await db.transaction(async (tx) => {
-			const token = await deriveNextBindingToken(lorebookId, tx)
-			return tx
-				.insert(schema.lorebookBindings)
-				.values({
-					lorebookId,
-					characterId: null,
-					binding: token,
-					name,
-					nodeState: (nodeState ?? "active") as NodeState,
-					nodeVisibility: (nodeVisibility ??
-						"normal") as NodeVisibility,
-					summary: summary ?? null,
-					historyEntryId: historyEntryId ?? null
-				})
-				.returning()
-		})
-
-		const res: Sockets.NarrativeGraph.CreateNode.Response = { node }
-		emitToUser("narrativeGraph:createNode", res)
-		return res
+/**
+ * Read a cast member's dated story, before an absorb takes it away.
+ *
+ * Amendments and presences hang off the binding with `ON DELETE CASCADE`, so
+ * deleting the absorbed row deletes them; attribute rows name the member by a
+ * plain `(owner_kind, owner_id)` pair with no key, so they would be left
+ * pointing at nothing. All four are snapshotted here so an undo can put the
+ * member back as they were, not as a bare row.
+ */
+async function snapshotMemberStory(
+	tx: Db,
+	bindingId: number
+): Promise<MemberStory> {
+	const castAmendments = await tx
+		.select()
+		.from(schema.castAmendments)
+		.where(eq(schema.castAmendments.lorebookBindingId, bindingId))
+	const castPresences = await tx
+		.select()
+		.from(schema.castPresences)
+		.where(eq(schema.castPresences.lorebookBindingId, bindingId))
+	const ownedBy = <T extends { ownerKind: any; ownerId: any }>(t: T) =>
+		and(eq(t.ownerKind, "cast_member"), eq(t.ownerId, bindingId))
+	const attributeValues = await tx
+		.select()
+		.from(schema.attributeValues)
+		.where(ownedBy(schema.attributeValues))
+	const attributeConfigs = await tx
+		.select()
+		.from(schema.attributeConfigs)
+		.where(ownedBy(schema.attributeConfigs))
+	return {
+		castAmendments,
+		castPresences,
+		attributeValues,
+		attributeConfigs
 	}
 }
 
-// ─── Query context (three-layer injection) ────────────────────────────────────
-
-export const narrativeGraphQueryContextHandler: Handler<
-	Sockets.NarrativeGraph.QueryContext.Params,
-	Sockets.NarrativeGraph.QueryContext.Response
-> = {
-	event: "narrativeGraph:queryContext",
-	handler: async (socket, params, emitToUser) => {
-		const userId = socket.user!.id
-		const { lorebookId, sessionId, speakerCharacterId, speakerPersonaId } =
-			params
-
-		const lorebook = await db.query.lorebooks.findFirst({
-			where: (l, { and, eq }) =>
-				and(eq(l.id, lorebookId), eq(l.userId, userId))
-		})
-		if (!lorebook) throw new Error("Lorebook not found or access denied.")
-
-		// Resolve speaker's root node — the binding IS the node now, so this
-		// is a single lookup, not binding-then-separately-find-its-node.
-		let speakerNodeId: number | null = null
-		if (speakerCharacterId || speakerPersonaId) {
-			const binding = await db.query.lorebookBindings.findFirst({
-				where: and(
-					eq(schema.lorebookBindings.lorebookId, lorebookId),
-					// One column — the speaker is a character whether the
-					// model or a user is voicing them.
-					eq(
-						schema.lorebookBindings.characterId,
-						(speakerCharacterId ?? speakerPersonaId)!
-					)
-				),
-				columns: { id: true }
-			})
-			speakerNodeId = binding?.id ?? null
-		}
-
-		const res: Sockets.NarrativeGraph.QueryContext.Response = {
-			speakerRelationships: [],
-			inverseRelationships: [],
-			legendaryNodes: []
-		}
-
-		if (!speakerNodeId) {
-			emitToUser("narrativeGraph:queryContext", res)
-			return res
-		}
-
-		// Helper: resolve node name+state by id from a pre-fetched map
-		async function fetchNodeMap(nodeIds: number[]) {
-			if (nodeIds.length === 0)
-				return new Map<
-					number,
-					{ name: string; nodeState: string; nodeVisibility: string }
-				>()
-			const nodes = await db.query.lorebookBindings.findMany({
-				where: inArray(schema.lorebookBindings.id, nodeIds),
-				columns: {
-					id: true,
-					name: true,
-					nodeState: true,
-					nodeVisibility: true
-				}
-			})
-			return new Map(
-				nodes.map((n) => [
-					n.id,
-					{
-						name: n.name,
-						nodeState: n.nodeState,
-						nodeVisibility: n.nodeVisibility
-					}
-				])
+/**
+ * Delete the attribute rows a cast member owns.
+ *
+ * The other half of their story cascades with the binding; these have no key
+ * to cascade on, so every path that removes a member (absorb, delete) removes
+ * them by hand in the same transaction.
+ */
+async function deleteMemberAttributes(tx: Db, bindingId: number) {
+	await tx
+		.delete(schema.attributeValues)
+		.where(
+			and(
+				eq(schema.attributeValues.ownerKind, "cast_member"),
+				eq(schema.attributeValues.ownerId, bindingId)
 			)
-		}
-
-		function relEntry(
-			r: {
-				fromNodeId: number
-				toNodeId: number
-				relationshipType: string
-				description: string
-				visibility: string
-			},
-			nodeMap: Map<
-				number,
-				{ name: string; nodeState: string; nodeVisibility: string }
-			>
-		): Sockets.NarrativeGraph.QueryContext.RelationshipEntry {
-			const from = nodeMap.get(r.fromNodeId)
-			const to = nodeMap.get(r.toNodeId)
-			return {
-				fromNodeId: r.fromNodeId,
-				fromNodeName: from?.name ?? "",
-				fromNodeState: from?.nodeState ?? "active",
-				toNodeId: r.toNodeId,
-				toNodeName: to?.name ?? "",
-				toNodeState: to?.nodeState ?? "active",
-				relationshipType: r.relationshipType,
-				description: r.description,
-				visibility: r.visibility
-			}
-		}
-
-		// ── Layer 1: speaker's outbound relationships ─────────────────────────────
-		const speakerRels = (
-			await db.query.narrativeRelationships.findMany({
-				where: and(
-					eq(schema.narrativeRelationships.lorebookId, lorebookId),
-					castEdgeOnly,
-					eq(schema.narrativeRelationships.fromNodeId, speakerNodeId)
-				)
-			})
-		).filter(isCastEdge)
-
-		const l1NodeIds = [
-			...new Set([
-				...speakerRels.map((r) => r.fromNodeId),
-				...speakerRels.map((r) => r.toNodeId)
-			])
-		]
-		const l1NodeMap = await fetchNodeMap(l1NodeIds)
-
-		res.speakerRelationships = speakerRels
-			.filter(
-				(r) => l1NodeMap.get(r.toNodeId)?.nodeVisibility !== "hidden"
+		)
+	await tx
+		.delete(schema.attributeConfigs)
+		.where(
+			and(
+				eq(schema.attributeConfigs.ownerKind, "cast_member"),
+				eq(schema.attributeConfigs.ownerId, bindingId)
 			)
-			.map((r) => relEntry(r, l1NodeMap))
-
-		// ── Layer 2: inverse rels from session participants → speaker (acknowledged/public only) ──
-		const [sessionChars, sessionPersonas] = await Promise.all([
-			db.query.sessionCharacters.findMany({
-				where: and(
-					eq(schema.sessionCharacters.sessionId, sessionId),
-					isNull(schema.sessionCharacters.removedAt)
-				),
-				columns: { characterId: true }
-			}),
-			db.query.sessionPersonas.findMany({
-				where: and(
-					eq(schema.sessionPersonas.sessionId, sessionId),
-					isNull(schema.sessionPersonas.removedAt)
-				),
-				columns: { personaId: true }
-			})
-		])
-
-		const sessionCharIds = sessionChars
-			.map((c) => c.characterId)
-			.filter(
-				(id): id is number => id !== null && id !== speakerCharacterId
-			)
-		const sessionPersonaIds = sessionPersonas
-			.map((p) => p.personaId)
-			.filter(
-				(id): id is number =>
-					id !== null && id !== (speakerPersonaId ?? -1)
-			)
-
-		if (sessionCharIds.length > 0 || sessionPersonaIds.length > 0) {
-			const participantBindings =
-				await db.query.lorebookBindings.findMany({
-					where: and(
-						eq(schema.lorebookBindings.lorebookId, lorebookId),
-						sql`(
-						${
-							sessionCharIds.length > 0
-								? sql`${schema.lorebookBindings.characterId} IN (${sql.join(
-										sessionCharIds.map((id) => sql`${id}`),
-										sql`, `
-									)})`
-								: sql`false`
-						}
-						OR
-						${
-							sessionPersonaIds.length > 0
-								? sql`${schema.lorebookBindings.characterId} IN (${sql.join(
-										sessionPersonaIds.map(
-											(id) => sql`${id}`
-										),
-										sql`, `
-									)})`
-								: sql`false`
-						}
-					)`
-					),
-					columns: { id: true }
-				})
-
-			// A participant's binding IS their node — no separate lookup
-			// needed (post-merge simplification, see the merge plan).
-			const participantNodeIds = participantBindings
-				.map((b) => b.id)
-				.filter((id) => id !== speakerNodeId)
-
-			if (participantNodeIds.length > 0) {
-				const inverseRels = (
-					await db.query.narrativeRelationships.findMany({
-						where: and(
-							eq(
-								schema.narrativeRelationships.lorebookId,
-								lorebookId
-							),
-							castEdgeOnly,
-							eq(
-								schema.narrativeRelationships.toNodeId,
-								speakerNodeId
-							),
-							inArray(
-								schema.narrativeRelationships.fromNodeId,
-								participantNodeIds
-							),
-							inArray(schema.narrativeRelationships.visibility, [
-								"acknowledged",
-								"public"
-							] as RelationshipVisibility[])
-						)
-					})
-				).filter(isCastEdge)
-
-				const l2NodeIds = [
-					...new Set([
-						...inverseRels.map((r) => r.fromNodeId),
-						...inverseRels.map((r) => r.toNodeId)
-					])
-				]
-				const l2NodeMap = await fetchNodeMap(l2NodeIds)
-				res.inverseRelationships = inverseRels.map((r) =>
-					relEntry(r, l2NodeMap)
-				)
-			}
-		}
-
-		// ── Layer 3: legendary nodes (nodeVisibility="legendary") + public rels ──
-		const legendaryNodes = await db.query.lorebookBindings.findMany({
-			where: and(
-				eq(schema.lorebookBindings.lorebookId, lorebookId),
-				eq(
-					schema.lorebookBindings.nodeVisibility,
-					"legendary" as NodeVisibility
-				)
-			),
-			orderBy: desc(schema.lorebookBindings.updatedAt),
-			limit: 5
-		})
-
-		for (const node of legendaryNodes) {
-			const publicRels = (
-				await db.query.narrativeRelationships.findMany({
-					where: and(
-						eq(
-							schema.narrativeRelationships.lorebookId,
-							lorebookId
-						),
-						castEdgeOnly,
-						eq(schema.narrativeRelationships.fromNodeId, node.id),
-						eq(
-							schema.narrativeRelationships.visibility,
-							"public" as RelationshipVisibility
-						)
-					)
-				})
-			).filter(isCastEdge)
-
-			const l3NodeIds = [
-				...new Set([
-					...publicRels.map((r) => r.fromNodeId),
-					...publicRels.map((r) => r.toNodeId)
-				])
-			]
-			const l3NodeMap = await fetchNodeMap(l3NodeIds)
-			l3NodeMap.set(node.id, {
-				name: node.name,
-				nodeState: node.nodeState,
-				nodeVisibility: "legendary"
-			})
-
-			res.legendaryNodes.push({
-				nodeId: node.id,
-				nodeName: node.name,
-				summary: node.summary,
-				publicRelationships: publicRels.map((r) =>
-					relEntry(r, l3NodeMap)
-				)
-			})
-		}
-
-		emitToUser("narrativeGraph:queryContext", res)
-		return res
-	}
+		)
 }
 
-// narrativeGraphLinkBindingNodeHandler is gone — its entire purpose was
-// reconciling two independently-created rows (a binding and a node) that
-// might not know about each other. That state can't exist once binding IS
-// the row (see the lorebookBindings/narrativeNodes merge plan).
-// NodeLinkerModal.svelte (its UI) is deleted alongside it.
+/** Which of `ids` still exist in `table` — one query per table. */
+async function stillThere(
+	tx: Db,
+	table: any,
+	ids: readonly (number | null | undefined)[]
+): Promise<Set<number>> {
+	const wanted = [
+		...new Set(ids.filter((id): id is number => typeof id === "number"))
+	]
+	if (wanted.length === 0) return new Set()
+	const rows: { id: number }[] = await tx
+		.select({ id: table.id })
+		.from(table)
+		.where(inArray(table.id, wanted))
+	return new Set(rows.map((r) => r.id))
+}
 
-// ─── Link orphaned binding to character/persona ───────────────────────────────
+/**
+ * A snapshotted row made insertable again: no id (it returns under a new one),
+ * and every timestamp revived — a JSON snapshot hands them back as ISO strings,
+ * which a `timestamp` column refuses.
+ */
+function reviveRow(row: Record<string, unknown>): Record<string, any> {
+	const { id: _id, ...rest } = row
+	for (const key of ["createdAt", "updatedAt"])
+		if (typeof rest[key] === "string")
+			rest[key] = new Date(rest[key] as string)
+	return rest
+}
 
-export const narrativeGraphLinkOrphanBindingHandler: Handler<
-	Sockets.NarrativeGraph.LinkOrphanBinding.Params,
-	Sockets.NarrativeGraph.LinkOrphanBinding.Response
-> = {
-	event: "narrativeGraph:linkOrphanBinding",
-	handler: async (socket, params, emitToUser) => {
-		const userId = socket.user!.id
-		const { bindingId, characterId, skip } = params
+/**
+ * Put a cast member's dated story back onto their recreated row.
+ *
+ * What the snapshot names may have gone since the absorb, and the undo must not
+ * fail on it. A row whose LINE is gone (its branch, or its session for a
+ * session-layer attribute) went with that line and is skipped; a row whose
+ * MOMENT is gone (a history entry, a scene) keeps its value and loses the
+ * pointer, exactly as the foreign key's own `SET NULL` would have done.
+ *
+ * Returns how many rows could not be put back.
+ */
+async function restoreMemberStory(
+	tx: Db,
+	story: MemberStory,
+	newBindingId: number
+): Promise<number> {
+	const all = [
+		...story.castAmendments,
+		...story.castPresences,
+		...story.attributeValues,
+		...story.attributeConfigs
+	]
+	if (all.length === 0) return 0
+	const col = (key: string) => all.map((r) => r[key] as number | null)
+	// One after another, not `Promise.all`: these run on the transaction's
+	// one connection either way, and sequential is what keeps it that way.
+	const branches = await stillThere(tx, schema.lorebookBranches, col("branchId"))
+	const historyEntries = await stillThere(
+		tx,
+		schema.lorebookEntries,
+		col("historyEntryId")
+	)
+	const scenes = await stillThere(tx, schema.scenes, col("sceneId"))
+	const sessions = await stillThere(tx, schema.sessions, col("sessionId"))
+	const messages = await stillThere(
+		tx,
+		schema.messages,
+		col("validFromMessageId")
+	)
+	const gone = (set: Set<number>, id: unknown) =>
+		typeof id === "number" && !set.has(id)
+	let skipped = 0
 
-		const binding = await db.query.lorebookBindings.findFirst({
-			where: eq(schema.lorebookBindings.id, bindingId)
-		})
-		if (!binding) throw new Error("Binding not found.")
-		const lorebookForOrphan = await db.query.lorebooks.findFirst({
-			where: and(
-				eq(schema.lorebooks.id, binding.lorebookId),
-				eq(schema.lorebooks.userId, userId)
-			)
-		})
-		if (!lorebookForOrphan) throw new Error("Access denied.")
-
-		if (!skip && characterId) {
-			// Without this, an attacker could link an orphaned/self-created
-			// binding to a guessed characterId belonging to a user
-			// who never shared it with them at all — syncLorebookBindings*
-			// below would then immediately copy that victim's private
-			// name/nickname/aliases onto the attacker's own binding. Mirrors
-			// the exact check lorebooks.ts's createLorebookBindingHandler/
-			// updateLorebookBindingHandler already require before accepting
-			// the field.
-			if (!(await verifyBindingTargetAccess({ characterId }, userId))) {
-				throw new Error("Access denied.")
-			}
-
-			await db
-				.update(schema.lorebookBindings)
-				.set({ characterId })
-				.where(eq(schema.lorebookBindings.id, bindingId))
-
-			// Attach-time sync (decision 2) — pull in the newly-attached
-			// entity's name/aliases immediately rather than waiting for an
-			// unrelated future edit to it.
-			await syncLorebookBindingsForCharacter(characterId)
-		}
-
-		const res: Sockets.NarrativeGraph.LinkOrphanBinding.Response = {
-			success: true
-		}
-		emitToUser("narrativeGraph:linkOrphanBinding", res)
-		return res
+	/**
+	 * `branchIsKeyed`: amendments and presences key `branch_id` to
+	 * `lorebook_branches`; attribute rows hold it as a plain int with no key
+	 * (the column predates the table), so a missing branch cannot fail their
+	 * insert and is not a reason to drop them.
+	 */
+	const revive = (row: Record<string, unknown>, branchIsKeyed: boolean) => {
+		if (branchIsKeyed && gone(branches, row.branchId)) return null
+		if (gone(sessions, row.sessionId)) return null
+		if (gone(messages, row.validFromMessageId)) return null
+		const out = reviveRow(row)
+		if (gone(historyEntries, row.historyEntryId)) out.historyEntryId = null
+		if ("sceneId" in out && gone(scenes, row.sceneId)) out.sceneId = null
+		return out
 	}
+
+	for (const row of story.castAmendments) {
+		const values = revive(row, true)
+		if (!values) {
+			skipped++
+			continue
+		}
+		await tx
+			.insert(schema.castAmendments)
+			.values({ ...values, lorebookBindingId: newBindingId } as any)
+	}
+	for (const row of story.castPresences) {
+		const values = revive(row, true)
+		if (!values) {
+			skipped++
+			continue
+		}
+		await tx
+			.insert(schema.castPresences)
+			.values({ ...values, lorebookBindingId: newBindingId } as any)
+	}
+	for (const row of story.attributeValues) {
+		const values = revive(row, false)
+		if (!values) {
+			skipped++
+			continue
+		}
+		await tx
+			.insert(schema.attributeValues)
+			.values({ ...values, ownerId: newBindingId } as any)
+	}
+	for (const row of story.attributeConfigs) {
+		const values = revive(row, false)
+		if (!values) {
+			skipped++
+			continue
+		}
+		await tx
+			.insert(schema.attributeConfigs)
+			.values({ ...values, ownerId: newBindingId } as any)
+	}
+	return skipped
 }
 
 // ─── Merge Node ───────────────────────────────────────────────────────────────
@@ -3047,6 +2990,12 @@ export const narrativeGraphMergeNodeHandler: Handler<
 					continue
 				}
 
+				// A duplicate is the SAME dated state on the SAME line: same
+				// ends, same type, same branch, same history entry. Two versions
+				// filed at different dates, or on different lines, are two
+				// records, not one said twice — collapsing them loses a dated
+				// version of the link (and the tie-break below goes by row id,
+				// the later-written, never a history entry's id read as a date).
 				const duplicate = survivorRels.find(
 					(r) =>
 						r.id !== rel.id &&
@@ -3054,16 +3003,17 @@ export const narrativeGraphMergeNodeHandler: Handler<
 						r.toNodeId === newToNodeId &&
 						r.fromEntryId === rel.fromEntryId &&
 						r.toEntryId === rel.toEntryId &&
-						r.relationshipType === rel.relationshipType
+						r.relationshipType === rel.relationshipType &&
+						(r.branchId ?? null) === (rel.branchId ?? null) &&
+						(r.historyEntryId ?? null) === (rel.historyEntryId ?? null)
 				)
 				if (duplicate) {
-					// Keep whichever is more complete/recent; delete the other.
+					// Keep the more complete one; on a tie, the later-written.
 					const relIsBetter =
 						rel.description.length > duplicate.description.length ||
 						(rel.description.length ===
 							duplicate.description.length &&
-							(rel.historyEntryId ?? 0) >
-								(duplicate.historyEntryId ?? 0))
+							rel.id > duplicate.id)
 					const toDelete = relIsBetter ? duplicate : rel
 					const toKeep = relIsBetter ? rel : duplicate
 					deletedRelationships.push({ ...toDelete })
@@ -3252,6 +3202,19 @@ export const narrativeGraphMergeNodeHandler: Handler<
 				})
 				.where(eq(schema.lorebookBindings.id, survivorId))
 
+			// 7.5. The absorbed member's own dated story — their amendments,
+			// presences and attribute rows. The first two cascade with the row
+			// below and the attribute rows have no key to cascade on, so all of
+			// it is snapshotted into the log first; undo puts it back onto the
+			// recreated row. Left on the absorbed member, not moved onto the
+			// survivor: two members' dated overlays can collide on one date,
+			// and which one wins is not a merge's call to make.
+			absorbedSnapshot[MEMBER_STORY_KEY] = await snapshotMemberStory(
+				tx,
+				absorbedId
+			)
+			await deleteMemberAttributes(tx, absorbedId)
+
 			// 8. Delete the absorbed row.
 			await tx
 				.delete(schema.lorebookBindings)
@@ -3331,7 +3294,7 @@ export const narrativeGraphUndoMergeHandler: Handler<
 		}
 		const survivorId = log.survivorId
 
-		const restoredNode = await db.transaction(async (tx) => {
+		const restored = await db.transaction(async (tx) => {
 			const snapshot = log.absorbedSnapshot as Record<string, unknown>
 			const oldAbsorbedId = snapshot.id as number
 			const {
@@ -3355,6 +3318,10 @@ export const narrativeGraphUndoMergeHandler: Handler<
 				// it.
 				vectorizedAt: _oldVectorizedAt,
 				embeddingModel: _oldEmbeddingModel,
+				// Not a column: the member's dated story, restored below once
+				// the row has its new id. Absent from logs written before it
+				// was recorded, which restore nothing for it.
+				[MEMBER_STORY_KEY]: memberStory,
 				...rest
 			} = snapshot
 
@@ -3394,10 +3361,62 @@ export const narrativeGraphUndoMergeHandler: Handler<
 
 			// Re-insert relationships deleted outright (self-loops, or the
 			// losing side of a third-party dedup).
-			for (const deletedRel of log.deletedRelationships as Record<
+			//
+			// ⚠ Not a no-op against a world that moved on. Anything a
+			// snapshotted link names may have been deleted since the merge — an
+			// entry at one end, the other cast member, its branch — and one
+			// such row must not fail the insert and with it the WHOLE undo. So
+			// the ends are checked first: a link whose end or line is gone is
+			// skipped and counted (it went with that end), and a link whose
+			// history entry or scene is gone keeps itself and loses the pointer,
+			// as the foreign key's own `SET NULL` would have done.
+			const deletedRels = log.deletedRelationships as Record<
 				string,
 				unknown
-			>[]) {
+			>[]
+			const remapped = deletedRels.map((r) => ({
+				row: r,
+				fromNodeId: remapId((r.fromNodeId ?? null) as number | null),
+				toNodeId: remapId((r.toNodeId ?? null) as number | null)
+			}))
+			const nodesLeft = await stillThere(
+				tx,
+				schema.lorebookBindings,
+				remapped.flatMap((r) => [r.fromNodeId, r.toNodeId])
+			)
+			const entriesLeft = await stillThere(
+				tx,
+				schema.lorebookEntries,
+				deletedRels.flatMap((r) => [
+					r.fromEntryId as number | null,
+					r.toEntryId as number | null,
+					r.historyEntryId as number | null
+				])
+			)
+			const scenesLeft = await stillThere(
+				tx,
+				schema.scenes,
+				deletedRels.map((r) => r.sceneId as number | null)
+			)
+			const branchesLeft = await stillThere(
+				tx,
+				schema.lorebookBranches,
+				deletedRels.map((r) => r.branchId as number | null)
+			)
+			const missing = (set: Set<number>, id: unknown) =>
+				typeof id === "number" && !set.has(id)
+			let unrestoredLinkCount = 0
+			for (const { row, fromNodeId, toNodeId } of remapped) {
+				if (
+					missing(nodesLeft, fromNodeId) ||
+					missing(nodesLeft, toNodeId) ||
+					missing(entriesLeft, row.fromEntryId) ||
+					missing(entriesLeft, row.toEntryId) ||
+					missing(branchesLeft, row.branchId)
+				) {
+					unrestoredLinkCount++
+					continue
+				}
 				const {
 					id: _oldRelId,
 					createdAt: relCreatedAt,
@@ -3409,20 +3428,31 @@ export const narrativeGraphUndoMergeHandler: Handler<
 					vectorizedAt: _relVectorizedAt,
 					embeddingModel: _relEmbeddingModel,
 					...relRest
-				} = deletedRel
+				} = row
 				await tx.insert(schema.narrativeRelationships).values({
 					...(relRest as typeof schema.narrativeRelationships.$inferInsert),
-					fromNodeId: remapId(
-						(relRest.fromNodeId ?? null) as number | null
-					),
-					toNodeId: remapId(
-						(relRest.toNodeId ?? null) as number | null
-					),
+					fromNodeId,
+					toNodeId,
+					historyEntryId: missing(entriesLeft, row.historyEntryId)
+						? null
+						: ((row.historyEntryId ?? null) as number | null),
+					sceneId: missing(scenesLeft, row.sceneId)
+						? null
+						: ((row.sceneId ?? null) as number | null),
 					createdAt: relCreatedAt
 						? new Date(relCreatedAt as string)
 						: new Date()
 				})
 			}
+
+			// The member's own dated story, back onto the recreated row.
+			const unrestoredStoryCount = memberStory
+				? await restoreMemberStory(
+						tx,
+						memberStory as MemberStory,
+						inserted.id
+					)
+				: 0
 
 			// Restore scene cast to its recorded pre-merge value (remapped onto
 			// the recreated row's new id). The snapshot format is unchanged —
@@ -3438,12 +3468,30 @@ export const narrativeGraphUndoMergeHandler: Handler<
 			// would be work whose only effect is to look like an answer.
 			// `sceneSnapshots.mentionedCharacters` stays in the log as the
 			// frozen record of what the merge saw.
+			//
+			// A scene deleted since is skipped, and a cast member deleted since
+			// is left out of the list — either would fail the insert and take
+			// the whole undo with it.
+			const snapScenesLeft = await stillThere(
+				tx,
+				schema.scenes,
+				log.sceneSnapshots.map((s) => s.sceneId)
+			)
+			const castLeft = await stillThere(
+				tx,
+				schema.lorebookBindings,
+				log.sceneSnapshots.flatMap((s) =>
+					s.participantCharacters.map(remapId)
+				)
+			)
 			for (const sceneSnap of log.sceneSnapshots) {
+				if (!snapScenesLeft.has(sceneSnap.sceneId)) continue
 				await writeSceneCast(
 					sceneSnap.sceneId,
 					{
-						participantCharacters:
-							sceneSnap.participantCharacters.map(remapId)
+						participantCharacters: sceneSnap.participantCharacters
+							.map(remapId)
+							.filter((id) => castLeft.has(id))
 					},
 					tx
 				)
@@ -3500,11 +3548,17 @@ export const narrativeGraphUndoMergeHandler: Handler<
 				.delete(schema.bindingMergeLogs)
 				.where(eq(schema.bindingMergeLogs.id, mergeLogId))
 
-			return inserted
+			return {
+				inserted,
+				unrestoredLinkCount,
+				unrestoredStoryCount
+			}
 		})
 
 		const res: Sockets.NarrativeGraph.UndoMerge.Response = {
-			restoredNode
+			restoredNode: restored.inserted,
+			unrestoredLinkCount: restored.unrestoredLinkCount,
+			unrestoredStoryCount: restored.unrestoredStoryCount
 		}
 		emitToUser("narrativeGraph:undoMerge", res)
 
@@ -3656,9 +3710,6 @@ export function registerNarrativeGraphHandlers(
 	register(socket, narrativeGraphUpdateRelationshipHandler, emitToUser)
 	register(socket, narrativeGraphDeleteRelationshipHandler, emitToUser)
 	register(socket, narrativeGraphCreateRelationshipHandler, emitToUser)
-	register(socket, narrativeGraphCreateNodeHandler, emitToUser)
-	register(socket, narrativeGraphQueryContextHandler, emitToUser)
-	register(socket, narrativeGraphLinkOrphanBindingHandler, emitToUser)
 	register(socket, narrativeGraphMergeNodeHandler, emitToUser)
 	register(socket, narrativeGraphUndoMergeHandler, emitToUser)
 	register(socket, narrativeGraphListMergeLogsHandler, emitToUser)

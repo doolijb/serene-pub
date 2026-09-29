@@ -83,6 +83,17 @@ export interface PluginDescriptor {
 	secretNonce?: string
 	/** The secret keys the plugin lends to its nodes in other packages' pipelines (`lend: true`). */
 	lentSecrets?: string[]
+	/**
+	 * The resolution for each user who has set a user-scoped setting of their
+	 * own (`scope: 'user'`), keyed by the user id as text — the spelling a
+	 * call's `user` has. A call acting for one of them reads these in place of
+	 * `settings` / `secrets` (user → instance → default, `settingsHost.ts`);
+	 * a call for anyone else, or for no one, reads the instance's.
+	 */
+	settingsByUser?: Record<
+		string,
+		{ settings: Record<string, unknown>; secrets?: Record<string, string> }
+	>
 }
 
 export interface CallOptions {
@@ -98,7 +109,11 @@ export interface CallOptions {
 	/** What `ctx.now()` answers; defaults to the wall clock at dispatch. */
 	nowMs?: number
 	maxOutputBytes?: number
-	/** Who triggered this (a user/session), for the log and the live monitor. */
+	/**
+	 * Who triggered this — the user id as text — for the log and the live
+	 * monitor, and the user whose own settings the hook reads
+	 * (`PluginDescriptor.settingsByUser`).
+	 */
 	user?: string
 	/** The pipeline run this hook fired within, if any — the log's soft link. */
 	runId?: string
@@ -332,6 +347,16 @@ export class SandboxManager {
 			)
 		this.descriptors.set(desc.id, { ...desc })
 		if (this.isStale(desc)) this.refresh(desc.id)
+	}
+
+	/** Whether a plugin is registered — switched on, and not a `core` row. */
+	isRegistered(pluginId: string): boolean {
+		return this.descriptors.has(pluginId)
+	}
+
+	/** Every registered plugin's id, in registration order. */
+	registeredIds(): string[] {
+		return [...this.descriptors.keys()]
 	}
 
 	unregister(pluginId: string): void {
@@ -876,6 +901,13 @@ export class SandboxManager {
 			)
 		)
 
+		// The settings this call reads: the acting user's own resolution when
+		// they have one, the instance's otherwise. Picked from the descriptor
+		// resolved *now*, like the grants.
+		const own = opts.user ? desc.settingsByUser?.[opts.user] : undefined
+		const callSettings = own ? own.settings : desc.settings
+		const callSecrets = own ? own.secrets : desc.secrets
+
 		let result: HookRunResult
 		try {
 			const invoked = sandbox.invoke(
@@ -886,8 +918,8 @@ export class SandboxManager {
 					// the descriptor resolved *now* — same staleness rule as
 					// the grants above. Only when the manifest declares a
 					// schema, so a settings-free plugin's input is unchanged.
-					input: desc.settings
-						? { ...input, settings: desc.settings }
+					input: callSettings
+						? { ...input, settings: callSettings }
 						: input,
 					timeoutMs: opts.timeoutMs,
 					seedLabel:
@@ -898,7 +930,10 @@ export class SandboxManager {
 					// For the fetch bridge alone, host-side (R63): everything
 					// for the plugin's own work, only what it lends when its
 					// node runs in another package's pipeline.
-					secrets: secretsForCall(desc, !!opts.foreignPipeline),
+					secrets: secretsForCall(
+						{ ...desc, secrets: callSecrets },
+						!!opts.foreignPipeline
+					),
 					// The address `abortCall`/`killCall` stop this call by. The
 					// call id is already the manager's handle for it, and the
 					// live monitor's — one name for one call, end to end.
@@ -971,7 +1006,7 @@ export class SandboxManager {
 		// that printed one — has every one of this plugin's secret values (and
 		// every handle) replaced before it reaches storage, a node, an event, a
 		// log or a receipt. Before the row commit, so no value is persisted.
-		result = scrubSecrets(result, desc.secrets)
+		result = scrubSecrets(result, callSecrets)
 		if (result.ok && result.rowChanges?.length && this.rows) {
 			try {
 				await this.rows.commit(desc.id, result.rowChanges)

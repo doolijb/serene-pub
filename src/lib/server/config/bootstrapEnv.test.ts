@@ -70,12 +70,18 @@ describe("buildStartupBanner", () => {
 		expect(banner).toContain("(from PUBLIC_URL)")
 	})
 
-	test("tells the operator their proxy must route /socket.io/ when same-origin", async () => {
-		process.env.PUBLIC_URL = "https://tunnel.example.com"
-		const { buildStartupBanner } = await load()
-		const banner = buildStartupBanner().join("\n")
-		expect(banner).toContain("Socket URL:  https://tunnel.example.com")
-		expect(banner).toContain("must route /socket.io/ to port 3001")
+	// Socket.IO shares the app's own listener (no SOCKETS_PORT since
+	// 2026-08-29), so the banner must not advertise a second socket address —
+	// it printed a stale `Socket URL: http://localhost:3001` for months.
+	test("advertises no separate socket URL or port", async () => {
+		for (const publicUrl of [undefined, "https://tunnel.example.com"]) {
+			if (publicUrl) process.env.PUBLIC_URL = publicUrl
+			vi.resetModules()
+			const { buildStartupBanner } = await load()
+			const banner = buildStartupBanner().join("\n")
+			expect(banner).not.toContain("Socket URL")
+			expect(banner).not.toContain("3001")
+		}
 	})
 
 	test("reports the default trust rule when TRUSTED_PROXIES is unset", async () => {
@@ -141,7 +147,12 @@ describe("buildLegacyMigrationNotice", () => {
 		expect(notice).toContain("SOCKETS_HTTP_MODE")
 		expect(notice).toContain("SERENE_PUB_SECURE_COOKIES")
 		expect(notice).toContain("PUBLIC_SOCKETS_ENDPOINT")
-		expect(notice).toContain("SOCKETS_ENDPOINT=<same value>")
+		expect(notice).toContain("no longer needed")
+		// The retired SOCKETS_ENDPOINT is never offered as the replacement.
+		expect(notice).not.toContain("-> SOCKETS_ENDPOINT")
+		// It is read no longer, so the notice never claims it still works.
+		expect(notice).toContain("PUBLIC_SOCKETS_ENDPOINT=https://s.example.com (ignored)")
+		expect(notice).not.toContain("They still work")
 	})
 
 	test("says nothing is broken — these still work", async () => {

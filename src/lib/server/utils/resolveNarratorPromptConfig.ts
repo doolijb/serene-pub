@@ -9,7 +9,7 @@ import { getUserConfigurations } from "./getUserConfigurations"
  * see resolveTaskConfig.ts's session-level sampling override, the only other
  * one: a session names no connection).
  *
- * Shared by generateResponse.ts (actual generation), triggerNarratorResponseHandler
+ * Shared by generateResponse.ts (actual generation), fireNarratorResponseHandler
  * (stamping the display name onto a new message), and the
  * sessions:getNarratorName handler (previewing the name before triggering).
  */

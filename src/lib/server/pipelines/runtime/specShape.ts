@@ -3,32 +3,23 @@
  *
  * Every reply runs end to end now — one road (09-B B4, R-17): the spec creates
  * its own row at a placeholder outlet, its oracles run, and its last outlet
- * fills the row. What this module still decides is which oracle's stream is
- * the reply's prose, because a run has ONE live row and several oracles may
- * run before the write.
+ * fills the row. What this module reads off the document is which oracle's
+ * stream is the reply's prose — declared by the spec, because a run has ONE
+ * live row and several oracles may run before the write — and what each
+ * step says while it runs.
  *
- * ⚠ **An oracle inside a clause does not count** as a stage, and that is
- * deliberate rather than incidental: `core:spec/respond` puts its two `embed`
- * oracles inside gather clauses precisely so the preview does not halt on
- * them (see the note on its `names` block).
+ * ⚠ **An oracle inside a clause is not on the spine** (`spineProviders`, what
+ * the preview halt and the step count read), and that is deliberate:
+ * `core:spec/respond` puts its two `embed` oracles inside gather clauses
+ * precisely so the preview does not halt on them (see the note on its
+ * `names` block). It says nothing about streaming, which is declared.
  */
 
-import type { SpecDocument } from "@serene-pub/sdk"
+import { localeMapOf, type SpecDocument, type StatusText } from "@serene-pub/sdk"
 
 type Node = SpecDocument["nodes"][number]
 
-/**
- * The outlets that write a message's text — the one that FILLS the row first,
- * then the one that creates it complete. A spec with both (the reply's
- * placeholder → update pair) streams to the update's oracle; a spec with only
- * a create (an image post, the echo) streams to the create's.
- */
-const MESSAGE_CONSUMERS = [
-	"core:outlet/update-message",
-	"core:outlet/create-message"
-]
-
-/** The generating stages the executor's preview halt can see, in document order. */
+/** The generating steps the executor's preview halt can see, in document order. */
 export function spineProviders(doc: SpecDocument): Node[] {
 	return doc.nodes
 		.filter((n) => !n.clauseId && n.kind === "oracle")
@@ -36,60 +27,49 @@ export function spineProviders(doc: SpecDocument): Node[] {
 }
 
 /**
- * The stage whose tokens are the reply's prose, when the document names one.
+ * The steps whose tokens are the reply's prose — the ones the spec DECLARES
+ * (`expose: { stream: true }`; lair pass B3, owner D6, 2026-09-27).
  *
- * A run has ONE live row, so every Provider in a multi-stage spec would stream
- * into the same place. Most of them must not: a planner emits JSON, a
- * state-keeper emits JSON, and several voices generating in parallel would
- * interleave into nonsense. So exactly one node is allowed to stream, chosen
- * here — and core routes the stream (R-21 (2)), never the oracle, which stays
- * blind to messages.
+ * A run has ONE live row, so every oracle in a multi-step spec would stream
+ * into the same place, and most must not: a planner and a keeper answer in
+ * JSON, and voices generating in parallel would interleave. At most one may
+ * stream on any execution path, and core routes it (R-21 (2)) — the oracle
+ * stays blind to messages. A set, not one key (W2, 2026-09-27): steps in
+ * mutually exclusive branches of one junction may each be declared — the
+ * Writing Room's manuscript and talk — and whichever branch runs streams;
+ * `validate()` proves no two in the set can run in one execution.
  *
- * It is the spine Provider NEAREST the message-writing outlet along the data
- * edges — nearest, not earliest. Every stage is an ancestor of the reply in a
- * pipeline that plans before it narrates (the planner's JSON feeds the
- * narrator's context), so "the earliest ancestor" is the planner, which is the
- * one answer that is always wrong. Distance is what separates "produced the
- * prose" from "informed whoever did".
+ * ⚠ **Declared, never inferred.** The rule this replaced walked back from the
+ * write to the nearest SPINE oracle, and skipped anything inside a clause —
+ * so the Lair, whose narrator sits in the `turn` junction, streamed its
+ * planner's JSON into the reply and never streamed the narrator at all (F3).
+ * `validate()` refuses the declarations that can never be right: a JSON
+ * step, a second one on the same path, one inside an each or a loop.
  *
- * Explicit edges only — the implicit chain edge is execution order, not a data
- * path, and following it would make every node an ancestor of every later one.
- *
- * Undefined when nothing qualifies, and that is a legitimate answer: the run
- * then reports its stages and the reply lands when it is assembled.
+ * Empty when nothing is declared, and that is a legitimate answer: the
+ * run then shows its step statuses and the reply lands when it is written.
  */
-export function narratingProvider(doc: SpecDocument): string | undefined {
-	const consumer = MESSAGE_CONSUMERS.map(
-		(definitionId) =>
-			doc.nodes
-				.filter((n) => n.definitionId.startsWith(definitionId))
-				.sort((a, b) => a.position - b.position)[0]
-	).find((n) => n !== undefined)
-	if (!consumer) return undefined
+export function streamingSteps(doc: SpecDocument): ReadonlySet<string> {
+	return new Set(
+		doc.nodes
+			.filter((n) => n.kind === "oracle" && n.expose?.stream === true)
+			.map((n) => n.key)
+	)
+}
 
-	const byKey = new Map(doc.nodes.map((n) => [n.key, n]))
-	const seen = new Set<string>([consumer.key])
-	let frontier = [consumer.key]
-	while (frontier.length) {
-		const next: string[] = []
-		for (const to of frontier)
-			for (const edge of doc.edges) {
-				if (edge.implicit || edge.to !== to || seen.has(edge.from))
-					continue
-				seen.add(edge.from)
-				next.push(edge.from)
-			}
-		// The whole level at once, so "nearest" is decided before "earliest":
-		// a tie inside one level falls back to document order, which is the
-		// only ordering a document gives two independent stages.
-		const found = next
-			.map((key) => byKey.get(key))
-			.filter(
-				(n): n is Node => !!n && !n.clauseId && n.kind === "oracle"
-			)
-			.sort((a, b) => a.position - b.position)[0]
-		if (found) return found.key
-		frontier = next
-	}
-	return undefined
+/**
+ * Each node's declared **step status** (`expose.status`; lair pass B18,
+ * owner D5) — *Planning the turn* — as the status the relay shows while that
+ * node runs. Only declared nodes are here; a node without one keeps saying
+ * whatever its own handler says.
+ */
+export function stepStatuses(doc: SpecDocument): ReadonlyMap<string, StatusText> {
+	const out = new Map<string, StatusText>()
+	for (const n of doc.nodes)
+		// As a locale map — the spelling every handler's status arrives in —
+		// so a declaration equal to what the node would have said anyway is
+		// the SAME status, and the relay does not show it twice.
+		if (n.expose?.status !== undefined)
+			out.set(n.key, { i18n: localeMapOf(n.expose.status) })
+	return out
 }

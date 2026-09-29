@@ -20,9 +20,9 @@
  *
  * One object per run, created by `runSpec` and handed to the host through the
  * scope. It never decides which row is live — the executor says — and it never
- * decides which oracle streams: `narratingProvider` reads that off the document
- * once, because a multi-stage spec's planner and keeper must not write JSON
- * into the row the narrator is filling.
+ * decides which oracle streams: the spec declares it (`expose.stream`, read by
+ * `streamingSteps` once — lair pass B3), because a multi-step spec's planner
+ * and keeper must not write JSON into the row the narrator is filling.
  *
  * ## Fences
  *
@@ -78,11 +78,12 @@ export interface LiveRowOptions {
 	 */
 	userId?: number
 	/**
-	 * The one oracle whose stream is the reply's prose — see
-	 * `narratingProvider`. Undefined streams nothing: the row fills when the
-	 * write lands.
+	 * The oracles whose stream is the reply's prose, as the spec declared
+	 * them — see `streamingSteps`. At most one of them runs in any execution
+	 * (W2: exclusive junction branches), so whichever runs streams. Absent or
+	 * empty streams nothing: the row fills when the write lands.
 	 */
-	streamingNode?: string
+	streamingNodes?: ReadonlySet<string>
 }
 
 /** The callbacks an oracle's dispatch streams into, when this call streams. */
@@ -94,10 +95,10 @@ export interface LiveStream {
 export interface LiveRow {
 	/** The row this run is filling, once its placeholder committed. */
 	readonly id: number | undefined
-	/** The text streamed so far, joined onto the prefill a continue started from. */
+	/** The text streamed so far, joined onto the prefill an extend started from. */
 	readonly text: string
 	/**
-	 * What the row held when the placeholder claimed it — a continue's
+	 * What the row held when the placeholder claimed it — an extend's
 	 * partial, empty otherwise. The final write joins onto THIS, never onto
 	 * the row's current text, which the stream has been rewriting.
 	 */
@@ -279,7 +280,7 @@ export function createLiveRow(opts: LiveRowOptions): LiveRow {
 			)
 		},
 		attach(row, nodeKey) {
-			if (typeof row !== "number" || nodeKey !== opts.streamingNode)
+			if (typeof row !== "number" || !opts.streamingNodes?.has(nodeKey))
 				return undefined
 			if (id === undefined) id = row
 			return {
@@ -328,7 +329,10 @@ export function createLiveRow(opts: LiveRowOptions): LiveRow {
 						new ComposedError(
 							end.reason ?? "the turn produced no reply"
 						),
-					queueItemId ?? undefined
+					{
+						queueItemId: queueItemId ?? undefined,
+						userId: opts.userId
+					}
 				)
 				return
 			}

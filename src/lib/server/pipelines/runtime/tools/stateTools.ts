@@ -31,7 +31,8 @@ import {
 	type CoreTool,
 	type ToolContext
 } from "$lib/server/pipelines/runtime/tools"
-import { getAttributeSlot, attributeSlots } from "@serene-pub/sdk"
+import { slotKey } from "$lib/server/state/keys"
+import { inventoryChange } from "$lib/server/state/inventory"
 
 /** A cast row as `session_cast` hands it over. */
 const castName = (row: any): string =>
@@ -52,7 +53,7 @@ const same = (a: string, b: string) =>
 export async function ownerFor(
 	ctx: ToolContext,
 	who: string
-): Promise<{ kind: "session" | "session_cast"; id: number }> {
+): Promise<{ kind: "session" | "session_cast" | "session_location"; id: number }> {
 	// The world owner: what nobody is carrying, and where weather lives.
 	if (!who || same(who, "world") || same(who, "the world")) {
 		if (!ctx.sessionId)
@@ -84,39 +85,62 @@ export async function ownerFor(
 		same(castName(r), who)
 	)
 	const id = match?.character?.id ?? match?.id
-	if (typeof id !== "number")
-		throw new ToolError(
-			`there is nobody called '${who}' in this scene. Use the name as it appears in the conversation, or 'world'.`
-		)
-	return { kind: "session_cast", id }
+	if (typeof id === "number") return { kind: "session_cast", id }
+	// 🚧 A place (attributes phase 4): a location of the session's world holds
+	// state too — "the key is left in the crypt". Asked after the cast, so a
+	// character and a place sharing a name resolve to the character.
+	const place = ctx.sessionId ? await locationNamed(ctx.sessionId, who) : null
+	if (place !== null) return { kind: "session_location", id: place }
+	throw new ToolError(
+		`there is nobody called '${who}' in this scene, and no place by that name. Use the name as it appears in the conversation or the lorebook, or 'world'.`
+	)
+}
+
+/** The entry id of the session's location called `name`, or null. */
+async function locationNamed(sessionId: number, name: string): Promise<number | null> {
+	// Dynamic, as `bindings.state.ts` reads the database: this module is
+	// loaded by the tool registry, which must not open the database to load.
+	const { db } = await import("$lib/server/db")
+	const { sessionLinks } = await import("$lib/server/state/resolve")
+	const { locations } = await sessionLinks(db, sessionId)
+	return locations.find((l) => same(l.name, name))?.entryId ?? null
 }
 
 /**
- * The slot a model named, matched on its declared local name or its full id.
+ * The slot a model named, matched on its declared local name or its full id —
+ * **within the session's own vocabulary**, `tracked` (`trackedSlotIds`).
+ *
+ * ⚠ Not the whole declaration registry. That registry is global — a genre
+ * declaring weather declares it for the process — so matching against it put
+ * a value on a session that does not track the slot, and the refusal told the
+ * model "This session tracks:" followed by every slot any genre declared. A
+ * session of a genre this process does not hold tracks nothing
+ * (`vocabularyFor` fails closed), and every name is then refused.
  *
  * Exported on the same terms as `ownerFor` above, and for the same reason.
  */
-export function slotFor(named: string): string {
-	if (getAttributeSlot(named)) return named
+export function slotFor(named: string, tracked: readonly string[]): string {
+	const exact = tracked.find((id) => id === named.trim())
+	if (exact) return exact
 	const bare = named.trim().toLowerCase()
-	const found = attributeSlots().find(
-		(d) =>
-			d.id
-				.replace(/^.*:slot\//, "")
-				.replace(/@\d+$/, "")
-				.toLowerCase() === bare
-	)
+	const found = tracked.find((id) => slotKey(id).toLowerCase() === bare)
 	if (!found)
 		throw new ToolError(
 			`there is no '${named}' to set here. This session tracks: ${
-				attributeSlots()
-					.map((d) =>
-						d.id.replace(/^.*:slot\//, "").replace(/@\d+$/, "")
-					)
-					.join(", ") || "nothing"
+				tracked.map(slotKey).join(", ") || "nothing"
 			}.`
 		)
-	return found.id
+	return found
+}
+
+/** The slot ids `sessionId` tracks — its vocabulary, what `slotFor` matches. */
+export async function trackedSlotIds(sessionId: number): Promise<string[]> {
+	// Dynamic, as `locationNamed` above: the tool registry loads this module
+	// and must not open the database to do it.
+	const { db } = await import("$lib/server/db")
+	const { vocabularyFor } = await import("$lib/server/state/resolve")
+	const vocabulary = await vocabularyFor(db, sessionId)
+	return vocabulary.entries.map((e) => e.decl.id)
 }
 
 const ask = async (ctx: ToolContext, change: unknown): Promise<number> => {
@@ -156,7 +180,12 @@ export const setState: CoreTool = {
 			ctx,
 			strArg(args, "owner", "who", "target")
 		)
-		const slotId = slotFor(strArg(args, "slot", "stat", "name", "field"))
+		if (!ctx.sessionId)
+			throw new ToolError("there is no session to change state in.")
+		const slotId = slotFor(
+			strArg(args, "slot", "stat", "name", "field"),
+			await trackedSlotIds(ctx.sessionId)
+		)
 		const raw = (args as Record<string, unknown>).value
 		const value =
 			typeof raw === "number" ||
@@ -177,7 +206,7 @@ export const setState: CoreTool = {
 export const giveItem: CoreTool = {
 	name: "give_item",
 	description:
-		"Ask to give a lorebook entry to somebody as an item they are carrying. Use search_entries to find the item's id first. The player approves it before it takes effect.",
+		"Ask to add a lorebook entry to somebody's inventory, as an item they are carrying. Use search_entries to find the item's id first. The player approves it before it takes effect.",
 	parameters: {
 		type: "object",
 		properties: {
@@ -206,7 +235,7 @@ export const giveItem: CoreTool = {
 export const takeItem: CoreTool = {
 	name: "take_item",
 	description:
-		"Ask to take an item away from somebody. Use search_entries to find the item's id first. The player approves it before it takes effect.",
+		"Ask to remove an item from somebody's inventory. Use search_entries to find the item's id first. The player approves it before it takes effect.",
 	parameters: {
 		type: "object",
 		properties: {
@@ -231,6 +260,11 @@ export const takeItem: CoreTool = {
 	}
 }
 
+/**
+ * An item moving, as a list change on the owner's `inventory` stat (phase 3b:
+ * the possession edges these tools once wrote are retired). `quantity` is the
+ * held count added or removed — a remove below one drops the item.
+ */
 async function moveItem(
 	args: Record<string, unknown>,
 	ctx: ToolContext,
@@ -245,11 +279,11 @@ async function moveItem(
 		)
 	const asked = Number(strArg(args, "quantity", "count", "amount")) || 1
 	const delta = sign * Math.max(1, Math.trunc(Math.abs(asked)))
-	const id = await ask(ctx, { owner, entryId, delta })
+	const id = await ask(ctx, inventoryChange(owner, entryId, delta))
 	return {
 		proposalId: id,
 		status: "proposed",
-		message: `Asked to ${verb} ${Math.abs(delta)} of entry ${entryId}. It is waiting for the player to accept it.`
+		message: `Asked to ${verb === "give" ? "add" : "remove"} ${Math.abs(delta)} of entry ${entryId} ${verb === "give" ? "to" : "from"} their inventory. It is waiting for the player to accept it.`
 	}
 }
 

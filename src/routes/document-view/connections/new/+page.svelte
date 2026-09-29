@@ -29,8 +29,8 @@
 	const formatOptions = completionTemplateOptions()
 	let userCtx: UserCtx = getContext("userCtx")
 
-	// KoboldCPP Manager connections — text and image both — are created from
-	// the KoboldCPP Manager page, not this generic form; see
+	// Connections of KoboldCPP, run by Serene Pub — text and image both — are
+	// created from its own page, not this generic form; see
 	// /document-view/koboldcpp.
 	const typeOptions = CONNECTION_TYPE.options.filter(
 		(o) => !isKoboldCppManagedType(o.value)
@@ -146,10 +146,10 @@
 </script>
 
 <svelte:head>
-	<title>New Connection — Document View — Serene Pub</title>
+	<title>New connection — Document View — Serene Pub</title>
 </svelte:head>
 
-<h1>New Connection</h1>
+<h1>New connection</h1>
 <p><a href="/document-view/connections">Back to Connections</a></p>
 
 {#if !userCtx.user?.isAdmin}
@@ -163,7 +163,7 @@
 
 	<form onsubmit={submit}>
 		<div class="a11y-field">
-			<label for="a11y-conn-name">Connection Name</label>
+			<label for="a11y-conn-name">Connection name</label>
 			<input
 				id="a11y-conn-name"
 				type="text"
@@ -191,7 +191,7 @@
 		     design systems, which is the drift the edit form's own capability
 		     panel documents refusing. -->
 		<div class="a11y-field">
-			<label for="a11y-conn-type">Service Type</label>
+			<label for="a11y-conn-type">Service type</label>
 			<select
 				id="a11y-conn-type"
 				bind:value={type}
@@ -244,7 +244,7 @@
 				onclick={testConnection}
 				disabled={saving || testing}
 			>
-				{testing ? "Testing…" : "Test Connection"}
+				{testing ? "Testing…" : "Test connection"}
 			</button>
 		</div>
 		{#if testResult}
@@ -263,7 +263,7 @@
 		     declares. -->
 		{#if showFormat}
 			<div class="a11y-field">
-				<label for="a11y-conn-prompt-format">Prompt Format</label>
+				<label for="a11y-conn-prompt-format">Prompt format</label>
 				<select
 					id="a11y-conn-prompt-format"
 					bind:value={promptFormat}
@@ -277,7 +277,7 @@
 		{/if}
 
 		<div class="a11y-field">
-			<label for="a11y-conn-token-counter">Token Counter</label>
+			<label for="a11y-conn-token-counter">Token counter</label>
 			<select
 				id="a11y-conn-token-counter"
 				bind:value={tokenCounter}
@@ -312,7 +312,7 @@
 		</p>
 
 		<button type="submit" class="a11y-btn" disabled={saving}>
-			{saving ? "Creating…" : "Create Connection"}
+			{saving ? "Creating…" : "Create connection"}
 		</button>
 	</form>
 {/if}

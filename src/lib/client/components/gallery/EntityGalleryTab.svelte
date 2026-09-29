@@ -1,6 +1,7 @@
 <script lang="ts">
 	import * as Icons from "@lucide/svelte"
-	import { Dialog, Popover, Portal } from "@skeletonlabs/skeleton-svelte"
+	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
+	import RowMenu from "$lib/client/components/menus/RowMenu.svelte"
 	import { dragHandleZone, dragHandle } from "svelte-dnd-action"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 	import { declareInterest } from "$lib/client/sockets/interest.svelte"
@@ -248,14 +249,14 @@
 
 	{#if isLoading}
 		<div class="flex items-center justify-center py-6">
-			<Icons.Loader2 class="text-muted-foreground h-6 w-6 animate-spin" />
+			<Icons.Loader2 class="text-surface-600-400 h-6 w-6 animate-spin" />
 		</div>
 	{:else if tiles.length === 0}
 		<div
 			class="border-surface-300-600 flex flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed py-6"
 		>
-			<Icons.ImagePlus class="text-muted-foreground h-8 w-8" />
-			<p class="text-muted-foreground text-sm">No images yet</p>
+			<Icons.ImagePlus class="text-surface-600-400 h-8 w-8" />
+			<p class="text-surface-600-400 text-sm">No images yet</p>
 			{#if isOwner}
 				<button
 					type="button"
@@ -319,77 +320,44 @@
 							role="none"
 							onclick={(e) => e.stopPropagation()}
 						>
-							<Popover
-								open={menuOpenFor === tile.id}
-								onOpenChange={(e) =>
-									(menuOpenFor = e.open ? tile.id : null)}
-								positioning={{ placement: "bottom-end" }}
+							<RowMenu
+								label="Image"
+								width={200}
+								triggerClass="bg-surface-950/60 hover:bg-surface-950/80 rounded-full p-0.5 text-white"
+								bind:open={
+									() => menuOpenFor === tile.id,
+									(v) => (menuOpenFor = v ? tile.id : null)
+								}
+								items={[
+									currentAvatarMediaId !== tile.id && {
+										label: "Set as avatar",
+										icon: Icons.Star,
+										onSelect: () => setAsAvatar(tile.id)
+									},
+									{
+										label: "Delete",
+										icon: Icons.Trash2,
+										destructive: true,
+										onSelect: () => requestDelete(tile.id)
+									}
+								]}
 							>
-								<Popover.Trigger
-									class="bg-surface-950/60 hover:bg-primary-600-400 rounded-full p-0.5 text-white"
-									aria-label="Image options"
-								>
-									<Icons.EllipsisVertical class="h-3 w-3" />
-								</Popover.Trigger>
-								<Portal>
-									<Popover.Positioner class="z-[1000]!">
-										<Popover.Content
-											class="card bg-primary-200-800 w-[min(90vw,200px)] space-y-3 p-3 shadow-xl"
-										>
-											<header class="popover-menu-title">
-												<Icons.Image
-													size={16}
-													aria-hidden="true"
-												/>
-												<p>Image Options</p>
-											</header>
-											<article
-												class="flex flex-col gap-2"
-											>
-												{#if currentAvatarMediaId !== tile.id}
-													<button
-														type="button"
-														class="btn btn-sm popover-menu-btn hover:preset-filled-primary-500"
-														onclick={() =>
-															setAsAvatar(
-																tile.id
-															)}
-													>
-														<Icons.Star
-															size={16}
-															aria-hidden="true"
-														/>
-														<span>
-															Set as avatar
-														</span>
-													</button>
-												{/if}
-												<button
-													type="button"
-													class="btn btn-sm popover-menu-btn hover:preset-filled-error-500"
-													onclick={() =>
-														requestDelete(tile.id)}
-												>
-													<Icons.Trash2
-														size={16}
-														aria-hidden="true"
-													/>
-													<span>Delete</span>
-												</button>
-											</article>
-										</Popover.Content>
-									</Popover.Positioner>
-								</Portal>
-							</Popover>
+								{#snippet trigger()}
+									<Icons.EllipsisVertical
+										class="h-3 w-3"
+										aria-hidden="true"
+									/>
+								{/snippet}
+							</RowMenu>
 						</div>
 					{/if}
 
 					{#if currentAvatarMediaId === tile.id}
 						<div
-							class="bg-primary-500 pointer-events-none absolute right-1 bottom-1 rounded-full p-0.5"
+							class="preset-filled-primary-500 pointer-events-none absolute right-1 bottom-1 rounded-full p-0.5"
 							title="Current avatar"
 						>
-							<Icons.Check class="h-3 w-3 text-white" />
+							<Icons.Check class="h-3 w-3" aria-hidden="true" />
 						</div>
 					{/if}
 				</div>
@@ -416,7 +384,7 @@
 			>
 				<header class="flex items-center gap-3">
 					<Icons.Trash2 class="text-error-500 h-5 w-5 shrink-0" />
-					<h2 class="text-lg font-bold">Delete Image</h2>
+					<h2 class="text-lg font-bold">Delete image</h2>
 				</header>
 				{#if pendingDeleteMedia}
 					<div class="overflow-hidden rounded-lg">
@@ -427,7 +395,7 @@
 						/>
 					</div>
 				{/if}
-				<p class="text-muted-foreground text-sm">
+				<p class="text-surface-600-400 text-sm">
 					Are you sure you want to delete this image? This cannot be
 					undone.
 				</p>

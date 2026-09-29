@@ -19,8 +19,9 @@
  *   author did not repeat it in `meta.genre`.
  * - **pipelines** — `saveDocument(…, { sourcePluginId, publish: true })`. The
  *   column existed and no caller had ever written it.
- * - **configs** — `pipeline_configs`, keyed by the same `plugin:<id>:<slug>`
- *   seed key `syncPluginPresets` uses. The table has no owner column and does
+ * - **configs** — `pipeline_configs`, keyed `plugin:<id>:<spec>#<slug>` (a
+ *   config slug is unique per spec, not per package), the key
+ *   `syncPluginPresets` resolves a binding's config through. The table has no owner column and does
  *   not need one: a config over the package's OWN spec is owned transitively
  *   (`spec_id → pipeline_specs.source_plugin_id`) and dies with it, and a
  *   config over somebody else's spec — which is legitimate, and the one thing
@@ -63,12 +64,19 @@ import {
 	assertInstallSlashNamesFree,
 	saveDocument
 } from "$lib/server/pipelines/boot/store"
-import { syncDefinitionRegistry } from "$lib/server/pipelines/boot/registrySync"
+import {
+	legacyPluginConfigSeedKey,
+	pluginConfigSeedKey,
+	projectObjectVariableLayouts,
+	syncDefinitionRegistry
+} from "$lib/server/pipelines/boot/registrySync"
 import {
 	pluginDeclarationsOf,
 	registerPluginDefinitions
 } from "./pluginDefinitions"
 import { registerPluginEvents } from "./pluginEvents"
+import { registerPluginAnnex } from "./pluginAnnex"
+import { registerPluginVariables } from "./pluginVariables"
 import { storePluginFiles } from "./frameHost"
 import {
 	readPluginPackage,
@@ -83,12 +91,12 @@ import { upsertPlugin } from "./store"
 const SESSION_CREATED = "core:event/session-created@1"
 
 /**
- * A projected config's storage identity, and the only handle the cull has on a
- * config over a spec this package does not own. Mirrors `presetSeedKey` in
- * `registrySync.ts` — one spelling for "this row came from that package".
+ * A projected config's storage identity — `plugin:<id>:<spec>#<slug>` — and the
+ * only handle the cull has on a config over a spec this package does not own.
+ * Defined beside `presetSeedKey` in `registrySync.ts`, whose preset sync
+ * resolves a binding's config through it; re-exported for this module's readers.
  */
-export const pluginConfigSeedKey = (pluginId: string, slug: string) =>
-	`plugin:${pluginId}:${slug}`
+export { pluginConfigSeedKey }
 
 export interface PluginProjectionReport {
 	/** Spec slugs saved, in manifest order. */
@@ -116,12 +124,18 @@ export interface InstallPluginPackageReport extends PluginProjectionReport {
 	 * writes no sandbox bundle installs its declarations and none of its code.
 	 */
 	warnings: string[]
+	/**
+	 * Whether the plugin was switched on before this install wrote its row —
+	 * what tells the caller a running plugin was just switched off by it
+	 * (a replaced bundle arrives disabled), and so owes it a `disable`.
+	 */
+	wasEnabled: boolean
 }
 
 /**
  * The bundle a package ships for the sandbox, if it ships one.
  *
- * `dist/plugin/bundle.js` is the one path this looks at, deliberately not a
+ * `dist/plugin/bundle.js` is the one path this looks at, on purpose, not a
  * guess at a package's own `main`: an unbundled ESM entry would load in no
  * sandbox, and installing it as if it were a bundle would turn a missing
  * artifact into a runtime failure with no explanation. `serene-pub build`
@@ -300,8 +314,8 @@ async function projectDefinitions(
 			// the same thing `release` means for core's build.
 			release: pkg.manifest.version,
 			ownerPluginId: ownerId,
-			// Everything this package publishes, so a definition it used to
-			// declare and does not any more is marked `removed` rather than
+			// Everything this package publishes, so a stored definition it does
+			// not declare is marked `removed` rather than
 			// left standing (the reverse-diff, plans/29 R-2).
 			complete: true
 		}
@@ -375,6 +389,17 @@ export async function projectPluginPackage(
 	const ownerId = row.id
 	await adoptPriorRows(db, pluginId, ownerId)
 
+	// Its context variables before anything: a banded definition's
+	// `register()` refuses a band whose variable this process does not hold,
+	// and law T1 at the publish below types a band from its variable
+	// (typed templates, 2026-09-27; `pluginVariables.ts`).
+	report.refused.push(...registerPluginVariables(pkg.manifest, pluginId))
+	// …and every OBJECT variable's automatic layout row with them (owner
+	// ruling 2026-09-27: an object variable is never without a layout). The
+	// template sync writes the same seeds on every pass; this is register time.
+	report.refused.push(
+		...(await projectObjectVariableLayouts(db, pkg.manifest, pluginId, ownerId))
+	)
 	// Definitions before the documents that place them: a node is declared
 	// before a pipeline can name it, and a spec saved against a registry that
 	// has not heard of its own package's node is a spec whose notice says so.
@@ -382,6 +407,9 @@ export async function projectPluginPackage(
 	// And its declared events, before a document that locks on or records
 	// one is validated (E1b; `pluginEvents.ts`).
 	report.refused.push(...registerPluginEvents(pkg.manifest, pkg.manifest.slug))
+	// And its annex declaration, before a document writing the annex is
+	// validated (ruling 2026-09-26; `pluginAnnex.ts`).
+	report.refused.push(...registerPluginAnnex(pkg.manifest, pkg.manifest.slug))
 
 	// The whole set publishes together, so a package that renames a slash name
 	// between two of its own specs is not refused one spec at a time.
@@ -468,14 +496,51 @@ export async function projectPluginPackage(
 			)
 			continue
 		}
-		const seedKey = pluginConfigSeedKey(pluginId, slug)
+		const seedKey = pluginConfigSeedKey(pluginId, specSlug, slug)
 		const name = i18nText(decl.label as I18n | undefined) || slug
 		try {
-			const [existing] = await db
-				.select({ id: schema.pipelineConfigs.id })
+			let [existing] = await db
+				.select({
+					id: schema.pipelineConfigs.id,
+					isImmutable: schema.pipelineConfigs.isImmutable
+				})
 				.from(schema.pipelineConfigs)
 				.where(eq(schema.pipelineConfigs.seedKey, seedKey))
 				.limit(1)
+			// ⏳ A row the previous key (`plugin:<id>:<slug>`) wrote is adopted
+			// by the config of the spec it sits on, and by no other: that key
+			// collided across specs, and the last config declared moved the
+			// row onto its own spec. Taking it for a different spec would be
+			// the same move again. Remove once no install predates the key.
+			if (!existing) {
+				const [legacy] = await db
+					.update(schema.pipelineConfigs)
+					.set({ seedKey })
+					.where(
+						and(
+							eq(
+								schema.pipelineConfigs.seedKey,
+								legacyPluginConfigSeedKey(pluginId, slug)
+							),
+							eq(schema.pipelineConfigs.specId, spec.id)
+						)
+					)
+					.returning({
+						id: schema.pipelineConfigs.id,
+						isImmutable: schema.pipelineConfigs.isImmutable
+					})
+				existing = legacy
+			}
+			// A shipped row is immutable — selectable and copyable, never
+			// edited in place — so re-forcing it is how an update ships new
+			// prose, exactly as core's seeds re-sync on boot. A row under the
+			// key that is NOT immutable has been made somebody's; its name
+			// and values are theirs, and neither install nor update touches
+			// them. A person's own copy has no seed key and is never reached.
+			if (existing && !existing.isImmutable) {
+				report.configs.push(seedKey)
+				continue
+			}
 			const configId = existing
 				? (await db
 						.update(schema.pipelineConfigs)
@@ -572,8 +637,8 @@ export async function cullPluginProjection(
 	 * deleted is what the column points at. A kept row would name an owner
 	 * that does not exist — and the moment the package is installed again it
 	 * would name the WRONG one, since a re-install is a new identity value, so
-	 * every run of its own node would answer "belongs to an extension that is
-	 * no longer installed". The declaration itself is not lost: the archive
+	 * every run of its own node would answer "belongs to an uninstalled
+	 * extension". The declaration itself is not lost: the archive
 	 * (`pipeline_definition_declarations`) keeps it under its hash, which is
 	 * what anything pinning it named.
 	 */
@@ -635,6 +700,10 @@ export async function installPluginPackage(
 				`regardless.`
 		)
 
+	const [prior] = await db
+		.select({ enabled: schema.plugins.enabled })
+		.from(schema.plugins)
+		.where(eq(schema.plugins.pluginId, pluginId))
 	await upsertPlugin(db, {
 		pluginId,
 		name: i18nText(pkg.manifest.name as I18n | undefined) || pluginId,
@@ -655,5 +724,11 @@ export async function installPluginPackage(
 		)
 
 	const projection = await projectPluginPackage(db, pkg)
-	return { pluginId, files, warnings, ...projection }
+	return {
+		pluginId,
+		files,
+		warnings,
+		wasEnabled: !!prior?.enabled,
+		...projection
+	}
 }

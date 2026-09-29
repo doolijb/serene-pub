@@ -8,9 +8,8 @@
  * another lorebook, a parent that is not there, the entry itself, and a parent
  * whose own chain of parents comes back round to the entry being moved.
  *
- * `entries:counts` is here too, because the count it gained answers a question
- * about edges rather than about rows: an entry is a **place** when it has an
- * edge to another entry, or an edge typed with a way of getting somewhere.
+ * `entries:counts` is here too, for its `places` figure: a place is a
+ * `core:entry/location` entry (decided 2026-09-28), the Places board's rule.
  */
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest"
 import fs from "fs/promises"
@@ -18,7 +17,7 @@ import os from "os"
 import path from "path"
 import { eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
-import { WORLD_LORE_TYPE_ID } from "$lib/shared/entries/types"
+import { LOCATION_TYPE_ID, WORLD_LORE_TYPE_ID } from "$lib/shared/entries/types"
 import type { TestDb } from "$lib/server/utils/testDb"
 
 let testDb: TestDb
@@ -213,61 +212,48 @@ describe("the wire row's own two facts", () => {
 })
 
 describe("entries:counts — places", () => {
-	test("counts an entry with a travel edge and an entry linked to an entry, once each", async () => {
+	// Decided 2026-09-28: a place is a `core:entry/location` entry — one
+	// definition for the rail's count and the Places board. Edges no longer
+	// make an entry a place.
+	test("counts location entries, and nothing an edge touches", async () => {
 		const { entryCountsHandler } = await import("./entries")
 		const { narrativeGraphCreateRelationshipHandler: createRelationship } =
 			await import("./narrativeGraph")
 		const user = await makeUser("counts-places")
 		const book = await makeLorebook(user.id, "Mapped")
 
-		const room = await create(user.id, book.id, "The Room")
-		const tunnel = await create(user.id, book.id, "The Tunnel")
-		const far = await create(user.id, book.id, "The Far Hall")
-		const person = await create(user.id, book.id, "A Person")
-		await create(user.id, book.id, "Unlinked Lore")
-
-		const [keeper] = await testDb
-			.insert(schema.lorebookBindings)
-			.values({ lorebookId: book.id, binding: "", name: "The Keeper" })
-			.returning()
-
-		const link = (params: Record<string, unknown>) =>
-			createRelationship.handler(
-				fakeSocket(user.id),
-				{
-					lorebookId: book.id,
-					relationshipType: "connects to",
-					status: "active",
-					...params
-				} as any,
-				noopEmit
-			)
-
-		// Room ↔ tunnel, twice over, to prove an entry is counted once.
-		await link({
-			from: { kind: "entry", entryId: room.id },
-			to: { kind: "entry", entryId: tunnel.id }
+		const room = await create(user.id, book.id, "The Room", {
+			typeId: LOCATION_TYPE_ID
 		})
-		await link({
-			from: { kind: "entry", entryId: tunnel.id },
-			to: { kind: "entry", entryId: far.id },
-			relationshipType: "leads to"
+		await create(user.id, book.id, "The Tunnel", { typeId: LOCATION_TYPE_ID })
+		await create(user.id, book.id, "Shelved Hall", {
+			typeId: LOCATION_TYPE_ID,
+			archived: true
 		})
-		// A cast edge with a travel type: the entry end is a place.
-		await link({
-			from: { kind: "cast", bindingId: keeper.id },
-			to: { kind: "entry", entryId: person.id },
-			relationshipType: "keeper of"
-		})
+		const lore = await create(user.id, book.id, "A Road Story")
+
+		// A travel edge between a location and a lore row: the lore row is
+		// still not a place.
+		await createRelationship.handler(
+			fakeSocket(user.id),
+			{
+				lorebookId: book.id,
+				relationshipType: "connects to",
+				status: "active",
+				from: { kind: "entry", entryId: room.id },
+				to: { kind: "entry", entryId: lore.id }
+			} as any,
+			noopEmit
+		)
 
 		const { counts } = await entryCountsHandler.handler(
 			fakeSocket(user.id),
 			{ lorebookId: book.id } as any,
 			noopEmit
 		)
-		// Room, tunnel and far hall. The person is on a `keeper of` edge whose
-		// other end is a binding, which is neither a travel type nor an entry.
-		expect(counts.places).toBe(3)
-		expect(counts[WORLD_LORE_TYPE_ID]).toBe(5)
+		// The archived hall is out, as the default list leaves it out.
+		expect(counts.places).toBe(2)
+		expect(counts[LOCATION_TYPE_ID]).toBe(2)
+		expect(counts[WORLD_LORE_TYPE_ID]).toBe(1)
 	}, 60_000)
 })

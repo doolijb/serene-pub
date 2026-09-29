@@ -27,7 +27,13 @@
 
 	let { map, selectedEntryId, onOpenEntry, onOpenCast }: Props = $props()
 
-	let containerEl = $state<HTMLDivElement | undefined>(undefined)
+	/**
+	 * The boxes' own wrapper — the full height of the content, not of the
+	 * scrolling viewport. The overlay spans it and is measured against it, so
+	 * the lines scroll with the boxes and reach boxes below the fold without
+	 * any scroll arithmetic.
+	 */
+	let contentEl = $state<HTMLDivElement | undefined>(undefined)
 	/** Reactive so the overlay re-measures as boxes arrive and leave. */
 	const boxEls = new SvelteMap<number, HTMLElement>()
 
@@ -38,8 +44,8 @@
 	let centers = $state<Map<number, Point>>(new Map())
 
 	function measure() {
-		if (!containerEl) return
-		const base = containerEl.getBoundingClientRect()
+		if (!contentEl) return
+		const base = contentEl.getBoundingClientRect()
 		const next = new Map<number, Point>()
 		for (const [id, el] of boxEls) {
 			const box = el.getBoundingClientRect()
@@ -69,9 +75,9 @@
 	})
 
 	$effect(() => {
-		if (!containerEl) return
+		if (!contentEl) return
 		const observer = new ResizeObserver(() => measure())
-		observer.observe(containerEl)
+		observer.observe(contentEl)
 		return () => observer.disconnect()
 	})
 
@@ -98,57 +104,59 @@
 		<EmptyState icon={Icons.Map} message={PLACES_EMPTY_LINE} />
 	{:else}
 		<div
-			class="bg-surface-200-800 relative min-h-72 flex-1 overflow-auto rounded-lg p-4"
-			bind:this={containerEl}
+			class="bg-surface-200-800 min-h-72 flex-1 overflow-auto rounded-lg p-4"
 			data-places-canvas
 		>
-			<svg
-				class="pointer-events-none absolute inset-0 h-full w-full"
-				aria-hidden="true"
-			>
-				<defs>
-					<marker
-						id="placeArrow"
-						markerWidth="8"
-						markerHeight="6"
-						refX="8"
-						refY="3"
-						orient="auto"
-					>
-						<polygon
-							points="0 0, 8 3, 0 6"
-							fill="#6b7280"
-							opacity="0.7"
+			<div class="relative" bind:this={contentEl}>
+				<svg
+					class="text-surface-600-400 pointer-events-none absolute inset-0 h-full w-full overflow-visible"
+					aria-hidden="true"
+				>
+					<defs>
+						<marker
+							id="placeArrow"
+							markerWidth="8"
+							markerHeight="6"
+							refX="8"
+							refY="3"
+							orient="auto"
+						>
+							<polygon
+								points="0 0, 8 3, 0 6"
+								fill="currentColor"
+								opacity="0.7"
+							/>
+						</marker>
+					</defs>
+					{#each drawnLinks as { link, from, to } (link.id)}
+						<line
+							x1={from!.x}
+							y1={from!.y}
+							x2={to!.x}
+							y2={to!.y}
+							stroke="currentColor"
+							stroke-width="1.5"
+							stroke-dasharray="6 3"
+							marker-end="url(#placeArrow)"
 						/>
-					</marker>
-				</defs>
-				{#each drawnLinks as { link, from, to } (link.id)}
-					<line
-						x1={from!.x}
-						y1={from!.y}
-						x2={to!.x}
-						y2={to!.y}
-						stroke="#6b7280"
-						stroke-width="1.5"
-						stroke-dasharray="6 3"
-						marker-end="url(#placeArrow)"
-					/>
-					<text
-						x={(from!.x + to!.x) / 2}
-						y={(from!.y + to!.y) / 2 - 4}
-						text-anchor="middle"
-						font-size="10"
-						fill="#9ca3af"
-					>
-						{link.label}
-					</text>
-				{/each}
-			</svg>
+						<text
+							x={(from!.x + to!.x) / 2}
+							y={(from!.y + to!.y) / 2 - 4}
+							text-anchor="middle"
+							font-size="10"
+							fill="currentColor"
+						>
+							{link.label}
+						</text>
+					{/each}
+				</svg>
 
-			<div class="relative flex flex-col gap-3">
-				{#each map.regions as region (region.id)}
-					{@render box(region)}
-				{/each}
+				<!-- Positioned, so it paints above the absolutely placed overlay. -->
+				<div class="relative flex flex-col gap-3">
+					{#each map.regions as region (region.id)}
+						{@render box(region)}
+					{/each}
+				</div>
 			</div>
 		</div>
 
@@ -178,11 +186,11 @@
 			>
 				{region.name}
 			</button>
-			{#each region.pins as pin (pin.castId)}
+			{#each region.pins as pin (pin.key)}
 				<button
 					type="button"
-					class="chip preset-tonal-secondary gap-1 text-[10px]"
-					title={pin.relationshipType}
+					class="chip preset-tonal-secondary gap-1 text-[11px]"
+					title="{pin.name} — {pin.relationshipType}"
 					data-place-pin={pin.castId}
 					onclick={() => onOpenCast(pin.castId)}
 				>

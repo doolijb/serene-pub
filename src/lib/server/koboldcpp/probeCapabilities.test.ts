@@ -97,12 +97,12 @@ describe("the probe against the manifest — the Phase 4 gate", () => {
 
 	test("the flags this app cannot yet act on are still recorded, and still discarded", () => {
 		// ⚠ Two assertions that look contradictory and are not, which is why they
-		// share a test: the probe MUST keep answering for speech, transcription and
-		// embeddings, and resolution MUST ignore all three.
+		// share a test: the probe MUST keep answering for speech and
+		// transcription, and resolution MUST ignore both.
 		//
-		// The manifest declares none of them for either KoboldCPP type, because
-		// nothing implements `synthesizeSpeech`, `transcribeAudio` or `embedText`
-		// and the key space is derived from which actions exist. `resolveCapabilities`
+		// The manifest declares neither for either KoboldCPP type, because
+		// nothing implements `synthesizeSpeech` or `transcribeAudio` and the key
+		// space is derived from which actions exist. `resolveCapabilities`
 		// iterates `supports` only, so an answer to a question nobody asked cannot
 		// grant anything — which is correct, and is what stops a capability being
 		// switchable and uncallable.
@@ -110,9 +110,8 @@ describe("the probe against the manifest — the Phase 4 gate", () => {
 		// The mapping stays anyway, because the probe records what the SERVER said
 		// and that outlives what this app can do with it: the day one of those
 		// actions lands, the key returns and every already-tested connection
-		// resolves it with no re-test. If somebody "cleans up" the three lines in
-		// `capabilitiesFromFlags` to match what resolution consumes, the first half
-		// of this test is what stops them.
+		// resolves it with no re-test — see the embeddings test below, which is
+		// that day for `text->embedding`.
 		const found = capabilitiesFromFlags(
 			flagsFrom({ tts: true, transcribe: true, embeddings: true })
 		)
@@ -125,12 +124,23 @@ describe("the probe against the manifest — the Phase 4 gate", () => {
 		const resolved = resolveFor(
 			flagsFrom({ tts: true, transcribe: true, embeddings: true })
 		)
-		for (const id of [
-			"text->audio",
-			"audio->text",
-			"text->embedding"
-		] as const)
+		for (const id of ["text->audio", "audio->text"] as const)
 			expect(satisfies({ requires: [id] }, resolved).ok).toBe(false)
+	})
+
+	test("the embeddings flag, recorded all along, resolves now that embedText exists", () => {
+		expect(
+			satisfies(
+				{ requires: ["text->embedding"] },
+				resolveFor(flagsFrom({ embeddings: true }))
+			).ok
+		).toBe(true)
+		expect(
+			satisfies(
+				{ requires: ["text->embedding"] },
+				resolveFor(flagsFrom({ embeddings: false }))
+			).ok
+		).toBe(false)
 	})
 
 	test("the type still says text — which is exactly why the probe exists", () => {

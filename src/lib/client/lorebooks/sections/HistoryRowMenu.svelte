@@ -40,8 +40,8 @@
 >
 	<Icons.Wand size={14} />
 	{activity?.status === "review"
-		? "Review Compile"
+		? "Review compile"
 		: activity?.status === "running"
-			? "View Progress"
+			? "View progress"
 			: "Compile to Entry"}
 </button>

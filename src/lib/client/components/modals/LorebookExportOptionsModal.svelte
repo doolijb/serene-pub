@@ -43,7 +43,7 @@
 				class="card bg-surface-100-900 max-w-md space-y-6 p-6 shadow-xl"
 			>
 				<header class="flex justify-between">
-					<h2 class="h2">Export Lorebook</h2>
+					<h2 class="h2">Export lorebook</h2>
 				</header>
 				<article class="space-y-4">
 					<p class="text-surface-700-300 text-sm">

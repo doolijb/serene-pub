@@ -72,6 +72,30 @@ describe("showsToggles — the header L/R group", () => {
 	})
 })
 
+describe("the Middle sheet (QE, brief 7a)", () => {
+	it("the header's panels button shows for middle widgets alone", () => {
+		// The conversation sits in a side and is the phone's stage; the only
+		// other widgets are the middle's, so they are what the menu lists.
+		expect(showsToggles({ narrow: true, left: 0, right: 0, middle: 2 })).toBe(true)
+		expect(showsToggles({ narrow: true, left: 0, right: 0, middle: 0 })).toBe(false)
+	})
+
+	it("the middle sheet stays open while it lists something, and closes when it does not", () => {
+		expect(resolveOpen({ narrow: true, left: 0, right: 0, middle: 1, open: "middle" })).toBe("middle")
+		expect(resolveOpen({ narrow: true, left: 3, right: 3, middle: 0, open: "middle" })).toBe(null)
+	})
+
+	it("the store opens a Middle group and publishes the count", () => {
+		mobileSidePanels.setSides(true, 0, 1, 2)
+		expect(mobileSidePanels.middle).toBe(2)
+		mobileSidePanels.openGroup("middle", "world-state")
+		expect(mobileSidePanels.open).toBe("middle")
+		expect(mobileSidePanels.takePending()).toEqual({ side: "middle", key: "world-state" })
+		mobileSidePanels.setSides(true, 0, 1, 0)
+		expect(mobileSidePanels.open).toBe(null)
+	})
+})
+
 describe("mobileSidePanels — the shared singleton", () => {
 	beforeEach(() => {
 		mobileSidePanels.open = null

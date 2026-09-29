@@ -10,7 +10,9 @@
 	import NewNameModal from "../modals/NewNameModal.svelte"
 	import SamplingValuesForm from "./SamplingValuesForm.svelte"
 	import SamplingEnabledForm from "./SamplingEnabledForm.svelte"
+	import Select from "$lib/client/components/inputs/Select.svelte"
 	import { countEnabled } from "./samplingFields"
+	import { sameFormValue } from "$lib/client/forms/sameFormValue"
 	import { toaster } from "$lib/client/utils/toaster"
 	import { z } from "zod"
 	import { S, SAMPLING_SCHEMAS, samplingSchemaFor } from "@serene-pub/sdk"
@@ -20,20 +22,12 @@
 
 	interface Props {
 		onclose?: () => Promise<boolean> | undefined
-		/** Deep-link: select this config instead of the system default (admin change pages). */
-		initialSelectedId?: number | null
-		/** Deep-link: open the new-config flow on mount (admin create page). */
-		startNew?: boolean
-		/** Deep-link: land straight in one category instead of the picker. */
-		initialShape?: string | null
 	}
 
-	let {
-		onclose = $bindable(),
-		initialSelectedId = null,
-		startNew = false,
-		initialShape = null
-	}: Props = $props()
+	// No deep-link props any more: Admin → Sampling stopped embedding this
+	// view (2026-09-27) and manages configs with its own changelist and
+	// change form (`admin/sections/sampling/`).
+	let { onclose = $bindable() }: Props = $props()
 
 	let systemSettingsCtx: SystemSettingsCtx = getContext("systemSettingsCtx")
 
@@ -43,19 +37,13 @@
 	//
 	// Sampling configs are split by modality for the same reason connections are:
 	// the two vocabularies share nothing, and a list mixing them makes the reader
-	// check every row's shape before trusting its name. A deep link that names a
-	// config or a shape skips the picker.
-	let shape = $state<string>(initialShape ?? S.textGen)
-	// Whether the deep-linked row's own shape has been adopted yet. Not `$state`:
-	// nothing renders from it, and it flips once, the first time a list lands.
-	let deepLinkAdopted = false
+	// check every row's shape before trusting its name.
+	let shape = $state<string>(S.textGen)
 	// Three screens, one variable — the same pattern index→list already proves.
 	// "enabled" is the enable/disable screen: which parameters this config is in
 	// charge of, edited apart from their values rather than as a checkbox in
 	// front of every one of them.
-	let view = $state<"index" | "list" | "enabled">(
-		initialSelectedId != null || startNew || initialShape ? "list" : "index"
-	)
+	let view = $state<"index" | "list" | "enabled">("index")
 	/**
 	 * Desk turns those three screens into two panes: the categories stand on
 	 * the left whatever `view` says, and `view` decides only what — if
@@ -67,7 +55,7 @@
 		{
 			shape: S.textGen,
 			icon: Icons.Type,
-			title: "Large Language Models",
+			title: "Large language models",
 			blurb: "Temperature, penalties, context and response budgets — the parameters behind every generated reply."
 		},
 		{
@@ -81,7 +69,7 @@
 			// quality, background, output format — lives on its CONNECTION,
 			// declared by its adapter. Hence five model families here and no
 			// sixth "hosted" preset.
-			title: "Image Generation",
+			title: "Image generation",
 			blurb: "Steps, CFG, size, seed — shared by every image backend, whichever one a connection points at. These are the parameters of local diffusion; a hosted service's own options (quality, background, output format) live on its connection instead."
 		}
 	]
@@ -139,18 +127,21 @@
 	// the full editable config once this is set. Through `defaultIdFor` rather
 	// than a second read of the map: this is the one place the two could
 	// disagree about which capability the current category means.
-	// svelte-ignore state_referenced_locally — deliberate initial seed.
-	let selectedSamplingId: number | null = $state(
-		initialSelectedId ?? defaultIdFor(initialShape ?? S.textGen)
-	)
+	let selectedSamplingId: number | null = $state(defaultIdFor(S.textGen))
 
 	let sampling: SelectSamplingConfig | undefined = $state()
 	let originalSamplingConfig: SelectSamplingConfig | undefined = $state()
+	/**
+	 * Deep and forgiving where a person would be (`sameFormValue`): a number
+	 * typed back to its value arrives as a string, a cleared field is `""`
+	 * where the row held `null`, and a key an edit deleted and re-added moves
+	 * to the end — none of those is a change.
+	 */
 	let unsavedChanges = $derived.by(() => {
 		if (!sampling || !originalSamplingConfig) return false
-		// Compare current sampling with original to detect changes
-		return (
-			JSON.stringify(sampling) !== JSON.stringify(originalSamplingConfig)
+		return !sameFormValue(
+			$state.snapshot(sampling),
+			$state.snapshot(originalSamplingConfig)
 		)
 	})
 	let showUnsavedChangesModal = $state(false)
@@ -264,7 +255,7 @@
 		if (!socket || !sampling) return
 		if (sampling.isImmutable) {
 			toaster.error({
-				title: "Cannot Save",
+				title: "Cannot save",
 				description: "Cannot save immutable sampling configuration."
 			})
 			return
@@ -285,7 +276,7 @@
 		if (!socket || !sampling) return
 		if (sampling.isImmutable) {
 			toaster.error({
-				title: "Cannot Delete",
+				title: "Cannot delete",
 				description: "Cannot delete immutable sampling configuration."
 			})
 			return
@@ -339,33 +330,6 @@
 		// `!== "index"` rather than `=== "list"`: the enable/disable screen
 		// edits the same selection, so a row deleted while it is open needs the
 		// same repair.
-		// A deep link names a config but not its category, so adopt the row's own
-		// shape before repairing anything.
-		//
-		// /admin/sampling/<id> passes only `initialSelectedId`, leaving `shape` at
-		// the text default. `viewConfigs` filters by shape, so an IMAGE config is
-		// never in it, the repair below fires, and the panel silently loads the
-		// TEXT default instead — under the wrong heading, with the URL still
-		// naming the image row. Harmless when one image config existed; this
-		// sprint added five prominently-named rows whose whole purpose is to be
-		// clicked.
-		//
-		// Consumed once (`pendingDeepLinkId = null`), so an ordinary list refresh
-		// can never yank someone out of the category they picked by hand.
-		if (!deepLinkAdopted) {
-			deepLinkAdopted = true
-			// Only when the link named a config WITHOUT naming a shape — a link
-			// that named both meant both, and must not be second-guessed.
-			if (initialShape == null && initialSelectedId != null) {
-				const target = samplingConfigsList.find(
-					(c: { id: number; shape?: string }) =>
-						c.id === initialSelectedId
-				)
-				if (target?.shape && target.shape !== shape)
-					shape = target.shape
-			}
-		}
-
 		if (
 			view !== "index" &&
 			selectedSamplingId != null &&
@@ -377,12 +341,12 @@
 	function handleSamplingConfigsDelete(
 		_message: Sockets.SamplingConfigs.Delete.Response
 	) {
-		toaster.success({ title: "Sampling Config Deleted" })
+		toaster.success({ title: "Sampling config deleted" })
 	}
 	function handleSamplingConfigsUpdate(
 		_message: Sockets.SamplingConfigs.Update.Response
 	) {
-		toaster.success({ title: "Sampling Config Updated" })
+		toaster.success({ title: "Sampling config updated" })
 	}
 	function handleSamplingConfigsCreate(
 		message: Sockets.SamplingConfigs.Create.Response
@@ -392,7 +356,7 @@
 		// so there is nothing left to correct in it.
 		newNameError = undefined
 		showNewNameModal = false
-		toaster.success({ title: "Sampling Config Created" })
+		toaster.success({ title: "Sampling config created" })
 	}
 	/**
 	 * A refused clone — a name already taken within this modality is the one a
@@ -476,8 +440,6 @@
 	onMount(() => {
 		onclose = handleOnClose
 		socket.emit("samplingConfigs:list", {})
-		// Admin create page deep-link: open the new-config flow immediately.
-		if (startNew) handleNew()
 	})
 </script>
 
@@ -502,7 +464,7 @@
 
 {#snippet categoryPane()}
 	<div class="text-foreground flex h-full flex-col gap-3">
-		<p class="text-muted-foreground text-sm">
+		<p class="text-surface-600-400 text-sm">
 			Select a category to view and edit its sampling configurations.
 		</p>
 
@@ -537,14 +499,14 @@
 							<span class="font-semibold">{cat.title}</span>
 							<Icons.ChevronRight
 								size={16}
-								class="text-muted-foreground shrink-0 transition-transform group-hover:translate-x-0.5"
+								class="text-surface-600-400 shrink-0 transition-transform group-hover:translate-x-0.5"
 							/>
 						</div>
-						<p class="text-muted-foreground mt-0.5 text-sm">
+						<p class="text-surface-600-400 mt-0.5 text-sm">
 							{cat.blurb}
 						</p>
 						<div
-							class="text-muted-foreground mt-2 flex items-center gap-3 text-xs"
+							class="text-surface-600-400 mt-2 flex items-center gap-3 text-xs"
 						>
 							<span>
 								{count}
@@ -574,13 +536,13 @@
 	<div class="text-foreground min-h-100">
 		<div class="mb-3">
 			<PanelNavHeader
-				title="Enabled Parameters"
+				title="Enabled parameters"
 				onBack={() => (view = "list")}
 				backLabel={categoryTitle}
 			/>
 		</div>
 		{#if sampling}
-			<p class="text-muted-foreground mb-4 text-sm">
+			<p class="text-surface-600-400 mb-4 text-sm">
 				Only the parameters switched on are sent — the rest are left to
 				the backend's own defaults. Their values are edited on the
 				previous screen, and nothing is saved until you press Update
@@ -617,14 +579,14 @@
 		</div>
 
 		{#if !viewConfigs.length}
-			<p class="text-muted-foreground py-8 text-center text-sm">
+			<p class="text-surface-600-400 py-8 text-center text-sm">
 				No sampling configurations in this category yet.
 			</p>
 		{:else if !!sampling}
-			<div class="panel-actions mt-2 mb-2 @sm/view:mt-0">
+			<div class="panel-actions mt-2 mb-2 @lg/view:mt-0">
 				<button
 					type="button"
-					class="btn btn-sm preset-filled-primary-500"
+					class="btn btn-sm preset-tonal-surface"
 					onclick={handleNew}
 					title="Clone to new config"
 				>
@@ -633,7 +595,7 @@
 				</button>
 				<button
 					type="button"
-					class="btn btn-sm preset-filled-secondary-500"
+					class="btn btn-sm preset-tonal-surface"
 					onclick={handleReset}
 					disabled={!unsavedChanges}
 					title="Reset unsaved changes"
@@ -643,7 +605,7 @@
 				</button>
 				<button
 					type="button"
-					class="btn btn-sm preset-filled-error-500"
+					class="btn btn-sm preset-tonal-error"
 					onclick={handleDelete}
 					disabled={!!sampling && sampling.isImmutable}
 					title="Delete sampling config"
@@ -653,24 +615,22 @@
 				</button>
 			</div>
 			<div class="mb-4">
-				<select
-					class="select w-full"
-					bind:value={selectedSamplingId}
+				<Select
+					label="Sampling config"
+					labelHidden
 					disabled={unsavedChanges}
-				>
-					{#each viewConfigs.filter((w) => w.isImmutable) as w}
-						{@const isDefault = w.id === activeSamplingConfigId}
-						<option value={w.id}>
-							{isDefault ? "★ " : ""}{w.name}*
-						</option>
-					{/each}
-					{#each viewConfigs.filter((w) => !w.isImmutable) as w}
-						{@const isDefault = w.id === activeSamplingConfigId}
-						<option value={w.id}>
-							{isDefault ? "★ " : ""}{w.name}
-						</option>
-					{/each}
-				</select>
+					options={[
+						...viewConfigs.filter((c) => c.isImmutable),
+						...viewConfigs.filter((c) => !c.isImmutable)
+					].map((c) => ({
+						value: String(c.id),
+						label: `${c.id === activeSamplingConfigId ? "★ " : ""}${c.name}${c.isImmutable ? "*" : ""}`
+					}))}
+					bind:value={
+						() => (selectedSamplingId == null ? "" : String(selectedSamplingId)),
+						(v) => (selectedSamplingId = v ? Number(v) : null)
+					}
+				/>
 			</div>
 			{#if sampling && sampling.isImmutable}
 				<div
@@ -684,7 +644,7 @@
 			<PanelToolbar label="Sampling config actions" class="mb-4">
 				<button
 					type="button"
-					class="btn btn-sm preset-filled-success-500 min-w-[6rem] flex-1"
+					class="btn btn-sm preset-filled-primary-500 min-w-[6rem] flex-1"
 					onclick={handleUpdate}
 					disabled={(!!sampling && sampling.isImmutable) ||
 						!unsavedChanges}
@@ -693,7 +653,7 @@
 				</button>
 				<button
 					type="button"
-					class="btn btn-sm preset-filled-warning-500 shrink-0"
+					class="btn btn-sm preset-tonal-surface shrink-0"
 					onclick={handleSetDefault}
 					disabled={!selectedSamplingId ||
 						selectedSamplingId === activeSamplingConfigId}
@@ -709,7 +669,7 @@
 					/>
 					{selectedSamplingId === activeSamplingConfigId
 						? "Default"
-						: "Set Default"}
+						: "Set default"}
 				</button>
 			</PanelToolbar>
 
@@ -746,7 +706,7 @@
 					type="button"
 					class="card preset-filled-surface-100-900 hover:preset-tonal-primary group flex w-full cursor-pointer items-center justify-between gap-2 rounded-xl p-3 text-left transition-all"
 					onclick={() => (view = "enabled")}
-					aria-label="Enabled Parameters — {enabledSummary.on} of {enabledSummary.total}"
+					aria-label="Enabled parameters — {enabledSummary.on} of {enabledSummary.total}"
 				>
 					<span class="flex min-w-0 items-center gap-2">
 						<Icons.ListChecks
@@ -754,11 +714,11 @@
 							class="text-primary-500 shrink-0"
 						/>
 						<span class="truncate font-semibold">
-							Enabled Parameters
+							Enabled parameters
 						</span>
 					</span>
 					<span
-						class="text-muted-foreground flex shrink-0 items-center gap-1 text-sm"
+						class="text-surface-600-400 flex shrink-0 items-center gap-1 text-sm"
 					>
 						{enabledSummary.on} of {enabledSummary.total}
 						<Icons.ChevronRight
@@ -797,7 +757,7 @@
 	}}
 	onConfirm={handleNewNameConfirm}
 	onCancel={handleNewNameCancel}
-	title="New Sampling Config"
+	title="New sampling config"
 	description="Your current settings will be copied."
 	error={newNameError}
 />
@@ -814,7 +774,7 @@
 				class="card bg-surface-100-900 max-w-[95vw] space-y-4 p-4 shadow-xl"
 			>
 				<header class="flex justify-between">
-					<h2 class="h2">Delete Sampling Configuration</h2>
+					<h2 class="h2">Delete sampling configuration</h2>
 				</header>
 				<article>
 					<p class="opacity-60">

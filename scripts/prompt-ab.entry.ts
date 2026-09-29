@@ -302,13 +302,16 @@ const cleanup = (keep: boolean) => {
 	}
 }
 
-main()
-	.then((code) => {
+// The snapshot's PGlite is closed before the snapshot is removed (or kept):
+// a `--keep` copy left with an open WAL boots "unclean", and deleting a
+// directory out from under a live database is the race `closeDatabase` exists
+// to prevent.
+const { exitAfterClose } = await import("./exitAfterClose")
+const { closeDatabase } = await import("$lib/server/db")
+await exitAfterClose(main, async () => {
+	try {
+		await closeDatabase()
+	} finally {
 		cleanup(process.argv.includes("--keep"))
-		process.exit(code)
-	})
-	.catch((error) => {
-		console.error(error)
-		cleanup(process.argv.includes("--keep"))
-		process.exit(1)
-	})
+	}
+})

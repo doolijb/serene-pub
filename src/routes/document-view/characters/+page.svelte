@@ -56,7 +56,7 @@
 		href="/document-view/characters/browse"
 		class="a11y-btn a11y-btn-secondary"
 	>
-		Browse Character Library
+		Browse character library
 	</a>
 </p>
 
@@ -81,7 +81,7 @@
 						href="/document-view/sessions/new?characterId={character.id}"
 						class="a11y-btn a11y-btn-small"
 					>
-						Start Session
+						Start session
 					</a>
 					<button
 						type="button"

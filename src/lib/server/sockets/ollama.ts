@@ -1,5 +1,10 @@
+import {
+	chatEntries,
+	embeddingEntries,
+	fetchRecommendedGguf
+} from "$lib/server/connections/recommendedGguf"
 import { db } from "$lib/server/db"
-import { and, eq } from "drizzle-orm"
+import { and, eq, inArray } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 // InsertConnection is declared globally in $lib/server/db/types.d.ts (ambient
 // `export global {}` block, same pattern as the Sockets namespace) — no
@@ -21,8 +26,82 @@ import {
 } from "$lib/server/connections/models"
 import { syncManyConnectionModels } from "$lib/server/connections/modelSync"
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
+import {
+	downloadHref,
+	notifyDownloadSettled
+} from "$lib/server/notifications/downloads"
 
 // --- OLLAMA SPECIFIC FUNCTIONS ---
+
+/**
+ * The Ollama host a handler talks to.
+ *
+ * The connection named by `connectionId`: every Ollama connection is managed
+ * against its OWN host (ruled 2026-09-24, plan B4). These handlers all read one
+ * global `ollamaManagerBaseUrl` before, so a second Ollama connection showed
+ * the first one's status, and "Change address" on it edited the global. Every
+ * call here is plain HTTP to the host's API and every handler is admin-only —
+ * the same gate as editing a connection — so no permission changes with it.
+ *
+ * ⏳ Transitional: a caller that names no connection (Document View's Ollama
+ * page, the home page's model check) still gets the manager's saved address.
+ */
+async function ollamaHost(
+	connectionId: number | null | undefined
+): Promise<{ baseUrl: string; connectionId: number | null }> {
+	if (connectionId != null) {
+		const row = await db.query.connections.findFirst({
+			where: (c, { eq }) => eq(c.id, connectionId),
+			columns: { id: true, type: true, baseUrl: true }
+		})
+		if (!row || row.type !== CONNECTION_TYPE.OLLAMA)
+			throw new Error("That is not an Ollama connection.")
+		if (!row.baseUrl?.trim())
+			throw new Error("That Ollama connection has no address.")
+		return {
+			baseUrl: row.baseUrl.replace(/\/+$/, ""),
+			connectionId: row.id
+		}
+	}
+	const { ollamaManagerBaseUrl } =
+		(await db.query.ollamaSettings.findFirst())!
+	return {
+		baseUrl: (ollamaManagerBaseUrl ?? "").replace(/\/+$/, ""),
+		connectionId: null
+	}
+}
+
+/**
+ * Forget one model on every Ollama connection that points at `baseUrl`,
+ * deleting no connection. The host is compared without its trailing slash,
+ * the one spelling difference an address typed twice usually has.
+ */
+async function forgetModelOnHost(baseUrl: string, model: string) {
+	const rows = await db.query.connections.findMany({
+		where: (c, { eq }) => eq(c.type, CONNECTION_TYPE.OLLAMA),
+		columns: { id: true, baseUrl: true }
+	})
+	const ids = rows
+		.filter((r) => (r.baseUrl ?? "").replace(/\/+$/, "") === baseUrl)
+		.map((r) => r.id)
+	if (!ids.length) return
+	await db
+		.delete(schema.connectionModels)
+		.where(
+			and(
+				inArray(schema.connectionModels.connectionId, ids),
+				eq(schema.connectionModels.model, model)
+			)
+		)
+}
+
+/**
+ * The key one pull is tracked under. A connection's pulls are keyed by it, so
+ * the same model pulled on two hosts is two downloads; a pull that names no
+ * connection keeps the bare model name it always had.
+ */
+const pullKey = (connectionId: number | null, modelName: string) =>
+	connectionId == null ? modelName : `${connectionId}:${modelName}`
 
 let cancelingPulls: string[] = []
 
@@ -30,6 +109,8 @@ let cancelingPulls: string[] = []
 let downloadingQuants: {
 	[key: string]: {
 		modelName: string
+		/** The connection whose host this pull runs on; null for the legacy path. */
+		connectionId?: number | null
 		status: string
 		isDone: boolean // Indicates if it's "done" processing regardless of success or not
 		files: { [key: string]: { total: number; completed: number } }
@@ -100,14 +181,12 @@ export const ollamaModelsList: Handler<
 	handler: async (socket, params, emitToUser) => {
 		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
 		try {
-			const { ollamaManagerBaseUrl: baseUrl } =
-				(await db.query.ollamaSettings.findFirst())!
-			const ollama = new Ollama({
-				host: baseUrl
-			})
+			const host = await ollamaHost(params?.connectionId)
+			const ollama = new Ollama({ host: host.baseUrl })
 
 			const result = await ollama.list()
 			const res: Sockets.Ollama.ModelsList.Response = {
+				connectionId: host.connectionId,
 				models: result.models || []
 			}
 			emitToUser("ollama:modelsList", res)
@@ -115,6 +194,7 @@ export const ollamaModelsList: Handler<
 		} catch (error: any) {
 			console.error("Ollama models list error:", error)
 			emitToUser("ollama:modelsList:error", {
+				connectionId: params?.connectionId ?? null,
 				error: "Failed to list models"
 			})
 			throw error
@@ -130,17 +210,28 @@ export const ollamaDeleteModelHandler: Handler<
 	handler: async (socket, params, emitToUser) => {
 		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
 		try {
-			const { ollamaManagerBaseUrl: baseUrl } =
-				(await db.query.ollamaSettings.findFirst())!
-			const ollama = new Ollama({
-				host: baseUrl
-			})
+			const host = await ollamaHost(params.connectionId)
+			const ollama = new Ollama({ host: host.baseUrl })
 
 			await ollama.delete({ model: params.modelName })
 			const res: Sockets.Ollama.DeleteModel.Response = {
 				success: "Model deleted successfully"
 			}
 			emitToUser("ollama:deleteModel", res)
+
+			if (host.connectionId != null) {
+				// The model is gone from THIS host only: forget its rows on the
+				// Ollama connections that point at it, and delete no connection.
+				// `forgetModelEverywhere` below also deletes an endpoint it
+				// empties — right for the one-model rows `connectModel` once
+				// made, and the way a managed connection would vanish the
+				// moment its last model was deleted.
+				await forgetModelOnHost(host.baseUrl, params.modelName)
+				await emitToUser("connections:list", () =>
+					buildConnectionsList()
+				)
+				return res
+			}
 
 			// The MODEL, and the endpoint only if that empties it (0114). This
 			// was `DELETE FROM connections WHERE model = $1` — correct while an
@@ -170,6 +261,36 @@ export const ollamaConnectModelHandler: Handler<
 	handler: async (socket, params, emitToUser) => {
 		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
 		try {
+			if (params.connectionId != null) {
+				// Use, from a connection's own model list: the model goes on
+				// THAT connection, never on a new one-model endpoint made from
+				// the adapter's defaults (which pointed at localhost whatever
+				// host the list came from).
+				const host = await ollamaHost(params.connectionId)
+				const modelRow = await ensureConnectionModel(
+					db,
+					host.connectionId!,
+					params.modelName
+				)
+				if (!modelRow) throw new Error("No model named.")
+				await connectionsSetDefault.handler(
+					socket,
+					{
+						capability: "text->text",
+						id: host.connectionId!,
+						modelId: modelRow.id
+					},
+					emitToUser
+				)
+				await emitToUser("connections:list", () =>
+					buildConnectionsList()
+				)
+				const res: Sockets.Ollama.ConnectModel.Response = {
+					success: "Model connected successfully"
+				}
+				emitToUser("ollama:connectModel", res)
+				return res
+			}
 			// Which endpoint already SERVES this model — asked of
 			// `connection_models` and not of the endpoint's mirror column
 			// (0114). An Ollama host can carry several models now, so the old
@@ -288,14 +409,12 @@ export const ollamaListRunningModelsHandler: Handler<
 	handler: async (socket, params, emitToUser) => {
 		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
 		try {
-			const { ollamaManagerBaseUrl: baseUrl } =
-				(await db.query.ollamaSettings.findFirst())!
-			const ollama = new Ollama({
-				host: baseUrl
-			})
+			const host = await ollamaHost(params?.connectionId)
+			const ollama = new Ollama({ host: host.baseUrl })
 
 			const result = await ollama.ps()
 			const res: Sockets.Ollama.ListRunningModels.Response = {
+				connectionId: host.connectionId,
 				runningModels: result.models || []
 			}
 			emitToUser("ollama:listRunningModels", res)
@@ -303,6 +422,7 @@ export const ollamaListRunningModelsHandler: Handler<
 		} catch (error: any) {
 			console.error("Ollama list running models error:", error)
 			emitToUser("ollama:listRunningModels:error", {
+				connectionId: params?.connectionId ?? null,
 				error: "Failed to list running models"
 			})
 			throw error
@@ -326,27 +446,34 @@ export const ollamaPullModelHandler: Handler<
 	event: "ollama:pullModel",
 	handler: async (socket, params, emitToUser) => {
 		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
+		const host = await ollamaHost(params.connectionId)
+		const key = pullKey(host.connectionId, params.modelName)
+		// Only the admin who started the pull is told how it settled. `pulled`
+		// separates a failed pull from a failure in the bookkeeping after it.
+		const settled = {
+			userId: socket.user!.id,
+			source: "ollama" as const,
+			key,
+			model: params.modelName,
+			href: downloadHref(host.connectionId)
+		}
+		let pulled = false
 		try {
 			// Remove from cancelingPulls if it exists
-			if (cancelingPulls.includes(params.modelName)) {
-				cancelingPulls = cancelingPulls.filter(
-					(name) => name !== params.modelName
-				)
+			if (cancelingPulls.includes(key)) {
+				cancelingPulls = cancelingPulls.filter((name) => name !== key)
 			}
 
 			// Initialize download tracking
-			downloadingQuants[params.modelName] = {
+			downloadingQuants[key] = {
 				modelName: params.modelName,
+				connectionId: host.connectionId,
 				status: "starting",
 				isDone: false,
 				files: {}
 			}
 
-			const { ollamaManagerBaseUrl: baseUrl } =
-				(await db.query.ollamaSettings.findFirst())!
-			const ollama = new Ollama({
-				host: baseUrl
-			})
+			const ollama = new Ollama({ host: host.baseUrl })
 
 			// For streaming progress, we could implement progress callbacks
 			const stream = await ollama.pull({
@@ -355,16 +482,16 @@ export const ollamaPullModelHandler: Handler<
 			})
 
 			for await (const chunk of stream) {
-				if (cancelingPulls.includes(params.modelName)) {
+				if (cancelingPulls.includes(key)) {
 					cancelingPulls = cancelingPulls.filter(
-						(name) => name !== params.modelName
+						(name) => name !== key
 					)
 					stream.abort()
 
 					// Update server state
-					if (downloadingQuants[params.modelName]) {
-						downloadingQuants[params.modelName].status = "cancelled"
-						downloadingQuants[params.modelName].isDone = true
+					if (downloadingQuants[key]) {
+						downloadingQuants[key].status = "cancelled"
+						downloadingQuants[key].isDone = true
 					}
 
 					// Emit cancellation with full state
@@ -379,7 +506,7 @@ export const ollamaPullModelHandler: Handler<
 				// Emit progress updates and update server state
 				if (chunk.status) {
 					// Update server-side tracking
-					if (downloadingQuants[params.modelName]) {
+					if (downloadingQuants[key]) {
 						let fileName: string | undefined
 
 						if (
@@ -389,12 +516,9 @@ export const ollamaPullModelHandler: Handler<
 							fileName = chunk.status.split("pulling ")[1]
 						}
 
-						downloadingQuants[params.modelName].status =
-							chunk.status
+						downloadingQuants[key].status = chunk.status
 						if (fileName) {
-							downloadingQuants[params.modelName].files[
-								fileName
-							] = {
+							downloadingQuants[key].files[fileName] = {
 								total: chunk.total || 0,
 								completed: chunk.completed || 0
 							}
@@ -409,10 +533,12 @@ export const ollamaPullModelHandler: Handler<
 			}
 
 			// Update status to success
-			if (downloadingQuants[params.modelName]) {
-				downloadingQuants[params.modelName].status = "success"
-				downloadingQuants[params.modelName].isDone = true
+			if (downloadingQuants[key]) {
+				downloadingQuants[key].status = "success"
+				downloadingQuants[key].isDone = true
 			}
+			pulled = true
+			await notifyDownloadSettled(settled)
 
 			// Emit final progress with full state
 			emitToUser("ollama:pullProgress", {
@@ -441,9 +567,9 @@ export const ollamaPullModelHandler: Handler<
 			console.error("Ollama pull model error:", error)
 
 			// Update server state for error
-			if (downloadingQuants[params.modelName]) {
-				downloadingQuants[params.modelName].status = "error"
-				downloadingQuants[params.modelName].isDone = true
+			if (downloadingQuants[key]) {
+				downloadingQuants[key].status = "error"
+				downloadingQuants[key].isDone = true
 			}
 
 			// Emit error progress with full state
@@ -454,6 +580,11 @@ export const ollamaPullModelHandler: Handler<
 			emitToUser("ollama:pullModel:error", {
 				error: "Failed to download model"
 			})
+			if (!pulled)
+				await notifyDownloadSettled({
+					...settled,
+					error: error ?? new Error("Unknown error")
+				})
 			throw error
 		}
 	}
@@ -467,10 +598,16 @@ export const ollamaVersionHandler: Handler<
 	handler: async (socket, params, emitToUser) => {
 		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
 		try {
-			const { ollamaManagerBaseUrl } =
-				(await db.query.ollamaSettings.findFirst())!
-			const baseUrl = params.baseUrl || ollamaManagerBaseUrl
-			const response = await fetch(`${baseUrl}/api/version`)
+			// `baseUrl` tests an address as typed, before it is saved — the same
+			// admin-only reach `connections:test` already has, so naming a
+			// connection does not replace it.
+			const host = params?.baseUrl
+				? {
+						baseUrl: params.baseUrl.replace(/\/+$/, ""),
+						connectionId: params.connectionId ?? null
+					}
+				: await ollamaHost(params?.connectionId)
+			const response = await fetch(`${host.baseUrl}/api/version`)
 
 			if (!response.ok) {
 				throw new Error(
@@ -480,6 +617,7 @@ export const ollamaVersionHandler: Handler<
 
 			const result = await response.json()
 			const res: Sockets.Ollama.Version.Response = {
+				connectionId: host.connectionId,
 				version: result.version
 			}
 			emitToUser("ollama:version", res)
@@ -487,6 +625,7 @@ export const ollamaVersionHandler: Handler<
 		} catch (error: any) {
 			console.error("Ollama version error:", error)
 			emitToUser("ollama:version:error", {
+				connectionId: params?.connectionId ?? null,
 				error: "Failed to connect to Ollama or get version"
 			})
 			throw error
@@ -503,9 +642,8 @@ export const ollamaIsUpdateAvailableHandler: Handler<
 		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
 		try {
 			// Get current version using direct HTTP request
-			const { ollamaManagerBaseUrl: baseUrl } =
-				(await db.query.ollamaSettings.findFirst())!
-			const versionResponse = await fetch(`${baseUrl}/api/version`)
+			const host = await ollamaHost(params?.connectionId)
+			const versionResponse = await fetch(`${host.baseUrl}/api/version`)
 
 			if (!versionResponse.ok) {
 				throw new Error(
@@ -537,6 +675,7 @@ export const ollamaIsUpdateAvailableHandler: Handler<
 				compareVersions(latestVersionClean, currentVersionClean) > 0
 
 			const res: Sockets.Ollama.IsUpdateAvailable.Response = {
+				connectionId: host.connectionId,
 				isUpdateAvailable: updateAvailable,
 				currentVersion: currentVersion,
 				latestVersion: latestVersion
@@ -546,6 +685,7 @@ export const ollamaIsUpdateAvailableHandler: Handler<
 		} catch (error: any) {
 			console.error("Ollama update check error:", error)
 			emitToUser("ollama:isUpdateAvailable:error", {
+				connectionId: params?.connectionId ?? null,
 				error: "Failed to check for updates"
 			})
 			throw error
@@ -585,8 +725,16 @@ export const ollamaSearchAvailableModelsHandler: Handler<
 			}> = []
 
 			if (source === OllamaModelSearchSource.HUGGING_FACE) {
+				// An embeddings search narrows to embedding models by the Hub's own
+				// pipeline tag, on top of `filter=gguf` — so "nomic" finds the
+				// embedding GGUFs and not every chat model with that word in it.
+				// Chat (the default) sends exactly the query it always did.
+				const pipeline =
+					params.kind === "embedding"
+						? "&pipeline_tag=feature-extraction"
+						: ""
 				const response = await fetch(
-					`https://huggingface.co/api/models?search=${encodeURIComponent(search)}&filter=gguf&limit=50&sort=trendingScore&full=True&config=True`
+					`https://huggingface.co/api/models?search=${encodeURIComponent(search)}&filter=gguf${pipeline}&limit=50&sort=trendingScore&full=True&config=True`
 				)
 
 				if (!response.ok) {
@@ -712,15 +860,16 @@ export const ollamaCancelPullHandler: Handler<
 	handler: async (socket, params, emitToUser) => {
 		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
 		try {
+			const key = pullKey(params.connectionId ?? null, params.modelName)
 			// Add the model to the canceling pulls array
-			if (!cancelingPulls.includes(params.modelName)) {
-				cancelingPulls.push(params.modelName)
+			if (!cancelingPulls.includes(key)) {
+				cancelingPulls.push(key)
 			}
 
 			// If the model is currently downloading, update its status
-			if (downloadingQuants[params.modelName]) {
-				downloadingQuants[params.modelName].status = "cancelled"
-				downloadingQuants[params.modelName].isDone = true
+			if (downloadingQuants[key]) {
+				downloadingQuants[key].status = "cancelled"
+				downloadingQuants[key].isDone = true
 			}
 
 			const res: Sockets.Ollama.CancelPull.Response = {
@@ -746,97 +895,15 @@ export const ollamaRecommendedModelsHandler: Handler<
 	handler: async (socket, params, emitToUser) => {
 		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
 		try {
-			// Fetch the recommended models YAML from GitHub
-			const response = await fetch(
-				"https://raw.githubusercontent.com/SerenePub/serene-pub-gguf-list/main/recommended.yaml"
-			)
-
-			if (!response.ok) {
-				throw new Error(`GitHub API error: ${response.status}`)
-			}
-
-			const yamlText = await response.text()
-
-			// Parse YAML - simple parsing for our specific structure
-			const models: Array<{
-				name: string
-				pull: string
-				size: number
-				recommended_vram: number
-				details: {
-					parameter_size: string
-					quantization_level: string
-					modified_at: string
-					description: string
-				}
-			}> = []
-			const lines = yamlText.split("\n")
-			let currentModel: any = null
-			let inDetails = false
-
-			for (const line of lines) {
-				const trimmed = line.trim()
-
-				if (trimmed.startsWith("- name:")) {
-					if (currentModel) {
-						models.push(currentModel)
-					}
-					currentModel = {
-						name: trimmed.replace("- name:", "").trim(),
-						pull: "",
-						size: 0,
-						recommended_vram: 0,
-						details: {
-							parameter_size: "",
-							quantization_level: "",
-							modified_at: "",
-							description: ""
-						}
-					}
-					inDetails = false
-				} else if (currentModel) {
-					if (trimmed.startsWith("pull:")) {
-						currentModel.pull = trimmed.replace("pull:", "").trim()
-					} else if (trimmed.startsWith("size:")) {
-						currentModel.size = parseFloat(
-							trimmed.replace("size:", "").trim()
-						)
-					} else if (trimmed.startsWith("recommended_vram:")) {
-						currentModel.recommended_vram = parseInt(
-							trimmed.replace("recommended_vram:", "").trim()
-						)
-					} else if (trimmed === "details:") {
-						inDetails = true
-					} else if (inDetails) {
-						if (trimmed.startsWith("parameter_size:")) {
-							currentModel.details.parameter_size = trimmed
-								.replace("parameter_size:", "")
-								.trim()
-								.replace(/"/g, "")
-						} else if (trimmed.startsWith("quantization_level:")) {
-							currentModel.details.quantization_level = trimmed
-								.replace("quantization_level:", "")
-								.trim()
-								.replace(/"/g, "")
-						} else if (trimmed.startsWith("modified_at:")) {
-							currentModel.details.modified_at = trimmed
-								.replace("modified_at:", "")
-								.trim()
-								.replace(/"/g, "")
-						} else if (trimmed.startsWith("description:")) {
-							currentModel.details.description = trimmed
-								.replace("description:", "")
-								.trim()
-								.replace(/"/g, "")
-						}
-					}
-				}
-			}
-
-			// Add the last model if exists
-			if (currentModel) {
-				models.push(currentModel)
-			}
+			// The shared reader of `recommended.yaml` (see recommendedGguf.ts),
+			// narrowed to what was asked for. `kind` defaults to chat, which is
+			// every caller that predates embeddings — so nothing that sent `{}`
+			// is suddenly handed an embedding model.
+			const all = await fetchRecommendedGguf()
+			const models =
+				params?.kind === "embedding"
+					? embeddingEntries(all)
+					: chatEntries(all)
 
 			const res: Sockets.Ollama.RecommendedModels.Response = {
 				recommendedModels: models
@@ -882,7 +949,7 @@ export const ollamaUpdateManagerEnabled: Handler<
 		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
 		if (params.enabled && isAndroidWrapper()) {
 			throw new Error(
-				"Ollama Manager is not available in the Android app"
+				"Ollama, managed, is not available in the Android app"
 			)
 		}
 		await db

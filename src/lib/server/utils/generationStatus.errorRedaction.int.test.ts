@@ -285,7 +285,7 @@ describe("a failure lands only on the row its run still owns", () => {
 			session.id,
 			message.id,
 			new Error(SERVICE_TEXT),
-			"queue-item-A"
+			{ queueItemId: "queue-item-A" }
 		)
 
 		const [untouched] = await testDb
@@ -303,7 +303,7 @@ describe("a failure lands only on the row its run still owns", () => {
 			session.id,
 			message.id,
 			new Error(SERVICE_TEXT),
-			"queue-item-B"
+			{ queueItemId: "queue-item-B" }
 		)
 		const [failed] = await testDb
 			.select()

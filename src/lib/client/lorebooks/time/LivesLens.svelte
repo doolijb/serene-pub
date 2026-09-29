@@ -2,8 +2,9 @@
 	import * as Icons from "@lucide/svelte"
 	import type { Presence } from "$lib/shared/lorebooks/presence"
 	import type { StoryDate } from "$lib/shared/lorebooks/storyDate"
+	import type { Line } from "$lib/shared/lorebooks/lineReading"
 	import { formatDate } from "../sections/historyDates"
-	import { buildAxis } from "./livesLens"
+	import { buildAxis, pinMarksOf } from "./livesLens"
 
 	/**
 	 * The weave: every placed life, drawn against the story's own line.
@@ -25,30 +26,16 @@
 		/** Every dated thing the book knows, so a life is placed against events. */
 		pins: readonly StoryDate[]
 		moment?: StoryDate | null
-		branchId?: number | null
+		/** The line being read, ancestor chain and fork cuts included. */
+		line: Line
 		onOpenMember: (castId: number) => void
 	}
 
-	let { members, presences, pins, moment, branchId, onOpenMember }: Props =
+	let { members, presences, pins, moment, line, onOpenMember }: Props =
 		$props()
 
-	let axis = $derived(
-		buildAxis(members, presences, pins, { moment, branchId })
-	)
-	let pinMarks = $derived(
-		axis.max > axis.min
-			? pins.map((d) => ({
-					date: d,
-					left:
-						((d.year * 10000 +
-							(d.month ?? 0) * 100 +
-							(d.day ?? 0) -
-							axis.min) /
-							(axis.max - axis.min)) *
-						100
-				}))
-			: []
-	)
+	let axis = $derived(buildAxis(members, presences, pins, { moment, line }))
+	let pinMarks = $derived(pinMarksOf(pins, axis))
 	const pct = (n: number) => `${n * 100}%`
 </script>
 
@@ -72,7 +59,7 @@
 		<!-- The events, so a life has something to be legible against. -->
 		<div class="relative h-6 shrink-0">
 			<div class="bg-surface-300-700 absolute inset-x-0 top-3 h-px"></div>
-			{#each pinMarks as mark (mark.left)}
+			{#each pinMarks as mark (mark.key)}
 				<span
 					class="bg-warning-500 absolute top-[0.4rem] size-2 -translate-x-1/2 rotate-45"
 					style="left: {mark.left}%"
@@ -112,7 +99,7 @@
 								)}"
 								title={run.note ?? `at ${run.personalPosition}`}
 							>
-								<span class="truncate text-[0.66rem]">
+								<span class="truncate text-[11px]">
 									{run.personalPosition}
 								</span>
 							</div>
@@ -126,7 +113,7 @@
 					</div>
 					{#if lane.doubled}
 						<span
-							class="chip preset-tonal-primary shrink-0 text-[0.62rem]"
+							class="chip preset-tonal-primary shrink-0 text-[11px]"
 						>
 							two of them
 						</span>

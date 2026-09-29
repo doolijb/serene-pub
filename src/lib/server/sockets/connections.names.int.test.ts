@@ -38,6 +38,15 @@ const collectingEmit = (event: string, data: any) => {
 	emitted.push([event, data])
 }
 
+/**
+ * A distinct host per fixture. One Ollama connection per host (owner ruling
+ * 2026-09-25) means a second create at `localhost:11434` is refused for its
+ * HOST — which would mask the name refusal these tests exist to check. The
+ * name check runs first in `connections:create`, so a deliberate duplicate
+ * name is still refused by name.
+ */
+let fixtureHost = 0
+
 async function createConnection(name: string) {
 	const { connectionsCreate } = await import("./connections")
 	emitted.length = 0
@@ -48,7 +57,7 @@ async function createConnection(name: string) {
 				connection: {
 					name,
 					type: "ollama",
-					baseUrl: "http://localhost:11434"
+					baseUrl: `http://ollama-fixture-${++fixtureHost}.test:11434`
 				} as any
 			},
 			collectingEmit as any

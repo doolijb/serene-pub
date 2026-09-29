@@ -1,12 +1,12 @@
 /**
- * What a JSON stage is allowed to see of the conversation.
+ * What a JSON step is allowed to see of the conversation.
  *
  * A model imitates the last thing it read. When a planner's answer lands inside
  * a reply, the next turn's planner reads its own schema back out of the
  * transcript and the keeper reads it too — which is how a state keeper came to
  * answer with `{beats, speakers, worldHints}` and change nothing at all.
  *
- * So the JSON stages read the conversation as prose. This is the cut, and it is
+ * So the JSON steps read the conversation as prose. This is the cut, and it is
  * a pure function because the rule has edges: a brace inside a sentence is not a
  * block, and a message that was nothing but a block has no prose left in it.
  */

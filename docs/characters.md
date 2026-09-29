@@ -1,10 +1,10 @@
 # Characters
 
-Characters are the people in a session — the ones the AI plays and, since the library merge, the ones _you_ play too (your [personas](./personas.md)) — everything from their name and backstory to how they greet you and speak. This page covers every field on a character, how avatars and image galleries work, the two ways to create a character, importing from the built-in library or a file, exporting a character card, and controlling how much of a character's info is exposed inside a given session.
+Characters are the people in a session — the ones the AI plays and the ones _you_ play too (your [personas](./personas.md)) — everything from their name and backstory to how they greet you and speak. This page covers every field on a character, how avatars and image galleries work, the two ways to create a character, importing from the built-in library or a file, exporting a character card, and controlling how much of a character's info is exposed inside a given session.
 
 ## Overview
 
-Every character lives in your personal character list, accessible from the Characters sidebar. The **New** button at the top of the list opens a menu with the three ways to add one: **Write a character** starts from a blank card, **Browse the library** opens the community character library, and **Import a card** brings in an existing character card (PNG, APNG, JPEG, JPG, WEBP, JSON, or CHARX). Dropping a card file anywhere on the list imports it too. Each character has a required **Name** and **Description**; every other field is optional. Characters can be attached to a [lorebook](./lorebooks.md) for world/setting info, tagged for organization (see [Tags](./tags.md)), marked as a favorite, and added to any number of [sessions](./sessions.md), including group sessions with multiple characters.
+Every character lives in your personal character list, accessible from the Characters sidebar. The **New** button at the top of the list opens a menu with the three ways to add one: **Write a character** starts from a blank card, **Browse the library** opens the community character [Library](#browsing-the-character-library), and **Import a card** brings in an existing character card (PNG, APNG, JPEG, JPG, WEBP, JSON, or CHARX). Dropping a card file anywhere on the list imports it too. Each character has a required **Name** and **Description**; every other field is optional. Characters can be members of a [lorebook](./lorebooks.md)'s cast, tagged for organization (see [Tags](./tags.md)), marked as a favorite, and added to any number of [sessions](./sessions.md), including group sessions with multiple characters.
 
 Characters are private to your account — the character list is scoped to the logged-in user, so different accounts on the same Serene Pub instance don't see each other's characters. See [Users & Accounts](./users-and-accounts.md) for more on account scoping.
 
@@ -76,7 +76,7 @@ the cursor is inside it.
 
 ### Favoriting a Character
 
-Each character has an **isFavorite** flag, toggled with the **Favorite** switch in the edit form. Favorited characters get a highlighted border in the character list and are always sorted before non-favorites.
+The **Favorite** switch in the edit form marks a character as a favorite. Favorited characters show a small star beside their name in the list and always sort before non-favorites in their folder.
 
 ### The Persona Flag
 
@@ -98,11 +98,11 @@ The **Tags** field is a search-and-create combo box: type to filter your existin
 
 ### Saving, Canceling, and Unsaved Changes
 
-While editing, **Ctrl+S** (or **Cmd+S** on Mac) saves the form and **Escape** cancels, provided the form has focus. If you try to close a character with unsaved edits — via the Cancel button, Escape, or navigating away — a confirmation dialog appears asking whether to discard the changes. The **Create**/**Update** button itself changes color (filled vs. tonal) to indicate whether there are unsaved changes pending.
+While editing, **Ctrl+S** (or **Cmd+S** on Mac) saves the form and **Escape** leaves it, provided the form has focus. While there are unsaved edits, the header reads **Unsaved changes** and the **Save** button is filled rather than muted. If you try to leave a character with unsaved edits — via the back button, Escape, or navigating away — a **Discard unsaved changes?** dialog asks whether to throw them away.
 
-### Binding a Character to a Lorebook
+### Characters and Lorebooks
 
-Characters can be linked to a single [lorebook](./lorebooks.md) via a `lorebookId`. When you import a character card that has an embedded lorebook, Serene Pub will prompt you after import to confirm the lorebook name and import it, associating it with that character.
+A character joins a [lorebook](./lorebooks.md) as a member of its [cast](./lorebooks.md#cast), which happens on its own when the character is added to a session that reads the book. When you import a character card that has an embedded lorebook, Serene Pub asks after the import whether to bring the lorebook in as well (see [What Happens After Import](#what-happens-after-import)).
 
 ### Fields Marked Visible in Prompts
 
@@ -112,8 +112,8 @@ Several fields — Name, Nickname, Aliases, Description, Personality, Scenario, 
 
 Each character has one active **avatar** image plus an optional image gallery of alternates. The two live in different places: the avatar picker is part of the create/edit form, but the gallery itself is only available from a character's read-only **detail**, in a dedicated **Gallery** tab — it's not part of the edit form.
 
-- In the create/edit form, drop or click the dashed upload box to select an avatar image (JPG, PNG, or GIF). The image is only staged locally as a preview until you save the character — nothing uploads until you click **Create**/**Update**.
-- Use **Clear Selection** to discard a staged (not-yet-saved) avatar file before saving.
+- In the create/edit form, the avatar picture beside the name is the upload control: click it (it carries a small camera badge) or drop an image onto it. The image is only staged locally as a preview until you save the character — nothing uploads until you click **Save**.
+- The small menu under the avatar offers **Adjust crop** and **Remove image**; **Remove image** discards a staged (not-yet-saved) avatar file before saving.
 - Once a character exists, open its **detail** and switch to the **Gallery** tab to manage additional images. Here you can:
     - **Upload** additional images to the character's gallery.
     - Click a thumbnail to open it in a **lightbox** for a closer look.
@@ -139,7 +139,7 @@ Small pictures of an avatar (the sidebars, message avatars, scene portraits, the
 To choose your own:
 
 - **When you pick a new avatar**, the crop editor opens over the image you chose, before anything is uploaded. Drag the picture to move it under the square, use the wheel, a pinch or the zoom slider to zoom, and the arrow keys to nudge it a pixel at a time (hold Shift for ten). Two live previews show exactly what the round and the square avatar will look like. **Save** keeps your crop; **Cancel** uploads the image uncropped, which means the default crop above.
-- **For an avatar you already have**, the **Adjust crop** button beside the avatar in the character or persona form opens the same editor on the stored image, starting from the crop that is in force.
+- **For an avatar you already have**, **Adjust crop**, in the menu under the avatar on the character form, opens the same editor on the stored image, starting from the crop that is in force.
 - **From the Media panel**, any image's **⋮** menu has a **Crop** action, which edits the same value.
 
 **Reset** puts the crop back to the default rule rather than to whatever it was before. The crop is never destructive: the full image is always kept, so a lightbox still shows everything and you can re-crop as often as you like. Changing the crop re-cuts the small picture and gives it a new address, so every open view switches to it at once (see below).
@@ -182,28 +182,32 @@ The **Easy Character Creation** switch on the User Settings tab controls which o
 
 ### Editing and Deleting
 
-From the character list, each entry has a menu (the "..." button) with **View**, **Edit**, **Export**, the persona and folder actions described above, and **Delete**. Deleting a character asks for confirmation ("Delete Character? This action cannot be undone") and removes the character's stored data directory (avatar and gallery images) along with its database record.
+From the character list, each entry has a menu (the **⋮** button) with **View**, **Edit**, **Export**, the persona and folder actions described above, and **Delete**. Deleting a character asks for confirmation ("Delete character? … This action cannot be undone.") and removes the character's stored data directory (avatar and gallery images) along with its database record.
 
 ### Viewing a Character
 
 Clicking a character in the list (rather than its menu) opens a read-only **detail**: the
 avatar, name and nickname, version and owner on one line, its tags, then Details (description,
 personality, scenario, first message, alternate greetings, creator notes, each shown only when it
-has content) and a **Gallery** tab. The pencil in the header edits; the menu offers **View
-Sessions** and **Export**. At full page the list stays beside the panel.
+has content), a **Gallery** tab and a **Sprites** tab. The pencil in the header edits; the menu offers **View
+sessions** and **Export character**. In Focus the list stays beside the panel.
 
 ## Browsing the Character Library
 
-The **Character Library** is a searchable catalog of community-contributed character cards, browsed and imported without leaving the app. Open it from **Browse the library** under the **New** button in the Characters sidebar — unlike creating or importing a file, this takes you to a full-page Character Library rather than opening a dialog in the sidebar.
+The **Library** is a searchable catalog of community character cards, browsed and imported without leaving what you are doing. You open it from the **Characters** view: **Browse the library** under the **New** button, or **Browse Characters** when you have no characters yet. Like every view it shows docked, at half width or in Focus, where its address is `/library` (the old `/library/characters` address still leads there).
 
-- A **Characters · Personas** switch at the top picks which kind of card you are browsing; the Personas catalog is described on the [Personas](./personas.md#the-personas-catalog) page. Under Characters, if more than one catalog is available, a row of tabs lets you switch between sources. Today there are two: the original **Serene Pub** catalog (the `serene-pub-chara-list` GitHub repository, grouped into named categories) and **CharaVault**, a much larger third-party card catalog shown as a flat grid instead, since CharaVault's own category/folder structure doesn't map onto a meaningful browsing grouping the way the curated catalog's does.
-- Each entry shows its thumbnail, name, an excerpt of its description, author, and card spec version. Type in the search box to filter by name, description, category, or tags — it searches as you type (debounced) or immediately on Enter; there's no separate Search button.
-- When browsing CharaVault specifically, you also get a **Sort** dropdown (Top Rated, Most Downloaded, Newest, Oldest, Name A–Z/Z–A, Token Count, Most Discussed), an **Only cards with a lorebook** toggle, a creator filter (click an author's name in a card's detail view to filter the whole list to their cards, removable via the chip that appears above the results), and support for advanced query syntax in the search box — `tag:name`, `-exclude`, `creator:name`, and `"exact phrase"`, which can be combined freely (e.g. `elf tag:fantasy -romance creator:anon`). If the admin has enabled unsafe/NSFW browsing, an **Include NSFW results** toggle also appears. Results load a page at a time with a **Load More** button rather than infinite scroll, and a source that's unreachable or rate-limited shows its own message with a **Retry** button instead of an empty grid.
-- Clicking an entry opens a detail view with the full description, tags, author, version, spec, category, and (if the card carries one) a note that it includes a lorebook, plus a **Download Character** button to pull it directly into your own character list. Downloading also triggers the same lorebook-import prompt as a manual file import if the card includes an embedded lorebook.
+- **Searching.** Type in the search box: it searches as you type, after a short pause, or at once on Enter. With the Library open, Ctrl K searches the library as well. Results load a page at a time with a **Load more** button; a page that content filtering empties carries on to the next by itself.
+- **Sources.** There are two: the **Serene Pub** catalog (the `serene-pub-chara-list` GitHub repository, grouped into named categories) and **CharaVault**, a much larger third-party catalog shown as one flat run, since its folders are not a browsing structure. Pick one from **Source**.
+- **CharaVault's filters.** Browsing CharaVault adds a **Sort** (Top rated, Most downloaded, Newest, Oldest, Name A–Z/Z–A, Token count, Most discussed), an **Only with a lorebook** switch, a creator filter (**More by …** on a card's detail narrows the whole list to that creator, and the chip that appears above the results removes it), and query syntax in the search box: `tag:name`, `-exclude`, `creator:name` and `"exact phrase"`, combined freely (e.g. `elf tag:fantasy -romance creator:anon`). If the admin has enabled unsafe browsing, an **Include NSFW** switch appears too.
+- **Docked**, the source and filters sit behind the sliders button beside the search box, a pick that is not the default shows as a chip you can clear, and results are a single column of rows. With more room the filters are a row above a grid of portraits.
+- **A card's detail** shows its portrait, author, spec, version and category, the full description, its tags, and whether it includes a lorebook. Docked it replaces the list (the back button returns to the list where you left it); from desk width it opens beside the grid.
+- **Importing.** **Import** pulls the card into your character list. Once it is in, the button becomes **Open in Characters**, which opens the new character in the Characters view; the Library stays where it was, so you can keep browsing. If the card carries a lorebook and the Characters view is open, Characters offers to import the lorebook as well, as it does for a file.
+- **Personas.** The Library browses characters only. To play a card as yourself, import it and then choose **Use as persona** from its **⋮** menu in Characters — see [Personas](./personas.md).
+- A source that cannot be reached shows a **Retry** button instead of an empty list, and one that is rate-limiting counts down to its own retry.
 
 ### Library Source
 
-The Serene Pub catalog is sourced live from a public, community-maintained catalog (the `serene-pub-chara-list` repository) rather than being bundled with the app, and CharaVault is queried live from its own public API — both require an internet connection to search or import from, and new or updated cards on either source show up automatically the next time you open the Character Library.
+The Serene Pub catalog is sourced live from a public, community-maintained catalog (the `serene-pub-chara-list` repository) rather than being bundled with the app, and CharaVault is queried live from its own public API — both require an internet connection to search or import from, and new or updated cards on either source show up automatically the next time you search the Library.
 
 ## Importing a Character from a File
 
@@ -213,44 +217,36 @@ A **CHARX** file is the zip-based Character Card V3 container that RisuAI writes
 
 ### What Happens After Import
 
-A successful import shows a confirmation toast naming the imported character and immediately refreshes your character list. If the imported card carries an embedded lorebook, a follow-up **Import Lorebook?** dialog appears, pre-filled with the lorebook's name (editable before you confirm), letting you decide whether to bring the world/setting data in alongside the character. See [Lorebooks](./lorebooks.md).
+A successful import shows a confirmation toast naming the imported character and immediately refreshes your character list. A card Serene Pub exported carries its character's id, so re-importing one is recognised: if nothing has changed, the toast says **Character already imported** and the existing character is used; if it has changed, a dialog asks whether to overwrite the existing character or import it as a new one. If the imported card carries an embedded lorebook, a follow-up **Import the lorebook?** dialog appears, pre-filled with the lorebook's name (editable before you confirm), letting you decide whether to bring the world/setting data in alongside the character as a new lorebook. See [Lorebooks](./lorebooks.md).
 
 ## Exporting a Character
 
-From the edit form of an existing character, click the **export button** (upload icon) in the header to open the **Export Character** dialog, which offers three formats:
+Choose **Export** from a character's **⋮** menu in the list, or **Export character** from the menu on its detail, to open the export dialog, which offers three formats:
 
 - **Export as JSON** — downloads the character as a standard character-card JSON file.
 - **Export as CHARX, with sprites** — a zip holding the card, the avatar and every sprite. This is the only format that carries sprites. The default set's first image for each sprite label is written as a standard emotion asset, which RisuAI and SillyTavern read; other sets and extra variants use a Serene Pub asset type that those apps keep and re-export, and that Serene Pub reads back into the same sets.
-- **Export as PNG Card** — embeds the character card data into the character's avatar image and downloads it as a PNG. This option is disabled ("No Avatar") if the character has no avatar image set.
+- **Export as PNG card** — embeds the character card data into the character's avatar image and downloads it as a PNG. This option is disabled ("Export as PNG card (no avatar)") if the character has no avatar image set.
 
 If the character has one or more lorebooks bound to it, the dialog also shows an **Include a lorebook (optional)** dropdown above the format buttons, letting you embed one of those bound lorebooks into the exported card so it travels with the character on import (see [Lorebooks](./lorebooks.md)). Leave it set to "None" to export the character without any lorebook data.
 
-Both formats build a CharacterCard V2-compatible structure, including the character's tags, so exported characters can be re-imported into Serene Pub or shared with compatible apps.
+Every format builds a Character Card V3 structure, including the character's tags, so exported characters can be re-imported into Serene Pub or shared with compatible apps.
 
 ### Export File Names
 
-Exported files are named automatically from the character's name (lowercased, with non-alphanumeric characters stripped), e.g. a character named "Dr. John Watson" exports as `dr_john_watson.json`, `dr_john_watson.charx` or `dr_john_watson.png`.
+Exported files are named automatically from the character's name (lowercased, with every character other than a letter or digit replaced by `_`), e.g. a character named "John Watson" exports as `john_watson.v3.json`, `john_watson.charx` or `john_watson.v3.png`.
 
-## Visibility Settings
+## How Much of a Character the Model Sees
 
-Beyond the character's own fields, each character has a **per-session visibility** setting that controls how much of that character's information is exposed to the model when the character is present in a session but not the one currently responding. This is configured per character, per session, from the session's edit screen (see [Sessions](./sessions.md)) rather than from the character form itself — the same character can be fully visible in one session and hidden in another.
+A character's own information is always sent in full on their own turn. On everyone else's turns, how much of each character's card goes into the prompt is one setting for the whole session — **Character detail**, in the session's settings (Chat and Adventure) — rather than something set per character: **Everything**, **Name and description**, or **Only whoever is speaking**. See [Sessions → Character detail](./sessions.md#character-detail). (Earlier versions had a per-character visibility button in the cast list; it is gone.)
 
-Each character row in the session's participant list has a visibility button (an eye icon) that cycles through three levels on click:
+### Enabled vs. Benched
 
-- **Full Info** — the character's complete information is shown even when they aren't the one responding.
-- **Name Only** — only the character's name/nickname is shown when they aren't responding.
-- **Hidden** — the character's info is fully hidden from the prompt when they aren't responding.
+Separately, each character in a session has an on/off switch in the session's **Participants** settings (a smile/meh icon). A benched (switched-off) character stays listed in the session but is left out of the turn rotation and the prompt's list of names — distinct from Character detail, which only affects how much of a character's card is shown. See [Sessions](./sessions.md).
 
-The button's tooltip states what happens on the character's _other_ turns — e.g. "When not speaking: Only name/nickname is included" — since a character's own information is always fully included on their own turn regardless of this setting. Its purpose is trimming prompt size in multi-character group sessions by hiding detail for characters who aren't currently active in the conversation.
+### Why Character Detail Matters in Group Sessions
 
-### Active vs. Visible
-
-Separately from visibility, each character in a session also has an **active/inactive** toggle (a smile/meh icon switch). An inactive character stays listed in the session but is excluded from participating — this is distinct from the visibility level, which only affects how much of an active-or-inactive character's data is shown in context.
-
-### Why Visibility Matters in Group Sessions
-
-Visibility levels matter most in sessions with several characters at once: with every character set to Full Visibility, the prompt sent to the model grows with each additional participant, since all of their descriptions, personalities, and other prompt-visible fields are included every turn. Setting less-central characters to Minimal Visibility or Hidden keeps the prompt smaller and cheaper while the model is generating a different character's response, without removing them from the session.
+It matters most in sessions with several characters at once: at **Everything**, the prompt sent to the model grows with each additional participant, since all of their descriptions and personalities are included every turn. **Name and description** or **Only whoever is speaking** keeps the prompt smaller while the model is generating a different character's response, without removing anyone from the session.
 
 ## Characters in Sessions
 
-A character isn't tied to a single conversation — the same character can be added to any number of [sessions](./sessions.md), including one-on-one sessions and group sessions with multiple characters and personas together. Characters are added to a session, reordered by drag handle, and have their active state and visibility level managed from the session's edit screen, as described above.
+A character isn't tied to a single conversation — the same character can be added to any number of [sessions](./sessions.md), including one-on-one sessions and group sessions with multiple characters and personas together. Characters are added to a session, reordered by drag handle, and switched on or off from the session's edit screen, as described above.

@@ -3,8 +3,10 @@ import {
 	capabilitiesServedBy,
 	contextLabel,
 	downloadSourcesFor,
+	duplicateOllamaHosts,
 	formatUptime,
 	kcppExternalLine,
+	kcppInstallState,
 	kcppLoadedLine,
 	kcppPerfLine,
 	kcppProcessLine,
@@ -17,6 +19,7 @@ import {
 	removeConfirmation,
 	uptimeSince
 } from "./managedConnectionView"
+import { connectionRowStatus } from "./connectionRowStatus"
 
 describe("managedStage", () => {
 	const base = {
@@ -337,5 +340,147 @@ describe("managedLabel", () => {
 	test("what a person calls each one", () => {
 		expect(managedLabel("koboldcpp")).toBe("KoboldCPP")
 		expect(managedLabel("ollama")).toBe("Ollama")
+	})
+})
+
+// Plan 2026-09-24 A2: ONE reading of the install, shared by the index row and
+// this view. The table pins both halves for every settings combination, so a
+// row that says "Not installed" can never open a view that says "Stopped".
+describe("kcppInstallState — the row and the view read the install once", () => {
+	const cases: Array<{
+		name: string
+		settings: Parameters<typeof kcppInstallState>[0]
+		state: ReturnType<typeof kcppInstallState>
+		rowLabel: string
+		rowVerb: string | null
+	}> = [
+		{
+			name: "no settings yet",
+			settings: undefined,
+			state: "loading",
+			rowLabel: "Checking",
+			rowVerb: null
+		},
+		{
+			name: "flag off, nothing set up",
+			settings: {
+				koboldCppManagerEnabled: false,
+				koboldCppManagedMode: null
+			},
+			state: "not-installed",
+			rowLabel: "Not installed",
+			rowVerb: "setup"
+		},
+		{
+			name: "flag off, managed with a binary",
+			settings: {
+				koboldCppManagerEnabled: false,
+				koboldCppManagedMode: "managed",
+				koboldCppManagedBinaryVariant: "koboldcpp-linux-x64"
+			},
+			state: "offline",
+			rowLabel: "Offline",
+			rowVerb: "start-offline"
+		},
+		{
+			name: "flag off, managed without a binary",
+			settings: {
+				koboldCppManagerEnabled: false,
+				koboldCppManagedMode: "managed"
+			},
+			state: "not-installed",
+			rowLabel: "Not installed",
+			rowVerb: "setup"
+		},
+		{
+			name: "flag off, external",
+			settings: {
+				koboldCppManagerEnabled: false,
+				koboldCppManagedMode: "external"
+			},
+			state: "offline",
+			rowLabel: "Offline",
+			rowVerb: "start-offline"
+		},
+		{
+			name: "flag on, no mode",
+			settings: {
+				koboldCppManagerEnabled: true,
+				koboldCppManagedMode: null
+			},
+			state: "no-mode",
+			rowLabel: "Not set up",
+			rowVerb: "setup"
+		},
+		{
+			name: "flag on, managed without a binary",
+			settings: {
+				koboldCppManagerEnabled: true,
+				koboldCppManagedMode: "managed"
+			},
+			state: "no-binary",
+			rowLabel: "Not set up",
+			rowVerb: "setup"
+		}
+	]
+	for (const c of cases) {
+		test(c.name, () => {
+			const state = kcppInstallState(c.settings)
+			expect(state).toBe(c.state)
+			const row = connectionRowStatus(
+				{
+					id: 1,
+					name: "KoboldCPP",
+					type: "koboldcpp_managed",
+					baseUrl: null,
+					models: []
+				} as any,
+				{ kind: "koboldcpp-managed", kcppInstall: state }
+			)
+			expect(row.label).toBe(c.rowLabel)
+			expect(row.action?.verb ?? null).toBe(c.rowVerb)
+		})
+	}
+	test("flag on and set up hands over to the process status", () => {
+		expect(
+			kcppInstallState({
+				koboldCppManagerEnabled: true,
+				koboldCppManagedMode: "managed",
+				koboldCppManagedBinaryVariant: "x"
+			})
+		).toBe("ready")
+	})
+})
+
+describe("other Ollama connections on this host", () => {
+	type Row = {
+		id: number | null
+		type: string
+		baseUrl: string
+		name: string
+	}
+	const rows: Row[] = [
+		{ id: 1, type: "ollama", baseUrl: "http://localhost:11434", name: "Ollama" },
+		{ id: 2, type: "ollama", baseUrl: "http://localhost:11434/", name: "Ollama embeddings" },
+		{ id: 3, type: "ollama", baseUrl: "http://ollama.lan:11434", name: "Lan" },
+		{ id: 4, type: "openai", baseUrl: "http://localhost:11434", name: "Compat" }
+	]
+
+	test("finds the other row on the same host, forgiving a trailing slash", () => {
+		expect(duplicateOllamaHosts(rows[0], rows).map((r) => r.id)).toEqual([2])
+	})
+
+	test("never counts itself", () => {
+		expect(duplicateOllamaHosts(rows[1], rows).map((r) => r.id)).toEqual([1])
+	})
+
+	test("ignores another host, and another type on the same host", () => {
+		// An OpenAI-compatible row at Ollama's address is a different service.
+		expect(duplicateOllamaHosts(rows[2], rows)).toEqual([])
+	})
+
+	test("says nothing for a row with no id yet", () => {
+		expect(duplicateOllamaHosts({ ...rows[0], id: null }, rows)).toEqual([])
+		expect(duplicateOllamaHosts(undefined, rows)).toEqual([])
 	})
 })

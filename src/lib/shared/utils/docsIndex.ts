@@ -75,6 +75,11 @@ export interface DocSection {
 	title: string
 	depth: number
 	preview: string
+	/**
+	 * The section's body as plain text (≤1200 chars) — what search reads
+	 * past the preview. Absent from an index compiled before it existed.
+	 */
+	text?: string
 }
 
 /** A page, everywhere the app lists or titles one. */

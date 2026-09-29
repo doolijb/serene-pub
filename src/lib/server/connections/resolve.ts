@@ -346,6 +346,68 @@ export async function persistCapabilities(
 	return capabilities
 }
 
+/** Order-insensitive equality for two resolved capability sets. */
+function sameResolved(
+	a: Record<string, unknown> | null | undefined,
+	b: Record<string, unknown> | null | undefined
+): boolean {
+	const ak = Object.keys(a ?? {}).sort()
+	const bk = Object.keys(b ?? {}).sort()
+	if (ak.length !== bk.length) return false
+	return ak.every(
+		(k, i) =>
+			k === bk[i] &&
+			JSON.stringify((a ?? {})[k]) === JSON.stringify((b ?? {})[k])
+	)
+}
+
+/**
+ * Rebuild every connection's cached `resolved` set from the CURRENT manifest.
+ *
+ * This is the write path this file's header says does not exist: *"no write
+ * path does it on load today, so an upgrading install's column keeps predating
+ * the key until a test or an edit rewrites it."* And the picker's `satisfies()`
+ * reads that cache, so a capability added to the manifest was invisible to
+ * every existing row in exactly the place people choose a connection — while
+ * every test stayed green. Ollama gaining `text->embedding` (2026-09-25) was
+ * the first time it would have shipped broken; this closes it for every type.
+ *
+ * Through `persistCapabilities`, the one write path, so each row's probe and
+ * the person's own toggles survive exactly as they are.
+ *
+ * ⚠ **A type the manifest declares nothing for is skipped.** For those
+ * (`openai-embeddings`, `local-onnx`) `resolveConnectionCapabilities` answers
+ * `{}` and `persistCapabilities`' empty-rebuild guard keeps the stored cache —
+ * the one 0175 determined from the old modality column. Refreshing them would
+ * only rewrite the same value on every boot, and "settled installs do no
+ * writes" is the property that makes this safe to run at startup.
+ *
+ * Idempotent; a row whose rebuilt set matches its stored one is not written.
+ */
+export async function refreshConnectionCapabilityCaches(
+	db: Db,
+	options: { types?: readonly string[] } = {}
+): Promise<{ refreshed: number }> {
+	const rows = await db
+		.select({
+			id: schema.connections.id,
+			type: schema.connections.type,
+			preset: schema.connections.preset,
+			capabilities: schema.connections.capabilities
+		})
+		.from(schema.connections)
+	let refreshed = 0
+	for (const row of rows) {
+		if (options.types && !options.types.includes(row.type)) continue
+		if (adapterCapabilities(row.type) === undefined) continue
+		const next = resolveConnectionCapabilities(row)
+		if (sameResolved(column(row).resolved, next)) continue
+		await persistCapabilities(db, row.id, { resolved: next })
+		refreshed++
+	}
+	return { refreshed }
+}
+
 /**
  * The same write, for one MODEL's capability column (0114).
  *

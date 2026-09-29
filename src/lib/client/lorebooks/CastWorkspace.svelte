@@ -12,7 +12,6 @@
 	import { toaster } from "$lib/client/utils/toaster"
 	import EmptyState from "$lib/client/components/EmptyState.svelte"
 	import CharacterSelectModal from "$lib/client/components/modals/CharacterSelectModal.svelte"
-	import DeleteLorebookEntryConfirmModal from "$lib/client/components/modals/DeleteLorebookEntryConfirmModal.svelte"
 	import BindingSuggestionsPanel from "$lib/client/components/lorebookForms/BindingSuggestionsPanel.svelte"
 	import {
 		entryChannel,
@@ -24,6 +23,19 @@
 	} from "$lib/shared/entries/types"
 	import { castPool, type CastMember, type CastRow } from "./castPool"
 	import CastDuplicatesPanel from "./cast/CastDuplicatesPanel.svelte"
+	import DeleteCastMemberModal from "./cast/DeleteCastMemberModal.svelte"
+	import {
+		castMaskedWarning,
+		deletedMemberToast,
+		fileCastAmendment,
+		type PrivateLoreChoice
+	} from "./cast/castSave"
+	import {
+		lineName,
+		maskedFields,
+		maskingAmendment
+	} from "./editor/entrySave"
+	import { awaitReply, isReplyTimeout } from "$lib/client/utils/awaitReply"
 	import CastMemberForm from "./cast/CastMemberForm.svelte"
 	import PresencesPanel from "./cast/PresencesPanel.svelte"
 	import CastRelationships from "./cast/CastRelationships.svelte"
@@ -150,10 +162,24 @@
 	let characterPickerOpen = $state(false)
 
 	let deleteTarget = $state<CastMember | null>(null)
+	/** The delete pre-check's counts for `deleteTarget`; null while asked. */
+	let deleteCheck =
+		$state<Sockets.NarrativeGraph.CheckNodeMergeReferences.Response | null>(
+			null
+		)
+	let deleteCheckError = $state<string | null>(null)
+	let deleting = $state(false)
+	/**
+	 * How the picker's card is written to `linkTargetId`: dated from the
+	 * moment being read, or to the member outright (#115).
+	 */
+	let linkHow = $state<"amend" | "base">("base")
 
 	let memberDirty = $state(false)
 	let loreDraft = $state<Record<string, any> | null>(null)
 	let loreDraftKey = $state<string | null>(null)
+	/** The lore draft as it was BUILT — the other half of every diff. */
+	let lorePristine = $state<Record<string, any> | null>(null)
 	let creatingLore = $state(false)
 	let awaitingSave = $state<string | null>(null)
 
@@ -288,9 +314,9 @@
 		if (!loreDraft) return false
 		if (creatingLore)
 			return !!loreDraft.name?.trim() || !!loreDraft.content?.trim()
-		if (!selectedLore) return false
+		if (!lorePristine) return false
 		return (
-			JSON.stringify(CHARACTER_LORE_DOOR.toDraft(selectedLore)) !==
+			JSON.stringify(lorePristine) !==
 			JSON.stringify($state.snapshot(loreDraft))
 		)
 	})
@@ -313,6 +339,7 @@
 		loreDraft = selectedLore
 			? CHARACTER_LORE_DOOR.toDraft(selectedLore)
 			: null
+		lorePristine = loreDraft ? { ...$state.snapshot(loreDraft) } : null
 	})
 
 	// A member the book does not hold is not a page to be on.
@@ -325,6 +352,7 @@
 	function discardLoreDraft() {
 		creatingLore = false
 		loreDraft = null
+		lorePristine = null
 		loreDraftKey = null
 	}
 
@@ -363,20 +391,116 @@
 			...CHARACTER_LORE_DOOR.newDraft(lorebookId),
 			lorebookBindingId: selectedMember.id
 		}
+		lorePristine = { ...$state.snapshot(loreDraft) }
 	}
 
-	function saveLore() {
-		if (!loreDraft) return
+	/**
+	 * A refusal Layout's `:error` catch-all has already toasted is not toasted
+	 * again; a reply that never came is said here, because nothing else will.
+	 */
+	function reportUnanswered(err: unknown, title: string) {
+		if (isReplyTimeout(err))
+			toaster.error({
+				title,
+				description:
+					"The server did not answer in time. Your changes are still here."
+			})
+	}
+
+	/** A lore write of ours is on its way; Save stands down meanwhile. */
+	let loreSaving = $state(false)
+	const trimmed = (v: unknown) => (typeof v === "string" ? v.trim() : "")
+
+	/**
+	 * Character lore, saved the way the entry editor saves an entry.
+	 *
+	 * ⚠ A create keeps the draft until the row exists: a refusal or a lost
+	 * reply must not throw the author's text away. An update writes only what
+	 * changed (`changedFields` against the draft as built), and the toast
+	 * waits for the server — the channel's own create/update echoes say
+	 * nothing, so one save is one toast.
+	 */
+	async function saveLore() {
+		if (!loreDraft || loreSaving) return
 		if (!CHARACTER_LORE_DOOR.validate(loreDraft, loreEntries, true)) return
 		const payload = $state.snapshot(loreDraft) as Record<string, any>
 		if (creatingLore) {
+			// ⚠ Lore created while reading a line belongs to that line, as a
+			// new entry does in the entry editor.
+			if (branchId != null) payload.branchId = branchId
 			awaitingSave = "new"
-			channel?.create(payload)
+			loreSaving = true
+			let created: Sockets.Entries.Create.Response
+			try {
+				created = await awaitReply({
+					socket,
+					event: "entries:create",
+					params: {
+						entry: {
+							...payload,
+							typeId: CHARACTER_LORE_TYPE_ID,
+							lorebookId
+						} as any
+					},
+					replyKey: interestKey("entries:create", lorebookId),
+					errorEvent: "entries:create:error",
+					fallbackError: "The lore could not be created.",
+					match: (data) =>
+						data.entry?.lorebookId === lorebookId &&
+						data.entry.typeId === CHARACTER_LORE_TYPE_ID &&
+						trimmed(data.entry.name) === trimmed(payload.name) &&
+						trimmed(data.entry.content) === trimmed(payload.content)
+				})
+			} catch (err) {
+				loreSaving = false
+				if (awaitingSave === "new") awaitingSave = null
+				reportUnanswered(err, "Character lore was not created")
+				return
+			}
+			loreSaving = false
+			toaster.success({ title: "Character lore created" })
+			// Still the create the author sent? Then open what it became.
+			if (awaitingSave !== "new") return
+			awaitingSave = null
+			if (!creatingLore || loreDraftKey !== "new") return
 			discardLoreDraft()
-		} else {
-			awaitingSave = `entry#${payload.id}`
-			channel?.update(payload as Record<string, any> & { id: number })
+			void loreRoute.navigate({
+				type: "openEntry",
+				entryId: created.entry.id
+			})
+			return
 		}
+		const id = payload.id as number
+		const fields = changedFields(payload, lorePristine ?? {})
+		if (!Object.keys(fields).length) {
+			toaster.error({ title: "Nothing has changed" })
+			return
+		}
+		const key = `entry#${id}`
+		awaitingSave = key
+		loreSaving = true
+		try {
+			await awaitReply({
+				socket,
+				event: "entries:update",
+				params: {
+					entry: { ...fields, id, typeId: CHARACTER_LORE_TYPE_ID } as any
+				},
+				replyKey: interestKey("entries:update", lorebookId),
+				errorEvent: "entries:update:error",
+				fallbackError: "The lore could not be saved.",
+				match: (data) => data.entry?.id === id
+			})
+		} catch (err) {
+			loreSaving = false
+			if (awaitingSave === key) awaitingSave = null
+			reportUnanswered(err, "Character lore was not saved")
+			return
+		}
+		loreSaving = false
+		// The draft itself is settled by the channel's `onUpdated`, which
+		// hears the same reply; this only says how it went.
+		toaster.success({ title: "Character lore saved" })
 	}
 
 	/**
@@ -387,63 +511,207 @@
 	 */
 	let momentDate = $derived(parseMoment(moment))
 
-	/**
-	 * A change to a cast member: to the member, or dated from this moment.
-	 *
-	 * ⚠ The patch is already a DIFF — `CastMemberForm` sends only what it
-	 * changed — so both paths write the same fields and neither can fold a
-	 * resolved value into the other. That is the same property the entry
-	 * editor gets from `changedFields`, arrived at from the other direction.
-	 */
-	/**
-	 * What the author actually changed, against the row as it READS now.
-	 *
-	 * ⚠ The form hands back every editable field, not a diff, and the row it
-	 * was filled from is the RESOLVED one. Writing that whole set to the base
-	 * would bake an amendment's value into it — the same hazard the entry
-	 * editor avoids with `changedFields`, which is the function used here too.
-	 */
-	function memberDiff(patch: Record<string, unknown>) {
-		return changedFields(patch, (selectedRow ?? {}) as any)
+	/** Every overlay id this board has seen for a member, for `isOurCastAmendment`. */
+	function knownCastAmendmentIds(castId: number): number[] {
+		return (castAmendmentsFor?.(castId) ?? []).map((a) => a.id)
 	}
 
-	function saveMember(patch: Record<string, unknown>) {
-		if (!selectedMember) return
-		const fields = memberDiff(patch)
+	/**
+	 * The warning a base write earns when an amendment still overrides part
+	 * of it (#113), or null. Asked of the SAME resolver the list reads
+	 * through: the base as it will be after this write, resolved at the
+	 * moment being read — any field that still comes out different is one
+	 * the author will not see change. Warn only (ruled default).
+	 */
+	function baseSaveWarning(castId: number, fields: Record<string, unknown>) {
+		if (!resolveCast) return null
+		const base = castRows.find((r) => r.id === castId)
+		if (!base) return null
+		const [row] = resolveCast([{ ...base, ...fields } as CastRow])
+		if (!row) return null
+		const resolved = row as unknown as Record<string, unknown>
+		const masked = maskedFields(fields, resolved)
+		if (!masked.length) return null
+		const overlays = castAmendmentsFor?.(castId) ?? []
+		return castMaskedWarning(
+			masked.map((field) => ({
+				field,
+				amendment: maskingAmendment(
+					field,
+					resolved[field],
+					overlays,
+					branchId,
+					momentDate
+				)
+			}))
+		)
+	}
+
+	/**
+	 * Write to the member outright — on every line, at every date — and wait
+	 * for the server before saying so.
+	 */
+	async function writeBase(
+		castId: number,
+		fields: Record<string, unknown>,
+		title: string,
+		failTitle: string
+	): Promise<boolean> {
+		const warning = baseSaveWarning(castId, fields)
+		try {
+			await awaitReply({
+				socket,
+				event: "lorebooks:updateBinding",
+				params: {
+					lorebookBinding: { id: castId, ...fields }
+				} as Sockets.Lorebooks.UpdateBinding.Params,
+				errorEvent: "lorebooks:updateBinding:error",
+				fallbackError: "The cast member could not be saved.",
+				match: (data) => data.lorebookBinding?.id === castId
+			})
+		} catch (err) {
+			reportUnanswered(err, failTitle)
+			return false
+		}
+		if (warning) toaster.warning(warning)
+		else toaster.success({ title })
+		return true
+	}
+
+	/**
+	 * File a change to a member dated from the moment being read, ON THE LINE
+	 * BEING READ (#105) — a fork's change must not land on main.
+	 */
+	async function writeAmendment(
+		castId: number,
+		fields: Record<string, unknown>,
+		what: string
+	): Promise<boolean> {
+		if (!momentDate) return false
+		const date = momentDate
+		let reply: Sockets.Amendments.List.Response
+		try {
+			reply = await fileCastAmendment(
+				socket,
+				{ lorebookId, castId, branchId },
+				{ ...date, fields },
+				knownCastAmendmentIds(castId)
+			)
+		} catch (err) {
+			reportUnanswered(err, "The amendment was not saved")
+			return false
+		}
+		const line = lineName(reply, branchId)
+		toaster.success({
+			title: `${what} as of ${formatDate(date)}${line ? ` on ${line}` : ""}`
+		})
+		return true
+	}
+
+	/**
+	 * What the author changed: the form's draft against the draft as it was
+	 * BUILT (#106), never against the row as it reads now — the row may have
+	 * moved with the moment since, and a diff against it would write values
+	 * the author never touched.
+	 */
+	function memberDiff(
+		patch: Record<string, unknown>,
+		pristine: Record<string, unknown>
+	): Record<string, unknown> | null {
+		const fields = changedFields(patch, pristine)
 		if (!Object.keys(fields).length) {
 			toaster.error({ title: "Nothing has changed" })
-			return
+			return null
 		}
-		socket.emit("lorebooks:updateBinding", {
-			lorebookBinding: { id: selectedMember.id, ...fields }
-		} as Sockets.Lorebooks.UpdateBinding.Params)
+		return fields
 	}
 
-	function amendMember(raw: Record<string, unknown>) {
-		if (!selectedMember || !momentDate) return
-		const patch = memberDiff(raw)
-		if (!Object.keys(patch).length) {
-			toaster.error({ title: "Nothing has changed" })
-			return
-		}
-		socket.emit("amendments:create", {
-			lorebookId,
-			castId: selectedMember.id,
-			year: momentDate.year,
-			month: momentDate.month ?? null,
-			day: momentDate.day ?? null,
-			fields: patch
-		} satisfies Sockets.Amendments.Create.Params)
-		toaster.success({ title: `Amended as of ${formatDate(momentDate)}` })
+	async function saveMember(
+		patch: Record<string, unknown>,
+		pristine: Record<string, unknown>
+	): Promise<boolean> {
+		if (!selectedMember) return false
+		const fields = memberDiff(patch, pristine)
+		if (!fields) return false
+		return writeBase(
+			selectedMember.id,
+			fields,
+			"Cast member saved",
+			"The cast member was not saved"
+		)
 	}
 
-	function confirmDeleteMember() {
-		const target = deleteTarget
+	async function amendMember(
+		patch: Record<string, unknown>,
+		pristine: Record<string, unknown>
+	): Promise<boolean> {
+		if (!selectedMember || !momentDate) return false
+		const fields = memberDiff(patch, pristine)
+		if (!fields) return false
+		return writeAmendment(selectedMember.id, fields, "Amended")
+	}
+
+	/**
+	 * Open the delete dialog and ask the server how much private lore the
+	 * member anchors — the dialog's question depends on it (ruling 4).
+	 */
+	async function requestDelete(member: CastMember) {
+		deleteTarget = member
+		deleteCheck = null
+		deleteCheckError = null
+		try {
+			// The reply names the member it counted, so another dialog's
+			// question (the graph lens asks it too) cannot answer this one.
+			const res = await awaitReply({
+				socket,
+				event: "narrativeGraph:checkNodeMergeReferences",
+				params: { nodeId: member.id },
+				errorEvent: "narrativeGraph:checkNodeMergeReferences:error",
+				fallbackError: "The server could not count it.",
+				match: (data) => data.nodeId === member.id
+			})
+			if (deleteTarget?.id === member.id) deleteCheck = res
+		} catch (err) {
+			if (deleteTarget?.id === member.id)
+				deleteCheckError =
+					err instanceof Error ? err.message : String(err)
+		}
+	}
+
+	function cancelDelete() {
+		if (deleting) return
 		deleteTarget = null
-		if (!target) return
-		// A cast member IS the graph's node for that person, so one delete
-		// removes both; there is no second row to clean up.
-		socket.emit("narrativeGraph:deleteNode", { id: target.id })
+		deleteCheck = null
+		deleteCheckError = null
+	}
+
+	async function confirmDeleteMember(privateLore: PrivateLoreChoice) {
+		const target = deleteTarget
+		if (!target || deleting) return
+		deleting = true
+		let res: Sockets.NarrativeGraph.DeleteNode.Response
+		try {
+			// A cast member IS the graph's node for that person, so one delete
+			// removes both; there is no second row to clean up.
+			res = await awaitReply({
+				socket,
+				event: "narrativeGraph:deleteNode",
+				params: { id: target.id, privateLore },
+				errorEvent: "narrativeGraph:deleteNode:error",
+				fallbackError: "The cast member could not be deleted.",
+				match: (data) => data.id === target.id
+			})
+		} catch (err) {
+			deleting = false
+			reportUnanswered(err, `${target.name} was not deleted`)
+			return
+		}
+		deleting = false
+		deleteTarget = null
+		deleteCheck = null
+		toaster.success({
+			title: deletedMemberToast(target.name, res.deletedLoreCount)
+		})
 		if (route.castId === target.id)
 			void loreRoute.navigate({ type: "openCastMember", castId: null })
 	}
@@ -465,16 +733,17 @@
 		} satisfies Sockets.Lorebooks.CreateBinding.Params)
 	}
 
-	function pickCharacter(character: { id: number }) {
+	/**
+	 * The picker's card: a new member, or which card an existing one is
+	 * drawn with — dated from the moment being read, or outright (#115).
+	 */
+	async function pickCharacter(character: { id: number }) {
 		characterPickerOpen = false
-		if (linkTargetId != null) {
-			socket.emit("lorebooks:updateBinding", {
-				lorebookBinding: {
-					id: linkTargetId,
-					characterId: character.id
-				}
-			} as Sockets.Lorebooks.UpdateBinding.Params)
-		} else {
+		const target = linkTargetId
+		const how = linkHow
+		linkTargetId = null
+		linkHow = "base"
+		if (target == null) {
 			socket.emit("lorebooks:createBinding", {
 				lorebookBinding: {
 					lorebookId,
@@ -482,19 +751,44 @@
 					binding: ""
 				}
 			} satisfies Sockets.Lorebooks.CreateBinding.Params)
+			return
 		}
-		linkTargetId = null
+		const fields = { characterId: character.id }
+		if (how === "amend" && momentDate)
+			await writeAmendment(target, fields, "Card changed")
+		else
+			await writeBase(
+				target,
+				fields,
+				"Card changed",
+				"The card was not changed"
+			)
 	}
 
-	function unlink(id: number) {
-		socket.emit("lorebooks:updateBinding", {
-			lorebookBinding: { id, characterId: null }
-		} as Sockets.Lorebooks.UpdateBinding.Params)
+	/** Detach the card — dated from the moment, or outright (#115). */
+	async function unlink(id: number, how: "amend" | "base") {
+		const fields = { characterId: null }
+		if (how === "amend" && momentDate)
+			await writeAmendment(id, fields, "Card unlinked")
+		else
+			await writeBase(
+				id,
+				fields,
+				"Card unlinked",
+				"The card was not unlinked"
+			)
 	}
 
+	/**
+	 * Cards the picker offers: none another member is stored with (the base
+	 * allows one member per card) and none a member already READS as at this
+	 * moment, so the member's own current card is not offered back.
+	 */
 	let unlinkedCharacters = $derived(
 		characterList.filter(
-			(c) => !castRows.some((r) => r.characterId === c.id)
+			(c) =>
+				!castRows.some((r) => r.characterId === c.id) &&
+				!resolvedCast.some((r) => r.characterId === c.id)
 		)
 	)
 	let channel: ReturnType<typeof entryChannel> | null = null
@@ -533,14 +827,22 @@
 		socket.emit("lorebooks:bindingList", { lorebookId })
 	}
 
+	/**
+	 * No toast: the write that asked says how it went (`writeBase`), and a
+	 * write from another tab or lens is not this board's news.
+	 */
 	function handleUpdateBinding() {
-		toaster.success({ title: "Cast member updated" })
 		socket.emit("lorebooks:bindingList", { lorebookId })
 	}
 
-	function handleDeleteNode() {
-		toaster.success({ title: "Cast member deleted" })
+	/**
+	 * A member went — from here or from the graph lens. Their lore went with
+	 * them or is now anchored to nobody, so the lore list is re-read too.
+	 */
+	function handleDeleteNode(msg: Sockets.NarrativeGraph.DeleteNode.Response) {
+		if (msg.lorebookId != null && msg.lorebookId !== lorebookId) return
 		socket.emit("lorebooks:bindingList", { lorebookId })
+		channel?.list()
 	}
 
 	function handleMergeWrite() {
@@ -679,27 +981,23 @@
 						e.id === id ? { ...e, embeddingModel } : e
 					)
 				},
-				onCreated(entry) {
-					toaster.success({ title: "Character lore created" })
-					if (awaitingSave !== "new") return
-					awaitingSave = null
-					void loreRoute.navigate({
-						type: "openEntry",
-						entryId: entry.id
-					})
-				},
+				// No create/update toasts here: `saveLore` says how its own
+				// write went, and an echo of another tab's is not news.
 				onUpdated(entry) {
-					toaster.success({ title: "Character lore updated" })
 					const key = `entry#${entry.id}`
 					if (awaitingSave !== key) return
 					awaitingSave = null
 					// The server re-joins keywords, so the draft and the row
 					// are only the same text once the saved row is back.
-					if (loreDraftKey === key)
+					if (loreDraftKey === key) {
 						loreDraft = CHARACTER_LORE_DOOR.toDraft(entry)
+						lorePristine = { ...$state.snapshot(loreDraft) }
+					}
 				},
-				onDeleted: () =>
-					toaster.success({ title: "Character lore deleted" })
+				onDeleted: (_id, askedHere) => {
+					if (askedHere)
+						toaster.success({ title: "Character lore deleted" })
+				}
 			}
 		})
 		channel.open()
@@ -726,11 +1024,11 @@
 		positioning={{ placement: "bottom-end" }}
 	>
 		<Popover.Trigger
-			class="btn btn-sm preset-filled-success-500 shrink-0 gap-1"
+			class="btn btn-sm preset-filled-primary-500 shrink-0 gap-1"
 			title="Add to the cast"
 		>
 			<Icons.Plus size={14} aria-hidden="true" />
-			<span class="hidden sm:inline">New</span>
+			<span class="hidden @lg/view:inline">New</span>
 			<Icons.ChevronDown size={14} aria-hidden="true" />
 		</Popover.Trigger>
 		<Portal>
@@ -795,7 +1093,7 @@
 					id="newBackgroundName"
 					class="input text-sm"
 					type="text"
-					placeholder="e.g. The Innkeeper"
+					placeholder="e.g. The innkeeper"
 					bind:value={backgroundName}
 					onkeydown={(e) => {
 						if (e.key === "Enter") addBackground()
@@ -827,7 +1125,7 @@
 				<div class="flex items-center justify-center py-8">
 					<Icons.Loader2
 						size={20}
-						class="text-surface-400 animate-spin"
+						class="text-surface-600-400 animate-spin"
 					/>
 				</div>
 			{:else if pool.members.length === 0}
@@ -870,7 +1168,7 @@
 							{#if member.state !== "active"}
 								<span
 									class="badge {stateBadge(member.state)
-										.color} shrink-0 text-[10px]"
+										.color} shrink-0 text-[11px]"
 								>
 									{member.state}
 								</span>
@@ -879,7 +1177,7 @@
 								<span
 									class="badge {visibilityBadge(
 										member.visibility
-									)} shrink-0 text-[10px]"
+									)} shrink-0 text-[11px]"
 								>
 									{member.visibility}
 								</span>
@@ -951,10 +1249,10 @@
 							: ""}
 				</h3>
 				<button
-					class="btn btn-sm preset-filled-success-500 shrink-0"
+					class="btn btn-sm preset-filled-primary-500 shrink-0"
 					type="button"
 					onclick={saveLore}
-					disabled={!CHARACTER_LORE_DOOR.validate(
+					disabled={loreSaving || !CHARACTER_LORE_DOOR.validate(
 						loreDraft,
 						loreEntries
 					)}
@@ -1003,10 +1301,11 @@
 				onSave={saveMember}
 				onAmend={momentDate ? amendMember : undefined}
 				momentLabel={momentDate ? formatDate(momentDate) : null}
-				onDelete={() => (deleteTarget = selectedMember)}
-				onUnlink={() => unlink(selectedMember!.id)}
-				onLinkCharacter={() => {
+				onDelete={() => void requestDelete(selectedMember!)}
+				onUnlink={(how) => void unlink(selectedMember!.id, how)}
+				onLinkCharacter={(how) => {
 					linkTargetId = selectedMember!.id
+					linkHow = how
 					characterPickerOpen = true
 				}}
 			/>
@@ -1046,7 +1345,7 @@
 						{anchoredLore.length}
 					</h4>
 					<button
-						class="btn btn-sm preset-filled-success-500 shrink-0"
+						class="btn btn-sm preset-filled-primary-500 shrink-0"
 						type="button"
 						onclick={startLore}
 					>
@@ -1114,7 +1413,7 @@
 			<button
 				type="button"
 				class="btn btn-sm {inspectorTab === 'suggestions'
-					? 'preset-filled-primary-500'
+					? 'preset-tonal-primary'
 					: 'preset-tonal-surface'}"
 				aria-pressed={inspectorTab === "suggestions"}
 				onclick={() => (inspectorTab = "suggestions")}
@@ -1124,7 +1423,7 @@
 			<button
 				type="button"
 				class="btn btn-sm {inspectorTab === 'duplicates'
-					? 'preset-filled-primary-500'
+					? 'preset-tonal-primary'
 					: 'preset-tonal-surface'}"
 				aria-pressed={inspectorTab === "duplicates"}
 				onclick={() => (inspectorTab = "duplicates")}
@@ -1165,34 +1464,47 @@
 			class="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto"
 			data-cast-editor
 		>
+			<!-- No review panel here: it acts on the cast as a whole, not
+			     on the member open (#112). It sits under the roster. -->
 			{#if loreDraft}
 				{@render loreEditor()}
 			{:else}
 				{@render memberPage()}
 			{/if}
-			{@render inspector()}
 		</div>
 	{:else}
-		{@render castList()}
+		<!-- Compact: suggestions and duplicates listed under the roster, so
+		     reviewing them never means opening an unrelated member (#112). -->
+		<div class="flex min-h-0 flex-1 flex-col gap-3">
+			{@render castList()}
+			<div class="flex max-h-[45%] shrink-0 flex-col overflow-y-auto">
+				{@render inspector()}
+			</div>
+		</div>
 	{/if}
 </div>
 
-<DeleteLorebookEntryConfirmModal
+<DeleteCastMemberModal
 	open={deleteTarget !== null}
-	onOpenChange={(e) => {
-		if (!e.open) deleteTarget = null
-	}}
+	name={deleteTarget?.name ?? ""}
+	linked={deleteTarget?.linked ?? false}
+	relationshipCount={deleteTarget
+		? (edgeCounts.get(deleteTarget.id) ?? 0)
+		: 0}
+	check={deleteCheck}
+	checkError={deleteCheckError}
+	busy={deleting}
 	onConfirm={confirmDeleteMember}
-	onCancel={() => (deleteTarget = null)}
-	title="Delete cast member?"
-	message={deleteTarget?.linked
-		? "This detaches the linked card from this lorebook and deletes the member, including the lore private to them and every relationship they are in. This cannot be undone."
-		: "This permanently deletes this background character, including the lore private to them and every relationship they are in. This cannot be undone."}
+	onCancel={cancelDelete}
 />
 
 <CharacterSelectModal
 	open={characterPickerOpen}
 	onSelect={pickCharacter}
-	onOpenChange={() => (characterPickerOpen = false)}
+	onOpenChange={() => {
+		characterPickerOpen = false
+		linkTargetId = null
+		linkHow = "base"
+	}}
 	characters={unlinkedCharacters}
 />

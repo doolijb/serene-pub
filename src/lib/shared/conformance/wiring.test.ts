@@ -34,9 +34,9 @@
  *      the deprecation tags point somewhere real. A fifteenth, `readEvent`, was
  *      closed the other way — deleted, because the payload had always arrived
  *      as argument 0 and the SDK moved to the `(input, ctx)` convention both
- *      backends actually call. `readCore` and the two deprecated `*OwnRows`
- *      members are still declared and still endowed by nothing, and their
- *      entries below say so.)
+ *      backends actually call. `readCore` is still declared and still endowed
+ *      by nothing, and its entry below says so. The two `*OwnRows` members
+ *      were removed from the SDK.)
  *
  * ## The allowlist is the point, not the escape hatch
  *
@@ -381,24 +381,32 @@ const unfilledInPorts = (): string[] => {
  */
 const UNFILLED_IN_PORTS: Deliberate[] = [
 	{
-		subject: "core:outlet/update-message@1.blocks",
+		subject: "core:outlet/update-message@1.sections",
 		reason:
-			"A reply may end with a question put to the cast (R-15 *Forms*, " +
-			"U5d): the port is the same list `create-message@1.blocks` takes, " +
-			"appended once the text lands. The shipped reply pipelines end in " +
-			"prose alone — the Adventure genre's Ask writes its question through " +
-			"`create-message` on a narration row — and the port is read by the " +
-			"host's `writeBlocks` on both writes. Delete this entry when a " +
-			"shipped reply wires it."
+			"Folded sections on a finished placeholder (lair pass B4). The " +
+			"Lair's Plan fold was their one wirer, and R8 (2026-09-28) retired " +
+			"it: the beats are the Sanctum row's body now. The port stays the " +
+			"declared way a reply folds a step's notes — the same fact " +
+			"`create-message.sections` states for a row written whole."
 	},
 	{
-		subject: "core:task/make-choices@1.addressee",
+		subject: "core:task/build-scene-context@1.turnDirection",
 		reason:
-			"The override: a spec that already knows whom it is asking wires a " +
-			"participant reference here and it wins over the oracle's document. " +
-			"The Adventure genre's Ask lets the oracle choose the addressee by " +
-			"name and resolves it against the cast instead, so no shipped spec " +
-			"fills the port; the binding reads it (`wired ?? resolveAddresseeName`)."
+			"This turn's direction on the scene builder (lair pass B11). The " +
+			"Lair's narrator scene was its one wirer; R8 (2026-09-28) retired the " +
+			"step, and the Castellan's narration that now uses this builder is " +
+			"Narrate — _what happens next, with no new direction_ — so it wires " +
+			"none. R13 decides what the narration reads from the Sanctum."
+	},
+	{
+		subject: "core:outlet/create-message@1.sections",
+		reason:
+			"Folded sections (lair pass B4): a reply written whole, in one " +
+			"create, carries them the way a finished placeholder does — the " +
+			"two message writes state the same row facts. Every shipped reply " +
+			"today is a placeholder finished by `update-message` (the Lair's " +
+			"knock included), so nothing fills this until a spec posts a " +
+			"complete reply with a Plan."
 	},
 	{
 		subject: "core:oracle/generate-text@1.attachments",
@@ -425,16 +433,6 @@ const UNFILLED_IN_PORTS: Deliberate[] = [
 			"which is where a person writes it, rather than through the port. " +
 			"The port stays for a spec that wants to COMPUTE a negative prompt " +
 			"upstream; the binding reads whichever arrives."
-	},
-	{
-		subject: "core:outlet/create-message@1.channel",
-		reason:
-			"Declared 2026-09-16 (U2 residual): the host read `channel` off " +
-			"the payload while no declaration supplied it. The create specs " +
-			"wire it on `seed-greetings` (the genre's greeting channel); the " +
-			"reply specs write to `main` and say nothing, which is the " +
-			"declared default — a spec that redirects a reply to another " +
-			"channel is what fills it. Delete this entry the day one does."
 	},
 	{
 		subject: "core:oracle/embed-text@1.text",
@@ -483,6 +481,46 @@ const UNFILLED_IN_PORTS: Deliberate[] = [
 			"The card half of the pair above — `null` for a free-form name, " +
 			"which is a normal turn rather than a degraded one. Same supplier, " +
 			"same terms."
+	},
+	{
+		subject: "core:task/assemble@2.annex",
+		reason:
+			"Opt-in per template (typed templates P6): the port is fed only by " +
+			"`core:query/session-annex@1` with `view: 'template'`, and only a " +
+			"spec whose template reads `annex.<owner>.<key>` wires it. Unwired, " +
+			"`annex` is absent from the template scope and a template naming " +
+			"it is refused. Core's annex declaration is empty, so no shipped " +
+			"template reads the annex. Delete this entry when one does."
+	},
+	{
+		subject: "core:query/lorebook-triggers@1.speaker",
+		reason:
+			"Per-voice private lore (W1): wired inside a repeating clause, it " +
+			"narrows character-lore visibility to that iteration's speaker; " +
+			"unwired, the run's scope decides, which is the narrator's and the " +
+			"single-speaker read. The shipped per-voice reads (Adventure's " +
+			"`voices`) go through `character-lore@1.speaker`, which is wired; " +
+			"every shipped `lorebook-triggers` read is a whole-turn gather. " +
+			"Delete this entry when a spec reads it per voice."
+	},
+	{
+		subject: "core:query/item-supply@1.entryIds",
+		reason:
+			"A narrowing filter: with no ids the query answers for every item " +
+			"entry in the session's lorebook, which is what both shipped " +
+			"keepers (Adventure, Lair) want — supply is checked against every " +
+			"item a keeper line may name. A spec that asks about a known set " +
+			"of items is what fills it."
+	},
+	{
+		subject: "core:outlet/create-lore-entry@1.links",
+		reason:
+			"Graph edges written with the entry, from a structured list. The " +
+			"shipped writers (Lair's room drafting, the Writing Room's bible) " +
+			"produce prose, and nothing in core parses a line of prose into " +
+			"entry names (`LAIR_ROOM_CONTENT_SHAPE`), so none has a list to " +
+			"wire. The host writes whatever arrives; a spec with structured " +
+			"output fills it."
 	}
 ]
 
@@ -806,6 +844,17 @@ const RUN_OPTIONS: Record<string, true | string> = {
 	// passes `request.lineage` through; unwiring it leaves every child
 	// receipt claiming to be a root and the cycle caps counting nothing.
 	lineage: true,
+	// The swaps `runSpec` seated before the run, by node key (F2): the
+	// executor records each on that node's row as `swap`, and `null` on every
+	// row whose pin ran. `runSpec` always passes the map, `{}` when nothing
+	// was swapped; left out, no row carries `swap` and the inspector cannot
+	// tell a pin from a swap.
+	swaps: true,
+	// How the run was reached (`ReceiptMeta`, F2) — a session preset's
+	// fallback, today — recorded verbatim on the receipt at construction.
+	// `runSpec` passes `request.meta` when a caller set any; unwiring it
+	// drops the fallback line from every receipt that fell back.
+	meta: true,
 	dry:
 		"Defaults to the preview flag inside the executor, and every preview " +
 		"the app runs (`sessions:promptTokenCount`, the retrieval previews, " +
@@ -1088,17 +1137,6 @@ const UNREFERENCED_SOCKET_EVENTS: Deliberate[] = [
 			"that message triggers, not by a client asking for one directly."
 	},
 	{
-		subject: "narrativeGraph:build:progress",
-		reason:
-			"The build reports through `narrativeGraph:buildLog` and " +
-			"`narrativeGraph:build:error`, which are handled and emitted. This " +
-			"pair was declared for a progress stream that was never built."
-	},
-	{
-		subject: "narrativeGraph:build:complete",
-		reason: "The terminal half of `narrativeGraph:build:progress`."
-	},
-	{
 		subject: "ollamaModelsList",
 		reason:
 			"One of the block `typedSocket.ts` itself labels 'Legacy events " +
@@ -1260,7 +1298,7 @@ function rawTemplates(path: string): string[] {
 /** One member of a hook surface, at its full dotted path. */
 interface DeclaredMember {
 	readonly path: string
-	/** `readOwnRows?()` — absent is a state the author is told to expect. */
+	/** `m?()` — absent is a state the author is told to expect. */
 	readonly optional: boolean
 	/** Declared members this one's `@deprecated` tag names as its replacement. */
 	readonly deprecatedFor: readonly string[]
@@ -1607,24 +1645,6 @@ const endowedNested = (): Record<string, string[]> => ({
  */
 const UNENDOWED_HOOK_CTX: Deliberate[] = [
 	{
-		subject: "readOwnRows",
-		reason:
-			"Optional, and endowed by neither backend — which is honest, since " +
-			"an optional member tells an author to feature-test it, and its " +
-			"`@deprecated` tag now points somewhere real: `storage.get` and " +
-			"`storage.query` are both endowed, so the migration it names is one " +
-			"an author can actually make. Removing the pair is the SDK's call, " +
-			"not the runtime's; endowing a member the SDK has already retired " +
-			"would be the wrong direction."
-	},
-	{
-		subject: "writeOwnRows",
-		reason:
-			"As `readOwnRows`: optional, unendowed, and deprecated in favour " +
-			"of `storage.put` — which is endowed now, so the tag is a working " +
-			"signpost rather than one pointing at nothing."
-	},
-	{
 		subject: "readCore",
 		reason:
 			"⚠ `LifecycleCallbackSurface`'s whole reason to exist beside the event " +
@@ -1704,11 +1724,6 @@ const UNDECLARED_HOOK_CTX: Deliberate[] = [
  * the tag is a signpost from nothing to nothing.
  */
 const MISDIRECTING_DEPRECATIONS: Deliberate[] = [
-	// `readOwnRows → storage.get`, `readOwnRows → storage.query` and
-	// `writeOwnRows → storage.put` lived here for as long as the replacements
-	// did not exist. They do now (`plugins/storageHost.ts`, endowed on both
-	// backends and adapted to the SDK's shape by `plugins/prelude.ts`), so the
-	// tags point somewhere real and the entries are gone rather than reworded.
 ]
 
 describe("§5 hook context — every declared member is one the runtime endows", () => {

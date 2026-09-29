@@ -5,8 +5,7 @@
  * llama.cpp server, vLLM, a hosted gateway — the same argument `A1111Adapter`
  * makes for scoping by API FORMAT rather than by vendor.
  *
- * ⚠ Its own connection type rather than a capability on `openai`, because a
- * connection names exactly ONE model and an embedding model is not a chat model.
+ * ⚠ Its own connection type rather than a capability on `openai`, because
  * `OpenAIChatAdapter` speaks `/v1/chat/completions` and nothing else; the
  * manifest's own note on that entry says image generation would be a different
  * route hence a different adapter, and `/embeddings` is that case again.

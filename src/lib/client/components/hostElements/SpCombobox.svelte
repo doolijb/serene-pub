@@ -41,7 +41,10 @@
 	placeholder={attrs.placeholder ?? undefined}
 	disabled={flag(attrs.disabled)}
 	onInputValueChange={(e) => {
-		query = e.inputValue
+		// Only what the person types filters: the field also takes the picked
+		// option's label (a pick, a written `value`), and filtering on that
+		// would offer only the option already in force.
+		query = e.reason === "input-change" ? e.inputValue : ""
 		emit("input", { query: e.inputValue })
 	}}
 	onValueChange={(e) => {

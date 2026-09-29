@@ -219,10 +219,10 @@ async function buildSamplingConfigsList(): Promise<Sockets.SamplingConfigs.List.
 	// `desc` on a boolean puts true first. Ordered here rather than in each
 	// consumer because this one response feeds several: SamplingSidebar
 	// (which groups with its own immutable/mutable filters — those preserve
-	// input order, so this is what sorts within each group), EditSessionForm,
-	// and every per-task override selector in PromptsSidebar. Without it the
-	// list came back in whatever order Postgres happened to return, so the
-	// flat consumers interleaved presets with user configs.
+	// input order, so this is what sorts within each group) and
+	// EditSessionForm. Without it the list came back in whatever order
+	// Postgres happened to return, so the flat consumer interleaved presets
+	// with user configs.
 	const samplingConfigsList = await db.query.samplingConfigs.findMany({
 		columns: {
 			id: true,
@@ -577,7 +577,19 @@ export const samplingConfigsUpdate: Handler<
 		}
 
 		const id = params.sampling.id!
-		const { id: _, ...updateData } = params.sampling // Remove id from sampling object to avoid conflicts
+		// Only name, shape, values and enabled are the editor's to change. The
+		// id addresses the row; `isImmutable` and `seedKey` belong to the
+		// seeder, and a client (or a stale round-tripped copy) must not be able
+		// to lock a row or re-key it as a built-in.
+		const {
+			id: _,
+			isImmutable: _immutable,
+			seedKey: _seedKey,
+			...updateData
+		} = params.sampling as typeof params.sampling & {
+			isImmutable?: unknown
+			seedKey?: unknown
+		}
 
 		const currentSamplingConfig = await db.query.samplingConfigs.findFirst({
 			where: (w, { eq }) => eq(w.id, id)

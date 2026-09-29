@@ -5,13 +5,36 @@
  * defense-in-depth re-check of a staged upload).
  *
  * A SillyTavern data root is identified by the presence of one of its
- * landmark subdirectories (characters/sessions/groups/worlds) or settings.json,
+ * landmark subdirectories (characters/chats/groups/worlds) or settings.json,
  * rather than by a specific parent folder name — this way it doesn't matter
  * whether the user picked the SillyTavern root, a SillyTavern-Launcher root,
  * a "data" or "data/default-user" folder, or renamed any of those.
  */
 
-const LANDMARK_DIRS = ["characters", "sessions", "groups", "worlds"]
+/**
+ * SillyTavern's OWN folder names under its data root — its vocabulary, not
+ * ours (NOMENCLATURE R5). SillyTavern calls a conversation a *chat* and keeps
+ * one per `.jsonl` under `chats/<character>/`; group conversations live under
+ * `group chats/`. Serene Pub imports each one as a session, but the folders
+ * are SillyTavern's and keep SillyTavern's names. A Serene Pub rename sweep
+ * must never touch these: baf439d7 turned `chats/` into `sessions/` and the
+ * importer silently found no history in any real SillyTavern folder.
+ */
+export const SILLYTAVERN_DIRS = {
+	characters: "characters",
+	chats: "chats",
+	groups: "groups",
+	groupChats: "group chats",
+	worlds: "worlds",
+	userAvatars: "User Avatars"
+} as const
+
+const LANDMARK_DIRS = [
+	SILLYTAVERN_DIRS.characters,
+	SILLYTAVERN_DIRS.chats,
+	SILLYTAVERN_DIRS.groups,
+	SILLYTAVERN_DIRS.worlds
+]
 
 function normalizePath(p: string): string {
 	return p.replace(/\\/g, "/").replace(/^\/+/, "")
@@ -72,11 +95,24 @@ export function isRelevantImportPath(relativePath: string): boolean {
 	const p = normalizePath(relativePath)
 	return (
 		p === "settings.json" ||
-		p.startsWith("characters/") ||
-		p.startsWith("sessions/") ||
-		p.startsWith("groups/") ||
-		p.startsWith("group sessions/") ||
-		p.startsWith("worlds/") ||
-		p.startsWith("User Avatars/")
+		p.startsWith(`${SILLYTAVERN_DIRS.characters}/`) ||
+		p.startsWith(`${SILLYTAVERN_DIRS.chats}/`) ||
+		p.startsWith(`${SILLYTAVERN_DIRS.groups}/`) ||
+		p.startsWith(`${SILLYTAVERN_DIRS.groupChats}/`) ||
+		p.startsWith(`${SILLYTAVERN_DIRS.worlds}/`) ||
+		p.startsWith(`${SILLYTAVERN_DIRS.userAvatars}/`)
+	)
+}
+
+/**
+ * True for a SillyTavern chat-history file (relative to the data root) — a
+ * solo chat under `chats/` or a group chat under `group chats/`. These are
+ * the large files the import uploads only for what the user selects.
+ */
+export function isSillyTavernChatHistoryPath(relativePath: string): boolean {
+	const p = normalizePath(relativePath)
+	return (
+		p.startsWith(`${SILLYTAVERN_DIRS.chats}/`) ||
+		p.startsWith(`${SILLYTAVERN_DIRS.groupChats}/`)
 	)
 }

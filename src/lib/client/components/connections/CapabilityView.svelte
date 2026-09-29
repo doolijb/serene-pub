@@ -5,8 +5,8 @@
 	 * What answers when this is asked for, what else here could, and how to get
 	 * something that can — in that order, because the first is the one they came
 	 * to check and the third is only interesting once the first two disappoint.
-	 * It is the destination of every readiness row (`ReadinessCard`) and of the
-	 * `Change` fix on one.
+	 * It is the destination of every readiness row (the index's status strip
+	 * and jobs grid, `jobTile.ts`) and of the `Change` fix on one.
 	 *
 	 * ## It fetches its own list, and takes its defaults from the shell
 	 *
@@ -41,6 +41,7 @@
 	import {
 		alsoAbleHeading,
 		candidateRows,
+		toDownloadSentence,
 		capabilityEntry,
 		capabilityStateWord,
 		CANDIDATE_LIMIT,
@@ -148,6 +149,7 @@
 	)
 	const nothingServes = $derived(!entry.set && candidates.rows.length === 0)
 	const hidden = $derived(hiddenSentence(candidates.hidden))
+	const toDownload = $derived(toDownloadSentence(candidates.toDownload))
 	let showAll = $state(false)
 
 	/**
@@ -279,10 +281,10 @@
 			</div>
 
 			<div
-				class="border-surface-300-700 flex items-baseline gap-2 border-t pt-3"
+				class="flex items-baseline gap-2 pt-3"
 			>
-				<span class="text-surface-500 min-w-0 flex-1 text-xs">
-					Default
+				<span class="text-surface-600-400 min-w-0 flex-1 text-xs">
+					{chip}
 				</span>
 				<a class="anchor shrink-0 text-xs" href="/admin/defaults">
 					Admin → Defaults
@@ -364,7 +366,7 @@
 				</button>
 			{:else}
 				<div
-					class="border-surface-300-700 text-surface-500 flex min-h-11 items-center rounded-[10px] border border-dashed px-2.5 text-xs"
+					class="border-surface-300-700 text-surface-600-400 flex min-h-11 items-center rounded-[10px] border border-dashed px-2.5 text-xs"
 				>
 					Not set · pick one below
 				</div>
@@ -380,7 +382,7 @@
 				candidates.rows.length
 			)}
 		>
-			<p class="text-surface-500 mb-1 text-xs">
+			<p class="text-surface-600-400 mb-1 text-xs">
 				{alsoAbleHeading(capability, label, candidates.rows.length)}
 			</p>
 
@@ -438,14 +440,16 @@
 								</span>
 							</span>
 						</button>
-						<button
-							type="button"
-							class="btn btn-sm preset-tonal-surface shrink-0 text-xs"
-							onclick={() => use(row)}
-							aria-label={`Use ${row.modelName} for ${label}`}
-						>
-							Use
-						</button>
+						{#if row.usable}
+							<button
+								type="button"
+								class="btn btn-sm preset-tonal-surface shrink-0 text-xs"
+								onclick={() => use(row)}
+								aria-label={`Use ${row.modelName} for ${label}`}
+							>
+								Use
+							</button>
+						{/if}
 					</div>
 				{/each}
 
@@ -468,11 +472,21 @@
 			{/if}
 
 			{#if hidden}
-				<p class="text-surface-500 px-1.5 text-xs">{hidden}</p>
+				<p class="text-surface-600-400 px-1.5 text-xs">{hidden}</p>
+			{/if}
+			{#if toDownload}
+				<button
+					type="button"
+					class="hover:preset-tonal-primary text-surface-600-400 flex min-h-9 items-center gap-2 rounded-[10px] px-1.5 text-left text-xs"
+					onclick={() => onGetModel(capability)}
+				>
+					<Icons.Download size={14} aria-hidden="true" />
+					{toDownload}
+				</button>
 			{/if}
 		</section>
 
-		<div class="border-surface-300-700 flex flex-col gap-1.5 border-t pt-3">
+		<div class="flex flex-col gap-1.5 pt-3">
 			<button
 				type="button"
 				class="btn w-full {nothingServes
@@ -483,7 +497,7 @@
 				<Icons.Download size={16} aria-hidden="true" />
 				{getModelButtonLabel(label, nothingServes)}
 			</button>
-			<p class="text-surface-500 px-0.5 text-xs">
+			<p class="text-surface-600-400 px-0.5 text-xs">
 				{finderNote(label, capability)}
 			</p>
 		</div>

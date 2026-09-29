@@ -14,13 +14,13 @@
 	 * persists. Narrow "drawer" widths behave like icons plus a scrim.
 	 *
 	 * Widgets are the same PanelInstances the SurfaceManager owns; this host
-	 * renders them through Panel (chrome="zone") so native/frame surfaces and
+	 * renders them through Panel (chrome="zone") so remote/frame surfaces and
 	 * channel wiring are untouched. Placement changes reparent the panel stack
 	 * between rail and flyout — rare (resize/pin), and accepted for zones,
 	 * unlike the old grid's no-reparent law.
 	 */
-	import type { Snippet } from "svelte"
 	import { getContext, onMount, untrack } from "svelte"
+	import { SvelteSet } from "svelte/reactivity"
 	import * as Icons from "@lucide/svelte"
 	import Panel from "$lib/client/components/surfaces/Panel.svelte"
 	import type { SurfaceManager } from "$lib/client/surfaces/panelManager.svelte"
@@ -55,33 +55,46 @@
 		type MobileGroup
 	} from "./mobileSidePanels.svelte"
 	// PLAN 25: the chat middle is a widget grid. Messages (GROW, filling it) is
-	// the one required widget that falls out of the model — no bespoke center
-	// layout. The surrounding zones stay the interim system for now; this
-	// proves the normal chat in the new model first.
+	// the genre default that falls out of the model — no bespoke center
+	// layout. Placement is free (brief 7a): the conversation may sit in any
+	// zone, and the one rule left is the primary floor (./primaryFloor).
 	import WidgetZone from "./WidgetZone.svelte"
 	import {
 		DEFAULT_CELL,
 		loadChatLayout,
 		placementOf,
 		widgetsInZone,
-		withGridMembership,
-		withoutGridRequired,
 		withGridWidget,
 		withoutGridWidget,
 		type GridLayout,
 		type WidgetConfig,
 		type Zone
 	} from "./widgetGrid"
+	import {
+		floorKeeps,
+		floorNote,
+		withPrimaryFloor
+	} from "./primaryFloor"
+	import { placementAtDone } from "./donePlacement"
+	// The two owner questions free placement leaves open (QE, QF), answered
+	// with the plan's recommended defaults — flipped in that one file.
+	import { emptyMiddleRefusal, stageOf, type StagePick } from "./placementRules"
+	import { toaster } from "$lib/client/utils/toaster"
 	import type {
 		ActionsV1,
 		PlacementInput
 	} from "$lib/shared/widgets/context"
+	import { withHostCard } from "$lib/shared/widgets/context"
 	import type { ActionDispatch } from "$lib/shared/widgets/invokeAction"
 	// PLAN 25: the docked-rail case (the common one — a pinned, single-column
 	// side zone) also now runs on the widget-grid engine, via this pure
 	// translation of the panel/zone system. See panelWidgets.ts's module doc
 	// for exactly what it does and doesn't cover.
-	import { widgetsFromSideZones } from "./panelWidgets"
+	import {
+		widgetsFromSideZones,
+		zoneEntries,
+		type ZoneEntry
+	} from "./panelWidgets"
 	// The editor's grid is gridstack (free 2D drag / resize / snap), mounted by
 	// LayoutEditCanvas; what is read here is the shape of what it reports back.
 	// See GridStackZone — gridstack owns its DOM, Svelte owns only the host.
@@ -125,10 +138,16 @@
 	} from "./simulator"
 	import { unitsOf, type RenderUnit } from "./tabGroups"
 	import {
-		inlineSideWidths,
+		dockedZoneWidths,
+		emptyColumnPx,
+		emptyColumnsPx,
 		sideFlowPx,
+		sidePopulated,
+		zonePopulated,
+		middleIsOneColumn,
 		sideSlot,
-		type SideSlot
+		type SideSlot,
+		type SideZoneFill
 	} from "./sideSlot"
 	// The side column's RAIL MODEL (ruled 2026-09-10): each docked widget group
 	// in a side column is its own toggling panel — expanded in the column, an
@@ -147,10 +166,25 @@
 		collapseColumn,
 		collapsedOrder,
 		resolveRailColumn,
+		rovingStep,
+		rovingStop,
 		type CellState,
 		type ColumnLayout,
 		type RailPlacement
 	} from "./sideRail"
+	// Tucked sides and the centred stage (ruled 2026-09-27): when the session's
+	// box cannot hold the docked sides and the stage at its measure, the sides
+	// draw only their icon rails and a panel comes out as a flyout, one at a
+	// time; and the column is centred by a balance the middle zone carries.
+	import {
+		balancedGutters,
+		sidesTucked,
+		stagePlanPx,
+		toggleTuckedFlyout,
+		type Gutters,
+		type TuckedFlyout
+	} from "./tuckedSides"
+	import { HOST_CARD_CLASS, hostCardShown } from "./hostCard"
 	// Per-widget styling (PLAN 25) is NOT a panel any more (ruled 2026-09-09):
 	// each widget wears its own hover overlay, mounted by WidgetHost. All this
 	// file still owns is turning that mode on and persisting the pins.
@@ -174,11 +208,22 @@
 		type WidgetSettingsDecl
 	} from "$lib/shared/widgets/settings"
 	import { CORE_WIDGETS } from "$lib/shared/widgets/types"
+	// A second copy of a widget is placed under `<widget id>#<instance name>`
+	// (the Lair's `messages#sanctum`, S1): its settings and pins are the copy's,
+	// its declaration the widget's.
+	import { isInstanceOf, widgetOfInstance } from "$lib/shared/widgets/instanceId"
+	import { channelClaims, channelsForCopy, primaryLogOf } from "./channelClaims"
+	// A widget's settings and style open in ONE app-level modal (owner ruling
+	// 2026-09-27); every entry point calls `openWidgetSettings`, and this file
+	// mounts the modal once.
+	import WidgetSettingsModal from "./WidgetSettingsModal.svelte"
+	import { closeWidgetSettings } from "./widgetSettingsModal.svelte"
 	import { legacyLayoutAttr } from "$lib/shared/widgets/corePresets"
 	// The per-widget context + skin wrapper. Messages wears one for the same
 	// reason every other widget does (ruled 2026-08-30): it is what injects its
 	// style and what grows its Style-mode overlay.
-	import WidgetHost from "./WidgetHost.svelte"
+	import RemoteWidget from "$lib/client/components/host/RemoteWidget.svelte"
+	import { CORE_CONVERSATION } from "$lib/client/components/sessionPage/coreWidgets"
 	// The phone editor itself (ruled 2026-09-10) — the row list, its sheets and
 	// their state, which unmounts with it. The gates that mount it (`mobileEdit`,
 	// `liveStowed`) stay here, because the live session's own mount reads them.
@@ -197,28 +242,13 @@
 	/** The three columns a preset picture is drawn in, left to right. */
 	const PREVIEW_ZONES = ["left", "middle", "right"] as const
 
-	/* ── session layout v2, behind a flag (plan P2) ─────────────────────────
-	 * `?stage=v2` swaps the LIVE body for `SessionStage`, which renders the
-	 * session from a resolved layout document and nothing else. The editor
-	 * markup below is untouched and still the legacy one: opening it while the
-	 * flag is on is allowed to look wrong until P4 replaces it. The flag lives
-	 * here rather than on the page because the page is owned by another session
-	 * (plan §8, sequencing). */
-	import { page } from "$app/state"
-	import SessionStage from "./SessionStage.svelte"
-	let stageV2 = $derived(page.url.searchParams.get("stage") === "v2")
+	import { desktop } from "$lib/client/utils/breakpoint.svelte"
+	import { primaryUnitKey, stageOnlyActive } from "./stageOnly"
 
 	interface Props {
 		manager: SurfaceManager
 		sessionId: number | null
 		session?: unknown
-		/**
-		 * The middle zone's content (PLAN 25): the ONE `messages` widget, log
-		 * and composer together, as the page wires it. The page owns that
-		 * wiring and the widget owns its own arrangement; this host decides
-		 * only where the widget sits, and renders it inside one `WidgetHost`.
-		 */
-		conversationChildren?: Snippet
 		/**
 		 * 🚧 What core's conversation widget is told about the session (C0b):
 		 * its `session_full.v1`, granted to that one widget.
@@ -291,7 +321,6 @@
 		manager,
 		sessionId,
 		session,
-		conversationChildren,
 		conversationDossier = null,
 		presets = [],
 		activePresetId = null,
@@ -308,21 +337,45 @@
 		onFrameAction
 	}: Props = $props()
 
-	// The chat's widget grid: the genre's default Chat layout merged with this
-	// user's saved widget blob (courier'd verbatim by the manager). Read here —
-	// what the editor changes about the middle is its ARRANGEMENT, which
-	// commits through `manager.setArrangedGrid` on Done.
-	let chatGrid = $derived<GridLayout>(
-		loadChatLayout(
-			manager.effectiveWidgetGrid,
-			// A genre that withholds the conversation (R71) puts its own
-			// primary widget in the middle — Battleship's board.
-			manager.omitted.has("messages")
-				? (manager.instances.find((p) => p.role === "primary")?.id ?? "messages")
-				: "messages",
-			manager.omitted
+	// The chat's widget grid: this user's saved widget blob (courier'd
+	// verbatim by the manager), read AS SAVED — the conversation stays in
+	// whichever zone it was put (brief 7a). Read here — what the editor
+	// changes about the middle is its ARRANGEMENT, which commits through
+	// `manager.setArrangedGrid` on Done.
+	// The genre's PRIMARY widget is the conversation, or — for a genre that
+	// withholds it (R71) — its own (Battleship's board).
+	let primaryId = $derived(
+		manager.omitted.has("messages")
+			? (manager.instances.find((p) => p.role === "primary")?.id ?? "messages")
+			: "messages"
+	)
+	let savedGrid = $derived<GridLayout>(
+		loadChatLayout(manager.effectiveWidgetGrid, primaryId, manager.omitted)
+	)
+	/** The saved arrangement, before the floor (see `floored`). */
+	let storedArranged = $derived<Arranged>(
+		loadArranged(manager.effectiveArrangedGrid)
+	)
+	/**
+	 * The layout with the PRIMARY FLOOR applied (./primaryFloor): handed back
+	 * by reference when an instance of the primary is placed anywhere — a side
+	 * list, the grid or the arrangement — else with the bare primary appended
+	 * to the middle, in the grid and in an arranged middle alike. While the
+	 * editor is open the arrangement asked is its working copy, so a card
+	 * dragged into a side is still placed. Declared up here, read lazily:
+	 * `saved`, `editing` and `editArranged` are further down.
+	 */
+	let floored = $derived.by(() =>
+		withPrimaryFloor(
+			{
+				zones: saved,
+				grid: savedGrid,
+				arranged: editing ? editArranged : storedArranged
+			},
+			primaryId
 		)
 	)
+	let chatGrid = $derived<GridLayout>(floored.grid)
 	/**
 	 * The ids the middle widget grid places. The zone template covers the sides
 	 * and never names the middle, so every "is this widget placed?" question has
@@ -339,14 +392,14 @@
 	 * re-measured whenever the shell reflows around it. Two things position
 	 * against them, both of them `position: fixed` and so unable to read the
 	 * root's box themselves: a group's flyout, which flies out at the edge the
-	 * column is already on (`flyoutStyle`), and the editor toolbar, which
+	 * column is already on (`flyoutStyle`, via `bLeft` / `bRight`, the capped
+	 * body's edges), and the editor toolbar, which
 	 * starts where `<main>` does on every tab but Move (see `.editor`).
 	 *
-	 * Since the one-rail shell (2026-09-15) `mLeft` IS the nav rail — 64px, or
-	 * 208 while the rail is wide — plus any sidebar view open beside it, and
-	 * `mRight` is 0. That is also why the side zones no longer have a `margin`
-	 * slot: there is no reserved dead space left to lift them into (retired
-	 * 2026-09-17; see ./sideSlot).
+	 * `mLeft` IS the nav rail — 64px, or 208 while the rail is wide — plus any
+	 * sidebar view open beside it, and `mRight` is 0. That is also why the side
+	 * zones have no `margin` slot: there is no reserved dead space to lift them
+	 * into (see ./sideSlot).
 	 *
 	 * `leftPanel` / `rightPanel` are read for one thing only: a view opening or
 	 * closing reflows `<main>`, so the offsets have to be taken again once the
@@ -355,6 +408,7 @@
 		| {
 				leftPanel?: string | null
 				rightPanel?: string | null
+				stageOnly?: boolean
 		  }
 		| undefined
 	>("panelsCtx")
@@ -376,6 +430,14 @@
 	let mRight = $state(0)
 	let mTop = $state(0)
 	let vw = $state(1024)
+	/**
+	 * The side columns' own edges, for the flyout: `.layout-body`'s. Since the
+	 * body lost its width cap (2026-09-27, see `measureStage`) they equal
+	 * `mLeft` / `mRight`; measured anyway, so a flyout follows the body and
+	 * not an assumption about it.
+	 */
+	let bLeft = $state(0)
+	let bRight = $state(0)
 
 	function updateMargins() {
 		if (!rootEl) return
@@ -384,6 +446,9 @@
 		mLeft = Math.max(0, Math.round(r.left))
 		mRight = Math.max(0, Math.round(window.innerWidth - r.right))
 		mTop = Math.max(0, Math.round(r.top))
+		const b = bodyEl?.getBoundingClientRect() ?? r
+		bLeft = Math.max(0, Math.round(b.left))
+		bRight = Math.max(0, Math.round(window.innerWidth - b.right))
 	}
 	// The editor lays out as a consistent ¼ | ½ | ¼ across the viewport: it
 	// uses a viewport-quarter for the sides and centres the middle to the
@@ -465,7 +530,89 @@
 
 	/* ── measured width (never the viewport) ───────────────────────── */
 	let rootEl: HTMLDivElement | null = $state(null)
+	/**
+	 * `.layout-body`, the row of Left | Middle | Right. UNCAPPED (ruled
+	 * 2026-09-27): a cap would leave part of a wide screen empty whatever the
+	 * layout asked for. The stage is centred by the middle zone's balance
+	 * (`measureStage`), so the zones take the width the window gives them.
+	 */
+	let bodyEl: HTMLDivElement | null = $state(null)
 	let containerW = $state(1024)
+
+	/* ── the centred stage (ruled 2026-09-27; ./tuckedSides) ────────────────
+	 * The conversation's column sits in the middle of the body, not in the
+	 * middle of what the sides leave: the lighter end needs a balance as wide
+	 * as the difference, paid only out of room the stage's measure does not
+	 * need. The MIDDLE ZONE carries it (revised 2026-09-27, "the whole panel
+	 * scrolls"): `.layout-center` runs from side to side with no body padding,
+	 * the widgets in it fill that width, and the balance reaches the column as
+	 * `--sp-stage-balance-start` / `-end` (styles/conversation.css). Measured
+	 * rather than summed — a side is a rail, an icon strip or an arranged
+	 * column, each with its own box — as the distance from each body edge to
+	 * the middle; the balance is inside the middle, so writing it cannot
+	 * change what it was computed from. */
+	let centerEl: HTMLDivElement | null = $state(null)
+	/**
+	 * A classic scrollbar's width on this platform (0 for overlay
+	 * scrollbars), measured once on mount. The balance plans
+	 * the stage as its measure plus one of these on each edge (`stagePlanPx`),
+	 * the room the conversation's scroll region keeps so its rows centre where
+	 * the composer does.
+	 */
+	let scrollbarPx = $state(0)
+	let stagePlan = $derived(stagePlanPx(scrollbarPx))
+	let gutters = $state<Gutters>({ start: 0, end: 0 })
+	/** Body edge → the column's area, balance included: where a tucked flyout stops. */
+	let flowEdge = $state<Gutters>({ start: 0, end: 0 })
+	/**
+	 * Which ends of the middle zone have a side in the flow next to them. The
+	 * middle reaches over the body gap on those ends (a negative margin of
+	 * the gap), so the conversation covers the gap too and no strip between
+	 * a side and the column is outside a widget. The sides and every width
+	 * sum keep the gap exactly as before; only the middle's box grows into it.
+	 * Stable: covering the gap leaves the side itself between the body edge
+	 * and the middle, so the measure that set it still reads > 0.
+	 */
+	let middleOverGap = $state({ start: false, end: false })
+	function measureStage() {
+		if (!bodyEl || !centerEl) return
+		const b = bodyEl.getBoundingClientRect()
+		const c = centerEl.getBoundingClientRect()
+		if (!(b.width > 0) || !(c.width > 0)) return
+		const start = Math.max(0, Math.round(c.left - b.left))
+		const end = Math.max(0, Math.round(b.right - c.right))
+		// What the box just measured was drawn with: the gap already covered
+		// or not yet.
+		const drawn = middleOverGap
+		const over = { start: start > 0, end: end > 0 }
+		if (over.start !== drawn.start || over.end !== drawn.end)
+			middleOverGap = over
+		const next = balancedGutters({
+			bodyPx: Math.round(b.width),
+			startPx: start,
+			endPx: end,
+			stagePx: stagePlan
+		})
+		if (next.start !== gutters.start || next.end !== gutters.end)
+			gutters = next
+		// A tucked flyout stops where it always did: past the gap as well.
+		const edge = {
+			start: start + (drawn.start ? BODY_GAP_PX : 0) + next.start,
+			end: end + (drawn.end ? BODY_GAP_PX : 0) + next.end
+		}
+		if (edge.start !== flowEdge.start || edge.end !== flowEdge.end)
+			flowEdge = edge
+	}
+	$effect(() => {
+		const body = bodyEl
+		const centre = centerEl
+		if (!body || !centre) return
+		const ro = new ResizeObserver(() => measureStage())
+		ro.observe(body)
+		ro.observe(centre)
+		untrack(measureStage)
+		return () => ro.disconnect()
+	})
 
 	// The editor's zone widths, for the real viewport or a simulated tier —
 	// declared here because the scale needs `containerW` above.
@@ -493,6 +640,18 @@
 		})
 		ro.observe(rootEl)
 		containerW = rootEl.clientWidth || containerW
+		{
+			const probe = document.createElement("div")
+			probe.style.cssText =
+				"position:absolute;inset-block-start:-9999px;inline-size:100px;block-size:100px;overflow:auto;scrollbar-gutter:stable;visibility:hidden"
+			// What a `scrollbar-gutter: stable` region RESERVES — the room the
+			// conversation's scroll region keeps — rather than what a drawn
+			// scrollbar takes: a browser run with hidden scrollbars (headless
+			// Chromium) draws none yet still reserves the gutter.
+			rootEl.appendChild(probe)
+			scrollbarPx = Math.max(0, probe.offsetWidth - probe.clientWidth)
+			probe.remove()
+		}
 		manager.setWidth(containerW)
 
 		const mq = window.matchMedia("(min-width: 1024px)")
@@ -545,15 +704,31 @@
 	// the MIDDLE grid places is already at home — the zone template does not name
 	// the middle, so without this a preset's own strip lands in a side rail as
 	// well and renders twice.
+	//
+	// A grid entry that names a SIDE zone (a preset's or a hand-written blob —
+	// the editor never writes one; `loadChatLayout` keeps the zone it names,
+	// the conversation's included) is drawn in that side: folded into the
+	// side's first zone here, after what the list already holds. Done then
+	// writes it into the list for good (./donePlacement).
 	let layout = $derived.by((): ZoneLayout => {
-		const placed = new Set([...placedWidgetIds(saved), ...middleGridIds])
-		const extras = activeSecondaryIds.filter((id) => !placed.has(id))
-		if (!extras.length) return saved
-		const host =
+		const sideZoneOf = (side: "left" | "right") =>
 			Object.entries(saved.zones).find(
-				([, z]) => z.kind === "side" && z.side === "right"
-			)?.[0] ?? Object.keys(saved.zones)[0]
-		return extras.reduce((l, id) => withWidget(l, host, id), saved)
+				([, z]) => z.kind === "side" && (side === "left" ? z.side === "left" : z.side !== "left")
+			)?.[0]
+		let out = saved
+		for (const w of chatGrid.widgets) {
+			if (w.zone === "middle" || placedWidgetIds(out).includes(w.id)) continue
+			const host = sideZoneOf(w.zone)
+			if (host) out = withWidget(out, host, w.id)
+		}
+		const placed = new Set([
+			...placedWidgetIds(out),
+			...chatGrid.widgets.map((w) => w.id)
+		])
+		const extras = activeSecondaryIds.filter((id) => !placed.has(id))
+		if (!extras.length) return out
+		const host = sideZoneOf("right") ?? Object.keys(out.zones)[0]
+		return extras.reduce((l, id) => withWidget(l, host, id), out)
 	})
 
 	function commit(next: ZoneLayout) {
@@ -568,10 +743,25 @@
 		manager.setWidgetGrid(next)
 	}
 
-	let resolved = $derived(
+	/** Every zone as the ladder resolves it at this width — the DOCKED answer. */
+	let resolvedDocked = $derived(
 		Object.entries(layout.zones).map(([id, def]) =>
 			resolveZone(id, def, containerW)
 		)
+	)
+	/**
+	 * What is drawn. While the sides are tucked (./tuckedSides) a docked rail
+	 * is drawn as its icon strip, the same one an unpinned zone has always
+	 * had; nothing is written, so untucking draws the rail again.
+	 */
+	let resolved = $derived(
+		tuckedNow()
+			? resolvedDocked.map((z) =>
+					z.def.kind === "side" && z.mode === "rail"
+						? { ...z, mode: "icons" as const }
+						: z
+				)
+			: resolvedDocked
 	)
 	let leftZones = $derived(
 		resolved.filter((z) => z.def.kind === "side" && z.def.side === "left")
@@ -605,11 +795,10 @@
 		setLegacyStylePacks(layout.styles ?? null)
 		return () => setLegacyStylePacks(null)
 	})
-	// Called for the subscription, and for the arm/disarm the phone editor's
-	// style sheet spends — the same contract WidgetHost keeps: it starts the
-	// one fetch, and the deriveds below read the same module state, so they
-	// re-run when the rows or the pins land.
-	const sheetStyles = widgetStylesStore()
+	// Called for the subscription — the same contract WidgetHost keeps: it
+	// starts the one fetch, and the deriveds below read the same module state,
+	// so they re-run when the rows or the pins land.
+	widgetStylesStore()
 	let msgLayoutAttr = $derived(
 		legacyLayoutAttr("messages", resolveWidgetStyle("messages")?.slug)
 	)
@@ -617,10 +806,35 @@
 	function inst(id: string): PanelInstance | undefined {
 		return manager.instances.find((p) => p.id === id)
 	}
-	function widgetsOf(z: ResolvedZone): PanelInstance[] {
-		return z.def.widgets
-			.map(inst)
-			.filter((p): p is PanelInstance => !!p && p.role !== "primary")
+	/**
+	 * Is this placed id drawn as the conversation — a `messages` instance, the
+	 * bare id included (brief 7a: the log may sit in a side), or a copy
+	 * (`messages#sanctum`, S1)? Never a panel instance, so `inst()` does not
+	 * know it. A genre that withholds the conversation (R71) draws none.
+	 */
+	const isConversation = (id: string) =>
+		isInstanceOf(id, "messages") && !manager.omitted.has("messages")
+	/**
+	 * What a zone draws, lists and counts, in the zone's own order — its
+	 * panel instances and its conversations (./panelWidgets `zoneEntries`, the
+	 * one reader for the rail, the icon strip, the editor's side lists, the
+	 * side counts and the phone's panels menu).
+	 */
+	function zoneEntriesOf(z: ResolvedZone): ZoneEntry[] {
+		return zoneEntries(z.def.widgets, manager.instances, isConversation, widgetLabel)
+	}
+	/** An entry's icon, as a component to draw with. */
+	function entryIcon(e: ZoneEntry) {
+		if (!e.panel) return middleWidgetIcon(e.id)
+		return iconOf(e.panel)
+	}
+	/**
+	 * A zone as ./sideSlot's populated test reads it: its mode and its entry
+	 * count, conversation copies included — so the desktop's empty column and
+	 * the phone's panels menu answer one question the same way.
+	 */
+	function zoneFill(z: ResolvedZone): SideZoneFill {
+		return { mode: z.mode, entries: zoneEntriesOf(z).length }
 	}
 	function iconOf(p: PanelInstance) {
 		return (p.icon && (Icons as any)[p.icon]) || Icons.LayoutPanelTop
@@ -642,10 +856,10 @@
 	// left/right pair and leaves any others to the raw JSON escape hatch.
 	let leftZoneId = $derived(leftZones[0]?.id ?? null)
 	let rightZoneId = $derived(rightZones[0]?.id ?? null)
-	let editorLeftPanels = $derived(leftZones.flatMap(widgetsOf))
-	let editorRightPanels = $derived(rightZones.flatMap(widgetsOf))
+	let editorLeftPanels = $derived(leftZones.flatMap(zoneEntriesOf))
+	let editorRightPanels = $derived(rightZones.flatMap(zoneEntriesOf))
 	function middleWidgetLabel(id: string): string {
-		return id === "messages" ? "Messages" : id
+		return isInstanceOf(id, "messages") ? "Messages" : id
 	}
 	function middleWidgetIcon(_id: string) {
 		return Icons.MessagesSquare
@@ -664,7 +878,7 @@
 	})
 	//   Sides: each panel is a full-width widget (grow width, a min-height so an
 	//   empty card reads as a real block), top-anchored — the panel stack.
-	function editorSideGrid(zoneKey: Zone, panels: PanelInstance[]): GridLayout {
+	function editorSideGrid(zoneKey: Zone, panels: { id: string }[]): GridLayout {
 		return {
 			version: 1,
 			cell: EDITOR_CELL,
@@ -683,7 +897,7 @@
 	let editorRightGrid = $derived(editorSideGrid("right", editorRightPanels))
 
 	// ── gridstack-backed editor items ──────────────────────────────────────
-	// Each zone hands gridstack a plain {id,title,size,locked} list; gridstack
+	// Each zone hands gridstack a plain {id,title,size,floorNote} list; gridstack
 	// owns drag/resize/snap. The list is keyed by its ids, so adding/removing a
 	// widget (palette drop, remove) re-seeds the grid, while a drag/resize —
 	// which changes only positions, not the id set — leaves it untouched.
@@ -696,15 +910,12 @@
 	// by reset / apply-preset, which change what "persisted" means). Committed
 	// on Done.
 	//
-	// `arranged` is what the LIVE view draws, and it is DERIVED — this used to
-	// be one `$state` seeded once, at construction, from a manager the page had
-	// not `init`ed yet: the layout blob arrives on `sessions:panelLayout:get`,
-	// after this component exists, and nothing re-read it. The session
-	// remembered its arrangement and the page drew the pre-edit default until
-	// you opened the editor once, which is exactly the shape of the old
-	// `state_referenced_locally` warning here. So: the manager is read
-	// reactively, and a load, a preset applied, or the active preset deleted
-	// all repaint on their own.
+	// `arranged` is what the LIVE view draws, and it is DERIVED, never a
+	// `$state` seeded once at construction: the layout blob arrives on
+	// `sessions:panelLayout:get`, after this component exists, so a one-time
+	// seed would draw the pre-edit default until the editor opened. The
+	// manager is read reactively, and a load, a preset applied, or the active
+	// preset deleted all repaint on their own.
 	//
 	// While editing it is the working copy instead, so the live preview under
 	// the Presets/Style tabs shows the arrangement in progress rather than the
@@ -751,7 +962,7 @@
 	 */
 	let lastDropped: { id: string; zone: ZoneKey } | null = null
 	let arranged = $derived<Arranged>(
-		editing ? editArranged : loadArranged(manager.effectiveArrangedGrid)
+		editing ? editArranged : floored.arranged
 	)
 
 	// Each list carries its default placement (place/h); `withGeometry` overlays
@@ -763,11 +974,10 @@
 			widgetsInZone(chatGrid, "middle").map((w) => ({
 				id: w.id,
 				title: widgetLabel(w.id),
-				// Locked hides the remove button, which is the anchor
-				// guarantee: the conversation is movable and never
-				// removable. Anything else a layout puts in the middle is an
-				// ordinary widget and comes out again.
-				locked: !!w.required,
+				// The primary floor: the LAST placed Messages (or an R71
+				// genre's own primary) offers no ×, and says why. Every card
+				// moves, into any zone — placement is free (brief 7a).
+				...floorNoteProp(w.id),
 				// The chat's bound default, read off the widget rather than its
 				// name: a GROW height fills what is left, a FIXED one docks three
 				// cells deep against the edge it anchors to. Both full-width.
@@ -785,16 +995,41 @@
 	)
 	let leftGsItems = $derived<GsItem[]>(
 		withGeometry(
-			editorLeftPanels.map((p) => ({ id: p.id, title: p.title, h: 3 })),
+			editorLeftPanels.map((p) => ({
+				id: p.id,
+				title: p.title,
+				h: 3,
+				...floorNoteProp(p.id)
+			})),
 			editArranged.left
 		)
 	)
 	let rightGsItems = $derived<GsItem[]>(
 		withGeometry(
-			editorRightPanels.map((p) => ({ id: p.id, title: p.title, h: 3 })),
+			editorRightPanels.map((p) => ({
+				id: p.id,
+				title: p.title,
+				h: 3,
+				...floorNoteProp(p.id)
+			})),
 			editArranged.right
 		)
 	)
+	/**
+	 * The primary floor's note for a widget (./primaryFloor): what its card
+	 * says in place of the × when it is the last placed instance of the
+	 * genre's primary widget, else null. Counted over `placedIds` — the side
+	 * lists, the grid and the arrangement (the working one while editing).
+	 */
+	function floorNoteOf(id: string): string | null {
+		if (!floorKeeps(id, placedIds, primaryId)) return null
+		const decl = CORE_WIDGETS.find((w) => w.id === widgetOfInstance(id))
+		return floorNote(decl?.title ?? inst(id)?.title ?? widgetLabel(id))
+	}
+	function floorNoteProp(id: string): { floorNote?: string } {
+		const note = floorNoteOf(id)
+		return note ? { floorNote: note } : {}
+	}
 
 	/**
 	 * justify/align-self for an arranged cell from a widget's anchor edges — the
@@ -821,7 +1056,7 @@
 	// (individually draggable / un-groupable) — only these live renderers collapse
 	// them. `unitsOf` (with the scattered-overlap guard) lives in ./tabGroups.
 	// Which member is showing in each tab group (keyed by group id). Defaults to
-	// the first member; falls back if the remembered one is no longer present.
+	// the first member; falls back if the remembered one is not present.
 	let activeTabs = $state<Record<string, string>>({})
 	function activeTab(u: RenderUnit): string {
 		const a = activeTabs[u.key]
@@ -845,13 +1080,36 @@
 				channels: p.channels,
 				settings: p.settings
 			}
-		const core = CORE_WIDGETS.find((w) => w.id === id)
+		// A copy (`messages#sanctum`) is declared by its widget; a
+		// conversation copy pinned to a channel is titled by the channel's
+		// declared label (S1: the panel reads _Sanctum_).
+		const core = CORE_WIDGETS.find((w) => w.id === widgetOfInstance(id))
 		return {
 			id,
-			title: core?.title ?? middleWidgetLabel(id),
+			title: pinnedChannelTitle(id) ?? core?.title ?? middleWidgetLabel(id),
 			channels: core?.channels,
 			settings: core?.settings
 		}
+	}
+	/**
+	 * A conversation copy's title when it claims a channel: the channel's
+	 * label in the viewer's language (`composer.channelLabels`, off
+	 * `ChannelDecl.label`), else its slug title-cased. Read off the stored
+	 * settings, not `resolvedWidget` — that resolves THROUGH this.
+	 */
+	function pinnedChannelTitle(id: string): string | undefined {
+		if (!isInstanceOf(id, "messages")) return undefined
+		const claim = widgetSettingValues(id).channel
+		if (typeof claim !== "string" || !claim.trim()) return undefined
+		const slug = claim.trim()
+		return (
+			conversationDossier?.composer.channelLabels?.[slug] ??
+			slug
+				.split(/[-_]/)
+				.filter(Boolean)
+				.map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+				.join(" ")
+		)
 	}
 	function resolvedWidget(id: string) {
 		return resolveWidgetInstance(widgetDeclOf(id), widgetSettingValues(id))
@@ -874,8 +1132,60 @@
 					channels: p.channels,
 					settings: p.settings
 				}
+		// A placed copy of a core widget (S1) has its own settings under its
+		// own id, declared by its widget.
+		for (const id of placedIds)
+			if (id !== widgetOfInstance(id) && !out[id]) out[id] = widgetDeclOf(id)
 		setWidgetSettingDecls(out)
 	})
+
+	/**
+	 * Every id this layout places, anywhere: the side zones, the middle grid
+	 * and the saved arrangement. The one list the channel claims (S1) and the
+	 * copies' declarations read.
+	 */
+	let placedIds = $derived(
+		new Set<string>([
+			...placedWidgetIds(layout),
+			...middleGridIds,
+			...(arranged.left?.items ?? []).map((i) => i.id),
+			...(arranged.middle?.items ?? []).map((i) => i.id),
+			...(arranged.right?.items ?? []).map((i) => i.id)
+		])
+	)
+	/**
+	 * Which placed conversation copy claims which channel (S1): a copy with a
+	 * `channel` setting shows that channel alone; the others share the rest.
+	 */
+	let claims = $derived(
+		channelClaims(placedIds, (id) => widgetSettingValues(id))
+	)
+	/**
+	 * The layout's primary log (./channelClaims `primaryLogOf`): the first
+	 * unclaimed Messages in reading order, else the first Messages. When it
+	 * claims a channel — no unclaimed copy is placed — it also shows what no
+	 * copy claims, so `main` never leaves the session with the log it was in.
+	 */
+	let primaryLog = $derived.by(() =>
+		primaryLogOf(
+			[...readingOrder.middle, ...readingOrder.left, ...readingOrder.right],
+			claims
+		)
+	)
+	/**
+	 * The dossier one conversation copy is handed: the page's, with its
+	 * composer told only this copy's channels — the rows it draws and the
+	 * lanes its strip offers. The page's own object when nothing narrows it.
+	 */
+	function dossierFor(id: string): ConversationDossierV1 | null {
+		const d = conversationDossier
+		if (!d) return d
+		const all = d.composer.channels
+		const mine = channelsForCopy(all, claims, id, primaryLog)
+		if (mine.length === all.length && mine.every((c, i) => c === all[i]))
+			return d
+		return { ...d, composer: { ...d.composer, channels: mine } }
+	}
 
 	function widgetLabel(id: string): string {
 		return resolvedWidget(id).title
@@ -896,7 +1206,11 @@
 	 * Unmeasured for a frame → 0 → `compact`, corrected by an ordinary
 	 * `layout:changed`. */
 	/**
-	 * The primary widget's channel declaration: none, i.e. the whole log.
+	 * The conversation's channel declaration: none, i.e. the whole log — for
+	 * every copy of it. Which channels a copy SHOWS is not this (S1): a
+	 * declared list switches the wire to per-lane posts the conversation does
+	 * not read, so the host narrows the copy's dossier instead (`dossierFor`:
+	 * its composer's channels), and the conversation draws those rows alone.
 	 *
 	 * A constant rather than an `[]` literal in the mount below because a widget
 	 * host SUBSCRIBES against this array — a fresh literal on every re-render
@@ -923,16 +1237,20 @@
 		// what a tab group is — while pinned/collapsed and the chrome are the
 		// individual widget's.
 		const p = inst(id)
-		const primary = id === "messages"
+		const primary = isInstanceOf(id, "messages")
 		return placementOf({
 			zone: { cols: zone.cols, rows: zone.rows },
 			box: u.box,
 			widthPx,
 			heightPx,
 			// The contract's `pinned`: "placed in the grid, not collapsible /
-			// closable away". For the conversation that is the anchor
-			// guarantee (`required`); for a panel it is its own declaration.
-			pinned: primary ? true : !(p?.layout.closable ?? true),
+			// closable away". The conversation — and an R71 genre's own
+			// primary — never collapses or closes away wherever it is placed;
+			// for a panel it is its own declaration.
+			pinned:
+				primary || p?.role === "primary"
+					? true
+					: !(p?.layout.closable ?? true),
 			collapsed: p?.collapsed ?? false,
 			// Nothing in an arranged zone is drawered — the zone places its
 			// widgets (Panel's `chrome="zone"`), and the drawer rail is the
@@ -981,7 +1299,7 @@
 		return [...ids]
 			.filter(
 				(id) =>
-					id === "messages" ||
+					isInstanceOf(id, "messages") ||
 					(inst(id)?.role && inst(id)!.role !== "primary")
 			)
 			.map((id) => ({ id, label: widgetLabel(id) }))
@@ -992,8 +1310,12 @@
 	 * the palette/active logic), and the full per-zone geometry → arrangedGrid
 	 * (positions + anchors + groups — what makes the arrangement survive a reload
 	 * and restore into the editor).
+	 *
+	 * Returns false, having written NOTHING, when Done is refused — QF (1)
+	 * (./placementRules): a middle left empty is almost always a move
+	 * half-made, so the editor stays open and says so.
 	 */
-	function commitArrangement() {
+	function commitArrangement(): boolean {
 		// Never persist a PREVIEW. Done can be pressed with a tier still showing,
 		// and the reset $effect only runs after this handler — so leave simulation
 		// here, synchronously, and save the arrangement the user actually made
@@ -1016,55 +1338,24 @@
 					`(${[d.kept, ...d.dropped].join(", ")}); kept ${d.kept}.`
 			)
 		const arrangement = deduped.arranged
-		let next = layout
-		for (const [key, zid] of [
-			["left", leftZoneId],
-			["right", rightZoneId]
-		] as const) {
-			const a = arrangement[key]
-			if (!a || !zid || !next.zones[zid]) continue
-			// order top→bottom by the widget's row so the saved list matches
-			const sorted = [...a.items]
-				.sort((p, q) => p.y - q.y)
-				.map((i) => i.id)
-			// A widget the GRID holds as required belongs to the zone the grid
-			// puts it in and to no other: the conversation moves around the
-			// middle and never leaves it. The editor refuses the drag that
-			// would take it out (`GridStackZone`'s `acceptsRequired`); this is
-			// the same rule kept for a blob written before that refusal did.
-			const { ids, refused } = withoutGridRequired(chatGrid, sorted)
-			for (const id of refused)
-				console.warn(
-					`[session layout] "${id}" is required by the widget grid ` +
-						`and cannot live in a side zone; left where it is.`
-				)
-			next = {
-				...next,
-				zones: {
-					...next.zones,
-					[zid]: { ...next.zones[zid], widgets: ids }
-				}
-			}
+		// Membership, both halves (./donePlacement): each side that reported a
+		// frame has its list replaced in row order, and the middle's grid is
+		// reconciled against its frame — an ABSENT middle frame is no opinion,
+		// never an empty middle (`withGridMembership`). Placement is free: the
+		// conversation is written wherever its card was left, a side included.
+		const done = placementAtDone({
+			zones: layout,
+			grid: chatGrid,
+			arrangement,
+			sideZoneIds: { left: leftZoneId, right: rightZoneId }
+		})
+		const refusal = emptyMiddleRefusal(done.middle)
+		if (refusal) {
+			toaster.error({ title: refusal })
+			return false
 		}
-		if (next !== layout) commit(next)
-		// The MIDDLE's membership, the same reading one model over. The zone
-		// template never names the middle — that list is the chat widget grid's
-		// (see `place`) — so without this a card dragged OUT of the middle
-		// stayed in the grid and drew in two zones, and one dragged IN was
-		// arranged into cells nothing declared it in and was gone by the next
-		// open. `arrangement` is the DEDUPED one, so `lastDropped` has already
-		// settled which zone a card that reported itself in two belongs to.
-		//
-		// Row order for the ids, exactly as the sides above take it — and an
-		// ABSENT middle frame is no opinion, never an empty middle: see
-		// `withGridMembership`, which is where that rule is kept.
-		const middleIds = arrangement.middle
-			? [...arrangement.middle.items]
-					.sort((p, q) => p.y - q.y)
-					.map((i) => i.id)
-			: null
-		const nextGrid = withGridMembership(chatGrid, "middle", middleIds)
-		if (nextGrid !== chatGrid) commitGrid(nextGrid)
+		if (done.zones !== layout) commit(done.zones)
+		if (done.grid !== chatGrid) commitGrid(done.grid)
 		// The manager is now the live view's only source (`arranged` derives
 		// from it), so this write is also what repaints the session behind the
 		// editor when Done closes it.
@@ -1078,11 +1369,128 @@
 		// instead, which is what an empty one means and what reset already does.
 		if (arrangementIsEmpty(arrangement)) manager.clearArrangement()
 		else manager.setArrangedGrid(arrangement)
+		return true
 	}
 
 	/* ── pop-over (unpinned rails + narrow drawers) ────────────────── */
 	let popId = $state<string | null>(null)
-	let popZone = $derived(resolved.find((z) => z.id === popId) ?? null)
+	/**
+	 * Every zone popped over at least once, kept (unit M): its flyout is
+	 * mounted the first time it opens and HIDDEN when it closes, never
+	 * unmounted, so closing and reopening a flyout remounts (and reloads) no
+	 * widget in it. Only while the zone still pops over: pinned, its
+	 * widgets live in its rail instead.
+	 */
+	const poppedZones = new SvelteSet<string>()
+	$effect(() => {
+		if (popId) poppedZones.add(popId)
+	})
+	let keptPops = $derived(resolved.filter((z) => poppedZones.has(z.id) && z.mode !== "rail"))
+
+	/* ── the tucked flyout (ruled 2026-09-27; ./tuckedSides) ───────────────
+	 * While the sides are tucked, a rail icon brings ITS panel out over the
+	 * session, one at a time across both sides: opening another puts the first
+	 * away, and Esc or an outside click puts it away. It is the same flyout
+	 * both paths already had — an arranged group's cell positioned over the
+	 * session (`cell-flyout`), an un-arranged zone's `.zone-flyout` — driven by
+	 * this one value instead of by `groupOpen` / `popId`, which keep the docked
+	 * choices for when the sides untuck. Transient; nothing is persisted. */
+	let tuckedFlyout = $state<TuckedFlyout | null>(null)
+	/** The rail icon that opened it — where focus goes back to. */
+	let tuckedTrigger: HTMLElement | null = null
+	/**
+	 * The widget an un-arranged zone's flyout shows while tucked, by zone.
+	 * Kept after it closes so the closed flyout keeps the SAME mount hidden
+	 * (the keep-alive `keptPops` exists for) rather than filling with the
+	 * zone's other widgets.
+	 */
+	let tuckedShown = $state<Record<string, string>>({})
+	/** The un-arranged zone holding the tucked panel that is out, if any. */
+	let tuckedZoneId = $derived.by(() => {
+		const t = tuckedFlyout
+		if (!t || !sidesAreTucked || arrangedHere(t.side)) return null
+		const zones = t.side === "left" ? leftZones : rightZones
+		return zones.find((z) => z.def.widgets.includes(t.key))?.id ?? null
+	})
+	$effect(() => {
+		const id = tuckedZoneId
+		const t = tuckedFlyout
+		if (!id || !t) return
+		untrack(() => {
+			poppedZones.add(id)
+			if (tuckedShown[id] !== t.key) tuckedShown[id] = t.key
+		})
+	})
+	/** A zone narrowed to the one widget its tucked flyout shows. */
+	function tuckedZone(z: ResolvedZone): ResolvedZone {
+		const id = tuckedShown[z.id]
+		return id && z.def.widgets.includes(id)
+			? { ...z, def: { ...z.def, widgets: [id] } }
+			: z
+	}
+	function tuckedOpen(side: "left" | "right", key: string): boolean {
+		return tuckedFlyout?.side === side && tuckedFlyout.key === key
+	}
+	/** A rail icon pressed while tucked. */
+	function toggleTucked(
+		side: "left" | "right",
+		key: string,
+		trigger: HTMLElement
+	) {
+		const next = toggleTuckedFlyout(tuckedFlyout, { side, key })
+		if (!next) {
+			closeTucked(true)
+			return
+		}
+		tuckedFlyout = next
+		tuckedTrigger = trigger
+		// Focus moves INTO the panel once it is drawn: its first control, or
+		// the dialog itself.
+		requestAnimationFrame(() => {
+			const el = rootEl?.querySelector<HTMLElement>("[data-tucked-flyout]")
+			if (!el) return
+			const first = focusablesIn(el)[0]
+			;(first ?? el).focus({ preventScroll: true })
+		})
+	}
+	/**
+	 * Put the tucked panel away. Focus goes back to its rail icon on Esc and
+	 * on the icon itself — never on an outside click, which has already put
+	 * focus where the user wanted it.
+	 */
+	function closeTucked(returnFocus: boolean) {
+		const back = tuckedTrigger
+		tuckedFlyout = null
+		tuckedTrigger = null
+		if (returnFocus) back?.focus({ preventScroll: true })
+	}
+	// Untucking puts the panel away: the docked layout is back, and its own
+	// open/closed choices with it.
+	$effect(() => {
+		if (!sidesAreTucked && untrack(() => tuckedFlyout)) closeTucked(false)
+	})
+	$effect(() => {
+		if (!tuckedFlyout) return
+		const onDown = (e: PointerEvent) => {
+			const t = e.target as HTMLElement | null
+			if (t?.closest("[data-pop-keep]")) return
+			closeTucked(false)
+		}
+		const onKey = (e: KeyboardEvent) => {
+			if (e.key !== "Escape" || e.defaultPrevented) return
+			// The shell's Escape steps a layer down (Stage only, Focus, the
+			// dock) unless something took it — and folding the dock would
+			// untuck the sides under the user's hands.
+			e.preventDefault()
+			closeTucked(true)
+		}
+		document.addEventListener("pointerdown", onDown, true)
+		document.addEventListener("keydown", onKey)
+		return () => {
+			document.removeEventListener("pointerdown", onDown, true)
+			document.removeEventListener("keydown", onKey)
+		}
+	})
 
 	function togglePop(zoneId: string, widgetId?: string) {
 		if (popId === zoneId && !widgetId) {
@@ -1100,6 +1508,23 @@
 					?.scrollIntoView({ block: "nearest" })
 			)
 		}
+	}
+
+	/**
+	 * Which icon holds each rail's one tab stop, keyed by rail (./sideRail
+	 * `rovingStep`). Transient UI state, never written to the layout.
+	 */
+	let railStop = $state<Record<string, number>>({})
+	function onRailKeydown(e: KeyboardEvent, rail: string) {
+		const bar = (e.currentTarget as HTMLElement).closest("[data-rail]")
+		if (!bar) return
+		const btns = [...bar.querySelectorAll<HTMLButtonElement>(":scope > button")]
+		const at = btns.indexOf(e.currentTarget as HTMLButtonElement)
+		const next = rovingStep(e.key, at < 0 ? 0 : at, btns.length)
+		if (next == null) return
+		e.preventDefault()
+		railStop[rail] = next
+		btns[next]?.focus()
 	}
 
 	// Click-away + Escape close the pop-over (mockup behavior).
@@ -1134,63 +1559,100 @@
 	 * does NOT reuse is `popId`: the trigger lives outside this component, so the
 	 * pop-over's document-level click-away would fight it (its pointerdown closes
 	 * what its click then re-opens), and a side may own more than one zone. */
-	// A side shows on mobile exactly when it would have shown inline: a visible
-	// mode with at least one live widget (`sideZone` skips `hidden` the same way).
+	// A side shows on mobile exactly when it is POPULATED on the desktop: a
+	// visible mode with at least one entry, conversation copies included
+	// (./sideSlot `zonePopulated`, the same test `populatedHere` asks, so a
+	// side is never an empty column on the desktop and listed on the phone).
 	let mobileLeftZones = $derived(
-		leftZones.filter((z) => z.mode !== "hidden" && widgetsOf(z).length > 0)
+		leftZones.filter((z) => zonePopulated(zoneFill(z)))
 	)
 	let mobileRightZones = $derived(
-		rightZones.filter((z) => z.mode !== "hidden" && widgetsOf(z).length > 0)
+		rightZones.filter((z) => zonePopulated(zoneFill(z)))
 	)
-	let leftWidgetCount = $derived(
-		mobileLeftZones.reduce((n, z) => n + widgetsOf(z).length, 0)
-	)
-	let rightWidgetCount = $derived(
-		mobileRightZones.reduce((n, z) => n + widgetsOf(z).length, 0)
-	)
-	// The one writer of the shared store: the breakpoint plus each side's count.
-	// `untrack` because setSides also RESOLVES `open` (dropping an overlay a
-	// resize just invalidated), and reading that back would make this effect
-	// depend on its own write.
-	$effect(() => {
-		const n = isNarrow
-		const l = leftWidgetCount
-		const r = rightWidgetCount
-		untrack(() => mobileSidePanels.setSides(n, l, r))
-	})
 	/* The panels menu's list (ruled 2026-09-10). The two per-side buttons are
 	 * gone; one button in the header opens a sheet listing the side groups, and
 	 * this is what it lists. An arranged side lists its render units — the same
 	 * groups the rail draws — and a side with no arrangement yet lists its zone
 	 * widgets, so the menu is never empty while the button is showing.
 	 *
+	 * While a side is the phone's stage (QE, `stageSide`), its conversation is
+	 * the stage rather than a line here, and the MIDDLE's widgets are listed
+	 * instead ("Middle"), opening the middle as a sheet of its own.
+	 *
 	 * `untrack` for the same reason `setSides` needs it: publishing is a write
 	 * to shared state this effect must not then depend on. */
 	function mobileGroupsOf(side: "left" | "right"): MobileGroup[] {
+		const stageId = stageSide === side ? stagePick?.id : undefined
 		const units = side === "left" ? leftUnits : rightUnits
 		if (units.length)
-			return units.map((u) => ({
-				side,
-				key: u.key,
-				title: groupTitle(u),
-				icon: groupIconName(u),
-				pinned: groupPinned(u)
-			}))
+			return units
+				.filter((u) => !stageId || !u.members.some((m) => m.id === stageId))
+				.map((u) => ({
+					side,
+					key: u.key,
+					title: groupTitle(u),
+					icon: groupIconName(u),
+					pinned: groupPinned(u)
+				}))
 		const zones = side === "left" ? mobileLeftZones : mobileRightZones
 		return zones.flatMap((z) =>
-			widgetsOf(z).map((p) => ({
-				side,
-				key: p.id,
-				title: p.title,
-				icon: p.icon || "LayoutPanelTop",
-				pinned: zonePinned(side)
-			}))
+			zoneEntriesOf(z)
+				.filter((p) => p.id !== stageId)
+				.map((p) => ({
+					side,
+					key: p.id,
+					title: p.title,
+					icon: p.icon || "LayoutPanelTop",
+					pinned: zonePinned(side)
+				}))
 		)
 	}
-	$effect(() => {
-		const groups = isNarrow
-			? [...mobileGroupsOf("left"), ...mobileGroupsOf("right")]
+	/** The middle's widgets as menu lines, while a side is the phone's stage. */
+	function mobileMiddleGroups(): MobileGroup[] {
+		if (!(stageSide && isNarrow)) return []
+		const units: { key: string; members: { id: string }[] }[] = arranged.middle
+			? columnUnits(arranged.middle.items)
+			: widgetsInZone(chatGrid, "middle").map((w) => ({
+					key: w.id,
+					members: [{ id: w.id }]
+				}))
+		return units.map((u) => ({
+			side: "middle" as const,
+			key: u.key,
+			title: u.members.map((m) => widgetLabel(m.id)).join(" · "),
+			icon:
+				u.members.length > 1
+					? "Layers"
+					: isConversation(u.members[0].id)
+						? "MessagesSquare"
+						: inst(u.members[0].id)?.icon || "LayoutPanelTop",
+			pinned: true
+		}))
+	}
+	let mobileGroups = $derived<MobileGroup[]>(
+		isNarrow
+			? [
+					...mobileGroupsOf("left"),
+					...mobileGroupsOf("right"),
+					...mobileMiddleGroups()
+				]
 			: []
+	)
+	// The one writer of the shared store: the breakpoint plus how many lines
+	// each sheet lists. `untrack` because setSides also RESOLVES `open`
+	// (dropping an overlay a resize just invalidated), and reading that back
+	// would make this effect depend on its own write.
+	$effect(() => {
+		const n = isNarrow
+		const count = (side: MobileGroup["side"]) =>
+			mobileGroups.filter((g) => g.side === side).length
+		const l = count("left")
+		const r = count("right")
+		const m = count("middle")
+		untrack(() => mobileSidePanels.setSides(n, l, r, m))
+	})
+	$effect(() => {
+		const groups = mobileGroups
 		untrack(() => mobileSidePanels.setGroups(groups))
 	})
 	/**
@@ -1204,12 +1666,14 @@
 		untrack(() => {
 			const p = mobileSidePanels.takePending()
 			if (!p) return
-			groupOpen[groupKey(p.side, p.key)] = true
-			groupFocus[p.side] = p.key
+			if (p.side !== "middle") {
+				groupOpen[groupKey(p.side, p.key)] = true
+				groupFocus[p.side] = p.key
+			}
 			requestAnimationFrame(() =>
 				rootEl
 					?.querySelector(
-						`.slot-overlay [data-group-key="${CSS.escape(p.key)}"]`
+						`:is(.slot-overlay, .center-sheet) [data-group-key="${CSS.escape(p.key)}"]`
 					)
 					?.scrollIntoView({ block: "nearest" })
 			)
@@ -1219,7 +1683,8 @@
 	// Crossing INTO mobile retires any desktop pop-over, so coming back out does
 	// not re-reveal a flyout the user left open on a wider screen.
 	$effect(() => {
-		if (isNarrow) popId = null
+		// Tucking retires it too: a tucked zone's flyout is `tuckedFlyout`'s.
+		if (isNarrow || sidesAreTucked) popId = null
 	})
 	let mobileSide = $derived(isNarrow ? mobileSidePanels.open : null)
 	/**
@@ -1232,7 +1697,14 @@
 		left: null,
 		right: null
 	})
-	let mobileOverlayEl = $derived(mobileSide ? sideEls[mobileSide] : null)
+	/** The middle's sheet (QE, `centerSlot`) is `.layout-center` itself. */
+	let mobileOverlayEl = $derived(
+		mobileSide === "middle"
+			? centerEl
+			: mobileSide
+				? sideEls[mobileSide]
+				: null
+	)
 
 	/* ── one mount per side, three places (the no-reload law) ───────────────
 	 * The live render writes each side zone ONCE and moves the container
@@ -1241,16 +1713,19 @@
 	 * with the breakpoint. See ./sideSlot for what each slot means, why
 	 * "stowed" is a display:none rather than an unmount, and what the retired
 	 * `margin` slot was. */
-	let leftSlot = $derived(
+	// `.by`: the stage (`stageSide`) is decided further down, with Stage only.
+	let leftSlot = $derived.by(() =>
 		sideSlot({
 			narrow: isNarrow,
-			overlayOwns: mobileSide === "left"
+			overlayOwns: mobileSide === "left",
+			stage: stageSide === "left"
 		})
 	)
-	let rightSlot = $derived(
+	let rightSlot = $derived.by(() =>
 		sideSlot({
 			narrow: isNarrow,
-			overlayOwns: mobileSide === "right"
+			overlayOwns: mobileSide === "right",
+			stage: stageSide === "right"
 		})
 	)
 
@@ -1288,12 +1763,14 @@
 	}
 	/**
 	 * The ladder footprint of each RAIL this side actually draws — `sideZone`'s
-	 * own guard, so an empty or hidden zone reserves nothing. An icon strip is
-	 * not a rail: it is a fixed 2.25rem the ladder never sized.
+	 * own guard, so an empty or hidden zone reserves no rail. (An EMPTY side's
+	 * column is asked for separately and softly — `emptyAsk` below, ./sideSlot
+	 * `emptyColumnPx` — and a hidden one has none.) An icon strip is not a
+	 * rail: it is a fixed 2.25rem the ladder never sized.
 	 */
 	function railLadderPx(zones: ResolvedZone[]): number[] {
 		return zones
-			.filter((z) => z.mode === "rail" && widgetsOf(z).length > 0)
+			.filter((z) => z.mode === "rail" && zoneEntriesOf(z).length > 0)
 			.map((z) => z.width * z.columns)
 	}
 	/**
@@ -1302,33 +1779,161 @@
 	 * An arrangement EXISTS the moment a zone reports its cell grid, items or
 	 * not — emptying a side leaves `{cols, rows, items: []}` behind, and the
 	 * middle deliberately treats that as authoritative (an emptied middle stays
-	 * empty). A SIDE has nothing to be authoritative about: with no widgets
-	 * there is no column and no rail, so the old `!!arranged.right` reserved a
-	 * quarter of the window for an empty box and pushed the conversation off
-	 * centre. Seen live after moving a side's only widget to the other side.
+	 * empty). A SIDE's arrangement with no items places nothing, so this is
+	 * false for it and the side draws its zones' way instead. That does NOT
+	 * make it disappear any more: an empty side keeps an empty column (ruled
+	 * 2026-09-29, `emptyAsk` below). What the old `!!arranged.right` got wrong
+	 * was the SIZE — it drew the arranged grid with no width reserved, so it
+	 * took `.side-column`'s `inline-size: 100%`, shoved the conversation off
+	 * centre (seen live after moving a side's only widget to the other side).
+	 * The empty column is sized by the same reserve as every other side, and
+	 * a box is drawn exactly when its width was granted.
 	 */
 	function arrangedHere(side: "left" | "right"): boolean {
 		return ((side === "left" ? arranged.left : arranged.right)?.items
 			.length ?? 0) > 0
 	}
-	let sideWidths = $derived(
-		inlineSideWidths({
-			left: sideFlowPx({
+	/**
+	 * Does this side hold anything — an arranged item, or a visible zone with
+	 * an entry, conversation copies included (./sideSlot `sidePopulated`)? The
+	 * phone's panels menu asks the same question (`mobileLeftZones`), so a
+	 * side holding only a Sanctum copy is populated on both. A side that is
+	 * not keeps an EMPTY COLUMN (ruled 2026-09-29, "the columns shouldn't
+	 * disappear if the pane is empty"; `emptyAsk` below).
+	 */
+	function populatedHere(side: "left" | "right", zones: ResolvedZone[]): boolean {
+		return sidePopulated({
+			arranged: arrangedHere(side),
+			zones: zones.map(zoneFill)
+		})
+	}
+	/* ── tucked sides (ruled 2026-09-27; ./tuckedSides) ─────────────────────
+	 * Decided from the session's own measured box (`containerW`, the root's
+	 * ResizeObserver), never the viewport — an open sidebar narrows the box and
+	 * not the window, and that is the case this exists for. The threshold is
+	 * the layout's own minimums: each side's DOCKED footprint (the ladder's,
+	 * the same `sideFlowPx` the flow reserves) plus a gap each, plus the
+	 * stage's measure. Read off `resolvedDocked`, never the drawn zones, so
+	 * tucking cannot free the room that would untuck it.
+	 *
+	 * Not below the breakpoint (the sides are already stowed there, with their
+	 * own sheet) and not while the editor is open (it needs the whole layout). */
+	function dockedZonesOf(side: "left" | "right"): ResolvedZone[] {
+		return resolvedDocked.filter(
+			(z) =>
+				z.def.kind === "side" &&
+				(side === "left" ? z.def.side === "left" : z.def.side !== "left")
+		)
+	}
+	let dockedFlow = $derived({
+		left: sideFlowPx({
+			slot: leftSlot,
+			arranged: arrangedHere("left"),
+			arrangedPx: ladderPx(dockedZonesOf("left"), "left"),
+			railPx: railLadderPx(dockedZonesOf("left"))
+		}),
+		right: sideFlowPx({
+			slot: rightSlot,
+			arranged: arrangedHere("right"),
+			arrangedPx: ladderPx(dockedZonesOf("right"), "right"),
+			railPx: railLadderPx(dockedZonesOf("right"))
+		})
+	})
+	/**
+	 * `resolved` (above) reads the tuck through this hoisted accessor: the
+	 * decision needs the docked footprints declared further down, and a
+	 * derived's closure is only evaluated after the script has run.
+	 */
+	function tuckedNow(): boolean {
+		return sidesAreTucked
+	}
+	let sidesAreTucked = $derived(
+		mounted &&
+			!isNarrow &&
+			!editing &&
+			sidesTucked({
+				leftPx: dockedFlow.left,
+				rightPx: dockedFlow.right,
+				gapPx: BODY_GAP_PX,
+				bodyPx: containerW
+			})
+	)
+
+	/**
+	 * The MIDDLE grows with the window; a docked side keeps its ladder width
+	 * (ruled 2026-09-28, reversing the 09-27 fill; ./sideSlot
+	 * `dockedZoneWidths`). The conversation's column keeps its measure inside
+	 * the wider middle, centred on the session by the balance below.
+	 */
+	let middleOneColumn = $derived(middleIsOneColumn(arranged.middle?.items ?? []))
+	/**
+	 * The balance the middle zone hands the conversation's column. Only a
+	 * one-column middle has one column to centre: a middle arranged across
+	 * has no single column, so it takes its whole width unbalanced — either
+	 * way nothing between the sides is left outside a widget.
+	 */
+	let stageBalance = $derived<Gutters>(
+		middleOneColumn ? gutters : { start: 0, end: 0 }
+	)
+	/** What each side DRAWS in the row — 0 for an empty side. */
+	let drawnFlow = $derived({
+		left: sideFlowPx({
+			slot: leftSlot,
+			arranged: arrangedHere("left"),
+			arrangedPx: ladderPx(leftZones, "left"),
+			railPx: railLadderPx(leftZones),
+			tucked: sidesAreTucked
+		}),
+		right: sideFlowPx({
+			slot: rightSlot,
+			arranged: arrangedHere("right"),
+			arrangedPx: ladderPx(rightZones, "right"),
+			railPx: railLadderPx(rightZones),
+			tucked: sidesAreTucked
+		})
+	})
+	/**
+	 * An EMPTY side keeps its column (ruled 2026-09-29; ./sideSlot
+	 * `emptyColumnPx` / `emptyColumnsPx`): every declared side that docks at
+	 * this width — pinned rail or unpinned icon strip — asks for the width its
+	 * first widget will have, read off the DOCKED zones. The ask is soft: the
+	 * column is granted only from room the populated sides and the stage's
+	 * measure do not need, so it gives way before any populated side tucks
+	 * (the tuck threshold, `dockedFlow`, never counts it). Tucked, stowed or
+	 * in the sheet it asks nothing, and a hidden side has nothing to ask.
+	 */
+	let emptyColumns = $derived(
+		emptyColumnsPx({
+			hardLeftPx: drawnFlow.left,
+			hardRightPx: drawnFlow.right,
+			emptyLeftPx: emptyColumnPx({
 				slot: leftSlot,
-				arranged: arrangedHere("left"),
-				arrangedPx: ladderPx(leftZones, "left"),
-				railPx: railLadderPx(leftZones)
+				tucked: sidesAreTucked,
+				populated: populatedHere("left", leftZones),
+				zones: dockedZonesOf("left")
 			}),
-			right: sideFlowPx({
+			emptyRightPx: emptyColumnPx({
 				slot: rightSlot,
-				arranged: arrangedHere("right"),
-				arrangedPx: ladderPx(rightZones, "right"),
-				railPx: railLadderPx(rightZones)
+				tucked: sidesAreTucked,
+				populated: populatedHere("right", rightZones),
+				zones: dockedZonesOf("right")
 			}),
 			bodyPx: containerW,
 			gapPx: BODY_GAP_PX
 		})
 	)
+	let sideWidths = $derived(
+		dockedZoneWidths({
+			left: drawnFlow.left || emptyColumns.left,
+			right: drawnFlow.right || emptyColumns.right,
+			bodyPx: containerW,
+			gapPx: BODY_GAP_PX
+		})
+	)
+	/** Is this zone's side the phone's open sheet? Momentarily opened, so carded. */
+	function inSheet(z: ResolvedZone): boolean {
+		return (z.def.side === "left" ? leftSlot : rightSlot) === "overlay"
+	}
 
 	/* ── the side rail model (ruled 2026-09-10) ─────────────────────────────
 	 * The idea this replaces was a parent side panel that arbitrated the
@@ -1404,7 +2009,7 @@
 	function groupIcon(u: RenderUnit) {
 		if (u.members.length > 1) return Icons.Layers
 		const id = u.members[0].id
-		if (id === "messages") return middleWidgetIcon(id)
+		if (isInstanceOf(id, "messages")) return middleWidgetIcon(id)
 		const p = inst(id)
 		return p ? iconOf(p) : Icons.LayoutPanelTop
 	}
@@ -1416,7 +2021,7 @@
 	function groupIconName(u: RenderUnit): string {
 		if (u.members.length > 1) return "Layers"
 		const id = u.members[0].id
-		if (id === "messages") return "MessagesSquare"
+		if (isInstanceOf(id, "messages")) return "MessagesSquare"
 		return inst(id)?.icon || "LayoutPanelTop"
 	}
 	/** A group's tooltip: every title in it, which is what opening it opens. */
@@ -1461,6 +2066,12 @@
 		sheet: boolean
 		/** Below the app's 1024px breakpoint (or previewing a width that is). */
 		narrow: boolean
+		/**
+		 * The sides are tucked (./tuckedSides): every group is a rail icon and
+		 * the one `tuckedFlyout` names is the flyout — whatever the user's
+		 * docked open/closed choices were, which are kept for untucking.
+		 */
+		tucked?: boolean
 		heightPx: number
 		widthPx: number
 	}
@@ -1471,6 +2082,12 @@
 		m: ColumnMeasure
 	): ColumnLayout {
 		const sheet = m.sheet
+		const tucked = !!m.tucked && !sheet
+		const tuckedKey =
+			tucked && tuckedFlyout?.side === side ? tuckedFlyout.key : null
+		const isOpen = (u: RenderUnit) =>
+			tucked ? u.key === tuckedKey : groupIsOpen(side, u)
+		const focusKey = tucked ? tuckedKey : groupFocus[side]
 		const natural = bandsOf(units)
 		const collapsed = collapseColumn({
 			columnPx: m.widthPx,
@@ -1479,7 +2096,9 @@
 			minWidthPx: Array(
 				Math.max(1, ...natural.map((b) => b.length))
 			).fill(MIN_WIDGET_PX),
-			narrow: m.narrow
+			// Tucked, every group is its own rail icon, so its own band: the
+			// flyout is exactly the group asked for.
+			narrow: m.narrow || tucked
 		})
 		const orderKeys = collapsedOrder(
 			units.map((u) => ({
@@ -1494,9 +2113,7 @@
 		const bands = collapsed
 			? orderKeys.map((k) => [byKey.get(k)!]).filter((b) => !!b[0])
 			: natural
-		const focus = bands.findIndex((b) =>
-			b.some((u) => u.key === groupFocus[side])
-		)
+		const focus = bands.findIndex((b) => b.some((u) => u.key === focusKey))
 		// The SHEET is not a column — it is the side's panels, listed — so
 		// nothing in it competes for height and nothing flies out of it.
 		const place: RailPlacement[] = sheet
@@ -1512,10 +2129,12 @@
 						key: `b${i}`,
 						rows: bandRows(b),
 						pinned: b.some((u) => groupPinned(u)),
-						open: b.some((u) => groupIsOpen(side, u))
+						open: b.some((u) => isOpen(u))
 					})),
 					focusKey: focus >= 0 ? `b${focus}` : null,
-					narrow: m.narrow
+					// The rail model's no-column answer: all icons, and the one
+					// asked for flies out.
+					narrow: m.narrow || tucked
 				})
 		const state: Record<string, CellState> = {}
 		const row: Record<string, number> = {}
@@ -1530,12 +2149,12 @@
 			// the one the user asked for goes and the rest stay icons.
 			let flownHere = false
 			for (const u of b) {
-				const open = groupIsOpen(side, u)
+				const open = isOpen(u)
 				const mine =
 					p.state !== "flyout" ||
 					(!flownHere &&
-						(groupFocus[side] === u.key ||
-							b.every((v) => groupFocus[side] !== v.key)))
+						(focusKey === u.key ||
+							b.every((v) => focusKey !== v.key)))
 				if (p.state === "flyout" && mine && open) flownHere = true
 				row[u.key] = r
 				state[u.key] = sheet
@@ -1617,6 +2236,7 @@
 		columnLayout("left", leftUnits, arranged.left?.rows ?? 1, {
 			sheet: leftSlot === "overlay",
 			narrow: isNarrow,
+			tucked: sidesAreTucked,
 			heightPx: columnPx.left,
 			widthPx: columnWPx.left
 		})
@@ -1625,6 +2245,7 @@
 		columnLayout("right", rightUnits, arranged.right?.rows ?? 1, {
 			sheet: rightSlot === "overlay",
 			narrow: isNarrow,
+			tucked: sidesAreTucked,
 			heightPx: columnPx.right,
 			widthPx: columnWPx.right
 		})
@@ -1759,7 +2380,7 @@
 	 * is made of, so Done commits it with the rest of the arrangement and a
 	 * preset saved from it carries it.
 	 *
-	 * Deliberately NOT `markSimDirty`. A pin moves no cell, so it must not make
+	 * Intentionally NOT `markSimDirty`. A pin moves no cell, so it must not make
 	 * a previewed width's clamp count as an arrangement the user made — the
 	 * same reading the zone pin already gets. But `exitSimulation` puts the
 	 * pre-preview arrangement back, which would take the pin with it, so the pin
@@ -1844,6 +2465,8 @@
 
 	$effect(() => {
 		if (!flyoutKey.left && !flyoutKey.right) return
+		// Tucked, the flyout is `tuckedFlyout`'s and so are its closers.
+		if (sidesAreTucked) return
 		const shut = () => {
 			for (const side of ["left", "right"] as const) {
 				const k = flyoutKey[side]
@@ -1894,11 +2517,16 @@
 	 * the column is already on. `position: fixed` rather than absolute because
 	 * the side it flies out of is a scrolling box — a fixed element is not
 	 * clipped by an ancestor's overflow, and there is no transformed ancestor in
-	 * the live render to re-anchor it. The column sits at the session root's
-	 * edge, which is what `mLeft` / `mRight` already measure.
+	 * the live render to re-anchor it. The column sits at the edge of
+	 * `.layout-body`, which is what `bLeft` / `bRight` measure (the root's
+	 * edge until the body reaches its cap).
 	 */
 	function flyoutStyle(side: "left" | "right"): string {
-		const edge = side === "left" ? mLeft : mRight
+		// Tucked, it stops at the stage's edge so the rail that opened it —
+		// and the other icons on it — stay in reach.
+		const edge =
+			(side === "left" ? bLeft : bRight) +
+			(sidesAreTucked ? flowEdge[side === "left" ? "start" : "end"] : 0)
 		const start = side === "left" ? "inset-inline-start" : "inset-inline-end"
 		return `position:fixed;z-index:30;inset-block-start:${liveTop}px;inset-block-end:0;${start}:${edge}px;inline-size:min(22rem,86vw);`
 	}
@@ -1907,8 +2535,7 @@
 	 * Below the breakpoint a side takes no layout space, so there is no rail
 	 * for an unpinned zone to collapse INTO: the icon strip has nothing to open
 	 * (the desktop pop-over is off down here — see the `isNarrow` guard on it),
-	 * and the sheet has to show the panels themselves, which is what the
-	 * overlay's own `panelStack` used to render. Same zone, docked — so the one
+	 * and the sheet has to show the panels themselves. Same zone, docked — so the one
 	 * mount is in the form the sheet needs BEFORE it is opened, and opening it
 	 * changes the container and nothing else.
 	 */
@@ -1940,9 +2567,8 @@
 		// The sheet itself is a box inside the live session, so a STOWED
 		// session has no sheet on screen — but this trap is a document
 		// listener, and the one thing here that would outlive the box it
-		// belongs to. It used to stand down because the whole body was
-		// unmounted under the Move tab; the mount survives that now, so the
-		// guard is explicit. (Reachable only by narrowing the window below the
+		// belongs to. The mount survives the Move tab, so the guard is
+		// explicit. (Reachable only by narrowing the window below the
 		// breakpoint while a tier is previewed — enough to swallow Tab and
 		// Escape with nothing visible to swallow them for.)
 		if (!mobileSide || !el || liveStowed) return
@@ -2082,27 +2708,14 @@
 	 * `WidgetHost`, which sits several layers below anything this component
 	 * hands down (the same reason the page pushes the pins there).
 	 *
-	 * `placing` is deliberately not part of the mode: the Move tab draws
+	 * `placing` is intentionally not part of the mode: the Move tab draws
 	 * gridstack CARDS, not `WidgetHost`s, so an overlay could not appear on
 	 * one anyway — but style mode ending is what disarms and drops any
 	 * half-typed draft, so it must end when the tab changes. */
 	$effect(() => {
-		// The phone editor has no hover, so its style sheet turns the same mode
-		// on for the one widget it holds.
-		setWidgetStyleMode(
-			editing && (editTab === "settings" || styleSheetId !== null)
-		)
-	})
-	/**
-	 * The sheet's widget is armed for as long as the sheet is open: `armed` is
-	 * what makes the overlay visible without a pointer on the widget, and only
-	 * one widget may hold it.
-	 */
-	$effect(() => {
-		const id = styleSheetId
-		if (!id) return
-		sheetStyles.arm(id)
-		return () => sheetStyles.disarm(id)
+		// The phone editor has no hover and no overlays: its rows open the
+		// settings modal directly, which needs no mode.
+		setWidgetStyleMode(editing && editTab === "settings")
 	})
 	$effect(() => {
 		// Re-registered whenever the blob or the setter changes, so the write
@@ -2118,7 +2731,7 @@
 	// Reads nothing, so it runs once and its teardown is the unmount: leaving
 	// the session with the Style tab open must not leave style mode ON in
 	// module state, or the next session's widgets open wearing overlays.
-	// Deliberately NOT folded into the effect above — that one re-runs, and a
+	// Intentionally NOT folded into the effect above — that one re-runs, and a
 	// teardown there would drop a half-typed draft every time it did.
 	$effect(() => () => setWidgetStyleMode(false))
 	// The width simulator belongs to the Move tab and only to it: leaving the
@@ -2249,8 +2862,7 @@
 	 *
 	 * The two halves of the membership model part here. A side zone's widgets
 	 * are the zone template's; the middle's are the chat widget grid's, which
-	 * `withWidget` cannot reach and which is why the middle used to take no
-	 * drop at all.
+	 * `withWidget` cannot reach, so the middle's drop has its own path.
 	 */
 	function place(target: string, widgetId: string, beforeId?: string) {
 		manager.activate(widgetId)
@@ -2266,19 +2878,33 @@
 			commitGrid(withGridWidget(chatGrid, widgetId, "middle"))
 		} else {
 			commit(withWidget(layout, target, widgetId, beforeId))
-			if (middleGridIds.has(widgetId))
+			// Any grid entry, not only the middle's: a side entry the grid
+			// named (folded into `layout`) is now the list's.
+			if (gridHolds(widgetId))
 				commitGrid(withoutGridWidget(chatGrid, widgetId))
 			pinOnDrop(target)
 		}
 		armedId = null
 		markSimDirty()
 	}
+	/** Does the chat widget grid hold this id, in any zone? */
+	function gridHolds(id: string): boolean {
+		return chatGrid.widgets.some((w) => w.id === id)
+	}
 	function removeWidget(widgetId: string) {
+		// The primary floor (./primaryFloor): the last placed instance of the
+		// genre's primary never goes. Its × is not drawn; this also turns away
+		// the other ways in — a card dragged back to the tray.
+		const keep = floorNoteOf(widgetId)
+		if (keep) {
+			toaster.info({ title: keep })
+			return
+		}
 		commit(withoutWidget(layout, widgetId))
 		// The same split as `place`: the zone template above cannot reach a
-		// middle widget, so its card's × would remove nothing at all and the
+		// grid widget, so its card's × would remove nothing at all and the
 		// re-seed would bring it straight back from `chatGrid`.
-		if (middleGridIds.has(widgetId))
+		if (gridHolds(widgetId))
 			commitGrid(withoutGridWidget(chatGrid, widgetId))
 		manager.close(widgetId)
 		markSimDirty()
@@ -2344,22 +2970,139 @@
 	 * file). Exactly the two branches that draw one: the grid editor, and the
 	 * phone editor drawn in the simulator's frame from a desktop. A REAL
 	 * narrow window's row editor is drawn over the live session instead, and
-	 * is deliberately not one of them.
+	 * is intentionally not one of them.
 	 */
 	let liveStowed = $derived(placing && (!mobileEdit || simWidth != null))
 	/**
-	 * The widget whose style sheet is open, in the row editor below. Its own
-	 * state would live with the sheet — but the per-widget styling section
-	 * further up reads it (the sheet is the touch screen's style MODE, and it
-	 * arms that one widget's overlay), so it is held here and bound down.
+	 * Stage only (the shell's Ctrl/⌘ + ., ./stageOnly): the sides, the strips,
+	 * every flyout, sheet, scrim and the panels menu are marked
+	 * `data-stage-hidden`, and so is every middle cell but the primary's, which
+	 * takes the whole middle. Marks only — nothing unmounts and nothing is
+	 * written, so turning it off draws the previous layout exactly. Never
+	 * while the editor is open: the editor needs the whole layout.
 	 */
-	let styleSheetId = $state<string | null>(null)
-
+	let stageOnly = $derived(
+		!editing && stageOnlyActive(panelsCtx, desktop.matches)
+	)
+	/* ── the stage (QE, ./placementRules; brief 7a) ─────────────────────────
+	 * Placement is free, so the conversation may sit in a side. Stage only
+	 * and the phone draw ONE widget as the stage — `stagePick`, the layout's
+	 * primary log (the first unclaimed Messages in reading order), in
+	 * whichever zone holds it. In the middle that is what they always did.
+	 * In a side (QE (1), the recommended default) that side's mount becomes
+	 * the stage (./sideSlot's `stage` slot), showing that one widget full
+	 * width; the middle is hidden with the rest, and on the phone its widgets
+	 * join the panels menu as "Middle". Marks and containers only — nothing
+	 * unmounts, and nothing is written. */
+	/** A zone's placed ids in reading order: by row, then by column. */
+	function readingIds(frame: GsLayout | undefined): string[] {
+		return [...(frame?.items ?? [])]
+			.sort((a, b) => a.y - b.y || a.x - b.x)
+			.map((i) => i.id)
+	}
+	/**
+	 * A side's drawable ids as the side draws them: its arrangement when it
+	 * places anything, else its zone lists. Read off `layout`, never the
+	 * resolved zones: those depend on the tuck, which depends on the slots,
+	 * which depend on this.
+	 */
+	function sideReadingIds(side: "left" | "right"): string[] {
+		const frame = side === "left" ? arranged.left : arranged.right
+		if (frame?.items.length) return readingIds(frame)
+		return Object.values(layout.zones)
+			.filter(
+				(z) =>
+					z.kind === "side" &&
+					(side === "left" ? z.side === "left" : z.side !== "left")
+			)
+			.flatMap((z) => z.widgets)
+			.filter((id) => isConversation(id) || !!inst(id))
+	}
+	/** Every zone's placed ids in reading order — middle, left, right. */
+	let readingOrder = $derived({
+		middle: arranged.middle
+			? readingIds(arranged.middle)
+			: widgetsInZone(chatGrid, "middle").map((w) => w.id),
+		left: sideReadingIds("left"),
+		right: sideReadingIds("right")
+	})
+	let stagePick = $derived<StagePick | null>(
+		stageOf({ ...readingOrder, claims, primaryId })
+	)
+	/**
+	 * The side drawn as the stage right now, or null: on the phone, and in
+	 * Stage only, while the stage sits in a side. Never while editing — the
+	 * editor needs the whole layout.
+	 */
+	let stageSide = $derived<"left" | "right" | null>(
+		!editing && (isNarrow || stageOnly) && stagePick && stagePick.zone !== "middle"
+			? stagePick.zone
+			: null
+	)
+	/**
+	 * The middle on the phone while a side is the stage: stowed (mounted,
+	 * `display: none`), or opened from the panels menu as a sheet of its own.
+	 * `flow` everywhere else — Stage only hides it with a mark instead.
+	 */
+	let centerSlot = $derived<"flow" | "stowed" | "overlay">(
+		stageSide && isNarrow
+			? mobileSide === "middle"
+				? "overlay"
+				: "stowed"
+			: "flow"
+	)
+	/**
+	 * What a side's rail hides around their mounts for the stage: in the stage
+	 * slot, everything but the stage; in that side's phone sheet, the stage
+	 * alone (it is drawn as the stage, not listed in the sheet).
+	 */
+	function stageHiddenIn(
+		side: "left" | "right",
+		ids: readonly string[]
+	): ReadonlySet<string> | undefined {
+		const id = stagePick?.zone === side ? stagePick.id : null
+		if (!id || !ids.includes(id)) return undefined
+		const slot = side === "left" ? leftSlot : rightSlot
+		if (slot === "stage") return new Set(ids.filter((i) => i !== id))
+		if (slot === "overlay" && isNarrow && !editing) return new Set([id])
+		return undefined
+	}
+	/** The same, for an arranged side's render units, by unit key. */
+	function stageUnitKey(side: "left" | "right", units: RenderUnit[]): string | null {
+		const id = stagePick?.zone === side ? stagePick.id : null
+		if (!id) return null
+		return units.find((u) => u.members.some((m) => m.id === id))?.key ?? null
+	}
+	/** The middle's stage while Stage only draws it there, else null. */
+	let stageMiddleId = $derived(
+		stageOnly && stagePick?.zone === "middle" ? stagePick.id : null
+	)
+	/** The arranged middle's stage unit while stage-only is on, else null. */
+	let stagePrimaryKey = $derived(
+		stageMiddleId && arranged.middle
+			? primaryUnitKey(
+					unitsOf(arranged.middle.items).map((u) => ({
+						key: u.key,
+						memberIds: u.members.map((m) => m.id)
+					})),
+					stageMiddleId
+				)
+			: null
+	)
+	/** What the un-arranged middle (`WidgetZone`) hides while stage-only is on. */
+	let stageHiddenMiddleIds = $derived.by(() => {
+		if (!stageMiddleId || arranged.middle) return undefined
+		const ids = widgetsInZone(chatGrid, "middle").map((w) => w.id)
+		return ids.includes(stageMiddleId)
+			? new Set(ids.filter((id) => id !== stageMiddleId))
+			: undefined
+	})
 	/** Leave the editor, keeping everything — the desktop Done, and the bar's. */
 	function finishEditing() {
 		// Commit FIRST: the save reads the arrangement this writes, so a preset
-		// saved on Done captures what was just arranged.
-		commitArrangement()
+		// saved on Done captures what was just arranged. A refused Done (QF:
+		// an empty middle) leaves the editor open on the arrangement as it is.
+		if (!commitArrangement()) return
 		savePreset()
 		closeEditor()
 	}
@@ -2403,9 +3146,9 @@
 		lastDropped = null
 		// `pickerTarget` and `presetSheet` went with the sheets: MobileLayoutEditor
 		// owns them now, and closing the editor unmounts it, which is what
-		// clearing them here did. `styleSheetId` is still cleared, because it is
-		// still held here — see its declaration for why.
-		styleSheetId = null
+		// clearing them here did. A widget's settings modal is module state, so
+		// it is closed here: its entry points are the editor's.
+		closeWidgetSettings()
 	}
 
 	/* ── presets (PLAN 25 redesign) ─────────────────────────────────────
@@ -2471,58 +3214,64 @@
 
 <!-- Unified live widget renderer: turns a widget id into its real content, so
      ANY widget renders correctly in ANY zone (a panel dragged into the middle,
-     or chat dragged into a side, no longer vanishes). Used by the middle grid
+     or chat dragged into a side, still draws). Used by the middle grid
      AND the side connector. -->
 <!-- `placement` is the cells the zone that drew this widget placed it at (PLAN
      25). Every live renderer below measures and threads it, so `layout.v1` is
      the geometry on screen rather than a stand-in; a caller with none (a
-     pop-over flyout) falls through to `WidgetHost`'s `UNPLACED`. -->
+     pop-over flyout) is told `UNPLACED` by `RemoteWidget`. -->
 {#snippet middleWidget({
 	id,
 	bare = false,
-	placement
+	placement,
+	popover = false
 }: {
 	id: string
 	bare?: boolean
 	placement?: PlacementInput
+	/** Momentarily opened over the session: carded whatever the setting (./hostCard). */
+	popover?: boolean
 })}
-	{#if id === "messages"}
-		<!-- The primary widget goes through a `WidgetHost` like every other one
-		     (ruled 2026-08-30): same ctx projection, same skin injection, same
-		     Style-mode hover overlay — which is what makes the message packs
-		     ordinary widget styles rather than a special case. It gets the same
-		     FOUR inputs a panel does — placement, channels, props and the
-		     session event source — so nothing about its ctx is a special case
-		     either. `channels` is deliberately empty: the primary log is the
-		     whole session, not a view onto one channel, and an empty declaration
-		     is exactly what `scopeMessages` reads as "all of it". A session-less
-		     mount has nothing to project, so it renders bare, exactly as Panel's
-		     native branch does. -->
+	{#if isInstanceOf(id, "messages")}
+		<!-- The `messages` widget — the log, the field you write into, and
+		     the strips beside it — is core's own remote component (C7, R79),
+		     mounted like every other widget: same skin, same Style-mode overlay,
+		     the same inputs a panel gets, narrowed to what it declares it reads
+		     (K12). So is every COPY of it a layout places (`messages#sanctum`,
+		     S1), under its own id, settings and pins. `channels` stays empty:
+		     each copy is handed the whole log and draws its own channels' rows
+		     (`dossierFor`, below). `eager`: the
+		     conversation mounts at once, shown or not (every other widget
+		     mounts on first show). Nothing to show until
+		     the session is here. -->
 		{@const r = resolvedWidget(id)}
+		<!-- Each copy is told its own channels (S1): the Sanctum copy the
+		     Sanctum, the story's log what no copy claims. -->
+		{@const copyDossier = dossierFor(id)}
+		<!-- The conversation has no panel around it, so its card (./hostCard) is
+		     worn by its own box — the same classes, never a wrapper that comes
+		     and goes with the setting (that would remount it). -->
+		{@const carded = hostCardShown({ setting: r.settings.hostCard, popover })}
 		{#if session}
-			<WidgetHost
-				widget={{
-					id,
-					instanceId: id,
-					title: r.title
-				}}
+			<RemoteWidget
+				widget={{ id, title: r.title }}
+				owner="core"
+				src={CORE_CONVERSATION.src}
 				session={session as any}
-				messages={((session as any)?.sessionMessages ?? []) as any}
 				channels={ALL_CHANNELS}
 				props={{ widgetId: id, title: r.title }}
 				settings={r.settings}
-				{placement}
+				reads={CORE_CONVERSATION.reads}
+				placement={withHostCard(placement, carded, false)}
 				source={manager}
 				{actions}
 				{actionDispatch}
 				onAction={onFrameAction}
-				grants={conversationDossier ? ["session:full"] : []}
-				scoped={conversationDossier ? { sessionFull: conversationDossier } : undefined}
-			>
-				{@render conversationChildren?.()}
-			</WidgetHost>
-		{:else}
-			{@render conversationChildren?.()}
+				grants={["session:full"]}
+				scoped={copyDossier ? { session_full: copyDossier } : undefined}
+				class="h-full {carded ? HOST_CARD_CLASS : ''}"
+				eager
+			/>
 		{/if}
 	{:else}
 		{@const p = inst(id)}
@@ -2537,6 +3286,7 @@
 				{placement}
 				chrome="zone"
 				hideHeader={bare || p.role === "primary"}
+				{popover}
 				{actions}
 				{actionDispatch}
 				{onFrameAction}
@@ -2549,38 +3299,57 @@
      multi-column / flyout branch of `panelStack` doesn't run on that engine yet
      and passes none, so those mounts fall through to `UNPLACED`. -->
 {#snippet railPanelInner(
-	p: PanelInstance,
+	p: ZoneEntry,
 	z: ResolvedZone,
-	placement?: PlacementInput
+	placement?: PlacementInput,
+	popover = false
 )}
 	{#if placing}
+		{@const keep = floorNoteOf(p.id)}
 		<div class="edit-item-bar">
 			<Icons.GripVertical size={12} />
 			<span class="min-w-0 flex-1 truncate">{p.title}</span>
-			<button
-				class="edit-x"
-				title="Remove from layout"
-				aria-label="Remove {p.title} from layout"
-				onclick={(e) => {
-					e.stopPropagation()
-					removeWidget(p.id)
-				}}
-			>
-				<Icons.X size={12} />
-			</button>
+			{#if keep}
+				<span class="edit-x" role="note" title={keep} aria-label={keep}>
+					<Icons.Lock size={12} aria-hidden="true" />
+				</span>
+			{:else}
+				<button
+					class="edit-x"
+					title="Remove from layout"
+					aria-label="Remove {p.title} from layout"
+					onclick={(e) => {
+						e.stopPropagation()
+						removeWidget(p.id)
+					}}
+				>
+					<Icons.X size={12} />
+				</button>
+			{/if}
 		</div>
 	{/if}
-	<Panel
-		instance={p}
-		{manager}
-		{sessionId}
-		{session}
-		{placement}
-		chrome="zone"
-		{actions}
-		{actionDispatch}
-		{onFrameAction}
-	/>
+	{#if p.panel}
+		<Panel
+			instance={p.panel}
+			{manager}
+			{sessionId}
+			{session}
+			{placement}
+			chrome="zone"
+			popover={popover || inSheet(z)}
+			{actions}
+			{actionDispatch}
+			{onFrameAction}
+		/>
+	{:else}
+		<!-- A conversation in a side (brief 7a): drawn like the log is
+		     anywhere, through the one renderer. -->
+		{@render middleWidget({
+			id: p.id,
+			placement,
+			popover: popover || inSheet(z)
+		})}
+	{/if}
 {/snippet}
 
 {#snippet panelStack(z: ResolvedZone, flyout: boolean)}
@@ -2593,10 +3362,11 @@
 		     0-floor `minmax(0,1fr)`; multi-column needs a row-generalization the
 		     engine doesn't do yet (see panelWidgets.ts's module doc). -->
 		{@const zoneSide = z.def.side === "left" ? "left" : "right"}
+		{@const entries = zoneEntriesOf(z)}
 		{@const sideGrid = {
 			version: 1 as const,
 			cell: z.width,
-			widgets: widgetsFromSideZones([z], widgetsOf(z), z.width)
+			widgets: widgetsFromSideZones([z], manager.instances, z.width, isConversation)
 		}}
 		{#snippet railPanel({
 			id,
@@ -2605,11 +3375,12 @@
 			id: string
 			placement: PlacementInput
 		})}
-			{@const p = inst(id)}
+			{@const p = entries.find((e) => e.id === id)}
 			{#if p}
 				<!-- svelte-ignore a11y_no_static_element_interactions -->
 				<div
 					class="zone-panel"
+					class:conversation={!p.panel}
 					class:edit-item={placing}
 					draggable={placing}
 					role={placing ? "listitem" : undefined}
@@ -2625,31 +3396,39 @@
 			{#if placing && !z.def.widgets.length}
 				<div class="zone-empty">Drop widgets here</div>
 			{:else}
+				<!-- `hiddenIds`: the stage (QE) hides this rail's other widgets
+				     while it draws the conversation full width, and the phone's
+				     sheet of this side hides the conversation the stage shows.
+				     Hidden around their mounts, never unmounted. -->
 				<WidgetZone
 					layout={sideGrid}
 					zone={zoneSide}
 					widget={railPanel}
 					gap="0.5rem"
+					hiddenIds={stageHiddenIn(zoneSide, entries.map((e) => e.id))}
 				/>
 			{/if}
 		</div>
 	{:else}
+		{@const hidden = stageHiddenIn(z.def.side === "left" ? "left" : "right", zoneEntriesOf(z).map((e) => e.id))}
 		<div
 			class="zone-stack"
 			style="grid-template-columns:repeat({flyout ? 1 : z.columns},minmax(0,1fr));"
 		>
-			{#each widgetsOf(z) as p (p.id)}
+			{#each zoneEntriesOf(z) as p (p.id)}
 				<!-- svelte-ignore a11y_no_static_element_interactions -->
 				<div
 					class="zone-panel"
+					class:conversation={!p.panel}
 					class:edit-item={placing}
 					draggable={placing}
 					role={placing ? "listitem" : undefined}
+					data-stage-hidden={!flyout && hidden?.has(p.id) ? "" : undefined}
 					ondragstart={(e) => onChipDragStart(e, p.id)}
 					ondragover={(e) => placing && e.preventDefault()}
 					ondrop={(e) => onZoneDrop(e, z.id, p.id)}
 				>
-					{@render railPanelInner(p, z)}
+					{@render railPanelInner(p, z, undefined, flyout)}
 				</div>
 			{/each}
 			{#if placing && !z.def.widgets.length}
@@ -2660,7 +3439,7 @@
 {/snippet}
 
 {#snippet sideZone(z: ResolvedZone)}
-	{@const widgets = widgetsOf(z)}
+	{@const widgets = zoneEntriesOf(z)}
 	{#if z.mode !== "hidden" && (widgets.length || placing)}
 		{#if z.mode === "rail"}
 			<!-- Pinned rail: takes layout space. Edit-mode drop/click targets are
@@ -2671,7 +3450,7 @@
 				class="zone-rail"
 				class:edit-zone={placing}
 				class:drag-over={dragOverZone === z.id}
-				style="inline-size:{z.width * z.columns}px;"
+				style="inline-size:var(--side-flow-px, {z.width * z.columns}px);"
 				aria-label={labelOf(z)}
 				data-pop-keep
 				ondragover={(e) => onZoneDragOver(e, z.id)}
@@ -2710,32 +3489,45 @@
 				aria-orientation="vertical"
 				aria-label={labelOf(z)}
 				data-pop-keep
+				data-rail
 				ondragover={(e) => onZoneDragOver(e, z.id)}
 				ondragleave={() => (dragOverZone = null)}
 				ondrop={(e) => onZoneDrop(e, z.id)}
 				onclick={() => onZoneClick(z.id)}
 			>
-				{#each widgets as p (p.id)}
-					{@const IconCmp = iconOf(p)}
+				{#each widgets as p, i (p.id)}
+					{@const IconCmp = entryIcon(p)}
+					{@const zSide = z.def.side === "left" ? "left" : "right"}
+					{@const out = sidesAreTucked && tuckedOpen(zSide, p.id)}
 					<!-- Template literals, not "{p.title}": inside an expression
 					     those braces are ordinary characters, and a screen reader
 					     was announcing the literal text "Open {p.title}". -->
 					<button
 						class="icon-btn"
-						class:active={popId === z.id}
+						tabindex={i === rovingStop(railStop[`z:${z.id}`], widgets.length) ? 0 : -1}
+						onkeydown={(e) => onRailKeydown(e, `z:${z.id}`)}
+						onfocus={() => (railStop[`z:${z.id}`] = i)}
+						class:active={sidesAreTucked ? out : popId === z.id}
 						class:edit-item={placing}
 						draggable={placing}
 						title={placing ? `Drag to move ${p.title}` : p.title}
 						aria-label={placing
 							? `Move ${p.title}`
 							: `Open ${p.title}`}
-						aria-pressed={popId === z.id}
+						aria-pressed={sidesAreTucked ? undefined : popId === z.id}
+						aria-expanded={sidesAreTucked ? out : undefined}
+						aria-haspopup={sidesAreTucked ? "dialog" : undefined}
+						aria-controls={out ? `tucked-zone-${z.id}` : undefined}
 						ondragstart={(e) => onChipDragStart(e, p.id)}
 						onclick={(e) => {
 							e.stopPropagation()
 							// In edit mode the icon is a drag handle for moving the
-							// widget between zones, not an opener.
-							if (!placing) togglePop(z.id, p.id)
+							// widget between zones, not an opener. Tucked, it brings
+							// THIS widget out, one at a time (./tuckedSides).
+							if (placing) return
+							if (sidesAreTucked)
+								toggleTucked(zSide, p.id, e.currentTarget)
+							else togglePop(z.id, p.id)
 						}}
 					>
 						<IconCmp size={16} />
@@ -2752,11 +3544,12 @@
 {/snippet}
 
 {#snippet stripZone(z: ResolvedZone)}
-	{@const widgets = widgetsOf(z)}
+	{@const widgets = zoneEntriesOf(z)}
 	{#if z.mode !== "hidden" && (widgets.length || placing)}
 		<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
 		<div
 			class="zone-strip"
+			data-stage-hidden={stageOnly ? "" : undefined}
 			class:edit-zone={placing}
 			class:drag-over={dragOverZone === z.id}
 			aria-label={labelOf(z)}
@@ -2779,32 +3572,43 @@
 					ondrop={(e) => onZoneDrop(e, z.id, p.id)}
 				>
 					{#if placing}
+						{@const keep = floorNoteOf(p.id)}
 						<div class="edit-item-bar">
 							<Icons.GripVertical size={12} />
 							<span class="min-w-0 flex-1 truncate">{p.title}</span>
-							<button
-								class="edit-x"
-								title="Remove from layout"
-								aria-label="Remove {p.title} from layout"
-								onclick={(e) => {
-									e.stopPropagation()
-									removeWidget(p.id)
-								}}
-							>
-								<Icons.X size={12} />
-							</button>
+							{#if keep}
+								<span class="edit-x" role="note" title={keep} aria-label={keep}>
+									<Icons.Lock size={12} aria-hidden="true" />
+								</span>
+							{:else}
+								<button
+									class="edit-x"
+									title="Remove from layout"
+									aria-label="Remove {p.title} from layout"
+									onclick={(e) => {
+										e.stopPropagation()
+										removeWidget(p.id)
+									}}
+								>
+									<Icons.X size={12} />
+								</button>
+							{/if}
 						</div>
 					{/if}
-					<Panel
-						instance={p}
-						{manager}
-						{sessionId}
-						{session}
-						chrome="zone"
-						{actions}
-						{actionDispatch}
-						{onFrameAction}
-					/>
+					{#if p.panel}
+						<Panel
+							instance={p.panel}
+							{manager}
+							{sessionId}
+							{session}
+							chrome="zone"
+							{actions}
+							{actionDispatch}
+							{onFrameAction}
+						/>
+					{:else}
+						{@render middleWidget({ id: p.id })}
+					{/if}
 				</div>
 			{/each}
 			{#if placing && !widgets.length}
@@ -2827,7 +3631,8 @@
 		zone: { cols: number; rows: number }
 		widthPx: number
 		heightPx?: number
-	}
+	},
+	popover = false
 )}
 	{@const active = activeTab(u)}
 	<div class="wtabs">
@@ -2856,7 +3661,8 @@
 						bare: true,
 						placement: geom
 							? unitPlacement(geom.zone, u, geom.widthPx, m.id, geom.heightPx)
-							: undefined
+							: undefined,
+						popover
 					})}
 				</div>
 			{/each}
@@ -2867,7 +3673,7 @@
 <!-- `flowPx` is this side's width when it is drawn IN THE FLOW, and 0 when it
      is not (a stowed side has no box; the mobile sheet has a width of its own).
      Without it the grid was `inline-size: 100%` of `.layout-body` — see
-     `sideWidths` / ./sideSlot's `inlineSideWidths`. -->
+     `sideWidths` / ./sideSlot's `dockedZoneWidths`. -->
 {#snippet groupRail(
 	side: "left" | "right",
 	units: RenderUnit[],
@@ -2879,19 +3685,39 @@
 	     serves both sides). This is the ONLY thing more enabled widgets adds —
 	     an icon, never more chrome. `data-pop-keep` so clicking the rail that
 	     opened a flyout is not "outside" it. -->
-	<div class="side-rail" data-pop-keep>
-		{#each units as u (u.key)}
+	<div
+		class="side-rail"
+		data-pop-keep
+		data-rail
+		role="toolbar"
+		aria-orientation="vertical"
+		aria-label="{side === "left" ? "Left" : "Right"} panels"
+	>
+		{#each units as u, i (u.key)}
 			{@const st = col.state[u.key] ?? "collapsed"}
 			{@const Icon = groupIcon(u)}
 			{@const title = groupTitle(u)}
+			<!-- Tucked, the icon opens a flyout (a dialog), so it says so with
+			     `aria-expanded`; docked, it toggles a group in the column. -->
 			<button
 				class="icon-btn rail-btn"
+				tabindex={i === rovingStop(railStop[`g:${side}`], units.length) ? 0 : -1}
+				onkeydown={(e) => onRailKeydown(e, `g:${side}`)}
+				onfocus={() => (railStop[`g:${side}`] = i)}
 				class:active={st !== "collapsed"}
 				class:pinned={markPinned && groupPinned(u)}
 				title={title}
 				aria-label={title}
-				aria-pressed={st !== "collapsed"}
-				onclick={() => toggleGroup(side, u)}
+				aria-pressed={sidesAreTucked ? undefined : st !== "collapsed"}
+				aria-expanded={sidesAreTucked ? tuckedOpen(side, u.key) : undefined}
+				aria-haspopup={sidesAreTucked ? "dialog" : undefined}
+				aria-controls={sidesAreTucked && tuckedOpen(side, u.key)
+					? `tucked-${side}-${u.key}`
+					: undefined}
+				onclick={(e) =>
+					sidesAreTucked
+						? toggleTucked(side, u.key, e.currentTarget)
+						: toggleGroup(side, u)}
 			>
 				<Icon size={16} />
 			</button>
@@ -2905,6 +3731,12 @@
 		{@const units = side === "left" ? leftUnits : rightUnits}
 		{@const col = side === "left" ? leftCol : rightCol}
 		{@const sheet = slot === "overlay"}
+		<!-- The unit holding the stage's conversation (QE), when this side has
+		     it: as the stage it is the ONE cell drawn, full size and open;
+		     in this side's phone sheet it is the one cell NOT listed. -->
+		{@const stageKey = stageUnitKey(side, units)}
+		{@const asStage = slot === "stage" && stageKey !== null}
+		{@const sheetHides = sheet && isNarrow && !editing && stageKey !== null}
 		<!-- The column and its rail. The stack is still a grid, but its ROWS are
 		     the rail model's answer rather than the arrangement's own
 		     `repeat(rows,1fr)`: a group that collapses has to give its height
@@ -2914,6 +3746,7 @@
 		<div
 			class="side-column"
 			class:col-left={side === "left"}
+			class:tucked={sidesAreTucked && !sheet && !asStage}
 			style={flowPx > 0
 				? `flex:0 0 ${flowPx}px; inline-size:${flowPx}px;`
 				: ""}
@@ -2930,9 +3763,11 @@
 				class:one-column={col.collapsed}
 				bind:clientHeight={columnPx[side]}
 				bind:clientWidth={columnWPx[side]}
-				style="grid-template-columns:repeat({col.collapsed
-					? 1
-					: arr.cols},1fr);grid-template-rows:{col.rows || '1fr'};"
+				style={asStage
+					? "grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr);"
+					: `grid-template-columns:repeat(${col.collapsed
+							? 1
+							: arr.cols},1fr);grid-template-rows:${col.rows || '1fr'};`}
 			>
 				{#each units as u (u.key)}
 					<!-- The cell's own measured width is the widget's tier: a rail
@@ -2942,25 +3777,41 @@
 					     size is the browser's answer, not ours. -->
 					{@const widthPx = cellWidths[`${side}:${u.key}`] ?? 0}
 					{@const heightPx = cellHeights[`${side}:${u.key}`] ?? 0}
-					{@const st = col.state[u.key] ?? "expanded"}
+					<!-- The stage cell is open, whatever the column decided. -->
+					{@const st = asStage && u.key === stageKey
+						? "expanded"
+						: (col.state[u.key] ?? "expanded")}
 					<!-- ONE cell per group, whatever it is doing: expanded is a
 					     row, collapsed is a display:none, folded is its title bar
 					     and a hidden body, and a flyout is the same box
 					     positioned over the session. Four containers, one mount —
 					     a second call site for any of them would reload every
 					     iframe in it. -->
+					{@const tuckedOut = sidesAreTucked && st === "flyout"}
+					<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
 					<div
 						class="live-side-cell cell-{st}"
 						class:from-left={side === "left"}
 						data-group-key={u.key}
 						data-pop-keep={st === "flyout" ? "" : undefined}
+						id={tuckedOut ? `tucked-${side}-${u.key}` : undefined}
+						data-tucked-flyout={tuckedOut ? "" : undefined}
+						role={tuckedOut ? "dialog" : undefined}
+						aria-label={tuckedOut ? groupTitle(u) : undefined}
+						tabindex={tuckedOut ? -1 : undefined}
+						data-stage-hidden={(asStage && u.key !== stageKey) ||
+						(sheetHides && u.key === stageKey)
+							? ""
+							: undefined}
 						bind:clientWidth={cellWidths[`${side}:${u.key}`]}
 						bind:clientHeight={cellHeights[`${side}:${u.key}`]}
-						style="{cellGridStyle(u, col, st)}{st === 'flyout'
-							? flyoutStyle(side)
-							: ''}{u.members.length === 1 && !col.collapsed
-							? anchorCellStyle(u.members[0].anchor)
-							: ''}"
+						style={asStage && u.key === stageKey
+							? "grid-column:1; grid-row:1;"
+							: `${cellGridStyle(u, col, st)}${st === "flyout"
+									? flyoutStyle(side)
+									: ""}${u.members.length === 1 && !col.collapsed
+									? anchorCellStyle(u.members[0].anchor)
+									: ""}`}
 					>
 						{#if st === "folded"}
 							<!-- Ruled 2026-09-10: on a phone a tap on the header
@@ -2978,6 +3829,9 @@
 								<Icons.ChevronDown size={14} />
 							</button>
 						{/if}
+						<!-- Out over the session (rule (c), a tucked panel) or in the
+						     phone's sheet, a group is momentarily opened: carded
+						     whatever its setting says (./hostCard). -->
 						{#if u.members.length === 1}
 							{@render middleWidget({
 								id: u.members[0].id,
@@ -2987,36 +3841,39 @@
 									widthPx,
 									u.members[0].id,
 									heightPx
-								)
+								),
+								popover: st === "flyout" || sheet
 							})}
 						{:else}
-							{@render tabGroup(u, { zone: arr, widthPx, heightPx })}
+							{@render tabGroup(
+								u,
+								{ zone: arr, widthPx, heightPx },
+								st === "flyout" || sheet
+							)}
 						{/if}
 					</div>
 				{/each}
 			</div>
 			<!-- No groups, no rail. In the mobile SHEET there is no rail either:
 			     the sheet IS the side, opened from the header's own control. -->
-			{#if units.length && !sheet}
+			{#if units.length && !sheet && !asStage}
 				{@render groupRail(side, units, col, false)}
 			{/if}
 		</div>
 	{/if}
 {/snippet}
 
-<!-- A side zone's ONE mount. This used to be written twice — once in the flow,
-     once inside a fixed layer — and a flag swapped which `{#if}` was live, so
-     Svelte destroyed one subtree and built the other: every iframe in the zone
-     reloaded and every native panel lost its state. Now the SUBTREE never moves
+<!-- A side zone's ONE mount. It is written once, never once in the flow and
+     once inside a fixed layer behind a flag — swapping which `{#if}` is live
+     would destroy one subtree and build the other, reloading every iframe in
+     the zone and dropping every native panel's state. The SUBTREE never moves
      and only the container around it changes — the same trick the tab groups
      below use to keep an inactive pane alive (`.wtab-hidden` is a display:none,
      not an unmount). `sideSlot` (and its unit tests) is the whole decision.
 
-     The mobile overlay is a container too, and the newest of the three: it used
-     to render the side a SECOND time (`panelStack`), so this mount had to stand
-     down — and opening the sheet reloaded every iframe in it and dropped every
-     native panel's state, the very thing this snippet exists to stop. Now the
-     wrapper itself wears `.zone-flyout.mobile` and IS the dialog; the sheet's
+     The mobile overlay is a container too: it never renders the side a
+     SECOND time, since that would make opening the sheet reload every iframe
+     in it and drop every native panel's state. The wrapper itself wears `.zone-flyout.mobile` and IS the dialog; the sheet's
      chrome is the header below, and the backdrop, the focus trap and the
      Esc/return-focus trip are untouched. No slot is a no-render. -->
 {#snippet sideMount(side: "left" | "right", slot: SideSlot)}
@@ -3025,6 +3882,8 @@
 	<!-- Already 0 unless this side's slot is `inline` — `sideWidths` reads
 	     the same `leftSlot`/`rightSlot` this snippet is handed. -->
 	{@const flowPx = side === "left" ? sideWidths.left : sideWidths.right}
+	<!-- This side's EMPTY COLUMN, when it has one; 0 for a populated side. -->
+	{@const emptyPx = side === "left" ? emptyColumns.left : emptyColumns.right}
 	{@const overlay = slot === "overlay"}
 	{@const sideLabel = side === "left" ? "Left" : "Right"}
 	<!-- The dialog role and the `tabindex="-1"` are the SAME condition — this
@@ -3032,9 +3891,11 @@
 	     can't follow that through two ternaries and reads a bare div with a
 	     dynamic tabindex. -->
 	<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+	<!-- Stage only hides every side but the one that IS the stage (QE). -->
 	<div
 		bind:this={sideEls[side]}
 		class="side-slot slot-{slot}"
+		data-stage-hidden={stageOnly && slot !== "stage" ? "" : undefined}
 		class:zone-flyout={overlay}
 		class:mobile={overlay}
 		class:from-left={overlay && side === "left"}
@@ -3069,9 +3930,25 @@
 		     to `.side-column { inline-size: 100% }` and shrinks the centre. -->
 		{#if arr && arr.items.length}
 			{@render arrangedSide(side, flowPx, slot)}
+		{:else if emptyPx > 0 && flowPx > 0 && !placing}
+			<!-- An EMPTY side keeps its column (ruled 2026-09-29; `emptyColumns`,
+			     ./sideSlot `emptyColumnsPx`). Drawn exactly when its width was
+			     granted, so the box and the reserve cannot disagree; the grant
+			     is already 0 where the side takes no room — stowed, in the
+			     sheet, tucked, hidden, or given way to the stage. Nothing in it
+			     to reach, so no tab stop and no a11y tree; widgets go in from
+			     the editor's Move tab. -->
+			<div
+				class="side-empty"
+				aria-hidden="true"
+				style="flex:0 0 {flowPx}px; inline-size:{flowPx}px;"
+			></div>
 		{:else}
+			<!-- Docked below the breakpoint, and as the stage: an unpinned
+			     zone's icon strip mounts nothing, and the stage has to draw
+			     its conversation. -->
 			{#each zones as z (z.id)}
-				{@render sideZone(isNarrow ? dockedZone(z) : z)}
+				{@render sideZone(isNarrow || slot === "stage" ? dockedZone(z) : z)}
 			{/each}
 		{/if}
 	</div>
@@ -3085,6 +3962,7 @@
 	bind:this={rootEl}
 	class="session-layout"
 	class:editing
+	data-stage-only={stageOnly ? "" : undefined}
 	style:padding-block-start="{editorTop}px"
 >
 	<!-- The toolbar is the DESKTOP's, and it survives a previewed phone width:
@@ -3272,13 +4150,13 @@
 					{paletteWidgets}
 					{place}
 					{removeWidget}
+					{floorNoteOf}
 					{presets}
 					{activePreset}
 					{applyPreset}
 					bind:presetName
 					{savePreset}
 					{resetLayout}
-					bind:styleSheetId
 					onCancel={cancelEditing}
 					onDone={finishEditing}
 					{presetPicture}
@@ -3288,16 +4166,16 @@
 	{/if}
 
 	<!-- ── the live session: ONE mount, drawn or stowed ─────────────────────
-	     The canvas above used to be the other arm of this `{#if}`, so every
-	     switch to or from the Move tab destroyed the whole session and built
-	     it again: every panel iframe reloaded and every native panel lost its
-	     state. That is the reload `sideSlot` exists to forbid, one level up —
-	     a stowed side is `display: none` and never an unmount, precisely
-	     because an iframe goes on running under it.
+	     The canvas above is never the other arm of an `{#if}` with this: a
+	     switch to or from the Move tab would destroy the whole session and
+	     build it again, reloading every panel iframe and dropping every native
+	     panel's state. That is the reload `sideSlot` exists to forbid, one
+	     level up — a stowed side is `display: none` and never an unmount,
+	     precisely because an iframe goes on running under it.
 
 	     So the session is written ONCE and the canvas is drawn over it. The
-	     Presets and Settings tabs were always this live view; the Move tab now
-	     merely covers it, and a tab switch reloads nothing. `.live-body` is
+	     Presets and Settings tabs are this live view; the Move tab merely
+	     covers it, and a tab switch reloads nothing. `.live-body` is
 	     `display: contents` while drawn and `display: none` while stowed —
 	     the side slots' own rule, shared with them rather than restated.
 
@@ -3308,32 +4186,64 @@
 	     stop, no a11y tree. The toolbar and the real-width row editor are the
 	     two things deliberately left outside. -->
 	<div class="live-body" class:body-stowed={liveStowed}>
-	{#if stageV2}
-		<!-- The stage (plan P2), behind `?stage=v2`. It replaces the live body
-		     only: the editor above is the legacy one, so opening the editor
-		     with the flag on draws the old editor over the new stage. That is allowed until P4 and is why the flag is
-		     a query parameter rather than a setting. -->
-		<SessionStage
-			{manager}
-			{sessionId}
-			{session}
-			{conversationChildren}
-			{conversationDossier}
-			{actions}
-			{actionDispatch}
-			{onFrameAction}
-			genreId={(session as any)?.genreId ?? null}
-			{layoutSettings}
-		/>
-	{:else}
-	<div class="layout-body">
+	<div
+		class="layout-body"
+		class:sides-tucked={sidesAreTucked}
+		bind:this={bodyEl}
+	>
 		<!-- The left side, mounted ONCE. `leftSlot` says whether it is drawn in
 		     the flow here or stowed (mobile — P6: no rail, no icon strip, the
 		     centre gets the full width; it comes back as the overlay at the
 		     bottom of this block). Stowed is display:none, never an unmount. -->
 		{@render sideMount("left", leftSlot)}
 
-		<div class="layout-center">
+		<!-- The middle zone runs side to side and carries the balance that
+		     centres the column on the body (./tuckedSides rule (1)); the
+		     conversation reads it, so its scroll region covers it. -->
+		<!-- While a SIDE is the stage (QE, `stageSide`) the middle stands down
+		     around its one mount, like a side does: Stage only marks it hidden,
+		     and the phone stows it (`centerSlot`) or opens it as a sheet from
+		     the panels menu ("Middle") — the same element wearing
+		     `.zone-flyout.mobile`, never a second render. -->
+		<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+		<div
+			class="layout-center"
+			class:center-stowed={centerSlot === "stowed"}
+			class:center-sheet={centerSlot === "overlay"}
+			class:zone-flyout={centerSlot === "overlay"}
+			class:mobile={centerSlot === "overlay"}
+			role={centerSlot === "overlay" ? "dialog" : undefined}
+			aria-modal={centerSlot === "overlay" ? "true" : undefined}
+			aria-label={centerSlot === "overlay" ? "Middle panels" : undefined}
+			tabindex={centerSlot === "overlay" ? -1 : undefined}
+			data-pop-keep={centerSlot === "overlay" ? "" : undefined}
+			data-stage-hidden={stageOnly && stageSide ? "" : undefined}
+			bind:this={centerEl}
+			style:--sp-stage-balance-start="{stageBalance.start}px"
+			style:--sp-stage-balance-end="{stageBalance.end}px"
+			style:margin-inline-start={middleOverGap.start && centerSlot === "flow"
+				? `-${BODY_GAP_PX}px`
+				: undefined}
+			style:margin-inline-end={middleOverGap.end && centerSlot === "flow"
+				? `-${BODY_GAP_PX}px`
+				: undefined}
+		>
+			{#if centerSlot === "overlay"}
+				<!-- The middle sheet's chrome: its own nodes, added at their
+				     anchor; the mount below never moves. -->
+				<div class="zone-head">
+					<span class="zone-label always">Middle</span>
+					<span class="flex-1"></span>
+					<button
+						class="zone-head-btn"
+						title="Close"
+						aria-label="Close middle panels"
+						onclick={closeMobilePanels}
+					>
+						<Icons.X size={16} />
+					</button>
+				</div>
+			{/if}
 			{#each topStrips as z (z.id)}
 				{@render stripZone(z)}
 			{/each}
@@ -3359,11 +4269,13 @@
 						class="chat-arranged"
 						class:one-column={middleCol.collapsed}
 						bind:clientWidth={middleWPx}
-						style="grid-template-columns:repeat({middleCol.collapsed
-							? 1
-							: arranged.middle.cols},1fr); grid-template-rows:{middleCol.collapsed
-							? middleCol.rows || '1fr'
-							: `repeat(${arranged.middle.rows},1fr)`};"
+						style={stagePrimaryKey !== null
+							? "grid-template-columns:minmax(0,1fr); grid-template-rows:minmax(0,1fr);"
+							: `grid-template-columns:repeat(${middleCol.collapsed
+									? 1
+									: arranged.middle.cols},1fr); grid-template-rows:${middleCol.collapsed
+									? middleCol.rows || '1fr'
+									: `repeat(${arranged.middle.rows},1fr)`};`}
 					>
 						{#each unitsOf(arranged.middle.items) as u (u.key)}
 							{@const widthPx = cellWidths[`middle:${u.key}`] ?? 0}
@@ -3372,7 +4284,11 @@
 								class="chat-arranged-cell"
 								bind:clientWidth={cellWidths[`middle:${u.key}`]}
 								bind:clientHeight={cellHeights[`middle:${u.key}`]}
-								style="{middleCol.collapsed
+								data-stage-primary={stagePrimaryKey !== null && u.key === stagePrimaryKey ? "" : undefined}
+								data-stage-hidden={stagePrimaryKey !== null && u.key !== stagePrimaryKey ? "" : undefined}
+								style="{stagePrimaryKey === u.key
+									? 'grid-column:1; grid-row:1;'
+									: middleCol.collapsed
 									? `grid-column:1; grid-row:${middleCol.row[u.key] ?? 1};`
 									: `grid-column:${u.box.x + 1} / span ${u.box.w}; grid-row:${u.box.y + 1} / span ${u.box.h};`}{u
 									.members.length === 1 && !middleCol.collapsed
@@ -3403,7 +4319,13 @@
 				{:else}
 					<!-- No arrangement yet (fresh / never edited): the default —
 					     Messages fills the middle. -->
-					<WidgetZone layout={chatGrid} zone="middle" gap="0" widget={middleWidget} />
+					<WidgetZone
+						layout={chatGrid}
+						zone="middle"
+						gap="0"
+						widget={middleWidget}
+						hiddenIds={stageHiddenMiddleIds}
+					/>
 				{/if}
 			</div>
 			{#each bottomStrips as z (z.id)}
@@ -3421,72 +4343,106 @@
 		<!-- The pop-over: an unpinned/narrow zone slid over the chat.
 		     Desktop only — below the breakpoint the header's L/R group owns the
 		     overlay, and the icon strips that arm this one are not rendered. -->
-		{#if popZone && popZone.mode !== "rail" && !isNarrow}
-			{@const onLeft = popZone.def.side === "left"}
-			{#if popZone.mode === "drawer"}
-				<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-				<div class="pop-scrim" onclick={() => (popId = null)}></div>
-			{/if}
-			<div
-				class="zone-flyout"
-				class:from-left={onLeft}
-				style="inline-size:min({popZone.width}px, 86%);"
-				role="dialog"
-				aria-label={labelOf(popZone)}
-				data-pop-keep
-			>
-				<div class="zone-head">
-					<span class="zone-label always">{labelOf(popZone)}</span>
-					<span class="flex-1"></span>
-					{#if popZone.mode === "icons"}
+		{#if !isNarrow}
+			{#each keptPops as z (z.id)}
+				{@const tuckedHere = sidesAreTucked && !!tuckedShown[z.id]}
+				{@const open = sidesAreTucked ? z.id === tuckedZoneId : z.id === popId}
+				{@const onLeft = z.def.side === "left"}
+				{@const shownZone = tuckedHere ? tuckedZone(z) : z}
+				{@const title = tuckedHere
+					? (inst(tuckedShown[z.id])?.title ??
+						(isConversation(tuckedShown[z.id])
+							? widgetLabel(tuckedShown[z.id])
+							: labelOf(z)))
+					: labelOf(z)}
+				{#if open && z.mode === "drawer"}
+					<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+					<div
+						class="pop-scrim"
+						data-stage-hidden={stageOnly ? "" : undefined}
+						onclick={() =>
+							sidesAreTucked ? closeTucked(false) : (popId = null)}
+					></div>
+				{/if}
+				<!-- Closed, it is `display: none` — kept, not unmounted (`keptPops`). -->
+				<!-- Tucked, it stops at the stage's edge (`flowEdge`) so the icon
+				     strip that opened it stays in reach, and shows the ONE widget
+				     whose icon was pressed (`tuckedZone`). -->
+				<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+				<div
+					class="zone-flyout"
+					data-stage-hidden={stageOnly ? "" : undefined}
+					class:from-left={onLeft}
+					class:pop-closed={!open}
+					style="inline-size:min({z.width}px, 86%);{sidesAreTucked
+						? `${onLeft ? 'inset-inline-start' : 'inset-inline-end'}:${onLeft ? flowEdge.start : flowEdge.end}px;`
+						: ''}"
+					role="dialog"
+					aria-label={title}
+					id={sidesAreTucked ? `tucked-zone-${z.id}` : undefined}
+					data-tucked-flyout={sidesAreTucked && open ? "" : undefined}
+					tabindex={sidesAreTucked ? -1 : undefined}
+					data-pop-keep
+				>
+					<div class="zone-head">
+						<span class="zone-label always">{title}</span>
+						<span class="flex-1"></span>
+						{#if z.mode === "icons" && !sidesAreTucked}
+							<button
+								class="zone-head-btn"
+								title="Pin — keep this zone open"
+								aria-label="Pin {labelOf(z)}"
+								onclick={() => setPinned(z.id, true)}
+							>
+								<Icons.Pin size={13} />
+							</button>
+						{/if}
 						<button
 							class="zone-head-btn"
-							title="Pin — keep this zone open"
-							aria-label="Pin {labelOf(popZone)}"
-							onclick={() => setPinned(popZone!.id, true)}
+							title="Close"
+							aria-label="Close {title}"
+							onclick={() =>
+								sidesAreTucked ? closeTucked(true) : (popId = null)}
 						>
-							<Icons.Pin size={13} />
+							<Icons.X size={13} />
 						</button>
-					{/if}
-					<button
-						class="zone-head-btn"
-						title="Close"
-						aria-label="Close {labelOf(popZone)}"
-						onclick={() => (popId = null)}
-					>
-						<Icons.X size={13} />
-					</button>
+					</div>
+					{@render panelStack(shownZone, true)}
 				</div>
-				{@render panelStack(popZone, true)}
-			</div>
+			{/each}
 		{/if}
 
 		<!-- Mobile side panels (P6, ruled 2026-08-30): one side at a time, slid
 		     in from its own edge over the session and opened from the header's
 		     L/R group. The SHEET is that side's own mount wearing
 		     `.zone-flyout.mobile` (see `sideMount` / `sideSlot`'s `overlay`
-		     slot) — it used to be a second render of the same panels here, and
-		     opening it reloaded every iframe in the side. What is left here is
-		     the backdrop, which belongs to no side. -->
+		     slot), not a second render of the same panels, so opening it
+		     reloads nothing. What is here is the backdrop, which belongs to no
+		     side. -->
 		{#if mobileSide}
 			<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-			<div class="pop-scrim" onclick={closeMobilePanels}></div>
+			<div
+				class="pop-scrim"
+				data-stage-hidden={stageOnly ? "" : undefined}
+				onclick={closeMobilePanels}
+			></div>
 		{/if}
 
 		<!-- The panels menu (ruled 2026-09-10): the sheet the header's one
 		     panels button opens. It LISTS the side groups — icon, title, which
 		     side, and which are pinned — and tapping one opens that side's
 		     overlay showing it. The list is what scales: another widget is
-		     another line here, where it used to have to be another button in the
-		     header. Nothing is mounted by it, so it is an ordinary `{#if}`. -->
+		     another line here, not another button in the header. Nothing is mounted by it, so it is an ordinary `{#if}`. -->
 		{#if mobileSidePanels.menuOpen}
 			<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
 			<div
 				class="pop-scrim"
+				data-stage-hidden={stageOnly ? "" : undefined}
 				onclick={() => mobileSidePanels.closeMenu()}
 			></div>
 			<div
 				class="panels-menu"
+				data-stage-hidden={stageOnly ? "" : undefined}
 				role="dialog"
 				aria-modal="true"
 				aria-label="Session panels"
@@ -3520,7 +4476,11 @@
 									<Icons.Pin size={12} />
 								{/if}
 								<span class="pm-side">
-									{g.side === "left" ? "Left" : "Right"}
+									{g.side === "left"
+										? "Left"
+										: g.side === "right"
+											? "Right"
+											: "Middle"}
 								</span>
 							</button>
 						</li>
@@ -3529,7 +4489,6 @@
 			</div>
 		{/if}
 	</div>
-	{/if}
 	</div>
 
 	<!-- The row editor at the REAL width, over the live session: everything in
@@ -3555,13 +4514,13 @@
 			{paletteWidgets}
 			{place}
 			{removeWidget}
+			{floorNoteOf}
 			{presets}
 			{activePreset}
 			{applyPreset}
 			bind:presetName
 			{savePreset}
 			{resetLayout}
-			bind:styleSheetId
 			onCancel={cancelEditing}
 			onDone={finishEditing}
 			{presetPicture}
@@ -3569,7 +4528,16 @@
 	{/if}
 </div>
 
+<!-- Portalled to the body: no widget box, zone or flyout can clip it. -->
+<WidgetSettingsModal />
+
 <style>
+	/* Stage only (see `stageOnly`): marked, never unmounted — the mount stays
+	   and an iframe under it keeps running. `!important` because a side's
+	   slot and a flyout set their own `display` by class. */
+	.session-layout [data-stage-hidden] {
+		display: none !important;
+	}
 	.session-layout {
 		position: relative;
 		display: flex;
@@ -3578,10 +4546,13 @@
 		inline-size: 100%;
 		min-block-size: 0;
 	}
+	/* The whole width, uncapped, and no padding: the balance that centres the
+	   column belongs to the middle zone (`measureStage`, ./tuckedSides). */
 	.layout-body {
 		position: relative;
 		display: flex;
 		flex: 1;
+		inline-size: 100%;
 		gap: 0.5rem;
 		min-block-size: 0;
 		overflow: hidden; /* clip flyouts sliding past the edges */
@@ -3600,8 +4571,8 @@
 	/* Stowed: below the breakpoint (P6), where a side takes no room in the
 	   layout at all — no box, no tab stop, no a11y tree — but is still
 	   MOUNTED, so the iframes keep running and the panels keep their state
-	   (the no-reload law). This is the state that used to be an unmount, and
-	   the reload it used to cost.
+	   (the no-reload law). Stowing is never an unmount, so it costs no
+	   reload.
 
 	   `.live-body.body-stowed` is the WHOLE session in that same state, under
 	   the Move tab's canvas. One law, one rule — not a second one to drift
@@ -3631,6 +4602,39 @@
 	.side-slot.slot-overlay > :global(.side-column) {
 		flex: 1;
 		min-block-size: 0;
+	}
+	/* The stage (QE, brief 7a): this side holds the conversation the phone or
+	   Stage only draws full width. The wrapper becomes the body's one flex
+	   item and its column or rail fills it; everything in the side but the
+	   conversation is `data-stage-hidden` around its mount, and the rail's
+	   own chrome goes. A container change, never a second render. */
+	.side-slot.slot-stage {
+		display: flex;
+		flex: 1 1 auto;
+		min-inline-size: 0;
+		min-block-size: 0;
+	}
+	.side-slot.slot-stage > :global(.side-column) {
+		flex: 1;
+		inline-size: auto;
+	}
+	.side-slot.slot-stage > :global(.zone-rail) {
+		flex: 1;
+		inline-size: auto !important;
+		max-inline-size: none;
+	}
+	.side-slot.slot-stage > :global(.zone-rail > .zone-head) {
+		display: none;
+	}
+	/* The middle while a side is the phone's stage: stowed like a side is —
+	   mounted, no box — or opened as its own sheet from the panels menu. The
+	   sheet's box is `.zone-flyout.mobile`'s; `position` is restated because
+	   `.layout-center`'s own `relative` comes later in this sheet. */
+	.layout-center.center-stowed {
+		display: none;
+	}
+	.layout-center.center-sheet {
+		position: absolute;
 	}
 
 	.layout-center {
@@ -3707,6 +4711,28 @@
 	}
 	.side-column.col-left {
 		flex-direction: row-reverse;
+	}
+	/* An EMPTY side's column (ruled 2026-09-29, `emptyColumns`): the room its
+	   first widget will take, kept so the middle does not move into it. A
+	   quiet region — a faint tint of the mid stop, which reads the same over
+	   a dark or a light ground (STYLE-GUIDE 2.6), no border and no text: a
+	   drop hint belongs to the editor, where there is something to drop
+	   (6.7). Its width is the inline `flex-basis` `sideMount` writes. */
+	.side-empty {
+		flex: none;
+		block-size: 100%;
+		min-inline-size: 0;
+		border-radius: 12px;
+		background: color-mix(in oklab, var(--color-surface-500) 7%, transparent);
+	}
+	/* Tucked (./tuckedSides): the column is its rail and nothing more. The
+	   stack keeps its mount and its cells — the one out is a fixed flyout, the
+	   rest are display:none — but gives its width back to the stage. */
+	.side-column.tucked {
+		gap: 0;
+	}
+	.side-column.tucked > .live-side {
+		flex: 0 0 0;
 	}
 	/* The stack. Still a grid, but its ROWS are the rail model's answer rather
 	   than the arrangement's `repeat(rows,1fr)`: a collapsed group has to give
@@ -4020,6 +5046,12 @@
 		display: flex;
 		flex-direction: column;
 	}
+	/* A conversation in a rail (brief 7a) GROWS down it (./panelWidgets), so
+	   its wrapper fills the track and the log has a box to scroll in. */
+	.zone-panel.conversation {
+		flex: 1;
+		min-block-size: 0;
+	}
 	.zone-head {
 		display: flex;
 		align-items: center;
@@ -4029,10 +5061,8 @@
 	}
 	.zone-label {
 		display: none;
-		font-size: 0.65rem;
+		font-size: 0.6875rem;
 		font-weight: 650;
-		text-transform: uppercase;
-		letter-spacing: 0.07em;
 		color: var(--color-surface-500);
 		padding-inline: 0.2rem;
 	}
@@ -4120,6 +5150,9 @@
 	}
 
 	/* Fly-out (popped zone) */
+	.zone-flyout.pop-closed {
+		display: none;
+	}
 	.zone-flyout {
 		position: absolute;
 		inset-block: 0;
@@ -4270,10 +5303,8 @@
 	}
 	.pm-side {
 		flex: none;
-		font-size: 0.65rem;
+		font-size: 0.6875rem;
 		font-weight: 700;
-		letter-spacing: 0.05em;
-		text-transform: uppercase;
 		color: var(--color-surface-500);
 	}
 

@@ -60,10 +60,15 @@ import {
 	type TurnOrderV1
 } from "@serene-pub/sdk"
 import {
+	cascadeFields,
 	getSessionGenre,
 	STANDARD_GENRE_ID
 } from "$lib/server/pipelines/entities/sessionGenres"
 import { channelsOf } from "$lib/server/messages/channels"
+import {
+	resolvePlayerLabel,
+	storedPlayerLabel
+} from "$lib/shared/sessions/playerLabel"
 
 /**
  * Resolve the document for a session, or `null` when the session does not
@@ -163,6 +168,13 @@ export async function resolveSessionSettings(
 	// .rebinds`, and what it may choose is on the registry — the document
 	// carries no turn-order special case and keys on no spec slug.
 	const turnOrder = readTurnOrder(metadata)
+	// What the person's own lines are called (R4): the session's override
+	// (`metadata.playerLabel`), else the genre's, else absent — the one
+	// cascade the page and the prompt also resolve through.
+	const playerLabel = resolvePlayerLabel({
+		declared: genre?.playerLabel,
+		stored: storedPlayerLabel(metadata)
+	})
 
 	return {
 		v: 1,
@@ -176,6 +188,7 @@ export async function resolveSessionSettings(
 			pinned: genre?.settings ?? {},
 			stored: (session.genreFields ?? {}) as Record<string, unknown>
 		}),
+		...(playerLabel ? { playerLabel } : {}),
 		scenario: session.scenario ?? null,
 		lorebookId: session.lorebookId ?? null,
 		tags: tagRows.map((t) => t.name),
@@ -184,47 +197,15 @@ export async function resolveSessionSettings(
 		pipelines,
 		turnOrder,
 		metadata,
-		// The annex column lands with 0153 (A5); until the schema carries it
-		// the row has no such key and the annex is empty. Read off the row
-		// rather than typed, so the column is picked up the day it exists.
+		// The annex column (0153, A5) is on the row: not null, default `{}`.
+		// The cast and the `?? {}` are left over from before the schema
+		// carried it and are inert now; every value is still in here, secrets
+		// included, so never hand this to a widget (`annexViewFor`, R57).
 		annex:
 			((session as { annex?: unknown }).annex as
 				| Record<string, unknown>
 				| undefined) ?? {}
 	}
-}
-
-/**
- * The cascade (§4.13) over declared ∪ pinned keys, in that order — declared
- * first so the form's order is the document's, pinned-only keys after.
- */
-export function cascadeFields(layers: {
-	declared: Record<string, { default?: unknown }>
-	pinned: Readonly<Record<string, unknown>>
-	stored: Record<string, unknown>
-}): Record<string, unknown> {
-	const { declared, pinned, stored } = layers
-	const out: Record<string, unknown> = {}
-	const keys = [
-		...Object.keys(declared),
-		...Object.keys(pinned).filter((k) => !(k in declared))
-	]
-	for (const key of keys) {
-		const isDeclared = key in declared
-		// The session layer exists only for a declared field: a stored value
-		// under an undeclared key is not a field and cannot be smuggled in.
-		if (isDeclared && key in stored && stored[key] !== undefined) {
-			out[key] = stored[key]
-			continue
-		}
-		if (key in pinned && pinned[key] !== undefined) {
-			out[key] = pinned[key]
-			continue
-		}
-		const fallback = isDeclared ? declared[key]?.default : undefined
-		if (fallback !== undefined) out[key] = fallback
-	}
-	return out
 }
 
 /**

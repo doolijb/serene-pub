@@ -4,6 +4,7 @@ import os from "os"
 import path from "path"
 import * as schema from "$lib/server/db/schema"
 import type { TestDb } from "$lib/server/utils/testDb"
+import { eq } from "drizzle-orm"
 
 /**
  * The admin socket API against a real (in-memory) DB. Exercised with the
@@ -52,7 +53,7 @@ describe("plugin admin socket API", () => {
 		await h.pluginsInstall.handler(
 			adminSocket,
 			{
-				pluginId: "acme/x",
+				pluginId: "acme.x",
 				name: "Acme X",
 				bundleSource: BUNDLE,
 				backends: ["quickjs", "ses"]
@@ -61,7 +62,7 @@ describe("plugin admin socket API", () => {
 		)
 		let list = await h.pluginsList.handler(adminSocket, {}, c.emit)
 		expect(list.sandboxEnabled).toBe(false) // flag off in this test
-		const row = list.plugins.find((p) => p.pluginId === "acme/x")
+		const row = list.plugins.find((p) => p.pluginId === "acme.x")
 		expect(row).toMatchObject({
 			name: "Acme X",
 			backends: ["quickjs", "ses"],
@@ -73,34 +74,34 @@ describe("plugin admin socket API", () => {
 		// enable
 		await h.pluginsSetEnabled.handler(
 			adminSocket,
-			{ pluginId: "acme/x", enabled: true },
+			{ pluginId: "acme.x", enabled: true },
 			c.emit
 		)
 		list = await h.pluginsList.handler(adminSocket, {}, c.emit)
-		expect(list.plugins.find((p) => p.pluginId === "acme/x")?.enabled).toBe(
+		expect(list.plugins.find((p) => p.pluginId === "acme.x")?.enabled).toBe(
 			true
 		)
 
 		// the dial
 		await h.pluginsSetBackend.handler(
 			adminSocket,
-			{ pluginId: "acme/x", backend: "ses" },
+			{ pluginId: "acme.x", backend: "ses" },
 			c.emit
 		)
 		list = await h.pluginsList.handler(adminSocket, {}, c.emit)
-		expect(list.plugins.find((p) => p.pluginId === "acme/x")?.backend).toBe(
+		expect(list.plugins.find((p) => p.pluginId === "acme.x")?.backend).toBe(
 			"ses"
 		)
 
 		// sequential
 		await h.pluginsSetSequential.handler(
 			adminSocket,
-			{ pluginId: "acme/x", sequential: true },
+			{ pluginId: "acme.x", sequential: true },
 			c.emit
 		)
 		list = await h.pluginsList.handler(adminSocket, {}, c.emit)
 		expect(
-			list.plugins.find((p) => p.pluginId === "acme/x")?.sequential
+			list.plugins.find((p) => p.pluginId === "acme.x")?.sequential
 		).toBe(true)
 
 		// logs (none yet)
@@ -114,12 +115,12 @@ describe("plugin admin socket API", () => {
 		// uninstall
 		await h.pluginsUninstall.handler(
 			adminSocket,
-			{ pluginId: "acme/x" },
+			{ pluginId: "acme.x" },
 			c.emit
 		)
 		list = await h.pluginsList.handler(adminSocket, {}, c.emit)
 		expect(
-			list.plugins.find((p) => p.pluginId === "acme/x")
+			list.plugins.find((p) => p.pluginId === "acme.x")
 		).toBeUndefined()
 	})
 
@@ -129,7 +130,7 @@ describe("plugin admin socket API", () => {
 		await h.pluginsInstall.handler(
 			adminSocket,
 			{
-				pluginId: "acme/y",
+				pluginId: "acme.y",
 				name: "Y",
 				bundleSource: BUNDLE,
 				backends: ["quickjs"]
@@ -138,14 +139,14 @@ describe("plugin admin socket API", () => {
 		)
 		await h.pluginsSetEnabled.handler(
 			adminSocket,
-			{ pluginId: "acme/y", enabled: true },
+			{ pluginId: "acme.y", enabled: true },
 			c.emit
 		)
 		// re-install with different bytes
 		await h.pluginsInstall.handler(
 			adminSocket,
 			{
-				pluginId: "acme/y",
+				pluginId: "acme.y",
 				name: "Y",
 				bundleSource: BUNDLE + "\n// changed",
 				backends: ["quickjs"]
@@ -153,7 +154,7 @@ describe("plugin admin socket API", () => {
 			c.emit
 		)
 		const list = await h.pluginsList.handler(adminSocket, {}, c.emit)
-		expect(list.plugins.find((p) => p.pluginId === "acme/y")?.enabled).toBe(
+		expect(list.plugins.find((p) => p.pluginId === "acme.y")?.enabled).toBe(
 			false
 		)
 	})
@@ -164,7 +165,7 @@ describe("plugin admin socket API", () => {
 		await h.pluginsInstall.handler(
 			adminSocket,
 			{
-				pluginId: "acme/perm",
+				pluginId: "acme.perm",
 				name: "Perm",
 				bundleSource: BUNDLE,
 				backends: ["quickjs"],
@@ -182,7 +183,7 @@ describe("plugin admin socket API", () => {
 		// what was asked) but nothing is in force.
 		const asked = await h.pluginsPermissions.handler(
 			adminSocket,
-			{ pluginId: "acme/perm" },
+			{ pluginId: "acme.perm" },
 			c.emit
 		)
 		expect(asked.permissions.map((p) => p.key).sort()).toEqual([
@@ -197,13 +198,13 @@ describe("plugin admin socket API", () => {
 		expect(asked.storage?.effectiveBytes).toBe(null)
 		const listed = await h.pluginsList.handler(adminSocket, {}, c.emit)
 		expect(
-			listed.plugins.find((p) => p.pluginId === "acme/perm")?.needsReview
+			listed.plugins.find((p) => p.pluginId === "acme.perm")?.needsReview
 		).toBe(true)
 
 		// The consent act puts what is still ticked into force.
 		const perms = await h.pluginsReviewPermissions.handler(
 			adminSocket,
-			{ pluginId: "acme/perm" },
+			{ pluginId: "acme.perm" },
 			c.emit
 		)
 		expect(perms.permissions.every((p) => !p.pending)).toBe(true)
@@ -217,14 +218,14 @@ describe("plugin admin socket API", () => {
 		expect(perms.storage?.overrideBytes).toBe(null)
 		const reviewed = await h.pluginsList.handler(adminSocket, {}, c.emit)
 		expect(
-			reviewed.plugins.find((p) => p.pluginId === "acme/perm")
+			reviewed.plugins.find((p) => p.pluginId === "acme.perm")
 				?.needsReview
 		).toBe(false)
 
 		// deny storage → not granted anymore
 		const after = await h.pluginsSetPermission.handler(
 			adminSocket,
-			{ pluginId: "acme/perm", key: "storage", granted: false },
+			{ pluginId: "acme.perm", key: "storage", granted: false },
 			c.emit
 		)
 		expect(
@@ -240,7 +241,7 @@ describe("plugin admin socket API", () => {
 		// re-grant
 		const regranted = await h.pluginsSetPermission.handler(
 			adminSocket,
-			{ pluginId: "acme/perm", key: "storage", granted: true },
+			{ pluginId: "acme.perm", key: "storage", granted: true },
 			c.emit
 		)
 		expect(
@@ -260,7 +261,7 @@ describe("plugin admin socket API", () => {
 		await h.pluginsInstall.handler(
 			adminSocket,
 			{
-				pluginId: "acme/forge",
+				pluginId: "acme.forge",
 				name: "Forge",
 				bundleSource: BUNDLE,
 				backends: ["quickjs"],
@@ -274,7 +275,7 @@ describe("plugin admin socket API", () => {
 		const forged = await h.pluginsSetPermission.handler(
 			adminSocket,
 			{
-				pluginId: "acme/forge",
+				pluginId: "acme.forge",
 				key: "__reviewed:storage",
 				granted: false
 			},
@@ -292,7 +293,7 @@ describe("plugin admin socket API", () => {
 		const invented = await h.pluginsSetPermission.handler(
 			adminSocket,
 			{
-				pluginId: "acme/forge",
+				pluginId: "acme.forge",
 				key: "network:evil.example",
 				granted: true
 			},
@@ -305,7 +306,7 @@ describe("plugin admin socket API", () => {
 		// And the ordinary path still works: deciding a declared key reviews it.
 		const decided = await h.pluginsSetPermission.handler(
 			adminSocket,
-			{ pluginId: "acme/forge", key: "storage", granted: true },
+			{ pluginId: "acme.forge", key: "storage", granted: true },
 			c.emit
 		)
 		expect(
@@ -316,13 +317,65 @@ describe("plugin admin socket API", () => {
 		})
 	})
 
+	/**
+	 * `#` separates a key from what it was reviewed as, and this write adds the
+	 * key's mark whether the admin grants or denies. A declared
+	 * `widget:lore#scope` would mark as the real `lore` scope's review, so
+	 * DENYING the decoy granted the scope; `storage#{…}` did the same for the
+	 * storage quota. Such a key is refused: not listed, not writable.
+	 */
+	test("deciding a '#'-key decoy cannot review the permission it imitates", async () => {
+		const h = await import("./plugins")
+		const { grantedWidgetScopes } = await import("$lib/server/plugins/permissions")
+		const { eq } = await import("drizzle-orm")
+		const c = collector()
+		await h.pluginsInstall.handler(
+			adminSocket,
+			{ pluginId: "acme.decoy", name: "Decoy", bundleSource: BUNDLE, backends: ["quickjs"] },
+			c.emit
+		)
+		// The manifest as a package could ship it — set on the row directly, so
+		// only the permission write is under test.
+		const manifest = {
+			permissions: ["widget:lore", "widget:lore#scope", "storage", 'storage#{"quotaBytes":5242880}'],
+			genres: [{ shape: { panels: [{ id: "a", scopes: ["lore"] }] } }]
+		}
+		await testDb.update(schema.plugins).set({ manifest }).where(eq(schema.plugins.pluginId, "acme.decoy"))
+		const row = async () =>
+			(await testDb.select().from(schema.plugins).where(eq(schema.plugins.pluginId, "acme.decoy")))[0]
+
+		for (const granted of [false, true])
+			for (const key of ["widget:lore#scope", 'storage#{"quotaBytes":5242880}']) {
+				const res = await h.pluginsSetPermission.handler(
+					adminSocket,
+					{ pluginId: "acme.decoy", key, granted },
+					c.emit
+				)
+				expect(res.permissions.find((p) => p.key === "widget:lore")).toMatchObject({
+					pending: true,
+					granted: false
+				})
+				expect(res.permissions.find((p) => p.key === "storage")).toMatchObject({
+					pending: true,
+					granted: false
+				})
+				expect(res.storage?.granted).toBe(false)
+			}
+		const r = await row()
+		expect(grantedWidgetScopes(r.manifest as never, r.adminDenied)).toEqual([])
+		expect(r.adminDenied ?? []).toEqual([])
+		// Not listed, so there is nothing to tick.
+		const asked = await h.pluginsPermissions.handler(adminSocket, { pluginId: "acme.decoy" }, c.emit)
+		expect(asked.permissions.map((p) => p.key).sort()).toEqual(["storage", "widget:lore"])
+	})
+
 	test("admin sets and clears a per-plugin storage-quota override", async () => {
 		const h = await import("./plugins")
 		const c = collector()
 		await h.pluginsInstall.handler(
 			adminSocket,
 			{
-				pluginId: "acme/quota",
+				pluginId: "acme.quota",
 				name: "Quota",
 				bundleSource: BUNDLE,
 				backends: ["quickjs"],
@@ -333,13 +386,13 @@ describe("plugin admin socket API", () => {
 		// Consent first: an override tunes a grant, it does not create one.
 		await h.pluginsReviewPermissions.handler(
 			adminSocket,
-			{ pluginId: "acme/quota" },
+			{ pluginId: "acme.quota" },
 			c.emit
 		)
 		// set an override above the author ceiling (a trusted admin act)
 		const set = await h.pluginsSetStorageQuota.handler(
 			adminSocket,
-			{ pluginId: "acme/quota", bytes: 512 * 1024 * 1024 },
+			{ pluginId: "acme.quota", bytes: 512 * 1024 * 1024 },
 			c.emit
 		)
 		expect(set.storage?.overrideBytes).toBe(512 * 1024 * 1024)
@@ -349,7 +402,7 @@ describe("plugin admin socket API", () => {
 		// an out-of-band huge value is clamped to the admin ceiling
 		const clamped = await h.pluginsSetStorageQuota.handler(
 			adminSocket,
-			{ pluginId: "acme/quota", bytes: 999 * 1024 * 1024 * 1024 },
+			{ pluginId: "acme.quota", bytes: 999 * 1024 * 1024 * 1024 },
 			c.emit
 		)
 		expect(clamped.storage?.overrideBytes).toBe(2 * 1024 * 1024 * 1024)
@@ -357,7 +410,7 @@ describe("plugin admin socket API", () => {
 		// clearing reverts to the manifest quota
 		const cleared = await h.pluginsSetStorageQuota.handler(
 			adminSocket,
-			{ pluginId: "acme/quota", bytes: null },
+			{ pluginId: "acme.quota", bytes: null },
 			c.emit
 		)
 		expect(cleared.storage?.overrideBytes).toBe(null)
@@ -399,7 +452,7 @@ describe("plugin admin socket API", () => {
 		const { writeInvocation } = await import("$lib/server/plugins/store")
 		await writeInvocation(testDb as any, {
 			callId: 1,
-			pluginId: "acme/logged",
+			pluginId: "acme.logged",
 			pluginName: "Logged",
 			bundleHash: "h",
 			hookName: "v",
@@ -416,14 +469,180 @@ describe("plugin admin socket API", () => {
 		const c = collector()
 		const res = await h.pluginsLogs.handler(
 			adminSocket,
-			{ pluginId: "acme/logged" },
+			{ pluginId: "acme.logged" },
 			c.emit
 		)
 		expect(res.logs).toHaveLength(1)
 		expect(res.logs[0]).toMatchObject({
-			pluginId: "acme/logged",
+			pluginId: "acme.logged",
 			hookName: "v",
 			outcome: "ok"
 		})
+	})
+})
+
+/**
+ * Per-user settings (`scope: 'user'`): the permission rule, end to end
+ * against a real DB. An instance field is an administrator's; a user-scoped
+ * field is each person's own, and the socket never names another person.
+ */
+describe("user-scoped plugin settings", () => {
+	const SETTINGS = {
+		endpoint: { type: "string", default: "https://a.test" },
+		notation: { type: "string", default: "1d20", scope: "user" }
+	}
+
+	async function fixture() {
+		const [a] = await testDb
+			.insert(schema.users)
+			.values({ username: `pus-a-${Math.random()}`, isAdmin: false })
+			.returning()
+		const [b] = await testDb
+			.insert(schema.users)
+			.values({ username: `pus-b-${Math.random()}`, isAdmin: false })
+			.returning()
+		const [admin] = await testDb
+			.insert(schema.users)
+			.values({ username: `pus-admin-${Math.random()}`, isAdmin: true })
+			.returning()
+		const pluginId = `acme.dice${Math.floor(Math.random() * 1e9)}`
+		await testDb.insert(schema.plugins).values({
+			pluginId,
+			name: "Dice",
+			bundleSource: BUNDLE,
+			bundleHash: "h-dice",
+			enabled: true,
+			manifest: { settings: SETTINGS },
+			settings: { notation: "2d6" }
+		})
+		return {
+			pluginId,
+			a: { user: { id: a.id, isAdmin: false } } as any,
+			b: { user: { id: b.id, isAdmin: false } } as any,
+			admin: { user: { id: admin.id, isAdmin: true } } as any
+		}
+	}
+
+	test("a non-admin is refused on instance fields and allowed on their own user fields", async () => {
+		const h = await import("./plugins")
+		const f = await fixture()
+		const c = collector()
+
+		// The instance surface is admin-only, whatever the field.
+		await expect(
+			h.pluginsSetSettings.handler(
+				f.a,
+				{ pluginId: f.pluginId, values: { notation: "9d9" } },
+				c.emit
+			)
+		).rejects.toThrow(/admin/i)
+
+		// Through their own surface, an instance field is refused by name…
+		const refused = await h.pluginUserSettingsSet.handler(
+			f.a,
+			{ pluginId: f.pluginId, values: { endpoint: "https://mine.test" } },
+			c.emit
+		)
+		expect(refused.error).toMatch(/'endpoint'.*administrator/)
+		const [row] = await testDb
+			.select()
+			.from(schema.plugins)
+			.where(eq(schema.plugins.pluginId, f.pluginId))
+		expect(row.settings).toEqual({ notation: "2d6" })
+
+		// …and a user-scoped one is theirs.
+		const ok = await h.pluginUserSettingsSet.handler(
+			f.a,
+			{ pluginId: f.pluginId, values: { notation: "3d8" } },
+			c.emit
+		)
+		expect(ok.error).toBeUndefined()
+		expect(ok.settings).toMatchObject({
+			values: { notation: "3d8" },
+			own: ["notation"]
+		})
+		// The instance value did not move.
+		const [after] = await testDb
+			.select()
+			.from(schema.plugins)
+			.where(eq(schema.plugins.pluginId, f.pluginId))
+		expect(after.settings).toEqual({ notation: "2d6" })
+
+		// An admin still writes the instance value for everyone.
+		const adminWrite = await h.pluginsSetSettings.handler(
+			f.admin,
+			{ pluginId: f.pluginId, values: { notation: "4d4" } },
+			c.emit
+		)
+		expect(adminWrite.error).toBeUndefined()
+	})
+
+	test("user A cannot read or write user B's values", async () => {
+		const h = await import("./plugins")
+		const f = await fixture()
+		const c = collector()
+
+		await h.pluginUserSettingsSet.handler(
+			f.a,
+			{ pluginId: f.pluginId, values: { notation: "3d8" } },
+			c.emit
+		)
+		// B reads the instance value, never A's.
+		const bView = await h.pluginUserSettingsList.handler(f.b, {}, c.emit)
+		const bDice = bView.plugins.find((p) => p.pluginId === f.pluginId)!
+		expect(bDice.settings.values).toEqual({ notation: "2d6" })
+		expect(bDice.settings.own).toEqual([])
+
+		// B's write lands on B's row only; A still reads their own.
+		await h.pluginUserSettingsSet.handler(
+			f.b,
+			{ pluginId: f.pluginId, values: { notation: "1d4" } },
+			c.emit
+		)
+		const aView = await h.pluginUserSettingsList.handler(f.a, {}, c.emit)
+		expect(
+			aView.plugins.find((p) => p.pluginId === f.pluginId)!.settings.values
+		).toEqual({ notation: "3d8" })
+
+		// Nothing in the request can name another person: a smuggled userId
+		// is ignored and the write lands on the caller's own row.
+		await h.pluginUserSettingsSet.handler(
+			f.b,
+			{ pluginId: f.pluginId, values: { notation: "6d6" }, userId: f.a.user.id } as any,
+			c.emit
+		)
+		const rows = await testDb
+			.select()
+			.from(schema.pluginUserSettings)
+			.where(eq(schema.pluginUserSettings.pluginId, f.pluginId))
+		const byUser = Object.fromEntries(rows.map((r) => [r.userId, r.settings]))
+		expect(byUser[f.a.user.id]).toEqual({ notation: "3d8" })
+		expect(byUser[f.b.user.id]).toEqual({ notation: "6d6" })
+
+		// Clearing falls back to the instance value and removes the row.
+		await h.pluginUserSettingsSet.handler(
+			f.a,
+			{ pluginId: f.pluginId, values: { notation: null } },
+			c.emit
+		)
+		const again = await h.pluginUserSettingsList.handler(f.a, {}, c.emit)
+		expect(
+			again.plugins.find((p) => p.pluginId === f.pluginId)!.settings
+		).toMatchObject({ values: { notation: "2d6" }, own: [] })
+	})
+
+	test("a plugin without user-scoped fields is left off a person's list", async () => {
+		const h = await import("./plugins")
+		const f = await fixture()
+		await testDb.insert(schema.plugins).values({
+			pluginId: `acme.plain${Math.floor(Math.random() * 1e9)}`,
+			name: "Plain",
+			bundleSource: BUNDLE,
+			bundleHash: "h-plain",
+			enabled: true,
+			manifest: { settings: { endpoint: { type: "string" } } }
+		})
+		const res = await h.pluginUserSettingsList.handler(f.a, {}, collector().emit)
+		expect(res.plugins.map((p) => p.name)).not.toContain("Plain")
 	})
 })

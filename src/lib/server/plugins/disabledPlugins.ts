@@ -5,11 +5,17 @@
  * turning it back on restores everything, and sessions already running on
  * what it provided keep running: resolution and dispatch never read this.
  *
+ * With the whole subsystem off (SP_PLUGINS_ENABLED unset) every non-core
+ * plugin counts as switched off here, so listings offer nothing a plugin
+ * provides — the same as every other plugin surface under the flag.
+ *
  * One read per listing — the plugins table is small, and a listing asks once.
  */
 
-import { eq } from "drizzle-orm"
+import { and, eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
+import { notCoreRow } from "./frameHost"
+import { pluginsEnabled } from "./flag"
 
 export interface DisabledPlugins {
 	/** `plugins.id` — what `source_plugin_id` / `owner_plugin_id` hold. */
@@ -26,7 +32,13 @@ export async function disabledPlugins(db: Db): Promise<DisabledPlugins> {
 	const rows = await db
 		.select({ id: schema.plugins.id, pluginId: schema.plugins.pluginId })
 		.from(schema.plugins)
-		.where(eq(schema.plugins.enabled, false))
+		// A switched-off row stored as `core` would read every `core:` id as
+		// a disabled plugin's — the app's own pipelines and events gone.
+		.where(
+			pluginsEnabled()
+				? and(eq(schema.plugins.enabled, false), notCoreRow())
+				: notCoreRow()
+		)
 	const ids = new Set(rows.map((r) => r.id))
 	const slugs = new Set(rows.map((r) => r.pluginId))
 	return {

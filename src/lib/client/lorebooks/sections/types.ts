@@ -1,6 +1,6 @@
 import type { Component } from "svelte"
 import type { BindingWithRelations } from "$lib/client/components/lorebookForms/entryManager"
-import type { LoreScope } from "../loreRoute"
+import type { LoreScope } from "$lib/shared/lorebooks/loreRoute"
 import type { PoolItem } from "../poolFilter"
 
 /**

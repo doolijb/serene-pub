@@ -24,7 +24,7 @@ is the reference implementation of a sidebar view.
    is a sidebar view. Jump is the only search surface. Nothing else may add a navigation strip, a
    second sidebar, or a search box that is not a view's own filter.
 3. **A view is complete at 400px.** Every sidebar view is 100% functional in the dock and is the
-   same component at full page and on a phone. Width changes the arrangement, never the feature set.
+   same component at every width (Dock, Half, Focus) and on a phone. Width changes the arrangement, never the feature set.
 4. **Cards, not separators.** Sections sit in cards. Horizontal rules and `border-t` separators
    between sections are retired.
 5. **Selection is tonal plus a bar.** A selected row or active toggle is a tonal surface with a
@@ -121,7 +121,7 @@ for hints and placeholders that can be missed.
 | ---------------------- | -------------------------------------------------------------------------------------------------------------- |
 | Selected row           | `.sidebar-row-active`: `bg-surface-200 dark:bg-surface-800` + `inset 3px 0 0 primary-500`, with `aria-current` |
 | Active rail item       | `text-primary-500 bg-surface-900` + the same inset bar                                                         |
-| Open-but-inactive view | a 6px `primary-500` dot on the rail item                                                                       |
+| Open-but-inactive view | a 6px `surface-500` dot on the rail item (§5.1)                                                                |
 | Active toggle or chip  | `preset-tonal-primary`                                                                                         |
 | Selected card          | `ring-2 ring-primary-500 ring-offset-2 ring-offset-surface-950` (an inset bar hides under an image)            |
 | Hover on a row         | `surface-200-800`                                                                                              |
@@ -132,6 +132,20 @@ for hints and placeholders that can be missed.
 
 `preset-filled-primary-500` is a button. It is never a selected row, an active tab, or a badge:
 the old convention failed contrast at 3.62:1 and was retired app-wide.
+
+
+**Rulings of the 2026-09-26 consistency pass:**
+
+- A Skeleton **Switch** keeps its filled primary track when on. It shows the control's own state,
+  not a selection among siblings, so the tonal-plus-bar rule does not apply to it.
+- **Menu items** hover neutral (`hover:bg-surface-200-800`). Only the destructive item is tinted
+  (`text-error-600-400 hover:bg-error-500/10`). No menu item hovers to a filled colour.
+- **Save, Update and Create** are the surface's one filled primary. **Set default** and other
+  secondary actions are `preset-tonal-surface`. Success green and ember are signals, never buttons.
+- A **`⋯` trigger** stays surface when its menu is open (`bg-surface-200-800`), and a popover's
+  ground is `bg-surface-50-950` with a `border-surface-200-800` edge, never gold.
+- `text-muted` and `text-muted-foreground` are not defined by any theme and render at full ink.
+  Muted text is `text-surface-600-400`.
 
 ### 2.5 Contrast
 
@@ -179,9 +193,9 @@ declares dark stops is a bug, even if it looks right today.
 
 Fonts are self-hosted and imported in `src/app.css`; nothing is fetched from the web. The theme
 sets `--typo-heading--font-family` to Funnel Display at weight 600 with letter-spacing `-0.01em`,
-and `--typo-base--font-family` to Funnel Sans. Use the theme's heading font through the `font-heading`
-utility or `[font-family:var(--typo-heading--font-family)]`; the `.funnel-display` class in
-`app.css` is the older spelling and still works.
+and `--typo-base--font-family` to Funnel Sans. Use the theme's heading font as `[font-family:var(--typo-heading--font-family)]`; there is no
+`font-heading` utility. The `.funnel-display` class in `app.css` is the older spelling, retired
+from components on 2026-09-26 (it names a font, not the theme's heading role).
 
 Two faces, one family, is deliberate: Display carries identity, Sans carries information, and
 they never fight because they share their letterforms. Literata is the one exception, ruled
@@ -228,9 +242,14 @@ one row above the prose; times are 12px quiet.
 
 ### 3.4 Measure and wrapping
 
-Body copy in a column wraps at about 65 to 75 characters. Story prose gets a 640px measure
-(`--sp-measure`) centred in the middle zone, with a 56px gutter on its left for the speaker's
-avatar; the composer is the same width as the prose, so what you type lands where you typed it. Lists truncate with an ellipsis on one line for taglines and two lines for descriptions;
+Body copy in a column wraps at about 65 to 75 characters. Story prose is the exception, and it is a
+person's choice: the messages widget's **Line width** setting (`lineWidth`, on the root as
+`data-line-width`) is **Full** by default — the rows and the composer take the whole width the
+widget is given (5.3, the fill rule) — or **Comfortable**, a 640px measure (`--sp-measure`) plus a
+56px gutter for the speaker's avatar, centred on the session. Either way the composer is the same
+width as the prose, so what you type lands where you typed it. Comfortable caps the rows and the
+composer, never the scroll region: the whole panel scrolls, its scrollbar at the panel's edge and the
+wheel working over the gutters beside the column. A measure is never a hidden cap. Lists truncate with an ellipsis on one line for taglines and two lines for descriptions;
 never let a row grow taller than its neighbours because of copy. Long identifiers wrap with
 `break-words` rather than overflow.
 
@@ -257,9 +276,11 @@ The base unit is 4px. Everything below is a multiple of it, with the two excepti
 | ------------------------- | ----------------------------------------------------------- |
 | Rail                      | 64px narrow, 208px wide                                     |
 | Rail item                 | 44 × 44 narrow; 40px rows wide                              |
-| Sidebar                   | 400px                                                       |
+| Sidebar                   | 400px (Dock); half the room right of the rail (Half)        |
+| Sidebar edge (drag)       | 12px hit area over the border, 18 × 40 grip                 |
+| Spine                     | 56px                                                        |
 | Sidebar header            | 56px                                                        |
-| List pane at full page    | 340px default, 360–380px for card lists                     |
+| List pane in Focus        | 340px default, 360–380px for card lists                     |
 | Input, filter box, button | 40px; 32px for the small size                               |
 | List row                  | 44px minimum                                                |
 | Tab                       | 40px                                                        |
@@ -283,7 +304,7 @@ Fields inside a card: 16px. Cards in a stack: 12px. Rows in a list: 4px. Items i
 ### 5.1 The shell
 
 The window is rail, sidebar, main. The rail is fixed to the left edge and holds Home, the **Play**
-group (Sessions, Characters, Personas, Lorebooks, Tags), the **Tune** group (Connections, Sampling,
+group (Sessions, Characters — personas included — Library, Lorebooks, Tags), the **Tune** group (Connections, Sampling,
 Pipelines, Settings, and whatever the instance enables), then Activity, Admin and the account. The
 sidebar shows one view; other opened views stay mounted as tabs and show as a dot on their rail
 item. Main is the page. Below the `lg` breakpoint the rail becomes a five-item bottom bar and a view
@@ -291,6 +312,31 @@ opens as a full-screen sheet.
 
 The wide rail shows labels and the group names; the user toggles it and the choice persists per
 browser. Design for both forms: an item's active and open states are identical in each.
+
+
+**Widths.** A view shows at one of three widths, chosen by the width switch in its header (three
+32px icon buttons in a tonal track, replacing the old expand button), by dragging its edge, or by
+Ctrl+\\. **Dock** is the 400px sidebar and **Half** is half the room right of the rail; both sit
+beside the page, and which one a view comes back at is remembered per browser. **Focus** puts the
+view over the page, which stays mounted and hidden. Focus is the only width with an address: it
+shallow-routes to the view's own path (`viewRoutes.ts`), so Back steps down a width, and a cold
+load of that path focuses the view over Home. Over a session, Focus draws the **spine** at the
+right edge (cast, the ember dot while a reply is written, the way back); a phone's sheet shows the
+same thing as a return bar at its top.
+
+**Escape steps down one layer**: Stage only, then Focus to the width it came from, then the dock
+folds. It stays out of text fields, dialogs and open popovers, and never leaves a page.
+
+**Stage only** (Ctrl+.) hides the rail and the sidebar; an 8px strip at the left edge brings the
+rail back over the stage, and a "Leave stage only" pill takes the Jump pill's place. The shell
+sets `data-stage-only` on its root for pages to hide their own chrome.
+
+**Open-view dots**: `surface-500` for a view that is open but not showing; `warning` (ember) on
+Sessions while the session under a focused view is writing. Gold stays for "act on it".
+The **Activity** and **Admin** dots are status (§6.11): the worst unread notification (Admin: the
+worst Needs you item), `error` or `primary`; an info-only notification lights nothing, queued work
+never does, and the count or state is in the item's `aria-label`. The phone's Views button shows
+the worse of the two as one dot, never a count badge.
 
 ### 5.2 Views
 
@@ -302,6 +348,13 @@ through `panelsCtx.registerViewCloseGate`.
 A list-with-detail view uses `PanelSplit`: one pane in the dock, list beside detail at desk width.
 The switch is `ViewModeTracker`, which measures the view and answers `compact` under 900px and
 `desk` at or above it, holding its last answer while the view is hidden.
+
+The list is the fixed column (`listWidth`) and the detail takes the room — except where the list
+is the thing being looked at. The **Library**'s portrait grid passes `detailWidth` instead, which
+turns the split around: the grid fills and the detail is a `clamp(360px, 32%, 560px)` column. A
+view may measure its list pane too (a second `ViewModeTracker`, read by `.width`) when the list
+changes form inside its own column: the Library is a single column of rows with its filters in a
+popout under 560px of list, and a portrait grid with its filters in a row from there.
 
 ### 5.3 Responsive rules
 
@@ -318,24 +371,102 @@ the window is wide while the column is narrow, and the rule fires in the wrong p
 variants are for the shell and for pages in main, and even there `@container/home`-style named
 containers are preferred.
 
+**The session's zones** decide from the session's own measured box, never the viewport, so an
+open sidebar counts. The conversation fills the zone it is placed in — the middle by default (Line width: Full, 3.4); under Comfortable its
+column is centred in that box, and **the middle zone takes the balance; the column keeps its
+measure**. The middle runs from side to side, over the body gap
+too, with no padding on the body: it widens by the difference between the sides, its widgets fill
+it, and the column is placed off the middle's own centre by half the balance
+(`--sp-stage-balance-start` / `-end`, `columnInsetPx` in `sessionLayout/tuckedSides.ts`), so no
+strip between a side and the column is outside a widget and the wheel scrolls everywhere there. The
+balance is paid only from room beyond the stage's plan — its measure plus a scrollbar gutter on each
+edge (`stagePlanPx`), which is what lets the log's rows centre where the composer does — and the body
+has no width cap. **The middle grows; a docked side keeps its ladder width** (ruled 2026-09-28,
+reversing the 09-27 side fill): the sides are their ladder footprint and nothing more
+(`dockedZoneWidths` in `sessionLayout/sideSlot.ts`), `.layout-center` is `flex: 1` and takes every
+pixel the window adds, and the conversation fills it (or, under Comfortable, the column keeps its
+measure inside it). Never size a side from the
+window's spare room. **An empty side keeps its column** (ruled 2026-09-29): a declared side that docks
+at this width, pinned or not, and holds nothing is drawn as `.side-empty` at the width its first widget
+will have, so the middle never grows into it. It is a quiet region: a 7% `surface-500` tint (it reads
+the same over either ground), a 12px radius, no border, no text and no drop hint (6.7: hints belong to
+the editor), `aria-hidden` and no tab stop. The column is **soft** (`emptyColumnsPx` in
+`sessionLayout/sideSlot.ts`): it is never counted in the tuck threshold, it is granted only from room
+beyond the populated sides and the stage's measure, two empty columns go together, and it gives way
+to 0 before any populated side tucks. Tucked, stowed, hidden or on its drawer rung, an empty side draws
+nothing: no column and no icon rail. A side holding only a conversation (any Messages instance, the
+bare log included) is populated, never empty, on the desktop and the phone alike (`sidePopulated`).
+
+**Placement is free** (brief 7a, 2026-09-29): any widget may sit in any zone, the conversation
+included. The one placement rule is the **primary floor** (`sessionLayout/primaryFloor.ts`): a layout
+places at least one instance of the genre's primary widget, anywhere. The editor never offers to
+remove the last one: its card shows a lock with the note *A session needs one Messages widget* where
+the × would be, on the grid cards, the rail's edit bar and the phone editor's rows alike. A reader
+that finds none appends it to the middle. A zone never refuses a card. A conversation in a side draws
+through the same renderer as in the middle and GROWS down its rail; it takes the side's ladder width,
+and the middle's balance (`--sp-stage-balance-*`, set on `.layout-center`) never reaches it.
+
+**The stage follows the conversation** (QE, recommended default, `sessionLayout/placementRules.ts`):
+Stage only and the phone draw the layout's primary log (the first unclaimed Messages in reading
+order) wherever it sits. In a side, that side's one mount takes `sideSlot`'s `stage` slot and fills
+the body, its other widgets `data-stage-hidden` around their mounts; the middle is hidden (Stage only)
+or stowed (phone), and on the phone its widgets are listed in the panels menu as **Middle**, opening
+`.layout-center` itself as the sheet. A container change, never a second render. **Done refuses an
+empty middle** (QF, same file) with a toast: *Put a widget in the middle, or move one back.* A middle arranged with widgets side by side carries no balance: it has no single
+column to centre. When the
+box is narrower than the docked sides plus the stage's measure (3.4, the stage's minimum at either
+Line width), the sides **tuck** to their
+icon rails and a panel comes out as a flyout, one at a time, with `aria-expanded` on its icon, a
+labelled dialog, focus moved in and returned to the icon on Escape (`sessionLayout/tuckedSides.ts`).
+The session measures with a `ResizeObserver`, not `container-type`, because its flyouts are
+`position: fixed`.
+
 A container makes itself the containing block for `position: fixed` descendants. Dialogs and
 popovers inside views must be portaled to the body; every Skeleton `Dialog` and `Popover` in the
 app already is, and a new one must be too.
+
+**Session widgets** answer their own cell, never the window or the `view`. Every remote widget's
+box (`ComponentMount`'s `.sp-remote-box`, marked `data-sp-widget-box`) fills the cell the layout
+gave it, both ways, and is an inline-size container named `sp-widget`. Widget CSS uses
+`@container sp-widget (min-width: …)` and `cqi` units. A root that wants the full height sets
+`block-size: 100%`; the box's height is definite. There is no block-axis container, because a
+cell whose height comes from its content would measure as zero.
+
+**The fill rule** (ruled 2026-09-29): a widget fills the width its zone grants. The WidgetHost wrapper
+is `display: contents`; the box is the zone's content width, the widget's root is 100% of the box, and
+its parts stretch — stat cards, the lore list, the scene's faces and the conversation's rows and
+composer alike. The only inset is the widget's own declared gutter (its root's padding). A widget
+never caps itself at a width the person cannot see or change: the conversation's reading measure is
+its **Line width** setting (3.4), off by default. A cap that stays scales with the cell, such as a
+scene portrait's `clamp(8rem, 45cqi, 20rem)` or content sized to itself (an image, a table, a form in
+a message); it is never a fixed rem width that a wide cell leaves standing in empty panel. Container
+queries key off the box (`@container sp-widget`), never an inner column.
+
+**A placed widget is flush.** The host draws no card around a widget in a zone: no surface, no
+border and no title bar, so the widget's style decides its surface. The card (`HOST_CARD_CLASS` in
+`sessionLayout/hostCard.ts`) comes back when the widget's **Card** setting (`hostCard`, a core
+setting every widget has, off by default) is on. It is always on while the widget is opened for a
+moment over the session: a flyout, a tucked panel, the phone's panel sheet. The widget is told which
+through `layout.v1.chrome.card`, and its box carries `data-sp-card="on"` or `"off"` for a stylesheet
+to key off. The card is classes on the same element, never a wrapper that comes and goes, because a
+new parent would remount the widget.
 
 ### 5.4 Layering
 
 | z-index | Layer                                                   |
 | ------- | ------------------------------------------------------- |
 | 10      | The shell: rail, sidebar, main                          |
-| 40      | The mobile More sheet                                   |
+| 20      | The view edge (drag handle), inside the shell           |
+| 29      | Stage only's left-edge strip that brings the rail back  |
+| 30      | Stage only's rail, shown over the stage (`lg:`)         |
+| 40      | The mobile Views sheet                                  |
 | 44      | The Jump pill                                           |
 | 45      | A view open as a mobile sheet                           |
 | 50      | Modal backdrops and dialogs, including the Jump overlay |
-| 100     | The update notice bar                                   |
 | 1000    | Popovers and menus                                      |
 
 The pill sits **under** every sidebar view and above the rest of the page (ruled 2026-09-17). It
-is not rendered at all while a view is full page on desktop, nor while a view is open as a sheet
+is not rendered at all while a view is in Focus on desktop, while the Views sheet is open, or in Stage only, nor while a view is open as a sheet
 below `lg`: the shell is its own stacking context, so nothing outside it can slide beneath a view
 that fills the window, and the z-index alone would leave the pill drawn over the sheet. Ctrl K
 opens the overlay in every state. A modal opened from a sheet must cover the sheet.
@@ -379,8 +510,20 @@ Browse the library, Import a card.
 `SidebarListItem` is the row shell; `active` applies the selected treatment. A row is a 40px
 avatar (rounded 9px), a 15px name, a 12px muted second line, and at most one chip at the right with
 a `+N` for the rest. A favourite is a small filled star after the name; a persona is a small `UserRound` after it. The
-row's own actions are in a `⋯` popover menu. The numeric id column is off (`showIndex={false}`) in
+row's own actions are in a `⋯` `RowMenu` (§6.6). The numeric id column is off (`showIndex={false}`) in
 views that show names.
+
+A **session row** in the Sessions view is the denser variant (2026-09-26): a 48px slot holding up
+to three 26px round cast avatars overlapping (ringed in the row's ground), a 14px medium name, the
+relative time at 12px **muted** on the right with a 6px primary dot before it when it is the
+reader's turn, and a 12px muted `Speaker: excerpt` line. The list groups under 12px muted
+sentence-case labels — _Your turn_, _Recent_, _Older_ — with no header row and no rule.
+
+A **detail view** opens with **`DetailHero`** (`components/panels/DetailHero.svelte`) under its
+`PanelNavHeader`: a 72px tile at radius 14 (the picture, else an initial, else an icon for things
+that never have one — a connection, a model, a tag), the name at 18px Display, a 13px muted line,
+an optional 12px meta line, then chips and actions. Characters, personas, sessions, users,
+connections, models and tags all use it; nobody draws their own header.
 
 A list that can be grouped (character folders) groups with a **folder header**: a 32px row with a
 `Folder`/`FolderOpen` glyph, a 13px medium name, a 12px muted count, and a `⋯` menu at the right,
@@ -411,23 +554,45 @@ AA. And the ground decides, not the role: the model table's column headers and i
 on `surface-200-800`, where muted measures 3.77:1, so those cells step up to `surface-700-300`.
 Measure a pairing when you add one (§2.5).
 
+**Quiet is for icons, not text** (2026-09-25). Text must reach 4.5:1 and quiet measures 3.45:1,
+so *any* quiet text a reader needs fails AA — a size band does not rescue it, because the large-text
+allowance starts at 18px (14px bold), far above anything set in quiet here. A non-text element only
+needs 3:1, so quiet is right for a decorative or supporting **icon** (a row's trailing chevron, a
+status glyph) and wrong for a word. A connections sweep moved 27 quiet text uses to muted and left
+the 7 icons alone; the tone once named `muted` in `QuantPicker` was quiet, and now matches its name.
+
 Only ONE of a connection's five states is red. `ready` is success, `idle` is quiet, `unfinished`
 is **primary** — the app is waiting on the person, and nothing has failed — `busy` is warning,
 and `broken` alone is error. A fresh install showed two red rows and two **Fix** buttons because
 two connections had no API key yet; incomplete is not broken and must not be coloured as though
 it were.
 
-A **model row** is the same shape: the model's display name (the identifier with the packager,
+A **model row** keeps a row's anatomy: the model's display name (the identifier with the packager,
 format, quantisation and parameter count lifted out), the gold default mark, and one quiet facts
 line — `12.2B · Q4_K_M · 7.5 GB · 32k context`. `Use` is outlined and inline; delete and the rest
-are in the `⋯` menu. Never a card with a `Size:`/`Modified:`/`Parameters:` table and a filled
+are in the `⋯` menu. Never a `Size:`/`Modified:`/`Parameters:` key-value table, and never a filled
 green button beside a filled red one: `preset-filled-*` is a button, not a badge (§2.4), and the
 one irreversible action does not belong on every row.
 
+**Amended 2026-09-25: a model sits in a CARD, not on a bare row.** This read "never a card with a
+… table and a filled green button", which was one sentence prohibiting two different things — the
+container and the anatomy — and only the anatomy was ever the problem. Every model list is now
+`.panel-card`, 12px apart, so a model you **have** and a model you could **download** read as one
+kind of thing. Use the utility's own padding rather than overriding it: two padding utilities on
+one element resolve by emit order. The selected treatment is the card's ring (§2.4), not
+the row's inset bar. ⚠ The density cost is real and was the original argument for rows: ~88px
+against 44px, so a 400px dock shows three or four models where it showed seven.
+
+A **downloadable model** is the same card with two more lines: the repo's own sentence,
+`line-clamp-2` so two lines of a sentence is a sentence, and its tags as tonal pills (at most four,
+then `+N more`). Tags are the human ones only — Hugging Face answers with `license:…`, `region:…`,
+`arxiv:…` and `base_model:…` mixed in, and four chips of machine metadata is four chips nobody
+reads. The licence rides the facts line instead.
+
 A card is `rounded-[12px] border border-surface-800` with `p-4`, on the ground one step lighter
 than what it sits on. That recipe is the `.panel-card` utility in `app.css`, paired for light mode;
-use it rather than spelling the four classes out again. Section cards carry a 12px quiet label or a
-14px medium heading, then content. Empty sections are not rendered; the card boundary is the
+use it rather than spelling the four classes out again. Section cards carry a 12px **muted** label or a
+14px medium heading, then content. (It said quiet until 2026-09-25 — see the quiet-is-for-icons rule above: a label is text a reader uses.) Empty sections are not rendered; the card boundary is the
 separator, so there is no rule between cards.
 
 ### 6.5 Tabs
@@ -440,7 +605,9 @@ Two strips, deliberately alike:
 - `PanelTabList` + `PanelTab`: icon-only tabs for panels with many sections in a narrow dock;
   becomes a labelled vertical rail at desk width when the panel passes `orientation="vertical"`.
 
-No segmented controls, no pill tabs.
+No segmented controls, no pill tabs, for moving between sections. A control that picks one
+value from a short fixed set is not a tab and may be segmented: the view header's width switch
+(Dock, Half, Focus) and Settings' story text size (ruled with the Full UI build, 2026-09-26).
 
 ### 6.6 Popovers, menus and dialogs
 
@@ -449,6 +616,17 @@ placement `bottom-end`, and they flip when the viewport says so. Menus are `role
 `role="menuitem"` rows and a `tabindex="-1"` container, arrow-key movement, Escape to close, and
 focus returned to the trigger. Dialogs are Skeleton `Dialog` in a `Portal` at `z-50`. Nothing in the
 app renders its own `fixed inset-0` backdrop.
+
+An action menu is **`RowMenu`** (`components/menus/RowMenu.svelte`, 2026-09-27), built on
+Skeleton's `Menu`, which owns the roles, the roving highlight, arrows/Home/End/typeahead, Escape
+and the focus return. Items are data — `{ label, icon, onSelect, destructive?, disabled?, href?,
+title? }` or `{ separator: true }`, falsy entries dropped — so every menu draws the same row: a
+bordered `bg-surface-50-950` panel at `p-1`, 36px rows at 13px with a 16px icon,
+`rounded-[8px] px-2.5`, hovering `surface-200-800`; the destructive row is `text-error-600-400`
+hovering `error-500/10` and sits after a separator. No title inside the panel: the trigger names
+it. The default trigger is the `⋯`; a caller may restyle it (`triggerClass`) or replace its content
+(`trigger`). `PanelNavHeader` takes the same items as `menuItems`. Do not hand-build a menu from
+a `Popover` and buttons.
 
 ### 6.7 Empty, loading and drop states
 
@@ -460,17 +638,20 @@ footer. Loading is a spinner in place, never a blank pane.
 ### 6.8 Jump
 
 The pill at the top right is the entry point; the overlay is the surface. The scope chip follows
-the open view or the route; Backspace on an empty box or the chip's × drops to Everywhere; a
-`kind:` prefix narrows. Results are grouped, the highlighted row uses the selected treatment, and
-a scoped search always ends with an Everywhere tail. Views feed Jump through registration, never by
-adding their own search UI.
+the open view or the route; Backspace on an empty box widens one step (view → route → Everywhere),
+the chip's × drops straight to Everywhere; a `kind:` prefix narrows. Enter opens the highlighted
+row in the sidebar, Shift Enter (or Shift click) opens it focused; a hit that is a page navigates
+either way. Results are grouped, the highlighted row uses the selected treatment, and a scoped
+search always ends with an Everywhere tail. A footer names the keys as `kbd` chips — ↑ ↓ move ·
+Enter open · Shift Enter open focused · Backspace widen — only at 480px of overlay width and up
+(`@min-[480px]/jump:`). Views feed Jump through registration, never by adding their own search UI.
 
 The pill is 34px tall in a 56px band, so it sits _in_ a header row rather than over one — but only
 where that row leaves it the room. It publishes its measured width as `--jump-pill-width`
 (the label names the scope, so it is 190px over Admin and 247px over Documentation), and any
 surface whose own controls reach the top-right corner reserves that width plus the pill's 1rem
 inset and one `gap-1.5`. Today that is one surface: the session header, whose **Layout** button
-ends before the pill. A sidebar view in **full page** reserves nothing, because the pill is not
+ends before the pill. A sidebar view in **Focus** reserves nothing, because the pill is not
 rendered while one is open (§5.4). While the session layout editor is open its toolbar owns the
 band and the pill is not rendered either. In both cases the Ctrl K overlay still opens.
 
@@ -478,10 +659,11 @@ band and the pill is not rendered either. In both cases the Ctrl K overlay still
 
 ### 6.9 Documentation pages
 
-The docs are compiled once (NOMENCLATURE §27) and read in three places: the `/docs` page, the
-**Help** sidebar view, and Document View. The first two share `src/lib/client/styles/docs.css`,
-scoped under `.docs-article`; Document View keeps its greyscale palette (§2.5) and renders the
-same markup unstyled.
+The docs are compiled once (NOMENCLATURE §27) and read in two places: the **Help** sidebar view
+and Document View. There is no docs page: `/docs` and `/docs/<slug>` are Help's Focus addresses
+(§5.4), and loading one opens Help in Focus at that page. Help styles the article with
+`src/lib/client/styles/docs.css`, scoped under `.docs-article`; Document View keeps its greyscale
+palette (§2.5) and renders the same markup unstyled.
 
 - **Prose** is Tailwind Typography (`prose dark:prose-invert`), with its literal backticks around
   inline code removed — code-heavy reference pages read as pills, not quoted strings.
@@ -502,14 +684,31 @@ same markup unstyled.
 - **Playground** (`.doc-playground`): the same card around two faces of one block — the highlighted
   `pre` and a sandboxed frame that runs it — with a right-aligned toolbar above them carrying one
   tonal `btn-sm`, **Run in playground** / **Show code**. Nothing loads until it is pressed, and a
-  block the compiler emitted without a source gets no toolbar at all. `/docs` and Help only:
+  block the compiler emitted without a source gets no toolbar at all. Help only:
   Document View keeps the static block (§2.5).
 - **Outline** ("On this page"): depth 2–3 headings, shown only when the docs container is ≥ 48rem.
   From 40rem the article drops `prose-sm` and prose's 65ch cap (`prose-base max-w-none`), a step
   before the outline: the column bounds the line, and a capped column beside a list pane reads as a
   slot, not a page.
-- **Search** is Jump (§6.8): a heading is a `doc` hit, the chip reads _Documentation_ while Help or
-  `/docs` is open, and `doc:` narrows. Neither Help nor `/docs` has a search box of its own.
+- **Search** is one query with two boxes onto it: the `PanelFilterInput` at the head of Help's
+  index, and Jump (§6.8), which Help registers with — the chip reads _Documentation_ while Help is
+  open, and `doc:` narrows from anywhere. Every word must match, in any order, in the heading, the
+  page title or the section's text (the index carries ≤1200 chars of it); the whole query in a
+  heading ranks first, and the SDK reference always ranks after the guides. Results replace the page
+  list from two characters, grouped **Using Serene Pub** then **Reference**, each row the heading (marked
+  words tinted, never recoloured), its page, and a two-line snippet around the match. ↓ from the box
+  enters the list, ↑ from the first row returns. Opening one lands on that heading and keeps the
+  query, so Back returns to the results.
+- **Index groups**: the page list follows the compiler's nav groups — the guides fill five
+  (**Start here** · **Guides** · **How-to** · **For power users** · **Reference and help**), then
+  each SDK source its own. Every group heading is the §3.3 14px section heading, never an eyebrow;
+  only groups not from the `app` source carry the tonal **Reference** badge.
+- **Reading on**: an article ends with Previous / Next in its own group's reading order, and Help
+  reopens on the page last read (per browser) unless an address, link or jump names another.
+- **Contextual help** is `DocPeek`: a 28px "?" beside a heading that opens a popover with the
+  section's heading and opening prose and a **Read the full guide** link. `AdminPageHeader` takes it
+  as `doc={docsHref(...)}`. App-only: the pages themselves keep plain `/docs/...` links, which the
+  website serves and the app opens in Help.
 
 ### 6.10 Host elements (sp elements)
 
@@ -526,6 +725,321 @@ Unstyled-but-correct is the accepted failure mode; broken is not. Core's own ski
 the §6.6 dialog, menu and tooltip recipes — is `src/lib/client/styles/hostElements.css`; a
 popover's panel is left bare because its body is the widget's own card.
 
+### 6.11 Admin pages
+
+Ruled 2026-09-27 (the admin overhaul), and the same day: **admin is purely a view**, never a
+page. The Admin view (`admin/AdminView.svelte`) holds the section list, grouped by the job
+(Overview · Models · People · Play · Pipelines · Writing · Extensions · Instance,
+`shell/adminNav.ts`), and the section on screen; at desk width the list (240px) sits beside the
+section, below it they take turns. Sections are components (`admin/sections/**`) routed by
+`adminRouter`, addressed under `/admin` only while the view is in Focus; `src/routes/admin/**` is
+an empty catch-all so a link or a reload opens the view at that section. The section pane sits
+on the view's 950 ground, so every admin card is `panel-card`. Every section opens with
+`AdminPageHeader`: a 24px Display title, one sentence saying what the section decides, and at
+most one filled primary among its actions. The group name is never repeated in the title.
+
+Every section is one of three shapes:
+
+| Shape            | Built from                                                       | Used by                                                                 |
+| ---------------- | ---------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| Overview cards   | cards that each answer one question and link to the fix          | Overview, Pipelines                                                     |
+| List and detail  | `AdminSplit` + `AdminList compact`; the `[id]` page is the detail | Users, Genres, Presets, Prompts, the three template kinds, Scripts       |
+| Changelist and change form | `AdminChangelist` page; `AdminChangeForm` pages at `/new` and `/:id` | Connections, Sampling                                         |
+| Settings form    | one column of `.panel-card` cards, 820px, one topic per card     | Defaults, General, Network, Data and backups, Diagnostics               |
+
+**Admin never nests another view** (owner ruling 2026-09-27: "they need their own django admin
+like management"). A section that manages objects a sidebar view also shows is a Django-style
+**changelist** and **change form** built from the shared pieces in `components/admin/`, reusing
+the view's field-level components (`ConnectionTypeForm`, `ConnectionStopScripts`,
+`SamplingValuesForm`, `SamplingEnabledForm`, …), never its shell or navigation stack. A
+schema-grouped editor gets **one fieldset per group** (Sampling: Core, Repetition, Budget, …;
+`groupHeadings={false}` so the group is not named twice). An **immutable** object (a built-in
+config) is readonly on its change form, offers **Duplicate** (`/new?from=<id>`) in the header, and
+has no Delete; a bulk delete names it as kept, and when nothing selected can go the confirmation
+offers only **Close**. A link out to the user's view opens it (`panelsCtx`), it does not
+navigate the page.
+
+**`AdminChangelist`** answers its own measured width, never the viewport: under 720px rows are
+**stacked** (the title as a 15px link, then the columns as a 12px muted facts line), from 720px a
+table, and from 960px the **filter rail** (240px `panel-card`, Django's `list_filter`) stands
+beside the table; narrower, filters are a 40px `ListFilter` button opening the §6.3 popout. Each
+facet is a `radiogroup` of "All" plus its values with counts (counted against the other facets);
+an active filter shows as a dismissible tonal chip under the toolbar with **Clear all**. Headers
+sort (`aria-sort`); stacked, a Sort select does. A 40px **action bar** carries select-all (in the
+header cell when tabled), "N of M selected", **Clear selection** and the **Actions** `RowMenu` of
+**bulk actions**; a destructive one asks first through `AdminDeleteConfirm`, which lists each
+object and, under it, what goes or changes with it. The "Add <thing>" filled primary ends the
+toolbar and is dropped while the list is empty, where `EmptyState` carries it. Rows load 50 at a
+time with **Show N more**. Search, filters and sort live in the section's query (`q`, the facet
+keys, `o=-key`), never local state.
+
+**`AdminChangeForm`**: a breadcrumb back to the changelist, `AdminPageHeader` (tonal actions and a
+**History** link to `/admin/history?type=<noun>&id=<id>`), an error summary (`role="alert"`, each
+field error a button that focuses its field), then **`AdminFieldset`**s — a `panel-card` with a
+14px `h2` and a muted sentence, or a `<details>` for **Advanced** — holding **`AdminField`** rows
+(label, control, 12px help under it, the error above the help; no control means a readonly value,
+never a disabled input). The **save row** is sticky at the foot of the pane on the 950 ground:
+**Delete** (quiet error text) at the start, the unsaved-changes dot, then **Save and add another**,
+**Save and continue editing** (Ctrl+S) and **Save**, the one filled primary. Under 36rem of pane
+the two long saves fold into a §6.1 split button beside Save. Dirty state is `UnsavedEdits` plus
+`adminUnsavedEdits`, so leaving asks first. What saves on its own (capabilities, stop scripts,
+models, a runtime's settings) never joins the draft.
+
+History (`/admin/history`) is a fourth, read-only shape: a **changelist** — a `.panel-card` of
+filters (search, then selects and dates, one column in the dock, two at `@lg/view`, three at 900px)
+over a full-width `AdminList`, and the selected record as a card between them. Its filters live in
+the address (`?type=&id=` is the link a change form's History button uses), never in local state.
+
+**Links name views, not pages.** Any plain `<a href="/admin/...">` or `/docs/...` anywhere in the
+app opens the Admin or Help view in place (`shell/viewLinks.ts`, caught by the shell), keeping the
+page underneath; a modified click still opens a tab. **Addresses can land on a field**: a
+`#target` (an element id, a `data-field`, or a `SettingSwitch` name) scrolls it into view and rings
+it once (`.sp-landed`, app.css); a heading's id rings its card. Needs you actions and Jump's
+**Admin settings** rows (`shell/adminSettings.ts`, one row per field, drift-tested) land this way.
+
+**Status is a dot plus words**, never colour alone: `error` for broken or needed-and-missing,
+`primary` for something to act on, `success` for healthy, `surface-500` for off. The Overview's
+**Needs you** list gathers the error and act-on-it items across sections, each with the button
+that fixes it; the Admin view shows the same count above its list, and each section row carries
+its own dot. A blocked action says why in one line beside it and links to the fix.
+
+### 6.12 Code fields (the template editor)
+
+A field that holds code (a context template, a variable layout) is `TemplateEditor`: a mono
+`textarea` with the editor's help drawn around it, never a second editing surface. **Lint is a
+wave under the text**, drawn by a transparent copy of the text laid over the field
+(`decoration-wavy`, `decoration-error-500` for an error, `decoration-warning-500` for a
+warning; never a filled highlight). The wave is decoration only: the **issue list** below the field is
+the accessible surface. Each row is an icon plus the word (_Error_ / _Warning_) and the line, in
+`text-error-600-400` or `text-warning-700-300`, never colour alone. A near-miss fix is a
+`preset-tonal-surface` button that says what it types (**Use "message"**), also on **Ctrl+.**. The
+completion list is a `role="listbox"` on `bg-surface-50-950` with a `border-surface-200-800` edge,
+with the selected option in `.sidebar-row-active`. **"Variables available here"** is a `role="tree"`
+with roving `tabindex` beside the field, in its own named container (`@container/tpl`, side by side from
+40rem, stacked below). Its rows carry the type and the supplier in `text-surface-600-400`.
+
+### 6.13 A message's folds
+
+What a reply carries beside its text folds **above** the body, collapsed on load, in one fixed
+order: a narrator's instructions, then its folded sections (a **Plan**, a stage's notes), then
+**Thinking**, then the reply. Each fold is a full-width `<button type="button" aria-expanded
+aria-controls>` holding a glyph, a sentence-case label and a chevron that turns when open; its
+panel stays mounted (the 0fr → 1fr track) and its contents leave the tab order while closed. A
+section that is a list renders as a list, one item per line, never as JSON. The style packs skin
+the message but never reach the folds: a pack decides how a reply looks, not whether its Plan is
+there.
+
+### 6.14 Unsaved changes
+
+A form that buffers edits behind a Save asks before they are lost — and **only** then. A false
+_Discard unsaved changes?_ teaches people to click through the real one, so the rule is strict in
+both directions (2026-09-27):
+
+- **Unsaved means different from what is saved, not "touched".** Dirty is derived, never set by
+  an effect or a typed-anything flag: `UnsavedEdits` (`client/forms/unsavedEdits.svelte.ts`) holds
+  a **saved snapshot** and compares the draft to it with `sameFormValue`
+  (`client/forms/sameFormValue.ts`). Key order never counts; `null`, `undefined`, `""` and `[]`
+  are one empty; `"5"` from an input equals `5`; arrays are ordered unless the form names the
+  path `unordered` (tags, ids picked from a list). Changing a value and changing it back is clean.
+- **The snapshot is the draft as the form built it** (`adoptSaved`, `markSaved()` after a load),
+  so a form that trims, splits or fills defaults on load is not dirty the moment it opens.
+- **Save resets it, and a push never lies.** Each push of the saved row moves the snapshot
+  (`adoptSaved`): a clean form follows the row; an edited form keeps the person's edits and stays
+  dirty only while they differ from what is now saved — so the echo of its own save is clean and
+  another tab's save never wipes what is being typed. Delete or Create-then-leave calls
+  `forget()` first.
+- **Write-only fields** (a token, a passphrase) have an empty snapshot, are cleared once sent,
+  and carry `autocomplete="off"` / `"new-password"` so a password manager's fill is never an edit.
+- **One question, one dialog.** In the Admin view a section registers
+  `adminUnsavedEdits(() => dirty)`; another section, Back, closing the view, and the section list
+  replacing the section below desk width all ask through `AdminUnsavedChangesModal` (**Keep
+  editing** · **Discard**) via `adminRouter.confirmDiscard()` — never `window.confirm`. Other views
+  answer their shell close gate with their own unsaved-changes modal. The tab asks on reload
+  (`warnBeforeUnload`) only while something is unsaved.
+
+### 6.15 The setup wizard
+
+The home route's first-run wizard (`src/routes/+page.svelte`, ruled 2026-09-27) is one decision per
+screen, in a card at most `max-w-2xl` wide.
+
+- **Progress** is one 4px bar per step still on the person's road — filled `primary-500` up to and
+  including the current step, `surface-300-700` after — with the step's sentence-case label under
+  it (`sm` and up; below that a single "Step 2 of 5 · Choose an LLM" line). Finished steps are
+  buttons back to themselves; the current one carries `aria-current="step"`. Steps that only one
+  answer leads to (Character, Who you are) appear once that answer is chosen, so the count never
+  promises screens the person will not see. No numbered circles.
+- **A choice is a whole-card button** (`CHOICE_CARD`: the dashboard's inset card — `surface-50-950`
+  ground, `surface-200-800` border, radius 14): a 40px tonal icon tile, a semibold title, a muted
+  one-line explanation in plain words, and the trade as tonal chips (_Private · Free · Costs per
+  message_). At most one option wears a `preset-tonal-primary` **Recommended** chip. A selected
+  card adds `ring-2 ring-primary-500` and a check (§2.4); it is never filled.
+- **The footer** holds **Back** (tonal) on the left and the screen's one primary on the right. A
+  step that waits on work elsewhere says so in a `role="status"` line and moves on by itself when
+  the fact it waits for lands — never a "Done" button the person has to remember to press.
+
+### 6.16 Widget parts
+
+🚧 _Stub, ruled 2026-09-27; the markup moves in phases (plans/DESIGN-default-widget-stylesheet
+§2.9)._ A session widget's markup carries **no look**: no spacing, type, colour, radius or
+`preset-*` classes. Its elements carry **widget parts**, stable names in one attribute, and a
+style draws them.
+
+- **Carrier:** `data-widget-part`, a whitespace-separated token list, selected with `~=`:
+  `[data-widget-part~="stats.card"]`. Never `id` (widgets repeat), never `data-part` (Skeleton's
+  Zag vocabulary: `trigger`, `list`, `item` sit in the same boxes), never a class (classes are
+  what a style grants).
+- **Grammar:** `<part owner>.<part name>`. The **part owner** is whoever draws the element: the
+  widget, by its widget id (`stats.card`, `world-state.place`, `scene-portraits.face`; a plugin
+  writes its whole plugin widget id, `acme:map.pin`, and the last `.` splits), or a **shared
+  control** core draws inside several widgets, by its own name (`stat-slot.bar`: the slot control
+  World State and Stats share). A shared control's parts are the same in every widget, so a style
+  draws them once and scopes them to one widget through ancestry:
+  `[data-widget-part~="stats.root"] [data-widget-part~="stat-slot.bar"]`. A shared control's name
+  is qualified (never bare `slot`, the pipeline word) and never a widget id. Or a bare **generic
+  part** from core's closed list (`card`, `card-head`, `list`, `row`, `label`, `value`, `meter`,
+  `chip`, `empty`, `toolbar`; fixed in P4) that any widget may use to look native. One element can
+  carry both, the owner's first: `stats.card card`. An element that is one of a kind and also
+  which one names both (`stat-slot.add stat-slot.field`). A
+  part name is kebab-case, singular, and says what the element is, never how it looks. State stays
+  in the widget's own `data-*` (`data-retired`, `data-empty`, `data-density`), never in a part
+  name.
+- **Who styles them, lowest first:** the theme's tokens → the **default widget stylesheet**
+  (`src/lib/client/styles/widgets.css`, `@layer sp-widgets`, page-loaded) → a style preset or a
+  person's style (unlayered, scoped to `[data-widget-instance]`, so it always wins). A plugin
+  brings its own stylesheet, and its own classes and Tailwind utilities still work on top. Deferring
+  to the parts is encouraged.
+- **Until the markup moves:** `@layer sp-widgets` is ordered **after** `utilities` (`app.css`), so
+  it beats the utilities still baked into core's markup the way the unlayered files it replaced
+  did. It drops below `components` once no core widget carries utilities (phase P3 exit).
+
+**Parts by widget.** This table is the one list of each widget's parts, and each shared
+control's (NOMENCLATURE §9 points here). A phase that strips a widget's markup adds its row. Until P4 the sheet has no rules for the
+generic tokens, so they name what an element is and draw nothing yet.
+
+| Widget  | Parts (widget-specific first, then generic)                                                                                                                                                                                  | State on the widget's own `data-*`                                                                    |
+| ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| Stats   | `stats.root` (the box) · `stats.alert` (a refusal or failed read) · `stats.empty empty` (the empty floor) · `stats.card card` · `stats.card-head card-head` · `stats.card-name` · `stats.card-note` (a member with nothing to show) · `stats.card-body list` | `data-density` (`full` · `compact`) on `stats.card-body`; rows are the slot control's (`stat-slot.*`, below) |
+| World State | `world-state.root` (the box) · `world-state.alert` (a refusal or failed read) · `world-state.empty empty` (the empty floor) · `world-state.place` (a location in play, a group rather than a card) · `world-state.place-head` (no generic `card-head`: a place is not a card) · `world-state.place-name` | `data-layout` (`strip` · `list`) on `world-state.root`; rows are the slot control's (`stat-slot.*`, below) |
+| Scene Portraits | `scene-portraits.root` (the box) · `scene-portraits.alert` (a refusal) · `scene-portraits.alert-text` · `scene-portraits.dismiss` (the alert's close) · `scene-portraits.empty empty` (the empty floor) · `scene-portraits.scene` (the faces' row) · `scene-portraits.face` · `scene-portraits.face-img` · `scene-portraits.face-name` · `scene-portraits.set-menu` (the `sp-popover` in a face's corner) · `scene-portraits.set` (the sprite-set pill) · `scene-portraits.set-name` · `scene-portraits.set-panel` (the popover's body) · `scene-portraits.set-title` · `scene-portraits.set-list` · `scene-portraits.set-option` · `scene-portraits.set-note` · `scene-portraits.pins` (the pinned source's two cells) · `scene-portraits.pin` · `scene-portraits.pin-img` · `scene-portraits.pin-clear` · `scene-portraits.pin-placeholder` (an unpinned side); the mini bars: `scene-portraits.bars list` · `scene-portraits.bar row` · `scene-portraits.bar-label label` · `scene-portraits.bar-track meter` · `scene-portraits.bar-fill` | `data-blank` on `scene-portraits.face-img` (a member with no picture); a bar's fill is the inline `--sp-fill` |
+| Lore entries | `lore-entries.root` (the box) · `lore-entries.note` (said instead of the list: the book is its owner's, or there is none) · `lore-entries.search-bar toolbar` · `lore-entries.search` (the field's label box) · `lore-entries.search-label` (screen reader only) · `lore-entries.search-icon` · `lore-entries.search-input` · `lore-entries.refresh` · `lore-entries.filter-bar toolbar` · `lore-entries.filters` (the radio group) · `lore-entries.filter chip` (a pill) · `lore-entries.filter-input` (its radio, unseen over it) · `lore-entries.sort` · `lore-entries.sort-field` (the `sp-combobox`) · `lore-entries.alert` (a refusal or failed read) · `lore-entries.entries list` · `lore-entries.entry row` · `lore-entries.entry-text` · `lore-entries.entry-title label` · `lore-entries.entry-keys` · `lore-entries.entry-read` · `lore-entries.marks` · `lore-entries.pin` · `lore-entries.off` · `lore-entries.empty empty` (the empty floor) · `lore-entries.pager` · `lore-entries.previous` · `lore-entries.page-count` · `lore-entries.next` | `data-off` on `lore-entries.entry` (turned off: its title struck through); a pressed mark is its button's `aria-pressed`, the chosen filter its radio's `:checked` (native state, no widget attribute) |
+| Slot control (shared: World State, Stats) | `stat-slot.root row` (one slot) · `stat-slot.label label` · `stat-slot.required` (the `*` a sheet asks for) · `stat-slot.control` (the value's cell); read: `stat-slot.bar` (a bounded number, a button) · `stat-slot.track meter` · `stat-slot.fill` · `stat-slot.bar-value value` · `stat-slot.chip chip` (a choice, or a switch) · `stat-slot.option` (a choice's menu item) · `stat-slot.line value` (text, a list, a story time); edited: `stat-slot.field` (every input, beside which one it is) · `stat-slot.editor` (an open list or story time) · `stat-slot.items list` · `stat-slot.item row` · `stat-slot.item-text label` · `stat-slot.item-less` · `stat-slot.item-more` (a held entry's − and +) · `stat-slot.item-up` · `stat-slot.item-down` · `stat-slot.item-remove` · `stat-slot.items-empty empty` · `stat-slot.add` · `stat-slot.invalid` (what was refused) · `stat-slot.done`; the lorebook picker: `stat-slot.pick-open` · `stat-slot.picker` · `stat-slot.pick-search` · `stat-slot.pick-status` · `stat-slot.pick-heading` · `stat-slot.pick-list list` · `stat-slot.pick-entry row` · `stat-slot.pick-title label` · `stat-slot.pick-held` · `stat-slot.pick-add toolbar` · `stat-slot.pick-count` · `stat-slot.pick-confirm` · `stat-slot.pick-close`; a story time: `stat-slot.year` · `stat-slot.month` · `stat-slot.day` · `stat-slot.clock` · `stat-slot.save` · `stat-slot.cancel` | On `stat-slot.root`: `data-density` (`full` · `compact`), `data-retired`, `data-slot-shape` (`derived` · `story-time` · …); `data-empty` on a chip, line or option with nothing to show; a switch that is on and a chosen picker row are `aria-pressed`, a refusal `role="alert"` |
+| Messages: the selection bar and who is due next (P3f) | the selection bar: `messages.selection-bar toolbar` (selecting lines for a summary; it stands where the composer was) · `messages.selection-count` · `messages.selection-bulk` (Select all, Select none) · `messages.select-all` · `messages.select-none` · `messages.selection-finish` (Cancel, or a summary) · `messages.selection-cancel` · `messages.summarize-scene` · `messages.summarize-world` · `messages.summarize-character` · `messages.selection-button` (every button on the bar, beside which one it is) · `messages.selection-button-label` (its label, gone in a box under 40rem); the read-only banner: `messages.read-only` · `messages.read-only-icon` · `messages.read-only-text` · `messages.read-only-title`; who is due next: `messages.next-up` (its place above the field) · `messages.next-up-waiting` (nobody at the head: waiting, with Pick) · `messages.next-up-head` (someone is due) · `messages.next-up-line` · `messages.next-up-narrator` (the narrator's book, in place of a face) · `messages.next-up-text` · `messages.next-up-controls` · `messages.next-up-pick` (Pick, and Someone else: both open the turn picker) · `messages.next-up-pick-label` · `messages.next-up-continue` · `messages.next-up-after` (who follows, with `nextUp: list`) | A summary button with nothing selected is its `disabled`; the banner is `role="status"`. Which shape who-is-due-next takes is the page's (the order's head, the `nextUp` setting), never a part |
+| Messages: the composer and a line's editor (P3g) | the compose block: `messages.compose` (on the reading column: the page's banners, who is due next and the composer's area) · `messages.compose-area` (the composer, or the selection bar or read-only banner standing in its place); the composer: `messages.composer` (its root) · a guest's offer `messages.join` · `messages.join-text` · `messages.join-icon` · `messages.join-title` · `messages.join-note` · `messages.join-button`; above the card: `messages.composer-disclosure` · `messages.composer-disclosure-bar` · `messages.composer-actions-toggle` · `messages.composer-actions-chevron` · `messages.composer-notice` (the retrieval notice's place) · `messages.composer-actions-row` · `messages.composer-chips` (a row of chips, beside which: `messages.composer-actions`, the genre's, or `messages.composer-turn-controls`) · `messages.composer-more-actions` (the overflow's trigger) · `messages.composer-new-dot` · `messages.composer-overflow-item` · `messages.composer-overflow-slash` · `messages.composer-overflow-note` · `messages.composer-new` (a newcomer's badge, in the overflow and the palette); the card: `messages.composer-card` · `messages.composer-meter` · `messages.composer-meter-fill` · `messages.composer-body` · `messages.composer-pane-head` · `messages.composer-pane-title` · `messages.composer-back` (Back to compose) · `messages.composer-preview` · `messages.composer-palette` · `messages.composer-palette-row` · `messages.composer-palette-button` · `messages.composer-palette-slash` · `messages.composer-palette-label` · `messages.composer-palette-note` · `messages.composer-field` (the `sp-composer-field`; the field itself is its `textarea`); the footer: `messages.composer-footer` · `messages.composer-channels` · `messages.composer-channel` · `messages.composer-persona` (a chip, or a switch) · `messages.composer-persona-name` · `messages.composer-persona-menu` · `messages.composer-persona-menu-title` · `messages.composer-persona-option` · `messages.composer-persona-option-name` · `messages.composer-footer-end` · `messages.composer-icon-button` (Preview and More, beside which: `messages.composer-preview-toggle` or `messages.composer-more`) · `messages.composer-panes` (More's panel) · `messages.composer-panes-title` · `messages.composer-panes-list` · `messages.composer-pane-option` · `messages.composer-send` · `messages.composer-stop`; under it: `messages.composer-warning` · `messages.composer-hint` · `messages.composer-key`; a line's editor (MessageComposer): `messages.edit-tabs` · `messages.edit-tab` · `messages.edit-tab-body` · `messages.edit-tab-label` · `messages.edit-more-tabs` · `messages.edit-more-tabs-button` · `messages.edit-more-tabs-body` · `messages.edit-more-tabs-label` · `messages.edit-more-tabs-icon` · `messages.edit-more-tabs-panel` · `messages.edit-more-tabs-title` · `messages.edit-more-tabs-list` · `messages.edit-more-tabs-option` · `messages.edit-row` · `messages.edit-left` · `messages.edit-panels` · `messages.edit-right` · `messages.edit-field` · `messages.edit-preview` · `messages.edit-preview-body` | `data-composer-skin` (`classic` · `minimal` · `writer`, the widget's `composer` setting) on `messages.composer` and the widget's root; the composer is `hidden` while a line is edited; a highlighted palette row is its option's `aria-selected`, a refused one `aria-disabled`; Actions open is `aria-expanded`; Preview pressed and the chosen channel are `aria-pressed`; the persona written as is `aria-current`; More while a pane holds the field is `data-active`, that pane's row `data-current`; Send while someone is due next is `data-someone-due`; the meter's fill past 90% is `data-high`; an editor tab that folds into More in a narrow box is `data-collapsible`, More's trigger while a folded tab is chosen `data-active`, and its row `data-current` |
+| Messages: the message and the log (P3h) | the box and the log: `messages.root` (the widget's box: its palette, `--sp-measure`, the settings as `data-*`) · a copy pinned to one channel names it (S1, the Lair's Sanctum panel): `messages.channel-head` (one row across the box's top, first whichever end the composer is at) · `messages.channel-icon` · `messages.channel-title` (the channel's declared label) · `messages.log` · `messages.log-body` · `messages.log-scroll` (the `sp-scroll`) · `messages.stage` (the log's rows: as wide as the compose block — the box, or the measure under Line width: Comfortable) · `messages.stage-body` · `messages.message-list list` · `messages.log-item` (a marker's place in the list) · `messages.history-marker` (a history entry's date; beside which `messages.history-start`, Start a new entry) · `messages.scene-title` · `messages.scene-title-state`; said instead of lines: `messages.log-floor` (beside which `messages.log-note`, not granted · `messages.log-loading` · `messages.log-empty empty`) · `messages.log-floor-icon` · `messages.log-loading-icon` · `messages.log-floor-text` · `messages.older-loading` · `messages.older-loading-body` · `messages.older-loading-icon`; a line: `messages.message-row` (its `li`) · `messages.message` (the four-cell grid) · `messages.message-avatar` · `messages.message-avatar-button` · `messages.message-avatar-img` · `messages.message-avatar-glyph` · `messages.message-identity` · `messages.message-name` · `messages.message-badges` · `messages.message-badge` (beside which `messages.message-badge-scene`) · `messages.message-badge-label` (screen reader only) · `messages.message-badge-text` · `messages.message-vectors` · `messages.message-status` · `messages.message-ember` · `messages.message-controls` · `messages.message-time` · `messages.message-swipes` · `messages.message-swipe-previous` · `messages.message-swipe-count` · `messages.message-swipe-next` · `messages.message-actions` (the quick icons, the message venue's primary set) · `messages.message-action` · `messages.message-icon-button` (every icon control on the row, beside which one it is) · `messages.message-menu` (the ⋮ menu's place, where the selection controls stand while selecting) · `messages.message-selection` · `messages.message-selection-button` (beside which `messages.message-select` · `messages.message-select-above` · `messages.message-select-below` · `messages.message-in-scene`) · `messages.message-selection-label` · `messages.message-stop` · `messages.message-cancel` · `messages.message-save` · `messages.message-content` · `messages.message-disclosures` · `messages.message-disclosure` · `messages.message-disclosure-toggle` · `messages.message-disclosure-track` · `messages.message-disclosure-clip` · `messages.message-disclosure-panel` · `messages.fold-list` (a folded section's items) · `messages.message-sizer` · `messages.message-body` · `messages.message-text` · `messages.message-parts` · `messages.message-failure` · `messages.message-partial` · `messages.message-error` · `messages.message-error-line` · `messages.message-error-icon` · `messages.message-error-detail` · `messages.message-retry` · `messages.prose` (every rendered prose: a body, a disclosure's panel, a part's markdown, a block's; set in the two tones); a line being edited: `messages.edit-surface` · `messages.edit-hint` · `messages.edit-key` · `messages.edit-hint-separator` · `messages.edit-unsaved`; the ⋮ menu: `messages.message-options` · `messages.message-options-button` · `messages.message-options-panel` · `messages.message-options-title` · `messages.message-options-list` · `messages.message-option` · `messages.message-option-note` (screen reader only) · `messages.message-option-new` · `messages.message-options-divider`; a reply's typed parts: `messages.part-disclosure` · `messages.part-disclosure-toggle` · `messages.part-disclosure-chevron` · `messages.part-disclosure-track` · `messages.part-disclosure-clip` · `messages.part-disclosure-panel` · `messages.part-step-divider` · `messages.part-markdown` · `messages.part-image` · `messages.part-image-img` · `messages.part-file`; a block tree: `messages.blocks` · `messages.block-markdown` · `messages.block-kv` · `messages.block-kv-label` · `messages.block-table-scroll` · `messages.block-table` · `messages.block-stat` · `messages.block-stat-head` · `messages.block-stat-label` · `messages.block-stat-value` · `messages.block-stat-track meter` · `messages.block-stat-fill` · `messages.block-image` · `messages.block-superseded` · `messages.block-choices` · `messages.block-caption` · `messages.block-answered` · `messages.block-answered-label` · `messages.block-awaiting` · `messages.block-choice-list` · `messages.block-choice` · `messages.block-form` · `messages.block-field` · `messages.block-field-label` · `messages.block-checkbox` · `messages.block-select` · `messages.block-input` · `messages.block-submit` · `messages.block-group`; the state ledger: `messages.ledger` · `messages.ledger-line` · `messages.ledger-owner` · `messages.ledger-separator` · `messages.ledger-change` · `messages.ledger-review` · `messages.ledger-review-panel` · `messages.ledger-review-title` · `messages.ledger-review-note` · `messages.proposal` · `messages.proposal-text` · `messages.proposal-anchor` · `messages.proposal-note` · `messages.proposal-decide` (beside which `messages.proposal-accept` or `messages.proposal-reject`) | On `messages.root`: `data-channel` (the channel a copy is pinned to; absent on the primary log) · `data-order` · `data-composer-position` · `data-composer-skin` · `data-line-width` (`full` · `comfortable`) · `data-show-messages` · `data-show-avatars` · `data-show-timestamps` · `data-show-scene-markers` · `data-backdrop`. On `messages.message`: `data-msg-role` · `data-msg-author` · `data-msg-state` (`normal` · `selected` · `dim` · `editing`) · `data-msg-generating` · `data-msg-hidden` · `data-msg-greeting` · `data-msg-newest`; the row is `hidden` (the attribute) off the current channel and carries `--sp-scene` in a scene, `data-arrive` as it lands; `data-settled` on the sizer; `data-streaming` on `messages.message-text` while text arrives; `data-vectors` (`current` · `stale`); a toggle's `aria-expanded` (the part chevron turns) and its track's `data-expanded`; a line chosen for a summary is its Select button's `aria-pressed`; in the ⋮ menu a core verb's row says which (`data-verb`: Delete and Stop take the error's tone), Hide while hidden is `aria-pressed`, a row the line refuses `aria-disabled`; a block tree's `data-depth`, a group's `data-layout` (`row` · `column`), a choice or form's `data-answered`, a superseded form's or proposal's `data-superseded` |
+
+Stats carries no class at all (P3a, 2026-09-28): even `truncate` on the member's name moved into
+the sheet, because cutting a name rather than wrapping it is a look a skin may change.
+World State followed (P3b, 2026-09-28): its strip-or-list layout is `data-layout` on the root,
+not a class, and the place's `truncate font-semibold` name moved the same way.
+Scene Portraits followed (P3c, 2026-09-28), Skeleton classes included: the sheet writes what
+`btn-icon`, `card`, `btn btn-sm`, `preset-tonal-surface` and the app's `popover-menu-*` compiled to,
+with their hover, focus-visible, active and disabled rules and the pill's coarse-pointer 44px
+target. A popover's body is portalled to `<body>`, and part selectors still reach it, so it takes
+parts like any element. A face with no picture is the same part in a `data-blank` state; an
+unpinned side is a different element, so it is its own part (`pin-placeholder`).
+Lore entries followed (P3d, 2026-09-28): Skeleton's `input`, `btn-icon btn-icon-sm`, `btn btn-sm` and the
+tonal presets written into the sheet with their states, and the `pointer-coarse:` 44px targets as
+`@media (pointer: coarse)`. Where a state is already native or ARIA, the sheet reads it rather than
+the widget restating it: a chosen filter is `:has(> …:checked)`, a pressed mark `[aria-pressed="true"]`.
+Only a state with no native carrier gets a `data-*` (`data-off`).
+The slot control followed (P3e, 2026-09-28), as the first **shared control**: its parts are its own
+(`stat-slot.*`), whichever widget draws it, so one rule draws a slot in World State and in Stats
+alike and a style scopes it to one widget through ancestry. Every input is `stat-slot.field` plus
+which field it is (`stat-slot.add stat-slot.field`), so a style reaches all of them or one.
+Skeleton's `input` is written into the sheet as it compiles, focus ring included, and the coarse
+44px targets stay `@media (pointer: coarse)`. A value with nothing to show (unset, or a list with
+nothing in it) is `data-empty`, a state rather than a part.
+The conversation's selection bar, its read-only banner and its who-is-due-next line followed (P3f,
+2026-09-28), all `messages.*` (the part owner is the widget, whichever of its components draws the
+element). Skeleton's `btn btn-sm`, the five `preset-filled-*` tones and the two `preset-tonal-*` banners
+are written into the sheet as they compile, and so are the app's `.composer-send` (Continue) and
+`.composer-quiet-btn` (Pick, Someone else), which left `app.css` with the composer (P3g). The part is `next-up`, after the widget's `nextUp` setting, never the retired `showNudge`'s
+_nudge_. **Viewport variants:** the `sm:` pair (the bar's labels shown from 40rem, Someone else's said
+to a screen reader only below it) now answers the widget's box, `@container sp-widget`, as §5.3 asks;
+the `lg:` pair (the bar's rounded top from 64rem, Continue's 44px below it) moved with the
+composer's own in P3g (below). At the gate's 1440 the box is 1112px, and at 820 and 390 it is the
+viewport's width, so neither side moved where it is measured; the container rule differs only where
+a box is narrower than its window.
+The composer followed (P3g, 2026-09-28): SessionComposer, MessageComposer (a line's editor) and the
+compose block's wrappers carry no class. The compose block is `messages.compose` (the old
+`sp-compose sp-column`: it shares the reading column's rule with the log's rows, which keep
+`.sp-column` until P3h) and the composer's area `messages.compose-area` (the old `sp-field`). app.css's
+unlayered `.composer-*` rules, their `[data-composer-skin]` variants included, now live in the sheet
+keyed on parts; `.composer-send`, `.composer-quiet-btn` and `.sp-action-new-dot` are gone (nothing
+wears them). The field is its host's: `sp-composer-field` draws a `textarea` that wears Skeleton's
+`textarea` unless a widget passes `field-class`, and a part carries no class, so the field's rules put
+back what that default adds (a block box, its colour, the ring, the transparent outline, the
+placeholder's colour). State reads what is native: a palette row's `aria-selected` /
+`aria-disabled`, Preview's and a channel's `aria-pressed`, the persona's `aria-current`, the
+composer's `hidden` while a line is edited; only what has no native carrier is `data-*`
+(`data-someone-due` on Send, `data-active` on More, `data-current` on a pane's row, `data-high` on the
+meter's fill, `data-collapsible` on an editor tab). **Viewport variants:** every `lg:` / `max-lg:` rule
+of the composer, the editor, the selection bar and Continue is `@container sp-widget` at 64rem (the
+join heading's `h3` step at 48rem), so the composer and the bar change together: from 64rem the
+composer has 1rem under it and the bar a rounded top; below it Send, Stop, Continue, Preview, More,
+the persona and a channel are 44px. The box is 1112px at the gate's 1440 and the viewport's width at
+820 and 390, so nothing moved where measured. **Behaviour change:** where the conversation's box is
+narrower than 64rem while the window is wider (a side zone, a split middle, the middle beside docked
+sides, e.g. a 1280px window with both sides docked), the composer now takes its narrow form (the
+44px controls, 0.5rem under it, the bar's square top); where a window is narrower than 64rem nothing
+changed.
+The message and the log followed (P3h, 2026-09-28): MessagesWidget's root and log, SessionContainer,
+SessionMessage, MessageControls (the ⋮ menu), MessagePartsView, MessageBlocksView and the state ledger
+carry no class; the markup is `messages.*` parts only (`messages.message-*` for a line, never an
+abbreviation). The reading column the log's rows sit on is `messages.stage` (the stage, NOMENCLATURE §23); every
+rendered body is `messages.prose` as well as its own part, so one rule sets the prose's two tones
+(`--sp-body` / `--sp-quote`, read at the end of messageLayouts.css). The packs select the same parts
+(`[data-widget-part~="messages.message"]`, …). app.css's `.msg-ctrl-*` (the selection controls' box,
+with `:root --msg-ctrl-size`), `.popover-menu-btn` / `-title` and `.sp-action-new` moved into the sheet
+and were deleted (no users left); the selection controls' viewport step is `@container sp-widget` at
+64rem, with the composer's. State stays native where it can (`aria-pressed`, `aria-disabled`,
+`aria-expanded`, the row's `hidden`); what has no carrier is `data-*` (`data-verb` on a core verb's
+menu row, `data-vectors`, `data-streaming`, `data-depth`, a block group's `data-layout`).
+This phase was not held to zero pixels (owner, 2026-09-28): the look was checked by eye across the
+five packs at 1440 and 390, dark and light. Compact now drops the text under its name row in a box
+under 36rem (it had squeezed it to a sliver). **Dreamlit Cameo** was redrawn after Moonlit Echoes'
+*Echo* style: a glass card per line, the speaker's portrait large and unframed in the card's leading
+edge (the persona's trailing), fading toward the text and at the bottom, the text clear of its leading
+part; under 36rem the portrait sits behind the text, faint. The pack no longer makes every child of its
+scope an inline-size container (`:root > *`), which had reached the portalled ⋮ menu and given it a 0px
+box.
+
+**Widget tokens.** The default sheet draws its shared looks from `--sp-w-*` custom properties,
+declared once on `:root` inside `@layer sp-widgets` (so they resolve in a WidgetHost box, in a
+popover portalled to `<body>`, and in a mount with no host). Set one in a style's `vars` (it
+lands on the widget's box and inherits down) or in a theme, and every widget that draws that
+role follows, with no selector written. A token names the role it governs, never its value; a
+new shared look gets a token only when it recurs or is a role a skin would retune. The defaults
+are today's look exactly (P2 changed no pixel), including off-grid sizes a later look phase may
+move onto §3.2 and §4.
+
+| Token                                                   | Default                     | Governs                                                                                                    |
+| ------------------------------------------------------- | --------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `--sp-w-card-bg`                                        | `currentColor` 6% wash      | A card's ground (a Stats card) and an inset panel inside one (the items picker)                            |
+| `--sp-w-card-radius`                                    | 0.5rem                      | A card's corners, and a portrait framed like one (Scene Portraits)                                         |
+| `--sp-w-card-pad` · `--sp-w-card-gap`                   | 0.45rem 0.55rem · 0.3rem    | A card's padding; the gap between its head and body                                                        |
+| `--sp-w-chip-bg` · `--sp-w-chip-on-bg`                  | 12% · 30% wash              | A chip or pill (a slot's value chip, the ledger's Review pill); a chip that is chosen                      |
+| `--sp-w-chip-radius` · `--sp-w-chip-pad`                | 999px · 0.05rem 0.4rem      | A chip's pill shape (also the proposal's decide pill and the sprite-set pill); its padding                 |
+| `--sp-w-control-bg`                                     | 12% wash                    | A small text button inside a widget (Done, Save, Cancel; the picker's open, confirm and close)             |
+| `--sp-w-control-radius` · `--sp-w-control-pad`          | 0.3rem · 0.05rem 0.45rem    | Those buttons' corners (also a text-value slot and a picker row) and padding                               |
+| `--sp-w-icon-button-radius` · `--sp-w-icon-button-pad`  | 0.25rem · 0.1rem            | A quiet square icon button (move, remove, − and + beside a held entry)                                     |
+| `--sp-w-hover-bg`                                       | 12% wash                    | Those icon buttons' hover                                                                                  |
+| `--sp-w-meter-track-bg` · `--sp-w-meter-fill-bg`        | 16% · 62% wash              | A meter's track (a slot's bar) and its fill (the slot's bar and the portraits' mini bars)                   |
+| `--sp-w-meter-radius` · `--sp-w-meter-height`           | 999px · 0.55rem             | Every meter's track and fill corners; a slot bar's track height                                            |
+| `--sp-w-empty-pad` · `--sp-w-empty-gap`                 | 0.75rem · 0.5rem            | A widget's empty floor (Stats, Scene Portraits): its padding and the gap between its lines                 |
+| `--sp-w-font-head`                                      | 0.76rem                     | A card's head line (a cast member's name on a Stats card)                                                  |
+| `--sp-w-font-row` · `--sp-w-font-row-compact`           | 0.74rem · 0.68rem           | A slot row's text; the same in a compact card                                                              |
+| `--sp-w-font-empty`                                     | 0.72rem                     | An empty floor's text                                                                                      |
+| `--sp-w-font-note`                                      | 0.7rem                      | A note under or beside a control: a refusal, the picker's heading, a held count                            |
+| `--sp-w-font-meta`                                      | 0.68rem                     | The meta lines under a message: the state ledger and its proposals                                         |
+| `--sp-w-muted-opacity`                                  | 0.7                         | Muted text drawn by opacity over the widget's ink: a slot's label, an empty floor, a mini bar's label      |
+
+Not tokens: values already on a theme role (`--color-error-700`, the chosen row's
+`--color-primary-500`, the conversation's glass `--sp-glass-*`, `--sp-measure`), the per-element
+data values (`--sp-fill`, `--sp-scene`), and one-off shapes that belong to a single part (World
+State's gaps, the slot grid's columns, the portraits' mini-bar track) — those move with their part
+in P3 and get a token only if a second widget needs the role.
+
 ## 7. Iconography
 
 Icons are lucide, stroke 1.6, on the 24px grid: 20px on the rail, 18px in menus and rows, 16px
@@ -538,7 +1052,10 @@ dingbat, never two icons for one idea.
 ## 8. Motion
 
 Motion answers an action and shows what changed. The rail width transitions over 150ms. A popover
-appears in place. A view being hidden is `hidden`, instantly, because it is a tab, not a page.
+appears in place. Opening a view slides it 16px out of the rail and fades it in over 160ms (on a
+phone the sheet rises 24px); switching between open views is instant, because a tab is not a
+page; a released drag of the view's edge snaps without animation. The **Animate views** setting
+(Settings → Themes, per browser) turns the open motion off.
 There are no entrance animations on load, no hover transitions on every card, and no motion that
 repeats on its own except the ember pulse that means the model is working and an atmosphere
 (§8.1). Respect `prefers-reduced-motion` on anything longer than 150ms.
@@ -615,7 +1132,7 @@ user-supplied image stays a **background**. The words are kept apart in NOMENCLA
 - [ ] Sizes come from the type scale and the size table.
 - [ ] Sections are cards; there are no rules between them.
 - [ ] Responsive rules query the `view` container, never the viewport, and never `@sm/view` for columns.
-- [ ] No horizontal scroll at 399px or at full page.
+- [ ] No horizontal scroll at 399px, at Half or in Focus.
 - [ ] Dialogs and popovers are portaled.
 - [ ] Every control has a name, a focus ring and a 44px target on touch.
 - [ ] Copy is sentence case and says what happens.

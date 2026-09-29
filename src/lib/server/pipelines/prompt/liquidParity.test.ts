@@ -115,7 +115,7 @@ const FORMATS = [
 	"llama2_inst",
 	"claude",
 	"instruct",
-	"split_session"
+	"split_chat"
 ] as const
 
 /** Render the same context through both engines and hand back both strings. */
@@ -362,7 +362,17 @@ describe("the shipped variable layouts render identically in both engines", () =
 		// Month zero: present, and falsy. `isSet` exists for exactly this.
 		["currentDate/content", { currentDate: { year: 412, month: 0 } }],
 		["currentDate/content", { currentDate: { year: 412 } }],
-		["currentDate/wrapped", { currentDate: { year: 412, month: 12 } }]
+		["currentDate/wrapped", { currentDate: { year: 412, month: 12 } }],
+		// A stored clock's time of day, and a declared calendar's spelling
+		// (DESIGN-story-time P5), which wins over the parts.
+		[
+			"currentDate/content",
+			{ currentDate: { year: 412, month: 3, day: 4, hour: 9, minute: 5 } }
+		],
+		[
+			"currentDate/content",
+			{ currentDate: { year: 412, month: 3, day: 4, label: "4 Thaw, Year 412" } }
+		]
 	]
 
 	for (const [id, variables] of cases)

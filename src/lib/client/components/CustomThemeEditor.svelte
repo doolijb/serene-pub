@@ -50,7 +50,6 @@
 	// Editor state
 	let editorContainer: HTMLElement
 	let editorView: EditorView | null = null
-	let isFullscreen = $state(false)
 	let isSaving = $state(false)
 	let isDeleting = $state(false)
 	let isLoadingCss = $state(false)
@@ -282,9 +281,7 @@
 </script>
 
 <div
-	class="flex flex-col overflow-hidden rounded-xl border transition-all {isFullscreen
-		? 'fixed inset-0 z-[9999] rounded-none'
-		: 'h-full'}"
+	class="flex h-full flex-col overflow-hidden rounded-xl border"
 	style="border-color: #2a2a3a; background: #13131f;"
 >
 	<!-- Editor toolbar -->
@@ -299,10 +296,10 @@
 				style="background: linear-gradient(135deg, #7c6af7, #a855f7);"
 			></span>
 			<span
-				class="text-xs font-semibold tracking-wider uppercase"
+				class="text-xs"
 				style="color: #8b8ba7;"
 			>
-				Custom Theme
+				Custom theme
 			</span>
 		</div>
 		<div class="flex items-center gap-1">
@@ -321,19 +318,6 @@
 					onchange={handleFileImport}
 				/>
 			</label>
-			<!-- Fullscreen toggle -->
-			<button
-				class="btn btn-sm text-xs"
-				style="color: #8b8ba7; background: transparent;"
-				onclick={() => (isFullscreen = !isFullscreen)}
-				title={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
-			>
-				{#if isFullscreen}
-					<Icons.Minimize2 size={13} />
-				{:else}
-					<Icons.Maximize2 size={13} />
-				{/if}
-			</button>
 		</div>
 	</div>
 
@@ -424,8 +408,7 @@
 			{#if theme?.id}
 				{#if confirmDelete}
 					<button
-						class="btn btn-sm text-xs"
-						style="background: #7f1d1d; color: #fca5a5; border: 1px solid #991b1b;"
+						class="btn btn-sm preset-filled-error-500 text-xs"
 						onclick={deleteTheme}
 						disabled={isDeleting}
 					>
@@ -447,6 +430,8 @@
 						class="btn btn-sm text-xs"
 						style="color: #4a4a6a; background: transparent;"
 						onclick={() => (confirmDelete = true)}
+						aria-label="Delete theme"
+						title="Delete theme"
 					>
 						<Icons.Trash2 size={11} />
 					</button>
@@ -464,8 +449,7 @@
 			{/if}
 
 			<button
-				class="btn btn-sm text-xs font-semibold"
-				style="background: linear-gradient(135deg, #7c6af7, #a855f7); color: white; padding: 0.25rem 0.875rem;"
+				class="btn btn-sm preset-filled-primary-500 text-xs font-semibold"
 				onclick={save}
 				disabled={isSaving}
 			>

@@ -129,7 +129,7 @@
 						<span class="sr-only">Loading sprites</span>
 					</div>
 				{:else if sets.length === 0}
-					<p class="text-surface-500 text-sm">
+					<p class="text-surface-600-400 text-sm">
 						No sprites yet. Add some in the character's Sprites tab.
 					</p>
 				{:else}

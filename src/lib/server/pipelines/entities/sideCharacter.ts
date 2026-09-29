@@ -31,6 +31,16 @@
 
 import { and, eq, isNull } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
+import { sessionReadingOf } from "$lib/server/state/reading"
+import {
+	MAIN_HEAD,
+	castMemberAt,
+	castOverlaysFor,
+	entryAt,
+	entryOnReadingSql,
+	entryOverlaysFor,
+	type EntryReading
+} from "$lib/server/state/entriesOnReading"
 
 /** The card fields a side character's prompt entry is compiled from. */
 export interface SideCharacterCard {
@@ -81,15 +91,25 @@ const norm = (v: unknown): string =>
  */
 async function lorebookNames(
 	db: Db,
-	lorebookId: number
+	lorebookId: number,
+	/**
+	 * Where the session reads the book: a name only another line's story
+	 * gave somebody — a sibling fork's entry, a cast rename dated after the
+	 * session's clock — is not a name this story has heard.
+	 */
+	reading: EntryReading = MAIN_HEAD
 ): Promise<{ names: Set<string>; characterIds: Set<number> }> {
 	const names = new Set<string>()
 	const characterIds = new Set<number>()
 
-	const bindings = (await db
+	const castOverlays = await castOverlaysFor(db, lorebookId, reading)
+	const bindings = ((await db
 		.select()
 		.from(schema.lorebookBindings)
-		.where(eq(schema.lorebookBindings.lorebookId, lorebookId))) as any[]
+		.where(eq(schema.lorebookBindings.lorebookId, lorebookId))) as any[]).map(
+		// The card stays the member's own: it is who is seated.
+		(b) => castMemberAt(b, castOverlays, reading, { keepCard: true })
+	)
 	for (const b of bindings) {
 		if (typeof b.characterId === "number") characterIds.add(b.characterId)
 		for (const n of [
@@ -102,12 +122,29 @@ async function lorebookNames(
 		}
 	}
 
-	const entries = (await db
-		.select({ title: schema.lorebookEntries.title })
+	const stored = await db
+		.select({
+			id: schema.lorebookEntries.id,
+			title: schema.lorebookEntries.title,
+			archived: schema.lorebookEntries.archived
+		})
 		.from(schema.lorebookEntries)
-		.where(eq(schema.lorebookEntries.lorebookId, lorebookId))) as any[]
-	for (const e of entries) {
-		const k = norm(e.title)
+		.where(
+			and(
+				eq(schema.lorebookEntries.lorebookId, lorebookId),
+				entryOnReadingSql(reading)
+			)
+		)
+	const entryOverlays = await entryOverlaysFor(db, lorebookId, reading)
+	for (const row of stored) {
+		const e = entryAt(
+			{ id: row.id, name: row.title, archived: row.archived },
+			entryOverlays,
+			reading
+		)
+		// A shelved entry is not a name the world still answers to.
+		if (e.archived === true) continue
+		const k = norm(e.name)
 		if (k) names.add(k)
 	}
 
@@ -120,7 +157,7 @@ async function lorebookNames(
  * @param userId the person who pressed the button. A character id is checked
  * against their own characters — a forged id reaching a prompt as somebody
  * else's card would make the picker decoration, which is the same reasoning
- * `sessions:triggerFunction` applies to a menu trigger's subject.
+ * `sessions:fireAction` applies to a menu trigger's subject.
  */
 export async function resolveSideCharacter(
 	db: Db,
@@ -209,7 +246,11 @@ export async function resolveSideCharacter(
 			speaker: { name, characterId: pickedId, known: true, character: card }
 		}
 
-	const { names, characterIds } = await lorebookNames(db, session.lorebookId)
+	const { names, characterIds } = await lorebookNames(
+		db,
+		session.lorebookId,
+		(await sessionReadingOf(db, sessionId)) ?? MAIN_HEAD
+	)
 	const known =
 		(pickedId != null && characterIds.has(pickedId)) || names.has(norm(name))
 

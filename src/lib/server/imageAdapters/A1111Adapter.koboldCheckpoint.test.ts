@@ -3,7 +3,7 @@
  *
  * `sd_model_checkpoint` names a file A1111/Forge/SD.Next will switch to. KoboldCPP
  * has no such list — it holds exactly one image model, decided before the request
- * by the .kcpps its Manager wrote or by the `--sdmodel` it was started with — so
+ * by the .kcpps Serene Pub wrote or by the `--sdmodel` it was started with — so
  * the field is a per-request answer to a question nobody can ask it.
  *
  * All three KoboldCPP type ids, for two different reasons. On KOBOLDCPP and
@@ -11,7 +11,7 @@
  * asking KoboldCPP to draw with "MN-12B-Lyra-v4-Q4_K_M.gguf" as its checkpoint.
  * On KOBOLDCPP_MANAGED_IMAGE it genuinely IS the image model, and sending it
  * would still be wrong — it would claim the backend can switch to it mid-request,
- * when what actually loads it is a full model swap through the Manager. The
+ * when what actually loads it is a full model swap through the managed KoboldCPP. The
  * second case is the one worth a test: it is the one where the value looks right.
  *
  * Silent today: this build ignores an override it doesn't recognise, so the image
@@ -76,7 +76,7 @@ describe("A1111Adapter — the checkpoint override against KoboldCPP", () => {
 		// The case the two above cannot catch. Here `connection.model` names a
 		// real image model, so the value would look entirely plausible on the
 		// wire — and it is still a lie: KoboldCPP cannot switch to it per
-		// request, and it is already the model the Manager loaded before this
+		// request, and it is already the model the managed KoboldCPP loaded before this
 		// render was allowed to start. A suppression keyed on "the model field
 		// holds the wrong kind of file" rather than on "this backend has no
 		// checkpoint list" would have let this one through.

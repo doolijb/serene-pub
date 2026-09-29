@@ -14,12 +14,18 @@ import {
 import { ensureManagedReady } from "$lib/server/koboldcpp/managedPreflight"
 import { normalizeBaseUrl } from "$lib/shared/utils/normalizeBaseUrl"
 import * as fsPromises from "fs/promises"
-import { modelsDirFor } from "$lib/server/koboldcpp/modelsDir"
-import { extensionAllowedForKind } from "$lib/server/koboldcpp/modelKind"
+import { modelsDirFor, resolveModelPath } from "$lib/server/koboldcpp/modelsDir"
+import {
+	classifyModelFile,
+	extensionAllowedForKind
+} from "$lib/server/koboldcpp/modelKind"
+import path from "path"
+import { and, eq } from "drizzle-orm"
+import * as schema from "$lib/server/db/schema"
 
 /**
  * A KoboldCPP connection that works with Serene Pub's built-in KoboldCPP
- * Manager: model loading/swapping via the admin API, optionally with a
+ * the managed KoboldCPP: model loading/swapping via the admin API, optionally with a
  * subprocess Serene Pub itself spawns and owns. Everything about sending a
  * generation request (generateText(), mapSamplingConfig(), etc.) is identical to
  * the plain KoboldCppAdapter — this subclass only adds the preflight step
@@ -192,21 +198,21 @@ async function testConnection(
 }
 
 /**
- * The text models this Manager can serve — what the sync persists as this
+ * The text models this managed KoboldCPP can serve — what the sync persists as this
  * endpoint's rows, and therefore what decides `missing_since`.
  *
- * Read off the Manager's own text models directory, NOT off koboldcpp's
+ * Read off the managed KoboldCPP's own text models directory, NOT off koboldcpp's
  * `/api/admin/list_options`. That endpoint lists the `--admindir` — the
  * BINARY directory, where the .kcpps files go — and since the models moved to
  * their own directory (`koboldCppManagerModelsDir`) it has answered `[]` for
  * every install: a successful, empty listing, which the sync then honoured by
  * marking the connection's one model missing. The resolver refused the run
- * with "no longer listed by its host" before preflight ever ran, so the
+ * as unlisted by its host before preflight ever ran, so the
  * process auto-started for the earlier stage and the model was never loaded.
  * Seen live 2026-09-19 on a file that was sitting in `models/llm` the whole
  * time, and that the Models tab listed as _In use for chat_.
  *
- * The directory is the same source the Manager's own listing scans, so the
+ * The directory is the same source the managed KoboldCPP's own listing scans, so the
  * two cannot disagree about what exists. `local_models` is consulted only for
  * what a scan cannot know: a file the classifier put in the image lane, and a
  * download still in flight — neither is a text model to offer. Nothing here
@@ -219,7 +225,7 @@ async function testConnection(
  * bare filenames against its own working directory; there the admin listing
  * is still the only source and is asked as before.
  */
-async function listModels(
+async function listTextModels(
 	connection: SelectConnection
 ): Promise<{ models: any[]; error?: string }> {
 	try {
@@ -227,7 +233,7 @@ async function listModels(
 		if (!settings)
 			return {
 				models: [],
-				error: "The KoboldCPP Manager has no settings row yet."
+				error: "KoboldCPP, run by Serene Pub, has no settings row yet."
 			}
 
 		const dir = modelsDirFor("text", settings)
@@ -239,7 +245,7 @@ async function listModels(
 		} catch (e: any) {
 			return {
 				models: [],
-				error: `The Manager's models directory could not be read (${dir}): ${e?.message ?? String(e)}`
+				error: `The KoboldCPP models directory could not be read (${dir}): ${e?.message ?? String(e)}`
 			}
 		}
 
@@ -250,13 +256,27 @@ async function listModels(
 		const incomplete = new Set(
 			rows.filter((m) => m.status !== "complete").map((m) => m.filename)
 		)
-		const models = entries
-			.filter(
-				(name) =>
-					extensionAllowedForKind(name, "text") &&
-					!imageLane.has(name) &&
-					!incomplete.has(name)
-			)
+		const candidates = entries.filter(
+			(name) =>
+				extensionAllowedForKind(name, "text") &&
+				!imageLane.has(name) &&
+				!incomplete.has(name)
+		)
+		// A file the registry has never seen has no kind yet — the managed KoboldCPP's
+		// own listing registers and classifies it, but this sync can run
+		// first. Read its header here rather than call it text: an SD GGUF
+		// dropped in this folder was listed under Text models with a Use
+		// button until something else happened to classify it (walk
+		// 2026-09-24, plan C5). Only unregistered files pay for the read.
+		const registered = new Set(rows.map((m) => m.filename))
+		const unregisteredImages = new Set<string>()
+		for (const name of candidates) {
+			if (registered.has(name)) continue
+			const verdict = await classifyModelFile(path.join(dir, name))
+			if (verdict.kind === "image") unregisteredImages.add(name)
+		}
+		const models = candidates
+			.filter((name) => !unregisteredImages.has(name))
 			.sort((a, b) => a.localeCompare(b))
 
 		// The registry rows were already read above to filter the listing, and
@@ -290,7 +310,103 @@ async function listModels(
 	} catch (e: any) {
 		return {
 			models: [],
-			error: e.message || "Failed to list the Manager's models"
+			error: e.message || "Failed to list KoboldCPP's models"
+		}
+	}
+}
+
+/**
+ * The image models this managed KoboldCPP can serve on the same endpoint.
+ *
+ * One process holds one model at a time, text or image, and the model manager
+ * swaps between them on demand — so the managed KoboldCPP is ONE endpoint that chats and
+ * draws, and its listing carries both halves, each entry saying which it is
+ * (`modality`). `capabilityRefusal` reads that per model, which is what keeps a
+ * text GGUF out of the image picker and an SD checkpoint out of the chat one.
+ *
+ * `kind: "image"` and complete, from `local_models` — what the managed KoboldCPP's own
+ * listing maintains. Plus any model a person already set up as an image model
+ * on this endpoint whose file is still in the image directory, whatever its
+ * kind says: `unknown` is deliberately selectable in the managed KoboldCPP (overriding an
+ * unverified file is how it stops being unverified), and dropping it here would
+ * mark that deliberate choice missing on the next sync.
+ */
+async function listImageModels(
+	connection: SelectConnection,
+	textIds: ReadonlySet<string>
+): Promise<any[]> {
+	const settings = await db.query.koboldCppSettings.findFirst()
+	const rows = await db.query.localModels.findMany()
+	const listed = new Set(
+		rows
+			.filter((m) => m.kind === "image" && m.status === "complete")
+			.map((m) => m.filename)
+	)
+	if (settings && connection.id != null) {
+		const own = await db
+			.select({ model: schema.connectionModels.model })
+			.from(schema.connectionModels)
+			.where(
+				and(
+					eq(schema.connectionModels.connectionId, connection.id),
+					eq(schema.connectionModels.modality, "image-gen")
+				)
+			)
+		for (const { model } of own) {
+			if (listed.has(model)) continue
+			const onDisk = await resolveModelPath("image", model, settings, {
+				mustExist: true
+			}).catch(() => null)
+			if (onDisk) listed.add(model)
+		}
+	}
+	const byFilename = new Map(rows.map((m) => [m.filename, m]))
+	return [...listed]
+		.filter((filename) => !textIds.has(filename))
+		.sort((a, b) => a.localeCompare(b))
+		.map((filename) => {
+			const row = byFilename.get(filename)
+			const facts = {
+				...(row?.quantization ? { quantization: row.quantization } : {}),
+				...(row?.sizeBytes ? { sizeBytes: row.sizeBytes } : {}),
+				...(row?.description ? { description: row.description } : {}),
+				source: "file" as const
+			}
+			return {
+				model: filename,
+				name: row?.modelName || filename,
+				modality: "image-gen",
+				...(Object.keys(facts).length > 1 ? { facts } : {})
+			}
+		})
+}
+
+/**
+ * Everything this managed KoboldCPP can serve — text models, then image models — each
+ * entry carrying its `modality`. A text listing that FAILS fails the whole
+ * listing, so the sync touches no row (modelSync.ts's header): half a listing
+ * would mark every text model missing.
+ */
+async function listModels(
+	connection: SelectConnection
+): Promise<{ models: any[]; error?: string }> {
+	const text = await listTextModels(connection)
+	if (text.error) return text
+	const textModels = text.models.map((m) =>
+		typeof m === "string"
+			? { model: m, name: m, modality: "text-gen" }
+			: { ...m, modality: "text-gen" }
+	)
+	try {
+		const images = await listImageModels(
+			connection,
+			new Set(textModels.map((m) => m.model as string))
+		)
+		return { models: [...textModels, ...images] }
+	} catch (e: any) {
+		return {
+			models: [],
+			error: `KoboldCPP's image models could not be listed: ${e?.message ?? String(e)}`
 		}
 	}
 }

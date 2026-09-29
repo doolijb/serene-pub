@@ -236,7 +236,7 @@ describe("ensureManagedReady — the image path", () => {
 
 		await expect(
 			ensureManagedReady(imageSpec(), { connectionId: 7 })
-		).rejects.toThrow(/Manager is disabled/)
+		).rejects.toThrow(/run by Serene Pub, is turned off/)
 	})
 })
 
@@ -352,7 +352,7 @@ describe("KoboldCppManagedAdapter.preflight — Ruling 1 at the adapter", () => 
 		})
 	})
 
-	it("points the connection at the Manager's base URL, not the row's own", async () => {
+	it("points the connection at the managed KoboldCPP's base URL, not the row's own", async () => {
 		const { default: exportsDefault } = await import(
 			"./KoboldCppManagedAdapter"
 		)

@@ -251,7 +251,6 @@ async function makeChatSession(tag: string, withLorebook = false) {
 		sessionId: session.id,
 		characterId,
 		isActive: true,
-		visibility: "visible"
 	})
 	await db.insert(schema.sessionPersonas).values({
 		sessionId: session.id,
@@ -275,20 +274,22 @@ async function makeChatSession(tag: string, withLorebook = false) {
  * session's **prepared order**, and these sessions are built by inserting
  * rows rather than by sending — so no event has ever recomputed their
  * order and there is nothing prepared. Naming the speaker is what
- * "Trigger Character" does, it is what the alias carries, and it is what
+ * "Trigger Character" does, it is what a pick carries, and it is what
  * these tests are actually about: the status relay, which now fills
  * `{speaker}` from the trigger's word again (§4.6).
  */
 const trigger = async (sessionId: number, speaker?: string) => {
-	const { triggerGenerateMessageHandler } = await import(
+	const { sessionsFireTurnHandler } = await import(
 		"$lib/server/sockets/sessions"
 	)
-	return triggerGenerateMessageHandler.handler(
+	return sessionsFireTurnHandler.handler(
 		fakeSocket(userId),
 		{
 			sessionId,
-			once: true,
-			...(speaker ? { speaker } : { characterId })
+			entry: {
+				ref: (speaker ?? `character:${characterId}`) as never,
+				via: "pick"
+			}
 		},
 		emit
 	)
@@ -510,7 +511,7 @@ describe("Stop mid-typing", () => {
 			() => {}
 		)
 		const res: any = await running
-		expect(res?.stopped ?? res?.error ?? res?.success).toBeDefined()
+		expect(res?.stopped ?? res?.error ?? res?.ok).toBeDefined()
 
 		const rows = await messagesOf(sessionId)
 		const reply = rows[rows.length - 1]!

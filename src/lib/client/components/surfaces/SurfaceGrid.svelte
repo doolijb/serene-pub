@@ -389,7 +389,7 @@
 								<kbd
 									class="preset-tonal-surface rounded px-1 font-mono text-[10px]"
 									>F6</kbd
-								> to move between panels · use each panel's title bar
+								> to move between widgets · use each widget's title bar
 								to collapse, move, or send it to this drawer.
 							</div>
 						</div>

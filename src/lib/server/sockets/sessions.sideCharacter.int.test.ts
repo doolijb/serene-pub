@@ -171,7 +171,14 @@ async function whoIsNext(sessionId: number) {
 		with: { character: true }
 	})
 	return roundRobinSpeaker(
-		rotationSeats({ sessionCharacters: sessionCharacters as any }),
+		// Translated as the host's cast read translates it: `is_active` is
+		// `enabled` on every read a pipeline takes.
+		rotationSeats({
+			sessionCharacters: sessionCharacters.map((c) => ({
+				...c,
+				enabled: c.isActive
+			})) as any
+		}),
 		sessionMessages
 	)
 }
@@ -190,7 +197,7 @@ const castOf = async (sessionId: number) =>
 
 describe("a side-character turn is a participant, not a cast member", () => {
 	test("a picked character speaks without entering the rotation", async () => {
-		const { triggerNarratorResponseHandler } = await import("./sessions")
+		const { fireNarratorResponseHandler } = await import("./sessions")
 		const f = await makeSession("picked")
 
 		const dueBefore = await whoIsNext(f.session.id)
@@ -201,7 +208,7 @@ describe("a side-character turn is a participant, not a cast member", () => {
 		).toBe(f.bram.id)
 		const castBefore = await castOf(f.session.id)
 
-		const res = await triggerNarratorResponseHandler.handler(
+		const res = await fireNarratorResponseHandler.handler(
 			fakeSocket(f.user.id),
 			{
 				sessionId: f.session.id,
@@ -234,7 +241,7 @@ describe("a side-character turn is a participant, not a cast member", () => {
 	}, 60_000)
 
 	test("a free-form name produces a turn without joining the cast", async () => {
-		const { triggerNarratorResponseHandler } = await import("./sessions")
+		const { fireNarratorResponseHandler } = await import("./sessions")
 		const f = await makeSession("freeform")
 
 		const dueBefore = await whoIsNext(f.session.id)
@@ -244,7 +251,7 @@ describe("a side-character turn is a participant, not a cast member", () => {
 			.from(schema.characters)
 			.where(eq(schema.characters.userId, f.user.id))
 
-		const res = await triggerNarratorResponseHandler.handler(
+		const res = await fireNarratorResponseHandler.handler(
 			fakeSocket(f.user.id),
 			{
 				sessionId: f.session.id,
@@ -280,7 +287,7 @@ describe("a side-character turn is a participant, not a cast member", () => {
 		// The other half of the fact. `known: false` is what a script acts on,
 		// so a lorebook that DOES know the name must not produce it — otherwise
 		// the suggestion fires on everybody.
-		const { triggerNarratorResponseHandler } = await import("./sessions")
+		const { fireNarratorResponseHandler } = await import("./sessions")
 		const f = await makeSession("known")
 		await testDb.insert(schema.lorebookBindings).values({
 			lorebookId: f.lorebook.id,
@@ -289,7 +296,7 @@ describe("a side-character turn is a participant, not a cast member", () => {
 			aliases: ["Old Marl"]
 		} as any)
 
-		await triggerNarratorResponseHandler.handler(
+		await fireNarratorResponseHandler.handler(
 			fakeSocket(f.user.id),
 			{
 				sessionId: f.session.id,
@@ -307,10 +314,10 @@ describe("a side-character turn is a participant, not a cast member", () => {
 		// The regression guard for the half that already worked. A `speaker`
 		// key absent means the narrator: the run is the narrate spec's, with no
 		// speaker fact at all.
-		const { triggerNarratorResponseHandler } = await import("./sessions")
+		const { fireNarratorResponseHandler } = await import("./sessions")
 		const f = await makeSession("world")
 
-		const res = await triggerNarratorResponseHandler.handler(
+		const res = await fireNarratorResponseHandler.handler(
 			fakeSocket(f.user.id),
 			{
 				sessionId: f.session.id,
@@ -329,9 +336,9 @@ describe("a side-character turn is a participant, not a cast member", () => {
 
 describe("the trigger's first step refuses what it cannot run", () => {
 	test("a speaker with neither a pick nor a name", async () => {
-		const { triggerNarratorResponseHandler } = await import("./sessions")
+		const { fireNarratorResponseHandler } = await import("./sessions")
 		const f = await makeSession("empty")
-		const res = await triggerNarratorResponseHandler.handler(
+		const res = await fireNarratorResponseHandler.handler(
 			fakeSocket(f.user.id),
 			{
 				sessionId: f.session.id,
@@ -349,9 +356,9 @@ describe("the trigger's first step refuses what it cannot run", () => {
 	}, 60_000)
 
 	test("a name longer than the cap", async () => {
-		const { triggerNarratorResponseHandler } = await import("./sessions")
+		const { fireNarratorResponseHandler } = await import("./sessions")
 		const f = await makeSession("long")
-		const res = await triggerNarratorResponseHandler.handler(
+		const res = await fireNarratorResponseHandler.handler(
 			fakeSocket(f.user.id),
 			{
 				sessionId: f.session.id,
@@ -368,12 +375,12 @@ describe("the trigger's first step refuses what it cannot run", () => {
 	test("somebody else's character", async () => {
 		// The picker is a control surface, and a forged id reaching a prompt as
 		// another person's card would make it decoration — the same reasoning
-		// `sessions:triggerFunction` applies to a menu trigger's subject.
-		const { triggerNarratorResponseHandler } = await import("./sessions")
+		// `sessions:fireAction` applies to a menu trigger's subject.
+		const { fireNarratorResponseHandler } = await import("./sessions")
 		const mine = await makeSession("mine")
 		const theirs = await makeSession("theirs")
 
-		const res = await triggerNarratorResponseHandler.handler(
+		const res = await fireNarratorResponseHandler.handler(
 			fakeSocket(mine.user.id),
 			{
 				sessionId: mine.session.id,
@@ -392,9 +399,9 @@ describe("the trigger's first step refuses what it cannot run", () => {
 		// so a request naming one did not come through the picker. Refused
 		// with a sentence rather than seated as nobody: the reply road's
 		// null seat stays as the belt, but a person should be told why.
-		const { triggerNarratorResponseHandler } = await import("./sessions")
+		const { fireNarratorResponseHandler } = await import("./sessions")
 		const f = await makeSession("presence-speaker")
-		const res = await triggerNarratorResponseHandler.handler(
+		const res = await fireNarratorResponseHandler.handler(
 			fakeSocket(f.user.id),
 			{
 				sessionId: f.session.id,
@@ -414,7 +421,7 @@ describe("the trigger's first step refuses what it cannot run", () => {
 			.update(schema.sessionPersonas)
 			.set({ removedAt: new Date() })
 			.where(eq(schema.sessionPersonas.personaId, f.persona.id))
-		const after = await triggerNarratorResponseHandler.handler(
+		const after = await fireNarratorResponseHandler.handler(
 			fakeSocket(f.user.id),
 			{
 				sessionId: f.session.id,
@@ -433,7 +440,7 @@ describe("the trigger's first step refuses what it cannot run", () => {
 		// same ownership boundary "somebody else's character" above
 		// exercises), so this is refused before the presence check runs at
 		// all — the guard the presence rule backs up, holding on its own.
-		const { triggerNarratorResponseHandler } = await import("./sessions")
+		const { fireNarratorResponseHandler } = await import("./sessions")
 		const { createTestUser } = await import("$lib/server/utils/testDb")
 		const f = await makeSession("guest-presence")
 		const guest = await createTestUser(testDb, "guest-presence-guest")
@@ -453,7 +460,7 @@ describe("the trigger's first step refuses what it cannot run", () => {
 			.insert(schema.sessionPersonas)
 			.values({ sessionId: f.session.id, personaId: guestPersona.id })
 
-		const res = await triggerNarratorResponseHandler.handler(
+		const res = await fireNarratorResponseHandler.handler(
 			fakeSocket(f.user.id),
 			{
 				sessionId: f.session.id,

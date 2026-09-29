@@ -1,6 +1,6 @@
 /**
- * A3 fix: sessionMessages:regenerate/continue/swipeRight now wrap their body
- * in withSessionTriggerLock (same per-session mutex sessions:triggerGenerateMessage
+ * A3 fix: sessionMessages:regenerate/extend/swipeRight now wrap their body
+ * in withSessionGenerationLock (same per-session mutex sessions:triggerGenerateMessage
  * already used) AND re-check, fresh, inside the lock, whether anything else
  * in the session is already generating — mirroring
  * triggerGenerateMessageHandler's own in-lock "hasGeneratingMessages" check.

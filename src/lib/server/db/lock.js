@@ -21,6 +21,7 @@ import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import crypto from "node:crypto"
+import { execFileSync } from "node:child_process"
 
 /**
  * The owning process, recorded alongside the timestamp.
@@ -234,6 +235,112 @@ export function processLiveness(pid) {
 }
 
 /**
+ * The environment variable a lock holder sets on the command it runs, naming
+ * itself (its pid) as the holder that command may work under.
+ *
+ * `scripts/check-db-lock.js` takes the lock and then runs a command — and some
+ * of those commands (`plugin:install`) import the app's database module, which
+ * takes the lock again at module scope. Without this, that child found a live
+ * `db-cli` lock that was not its own pid and refused it: the wrapper was
+ * refusing itself, twenty seconds later.
+ */
+export const LOCK_DELEGATE_ENV = "SERENE_PUB_DB_LOCK_HOLDER"
+
+/**
+ * The parent of `pid`, or `null` when this platform cannot say.
+ *
+ * Linux reads `/proc/<pid>/stat` (field 4, after the parenthesised command
+ * name, which may itself contain spaces and parentheses). Other POSIX systems
+ * ask `ps`. Windows has no cheap answer and returns `null`.
+ *
+ * @param {number} pid
+ * @returns {number | null}
+ */
+export function parentPid(pid) {
+	if (!Number.isInteger(pid) || pid <= 0) return null
+	if (process.platform === "linux") {
+		try {
+			const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8")
+			const rest = stat.slice(stat.lastIndexOf(")") + 2).split(" ")
+			const ppid = Number(rest[1])
+			return Number.isInteger(ppid) && ppid > 0 ? ppid : null
+		} catch {
+			return null
+		}
+	}
+	if (process.platform === "win32") return null
+	try {
+		const out = execFileSync("ps", ["-o", "ppid=", "-p", String(pid)], {
+			encoding: "utf8",
+			stdio: ["ignore", "pipe", "ignore"]
+		})
+		const ppid = Number(out.trim())
+		return Number.isInteger(ppid) && ppid > 0 ? ppid : null
+	} catch {
+		return null
+	}
+}
+
+/**
+ * Every ancestor of `pid`, nearest first — or `null` when the chain cannot be
+ * walked at all on this platform (so "not an ancestor" is never guessed).
+ *
+ * @param {number} [pid]
+ * @param {{ getParent?: (pid: number) => number | null, max?: number }} [options]
+ * @returns {number[] | null}
+ */
+export function ancestorPids(pid = process.pid, options = {}) {
+	const getParent = options.getParent ?? parentPid
+	const max = options.max ?? 64
+	/** @type {number[]} */
+	const chain = []
+	let current = pid
+	for (let i = 0; i < max; i++) {
+		const parent = getParent(current)
+		if (parent === null) {
+			// Not even our own parent could be read: the platform cannot walk
+			// the chain, which is different from "no ancestor matches".
+			if (i === 0) return null
+			break
+		}
+		if (parent === current || chain.includes(parent)) break
+		chain.push(parent)
+		current = parent
+	}
+	return chain
+}
+
+/**
+ * Whether a lock's owner is the holder this process was launched to work
+ * under, rather than somebody else.
+ *
+ * Both halves are required where both can be checked:
+ *
+ * - **The holder named us.** `delegate` is the pid the wrapper put in
+ *   {@link LOCK_DELEGATE_ENV} for the command it ran. An environment variable
+ *   is inherited only by descendants, so a dev server started from another
+ *   terminal never carries it.
+ * - **The holder is our ancestor.** Guards the leftovers: a stray variable in
+ *   a shell profile, or a descendant that outlived the wrapper and whose
+ *   wrapper's pid was reused. Where the chain cannot be walked (`ancestors` is
+ *   `null`, e.g. Windows) the inherited variable alone is the evidence.
+ *
+ * Pure, so the decision is testable without real processes.
+ *
+ * @param {LockOwner | null} owner
+ * @param {{ delegate: string | undefined | null, ancestors: () => number[] | null }} params
+ * @returns {boolean}
+ */
+export function isDelegatedHolder(owner, params) {
+	if (!owner || !(owner.pid > 0)) return false
+	const delegate = Number(params.delegate)
+	if (!Number.isInteger(delegate) || delegate <= 0) return false
+	if (delegate !== owner.pid) return false
+	const ancestors = params.ancestors()
+	return ancestors === null || ancestors.includes(owner.pid)
+}
+
+/**
  * @param {unknown} raw
  * @returns {LockOwner | null}
  */
@@ -267,7 +374,9 @@ function normaliseOwner(raw) {
  *    owner field says. This is what stops a recycled pid — a crash leaves a
  *    lock behind, the number is later reissued to some unrelated daemon — from
  *    becoming a lock nobody can ever clear.
- * 3. Only then does ownership speak, and only about a lock that has *not* yet
+ * 3. Only then does ownership speak — first to recognise the holder that
+ *    launched this process to work under its lock (see `isDelegatedHolder`),
+ *    about everyone else, and only about a lock that has *not* yet
  *    expired: an owner provably gone makes it stale immediately (the whole
  *    point — a restart no longer waits at all), an owner alive keeps us out.
  * 4. Anything unverifiable falls back to the timestamp, which is how a lock
@@ -279,13 +388,19 @@ function normaliseOwner(raw) {
  * us declare a live holder's lock stale.
  *
  * @param {unknown} rawLock
- * @param {{ now?: number, identity?: LockIdentity, liveness?: (pid: number) => ("alive" | "dead" | "unknown") }} [options]
+ * @param {{ now?: number, identity?: LockIdentity, liveness?: (pid: number) => ("alive" | "dead" | "unknown"), delegation?: { delegate: string | undefined | null, ancestors: () => number[] | null } }} [options]
  * @returns {LockEvaluation}
  */
 export function evaluateLock(rawLock, options = {}) {
 	const now = options.now ?? Date.now()
 	const identity = options.identity ?? getIdentity()
 	const liveness = options.liveness ?? processLiveness
+	const delegation = options.delegation ?? {
+		delegate: process.env[LOCK_DELEGATE_ENV],
+		// Walked only when a delegate is named and matches, so the app's
+		// ordinary poll never spawns `ps`.
+		ancestors: () => ancestorPids(identity.pid)
+	}
 
 	if (!rawLock || typeof rawLock !== "object") {
 		return {
@@ -342,6 +457,28 @@ export function evaluateLock(rawLock, options = {}) {
 		return {
 			state: "stale",
 			reason: "expired",
+			owner,
+			refreshedAt,
+			expiresAt
+		}
+	}
+
+	// 3a. The holder that launched us to work under its lock — the
+	// `check-db-lock.js` wrapper around `plugin:install`. Its lock is ours to
+	// use, not a reason to refuse: waiting for it would wait for ourselves.
+	// Only a live, unexpired, same-host lock gets here, and the `delegated`
+	// reason keeps a delegate from ever *releasing* it (see `stop()` below).
+	if (
+		sameHost &&
+		owner &&
+		isDelegatedHolder(owner, {
+			delegate: delegation.delegate,
+			ancestors: delegation.ancestors
+		})
+	) {
+		return {
+			state: "self",
+			reason: "delegated",
 			owner,
 			refreshedAt,
 			expiresAt
@@ -801,7 +938,10 @@ export function createLockHeartbeat(options) {
 			// Only ever clear our own. A process that loses the race used to
 			// clear the *winner's* lock on its way out through the `exit`
 			// handler, leaving the live holder's database advertised as free.
-			if (evaluation.state !== "self") return
+			// Nor a lock we were only *delegated*: the wrapper that took it
+			// is still running and releases it itself.
+			if (evaluation.state !== "self" || evaluation.reason === "delegated")
+				return
 			delete read.meta.lock
 			writeMetaFile(metaPath, read.meta)
 		} catch (error) {

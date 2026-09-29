@@ -1,11 +1,5 @@
 import { describe, expect, test } from "vitest"
-import {
-	foldSummary,
-	readinessRow,
-	readinessRows,
-	readyCount,
-	splitReadiness
-} from "./readiness"
+import { readinessRow, readinessRows } from "./readiness"
 import { defaultsSummary } from "./defaultsSummary"
 import type { DefaultsSummaryEntry } from "./defaultsSummary"
 
@@ -151,41 +145,12 @@ describe("readinessRow — the fix is the most direct undo", () => {
 	})
 })
 
-describe("the card as a whole", () => {
+describe("the rows as a whole", () => {
 	const summary = defaultsSummary([], {})
 	const rows = readinessRows(summary.entries)
 
 	test("every SDK transform gets a row, and none is ready on a bare install", () => {
 		expect(rows).toHaveLength(10)
-		expect(readyCount(rows)).toBe(0)
 		expect(rows.every((r) => r.state === "unset")).toBe(true)
-	})
-
-	test("the four sections come first, in section order", () => {
-		const order = [
-			"text->text",
-			"text->image",
-			"text->embedding",
-			"text->entities"
-		]
-		const { sections, rest } = splitReadiness(rows, order)
-		expect(sections.map((r) => r.capability)).toEqual(order)
-		expect(rest).toHaveLength(6)
-		expect(rest.some((r) => order.includes(r.capability))).toBe(false)
-	})
-
-	test("the fold row names a few of what it hides", () => {
-		const { rest } = splitReadiness(rows, [
-			"text->text",
-			"text->image",
-			"text->embedding",
-			"text->entities"
-		])
-		const fold = foldSummary(rest)
-		expect(fold.count).toBe(6)
-		expect(fold.setCount).toBe(0)
-		expect(fold.names).toBe(
-			"vision, document reading, image editing, image transform…"
-		)
 	})
 })

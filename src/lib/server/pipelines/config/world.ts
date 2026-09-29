@@ -14,8 +14,8 @@
  * | SP row | pipeline slot | on which node |
  * |---|---|---|
  * | `prompt_configs.*` | `prompts` | the Assemble task |
- * | `sampling_configs` | `sampling` | the Provider |
- * | `connections` | `connection` | the Provider |
+ * | `sampling_configs` | `sampling` | the oracle |
+ * | `connections` | `connection` | the oracle |
  *
  * That table is the whole migration of user configuration, stated once. When
  * 08 §5b's migration writes preset rows, it writes exactly these mappings.
@@ -70,9 +70,9 @@ import { resolveWireMode } from "$lib/server/connections/resolve"
 
 export interface WorldScope {
 	sessionId?: number
-	/** Which node keys carry the assemble/provider slots in the spec being run. */
+	/** Which node keys carry the assemble/connection slots in the spec being run. */
 	assembleNodeKey?: string
-	providerNodeKey?: string
+	oracleNodeKey?: string
 	/** The node that builds the template context, which needs the prompts too. */
 	contextNodeKey?: string
 	/** Which pipeline is running, so its own configuration can be read. */
@@ -173,7 +173,7 @@ export async function buildWorld(
 	scope: WorldScope = {}
 ): Promise<ConfigWorld> {
 	const assemble = scope.assembleNodeKey ?? "prompt"
-	const provider = scope.providerNodeKey ?? "generate"
+	const oracle = scope.oracleNodeKey ?? "generate"
 	const context = scope.contextNodeKey ?? "context"
 
 	const [system] = await db.select().from(schema.systemSettings).limit(1)
@@ -271,7 +271,7 @@ export async function buildWorld(
 		if (!row) return
 		for (const [path, value] of Object.entries(promptFields(row))) {
 			// Written once, at the node that owns the slot. Assemble and the
-			// provider read it **by reference** (`slot.prompts({node})`, spec
+			// oracle read it **by reference** (`slot.prompts({node})`, spec
 			// 1.1.0) — the executor resolves the shared slot to this node's
 			// values, which is what retired the double-write that used to
 			// live here and the three "System" boxes it produced in the panel
@@ -298,27 +298,27 @@ export async function buildWorld(
 	// rather than a user override.
 	//
 	// The instance layer is keyed by CAPABILITY (`connection_defaults`), so the
-	// provider gets the default for the thing it actually needs to do rather
+	// oracle gets the default for the thing it actually needs to do rather
 	// than the default for whatever family it was filed under. The session layer
 	// is written further down — after the pipeline layer, deliberately; its
 	// block says why — and is still text-only, because layering
-	// `sessions.connection_id` onto an image provider would hand a session's
+	// `sessions.connection_id` onto an image oracle would hand a session's
 	// chat connection to a backend that has never heard of a temperature.
 	const defaultsByCapability = await capabilityDefaults(db)
 	// The shape is the fallback and `??` is what keeps it one: a slot that named
 	// a capability never reads its declarations a second time, and a slot
 	// authored before capabilities existed still gets the answer it always got.
-	const providerCapability =
-		requiredTransform(await providerSlotRequires(db, scope, provider)) ??
-		capabilityForSamplingShape(await providerSlotShape(db, scope, provider))
-	const providerIsText = providerCapability === TEXT_CAPABILITY
+	const oracleCapability =
+		requiredTransform(await connectionSlotRequires(db, scope, oracle)) ??
+		capabilityForSamplingShape(await connectionSlotShape(db, scope, oracle))
+	const oracleIsText = oracleCapability === TEXT_CAPABILITY
 	// `undefined` means the slot's shape names no capability — an embeddings or
 	// MCP connection slot. Those layer NO default: the instance's "default
 	// connection" is a text connection, and handing it to a slot that wanted an
 	// MCP server is the cross-modality leak this whole indirection exists to
 	// prevent. It is also what they got before capabilities existed.
-	const instanceDefault = providerCapability
-		? defaultsByCapability[providerCapability]
+	const instanceDefault = oracleCapability
+		? defaultsByCapability[oracleCapability]
 		: undefined
 
 	/**
@@ -348,12 +348,12 @@ export async function buildWorld(
 	 * endpoint with no model, a config still pointing at some other endpoint
 	 * made every reply on that install refuse with "No model is chosen".
 	 * This is NOT parity with the old walk; it is the half of the tier that
-	 * was live, kept live. The "AI Override" connection picker on the prompt
-	 * config (`PromptsSidebar.svelte`) therefore writes a column nothing
-	 * reads; whether it is retired or re-homed onto the pipeline panel's
-	 * connection slot awaits a ruling — see plans/29 R-8.
+	 * was live, kept live. The prompt config's "AI Override" connection
+	 * column is therefore read by nothing; whether it is retired or re-homed
+	 * onto the pipeline panel's connection slot awaits a ruling — see
+	 * plans/29 R-8.
 	 */
-	if (legacyConnection && providerIsText) {
+	if (legacyConnection && oracleIsText) {
 		const legacyRow =
 			pick(
 				legacyConnectionRows,
@@ -366,7 +366,7 @@ export async function buildWorld(
 		layer(
 			"defaults",
 			undefined,
-			provider,
+			oracle,
 			"sampling",
 			SLOT_VALUE,
 			idOrNull(legacyRow?.samplingConfigId)
@@ -374,7 +374,7 @@ export async function buildWorld(
 	}
 
 	// The table, and only the table (0181). This used to read
-	// `?? (providerIsText ? system.defaultConnectionId : undefined)`, because
+	// `?? (oracleIsText ? system.defaultConnectionId : undefined)`, because
 	// 0175 seeded `connection_defaults` from that column ONCE and a later star
 	// press landed only in the column — so the fallback existed to stop the
 	// screen and the run disagreeing. Both writers now write here, so the
@@ -389,7 +389,7 @@ export async function buildWorld(
 	layer(
 		"defaults",
 		undefined,
-		provider,
+		oracle,
 		"connection",
 		SLOT_VALUE,
 		instanceDefault?.connectionId != null
@@ -402,7 +402,7 @@ export async function buildWorld(
 	layer(
 		"defaults",
 		undefined,
-		provider,
+		oracle,
 		"sampling",
 		SLOT_VALUE,
 		idOrNull(instanceDefault?.samplingConfigId)
@@ -501,18 +501,18 @@ export async function buildWorld(
 	// `connection_id` was the other half of this block and it outranked the
 	// panel's pick for as long as this sat above `applyPipelineLayer`; overrides
 	// are by model now, never by connection, so the only connection override
-	// left is the pipeline configuration's provider slot — which is a
+	// left is the pipeline configuration's connection slot — which is a
 	// `pipeline_node_overrides` row like any other and arrives through
 	// `applyPipelineLayer` above.
 	//
 	// Still text-only, and that is a fact about the column rather than a policy:
 	// `sampling_config_id` predates there being anything but text and cannot say
 	// which capability it means.
-	if (providerIsText) {
+	if (oracleIsText) {
 		layer(
 			"session",
 			scope.sessionId,
-			provider,
+			oracle,
 			"sampling",
 			SLOT_VALUE,
 			idOrNull(session?.samplingConfigId)
@@ -596,7 +596,7 @@ export async function buildWorld(
 			// for text generation is only offerable on a text-generation
 			// connection, and saying so once here is what makes that true in the
 			// UI without a second rule. It is the row's own shape now — hardcoding
-			// text-gen here would have handed an image config to a text provider
+			// text-gen here would have handed an image config to a text oracle
 			// the moment a second modality existed.
 			shape: s.shape ?? "core:shape/text-gen@1",
 			values: s.values ?? {},
@@ -709,7 +709,7 @@ export async function buildWorld(
  *    the value is what runs.
  */
 /**
- * The provider node's connection declaration, as its spec authored it.
+ * The oracle node's connection declaration, as its spec authored it.
  *
  * Read from the spec's own declarations rather than guessed from the node key,
  * because the key is the author's ("generate", "render", "narrate") and says
@@ -717,10 +717,10 @@ export async function buildWorld(
  * the legacy path, which is text by construction — or when the node declares no
  * connection at all.
  */
-async function providerConnectionDecl(
+async function oracleConnectionDecl(
 	db: Db,
 	scope: WorldScope,
-	providerKey: string
+	oracleKey: string
 ): Promise<Decl | undefined> {
 	if (!scope.specId) return undefined
 	const [spec] = await db
@@ -731,34 +731,34 @@ async function providerConnectionDecl(
 	if (!spec?.activeVersionId) return undefined
 	const decls = await declarations(db, spec.activeVersionId)
 	return decls.find(
-		(d) => d.nodeKey === providerKey && d.control === "connection-ref"
+		(d) => d.nodeKey === oracleKey && d.control === "connection-ref"
 	)
 }
 
 /**
  * What the connection in that slot must be able to *do*.
  *
- * The successor to `providerSlotShape`, and read before it. A shape asserts a
+ * The successor to `connectionSlotShape`, and read before it. A shape asserts a
  * modality — "this is an image connection" — where `requires` names a transform
  * the backend can actually be asked about, which is the same fact without the
  * assumption that a backend is only one thing. Absent for every slot authored
  * before capabilities existed, and the caller falls back to the shape.
  */
-async function providerSlotRequires(
+async function connectionSlotRequires(
 	db: Db,
 	scope: WorldScope,
-	providerKey: string
+	oracleKey: string
 ): Promise<readonly string[] | undefined> {
-	return (await providerConnectionDecl(db, scope, providerKey))?.requires
+	return (await oracleConnectionDecl(db, scope, oracleKey))?.requires
 }
 
-/** Which modality that slot speaks. Superseded — see `providerSlotRequires`. */
-async function providerSlotShape(
+/** Which modality that slot speaks. Superseded — see `connectionSlotRequires`. */
+async function connectionSlotShape(
 	db: Db,
 	scope: WorldScope,
-	providerKey: string
+	oracleKey: string
 ): Promise<string | undefined> {
-	return (await providerConnectionDecl(db, scope, providerKey))?.shape
+	return (await oracleConnectionDecl(db, scope, oracleKey))?.shape
 }
 
 /** The task that renders a prompt. Its `params` carry the post-history pair. */
@@ -994,12 +994,12 @@ async function applyPipelineLayer(
 				// one field does not pin the rest of the prompt.
 				const fields = await resolvePromptFields(db, Number(v.value))
 				for (const [field, text] of Object.entries(fields))
-					push("preset", undefined, v.nodeKey, v.slot, field, text)
+					push("config", undefined, v.nodeKey, v.slot, field, text)
 				continue
 			}
 			if (templateSlots.has(addressOf(v.nodeKey, v.slot))) {
 				await pushTemplate(
-					"preset",
+					"config",
 					undefined,
 					v.nodeKey,
 					v.slot,
@@ -1009,7 +1009,7 @@ async function applyPipelineLayer(
 			}
 			if (variableSlots.has(addressOf(v.nodeKey, v.slot))) {
 				push(
-					"preset",
+					"config",
 					undefined,
 					v.nodeKey,
 					v.slot,
@@ -1018,7 +1018,7 @@ async function applyPipelineLayer(
 				)
 				continue
 			}
-			push("preset", undefined, v.nodeKey, v.slot, v.path ?? "", v.value)
+			push("config", undefined, v.nodeKey, v.slot, v.path ?? "", v.value)
 		}
 	}
 
@@ -1212,7 +1212,12 @@ async function applyPipelineLayer(
 				d.nodeKey,
 				d.slot,
 				d.path,
-				shipped.get(d.variableId)
+				shipped.get(d.variableId) ??
+					// A band declared upstream (typed templates P2) resolves even
+					// with no layout anywhere: the resolved keys are how Assemble
+					// learns which bands to render at the top level. No `source`,
+					// so it renders through the in-code floor.
+					(d.band ? { engine: CORE_TEMPLATE_ENGINE } : undefined)
 			)
 		}
 	}

@@ -13,7 +13,7 @@
  */
 
 import { createHash } from "node:crypto"
-import { asc, desc, eq } from "drizzle-orm"
+import { and, asc, desc, eq } from "drizzle-orm"
 import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
 import type { Handler } from "$lib/shared/events"
@@ -34,6 +34,7 @@ import {
 	permissionStates,
 	declaredPermissions,
 	effectivePermissions,
+	isRefusedPermissionKey,
 	isReviewMark,
 	needsReview,
 	reviewMark,
@@ -47,11 +48,24 @@ import {
 } from "$lib/server/plugins/permissions"
 import {
 	applySettingsWrite,
+	applyUserSettingsWrite,
 	clientSettingsView,
-	hookSettingsFor,
+	loadPluginUserSettingsRows,
+	readUserPluginSettings,
+	settingsDelivery,
 	settingsSchemaOf,
-	writePluginSettings
+	pluginUserSettingsView,
+	writePluginSettings,
+	writeUserPluginSettings,
+	type PluginUserSettingsRow
 } from "$lib/server/plugins/settingsHost"
+import { notCoreRow } from "$lib/server/plugins/frameHost"
+import {
+	afterEnable,
+	fireLifecycle,
+	firePendingUpdate
+} from "$lib/server/plugins/lifecycle"
+import { pluginComponentRefusals } from "$lib/server/components/compat"
 
 type Emit = (event: string, data: any) => void
 
@@ -81,10 +95,13 @@ interface Row {
 	settings?: Record<string, unknown> | null
 }
 
-function toPluginRow(r: Row): Sockets.Plugins.PluginRow {
+export function toPluginRow(r: Row): Sockets.Plugins.PluginRow {
 	const backends = (
 		Array.isArray(r.backends) ? r.backends : ["quickjs"]
 	).filter((b): b is SandboxKind => b === "quickjs" || b === "ses")
+	// Components built for a host contract this host does not speak (F1):
+	// never offered to a session, and this is where an admin reads why.
+	const refusals = pluginComponentRefusals(r.manifest)
 	return {
 		pluginId: r.pluginId,
 		name: r.name,
@@ -98,17 +115,20 @@ function toPluginRow(r: Row): Sockets.Plugins.PluginRow {
 		// How an admin is told a plugin is waiting: a declared permission no one
 		// has decided about yet. Until they do it is refused, so this badge is
 		// also the explanation for a plugin that runs but reaches nothing.
-		needsReview: needsReview(r.manifest, r.adminDenied)
+		needsReview: needsReview(r.manifest, r.adminDenied),
+		...(refusals.length ? { componentRefusals: refusals } : {})
 	}
 }
 
-function toDescriptor(r: Row): PluginDescriptor {
+function toDescriptor(
+	r: Row,
+	userRows: readonly PluginUserSettingsRow[] = []
+): PluginDescriptor {
 	const p = toPluginRow(r)
 	const eff = effectivePermissions(
 		declaredPermissions(r.manifest),
 		r.adminDenied
 	)
-	const settings = hookSettingsFor(r.manifest, r.settings)
 	return {
 		id: r.pluginId,
 		name: r.name,
@@ -119,15 +139,9 @@ function toDescriptor(r: Row): PluginDescriptor {
 		sequential: r.sequential,
 		storageQuotaBytes: storageGrant(eff, r.storageQuotaOverride),
 		networkHosts: networkGrant(eff),
-		// Handles for the hook, plaintext host-side (R63) — as `store.ts` does.
-		...(settings
-			? {
-					settings: settings.settings,
-					...(Object.keys(settings.secrets).length
-						? { secrets: settings.secrets, lentSecrets: settings.lent, secretNonce: settings.nonce }
-						: {})
-				}
-			: {})
+		// Handles for the hook, plaintext host-side (R63) — as `store.ts`
+		// does — and each user's own resolution for user-scoped fields.
+		...settingsDelivery(r.manifest, r.settings, userRows)
 	}
 }
 
@@ -224,13 +238,26 @@ export async function emitList(
 	return plugins
 }
 
+/**
+ * Re-send `sessionPresets:list` to every socket that declared it: a plugin's
+ * install, switch or uninstall publishes or culls its pipelines and lists or
+ * hides its presets (R67), so an open session-create screen — anyone's — is
+ * stale until it hears.
+ */
+async function pushPresets(socket: any): Promise<void> {
+	const { pushSessionPresetsAfter } = await import("./sessionAdmin")
+	await pushSessionPresetsAfter(socket)
+}
+
 /** Best-effort: keep the live manager in step with the DB (only when on). */
 async function syncManager(pluginId: string): Promise<void> {
 	if (!pluginsEnabled()) return
+	// A row stored as `core` is never registered, even switched on: it
+	// reads as absent, so the manager holds nothing under the app's name.
 	const [row] = await db
 		.select()
 		.from(schema.plugins)
-		.where(eq(schema.plugins.pluginId, pluginId))
+		.where(and(eq(schema.plugins.pluginId, pluginId), notCoreRow()))
 	const mgr = getManager()
 	if (!row || !row.enabled) {
 		mgr.unregister(pluginId)
@@ -238,16 +265,52 @@ async function syncManager(pluginId: string): Promise<void> {
 		return
 	}
 	try {
-		mgr.register(toDescriptor(row as Row))
+		const userRows = await loadPluginUserSettingsRows(db, [pluginId])
+		mgr.register(toDescriptor(row as Row, userRows.get(pluginId)))
 	} catch (e) {
 		console.warn(`[plugins] manager register '${pluginId}' failed:`, e)
 	}
 	await syncDeclarations()
 }
 
+/** Whether a plugin's row says it is switched on (false when there is none). */
+async function isSwitchedOn(pluginId: string): Promise<boolean> {
+	const [row] = await db
+		.select({ enabled: schema.plugins.enabled })
+		.from(schema.plugins)
+		.where(eq(schema.plugins.pluginId, pluginId))
+	return !!row?.enabled
+}
+
 /**
- * Reconcile the manifest-declared registries with the enabled set: template
- * engines, event subscriptions, and session presets.
+ * After a (re)install wrote the row. A replaced bundle arrives disabled, so a
+ * plugin that was running is being switched off by the install: its OLD
+ * bundle hears `disable` while still registered, and is then unregistered —
+ * before this, the old copy kept running until the next boot. A reinstall
+ * that kept the plugin on (same bundle, new version) fires its pending
+ * `update` straight away, since the bundle it owes it to is already running.
+ */
+async function afterReinstall(pluginId: string, wasOn: boolean): Promise<void> {
+	if (!pluginsEnabled()) return
+	const nowOn = await isSwitchedOn(pluginId)
+	if (wasOn && !nowOn) {
+		await fireLifecycle(getManager(), pluginId, "disable")
+		await syncManager(pluginId)
+	} else if (nowOn) {
+		await syncManager(pluginId)
+		await firePendingUpdate(db, getManager(), pluginId)
+	} else {
+		// Installed but not switched on: its genres, slots and sheets still
+		// register (they follow installation, not the switch — see
+		// `pluginGenres.ts`), and a replaced manifest's must be re-read.
+		await syncDeclarations()
+	}
+}
+
+/**
+ * Reconcile the manifest-declared registries with the plugin rows: genres
+ * (with their slots and sheets) with the installed set; template engines,
+ * event subscriptions, and session presets with the enabled set.
  *
  * All three are projections of the `plugins` table, so all three are stale the
  * moment a plugin is enabled, disabled, uninstalled or has a permission denied —
@@ -256,6 +319,30 @@ async function syncManager(pluginId: string): Promise<void> {
  * than only change what the audit screen says.
  */
 async function syncDeclarations(): Promise<void> {
+	try {
+		// Context variables first (typed templates, 2026-09-27): installed,
+		// not enabled, like genres — see `pluginVariables.ts`.
+		const { syncPluginVariables } = await import(
+			"$lib/server/plugins/pluginVariables"
+		)
+		for (const line of await syncPluginVariables(db))
+			console.warn(`[plugins] variable ${line}`)
+	} catch (e) {
+		console.warn("[plugins] variable sync failed:", e)
+	}
+	try {
+		// Genres first, with their attribute slots and sheets: a plugin genre
+		// the registries do not hold states no vocabulary. They follow
+		// INSTALLATION, not the switch — a disabled plugin's running sessions
+		// keep writing, only an uninstall withdraws. See `pluginGenres.ts`.
+		const { syncPluginGenres } = await import(
+			"$lib/server/plugins/pluginGenres"
+		)
+		for (const line of await syncPluginGenres(db))
+			console.warn(`[plugins] genre ${line}`)
+	} catch (e) {
+		console.warn("[plugins] genre sync failed:", e)
+	}
 	try {
 		const { syncPluginEngines } = await import(
 			"$lib/server/plugins/engineHost"
@@ -353,6 +440,18 @@ export const pluginsInstall: Handler<
 	event: "plugins:install",
 	handler: async (socket, params, emitToUser) => {
 		requireAdmin(socket, emitToUser)
+		// The id before anything runs: `upsertPlugin` refuses it too, but only
+		// after the conformance run, and a thrown refusal reaches the admin as
+		// the socket layer's generic sentence.
+		{
+			const { pluginIdFindings } = await import("$lib/server/plugins/store")
+			const bad = pluginIdFindings(params.pluginId)
+			if (bad.length) {
+				const msg = `This package cannot install: ${bad.join("; ")}`
+				emitToUser("error", { error: msg })
+				throw new Error(msg)
+			}
+		}
 		// Requirements first (24 §10, T7b): what the package references but
 		// does not ship must exist here, or the install refuses with names —
 		// a missing dependency found now is a sentence; found at runtime it
@@ -397,6 +496,7 @@ export const pluginsInstall: Handler<
 		const bundleHash = createHash("sha256")
 			.update(params.bundleSource, "utf8")
 			.digest("hex")
+		const wasOn = await isSwitchedOn(params.pluginId)
 		await upsertPlugin(db, {
 			pluginId: params.pluginId,
 			name: params.name,
@@ -411,10 +511,20 @@ export const pluginsInstall: Handler<
 		// this plugin declared — boot re-registers the same list from the
 		// stored manifest.
 		{
+			// Its context variables (typed templates, 2026-09-27) — before
+			// anything reads a band of its definitions.
+			const { registerPluginVariables } = await import("$lib/server/plugins/pluginVariables")
+			const varsRefused = registerPluginVariables(params.manifest, params.pluginId)
+			if (varsRefused.length)
+				console.warn(`[plugins] '${params.pluginId}' variables refused: ${varsRefused.join("; ")}`)
 			const { registerPluginEvents } = await import("$lib/server/plugins/pluginEvents")
 			const refused = registerPluginEvents(params.manifest, params.pluginId)
 			if (refused.length)
 				console.warn(`[plugins] '${params.pluginId}' events refused: ${refused.join("; ")}`)
+			const { registerPluginAnnex } = await import("$lib/server/plugins/pluginAnnex")
+			const annexRefused = registerPluginAnnex(params.manifest, params.pluginId)
+			if (annexRefused.length)
+				console.warn(`[plugins] '${params.pluginId}' annex fields refused: ${annexRefused.join("; ")}`)
 		}
 		// The frame surfaces' documents (20 §12), replaced wholesale like the
 		// bundle. Refused paths are logged, not fatal — a plugin with one bad
@@ -429,7 +539,10 @@ export const pluginsInstall: Handler<
 					`[plugins] '${params.pluginId}' UI files refused (unsafe path): ${r.refused.join(", ")}`
 				)
 		}
-		// A fresh/changed bundle is disabled until re-enabled — no manager sync.
+		// A fresh/changed bundle is disabled until re-enabled; a running
+		// plugin it replaced hears `disable` on the way out.
+		await afterReinstall(params.pluginId, wasOn)
+		await pushPresets(socket)
 		return { plugins: await emitList(emitToUser) }
 	}
 }
@@ -441,8 +554,17 @@ export const pluginsSetEnabled: Handler<
 	event: "plugins:setEnabled",
 	handler: async (socket, params, emitToUser) => {
 		requireAdmin(socket, emitToUser)
+		const wasOn = await isSwitchedOn(params.pluginId)
+		// `disable` BEFORE the switch, while the plugin is still registered —
+		// bounded, and its outcome never stops the switch (lifecycle.ts).
+		if (pluginsEnabled() && wasOn && !params.enabled)
+			await fireLifecycle(getManager(), params.pluginId, "disable")
 		await setEnabled(db, params.pluginId, params.enabled)
 		await syncManager(params.pluginId)
+		// `update` (if a replaced bundle owes one) then `enable`, AFTER.
+		if (pluginsEnabled() && !wasOn && params.enabled)
+			await afterEnable(db, getManager(), params.pluginId)
+		await pushPresets(socket)
 		return { plugins: await emitList(emitToUser) }
 	}
 }
@@ -493,11 +615,17 @@ export const pluginsUninstall: Handler<
 	event: "plugins:uninstall",
 	handler: async (socket, params, emitToUser) => {
 		requireAdmin(socket, emitToUser)
-		if (pluginsEnabled()) getManager().unregister(params.pluginId)
+		if (pluginsEnabled()) {
+			// Its last chance to clean up, before anything of it is removed.
+			// Bounded; a failure removes the plugin all the same. A plugin
+			// that is switched off is not registered, so its code does not run.
+			await fireLifecycle(getManager(), params.pluginId, "uninstall")
+			getManager().unregister(params.pluginId)
+		}
 		// What an install PROJECTED comes out first, while the plugin row that
 		// owns it still exists (D-6): the specs by `source_plugin_id` and the
 		// configs by seed key, with everything under a spec following by FK
-		// cascade. Prompts, presets and layouts are deliberately not here —
+		// cascade. Prompts, presets and layouts are intentionally not here —
 		// they are marked withdrawn by their own syncs below, because a session
 		// names its preset and a configuration names a prompt row.
 		const { cullPluginProjection } = await import(
@@ -509,6 +637,7 @@ export const pluginsUninstall: Handler<
 			.delete(schema.pluginFiles)
 			.where(eq(schema.pluginFiles.pluginId, params.pluginId))
 		if (pluginsEnabled()) await syncDeclarations()
+		await pushPresets(socket)
 		return { plugins: await emitList(emitToUser) }
 	}
 }
@@ -570,10 +699,12 @@ export const pluginsInstallLocal: Handler<
 		const report = await installPluginPackage(db, dir)
 		for (const line of [...report.warnings, ...report.refused])
 			console.warn(`[plugins] installLocal '${report.pluginId}': ${line}`)
+		await afterReinstall(report.pluginId, report.wasEnabled)
 		// The manifest's own declarations — presets, prompts, engines, event
 		// subscriptions, layouts — are reconciled from the plugin rows, so they
 		// land the moment the row exists (and again on enable).
 		await syncDeclarations()
+		await pushPresets(socket)
 		return {
 			pluginId: report.pluginId,
 			specs: report.specs,
@@ -752,7 +883,10 @@ export const pluginsSetPermission: Handler<
 		if (!row) return { pluginId: params.pluginId, permissions: [] }
 		const declared = declaredPermissions(row.manifest as PluginManifest)
 		const known = declared.find((p) => p.key === params.key)
-		if (known && !isReviewMark(params.key)) {
+		// A refused key is never declared, so `known` is already undefined for
+		// one; refused here as well so a write can never spell another
+		// permission's mark (`isRefusedPermissionKey`).
+		if (known && !isReviewMark(params.key) && !isRefusedPermissionKey(params.key)) {
 			const entries = new Set<string>(row.adminDenied ?? [])
 			if (params.granted) entries.delete(params.key)
 			else entries.add(params.key)
@@ -783,8 +917,8 @@ export const pluginsSetPermission: Handler<
  * permissions, and put in force everything they left ticked.
  *
  * It writes markers only — never a denial and never a removal — so an admin who
- * unticked a host first keeps that decision, and a key the plugin no longer
- * declares keeps whatever was decided about it (if it ever comes back, the
+ * unticked a host first keeps that decision, and a key the plugin has dropped
+ * from its declaration keeps whatever was decided about it (if it ever comes back, the
  * marker is still there and nothing re-prompts, which is the same rule as an
  * update that asks for nothing new).
  */
@@ -864,8 +998,9 @@ export const pluginsSetStorageQuota: Handler<
 /**
  * The settings view for one plugin (12 §6): the manifest's schema, the stored
  * values with every secret masked to set/unset, and the config state. Admin
- * only, like the rest of this surface — per-user (`scope: 'user'`) settings
- * are a later lane; today every write is instance scope.
+ * only, like the rest of this surface. Every value here is the instance's: for
+ * a user-scoped field (`scope: 'user'`) it is what everyone reads until they
+ * set their own through `pluginUserSettings:set`.
  */
 export const pluginsGetSettings: Handler<
 	Sockets.Plugins.GetSettings.Params,
@@ -951,6 +1086,107 @@ export const pluginsSetSettings: Handler<
 	}
 }
 
+/* ── a person's own values for user-scoped settings ──────────────────────── */
+
+/**
+ * The signed-in person's own settings, for every enabled plugin that declares
+ * a user-scoped field (`scope: 'user'`). Not admin-only: this is the one part
+ * of plugin settings each person owns. The user is always the socket's own —
+ * there is no parameter naming anyone else, so no one can read another
+ * person's values through it.
+ */
+async function userSettingsPayload(
+	userId: number
+): Promise<Sockets.PluginUserSettings.List.Response> {
+	const rows = await db
+		.select({
+			pluginId: schema.plugins.pluginId,
+			name: schema.plugins.name,
+			manifest: schema.plugins.manifest,
+			settings: schema.plugins.settings
+		})
+		.from(schema.plugins)
+		.where(and(eq(schema.plugins.enabled, true), notCoreRow()))
+		.orderBy(asc(schema.plugins.name))
+	const out: Sockets.PluginUserSettings.List.Response["plugins"] = []
+	for (const r of rows) {
+		const own = await readUserPluginSettings(db, r.pluginId, userId)
+		const view = pluginUserSettingsView(r.manifest, r.settings, own)
+		if (view) out.push({ pluginId: r.pluginId, name: r.name, settings: view })
+	}
+	return { plugins: out }
+}
+
+function signedInUserId(socket: any): number | null {
+	const id = socket.user?.id
+	return typeof id === "number" && Number.isInteger(id) ? id : null
+}
+
+export const pluginUserSettingsList: Handler<
+	Sockets.PluginUserSettings.List.Params,
+	Sockets.PluginUserSettings.List.Response
+> = {
+	event: "pluginUserSettings:list",
+	handler: async (socket, _params, emitToUser) => {
+		const userId = signedInUserId(socket)
+		if (userId === null) {
+			const res = { plugins: [], error: "Sign in to change your own settings." }
+			emitToUser("pluginUserSettings:list:error", res)
+			return res
+		}
+		const res = await userSettingsPayload(userId)
+		emitToUser("pluginUserSettings:list", res)
+		return res
+	}
+}
+
+/**
+ * Write the signed-in person's own values. Only user-scoped fields are
+ * writable — an instance field is refused by name, whoever asks, because this
+ * path writes a person's row and an instance value belongs in
+ * `plugins:setSettings`. A null (or "" for a secret) clears the person's own
+ * value, so they read the instance's again. A successful write re-syncs the
+ * manager, so their next hook call carries it.
+ */
+export const pluginUserSettingsSet: Handler<
+	Sockets.PluginUserSettings.Set.Params,
+	Sockets.PluginUserSettings.Set.Response
+> = {
+	event: "pluginUserSettings:set",
+	handler: async (socket, params, emitToUser) => {
+		const fail = (error: string) => {
+			const res = { pluginId: params.pluginId, error }
+			emitToUser("pluginUserSettings:set:error", res)
+			return res
+		}
+		const userId = signedInUserId(socket)
+		if (userId === null) return fail("Sign in to change your own settings.")
+		const [row] = await db
+			.select()
+			.from(schema.plugins)
+			.where(
+				and(eq(schema.plugins.pluginId, params.pluginId), notCoreRow())
+			)
+		if (!row || !row.enabled)
+			return fail("That extension is not installed and switched on.")
+		const current = await readUserPluginSettings(db, row.pluginId, userId)
+		const applied = applyUserSettingsWrite(
+			settingsSchemaOf(row.manifest),
+			current,
+			params.values ?? {}
+		)
+		if (!applied.ok) return fail(applied.error)
+		await writeUserPluginSettings(db, row.pluginId, userId, applied.next)
+		await syncManager(row.pluginId)
+		const res: Sockets.PluginUserSettings.Set.Response = {
+			pluginId: row.pluginId,
+			settings: pluginUserSettingsView(row.manifest, row.settings, applied.next)
+		}
+		emitToUser("pluginUserSettings:list", await userSettingsPayload(userId))
+		return res
+	}
+}
+
 export function registerPluginHandlers(
 	socket: any,
 	emitToUser: Emit,
@@ -978,4 +1214,6 @@ export function registerPluginHandlers(
 	register(socket, pluginsLogs, emitToUser)
 	register(socket, pluginsGetSettings, emitToUser)
 	register(socket, pluginsSetSettings, emitToUser)
+	register(socket, pluginUserSettingsList, emitToUser)
+	register(socket, pluginUserSettingsSet, emitToUser)
 }

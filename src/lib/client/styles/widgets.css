@@ -1,0 +1,4021 @@
+/*
+ * The DEFAULT STYLE PRESET for session widgets: core's one widget stylesheet
+ * (DESIGN-default-widget-stylesheet, P1). Every rule sits in the cascade layer
+ * `sp-widgets`, which app.css orders LAST among the layers
+ * (`theme, base, components, utilities, sp-widgets`):
+ *   - it still beats the utilities in a widget's markup, exactly as the
+ *     unlayered files it was moved from did — so this move changes no look;
+ *   - anything UNLAYERED beats it whatever its specificity: a style preset
+ *     row or a person's own style (WidgetHost, scoped to the widget's box)
+ *     always wins over the default, structurally rather than by out-
+ *     specifying it. The conversation's pack base (sessionLayout/
+ *     messageLayouts.css) sits in this same layer for the same reason.
+ *
+ * Loaded by the page (app.css), never shipped in a module, so every remote
+ * widget, whoever owns it, is covered (a remote build drops `<style>`).
+ * One section per widget, moved verbatim from the files it replaces:
+ *   §conversation     — was styles/conversation.css
+ *   §lore-entries     — was styles/lore-entries.css
+ *   §state-widgets    — was styles/state-widgets.css (World State, Stats, slot control)
+ *   §scene-portraits  — was styles/scene-portraits.css
+ * The P3 phases re-key these rules on widget parts (`data-widget-part`,
+ * STYLE-GUIDE §6.16 "Widget parts"), one widget at a time: Stats (P3a),
+ * World State (P3b), Scene Portraits (P3c), Lore entries (P3d), and the
+ * slot control World State and Stats share (P3e, `stat-slot.*`), then the
+ * conversation's selection bar, read-only banner and who-is-due-next line
+ * (P3f, `messages.*`), its composer (P3g) and its message and log (P3h). P2
+ * tokenised the shared roles: the `--sp-w-*` block below (STYLE-GUIDE §6.16
+ * "Widget tokens").
+ */
+
+@layer sp-widgets {
+
+/* ── widget tokens (P2) ──────────────────────────────────────────────────── */
+
+/* The roles a skin retunes without a selector: set any of these in a style's
+   `vars` (WidgetHost puts them on the widget's box, and they inherit down) or
+   in a theme. Each default is the literal it replaced, so the defaults draw
+   exactly what the sheet drew before.
+
+   Declared on `:root`, not on `[data-widget-instance]`: a token must resolve
+   wherever a sheet class is drawn — inside a WidgetHost box, in a popover
+   panel portalled to `<body>`, and in a mount with no WidgetHost around it —
+   or the declaration that reads it falls back to its initial value. A box's
+   own `vars` still win for everything inside it, by inheritance. Unregistered
+   custom properties substitute as written, so `currentColor` and `em` resolve
+   on the element that reads the token, never on the root. */
+:root {
+	/* surfaces: currentColor washes, so they read on any ground in either mode */
+	--sp-w-card-bg: color-mix(in oklab, currentColor 6%, transparent);
+	--sp-w-chip-bg: color-mix(in oklab, currentColor 12%, transparent);
+	--sp-w-chip-on-bg: color-mix(in oklab, currentColor 30%, transparent);
+	--sp-w-control-bg: color-mix(in oklab, currentColor 12%, transparent);
+	--sp-w-hover-bg: color-mix(in oklab, currentColor 12%, transparent);
+	--sp-w-meter-track-bg: color-mix(in oklab, currentColor 16%, transparent);
+	--sp-w-meter-fill-bg: color-mix(in oklab, currentColor 62%, transparent);
+	/* radii */
+	--sp-w-card-radius: 0.5rem;
+	--sp-w-chip-radius: 999px;
+	--sp-w-control-radius: 0.3rem;
+	--sp-w-icon-button-radius: 0.25rem;
+	--sp-w-meter-radius: 999px;
+	/* spacing and sizes */
+	--sp-w-card-pad: 0.45rem 0.55rem;
+	--sp-w-card-gap: 0.3rem;
+	--sp-w-chip-pad: 0.05rem 0.4rem;
+	--sp-w-control-pad: 0.05rem 0.45rem;
+	--sp-w-icon-button-pad: 0.1rem;
+	--sp-w-empty-pad: 0.75rem;
+	--sp-w-empty-gap: 0.5rem;
+	--sp-w-meter-height: 0.55rem;
+	/* type */
+	--sp-w-font-head: 0.76rem;
+	--sp-w-font-row: 0.74rem;
+	--sp-w-font-row-compact: 0.68rem;
+	--sp-w-font-empty: 0.72rem;
+	--sp-w-font-note: 0.7rem;
+	--sp-w-font-meta: 0.68rem;
+	/* quiet text */
+	--sp-w-muted-opacity: 0.7;
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   §conversation (was styles/conversation.css)
+   ════════════════════════════════════════════════════════════════════════ */
+
+/*
+ * The conversation's structural skin (C0b): what the messages widget and its
+ * parts looked like from their own `<style>` blocks, as global, class-keyed
+ * rules. A component's `<style>` does not survive a remote build (styles are
+ * not in the host-element vocabulary), and core's conversation widgets build
+ * as remotes from the same source — so their structure lives here, beside
+ * the sp elements' base skin, and style packs keep layering over it.
+ */
+
+/* ── the widget's box (MessagesWidget) ──────────────────────────────────── */
+
+/* The whole panel scrolls (owner ruling 2026-09-27): the log and the
+   composer are the box's own children at its full width, so the log's
+   scrollbar sits at the panel's edge and the wheel works over the gutters. */
+[data-widget-part~="messages.root"] {
+	position: relative;
+	isolation: isolate;
+	display: flex;
+	flex-direction: column;
+	min-inline-size: 0;
+	min-block-size: 0;
+	block-size: 100%;
+	/* The glass panel's colours, light first and paired below — a message
+	   sits on the page's ground, and the panel is one step off it. */
+	--sp-glass-bg: color-mix(in oklab, var(--color-surface-50) 78%, transparent);
+	--sp-glass-bd: color-mix(in oklab, var(--color-surface-300) 70%, transparent);
+}
+[data-mode="dark"] [data-widget-part~="messages.root"] {
+	--sp-glass-bg: color-mix(in oklab, var(--color-surface-950) 78%, transparent);
+	--sp-glass-bd: color-mix(in oklab, var(--color-surface-800) 70%, transparent);
+}
+
+/* The width: the log's rows (the stage, `messages.stage`, SessionContainer)
+   and the compose block (`messages.compose`) take the widget's whole box —
+   a widget fills the width its zone grants (STYLE-GUIDE 5.3, ruled
+   2026-09-29). Nothing here caps them. */
+[data-widget-part~="messages.root"] [data-widget-part~="messages.stage"],
+[data-widget-part~="messages.root"] [data-widget-part~="messages.compose"] {
+	inline-size: 100%;
+	min-inline-size: 0;
+}
+
+/* Line width: Comfortable (the `lineWidth` setting, `data-line-width`) — the
+   rows and the field keep a reading measure, about 640px of prose plus the
+   avatar gutter (STYLE-GUIDE 3.4), centred in however wide the box is; the
+   scroll region around them is not capped. A widget style can move the
+   measure with `--sp-measure`.
+
+   The box can be wider on one end than the other: the session's middle zone
+   carries the balance that centres the column on the whole session
+   (`--sp-stage-balance-start` / `-end`, STYLE-GUIDE 5.3), so the column moves
+   by half the difference and never past either edge. Outside a session
+   layout both are unset and this is `margin-inline: auto`. The pure mirror
+   is `columnInsetPx` in sessionLayout/tuckedSides.ts. */
+[data-widget-part~="messages.root"][data-line-width="comfortable"] {
+	--sp-column-width: calc(var(--sp-measure, 40rem) + 3.5rem);
+	--sp-column-shift: calc(
+		(var(--sp-stage-balance-start, 0px) - var(--sp-stage-balance-end, 0px)) /
+			2
+	);
+}
+[data-widget-part~="messages.root"][data-line-width="comfortable"] [data-widget-part~="messages.stage"],
+[data-widget-part~="messages.root"][data-line-width="comfortable"] [data-widget-part~="messages.compose"] {
+	max-inline-size: var(--sp-column-width);
+	margin-inline-start: clamp(
+		0px,
+		(100% - var(--sp-column-width)) / 2 + var(--sp-column-shift),
+		max(0px, 100% - var(--sp-column-width))
+	);
+	margin-inline-end: auto;
+}
+
+/* The log grows; the composer is as tall as it needs to be. `overflow` stays
+   visible so the composer's panes grow their box instead of being clipped —
+   the scroll region is the log's own, inside it. */
+[data-widget-part~="messages.root"] [data-widget-part~="messages.log"] {
+	flex: 1;
+	min-block-size: 0;
+	min-inline-size: 0;
+	display: flex;
+	flex-direction: column;
+}
+[data-widget-part~="messages.root"] [data-widget-part~="messages.log"] > * {
+	flex: 1;
+	min-block-size: 0;
+}
+[data-widget-part~="messages.root"] [data-widget-part~="messages.compose"] {
+	flex: 0 0 auto;
+	min-inline-size: 0;
+	display: flex;
+	flex-direction: column;
+}
+
+/* With the log hidden the widget is its composer, and the field keeps the
+   end of the box it was drawn at. */
+[data-widget-part~="messages.root"][data-show-messages="false"][data-composer-position="bottom"] {
+	justify-content: flex-end;
+}
+
+/* Composer at the top: the field moves above the banners and the nudge, and
+   the whole compose block above the log, so the two strips stay between the
+   field and the conversation at either end. */
+[data-widget-part~="messages.root"][data-composer-position="top"] [data-widget-part~="messages.compose"] {
+	order: -1;
+}
+[data-widget-part~="messages.root"][data-composer-position="top"] [data-widget-part~="messages.compose-area"] {
+	order: -1;
+}
+
+/* The glass panel, painted only where a backdrop image is behind it: one
+   pane behind the rows and the composer — the box's width less an 8px
+   margin, or the column's under Comfortable — standing still while the log
+   scrolls over it. The box keeps the pane's margin, border and padding on
+   its block ends, so the log clips at the pane's inner edge; the rows and
+   the field keep them on their inline ends, so they sit inside the pane. */
+[data-widget-part~="messages.root"][data-backdrop] {
+	padding-block: 17px 33px;
+}
+[data-widget-part~="messages.root"][data-backdrop]::before {
+	content: "";
+	position: absolute;
+	z-index: -1;
+	inset-block: 8px 16px;
+	inset-inline: 8px;
+	background: var(--sp-glass-bg);
+	backdrop-filter: blur(14px);
+	border: 1px solid var(--sp-glass-bd);
+	border-radius: 14px;
+	pointer-events: none;
+}
+/* Under Comfortable the pane is the column's, balance included (see the
+   Line width rules above). */
+[data-widget-part~="messages.root"][data-backdrop][data-line-width="comfortable"]::before {
+	inset-inline: clamp(
+			0px,
+			(100% - var(--sp-column-width)) / 2 + var(--sp-column-shift),
+			max(0px, 100% - var(--sp-column-width))
+		)
+		auto;
+	inline-size: min(100%, var(--sp-column-width));
+}
+[data-widget-part~="messages.root"][data-backdrop] [data-widget-part~="messages.stage"],
+[data-widget-part~="messages.root"][data-backdrop] [data-widget-part~="messages.compose"] {
+	padding-inline: 25px;
+}
+
+/* Avatars off: the cell goes, and the custom properties a style sizes its
+   avatar column with go to zero so the gutter does not stand empty. */
+[data-widget-part~="messages.root"][data-show-avatars="false"] [data-widget-part~="messages.message-avatar"] {
+	display: none;
+}
+[data-widget-part~="messages.root"][data-show-avatars="false"] [data-widget-part~="messages.message"] {
+	--sp-av: 0;
+	--sp-portrait: 0;
+}
+
+/* A copy pinned to one channel names it (lair re-plan S1: the Lair's
+   Sanctum panel). One quiet row across the box's top, the channel's label
+   beside the conversation's icon; it never scrolls with the log. */
+[data-widget-part~="messages.channel-head"] {
+	/* First whichever end the composer is drawn at (`order: -1` there). */
+	order: -2;
+	flex: 0 0 auto;
+	display: flex;
+	align-items: center;
+	gap: 0.4rem;
+	min-inline-size: 0;
+	padding: 0.5rem 0.75rem;
+	border-block-end: 1px solid color-mix(in oklab, currentColor 12%, transparent);
+}
+[data-widget-part~="messages.channel-icon"] {
+	flex: 0 0 auto;
+	opacity: var(--sp-w-muted-opacity);
+}
+/* A pinned copy is side talk, usually in a side panel: its prose a step
+   smaller than the story's. The person's story text size (the root's
+   `--sp-prose-scale`) still multiplies it: the box keeps the inherited scale
+   under its own name, and its children scale that — one element each, so
+   the property never reads itself. */
+[data-widget-part~="messages.root"][data-channel] {
+	--sp-copy-prose-scale: var(--sp-prose-scale, 1);
+}
+[data-widget-part~="messages.root"][data-channel] > * {
+	--sp-prose-scale: calc(var(--sp-copy-prose-scale, 1) * 0.88);
+}
+[data-widget-part~="messages.channel-title"] {
+	margin: 0;
+	min-inline-size: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-size: calc(0.875rem * var(--text-scaling, 1));
+	font-weight: var(--font-weight-semibold);
+}
+
+/* ── the selection bar, the read-only banner, who is due next ────────────── */
+
+/* Keyed on the widget's parts (`data-widget-part`, P3f); the markup carries
+   no class (STYLE-GUIDE §6.16 "Parts by widget"). Skeleton's `btn btn-sm`,
+   its `preset-filled-*` / `preset-tonal-*` and the app's `.btn` states, and
+   the composer's send and quiet buttons Continue and Pick wear, are written
+   here as they compile, hover, focus-visible, active, disabled and the coarse
+   44px targets included. Every viewport variant answers the widget's box
+   (`@container sp-widget`, STYLE-GUIDE §5.3): the bar's labels from 40rem, and
+   the bar's rounded top and Continue's 44px at 64rem, with the composer's own
+   (P3g), so the two change together. */
+
+/* Selecting lines for a summary: the bar stands where the composer was. */
+[data-widget-part~="messages.selection-bar"] {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: calc(var(--spacing) * 2);
+	padding: calc(var(--spacing) * 3);
+	background-color: var(--color-secondary-50-950);
+	color: var(--color-secondary-950-50);
+}
+@container sp-widget (min-width: 64rem) {
+	[data-widget-part~="messages.selection-bar"] {
+		border-top-left-radius: var(--radius-lg);
+		border-top-right-radius: var(--radius-lg);
+	}
+}
+[data-widget-part~="messages.selection-count"] {
+	font-size: calc(0.875rem * var(--text-scaling));
+	line-height: calc(calc(1.25 / 0.875) * var(--text-scaling));
+	font-weight: var(--font-weight-semibold);
+}
+[data-widget-part~="messages.selection-bulk"] {
+	display: flex;
+	gap: calc(var(--spacing) * 2);
+}
+[data-widget-part~="messages.selection-finish"] {
+	margin-left: auto;
+	display: flex;
+	flex-wrap: wrap;
+	gap: calc(var(--spacing) * 2);
+}
+/* Every button on the bar: `btn btn-sm`. */
+[data-widget-part~="messages.selection-button"] {
+	border-radius: var(--radius-base);
+	display: inline-flex;
+	flex-direction: row;
+	align-items: center;
+	justify-content: center;
+	gap: calc(var(--spacing) * 2);
+	text-decoration-line: none;
+	white-space: nowrap;
+	font-size: var(--text-sm);
+	line-height: var(--text-sm);
+	padding-block: calc((var(--text-sm) - calc(var(--spacing) * 0.5)) / 2);
+	padding-inline: calc((var(--text-sm) - calc(var(--spacing) * 0.5)) / 2 + var(--spacing));
+	transition-property: var(--default-transition-property);
+	transition-timing-function: var(--default-transition-timing-function);
+	transition-duration: var(--default-transition-duration);
+}
+[data-widget-part~="messages.selection-button"] > sp-icon {
+	inline-size: var(--text-sm);
+	block-size: var(--text-sm);
+}
+/* Its colour, one filled preset per button. */
+[data-widget-part~="messages.select-all"],
+[data-widget-part~="messages.select-none"] {
+	background-color: var(--color-surface-400-600);
+	color: var(--color-surface-contrast-400-600);
+}
+[data-widget-part~="messages.selection-cancel"] {
+	background-color: var(--color-surface-500);
+	color: var(--color-surface-contrast-500);
+}
+[data-widget-part~="messages.summarize-scene"] {
+	background-color: var(--color-secondary-500);
+	color: var(--color-secondary-contrast-500);
+}
+[data-widget-part~="messages.summarize-world"] {
+	background-color: var(--color-primary-500);
+	color: var(--color-primary-contrast-500);
+}
+[data-widget-part~="messages.summarize-character"] {
+	background-color: var(--color-tertiary-500);
+	color: var(--color-tertiary-contrast-500);
+}
+/* In a narrow box the label goes; the icon and the title stay. */
+[data-widget-part~="messages.selection-button-label"] {
+	display: none;
+}
+@container sp-widget (min-width: 40rem) {
+	[data-widget-part~="messages.selection-button-label"] {
+		display: inline;
+	}
+}
+
+/* Read-only (19 §6): the mode is not installed, so a banner stands where the
+   composer was. */
+[data-widget-part~="messages.read-only"] {
+	display: flex;
+	align-items: flex-start;
+	gap: calc(var(--spacing) * 3);
+	border-top-left-radius: var(--radius-lg);
+	border-top-right-radius: var(--radius-lg);
+	padding: calc(var(--spacing) * 4);
+	background-color: var(--color-warning-50-950);
+	color: var(--color-warning-950-50);
+}
+[data-widget-part~="messages.read-only-icon"] {
+	margin-top: calc(var(--spacing) * 0.5);
+	flex-shrink: 0;
+}
+[data-widget-part~="messages.read-only-text"] {
+	font-size: calc(0.875rem * var(--text-scaling));
+	line-height: calc(calc(1.25 / 0.875) * var(--text-scaling));
+}
+[data-widget-part~="messages.read-only-title"] {
+	font-weight: var(--font-weight-semibold);
+}
+
+/* Who is due next (NextCharacterBlock): one line under the log, the order's
+   head or an invitation to pick, with who follows under it as a list. */
+[data-widget-part~="messages.next-up"] {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+}
+[data-widget-part~="messages.next-up-waiting"],
+[data-widget-part~="messages.next-up-head"] {
+	margin-block: calc(var(--spacing) * 2);
+	display: flex;
+	min-width: 0px;
+	padding-inline: calc(var(--spacing) * 4);
+}
+[data-widget-part~="messages.next-up-waiting"] {
+	align-items: center;
+	gap: calc(var(--spacing) * 2);
+}
+[data-widget-part~="messages.next-up-head"] {
+	flex-direction: column;
+	gap: var(--spacing);
+}
+[data-widget-part~="messages.next-up-line"] {
+	display: flex;
+	min-width: 0px;
+	align-items: center;
+	gap: calc(var(--spacing) * 2);
+}
+[data-widget-part~="messages.next-up-narrator"] {
+	color: light-dark(var(--color-surface-600), var(--color-surface-400));
+}
+/* The line itself: one line, cut with an ellipsis rather than wrapped. */
+[data-widget-part~="messages.next-up-text"] {
+	color: var(--color-surface-700);
+	min-width: 0px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-size: 13px;
+	line-height: 1.45;
+}
+[data-widget-part~="messages.next-up-text"]:where([data-mode="dark"], [data-mode="dark"] *) {
+	color: var(--color-surface-300);
+}
+[data-widget-part~="messages.next-up-controls"] {
+	margin-left: auto;
+	display: flex;
+	flex-shrink: 0;
+	align-items: center;
+	gap: var(--spacing);
+}
+/* Pick, and Someone else: the composer's quiet button (as Back to compose). */
+[data-widget-part~="messages.next-up-pick"] {
+	display: inline-flex;
+	height: calc(var(--spacing) * 7);
+	align-items: center;
+	gap: var(--spacing);
+	border-radius: 6px;
+	padding-inline: calc(var(--spacing) * 2);
+	font-size: calc(0.75rem * var(--text-scaling));
+	line-height: calc(calc(1 / 0.75) * var(--text-scaling));
+	color: var(--color-surface-600);
+}
+@media (hover: hover) {
+	[data-widget-part~="messages.next-up-pick"]:hover {
+		color: var(--color-surface-900);
+	}
+}
+[data-widget-part~="messages.next-up-pick"]:where([data-mode="dark"], [data-mode="dark"] *) {
+	color: var(--color-surface-400);
+}
+@media (hover: hover) {
+	[data-widget-part~="messages.next-up-pick"]:where([data-mode="dark"], [data-mode="dark"] *):hover {
+		color: var(--color-surface-50);
+	}
+}
+[data-widget-part~="messages.next-up-pick"]:focus-visible {
+	outline-style: solid;
+	outline-width: 2px;
+	outline-offset: 2px;
+	outline-color: var(--color-primary-500);
+}
+/* Waiting, Pick sits at the line's end. */
+[data-widget-part~="messages.next-up-waiting"] > [data-widget-part~="messages.next-up-pick"] {
+	margin-left: auto;
+	flex-shrink: 0;
+}
+/* In a narrow box "Someone else" is said to a screen reader only; its icon and title stay. */
+@container sp-widget (width < 40rem) {
+	[data-widget-part~="messages.next-up-pick-label"] {
+		position: absolute;
+		width: 1px;
+		height: 1px;
+		padding: 0;
+		margin: -1px;
+		overflow: hidden;
+		clip-path: inset(50%);
+		white-space: nowrap;
+		border-width: 0;
+	}
+}
+/* Continue: the composer's Send, filled. */
+[data-widget-part~="messages.next-up-continue"] {
+	display: inline-flex;
+	flex-direction: row;
+	align-items: center;
+	justify-content: center;
+	gap: calc(var(--spacing) * 1.5);
+	height: calc(var(--spacing) * 8);
+	border-radius: calc(infinity * 1px);
+	padding-block: calc((var(--text-base) - calc(var(--spacing) * 0.5)) / 2);
+	padding-inline: calc(var(--spacing) * 3);
+	text-decoration-line: none;
+	white-space: nowrap;
+	font-size: 13px;
+	line-height: 1.45;
+	font-weight: var(--font-weight-medium);
+	background-color: var(--color-primary-500);
+	color: var(--color-primary-contrast-500);
+	transition-property: var(--default-transition-property);
+	transition-timing-function: var(--default-transition-timing-function);
+	transition-duration: var(--default-transition-duration);
+}
+@container sp-widget (width < 64rem) {
+	[data-widget-part~="messages.next-up-continue"] {
+		height: calc(var(--spacing) * 11);
+		padding-inline: calc(var(--spacing) * 4);
+	}
+}
+[data-widget-part~="messages.next-up-continue"] > sp-icon {
+	width: calc(var(--spacing) * 4);
+	height: calc(var(--spacing) * 4);
+}
+/* That after-line: who follows the head, when the setting lists them. */
+[data-widget-part~="messages.next-up-after"] {
+	color: light-dark(var(--color-surface-600), var(--color-surface-400));
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-size: calc(0.75rem * var(--text-scaling));
+	line-height: calc(calc(1 / 0.75) * var(--text-scaling));
+}
+
+/* The bar's buttons and Continue answer the pointer, the press and the
+   keyboard as `.btn` does: brighter under the pointer, pressed in, a 2px
+   primary ring outside a 2px offset, and dimmed when disabled. */
+@media (hover: hover) {
+	[data-widget-part~="messages.selection-button"]:not(:disabled):hover,
+	[data-widget-part~="messages.next-up-continue"]:not(:disabled):hover {
+		filter: brightness(125%);
+	}
+	[data-widget-part~="messages.selection-button"]:not(:disabled):hover:where([data-mode="dark"], [data-mode="dark"] *),
+	[data-widget-part~="messages.next-up-continue"]:not(:disabled):hover:where([data-mode="dark"], [data-mode="dark"] *) {
+		filter: brightness(75%);
+	}
+}
+[data-widget-part~="messages.selection-button"]:not(:disabled):active,
+[data-widget-part~="messages.next-up-continue"]:not(:disabled):active {
+	filter: brightness(90%);
+	transform: scale(0.98);
+}
+[data-widget-part~="messages.selection-button"]:not(:disabled):active:where([data-mode="dark"], [data-mode="dark"] *),
+[data-widget-part~="messages.next-up-continue"]:not(:disabled):active:where([data-mode="dark"], [data-mode="dark"] *) {
+	filter: brightness(115%);
+}
+[data-widget-part~="messages.selection-button"]:focus-visible,
+[data-widget-part~="messages.next-up-continue"]:focus-visible {
+	box-shadow:
+		0 0 #0000,
+		0 0 #0000,
+		0 0 0 2px #fff,
+		0 0 0 4px var(--color-primary-500),
+		0 0 #0000;
+	outline-style: none;
+}
+[data-widget-part~="messages.selection-button"]:disabled,
+[data-widget-part~="messages.next-up-continue"]:disabled {
+	pointer-events: none;
+	opacity: 40%;
+	filter: grayscale(0.3);
+}
+
+/* STYLE-GUIDE §9: a finger lands on 44px, however small the control reads. */
+@media (pointer: coarse) {
+	[data-widget-part~="messages.next-up-pick"] {
+		height: calc(var(--spacing) * 11);
+	}
+	[data-widget-part~="messages.next-up-continue"] {
+		height: calc(var(--spacing) * 11);
+		padding-inline: calc(var(--spacing) * 4);
+	}
+}
+
+/* ── the composer (SessionComposer), and a line's editor (MessageComposer) ── */
+
+/* Keyed on the widget's parts (`data-widget-part`, P3g); the markup carries no
+   class (STYLE-GUIDE §6.16 "Parts by widget"). What were app.css's unlayered
+   `.composer-*` rules are here, re-keyed, with their skin variants
+   (`[data-composer-skin]`, the widget's `composer` setting); Skeleton's `btn`,
+   `btn-sm`, `card`, `h3`, the presets and the app's `.btn` states,
+   `.popover-menu-btn` / `-title` and `.sp-action-new` are written as they
+   compile, hover, focus-visible, active, disabled and the coarse 44px targets
+   included. The field is its host's (`sp-composer-field` draws a `textarea`
+   that wears Skeleton's `textarea` by default): the field's rules put back what
+   that default adds. Viewport variants answer the widget's box: the `lg:` pair
+   and its `max-lg:` 44px targets are `@container sp-widget` at 64rem, the same
+   rule the selection bar's rounded top and Continue use, so the composer and
+   the bar change together (STYLE-GUIDE §5.3). */
+
+/* The composer: one card holds the field and a 32px footer; everything around
+   it (the Actions disclosure, the keyboard hint) is quiet text above or below. */
+[data-widget-part~="messages.composer"] {
+	padding-inline: calc(var(--spacing) * 3);
+	padding-bottom: calc(var(--spacing) * 2);
+}
+
+/* A guest with no persona: the one thing they can do here. */
+[data-widget-part~="messages.join"] {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: calc(var(--spacing) * 4);
+	padding-block: calc(var(--spacing) * 8);
+}
+[data-widget-part~="messages.join-text"] {
+	text-align: center;
+}
+[data-widget-part~="messages.join-icon"] {
+	margin-inline: auto;
+	margin-bottom: calc(var(--spacing) * 2);
+	color: light-dark(var(--color-surface-700), var(--color-surface-300));
+}
+/* Skeleton's `h3`. */
+[data-widget-part~="messages.join-title"] {
+	margin-bottom: calc(var(--spacing) * 2);
+	color: var(--typo-heading--color-light);
+	font-family: var(--typo-heading--font-family);
+	font-weight: var(--typo-heading--font-weight);
+	font-style: var(--typo-heading--font-style);
+	letter-spacing: var(--typo-heading--letter-spacing);
+	font-stretch: var(--typo-heading--font-stretch);
+	font-kerning: var(--typo-heading--font-kerning);
+	text-shadow: var(--typo-heading--text-shadow);
+	word-spacing: var(--typo-heading--word-spacing);
+	hyphens: var(--typo-heading--hyphens);
+	text-transform: var(--typo-heading--text-transform);
+	font-size: var(--text-2xl);
+	line-height: var(--text-2xl--line-height);
+}
+[data-widget-part~="messages.join-title"]:where([data-mode="dark"], [data-mode="dark"] *) {
+	color: var(--typo-heading--color-dark);
+}
+[data-widget-part~="messages.join-note"] {
+	color: light-dark(var(--color-surface-600), var(--color-surface-400));
+}
+/* `btn preset-filled-primary-500`. */
+[data-widget-part~="messages.join-button"] {
+	border-radius: var(--radius-base);
+	display: inline-flex;
+	flex-direction: row;
+	align-items: center;
+	justify-content: center;
+	gap: calc(var(--spacing) * 2);
+	text-decoration-line: none;
+	white-space: nowrap;
+	font-size: var(--text-base);
+	line-height: var(--text-base);
+	padding-block: calc((var(--text-base) - calc(var(--spacing) * 0.5)) / 2);
+	padding-inline: calc((var(--text-base) - calc(var(--spacing) * 0.5)) / 2 + var(--spacing));
+	background-color: var(--color-primary-500);
+	color: var(--color-primary-contrast-500);
+	transition-property: var(--default-transition-property);
+	transition-timing-function: var(--default-transition-timing-function);
+	transition-duration: var(--default-transition-duration);
+}
+[data-widget-part~="messages.join-button"] > sp-icon {
+	inline-size: var(--text-base);
+	block-size: var(--text-base);
+}
+
+/* The Actions disclosure above the card, and the retrieval notice beside it. */
+[data-widget-part~="messages.composer-disclosure-bar"] {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	column-gap: calc(var(--spacing) * 3);
+	row-gap: var(--spacing);
+}
+[data-widget-part~="messages.composer-actions-toggle"] {
+	display: inline-flex;
+	height: calc(var(--spacing) * 7);
+	align-items: center;
+	gap: var(--spacing);
+	border-radius: 6px;
+	font-size: calc(0.75rem * var(--text-scaling));
+	line-height: calc(calc(1 / 0.75) * var(--text-scaling));
+	color: var(--color-surface-500);
+}
+@media (hover: hover) {
+	[data-widget-part~="messages.composer-actions-toggle"]:hover {
+		color: var(--color-surface-700);
+	}
+	[data-widget-part~="messages.composer-actions-toggle"]:where([data-mode="dark"], [data-mode="dark"] *):hover {
+		color: var(--color-surface-300);
+	}
+}
+[data-widget-part~="messages.composer-actions-chevron"] {
+	transition-property: transform, translate, scale, rotate;
+	transition-timing-function: var(--tw-ease, var(--default-transition-timing-function));
+	transition-duration: 150ms;
+}
+/* Open, the chevron points up. */
+[data-widget-part~="messages.composer-actions-toggle"][aria-expanded="true"] > [data-widget-part~="messages.composer-actions-chevron"] {
+	rotate: 180deg;
+}
+[data-widget-part~="messages.composer-notice"] {
+	margin-left: auto;
+	min-width: 0px;
+}
+
+/* The actions row: the genre's actions and the turn controls as chips. The
+   host views draw ordinary buttons; the chip shape is set here, on the row. */
+[data-widget-part~="messages.composer-actions-row"] {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: calc(var(--spacing) * 1.5);
+	padding-top: var(--spacing);
+	padding-bottom: var(--spacing);
+}
+[data-widget-part~="messages.composer-chips"] {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: calc(var(--spacing) * 1.5);
+}
+[data-widget-part~="messages.composer-chips"] :where(button) {
+	display: inline-flex;
+	height: calc(var(--spacing) * 8);
+	align-items: center;
+	justify-content: center;
+	gap: calc(var(--spacing) * 1.5);
+	border-radius: calc(infinity * 1px);
+	padding-inline: calc(var(--spacing) * 3);
+	font-size: 13px;
+	--tw-leading: 1.45;
+	line-height: 1.45;
+	--tw-font-weight: var(--font-weight-medium);
+	font-weight: var(--font-weight-medium);
+}
+[data-widget-part~="messages.composer-chips"] :where(button) > :where(svg, sp-icon) {
+	width: calc(var(--spacing) * 4);
+	height: calc(var(--spacing) * 4);
+}
+/* The genre's contributed actions read as the session's own vocabulary. */
+[data-widget-part~="messages.composer-actions"] :where(button) {
+	--tw-border-style: none;
+	border-style: none;
+	background-color: var(--color-surface-200);
+	color: var(--color-surface-700);
+}
+[data-widget-part~="messages.composer-actions"] :where(button):where([data-mode="dark"], [data-mode="dark"] *) {
+	background-color: var(--color-surface-800);
+	color: var(--color-surface-200);
+}
+/* The turn controls sit a step quieter than the genre's own actions. */
+[data-widget-part~="messages.composer-turn-controls"] :where(button) {
+	border-style: var(--tw-border-style);
+	border-width: var(--default-border-width, 1px);
+	border-color: var(--color-surface-300);
+	background-color: transparent;
+	color: var(--color-surface-600);
+}
+[data-widget-part~="messages.composer-turn-controls"] :where(button):where([data-mode="dark"], [data-mode="dark"] *) {
+	border-color: var(--color-surface-800);
+	color: var(--color-surface-400);
+}
+/* More actions (the overflow's trigger, a chip): what `btn btn-sm` adds under
+   the chip, and the room for the newcomer's dot. */
+[data-widget-part~="messages.composer-more-actions"] {
+	position: relative;
+	flex-direction: row;
+	text-decoration-line: none;
+	white-space: nowrap;
+	padding-block: calc((var(--text-sm) - calc(var(--spacing) * 0.5)) / 2);
+	transition-property: var(--default-transition-property);
+	transition-timing-function: var(--default-transition-timing-function);
+	transition-duration: var(--default-transition-duration);
+}
+/* The *new* mark (R-15, U5c): a dot on the trigger while the menu lists a
+   newcomer, and a badge on the row itself. */
+[data-widget-part~="messages.composer-new-dot"] {
+	position: absolute;
+	top: calc(var(--spacing) * -0.5);
+	right: calc(var(--spacing) * -0.5);
+	width: calc(var(--spacing) * 2);
+	height: calc(var(--spacing) * 2);
+	border-radius: calc(infinity * 1px);
+	background-color: var(--color-primary-500);
+}
+[data-widget-part~="messages.composer-new"] {
+	margin-left: auto;
+	border-radius: calc(infinity * 1px);
+	background-color: var(--color-primary-50-950);
+	color: var(--color-primary-950-50);
+	padding-inline: calc(var(--spacing) * 1.5);
+	padding-block: 0px;
+	font-size: 0.65em;
+	--tw-font-weight: var(--font-weight-semibold);
+	font-weight: var(--font-weight-semibold);
+	--tw-tracking: var(--tracking-wide);
+	letter-spacing: var(--tracking-wide);
+	text-transform: uppercase;
+}
+/* An overflow row (its `sp-menu-item`): the action's name, its slash name, and
+   why it is refused when it is. */
+[data-widget-part~="messages.composer-overflow-item"] {
+	display: flex;
+	align-items: center;
+	gap: calc(var(--spacing) * 2);
+	font-size: calc(0.75rem * var(--text-scaling));
+	line-height: calc(calc(1 / 0.75) * var(--text-scaling));
+}
+[data-widget-part~="messages.composer-overflow-slash"] {
+	margin-left: var(--spacing);
+	font-family: var(--font-mono);
+	font-size: 0.85em;
+	color: var(--color-surface-500);
+}
+[data-widget-part~="messages.composer-overflow-note"] {
+	display: block;
+	margin-left: auto;
+	font-size: 11px;
+	color: var(--color-surface-500);
+}
+
+/* The card: the field and its footer. */
+[data-widget-part~="messages.composer-card"] {
+	position: relative;
+	border-radius: 14px;
+	border-style: var(--tw-border-style);
+	border-width: var(--default-border-width, 1px);
+	border-color: var(--color-surface-300);
+	background-color: var(--color-surface-50);
+}
+[data-widget-part~="messages.composer-card"]:where([data-mode="dark"], [data-mode="dark"] *) {
+	border-color: var(--color-surface-800);
+	background-color: var(--color-surface-950);
+}
+[data-widget-part~="messages.composer-card"]:focus-within {
+	border-color: var(--color-primary-500);
+	--tw-ring-shadow: var(--tw-ring-inset,) 0 0 0 calc(1px + var(--tw-ring-offset-width)) var(--tw-ring-color, currentcolor);
+	box-shadow: var(--tw-inset-shadow), var(--tw-inset-ring-shadow), var(--tw-ring-offset-shadow), var(--tw-ring-shadow), var(--tw-shadow);
+	--tw-ring-color: var(--color-primary-500);
+}
+[data-composer-skin="minimal"] [data-widget-part~="messages.composer-card"] {
+	border-radius: 9999px;
+	padding-inline: calc(var(--spacing) * 2);
+}
+/* In a narrow box (a side panel, the Lair's Sanctum) the pill's footer wraps
+   under its field, and a stadium around two rows reads as a bubble: a card
+   with round corners instead. */
+@container sp-widget (width < 30rem) {
+	[data-composer-skin="minimal"] [data-widget-part~="messages.composer-card"] {
+		border-radius: 1.25rem;
+	}
+	/* Two lines, so a placeholder that wraps is read whole. */
+	[data-composer-skin="minimal"] [data-widget-part~="messages.composer-field"] textarea {
+		max-block-size: 3.2em;
+	}
+}
+/* The draft's share of the context window, along the card's top inner edge. */
+[data-widget-part~="messages.composer-meter"] {
+	pointer-events: none;
+	position: absolute;
+	inset-inline: 0px;
+	top: 0px;
+	height: 2px;
+	overflow: hidden;
+	border-start-start-radius: inherit;
+	border-start-end-radius: inherit;
+}
+[data-widget-part~="messages.composer-meter-fill"] {
+	inline-size: var(--sp-fill, 0%);
+	height: 100%;
+	background-color: var(--color-surface-500);
+}
+[data-widget-part~="messages.composer-meter-fill"][data-high] {
+	background-color: var(--color-warning-500);
+}
+[data-widget-part~="messages.composer-body"] {
+	padding-inline: calc(var(--spacing) * 2);
+	padding-top: calc(var(--spacing) * 2);
+}
+
+/* A panel taking the field area names itself and offers the way back. */
+[data-widget-part~="messages.composer-pane-head"] {
+	margin-bottom: var(--spacing);
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: calc(var(--spacing) * 2);
+}
+[data-widget-part~="messages.composer-pane-title"] {
+	font-size: calc(0.75rem * var(--text-scaling));
+	line-height: calc(calc(1 / 0.75) * var(--text-scaling));
+	color: var(--color-surface-600);
+}
+[data-widget-part~="messages.composer-pane-title"]:where([data-mode="dark"], [data-mode="dark"] *) {
+	color: var(--color-surface-400);
+}
+/* Back to compose: the composer's quiet button. */
+[data-widget-part~="messages.composer-back"] {
+	display: inline-flex;
+	height: calc(var(--spacing) * 7);
+	align-items: center;
+	gap: var(--spacing);
+	border-radius: 6px;
+	font-size: calc(0.75rem * var(--text-scaling));
+	line-height: calc(calc(1 / 0.75) * var(--text-scaling));
+	color: var(--color-surface-600);
+}
+@media (hover: hover) {
+	[data-widget-part~="messages.composer-back"]:hover {
+		color: var(--color-surface-900);
+	}
+}
+[data-widget-part~="messages.composer-back"]:where([data-mode="dark"], [data-mode="dark"] *) {
+	color: var(--color-surface-400);
+}
+@media (hover: hover) {
+	[data-widget-part~="messages.composer-back"]:where([data-mode="dark"], [data-mode="dark"] *):hover {
+		color: var(--color-surface-50);
+	}
+}
+
+/* The draft, previewed: set in the story's prose and its two tones. */
+[data-widget-part~="messages.composer-preview"] {
+	font-family: var(--sp-prose, inherit);
+	font-size: calc(17px * var(--sp-prose-scale, 1));
+	line-height: 1.65;
+	min-block-size: 1.65em;
+	max-block-size: 18em;
+	overflow-y: auto;
+}
+[data-widget-part~="messages.root"] :is([data-widget-part~="messages.composer-preview"], [data-widget-part~="messages.edit-preview-body"]) {
+	color: var(--sp-body, inherit);
+}
+[data-widget-part~="messages.root"] :is([data-widget-part~="messages.composer-preview"], [data-widget-part~="messages.edit-preview-body"]) span.quoted-text {
+	color: var(--sp-quote, inherit);
+}
+
+/* The `/` palette (R-15 slash names, U5c): a listbox above the field inside
+   the card, drawn by the composer rather than portalled, so it moves with the
+   composer's position and never floats over the log. The highlighted row is
+   its option's `aria-selected`, a refused one its `aria-disabled`. */
+[data-widget-part~="messages.composer-palette"] {
+	margin-bottom: var(--spacing);
+	display: flex;
+	max-height: calc(var(--spacing) * 56);
+	flex-direction: column;
+	gap: 1px;
+	overflow-y: auto;
+	border-bottom-style: var(--tw-border-style);
+	border-bottom-width: var(--default-border-width, 1px);
+	border-color: var(--color-surface-200);
+	padding-bottom: var(--spacing);
+}
+[data-widget-part~="messages.composer-palette"]:where([data-mode="dark"], [data-mode="dark"] *) {
+	border-color: var(--color-surface-800);
+}
+[data-widget-part~="messages.composer-palette-button"] {
+	display: flex;
+	width: 100%;
+	align-items: center;
+	gap: calc(var(--spacing) * 2);
+	border-radius: var(--radius-md);
+	padding-inline: calc(var(--spacing) * 2);
+	padding-block: calc(var(--spacing) * 1.5);
+	text-align: left;
+	font-size: 13px;
+}
+[data-widget-part~="messages.composer-palette-row"][aria-selected="true"] [data-widget-part~="messages.composer-palette-button"] {
+	background-color: var(--color-primary-50-950);
+	color: var(--color-primary-950-50);
+}
+[data-widget-part~="messages.composer-palette-row"][aria-disabled="true"] [data-widget-part~="messages.composer-palette-button"] {
+	cursor: not-allowed;
+	opacity: 50%;
+}
+[data-widget-part~="messages.composer-palette-slash"] {
+	font-family: var(--font-mono);
+	font-size: 12px;
+}
+/* The argument a row's action takes (S2): `<direction…>`, beside its name. */
+[data-widget-part~="messages.composer-palette-argument"] {
+	flex: 0 1 auto;
+	min-inline-size: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-family: var(--font-mono);
+	font-size: 12px;
+	color: var(--color-surface-600);
+}
+[data-widget-part~="messages.composer-palette-argument"]:where([data-mode="dark"], [data-mode="dark"] *) {
+	color: var(--color-surface-400);
+}
+/* Beside a hint, the name keeps its width: the hint is what gives way. */
+[data-widget-part~="messages.composer-palette-argument"] + [data-widget-part~="messages.composer-palette-label"] {
+	flex-shrink: 0;
+}
+[data-widget-part~="messages.composer-palette-label"] {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	color: var(--color-surface-700);
+}
+[data-widget-part~="messages.composer-palette-label"]:where([data-mode="dark"], [data-mode="dark"] *) {
+	color: var(--color-surface-300);
+}
+[data-widget-part~="messages.composer-palette-note"] {
+	margin-left: auto;
+	font-size: 11px;
+	color: var(--color-surface-500);
+}
+
+/* The field: the card is its box, so the textarea (its host's) brings none of
+   its own — Skeleton's `textarea` look, which the host gives a field by
+   default, is put back to the page's plain control here. */
+[data-widget-part~="messages.composer-field"] {
+	display: block;
+}
+[data-widget-part~="messages.composer-field"] textarea {
+	display: inline-block;
+	width: 100%;
+	resize: none;
+	--tw-border-style: none;
+	border-style: none;
+	border-radius: 0px;
+	background-color: transparent;
+	color: inherit;
+	padding: 0px;
+	font-size: 15px;
+	--tw-leading: 1.5;
+	line-height: 1.5;
+	--tw-outline-style: none;
+	outline-style: none;
+	outline-color: currentcolor;
+	box-shadow: none;
+	field-sizing: content;
+	max-block-size: 9em; /* six lines, then it scrolls */
+	overflow-y: auto;
+}
+[data-widget-part~="messages.composer-field"] textarea:focus {
+	outline-color: transparent;
+	border-color: transparent;
+	--tw-ring-inset: var(--tw-empty,/*!*/ /*!*/);
+	--tw-ring-color: oklch(54.6% 0.245 262.881);
+	--tw-ring-shadow: var(--tw-ring-inset,) 0 0 0 calc(0px + var(--tw-ring-offset-width)) var(--tw-ring-color, currentcolor);
+	box-shadow: var(--tw-inset-shadow), var(--tw-inset-ring-shadow), var(--tw-ring-offset-shadow), var(--tw-ring-shadow), var(--tw-shadow);
+}
+/* The forms base's placeholder, over Skeleton's. */
+[data-widget-part~="messages.composer-field"] textarea::placeholder {
+	color: oklch(55.1% 0.027 264.364);
+}
+[data-composer-skin="minimal"] [data-widget-part~="messages.composer-field"] textarea {
+	max-block-size: 1.6em;
+}
+[data-composer-skin="writer"] [data-widget-part~="messages.composer-field"] textarea {
+	font-family: var(--sp-prose, inherit);
+	/* Story text size multiplies it, as it does the message styles' prose. */
+	font-size: calc(17px * var(--sp-prose-scale, 1));
+	line-height: 1.65;
+	min-block-size: 13.2em; /* eight lines of prose */
+	max-block-size: none;
+}
+
+/* The footer: the channel, the persona, Preview, More and Send. */
+[data-widget-part~="messages.composer-footer"] {
+	display: flex;
+	align-items: center;
+	gap: var(--spacing);
+	padding: calc(var(--spacing) * 2);
+}
+[data-widget-part~="messages.composer-footer-end"] {
+	margin-left: auto;
+	display: flex;
+	align-items: center;
+	gap: var(--spacing);
+}
+/* The channel strip (R-C): which of the session's channels the next line
+   lands on; the chosen one is `aria-pressed`. */
+[data-widget-part~="messages.composer-channels"] {
+	display: inline-flex;
+	align-items: center;
+	gap: calc(var(--spacing) * 0.5);
+}
+[data-widget-part~="messages.composer-channel"] {
+	display: inline-flex;
+	height: calc(var(--spacing) * 8);
+	align-items: center;
+	justify-content: center;
+	border-radius: calc(infinity * 1px);
+	padding-inline: calc(var(--spacing) * 3);
+	font-size: 13px;
+	--tw-leading: 1.45;
+	line-height: 1.45;
+	--tw-font-weight: var(--font-weight-medium);
+	font-weight: var(--font-weight-medium);
+}
+[data-widget-part~="messages.composer-channel"][aria-pressed="true"] {
+	background-color: var(--color-primary-50-950);
+	color: var(--color-primary-950-50);
+}
+/* The persona written as: a chip, and a switch with a menu when there is a choice. */
+[data-widget-part~="messages.composer-persona"] {
+	display: inline-flex;
+	height: calc(var(--spacing) * 8);
+	align-items: center;
+	gap: calc(var(--spacing) * 1.5);
+	border-radius: calc(infinity * 1px);
+	padding-block: 0px;
+	padding-right: calc(var(--spacing) * 2);
+	padding-left: var(--spacing);
+	font-size: 13px;
+	--tw-leading: 1.45;
+	line-height: 1.45;
+	--tw-font-weight: var(--font-weight-medium);
+	font-weight: var(--font-weight-medium);
+	color: var(--color-surface-700);
+}
+[data-widget-part~="messages.composer-persona"]:where([data-mode="dark"], [data-mode="dark"] *) {
+	color: var(--color-surface-200);
+}
+button[data-widget-part~="messages.composer-persona"] {
+	cursor: pointer;
+}
+@media (hover: hover) {
+	button[data-widget-part~="messages.composer-persona"]:hover {
+		background-color: var(--color-surface-200);
+	}
+	button[data-widget-part~="messages.composer-persona"]:where([data-mode="dark"], [data-mode="dark"] *):hover {
+		background-color: var(--color-surface-800);
+	}
+}
+[data-composer-skin="minimal"] [data-widget-part~="messages.composer-persona-name"],
+[data-composer-skin="minimal"] [data-widget-part~="messages.composer-persona"] > :where(svg, sp-icon) {
+	display: none;
+}
+/* The persona menu (the popover's body, portalled to <body>): a `card` that
+   names whom one writes as, and a row per persona. */
+[data-widget-part~="messages.composer-persona-menu"] {
+	border-radius: var(--radius-container);
+	min-width: 200px;
+	padding: calc(var(--spacing) * 2);
+}
+/* `space-y-1`, as weightless as the utility's `:where()`. */
+:where([data-widget-part~="messages.composer-persona-menu"] > :not(:last-child)) {
+	margin-block-start: 0;
+	margin-block-end: var(--spacing);
+}
+[data-widget-part~="messages.composer-persona-menu-title"] {
+	padding-inline: calc(var(--spacing) * 2);
+	padding-bottom: var(--spacing);
+	font-size: calc(0.75rem * var(--text-scaling));
+	line-height: calc(calc(1 / 0.75) * var(--text-scaling));
+	color: var(--color-surface-600);
+}
+[data-widget-part~="messages.composer-persona-menu-title"]:where([data-mode="dark"], [data-mode="dark"] *) {
+	color: var(--color-surface-400);
+}
+[data-widget-part~="messages.composer-persona-option-name"] {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+/* Preview and More: quiet round icon buttons; pressed (Preview's
+   `aria-pressed`) or holding the field (More's `data-active`), tonal. */
+[data-widget-part~="messages.composer-icon-button"] {
+	display: inline-flex;
+	width: calc(var(--spacing) * 8);
+	height: calc(var(--spacing) * 8);
+	align-items: center;
+	justify-content: center;
+	border-radius: calc(infinity * 1px);
+}
+[data-widget-part~="messages.composer-icon-button"] > :where(svg, sp-icon) {
+	width: calc(var(--spacing) * 4);
+	height: calc(var(--spacing) * 4);
+}
+[data-widget-part~="messages.composer-icon-button"]:is([aria-pressed="true"], [data-active]) {
+	background-color: var(--color-primary-50-950);
+	color: var(--color-primary-950-50);
+}
+[data-widget-part~="messages.composer-icon-button"]:not([aria-pressed="true"], [data-active]),
+[data-widget-part~="messages.composer-channel"]:not([aria-pressed="true"]) {
+	color: var(--color-surface-600);
+}
+@media (hover: hover) {
+	[data-widget-part~="messages.composer-icon-button"]:not([aria-pressed="true"], [data-active]):hover,
+	[data-widget-part~="messages.composer-channel"]:not([aria-pressed="true"]):hover {
+		color: var(--color-surface-900);
+	}
+}
+[data-widget-part~="messages.composer-icon-button"]:not([aria-pressed="true"], [data-active]):where([data-mode="dark"], [data-mode="dark"] *),
+[data-widget-part~="messages.composer-channel"]:not([aria-pressed="true"]):where([data-mode="dark"], [data-mode="dark"] *) {
+	color: var(--color-surface-400);
+}
+@media (hover: hover) {
+	[data-widget-part~="messages.composer-icon-button"]:not([aria-pressed="true"], [data-active]):where([data-mode="dark"], [data-mode="dark"] *):hover,
+	[data-widget-part~="messages.composer-channel"]:not([aria-pressed="true"]):where([data-mode="dark"], [data-mode="dark"] *):hover {
+		color: var(--color-surface-50);
+	}
+}
+/* The More panel (the popover's body, portalled): a `card` of the panes that
+   can take the field's place. */
+[data-widget-part~="messages.composer-panes"] {
+	border-radius: var(--radius-container);
+	background-color: light-dark(var(--color-surface-100), var(--color-surface-900));
+	width: min(90vw, 240px);
+	padding: calc(var(--spacing) * 3);
+	--tw-shadow: 0 20px 25px -5px var(--tw-shadow-color, rgb(0 0 0 / 0.1)), 0 8px 10px -6px var(--tw-shadow-color, rgb(0 0 0 / 0.1));
+	box-shadow: var(--tw-inset-shadow), var(--tw-inset-ring-shadow), var(--tw-ring-offset-shadow), var(--tw-ring-shadow), var(--tw-shadow);
+}
+/* `space-y-3`, as weightless as the utility's `:where()`. */
+:where([data-widget-part~="messages.composer-panes"] > :not(:last-child)) {
+	margin-block-start: 0;
+	margin-block-end: calc(var(--spacing) * 3);
+}
+/* The panel's head: icon and title (the app's `popover-menu-title`). */
+[data-widget-part~="messages.composer-panes-title"] {
+	display: flex;
+	align-items: center;
+	gap: calc(var(--spacing) * 2);
+	font-size: calc(1.125rem * var(--text-scaling));
+	line-height: calc(calc(1.75 / 1.125) * var(--text-scaling));
+	--tw-font-weight: var(--font-weight-bold);
+	font-weight: var(--font-weight-bold);
+}
+[data-widget-part~="messages.composer-panes-list"] {
+	display: flex;
+	flex-direction: column;
+	gap: var(--spacing);
+}
+/* A persona's row and a pane's row: a plain text row that fills on hover
+   (`btn btn-sm` under the app's `popover-menu-btn`, which won where they
+   disagreed, and `rounded-lg`); the current one is tonal (a persona's
+   `aria-current`, a pane's `data-current`). */
+[data-widget-part~="messages.composer-persona-option"],
+[data-widget-part~="messages.composer-pane-option"] {
+	display: flex;
+	flex-direction: row;
+	align-items: center;
+	justify-content: flex-start;
+	gap: calc(var(--spacing) * 2);
+	width: 100%;
+	height: min-content;
+	padding-block: calc((var(--text-sm) - calc(var(--spacing) * 0.5)) / 2);
+	padding-inline: calc(var(--spacing) * 2);
+	border-radius: var(--radius-lg);
+	font-size: 1em;
+	line-height: var(--text-sm);
+	white-space: nowrap;
+	text-decoration-line: none;
+	transition-property: var(--default-transition-property);
+	transition-timing-function: var(--default-transition-timing-function);
+	transition-duration: var(--default-transition-duration);
+}
+[data-widget-part~="messages.composer-pane-option"] > sp-icon {
+	inline-size: var(--text-sm);
+	block-size: var(--text-sm);
+}
+[data-widget-part~="messages.composer-persona-option"][aria-current="true"],
+[data-widget-part~="messages.composer-pane-option"][data-current] {
+	background-color: var(--color-primary-50-950);
+	color: var(--color-primary-950-50);
+}
+@media (hover: hover) {
+	[data-widget-part~="messages.composer-persona-option"]:not([aria-current="true"]):hover,
+	[data-widget-part~="messages.composer-pane-option"]:not([data-current]):hover {
+		background-color: color-mix(in srgb, light-dark(oklch(0.145 0 0), oklch(0.985 0 0)) 10%, transparent);
+		color: var(--color-surface-950-50);
+	}
+	@supports (color: color-mix(in lab, red, red)) {
+		[data-widget-part~="messages.composer-persona-option"]:not([aria-current="true"]):hover,
+		[data-widget-part~="messages.composer-pane-option"]:not([data-current]):hover {
+			background-color: color-mix(in oklab, light-dark(var(--color-surface-950), var(--color-surface-50)) 10%, transparent);
+		}
+	}
+}
+
+/* Send and Stop (`btn composer-send`, with its preset): Send filled, or tonal
+   while someone is due next (`data-someone-due`); Stop the error's tone. */
+[data-widget-part~="messages.composer-send"],
+[data-widget-part~="messages.composer-stop"] {
+	display: inline-flex;
+	flex-direction: row;
+	align-items: center;
+	justify-content: center;
+	gap: calc(var(--spacing) * 1.5);
+	height: calc(var(--spacing) * 8);
+	border-radius: calc(infinity * 1px);
+	padding-block: calc((var(--text-base) - calc(var(--spacing) * 0.5)) / 2);
+	padding-inline: calc(var(--spacing) * 3);
+	text-decoration-line: none;
+	white-space: nowrap;
+	font-size: 13px;
+	--tw-leading: 1.45;
+	line-height: 1.45;
+	--tw-font-weight: var(--font-weight-medium);
+	font-weight: var(--font-weight-medium);
+	background-color: var(--color-primary-500);
+	color: var(--color-primary-contrast-500);
+	transition-property: var(--default-transition-property);
+	transition-timing-function: var(--default-transition-timing-function);
+	transition-duration: var(--default-transition-duration);
+}
+[data-widget-part~="messages.composer-send"][data-someone-due] {
+	background-color: var(--color-primary-50-950);
+	color: var(--color-primary-950-50);
+}
+[data-widget-part~="messages.composer-stop"] {
+	background-color: var(--color-error-50-950);
+	color: var(--color-error-950-50);
+}
+[data-widget-part~="messages.composer-send"] > sp-icon,
+[data-widget-part~="messages.composer-stop"] > sp-icon {
+	width: calc(var(--spacing) * 4);
+	height: calc(var(--spacing) * 4);
+}
+
+/* Under the card: the context warning, and the keyboard hint. */
+[data-widget-part~="messages.composer-warning"] {
+	margin-top: var(--spacing);
+	font-size: calc(0.75rem * var(--text-scaling));
+	line-height: calc(calc(1 / 0.75) * var(--text-scaling));
+	color: var(--color-warning-500);
+}
+[data-widget-part~="messages.composer-hint"] {
+	margin-top: var(--spacing);
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: var(--spacing);
+	font-size: calc(0.75rem * var(--text-scaling));
+	line-height: calc(calc(1 / 0.75) * var(--text-scaling));
+	color: var(--color-surface-500);
+}
+/* A slash argument the named action will not take (S2): `/advance takes no text`. */
+[data-widget-part~="messages.composer-hint"][data-refused] {
+	color: var(--color-error-600);
+}
+[data-widget-part~="messages.composer-hint"][data-refused]:where([data-mode="dark"], [data-mode="dark"] *) {
+	color: var(--color-error-400);
+}
+[data-widget-part~="messages.composer-key"] {
+	border-radius: 6px;
+	border-style: var(--tw-border-style);
+	border-width: var(--default-border-width, 1px);
+	border-color: var(--color-surface-300);
+	padding-inline: var(--spacing);
+	padding-block: 1px;
+	font-size: 11px;
+	color: var(--color-surface-600);
+	font-family: "Fira Mono", monospace;
+}
+[data-widget-part~="messages.composer-key"]:where([data-mode="dark"], [data-mode="dark"] *) {
+	border-color: var(--color-surface-800);
+	color: var(--color-surface-400);
+}
+
+/* A line's editor (MessageComposer, inside its row): Compose and Preview tabs
+   over the field. The tabs are the host's (`sp-tabs` draws the list and a
+   trigger per `sp-tab`), so the list and the triggers are reached through the
+   tabs' part; a tab that folds into the More menu in a narrow box is
+   `data-collapsible`. */
+[data-widget-part~="messages.edit-tabs"] .sp-tabs-list {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: var(--spacing);
+	--tw-border-style: none;
+	border-style: none;
+	padding-top: 0.2em;
+	padding-bottom: 0px;
+}
+[data-widget-part~="messages.edit-tab"],
+.sp-tab-trigger:has(> .sp-tab-trigger-body > [data-widget-part~="messages.edit-tab"]) {
+	display: flex;
+	min-height: 2em;
+	align-items: center;
+	justify-content: center;
+}
+[data-widget-part~="messages.edit-tab-body"] {
+	display: flex;
+	align-items: center;
+	gap: var(--spacing);
+}
+[data-widget-part~="messages.edit-tab-label"],
+[data-widget-part~="messages.edit-more-tabs-label"] {
+	font-size: calc(0.75rem * var(--text-scaling));
+	line-height: calc(calc(1 / 0.75) * var(--text-scaling));
+}
+/* The More menu the folding tabs go into (`flex self-stretch`: it takes the
+   triggers' height, whatever the font scale). */
+[data-widget-part~="messages.edit-more-tabs"] {
+	display: flex;
+	align-self: stretch;
+}
+/* `btn`, centred, with its own inline padding; tonal while a folded tab is chosen. */
+[data-widget-part~="messages.edit-more-tabs-button"] {
+	border-radius: var(--radius-base);
+	display: flex;
+	flex-direction: row;
+	align-items: center;
+	justify-content: center;
+	gap: calc(var(--spacing) * 2);
+	text-decoration-line: none;
+	white-space: nowrap;
+	font-size: var(--text-base);
+	line-height: var(--text-base);
+	padding-block: calc((var(--text-base) - calc(var(--spacing) * 0.5)) / 2);
+	padding-inline: calc(var(--spacing) * 2);
+	transition-property: var(--default-transition-property);
+	transition-timing-function: var(--default-transition-timing-function);
+	transition-duration: var(--default-transition-duration);
+}
+[data-widget-part~="messages.edit-more-tabs-button"][data-active] {
+	background-color: var(--color-primary-50-950);
+	color: var(--color-primary-950-50);
+}
+[data-widget-part~="messages.edit-more-tabs-body"] {
+	display: flex;
+	width: 100%;
+	align-items: center;
+	justify-content: center;
+	gap: var(--spacing);
+}
+[data-widget-part~="messages.edit-more-tabs-icon"] {
+	display: block;
+}
+[data-widget-part~="messages.edit-more-tabs-panel"] {
+	border-radius: var(--radius-container);
+	background-color: light-dark(var(--color-surface-200), var(--color-surface-800));
+	width: min(90vw, 240px);
+	padding: calc(var(--spacing) * 4);
+	--tw-shadow: 0 20px 25px -5px var(--tw-shadow-color, rgb(0 0 0 / 0.1)), 0 8px 10px -6px var(--tw-shadow-color, rgb(0 0 0 / 0.1));
+	box-shadow: var(--tw-inset-shadow), var(--tw-inset-ring-shadow), var(--tw-ring-offset-shadow), var(--tw-ring-shadow), var(--tw-shadow);
+}
+:where([data-widget-part~="messages.edit-more-tabs-panel"] > :not(:last-child)) {
+	margin-block-start: 0;
+	margin-block-end: calc(var(--spacing) * 4);
+}
+[data-widget-part~="messages.edit-more-tabs-title"] {
+	display: flex;
+	align-items: center;
+	gap: calc(var(--spacing) * 2);
+	font-size: calc(1.125rem * var(--text-scaling));
+	line-height: calc(calc(1.75 / 1.125) * var(--text-scaling));
+	--tw-font-weight: var(--font-weight-bold);
+	font-weight: var(--font-weight-bold);
+}
+[data-widget-part~="messages.edit-more-tabs-list"] {
+	display: flex;
+	flex-direction: column;
+	gap: calc(var(--spacing) * 2);
+}
+[data-widget-part~="messages.edit-more-tabs-option"] {
+	display: flex;
+	flex-direction: row;
+	align-items: center;
+	justify-content: flex-start;
+	gap: calc(var(--spacing) * 2);
+	width: 100%;
+	height: min-content;
+	padding-block: calc((var(--text-sm) - calc(var(--spacing) * 0.5)) / 2);
+	padding-inline: calc(var(--spacing) * 2);
+	border-radius: var(--radius-base);
+	font-size: 1em;
+	line-height: var(--text-sm);
+	white-space: nowrap;
+	text-decoration-line: none;
+	transition-property: var(--default-transition-property);
+	transition-timing-function: var(--default-transition-timing-function);
+	transition-duration: var(--default-transition-duration);
+}
+[data-widget-part~="messages.edit-more-tabs-option"][data-current] {
+	background-color: var(--color-primary-50-950);
+	color: var(--color-primary-950-50);
+}
+@media (hover: hover) {
+	[data-widget-part~="messages.edit-more-tabs-option"]:not([data-current]):hover {
+		background-color: var(--color-primary-500);
+		color: var(--color-primary-contrast-500);
+	}
+}
+/* The row under the tabs: a side group only where it has something to show. */
+[data-widget-part~="messages.edit-row"] {
+	display: flex;
+	align-items: center;
+}
+[data-widget-part~="messages.edit-panels"] {
+	width: 100%;
+}
+[data-widget-part~="messages.edit-right"] {
+	display: flex;
+	justify-content: flex-end;
+	padding-left: calc(var(--spacing) * 2);
+}
+[data-widget-part~="messages.edit-field"] {
+	display: block;
+}
+/* The preview, sized to the compose tab's row so switching does not resize it. */
+[data-widget-part~="messages.edit-preview"] {
+	border-radius: var(--radius-xl);
+	background-color: light-dark(var(--color-surface-100), var(--color-surface-900));
+	min-height: calc(var(--spacing) * 12);
+	width: 100%;
+	padding: calc(var(--spacing) * 2);
+}
+
+/* Every text button here answers the pointer, the press and the keyboard as
+   `.btn` does: brighter under the pointer, pressed in, a 2px primary ring
+   outside a 2px offset, and dimmed when disabled. */
+@media (hover: hover) {
+	:is([data-widget-part~="messages.join-button"], [data-widget-part~="messages.composer-more-actions"], [data-widget-part~="messages.composer-persona-option"], [data-widget-part~="messages.composer-pane-option"], [data-widget-part~="messages.composer-send"], [data-widget-part~="messages.composer-stop"], [data-widget-part~="messages.edit-more-tabs-button"], [data-widget-part~="messages.edit-more-tabs-option"]):not(:disabled):hover {
+		filter: brightness(125%);
+	}
+	:is([data-widget-part~="messages.join-button"], [data-widget-part~="messages.composer-more-actions"], [data-widget-part~="messages.composer-persona-option"], [data-widget-part~="messages.composer-pane-option"], [data-widget-part~="messages.composer-send"], [data-widget-part~="messages.composer-stop"], [data-widget-part~="messages.edit-more-tabs-button"], [data-widget-part~="messages.edit-more-tabs-option"]):not(:disabled):hover:where([data-mode="dark"], [data-mode="dark"] *) {
+		filter: brightness(75%);
+	}
+}
+:is([data-widget-part~="messages.join-button"], [data-widget-part~="messages.composer-more-actions"], [data-widget-part~="messages.composer-persona-option"], [data-widget-part~="messages.composer-pane-option"], [data-widget-part~="messages.composer-send"], [data-widget-part~="messages.composer-stop"], [data-widget-part~="messages.edit-more-tabs-button"], [data-widget-part~="messages.edit-more-tabs-option"]):not(:disabled):active {
+	filter: brightness(90%);
+	transform: scale(0.98);
+}
+:is([data-widget-part~="messages.join-button"], [data-widget-part~="messages.composer-more-actions"], [data-widget-part~="messages.composer-persona-option"], [data-widget-part~="messages.composer-pane-option"], [data-widget-part~="messages.composer-send"], [data-widget-part~="messages.composer-stop"], [data-widget-part~="messages.edit-more-tabs-button"], [data-widget-part~="messages.edit-more-tabs-option"]):not(:disabled):active:where([data-mode="dark"], [data-mode="dark"] *) {
+	filter: brightness(115%);
+}
+:is([data-widget-part~="messages.join-button"], [data-widget-part~="messages.composer-more-actions"], [data-widget-part~="messages.composer-persona-option"], [data-widget-part~="messages.composer-pane-option"], [data-widget-part~="messages.composer-send"], [data-widget-part~="messages.composer-stop"], [data-widget-part~="messages.edit-more-tabs-button"], [data-widget-part~="messages.edit-more-tabs-option"]):focus-visible {
+	box-shadow:
+		0 0 #0000,
+		0 0 #0000,
+		0 0 0 2px #fff,
+		0 0 0 4px var(--color-primary-500),
+		0 0 #0000;
+	outline-style: none;
+}
+:is([data-widget-part~="messages.join-button"], [data-widget-part~="messages.composer-more-actions"], [data-widget-part~="messages.composer-persona-option"], [data-widget-part~="messages.composer-pane-option"], [data-widget-part~="messages.composer-send"], [data-widget-part~="messages.composer-stop"], [data-widget-part~="messages.edit-more-tabs-button"], [data-widget-part~="messages.edit-more-tabs-option"]):disabled {
+	pointer-events: none;
+	opacity: 40%;
+	filter: grayscale(0.3);
+}
+/* The quiet controls: a 2px primary outline at a 2px offset. */
+:is([data-widget-part~="messages.composer-actions-toggle"], [data-widget-part~="messages.composer-back"], [data-widget-part~="messages.composer-persona"], [data-widget-part~="messages.composer-icon-button"], [data-widget-part~="messages.composer-channel"]):focus-visible {
+	outline-style: solid;
+	outline-width: 2px;
+	outline-offset: 2px;
+	outline-color: var(--color-primary-500);
+}
+
+/* The box, not the window (STYLE-GUIDE §5.3): from 64rem the composer has
+   room below it, the join heading its larger size from 48rem, and the bar its
+   rounded top (its rule is with the bar's, above); below 64rem the footer's
+   controls, Send and Continue grow to a finger's 44px. */
+@container sp-widget (min-width: 48rem) {
+	[data-widget-part~="messages.join-title"] {
+		font-size: var(--text-3xl);
+		line-height: var(--text-3xl--line-height);
+	}
+}
+@container sp-widget (min-width: 64rem) {
+	[data-widget-part~="messages.composer"] {
+		padding-bottom: calc(var(--spacing) * 4);
+	}
+	[data-widget-part~="messages.edit-more-tabs"] {
+		display: none;
+	}
+	[data-widget-part~="messages.edit-preview"] {
+		min-height: 4em;
+	}
+	[data-widget-part~="messages.edit-left"] {
+		padding-right: calc(var(--spacing) * 4);
+	}
+	[data-widget-part~="messages.edit-right"] {
+		padding-left: calc(var(--spacing) * 4);
+	}
+}
+@container sp-widget (width < 64rem) {
+	[data-widget-part~="messages.composer-persona"],
+	[data-widget-part~="messages.composer-channel"],
+	[data-widget-part~="messages.composer-send"],
+	[data-widget-part~="messages.composer-stop"] {
+		height: calc(var(--spacing) * 11);
+	}
+	[data-widget-part~="messages.composer-channel"],
+	[data-widget-part~="messages.composer-send"],
+	[data-widget-part~="messages.composer-stop"] {
+		padding-inline: calc(var(--spacing) * 4);
+	}
+	[data-widget-part~="messages.composer-icon-button"] {
+		width: calc(var(--spacing) * 11);
+		height: calc(var(--spacing) * 11);
+	}
+	[data-widget-part~="messages.edit-tab"][data-collapsible],
+	.sp-tab-trigger:has(> .sp-tab-trigger-body > [data-widget-part~="messages.edit-tab"][data-collapsible]) {
+		display: none;
+	}
+}
+
+/* STYLE-GUIDE §9: a finger lands on 44px, however small the control reads. */
+@media (pointer: coarse) {
+	[data-widget-part~="messages.composer-actions-toggle"],
+	[data-widget-part~="messages.composer-back"],
+	[data-widget-part~="messages.composer-persona"],
+	[data-widget-part~="messages.composer-channel"],
+	[data-widget-part~="messages.composer-send"],
+	[data-widget-part~="messages.composer-stop"],
+	[data-widget-part~="messages.composer-chips"] :where(button) {
+		height: calc(var(--spacing) * 11);
+	}
+	[data-widget-part~="messages.composer-channel"],
+	[data-widget-part~="messages.composer-send"],
+	[data-widget-part~="messages.composer-stop"],
+	[data-widget-part~="messages.composer-chips"] :where(button) {
+		padding-inline: calc(var(--spacing) * 4);
+	}
+	[data-widget-part~="messages.composer-icon-button"] {
+		width: calc(var(--spacing) * 11);
+		height: calc(var(--spacing) * 11);
+	}
+}
+
+/* ── motion (was JS: softFade, animateHeight) ────────────────────────────── */
+
+/* The newest message fades in as it arrives; older pages and the rows that
+   were already there do not. */
+@media (prefers-reduced-motion: no-preference) {
+	[data-widget-part~="messages.message-row"][data-arrive] {
+		animation: sp-arrive 130ms cubic-bezier(0.33, 1, 0.68, 1);
+	}
+	/* A discrete swap (a swipe, edit in or out, an error) eases to its new
+	   height where the engine can interpolate to `auto`; elsewhere it is
+	   instant, as reduced motion is. */
+	[data-widget-part~="messages.message-sizer"][data-settled] {
+		interpolate-size: allow-keywords;
+		transition: height 180ms cubic-bezier(0.33, 1, 0.68, 1);
+	}
+}
+@keyframes sp-arrive {
+	from {
+		opacity: 0;
+	}
+}
+
+/* ── a message's edit mode (SessionMessage) ──────────────────────────────── */
+
+/* The field is MessageComposer's (`messages.edit-field`, its host's textarea),
+   anchored to `messages.edit-surface` so it only ever reaches a line's editor, never
+   the composer's. Colourless on purpose; colour for edit mode is the row's.
+   The host gives a field Skeleton's `textarea` look by default; what that adds
+   (a block box, a ring, a transparent outline) is put back here. */
+[data-widget-part~="messages.edit-surface"] [data-widget-part~="messages.edit-field"] textarea {
+	display: inline-block;
+	width: 100%;
+	field-sizing: content;
+	outline-color: currentcolor;
+	box-shadow: none;
+	background: transparent;
+	border: none;
+	border-radius: 0;
+	padding: 0.5rem 0.25rem;
+	color: inherit;
+	font: inherit;
+	line-height: 1.6;
+	/* The native grabber is redundant under `field-sizing-content` (the field
+	   already grows to fit) and dragging it only desynchronised the box from
+	   its content. */
+	resize: none;
+	/* Without a cap, editing a long message grows the card unbounded and
+	   pushes Save/Cancel — which live in the header — off the top. */
+	max-height: 45vh;
+	overflow-y: auto;
+
+	&:focus {
+		outline: none;
+		box-shadow: none;
+	}
+	/* Mouse focus needs no ring — the card's own outline already says which
+	   message is open. Keyboard users tabbing back in get a landing cue. */
+	&:focus-visible {
+		outline: 2px solid color-mix(in srgb, currentColor 30%, transparent);
+		outline-offset: -2px;
+		border-radius: 0.375rem;
+	}
+	&::placeholder {
+		color: inherit;
+		opacity: 0.45;
+	}
+}
+
+/* currentColor keeps these legible in both themes without naming a palette entry. */
+[data-widget-part~="messages.edit-key"] {
+	display: inline-block;
+	padding: 0.05rem 0.3rem;
+	border: 1px solid currentColor;
+	border-radius: 0.25rem;
+	font-family: inherit;
+	font-size: 0.9em;
+	line-height: 1.4;
+	opacity: 0.75;
+}
+
+/* ── message markdown ────────────────────────────────────────────────────── */
+
+.markdown-body {
+	white-space: pre-line;
+}
+/* Theme roles, never hex (STYLE-GUIDE §2): a quote is `secondary`, emphasis
+   `tertiary`, each at the 700 stop on light and 300 on dark, so both follow
+   whichever theme is live. */
+.markdown-body blockquote {
+	color: var(--color-secondary-700);
+	border-left: 4px solid var(--color-secondary-500);
+	background: color-mix(in oklab, var(--color-secondary-500) 8%, transparent);
+	padding-left: 1em;
+	margin-left: 0;
+}
+.markdown-body em,
+.markdown-body i {
+	color: var(--color-tertiary-700);
+	font-style: italic;
+	background: color-mix(in oklab, var(--color-tertiary-500) 8%, transparent);
+	border-radius: 0.2em;
+	padding: 0 0.15em;
+}
+[data-mode="dark"] .markdown-body blockquote {
+	color: var(--color-secondary-300);
+}
+[data-mode="dark"] .markdown-body em,
+[data-mode="dark"] .markdown-body i {
+	color: var(--color-tertiary-300);
+}
+/* Preserve blank lines between paragraphs. */
+.markdown-body p {
+	margin-top: 1em;
+	margin-bottom: 1em;
+	min-height: 1.5em;
+}
+
+/* ── the state ledger under a message (MessageStateLedger, StateProposalList) ── */
+
+[data-widget-part~="messages.ledger"] {
+	display: flex;
+	flex-direction: column;
+	gap: 0.15rem;
+	padding: 0.2rem 0.1rem 0;
+	font-size: var(--sp-w-font-meta);
+	opacity: 0.85;
+}
+[data-widget-part~="messages.ledger-line"] {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	gap: 0.25rem;
+	margin: 0;
+}
+[data-widget-part~="messages.ledger-owner"] {
+	font-weight: 600;
+}
+[data-widget-part~="messages.ledger-separator"] {
+	opacity: 0.5;
+}
+[data-widget-part~="messages.ledger-change"] {
+	font-variant-numeric: tabular-nums;
+}
+[data-widget-part~="messages.ledger-review"] {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.25rem;
+	align-self: flex-start;
+	padding: 0.02rem 0.35rem;
+	border-radius: var(--sp-w-chip-radius);
+	background: var(--sp-w-chip-bg);
+	font-size: 0.66rem;
+}
+[data-widget-part~="messages.ledger-review"]:hover {
+	filter: brightness(1.2);
+}
+
+[data-widget-part~="messages.proposal"] {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 0.3rem;
+	font-size: var(--sp-w-font-meta);
+}
+[data-widget-part~="messages.proposal-text"] {
+	min-width: 0;
+	flex: 1 1 8rem;
+}
+[data-widget-part~="messages.proposal-anchor"],
+[data-widget-part~="messages.proposal-note"] {
+	opacity: 0.55;
+}
+[data-widget-part~="messages.proposal"][data-superseded] {
+	opacity: 0.7;
+}
+[data-widget-part~="messages.proposal-decide"] {
+	padding: 0.02rem 0.4rem;
+	border-radius: var(--sp-w-chip-radius);
+	background: color-mix(in oklab, currentColor 14%, transparent);
+}
+[data-widget-part~="messages.proposal-decide"]:hover {
+	filter: brightness(1.2);
+}
+[data-widget-part~="messages.proposal-accept"] {
+	font-weight: 600;
+}
+[data-widget-part~="messages.proposal-reject"] {
+	opacity: 0.75;
+}
+
+/* ── a message's collapsible parts (MessagePartsView) ────────────────────── */
+
+/* 0fr → 1fr transitions to and from auto height in pure CSS. */
+[data-widget-part~="messages.part-disclosure-track"] {
+	grid-template-rows: 0fr;
+}
+[data-widget-part~="messages.part-disclosure-track"][data-expanded] {
+	grid-template-rows: 1fr;
+}
+/* Collapsed, its focusables leave the tab order (what `inert` did). */
+[data-widget-part~="messages.part-disclosure-track"]:not([data-expanded]) > * {
+	visibility: hidden;
+}
+
+/* ── disclosures and meters (SessionMessage, MessageBlocksView, SessionComposer) ── */
+
+/* A message's thinking and narrator-instructions tracks: 0fr → 1fr, and a
+   collapsed track's focusables out of the tab order. */
+[data-widget-part~="messages.message-disclosure-track"] {
+	grid-template-rows: 0fr;
+}
+[data-widget-part~="messages.message-disclosure-track"][data-expanded] {
+	grid-template-rows: 1fr;
+}
+[data-widget-part~="messages.message-disclosure-track"]:not([data-expanded]) > * {
+	visibility: hidden;
+}
+
+/* A meter's fill, from the `--sp-fill` the widget sets (a widget writes
+   custom properties, never a declaration of its own). */
+[data-widget-part~="messages.block-stat-fill"] {
+	inline-size: var(--sp-fill, 0%);
+}
+
+/* ── the log's scroll region (SessionContainer) ─────────────────────────── */
+
+/* `sp-scroll` is the log's box: it fills what the compose block leaves, and
+   its region scrolls inside it. */
+[data-widget-part~="messages.log-scroll"] {
+	display: flex;
+	flex-direction: column;
+	flex: 1;
+	min-block-size: 0;
+}
+[data-widget-part~="messages.log-scroll"] .sp-scroll-region {
+	flex: 1;
+	min-block-size: 0;
+	block-size: 100%;
+}
+/* The region spans the panel. At Line width: Full the rows span it too, and
+   the scrollbar's own edge is the only gutter it keeps, so the rows start
+   where the composer does. At Comfortable the column is centred in it: where
+   the box has room beside the column, a classic scrollbar's width is kept on
+   both edges so the column's centre stays the panel's (and the header's),
+   with the scrollbar showing or not. Narrower, the gutter would only squeeze
+   the rows. */
+@container sp-widget (min-width: 46rem) {
+	[data-widget-part~="messages.root"][data-line-width="comfortable"] [data-widget-part~="messages.log-scroll"] .sp-scroll-region {
+		scrollbar-gutter: stable both-edges;
+	}
+}
+
+/* ── the message and the log (P3h) ───────────────────────────────────────── */
+
+/* Keyed on the widget's parts (`data-widget-part`, P3h); the markup carries no
+   class (STYLE-GUIDE §6.16 "Parts by widget"). What SessionContainer,
+   SessionMessage, MessageControls, MessagePartsView, MessageBlocksView and the
+   ledger wore as utilities and Skeleton classes is written here as it
+   compiles, hover, focus-visible, active, disabled and the coarse targets
+   included; app.css's unlayered `.msg-ctrl-btn-labeled` (the selection
+   controls), `.popover-menu-btn` / `-title` and `.sp-action-new` (the ⋮ menu)
+   and the app's `.btn` states moved here too. The row's grid, its cells and
+   the pack contract stay in sessionLayout/messageLayouts.css, with the
+   prose's two tones. A control inside a message row that wore `.btn` keeps
+   its ring and no outline: those rules name the row too, so they beat the
+   row's own `button:focus-visible` outline (messageLayouts.css), as the
+   unlayered `.btn:focus-visible` did. Viewport variants answer the widget's
+   box: the selection controls' labels and sizes change at 64rem, with the
+   composer's (STYLE-GUIDE §5.3). */
+
+/* The log: its box, the stage (the log's rows, as wide as the compose block:
+   the whole box, or the reading measure under Line width: Comfortable) and
+   the list of lines. */
+[data-widget-part~="messages.log-body"] {
+	position: relative;
+	display: flex;
+	height: 100%;
+	flex-direction: column;
+}
+[data-widget-part~="messages.stage"] {
+	display: flex;
+	flex: 1;
+	flex-direction: column;
+	gap: calc(var(--spacing) * 3);
+}
+[data-widget-part~="messages.stage-body"] {
+	padding: calc(var(--spacing) * 2);
+}
+[data-widget-part~="messages.message-list"] {
+	display: flex;
+	flex: 1;
+	flex-direction: column;
+	gap: calc(var(--spacing) * 3);
+}
+/* A marker's place in the list: a history entry's date, a scene's title. */
+[data-widget-part~="messages.log-item"] {
+	width: 100%;
+}
+/* What the log says instead of lines: not granted, loading, nothing yet. */
+[data-widget-part~="messages.log-floor"] {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: calc(var(--spacing) * 2);
+	padding-block: calc(var(--spacing) * 16);
+}
+[data-widget-part~="messages.log-note"],
+[data-widget-part~="messages.log-empty"] {
+	text-align: center;
+}
+[data-widget-part~="messages.log-floor-icon"] {
+	color: var(--color-surface-400);
+}
+[data-widget-part~="messages.log-floor-text"] {
+	font-size: calc(0.875rem * var(--text-scaling));
+	line-height: calc(calc(1.25 / 0.875) * var(--text-scaling));
+	color: light-dark(var(--color-surface-600), var(--color-surface-400));
+}
+[data-widget-part~="messages.log-loading-icon"],
+[data-widget-part~="messages.older-loading-icon"] {
+	animation: var(--animate-spin);
+}
+/* Older lines on their way, at whichever end they arrive. */
+[data-widget-part~="messages.older-loading"] {
+	padding-block: calc(var(--spacing) * 2);
+	text-align: center;
+	color: light-dark(var(--color-surface-600), var(--color-surface-400));
+}
+[data-widget-part~="messages.older-loading-body"] {
+	display: inline-flex;
+	align-items: center;
+	gap: calc(var(--spacing) * 2);
+}
+
+/* The member a role-named line belongs to (R4), after the name on a shared
+   session: "Dungeon Master · jody" — muted, the name's size, never bold. */
+[data-widget-part~="messages.message-member"] {
+	min-inline-size: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-size: 0.8125rem;
+	font-weight: 400;
+	line-height: 1.4;
+	color: var(--color-surface-600);
+}
+[data-widget-part~="messages.message-member"]:where([data-mode="dark"], [data-mode="dark"] *) {
+	color: var(--color-surface-400);
+}
+
+/* The line's vectors against the active embedding model. */
+[data-widget-part~="messages.message-vectors"] {
+	display: inline-flex;
+	flex-shrink: 0;
+	align-items: center;
+}
+[data-widget-part~="messages.message-vectors"][data-vectors="current"] {
+	color: var(--color-success-500);
+}
+[data-widget-part~="messages.message-vectors"][data-vectors="stale"] {
+	color: var(--color-warning-500);
+}
+/* "In scene:", said to a screen reader only. */
+[data-widget-part~="messages.message-badge-label"],
+[data-widget-part~="messages.message-option-note"] {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	padding: 0;
+	margin: -1px;
+	overflow: hidden;
+	clip-path: inset(50%);
+	white-space: nowrap;
+	border-width: 0;
+}
+
+/* Stop, while the line is being made: the error's tonal pill. */
+[data-widget-part~="messages.message-stop"] {
+	background-color: var(--color-error-50-950);
+	color: var(--color-error-950-50);
+}
+
+/* Save, beside Cancel while a line is edited (`btn btn-sm
+   preset-filled-primary-500`), and a block's choice and submit (`btn btn-sm
+   preset-tonal-primary`): Skeleton's small button. */
+[data-widget-part~="messages.message-save"],
+[data-widget-part~="messages.block-choice"],
+[data-widget-part~="messages.block-submit"] {
+	border-radius: var(--radius-base);
+	display: inline-flex;
+	flex-direction: row;
+	align-items: center;
+	justify-content: center;
+	gap: calc(var(--spacing) * 2);
+	text-decoration-line: none;
+	white-space: nowrap;
+	font-size: var(--text-sm);
+	line-height: var(--text-sm);
+	padding-block: calc((var(--text-sm) - calc(var(--spacing) * 0.5)) / 2);
+	padding-inline: calc((var(--text-sm) - calc(var(--spacing) * 0.5)) / 2 + var(--spacing));
+	transition-property: var(--default-transition-property);
+	transition-timing-function: var(--default-transition-timing-function);
+	transition-duration: var(--default-transition-duration);
+}
+[data-widget-part~="messages.block-choice"] > sp-icon,
+[data-widget-part~="messages.block-submit"] > sp-icon {
+	inline-size: var(--text-sm);
+	block-size: var(--text-sm);
+}
+[data-widget-part~="messages.message-save"] {
+	background-color: var(--color-primary-500);
+	color: var(--color-primary-contrast-500);
+}
+[data-widget-part~="messages.block-choice"],
+[data-widget-part~="messages.block-submit"] {
+	background-color: var(--color-primary-50-950);
+	color: var(--color-primary-950-50);
+}
+[data-widget-part~="messages.block-submit"] {
+	width: fit-content;
+}
+
+/* Selecting lines for a summary: a line's own choice and the two range
+   selections (`btn` under the app's `.msg-ctrl-btn-labeled`, which won where
+   they disagreed): a square the row's height, widening to its label from
+   64rem. Chosen (`aria-pressed`) in secondary; a line a scene has taken is
+   the same box, refused. */
+[data-widget-part~="messages.message-selection"] {
+	display: flex;
+	gap: calc(var(--spacing) * 2);
+}
+[data-widget-part~="messages.message-selection-button"] {
+	border-radius: var(--radius-base);
+	display: inline-flex;
+	flex: none;
+	flex-direction: row;
+	align-items: center;
+	justify-content: center;
+	gap: calc(var(--spacing) * 2);
+	inline-size: 2.25rem;
+	block-size: 2.25rem;
+	padding: 0;
+	text-decoration-line: none;
+	white-space: nowrap;
+	font-size: var(--text-base);
+	line-height: var(--text-base);
+	background-color: var(--color-surface-400-600);
+	color: var(--color-surface-contrast-400-600);
+	transition-property: var(--default-transition-property);
+	transition-timing-function: var(--default-transition-timing-function);
+	transition-duration: var(--default-transition-duration);
+}
+[data-widget-part~="messages.message-selection-button"] > :where(svg, sp-icon) {
+	inline-size: 1.125rem;
+	block-size: 1.125rem;
+}
+[data-widget-part~="messages.message-selection-button"][aria-pressed="true"] {
+	background-color: var(--color-secondary-500);
+	color: var(--color-secondary-contrast-500);
+}
+[data-widget-part~="messages.message-in-scene"] {
+	cursor: not-allowed;
+	opacity: 60%;
+}
+[data-widget-part~="messages.message-selection-label"] {
+	display: none;
+}
+@container sp-widget (min-width: 64rem) {
+	[data-widget-part~="messages.message-selection-button"] {
+		inline-size: auto;
+		block-size: 2rem;
+		padding-inline: calc(var(--spacing) * 3);
+	}
+	[data-widget-part~="messages.message-selection-button"] > :where(svg, sp-icon) {
+		inline-size: 1rem;
+		block-size: 1rem;
+	}
+	[data-widget-part~="messages.message-selection-label"] {
+		display: inline;
+	}
+}
+
+/* These buttons answer the pointer, the press and the keyboard as `.btn`
+   does: brighter under the pointer, pressed in, a 2px primary ring outside a
+   2px offset (never the outline: named under the row, so the row's own
+   outline rule loses), and dimmed when disabled. */
+@media (hover: hover) {
+	[data-widget-part~="messages.message-save"]:not(:disabled):hover,
+	[data-widget-part~="messages.message-selection-button"]:not(:disabled):hover,
+	[data-widget-part~="messages.block-choice"]:not(:disabled):hover,
+	[data-widget-part~="messages.block-submit"]:not(:disabled):hover,
+	[data-widget-part~="messages.message-option"]:not(:disabled):hover {
+		filter: brightness(125%);
+	}
+	[data-widget-part~="messages.message-save"]:not(:disabled):hover:where([data-mode="dark"], [data-mode="dark"] *),
+	[data-widget-part~="messages.message-selection-button"]:not(:disabled):hover:where([data-mode="dark"], [data-mode="dark"] *),
+	[data-widget-part~="messages.block-choice"]:not(:disabled):hover:where([data-mode="dark"], [data-mode="dark"] *),
+	[data-widget-part~="messages.block-submit"]:not(:disabled):hover:where([data-mode="dark"], [data-mode="dark"] *),
+	[data-widget-part~="messages.message-option"]:not(:disabled):hover:where([data-mode="dark"], [data-mode="dark"] *) {
+		filter: brightness(75%);
+	}
+}
+[data-widget-part~="messages.message-save"]:not(:disabled):active,
+[data-widget-part~="messages.message-selection-button"]:not(:disabled):active,
+[data-widget-part~="messages.block-choice"]:not(:disabled):active,
+[data-widget-part~="messages.block-submit"]:not(:disabled):active,
+[data-widget-part~="messages.message-option"]:not(:disabled):active {
+	filter: brightness(90%);
+	transform: scale(0.98);
+}
+[data-widget-part~="messages.message-save"]:not(:disabled):active:where([data-mode="dark"], [data-mode="dark"] *),
+[data-widget-part~="messages.message-selection-button"]:not(:disabled):active:where([data-mode="dark"], [data-mode="dark"] *),
+[data-widget-part~="messages.block-choice"]:not(:disabled):active:where([data-mode="dark"], [data-mode="dark"] *),
+[data-widget-part~="messages.block-submit"]:not(:disabled):active:where([data-mode="dark"], [data-mode="dark"] *),
+[data-widget-part~="messages.message-option"]:not(:disabled):active:where([data-mode="dark"], [data-mode="dark"] *) {
+	filter: brightness(115%);
+}
+[data-widget-part~="messages.message"] :is([data-widget-part~="messages.message-save"], [data-widget-part~="messages.message-selection-button"], [data-widget-part~="messages.block-choice"], [data-widget-part~="messages.block-submit"]):focus-visible,
+[data-widget-part~="messages.message-option"]:focus-visible {
+	box-shadow:
+		0 0 #0000,
+		0 0 #0000,
+		0 0 0 2px #fff,
+		0 0 0 4px var(--color-primary-500),
+		0 0 #0000;
+	outline-style: none;
+}
+[data-widget-part~="messages.message-save"]:disabled,
+[data-widget-part~="messages.message-selection-button"]:disabled,
+[data-widget-part~="messages.block-choice"]:disabled,
+[data-widget-part~="messages.block-submit"]:disabled,
+[data-widget-part~="messages.message-option"]:disabled {
+	pointer-events: none;
+	opacity: 40%;
+	filter: grayscale(0.3);
+}
+
+/* The body, and a failed reply's: its text kept above the error, what the
+   service said (an administrator's), and Retry. */
+[data-widget-part~="messages.message-body"] {
+	display: flex;
+	height: fit-content;
+	text-align: left;
+}
+[data-widget-part~="messages.message-failure"],
+[data-widget-part~="messages.message-parts"] {
+	width: 100%;
+}
+[data-widget-part~="messages.message-partial"] {
+	margin-bottom: calc(var(--spacing) * 2);
+}
+[data-widget-part~="messages.message-error"] {
+	color: light-dark(var(--color-error-600), var(--color-error-400));
+}
+[data-widget-part~="messages.message-error-line"] {
+	display: flex;
+	align-items: flex-start;
+	gap: calc(var(--spacing) * 1.5);
+}
+[data-widget-part~="messages.message-error-icon"] {
+	margin-top: calc(var(--spacing) * 0.5);
+	flex-shrink: 0;
+}
+/* Text still arriving pulses (`data-streaming`). */
+[data-widget-part~="messages.message-text"][data-streaming] {
+	animation: var(--animate-pulse);
+}
+/* A folded section's items: a bulleted list. */
+[data-widget-part~="messages.fold-list"] {
+	list-style-type: disc;
+	padding-inline-start: calc(var(--spacing) * 5);
+}
+
+/* A line being edited: one surface, the field on it, and under it how to
+   save or leave and whether anything changed. */
+[data-widget-part~="messages.edit-surface"] {
+	width: 100%;
+	padding-inline: calc(var(--spacing) * 2);
+	padding-top: calc(var(--spacing) * 0.5);
+	padding-bottom: var(--spacing);
+	border-radius: var(--radius-lg);
+	background-color: light-dark(var(--color-surface-100), var(--color-surface-900));
+}
+[data-widget-part~="messages.edit-hint"] {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	column-gap: calc(var(--spacing) * 3);
+	row-gap: var(--spacing);
+	padding-inline: var(--spacing);
+	padding-top: var(--spacing);
+	font-size: calc(0.75rem * var(--text-scaling));
+	line-height: calc(calc(1 / 0.75) * var(--text-scaling));
+	color: light-dark(var(--color-surface-600), var(--color-surface-400));
+}
+[data-widget-part~="messages.edit-hint-separator"] {
+	opacity: 40%;
+}
+[data-widget-part~="messages.edit-unsaved"] {
+	margin-left: auto;
+	--tw-font-weight: var(--font-weight-medium);
+	font-weight: var(--font-weight-medium);
+	color: light-dark(var(--color-warning-600), var(--color-warning-400));
+}
+
+/* The ⋮ menu (the popover's body, portalled to <body>): a `card` of every
+   verb the line offers, a row each (`btn btn-sm` under the app's
+   `popover-menu-btn`, which won where they disagreed), filling on hover
+   (`hover:preset-tonal-surface`). */
+[data-widget-part~="messages.message-options-panel"] {
+	border-radius: var(--radius-container);
+	width: min(90vw, 320px);
+	padding: calc(var(--spacing) * 4);
+	background-color: light-dark(var(--color-surface-200), var(--color-surface-800));
+}
+/* `space-y-4`, as weightless as the utility's `:where()`. */
+:where([data-widget-part~="messages.message-options-panel"] > :not(:last-child)) {
+	margin-block-start: 0;
+	margin-block-end: calc(var(--spacing) * 4);
+}
+/* The panel's head: icon and title (the app's `popover-menu-title`). */
+[data-widget-part~="messages.message-options-title"] {
+	display: flex;
+	align-items: center;
+	gap: calc(var(--spacing) * 2);
+	font-size: calc(1.125rem * var(--text-scaling));
+	line-height: calc(calc(1.75 / 1.125) * var(--text-scaling));
+	--tw-font-weight: var(--font-weight-bold);
+	font-weight: var(--font-weight-bold);
+}
+[data-widget-part~="messages.message-options-list"] {
+	display: flex;
+	flex-direction: column;
+	gap: calc(var(--spacing) * 2);
+}
+[data-widget-part~="messages.message-option"] {
+	display: flex;
+	flex-direction: row;
+	align-items: center;
+	justify-content: flex-start;
+	gap: calc(var(--spacing) * 2);
+	width: 100%;
+	height: min-content;
+	padding-block: calc((var(--text-sm) - calc(var(--spacing) * 0.5)) / 2);
+	padding-inline: calc(var(--spacing) * 2);
+	border-radius: var(--radius-base);
+	font-size: 1em;
+	line-height: var(--text-sm);
+	white-space: nowrap;
+	text-decoration-line: none;
+	transition-property: var(--default-transition-property);
+	transition-timing-function: var(--default-transition-timing-function);
+	transition-duration: var(--default-transition-duration);
+}
+[data-widget-part~="messages.message-option"] > sp-icon {
+	inline-size: var(--text-sm);
+	block-size: var(--text-sm);
+}
+/* Delete and Stop, core's two that end something, in the error's tone. */
+[data-widget-part~="messages.message-option"]:is([data-verb="delete"], [data-verb="stop"]) {
+	color: light-dark(var(--color-error-600), var(--color-error-400));
+}
+/* Hide while the line is hidden (its `aria-pressed`), tonal. */
+[data-widget-part~="messages.message-option"][aria-pressed="true"] {
+	background-color: var(--color-surface-50-950);
+	color: var(--color-surface-950-50);
+}
+/* A row the line's own state refuses: greyed, still reachable. */
+[data-widget-part~="messages.message-option"][aria-disabled="true"] {
+	cursor: not-allowed;
+	opacity: 60%;
+}
+@media (hover: hover) {
+	[data-widget-part~="messages.message-option"]:hover {
+		background-color: var(--color-surface-50-950);
+		color: var(--color-surface-950-50);
+	}
+}
+/* The *new* mark on a newcomer (R-15, U5c): a quiet badge at the row's end. */
+[data-widget-part~="messages.message-option-new"] {
+	margin-left: auto;
+	border-radius: calc(infinity * 1px);
+	background-color: var(--color-primary-50-950);
+	color: var(--color-primary-950-50);
+	padding-inline: calc(var(--spacing) * 1.5);
+	padding-block: 0px;
+	font-size: 0.65em;
+	--tw-font-weight: var(--font-weight-semibold);
+	font-weight: var(--font-weight-semibold);
+	--tw-tracking: var(--tracking-wide);
+	letter-spacing: var(--tracking-wide);
+	text-transform: uppercase;
+}
+/* Between core's verbs and the contributed ones (Skeleton's `hr`). */
+[data-widget-part~="messages.message-options-divider"] {
+	display: block;
+	width: 100%;
+	border-top-width: 1px;
+	border-color: var(--color-surface-300-700);
+}
+
+/* The Review panel of everything waiting (the popover's body, portalled): a
+   `card`, its head and its note. */
+[data-widget-part~="messages.ledger-review-panel"] {
+	border-radius: var(--radius-container);
+	width: min(92vw, 360px);
+	padding: calc(var(--spacing) * 3);
+	background-color: light-dark(var(--color-surface-100), var(--color-surface-900));
+}
+/* `space-y-2`, as weightless as the utility's `:where()`. */
+:where([data-widget-part~="messages.ledger-review-panel"] > :not(:last-child)) {
+	margin-block-start: 0;
+	margin-block-end: calc(var(--spacing) * 2);
+}
+[data-widget-part~="messages.ledger-review-title"] {
+	display: flex;
+	align-items: center;
+	gap: calc(var(--spacing) * 1.5);
+	font-size: calc(0.75rem * var(--text-scaling));
+	line-height: calc(calc(1 / 0.75) * var(--text-scaling));
+	--tw-font-weight: var(--font-weight-semibold);
+	font-weight: var(--font-weight-semibold);
+}
+[data-widget-part~="messages.ledger-review-note"] {
+	font-size: 0.68rem;
+	color: light-dark(var(--color-surface-600), var(--color-surface-400));
+}
+
+/* A reply's typed parts (MessagePartsView): thinking, a section, a tool call
+   or result, and an unknown type are one collapsible each; a step after the
+   first is set off by a rule; an image opens the viewer; a file downloads. */
+[data-widget-part~="messages.part-disclosure"] {
+	margin-inline: calc(var(--spacing) * 2);
+	margin-top: calc(var(--spacing) * 2);
+}
+[data-widget-part~="messages.part-disclosure-toggle"] {
+	display: flex;
+	width: 100%;
+	align-items: center;
+	gap: calc(var(--spacing) * 2);
+	padding-block: calc(var(--spacing) * 2);
+	font-size: calc(0.875rem * var(--text-scaling));
+	line-height: calc(calc(1.25 / 0.875) * var(--text-scaling));
+	opacity: 70%;
+	transition-property: opacity;
+	transition-timing-function: var(--default-transition-timing-function);
+	transition-duration: var(--default-transition-duration);
+}
+@media (hover: hover) {
+	[data-widget-part~="messages.part-disclosure-toggle"]:hover {
+		opacity: 100%;
+	}
+}
+[data-widget-part~="messages.part-disclosure-chevron"] {
+	transition-property: transform, translate, scale, rotate;
+	transition-timing-function: var(--default-transition-timing-function);
+	transition-duration: var(--default-transition-duration);
+}
+[aria-expanded="true"] > [data-widget-part~="messages.part-disclosure-chevron"] {
+	rotate: 180deg;
+}
+[data-widget-part~="messages.part-disclosure-track"] {
+	display: grid;
+	transition-property: grid-template-rows;
+	transition-timing-function: var(--ease-out);
+	transition-duration: 200ms;
+}
+[data-widget-part~="messages.part-disclosure-clip"] {
+	overflow: hidden;
+}
+[data-widget-part~="messages.part-disclosure-panel"] {
+	padding-bottom: calc(var(--spacing) * 2);
+	font-size: calc(0.875rem * var(--text-scaling));
+	line-height: calc(calc(1.25 / 0.875) * var(--text-scaling));
+	opacity: 80%;
+}
+[data-widget-part~="messages.part-step-divider"] {
+	display: block;
+	width: 100%;
+	margin-inline: calc(var(--spacing) * 2);
+	margin-block: var(--spacing);
+	border-top-width: 1px;
+	border-color: var(--color-surface-300-700);
+	opacity: 40%;
+}
+[data-widget-part~="messages.part-image"] {
+	display: block;
+	width: fit-content;
+	margin-top: calc(var(--spacing) * 2);
+	padding: 0px;
+	border-style: var(--tw-border-style);
+	border-width: 0px;
+	background-color: transparent;
+	cursor: pointer;
+}
+[data-widget-part~="messages.part-image-img"],
+[data-widget-part~="messages.block-image"] {
+	max-width: 100%;
+	max-height: calc(var(--spacing) * 96);
+	border-radius: 0.25rem;
+}
+[data-widget-part~="messages.part-file"] {
+	display: flex;
+	width: fit-content;
+	align-items: center;
+	gap: calc(var(--spacing) * 2);
+	margin-top: calc(var(--spacing) * 2);
+	padding: calc(var(--spacing) * 2);
+	border-radius: 0.25rem;
+	font-size: calc(0.875rem * var(--text-scaling));
+	line-height: calc(calc(1.25 / 0.875) * var(--text-scaling));
+	background-color: var(--color-surface-50-950);
+	color: var(--color-surface-950-50);
+}
+
+/* A block tree (MessageBlocksView, 20 §6): plugin content as data, drawn
+   here. A tree's own blocks stand apart from the part above them
+   (`data-depth="1"`); a group lays its blocks in a row or a column. */
+[data-widget-part~="messages.blocks"] {
+	display: flex;
+	flex-direction: column;
+	gap: calc(var(--spacing) * 2);
+}
+[data-widget-part~="messages.blocks"][data-depth="1"] {
+	margin-top: calc(var(--spacing) * 2);
+}
+[data-widget-part~="messages.block-group"] {
+	display: flex;
+	gap: calc(var(--spacing) * 2);
+}
+[data-widget-part~="messages.block-group"][data-layout="row"] {
+	flex-direction: row;
+	flex-wrap: wrap;
+}
+[data-widget-part~="messages.block-group"][data-layout="column"] {
+	flex-direction: column;
+}
+/* A key-value list, and a table (Skeleton's `table`, fit to its content). */
+[data-widget-part~="messages.block-kv"] {
+	display: grid;
+	width: fit-content;
+	grid-template-columns: auto 1fr;
+	column-gap: calc(var(--spacing) * 4);
+	row-gap: var(--spacing);
+	font-size: calc(0.875rem * var(--text-scaling));
+	line-height: calc(calc(1.25 / 0.875) * var(--text-scaling));
+}
+[data-widget-part~="messages.block-kv-label"] {
+	--tw-font-weight: var(--font-weight-medium);
+	font-weight: var(--font-weight-medium);
+	opacity: 70%;
+}
+[data-widget-part~="messages.block-table-scroll"] {
+	overflow-x: auto;
+}
+[data-widget-part~="messages.block-table"] {
+	position: relative;
+	display: table;
+	width: fit-content;
+	font-size: calc(0.875rem * var(--text-scaling));
+	line-height: calc(calc(1.25 / 0.875) * var(--text-scaling));
+}
+[data-widget-part~="messages.block-table"] :where(thead) {
+	color: var(--color-surface-700-300);
+	border-bottom-width: 1px;
+	border-color: var(--color-surface-300-700);
+}
+[data-widget-part~="messages.block-table"] :where(th) {
+	text-align: left;
+	font-weight: 400;
+	padding: calc(var(--spacing) * 2);
+}
+[data-widget-part~="messages.block-table"] :where(tbody) > :where(:not(:last-child)) {
+	border-color: var(--color-surface-300-700);
+	border-top-width: 0px;
+	border-bottom-width: 1px;
+}
+[data-widget-part~="messages.block-table"] :where(td) {
+	padding: calc(var(--spacing) * 2);
+}
+/* A stat: its name and value over a meter. */
+[data-widget-part~="messages.block-stat"] {
+	width: 100%;
+	max-width: var(--container-xs);
+	font-size: calc(0.875rem * var(--text-scaling));
+	line-height: calc(calc(1.25 / 0.875) * var(--text-scaling));
+}
+[data-widget-part~="messages.block-stat-head"] {
+	display: flex;
+	justify-content: space-between;
+}
+[data-widget-part~="messages.block-stat-label"],
+[data-widget-part~="messages.block-answered-label"],
+[data-widget-part~="messages.block-field-label"] {
+	--tw-font-weight: var(--font-weight-medium);
+	font-weight: var(--font-weight-medium);
+}
+[data-widget-part~="messages.block-stat-value"] {
+	--tw-numeric-spacing: tabular-nums;
+	font-variant-numeric: var(--tw-ordinal,) var(--tw-slashed-zero,) var(--tw-numeric-figure,) var(--tw-numeric-spacing,) var(--tw-numeric-fraction,);
+}
+[data-widget-part~="messages.block-stat-track"] {
+	width: 100%;
+	height: calc(var(--spacing) * 2);
+	margin-top: var(--spacing);
+	overflow: hidden;
+	border-radius: 0.25rem;
+	background-color: light-dark(var(--color-surface-300), var(--color-surface-700));
+}
+[data-widget-part~="messages.block-stat-fill"] {
+	height: 100%;
+	background-color: var(--color-primary-500);
+}
+/* A choice or a form: its question, its options or fields, and once
+   answered, superseded or put to someone else, a quiet line instead. */
+[data-widget-part~="messages.block-superseded"] {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: var(--spacing);
+	font-size: calc(0.875rem * var(--text-scaling));
+	line-height: calc(calc(1.25 / 0.875) * var(--text-scaling));
+	opacity: 60%;
+}
+[data-widget-part~="messages.block-choices"] {
+	display: flex;
+	flex-direction: column;
+	gap: var(--spacing);
+}
+[data-widget-part~="messages.block-form"] {
+	display: flex;
+	width: 100%;
+	max-width: var(--container-sm);
+	flex-direction: column;
+	gap: calc(var(--spacing) * 2);
+	font-size: calc(0.875rem * var(--text-scaling));
+	line-height: calc(calc(1.25 / 0.875) * var(--text-scaling));
+}
+[data-widget-part~="messages.block-choices"][data-answered],
+[data-widget-part~="messages.block-form"][data-answered] {
+	opacity: 60%;
+}
+[data-widget-part~="messages.block-caption"] {
+	font-size: calc(0.875rem * var(--text-scaling));
+	line-height: calc(calc(1.25 / 0.875) * var(--text-scaling));
+	font-style: italic;
+	opacity: 80%;
+}
+[data-widget-part~="messages.block-answered"] {
+	display: flex;
+	align-items: center;
+	gap: var(--spacing);
+	font-size: calc(0.875rem * var(--text-scaling));
+	line-height: calc(calc(1.25 / 0.875) * var(--text-scaling));
+}
+[data-widget-part~="messages.block-awaiting"] {
+	font-size: calc(0.875rem * var(--text-scaling));
+	line-height: calc(calc(1.25 / 0.875) * var(--text-scaling));
+	opacity: 70%;
+}
+[data-widget-part~="messages.block-choice-list"] {
+	display: flex;
+	flex-wrap: wrap;
+	gap: calc(var(--spacing) * 2);
+}
+[data-widget-part~="messages.block-field"] {
+	display: flex;
+	flex-direction: column;
+	gap: var(--spacing);
+}
+/* A form's switch: Skeleton's `checkbox`. */
+[data-widget-part~="messages.block-checkbox"] {
+	--tw-ring-color: var(--color-surface-200-800);
+	width: calc(var(--spacing) * 5);
+	height: calc(var(--spacing) * 5);
+	border-radius: var(--radius-sm);
+	background-color: var(--color-surface-300-700);
+	accent-color: var(--color-surface-300-700);
+}
+[data-widget-part~="messages.block-checkbox"]:focus-within {
+	--tw-ring-color: light-dark(var(--color-brand-light), var(--color-brand-dark));
+}
+@media (hover: hover) {
+	[data-widget-part~="messages.block-checkbox"]:hover {
+		filter: brightness(105%);
+	}
+}
+[data-widget-part~="messages.block-checkbox"]:focus {
+	filter: brightness(105%);
+}
+[data-widget-part~="messages.block-checkbox"]:is(:checked, :indeterminate) {
+	background-color: light-dark(var(--color-brand-light), var(--color-brand-dark));
+	accent-color: light-dark(var(--color-brand-light), var(--color-brand-dark));
+}
+[data-widget-part~="messages.block-checkbox"]:is(:checked, :indeterminate):focus {
+	border: 0;
+}
+/* A form's number and text fields: Skeleton's `input`. */
+[data-widget-part~="messages.block-input"] {
+	display: block;
+	width: 100%;
+	padding-block: calc((var(--text-base) - calc(var(--spacing) * 0.5)) / 2);
+	padding-inline: calc((var(--text-base) - calc(var(--spacing) * 0.5)) / 2 + var(--spacing));
+	border-width: 0;
+	border-radius: var(--radius-base);
+	outline-color: transparent;
+	font-size: var(--text-base);
+	line-height: var(--text-base);
+	color: var(--color-surface-950-50);
+	background-color: var(--color-surface-50-950);
+	--tw-ring-inset: inset;
+	--tw-ring-color: var(--color-surface-300-700);
+	--tw-ring-shadow: var(--tw-ring-inset,) 0 0 0 var(--default-ring-width) var(--tw-ring-color, currentColor);
+	box-shadow:
+		var(--tw-inset-shadow, 0 0 #0000),
+		var(--tw-inset-ring-shadow, 0 0 #0000),
+		var(--tw-ring-offset-shadow, 0 0 #0000),
+		var(--tw-ring-shadow),
+		var(--tw-shadow, 0 0 #0000);
+}
+[data-widget-part~="messages.block-input"]::placeholder {
+	color: var(--field-placeholder);
+}
+[data-widget-part~="messages.block-input"]:active,
+[data-widget-part~="messages.block-input"]:focus,
+[data-widget-part~="messages.block-input"]:focus-within {
+	--tw-ring-color: var(--color-primary-500);
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   §lore-entries (was styles/lore-entries.css)
+   ════════════════════════════════════════════════════════════════════════ */
+
+/*
+ * Core's Lore entries widget (R21), keyed on its widget parts
+ * (`data-widget-part`, P3d); the markup carries no look. Parts:
+ * lore-entries.root · .note · .search-bar · .search · .search-label ·
+ * .search-icon · .search-input · .refresh · .filter-bar · .filters · .filter
+ * · .filter-input · .sort · .sort-field · .alert · .entries · .entry ·
+ * .entry-text · .entry-title · .entry-keys · .entry-read · .marks · .pin ·
+ * .off · .empty · .pager · .previous · .page-count · .next (STYLE-GUIDE
+ * §6.16). State is the elements' own: a chosen filter is its radio's
+ * `:checked`, a pressed mark its button's `aria-pressed`, an entry turned
+ * off the entry's `data-off`.
+ *
+ * What the utilities and Skeleton classes it carried drew (`input`,
+ * `btn-icon btn-icon-sm`, `btn btn-sm`, `preset-tonal-primary`,
+ * `preset-tonal-warning`, `hover:preset-tonal-surface`, `sr-only`, the
+ * Tailwind layout and type ones, and the `pointer-coarse:` 44px targets as
+ * `@media (pointer: coarse)`) is written here as they compile, states
+ * included. Where a class set a variable only to read it back (`--btn-size`,
+ * `--field-size`), the rule reads what it held; `-translate-y-1/2` is the
+ * `translate` it composes to. The field keeps Skeleton's ring as custom
+ * properties, because the forms base rule's `:focus` feeds the same ones
+ * (its ring offset); each has the fallback its registration gives, so the
+ * rule leans on no utility. The app's unlayered `.btn` rules (disabled,
+ * active, focus ring) beat the utilities beside them, so they come after the
+ * hover rules here and still win a tie. Skeleton's rules for an `svg` child
+ * are left out: no such child is here.
+ */
+
+/* The widget's box: its bars, then the entries, then the pager. */
+[data-widget-part~="lore-entries.root"] {
+	display: flex;
+	flex-direction: column;
+	gap: calc(var(--spacing) * 2);
+	padding: calc(var(--spacing) * 2);
+}
+
+/* Said instead of the list (the book is its owner's; no book), and the empty
+   floor under a search or filter that finds nothing. */
+[data-widget-part~="lore-entries.note"],
+[data-widget-part~="lore-entries.empty"] {
+	padding: calc(var(--spacing) * 2);
+	font-size: calc(0.875rem * var(--text-scaling));
+	line-height: calc(calc(1.25 / 0.875) * var(--text-scaling));
+	color: light-dark(var(--color-surface-600), var(--color-surface-400));
+}
+
+/* ── the search and refresh ─────────────────────────────────────────────── */
+
+[data-widget-part~="lore-entries.search-bar"] {
+	display: flex;
+	align-items: center;
+	gap: calc(var(--spacing) * 2);
+}
+[data-widget-part~="lore-entries.search"] {
+	position: relative;
+	flex: 1;
+	min-width: 0;
+}
+/* The field's name, for a screen reader only (`sr-only`). */
+[data-widget-part~="lore-entries.search-label"] {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	padding: 0;
+	margin: -1px;
+	overflow: hidden;
+	clip-path: inset(50%);
+	white-space: nowrap;
+	border-width: 0;
+}
+[data-widget-part~="lore-entries.search-icon"] {
+	position: absolute;
+	top: calc(1 / 2 * 100%);
+	left: calc(var(--spacing) * 2.5);
+	translate: 0 calc(calc(1 / 2 * 100%) * -1);
+	pointer-events: none;
+	color: light-dark(var(--color-surface-600), var(--color-surface-400));
+}
+/* Skeleton's `input` at `h-9 w-full pl-8 text-sm`: the left padding clears
+   the icon (physical, as `pl-8` is, in either direction). */
+[data-widget-part~="lore-entries.search-input"] {
+	display: block;
+	width: 100%;
+	height: calc(var(--spacing) * 9);
+	padding-block: calc((var(--text-base) - calc(var(--spacing) * 0.5)) / 2);
+	padding-right: calc((var(--text-base) - calc(var(--spacing) * 0.5)) / 2 + var(--spacing));
+	padding-left: calc(var(--spacing) * 8);
+	border-width: 0;
+	border-radius: var(--radius-base);
+	outline-color: transparent;
+	font-size: calc(0.875rem * var(--text-scaling));
+	line-height: calc(calc(1.25 / 0.875) * var(--text-scaling));
+	color: var(--color-surface-950-50);
+	background-color: var(--color-surface-50-950);
+	--tw-ring-inset: inset;
+	--tw-ring-color: var(--color-surface-300-700);
+	--tw-ring-shadow: var(--tw-ring-inset,) 0 0 0 var(--default-ring-width) var(--tw-ring-color, currentColor);
+	box-shadow:
+		var(--tw-inset-shadow, 0 0 #0000),
+		var(--tw-inset-ring-shadow, 0 0 #0000),
+		var(--tw-ring-offset-shadow, 0 0 #0000),
+		var(--tw-ring-shadow),
+		var(--tw-shadow, 0 0 #0000);
+}
+[data-widget-part~="lore-entries.search-input"]::placeholder {
+	color: var(--field-placeholder);
+}
+[data-widget-part~="lore-entries.search-input"]:active,
+[data-widget-part~="lore-entries.search-input"]:focus,
+[data-widget-part~="lore-entries.search-input"]:focus-within {
+	--tw-ring-color: var(--color-primary-500);
+}
+
+/* ── the square icon buttons: Refresh, and each entry's Pin and Off ────── */
+
+/* `btn-icon btn-icon-sm`. */
+[data-widget-part~="lore-entries.refresh"],
+[data-widget-part~="lore-entries.pin"],
+[data-widget-part~="lore-entries.off"] {
+	display: inline-flex;
+	justify-content: center;
+	align-items: center;
+	width: calc(var(--text-sm) * 2 - calc(var(--spacing) * 0.5));
+	height: calc(var(--text-sm) * 2 - calc(var(--spacing) * 0.5));
+	padding: calc((var(--text-sm) - calc(var(--spacing) * 0.5)) / 2);
+	border-radius: var(--radius-base);
+	font-size: var(--text-sm);
+	line-height: var(--text-sm);
+	white-space: nowrap;
+	text-decoration-line: none;
+	transition-property: var(--default-transition-property);
+	transition-timing-function: var(--default-transition-timing-function);
+	transition-duration: var(--default-transition-duration);
+}
+[data-widget-part~="lore-entries.refresh"] > sp-icon,
+[data-widget-part~="lore-entries.pin"] > sp-icon,
+[data-widget-part~="lore-entries.off"] > sp-icon {
+	inline-size: var(--text-sm);
+	block-size: var(--text-sm);
+}
+/* A pressed mark reads as chosen: Pin in tonal primary, Off in tonal warning. */
+[data-widget-part~="lore-entries.pin"][aria-pressed="true"] {
+	background-color: var(--color-primary-50-950);
+	color: var(--color-primary-950-50);
+}
+[data-widget-part~="lore-entries.off"][aria-pressed="true"] {
+	background-color: var(--color-warning-50-950);
+	color: var(--color-warning-950-50);
+}
+@media (hover: hover) {
+	/* Tonal surface under the pointer, unless the mark is pressed. */
+	[data-widget-part~="lore-entries.refresh"]:hover,
+	[data-widget-part~="lore-entries.pin"]:not([aria-pressed="true"]):hover,
+	[data-widget-part~="lore-entries.off"]:not([aria-pressed="true"]):hover {
+		background-color: var(--color-surface-50-950);
+		color: var(--color-surface-950-50);
+	}
+	[data-widget-part~="lore-entries.refresh"]:not(:disabled):hover,
+	[data-widget-part~="lore-entries.pin"]:not(:disabled):hover,
+	[data-widget-part~="lore-entries.off"]:not(:disabled):hover {
+		filter: brightness(125%);
+	}
+	[data-widget-part~="lore-entries.refresh"]:not(:disabled):hover:where([data-mode="dark"], [data-mode="dark"] *),
+	[data-widget-part~="lore-entries.pin"]:not(:disabled):hover:where([data-mode="dark"], [data-mode="dark"] *),
+	[data-widget-part~="lore-entries.off"]:not(:disabled):hover:where([data-mode="dark"], [data-mode="dark"] *) {
+		filter: brightness(75%);
+	}
+}
+
+/* ── the filters and the sort ───────────────────────────────────────────── */
+
+[data-widget-part~="lore-entries.filter-bar"] {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: calc(var(--spacing) * 2);
+}
+[data-widget-part~="lore-entries.filters"] {
+	display: flex;
+	gap: var(--spacing);
+}
+/* A filter is a native radio (arrow keys move and select, one tab stop for
+   the group) drawn as a pill: the pill is its label, the radio sits over it
+   unseen but focusable and clickable. */
+[data-widget-part~="lore-entries.filter"] {
+	position: relative;
+	display: inline-flex;
+	align-items: center;
+	padding-inline: calc(var(--spacing) * 2.5);
+	padding-block: var(--spacing);
+	border-radius: calc(infinity * 1px);
+	font-size: calc(0.75rem * var(--text-scaling));
+	line-height: calc(calc(1 / 0.75) * var(--text-scaling));
+	cursor: pointer;
+}
+/* The chosen filter, in tonal primary. */
+[data-widget-part~="lore-entries.filter"]:has(> [data-widget-part~="lore-entries.filter-input"]:checked) {
+	background-color: var(--color-primary-50-950);
+	color: var(--color-primary-950-50);
+}
+@media (hover: hover) {
+	[data-widget-part~="lore-entries.filter"]:not(:has(> [data-widget-part~="lore-entries.filter-input"]:checked)):hover {
+		background-color: light-dark(var(--color-surface-200), var(--color-surface-800));
+	}
+}
+[data-widget-part~="lore-entries.filter"]:has(> [data-widget-part~="lore-entries.filter-input"]:focus-visible) {
+	outline: 2px solid var(--color-primary-500);
+	outline-offset: 2px;
+}
+[data-widget-part~="lore-entries.filter-input"] {
+	position: absolute;
+	inset: 0;
+	margin: 0;
+	opacity: 0;
+	cursor: pointer;
+}
+[data-widget-part~="lore-entries.sort"] {
+	display: flex;
+	align-items: center;
+	gap: var(--spacing);
+	margin-left: auto;
+	font-size: calc(0.75rem * var(--text-scaling));
+	line-height: calc(calc(1 / 0.75) * var(--text-scaling));
+	color: light-dark(var(--color-surface-600), var(--color-surface-400));
+}
+
+/* This widget's own refusal (R77) or a read that failed. */
+[data-widget-part~="lore-entries.alert"] {
+	padding-inline: calc(var(--spacing) * 2);
+	font-size: calc(0.75rem * var(--text-scaling));
+	line-height: calc(calc(1 / 0.75) * var(--text-scaling));
+	color: light-dark(var(--color-error-600), var(--color-error-400));
+}
+
+/* ── the entries ────────────────────────────────────────────────────────── */
+
+[data-widget-part~="lore-entries.entries"] {
+	display: flex;
+	flex-direction: column;
+	gap: calc(var(--spacing) * 0.5);
+}
+[data-widget-part~="lore-entries.entry"] {
+	display: flex;
+	align-items: flex-start;
+	gap: calc(var(--spacing) * 2);
+	padding-inline: calc(var(--spacing) * 2);
+	padding-block: calc(var(--spacing) * 1.5);
+	border-radius: var(--radius-md);
+}
+@media (hover: hover) {
+	[data-widget-part~="lore-entries.entry"]:hover {
+		background-color: light-dark(var(--color-surface-200), var(--color-surface-800));
+	}
+}
+[data-widget-part~="lore-entries.entry-text"] {
+	flex: 1;
+	min-width: 0;
+}
+/* Each line is one line, cut with an ellipsis rather than wrapped. */
+[data-widget-part~="lore-entries.entry-title"],
+[data-widget-part~="lore-entries.entry-keys"],
+[data-widget-part~="lore-entries.entry-read"] {
+	display: block;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+[data-widget-part~="lore-entries.entry-title"] {
+	font-size: calc(0.875rem * var(--text-scaling));
+	line-height: calc(calc(1.25 / 0.875) * var(--text-scaling));
+}
+/* Off: never read, so struck through and quiet. */
+[data-widget-part~="lore-entries.entry"][data-off] [data-widget-part~="lore-entries.entry-title"] {
+	color: light-dark(var(--color-surface-600), var(--color-surface-400));
+	text-decoration-line: line-through;
+}
+[data-widget-part~="lore-entries.entry-keys"],
+[data-widget-part~="lore-entries.entry-read"] {
+	font-size: calc(0.75rem * var(--text-scaling));
+	line-height: calc(calc(1 / 0.75) * var(--text-scaling));
+	color: light-dark(var(--color-surface-600), var(--color-surface-400));
+}
+[data-widget-part~="lore-entries.marks"] {
+	display: flex;
+	flex-shrink: 0;
+	gap: var(--spacing);
+}
+
+/* ── the pager ──────────────────────────────────────────────────────────── */
+
+[data-widget-part~="lore-entries.pager"] {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	font-size: calc(0.75rem * var(--text-scaling));
+	line-height: calc(calc(1 / 0.75) * var(--text-scaling));
+	color: light-dark(var(--color-surface-600), var(--color-surface-400));
+}
+/* Previous and Next: `btn btn-sm`, tonal surface under the pointer. */
+[data-widget-part~="lore-entries.previous"],
+[data-widget-part~="lore-entries.next"] {
+	display: inline-flex;
+	flex-direction: row;
+	align-items: center;
+	justify-content: center;
+	gap: calc(var(--spacing) * 2);
+	padding-block: calc((var(--text-sm) - calc(var(--spacing) * 0.5)) / 2);
+	padding-inline: calc((var(--text-sm) - calc(var(--spacing) * 0.5)) / 2 + var(--spacing));
+	border-radius: var(--radius-base);
+	font-size: var(--text-sm);
+	line-height: var(--text-sm);
+	white-space: nowrap;
+	text-decoration-line: none;
+	transition-property: var(--default-transition-property);
+	transition-timing-function: var(--default-transition-timing-function);
+	transition-duration: var(--default-transition-duration);
+}
+@media (hover: hover) {
+	[data-widget-part~="lore-entries.previous"]:hover,
+	[data-widget-part~="lore-entries.next"]:hover {
+		background-color: var(--color-surface-50-950);
+		color: var(--color-surface-950-50);
+	}
+	[data-widget-part~="lore-entries.previous"]:not(:disabled):hover,
+	[data-widget-part~="lore-entries.next"]:not(:disabled):hover {
+		filter: brightness(125%);
+	}
+	[data-widget-part~="lore-entries.previous"]:not(:disabled):hover:where([data-mode="dark"], [data-mode="dark"] *),
+	[data-widget-part~="lore-entries.next"]:not(:disabled):hover:where([data-mode="dark"], [data-mode="dark"] *) {
+		filter: brightness(75%);
+	}
+}
+[data-widget-part~="lore-entries.previous"]:not(:disabled):active,
+[data-widget-part~="lore-entries.next"]:not(:disabled):active {
+	filter: brightness(90%);
+	transform: scale(0.98);
+}
+[data-widget-part~="lore-entries.previous"]:not(:disabled):active:where([data-mode="dark"], [data-mode="dark"] *),
+[data-widget-part~="lore-entries.next"]:not(:disabled):active:where([data-mode="dark"], [data-mode="dark"] *) {
+	filter: brightness(115%);
+}
+/* A 2px primary ring outside a 2px offset, never the outline. */
+[data-widget-part~="lore-entries.previous"]:focus-visible,
+[data-widget-part~="lore-entries.next"]:focus-visible {
+	box-shadow:
+		0 0 #0000,
+		0 0 #0000,
+		0 0 0 2px #fff,
+		0 0 0 4px var(--color-primary-500),
+		0 0 #0000;
+	outline-style: none;
+}
+[data-widget-part~="lore-entries.previous"]:disabled,
+[data-widget-part~="lore-entries.next"]:disabled {
+	pointer-events: none;
+	opacity: 40%;
+	filter: grayscale(0.3);
+}
+
+/* STYLE-GUIDE §9: a finger lands on 44px, however small the control reads. */
+@media (pointer: coarse) {
+	[data-widget-part~="lore-entries.refresh"],
+	[data-widget-part~="lore-entries.pin"],
+	[data-widget-part~="lore-entries.off"] {
+		width: calc(var(--spacing) * 11);
+		height: calc(var(--spacing) * 11);
+	}
+	[data-widget-part~="lore-entries.filter"],
+	[data-widget-part~="lore-entries.previous"],
+	[data-widget-part~="lore-entries.next"] {
+		min-height: calc(var(--spacing) * 11);
+	}
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   §state-widgets (was styles/state-widgets.css)
+   ════════════════════════════════════════════════════════════════════════ */
+
+/*
+ * Core's two state widgets — World State and Stats — and the slot control
+ * they share (R21), as global rules: a component's `<style>` does not
+ * survive a remote build, so what the native widgets' own style blocks drew
+ * lives here, keyed on widget parts: Stats (P3a) and World State (P3b) on
+ * their own, the slot control (P3e) on the parts it owns as a shared control
+ * (`stat-slot.<part>`), whichever widget draws it.
+ */
+
+/* ── World State ─────────────────────────────────────────────────────────── */
+
+/* Keyed on the widget's parts (`data-widget-part`, P3b); the markup carries
+   no look. Parts: world-state.root · world-state.alert · world-state.empty ·
+   world-state.place · world-state.place-head · world-state.place-name
+   (STYLE-GUIDE §6.16); the layout rides on the root's `data-layout`
+   (`strip` | `list`). The alert and the place's name are what the utilities
+   they replaced drew (`text-error-700-300 text-xs`, `truncate
+   font-semibold`), `text-xs` written as the utility compiles it (§Stats). The
+   rows are SlotControl's (`stat-slot.root`, §One slot). */
+
+[data-widget-part~="world-state.root"] {
+	display: flex;
+	gap: 0.35rem 0.9rem;
+	padding: 0.35rem 0.5rem;
+	min-width: 0;
+}
+/* A strip reads across the top of the messages and wraps rather than
+   scrolls, so no world stat is hidden behind an edge nobody drags. */
+[data-widget-part~="world-state.root"][data-layout="strip"] {
+	flex-flow: row wrap;
+	align-items: center;
+}
+[data-widget-part~="world-state.root"][data-layout="strip"] > [data-widget-part~="stat-slot.root"] {
+	flex: 0 1 auto;
+}
+[data-widget-part~="world-state.root"][data-layout="list"] {
+	flex-direction: column;
+	overflow: auto;
+}
+/* A list given a wide cell reads in columns rather than one long line of
+   label, gap, value across the whole width (the `sp-widget` container is the
+   host box: the width the layout gave the widget, not the window's). After
+   the base rules, so it wins at equal specificity. */
+@container sp-widget (min-width: 40rem) {
+	[data-widget-part~="world-state.root"][data-layout="list"] {
+		display: grid;
+		grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr));
+		align-content: start;
+	}
+	[data-widget-part~="world-state.root"][data-layout="list"]
+		> :not([data-widget-part~="stat-slot.root"], [data-widget-part~="world-state.place"]) {
+		grid-column: 1 / -1;
+	}
+}
+/* This widget's own refusal (R77), and a read that failed (§Stats' alert). */
+[data-widget-part~="world-state.alert"] {
+	font-size: calc(0.75rem * var(--text-scaling));
+	line-height: calc(calc(1 / 0.75) * var(--text-scaling));
+	color: light-dark(var(--color-error-700), var(--color-error-300));
+}
+[data-widget-part~="world-state.empty"] {
+	display: flex;
+	align-items: center;
+	gap: 0.4rem;
+	font-size: 0.7rem;
+	opacity: var(--sp-w-muted-opacity);
+}
+
+/* A location in play (attributes phase 4): its name, then its slots, as one
+   group — in a strip it wraps with the world's; in a list it stacks. */
+[data-widget-part~="world-state.place"] {
+	display: flex;
+	flex-flow: row wrap;
+	align-items: center;
+	gap: 0.35rem 0.9rem;
+	min-width: 0;
+}
+[data-widget-part~="world-state.root"][data-layout="list"] > [data-widget-part~="world-state.place"] {
+	flex-direction: column;
+	align-items: stretch;
+}
+/* A place's head is not a card's (a place is a group, not a card), so it
+   carries no generic `card-head`. */
+[data-widget-part~="world-state.place-head"] {
+	display: flex;
+	align-items: center;
+	gap: 0.3rem;
+	font-size: 0.72rem;
+	min-width: 0;
+}
+/* The place's name: one line, cut with an ellipsis rather than wrapped. */
+[data-widget-part~="world-state.place-name"] {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-weight: var(--font-weight-semibold);
+}
+
+/* ── Stats ───────────────────────────────────────────────────────────────── */
+
+/* Keyed on the widget's parts (`data-widget-part`, P3a); the markup carries
+   no look. Parts: stats.root · stats.alert · stats.empty · stats.card ·
+   stats.card-head · stats.card-name · stats.card-note · stats.card-body
+   (STYLE-GUIDE §6.16). The type and colour values are the theme's, exactly
+   what the utilities they replaced drew (`text-xs`, `font-semibold`,
+   `text-error-700-300`, `text-surface-500`). `text-xs` is written as the
+   utility compiles it, scaled on the element (`--text-scaling` is a theme's,
+   and a theme can sit below the root), not through the root's `--text-xs`. */
+
+/* The widget's box: its cards stacked, and it scrolls when they overflow. */
+[data-widget-part~="stats.root"] {
+	display: flex;
+	flex-direction: column;
+	gap: calc(var(--spacing) * 2);
+	height: 100%;
+	padding: calc(var(--spacing) * 2);
+	overflow: auto;
+}
+/* This widget's own refusal (R77), and a read that failed. `light-dark()`
+   follows the mode's `color-scheme` (`[data-mode="dark"]`), as the utility's
+   paired stops did. */
+[data-widget-part~="stats.alert"] {
+	font-size: calc(0.75rem * var(--text-scaling));
+	line-height: calc(calc(1 / 0.75) * var(--text-scaling));
+	color: light-dark(var(--color-error-700), var(--color-error-300));
+}
+
+/* One card per cast member, stacked — until the layout gives the widget a
+   wide cell, where the cards sit in columns instead of stretching every bar
+   across it. After the root's own rule, so it wins at equal specificity;
+   anything that is not a card (an alert, the empty floor) spans the row. */
+@container sp-widget (min-width: 40rem) {
+	[data-widget-part~="stats.root"] {
+		display: grid;
+		grid-template-columns: repeat(auto-fill, minmax(18rem, 1fr));
+		align-content: start;
+	}
+	[data-widget-part~="stats.root"] > :not([data-widget-part~="stats.card"]) {
+		grid-column: 1 / -1;
+	}
+}
+
+[data-widget-part~="stats.empty"] {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: var(--sp-w-empty-gap);
+	height: 100%;
+	padding: var(--sp-w-empty-pad);
+	text-align: center;
+	font-size: var(--sp-w-font-empty);
+	opacity: var(--sp-w-muted-opacity);
+}
+[data-widget-part~="stats.card"] {
+	display: flex;
+	flex-direction: column;
+	gap: var(--sp-w-card-gap);
+	padding: var(--sp-w-card-pad);
+	border-radius: var(--sp-w-card-radius);
+	background: var(--sp-w-card-bg);
+}
+[data-widget-part~="stats.card-head"] {
+	display: flex;
+	align-items: center;
+	gap: 0.3rem;
+	font-size: var(--sp-w-font-head);
+	min-width: 0;
+}
+/* The member's name: one line, cut with an ellipsis rather than wrapped. */
+[data-widget-part~="stats.card-name"] {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-weight: var(--font-weight-semibold);
+}
+/* A member with nothing to show says so, quietly, inside its card. */
+[data-widget-part~="stats.card-note"] {
+	font-size: calc(0.75rem * var(--text-scaling));
+	line-height: calc(calc(1 / 0.75) * var(--text-scaling));
+	color: var(--color-surface-500);
+}
+[data-widget-part~="stats.card-body"] {
+	display: flex;
+	flex-direction: column;
+	gap: 0.25rem;
+}
+/* Compact packs the rows across the card instead of down it; the card's own
+   width decides how many fit, so a narrow column still reads as a list. */
+[data-widget-part~="stats.card-body"][data-density="compact"] {
+	flex-direction: row;
+	flex-wrap: wrap;
+	gap: 0.15rem 0.7rem;
+}
+/* The rows are SlotControl's (`stat-slot.root`, below). */
+[data-widget-part~="stats.card-body"][data-density="compact"] > [data-widget-part~="stat-slot.root"] {
+	flex: 1 1 9rem;
+}
+
+/* ── One slot (SlotControl) ──────────────────────────────────────────────── */
+
+/* Keyed on the slot control's own parts (`data-widget-part`, P3e): a shared
+   control owns its parts under its own name, `stat-slot.<part>`, so a style
+   draws a slot once for every widget that shows one and scopes it to one
+   widget through ancestry (`[data-widget-part~="stats.root"]
+   [data-widget-part~="stat-slot.bar"]`). Parts: stat-slot.root · .label ·
+   .required · .control · .bar · .track · .fill · .bar-value · .chip ·
+   .option · .line · .field · .editor · .items · .item · .item-text ·
+   .item-less · .item-more · .item-up · .item-down · .item-remove ·
+   .items-empty · .add · .pick-open · .picker · .pick-search · .pick-status ·
+   .pick-heading · .pick-list · .pick-entry · .pick-title · .pick-held ·
+   .pick-add · .pick-count · .pick-confirm · .pick-close · .invalid · .done ·
+   .year · .month · .day · .clock · .save · .cancel (STYLE-GUIDE §6.16). An
+   input names which field it is and that it is one (`stat-slot.add
+   stat-slot.field`). State is the slot's own: `data-density` and
+   `data-retired` on the root, `data-empty` on a value with nothing to show,
+   `aria-pressed` on a switch that is on and a picker row that is chosen.
+
+   Skeleton's `input` on the fields is written here as it compiles, its
+   `--field-size` read as the `--text-base` it held; its ring stays custom
+   properties, because the forms base rule's `:focus` feeds the same ones (its
+   ring offset), each with the fallback its registration gives. The coarse
+   targets are `@media (pointer: coarse)`, as they were. */
+
+[data-widget-part~="stat-slot.root"] {
+	display: grid;
+	grid-template-columns: minmax(4.5rem, 7rem) minmax(0, 1fr);
+	align-items: center;
+	gap: 0.4rem;
+	font-size: var(--sp-w-font-row);
+}
+[data-widget-part~="stat-slot.root"][data-density="compact"] {
+	grid-template-columns: auto minmax(0, 1fr);
+	gap: 0.3rem;
+	font-size: var(--sp-w-font-row-compact);
+}
+[data-widget-part~="stat-slot.label"] {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.2rem;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	opacity: var(--sp-w-muted-opacity);
+}
+/* A sheet requires a value (R7): said, never enforced here. */
+[data-widget-part~="stat-slot.required"] {
+	font-weight: 600;
+}
+/* Retired (R3): its values still resolve, nothing new is written — greyed. */
+[data-widget-part~="stat-slot.root"][data-retired] {
+	opacity: 0.6;
+}
+[data-widget-part~="stat-slot.control"] {
+	min-width: 0;
+}
+/* An open list or story-time editor takes the whole row under its label:
+   beside it, in a narrow card, the picker's rows would truncate to a word. */
+[data-widget-part~="stat-slot.root"]:has(> [data-widget-part~="stat-slot.control"] > [data-widget-part~="stat-slot.editor"]) {
+	grid-template-columns: minmax(0, 1fr);
+	align-items: start;
+	gap: 0.2rem;
+}
+/* Every field (a value's, the list's add, the picker's search and count, a
+   story time's four): Skeleton's `input`, at the row's type size and a slim
+   block padding. */
+[data-widget-part~="stat-slot.field"] {
+	display: block;
+	width: 100%;
+	padding-block: 0.1rem;
+	padding-inline: calc((var(--text-base) - calc(var(--spacing) * 0.5)) / 2 + var(--spacing));
+	border-width: 0;
+	border-radius: var(--radius-base);
+	outline-color: transparent;
+	font-size: inherit;
+	line-height: var(--text-base);
+	color: var(--color-surface-950-50);
+	background-color: var(--color-surface-50-950);
+	--tw-ring-inset: inset;
+	--tw-ring-color: var(--color-surface-300-700);
+	--tw-ring-shadow: var(--tw-ring-inset,) 0 0 0 var(--default-ring-width) var(--tw-ring-color, currentColor);
+	box-shadow:
+		var(--tw-inset-shadow, 0 0 #0000),
+		var(--tw-inset-ring-shadow, 0 0 #0000),
+		var(--tw-ring-offset-shadow, 0 0 #0000),
+		var(--tw-ring-shadow),
+		var(--tw-shadow, 0 0 #0000);
+}
+[data-widget-part~="stat-slot.field"]::placeholder {
+	color: var(--field-placeholder);
+}
+[data-widget-part~="stat-slot.field"]:active,
+[data-widget-part~="stat-slot.field"]:focus,
+[data-widget-part~="stat-slot.field"]:focus-within {
+	--tw-ring-color: var(--color-primary-500);
+}
+/* A bar is a button so it is reachable by keyboard and says what it holds;
+   the fill is decoration over the value, never instead of it. Its width is
+   the widget's `--sp-fill` custom property (a remote writes no other style). */
+[data-widget-part~="stat-slot.bar"] {
+	display: flex;
+	align-items: center;
+	gap: 0.4rem;
+	width: 100%;
+	text-align: left;
+}
+[data-widget-part~="stat-slot.track"] {
+	position: relative;
+	flex: 1;
+	min-width: 2rem;
+	height: var(--sp-w-meter-height);
+	border-radius: var(--sp-w-meter-radius);
+	background: var(--sp-w-meter-track-bg);
+	overflow: hidden;
+}
+[data-widget-part~="stat-slot.fill"] {
+	position: absolute;
+	inset-block: 0;
+	inset-inline-start: 0;
+	width: var(--sp-fill, 0%);
+	border-radius: var(--sp-w-meter-radius);
+	background: var(--sp-w-meter-fill-bg);
+}
+[data-widget-part~="stat-slot.bar-value"] {
+	font-variant-numeric: tabular-nums;
+	white-space: nowrap;
+}
+/* A chip (a choice, a switch) and a line (text, a list, a story time). */
+[data-widget-part~="stat-slot.chip"],
+[data-widget-part~="stat-slot.line"] {
+	display: inline-flex;
+	align-items: center;
+	max-width: 100%;
+	padding: var(--sp-w-chip-pad);
+	border-radius: var(--sp-w-chip-radius);
+	background: var(--sp-w-chip-bg);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+[data-widget-part~="stat-slot.line"] {
+	border-radius: var(--sp-w-control-radius);
+	background: transparent;
+	padding-inline: 0.1rem;
+}
+/* A switch that is on. */
+[data-widget-part~="stat-slot.chip"][aria-pressed="true"] {
+	background: var(--sp-w-chip-on-bg);
+}
+/* Absent is not zero: an unset slot (and a list with nothing in it, and the
+   menu's "not set") reads as unset, never as a value. */
+[data-widget-part~="stat-slot.chip"][data-empty],
+[data-widget-part~="stat-slot.line"][data-empty],
+[data-widget-part~="stat-slot.option"][data-empty],
+[data-widget-part~="stat-slot.items-empty"] {
+	opacity: 0.45;
+	font-style: italic;
+}
+[data-widget-part~="stat-slot.option"] {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.3rem;
+}
+[data-widget-part~="stat-slot.bar"]:hover:not(:disabled),
+[data-widget-part~="stat-slot.chip"]:hover:not(:disabled),
+[data-widget-part~="stat-slot.line"]:hover:not(:disabled) {
+	filter: brightness(1.15);
+}
+/* A derived or retired slot has nothing to write. */
+[data-widget-part~="stat-slot.root"] button:disabled {
+	opacity: 0.55;
+	cursor: default;
+}
+
+/* ── Stat shapes (phase 2): a list's items, a story time's fields ────────── */
+
+/* An open editor: the items, the add field, what was refused, and Done. */
+[data-widget-part~="stat-slot.editor"] {
+	display: flex;
+	flex-flow: row wrap;
+	align-items: center;
+	gap: 0.25rem 0.35rem;
+	min-width: 0;
+}
+[data-widget-part~="stat-slot.items"] {
+	display: flex;
+	flex-direction: column;
+	gap: 0.15rem;
+	flex-basis: 100%;
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+[data-widget-part~="stat-slot.item"] {
+	display: flex;
+	align-items: center;
+	gap: 0.2rem;
+	min-width: 0;
+}
+[data-widget-part~="stat-slot.item-text"] {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+[data-widget-part~="stat-slot.item-up"],
+[data-widget-part~="stat-slot.item-down"],
+[data-widget-part~="stat-slot.item-remove"] {
+	display: inline-flex;
+	align-items: center;
+	padding: var(--sp-w-icon-button-pad);
+	border-radius: var(--sp-w-icon-button-radius);
+}
+[data-widget-part~="stat-slot.item-up"]:hover:not(:disabled),
+[data-widget-part~="stat-slot.item-down"]:hover:not(:disabled),
+[data-widget-part~="stat-slot.item-remove"]:hover:not(:disabled) {
+	background: var(--sp-w-hover-bg);
+}
+[data-widget-part~="stat-slot.add"] {
+	flex: 1 1 8rem;
+}
+/* A story time's four fields sit on one line and wrap as a group. */
+[data-widget-part~="stat-slot.year"],
+[data-widget-part~="stat-slot.month"],
+[data-widget-part~="stat-slot.day"],
+[data-widget-part~="stat-slot.clock"] {
+	width: auto;
+	flex: 0 1 4.5rem;
+	min-width: 3rem;
+}
+[data-widget-part~="stat-slot.year"] {
+	flex-basis: 5.5rem;
+}
+[data-widget-part~="stat-slot.done"],
+[data-widget-part~="stat-slot.save"],
+[data-widget-part~="stat-slot.cancel"] {
+	padding: var(--sp-w-control-pad);
+	border-radius: var(--sp-w-control-radius);
+	background: var(--sp-w-control-bg);
+}
+[data-widget-part~="stat-slot.invalid"] {
+	flex-basis: 100%;
+	margin: 0;
+	font-size: var(--sp-w-font-note);
+	color: var(--color-error-700);
+}
+
+/* ── Items (phase 3c): a held reference's count, and the lorebook picker ── */
+
+/* − and + beside a held entry, the same quiet square as move and remove. */
+[data-widget-part~="stat-slot.item-less"],
+[data-widget-part~="stat-slot.item-more"] {
+	display: inline-flex;
+	align-items: center;
+	padding: var(--sp-w-icon-button-pad);
+	border-radius: var(--sp-w-icon-button-radius);
+}
+[data-widget-part~="stat-slot.item-less"]:hover:not(:disabled),
+[data-widget-part~="stat-slot.item-more"]:hover:not(:disabled) {
+	background: var(--sp-w-hover-bg);
+}
+[data-widget-part~="stat-slot.pick-open"],
+[data-widget-part~="stat-slot.pick-confirm"],
+[data-widget-part~="stat-slot.pick-close"] {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.3rem;
+	padding: var(--sp-w-control-pad);
+	border-radius: var(--sp-w-control-radius);
+	background: var(--sp-w-control-bg);
+}
+/* The picker takes the editor's whole width: a search, what it found, how many. */
+[data-widget-part~="stat-slot.picker"] {
+	display: flex;
+	flex-direction: column;
+	gap: 0.25rem;
+	flex-basis: 100%;
+	min-width: 0;
+	padding: 0.3rem;
+	border-radius: 0.4rem;
+	background: var(--sp-w-card-bg);
+}
+[data-widget-part~="stat-slot.pick-heading"] {
+	margin: 0.15rem 0 0;
+	font-size: var(--sp-w-font-note);
+	font-weight: 600;
+	opacity: 0.75;
+}
+[data-widget-part~="stat-slot.pick-status"] {
+	margin: 0;
+	font-size: 0.75rem;
+	opacity: 0.8;
+}
+[data-widget-part~="stat-slot.pick-list"] {
+	display: flex;
+	flex-direction: column;
+	gap: 0.1rem;
+	max-height: 11rem;
+	margin: 0;
+	padding: 0;
+	overflow-y: auto;
+	list-style: none;
+}
+[data-widget-part~="stat-slot.pick-entry"] {
+	display: flex;
+	align-items: center;
+	gap: 0.4rem;
+	width: 100%;
+	padding: 0.15rem 0.35rem;
+	border-radius: var(--sp-w-control-radius);
+	text-align: left;
+}
+[data-widget-part~="stat-slot.pick-entry"]:hover {
+	background: color-mix(in oklab, currentColor 10%, transparent);
+}
+/* Chosen reads as selection (STYLE-GUIDE §2.4): tonal primary plus the bar. */
+[data-widget-part~="stat-slot.pick-entry"][aria-pressed="true"] {
+	background: color-mix(in oklab, var(--color-primary-500) 22%, transparent);
+	box-shadow: inset 3px 0 0 var(--color-primary-500);
+}
+[data-widget-part~="stat-slot.pick-title"] {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+[data-widget-part~="stat-slot.pick-held"] {
+	font-size: var(--sp-w-font-note);
+	opacity: 0.75;
+	white-space: nowrap;
+}
+[data-widget-part~="stat-slot.pick-add"] {
+	display: flex;
+	flex-flow: row wrap;
+	align-items: center;
+	gap: 0.3rem;
+}
+[data-widget-part~="stat-slot.pick-count"] {
+	width: auto;
+	flex: 0 1 4.5rem;
+	min-width: 3rem;
+}
+/* A finger lands on 44px (STYLE-GUIDE §9), however small the control reads. */
+@media (pointer: coarse) {
+	[data-widget-part~="stat-slot.item-less"],
+	[data-widget-part~="stat-slot.item-more"],
+	[data-widget-part~="stat-slot.item-up"],
+	[data-widget-part~="stat-slot.item-down"],
+	[data-widget-part~="stat-slot.item-remove"],
+	[data-widget-part~="stat-slot.pick-entry"],
+	[data-widget-part~="stat-slot.pick-open"],
+	[data-widget-part~="stat-slot.pick-confirm"],
+	[data-widget-part~="stat-slot.pick-close"] {
+		min-width: 44px;
+		min-height: 44px;
+		justify-content: center;
+	}
+	[data-widget-part~="stat-slot.pick-entry"] {
+		justify-content: flex-start;
+	}
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   §scene-portraits (was styles/scene-portraits.css)
+   ════════════════════════════════════════════════════════════════════════ */
+
+/*
+ * Core's Scene Portraits widget (R21), keyed on its widget parts
+ * (`data-widget-part`, P3c); the markup carries no look. Parts:
+ * scene-portraits.root · .alert · .alert-text · .dismiss · .empty · .scene ·
+ * .face · .face-img (`data-blank`: no picture) · .face-name · .set-menu ·
+ * .set · .set-name · .set-panel · .set-title · .set-list · .set-option ·
+ * .set-note · .pins · .pin · .pin-img · .pin-clear · .pin-placeholder, and
+ * the mini bars' .bars · .bar · .bar-label · .bar-track · .bar-fill
+ * (STYLE-GUIDE §6.16).
+ *
+ * What the utilities and Skeleton classes it carried drew (`btn-icon`,
+ * `btn-icon-sm`, `preset-tonal-surface`, `card`, `btn btn-sm`, the app's
+ * `popover-menu-btn` / `popover-menu-title`, and the Tailwind layout ones) is
+ * written here as they compile, states included. Where a class set a
+ * variable only to read it back (`--btn-size`), the rule reads what it held
+ * (`--text-sm`); where Tailwind composes a shadow or a filter from its
+ * `--tw-*` properties, the rule writes what that composes to with nothing
+ * else set, so no rule here leans on a utility some other markup must keep.
+ * The app's rules that sat unlayered (`.popover-menu-btn`,
+ * `.popover-menu-title`, and `.btn`'s disabled, active and focus-ring rules)
+ * beat the utilities beside them, so where they disagreed theirs is the
+ * declaration written, and the active rules come after the hover ones so
+ * they still win a tie. The Skeleton rules for an `svg` child and for a
+ * `card` that is a link or a button are left out: no such element is here.
+ */
+
+/* The widget's box: its faces or pins, stacked in a column. */
+[data-widget-part~="scene-portraits.root"] {
+	display: flex;
+	flex-direction: column;
+	height: 100%;
+	padding: calc(var(--spacing) * 2);
+}
+
+[data-widget-part~="scene-portraits.empty"] {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: var(--sp-w-empty-gap);
+	height: 100%;
+	padding: var(--sp-w-empty-pad);
+	text-align: center;
+	font-size: var(--sp-w-font-empty);
+	opacity: var(--sp-w-muted-opacity);
+}
+
+/* This widget's own refusal (R77), above the faces. */
+[data-widget-part~="scene-portraits.alert"] {
+	display: flex;
+	align-items: center;
+	gap: 0.35rem;
+	margin-block-end: 0.35rem;
+	padding: 0.2rem 0.4rem;
+	border-radius: 0.35rem;
+	font-size: 0.68rem;
+	color: var(--color-error-700);
+	background: color-mix(in oklab, var(--color-error-500) 14%, transparent);
+}
+[data-mode="dark"] [data-widget-part~="scene-portraits.alert"] {
+	color: var(--color-error-200);
+}
+[data-widget-part~="scene-portraits.alert-text"] {
+	flex: 1;
+	min-width: 0;
+}
+/* The alert's dismiss: a small square icon button (`btn-icon btn-icon-sm`). */
+[data-widget-part~="scene-portraits.dismiss"] {
+	display: inline-flex;
+	justify-content: center;
+	align-items: center;
+	width: calc(var(--text-sm) * 2 - calc(var(--spacing) * 0.5));
+	height: calc(var(--text-sm) * 2 - calc(var(--spacing) * 0.5));
+	padding: calc((var(--text-sm) - calc(var(--spacing) * 0.5)) / 2);
+	border-radius: var(--radius-base);
+	font-size: var(--text-sm);
+	line-height: var(--text-sm);
+	white-space: nowrap;
+	text-decoration-line: none;
+	transition-property: var(--default-transition-property);
+	transition-timing-function: var(--default-transition-timing-function);
+	transition-duration: var(--default-transition-duration);
+}
+[data-widget-part~="scene-portraits.dismiss"] > sp-icon {
+	inline-size: var(--text-sm);
+	block-size: var(--text-sm);
+}
+@media (hover: hover) {
+	[data-widget-part~="scene-portraits.dismiss"]:not(:disabled):hover {
+		filter: brightness(125%);
+	}
+	[data-widget-part~="scene-portraits.dismiss"]:not(:disabled):hover:where([data-mode="dark"], [data-mode="dark"] *) {
+		filter: brightness(75%);
+	}
+}
+
+/* Faces wrap and share the width: the same row reads as a strip above the
+   messages and as a column in a narrow rail, with no second layout. A face
+   grows with the widget's own width (`cqi` of the host box, the `sp-widget`
+   container): 8rem in a narrow rail as before, up to 20rem where the layout
+   gave the widget room — a 4K rail no longer holds two thumbnails in a
+   screen of empty panel. The cap is the width's, not the height's: a cell
+   whose height is its content's cannot be measured for one. */
+[data-widget-part~="scene-portraits.scene"] {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.5rem;
+	min-height: 0;
+	overflow: auto;
+	align-content: flex-start;
+}
+[data-widget-part~="scene-portraits.face"] {
+	position: relative;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 0.15rem;
+	flex: 1 1 4.5rem;
+	max-width: clamp(8rem, 45cqi, 20rem);
+	min-width: 0;
+	margin: 0;
+}
+[data-widget-part~="scene-portraits.face-img"] {
+	inline-size: 100%;
+	aspect-ratio: 1;
+	object-fit: cover;
+	object-position: top;
+	border-radius: var(--sp-w-card-radius);
+	background: color-mix(in oklab, currentColor 8%, transparent);
+}
+/* A member with no picture: the same frame, holding an icon. */
+[data-widget-part~="scene-portraits.face-img"][data-blank] {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	opacity: 0.5;
+}
+[data-widget-part~="scene-portraits.face-name"] {
+	max-width: 100%;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-size: 0.66rem;
+	opacity: 0.8;
+}
+
+/* The sprite-set switch: over the portrait's top corner, not under the name —
+   a short widget clips everything below the face, and the switch must stay
+   reachable. The `sp-popover` (which wraps the trigger) is what sits in the
+   face's corner; the button is the pill inside it. */
+[data-widget-part~="scene-portraits.set-menu"] {
+	position: absolute;
+	top: 0.25rem;
+	left: 0.25rem;
+	max-width: calc(100% - 0.5rem);
+}
+[data-widget-part~="scene-portraits.set"] {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.2rem;
+	max-width: 100%;
+	font-size: 0.62rem;
+	opacity: 0.85;
+	border-radius: var(--sp-w-chip-radius);
+	padding: var(--sp-w-chip-pad);
+	color: var(--color-surface-50);
+	background: color-mix(in oklab, var(--color-surface-950) 70%, transparent);
+}
+/* STYLE-GUIDE §9: a 44px target on a coarse pointer. */
+@media (pointer: coarse) {
+	[data-widget-part~="scene-portraits.set"] {
+		min-height: 44px;
+		padding-inline: 0.75rem;
+	}
+}
+[data-widget-part~="scene-portraits.set"]:hover,
+[data-widget-part~="scene-portraits.set"]:focus-visible {
+	opacity: 1;
+}
+[data-widget-part~="scene-portraits.set-name"] {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+/* The sprite-set panel (`sp-popover`'s body, portalled to <body>, where these
+   global rules still reach it): a Skeleton `card` on `bg-primary-200-800`,
+   `w-[min(90vw,220px)] space-y-3 p-3 shadow-xl`. */
+[data-widget-part~="scene-portraits.set-panel"] {
+	width: min(90vw, 220px);
+	padding: calc(var(--spacing) * 3);
+	border-radius: var(--radius-container);
+	background-color: light-dark(var(--color-primary-200), var(--color-primary-800));
+	box-shadow:
+		0 0 #0000,
+		0 0 #0000,
+		0 0 #0000,
+		0 0 #0000,
+		0 20px 25px -5px rgb(0 0 0 / 0.1),
+		0 8px 10px -6px rgb(0 0 0 / 0.1);
+}
+/* `space-y-3`, as weightless as the utility's `:where()`. */
+:where([data-widget-part~="scene-portraits.set-panel"] > :not(:last-child)) {
+	margin-block-start: 0;
+	margin-block-end: calc(var(--spacing) * 3);
+}
+/* The panel's head: icon and title (the app's `popover-menu-title`). */
+[data-widget-part~="scene-portraits.set-title"] {
+	display: flex;
+	align-items: center;
+	gap: calc(var(--spacing) * 2);
+	font-size: calc(1.125rem * var(--text-scaling));
+	line-height: calc(calc(1.75 / 1.125) * var(--text-scaling));
+	font-weight: var(--font-weight-bold);
+}
+[data-widget-part~="scene-portraits.set-list"] {
+	display: flex;
+	flex-direction: column;
+	gap: calc(var(--spacing) * 2);
+}
+/* One set: a plain text row that fills on hover (`btn btn-sm` under the app's
+   `popover-menu-btn`, which won where they disagreed: display, justify,
+   inline padding, font size). */
+[data-widget-part~="scene-portraits.set-option"] {
+	display: flex;
+	flex-direction: row;
+	align-items: center;
+	justify-content: flex-start;
+	gap: calc(var(--spacing) * 2);
+	width: 100%;
+	height: min-content;
+	padding-block: calc((var(--text-sm) - calc(var(--spacing) * 0.5)) / 2);
+	padding-inline: calc(var(--spacing) * 2);
+	border-radius: var(--radius-base);
+	font-size: 1em;
+	line-height: var(--text-sm);
+	white-space: nowrap;
+	text-decoration-line: none;
+	transition-property: var(--default-transition-property);
+	transition-timing-function: var(--default-transition-timing-function);
+	transition-duration: var(--default-transition-duration);
+}
+@media (hover: hover) {
+	[data-widget-part~="scene-portraits.set-option"]:hover {
+		background-color: var(--color-primary-500);
+		color: var(--color-primary-contrast-500);
+	}
+	[data-widget-part~="scene-portraits.set-option"]:not(:disabled):hover {
+		filter: brightness(125%);
+	}
+	[data-widget-part~="scene-portraits.set-option"]:not(:disabled):hover:where([data-mode="dark"], [data-mode="dark"] *) {
+		filter: brightness(75%);
+	}
+}
+[data-widget-part~="scene-portraits.set-option"]:not(:disabled):active {
+	filter: brightness(90%);
+	transform: scale(0.98);
+}
+[data-widget-part~="scene-portraits.set-option"]:not(:disabled):active:where([data-mode="dark"], [data-mode="dark"] *) {
+	filter: brightness(115%);
+}
+/* A 2px primary ring outside a 2px offset, never the outline. */
+[data-widget-part~="scene-portraits.set-option"]:focus-visible {
+	box-shadow:
+		0 0 #0000,
+		0 0 #0000,
+		0 0 0 2px #fff,
+		0 0 0 4px var(--color-primary-500),
+		0 0 #0000;
+	outline-style: none;
+}
+[data-widget-part~="scene-portraits.set-option"]:disabled {
+	pointer-events: none;
+	opacity: 40%;
+	filter: grayscale(0.3);
+}
+[data-widget-part~="scene-portraits.set-note"] {
+	font-size: calc(0.75rem * var(--text-scaling));
+	line-height: calc(calc(1 / 0.75) * var(--text-scaling));
+	opacity: 80%;
+}
+
+/* ── the pinned source: two pins, side by side ───────────────────────────── */
+
+[data-widget-part~="scene-portraits.pins"] {
+	display: grid;
+	flex: 1;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: calc(var(--spacing) * 2);
+	min-height: 0;
+}
+/* A pin stands on the cell's floor, its bars under it. */
+[data-widget-part~="scene-portraits.pin"] {
+	position: relative;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: flex-end;
+	min-height: 0;
+}
+[data-widget-part~="scene-portraits.pin-img"] {
+	width: 100%;
+	max-height: 100%;
+	min-height: 0;
+	object-fit: contain;
+	object-position: bottom;
+	/* Tailwind's `drop-shadow-lg` (its `--drop-shadow-lg`, written out). */
+	filter: drop-shadow(0 4px 4px rgb(0 0 0 / 0.15));
+}
+/* Clear a pin: a quiet tonal square in the pin's corner (`btn-icon
+   btn-icon-sm preset-tonal-surface`, `opacity-70`, full on hover). */
+[data-widget-part~="scene-portraits.pin-clear"] {
+	position: absolute;
+	top: var(--spacing);
+	right: var(--spacing);
+	display: inline-flex;
+	justify-content: center;
+	align-items: center;
+	width: calc(var(--text-sm) * 2 - calc(var(--spacing) * 0.5));
+	height: calc(var(--text-sm) * 2 - calc(var(--spacing) * 0.5));
+	padding: calc((var(--text-sm) - calc(var(--spacing) * 0.5)) / 2);
+	border-radius: var(--radius-base);
+	font-size: var(--text-sm);
+	line-height: var(--text-sm);
+	white-space: nowrap;
+	text-decoration-line: none;
+	color: var(--color-surface-950-50);
+	background-color: var(--color-surface-50-950);
+	opacity: 70%;
+	transition-property: var(--default-transition-property);
+	transition-timing-function: var(--default-transition-timing-function);
+	transition-duration: var(--default-transition-duration);
+}
+[data-widget-part~="scene-portraits.pin-clear"] > sp-icon {
+	inline-size: var(--text-sm);
+	block-size: var(--text-sm);
+}
+@media (hover: hover) {
+	[data-widget-part~="scene-portraits.pin-clear"]:hover {
+		opacity: 100%;
+	}
+	[data-widget-part~="scene-portraits.pin-clear"]:not(:disabled):hover {
+		filter: brightness(125%);
+	}
+	[data-widget-part~="scene-portraits.pin-clear"]:not(:disabled):hover:where([data-mode="dark"], [data-mode="dark"] *) {
+		filter: brightness(75%);
+	}
+}
+/* A side with nothing pinned says so, inside a dashed frame. */
+[data-widget-part~="scene-portraits.pin-placeholder"] {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 100%;
+	height: 100%;
+	border-width: var(--default-border-width, 1px);
+	border-style: dashed;
+	border-color: light-dark(var(--color-surface-300), var(--color-surface-700));
+	border-radius: var(--radius-lg);
+	font-size: 11px;
+	color: var(--color-surface-500);
+}
+
+/* ── the mini bar row (StatBars) ─────────────────────────────────────────── */
+
+[data-widget-part~="scene-portraits.bars"] {
+	display: flex;
+	flex-direction: column;
+	gap: 0.12rem;
+	width: 100%;
+	padding: 0.15rem 0.2rem;
+	font-size: 0.6rem;
+}
+[data-widget-part~="scene-portraits.bar"] {
+	display: flex;
+	align-items: center;
+	gap: 0.25rem;
+	min-width: 0;
+}
+[data-widget-part~="scene-portraits.bar-label"] {
+	max-width: 4.5rem;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	opacity: var(--sp-w-muted-opacity);
+}
+[data-widget-part~="scene-portraits.bar-track"] {
+	position: relative;
+	flex: 1;
+	height: 0.3rem;
+	border-radius: var(--sp-w-meter-radius);
+	background: color-mix(in oklab, currentColor 18%, transparent);
+	overflow: hidden;
+}
+[data-widget-part~="scene-portraits.bar-fill"] {
+	position: absolute;
+	inset-block: 0;
+	inset-inline-start: 0;
+	width: var(--sp-fill, 0%);
+	border-radius: var(--sp-w-meter-radius);
+	background: var(--sp-w-meter-fill-bg);
+}
+
+} /* @layer sp-widgets */

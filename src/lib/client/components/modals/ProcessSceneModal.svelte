@@ -10,6 +10,7 @@
 	import { toaster } from "$lib/client/utils/toaster"
 	import { resolveOrCreateBindingByName } from "$lib/client/utils/createLorebookBinding"
 	import AiTaskModal, { type AiTaskStep } from "./AiTaskModal.svelte"
+	import Select from "$lib/client/components/inputs/Select.svelte"
 
 	type PendingResult = {
 		content: string
@@ -81,8 +82,8 @@
 	let reviewMentioned = $state<number[]>(
 		untrack(() => [...(pendingResult?.mentionedCharacters ?? [])])
 	)
-	let newParticipantId = $state<number | "">("")
-	let newMentionedId = $state<number | "">("")
+	let newParticipantId = $state("")
+	let newMentionedId = $state("")
 	let pendingNewParticipants = $state<PendingNewCharacter[]>(
 		untrack(() =>
 			(pendingResult?.suggestedParticipantCharacters ?? []).map(
@@ -112,17 +113,6 @@
 	let genBatch = $state(0)
 	let genTotalBatches = $state(1)
 	let genPartial = $state<{ content?: string; raw?: string }>({})
-
-	// Debug trace
-	type TraceEntry = {
-		label: string
-		system: string
-		user: string
-		response: string
-	}
-	let trace = $state<TraceEntry[]>([])
-	let showTrace = $state(false)
-	let expandedTraceIdx = $state<number | null>(null)
 
 	let progressPercent = $derived(
 		genPhase === "extracting"
@@ -232,6 +222,11 @@
 				mentionedIds.push(id)
 			}
 
+			// The review is dismissed BY the update, after its write lands (as
+			// `acted`) — sending `activity:dismiss` beside it raced the save,
+			// and the ephemeral-scene cleanup could delete the scene first.
+			// Success is shown only once the server answers (`handleSaved`).
+			awaitingSave = true
 			socket.emit("scenes:update", {
 				scene: {
 					id: sceneId,
@@ -239,22 +234,44 @@
 					summary: reviewContent.trim(),
 					participantCharacters: [...new Set(participantIds)],
 					mentionedCharacters: [...new Set(mentionedIds)]
-				}
+				},
+				...(internalActivityId ? { activityId: internalActivityId } : {})
 			} satisfies Sockets.Scenes.Update.Params)
-			if (internalActivityId)
-				socket.emit("activity:dismiss", { id: internalActivityId })
-			toaster.success({ title: "Scene updated" })
-			onApplied?.(sceneId)
-			onOpenChange({ open: false })
 		} catch (err) {
+			isSaving = false
 			toaster.error({
 				title: "Failed to save new character",
 				description: err instanceof Error ? err.message : undefined
 			})
-		} finally {
-			isSaving = false
 		}
 	}
+
+	/** A save this modal sent, waiting on the server's answer. */
+	let awaitingSave = $state(false)
+
+	function handleSaved(msg: Sockets.Scenes.Update.Response) {
+		if (!awaitingSave || msg.scene?.id !== sceneId) return
+		awaitingSave = false
+		isSaving = false
+		toaster.success({ title: "Scene updated" })
+		onApplied?.(sceneId)
+		onOpenChange({ open: false })
+	}
+
+	function handleSaveError(msg: { error?: string }) {
+		if (!awaitingSave) return
+		awaitingSave = false
+		isSaving = false
+		toaster.error({
+			title: "Scene not saved",
+			description: msg?.error
+		})
+	}
+
+	// Bare: neither event is in `SCOPED_EVENTS`; `handleSaved` filters on the
+	// scene, and both act only while this modal is waiting on a save.
+	useInterest<"scenes:update">("scenes:update", handleSaved)
+	useInterest<"scenes:update:error">("scenes:update:error", handleSaveError)
 
 	function discard() {
 		if (internalActivityId) {
@@ -270,8 +287,6 @@
 		genBatch = 0
 		genTotalBatches = 1
 		genPartial = {}
-		trace = []
-		expandedTraceIdx = null
 		errorMessage = ""
 		pendingNewParticipants = []
 		pendingNewMentioned = []
@@ -304,19 +319,6 @@
 		step = "review"
 	}
 
-	function handleTrace(msg: Sockets.Scenes.Process.TraceEntry) {
-		if (msg.sceneId !== sceneId) return
-		trace = [
-			...trace,
-			{
-				label: msg.label,
-				system: msg.system,
-				user: msg.user,
-				response: msg.response
-			}
-		]
-	}
-
 	function handleError(msg: Sockets.Scenes.Process.ErrorResponse) {
 		if (msg.sceneId !== sceneId || step !== "running") return
 		errorMessage = msg.error
@@ -333,9 +335,12 @@
 	 * prop, and `useInterest` keeps the key it was first given. Each handler's
 	 * own `msg.sceneId !== sceneId` check stays as belt and braces.
 	 *
-	 * The `:error` key is scoped like the other two — the refusal carries the
-	 * same `sceneId` — and is never gated (plan ruling 2); the registry is
-	 * simply the only listener path now.
+	 * The `:error` key is scoped like the other two, and is never gated (plan
+	 * ruling 2). Every failure the process handler reports names the scene —
+	 * the not-found and access refusals, a run that halts, and a throw
+	 * mid-run. `register()`'s own fallback for an unexpected throw does NOT
+	 * (it knows only the event), which is why the handler sends its own
+	 * before it throws; the registry is simply the only listener path now.
 	 */
 	$effect(() => {
 		const releases = [
@@ -356,13 +361,6 @@
 			for (const release of releases) release()
 		}
 	})
-
-	/**
-	 * BARE: `scenes:process:trace` has no server emitter today, so it is not in
-	 * `SCOPED_EVENTS` and a `#<id>` key would match no payload at all.
-	 * `handleTrace`'s own `msg.sceneId !== sceneId` check is the filter.
-	 */
-	useInterest<"scenes:process:trace">("scenes:process:trace", handleTrace)
 
 	// In confirm step (pre-rerun): cancel goes back to review; otherwise discard + close
 	let handleCancel = $derived(
@@ -385,7 +383,7 @@
 	{#if genPartial.content || genPartial.raw}
 		<div class="space-y-1">
 			<p
-				class="text-surface-700-300 text-xs font-semibold tracking-wide uppercase"
+				class="text-surface-600-400 text-xs font-semibold"
 			>
 				{genPhase === "synthesizing"
 					? "Synthesizing"
@@ -446,7 +444,7 @@
 
 		<div class="border-surface-300-700 space-y-3 rounded-lg border p-3">
 			<p
-				class="text-surface-700-300 text-xs font-semibold tracking-wide uppercase"
+				class="text-surface-600-400 text-xs font-semibold"
 			>
 				Characters
 			</p>
@@ -481,18 +479,19 @@
 						</span>
 					{/each}
 					<div class="flex gap-1">
-						<select
-							class="select select-sm w-32 text-xs"
+						<Select
+							label="Participant to add"
+							labelHidden
+							placeholder="Add character…"
+							class="w-40 text-xs"
+							options={lorebookBindingList.filter((b) => !reviewParticipants.includes(b.id)).map((b) => ({
+								value: String(b.id),
+								label: b.name || b.binding
+							}))}
 							bind:value={newParticipantId}
-						>
-							<option value="">Add character…</option>
-							{#each lorebookBindingList.filter((b) => !reviewParticipants.includes(b.id)) as b}
-								<option value={b.id}>
-									{b.name || b.binding}
-								</option>
-							{/each}
-						</select>
+						/>
 						<button
+							aria-label="Add participant"
 							class="btn btn-sm preset-filled-surface-400-600"
 							onclick={addParticipant}
 							disabled={newParticipantId === ""}
@@ -502,7 +501,7 @@
 					</div>
 				</div>
 				{#if reviewParticipants.length === 0}
-					<p class="text-surface-400 text-xs italic">None.</p>
+					<p class="text-surface-600-400 text-xs italic">None.</p>
 				{/if}
 				{#if pendingNewParticipants.length > 0}
 					<div class="flex flex-wrap gap-1.5">
@@ -511,7 +510,7 @@
 								class="chip preset-tonal-warning flex items-center gap-1 border border-dashed text-xs"
 							>
 								{p.name}
-								<span class="text-[10px] opacity-70">
+								<span class="text-[11px] opacity-70">
 									(new)
 								</span>
 								<button
@@ -543,6 +542,7 @@
 						}}
 					/>
 					<button
+						aria-label="Add participant by name"
 						class="btn btn-sm preset-filled-surface-400-600"
 						onclick={addManualParticipant}
 						disabled={!newParticipantName.trim()}
@@ -581,18 +581,19 @@
 						</span>
 					{/each}
 					<div class="flex gap-1">
-						<select
-							class="select select-sm w-32 text-xs"
+						<Select
+							label="Mentioned character to add"
+							labelHidden
+							placeholder="Add character…"
+							class="w-40 text-xs"
+							options={lorebookBindingList.filter((b) => !reviewMentioned.includes(b.id)).map((b) => ({
+								value: String(b.id),
+								label: b.name || b.binding
+							}))}
 							bind:value={newMentionedId}
-						>
-							<option value="">Add character…</option>
-							{#each lorebookBindingList.filter((b) => !reviewMentioned.includes(b.id)) as b}
-								<option value={b.id}>
-									{b.name || b.binding}
-								</option>
-							{/each}
-						</select>
+						/>
 						<button
+							aria-label="Add mentioned character"
 							class="btn btn-sm preset-filled-surface-400-600"
 							onclick={addMentioned}
 							disabled={newMentionedId === ""}
@@ -602,7 +603,7 @@
 					</div>
 				</div>
 				{#if reviewMentioned.length === 0}
-					<p class="text-surface-400 text-xs italic">None.</p>
+					<p class="text-surface-600-400 text-xs italic">None.</p>
 				{/if}
 				{#if pendingNewMentioned.length > 0}
 					<div class="flex flex-wrap gap-1.5">
@@ -611,7 +612,7 @@
 								class="chip preset-tonal-warning flex items-center gap-1 border border-dashed text-xs"
 							>
 								{p.name}
-								<span class="text-[10px] opacity-70">
+								<span class="text-[11px] opacity-70">
 									(new)
 								</span>
 								<button
@@ -643,6 +644,7 @@
 						}}
 					/>
 					<button
+						aria-label="Add mentioned character by name"
 						class="btn btn-sm preset-filled-surface-400-600"
 						onclick={addManualMentioned}
 						disabled={!newMentionedName.trim()}
@@ -655,92 +657,12 @@
 	</div>
 {/snippet}
 
-{#snippet debugBlock()}
-	{#if trace.length > 0}
-		<button
-			class="text-surface-700-300 hover:text-surface-700-300 flex w-full items-center justify-between text-xs"
-			onclick={() => (showTrace = !showTrace)}
-		>
-			<span>Debug ({trace.length} calls)</span>
-			<Icons.ChevronDown
-				size={14}
-				class="transition-transform {showTrace ? 'rotate-180' : ''}"
-			/>
-		</button>
-		{#if showTrace}
-			<div class="mt-3 max-h-[40vh] space-y-2 overflow-y-auto pr-1">
-				{#each trace as entry, i}
-					<div
-						class="bg-surface-100-900 border-surface-300-700 overflow-hidden rounded-lg border text-xs"
-					>
-						<button
-							class="hover:bg-surface-200-800 flex w-full items-center gap-2 px-3 py-2.5 text-left transition-colors"
-							onclick={() =>
-								(expandedTraceIdx =
-									expandedTraceIdx === i ? null : i)}
-						>
-							<Icons.ChevronRight
-								size={12}
-								class="text-surface-400 shrink-0 transition-transform {expandedTraceIdx ===
-								i
-									? 'rotate-90'
-									: ''}"
-							/>
-							<span
-								class="text-primary-400 shrink-0 font-mono font-medium"
-							>
-								{i + 1}.
-							</span>
-							<span class="truncate font-medium">
-								{entry.label}
-							</span>
-						</button>
-						{#if expandedTraceIdx === i}
-							<div
-								class="divide-surface-300-700 border-surface-300-700 divide-y border-t"
-							>
-								<div class="space-y-1 p-3">
-									<p
-										class="text-primary-500 text-[10px] font-bold tracking-widest uppercase"
-									>
-										System
-									</p>
-									<pre
-										class="bg-surface-200-800 max-h-48 overflow-y-auto rounded p-2.5 leading-relaxed whitespace-pre-wrap">{entry.system}</pre>
-								</div>
-								<div class="space-y-1 p-3">
-									<p
-										class="text-warning-500 text-[10px] font-bold tracking-widest uppercase"
-									>
-										User
-									</p>
-									<pre
-										class="bg-surface-200-800 max-h-48 overflow-y-auto rounded p-2.5 leading-relaxed whitespace-pre-wrap">{entry.user}</pre>
-								</div>
-								<div class="space-y-1 p-3">
-									<p
-										class="text-success-500 text-[10px] font-bold tracking-widest uppercase"
-									>
-										Response
-									</p>
-									<pre
-										class="bg-surface-200-800 max-h-48 overflow-y-auto rounded p-2.5 leading-relaxed whitespace-pre-wrap">{entry.response}</pre>
-								</div>
-							</div>
-						{/if}
-					</div>
-				{/each}
-			</div>
-		{/if}
-	{/if}
-{/snippet}
-
 <AiTaskModal
 	{open}
 	{onOpenChange}
-	title="Scene Summary"
-	runningTitle="Processing Scene…"
-	reviewTitle="Review Scene Summary"
+	title="Scene summary"
+	runningTitle="Processing scene…"
+	reviewTitle="Review scene summary"
 	badge="Scene"
 	{step}
 	{progressPercent}
@@ -762,5 +684,4 @@
 	confirm={confirmBlock}
 	preview={previewBlock}
 	review={reviewBlock}
-	debug={debugBlock}
 />

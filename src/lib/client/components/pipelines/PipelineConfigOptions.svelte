@@ -27,6 +27,7 @@
 	import { onMount } from "svelte"
 	import * as Icons from "@lucide/svelte"
 	import { toaster } from "$lib/client/utils/toaster"
+	import Select from "$lib/client/components/inputs/Select.svelte"
 	import ShareBar from "$lib/client/components/pipelines/ShareBar.svelte"
 	import StrengthBars from "$lib/client/components/pipelines/StrengthBars.svelte"
 	// The ONE spelling of what a connection slot stores, shared with the three
@@ -37,6 +38,8 @@
 		slotModelId
 	} from "$lib/shared/connections/slotRef"
 	import { languageOf } from "$lib/shared/pipelines/templateEngines"
+	import TemplateEditor from "$lib/client/components/templates/TemplateEditor.svelte"
+	import type { ScopeDeclarer } from "$lib/shared/utils/templateAssist"
 	// The value-decl controls (24 T6c): the simple editors live in
 	// @serene-pub/controls now — one component per value-type id, the render
 	// leg of the four-way registry. This panel keeps the behavioural wiring
@@ -154,6 +157,9 @@
 	 * the cursor.
 	 */
 	let drafts = $state<Record<string, string>>({})
+	/** The "Add…" pickers (script chains, lists): an action, so each goes
+	 *  back to empty once its pick is applied. */
+	let addPicks = $state<Record<string, string>>({})
 
 	/**
 	 * The prompt editor's in-flight text, keyed by option id.
@@ -217,7 +223,7 @@
 	 */
 	const SOURCE_LABEL: Record<Sockets.Pipelines.Option["source"], string> = {
 		session: "from this session",
-		preset: "from the selected configuration",
+		config: "from the selected configuration",
 		author: "default"
 	}
 
@@ -693,8 +699,8 @@
 	 * unlabelled button; a language name on every button of a single-language
 	 * slot is a constant repeated in the only place a person is choosing.
 	 */
-	const templateEngines = (option: Sockets.Pipelines.Option): string[] =>
-		option.templateEngines?.length ? option.templateEngines : []
+	const acceptedEngines = (option: Sockets.Pipelines.Option): string[] =>
+		option.acceptedEngines?.length ? option.acceptedEngines : []
 
 	function cloneTemplate(option: Sockets.Pipelines.Option) {
 		if (!option.contextTemplate) return
@@ -1245,7 +1251,7 @@
 
 			{#if draftMode && isPending(option.id)}
 				<span
-					class="preset-tonal-warning shrink-0 rounded-full px-1.5 py-0.5 text-[0.65rem] font-semibold"
+					class="preset-tonal-warning shrink-0 rounded-full px-1.5 py-0.5 text-[11px] font-semibold"
 					title="Unsaved — lands with Save all"
 				>
 					pending
@@ -1328,7 +1334,7 @@
 				who needs it at any size.
 			-->
 			<p
-				class="text-muted/80 text-[11px] leading-snug"
+				class="text-surface-600-400 text-[11px] leading-snug"
 				title={option.description}
 			>
 				{option.description}
@@ -1336,7 +1342,7 @@
 		{/if}
 
 		{#if !option.writable}
-			<p class="text-muted text-xs italic">
+			<p class="text-surface-600-400 text-xs italic">
 				{option.value ? String(option.value) : "—"}
 				<span class="not-italic">(admin only)</span>
 			</p>
@@ -1484,42 +1490,39 @@
 				{ key: "alsoFits", label: "Also fits (from other pipelines)" }
 			]}
 			<div class="flex items-center gap-1">
-				<select
-					id="opt-{option.id}"
-					class="select min-w-0 flex-1"
+				<Select
+					label={labelOverride ?? option.label}
+					labelHidden
+					class="min-w-0 flex-1"
+					options={[
+						// Unset is a fallback, not an absence: the step resolves to the
+						// prompt this pipeline ships for it, so a run never goes out
+						// with empty instructions.
+						{ value: "", label: "Pipeline default" },
+						...promptGroups.flatMap((g) =>
+							(option.choices ?? [])
+								.filter((c: any) => (c.group ?? "alsoFits") === g.key)
+								.map((choice: any) => ({
+									value: String(choice.id),
+									label: `${choice.label}${
+										choice.description ? ` — ${choice.description}` : ""
+									}`,
+									group: g.label
+								}))
+						)
+					]}
 					value={option.value == null ? "" : String(option.value)}
-					onchange={(e) => {
-						const raw = e.currentTarget.value
+					onValueChange={(raw) => {
 						if (raw === "") return clear(option)
 						set(option, Number(raw))
 					}}
-				>
-					<!-- Unset is a fallback, not an absence: the step resolves
-				     to the prompt this pipeline ships for it, so a run never
-				     goes out with empty instructions. -->
-					<option value="">— Pipeline Default —</option>
-					{#each promptGroups as g (g.key)}
-						{@const inGroup = (option.choices ?? []).filter(
-							(c: any) => (c.group ?? "alsoFits") === g.key
-						)}
-						{#if inGroup.length}
-							<optgroup label={g.label}>
-								{#each inGroup as choice (choice.id)}
-									<option value={String(choice.id)}>
-										{choice.label}{choice.description
-											? ` — ${choice.description}`
-											: ""}
-									</option>
-								{/each}
-							</optgroup>
-						{/if}
-					{/each}
-				</select>
+				/>
 				{#if !selectorsOnly}
 					<button
 						type="button"
 						class="btn btn-sm preset-tonal-surface shrink-0"
 						title="Write a new prompt for this step"
+						aria-label="Write a new prompt for this step"
 						onclick={() => createPrompt(option)}
 					>
 						<!-- Present even with rows in the pool, and required
@@ -1534,6 +1537,7 @@
 						type="button"
 						class="btn btn-sm preset-tonal-surface shrink-0"
 						title="Duplicate this prompt and edit the copy"
+						aria-label="Duplicate this prompt and edit the copy"
 						onclick={() => clonePrompt(option)}
 					>
 						<Icons.Copy size={14} />
@@ -1543,6 +1547,7 @@
 							type="button"
 							class="btn btn-sm preset-tonal-surface shrink-0"
 							title="Delete this prompt"
+							aria-label="Delete this prompt"
 							onclick={() => deletePrompt(option)}
 						>
 							<Icons.Trash2 size={14} />
@@ -1553,9 +1558,9 @@
 
 			{#if option.prompt && !selectorsOnly}
 				{@const readOnly = option.prompt.readOnly}
-				<div class="card bg-surface-100-800 mt-1 space-y-3 p-3">
+				<div class="bg-surface-50-950 mt-1 space-y-3 rounded-[10px] p-3">
 					{#if readOnly}
-						<p class="text-muted text-xs">
+						<p class="text-surface-600-400 text-xs">
 							<Icons.Lock size={11} class="inline" />
 							One of the prompts Serene Pub ships. Duplicate it to
 							make it yours.
@@ -1579,7 +1584,7 @@
 						     editing it reaches there too. The same note the
 						     template editor carries, because since prompts
 						     became pooled it is the same situation. -->
-						<p class="text-muted text-xs">
+						<p class="text-surface-600-400 text-xs">
 							<Icons.Info size={11} class="inline" />
 							Written {option.prompt.origin} — edits reach every pipeline
 							using this step.
@@ -1632,7 +1637,7 @@
 						<div
 							class="border-surface-500/30 space-y-2 border-t pt-3"
 						>
-							<p class="text-muted text-xs">
+							<p class="text-surface-600-400 text-xs">
 								<Icons.Archive size={11} class="inline" />
 								Archived — this step no longer has
 								{archivedOf(option).length === 1
@@ -1670,7 +1675,7 @@
 
 					{#if isDirty(option)}
 						<div class="flex items-center justify-end gap-2">
-							<span class="text-muted mr-auto text-xs">
+							<span class="text-surface-600-400 mr-auto text-xs">
 								Unsaved changes
 							</span>
 							<button
@@ -1704,57 +1709,42 @@
 				{ key: "alsoFits", label: "Also fits (from other pipelines)" }
 			]}
 			<div class="flex items-center gap-1">
-				<select
-					id="opt-{option.id}"
-					class="select min-w-0 flex-1"
+				<!-- A row whose engine has no registered renderer is `disabled`
+				     with its `reason`, never hidden — the rule the connection picker
+				     established. A row that vanished when a plugin was disabled would
+				     read as data loss, and "why isn't mine in the list" would be
+				     unanswerable on the screen that raised the question. -->
+				<Select
+					label={labelOverride ?? option.label}
+					labelHidden
+					class="min-w-0 flex-1"
+					options={[
+						// Unset still renders: the step falls back to the template
+						// Serene Pub ships, so a prompt is never empty because a
+						// selection went away.
+						{ value: "", label: "Pipeline default" },
+						...groups.flatMap((g) =>
+							(option.choices ?? [])
+								.filter((c: any) => (c.group ?? "alsoFits") === g.key)
+								.map((choice: any) => ({
+									value: String(choice.id),
+									label: `${choice.label}${
+										choice.description ? ` — ${choice.description}` : ""
+									}`,
+									group: g.label,
+									disabled: !!choice.disabled,
+									hint: choice.reason || undefined
+								}))
+						)
+					]}
 					value={option.value == null ? "" : String(option.value)}
-					onchange={(e) => {
-						const raw = e.currentTarget.value
+					onValueChange={(raw) => {
 						if (raw === "") return clear(option)
 						set(option, Number(raw))
 					}}
-				>
-					<!-- Unset still renders: the step falls back to the
-					     template Serene Pub ships, so a prompt is never empty
-					     because a selection went away. -->
-					<option value="">— Pipeline Default —</option>
-					{#each groups as g (g.key)}
-						{@const inGroup = (option.choices ?? []).filter(
-							(c: any) => (c.group ?? "alsoFits") === g.key
-						)}
-						{#if inGroup.length}
-							<optgroup label={g.label}>
-								{#each inGroup as choice (choice.id)}
-									<!-- `disabled` with a `reason`, never
-									     hidden — the same shape and the same
-									     rule the connection picker established.
-									     A template whose engine has no
-									     registered renderer is exactly the row
-									     an admin needs to see: it exists, it is
-									     simply unrenderable until the extension
-									     that speaks its language is enabled. A
-									     row that vanished when a plugin was
-									     disabled would read as data loss, and
-									     "why isn't mine in the list" would be
-									     unanswerable on the screen that raised
-									     the question. -->
-									<option
-										value={String(choice.id)}
-										disabled={choice.disabled}
-									>
-										{choice.label}{choice.description
-											? ` — ${choice.description}`
-											: ""}{choice.reason
-											? ` — ${choice.reason}`
-											: ""}
-									</option>
-								{/each}
-							</optgroup>
-						{/if}
-					{/each}
-				</select>
-				{#if templateEngines(option).length > 1}
-					{#each templateEngines(option) as engine (engine)}
+				/>
+				{#if acceptedEngines(option).length > 1}
+					{#each acceptedEngines(option) as engine (engine)}
 						<button
 							type="button"
 							class="btn btn-sm preset-tonal-surface shrink-0"
@@ -1772,6 +1762,7 @@
 						type="button"
 						class="btn btn-sm preset-tonal-surface shrink-0"
 						title="Write a new context template from scratch"
+						aria-label="Write a new context template from scratch"
 						onclick={() => createTemplate(option)}
 					>
 						<Icons.Plus size={14} />
@@ -1782,6 +1773,7 @@
 						type="button"
 						class="btn btn-sm preset-tonal-surface shrink-0"
 						title="Duplicate this template and edit the copy"
+						aria-label="Duplicate this template and edit the copy"
 						onclick={() => cloneTemplate(option)}
 					>
 						<Icons.Copy size={14} />
@@ -1791,6 +1783,7 @@
 							type="button"
 							class="btn btn-sm preset-tonal-surface shrink-0"
 							title="Delete this template"
+							aria-label="Delete this template"
 							onclick={() => deleteTemplate(option)}
 						>
 							<Icons.Trash2 size={14} />
@@ -1801,9 +1794,9 @@
 
 			{#if option.contextTemplate && !selectorsOnly}
 				{@const readOnly = option.contextTemplate.readOnly}
-				<div class="card bg-surface-100-800 mt-1 space-y-3 p-3">
+				<div class="bg-surface-50-950 mt-1 space-y-3 rounded-[10px] p-3">
 					{#if readOnly}
-						<p class="text-muted text-xs">
+						<p class="text-surface-600-400 text-xs">
 							<Icons.Lock size={11} class="inline" />
 							One of the templates Serene Pub ships. Duplicate it to
 							make it yours.
@@ -1827,29 +1820,35 @@
 						<!-- Answers the question the grouping raises: this row
 						     is selectable here and was written elsewhere, and
 						     editing it reaches there too. -->
-						<p class="text-muted text-xs">
+						<p class="text-surface-600-400 text-xs">
 							<Icons.Info size={11} class="inline" />
 							Written {option.contextTemplate.origin} — edits reach
 							every pipeline using it.
 						</p>
 					{/if}
 
-					<label class="flex flex-col gap-1 text-xs font-medium">
-						Template
-						<textarea
-							class="textarea w-full font-mono text-xs"
+					<!-- Typed templates P7: this step's typed scope — completion,
+					     hover, lint with did-you-mean fixes, and the variables
+					     tree — rather than the library's name list. -->
+					<div class="flex flex-col gap-1 text-xs font-medium">
+						<span>Template</span>
+						<TemplateEditor
+							label="Template"
 							rows={readOnly ? 6 : 16}
 							readonly={readOnly}
-							spellcheck="false"
 							value={templateSource(option)}
-							oninput={(e) =>
-								editTemplate(option, {
-									source: e.currentTarget.value
-								})}
-						></textarea>
-					</label>
-					<p class="text-muted text-xs">
-						Handlebars: message blocks, placement and loops. How
+							scope={option.scope}
+							declarers={option.scopeDeclarers as
+								| Record<string, ScopeDeclarer>
+								| undefined}
+							untyped={option.scopeUntyped?.map((u) => u.label)}
+							engine={option.contextTemplate.engine}
+							scopeNote="What this step supplies. A name outside it renders as nothing."
+							oninput={(source) => editTemplate(option, { source })}
+						/>
+					</div>
+					<p class="text-surface-600-400 text-xs">
+						Message blocks, placement and loops. How
 						each value is written out — headings, fences, JSON or
 						prose — is a <strong>layout</strong>
 						, set per variable below. Read variables with
@@ -1859,7 +1858,7 @@
 
 					{#if templateDirty(option)}
 						<div class="flex items-center justify-end gap-2">
-							<span class="text-muted mr-auto text-xs">
+							<span class="text-surface-600-400 mr-auto text-xs">
 								Unsaved changes
 							</span>
 							<button
@@ -1890,31 +1889,32 @@
 			     pipelines** — a layout written here is offered anywhere the
 			     same value is rendered, which is why the copy says so. -->
 			<div class="flex items-center gap-1">
-				<select
-					id="opt-{option.id}"
-					class="select min-w-0 flex-1"
+				<Select
+					label={labelOverride ?? option.label}
+					labelHidden
+					class="min-w-0 flex-1"
+					options={[
+						// Unset still renders: the step falls back to the layout Serene
+						// Pub ships, so the prompt is never missing a section because a
+						// selection went away.
+						{ value: "", label: "Pipeline default" },
+						...(option.choices ?? []).map((choice) => ({
+							value: String(choice.id),
+							label: choice.label
+						}))
+					]}
 					value={option.value == null ? "" : String(option.value)}
-					onchange={(e) => {
-						const raw = e.currentTarget.value
+					onValueChange={(raw) => {
 						if (raw === "") return clear(option)
 						set(option, Number(raw))
 					}}
-				>
-					<!-- Unset still renders: the step falls back to the layout
-					     Serene Pub ships, so the prompt is never missing a
-					     section because a selection went away. -->
-					<option value="">— Pipeline Default —</option>
-					{#each option.choices ?? [] as choice (choice.id)}
-						<option value={String(choice.id)}>
-							{choice.label}
-						</option>
-					{/each}
-				</select>
+				/>
 				{#if option.variableTemplate && !selectorsOnly}
 					<button
 						type="button"
 						class="btn btn-sm preset-tonal-surface shrink-0"
 						title="Duplicate this layout and edit the copy"
+						aria-label="Duplicate this layout and edit the copy"
 						onclick={() => cloneLayout(option)}
 					>
 						<Icons.Copy size={14} />
@@ -1924,6 +1924,7 @@
 							type="button"
 							class="btn btn-sm preset-tonal-surface shrink-0"
 							title="Delete this layout"
+							aria-label="Delete this layout"
 							onclick={() => deleteLayout(option)}
 						>
 							<Icons.Trash2 size={14} />
@@ -1934,9 +1935,9 @@
 
 			{#if option.variableTemplate && !selectorsOnly}
 				{@const readOnly = option.variableTemplate.readOnly}
-				<div class="card bg-surface-100-800 mt-1 space-y-3 p-3">
+				<div class="bg-surface-50-950 mt-1 space-y-3 rounded-[10px] p-3">
 					{#if readOnly}
-						<p class="text-muted text-xs">
+						<p class="text-surface-600-400 text-xs">
 							<Icons.Lock size={11} class="inline" />
 							One of the layouts Serene Pub ships. Duplicate it to
 							make it yours.
@@ -1970,7 +1971,7 @@
 								})}
 						></textarea>
 					</label>
-					<p class="text-muted text-xs">
+					<p class="text-surface-600-400 text-xs">
 						Handlebars. <code>
 							&#123;&#123;&#123;json x 2&#125;&#125;&#125;
 						</code>
@@ -1984,7 +1985,7 @@
 
 					{#if layoutDirty(option)}
 						<div class="flex items-center justify-end gap-2">
-							<span class="text-muted mr-auto text-xs">
+							<span class="text-surface-600-400 mr-auto text-xs">
 								Unsaved changes
 							</span>
 							<button
@@ -2017,7 +2018,7 @@
 			{@const inChain = new Set(chain.map((s) => s.id))}
 			<div class="flex flex-col gap-1">
 				{#if !chain.length}
-					<p class="text-muted text-xs italic">
+					<p class="text-surface-600-400 text-xs italic">
 						No scripts attached.
 					</p>
 				{/if}
@@ -2026,7 +2027,7 @@
 						class="border-surface-200-700 flex items-center gap-1.5 rounded-lg border px-2 py-1"
 					>
 						<span
-							class="text-muted w-4 shrink-0 text-right font-mono text-[10px]"
+							class="text-surface-600-400 w-4 shrink-0 text-right font-mono text-[11px]"
 						>
 							{i + 1}
 						</span>
@@ -2043,14 +2044,14 @@
 						</span>
 						{#if entry.missing}
 							<span
-								class="preset-tonal-error shrink-0 rounded-full px-1.5 py-0.5 text-[10px]"
+								class="preset-tonal-error shrink-0 rounded-full px-1.5 py-0.5 text-[11px]"
 							>
 								deleted
 							</span>
 						{:else}
 							{#if !entry.enabled}
 								<span
-									class="text-muted shrink-0 text-[10px]"
+									class="text-surface-600-400 shrink-0 text-[11px]"
 									title="Disabled on the scripts page — keeps its place, does nothing."
 								>
 									off
@@ -2058,7 +2059,7 @@
 							{/if}
 							{#if entry.blastRadius}
 								<span
-									class="preset-tonal-warning shrink-0 rounded-full px-1.5 py-0.5 text-[10px]"
+									class="preset-tonal-warning shrink-0 rounded-full px-1.5 py-0.5 text-[11px]"
 									title="{entry.typeLabel} — what a script of this type is able to do"
 								>
 									{entry.blastRadius}
@@ -2067,8 +2068,9 @@
 						{/if}
 						<button
 							type="button"
-							class="btn-icon btn-icon-sm preset-tonal-surface shrink-0"
+							class="btn btn-icon btn-icon-sm preset-tonal-surface shrink-0"
 							title="Move up"
+							aria-label="Move up"
 							disabled={i === 0}
 							onclick={() => chainMove(option, i, -1)}
 						>
@@ -2076,8 +2078,9 @@
 						</button>
 						<button
 							type="button"
-							class="btn-icon btn-icon-sm preset-tonal-surface shrink-0"
+							class="btn btn-icon btn-icon-sm preset-tonal-surface shrink-0"
 							title="Move down"
+							aria-label="Move down"
 							disabled={i === chain.length - 1}
 							onclick={() => chainMove(option, i, 1)}
 						>
@@ -2085,8 +2088,9 @@
 						</button>
 						<button
 							type="button"
-							class="btn-icon btn-icon-sm preset-tonal-surface shrink-0"
+							class="btn btn-icon btn-icon-sm preset-tonal-surface shrink-0"
 							title="Remove from this chain (the script itself is kept)"
+							aria-label="Remove from this chain (the script itself is kept)"
 							onclick={() => chainRemove(option, entry.id)}
 						>
 							<Icons.X size={12} />
@@ -2094,26 +2098,29 @@
 					</div>
 				{/each}
 				{#if option.choices?.some((c) => !inChain.has(c.id))}
-					<select
-						id="opt-{option.id}"
-						class="select w-full"
-						value=""
-						onchange={(e) => {
-							chainAdd(option, e.currentTarget.value)
-							e.currentTarget.value = ""
+					<Select
+						label="Add a script to {labelOverride ?? option.label}"
+						labelHidden
+						placeholder="Add a script…"
+						class="w-full"
+						options={option.choices
+							.filter((c) => !inChain.has(c.id))
+							.map((choice) => ({
+								value: String(choice.id),
+								label: `${choice.label}${
+									choice.description ? ` · ${choice.description}` : ""
+								}`
+							}))}
+						bind:value={addPicks[option.id]}
+						onValueChange={(raw) => {
+							if (!raw) return
+							chainAdd(option, raw)
+							// An action, not a setting: the picker goes back to empty.
+							addPicks[option.id] = ""
 						}}
-					>
-						<option value="" disabled>Add a script…</option>
-						{#each option.choices.filter((c) => !inChain.has(c.id)) as choice (choice.id)}
-							<option value={String(choice.id)}>
-								{choice.label}{choice.description
-									? ` · ${choice.description}`
-									: ""}
-							</option>
-						{/each}
-					</select>
+					/>
 				{:else if !option.choices?.length}
-					<p class="text-muted text-xs">
+					<p class="text-surface-600-400 text-xs">
 						Nothing fits this step yet — write one on the
 						<a class="underline" href="/admin/scripts">
 							scripts page
@@ -2126,7 +2133,7 @@
 					     run's connection carries join the same stop union, so
 					     the card shows the merged truth with provenance. -->
 					<div class="mt-1 flex flex-col gap-1">
-						<p class="text-muted text-[11px]">
+						<p class="text-surface-600-400 text-[11px]">
 							<Icons.Plug size={11} class="inline" />
 							From connection
 							<strong>
@@ -2146,12 +2153,12 @@
 									{s.name}
 								</span>
 								{#if !s.enabled}
-									<span class="text-muted text-[10px]">
+									<span class="text-surface-600-400 text-[11px]">
 										off
 									</span>
 								{/if}
 								<span
-									class="preset-tonal-surface shrink-0 rounded-full px-1.5 py-0.5 text-[10px]"
+									class="preset-tonal-surface shrink-0 rounded-full px-1.5 py-0.5 text-[11px]"
 								>
 									connection
 								</span>
@@ -2161,7 +2168,7 @@
 				{/if}
 				{#if option.choices?.length}
 					<a
-						class="text-muted text-xs underline"
+						class="text-surface-600-400 text-xs underline"
 						href="/admin/scripts"
 					>
 						Manage scripts
@@ -2192,9 +2199,38 @@
 				: []}
 			{@const chosenModel =
 				chosenModels.find((m) => m.id === chosenModelId) ?? null}
-			<select
-				id="opt-{option.id}"
-				class="select w-full"
+			<!-- `disabled` and `reason` are why a connection that cannot do
+			     this step's job is SHOWN rather than hidden. "Why isn't my
+			     connection in the list" has no answer when it is simply absent;
+			     greyed out with "Can't do Image generation." under it answers it
+			     in place. `reason` also arrives WITHOUT `disabled` for a
+			     connection nobody has tested yet — a caveat on a choice that is
+			     still selectable. -->
+			<Select
+				label={labelOverride ?? option.label}
+				labelHidden
+				class="w-full"
+				options={[
+					// Unset is not "nothing". A connection or sampling slot with no
+					// value here falls through the chain to the instance's default —
+					// which is what the step actually runs with.
+					{
+						value: "",
+						label:
+							option.control === "connection-ref" ||
+							option.control === "sampling-ref"
+								? "Global default"
+								: "None"
+					},
+					...(option.choices ?? []).map((choice) => ({
+						value: String(choice.id),
+						label: `${choice.label}${
+							choice.description ? ` · ${choice.description}` : ""
+						}`,
+						disabled: !!choice.disabled,
+						hint: choice.reason || undefined
+					}))
+				]}
 				value={isConnection
 					? chosenId == null
 						? ""
@@ -2202,8 +2238,7 @@
 					: option.value == null
 						? ""
 						: String(option.value)}
-				onchange={(e) => {
-					const raw = e.currentTarget.value
+				onValueChange={(raw) => {
 					if (raw === "") return clear(option)
 					// ⚠ Changing the ENDPOINT drops the model, deliberately. A
 					// `connection_models` row belongs to one connection, so
@@ -2229,36 +2264,7 @@
 							: Number(raw)
 					)
 				}}
-			>
-				<!-- Unset is not "nothing". A connection or sampling slot with
-				     no value here falls through the chain to the instance's
-				     default — which is what the step actually runs with — so
-				     "none" was describing an empty box rather than the
-				     behaviour, and read as "this step has no connection". -->
-				<option value="">
-					{option.control === "connection-ref" ||
-					option.control === "sampling-ref"
-						? "— Global Default —"
-						: "— none —"}
-				</option>
-				<!-- `disabled` and `reason` are why a connection that cannot do
-				     this step's job is SHOWN rather than hidden. "Why isn't my
-				     connection in the list" has no answer when it is simply
-				     absent; greyed out with "Can't do Image generation." beside
-				     it answers it in place. `reason` also arrives WITHOUT
-				     `disabled` for a connection nobody has tested yet — a
-				     caveat on a choice that is still selectable. -->
-				{#each option.choices as choice (choice.id)}
-					<option
-						value={String(choice.id)}
-						disabled={choice.disabled}
-					>
-						{choice.label}{choice.description
-							? ` · ${choice.description}`
-							: ""}{choice.reason ? ` — ${choice.reason}` : ""}
-					</option>
-				{/each}
-			</select>
+			/>
 			{#if isConnection && chosenModels.length}
 				<!-- The second half of the pair (0114). Rendered only where the
 				     chosen endpoint HAS models, because a picker over an empty
@@ -2269,38 +2275,32 @@
 				     authored before the split (a bare endpoint) lands on the
 				     placeholder until somebody picks: the resolver refuses it
 				     with the fix attached rather than guessing a row. -->
-				<select
-					class="select mt-1 w-full"
-					aria-label="Model"
+				<!-- Disabled and MISSING models are LISTED and greyed, the same
+				     rule the connection list above follows: a slot pointed at one
+				     before somebody switched it off, or before its host stopped
+				     listing it, has to still show what it is pointed at — and why
+				     it will refuse. -->
+				<Select
+					label="Model"
+					labelHidden
+					class="mt-1 w-full"
+					placeholder="Choose a model"
+					options={chosenModels.map((m) => ({
+						value: String(m.id),
+						label: m.name,
+						disabled: !m.enabled || m.missingSince != null,
+						hint: m.missingSince
+							? "No longer listed by its host"
+							: m.enabled
+								? undefined
+								: "Switched off"
+					}))}
 					value={chosenModelId == null ? "" : String(chosenModelId)}
-					onchange={(e) => {
-						const raw = e.currentTarget.value
+					onValueChange={(raw) => {
 						if (raw === "") return
 						set(option, connectionSlotValue(chosenId, Number(raw)))
 					}}
-				>
-					{#if chosenModelId == null}
-						<option value="" disabled>— Choose a model —</option>
-					{/if}
-					<!-- Disabled and MISSING models are LISTED and greyed, the
-					     same rule the connection list above follows: a slot
-					     pointed at one before somebody switched it off, or
-					     before its host stopped listing it, has to still show
-					     what it is pointed at — and why it will refuse. -->
-					{#each chosenModels as m (m.id)}
-						<option
-							value={String(m.id)}
-							disabled={!m.enabled || m.missingSince != null}
-							title={m.model}
-						>
-							{m.name}{m.missingSince
-								? " — no longer listed by its host"
-								: m.enabled
-									? ""
-									: " — switched off"}
-						</option>
-					{/each}
-				</select>
+				/>
 				{#if chosenModel?.missingSince}
 					<p
 						class="text-warning-500 mt-1 flex items-center gap-1 text-xs"
@@ -2336,7 +2336,7 @@
 			{@const available = listAvailable(option)}
 			<div class="flex flex-col gap-1">
 				{#if !rows.length}
-					<p class="text-muted text-xs italic">
+					<p class="text-surface-600-400 text-xs italic">
 						Nothing in this list.
 					</p>
 				{/if}
@@ -2367,7 +2367,7 @@
 							}}
 						>
 							<span
-								class="text-muted w-4 shrink-0 cursor-grab text-right font-mono text-[10px]"
+								class="text-surface-600-400 w-4 shrink-0 cursor-grab text-right font-mono text-[11px]"
 								aria-hidden="true"
 							>
 								{i + 1}
@@ -2382,7 +2382,7 @@
 							{#each option.item?.fields ?? [] as field (field.key)}
 								{#if field.control === "boolean"}
 									<label
-										class="flex shrink-0 items-center gap-1 text-[10px]"
+										class="flex shrink-0 items-center gap-1 text-[11px]"
 										title={field.label}
 									>
 										<input
@@ -2426,8 +2426,9 @@
 							{/each}
 							<button
 								type="button"
-								class="btn-icon btn-icon-sm preset-tonal-surface shrink-0"
+								class="btn btn-icon btn-icon-sm preset-tonal-surface shrink-0"
 								title="Move up"
+								aria-label="Move up"
 								disabled={i === 0}
 								onclick={() => listMove(option, i, i - 1)}
 							>
@@ -2435,8 +2436,9 @@
 							</button>
 							<button
 								type="button"
-								class="btn-icon btn-icon-sm preset-tonal-surface shrink-0"
+								class="btn btn-icon btn-icon-sm preset-tonal-surface shrink-0"
 								title="Move down"
+								aria-label="Move down"
 								disabled={i === rows.length - 1}
 								onclick={() => listMove(option, i, i + 1)}
 							>
@@ -2444,8 +2446,9 @@
 							</button>
 							<button
 								type="button"
-								class="btn-icon btn-icon-sm preset-tonal-surface shrink-0"
+								class="btn btn-icon btn-icon-sm preset-tonal-surface shrink-0"
 								title="Remove from this list"
+								aria-label="Remove from this list"
 								onclick={() => listRemove(option, i)}
 							>
 								<Icons.X size={12} />
@@ -2454,20 +2457,22 @@
 					{/each}
 				</div>
 				{#if available.length}
-					<select
-						id="opt-{option.id}"
-						class="select w-full"
-						value=""
-						onchange={(e) => {
-							listAdd(option, e.currentTarget.value)
-							e.currentTarget.value = ""
+					<Select
+						label="Add to {labelOverride ?? option.label}"
+						labelHidden
+						placeholder="Add…"
+						class="w-full"
+						options={available.map((choice) => ({
+							value: choice.key,
+							label: choice.label
+						}))}
+						bind:value={addPicks[option.id]}
+						onValueChange={(key) => {
+							if (!key) return
+							listAdd(option, key)
+							addPicks[option.id] = ""
 						}}
-					>
-						<option value="" disabled>Add…</option>
-						{#each available as choice (choice.key)}
-							<option value={choice.key}>{choice.label}</option>
-						{/each}
-					</select>
+					/>
 				{/if}
 			</div>
 		{:else if option.control === "string[]"}
@@ -2510,7 +2515,7 @@
 	<!-- Shared by the numbered spine list and the trailing, unnumbered
 	     "Also configured here" group — an envoy's card looks exactly like a
 	     step's; it is simply not counted as one. -->
-	<section class="card preset-filled-surface-100-900 space-y-3 p-3">
+	<section class="panel-card space-y-3 !p-3">
 		{#if stepKey == null}
 			<!-- The sidebar shows every step, so each card needs its
 			     name. The builder shows one — its host already titles
@@ -2521,7 +2526,7 @@
 		{#each group.facets as facet (facet.label)}
 			{#if showFacetHeadings(group)}
 				<p
-					class="text-muted text-xs font-semibold tracking-wide uppercase"
+					class="text-surface-600-400 text-xs font-semibold"
 				>
 					{facet.label}
 				</p>
@@ -2551,34 +2556,36 @@
 {/snippet}
 
 {#if !detail}
-	<p class="text-muted p-4 text-sm">Loading…</p>
+	<p class="text-surface-600-400 p-4 text-sm">Loading…</p>
 {:else}
 	{#if showScopeNote}
-		<p class="text-muted mb-3 text-xs">
+		<p class="text-surface-600-400 mb-3 text-xs">
 			Changes here apply to <strong>{scopeLabel}</strong>
 			.
 		</p>
 	{/if}
 
 	{#if showConfigPicker && detail.configs.length}
-		<div class="card preset-filled-surface-100-900 mb-3 space-y-2 p-3">
-			<p class="text-sm font-semibold">Configuration</p>
+		<div class="panel-card mb-3 space-y-2 !p-3">
+			<p class="text-sm font-semibold" aria-hidden="true">Configuration</p>
 			{#if detail.canSelectConfig}
-				<select
-					class="select w-full"
+				<Select
+					label="Configuration"
+					labelHidden
+					class="w-full"
+					options={detail.configs.map((c) => ({
+						value: String(c.id),
+						label: `${c.isDefault ? "★ " : ""}${c.name}${
+							c.enabled ? "" : " (withdrawn)"
+						}`
+					}))}
 					value={detail.selectedConfig
 						? String(detail.selectedConfig.id)
 						: ""}
-					onchange={(e) => chooseConfig(e.currentTarget.value)}
-				>
-					{#each detail.configs as c (c.id)}
-						<option value={String(c.id)}>
-							{c.isDefault ? "★ " : ""}{c.name}{c.enabled
-								? ""
-								: " (withdrawn)"}
-						</option>
-					{/each}
-				</select>
+					onValueChange={(v) => {
+						if (v) chooseConfig(v)
+					}}
+				/>
 			{:else}
 				<!-- Not a disabled control: outside a session the selection is
 				     the instance's, and that one is the administrator's. A
@@ -2588,7 +2595,7 @@
 				<p class="text-sm">
 					{detail.selectedConfig?.name ?? "—"}
 				</p>
-				<p class="text-muted text-xs">
+				<p class="text-surface-600-400 text-xs">
 					Chosen for this instance by an administrator. Open a session
 					to choose a different one there.
 				</p>
@@ -2635,7 +2642,7 @@
 					     follow-up) — set apart under its own small heading,
 					     after the numbered list rather than inside it. -->
 					<p
-						class="text-muted mt-1 text-xs font-semibold tracking-wide uppercase"
+						class="text-surface-600-400 mt-1 text-xs font-semibold"
 					>
 						Also configured here
 					</p>
@@ -2645,9 +2652,9 @@
 				{/if}
 
 				{#if tuning.length}
-					<details class="card preset-filled-surface-100-900 p-3">
+					<details class="panel-card !p-3">
 						<summary
-							class="text-muted flex cursor-pointer items-center gap-1 text-xs font-medium select-none"
+							class="text-surface-600-400 flex cursor-pointer items-center gap-1 text-xs font-medium select-none"
 						>
 							<Icons.SlidersHorizontal size={12} />
 							Advanced — per-step tuning ({tuning.length})
@@ -2682,15 +2689,15 @@
 	   and splitting the card list would just halve it. Headings and the
 	   show-more button span both columns; a row never splits. */
 	@container (min-width: 66rem) {
-		.option-groups :global(section.card) {
+		.option-groups :global(section.panel-card) {
 			columns: 2;
 			column-gap: 1.5rem;
 		}
-		.option-groups :global(section.card > h3),
-		.option-groups :global(section.card > button) {
+		.option-groups :global(section.panel-card > h3),
+		.option-groups :global(section.panel-card > button) {
 			column-span: all;
 		}
-		.option-groups :global(section.card > *) {
+		.option-groups :global(section.panel-card > *) {
 			break-inside: avoid;
 		}
 	}

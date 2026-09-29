@@ -1,23 +1,40 @@
 <script lang="ts">
-	import { Popover, Portal } from "@skeletonlabs/skeleton-svelte"
 	import * as Icons from "@lucide/svelte"
 	import SidebarListItem from "../SidebarListItem.svelte"
+	import RowMenu from "../menus/RowMenu.svelte"
+	import { LOREBOOK_EXPORT_PAUSED } from "$lib/shared/lorebooks/exportPaused"
+	import {
+		CHARACTER_LORE_TYPE_ID,
+		HISTORY_TYPE_ID,
+		ITEM_TYPE_ID,
+		LOCATION_TYPE_ID,
+		WORLD_LORE_TYPE_ID
+	} from "$lib/shared/entries/types"
+	import {
+		READ_INTO_SESSION,
+		STOP_READING
+	} from "$lib/client/lorebooks/scopes"
 
 	interface Props {
 		lorebook: any
 		onclick?: (lorebook: any) => void
 		onDelete?: (id: number) => void
-		onExport?: (id: number) => void
 		showControls?: boolean
 		contentTitle?: string
 		classes?: string
 		bindingsCount?: number
-		worldEntriesCount?: number
-		characterEntriesCount?: number
-		historyEntriesCount?: number
+		/**
+		 * The server's figures, keyed by entry type id (`lorebooks:list`'s
+		 * `entryCounts`, archived rows excluded). Falls back to the row's own.
+		 */
+		entryCounts?: Record<string, number>
 		hasOpenSession?: boolean
 		openSessionHasLorebook?: boolean
 		isOpenSessionLorebook?: boolean
+		/**
+		 * Read this book into the open session. The caller confirms when the
+		 * session already reads another book, since this replaces it.
+		 */
 		onAttachToSession?: (id: number) => void
 		onDetachFromSession?: (id: number) => void
 	}
@@ -26,14 +43,11 @@
 		lorebook,
 		onclick,
 		onDelete,
-		onExport,
 		showControls = true,
 		contentTitle = "Go to lorebook",
 		classes = "",
 		bindingsCount = 0,
-		worldEntriesCount = 0,
-		characterEntriesCount = 0,
-		historyEntriesCount = 0,
+		entryCounts,
 		hasOpenSession = false,
 		openSessionHasLorebook = false,
 		isOpenSessionLorebook = false,
@@ -41,7 +55,26 @@
 		onDetachFromSession
 	}: Props = $props()
 
-	let menuOpen = $state(false)
+	let counts = $derived<Record<string, number>>(
+		entryCounts ?? lorebook?.entryCounts ?? {}
+	)
+
+	/** One chip per kind the book holds, in the pool's order. */
+	let kindChips = $derived(
+		[
+			{ typeId: WORLD_LORE_TYPE_ID, title: "World lore", icon: Icons.Globe },
+			{
+				typeId: CHARACTER_LORE_TYPE_ID,
+				title: "Character lore",
+				icon: Icons.User
+			},
+			{ typeId: HISTORY_TYPE_ID, title: "History", icon: Icons.Clock },
+			{ typeId: LOCATION_TYPE_ID, title: "Places", icon: Icons.MapPin },
+			{ typeId: ITEM_TYPE_ID, title: "Items", icon: Icons.Package }
+		]
+			.map((chip) => ({ ...chip, count: counts[chip.typeId] ?? 0 }))
+			.filter((chip) => chip.count > 0)
+	)
 
 	function handleClick() {
 		onclick?.(lorebook)
@@ -64,7 +97,7 @@
 					</div>
 					{#if lorebook.description}
 						<div
-							class="text-muted-foreground line-clamp-2 text-left text-xs"
+							class="text-surface-600-400 line-clamp-2 text-left text-xs"
 						>
 							{lorebook.description}
 						</div>
@@ -76,164 +109,67 @@
 	{#snippet extraContent()}
 		<div class="flex gap-2 text-xs">
 			{#if bindingsCount > 0}
-				<div class="flex items-center gap-1" title="Bindings">
-					<Icons.Link size={12} />
+				<div class="flex items-center gap-1" title="Cast members">
+					<Icons.Users size={12} aria-hidden="true" />
 					{bindingsCount}
 				</div>
 			{/if}
-			{#if worldEntriesCount > 0}
-				<div class="flex items-center gap-1" title="World entries">
-					<Icons.Globe size={12} />
-					{worldEntriesCount}
+			{#each kindChips as chip (chip.typeId)}
+				<div class="flex items-center gap-1" title={chip.title}>
+					<chip.icon size={12} aria-hidden="true" />
+					{chip.count}
 				</div>
-			{/if}
-			{#if characterEntriesCount > 0}
-				<div class="flex items-center gap-1" title="Character entries">
-					<Icons.User size={12} />
-					{characterEntriesCount}
-				</div>
-			{/if}
-			{#if historyEntriesCount > 0}
-				<div class="flex items-center gap-1" title="History entries">
-					<Icons.Clock size={12} />
-					{historyEntriesCount}
-				</div>
-			{/if}
+			{/each}
 		</div>
 	{/snippet}
 	{#snippet controls()}
-		{#if showControls && (onclick || onDelete || onExport)}
-			<div role="none" onclick={(e) => e.stopPropagation()}>
-				<Popover
-					open={menuOpen}
-					onOpenChange={(e) => (menuOpen = e.open)}
-					positioning={{ placement: "bottom-end" }}
-				>
-					<Popover.Trigger
-						class="btn btn-sm hover:bg-primary-600-400 shrink-0 p-3 {menuOpen
-							? 'bg-primary-600-400'
-							: ''}"
-						aria-label="Lorebook options"
-					>
-						<Icons.EllipsisVertical size={16} />
-					</Popover.Trigger>
-					<Portal>
-						<Popover.Positioner class="z-[1000]!">
-							<Popover.Content
-								class="card bg-surface-200-800 w-[min(90vw,260px)] space-y-4 p-4 shadow-xl"
-							>
-								<header class="popover-menu-title">
-									<Icons.BookOpen
-										size={18}
-										aria-hidden="true"
-									/>
-									<p>Lorebook Options</p>
-								</header>
-								<article class="flex flex-col gap-2">
-									{#if onclick}
-										<button
-											class="btn btn-sm popover-menu-btn hover:preset-filled-primary-500"
-											onclick={() => {
-												menuOpen = false
-												handleClick()
-											}}
-											type="button"
-										>
-											<Icons.Eye
-												size={16}
-												aria-hidden="true"
-											/>
-											<span>View</span>
-										</button>
-									{/if}
-									{#if hasOpenSession && (onAttachToSession || onDetachFromSession)}
-										{#if isOpenSessionLorebook}
-											<button
-												class="btn btn-sm popover-menu-btn hover:preset-filled-warning-500"
-												onclick={() => {
-													menuOpen = false
-													onDetachFromSession?.(
-														lorebook.id!
-													)
-												}}
-												type="button"
-											>
-												<Icons.Unlink
-													size={16}
-													aria-hidden="true"
-												/>
-												<span>
-													Detach from current session
-												</span>
-											</button>
-										{:else}
-											<button
-												class="btn btn-sm popover-menu-btn hover:preset-filled-success-500"
-												disabled={openSessionHasLorebook}
-												title={openSessionHasLorebook
-													? "The current session already has a lorebook attached"
-													: "Attach to current session"}
-												onclick={() => {
-													menuOpen = false
-													onAttachToSession?.(
-														lorebook.id!
-													)
-												}}
-												type="button"
-											>
-												<Icons.Link
-													size={16}
-													aria-hidden="true"
-												/>
-												<span>
-													Attach to current session
-												</span>
-											</button>
-										{/if}
-									{/if}
-									{#if onExport}
-										<button
-											class="btn btn-sm popover-menu-btn hover:preset-filled-success-500"
-											onclick={() => {
-												menuOpen = false
-												onExport?.(lorebook.id!)
-											}}
-											type="button"
-										>
-											<Icons.Download
-												size={16}
-												aria-hidden="true"
-											/>
-											<span>Export</span>
-										</button>
-									{/if}
-									{#if onDelete}
-										<button
-											class="btn btn-sm popover-menu-btn hover:preset-filled-error-500"
-											onclick={() => {
-												menuOpen = false
-												onDelete?.(lorebook.id!)
-											}}
-											type="button"
-										>
-											<Icons.Trash2
-												size={16}
-												aria-hidden="true"
-											/>
-											<span>Delete</span>
-										</button>
-									{/if}
-								</article>
-								<Popover.Arrow>
-									<Popover.ArrowTip
-										class="!bg-surface-200 dark:!bg-surface-800"
-									/>
-								</Popover.Arrow>
-							</Popover.Content>
-						</Popover.Positioner>
-					</Portal>
-				</Popover>
-			</div>
+		{#if showControls && (onclick || onDelete)}
+			{@const sessionActions =
+				hasOpenSession && (onAttachToSession || onDetachFromSession)}
+			<RowMenu
+				label="Lorebook"
+				width={260}
+				triggerClass="btn btn-sm hover:bg-surface-200-800 data-[state=open]:bg-surface-200-800 shrink-0 p-3"
+				items={[
+					onclick && {
+						label: "View",
+						icon: Icons.Eye,
+						onSelect: handleClick
+					},
+					sessionActions &&
+						isOpenSessionLorebook && {
+							label: STOP_READING,
+							icon: Icons.BookX,
+							title: "Stop reading this book into the open session",
+							onSelect: () => onDetachFromSession?.(lorebook.id!)
+						},
+					sessionActions &&
+						!isOpenSessionLorebook && {
+							label: READ_INTO_SESSION,
+							icon: Icons.BookOpen,
+							title: openSessionHasLorebook
+								? "The open session reads another book; this asks before replacing it"
+								: "Read this book into the open session",
+							onSelect: () => onAttachToSession?.(lorebook.id!)
+						},
+					// Paused (owner ruling 2026-09-28): shown, disabled, with
+					// the reason on the row.
+					{
+						label: "Export (paused)",
+						icon: Icons.Download,
+						disabled: true,
+						title: LOREBOOK_EXPORT_PAUSED,
+						onSelect: () => {}
+					},
+					onDelete && { separator: true },
+					onDelete && {
+						label: "Delete",
+						icon: Icons.Trash2,
+						destructive: true,
+						onSelect: () => onDelete?.(lorebook.id!)
+					}
+				]}
+			/>
 		{/if}
 	{/snippet}
 </SidebarListItem>

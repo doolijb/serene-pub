@@ -9,15 +9,16 @@
  * a reader that moves takes its branch with it instead of leaving a jump that
  * silently opens an empty panel.
  *
- * ⚠ **The digest is written BEFORE `openPanel`.** Both orders work today —
+ * ⚠ **The digest is written BEFORE the view opens.** Both orders work today —
  * every reader is an `$effect` or an `onMount` that runs after the panel
  * mounts — but one order is a rule and two orders are a coin flip the day a
  * reader stops being an effect. Address first, then open.
  */
 
 import { goto } from "$app/navigation"
-import { DEFAULT_SCOPE } from "$lib/client/lorebooks/loreRoute"
-import { isDocsPath } from "$lib/client/shell/jump.svelte"
+import { adminRouter } from "$lib/client/admin/adminRouter.svelte"
+import { DEFAULT_SCOPE } from "$lib/shared/lorebooks/loreRoute"
+import { helpRouter } from "$lib/client/shell/helpRouter.svelte"
 import type { JumpHit } from "$lib/shared/sockets/jump"
 
 /**
@@ -32,20 +33,13 @@ function numericId(id: number | string): number | null {
 	return Number.isFinite(n) ? n : null
 }
 
-/**
- * Where the caller is standing, when it is not the browser's own answer.
- *
- * Passed rather than read so the routing rule is testable: the `doc` branch is
- * the one branch whose destination depends on the page the jump was made FROM.
- */
 export interface OpenJumpHitOptions {
-	pathname?: string
-}
-
-function currentPathname(): string {
-	// Guarded for SSR: this module is imported by the shell, which renders on
-	// the server, even though a jump is only ever made in a browser.
-	return typeof window === "undefined" ? "" : window.location.pathname
+	/**
+	 * Open a view-backed hit FOCUSED (full page) rather than in the sidebar —
+	 * Shift Enter / Shift click in the overlay. A hit that navigates to a page
+	 * (a session) is a page either way and ignores it.
+	 */
+	focus?: boolean
 }
 
 /**
@@ -54,32 +48,42 @@ function currentPathname(): string {
  * Async because two kinds are pages rather than panels and `goto` is what
  * finishes them; the panel branches settle immediately.
  */
+/**
+ * Open an admin address in the Admin view: the section first, then the view,
+ * focused when asked. Admin is a view, not a page, so this never navigates
+ * away from what is underneath.
+ */
+export function openAdminAddress(
+	panelsCtx: PanelsCtx,
+	href: string,
+	opts: { focus?: boolean } = {}
+): void {
+	void adminRouter.go(href)
+	panelsCtx.openView("admin", { toggle: false, fullPage: opts.focus })
+}
+
 export async function openJumpHit(
 	panelsCtx: PanelsCtx,
 	hit: JumpHit,
 	options: OpenJumpHitOptions = {}
 ): Promise<void> {
+	// The one place a branch opens its view, so "focused" is one decision
+	// rather than one per branch. `toggle: false` either way: a jump always
+	// opens, never closes the view the person was already looking at.
+	const openView = (key: string) => {
+		if (options.focus)
+			panelsCtx.openView(key, { toggle: false, fullPage: true })
+		else panelsCtx.openPanel({ key, toggle: false })
+	}
+
 	// ⚠ BEFORE the numeric-id guard. A `doc` hit's id is a slug — the one kind
 	// whose rows are not integer-keyed — so the guard below would drop it.
 	if (hit.kind === "doc") {
-		const slug = String(hit.id)
-		const anchor = hit.anchor ? `#${hit.anchor}` : ""
-		const pathname = options.pathname ?? currentPathname()
-		// Reading the documentation as a full page already: stay there. The
-		// Help view exists so the docs can sit BESIDE the work, and there is no
-		// work to sit beside on /docs — opening a 400px column over the page
-		// the reader is on would be a worse copy of what they can see.
-		if (isDocsPath(pathname)) {
-			await goto(`/docs/${slug}${anchor}`)
-			return
-		}
-		// Reader: components/sidebars/HelpSidebar.svelte's `digest.help`
-		// effect, which navigates the view in place and takes the address with
-		// it. An `$effect` and not an `onMount`, so a second jump while the
-		// view is already open still moves it — see the `connection` branch
-		// below for what the other order costs.
-		panelsCtx.digest.help = { slug, anchor: hit.anchor }
-		panelsCtx.openPanel({ key: "help", toggle: false })
+		// Reader: HelpSidebar.svelte, which follows the router whether it is
+		// mounted yet or not. The Help view is the one reading of the docs, so
+		// this is the same from anywhere — including from a Help address.
+		helpRouter.go(String(hit.id), hit.anchor ?? "")
+		openView("help")
 		return
 	}
 
@@ -97,7 +101,7 @@ export async function openJumpHit(
 		// address for one row.
 		case "character":
 			panelsCtx.digest.viewCharacterId = id
-			panelsCtx.openPanel({ key: "characters", toggle: false })
+			openView("characters")
 			return
 
 		// A session is a page, not a panel — the same navigation
@@ -114,7 +118,7 @@ export async function openJumpHit(
 		// nothing says otherwise, which is exactly what a jump is saying.
 		case "lorebook":
 			panelsCtx.digest.lore = { lorebookId: id, scope: DEFAULT_SCOPE }
-			panelsCtx.openPanel({ key: "lorebooks", toggle: false })
+			openView("lorebooks")
 			return
 
 		// The same address one level deeper. `parentId` is the entry's lorebook
@@ -129,7 +133,7 @@ export async function openJumpHit(
 				scope: DEFAULT_SCOPE,
 				entryId: id
 			}
-			panelsCtx.openPanel({ key: "lorebooks", toggle: false })
+			openView("lorebooks")
 			return
 		}
 
@@ -140,7 +144,7 @@ export async function openJumpHit(
 		// means adding a key to `src/app.d.ts` and a reader to that sidebar,
 		// which is the shell lane's file and the shell lane's call.
 		case "tag":
-			panelsCtx.openPanel({ key: "tags", toggle: false })
+			openView("tags")
 			return
 
 		// Reader: the `digestId` seeding in ConnectionsSidebar's `onMount`.
@@ -151,20 +155,20 @@ export async function openJumpHit(
 		//
 		// ⚠ Two things this branch cannot promise, both the shell lane's to
 		// settle if it wants them: `leftNav.connections` is registered only for
-		// an admin (Layout.svelte:421), so `openPanel` is a silent no-op for
+		// an admin (Layout.svelte:421), so opening it is a silent no-op for
 		// anyone else — harmless, since the server never sends a non-admin a
 		// `connection` hit to click; and that sidebar consumes the digest in
 		// `onMount` rather than an `$effect`, so jumping to a second connection
 		// while the panel is already open sets a key nothing reads again.
 		case "connection":
 			panelsCtx.digest.connectionId = id
-			panelsCtx.openPanel({ key: "connections", toggle: false })
+			openView("connections")
 			return
 
 		// A page, like a session. Admin-only on both sides — the server sends
 		// no `user` hit to anyone else.
 		case "user":
-			await goto(`/admin/users/${id}`)
+			openAdminAddress(panelsCtx, `/admin/users/${id}`, options)
 			return
 	}
 }

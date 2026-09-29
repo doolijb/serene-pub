@@ -14,13 +14,10 @@
 	import LorebookListItem from "$lib/client/components/listItems/LorebookListItem.svelte"
 	import PanelFilterInput from "$lib/client/components/panels/PanelFilterInput.svelte"
 	import LorebookUnsavedChangesModal from "$lib/client/components/modals/LorebookUnsavedChangesModal.svelte"
-	import {
-		CHARACTER_LORE_TYPE_ID,
-		HISTORY_TYPE_ID,
-		WORLD_LORE_TYPE_ID,
-		type EntryTypeId
-	} from "$lib/shared/entries/types"
+	import { HISTORY_TYPE_ID } from "$lib/shared/entries/types"
+	import { attachLorebookToSession } from "$lib/client/utils/attachLorebookToSession"
 	import BookMenu from "./BookMenu.svelte"
+	import DetailHero from "$lib/client/components/panels/DetailHero.svelte"
 	import BookSettings from "./BookSettings.svelte"
 	import CastWorkspace from "./CastWorkspace.svelte"
 	import DayOne from "./DayOne.svelte"
@@ -30,6 +27,7 @@
 	import LorebookActions from "./LorebookActions.svelte"
 	import LoreRail from "./LoreRail.svelte"
 	import ReadingInto from "./ReadingInto.svelte"
+	import ReplaceReadingModal from "./ReplaceReadingModal.svelte"
 	import MomentBanner from "./time/MomentBanner.svelte"
 	import MomentBar from "./time/MomentBar.svelte"
 	import CompareLines from "./time/CompareLines.svelte"
@@ -40,6 +38,7 @@
 	import TimeLens from "./time/TimeLens.svelte"
 	import { refLinksFrom, type RefLink } from "./editor/refs"
 	import { drawingForLens } from "./graphs"
+	import { edgesOnLine } from "./graphs/asOf"
 	import { layoutModeFor } from "./layoutMode"
 	import { loreRoute } from "./loreRoute.svelte"
 	import { JUMP_CONTEXT, type JumpCtx } from "$lib/client/shell/jump.svelte"
@@ -52,7 +51,7 @@
 		SCOPE_LABELS,
 		type LoreLens,
 		type LoreScope
-	} from "./loreRoute"
+	} from "$lib/shared/lorebooks/loreRoute"
 	import {
 		emptyFilters,
 		filterPool,
@@ -60,13 +59,17 @@
 		type PoolFilters
 	} from "./poolFilter"
 	import {
+		BOOK_ENTRY_TYPES,
 		bookIsEmpty,
 		CAST_KIND,
+		entryTotal,
+		matchSessionRoute,
 		mergeCastCount,
 		railScopes,
 		SAVED_SCOPES,
 		savedScopeCount,
 		savedScopeFilters,
+		timeLensEntries,
 		type SavedScopeId
 	} from "./scopes"
 	import {
@@ -78,9 +81,17 @@
 	import type { EntryDecisions } from "./markers"
 	import type { PoolSource } from "./sections/types"
 	import { timelineCursor } from "./timelineCursor.svelte"
+	import { openBookTime } from "./time/bookTime.svelte"
+	import { compareDates } from "$lib/shared/lorebooks/storyDate"
 	import { momentAxisRows } from "./timelineStrip"
-	import { momentValue, notYetKeys, parseMoment } from "./time/moment"
 	import {
+		castArrivalDates,
+		momentValue,
+		notYetKeys,
+		parseMoment
+	} from "./time/moment"
+	import {
+		amendmentsForAppearance,
 		castAsOf,
 		compareLines,
 		entryAsOf,
@@ -88,7 +99,12 @@
 		rowsOnLine
 	} from "$lib/shared/lorebooks/amendments"
 	import {
-		castArrivals,
+		amendmentsOnLine,
+		forkDateOf,
+		lineOf,
+		rowsReadingOnLine
+	} from "$lib/shared/lorebooks/lineReading"
+	import {
 		storyItems,
 		type TimeEntryRow,
 		type TimeSceneRow
@@ -107,12 +123,6 @@
 	const panelsCtx: PanelsCtx = getContext("panelsCtx")
 	const openSessionCtx: OpenSessionCtx = getContext("openSessionCtx")
 
-	const POOL_TYPES: EntryTypeId[] = [
-		WORLD_LORE_TYPE_ID,
-		CHARACTER_LORE_TYPE_ID,
-		HISTORY_TYPE_ID
-	]
-
 	let lorebookList: any[] = $state([])
 	let isLoading: boolean = $state(true)
 	/** The search over the list of books, which is a different list. */
@@ -123,6 +133,7 @@
 
 	let creating: boolean = $state(false)
 	let importing: boolean = $state(false)
+	/** Kept for `LorebookActions`' binding; Export is paused and nothing sets it. */
 	let exportingId: number | null = $state(null)
 	let deletingId: number | null = $state(null)
 	/** The book being copied, and what it is called, for the naming prompt. */
@@ -230,25 +241,75 @@
 	 * amendment dated in the past is in effect now; that is what makes it an
 	 * amendment rather than a note about the future.
 	 *
-	 * ⚠ Untouched when the book has no overlays, which is every book until
-	 * somebody makes one — `bookRows` is handed straight back, so the common
-	 * case costs one `length` check rather than a rebuild of every row.
+	 * ⚠ Never short-circuited: even a book with no overlays is filtered to
+	 * the line being read (see `resolveRows` below).
 	 */
-	let resolveRows = $derived.by(() => {
+	/**
+	 * The story's present on the line being read (DESIGN-story-time §3): the
+	 * line's stored clock, else its newest history entry — the same rule the
+	 * server's `storyNowOf` follows, so the bar and the prompt agree.
+	 */
+	let storyPresent = $derived.by(() => {
 		const branchId = route.branch ?? null
+		const clock = openBookTime.clockOn(branchId)
+		if (clock) return { date: clock, from: "clock" as const }
+		const dated = rowsReadingOnLine(
+			(bookRows[HISTORY_TYPE_ID] ?? []) as any[],
+			line,
+			rowDate
+		).filter((row: any) => typeof row.year === "number")
+		if (!dated.length) return null
+		const newest = dated.reduce((a: any, b: any) =>
+			compareDates(b, a) > 0 ? b : a
+		)
+		return {
+			date: { year: newest.year, month: newest.month, day: newest.day },
+			from: "history" as const
+		}
+	})
+
+	/** Stores (or clears) the clock on the line being read. */
+	function setStoryClock(clock: Sockets.Lorebooks.StoryClock | null) {
+		if (!book) return
+		socket.emit("lorebooks:setClock", {
+			lorebookId: book.id,
+			branchId: route.branch ?? null,
+			clock
+		})
+	}
+
+	/**
+	 * A row's own story date, or null when it carries none (only History
+	 * does). What the fork cut is measured against.
+	 */
+	function rowDate(row: any) {
+		return typeof row?.year === "number"
+			? { year: row.year, month: row.month ?? null, day: row.day ?? null }
+			: null
+	}
+
+	/**
+	 * The line being read: the branch and its ANCESTOR CHAIN down to main,
+	 * each step with its fork cut (owner ruling 5, 2026-09-28). The one rule
+	 * (`$lib/shared/lorebooks/lineReading.ts`) the server reads by too.
+	 */
+	let line = $derived(lineOf(route.branch ?? null, branches))
+
+	let resolveRows = $derived.by(() => {
 		const at = amendmentsAt
-		// ⚠ The short circuit is "this book has never forked and has no
-		// overlays", NOT "we are reading main". Main is not the unfiltered
-		// reading — a fork's own entries are rows main does not have, and
-		// skipping the filter there put them on both lines.
-		if (!entryAmendments.length && !branches.length)
-			return (rows: readonly PoolSource[]) => rows as PoolSource[]
+		const onLine = line
+		// ⚠ NO short circuit on "no overlays, no branches". Main is not the
+		// unfiltered reading — a fork's own entries are rows main does not
+		// have — and every early return here has failed open once (#80,
+		// three times over). `groupAmendments` of nothing is an empty map.
 		const byEntry = groupAmendments(entryAmendments, "entryId")
 		return (rows: readonly PoolSource[]) =>
 			// ⚠ Filter FIRST. Resolving a row this line cannot see would spend
 			// the work and then drop it, and — worse — a sibling line's entry
-			// would be counted by anything reading the length.
-			rowsOnLine(rows as any[], branchId).map((row: any) => {
+			// would be counted by anything reading the length. A shared row
+			// dated after the fork is CUT from the branch, as the server's
+			// counts and readings cut it.
+			rowsReadingOnLine(rows as any[], onLine, rowDate).map((row: any) => {
 				const overlays = byEntry.get(row.id)
 				return overlays
 					? (entryAsOf(row, overlays as any, at) as PoolSource)
@@ -267,26 +328,18 @@
 	 * is by STORY DATE, not by when the change was written. A line with no fork
 	 * date was never cut off from anything and keeps following main.
 	 *
-	 * ⚠ A fork off another fork passes ITS OWN fork date, not its parent's: the
-	 * cut is where THIS line left, and the parent's cut is already baked into
-	 * what the parent carried away.
+	 * ⚠ A fork off another fork reads THROUGH its parent (ruling 5): the
+	 * parent's amendments up to this line's fork date, the grandparent's up
+	 * to the earlier of the two cuts — `line` carries the whole chain, and
+	 * the resolvers read it rather than `forkedAt` (kept for display).
 	 */
 	let amendmentsAt = $derived.by(() => {
 		const branchId = route.branch ?? null
-		const line = branchId
-			? (branches.find((b) => b.id === branchId) ?? null)
-			: null
 		return {
 			moment: parseMoment(route.moment),
 			branchId,
-			forkedAt:
-				line && line.forkYear != null
-					? {
-							year: line.forkYear,
-							month: line.forkMonth,
-							day: line.forkDay
-						}
-					: null
+			forkedAt: forkDateOf(branches.find((b) => b.id === branchId)),
+			line
 		}
 	})
 
@@ -372,23 +425,35 @@
 	let inhabitants = $derived.by(() => {
 		const at = {
 			moment: amendmentsAt.moment,
-			branchId: amendmentsAt.branchId
+			line
 		}
-		const onThisLine = rowsOnLine(castRows, at.branchId) as any[]
+		const onThisLine = rowsOnLine(castRows, line) as any[]
+		const byMember = groupAmendments(castAmendments, "castId")
 		// ⚠ Each member becomes one row PER APPEARANCE. A member the book has
 		// never placed has exactly one, which is every member in every book
 		// today — the doubling only appears once somebody says where in their
 		// life they are standing.
+		//
+		// ⚠ And each appearance resolves at ITS point of her life: a change
+		// dated against her life reaches only appearances at or past it
+		// (`amendmentsForAppearance`, the filter `castMemberAsOf` uses on the
+		// server), so the thirty-four-year-old is not handed the scar the
+		// fifty-year-old got at forty.
 		const expanded = onThisLine.flatMap((row) => {
 			const here = appearancesOf(row.id, presences as any, at)
-			return here.map((a) => ({
-				...row,
-				personalPosition: a.personalPosition
-			}))
+			const overlays = byMember.get(row.id) ?? []
+			return here.map((a) => {
+				const appearance = { ...row, personalPosition: a.personalPosition }
+				return overlays.length
+					? castAsOf(
+							appearance,
+							amendmentsForAppearance(overlays, a.personalPosition) as any,
+							amendmentsAt
+						)
+					: appearance
+			})
 		})
-		return worldRoster(resolveCast(expanded) as any, (id) =>
-			cardNames.get(id)
-		)
+		return worldRoster(expanded as any, (id) => cardNames.get(id))
 	})
 
 	/**
@@ -400,7 +465,7 @@
 	 * is, which is the exact failure the one-resolver rule exists to stop.
 	 */
 	let livesMembers = $derived(
-		(resolveCast(rowsOnLine(castRows, route.branch ?? null)) as any[]).map(
+		(resolveCast(rowsOnLine(castRows, line)) as any[]).map(
 			(r) => ({
 				id: r.id,
 				name:
@@ -443,7 +508,7 @@
 		if (branchId === null) return []
 		const at = {
 			moment: amendmentsAt.moment,
-			forkedAt: amendmentsAt.forkedAt
+			line
 		}
 		const byEntry = groupAmendments(entryAmendments, "entryId")
 		const byMember = groupAmendments(castAmendments, "castId")
@@ -468,17 +533,40 @@
 		return [...entries, ...cast]
 	})
 
-	/** The book's own rows, read through that function. */
+	/**
+	 * The book's own rows, read through that function.
+	 *
+	 * ⚠ ALWAYS through it. This returned `bookRows` untouched whenever the
+	 * book had no entry amendments, which put a fork's own entries on main
+	 * the moment a book forked before anybody amended anything (#80).
+	 */
 	let resolvedRows = $derived.by(() => {
-		if (!entryAmendments.length) return bookRows
 		const out: Record<string, PoolSource[]> = {}
 		for (const [typeId, rows] of Object.entries(bookRows))
 			out[typeId] = resolveRows(rows)
 		return out
 	})
 
+	/**
+	 * The book's scenes on the line being read. A fork's scenes are not
+	 * main's (the server's counts filter them the same way).
+	 */
+	let lineScenes = $derived(rowsOnLine(sceneRows as any[], line) as PoolSource[])
+
 	/** Every row in the book, as the pool reads them. */
-	let bookPool = $derived(bookPoolItems(resolvedRows, sceneRows))
+	let bookPool = $derived(bookPoolItems(resolvedRows, lineScenes))
+
+	/** The links the line being read draws, for Book settings' readout. */
+	let lineRelationshipCount = $derived(
+		edgesOnLine(
+			graphRelationships as any[],
+			line,
+			Object.values(bookRows).flat() as any[]
+		).length
+	)
+
+	/** Every line the book has, by name, for Book settings (#90, #133). */
+	let lineNames = $derived(["main", ...branches.map((b) => b.name)])
 
 	/** What a cast endpoint is called, so an edge can name who it names. */
 	let castNames = $derived(
@@ -493,9 +581,14 @@
 	)
 
 	/** Every entry the book holds, whatever kind, as the line reads them. */
-	let timeEntries = $derived(
+	let lineEntries = $derived(
 		Object.values(resolvedRows).flat() as TimeEntryRow[]
 	)
+	/**
+	 * The Time lens's rows: the scope's, as every other lens draws (#88).
+	 * Its title names the scope, so its line must be the scope's too.
+	 */
+	let timeEntries = $derived(timeLensEntries(lineEntries, route.scope))
 	/**
 	 * The session reading this book, for the rail's block.
 	 *
@@ -510,25 +603,30 @@
 			? {
 					id: openSessionCtx.sessionId,
 					name: openSessionCtx.sessionName ?? "the open session",
-					branchId: openSessionCtx.lorebookBranchId ?? null
+					branchId: openSessionCtx.lorebookBranchId ?? null,
+					clock: openSessionCtx.storyClock ?? null
 				}
 			: null
 	)
 
 	/**
-	 * Stand where the session stands: its line, and now.
+	 * Stand where the session stands: its line, at its story clock (or now,
+	 * when it follows the line's present — owner ruling 3).
 	 *
-	 * Both at once and in one step, because "what the model sees" is the pair
-	 * — a reader on the right line at the wrong date is still not looking at
-	 * what was sent.
+	 * Both at once and in ONE guarded transition, because "what the model
+	 * sees" is the pair — a reader on the right line at the wrong date is
+	 * still not looking at what was sent. Two `navigate` calls raced and left
+	 * the reader at the old moment (#81).
 	 */
 	function matchSession() {
 		if (!railSession) return
-		loreRoute.navigate({ type: "setMoment", moment: undefined })
-		loreRoute.navigate({
-			type: "setBranch",
-			branch: railSession.branchId ?? undefined
-		})
+		settingsOpen = false
+		void loreRoute.navigateTo(
+			matchSessionRoute(route, {
+				branchId: railSession.branchId,
+				clock: railSession.clock
+			})
+		)
 	}
 
 	/** The session reading this book, which stands at now on the line. */
@@ -544,7 +642,12 @@
 	)
 	/** The moment being read from. Absent is now, which is the default. */
 	let moment = $derived(route.moment)
-	let momentAt = $derived(momentValue(moment))
+	/**
+	 * The moment as a DATE, or null at now. Ordering is `compareDates` on
+	 * this — never the packed `momentValue`, which collides once a month or
+	 * a day passes 100 (a book numbering days of the year).
+	 */
+	let momentDate = $derived(parseMoment(moment))
 
 	/**
 	 * The pool and the cast at the moment being read.
@@ -555,26 +658,28 @@
 	 * not arise.
 	 */
 	let poolAsOf = $derived.by(() => {
-		if (momentAt == null) return null
-		const dated = bookPool
-			.filter((item) => item.kind === HISTORY_TYPE_ID)
-			.map((item) => ({ key: item.key, value: item.order }))
+		if (momentDate == null) return null
+		const dated = (resolvedRows[HISTORY_TYPE_ID] ?? []).map((row: any) => ({
+			key: `entry#${row.id}`,
+			date: rowDate(row)
+		}))
 		return {
 			total: bookPool.length,
-			notYet: notYetKeys(dated, momentAt).length
+			notYet: notYetKeys(dated, momentDate).length
 		}
 	})
 
 	let castAsOfCounts = $derived.by(() => {
-		if (momentAt == null) return null
-		const arrivals = castArrivals(
+		if (momentDate == null) return null
+		const at = momentDate
+		const arrivals = castArrivalDates(
 			storyItems({
-				entries: timeEntries,
-				scenes: sceneRows as TimeSceneRow[]
+				entries: lineEntries,
+				scenes: lineScenes as TimeSceneRow[]
 			})
 		)
 		const notYet = [...arrivals.values()].filter(
-			(value) => value > momentAt
+			(date) => compareDates(date, at) > 0
 		).length
 		return { notYet, total: counts?.[CAST_KIND] ?? arrivals.size }
 	})
@@ -605,6 +710,17 @@
 	let bookEmpty = $derived(bookIsEmpty(counts))
 
 	/**
+	 * The reader chose somewhere day one does not stand in front of (#82):
+	 * the Cast board, where a member can be added by hand, or a lens that
+	 * draws something other than the pool (Time, Lives, Graph, Places). Each
+	 * of those draws its own empty state. The default landing — All entries,
+	 * List — still meets day one.
+	 */
+	let explicitlyElsewhere = $derived(
+		route.scope === "cast" || lens === "time" || lens === "lives" || !!drawing
+	)
+
+	/**
 	 * The facets in force. A saved scope answers the same question the count
 	 * beside it answered, so it wins over the chips it overlaps while it is on.
 	 */
@@ -614,14 +730,33 @@
 			: { ...poolFacets, search }
 	)
 
-	/** One book's figure for the menu, from what the list payload joins. */
+	/**
+	 * One book's figure for the menu: the server's count of every entry type,
+	 * archived rows out (`lorebooks:list`'s `entryCount`).
+	 *
+	 * ⚠ The OPEN book reads the line-aware figures the rail keeps current
+	 * (`entries:counts`, refreshed on every write), so the menu and the hero
+	 * do not go stale after a write the list payload never heard about (#85).
+	 */
 	function bookCount(l: any): number {
-		return (
-			(l.worldLoreEntries?.length ?? 0) +
-			(l.characterLoreEntries?.length ?? 0) +
-			(l.historyEntries?.length ?? 0)
-		)
+		if (l.id === route.lorebookId) {
+			const live = entryTotal(counts)
+			if (live !== undefined) return live
+		}
+		return l.entryCount ?? 0
 	}
+
+	/** The hero's meta line: how much the book holds, and the line if not main. */
+	let bookMeta = $derived.by(() => {
+		if (!book) return undefined
+		const n = bookCount(book)
+		const parts = [`${n} ${n === 1 ? "entry" : "entries"}`]
+		if (route.branch != null) {
+			const line = branches.find((b) => b.id === route.branch)?.name
+			if (line) parts.push(`on ${line}`)
+		}
+		return parts.join(" · ")
+	})
 
 	let bookChoices = $derived(
 		[...lorebookList]
@@ -679,6 +814,28 @@
 	}
 
 	/**
+	 * Opens an entry, leaving Book settings (#86). A helper rather than an
+	 * effect on the route, because a blanket effect would skip the settings
+	 * page's unsaved-changes guard and close it on a line switch too.
+	 */
+	function openEntry(entryId: number) {
+		menuOpen = false
+		settingsOpen = false
+		void loreRoute.navigate({ type: "openEntry", entryId })
+	}
+
+	/** Opens a cast member on the Cast board, leaving Book settings (#86). */
+	function openMember(castId: number) {
+		menuOpen = false
+		settingsOpen = false
+		void loreRoute.navigate({
+			type: "openCastMember",
+			scope: "cast",
+			castId
+		})
+	}
+
+	/**
 	 * Reads the book as of a date.
 	 *
 	 * Set rather than navigated: a moment is a way of reading the screen that
@@ -695,20 +852,51 @@
 		saved = null
 	}
 
+	/**
+	 * A book waiting on the reader's word before it replaces the one the open
+	 * session reads. A session reads one book at a time, so reading another
+	 * stops reading this one — which is worth a question, not a surprise.
+	 */
+	let replacing = $state<{
+		lorebookId: number
+		bookName: string
+		currentName: string
+	} | null>(null)
+
+	/** The book the open session reads, when it is not this one. */
+	let otherReadBook = $derived.by(() => {
+		const id = openSessionCtx.lorebookId
+		if (id === null || id === book?.id) return null
+		return lorebookList.find((l) => l.id === id)?.name ?? "another lorebook"
+	})
+
+	function readIntoSession(lorebookId: number) {
+		if (openSessionCtx.sessionId === null) return
+		attachLorebookToSession(socket, openSessionCtx.sessionId, lorebookId)
+	}
+
+	/** Reads a book in, asking first when that stops reading another. */
 	function handleAttachToSession(lorebookId: number) {
 		if (openSessionCtx.sessionId === null) return
-		socket.emit("sessions:setLorebook", {
-			sessionId: openSessionCtx.sessionId,
-			lorebookId
-		})
+		const current = openSessionCtx.lorebookId
+		if (current !== null && current !== lorebookId) {
+			replacing = {
+				lorebookId,
+				bookName:
+					lorebookList.find((l) => l.id === lorebookId)?.name ??
+					"this lorebook",
+				currentName:
+					lorebookList.find((l) => l.id === current)?.name ??
+					"another lorebook"
+			}
+			return
+		}
+		readIntoSession(lorebookId)
 	}
 
 	function handleDetachFromSession() {
 		if (openSessionCtx.sessionId === null) return
-		socket.emit("sessions:setLorebook", {
-			sessionId: openSessionCtx.sessionId,
-			lorebookId: null
-		})
+		attachLorebookToSession(socket, openSessionCtx.sessionId, null)
 	}
 
 	/** Reads this book into the open session, or stops reading it into one. */
@@ -790,11 +978,7 @@
 					}))
 			},
 			onPick: (hit) => {
-				if (hit.kind === "entry")
-					void loreRoute.navigate({
-						type: "openEntry",
-						entryId: Number(hit.id)
-					})
+				if (hit.kind === "entry") openEntry(Number(hit.id))
 				else openBook(Number(hit.id))
 			}
 		})
@@ -803,11 +987,13 @@
 	function refreshBook() {
 		const id = route.lorebookId
 		if (id === null) return
-		for (const typeId of POOL_TYPES)
+		for (const typeId of BOOK_ENTRY_TYPES)
 			socket.emit("entries:list", { lorebookId: id, typeId })
 		socket.emit("scenes:listByLorebook", { lorebookId: id })
 		socket.emit("narrativeGraph:list", { lorebookId: id })
 		socket.emit("amendments:list", { lorebookId: id })
+		openBookTime.open(id)
+		socket.emit("lorebooks:storyTime", { lorebookId: id })
 		// ⚠ The cast is REQUESTED on open, for the World bar's roster. As a
 		// cascade of somebody else's write it would not arrive at all until
 		// something touched a binding, and the world would read as empty.
@@ -848,6 +1034,18 @@
 		castAmendments = msg.cast
 		presences = msg.presences ?? []
 		branches = msg.branches
+		// Shared with the screens that draw amendments without being handed
+		// the branch list (AmendmentList labels each row's line).
+		openBookTime.setBranches(msg.lorebookId, msg.branches)
+		// A deleted line takes its sessions back to main (the column is
+		// `ON DELETE SET NULL`); the open session's copy follows here rather
+		// than holding a dead id until a reload (#136).
+		if (
+			openSessionCtx.lorebookId === msg.lorebookId &&
+			openSessionCtx.lorebookBranchId != null &&
+			!msg.branches.some((b) => b.id === openSessionCtx.lorebookBranchId)
+		)
+			openSessionCtx.lorebookBranchId = null
 	}
 
 	/**
@@ -902,9 +1100,14 @@
 		sceneRows = msg.sceneList as PoolSource[]
 	}
 
-	function handleSceneWritten() {
+	function handleSceneWritten(
+		msg: Sockets.Scenes.Create.Response | Sockets.Scenes.Delete.Response
+	) {
 		const id = route.lorebookId
 		if (id === null) return
+		// Both events are bare, so another book's writes arrive here too.
+		const bookId = "scene" in msg ? msg.scene?.lorebookId : msg?.lorebookId
+		if (bookId !== undefined && bookId !== id) return
 		socket.emit("scenes:listByLorebook", { lorebookId: id })
 		refreshCounts()
 	}
@@ -976,15 +1179,20 @@
 			msg.session.id !== openSessionCtx.sessionId
 		)
 			return
+		const readId = msg.session.lorebookId
+		const readName = readId
+			? lorebookList.find((l) => l.id === readId)?.name
+			: null
 		toaster.success({
-			title: msg.session.lorebookId
-				? "Lorebook Attached"
-				: "Lorebook Detached"
+			title: readId
+				? `Reading ${readName ?? "the lorebook"} into this session`
+				: "Stopped reading the lorebook into this session"
 		})
 		// The ack says what the session reads, so the open-session context
 		// follows it here rather than waiting on the session's own reload: the
 		// reading line and the run's marks both hang off this one field.
 		openSessionCtx.lorebookId = msg.session.lorebookId ?? null
+		openSessionCtx.lorebookBranchId = msg.session.lorebookBranchId ?? null
 		// Full reload of the open session, not just a field patch — lore-bound
 		// content (RAG notices, etc.) can depend on the session's lorebook.
 		socket.emit("sessions:get", {
@@ -1020,16 +1228,20 @@
 
 	// The strip runs under every scope, so its axis is read here once rather
 	// than by whichever scope happens to be open.
+	//
+	// ⚠ On the LINE being read: its history (fork cut included — the same
+	// rows the pool draws) and the amendments that apply on it at the head.
+	// Another line's dates are not moments this line can stand at.
 	$effect(() => {
 		timelineCursor.setAxis(
 			route.lorebookId,
 			momentAxisRows(
-				(bookRows[HISTORY_TYPE_ID] ?? []) as any[],
+				(resolvedRows[HISTORY_TYPE_ID] ?? []) as any[],
 				[
-					...entryAmendments,
+					...amendmentsOnLine(entryAmendments, line),
 					// A cast overlay dates the story exactly as an entry's does:
 					// the year a member changed card is a moment worth standing at.
-					...castAmendments
+					...amendmentsOnLine(castAmendments, line)
 				] as any[]
 			)
 		)
@@ -1043,12 +1255,18 @@
 	 * the cursor, and a book with no axis at all has no moment to be at.
 	 */
 	$effect(() => {
-		const at = momentValue(route.moment)
+		const key = route.moment ?? null
+		const at = momentValue(key)
 		const hasAxis = timelineCursor.ticks.length > 0
 		untrack(() => {
 			const next = hasAxis ? at : null
-			if (timelineCursor.position !== next)
-				timelineCursor.setPosition(next)
+			// The KEY rides along: the packed value is placement only and two
+			// dates can share one; the key is the lossless address.
+			if (
+				timelineCursor.position !== next ||
+				timelineCursor.key !== (hasAxis ? key : null)
+			)
+				timelineCursor.setPosition(next, hasAxis ? key : null)
 		})
 	})
 
@@ -1117,6 +1335,20 @@
 			declareInterest<"narrativeGraph:list">(
 				interestKey("narrativeGraph:list", id),
 				handleGraphList
+			),
+			// The book's calendar and clocks: every reply of the family is
+			// the whole of it, so one handler takes all four.
+			...(
+				[
+					"lorebooks:storyTime",
+					"lorebooks:setCalendar",
+					"lorebooks:setClock"
+				] as const
+			).map((event) =>
+				declareInterest<typeof event>(
+					interestKey(event, id),
+					openBookTime.apply
+				)
 			)
 		]
 		return () => {
@@ -1193,11 +1425,10 @@
 
 	/**
 	 * The four BARE keys. The list of books is not about one book; the two
-	 * scene writes answer with the scene alone and name none; and an `:error`
+	 * scene writes are not in `SCOPED_EVENTS` (each names its book in the
+	 * payload, and `handleSceneWritten` drops another book's); and an `:error`
 	 * is never gated (plan ruling 2) but still goes through the registry,
-	 * which is the only listener path. `scenes:delete` has no emitter
-	 * anywhere; the listener stays so that gaining one is not also gaining a
-	 * bug.
+	 * which is the only listener path.
 	 */
 	useInterest<"lorebooks:list">("lorebooks:list", handleLorebooksList)
 	useInterest<"lorebooks:list:error">(
@@ -1238,26 +1469,28 @@
 		onOpenChange={(e) => (menuOpen = e.open)}
 		positioning={{ placement: "bottom-start" }}
 	>
-		<!-- The book's name IS the button's accessible name; an aria-label
-		     here would replace it with words the user cannot see. -->
+		<!-- The hero above names the book; this button names what it opens. -->
 		<Popover.Trigger
-			class="btn btn-sm hover:preset-tonal-surface min-w-0 flex-1 justify-start gap-1"
+			class="btn btn-sm preset-tonal-surface gap-1 {menuOpen
+				? 'bg-surface-200-800'
+				: ''}"
 			title={crumbs.join(" › ")}
+			aria-label="Manage this lorebook"
 		>
-			<Icons.Book size={14} aria-hidden="true" />
-			<span class="min-w-0 truncate">{book?.name ?? "Lorebook"}</span>
+			<span>Manage</span>
 			<Icons.ChevronDown size={14} aria-hidden="true" />
 		</Popover.Trigger>
 		<Portal>
 			<Popover.Positioner class="z-[1000]!">
 				<Popover.Content
-					class="card bg-surface-100-900 flex w-[min(90vw,300px)] flex-col gap-3 p-4 shadow-xl"
+					class="bg-surface-50-950 border-surface-200-800 flex w-[min(90vw,300px)] flex-col rounded-[12px] border p-1 shadow-xl"
 				>
 					<BookMenu
 						books={bookChoices}
 						openId={route.lorebookId}
 						{readingInto}
 						canChangeReading={hasOpenSession}
+						readsOtherBook={otherReadBook}
 						onOpen={(id) => {
 							menuOpen = false
 							openBook(id, route.scope)
@@ -1280,10 +1513,6 @@
 								? { id: book.id, name: book.name }
 								: null
 						}}
-						onExport={() => {
-							menuOpen = false
-							exportingId = book?.id ?? null
-						}}
 						onChangeReading={changeReading}
 						onDelete={() => {
 							menuOpen = false
@@ -1296,13 +1525,25 @@
 	</Popover>
 {/snippet}
 
+{#snippet bookHero()}
+	<!-- The book's own header (STYLE-GUIDE §6.4): what it is, how much it
+	     holds, which line is being read, and everything about the book. -->
+	<DetailHero
+		class="min-w-0 flex-1"
+		title={book?.name ?? "Lorebook"}
+		icon={Icons.BookMarked}
+		meta={bookMeta}
+		actions={bookChip}
+	/>
+{/snippet}
+
 {#snippet scopeChips()}
 	<div class="flex flex-wrap gap-1" role="group" aria-label="Views">
 		{#each scopes as facet (facet.id)}
 			<button
 				type="button"
 				class="chip gap-1 {route.scope === facet.id
-					? 'preset-filled-primary-500'
+					? 'preset-tonal-primary'
 					: 'preset-tonal-surface'}"
 				class:opacity-60={facet.empty && route.scope !== facet.id}
 				aria-pressed={route.scope === facet.id}
@@ -1335,12 +1576,7 @@
 				loreRoute.navigate({ type: "setMoment", moment: next })}
 			onCompare={() =>
 				loreRoute.navigate({ type: "setCompare", compare: true })}
-			onOpenMember={(castId) =>
-				loreRoute.navigate({
-					type: "openCastMember",
-					scope: "cast",
-					castId
-				})}
+			onOpenMember={openMember}
 		/>
 	{/if}
 {/snippet}
@@ -1348,7 +1584,7 @@
 {#snippet workspace()}
 	{#if !book}
 		<div class="flex items-center justify-center py-8">
-			<Icons.Loader2 size={20} class="text-surface-400 animate-spin" />
+			<Icons.Loader2 size={20} class="text-surface-600-400 animate-spin" />
 		</div>
 	{:else if route.compare && route.branch != null}
 		<!-- Drawn in place of the pool, not beside it: comparing is a different
@@ -1384,20 +1620,29 @@
 			<BookSettings
 				lorebookId={book.id}
 				bookName={book.name}
+				branchId={route.branch ?? null}
+				branchName={route.branch != null
+					? (branches.find((b) => b.id === route.branch)?.name ?? null)
+					: null}
+				branches={lineNames}
+				present={storyPresent}
+				onSetClock={setStoryClock}
 				{counts}
+				rowsByType={resolvedRows}
+				scenes={lineScenes}
+				relationships={lineRelationshipCount}
 				{readingInto}
 				canChangeReading={hasOpenSession}
 				bind:hasUnsavedChanges={tabHasUnsavedChanges}
 				onClose={() => (settingsOpen = false)}
 				onChangeReading={changeReading}
 				onImport={() => (importing = true)}
-				onExport={() => (exportingId = book.id)}
 				onDuplicate={() =>
 					(duplicating = { id: book.id, name: book.name })}
 				onDelete={() => (deletingId = book.id)}
 			/>
 		{/key}
-	{:else if bookEmpty}
+	{:else if bookEmpty && !explicitlyElsewhere}
 		{#key book.id}
 			<DayOne lorebookId={book.id} onImport={() => (importing = true)} />
 		{/key}
@@ -1408,15 +1653,10 @@
 			<LivesLens
 				members={livesMembers}
 				presences={presences as any}
-				pins={(bookRows[HISTORY_TYPE_ID] ?? []) as any}
+				pins={(resolvedRows[HISTORY_TYPE_ID] ?? []) as any}
 				moment={amendmentsAt.moment}
-				branchId={amendmentsAt.branchId}
-				onOpenMember={(castId) =>
-					loreRoute.navigate({
-						type: "openCastMember",
-						scope: "cast",
-						castId
-					})}
+				{line}
+				onOpenMember={openMember}
 			/>
 		{/key}
 	{:else if lens === "time"}
@@ -1428,7 +1668,7 @@
 				{mode}
 				scopeTitle={SCOPE_LABELS[route.scope]}
 				entries={timeEntries}
-				scenes={sceneRows as TimeSceneRow[]}
+				scenes={lineScenes as TimeSceneRow[]}
 				session={timeSession}
 				{decisions}
 				bind:hasUnsavedChanges={tabHasUnsavedChanges}
@@ -1499,12 +1739,24 @@
 			/>
 		{/key}
 	{:else}
-		<!-- Places has no kind of its own yet, so the pool it would narrow to
-		     is empty until one is declared. -->
-		<EmptyState
-			icon={Icons.Map}
-			message="Nothing mapped yet. Link two places or put one inside another and this fills in."
-		/>
+		<!-- Places draws no list of its own: a place is a Location entry, and
+		     Location entries are drawn on the Places map, not in the pool. -->
+		{#if (counts?.places ?? 0) > 0}
+			<EmptyState
+				icon={Icons.Map}
+				message="Places are drawn on a map, not listed. {counts?.places} {counts?.places ===
+				1
+					? 'place is'
+					: 'places are'} on this line."
+				ctaLabel="Open the Places map"
+				onCta={() => openLens("places")}
+			/>
+		{:else}
+			<EmptyState
+				icon={Icons.Map}
+				message="No places on this line yet. A place is a Location entry; once the book has one, the Places map draws it."
+			/>
+		{/if}
 	{/if}
 {/snippet}
 
@@ -1520,14 +1772,14 @@
 			<button
 				class="btn btn-sm preset-filled-primary-500"
 				onclick={() => (creating = true)}
-				title="Create New Lorebook"
+				title="Create new lorebook"
 			>
 				<Icons.Plus size={16} />
 				New
 			</button>
 			<button
 				class="btn btn-sm preset-tonal-primary"
-				title="Import Lorebook"
+				title="Import lorebook"
 				onclick={() => (importing = true)}
 			>
 				<Icons.Upload size={16} />
@@ -1547,7 +1799,7 @@
 				<div class="flex items-center justify-center py-8">
 					<Icons.Loader2
 						size={20}
-						class="text-surface-400 animate-spin"
+						class="text-surface-600-400 animate-spin"
 					/>
 				</div>
 			{:else if filteredLorebooks.length === 0}
@@ -1556,7 +1808,7 @@
 					message={bookSearch
 						? `No lorebooks found matching "${bookSearch}".`
 						: "No lorebooks yet. Create one to get started."}
-					ctaLabel={bookSearch ? undefined : "New Lorebook"}
+					ctaLabel={bookSearch ? undefined : "New lorebook"}
 					onCta={bookSearch ? undefined : () => (creating = true)}
 				/>
 			{:else}
@@ -1565,12 +1817,8 @@
 						lorebook={l}
 						onclick={(lorebook) => openBook(lorebook.id)}
 						onDelete={(id) => (deletingId = id)}
-						onExport={(id) => (exportingId = id)}
 						bindingsCount={l.lorebookBindings?.length || 0}
-						worldEntriesCount={l.worldLoreEntries?.length || 0}
-						characterEntriesCount={l.characterLoreEntries?.length ||
-							0}
-						historyEntriesCount={l.historyEntries?.length || 0}
+						entryCounts={l.entryCounts}
 						{hasOpenSession}
 						{openSessionHasLorebook}
 						isOpenSessionLorebook={openSessionCtx.lorebookId ===
@@ -1582,6 +1830,9 @@
 			{/if}
 		</div>
 	{:else if mode === "desk"}
+		<div class="mb-3">
+			{@render bookHero()}
+		</div>
 		<div class="mb-3">
 			{@render worldBar()}
 		</div>
@@ -1601,16 +1852,11 @@
 				pinned={pinnedItems}
 				{readingInto}
 				reached={readInKeys ? readInKeys.size : null}
-				bookMenu={bookChip}
 				onScope={openScope}
 				onLens={openLens}
 				onSaved={(next) => (saved = next)}
 				onSearch={(next) => (search = next)}
-				onOpenEntry={(item) =>
-					loreRoute.navigate({
-						type: "openEntry",
-						entryId: item.id
-					})}
+				onOpenEntry={(item) => openEntry(item.id)}
 			/>
 			<div class="flex min-h-0 min-w-0 flex-1 flex-col gap-3">
 				{#if moment}
@@ -1628,6 +1874,8 @@
 				     them must not move the moment. -->
 				<MomentBar
 					{moment}
+					present={storyPresent}
+					onSetPresent={setStoryClock}
 					castNotYet={castAsOfCounts}
 					onMoment={setMoment}
 					onOpenTimeline={lens === "time"
@@ -1637,7 +1885,7 @@
 			</div>
 		</div>
 	{:else}
-		<div class="mb-2 flex min-w-0 items-center gap-2">
+		<div class="mb-2 flex min-w-0 items-start gap-2">
 			<button
 				type="button"
 				class="btn btn-sm preset-filled-surface-400-600 shrink-0 p-2"
@@ -1647,7 +1895,7 @@
 			>
 				<Icons.ChevronLeft size={16} aria-hidden="true" />
 			</button>
-			{@render bookChip()}
+			{@render bookHero()}
 		</div>
 		<div class="mb-2">
 			{@render worldBar()}
@@ -1662,6 +1910,7 @@
 					sessionName={railSession.name}
 					reached={readInKeys ? readInKeys.size : null}
 					sessionBranchId={railSession.branchId}
+					sessionStoryClock={railSession.clock}
 					branchId={route.branch ?? null}
 					{moment}
 					{branches}
@@ -1690,6 +1939,8 @@
 		<div class="mt-2">
 			<MomentBar
 				{moment}
+				present={storyPresent}
+				onSetPresent={setStoryClock}
 				castNotYet={castAsOfCounts}
 				onMoment={setMoment}
 				onOpenTimeline={lens === "time"
@@ -1715,6 +1966,21 @@
 		if (route.lorebookId === id) loreRoute.set(emptyRoute())
 	}}
 	onDuplicated={(id) => openBook(id)}
+	onCreated={(id) => openBook(id)}
+	onImported={(id) => openBook(id)}
+/>
+
+<ReplaceReadingModal
+	open={replacing !== null}
+	sessionName={openSessionCtx.sessionName ?? "The open session"}
+	currentBook={replacing?.currentName ?? ""}
+	nextBook={replacing?.bookName ?? ""}
+	onConfirm={() => {
+		const next = replacing
+		replacing = null
+		if (next) readIntoSession(next.lorebookId)
+	}}
+	onCancel={() => (replacing = null)}
 />
 
 <LorebookUnsavedChangesModal

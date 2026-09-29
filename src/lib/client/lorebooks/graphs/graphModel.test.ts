@@ -4,6 +4,7 @@
  */
 import { describe, expect, it } from "vitest"
 import {
+	bumpLinkCounts,
 	castKey,
 	endpointKey,
 	entriesWithLinks,
@@ -270,9 +271,31 @@ describe("panelEdges — the open node's own edges, said from its side", () => {
 		).toEqual([10, 11])
 	})
 
-	it("draws an edge that is not active as cut", () => {
+	it("draws a broken edge as cut", () => {
 		const rows = panelEdges(castKey(1), edges, names)
 		expect(rows.map((r) => r.cut)).toEqual([false, true])
+	})
+
+	it("says a resolved edge's own word rather than calling it cut (#123)", () => {
+		const resolved = graphEdges(
+			[
+				rel({
+					id: 20,
+					relationshipType: "rival",
+					status: "resolved",
+					from: { kind: "cast", bindingId: 1 },
+					to: { kind: "cast", bindingId: 2 }
+				})
+			],
+			new Set(["cast#1", "cast#2"])
+		)
+		const [row] = panelEdges(castKey(1), resolved, names)
+		expect(row.cut).toBe(false)
+		expect(row.statusWord).toBe("resolved")
+	})
+
+	it("says nothing beside an active edge", () => {
+		expect(panelEdges(castKey(1), edges, names)[0].statusWord).toBeNull()
 	})
 
 	it("says nothing about a node that is not open", () => {
@@ -431,5 +454,43 @@ describe("ceilingFactsFrom — the run's relationship figures", () => {
 	it("says nothing at all when no run reported on the graph", () => {
 		expect(ceilingFactsFrom(undefined)).toEqual({})
 		expect(ceilingLine(ceilingFactsFrom(null))).toBeNull()
+	})
+})
+
+describe("bumpLinkCounts — the Rebuild warning's counts stay true", () => {
+	const zero = { total: 0, entryToEntry: 0, castToEntry: 0 }
+	it("counts a road between two entries", () => {
+		expect(
+			bumpLinkCounts(
+				zero,
+				{ from: { kind: "entry", entryId: 1 }, to: { kind: "entry", entryId: 2 } },
+				1
+			)
+		).toEqual({ total: 1, entryToEntry: 1, castToEntry: 0 })
+	})
+	it("counts a member-to-entry link", () => {
+		expect(
+			bumpLinkCounts(
+				zero,
+				{ from: { kind: "cast", bindingId: 1 }, to: { kind: "entry", entryId: 2 } },
+				1
+			)
+		).toEqual({ total: 1, entryToEntry: 0, castToEntry: 1 })
+	})
+	it("takes one away and never goes below zero", () => {
+		expect(
+			bumpLinkCounts(
+				{ total: 1, entryToEntry: 0, castToEntry: 0 },
+				{ from: { kind: "cast", bindingId: 1 }, to: { kind: "cast", bindingId: 2 } },
+				-1
+			)
+		).toEqual(zero)
+		expect(
+			bumpLinkCounts(
+				zero,
+				{ from: { kind: "entry", entryId: 1 }, to: { kind: "entry", entryId: 2 } },
+				-1
+			)
+		).toEqual(zero)
 	})
 })

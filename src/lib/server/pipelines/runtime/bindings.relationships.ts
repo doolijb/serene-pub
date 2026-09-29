@@ -112,7 +112,7 @@ const secrecyLabel = (visibility: string): string =>
 async function chosenEntryIds(
 	input: NodeInput<typeof C.relationshipSearch>,
 	ctx: CoreQueryCtx
-): Promise<Set<number>> {
+): Promise<{ chosen: Set<number>; visible: Set<number> }> {
 	const [entries, messages, cast] = await Promise.all([
 		ctx.read("lorebook_entries", {
 			sessionId: input?.scope?.sessionId,
@@ -133,11 +133,26 @@ async function chosenEntryIds(
 	})
 	// A candidate's `id` is `string | number` because other bands address rows
 	// that way; a lore candidate's is a `lorebook_entries.id`.
-	return new Set(
-		(result.candidates ?? [])
-			.map((c) => c.id)
-			.filter((id): id is number => typeof id === "number")
-	)
+	return {
+		chosen: new Set(
+			(result.candidates ?? [])
+				.map((c) => c.id)
+				.filter((id): id is number => typeof id === "number")
+		),
+		/**
+		 * Which entries this speaker may be told of at all (finding #151): the
+		 * same read's rows — already on the session's line and already gated
+		 * by the binding-visibility policy — less the ones switched off or
+		 * shelved. A hop's far end outside it is somebody else's private lore,
+		 * or a room nobody may enter; it is not offered.
+		 */
+		visible: new Set(
+			((entries ?? []) as any[])
+				.filter((e) => e?.enabled !== false && e?.archived !== true)
+				.map((e) => e.id)
+				.filter((id): id is number => typeof id === "number")
+		)
+	}
 }
 
 /**
@@ -150,17 +165,21 @@ async function chosenEntryIds(
  */
 function linkedRows(
 	links: readonly GraphEntryLink[],
-	chosen: ReadonlySet<number>
+	{ chosen, visible }: { chosen: ReadonlySet<number>; visible: ReadonlySet<number> }
 ): LinkedRow[] {
 	const isChosen = (end: GraphEntryLinkEnd) =>
 		end.kind === "entry" && chosen.has(end.id)
+	// A cast end is a person in the book; an entry end must be one this
+	// speaker's own lore read returned (see `chosenEntryIds`).
+	const mayShow = (end: GraphEntryLinkEnd) =>
+		end.kind !== "entry" || visible.has(end.id)
 	const best = new Map<string, LinkedRow>()
 	for (const link of links) {
 		for (const [near, far] of [
 			[link.from, link.to],
 			[link.to, link.from]
 		] as const) {
-			if (!isChosen(near) || isChosen(far)) continue
+			if (!isChosen(near) || isChosen(far) || !mayShow(far)) continue
 			const key = `${far.kind}:${far.id}`
 			const row: LinkedRow = {
 				id: link.id,

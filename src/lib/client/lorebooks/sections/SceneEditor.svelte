@@ -57,11 +57,11 @@
 <div class="flex flex-wrap gap-2">
 	{#if pending}
 		<button
-			class="btn btn-sm preset-filled-warning-500"
+			class="btn btn-sm preset-tonal-surface"
 			type="button"
 			onclick={() => pool.openProcess(source!.id, pending!.activityId)}
 		>
-			<Icons.Eye size={13} /> Review Pending
+			<Icons.Eye size={13} /> Review pending
 		</button>
 	{:else if hasMessages}
 		<button
@@ -71,7 +71,7 @@
 			onclick={process}
 		>
 			{#if isProcessing}
-				<Icons.Loader size={13} class="animate-spin" /> Processing…
+				<Icons.Loader2 size={13} class="animate-spin" /> Processing…
 			{:else if source?.summary}
 				<Icons.RefreshCw size={13} /> Reprocess
 			{:else}
@@ -85,7 +85,7 @@
 			type="button"
 			onclick={pool.onNavigateToGraph}
 		>
-			<Icons.GitGraph size={13} /> Build Graph
+			<Icons.GitGraph size={13} /> Build graph
 		</button>
 	{/if}
 </div>

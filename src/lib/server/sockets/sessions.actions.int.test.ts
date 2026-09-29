@@ -18,7 +18,7 @@
  *  4. **Channels filter.** A venue naming a channel appears there and
  *     nowhere else; one naming none appears everywhere.
  *  5. **The fire reads the declaration it was handed.** `sessions:
- *     triggerFunction` keys on the action's identity (`<spec slug>#<key>`,
+ *     fireAction` keys on the action's identity (`<spec slug>#<key>`,
  *     U5c review W1): a guest is admitted for an action declaring `act:
  *     ['participant']` and refused under the default audience, with a
  *     sentence naming it; a call naming no action gets the owner floor.
@@ -91,7 +91,7 @@ vi.mock("$lib/server/db", async () => {
 /**
  * A spy on the status relay's construction — real behaviour, delegated —
  * so a test can see what `io` a run was built with without needing a node
- * that actually sets a status. `sessions:triggerFunction` used to build its
+ * that actually sets a status. `sessions:fireAction` used to build its
  * `runSpec` request with no `io` at all, so the relay could never reach
  * `sessions:runStatus` or a live row's `sessionMessage` frame; fixed
  * 2026-09-16 by handing it `socket.io` like every other trigger does.
@@ -211,6 +211,8 @@ async function publishActionSpec(
 						key,
 						venue: { kind: "composer" },
 						label: { en: key },
+						// Required since 2026-09-28 (the action legend).
+						description: { en: `Test action ${key}.` },
 						...a
 					} as any
 				})
@@ -431,7 +433,7 @@ describe("listSessionActions — audiences", () => {
 			itemGated: false
 		})
 		expect(byKey.branch).toMatchObject({ floor: true, canAct: false })
-		for (const k of ["edit", "retry", "continue", "swipe", "hide", "delete"])
+		for (const k of ["edit", "retry", "extend", "swipe", "hide", "delete"])
 			expect(byKey[k], k).toMatchObject({ itemGated: true, canAct: true })
 
 		const forOwner = await sessionsActionsHandler.handler(
@@ -469,19 +471,43 @@ describe("listSessionActions — placement", () => {
 		])
 		expect(message.overflow.map((a) => a.key).sort()).toEqual([
 			"branch",
-			"continue",
 			"delete",
+			"extend",
 			"hide",
 			"swipe"
 		])
-		// retry and continue also live in the extra tab.
+		// retry also lives in the extra tab, beside the turn controls
+		// `advance` — the composer's Continue, never the prefill (B7) — and
+		// `pick` (B8). Chat has no narrator voice, so no `narrate`.
 		expect(all(res.venues.extra).map((a) => a.key).sort()).toEqual([
-			"continue",
+			"advance",
+			"pick",
 			"retry"
 		])
 		// Every venue kind is present, even the ones nothing declares for.
-		for (const k of ["widget", "session-settings", "pipelines", "admin", "review"])
+		for (const k of ["session-settings", "pipelines", "admin", "review"])
 			expect(res.venues[k]).toEqual({ primary: [], overflow: [] })
+		// The widget venue holds core's one annex field (retake's "don't ask
+		// again", R2 2026-09-28): an annex field is declared for every genre.
+		expect(all(res.venues.widget).map((a) => `${a.specSlug}#${a.key}`)).toEqual([
+			"core:annex#retake-quietly"
+		])
+	})
+
+	test("every action the legend lists says what it does (2026-09-28)", async () => {
+		const { sessionsActionsHandler } = await import("./sessions")
+		const { owner, session } = await sessionWithGuest("legend")
+		const res = await sessionsActionsHandler.handler(
+			fakeSocket(owner.id),
+			{ sessionId: session.id },
+			noopEmit
+		)
+		const undescribed = ["composer", "extra", "message"].flatMap((venue) =>
+			all(res.venues[venue])
+				.filter((a) => !a.description?.trim())
+				.map((a) => `${venue}:${a.specSlug}#${a.key}`)
+		)
+		expect(undescribed).toEqual([])
 	})
 })
 
@@ -613,9 +639,9 @@ describe("channels", () => {
 	})
 })
 
-describe("sessions:triggerFunction reads the declaration it was handed", () => {
+describe("sessions:fireAction reads the declaration it was handed", () => {
 	test("act: ['participant'] admits a guest; the default refuses one, naming the audience; a bare key resolves to its sole declarer (V2)", async () => {
-		const { sessionsTriggerFunctionHandler } = await import("./sessions")
+		const { sessionsFireActionHandler } = await import("./sessions")
 		const { owner, guest, session } = await sessionWithGuest("fire")
 
 		// Both core-namespaced so the companion rule turns them on.
@@ -627,7 +653,7 @@ describe("sessions:triggerFunction reads the declaration it was handed", () => {
 			key: "bow"
 		})
 
-		const refused = await sessionsTriggerFunctionHandler.handler(
+		const refused = await sessionsFireActionHandler.handler(
 			fakeSocket(guest.id),
 			{
 				sessionId: session.id,
@@ -639,7 +665,7 @@ describe("sessions:triggerFunction reads the declaration it was handed", () => {
 			"'bow' is not yours to use here — its audience is owner."
 		)
 
-		const admitted = await sessionsTriggerFunctionHandler.handler(
+		const admitted = await sessionsFireActionHandler.handler(
 			fakeSocket(guest.id),
 			{
 				sessionId: session.id,
@@ -655,14 +681,14 @@ describe("sessions:triggerFunction reads the declaration it was handed", () => {
 		// A bare key (⏳) names its sole declarer, and THAT declaration's
 		// audience decides (plans/31 V2 — there is no narrower reading to
 		// fall to, because the key names one thing): the guest is admitted.
-		const bare = await sessionsTriggerFunctionHandler.handler(
+		const bare = await sessionsFireActionHandler.handler(
 			fakeSocket(guest.id),
 			{ sessionId: session.id, key: "wave" },
 			noopEmit
 		)
 		expect(bare.error ?? "").not.toMatch(/not yours to use|Session not found/)
 		// …and a bare key nothing declares is refused as such.
-		const unknown = await sessionsTriggerFunctionHandler.handler(
+		const unknown = await sessionsFireActionHandler.handler(
 			fakeSocket(guest.id),
 			{ sessionId: session.id, key: "curtsy" },
 			noopEmit
@@ -670,7 +696,7 @@ describe("sessions:triggerFunction reads the declaration it was handed", () => {
 		expect(unknown.error).toBe("No action 'curtsy' is offered to this session.")
 
 		// A malformed identity is refused as such, never read as a key.
-		const malformed = await sessionsTriggerFunctionHandler.handler(
+		const malformed = await sessionsFireActionHandler.handler(
 			fakeSocket(owner.id),
 			{ sessionId: session.id, action: "wave" },
 			noopEmit
@@ -679,7 +705,7 @@ describe("sessions:triggerFunction reads the declaration it was handed", () => {
 			"'wave' is not an action — one is named '<spec slug>#<key>'."
 		)
 		// …and a press naming nothing at all.
-		const nothing = await sessionsTriggerFunctionHandler.handler(
+		const nothing = await sessionsFireActionHandler.handler(
 			fakeSocket(owner.id),
 			{ sessionId: session.id },
 			noopEmit
@@ -694,7 +720,7 @@ describe("sessions:triggerFunction reads the declaration it was handed", () => {
 				action: "core:spec/test-owner-action#bow"
 			}
 		]) {
-			const byOwner = await sessionsTriggerFunctionHandler.handler(
+			const byOwner = await sessionsFireActionHandler.handler(
 				fakeSocket(owner.id),
 				params,
 				noopEmit
@@ -706,7 +732,7 @@ describe("sessions:triggerFunction reads the declaration it was handed", () => {
 
 		// A stranger is still nobody.
 		const stranger = await makeUser("fire-stranger")
-		const outside = await sessionsTriggerFunctionHandler.handler(
+		const outside = await sessionsFireActionHandler.handler(
 			fakeSocket(stranger.id),
 			{
 				sessionId: session.id,
@@ -718,7 +744,7 @@ describe("sessions:triggerFunction reads the declaration it was handed", () => {
 	}, 60_000)
 
 	test("two actions sharing a key are two things: each audience honoured, each spec its own, enablement per action (W1)", async () => {
-		const { sessionsTriggerFunctionHandler, sessionsActionsHandler } =
+		const { sessionsFireActionHandler, sessionsActionsHandler } =
 			await import("./sessions")
 		const { setSessionFunction, listSessionFunctions } = await import(
 			"$lib/server/pipelines/entities/sessionGenres"
@@ -788,7 +814,7 @@ describe("sessions:triggerFunction reads the declaration it was handed", () => {
 		// Firing the plugin's runs the PLUGIN spec — not the companion the
 		// verdict would otherwise choose for `sum`.
 		const before = (await runsOf(session.id)).length
-		const viaPlugin = await sessionsTriggerFunctionHandler.handler(
+		const viaPlugin = await sessionsFireActionHandler.handler(
 			fakeSocket(guest.id),
 			{ sessionId: session.id, action: "acme:spec/sum#sum" },
 			noopEmit
@@ -801,7 +827,7 @@ describe("sessions:triggerFunction reads the declaration it was handed", () => {
 		expect(after.filter((slug) => !slug.endsWith("-turn-order")).at(-1)).toBe("acme:spec/sum")
 
 		// Firing core's is refused — the plugin's audience is the plugin's.
-		const viaCore = await sessionsTriggerFunctionHandler.handler(
+		const viaCore = await sessionsFireActionHandler.handler(
 			fakeSocket(guest.id),
 			{ sessionId: session.id, action: "core:spec/test-sum#sum" },
 			noopEmit
@@ -813,7 +839,7 @@ describe("sessions:triggerFunction reads the declaration it was handed", () => {
 		// the identities, for the guest and the owner alike — a press has to
 		// be about one thing, and no binding selects among two actions.
 		for (const who of [guest, owner]) {
-			const bare = await sessionsTriggerFunctionHandler.handler(
+			const bare = await sessionsFireActionHandler.handler(
 				fakeSocket(who.id),
 				{ sessionId: session.id, key: "sum" },
 				noopEmit
@@ -836,13 +862,13 @@ describe("sessions:triggerFunction reads the declaration it was handed", () => {
 			{ userId: owner.id }
 		)
 		expect(off).toMatchObject({ ok: true, enabled: false })
-		const offFire = await sessionsTriggerFunctionHandler.handler(
+		const offFire = await sessionsFireActionHandler.handler(
 			fakeSocket(owner.id),
 			{ sessionId: session.id, action: "core:spec/test-sum#sum" },
 			noopEmit
 		)
 		expect(offFire.error).toMatch(/'sum' is turned off for this session/)
-		const stillOn = await sessionsTriggerFunctionHandler.handler(
+		const stillOn = await sessionsFireActionHandler.handler(
 			fakeSocket(guest.id),
 			{ sessionId: session.id, action: "acme:spec/sum#sum" },
 			noopEmit
@@ -896,7 +922,7 @@ describe("sessions:triggerFunction reads the declaration it was handed", () => {
 	}, 60_000)
 
 	test("a channel filters where an action is listed, never who may fire it (W2)", async () => {
-		const { sessionsTriggerFunctionHandler, sessionsActionsHandler } =
+		const { sessionsFireActionHandler, sessionsActionsHandler } =
 			await import("./sessions")
 		const { guest, session } = await sessionWithGuest("phone")
 		await publishActionSpec("core:spec/test-phone-wave", {
@@ -925,7 +951,7 @@ describe("sessions:triggerFunction reads the declaration it was handed", () => {
 		// …and fired by a guest it runs. The fire names no channel at all
 		// (W-B): audience is not per-channel, so the field was deleted from
 		// the params rather than carried unread.
-		const res = await sessionsTriggerFunctionHandler.handler(
+		const res = await sessionsFireActionHandler.handler(
 			fakeSocket(guest.id),
 			{
 				sessionId: session.id,
@@ -941,7 +967,7 @@ describe("sessions:triggerFunction reads the declaration it was handed", () => {
 	}, 60_000)
 
 	test("a block's choice carries the writing spec's identity: a guest's submit from an `act: ['participant']` spec runs; a legacy block (no identity) resolves its key to the sole declarer (W-E; V2)", async () => {
-		const { sessionsTriggerFunctionHandler } = await import("./sessions")
+		const { sessionsFireActionHandler } = await import("./sessions")
 		const schema = await import("$lib/server/db/schema")
 		const { guest, session } = await sessionWithGuest("block")
 		await publishActionSpec("core:spec/test-lock", {
@@ -962,7 +988,7 @@ describe("sessions:triggerFunction reads the declaration it was handed", () => {
 			})
 			.returning()
 		const submit = (action?: string) =>
-			sessionsTriggerFunctionHandler.handler(
+			sessionsFireActionHandler.handler(
 				fakeSocket(guest.id),
 				{
 					sessionId: session.id,
@@ -987,7 +1013,7 @@ describe("sessions:triggerFunction reads the declaration it was handed", () => {
 	}, 60_000)
 
 	test("a mixed audience admits either half: the owner without a message, a guest on their own message (S-A)", async () => {
-		const { sessionsTriggerFunctionHandler } = await import("./sessions")
+		const { sessionsFireActionHandler } = await import("./sessions")
 		const schema = await import("$lib/server/db/schema")
 		const { owner, guest, session } = await sessionWithGuest("mixed")
 		await publishActionSpec("core:spec/test-mixed", {
@@ -996,7 +1022,7 @@ describe("sessions:triggerFunction reads the declaration it was handed", () => {
 			audience: { see: ["participant"], act: ["owner", "item"] }
 		})
 		const fire = (userId: number, messageId?: number) =>
-			sessionsTriggerFunctionHandler.handler(
+			sessionsFireActionHandler.handler(
 				fakeSocket(userId),
 				{
 					sessionId: session.id,
@@ -1473,9 +1499,9 @@ describe("R-6 narrowing at sessions:bindFunction (subjects, plans/31 V2)", () =>
 	}, 60_000)
 })
 
-describe("sessions:triggerFunction announces its run (R-19)", () => {
+describe("sessions:fireAction announces its run (R-19)", () => {
 	test("runSpec is built with the socket's io, so the status relay can reach sessions:runStatus and the live row", async () => {
-		const { sessionsTriggerFunctionHandler } = await import("./sessions")
+		const { sessionsFireActionHandler } = await import("./sessions")
 		const { owner, session } = await sessionWithGuest("announce")
 
 		await publishActionSpec("core:spec/test-announce-action", {
@@ -1484,7 +1510,7 @@ describe("sessions:triggerFunction announces its run (R-19)", () => {
 
 		statusRelayHooks.ioSeen.length = 0
 		const socket = fakeSocket(owner.id)
-		const res = await sessionsTriggerFunctionHandler.handler(
+		const res = await sessionsFireActionHandler.handler(
 			socket,
 			{
 				sessionId: session.id,
@@ -1541,8 +1567,8 @@ describe("enabled-when (U5e)", () => {
 		action: string,
 		messageId?: number
 	) => {
-		const { sessionsTriggerFunctionHandler } = await import("./sessions")
-		return sessionsTriggerFunctionHandler.handler(
+		const { sessionsFireActionHandler } = await import("./sessions")
+		return sessionsFireActionHandler.handler(
 			fakeSocket(userId),
 			{ sessionId, action, ...(messageId != null ? { messageId } : {}) },
 			noopEmit
@@ -1827,10 +1853,15 @@ describe("enabled-when (U5e)", () => {
 		const swipe = all(res.venues.message).find((a) => a.key === "swipe")!
 		expect(swipe.enabled).toBe(true)
 		const paths = (a: { itemPredicates?: { on: string }[] }) => a.itemPredicates?.map((p) => p.on)
-		expect(paths(swipe)).toEqual(["item.isNewest", "item.hasSwipes"])
+		expect(paths(swipe)).toEqual([
+			"item.isNewest",
+			"item.role",
+			"item.hasSwipes"
+		])
 		const retry = all(res.venues.message).find((a) => a.key === "retry")!
 		expect(paths(retry)).toEqual([
 			"item.isNewest",
+			"item.role",
 			"item.greeting",
 			"item.hidden"
 		])
@@ -1882,8 +1913,8 @@ describe("enabled-when (U5e)", () => {
 				reason: { i18n: { en: "Let the reply land first." } }
 			})
 			// The door, too — a hand-made fire while a run is live.
-			const { sessionsTriggerFunctionHandler } = await import("./sessions")
-			const refused = await sessionsTriggerFunctionHandler.handler(
+			const { sessionsFireActionHandler } = await import("./sessions")
+			const refused = await sessionsFireActionHandler.handler(
 				fakeSocket(owner.id),
 				{ sessionId: session.id, action: "core:spec/test-when-quiet#quiet" },
 				noopEmit
@@ -1979,7 +2010,7 @@ describe("enabled-when — the review's follow-ups (2026-09-17)", () => {
 	}, 60_000)
 
 	test("a press naming a row of another session is refused at the door; an item.* predicate with no row to judge is refused with its reason (W4)", async () => {
-		const { sessionsTriggerFunctionHandler } = await import("./sessions")
+		const { sessionsFireActionHandler } = await import("./sessions")
 		const { enablementVerdict } = await import(
 			"$lib/server/pipelines/entities/sessionActions"
 		)
@@ -2023,13 +2054,13 @@ describe("enabled-when — the review's follow-ups (2026-09-17)", () => {
 		})
 
 		// …and over the real handler: a composer press names no row.
-		const pressed = await sessionsTriggerFunctionHandler.handler(
+		const pressed = await sessionsFireActionHandler.handler(
 			fakeSocket(owner.id),
 			{ sessionId: session.id, action: "core:spec/test-when-annotate#annotate" },
 			noopEmit
 		)
 		expect(pressed.error).toBe("Not on a hidden line.")
-		const onForeign = await sessionsTriggerFunctionHandler.handler(
+		const onForeign = await sessionsFireActionHandler.handler(
 			fakeSocket(owner.id),
 			{
 				sessionId: session.id,
@@ -2041,7 +2072,7 @@ describe("enabled-when — the review's follow-ups (2026-09-17)", () => {
 		expect(onForeign.error).toBe("That message is not part of this session.")
 		// A row of this session admits it.
 		const mine = await reply(session.id, owner.id)
-		const onMine = await sessionsTriggerFunctionHandler.handler(
+		const onMine = await sessionsFireActionHandler.handler(
 			fakeSocket(owner.id),
 			{
 				sessionId: session.id,
@@ -2055,7 +2086,7 @@ describe("enabled-when — the review's follow-ups (2026-09-17)", () => {
 	}, 60_000)
 
 	test("a root pushes sessions:actions to each member once at its start (retry grey, generating) and once at its end (retry enabled) — never per child (C1, W-A1)", async () => {
-		const { sessionsTriggerFunctionHandler } = await import("./sessions")
+		const { sessionsFireActionHandler } = await import("./sessions")
 		const { CORE_VERB_REASONS } = await import("@serene-pub/sdk")
 		const { owner, guest, session } = await sessionWithGuest("when-push")
 		await reply(session.id, owner.id)
@@ -2063,7 +2094,7 @@ describe("enabled-when — the review's follow-ups (2026-09-17)", () => {
 		const { io, emitted } = recordingIo([owner.id, guest.id], session.id)
 		const socket = { user: { id: owner.id, isAdmin: false }, io } as any
 
-		const res = await sessionsTriggerFunctionHandler.handler(
+		const res = await sessionsFireActionHandler.handler(
 			socket,
 			{ sessionId: session.id, action: "core:spec/test-when-nudge#nudge" },
 			noopEmit
@@ -2092,7 +2123,7 @@ describe("enabled-when — the review's follow-ups (2026-09-17)", () => {
 	}, 60_000)
 
 	test("a member whose only tab is on another session is sent nothing, and no list is built for them (W-A4)", async () => {
-		const { sessionsTriggerFunctionHandler } = await import("./sessions")
+		const { sessionsFireActionHandler } = await import("./sessions")
 		const { __actionsPushBuildsForTests } = await import("$lib/server/sessions/actionsPush")
 		const { owner, guest, session } = await sessionWithGuest("when-scope")
 		const elsewhere = await sessionWithGuest("when-scope-elsewhere")
@@ -2102,7 +2133,7 @@ describe("enabled-when — the review's follow-ups (2026-09-17)", () => {
 			[guest.id]: elsewhere.session.id
 		})
 		const before = __actionsPushBuildsForTests()
-		const res = await sessionsTriggerFunctionHandler.handler(
+		const res = await sessionsFireActionHandler.handler(
 			{ user: { id: owner.id, isAdmin: false }, io } as any,
 			{ sessionId: session.id, action: "core:spec/test-when-wave2#wave2" },
 			noopEmit
@@ -2297,4 +2328,70 @@ describe("one slash name means one action across the install (plans/31 V2)", () 
 			/the install's published specs collide on a slash name: '\/swap-y' is claimed twice/
 		)
 	}, 60_000)
+})
+
+/**
+ * 18. **Retake** (lair pass R2, 2026-09-28): Regenerate the last turn is a
+ *     turn control only a genre that declares it offers. Chat and Guide list
+ *     exactly the turn controls and message verbs they did — the row
+ *     regenerate at both venues, no retake — and the Lair shows ONE
+ *     Regenerate in the composer's extra venue (retake), its row regenerate
+ *     staying on the message venue. Retake's "don't ask again" is core's one
+ *     annex field, settable by the owner at the widget venue in every genre.
+ */
+describe("R2 · retake in the listing", () => {
+	const keysOf = (bucket: { primary: any[]; overflow: any[] }) =>
+		[...bucket.primary, ...bucket.overflow]
+			.filter((a) => a.specSlug === "core")
+			.map((a) => a.key)
+			.sort()
+
+	let made = 0
+	async function listing(genreId: string) {
+		const schema = await import("$lib/server/db/schema")
+		const owner = await makeUser(`retake-listing-${++made}`)
+		const [session] = await testDb
+			.insert(schema.sessions)
+			.values({ userId: owner.id, isGroup: false, genreId })
+			.returning()
+		const { listSessionActions } = await import(
+			"$lib/server/pipelines/entities/sessionActions"
+		)
+		return listSessionActions(testDb as any, session.id, { userId: owner.id })
+	}
+
+	test("Chat and Guide: unchanged — no retake, the row regenerate at both venues", async () => {
+		const chat = await listing("core:genre/chat")
+		expect(keysOf(chat.extra)).toEqual(["advance", "pick", "retry"])
+		expect(keysOf(chat.message)).toContain("retry")
+		const guide = await listing("core:genre/guide")
+		expect(keysOf(guide.extra)).toEqual(["retry"])
+		expect(keysOf(guide.message)).toContain("retry")
+		for (const v of [chat, guide])
+			for (const bucket of Object.values(v))
+				expect(keysOf(bucket as any)).not.toContain("retake")
+	})
+
+	test("the Lair: one Regenerate in the extra venue — retake — and the row regenerate on messages", async () => {
+		const lair = await listing("core:genre/lair")
+		const extra = [...lair.extra.primary, ...lair.extra.overflow]
+		expect(extra.filter((a) => a.name === "Regenerate").map((a) => `${a.specSlug}#${a.key}`)).toEqual([
+			"core#retake"
+		])
+		expect(keysOf(lair.extra)).toEqual(["advance", "narrate", "pick", "retake"])
+		expect(keysOf(lair.message)).toContain("retry")
+		const retake = extra.find((a) => a.key === "retake")!
+		expect(retake.slash).toBe("retake")
+		expect(retake.audience.act).toEqual(["owner"])
+	})
+
+	test("retake's \"don't ask again\" is core's annex field, the owner's to set", async () => {
+		for (const genreId of ["core:genre/chat", "core:genre/lair"]) {
+			const v = await listing(genreId)
+			const widget = [...v.widget.primary, ...v.widget.overflow]
+			const field = widget.find((a) => a.specSlug === "core:annex" && a.key === "retake-quietly")
+			expect(field, genreId).toBeTruthy()
+			expect(field!.audience.act).toEqual(["owner"])
+		}
+	})
 })

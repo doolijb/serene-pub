@@ -25,6 +25,7 @@ import {
 	type ToolContext
 } from "$lib/server/pipelines/runtime/tools"
 import { STATE_TOOLS } from "$lib/server/pipelines/runtime/tools/stateTools"
+import { keysText } from "$lib/server/pipelines/ranking/signals"
 
 /** How much of a hit's surroundings comes back, in characters, either side. */
 const EXCERPT_PAD = 90
@@ -85,7 +86,9 @@ const asEntry = (e: any) => ({
 	id: e.id,
 	name: e.name ?? null,
 	source: e.source,
-	keys: e.keys ?? "",
+	// One line of text, as a person reads a key list — the read hands the
+	// stored list on (one element per key).
+	keys: keysText(e.keys),
 	content: String(e.content ?? "")
 })
 
@@ -354,9 +357,17 @@ export const readSummary: CoreTool = {
  * would be answering about a world that no longer exists.
  */
 async function entriesFor(ctx: ToolContext): Promise<any[]> {
+	/**
+	 * The listing posture (finding #149), the same `core:query/lorebook-entries@1`
+	 * asks for: a switched-off or shelved entry is not one the model may find,
+	 * read or summarize. The host asks it of the entry as the session reads it,
+	 * so an Off set by a dated amendment counts.
+	 */
 	const rows = await ctx.read("lorebook_entries", {
 		sessionId: ctx.sessionId,
-		currentCharacterId: ctx.currentCharacterId ?? null
+		currentCharacterId: ctx.currentCharacterId ?? null,
+		enabled: true,
+		archived: false
 	})
 	return Array.isArray(rows) ? rows : []
 }

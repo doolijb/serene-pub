@@ -18,6 +18,7 @@
 
 import {
 	derivations,
+	parseStoryTime,
 	type AttributeSlotDecl,
 	type SlotValue
 } from "@serene-pub/sdk"
@@ -81,18 +82,20 @@ async function age(
 	return years < 0 ? undefined : years
 }
 
-/** `412`, `"412"`, `"412-03"`, `"412-03-05"` — the calendar this codebase has. */
+/**
+ * `412`, `"412"`, `"412-03"`, `"412-03-05"` — the calendar this codebase has,
+ * read by the SDK's story-time parser (the one a story-time stat is checked
+ * with), so a birthdate typed into a story-time slot reads here as it does
+ * everywhere. A time of day is carried and ignored: age counts days.
+ */
 function parseStoryDate(
 	value: SlotValue | undefined
 ): { year: number; month?: number; day?: number } | undefined {
-	if (typeof value === "number" && Number.isFinite(value))
-		return { year: Math.trunc(value) }
-	if (typeof value !== "string") return undefined
-	const m = /^\s*(-?\d+)(?:-(\d{1,2}))?(?:-(\d{1,2}))?\s*$/.exec(value)
-	if (!m) return undefined
+	const time = parseStoryTime(value)
+	if (!time) return undefined
 	return {
-		year: Number(m[1]),
-		month: m[2] ? Number(m[2]) : undefined,
-		day: m[3] ? Number(m[3]) : undefined
+		year: time.year,
+		...(time.month ? { month: time.month } : {}),
+		...(time.day ? { day: time.day } : {})
 	}
 }

@@ -23,7 +23,7 @@
 import { and, eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import { isDeviation } from "$lib/server/pipelines/config/deviations"
-import { acceptedEngines } from "$lib/shared/pipelines/templateEngines"
+import { acceptedEnginesOf } from "$lib/shared/pipelines/templateEngines"
 import {
 	type Published,
 	declarations,
@@ -137,7 +137,7 @@ export async function contextTemplateOptionGate(
 ): Promise<{
 	nodeDefinitionId: string
 	engine: string
-	engines: string[]
+	acceptedEngines: string[]
 	specId: number
 }> {
 	const { at, decl } = await locate(db, secret, slug, id)
@@ -152,7 +152,7 @@ export async function contextTemplateOptionGate(
 		viewer.isAdmin ? "config" : undefined,
 		decl.matrixSlot
 	)
-	const engines = acceptedEngines(decl)
+	const engines = acceptedEnginesOf(decl)
 	return {
 		nodeDefinitionId: decl.nodeDefinitionId,
 		// The language a NEW template here is written in — the slot's first
@@ -165,7 +165,7 @@ export async function contextTemplateOptionGate(
 		// Every language this slot renders, for the two callers that need the
 		// whole set: selection, which must accept a row in any of them, and
 		// creation, which must refuse one outside them.
-		engines,
+		acceptedEngines: engines,
 		specId: at.specId
 	}
 }
@@ -241,7 +241,7 @@ export async function promptOptionGate(
  * Two surfaces mean two different things by "change this", and conflating them
  * is what made the builder's configuration selector decorative: every edit
  * went to `pipeline_node_overrides` at **instance** scope, and instance
- * outranks `preset` in the scope chain — so the value followed you across
+ * outranked the config (then spelled `preset`) in the scope chain — so the value followed you across
  * every configuration you switched to, and duplicating one to change a single
  * setting changed it everywhere instead.
  *
@@ -376,6 +376,33 @@ export async function writeOption(
 			decl.nodeKey,
 			decl.slot,
 			value
+		)
+	}
+
+	// A context template is checked the same way, and one step further: against
+	// the typed scope of THIS step (typed templates P5, owner Q6). A template
+	// naming something nothing here supplies is refused with the name, the
+	// nearest one that exists and what does — rather than stored, shown as
+	// selected, and rendered as blanks. Warnings, and a step whose upstream
+	// declares no types, never refuse.
+	if (
+		decl.control === "context-template-ref" &&
+		typeof value === "number" &&
+		decl.nodeDefinitionId
+	) {
+		const { assertSelectable } = await import(
+			"$lib/server/pipelines/entities/contextTemplates"
+		)
+		await assertSelectable(
+			db,
+			decl.nodeDefinitionId,
+			value,
+			acceptedEnginesOf(decl),
+			{
+				specVersionId: at.specVersionId,
+				nodeKey: decl.nodeKey,
+				slot: decl.slot
+			}
 		)
 	}
 

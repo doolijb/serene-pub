@@ -23,7 +23,7 @@ import {
 } from "./contextConfigCards"
 
 const unrecognized = (template: string) =>
-	lintContextTemplate(parseContextTemplate(template).cards).filter((i) =>
+	lintContextTemplate(template).filter((i) =>
 		/isn't a recognized field/.test(i.message)
 	)
 
@@ -256,10 +256,13 @@ describe("path lint", () => {
 		)
 	})
 
-	test("a subexpression is left alone rather than guessed at", () => {
-		expect(
-			messages("{{#if (and characters somethingElse)}}x{{/if}}")
-		).toEqual([])
+	// Typed templates P4: the SDK checker reads a subexpression with the real
+	// parser, so its arguments are checked rather than skipped — the old
+	// regex lint could not tell `and` (a helper) from an argument there.
+	test("a subexpression's arguments are checked, its helper is not", () => {
+		const m = messages("{{#if (and characters somethingElse)}}x{{/if}}")
+		expect(m.length).toBe(1)
+		expect(m[0]).toMatch(/"somethingElse" isn't a recognized field/)
 	})
 
 	test("what the declaration cannot describe stays unchecked", () => {
@@ -298,9 +301,7 @@ describe("the shipped templates lint clean", () => {
 			"$lib/server/pipelines/entities/contextTemplateDefaults"
 		)
 		expect(
-			lintContextTemplate(
-				parseContextTemplate(SHIPPED_CONTEXT_TEMPLATE).cards
-			).map((i) => i.message)
+			lintContextTemplate(SHIPPED_CONTEXT_TEMPLATE).map((i) => i.message)
 		).toEqual([])
 	})
 

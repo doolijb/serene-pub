@@ -17,7 +17,13 @@
  * breakpoint source to drift. The header only reads those and calls `toggle`.
  */
 
-export type MobileSide = "left" | "right"
+/**
+ * Which sheet the panels menu opens. `middle` exists for free placement (brief
+ * 7a, QE): when the conversation sits in a side, the phone draws it as the
+ * stage and the MIDDLE's widgets are reached the way a side's are — listed in
+ * the menu, opened as a sheet.
+ */
+export type MobileSide = "left" | "right" | "middle"
 
 /**
  * One entry in the panels menu (ruled 2026-09-10). The two per-side buttons
@@ -46,6 +52,11 @@ export interface MobileSidesSnapshot {
 	/** How many widgets the left / right side zones would actually render. */
 	left: number
 	right: number
+	/**
+	 * How many middle widgets the menu lists — non-zero only while the phone
+	 * draws a side's conversation as the stage (QE). Absent = 0.
+	 */
+	middle?: number
 	/** Which side's overlay is showing. */
 	open: MobileSide | null
 }
@@ -69,20 +80,23 @@ export function nextOpen(
  */
 export function resolveOpen(s: MobileSidesSnapshot): MobileSide | null {
 	if (!s.narrow || !s.open) return null
-	return (s.open === "left" ? s.left : s.right) > 0 ? s.open : null
+	const n =
+		s.open === "left" ? s.left : s.open === "right" ? s.right : (s.middle ?? 0)
+	return n > 0 ? s.open : null
 }
 
 /** Does the header show the panels button at all? Nothing populated, no button. */
 export function showsToggles(
-	s: Pick<MobileSidesSnapshot, "narrow" | "left" | "right">
+	s: Pick<MobileSidesSnapshot, "narrow" | "left" | "right" | "middle">
 ): boolean {
-	return s.narrow && (s.left > 0 || s.right > 0)
+	return s.narrow && (s.left > 0 || s.right > 0 || (s.middle ?? 0) > 0)
 }
 
 class MobileSidePanels {
 	narrow = $state(false)
 	left = $state(0)
 	right = $state(0)
+	middle = $state(0)
 	open = $state<MobileSide | null>(null)
 
 	/** The side groups, published by SessionLayout for the panels menu. */
@@ -168,10 +182,11 @@ class MobileSidePanels {
 	 * deliberately does NOT move focus: a resize or a widget being deactivated
 	 * is not the user asking to go back to a button.
 	 */
-	setSides(narrow: boolean, left: number, right: number) {
+	setSides(narrow: boolean, left: number, right: number, middle = 0) {
 		this.narrow = narrow
 		this.left = left
 		this.right = right
+		this.middle = middle
 		const next = resolveOpen(this)
 		if (next !== this.open) {
 			this.open = next

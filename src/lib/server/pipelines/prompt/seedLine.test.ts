@@ -22,7 +22,7 @@ import { SEED_MESSAGE_ID } from "$lib/server/pipelines/prompt/messages"
 const names = {
 	characterName: "Verity",
 	speakerName: "The shopkeeper",
-	narratorName: "The GM"
+	ownVoiceName: "The GM"
 }
 
 describe("the voice a channel declares", () => {
@@ -76,7 +76,7 @@ describe("the fallbacks the character path already had", () => {
 		expect(
 			resolveSeedLine({
 				characterName: null,
-				narratorName: "The GM"
+				ownVoiceName: "The GM"
 			}).name
 		).toBe("The GM")
 		expect(resolveSeedLine({ characterName: null }).name).toBe("Narrator")
@@ -96,8 +96,7 @@ describe("both halves, read by the two nodes that read them", () => {
 	const cast = {
 		sessionCharacters: [
 			{
-				isActive: true,
-				visibility: "visible",
+				enabled: true,
 				character: { id: 1, name: "Verity", description: "A writer." }
 			}
 		],
@@ -131,5 +130,63 @@ describe("both halves, read by the two nodes that read them", () => {
 
 	it("writes no line at all for a channel with no voice", () => {
 		expect(seedOf("none")).toBeUndefined()
+	})
+})
+
+/**
+ * The pipeline's own voice, named (lair re-plan R5): a turn nobody speaks
+ * seeds under the genre's fallback envoy — the Lair's Castellan — before the
+ * prompt's narrator name, by the one rule (`ownVoiceName`) the page and the
+ * transcript read too.
+ */
+describe("the own voice's name (R5)", () => {
+	const base = {
+		sessionCharacters: [
+			{
+				enabled: true,
+				character: { id: 1, name: "Brannoc", description: "A delver." }
+			}
+		],
+		sessionPersonas: [],
+		promptConfig: {},
+		// A narrator turn: nobody in the cast is speaking.
+		currentCharacterId: null,
+		narratorName: "Narrator"
+	}
+	const steward = { slug: "steward", name: { en: "Steward" }, fallback: true }
+
+	it("a genre that declares a fallback envoy seeds under it, seated or only declared", () => {
+		expect(
+			resolveContextInput({ ...base, declaredEnvoys: [steward] } as any).seedName
+		).toBe("Steward")
+		expect(
+			resolveContextInput({ ...base, envoys: [steward] } as any).seedName
+		).toBe("Steward")
+		// A narrator-voice channel too, whoever is seated.
+		expect(
+			resolveContextInput({
+				...base,
+				currentCharacterId: 1,
+				turnChannelVoice: "narrator",
+				declaredEnvoys: [steward]
+			} as any).seedName
+		).toBe("Steward")
+	})
+
+	it("a genre without one keeps the narrator name, and a speaker keeps theirs", () => {
+		expect(resolveContextInput(base as any).seedName).toBe("Narrator")
+		expect(
+			resolveContextInput({
+				...base,
+				declaredEnvoys: [{ ...steward, fallback: false }]
+			} as any).seedName
+		).toBe("Narrator")
+		expect(
+			resolveContextInput({
+				...base,
+				currentCharacterId: 1,
+				declaredEnvoys: [steward]
+			} as any).seedName
+		).toBe("Brannoc")
 	})
 })

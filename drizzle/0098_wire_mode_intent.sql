@@ -1,7 +1,7 @@
 -- Wire mode becomes a capability: carry the old flags' INTENT across.
 --
 -- "Does this endpoint want chat or completions" used to be answered by
--- adapter-local flags — `extra_json.useSession` on KoboldCPP, KoboldCPP Managed,
+-- adapter-local flags — `extra_json.useChat` on KoboldCPP, KoboldCPP Managed,
 -- Ollama and LM Studio, `extra_json.prerenderPrompt` on the OpenAI-compatible
 -- adapter, and an unconditional true inside AnthropicAdapter. Those are gone: it
 -- is a connection capability now (`wire_chat` / `wire_completion`), graded
@@ -12,7 +12,7 @@
 -- Every default lands on chat, which is what all five of those flags already
 -- defaulted to — so nothing changes for a connection that never touched them.
 -- What this file exists for is the connection that DID: somebody who switched
--- Session Mode off, or Prerender Prompt on, chose text completion deliberately,
+-- Chat Mode off, or Prerender Prompt on, chose text completion deliberately,
 -- and dropping the flag without moving that choice would silently flip them to
 -- the other method on their next generation. On the send path, silently.
 --
@@ -38,8 +38,8 @@
 --
 -- ── What is deliberately NOT translated ─────────────────────────────────────
 --
--- An ABSENT `useSession` key on an Ollama connection. That adapter read the same
--- setting with two different defaults in one file — `!!extraJson?.useSession` at
+-- An ABSENT `useChat` key on an Ollama connection. That adapter read the same
+-- setting with two different defaults in one file — `!!extraJson?.useChat` at
 -- the build and `?? true` at the send — and its own comment names that a bug:
 -- a connection with no key had a completion prompt built and a chat request
 -- sent, with `messages: undefined`. Absence there is an accident of two
@@ -61,7 +61,7 @@ WHERE
 	-- ⚠ `->` and a jsonb literal, NOT `->>` and a string. `->>` extracts the
 	-- value as TEXT, so it cannot tell the boolean `false` from the string
 	-- `"false"` — and under the old code those two meant opposite things:
-	-- `extraJson?.useSession ?? true` reads a non-empty string as TRUTHY, so a
+	-- `extraJson?.useChat ?? true` reads a non-empty string as TRUTHY, so a
 	-- `"false"` connection was in chat mode and would have been flipped to
 	-- completion by the loose match. Comparing the jsonb VALUE matches exactly
 	-- what the connection forms and `connectionDefaults.ts` ever wrote.
@@ -69,7 +69,7 @@ WHERE
 	-- Anything else in these keys is left alone and lands on chat, which is what
 	-- it already did: no shipped code path wrote a non-boolean here, and a
 	-- migration guessing at one would be guessing on the send path.
-	("extra_json"::jsonb -> 'useSession') = 'false'::jsonb
+	("extra_json"::jsonb -> 'useChat') = 'false'::jsonb
 	-- The OpenAI-compatible adapter's own spelling of the same choice. Its read
 	-- was a plain truthiness test rather than a `??`, so the boolean is likewise
 	-- the whole of what it was ever given.

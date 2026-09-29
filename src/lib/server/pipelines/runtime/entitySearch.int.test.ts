@@ -41,6 +41,8 @@ import { buildWorld } from "$lib/server/pipelines/config/world"
 import { bootstrapPipelines } from "$lib/server/pipelines/boot/bootstrap"
 import { EXTRACTOR_VERSION } from "$lib/server/pipelines/ranking/entities"
 import { respondSpec, RESPOND_SPEC_ID } from "$lib/server/pipelines/specs"
+import { CORE_TEMPLATE_ENGINE } from "$lib/server/pipelines/prompt/renderers"
+import { SHIPPED_CONTEXT_TEMPLATE } from "$lib/server/pipelines/entities/contextTemplateDefaults"
 
 // No embedding model, deliberately: this mechanism's whole claim is that it needs
 // none (design §11, §13.5).
@@ -345,6 +347,44 @@ describe("a stored cap reaches the mechanism, and the mechanism reaches the prom
 		expect(on.diagnostics.extractorVersion).toBe(EXTRACTOR_VERSION)
 	})
 
+	it("never offers an entry that is switched off or archived (finding #148)", async () => {
+		await setParam("maxEntries", 5)
+		// Both name what the scene names — the same fragment the live entry is
+		// found by — so only the Off/archived rule can keep them out.
+		const shelved = await db
+			.insert(schema.lorebookEntries)
+			.values(
+				worldLoreValues([
+					{
+						lorebookId,
+						name: "The Ashguard Barracks",
+						keys: "",
+						content: "Where the ashguard slept, before the fire.",
+						enabled: false
+					},
+					{
+						lorebookId,
+						name: "The Ashguard Charter",
+						keys: "",
+						content: "The ashguard's founding charter, long superseded.",
+						archived: true
+					}
+				])
+			)
+			.returning({ id: schema.lorebookEntries.id })
+		try {
+			const on = await turn()
+			const ids = on.hits.map((c) => c.id)
+			expect(ids).toContain(ashguardId)
+			for (const row of shelved) expect(ids).not.toContain(row.id)
+		} finally {
+			for (const row of shelved)
+				await db
+					.delete(schema.lorebookEntries)
+					.where(eq(schema.lorebookEntries.id, row.id))
+		}
+	})
+
 	it("reaches the ranker, and does not displace what the keyword mechanism found", async () => {
 		const on = await turn()
 		// ⚠ Concatenated **last**, so an entry both mechanisms found keeps the
@@ -481,9 +521,26 @@ describe("the transcript half", () => {
 		)
 
 		const on = await turn()
-		expect(on.messages.map((c) => c.id)).toContain(oldMessageId)
-		for (const candidate of on.messages)
-			expect(candidate.source).toBe("messages")
+		// The declared band's intent first, then the lines in that band
+		// (2026-09-27) — never the transcript's `messages` band.
+		const [intent, ...lines] = on.messages
+		expect(intent).toEqual({
+			band: "recalledLines",
+			intent: { share: 0.1667, maxEntries: 5 }
+		})
+		expect(lines.map((c) => c.id)).toContain(oldMessageId)
+		for (const candidate of lines) {
+			expect(candidate.source).toBe("recalledLines")
+			// Named by the transcript's own chain, and placed in its channel.
+			expect(typeof candidate.payload.name).toBe("string")
+			expect(candidate.payload.turn).toBeGreaterThan(0)
+		}
+		const old = lines.find((c) => c.id === oldMessageId)
+		expect(old.payload).toMatchObject({
+			name: "User",
+			turn: 1,
+			content: "The ashguard turned us back at the third milestone."
+		})
 	})
 
 	it("keeps retrieved transcript out of the ranker", async () => {
@@ -499,7 +556,130 @@ describe("the transcript half", () => {
 		await settleAnnotationQueue()
 		const on = await turn()
 		expect(on.messages.length).toBeGreaterThan(0)
-		expect(on.loreIds.some((id) => id.startsWith("messages:"))).toBe(false)
+		expect(
+			on.loreIds.some(
+				(id) => id.startsWith("messages:") || id.startsWith("recalledLines:")
+			)
+		).toBe(false)
+	})
+
+	/**
+	 * **A spec that wires it, and a template that places it** (owner ruling
+	 * 2026-09-27, option b). The shipped reply spec with one edge added —
+	 * entity-search's `messages` into `lore` — and the world a published spec
+	 * like that would resolve: the `recalledLines` key on Assemble's
+	 * variables slot (the band reaches it, `bandPorts`) and a context
+	 * template that writes `{{{recalledLines}}}`. Not shipped anywhere.
+	 */
+	const wiredTurn = async (template: string) => {
+		const base = respondSpec() as any
+		const lore = base.nodes.find((n: any) => n.key === LORE_NODE)
+		const at = lore.config.sources.length
+		const doc = {
+			...base,
+			nodes: base.nodes.map((n: any) =>
+				n.key === LORE_NODE
+					? {
+							...n,
+							config: {
+								...n.config,
+								sources: [
+									...n.config.sources,
+									{ __ref: "data", node: ENTITY_LANE, port: "messages" }
+								]
+							}
+						}
+					: n
+			),
+			edges: [
+				...base.edges,
+				{
+					from: ENTITY_LANE,
+					fromPort: "messages",
+					to: LORE_NODE,
+					toPort: `sources.${at}`,
+					shape: "core:shape/context-candidates@1",
+					streaming: false
+				}
+			]
+		}
+		const world = await buildWorld(db, { sessionId, specId: RESPOND_SPEC_ID })
+		world.overrides.push(
+			{
+				nodeKey: "prompt",
+				slot: "template",
+				path: "source",
+				value: template,
+				// Session, the scope that wins: the stored config selects the
+				// shipped template by reference at `config`.
+				scopeKind: "session"
+			} as any,
+			{
+				nodeKey: "prompt",
+				slot: "template",
+				path: "engine",
+				value: CORE_TEMPLATE_ENGINE,
+				scopeKind: "session"
+			} as any,
+			{
+				nodeKey: "prompt",
+				slot: "variables",
+				path: "recalledLines",
+				value: { engine: CORE_TEMPLATE_ENGINE },
+				scopeKind: "session"
+			} as any
+		)
+		const receipt: any = await run(doc, {
+			input: {
+				text: "Well met. And you. Have you seen the ashguard?",
+				sessionId,
+				characterId: null,
+				sessionScope: { sessionId, currentCharacterId: null }
+			},
+			seed: "seed:entities-wired",
+			bindings: coreBindings(),
+			world,
+			host: createHost(db, { sessionId, userId }),
+			preview: true,
+			compactHaltReceipts: false
+		} as any)
+		const prompt = (receipt.nodes as any[]).find((n) => n.nodeKey === "prompt")
+		const out = receipt?.preview?.context?.rendered
+		return {
+			// The prompt text alone — the allocation beside it carries every
+			// line's content whether or not the template placed it.
+			rendered: String(out?.rendered ?? JSON.stringify(out?.messages ?? null)),
+			notes: [...(out?.notes ?? []), ...(prompt?.notes ?? [])] as string[],
+			decisions: ((
+				(receipt.nodes as any[]).find((n) => n.nodeKey === "rank")?.output
+					?.decisions ?? []
+			) as any[]).filter((d) => d.candidate.source === "recalledLines")
+		}
+	}
+
+	it("a spec wiring it into rank, with a template placing {{{recalledLines}}}, renders the lines", async () => {
+		const { settleAnnotationQueue } = await import(
+			"$lib/server/annotations/queue"
+		)
+		await settleAnnotationQueue()
+		const wired = await wiredTurn(
+			"Earlier in this conversation:\n{{{recalledLines}}}"
+		)
+		expect(wired.decisions.some((d) => d.included)).toBe(true)
+		expect(wired.rendered).toContain(
+			"Earlier (turn 1) — User: The ashguard turned us back at the third milestone."
+		)
+		expect(wired.notes.join("\n")).not.toMatch(/recalledLines/)
+	})
+
+	it("wired but unplaced, the receipt names the band and the fix", async () => {
+		const wired = await wiredTurn(SHIPPED_CONTEXT_TEMPLATE)
+		expect(wired.decisions.some((d) => d.included)).toBe(true)
+		expect(wired.rendered).not.toContain("third milestone")
+		expect(wired.notes).toContain(
+			"band 'recalledLines' was ranked and included but the template does " +
+				"not render it — place it with {{{recalledLines}}}"
+		)
 	})
 
 	it("refuses a message whose text moved under its annotation", async () => {

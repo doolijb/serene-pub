@@ -19,7 +19,7 @@
 	/**
 	 * ⚠ `enableThinking` is gone from this form (ruling 2026-09-12), the same
 	 * way it left `KoboldCppForm`: reasoning is a SAMPLING parameter now,
-	 * chosen per stage on the sampling config. The managed adapter extends the
+	 * chosen per step on the sampling config. The managed adapter extends the
 	 * plain one, so the read it depended on is gone too. Stale keys in an
 	 * existing row's `extraJson` are read by nothing and cost nothing.
 	 */
@@ -184,15 +184,16 @@
 				class="text-warning-700-300 mt-0.5 shrink-0"
 			/>
 			<p class="text-warning-700-300 text-sm">
-				This is a Managed KoboldCPP connection. KoboldCPP Manager must
-				be enabled in Settings to use this connection.
+				This connection is KoboldCPP, run by Serene Pub, which is turned
+				off. Turn it on from Connections → Add → KoboldCPP, run by Serene
+				Pub to use this connection.
 			</p>
 		</div>
 	{/if}
 
 	<!-- No model picker and no Refresh here: the managed process's ggufs are
 	     synced into this connection's models on their own, and downloaded or
-	     removed in the KoboldCPP Manager. -->
+	     removed in the managed connection view. -->
 
 	{#if showFormat}
 		<Select
@@ -214,13 +215,13 @@
 		>
 			Request settings
 		</summary>
-		<p class="text-muted-foreground mt-2 text-xs">
-			Base URL is managed by KoboldCPP Manager's configured address and
-			isn't set per-connection.
+		<p class="text-surface-600-400 mt-2 text-xs">
+			Base URL is the address Serene Pub runs KoboldCPP at, and isn't
+			set per-connection.
 		</p>
 		{#if koboldCppFields}
 			<section class="w-full space-y-4 pt-4">
-				<!-- "Use Session Mode" lived here. It is a CAPABILITY now —
+				<!-- "Use Chat Mode" lived here. It is a CAPABILITY now —
 				     Chat messages / Text completion, in the Capabilities panel
 				     below, graded through the same four layers as everything
 				     else and with a hand-set value outranking every later test.
@@ -270,7 +271,7 @@
 							placeholder="Text to forcefully append to the beginning of prompts"
 							class="textarea h-20"
 						></textarea>
-						<p class="text-muted-foreground text-xs">
+						<p class="text-surface-600-400 text-xs">
 							This text is forcefully appended to the beginning of
 							any prompt
 						</p>
@@ -380,7 +381,7 @@
 					<Switch.HiddenInput />
 				</Switch>
 				<hr class="border-surface-300-700" />
-				<p class="text-muted-foreground text-xs">
+				<p class="text-surface-600-400 text-xs">
 					Managed mode launch settings — applied the next time this
 					model is loaded.
 				</p>
@@ -395,7 +396,7 @@
 						bind:value={koboldCppFields.managedConfig.gpuLayers}
 						class="input"
 					/>
-					<p class="text-muted-foreground text-xs">
+					<p class="text-surface-600-400 text-xs">
 						-1 = autofit as many layers as fit on GPU, 0 = CPU only
 					</p>
 				</div>

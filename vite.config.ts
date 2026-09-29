@@ -1,9 +1,10 @@
 import tailwindcss from "@tailwindcss/vite"
 import { sveltekit } from "@sveltejs/kit/vite"
-import { defineConfig } from "vite"
+import { defineConfig, normalizePath } from "vite"
 import pkg from "./package.json"
 import banner from "vite-plugin-banner"
 import path from "node:path"
+import { fileURLToPath } from "node:url"
 import {
 	buildDocs,
 	DOC_ASSETS_DIR,
@@ -12,6 +13,7 @@ import {
 	GUIDES_DIR
 } from "./scripts/build-docs.js"
 import { createSingleFlight } from "./scripts/singleFlight.js"
+import { keepViteClientOutOfUiWorker } from "./scripts/viteClientOutOfUiWorker.js"
 
 /**
  * Hand Vite's own HTTP server to the app so Socket.IO can attach to it.
@@ -156,6 +158,15 @@ export default defineConfig({
 		sveltekit(),
 		serenePubSocketServer(),
 		serenePubDocs(),
+		// Dev only: the UI worker's CSP (`connect-src 'none'`) would block Vite's
+		// HMR socket, which import analysis pulls in for one query helper.
+		keepViteClientOutOfUiWorker(
+			normalizePath(
+				fileURLToPath(
+					new URL("./src/lib/client/components/host/uiWorker.ts", import.meta.url)
+				)
+			)
+		),
 		banner(
 			`/**\n * name: ${pkg.name}\n * version: v${pkg.version}\n * description: ${pkg.description}\n * author: ${JSON.stringify(pkg.author)}\n * homepage: ${pkg.homepage}\n */`
 		)
@@ -194,7 +205,25 @@ export default defineConfig({
 			.filter((h) => h && h !== "*")
 	},
 	resolve: {
-		extensions: [".mjs", ".js", ".ts", ".jsx", ".tsx", ".json", ".svelte"]
+		extensions: [".mjs", ".js", ".ts", ".jsx", ".tsx", ".json", ".svelte"],
+		/**
+		 * The SDK's template checker (`@serene-pub/sdk/template-check`) parses
+		 * with `handlebars` and `liquidjs`. The SDK is a `file:` link, so a bare
+		 * import in it would resolve against the SDK's own node_modules and put
+		 * a SECOND copy of each engine in every bundle that lints a template.
+		 * Resolve both from the app, the copy the renderers already use.
+		 */
+		dedupe: ["handlebars", "liquidjs", "@remote-dom/core"]
+	},
+	/**
+	 * The UI worker's runtime (`@serene-pub/component-client`, a `file:` link)
+	 * imports these. A linked package is served as source, so Vite only meets
+	 * them when a session first mounts a widget — it then optimises them and
+	 * force-reloads the page mid-render. Pre-bundle them at startup instead.
+	 * Dev only; a production build has no optimiser.
+	 */
+	optimizeDeps: {
+		include: ["@remote-dom/core/polyfill", "@remote-dom/core/elements"]
 	},
 	build: {
 		rollupOptions: {

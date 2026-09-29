@@ -165,4 +165,125 @@ describe("projectLegacy", () => {
 			JSON.stringify(projectLegacy(row))
 		)
 	})
+
+	/* ── folded sections (B4, D5 2026-09-27) ─────────────────────────── */
+
+	const plan = {
+		kind: "plan",
+		label: "Plan",
+		items: ["Wren — draws her blade", "The goblin — flees"]
+	}
+	const note = { kind: "notes", label: "Step notes", content: "Low light." }
+
+	it("a row's folded sections become core:section parts above thinking and body", () => {
+		const p = project({
+			metadata: { thinking: "weigh it", sections: [plan, note] }
+		})
+		expect(p.parts).toEqual([
+			{
+				step: 0,
+				revision: 0,
+				ordinal: 1,
+				type: "core:section",
+				content: "- Wren — draws her blade\n- The goblin — flees",
+				data: {
+					title: "Plan",
+					kind: "plan",
+					items: ["Wren — draws her blade", "The goblin — flees"]
+				}
+			},
+			{
+				step: 0,
+				revision: 0,
+				ordinal: 2,
+				type: "core:section",
+				content: "Low light.",
+				data: { title: "Step notes", kind: "notes" }
+			},
+			{
+				step: 0,
+				revision: 0,
+				ordinal: 3,
+				type: "core:thinking",
+				content: "weigh it",
+				data: null
+			},
+			{
+				step: 0,
+				revision: 0,
+				ordinal: 4,
+				type: "core:markdown",
+				content: "Ash tilts her head.",
+				data: null
+			}
+		])
+		// Folded sections never enter the default projection — the body only.
+		expect(textOf(asMessage(p))).toBe("Ash tilts her head.")
+	})
+
+	it("each swipe keeps its own sections, parallel to history", () => {
+		const p = project({
+			content: "second",
+			metadata: {
+				sections: [note],
+				swipes: {
+					currentIdx: 1,
+					history: ["first", "second", "third"],
+					sectionsHistory: [null, [plan]]
+				}
+			}
+		})
+		const sections = p.parts.filter((x) => x.type === "core:section")
+		expect(sections.map((x) => [x.revision, (x.data as any).title])).toEqual([
+			[1, "Plan"]
+		])
+		// A revision with sections lays its body out after them; one without
+		// keeps the fixed slot.
+		expect(
+			p.parts
+				.filter((x) => x.type === "core:markdown")
+				.map((x) => [x.revision, x.ordinal])
+		).toEqual([
+			[0, 2],
+			[1, 3],
+			[2, 2]
+		])
+		expect(textOf(asMessage(p))).toBe("second")
+	})
+
+	it("before any history is kept, slot 0 holds the row's own sections", () => {
+		const p = project({
+			content: "first",
+			metadata: {
+				sections: [note],
+				swipes: { currentIdx: 0, history: ["first", "second"] }
+			}
+		})
+		expect(
+			p.parts
+				.filter((x) => x.type === "core:section")
+				.map((x) => [x.revision, (x.data as any).title])
+		).toEqual([[0, "Step notes"]])
+	})
+
+	it("instructions stay at 0 and sections follow them", () => {
+		const p = project({
+			isNarratorResponse: true,
+			metadata: { narratorInstructions: "Focus.", sections: [plan] }
+		})
+		expect(p.parts.map((x) => [x.ordinal, x.type])).toEqual([
+			[0, "core:section"],
+			[1, "core:section"],
+			[3, "core:markdown"]
+		])
+		expect((p.parts[1]!.data as any).kind).toBe("plan")
+	})
+
+	it("a row with no sections projects exactly as before (existing rows unchanged)", () => {
+		const p = project({ metadata: { thinking: "t", sections: [] } })
+		expect(p.parts.map((x) => [x.ordinal, x.type])).toEqual([
+			[1, "core:thinking"],
+			[2, "core:markdown"]
+		])
+	})
 })

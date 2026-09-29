@@ -20,6 +20,7 @@ import { describe, it, expect, beforeAll, vi } from "vitest"
 import { and, eq } from "drizzle-orm"
 import { createTestDb, type TestDb } from "$lib/server/utils/testDb"
 import * as schema from "$lib/server/db/schema"
+import type { NodeSwap } from "@serene-pub/sdk"
 
 class FakeAdapter {
 	injected: any
@@ -148,7 +149,6 @@ beforeAll(async () => {
 		sessionId,
 		characterId,
 		isActive: true,
-		visibility: "visible"
 	})
 	await db
 		.insert(schema.sessionPersonas)
@@ -189,12 +189,12 @@ beforeAll(async () => {
 			status: "published",
 			canonicalHash: "test-dramatic-narrate",
 			contributes: {
-				triggers: [
+				actions: [
 					{
+						key: "narrate",
 						genre: STANDARD,
-						function: "narrate",
-						kind: "button",
-						i18n: { en: "Dramatize" }
+						venue: [],
+						label: { en: "Dramatize" }
 					}
 				]
 			}
@@ -419,14 +419,20 @@ describe("the session-scope rebind (PLAN-turn-order §4.7, R28, R29)", () => {
 		const { loadPublished } = await import(
 			"$lib/server/pipelines/boot/bootstrap"
 		)
+		const swaps: Record<string, NodeSwap> = {}
 		const doc = await applyNodeRebinds(
 			db,
 			await loadPublished(db, TURN_ORDER),
-			{ specSlug: TURN_ORDER, sessionId }
+			{ specSlug: TURN_ORDER, sessionId, swaps }
 		)
 		expect(
 			(doc.nodes as any[]).find((n) => n.key === STRATEGY).definitionId
 		).toBe("core:task/turn-user-split")
+		// The swap is reported for the receipt (F2): the pin it replaced, and
+		// that it was the session's choice. Only the swapped node is named.
+		expect(swaps).toEqual({
+			[STRATEGY]: { pin: "core:task/turn-round-robin@1", by: "session" }
+		})
 	})
 
 	it("offers the pin first, then the node's declared swaps, read off the registry", async () => {
@@ -714,13 +720,15 @@ describe("the session-scope rebind (PLAN-turn-order §4.7, R28, R29)", () => {
 			definitionId: null
 		})
 		expect(cleared.error).toBeUndefined()
+		const swaps: Record<string, NodeSwap> = {}
 		const doc = await applyNodeRebinds(
 			db,
 			await loadPublished(db, TURN_ORDER),
-			{ specSlug: TURN_ORDER, sessionId }
+			{ specSlug: TURN_ORDER, sessionId, swaps }
 		)
 		expect(
 			(doc.nodes as any[]).find((n) => n.key === STRATEGY).definitionId
 		).toBe("core:task/turn-round-robin")
+		expect(swaps, "the pin ran, so nothing is reported as a swap").toEqual({})
 	})
 })

@@ -41,8 +41,9 @@
 	const connectionId = $derived(Number(page.params.id))
 	let userCtx: UserCtx = getContext("userCtx")
 
-	// Both Manager-owned types are left out for the same reason the create form
-	// leaves them out: they are made from the KoboldCPP Manager page.
+	// Both managed KoboldCPP types are left out for the same reason the create
+	// form leaves them out: they are made from the page of KoboldCPP, run by
+	// Serene Pub (/document-view/koboldcpp).
 	const typeOptions = CONNECTION_TYPE.options.filter(
 		(o) => !isKoboldCppManagedType(o.value)
 	)
@@ -372,10 +373,10 @@
 </script>
 
 <svelte:head>
-	<title>Edit Connection — Document View — Serene Pub</title>
+	<title>Edit connection — Document View — Serene Pub</title>
 </svelte:head>
 
-<h1>Edit Connection</h1>
+<h1>Edit connection</h1>
 <p><a href="/document-view/connections">Back to Connections</a></p>
 
 {#if !userCtx.user?.isAdmin}
@@ -399,7 +400,7 @@
 
 	<form onsubmit={submit}>
 		<div class="a11y-field">
-			<label for="a11y-conn-name">Connection Name</label>
+			<label for="a11y-conn-name">Connection name</label>
 			<input
 				id="a11y-conn-name"
 				type="text"
@@ -427,7 +428,7 @@
 		     design systems, which this page already refuses to do for the
 		     capability rows below. -->
 		<div class="a11y-field">
-			<label for="a11y-conn-type">Service Type</label>
+			<label for="a11y-conn-type">Service type</label>
 			<select id="a11y-conn-type" bind:value={type} disabled={saving}>
 				{#each typeOptions as opt}
 					<option value={opt.value}>{opt.label}</option>
@@ -498,7 +499,7 @@
 				onclick={testConnection}
 				disabled={saving || testing}
 			>
-				{testing ? "Testing…" : "Test Connection"}
+				{testing ? "Testing…" : "Test connection"}
 			</button>
 		</div>
 		{#if testResult}
@@ -517,7 +518,7 @@
 		     declares. -->
 		{#if showFormat}
 			<div class="a11y-field">
-				<label for="a11y-conn-prompt-format">Prompt Format</label>
+				<label for="a11y-conn-prompt-format">Prompt format</label>
 				<select
 					id="a11y-conn-prompt-format"
 					bind:value={promptFormat}
@@ -531,7 +532,7 @@
 		{/if}
 
 		<div class="a11y-field">
-			<label for="a11y-conn-token-counter">Token Counter</label>
+			<label for="a11y-conn-token-counter">Token counter</label>
 			<select
 				id="a11y-conn-token-counter"
 				bind:value={tokenCounter}
@@ -566,7 +567,7 @@
 		</p>
 
 		<button type="submit" class="a11y-btn" disabled={saving}>
-			{saving ? "Saving…" : "Save Changes"}
+			{saving ? "Saving…" : "Save changes"}
 		</button>
 		<button
 			type="button"
@@ -574,12 +575,12 @@
 			onclick={deleteConnection}
 			disabled={deleting}
 		>
-			{deleting ? "Deleting…" : "Delete Connection"}
+			{deleting ? "Deleting…" : "Delete connection"}
 		</button>
 	</form>
 
 	<!-- Outside the form on purpose: each switch saves itself the moment it is
-	     chosen, over its own event, and has nothing to do with Save Changes. -->
+	     chosen, over its own event, and has nothing to do with Save changes. -->
 	<section aria-labelledby="a11y-cap-heading">
 		<h2 id="a11y-cap-heading">What this connection can do</h2>
 		<p class="a11y-hint">

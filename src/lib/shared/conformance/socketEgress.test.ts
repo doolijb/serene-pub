@@ -480,6 +480,16 @@ const BARE = SITES.filter((s) => !s.redacting).map((s) => s.subject)
 const REDACTING_EMITTERS: Deliberate[] = [
 	{
 		subject:
+			"src/lib/server/sockets/utils/broadcastHelpers.ts :: emitToInterested → io.to(…).emit(<computed>)",
+		reason:
+			"The instance-wide push for a GATED event (`components:changed`): it " +
+			"walks every connected socket and emits only to those that declared " +
+			"the key. The room is that socket itself and the subject is that " +
+			"socket's own `socket.user`, so recipient and subject are the same " +
+			"person — redacted per socket, as `emitToUser` does per room."
+	},
+	{
+		subject:
 			"src/lib/server/sockets/activity.ts :: registerActivityHandlers.send → socket.emit(<computed>)",
 		reason:
 			"Hole 3, closed. The activity store's emitter — registered with " +

@@ -1,0 +1,17 @@
+{
+	"format": 2,
+	"steps": [
+		"install: the dev install lands it off and waiting for its permissions' review, and its documents answer 404 until it is switched on",
+		"review and switch on: the review grants what it declares (network:frames-gate.example) and the switch turns it on",
+		"served: its document is served under a CSP composed from its grants (sandbox allow-scripts, frame-ancestors 'self', connect-src only frames-gate.example; 'none' while the host is denied), X-Frame-Options SAMEORIGIN and nosniff",
+		"seat: seated by the session's stored layout, the panel mounts in <iframe sandbox=\"allow-scripts\"> at /plugin-ui/gate.frames/ui/probe.html, runs at an opaque origin, and boots on the port its init carries (protocol 2)",
+		"sections: it is sent actions, annex, channel, layout, locale, page, props, session, settings, style, theme, turn-order, viewer — its lane (main) and never the whole log, no scoped section and no grants; every row, pushed or paged, arrives without the host's fields the page's own copy carries (debugMeta, embedding, embeddingModel, queueItemId, userId, vectorizedAt, version)",
+		"unprompted: its own invoke of core#hide, made on load with no person in it, is refused with the host's warning, and the line stays shown",
+		"person press: a person's click in the frame lets the same invoke through: the line is hidden on the server and the frame is pushed the hidden row; pressed again, it is shown again",
+		"session-view: a session of the genre whose view it is is drawn by the frame (sandboxed, at /plugin-ui/gate.frames/ui/probe.html) in place of core's conversation, and sent its rows without the host's fields — actions, annex, locale, messages, session, theme, turn-order, viewer — nothing only a widget is sent",
+		"page: /x/gate.frames mounts its page surface full-window (sandboxed, at /plugin-ui/gate.frames/ui/probe.html), sent locale, theme — no session, no rows, no actions",
+		"disabled: panel: switched off, its documents answer 404 and the chat session no longer seats the panel",
+		"disabled: session-view: switched off, the session-view session falls back to core's conversation, with no frame",
+		"disabled: page: switched off, /x/gate.frames says the extension is not found, with no frame"
+	]
+}

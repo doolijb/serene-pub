@@ -60,10 +60,10 @@
 </script>
 
 <svelte:head>
-	<title>New User — Document View — Serene Pub</title>
+	<title>New user — Document View — Serene Pub</title>
 </svelte:head>
 
-<h1>New User</h1>
+<h1>New user</h1>
 <p><a href="/document-view/settings/users">Back to Users</a></p>
 
 {#if !userCtx.user?.isAdmin}
@@ -87,7 +87,7 @@
 			/>
 		</div>
 		<div class="a11y-field">
-			<label for="a11y-user-display-name">Display Name</label>
+			<label for="a11y-user-display-name">Display name</label>
 			<p class="a11y-hint">
 				Optional. Shown instead of the username where set.
 			</p>
@@ -119,7 +119,7 @@
 			<label for="a11y-user-is-admin">Admin</label>
 		</div>
 		<button type="submit" class="a11y-btn" disabled={saving}>
-			{saving ? "Creating…" : "Create User"}
+			{saving ? "Creating…" : "Create user"}
 		</button>
 	</form>
 {/if}

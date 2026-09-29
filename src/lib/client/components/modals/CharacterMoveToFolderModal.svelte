@@ -83,13 +83,13 @@
 							{#if row.id === null}
 								<Icons.Minus
 									size={16}
-									class="text-surface-400 shrink-0"
+									class="text-surface-600-400 shrink-0"
 									aria-hidden="true"
 								/>
 							{:else}
 								<Icons.Folder
 									size={16}
-									class="text-surface-400 shrink-0"
+									class="text-surface-600-400 shrink-0"
 									aria-hidden="true"
 								/>
 							{/if}
@@ -97,7 +97,7 @@
 								{row.name}
 							</span>
 							{#if row.count !== null}
-								<span class="text-surface-500 shrink-0 text-xs">
+								<span class="text-surface-600-400 shrink-0 text-xs">
 									{row.count}
 								</span>
 							{/if}
@@ -105,7 +105,7 @@
 					{/each}
 				</div>
 				{#if folders.length === 0}
-					<p class="text-surface-500 mt-3 text-xs">
+					<p class="text-surface-600-400 mt-3 text-xs">
 						You have no folders yet — make one from the New menu.
 					</p>
 				{/if}

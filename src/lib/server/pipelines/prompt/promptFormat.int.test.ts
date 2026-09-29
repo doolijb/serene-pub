@@ -31,7 +31,7 @@
  *
  * A prompt format is meaningful **only** in completion wire mode (NOMENCLATURE
  * §10). In chat mode the roles carry the structure: the render emits role-tagged
- * messages through `split_session` and the connection's delimiters have nothing
+ * messages through `split_chat` and the connection's delimiters have nothing
  * to wrap — not a default format, none at all. So every case below states the
  * mode by a hand-set override on the row, which is what makes the property it
  * asserts a property this connection actually has. The last describe block is
@@ -180,7 +180,6 @@ beforeAll(async () => {
 		sessionId,
 		characterId: character.id,
 		isActive: true,
-		visibility: "visible"
 	})
 	await db
 		.insert(schema.sessionPersonas)
@@ -371,7 +370,7 @@ describe("chat wire mode overrides the connection's format", () => {
 		expect(asText).not.toContain("<@role:")
 	}, 60_000)
 
-	it("reports split_session on the receipt, not the row's format", async () => {
+	it("reports split_chat on the receipt, not the row's format", async () => {
 		// The receipt names what the render USED. Stamping "chatml" on a prompt
 		// carrying no ChatML would put a reader debugging an empty reply on the
 		// wrong trail — the same lie this file's other receipt case removed.
@@ -384,11 +383,11 @@ describe("chat wire mode overrides the connection's format", () => {
 	}, 60_000)
 })
 
-describe("the split-session shape, end to end", () => {
+describe("the split-chat shape, end to end", () => {
 	/**
 	 * The reachability this change creates.
 	 *
-	 * `split_session` is the one format that produces a role ARRAY instead of a
+	 * `split_chat` is the one format that produces a role ARRAY instead of a
 	 * string, and no pipeline run could reach it before: the format never got to
 	 * the render, so `isSplit` was false on every run. Everything downstream of
 	 * it — the marker neutralisation in `PromptBlockFormatter`, the re-parse in

@@ -591,7 +591,7 @@ describe("clone", () => {
 		expect(again.completionTemplate.key).toBe("chatml-copy-2")
 	}, 60_000)
 
-	test("cloning split_session produces a FLAT template", async () => {
+	test("cloning split_chat produces a FLAT template", async () => {
 		/**
 		 * ⚠ The one row whose mode is `role_array`, and the one thing a clone
 		 * must not carry across. That template's markers are emitted by
@@ -602,7 +602,7 @@ describe("clone", () => {
 		 */
 		const h = await handlers()
 		const split = await testDb.query.completionTemplates.findFirst({
-			where: (t, { eq }) => eq(t.key, "split_session")
+			where: (t, { eq }) => eq(t.key, "split_chat")
 		})
 		expect(split!.renderMode).toBe("role_array")
 		const res: any = await h.completionTemplatesClone.handler(
@@ -650,7 +650,7 @@ describe("options", () => {
 		// appear in the control that selects it.
 		expect(values).toContain("offered-one")
 		expect(values).toContain("vicuna")
-		expect(values).not.toContain("split_session")
+		expect(values).not.toContain("split_chat")
 		expect(values).not.toContain("hidden-one")
 	}, 60_000)
 })

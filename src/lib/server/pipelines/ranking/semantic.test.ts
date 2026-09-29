@@ -31,7 +31,7 @@ const c = (id: number, over: Partial<RagCandidate> = {}): RagCandidate => ({
 })
 
 describe("the defaults are the legacy constants", () => {
-	it("carries every RagInfillEngine number unchanged", () => {
+	it("carries every 0.5 RAG path number unchanged", () => {
 		// Making a constant configurable must not change it. A default that
 		// drifted during the extraction would show up as "RAG got worse in
 		// 0.6.0" with nothing in a changelog to point at.

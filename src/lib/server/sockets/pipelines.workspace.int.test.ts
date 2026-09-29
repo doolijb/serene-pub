@@ -352,22 +352,6 @@ describe("pipelines:run — the receipt", () => {
 		expect(JSON.stringify(res.run.portrayals)).not.toContain("Ghost")
 	})
 
-	it("reads a receipt stored under the old `voices` key (⏳ pre-rename blobs)", async () => {
-		const { pipelinesRun } = await import("./pipelines")
-		await seedRun(adminId, "run-voiced-blob", {
-			voices: { "envoy:mascot": { by: "ai" } }
-		})
-		const res: any = await pipelinesRun.handler(
-			fakeSocket(adminId, true),
-			{ runId: "run-voiced-blob" } as any,
-			noop
-		)
-		expect(res.error).toBeUndefined()
-		expect(res.run.portrayals).toEqual([
-			{ ref: "envoy:mascot", name: "mascot", by: "ai" }
-		])
-	})
-
 	it("serves no portrayals for a receipt that pinned none", async () => {
 		const { pipelinesRun } = await import("./pipelines")
 		await seedRun(adminId, "run-unportrayed")

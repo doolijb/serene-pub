@@ -2,7 +2,6 @@ import { describe, expect, test } from "vitest"
 import {
 	countConnections,
 	filterConnections,
-	foldManagedImage,
 	indexTotals,
 	isCustomOpenAiPreset,
 	needsAttention,
@@ -82,7 +81,7 @@ const opts = {
 		c.type === "ollama"
 			? "Ollama"
 			: c.type === "openai"
-				? (c.preset ?? "OpenAI Session")
+				? (c.preset ?? "OpenAI Chat")
 				: "Llama.cpp"
 }
 
@@ -163,7 +162,7 @@ describe("filterConnections — search", () => {
 				1
 			])
 		expect(
-			ids(filterConnections(rows, { ...opts, query: "openai session" }))
+			ids(filterConnections(rows, { ...opts, query: "openai chat" }))
 		).toEqual([2])
 	})
 
@@ -191,26 +190,6 @@ describe("countConnections", () => {
 		expect(countConnections(rows, "attention")).toBe(2)
 		expect(countConnections(rows, "cap:text->text")).toBe(1)
 		expect(countConnections(rows, "defaults")).toBe(0)
-	})
-})
-
-describe("foldManagedImage", () => {
-	const isText = (t: string | null | undefined) => t === "koboldcpp_managed"
-	const isImage = (t: string | null | undefined) =>
-		t === "koboldcpp_managed_image"
-	const managed: IndexConnection[] = [
-		{ ...rows[2], id: 4, type: "koboldcpp_managed" },
-		{ ...rows[2], id: 5, type: "koboldcpp_managed_image" }
-	]
-
-	test("drops the image row when the text row is there", () => {
-		expect(ids(foldManagedImage(managed, isText, isImage))).toEqual([4])
-	})
-
-	test("keeps a lone image row — a connection nothing can reach is worse", () => {
-		expect(ids(foldManagedImage([managed[1]], isText, isImage))).toEqual([
-			5
-		])
 	})
 })
 

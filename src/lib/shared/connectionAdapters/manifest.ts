@@ -299,7 +299,7 @@ export const ADAPTER_MANIFEST: Record<string, AdapterManifestEntry> = {
 				 * makes that unreachable rather than merely unset — the same
 				 * asymmetry `text->image` uses two entries down.
 				 *
-				 * ⚠ This replaces `compilePrompt({useSessionFormat: true})`, which
+				 * ⚠ This replaces `compilePrompt({useChatFormat: true})`, which
 				 * was the unconditional-true that hid the defect: the pipeline
 				 * hands its payload over through `withCompiledPrompt` and never
 				 * calls `compilePrompt`'s argument path at all, so the flag was
@@ -483,11 +483,9 @@ export const ADAPTER_MANIFEST: Record<string, AdapterManifestEntry> = {
 	 * answer. Tools degrade to `emulated` rather than `none` because the grammar
 	 * path works regardless of the model.
 	 *
-	 * No `text->embedding`, though Ollama's `/api/embed` is real and this entry
-	 * used to claim it: `OllamaAdapter` implements no `embedText`, so the
-	 * capability was one nothing could deliver. It returns the day the method
-	 * lands — and `src/lib/server/embedding/` already hand-rolls the client that
-	 * would become it, which is why this is the named first follow-up.
+	 * `text->embedding` is `/api/embed`, delivered by `OllamaEmbeddingAdapter`
+	 * (the registry's `embedding` module for this type). Which of a host's
+	 * models embed is per model — `connection_models.modality`.
 	 */
 	[CONNECTION_TYPE.OLLAMA]: {
 		id: CONNECTION_TYPE.OLLAMA,
@@ -501,7 +499,7 @@ export const ADAPTER_MANIFEST: Record<string, AdapterManifestEntry> = {
 				streaming: "native",
 				// `ollama.chat()` and `ollama.generate()` — two real methods on
 				// one client, both implemented in `OllamaAdapter`, so both are
-				// declared. This replaces `extraJson.useSession`, which that file
+				// declared. This replaces `extraJson.useChat`, which that file
 				// read with two different defaults in two places (`!!x` at
 				// `compilePrompt`, `x ?? true` at the send) and documented as a
 				// bug against itself.
@@ -510,7 +508,11 @@ export const ADAPTER_MANIFEST: Record<string, AdapterManifestEntry> = {
 				// `ollama.generate()` is handed the flat prompt, open assistant
 				// block and all, so completion wire prefills. `ollama.chat()`
 				// takes messages and applies the model's own template to them.
-				continue_reply: "native"
+				continue_reply: "native",
+				// `POST /api/embed` on the same host (owner ruling 2026-09-25):
+				// one Ollama connection serves every modality the host has, so
+				// there is no separate `ollama-embeddings` type to file it under.
+				"text->embedding": "native"
 			},
 			defaults: [
 				"text->text",
@@ -520,7 +522,12 @@ export const ADAPTER_MANIFEST: Record<string, AdapterManifestEntry> = {
 				"streaming",
 				"wire_chat",
 				"wire_completion",
-				"continue_reply"
+				"continue_reply",
+				// ON, because `ollama-embeddings` had it on and its rows merge
+				// into this type — off would quietly un-embed them. On means
+				// ELIGIBLE: whether this host is the embedding lane is still the
+				// capability default's decision, made separately.
+				"text->embedding"
 			]
 		},
 		continuesIn: ["completion"]
@@ -542,12 +549,14 @@ export const ADAPTER_MANIFEST: Record<string, AdapterManifestEntry> = {
 	 * question: this points at somebody else's process, and whether that process
 	 * has an SD model loaded is per-instance, which no class can answer.
 	 *
-	 * ⚠ `text->audio`, `audio->text` and `text->embedding` are gone. The endpoint
-	 * really does report all three over `/api/extra/version` and
-	 * `capabilitiesFromFlags` really does still read them — but nothing
-	 * implements `synthesizeSpeech`, `transcribeAudio` or `embedText` anywhere in
-	 * the app, so those were three capabilities that could be switched on and
-	 * never called. The probe's answers for them are now fetched, written to the
+	 * `text->embedding` is declared again now that `KoboldCppEmbeddingAdapter`
+	 * implements `embedText` (2026-09-26).
+	 *
+	 * ⚠ `text->audio` and `audio->text` are gone. The endpoint really does
+	 * report both over `/api/extra/version` and `capabilitiesFromFlags` really
+	 * does still read them — but nothing implements `synthesizeSpeech` or
+	 * `transcribeAudio` anywhere in the app, so those were two capabilities
+	 * that could be switched on and never called. The probe's answers for them are now fetched, written to the
 	 * durable `probe.found`, and discarded by resolution: correct, and worth
 	 * knowing before it reads as a bug. Existing user overrides for them sit in
 	 * the column doing nothing until the matching action lands, at which point
@@ -560,6 +569,11 @@ export const ADAPTER_MANIFEST: Record<string, AdapterManifestEntry> = {
 				"text->text": "native",
 				"text+image->text": { unproven: true, until: "none" },
 				"text->image": { unproven: true, until: "none" },
+				// Probed, like text->image: whether an embedding model is loaded
+				// is per-instance (`/api/extra/version`'s `embeddings` flag).
+				// Which one is per MODEL — the listing names it, and the adapter
+				// refuses a response from any other (owner ruling 2026-09-26).
+				"text->embedding": { unproven: true, until: "none" },
 				grammar: "native",
 				tools: "emulated",
 				streaming: "native",
@@ -601,19 +615,15 @@ export const ADAPTER_MANIFEST: Record<string, AdapterManifestEntry> = {
 			supports: {
 				"text->text": "native",
 				"text+image->text": { unproven: true, until: "none" },
-				// No text->image, and its absence is structural rather than a default.
-				// resolveCapabilities iterates `supports` only, so a key that is not here
-				// cannot be granted by a preset, a probe or an override — which is what makes
-				// the reported bug (an LLM connection offered in the image picker)
-				// unreproducible rather than merely un-triggered. A managed text connection
-				// names a text model and cannot draw, whatever the process happens to hold.
-				// Image generation through the Manager is KOBOLDCPP_MANAGED_IMAGE.
-				//
-				// ⚠ This absence is now DEFENDED BY CI rather than by this comment.
-				// ADAPTER_REGISTRY registers no `image` thunk for this type — the entry
-				// there carries the matching note — so the derivation and the declaration
-				// agree by construction: restoring the key without a module, or adding a
-				// module without the key, fails the conformance test. Do not "restore" it.
+				// The managed KoboldCPP is ONE endpoint that chats and draws: one process,
+				// and the model manager swaps the text or image model it holds on
+				// demand. Which transforms a given MODEL serves is its
+				// `connection_models.modality`, from the listing — an SD checkpoint
+				// is `image-gen` and is refused for chat by `capabilityRefusal`,
+				// a text GGUF the other way round. ADAPTER_REGISTRY registers the
+				// matching `image` module; the conformance test holds the two in
+				// step.
+				"text->image": "native",
 				grammar: "native",
 				tools: "emulated",
 				streaming: "native",
@@ -626,6 +636,7 @@ export const ADAPTER_MANIFEST: Record<string, AdapterManifestEntry> = {
 			},
 			defaults: [
 				"text->text",
+				"text->image",
 				"grammar",
 				"tools",
 				"streaming",
@@ -657,7 +668,7 @@ export const ADAPTER_MANIFEST: Record<string, AdapterManifestEntry> = {
 				 * chat branch in `LlamaCppAdapter`, so declaring the key would
 				 * have been a key with no code behind it, which is the
 				 * `text->image` failure this whole file was written to end. The
-				 * branch exists now (`isChatWire`, the same `useSession` idiom
+				 * branch exists now (`isChatWire`, the same `useChat` idiom
 				 * `OllamaAdapter` and `KoboldCppAdapter` use), so the
 				 * declaration follows it rather than anticipating it.
 				 *
@@ -705,7 +716,7 @@ export const ADAPTER_MANIFEST: Record<string, AdapterManifestEntry> = {
 				tools: "emulated",
 				streaming: "native",
 				// `.respond()` takes messages, `.complete()` takes a prompt; the
-				// adapter branches between them. Replaces `extraJson.useSession`.
+				// adapter branches between them. Replaces `extraJson.useChat`.
 				wire_chat: "native",
 				wire_completion: "native",
 				// `.complete()` is handed the prompt string; `.respond()` is
@@ -766,7 +777,7 @@ export const ADAPTER_MANIFEST: Record<string, AdapterManifestEntry> = {
 	 * not declare can never appear, whatever any other layer says, and that
 	 * asymmetry is the structural half of stopping a managed LLM connection from
 	 * turning up in the image picker. Do not "restore" it. This type names an
-	 * image model in `connection.model` and the Manager loads it on demand, so the
+	 * image model in `connection.model` and the managed KoboldCPP loads it on demand, so the
 	 * answer is known before anything is running — which is what dissolves the
 	 * refused→never-loaded→never-probed cycle that imageCapability.ts existed to
 	 * break.

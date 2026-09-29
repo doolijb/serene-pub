@@ -2,9 +2,9 @@
  * The frame half of the widget skin (PLAN 25, ruled 2026-08-30).
  *
  * A frame widget is a widget: the host resolves ONE skin for it exactly as it
- * does for a native one (`effectiveWidgetSkin` — the pinned row, or the unsaved
+ * does for a remote one (`effectiveWidgetSkin` — the pinned row, or the unsaved
  * draft while its editor is open) and injects it. The only thing that differs
- * is where it lands. Native gets a scoped `<style>` in THIS document; a frame
+ * is where it lands. A remote gets a scoped `<style>` in THIS document; a frame
  * gets its own document's `<style>`, pushed over the port as `{ t: "style" }`.
  *
  * That difference is why this uses the store's UNSCOPED `sanitizeWidgetCss`.

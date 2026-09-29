@@ -2,7 +2,7 @@ import { expect, test, vi, describe, beforeEach } from "vitest"
 import type { TextGenResult } from "$lib/server/adapters/actions"
 
 // BaseConnectionAdapter pulls in the full promptBuilder module graph
-// (KeywordInfillEngine/RagInfillEngine/NarrativeGraphContext), which touches
+// (the 0.5 keyword and RAG paths and NarrativeGraphContext), which touches
 // $lib/server/db and $lib/server/embedding at import time — mock both
 // minimally before importing anything else, matching this repo's established
 // test convention (see src/lib/server/auth/tokens/int.test.ts).

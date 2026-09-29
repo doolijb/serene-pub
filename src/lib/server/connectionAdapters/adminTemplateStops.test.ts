@@ -179,7 +179,7 @@ const summarizerSession = () =>
  * ⚠ `wireMode` is stated, not derived, and every case below that wants the
  * completion branch says so with it.
  *
- * These used to spell it `extraJson: { useSession: false }` /
+ * These used to spell it `extraJson: { useChat: false }` /
  * `{ prerenderPrompt: true }` — adapter-local flags each adapter read for
  * itself. Wire mode is a connection CAPABILITY now, resolved from the row's four
  * layers at the point the connection is loaded (`withWireMode`) and attached to

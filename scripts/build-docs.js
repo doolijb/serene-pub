@@ -152,43 +152,77 @@ export const DOCS_IGNORED_DIRS = [
 ]
 
 /**
- * Reading order for the guides — the hand-written pages under `docs/`.
+ * Reading order for the guides — the hand-written pages under `docs/` — as
+ * **order groups** (NOMENCLATURE §27): each group is its own section of the
+ * Help nav, while the files stay flat in `docs/` so no slug or link moves.
  *
  * Every file under docs/ must appear here. This list used to live in
  * `src/lib/shared/utils/docsIndex.ts` as DOC_ORDER, where an unlisted doc got
  * `indexOf` → -1 and sorted *ahead* of "getting-started" instead of falling to
  * the end; that is how "android" and "troubleshooting" once became the first
  * two cards a new user saw. The compiler now owns ordering: a page missing from
- * this list is appended alphabetically *and* reported as a warning, so it lands
- * at the end and says so, instead of jumping the queue in silence.
+ * this list is appended alphabetically to a trailing group headed by the
+ * source's own `group` ("Using Serene Pub") *and* reported as a warning, so it
+ * lands at the end and says so, instead of jumping the queue in silence.
+ *
+ * Adding a page is one line: write `docs/<slug>.md`, then put `"<slug>"` in
+ * the group it belongs to, at the place a reader should meet it. A slug listed
+ * here with no file yet only warns; a group none of whose pages exist yet is
+ * left out of the nav. Moving a page between groups never changes its URL.
+ *
+ * The groups and what goes in each are the IA of the beginner-first rewrite
+ * (plans/DOCS-beginner-first-rewrite-2026-09-27.md §3). `data-model-notes`
+ * is contributor rationale, so it sits last under For power users rather
+ * than beside the beginner guides.
  */
 export const GUIDE_ORDER = [
-	"getting-started",
-	"getting-around",
-	"characters",
-	"personas",
-	"sessions",
-	"session-layout",
-	"lorebooks",
-	"stats-and-states",
-	"connections",
-	"pipelines",
-	"context-templates",
-	"prompt-configs",
-	"summarization",
-	"embeddings-and-rag",
-	"tags",
-	"users-and-accounts",
-	"themes-and-settings",
-	"languages",
-	"document-view",
-	"system-settings",
-	"importing-from-sillytavern",
-	"troubleshooting",
-	"android",
-	"hosting",
-	"environment-variables",
-	"data-model-notes"
+	{
+		group: "Start here",
+		pages: [
+			"getting-started",
+			"what-is-serene-pub",
+			"install",
+			"connect-a-model"
+		]
+	},
+	{
+		group: "Guides",
+		pages: [
+			"characters",
+			"personas",
+			"sessions",
+			"lorebooks",
+			"tags",
+			"session-layout",
+			"themes-and-settings",
+			"languages",
+			"summarization",
+			"embeddings-and-rag",
+			"stats-and-states",
+			"connections",
+			"users-and-accounts",
+			"document-view",
+			"android"
+		]
+	},
+	{
+		group: "How-to",
+		pages: ["importing-from-sillytavern", "hosting"]
+	},
+	{
+		group: "For power users",
+		pages: [
+			"pipelines",
+			"context-templates",
+			"system-settings",
+			"component-authoring",
+			"data-model-notes"
+		]
+	},
+	{
+		group: "Reference and help",
+		pages: ["getting-around", "environment-variables", "troubleshooting"]
+	}
 ]
 
 /**
@@ -199,7 +233,7 @@ export const GUIDE_ORDER = [
  * A guide missing from this list is appended alphabetically and reported as a
  * warning — the compiler's rule, not a special case for this source.
  */
-const SDK_GUIDE_ORDER = ["your-first-plugin", "channels", "frames", "storage", "forms-and-effects"]
+const SDK_GUIDE_ORDER = ["vocabulary", "your-first-plugin", "where-values-come-from", "extending", "widgets", "frames", "channels", "events", "storage", "forms-and-effects", "plugin-permissions"]
 
 /**
  * Reading order for the catalog-and-laws source, derived from its own pages.
@@ -477,8 +511,9 @@ export async function buildDocs({ watch = false, profile = "app" } = {}) {
 		// Between using the app and the reference, because that is the order a
 		// reader arrives in: what the app does, then how to write a plugin for
 		// it, then the declarations that plugin is written against. The nav
-		// follows this array — `compileDocs` pushes one nav group per source,
-		// in order (docs/src/compile.ts, the loop over `bySource`).
+		// follows this array — `compileDocs` pushes each source's nav groups
+		// (one, or one per order group like "app" above) in source order
+		// (docs/src/compile.ts, the loop over `bySource`).
 		...(hasSdkGuides
 			? [
 					{

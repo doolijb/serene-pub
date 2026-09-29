@@ -5,7 +5,7 @@
  * for every type alike — what differs per type is what a person can DO about
  * the list from the connections sidebar:
  *
- * - **Manager-owned** (Ollama, managed KoboldCPP text and image): models are
+ * - **Runtime-owned** (Ollama, managed KoboldCPP text and image): models are
  *   pulled, downloaded and deleted in that manager, and the connection's
  *   rows follow it. The sidebar offers no Add and no Remove here, only a
  *   door to the manager — two places to delete a gguf is one place too many.
@@ -32,8 +32,8 @@ import { isKoboldCppManagedType } from "$lib/shared/utils/connectionServiceItems
  * A runtime this pub RUNS, whose own view owns this endpoint's models.
  *
  * `panel` keeps its name and its two values — they are the manager kinds
- * `enableManager` takes — but it is no longer a `panelsCtx.openPanel` key:
- * the managers folded into their connection with the 2026-09-17 ruling (R2),
+ * `enableManager` takes — but it is not a `panelsCtx.openPanel` key: the
+ * managers fold into their connection with the 2026-09-17 ruling (R2),
  * so the door it opens is that connection's view.
  */
 export interface ModelManager {
@@ -77,6 +77,45 @@ export function manualAddAllowed(type: string | null | undefined): boolean {
 /** Whether the sidebar offers Remove on this endpoint's rows. Same rule. */
 export function removeAllowed(type: string | null | undefined): boolean {
 	return manualAddAllowed(type)
+}
+
+/**
+ * Endpoints whose API names ONE model — the one it happens to have loaded —
+ * rather than a set a person could choose between.
+ *
+ * llama.cpp's `/v1/models` answers with the single model the server was
+ * started on; a plain (external) KoboldCPP has no admin API at all, so it
+ * cannot be asked to switch and does not reliably say what it is running.
+ * Neither offers a choice, so neither gets a Models tab.
+ */
+const SINGLE_MODEL_TYPES: readonly string[] = [
+	CONNECTION_TYPE.LLAMACPP,
+	CONNECTION_TYPE.KOBOLDCPP
+]
+
+/**
+ * Whether this endpoint's API lists models a person can SELECT — which is
+ * what earns a connection view its Models tab (owner ruling 2026-09-25:
+ * every connection has Settings; Models appears only where there is a
+ * choice to make; the tab strip is drawn only when there is more than one
+ * tab).
+ *
+ * ⚠ Not "has model rows". Every type can hold rows — a person may name one
+ * by hand on any endpoint `manualAddAllowed` admits — so a row count would
+ * make the tab appear and vanish as a sync lands, flipping the view under
+ * somebody's cursor. This is a fact about the API, and it does not move.
+ *
+ * ⚠ Defaults to TRUE for a type not named here, matching this module's
+ * header ("everything else … may name a model by hand"). A new type that
+ * cannot list should be added to `SINGLE_MODEL_TYPES`; the opposite mistake —
+ * a new listing API hidden behind no tab — would leave its models
+ * unselectable, which is the worse failure.
+ */
+export function listsAvailableModels(
+	type: string | null | undefined
+): boolean {
+	if (!type) return false
+	return !SINGLE_MODEL_TYPES.includes(type)
 }
 
 /**

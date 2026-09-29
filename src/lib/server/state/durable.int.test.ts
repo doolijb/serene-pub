@@ -136,8 +136,10 @@ async function world(opts: { lorebook?: boolean } = {}) {
 			.values({ userId: user.id, name: `World ${suffix}` })
 			.returning()
 		await testDb
-			.insert(schema.sessionLorebooks)
-			.values({ sessionId: session.id, lorebookId: lorebook!.id })
+		// The real shape: the lorebook is the session row's own binding.
+		.update(schema.sessions)
+		.set({ lorebookId: lorebook!.id })
+		.where(eq(schema.sessions.id, session.id))
 		;[binding] = await testDb
 			.insert(schema.lorebookBindings)
 			.values({
@@ -411,5 +413,59 @@ describe("scene capture", () => {
 		// clock the numbers are true at.
 		expect(hp?.sceneId).toBe(sceneId)
 		expect(hp?.historyEntryId).toBe(w.entry!.id)
+	})
+})
+
+describe("recording on a branch", () => {
+	test("a session on a branch files its rows on that branch, and they go with it", async () => {
+		declareSlots()
+		const w = await world()
+		const [branch] = await testDb
+			.insert(schema.lorebookBranches)
+			.values({ lorebookId: w.lorebook!.id, name: `What if ${n}` })
+			.returning()
+		await testDb
+			.update(schema.sessions)
+			.set({ lorebookBranchId: branch.id })
+			.where(eq(schema.sessions.id, w.session.id))
+		await setSessionValue(w, { kind: "session", id: w.session.id }, WEATHER, "storm")
+		await setSessionValue(
+			w,
+			{ kind: "session_cast", id: w.verity.id },
+			HP,
+			9
+		)
+
+		const { recordToTimeline } = await import("$lib/server/state/durable")
+		await recordToTimeline(testDb as unknown as Db, w.session.id, {
+			reason: "mark",
+			historyEntryId: w.entry!.id
+		})
+
+		// ⚠ Filed NULL, these would be SHARED and read on main and every other
+		// line — the branch's facts leaking out of it.
+		const onWorld = await durableRows("lorebook", w.lorebook!.id)
+		const onCast = await durableRows("cast_member", w.binding!.id)
+		expect(onWorld.length).toBeGreaterThan(0)
+		expect(onCast.length).toBeGreaterThan(0)
+		for (const row of [...onWorld, ...onCast]) expect(row.branchId).toBe(branch.id)
+		const configs = await testDb
+			.select()
+			.from(schema.attributeConfigs)
+			.where(eq(schema.attributeConfigs.branchId, branch.id))
+		expect(configs.length).toBeGreaterThan(0)
+
+		// Deleting the line takes its own stat rows with it (FK cascade), as it
+		// takes its amendments and entries.
+		await testDb
+			.delete(schema.lorebookBranches)
+			.where(eq(schema.lorebookBranches.id, branch.id))
+		expect(await durableRows("lorebook", w.lorebook!.id)).toEqual([])
+		expect(await durableRows("cast_member", w.binding!.id)).toEqual([])
+		const configsAfter = await testDb
+			.select()
+			.from(schema.attributeConfigs)
+			.where(eq(schema.attributeConfigs.sourceSessionId, w.session.id))
+		expect(configsAfter).toEqual([])
 	})
 })

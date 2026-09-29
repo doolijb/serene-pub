@@ -12,9 +12,14 @@ import { sessionEvents } from "@serene-pub/sdk"
 import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
 import { answersEvent } from "$lib/server/pipelines/entities/presetBindings"
-import { asc, desc, eq, inArray, sql } from "drizzle-orm"
+import { and, asc, desc, eq, inArray, sql } from "drizzle-orm"
+import { notCoreRow } from "$lib/server/plugins/frameHost"
+import { socketWants } from "./interest"
+import { emitToInterested } from "./utils/broadcastHelpers"
 import type { Handler } from "$lib/shared/events"
+import { actionIdentity } from "$lib/shared/actions/identity"
 import {
+	includedByPreset,
 	listGenreActions,
 	listOfferedGenres,
 	listSessionGenres,
@@ -57,9 +62,46 @@ async function staleBindingsByPreset(
 	return out
 }
 
+/**
+ * Each preset's included set, resolved — `includedByPreset` over its genre's
+ * offered actions, the same rule a session on it runs (`listSessionFunctions`).
+ * The Pipelines view's Edit level lists these: every shipped preset states
+ * `null`, and a view reading only the stated set would show none of their
+ * actions.
+ *
+ * One `listGenreActions` per genre, not per preset.
+ */
+async function effectiveIncludedActionsByPreset(
+	presets: Array<{ id: number; genreId: string; includedActions: unknown }>
+): Promise<Map<number, Sockets.SessionAdmin.PresetIncludedAction[]>> {
+	const offeredByGenre = new Map<string, Awaited<ReturnType<typeof listGenreActions>>>()
+	for (const genreId of new Set(presets.map((p) => p.genreId)))
+		offeredByGenre.set(genreId, await listGenreActions(db, genreId))
+	const out = new Map<number, Sockets.SessionAdmin.PresetIncludedAction[]>()
+	for (const p of presets) {
+		const offered = offeredByGenre.get(p.genreId) ?? []
+		const included = Array.isArray(p.includedActions)
+			? (p.includedActions as unknown[]).map(String)
+			: null
+		out.set(
+			p.id,
+			offered
+				.filter((t) => includedByPreset(included, t, offered))
+				.map((t) => ({
+					identity: actionIdentity(t),
+					key: t.key,
+					name: t.name,
+					specSlug: t.specSlug
+				}))
+		)
+	}
+	return out
+}
+
 const presetRow = (
 	p: typeof schema.sessionPresets.$inferSelect,
-	stale?: Sockets.SessionAdmin.StaleBinding[]
+	stale?: Sockets.SessionAdmin.StaleBinding[],
+	effectiveIncludedActions?: Sockets.SessionAdmin.PresetIncludedAction[]
 ): Sockets.SessionAdmin.PresetRow => ({
 	id: p.id,
 	name: p.name,
@@ -72,6 +114,7 @@ const presetRow = (
 	primarySlug: p.primarySlug ?? null,
 	configSelections: (p.configSelections ?? {}) as Record<string, number>,
 	includedActions: (p.includedActions ?? null) as string[] | null,
+	...(effectiveIncludedActions ? { effectiveIncludedActions } : {}),
 	defaults: (p.defaults ??
 		null) as Sockets.SessionAdmin.PresetDefaults | null,
 	enabled: p.enabled,
@@ -227,7 +270,7 @@ async function genreSwapContributions(
 			disabledSwaps: schema.plugins.disabledSwaps
 		})
 		.from(schema.plugins)
-		.where(eq(schema.plugins.enabled, true))
+		.where(and(eq(schema.plugins.enabled, true), notCoreRow()))
 		.orderBy(asc(schema.plugins.id))
 	const registry = await db
 		.select({
@@ -525,9 +568,11 @@ async function buildSessionPresets(
 	// (R67); a preset an uninstalled plugin left behind still is, to admins.
 	const { disabledPlugins } = await import("$lib/server/plugins/disabledPlugins")
 	const off = await disabledPlugins(db)
-	let out = (rows as any[])
-		.filter((r) => !off.owns(r.ownerPluginId))
-		.map((r) => presetRow(r, staleByPreset.get(r.id)))
+	const listed = (rows as any[]).filter((r) => !off.owns(r.ownerPluginId))
+	const actionsByPreset = await effectiveIncludedActionsByPreset(listed)
+	let out = listed.map((r) =>
+		presetRow(r, staleByPreset.get(r.id), actionsByPreset.get(r.id))
+	)
 	// The picker's cut: a non-admin sees only what they may start.
 	if (!isAdmin) {
 		const settings = await db.select().from(schema.sessionGenreSettings)
@@ -561,6 +606,55 @@ export const sessionPresetsList: Handler<
 		const res = await buildSessionPresets(!!socket.user?.isAdmin)
 		emitToUser("sessionPresets:list", res)
 		return res
+	}
+}
+
+/** The half of the Socket.IO server `pushSessionPresetsList` reads. */
+type PresetsPushIo = Parameters<typeof emitToInterested>[0]
+
+/**
+ * `sessionPresets:list` to EVERY socket that declared it, whoever's it is.
+ *
+ * For the writes that change what the list holds without being a preset
+ * write — a plugin installed, switched or uninstalled (its pipelines published
+ * or culled, its presets listed or not, R67), a preset's actions set from the
+ * Pipelines view. An open session-create screen is another person's socket as
+ * often as the admin's own, so the caller's `emitToUser` would leave it stale.
+ *
+ * The list is cut per recipient (`buildSessionPresets(isAdmin)`), so it is
+ * built at most twice — once per cut some socket actually wants — and not at
+ * all when no socket declared the event. Delivery is `emitToInterested`, one
+ * call per cut. Resolves to the number of sockets sent to.
+ */
+export async function pushSessionPresetsList(io: PresetsPushIo): Promise<number> {
+	const all = io?.sockets?.sockets
+	if (!all || typeof all.values !== "function") return 0
+	const cuts = new Set<boolean>()
+	for (const s of all.values())
+		if (s && socketWants(s, "sessionPresets:list")) cuts.add(!!s.user?.isAdmin)
+	let sent = 0
+	for (const admin of cuts) {
+		const payload = await buildSessionPresets(admin)
+		sent += emitToInterested(
+			io,
+			"sessionPresets:list",
+			payload,
+			(s) => !!s.user?.isAdmin === admin
+		)
+	}
+	return sent
+}
+
+/**
+ * `pushSessionPresetsList` for a write that has already happened: a failed
+ * re-send is logged, never the write's failure.
+ */
+export async function pushSessionPresetsAfter(socket: { io?: unknown }): Promise<void> {
+	if (!socket?.io) return
+	try {
+		await pushSessionPresetsList(socket.io as PresetsPushIo)
+	} catch (err) {
+		console.warn("[sessionAdmin] sessionPresets:list not re-sent:", err)
 	}
 }
 

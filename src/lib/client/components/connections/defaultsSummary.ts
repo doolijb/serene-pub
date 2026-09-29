@@ -40,6 +40,10 @@ import type { ModelFacts } from "$lib/shared/connections/modelFacts"
 export interface SummaryLocalState {
 	state?: "not_downloaded" | "downloading" | "on_disk" | "error"
 	loaded?: boolean
+	/** Bytes on disk once `on_disk`; the list's size until then. */
+	sizeBytes?: number | null
+	/** The catalogue's size and dimensions — `localCatalogLine` reads them. */
+	catalog?: { sizeMb?: number; dimensions?: number }
 }
 
 export interface SummaryModel {

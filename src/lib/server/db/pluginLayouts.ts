@@ -1,8 +1,8 @@
 /**
- * The plugin half of `session_layout_presets` (session layout v2 §4.1) — the
- * reconciler that projects a package's declared **layout presets** into rows,
- * beside `syncPluginPresets` (`pipelines/boot/registrySync.ts`), whose shape
- * this deliberately mirrors statement for statement.
+ * The plugin half of `session_layout_presets` — the reconciler that projects
+ * a package's declared **session layout presets** into rows, beside
+ * `syncPluginPresets` (`pipelines/boot/registrySync.ts`), whose shape this
+ * deliberately mirrors statement for statement.
  *
  * ## What a manifest declares
  *
@@ -10,12 +10,13 @@
  * layouts: [{ genreId, slug, name, description?, preset }]
  * ```
  *
- * `preset` is the SDK's `LayoutPreset` — the **layout document** plus the
- * per-instance settings and style pins that came with it. ⏳ The SDK's
- * `announce` side of this (the builder that puts `layouts[]` into a packaged
- * manifest, and the CLI validation of it) is P7's; this reads the field
- * defensively either way, because a manifest is stored verbatim at install and
- * runtime is where its shape is actually checked.
+ * `preset` is the SDK's `LayoutPreset`. ⏳ Until brief 1 of
+ * `PLAN-layout-one-format-2026-09-28` it still carries a retired layout
+ * document (LayoutDoc v2), which is validated and then NOT stored: a row
+ * stores only the **session layout** in `layout`, and a plugin's stays `{}`
+ * ("no overrides") until brief 1 declares that format in the SDK. This reads
+ * the field defensively either way, because a manifest is stored verbatim at
+ * install and runtime is where its shape is actually checked.
  *
  * ## It marks, it never deletes
  *
@@ -27,8 +28,8 @@
  *
  * ## `default` is the genre owner's slug
  *
- * A genre's own layout is the last tier before the built-in floor, and a plugin
- * that could claim it would silently re-floor a genre it does not own. Owner is
+ * A genre's `default` row is its **genre default layout**, and a plugin that
+ * could claim it would silently replace the layout of a genre it does not own. Owner is
  * by GRAMMAR, the rule the rest of the app already enforces: a genre id's
  * namespace is its owner's (`acme.x:genre/heist`), and a package's namespace is
  * its manifest id with the one `/` flattened (`acme/x` → `acme.x`,
@@ -41,9 +42,10 @@ import { i18nText, type I18n } from "@serene-pub/sdk"
 import { and, eq } from "drizzle-orm"
 import * as schema from "./schema"
 import { engineNamespaceOf } from "$lib/server/plugins/engineHost"
+import { notCoreRow } from "$lib/server/plugins/frameHost"
 import { DEFAULT_LAYOUT_SLUG } from "./layoutPresets"
 import { validateLayoutDoc } from "@serene-pub/sdk"
-import type { LayoutDecls, LayoutDoc, LayoutPreset } from "@serene-pub/sdk"
+import type { LayoutDecls, LayoutPreset } from "@serene-pub/sdk"
 
 /** One entry of a manifest's `layouts[]`, as this reconciler reads it. */
 export interface DeclaredLayout {
@@ -147,7 +149,8 @@ export async function syncPluginLayouts(
 		refused: []
 	}
 
-	const plugins = await db.select().from(schema.plugins)
+	// A row stored as `core` would own core's genres by grammar: it declares nothing.
+	const plugins = await db.select().from(schema.plugins).where(notCoreRow())
 	const declared = new Map<
 		string,
 		{ pluginId: string; version: string; decl: DeclaredLayout }
@@ -211,13 +214,10 @@ export async function syncPluginLayouts(
 			name: decl.name,
 			description: decl.description ?? null,
 			visibility: "shared" as const,
-			// ⏳ The legacy blob a plugin never had. `{}` is "no overrides",
-			// which is what the pre-v2 client renders as its own arrangement —
-			// so applying a plugin's layout there is inert rather than broken.
+			// ⏳ `{}` is "no overrides", which the client renders as its own
+			// arrangement — so applying a plugin's layout is inert rather than
+			// broken until brief 1 lets a manifest declare a session layout.
 			layout: {},
-			document: decl.preset.layout as LayoutDoc,
-			widgetSettings: decl.preset.widgetSettings ?? null,
-			widgetStyles: decl.preset.widgetStyles ?? null,
 			seededByVersion: version
 		}
 

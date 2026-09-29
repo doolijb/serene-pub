@@ -42,6 +42,8 @@
 		placeholder: string
 		/** How many items the unfiltered list holds. See `placeholder`. */
 		count?: number
+		/** The noun for exactly one ("character"), so a list of one reads right. */
+		singular?: string
 		/**
 		 * Defaults to the placeholder the box is showing. Passed separately
 		 * only when the visible text is too terse to stand alone as a name.
@@ -55,13 +57,16 @@
 		value = $bindable(""),
 		placeholder,
 		count,
+		singular,
 		"aria-label": ariaLabel,
 		id,
 		...rest
 	}: Props = $props()
 
 	const resolvedPlaceholder = $derived(
-		count === undefined ? placeholder : `Filter ${count} ${placeholder}`
+		count === undefined
+			? placeholder
+			: `Filter ${count} ${count === 1 && singular ? singular : placeholder}`
 	)
 
 	let inputEl = $state<HTMLInputElement | null>(null)

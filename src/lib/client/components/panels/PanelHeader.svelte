@@ -3,7 +3,7 @@
 	import * as Icons from "@lucide/svelte"
 
 	/**
-	 * The panel chrome: title on the left, fullscreen/close on the right.
+	 * The panel chrome: title on the left, close on the right.
 	 * Previously inlined three times in Layout.svelte (left, right, mobile),
 	 * which had drifted apart — the mobile copy used a <span> instead of a
 	 * heading and had no id, leaving its dialog's aria-labelledby pointing at
@@ -16,30 +16,18 @@
 		    "left-panel-title"/"right-panel-title", and the mobile dialog
 		    references "mobile-panel-title". */
 		titleId?: string
-		/** Panel titles fall back to the raw nav key (eg. "koboldcpp") when a
-		    nav entry has no explicit title, so this stays on by default.
-		    text-transform:capitalize only uppercases first letters, so
-		    "KoboldCPP Manager" and "Lorebooks+" survive it unchanged. */
-		capitalizeTitle?: boolean
 		onClose: () => void
 		/** Accessible name for the close button, eg. "Close Sessions panel". */
 		closeLabel: string
-		/** Omit onToggleFullscreen to hide that button entirely — this is how
-		    the mobile dialog keeps its button-less chrome. */
-		isFullscreen?: boolean
-		onToggleFullscreen?: () => void
-		/** Extra chrome controls, rendered before fullscreen/close. */
+		/** Extra chrome controls, rendered before close. */
 		actions?: Snippet
 	}
 
 	let {
 		title,
 		titleId,
-		capitalizeTitle = true,
 		onClose,
 		closeLabel,
-		isFullscreen = false,
-		onToggleFullscreen,
 		actions
 	}: Props = $props()
 
@@ -62,35 +50,12 @@
 	<h2
 		id={titleId}
 		data-panel-title
-		class="text-foreground min-w-0 flex-1 truncate text-lg font-semibold {capitalizeTitle
-			? 'capitalize'
-			: ''}"
+		class="text-foreground min-w-0 flex-1 truncate [font-family:var(--typo-heading--font-family)] text-base font-semibold"
 	>
 		{title}
 	</h2>
 	<div class="flex shrink-0 items-center gap-1">
 		{@render actions?.()}
-		{#if onToggleFullscreen}
-			<button
-				type="button"
-				class={chromeBtn}
-				onclick={onToggleFullscreen}
-				aria-label={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
-				title={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
-			>
-				{#if isFullscreen}
-					<Icons.Minimize2
-						class="text-foreground h-5 w-5"
-						aria-hidden="true"
-					/>
-				{:else}
-					<Icons.Maximize2
-						class="text-foreground h-5 w-5"
-						aria-hidden="true"
-					/>
-				{/if}
-			</button>
-		{/if}
 		<button
 			type="button"
 			class={chromeBtn}

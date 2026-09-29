@@ -21,9 +21,7 @@
  * segment is a *content contract* (`transform`, `filter`), shared across every
  * hook of that shape, never a function name. So the type id cannot say which of
  * a plugin's exported hooks implements a given link. That binding lives in the
- * compiled manifest as `hookKinds: { [scriptKindId]: exportedHookName }` (was
- * `hookTypes` until the 2026-09-16 rename; the old key is still read for one
- * release so an installed plugin keeps dispatching), which
+ * compiled manifest as `hookKinds: { [scriptKindId]: exportedHookName }`, which
  * the packager's registry projection writes when it lands a plugin's types. The
  * port reads it from the stored manifest — the one source of truth — rather
  * than guessing a convention that a settling manifest shape could contradict.
@@ -46,14 +44,10 @@ interface OwnerResolution {
 	hookKinds: Record<string, string>
 }
 
-/**
- * Read `hookKinds` off a stored manifest, tolerant of its json being anything.
- * ⏳ `hookTypes` — the pre-rename key — is read when `hookKinds` is absent, for
- * plugins packaged against the previous SDK; drop after one release.
- */
+/** Read `hookKinds` off a stored manifest, tolerant of its json being anything. */
 export function hookKindsOf(manifest: unknown): Record<string, string> {
 	const m = manifest && typeof manifest === "object" ? (manifest as any) : undefined
-	const raw = m?.hookKinds ?? m?.hookTypes
+	const raw = m?.hookKinds
 	if (!raw || typeof raw !== "object") return {}
 	const out: Record<string, string> = {}
 	for (const [typeId, hook] of Object.entries(raw as Record<string, unknown>))

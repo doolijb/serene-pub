@@ -15,7 +15,7 @@
  * that's alive but truly wedged forever, not the primary gate.
  *
  * For instances we didn't spawn (an externally-run koboldcpp, or an
- * external instance the Manager has merely adopted) there's no process
+ * external instance Serene Pub has merely adopted) there's no process
  * handle to check — `isAlive` is omitted and refusals are tolerated for a
  * bounded span instead: a consecutive-refusal count by default, or a
  * wall-clock grace (`refusedGraceMs`) where the caller knows refusals are the

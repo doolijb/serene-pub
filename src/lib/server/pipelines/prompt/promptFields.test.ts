@@ -10,11 +10,13 @@
 import { describe, it, expect } from "vitest"
 import { resolveContextInput } from "$lib/server/pipelines/prompt/promptFields"
 import { buildTemplateContext } from "$lib/server/pipelines/prompt/templateContext"
-import { SessionCharacterVisibility as V } from "$lib/shared/constants/SessionCharacterVisibility"
+import {
+	CHARACTER_DETAIL as D,
+	characterDetailOf
+} from "$lib/server/pipelines/prompt/promptFields"
 
 const cc = ({ character, ...over }: any = {}) => ({
-	isActive: true,
-	visibility: V.VISIBLE,
+	enabled: true,
 	...over,
 	character: {
 		id: 1,
@@ -36,64 +38,39 @@ const base = () => ({
 	currentCharacterId: 1
 })
 
-describe("the two visibility filters", () => {
-	it("names only active characters, but still shows an inactive one's card", async () => {
-		// The cards filter checks visibility; the names filter checks active
-		// *and* visibility (index.ts:288-306 vs :260-271). Merging them would
-		// either drop a card or add a name.
+const cara = (over: Record<string, unknown> = {}) =>
+	cc({
+		...over,
+		character: {
+			id: 2,
+			name: "Cara",
+			description: "A scout.",
+			personality: "Quick."
+		}
+	})
+
+describe("the enabled filter", () => {
+	it("names only enabled characters, but still shows a switched-off one's card", async () => {
+		// The cards filter ignores `enabled`; the names filter reads it
+		// (index.ts:288-306 vs :260-271). Merging them would either drop a
+		// card or add a name.
 		const r = resolveContextInput({
 			...base(),
-			sessionCharacters: [
-				cc(),
-				cc({
-					isActive: false,
-					character: { id: 2, name: "Cara", description: "A scout." }
-				})
-			]
+			sessionCharacters: [cc(), cara({ enabled: false })]
 		})
 		expect(r.characterNames).toEqual(["Alice"])
 		expect(r.characters.map((c) => c.name)).toEqual(["Alice", "Cara"])
 	})
 
-	it("shows the speaker's card even when they are hidden, without naming them", async () => {
+	it("reads no per-character visibility any more — a stray one changes nothing", async () => {
+		// The per-seat switch is retired (2026-09-27); a row still carrying
+		// the old column's value renders exactly as one without it.
 		const r = resolveContextInput({
 			...base(),
-			sessionCharacters: [cc({ visibility: V.HIDDEN })]
+			sessionCharacters: [cc(), cara({ visibility: "hidden" })]
 		})
-		expect(r.characters.map((c) => c.name)).toEqual(["Alice"])
-		expect(r.characterNames).toEqual([])
-	})
-
-	it("drops a hidden character who is not the speaker", async () => {
-		const r = resolveContextInput({
-			...base(),
-			sessionCharacters: [
-				cc(),
-				cc({
-					visibility: V.HIDDEN,
-					character: { id: 2, name: "Cara", description: "A scout." }
-				})
-			]
-		})
-		expect(r.characters.map((c) => c.name)).toEqual(["Alice"])
-	})
-
-	it("a minimal character shows who they are, not how they behave", async () => {
-		const r = resolveContextInput({
-			...base(),
-			currentCharacterId: 9,
-			sessionCharacters: [cc({ visibility: V.MINIMAL })]
-		})
-		expect(r.characters[0].description).toBe("A knight.")
-		expect("personality" in r.characters[0]).toBe(false)
-	})
-
-	it("the speaker is always shown in full, whatever their configured visibility", async () => {
-		const r = resolveContextInput({
-			...base(),
-			sessionCharacters: [cc({ visibility: V.MINIMAL })]
-		})
-		expect(r.characters[0].personality).toBe("Steady.")
+		expect(r.characters.map((c) => c.name)).toEqual(["Alice", "Cara"])
+		expect(r.characterNames).toEqual(["Alice", "Cara"])
 	})
 
 	it("leaves out an absent field rather than carrying a null into the prompt", async () => {
@@ -106,6 +83,69 @@ describe("the two visibility filters", () => {
 			]
 		})
 		expect(JSON.stringify(r.characters)).not.toContain("null")
+	})
+})
+
+describe("characterDetail, the session's level for every non-speaker", () => {
+	const two = (characterDetail?: unknown) =>
+		resolveContextInput({
+			...base(),
+			sessionCharacters: [cc(), cara()],
+			...(characterDetail === undefined ? {} : { characterDetail })
+		})
+
+	it("defaults to full: absent is exactly what every card rendered before", async () => {
+		const absent = two()
+		expect(absent.characters).toEqual([
+			{ name: "Alice", description: "A knight.", personality: "Steady." },
+			{ name: "Cara", description: "A scout.", personality: "Quick." }
+		])
+		expect(absent.characterNames).toEqual(["Alice", "Cara"])
+		// `full`, and anything unrecognised, is the same object.
+		expect(two(D.FULL)).toEqual(absent)
+		expect(two("visible")).toEqual(absent)
+		expect(characterDetailOf(undefined)).toBe(D.FULL)
+	})
+
+	it("brief keeps who a non-speaker is, not how they behave", async () => {
+		const r = two(D.BRIEF)
+		expect(r.characters).toEqual([
+			{ name: "Alice", description: "A knight.", personality: "Steady." },
+			{ name: "Cara", description: "A scout." }
+		])
+		expect(r.characterNames).toEqual(["Alice", "Cara"])
+	})
+
+	it("speaker-only drops every other card and every name, the speaker's included", async () => {
+		const r = two(D.SPEAKER_ONLY)
+		expect(r.characters).toEqual([
+			{ name: "Alice", description: "A knight.", personality: "Steady." }
+		])
+		// The old *hidden* rule, kept exactly: no exception for the speaker.
+		expect(r.characterNames).toEqual([])
+	})
+
+	it("never trims the speaker", async () => {
+		for (const level of [D.FULL, D.BRIEF, D.SPEAKER_ONLY])
+			expect(two(level).characters[0]).toEqual({
+				name: "Alice",
+				description: "A knight.",
+				personality: "Steady."
+			})
+	})
+
+	it("trims the rendered character block, level by level", async () => {
+		const rendered = async (level: string) =>
+			(await buildTemplateContext(two(level))).characters as string
+		const full = await rendered(D.FULL)
+		const brief = await rendered(D.BRIEF)
+		const only = await rendered(D.SPEAKER_ONLY)
+		expect(full).toContain('"personality": "Quick."')
+		expect(brief).toContain('"name": "Cara"')
+		expect(brief).not.toContain('"personality": "Quick."')
+		expect(brief).toContain('"personality": "Steady."')
+		expect(only).not.toContain("Cara")
+		expect(only).toContain('"personality": "Steady."')
 	})
 })
 

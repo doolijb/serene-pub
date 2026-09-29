@@ -258,7 +258,9 @@ describe("the listing read", () => {
 				source: "worldLore",
 				name: "  The Cellar  ",
 				content: "Damp, and colder than the street.",
-				keys: "",
+				// The stored list, one element per key — never joined and
+				// re-split on the way to the matcher (finding #146).
+				keys: [],
 				constant: false,
 				enabled: true
 			})
@@ -356,7 +358,7 @@ describe("the listing read", () => {
 			await expect(
 				readEntries(sessionId, { sessionId: otherSessionId })
 			).rejects.toThrow(
-				/asked for session \d+, but this run is scoped to \d+\. A pipeline may only read the session it was triggered in\./
+				/asked for session \d+, but this run is scoped to \d+\. A pipeline may only read the session it was started in\./
 			)
 		},
 		60_000

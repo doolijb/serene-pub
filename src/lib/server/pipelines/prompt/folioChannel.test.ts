@@ -21,7 +21,11 @@ import {
 	SEED_MESSAGE_ID
 } from "./messages"
 
-const cast = {}
+// Verity is seated so her line is claimed — a line nobody claims renders under
+// the unclaimed name (ruled 2026-09-26), which is not this file's subject.
+const cast = {
+	sessionCharacters: [{ characterId: 1, character: { id: 1, name: "Verity" } }]
+}
 const base = { cast, charName: "Verity", personaName: "Reader" }
 
 /** A row as the host's `session_messages` read hands it over. */
@@ -38,7 +42,7 @@ describe("a genre that declares no channel role", () => {
 			...base,
 			messages: [
 				row(1, "user", "Where are we?"),
-				row(2, "assistant", "At the gate.")
+				row(2, "assistant", "At the gate.", { characterId: 1 })
 			],
 			seedName: "Verity"
 		})

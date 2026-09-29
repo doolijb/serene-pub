@@ -36,6 +36,7 @@ async function publishTwoDeclarers() {
 							key: "sum",
 							venue: { kind: "composer" },
 							label: { en: "Sum" },
+							description: { en: "A test action." },
 							...(slash ? { slash } : {})
 						}
 					]

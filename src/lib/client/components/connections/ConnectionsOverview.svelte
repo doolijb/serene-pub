@@ -48,7 +48,7 @@
 		is announced as a second banner (axe: `landmark-banner-is-top-level`).
 	-->
 	<div>
-		<h2 class="funnel-display text-2xl font-semibold tracking-tight">
+		<h2 class="[font-family:var(--typo-heading--font-family)] text-2xl font-semibold tracking-tight">
 			What this pub can do
 		</h2>
 		<p class="text-surface-600-400 mt-1.5 text-sm">
@@ -71,13 +71,13 @@
 	<JobsGrid {tiles} onOpen={onOpenCapability} limit={Infinity} columns={4} />
 
 	<div
-		class="border-surface-300-700 flex flex-wrap items-center gap-3 border-t pt-5"
+		class="flex flex-wrap items-center gap-3 pt-5"
 	>
 		<p class="text-surface-600-400 min-w-0 flex-1 text-xs">
 			{connectionCount === 1
 				? "1 connection"
 				: `${connectionCount} connections`} in the list beside this. Pick
-			one to see its models, settings and what it last answered.
+			one to see its models and settings.
 		</p>
 		<button
 			type="button"

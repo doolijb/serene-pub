@@ -66,7 +66,7 @@ const deepLore = pin(
 						type: "number",
 						min: 0,
 						default: 0.25,
-						i18n: { en: "Share — deep lore" }
+						label: { en: "Share — deep lore" }
 					},
 					maxEntries: { type: "integer", min: 0, default: 2 },
 					priority: {

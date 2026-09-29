@@ -43,7 +43,11 @@ import {
 } from "$lib/server/embedding/reindex"
 import { NER_CAPABILITY } from "$lib/shared/constants/ner"
 import { applyNerStarChange, currentNerModelId } from "$lib/server/ner/reindex"
-import { localModelStates } from "$lib/server/localModels/onnxCache"
+import {
+	localModelState,
+	localModelStates,
+	onnxModalityOf
+} from "$lib/server/localModels/onnxCache"
 import {
 	allConnectionModels as listAllConnectionModels,
 	connectionModelById,
@@ -53,7 +57,9 @@ import {
 	mergeEndpointModel
 } from "$lib/server/connections/models"
 import { loginRateLimit } from "$lib/server/services/loginRateLimit"
-import type { ModelFacts } from "$lib/shared/connections/modelFacts"
+import { readStoredFacts } from "$lib/shared/connections/modelFacts"
+import { hostKey, sameHost } from "$lib/shared/connections/hostKey"
+import { discoverLocalProviders } from "$lib/server/connections/discoverLocal"
 import {
 	encryptApiKeyField,
 	decryptApiKeyField
@@ -92,6 +98,46 @@ function withEncryptedApiKey<T extends { extraJson?: Record<string, any> }>(
  * is small and admin-only, and a second spelling in a query is how "same"
  * stops meaning the same.
  */
+/**
+ * The Ollama connection already pointing at this host, if any.
+ *
+ * One Ollama connection per host serves every modality the host has (owner
+ * ruling 2026-09-25), so a second one to the same host is a duplicate rather
+ * than a second service — refused at create and at edit, the same way a taken
+ * name is. `sameHost` is the ONE rule the Ollama view also reads, so the
+ * refusal and the view's duplicate notice agree about what "the same" means.
+ */
+async function ollamaHostTaken(
+	baseUrl: string | null | undefined,
+	exceptId?: number
+): Promise<{ id: number; name: string } | null> {
+	if (!hostKey(baseUrl)) return null
+	const rows = await db
+		.select({
+			id: schema.connections.id,
+			name: schema.connections.name,
+			baseUrl: schema.connections.baseUrl
+		})
+		.from(schema.connections)
+		.where(eq(schema.connections.type, CONNECTION_TYPE.OLLAMA))
+	const clash = rows.find(
+		(r) => r.id !== exceptId && sameHost(r.baseUrl, baseUrl)
+	)
+	return clash ? { id: clash.id, name: clash.name } : null
+}
+
+/** The sentence both refusals say, so create and edit read the same. */
+function ollamaHostTakenError(
+	clash: { name: string },
+	baseUrl: string
+): string {
+	return (
+		`"${clash.name}" already connects to the Ollama at ${baseUrl}. ` +
+		`One Ollama connection serves both chat and embeddings for its host, ` +
+		`so use that one.`
+	)
+}
+
 async function connectionNameTaken(
 	name: string,
 	exceptId?: number
@@ -364,6 +410,14 @@ export const connectionsCreate: Handler<
 			throw new Error(error)
 		}
 		;(data as any).name = desiredName
+		if (data.type === CONNECTION_TYPE.OLLAMA) {
+			const clash = await ollamaHostTaken(data.baseUrl)
+			if (clash) {
+				const error = ollamaHostTakenError(clash, String(data.baseUrl))
+				emitToUser("connections:create:error", { error })
+				throw new Error(error)
+			}
+		}
 		if ("id" in data) delete data.id
 		// Always remove id before insert to let DB auto-increment
 		if ("id" in data) delete data.id
@@ -451,8 +505,15 @@ export const connectionsUpdate: Handler<
 		// Save after a Test wrote the PRE-test column back over the probe, and
 		// the read-then-write below then faithfully preserved the wreckage. The
 		// same mechanism would eat `overrides` the moment a toggle UI exists.
-		const { capabilities: _serverOwned, ...editable } =
-			params.connection as Record<string, unknown>
+		// The model-sync pair is server-owned the same way: only
+		// `syncConnectionModels` writes it, and the round-tripped copy arrives
+		// as a JSON string the timestamp column cannot take.
+		const {
+			capabilities: _serverOwned,
+			modelsSyncedAt: _syncedAt,
+			modelsSyncError: _syncError,
+			...editable
+		} = params.connection as Record<string, unknown>
 
 		// Renames obey the same uniqueness as creates: pickers show names
 		// alone, so a rename onto a taken name unorders them just the same.
@@ -486,10 +547,37 @@ export const connectionsUpdate: Handler<
 		// bare type change is about to strand.
 		const stored = await db.query.connections.findFirst({
 			where: (c, { eq }) => eq(c.id, id),
-			columns: { type: true, preset: true }
+			columns: { type: true, preset: true, baseUrl: true }
 		})
 		const nextType =
 			typeof editable.type === "string" ? editable.type : stored?.type
+
+		// A second Ollama connection to a host is refused here as at create.
+		// ⚠ Only when the host CHANGES (or the row becomes Ollama). Installs that
+		// had both an Ollama and an Ollama-embeddings connection to one host were
+		// left with two Ollama rows to it by the 2026-09-25 rename, and checking
+		// every edit would refuse even a rename of one — locking somebody out of
+		// the very duplicates they need to tidy. Those stay editable; nobody can
+		// move a row INTO a host another one already has.
+		if (nextType === CONNECTION_TYPE.OLLAMA) {
+			const nextBaseUrl =
+				"baseUrl" in editable
+					? (editable.baseUrl as string)
+					: stored?.baseUrl
+			const hostChanged = !sameHost(nextBaseUrl, stored?.baseUrl)
+			const becameOllama = stored?.type !== CONNECTION_TYPE.OLLAMA
+			if (hostChanged || becameOllama) {
+				const clash = await ollamaHostTaken(nextBaseUrl, id)
+				if (clash) {
+					const error = ollamaHostTakenError(
+						clash,
+						String(nextBaseUrl)
+					)
+					emitToUser("connections:update:error", { error })
+					throw new Error(error)
+				}
+			}
+		}
 		const preset = normalizeConnectionPreset(
 			// The payload's claim where it made one, and the STORED slug where it
 			// did not: changing only `type` strands the preset just as surely as
@@ -786,13 +874,23 @@ export const connectionsSetDefault: Handler<
 > = {
 	event: "connections:setDefault",
 	handler: async (socket, params, emitToUser) => {
-		if (!socket.user!.isAdmin) {
-			const res = {
-				error: "Access denied. Only admin users can set the default connection."
-			}
-			emitToUser("error", res)
-			throw new Error("Access denied.")
+		/**
+		 * Every refusal, said once. The bare `error` event is what the shell
+		 * toasts (and Document View shows inline); the event's own `:error`
+		 * is what tells the socket wrapper a specific answer went out. With
+		 * only the first, the wrapper ALSO sent its generic "An error occurred
+		 * while processing your request." — a second toast, titled
+		 * "Connections Set Default failed", that named no reason at all.
+		 */
+		const refuse: (error: string) => never = (error) => {
+			emitToUser("error", { error })
+			emitToUser("connections:setDefault:error", { error })
+			throw new Error(error)
 		}
+		if (!socket.user!.isAdmin)
+			refuse(
+				"Access denied. Only admin users can set the default connection."
+			)
 
 		// The star is refused where the connection cannot do the thing, rather
 		// than accepted and failed later at dispatch. Registering an image-only
@@ -818,23 +916,16 @@ export const connectionsSetDefault: Handler<
 					capabilities: true
 				}
 			})
-			if (!row) {
-				const res = { error: "Connection not found." }
-				emitToUser("error", res)
-				throw new Error("Connection not found.")
-			}
+			if (!row) refuse("Connection not found.")
 			// The MODEL half, validated before anything is stored: a
 			// registration whose two halves name different connections is a pair
 			// no picker can display and no run can resolve. It is REQUIRED —
 			// connections have no default model, so "the endpoint, whichever
 			// model" is not a registration.
-			if (params.modelId == null) {
-				const res = {
-					error: "Choose a model on this connection — connections have no default model."
-				}
-				emitToUser("error", res)
-				throw new Error(res.error)
-			}
+			if (params.modelId == null)
+				refuse(
+					"Choose a model on this connection — connections have no default model."
+				)
 			const model = await connectionModelById(db, params.modelId)
 			{
 				const bad = !model
@@ -846,10 +937,20 @@ export const connectionsSetDefault: Handler<
 							: model.missingSince
 								? "That model is no longer listed by its host. Refresh the connection's models, or choose another."
 								: null
-				if (bad) {
-					emitToUser("error", { error: bad })
-					throw new Error(bad)
-				}
+				if (bad) refuse(bad)
+			}
+			// A local ONNX model runs from files on THIS disk and nothing
+			// fetches them on use — registering one that is not downloaded
+			// points every embed or scan at nothing. Every other endpoint's
+			// models are a host's, and `localModelState` answers null for them.
+			if (onnxModalityOf(row.type)) {
+				const local = await localModelState(db, row, model!)
+				if (local && local.state !== "on_disk")
+					refuse(
+						local.state === "downloading"
+							? "That model is still downloading. Make it active once it has finished."
+							: "That model isn't downloaded yet. Download it first, then make it active."
+					)
 			}
 			// Judged as the PAIR (0114): one host serves a vision checkpoint and
 			// a text-only one at the same base URL, so judging the bare endpoint
@@ -859,11 +960,7 @@ export const connectionsSetDefault: Handler<
 				mergeEndpointModel(row as any, model) as any,
 				params.capability as CapabilityId
 			)
-			if (refusal) {
-				const res = { error: refusal }
-				emitToUser("error", res)
-				throw new Error(refusal)
-			}
+			if (refusal) refuse(refusal)
 		}
 
 		// What the embedding star resolved to BEFORE the write — the comparison
@@ -920,8 +1017,6 @@ export const connectionsSetDefault: Handler<
 		if (params.capability === NER_CAPABILITY)
 			await applyNerStarChange(db, nerBefore)
 
-		if (params.id) await resendConnection(params.id, emitToUser)
-
 		const res: Sockets.Connections.SetDefault.Response = {
 			ok: true,
 			capability: params.capability,
@@ -930,18 +1025,43 @@ export const connectionsSetDefault: Handler<
 		}
 		emitToUser("connections:setDefault", res)
 
+		/**
+		 * The write has landed and been answered; everything below only TELLS
+		 * other views. A failure here is logged, never thrown: thrown, it
+		 * reached the wrapper's generic error and a person whose default had
+		 * just been set was told that setting it failed.
+		 */
+		const tell = async (what: string, send: () => unknown) => {
+			try {
+				await send()
+			} catch (e) {
+				console.error(`connections:setDefault: ${what} failed`, e)
+			}
+		}
+		if (params.id) {
+			const id = params.id
+			await tell("resending the connection", () =>
+				resendConnection(id, emitToUser)
+			)
+		}
 		// The defaults ride on `systemSettings:get`, so this is how every client
 		// learns the star moved.
-		await emitToUser("systemSettings:get", () => buildSystemSettingsGet())
-		await emitToUser("users:current", () =>
-			buildUsersCurrent(socket.user!.id)
+		await tell("systemSettings:get", async () =>
+			emitToUser("systemSettings:get", () => buildSystemSettingsGet())
+		)
+		await tell("users:current", async () =>
+			emitToUser("users:current", () =>
+				buildUsersCurrent(socket.user!.id)
+			)
 		)
 		// Admin → Defaults renders from its own list, and a star pressed here
 		// (or by a manager's "Use for chat") is the same registration that page
 		// makes — so it is told too, at the price of one query only while the
 		// page is open.
-		await emitToUser("connectionDefaults:list", () =>
-			buildConnectionDefaultsList()
+		await tell("connectionDefaults:list", async () =>
+			emitToUser("connectionDefaults:list", () =>
+				buildConnectionDefaultsList()
+			)
 		)
 
 		return res
@@ -1327,6 +1447,8 @@ function modelRowView(
 	m: SelectConnectionModel,
 	local?: Sockets.Connections.LocalModelState
 ): Sockets.Connections.Models.ModelRow {
+	// Validated field by field rather than cast: see `readStoredFacts`.
+	const facts = readStoredFacts(m.facts)
 	return {
 		id: m.id,
 		connectionId: m.connectionId,
@@ -1334,6 +1456,7 @@ function modelRowView(
 		name: m.name,
 		enabled: m.enabled,
 		missingSince: m.missingSince?.toISOString() ?? null,
+		modality: m.modality ?? null,
 		contextWindow: m.contextWindow ?? null,
 		promptFormat: m.promptFormat ?? null,
 		tokenCounter: m.tokenCounter ?? null,
@@ -1342,9 +1465,7 @@ function modelRowView(
 		satisfiableCapabilities: satisfiableTransforms(endpoint, m),
 		// Omitted entirely when the host said nothing, so a consumer branches on
 		// presence rather than on an empty object that reads like an answer.
-		...(m.facts && Object.keys(m.facts).length
-			? { facts: m.facts as ModelFacts }
-			: {}),
+		...(facts ? { facts } : {}),
 		...(local ? { local } : {})
 	}
 }
@@ -1748,6 +1869,54 @@ export const connectionsSyncModels: Handler<
 	}
 }
 
+/**
+ * Which model servers are running on this machine right now, and the chat
+ * models each lists — the setup wizard's detected-provider cards. See
+ * `connections/discoverLocal.ts` for what is probed and why.
+ *
+ * Each answer names the connection that ALREADY points at that service, when
+ * one does, so the wizard reuses it rather than creating a second (the server
+ * refuses a second Ollama to one host). A KoboldCPP that a managed connection
+ * already addresses is left out: that is Serene Pub's own process, and the
+ * managed card is its door.
+ */
+export const connectionsDiscoverLocal: Handler<
+	Sockets.Connections.DiscoverLocal.Params,
+	Sockets.Connections.DiscoverLocal.Response
+> = {
+	event: "connections:discoverLocal",
+	handler: async (socket, _params, emitToUser) => {
+		if (!socket.user!.isAdmin) {
+			const error =
+				"Access denied. Only admin users can manage connections."
+			emitToUser("connections:discoverLocal:error", { error })
+			throw new Error(error)
+		}
+		const [found, rows] = await Promise.all([
+			discoverLocalProviders(),
+			db.query.connections.findMany({
+				columns: { id: true, type: true, baseUrl: true }
+			})
+		])
+		const providers: Sockets.Connections.DiscoverLocal.Provider[] = []
+		for (const p of found) {
+			const atHost = rows.filter((r) => sameHost(r.baseUrl, p.baseUrl))
+			if (
+				p.type === CONNECTION_TYPE.KOBOLDCPP &&
+				atHost.some((r) => CONNECTION_TYPE.isManagedKoboldCpp(r.type))
+			)
+				continue
+			providers.push({
+				...p,
+				connectionId: atHost.find((r) => r.type === p.type)?.id ?? null
+			})
+		}
+		const res: Sockets.Connections.DiscoverLocal.Response = { providers }
+		emitToUser("connections:discoverLocal", res)
+		return res
+	}
+}
+
 export function registerConnectionHandlers(
 	socket: any,
 	emitToUser: (event: string, data: any) => void,
@@ -1776,4 +1945,5 @@ export function registerConnectionHandlers(
 	register(socket, connectionsDeleteModel, emitToUser)
 	register(socket, connectionsImportModels, emitToUser)
 	register(socket, connectionsSyncModels, emitToUser)
+	register(socket, connectionsDiscoverLocal, emitToUser)
 }

@@ -7,13 +7,18 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest"
 // touches a real subprocess/DB.
 const findFirstMock = vi.fn()
 const localModelsMock = vi.fn(async () => [] as any[])
+/** The endpoint's own `image-gen` model rows — `listImageModels` keeps them. */
+const ownImageRowsMock = vi.fn(async () => [] as { model: string }[])
 vi.mock("$lib/server/db", () => ({
 	db: {
 		query: {
 			systemSettings: { findFirst: vi.fn(async () => null) },
 			koboldCppSettings: { findFirst: () => findFirstMock() },
 			localModels: { findMany: () => localModelsMock() }
-		}
+		},
+		select: () => ({
+			from: () => ({ where: () => ownImageRowsMock() })
+		})
 	}
 }))
 const readdirMock = vi.fn()
@@ -56,6 +61,27 @@ vi.mock("$lib/server/koboldcpp/kcppHttp", () => ({
 	fetchCurrentModelName: (...args: any[]) =>
 		fetchCurrentModelNameMock(...args),
 	pingKoboldCPP: (...args: any[]) => pingKoboldCPPMock(...args)
+}))
+
+// The header read, observed: `fs/promises` is mocked above without `open`, so
+// the real classifier would answer "unknown" for every file.
+const classifyMock = vi.fn(async (_path: string) => ({
+	kind: "unknown" as "text" | "image" | "unknown",
+	reason: ""
+}))
+/** Which image files are on disk, for `resolveModelPath(..., {mustExist})`. */
+let imageFilesOnDisk: string[] = []
+vi.mock("$lib/server/koboldcpp/modelsDir", async (orig) => ({
+	...((await orig()) as any),
+	resolveModelPath: async (kind: string, name: string) => {
+		if (kind === "image" && imageFilesOnDisk.includes(name))
+			return `/models/image/${name}`
+		throw new Error("not on disk")
+	}
+}))
+vi.mock("$lib/server/koboldcpp/modelKind", async (orig) => ({
+	...((await orig()) as any),
+	classifyModelFile: (p: string) => classifyMock(p)
 }))
 
 const exportsDefault = (await import("./KoboldCppManagedAdapter")).default
@@ -193,20 +219,76 @@ describe("KoboldCppManagedAdapter — base URL resolution", () => {
 			expect(fetchMock).not.toHaveBeenCalled()
 			expect(result.error).toBeUndefined()
 			expect(result.models).toEqual([
-				{ model: "a.gguf", name: "a.gguf" },
-				{ model: "b.gguf", name: "b.gguf" }
+				{ model: "a.gguf", name: "a.gguf", modality: "text-gen" },
+				{ model: "b.gguf", name: "b.gguf", modality: "text-gen" }
 			])
 		})
 
-		test("leaves out a file the Manager classified as an image model, and one still downloading", async () => {
-			readdirMock.mockResolvedValue(["chat.gguf", "sdxl.gguf", "half.gguf"])
+		test("files a classified image model under IMAGE, and leaves out one still downloading", async () => {
+			readdirMock.mockResolvedValue([
+				"chat.gguf",
+				"sdxl.gguf",
+				"half.gguf"
+			])
 			localModelsMock.mockResolvedValue([
 				{ filename: "sdxl.gguf", kind: "image", status: "complete" },
 				{ filename: "half.gguf", kind: "text", status: "downloading" },
 				{ filename: "chat.gguf", kind: "text", status: "complete" }
 			])
 			const result = await exportsDefault.listModels(makeConnection({}))
-			expect(result.models).toEqual([{ model: "chat.gguf", name: "chat.gguf" }])
+			// One endpoint chats and draws: the image model is listed, as one.
+			expect(result.models).toEqual([
+				{ model: "chat.gguf", name: "chat.gguf", modality: "text-gen" },
+				{ model: "sdxl.gguf", name: "sdxl.gguf", modality: "image-gen" }
+			])
+		})
+
+		test("keeps an image model a person already chose on this endpoint, whatever its kind says", async () => {
+			// `unknown` is deliberately selectable in the managed KoboldCPP; dropping it
+			// from the listing would mark that choice missing on the next sync.
+			readdirMock.mockResolvedValue(["chat.gguf"])
+			localModelsMock.mockResolvedValue([
+				{ filename: "chat.gguf", kind: "text", status: "complete" },
+				{ filename: "odd.gguf", kind: "unknown", status: "complete" }
+			])
+			ownImageRowsMock.mockResolvedValueOnce([
+				{ model: "odd.gguf" },
+				{ model: "gone.gguf" }
+			])
+			imageFilesOnDisk = ["odd.gguf"]
+			const result = await exportsDefault.listModels(makeConnection({}))
+			expect(result.models.map((m: any) => [m.model, m.modality])).toEqual([
+				["chat.gguf", "text-gen"],
+				// Its file is still there…
+				["odd.gguf", "image-gen"]
+				// …and `gone.gguf`'s is not, so it is honestly missing.
+			])
+			imageFilesOnDisk = []
+		})
+
+		// Plan 2026-09-24 C5: the sync can run before the managed KoboldCPP's own
+		// listing registers a new file. An unregistered image GGUF is read,
+		// not assumed to be text; a registered one is never re-read here.
+		test("reads an unregistered file's header and leaves out an image model", async () => {
+			classifyMock.mockClear()
+			readdirMock.mockResolvedValue(["chat.gguf", "sdxs.gguf"])
+			localModelsMock.mockResolvedValue([
+				{ filename: "chat.gguf", kind: "text", status: "complete" }
+			])
+			classifyMock.mockImplementation(async (p: string) => ({
+				kind: p.endsWith("sdxs.gguf") ? "image" : "text",
+				reason: ""
+			}))
+			const result = await exportsDefault.listModels(makeConnection({}))
+			// Left out of the TEXT half. It is not in the image half either
+			// until the managed KoboldCPP's own listing registers it as an image model.
+			expect(result.models).toEqual([
+				{ model: "chat.gguf", name: "chat.gguf", modality: "text-gen" }
+			])
+			expect(classifyMock).toHaveBeenCalledTimes(1)
+			expect(classifyMock).toHaveBeenCalledWith("/models/llm/sdxs.gguf")
+			classifyMock.mockReset()
+			classifyMock.mockResolvedValue({ kind: "unknown", reason: "" })
 		})
 
 		test("an unreadable directory is an ERROR, never an empty list", async () => {
@@ -235,8 +317,8 @@ describe("KoboldCppManagedAdapter — base URL resolution", () => {
 		// Real identifiers only — no "[current]" sentinel, which a persisted
 		// sync would have turned into a row no host lists.
 		expect(result.models).toEqual([
-			{ model: "a.gguf", name: "a.gguf" },
-			{ model: "b.gguf", name: "b.gguf" }
+			{ model: "a.gguf", name: "a.gguf", modality: "text-gen" },
+			{ model: "b.gguf", name: "b.gguf", modality: "text-gen" }
 		])
 	})
 
@@ -352,7 +434,7 @@ describe("KoboldCppManagedAdapter.preflight() — retry loop", () => {
 		expect(ensureModelLoaded).toHaveBeenCalledTimes(1)
 	})
 
-	test("fails fast with no retry when the Manager is disabled — not a transient condition", async () => {
+	test("fails fast with no retry when KoboldCPP, run by Serene Pub, is turned off — not a transient condition", async () => {
 		findFirstMock.mockResolvedValue({
 			...MANAGED_SETTINGS,
 			koboldCppManagerEnabled: false
@@ -360,7 +442,7 @@ describe("KoboldCppManagedAdapter.preflight() — retry loop", () => {
 		const adapter = makeAdapter()
 
 		await expect(adapter.preflight()).rejects.toThrow(
-			/KoboldCPP Manager is disabled/
+			/KoboldCPP, run by Serene Pub, is turned off/
 		)
 		expect(ensureModelLoaded).not.toHaveBeenCalled()
 	})

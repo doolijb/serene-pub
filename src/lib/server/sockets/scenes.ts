@@ -1,12 +1,11 @@
 import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
-import { eq, inArray, asc, and, sql } from "drizzle-orm"
+import { eq, inArray, asc, and } from "drizzle-orm"
 import type { Handler } from "$lib/shared/events"
 import { resolvePersonaName } from "$lib/shared/utils/resolveCharacterName"
 import {
 	HISTORY_TYPE_ID,
 	historyDateOf,
-	inBookOfType,
 	toEntryRow,
 	type LorebookEntry
 } from "$lib/server/utils/lorebookEntries"
@@ -30,9 +29,10 @@ import {
 } from "$lib/server/connections/capabilityTarget"
 import { activityError, activityStore } from "$lib/server/utils/activityStore"
 import { sceneWriteRefusal } from "$lib/server/messages/writes"
-import { withSessionTriggerLock } from "$lib/server/utils/sessionTriggerLock"
+import { withSessionGenerationLock } from "$lib/server/utils/sessionGenerationLock"
 import { checkSessionAccess } from "$lib/server/utils/sessionAccess"
 import { resolveOrCreateBinding } from "$lib/server/utils/characterBindingSync"
+import { formatDate, readStoryCalendar } from "$lib/shared/lorebooks/storyDate"
 
 /**
  * Every downstream consumer (graphBuilder.ts, lorebookExportMapper.ts,
@@ -69,15 +69,82 @@ async function filterCharacterIdsToLorebook(
 }
 
 /**
+ * The messages a scene may capture, or a refusal saying why not.
+ *
+ * Two rules the Summarize dialog already keeps by what it offers, held here so
+ * a raw emit cannot break them:
+ *
+ * - **Every id is one of this session's messages.** A scene's messages are
+ *   read back by `scenes:process` pinned to the scene's own session, so an id
+ *   from anywhere else is not a message the scene can ever show.
+ * - **No message is captured twice.** A message already in one of the
+ *   session's scenes is locked out of selection (docs/summarization.md); the
+ *   same message in two scenes would be summarised, graphed and counted twice.
+ *
+ * Refused rather than trimmed: quietly dropping half a selection would save a
+ * scene that is not the one the person chose. `null` in is `null` out — the
+ * payload did not speak about messages. `exceptSceneId` is the scene being
+ * edited, whose own capture is not an overlap with itself.
+ */
+async function capturableMessageIds(
+	sessionId: number | null,
+	requested: number[] | null,
+	exceptSceneId?: number
+): Promise<number[] | null> {
+	if (requested == null) return null
+	const ids = [...new Set(requested)]
+	if (ids.length === 0) return []
+	if (sessionId == null)
+		throw new Error("A scene can only capture messages from a session.")
+
+	const found = await db
+		.select({ id: schema.sessionMessages.id })
+		.from(schema.sessionMessages)
+		.where(
+			and(
+				eq(schema.sessionMessages.sessionId, sessionId),
+				inArray(schema.sessionMessages.id, ids)
+			)
+		)
+	if (found.length !== ids.length)
+		throw new Error(
+			"Some of the selected messages are not in this session. Nothing was saved."
+		)
+
+	const captured = new Set(
+		(
+			await db.query.scenes.findMany({
+				where: eq(schema.scenes.sessionId, sessionId),
+				columns: { id: true, selectedMessageIds: true }
+			})
+		)
+			.filter((s) => s.id !== exceptSceneId)
+			.flatMap((s) => s.selectedMessageIds ?? [])
+	)
+	const overlap = ids.filter((id) => captured.has(id)).length
+	if (overlap > 0)
+		throw new Error(
+			`${overlap} of the selected messages ${
+				overlap === 1 ? "is" : "are"
+			} already in another scene. Nothing was saved.`
+		)
+	return ids
+}
+
+/**
  * The scene list for one session.
  *
  * Split out of the handler below so the two write cascades that re-send it
  * (`scenes:create`, `scenes:delete`) can hand it to `emitToUser` as a thunk
  * (socket-interest plan, ruling 4): ONE source of truth for the payload, and
- * the scene read plus the whole history-entry ordering scan behind it are paid
- * only when some socket declared the key. A scene written from a surface that
- * shows no scene list — the summarize modal, the lorebook side — pays for
- * neither. Skipping the emit alone would save nothing; these reads are the cost.
+ * the scene read behind it is paid only when some socket declared the key. A
+ * scene written from a surface that shows no scene list — the summarize modal,
+ * the lorebook side — pays for none of it. Skipping the emit alone would save
+ * nothing; the read is the cost.
+ *
+ * ⚠ No "next history entry" is computed here any more. It was a branch-blind
+ * ordering scan over every history entry in the book that no client read; a
+ * view that ever needs it orders the rows on its own line with `compareDates`.
  *
  * The access check stays inside, so the cascade asks exactly what the handler
  * asks. It refuses the same way too — a thunk that throws is caught and logged
@@ -109,52 +176,13 @@ async function buildSceneList(
 		}
 	})
 
-	// Build nextEntry for each history entry (ordered by year, month, day, then id)
-	const lorebookId = scenes[0]?.lorebookId
-	let nextEntryMap = new Map<
-		number,
-		{
-			id: number
-			year: number
-			month: number | null
-			day: number | null
-		} | null
-	>()
-	if (lorebookId) {
-		// ⚠ The date sorts on jsonb members now, so the ordering is
-		// spelled in SQL rather than by column: `->>` yields text, and
-		// text order is not date order past nine. `NULLS FIRST` keeps the
-		// old column ordering, which Postgres gives ascending sorts by
-		// default and which this list depends on — an entry with only a
-		// year sorts before its own dated months.
-		const allEntries = (
-			await db
-				.select({
-					id: schema.lorebookEntries.id,
-					fields: schema.lorebookEntries.fields
-				})
-				.from(schema.lorebookEntries)
-				.where(inBookOfType(lorebookId, HISTORY_TYPE_ID))
-				.orderBy(
-					sql`(${schema.lorebookEntries.fields}->>'year')::int ASC NULLS FIRST`,
-					sql`(${schema.lorebookEntries.fields}->>'month')::int ASC NULLS FIRST`,
-					sql`(${schema.lorebookEntries.fields}->>'day')::int ASC NULLS FIRST`,
-					asc(schema.lorebookEntries.id)
-				)
-		).map((e) => ({ id: e.id, ...historyDateOf(e) }))
-		for (let i = 0; i < allEntries.length; i++) {
-			nextEntryMap.set(allEntries[i].id, allEntries[i + 1] ?? null)
-		}
-	}
-
 	const sceneList = (scenes as any[]).map((s) => ({
 		...s,
 		historyEntry: s.historyEntry
 			? {
 					id: s.historyEntry.id,
 					...historyDateOf(s.historyEntry),
-					isCompleted: s.historyEntry.fields?.isCompleted ?? false,
-					nextEntry: nextEntryMap.get(s.historyEntry.id) ?? null
+					isCompleted: s.historyEntry.fields?.isCompleted ?? false
 				}
 			: null
 	}))
@@ -187,27 +215,48 @@ export const sceneCreateHandler: Handler<
 	event: "scenes:create",
 	handler: async (socket, params, emitToUser) => {
 		const userId = socket.user!.id
-		// Cast rides alongside the row fields on the wire but is stored in
-		// scene_characters, so the type is the row type plus that pair.
-		const data: InsertScene & Partial<Sockets.Scenes.SceneCast> = {
-			...params.scene
-		}
+		/**
+		 * An ALLOWLIST of what the client may say, never a spread of it.
+		 *
+		 * Never `{ ...params.scene }`: that lets a client write any column —
+		 * `branchId` included, unvalidated, and `graphed` or `castResolvedAt`
+		 * besides. The line a scene is on is the server's to
+		 * decide (from the session, below), and the two markers are written by
+		 * the paths that earn them. Cast rides alongside on the wire but is
+		 * stored in `scene_characters`, so it is taken off here too.
+		 */
+		const {
+			lorebookId,
+			sessionId,
+			historyEntryId,
+			name,
+			summary,
+			selectedMessageIds: requestedMessageIds,
+			participantCharacters: rawParticipants,
+			mentionedCharacters: rawMentioned
+		} = params.scene as InsertScene & Partial<Sockets.Scenes.SceneCast>
 
 		// Verify lorebook ownership
 		const lorebook = await db.query.lorebooks.findFirst({
 			where: (l, { and, eq }) =>
-				and(eq(l.id, data.lorebookId), eq(l.userId, userId))
+				and(eq(l.id, lorebookId), eq(l.userId, userId))
 		})
 
 		if (!lorebook) {
 			throw new Error("Lorebook not found or access denied.")
 		}
 
+		// A scene written from a session is on the session's line — the branch
+		// it reads this book on — and a scene written anywhere else is on main.
+		// Only when the session reads THIS book: a session reading another
+		// book (or none) has no line in this one.
+		let branchId: number | null = null
+
 		// If sessionId provided, verify session ownership
-		if (data.sessionId) {
+		if (sessionId) {
 			const session = await db.query.sessions.findFirst({
 				where: (c, { and, eq }) =>
-					and(eq(c.id, data.sessionId!), eq(c.userId, userId))
+					and(eq(c.id, sessionId), eq(c.userId, userId))
 			})
 			if (!session) {
 				throw new Error("Session not found or access denied.")
@@ -215,12 +264,14 @@ export const sceneCreateHandler: Handler<
 			/**
 			 * Declared writes (R-B): a scene opened *from a session* is a
 			 * session write, and a genre that opens none refuses it here.
-			 * Gated on `data.sessionId` and nothing else — a scene created
-			 * from the lorebook screens carries no session and is a person at
-			 * a book, which this lever deliberately says nothing about.
+			 * Gated on `sessionId` and nothing else — a scene created from the
+			 * lorebook screens carries no session and is a person at a book,
+			 * which this lever deliberately says nothing about.
 			 */
-			const noScenes = await sceneWriteRefusal(db, data.sessionId)
+			const noScenes = await sceneWriteRefusal(db, sessionId)
 			if (noScenes) throw new Error(noScenes)
+			if (session.lorebookId === lorebookId)
+				branchId = session.lorebookBranchId ?? null
 		}
 
 		// Without this, a scene could be created with an attacker's own
@@ -234,41 +285,47 @@ export const sceneCreateHandler: Handler<
 			.from(schema.lorebookEntries)
 			.where(
 				and(
-					eq(schema.lorebookEntries.id, data.historyEntryId),
+					eq(schema.lorebookEntries.id, historyEntryId),
 					eq(schema.lorebookEntries.typeId, HISTORY_TYPE_ID)
 				)
 			)
-		if (!historyEntry || historyEntry.lorebookId !== data.lorebookId) {
+		if (!historyEntry || historyEntry.lorebookId !== lorebookId) {
 			throw new Error(
 				"History entry not found or does not belong to this lorebook."
 			)
 		}
 
-		// Cast lives in scene_characters now, so split it off the row payload.
-		const {
-			participantCharacters: rawParticipants,
-			mentionedCharacters: rawMentioned,
-			...sceneRow
-		} = data
+		const selectedMessageIds = await capturableMessageIds(
+			sessionId ?? null,
+			requestedMessageIds ?? null
+		)
+
 		const carriesCast =
 			rawParticipants !== undefined || rawMentioned !== undefined
 		const participantCharacters = await filterCharacterIdsToLorebook(
-			sceneRow.lorebookId,
+			lorebookId,
 			rawParticipants ?? []
 		)
 		const mentionedCharacters = await filterCharacterIdsToLorebook(
-			sceneRow.lorebookId,
+			lorebookId,
 			rawMentioned ?? []
 		)
 
-		// Mark the cast resolved ONLY when this insert actually carries cast —
-		// deliberately not unconditional. scenes:create can carry a summary
-		// without cast (SummarizeLoreModal emits both together, but nothing
-		// requires it), and marking such a row resolved would let a
-		// summarized-but-never-resolved scene claim it needs no extraction —
-		// silently re-enacting the bug that column exists to end.
-		if (sceneRow.castResolvedAt == null && carriesCast) {
-			sceneRow.castResolvedAt = new Date()
+		const sceneRow: InsertScene = {
+			lorebookId,
+			sessionId: sessionId ?? null,
+			historyEntryId,
+			branchId,
+			...(name !== undefined ? { name } : {}),
+			...(summary !== undefined ? { summary } : {}),
+			...(selectedMessageIds !== null ? { selectedMessageIds } : {}),
+			// Mark the cast resolved ONLY when this insert actually carries
+			// cast — never unconditionally. scenes:create can carry a
+			// summary without cast (SummarizeLoreModal emits both together, but
+			// nothing requires it), and marking such a row resolved would let a
+			// summarized-but-never-resolved scene claim it needs no extraction —
+			// silently re-enacting the bug that column exists to end.
+			...(carriesCast ? { castResolvedAt: new Date() } : {})
 		}
 
 		const [newScene] = await db
@@ -376,6 +433,17 @@ export const sceneUpdateHandler: Handler<
 			graphed
 		} = params.scene
 
+		// The same two capture rules `scenes:create` holds — this session's
+		// messages only, none already in another scene — minus this scene's
+		// own capture, which is not an overlap with itself.
+		if (selectedMessageIds !== undefined)
+			selectedMessageIds =
+				(await capturableMessageIds(
+					existing.sessionId ?? null,
+					selectedMessageIds ?? null,
+					existing.id
+				)) ?? undefined
+
 		// Cast is only rewritten when the payload actually carries it; a rename
 		// or summary edit leaves the existing scene_characters rows alone.
 		const carriesCast =
@@ -431,6 +499,34 @@ export const sceneUpdateHandler: Handler<
 		const res = {
 			scene: { ...updated, ...(await readSceneCast(params.scene.id)) }
 		}
+
+		/**
+		 * The review a save finishes, dismissed only now the save has landed.
+		 *
+		 * ⚠ Never dismiss beside this update (a separate `activity:dismiss`):
+		 * the two race. The dismiss runs the ephemeral-scene cleanup, which
+		 * deletes a scene with no summary and no resolved cast — exactly what a
+		 * session-side scene still is until THIS write commits — so whichever
+		 * arrives first decides whether the person's save survives. Dismissing
+		 * here, after the write, means the cleanup can only ever see a scene
+		 * that has its summary.
+		 *
+		 * Only a review of this very scene, owned by this person, is dismissed;
+		 * anything else named here is ignored rather than refused, because the
+		 * save itself has already succeeded.
+		 */
+		if (params.activityId) {
+			const activity = activityStore.getById(params.activityId)
+			if (
+				activity?.kind === "scene_summarize" &&
+				activity.userId === userId &&
+				activity.sceneId === params.scene.id
+			)
+				// `acted`: the result was used, which is what clears its
+				// notification as done rather than as dismissed.
+				activityStore.remove(params.activityId, "acted")
+		}
+
 		emitToUser("scenes:update", res)
 		return res
 	}
@@ -474,7 +570,23 @@ export const sceneDeleteHandler: Handler<
 			)
 		}
 
-		return { success: "Scene deleted." }
+		/**
+		 * The delete itself, told to every view of this person's.
+		 *
+		 * Every view hears it: without this emit a scene deleted from the
+		 * lorebook side stays on screen until something else refetches, because
+		 * the lorebook views only hear the session cascades above when a SESSION
+		 * view is open. Bare (not in `SCOPED_EVENTS`), so it names the book and
+		 * the session it was in and each listener filters on the one it shows.
+		 */
+		const res: Sockets.Scenes.Delete.Response = {
+			success: "Scene deleted.",
+			id: params.id,
+			lorebookId: existing.lorebookId,
+			sessionId: sessionId ?? null
+		}
+		emitToUser("scenes:delete", res)
+		return res
 	}
 }
 
@@ -568,7 +680,20 @@ export const sceneListByLorebookHandler: Handler<
 				: null
 		}))
 
-		const res = { sceneList }
+		// ⚠ `lorebookId` is LOAD-BEARING, not informational: `SCOPED_EVENTS`
+		// scopes this event on it, every subscriber holds a scoped key, and
+		// without it the gate resolved the scope to null and dropped every
+		// reply in silence — the lorebook side never heard its scene list.
+		//
+		// Every line's scenes, each carrying its own `branchId`, exactly as
+		// `entries:list` answers: the reply is broadcast to every view of the
+		// book, and those views read different lines, so a reply filtered for
+		// one would be wrong for the next. A view keeps the rows on its line
+		// with `rowsOnLine`, the rule `entries:counts` counts by.
+		const res: Sockets.Scenes.ListByLorebook.Response = {
+			lorebookId: params.lorebookId,
+			sceneList
+		}
 		emitToUser("scenes:listByLorebook", res)
 		return res
 	}
@@ -684,7 +809,12 @@ export const sceneCompileHandler: Handler<
 		const compileSampling = target.sampling
 
 		const lorebook = historyEntry.lorebook
-		const historyEntryDate = `Year ${historyEntry.year}${historyEntry.month ? `, Mo. ${historyEntry.month}` : ""}${historyEntry.day ? `, Day ${historyEntry.day}` : ""}`
+		// In the book's own calendar — the free-form "Year X, Mo. Y, Day Z"
+		// when it has none. `formatDate` decides that; never spell it by hand.
+		const historyEntryDate = formatDate(
+			historyEntry,
+			readStoryCalendar(lorebook.storyCalendar)
+		)
 
 		const abortController = new AbortController()
 		const activityId = activityStore.startCompile(
@@ -803,16 +933,33 @@ export const sceneProcessHandler: Handler<
 	handler: async (socket, params, emitToUser) => {
 		const userId = socket.user!.id
 
+		/**
+		 * A refusal the review modal can hear.
+		 *
+		 * `register()`'s fallback reply carries no `sceneId`, and the modal
+		 * listens on `scenes:process:error#<sceneId>` — so a bare throw left it
+		 * spinning at "running" forever. The id is known from the request, so
+		 * every failure names it; the throw still follows, for the log, and
+		 * `register()` sees the specific error was sent and adds no second one.
+		 */
+		const refuse = (error: string): never => {
+			emitToUser("scenes:process:error", {
+				sceneId: params.sceneId,
+				error
+			} satisfies Sockets.Scenes.Process.ErrorResponse)
+			throw new Error(error)
+		}
+
 		const scene = await db.query.scenes.findFirst({
 			where: eq(schema.scenes.id, params.sceneId)
 		})
-		if (!scene) throw new Error("Scene not found.")
+		if (!scene) return refuse("Scene not found.")
 
 		const lorebook = await db.query.lorebooks.findFirst({
 			where: (l, { and, eq }) =>
 				and(eq(l.id, scene.lorebookId), eq(l.userId, userId))
 		})
-		if (!lorebook) throw new Error("Scene not found or access denied.")
+		if (!lorebook) return refuse("Scene not found or access denied.")
 
 		// Register the activity BEFORE any queued work.
 		//
@@ -877,7 +1024,7 @@ export const sceneProcessHandler: Handler<
 		// generation. Holding it across the run would instead queue the user's
 		// next message behind minutes of LLM calls, which is precisely the trap
 		// a minimize-first flow must not set.
-		const rawMessages = await withSessionTriggerLock(
+		const rawMessages = await withSessionGenerationLock(
 			scene.sessionId,
 			async () =>
 				db.query.sessionMessages.findMany({
@@ -1039,10 +1186,19 @@ export const sceneProcessHandler: Handler<
 				return null as any // already removed by activityStore.cancel() — nothing to update
 			}
 			// See the note on the identical write in the compile handler above.
+			const failure = activityError(err)
 			activityStore.updateScene(activityId, {
 				status: "error",
-				...activityError(err)
+				...failure
 			})
+			// Named by scene, like every other failure of this run: the
+			// generic fallback `register()` would send carries no `sceneId`,
+			// and the review modal listening on this scene's key never heard
+			// it. The redacted sentence, never `err.message` — see above.
+			emitToUser("scenes:process:error", {
+				sceneId: params.sceneId,
+				error: failure.errorMessage
+			} satisfies Sockets.Scenes.Process.ErrorResponse)
 			throw err
 		}
 
@@ -1156,8 +1312,10 @@ export const sceneProcessHandler: Handler<
  * work if the flag were ever wrong. A re-processed scene always has a summary,
  * so the emptiness predicate can never match one.
  *
- * It also protects the save path for free: once a result is applied, `summary`
- * is set, so a later dismiss of the same activity cannot delete the scene.
+ * The save path does not race it: Review & Save hands its activity id to
+ * `scenes:update`, which dismisses the activity only AFTER the scene's summary
+ * is written. (An `activity:dismiss` sent alongside the update would race it,
+ * and a dismiss that arrived first would delete the very scene being saved.)
  */
 activityStore.setEphemeralSceneCleanup(async (sceneId, userId) => {
 	const scene = await db.query.scenes.findFirst({

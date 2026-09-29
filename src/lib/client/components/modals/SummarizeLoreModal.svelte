@@ -1,6 +1,8 @@
 <script lang="ts">
 	import {
+		CHARACTER_LORE_TYPE_ID,
 		HISTORY_TYPE_ID,
+		WORLD_LORE_TYPE_ID,
 		type LorebookEntry
 	} from "$lib/shared/entries/types"
 
@@ -15,8 +17,11 @@
 		useInterest
 	} from "$lib/client/sockets/interest.svelte"
 	import { resolveOrCreateBindingByName } from "$lib/client/utils/createLorebookBinding"
+	import { awaitReply } from "$lib/client/utils/awaitReply"
+	import { interestKey } from "$lib/shared/sockets/interest"
 	import { attachLorebookToSession as attachToSession } from "$lib/client/utils/attachLorebookToSession"
 	import AiTaskModal, { type AiTaskStep } from "./AiTaskModal.svelte"
+	import Select from "$lib/client/components/inputs/Select.svelte"
 	import { statusText } from "$lib/client/i18n/state.svelte"
 	import type { StatusText } from "@serene-pub/sdk"
 
@@ -147,12 +152,12 @@
 	let availableLorebooks = $state<
 		Sockets.Lorebooks.List.Response["lorebookList"]
 	>([])
-	let attachingLorebookId = $state<number | "">("")
+	let attachingLorebookId = $state("")
 	let isCreatingLorebook = $state(false)
 	let newLorebookName = $state("")
 	let historyEntryList = $state<History[]>([])
 
-	let selectedHistoryEntryId = $state<number | "">("")
+	let selectedHistoryEntryId = $state("")
 	let isCreatingHistoryEntry = $state(false)
 
 	/** Newest first, so the most recent entry is the obvious default. */
@@ -224,10 +229,17 @@
 	let rawOutput = $state("")
 	let showRaw = $state(false)
 	let isSaving = $state(false)
+	/**
+	 * Why the last Save did not land, shown in the review step beside the
+	 * text it failed to keep. Inline rather than a toast: the server's
+	 * `{event}:error` is already toasted by Layout's catch-all, and a second
+	 * toast would say the same thing twice.
+	 */
+	let saveError = $state("")
 	let extractedParticipantCharacters = $state<number[]>([])
 	let extractedMentionedCharacters = $state<number[]>([])
-	let newParticipantId = $state<number | "">("")
-	let newMentionedId = $state<number | "">("")
+	let newParticipantId = $state("")
+	let newMentionedId = $state("")
 	let pendingNewParticipants = $state<PendingNewCharacter[]>([])
 	let pendingNewMentioned = $state<PendingNewCharacter[]>([])
 	let newParticipantName = $state("")
@@ -286,9 +298,9 @@
 
 	let badgeLabel = $derived(
 		loreType === "world"
-			? "World Lore"
+			? "World lore"
 			: loreType === "character"
-				? "Character Lore"
+				? "Character lore"
 				: "Scene"
 	)
 
@@ -325,6 +337,7 @@
 		}
 		if (open) {
 			activeActivityId = null
+			saveError = ""
 			step = "configure"
 			loreType = initialLoreType
 			topic = ""
@@ -480,7 +493,7 @@
 				selectedHistoryEntryId === "" &&
 				sortedHistoryEntryList.length > 0
 			) {
-				selectedHistoryEntryId = sortedHistoryEntryList[0].id
+				selectedHistoryEntryId = String(sortedHistoryEntryList[0].id)
 				didPreselectHistoryEntry = true
 			}
 		}
@@ -501,7 +514,7 @@
 				historyEntryList = [...historyEntryList, historyEntry]
 			}
 			if (loreType === "scene") {
-				selectedHistoryEntryId = historyEntry.id
+				selectedHistoryEntryId = String(historyEntry.id)
 			}
 		}
 	}
@@ -513,6 +526,9 @@
 	// entries:create never fires and this was the only place that
 	// cleared the loading state.
 	function handleHistoryEntryCreateError(data: { error?: string }) {
+		// The same `entries:create:error` answers a failed lore Save, which
+		// reports itself inline — only a history create in flight is ours.
+		if (!isCreatingHistoryEntry) return
 		isCreatingHistoryEntry = false
 		toaster.error({
 			title: "Failed to create history entry",
@@ -617,7 +633,7 @@
 					month: defaultDate.month,
 					day: defaultDate.day,
 					content: "",
-					keys: "",
+					keys: [],
 					enabled: true,
 					constant: false,
 					useRegex: false,
@@ -809,90 +825,74 @@
 
 	async function saveEntry() {
 		if (!canSave || !lorebookId || isSaving) return
+		const bookId = lorebookId
 		isSaving = true
+		saveError = ""
 
-		if (loreType === "scene") {
-			try {
-				const participantIds = [...extractedParticipantCharacters]
-				const mentionedIds = [...extractedMentionedCharacters]
-				for (const p of pendingNewParticipants) {
-					const { id } = await resolveOrCreateBindingByName(
-						typedSocket,
-						lorebookId,
-						p.name
-					)
-					participantIds.push(id)
-				}
-				for (const m of pendingNewMentioned) {
-					const { id } = await resolveOrCreateBindingByName(
-						typedSocket,
-						lorebookId,
-						m.name
-					)
-					mentionedIds.push(id)
-				}
-
-				// `as any` on the payload, as the other `scenes:create` emit in
-				// this file already is: `historyEntryId` is nullable here and
-				// the declared Params are not. Left exactly as it was — the
-				// wire shape is unchanged by this conversion.
-				typedSocket.emit("scenes:create", {
-					scene: {
-						lorebookId,
-						sessionId,
-						historyEntryId: selectedHistoryEntryId
-							? Number(selectedHistoryEntryId)
-							: null,
-						name: reviewName.trim() || null,
-						summary: reviewContent.trim(),
-						selectedMessageIds,
-						participantCharacters: [...new Set(participantIds)],
-						mentionedCharacters: [...new Set(mentionedIds)]
-					}
-				} as any)
-			} catch (err) {
-				toaster.error({
-					title: "Failed to save new character",
-					description: err instanceof Error ? err.message : undefined
+		try {
+			if (loreType === "scene") {
+				await saveScene(bookId)
+			} else {
+				const name = reviewName.trim()
+				const content = reviewContent.trim()
+				// The unified entries door, one row per save. Keys left empty:
+				// the summarizer writes a draft for the author to key, and an
+				// unkeyed row is not read in until they do.
+				const entry =
+					loreType === "character"
+						? ({
+								typeId: CHARACTER_LORE_TYPE_ID,
+								lorebookId: bookId,
+								name,
+								content,
+								// The anchor — the cast member this lore is
+								// private to, as the summarizer resolved it.
+								lorebookBindingId: resolvedBindingId ?? null,
+								keys: [],
+								enabled: true,
+								constant: false,
+								useRegex: false,
+								caseSensitive: false,
+								priority: 1
+							} satisfies Sockets.Entries.Create.Params["entry"])
+						: ({
+								typeId: WORLD_LORE_TYPE_ID,
+								lorebookId: bookId,
+								name,
+								content,
+								keys: [],
+								enabled: true,
+								constant: false,
+								useRegex: false,
+								caseSensitive: false,
+								priority: 1
+							} satisfies Sockets.Entries.Create.Params["entry"])
+				// `entries:create` is broadcast to every tab of this user, so
+				// the reply is claimed only when it is this row — same book,
+				// type, name and (server-trimmed) content.
+				await awaitReply({
+					socket: typedSocket,
+					event: "entries:create",
+					params: { entry },
+					replyKey: interestKey("entries:create", bookId),
+					errorEvent: "entries:create:error",
+					fallbackError: "The entry could not be saved.",
+					match: (data) =>
+						data.entry?.lorebookId === bookId &&
+						data.entry.typeId === entry.typeId &&
+						(data.entry.name ?? "") === name &&
+						data.entry.content === content
 				})
-				isSaving = false
-				return
 			}
-		} else if (loreType === "world") {
-			// ⚠ `worldLoreEntries:create` and `characterLoreEntries:create`
-			// below are not in `SocketEventMap` and NOTHING registers them on
-			// the server — the 0.5 tables survive in the schema, the handlers
-			// do not. They are emitted through a cast so this conversion
-			// changes no behaviour; the save silently doing nothing is a
-			// pre-existing defect for the entries overhaul to answer.
-			typedSocket.emit("worldLoreEntries:create" as any, {
-				worldLoreEntry: {
-					lorebookId,
-					name: reviewName.trim(),
-					content: reviewContent.trim(),
-					keys: "",
-					enabled: true,
-					constant: false,
-					useRegex: false,
-					caseSensitive: false,
-					priority: 1
-				}
-			})
-		} else if (loreType === "character") {
-			typedSocket.emit("characterLoreEntries:create" as any, {
-				characterLoreEntry: {
-					lorebookId,
-					name: reviewName.trim(),
-					content: reviewContent.trim(),
-					lorebookBindingId: resolvedBindingId ?? null,
-					keys: "",
-					enabled: true,
-					constant: false,
-					useRegex: false,
-					caseSensitive: false,
-					priority: 1
-				}
-			})
+		} catch (err) {
+			// Keep the modal, the text and the activity: nothing was written,
+			// so the generated summary still lives only here.
+			saveError =
+				err instanceof Error && err.message
+					? err.message
+					: "The entry could not be saved."
+			isSaving = false
+			return
 		}
 
 		const titles = {
@@ -902,16 +902,74 @@
 		}
 		toaster.success({ title: titles[loreType] })
 		isSaving = false
-		// Only now is the generated text safe to let go of. The create emits
-		// above are fire-and-forget, so dismissing the activity before this
-		// point would make a failed save terminal — the summary lives nowhere
-		// else until the row exists.
+		// Only now is the generated text safe to let go of: the row exists.
+		// Dismissing the activity any earlier would make a failed save
+		// terminal — the summary lives nowhere else until then.
 		if (activeActivityId) {
-			typedSocket.emit("activity:dismiss", { id: activeActivityId })
+			typedSocket.emit("activity:dismiss", {
+				id: activeActivityId,
+				how: "acted"
+			})
 			activeActivityId = null
 		}
 		onSaved()
 		onOpenChange({ open: false })
+	}
+
+	/** A reviewed scene: resolve its new cast names, then create it and wait. */
+	async function saveScene(bookId: number) {
+		const participantIds = [...extractedParticipantCharacters]
+		const mentionedIds = [...extractedMentionedCharacters]
+		for (const p of pendingNewParticipants) {
+			const { id } = await resolveOrCreateBindingByName(
+				typedSocket,
+				bookId,
+				p.name
+			)
+			participantIds.push(id)
+		}
+		for (const m of pendingNewMentioned) {
+			const { id } = await resolveOrCreateBindingByName(
+				typedSocket,
+				bookId,
+				m.name
+			)
+			mentionedIds.push(id)
+		}
+
+		// `as any` on the payload, as the other `scenes:create` emit in this
+		// file already is: `historyEntryId` is nullable here and the declared
+		// Params are not.
+		await awaitReply({
+			socket: typedSocket,
+			event: "scenes:create",
+			params: {
+				scene: {
+					lorebookId: bookId,
+					sessionId,
+					historyEntryId: selectedHistoryEntryId
+						? Number(selectedHistoryEntryId)
+						: null,
+					name: reviewName.trim() || null,
+					summary: reviewContent.trim(),
+					selectedMessageIds,
+					participantCharacters: [...new Set(participantIds)],
+					mentionedCharacters: [...new Set(mentionedIds)]
+				}
+			} as any,
+			errorEvent: "scenes:create:error",
+			fallbackError: "The scene could not be saved.",
+			// A broadcast: claim it by the message set, which is unique to
+			// this save (the same correlation generateScene uses).
+			match: (data: any) => {
+				const ids: number[] = data?.scene?.selectedMessageIds ?? []
+				return (
+					!!data?.scene &&
+					ids.length === selectedMessageIds.length &&
+					ids.every((id) => selectedMessageIds.includes(id))
+				)
+			}
+		})
 	}
 
 	function addParticipant() {
@@ -992,17 +1050,17 @@
 					</div>
 					{#if !isCreatingLorebook}
 						<div class="flex flex-wrap gap-2">
-							<select
-								class="select flex-1 text-sm"
+							<Select
+								label="Lorebook to attach"
+								labelHidden
+								placeholder="Select existing lorebook…"
+								class="flex-1 text-sm"
+								options={availableLorebooks.map((lb) => ({
+									value: String(lb.id),
+									label: lb.name ?? ""
+								}))}
 								bind:value={attachingLorebookId}
-							>
-								<option value="">
-									Select existing lorebook…
-								</option>
-								{#each availableLorebooks as lb}
-									<option value={lb.id}>{lb.name}</option>
-								{/each}
-							</select>
+							/>
 							<button
 								class="btn btn-sm preset-filled-primary-500"
 								disabled={!attachingLorebookId}
@@ -1020,6 +1078,7 @@
 					{:else}
 						<div class="flex gap-2">
 							<input
+								aria-label="New lorebook name"
 								class="input flex-1 text-sm"
 								type="text"
 								placeholder="New lorebook name…"
@@ -1036,6 +1095,7 @@
 								Create & Attach
 							</button>
 							<button
+								aria-label="Cancel new lorebook"
 								class="btn btn-sm preset-filled-surface-400-600"
 								onclick={() => (isCreatingLorebook = false)}
 							>
@@ -1071,7 +1131,7 @@
 						bind:group={loreType}
 					/>
 					<Icons.Globe size={16} />
-					<span class="text-sm">World Lore</span>
+					<span class="text-sm">World lore</span>
 				</label>
 				<label class="flex cursor-pointer items-center gap-2">
 					<input
@@ -1082,7 +1142,7 @@
 						bind:group={loreType}
 					/>
 					<Icons.User size={16} />
-					<span class="text-sm">Character Lore</span>
+					<span class="text-sm">Character lore</span>
 				</label>
 			</div>
 		</fieldset>
@@ -1107,30 +1167,27 @@
 		<!-- History entry binding (scene only) -->
 		{#if loreType === "scene"}
 			<div class="space-y-1">
-				<label
-					class="label text-sm font-semibold"
-					for="summarize-history-entry"
-				>
+				<!-- A heading for both branches; the Select carries its own
+				     (visually hidden) label. -->
+				<p class="label text-sm font-semibold">
 					History entry <span class="text-error-500">*</span>
-				</label>
+				</p>
 				{#if historyEntryList.length > 0 || selectedHistoryEntryId}
 					<div class="flex gap-2">
-						<select
-							id="summarize-history-entry"
-							class="select flex-1 text-sm"
+						<Select
+							label="History entry"
+							labelHidden
+							required
+							placeholder="— Select history entry —"
+							class="flex-1 text-sm"
+							options={sortedHistoryEntryList.map((entry) => ({
+								value: String(entry.id),
+								label: entry.year
+									? `Year ${entry.year}${entry.month ? `, Month ${entry.month}` : ""}${entry.day ? `, Day ${entry.day}` : ""}`
+									: `Entry #${entry.id}`
+							}))}
 							bind:value={selectedHistoryEntryId}
-						>
-							<option value="">— Select history entry —</option>
-							{#each sortedHistoryEntryList as entry}
-								<option value={entry.id}>
-									{#if entry.year}Year {entry.year}{entry.month
-											? `, Month ${entry.month}`
-											: ""}{entry.day
-											? `, Day ${entry.day}`
-											: ""}{:else}Entry #{entry.id}{/if}
-								</option>
-							{/each}
-						</select>
+						/>
 						<button
 							class="btn btn-sm preset-filled-surface-400-600"
 							disabled={isCreatingHistoryEntry || !hasLorebook}
@@ -1140,7 +1197,7 @@
 								: "Create a new blank history entry"}
 						>
 							{#if isCreatingHistoryEntry}
-								<Icons.Loader size={14} class="animate-spin" />
+								<Icons.Loader2 size={14} class="animate-spin" />
 							{:else}
 								<Icons.Plus size={14} />
 							{/if}
@@ -1161,11 +1218,11 @@
 								: undefined}
 						>
 							{#if isCreatingHistoryEntry}
-								<Icons.Loader size={14} class="animate-spin" />
+								<Icons.Loader2 size={14} class="animate-spin" />
 							{:else}
 								<Icons.Plus size={14} />
 							{/if}
-							Create New Entry
+							Create new entry
 						</button>
 					</div>
 				{/if}
@@ -1178,7 +1235,7 @@
 							{entry.content}
 						</p>
 					{:else}
-						<p class="text-surface-400 text-xs italic">
+						<p class="text-surface-600-400 text-xs italic">
 							Empty entry — content will be populated from scenes
 							later.
 						</p>
@@ -1198,7 +1255,7 @@
 					{#if loreType === "character"}
 						<span class="text-error-500">*</span>
 					{:else}
-						<span class="text-surface-400 font-normal">
+						<span class="text-surface-600-400 font-normal">
 							(optional)
 						</span>
 					{/if}
@@ -1226,25 +1283,18 @@
 		<!-- Binding (character lore only) -->
 		{#if loreType === "character"}
 			<div class="space-y-1">
-				<label
-					class="label text-sm font-semibold"
-					for="summarize-binding"
-				>
-					Bind to character
-					<span class="text-surface-400 font-normal">(optional)</span>
-				</label>
-				<select
-					id="summarize-binding"
-					class="select text-sm"
+				<Select
+					label="Bind to character (optional)"
+					class="text-sm"
+					options={[
+						{ value: "", label: "— None (unbound) —" },
+						...bindableEntities.map((e) => ({
+							value: String(e.id),
+							label: e.isPersona ? `${e.name} · persona` : e.name
+						}))
+					]}
 					bind:value={selectedBinding}
-				>
-					<option value="">— None (unbound) —</option>
-					{#each bindableEntities as e}
-						<option value={String(e.id)}>
-							{e.isPersona ? `${e.name} · persona` : e.name}
-						</option>
-					{/each}
-				</select>
+				/>
 			</div>
 		{/if}
 
@@ -1261,9 +1311,7 @@
 {#snippet previewBlock()}
 	{#if partialSummary.content || partialSummary.raw}
 		<div class="space-y-1">
-			<p
-				class="text-surface-700-300 text-xs font-semibold tracking-wide uppercase"
-			>
+			<p class="text-surface-600-400 text-xs font-semibold">
 				{summarizePhase === "synthesizing"
 					? "Final entry"
 					: `Draft ${currentBatch}`}
@@ -1303,6 +1351,14 @@
 
 {#snippet reviewBlock()}
 	<div class="space-y-4">
+		{#if saveError}
+			<p
+				class="border-error-500 text-error-700-300 rounded-lg border p-3 text-sm"
+				role="alert"
+			>
+				Not saved: {saveError} Your text is still here — try Save again.
+			</p>
+		{/if}
 		{#if loreType === "world" || loreType === "character" || loreType === "scene"}
 			<div class="space-y-1">
 				<label class="label text-sm font-semibold" for="review-name">
@@ -1337,9 +1393,7 @@
 
 		{#if loreType === "scene"}
 			<div class="border-surface-300-700 space-y-3 rounded-lg border p-3">
-				<p
-					class="text-surface-700-300 text-xs font-semibold tracking-wide uppercase"
-				>
+				<p class="text-surface-600-400 text-xs font-semibold">
 					Extracted characters
 				</p>
 
@@ -1373,18 +1427,26 @@
 							</span>
 						{/each}
 						<div class="flex gap-1">
-							<select
-								class="select select-sm w-32 text-xs"
+							<Select
+								label="Participant to add"
+								labelHidden
+								placeholder="Add character…"
+								class="w-40 text-xs"
+								options={lorebookBindings
+									.filter(
+										(b) =>
+											!extractedParticipantCharacters.includes(
+												b.id
+											)
+									)
+									.map((b) => ({
+										value: String(b.id),
+										label: b.name || b.binding
+									}))}
 								bind:value={newParticipantId}
-							>
-								<option value="">Add character…</option>
-								{#each lorebookBindings.filter((b) => !extractedParticipantCharacters.includes(b.id)) as b}
-									<option value={b.id}>
-										{b.name || b.binding}
-									</option>
-								{/each}
-							</select>
+							/>
 							<button
+								aria-label="Add participant"
 								class="btn btn-sm preset-filled-surface-400-600"
 								onclick={addParticipant}
 								disabled={newParticipantId === ""}
@@ -1394,7 +1456,7 @@
 						</div>
 					</div>
 					{#if extractedParticipantCharacters.length === 0}
-						<p class="text-surface-400 text-xs italic">
+						<p class="text-surface-600-400 text-xs italic">
 							None extracted.
 						</p>
 					{/if}
@@ -1405,7 +1467,7 @@
 									class="chip preset-tonal-warning flex items-center gap-1 border border-dashed text-xs"
 								>
 									{p.name}
-									<span class="text-[10px] opacity-70">
+									<span class="text-[11px] opacity-70">
 										(new)
 									</span>
 									<button
@@ -1437,6 +1499,7 @@
 							}}
 						/>
 						<button
+							aria-label="Add participant by name"
 							class="btn btn-sm preset-filled-surface-400-600"
 							onclick={addManualParticipant}
 							disabled={!newParticipantName.trim()}
@@ -1476,18 +1539,26 @@
 							</span>
 						{/each}
 						<div class="flex gap-1">
-							<select
-								class="select select-sm w-32 text-xs"
+							<Select
+								label="Mentioned character to add"
+								labelHidden
+								placeholder="Add character…"
+								class="w-40 text-xs"
+								options={lorebookBindings
+									.filter(
+										(b) =>
+											!extractedMentionedCharacters.includes(
+												b.id
+											)
+									)
+									.map((b) => ({
+										value: String(b.id),
+										label: b.name || b.binding
+									}))}
 								bind:value={newMentionedId}
-							>
-								<option value="">Add character…</option>
-								{#each lorebookBindings.filter((b) => !extractedMentionedCharacters.includes(b.id)) as b}
-									<option value={b.id}>
-										{b.name || b.binding}
-									</option>
-								{/each}
-							</select>
+							/>
 							<button
+								aria-label="Add mentioned character"
 								class="btn btn-sm preset-filled-surface-400-600"
 								onclick={addMentioned}
 								disabled={newMentionedId === ""}
@@ -1497,7 +1568,7 @@
 						</div>
 					</div>
 					{#if extractedMentionedCharacters.length === 0}
-						<p class="text-surface-400 text-xs italic">
+						<p class="text-surface-600-400 text-xs italic">
 							None extracted.
 						</p>
 					{/if}
@@ -1508,7 +1579,7 @@
 									class="chip preset-tonal-warning flex items-center gap-1 border border-dashed text-xs"
 								>
 									{p.name}
-									<span class="text-[10px] opacity-70">
+									<span class="text-[11px] opacity-70">
 										(new)
 									</span>
 									<button
@@ -1540,6 +1611,7 @@
 							}}
 						/>
 						<button
+							aria-label="Add mentioned character by name"
 							class="btn btn-sm preset-filled-surface-400-600"
 							onclick={addManualMentioned}
 							disabled={!newMentionedName.trim()}
@@ -1596,7 +1668,7 @@
 						>
 							<Icons.ChevronRight
 								size={12}
-								class="text-surface-400 shrink-0 transition-transform {expandedTraceIdx ===
+								class="text-surface-600-400 shrink-0 transition-transform {expandedTraceIdx ===
 								i
 									? 'rotate-90'
 									: ''}"
@@ -1616,7 +1688,7 @@
 							>
 								<div class="space-y-1 p-3">
 									<p
-										class="text-primary-500 text-[10px] font-bold tracking-widest uppercase"
+										class="text-surface-600-400 text-xs font-medium"
 									>
 										System
 									</p>
@@ -1625,7 +1697,7 @@
 								</div>
 								<div class="space-y-1 p-3">
 									<p
-										class="text-warning-500 text-[10px] font-bold tracking-widest uppercase"
+										class="text-surface-600-400 text-xs font-medium"
 									>
 										User
 									</p>
@@ -1634,7 +1706,7 @@
 								</div>
 								<div class="space-y-1 p-3">
 									<p
-										class="text-success-500 text-[10px] font-bold tracking-widest uppercase"
+										class="text-surface-600-400 text-xs font-medium"
 									>
 										Response
 									</p>
@@ -1654,14 +1726,14 @@
 	{open}
 	{onOpenChange}
 	title="Summarize to Lorebook"
-	runningTitle="Generating Summary…"
+	runningTitle="Generating summary…"
 	reviewTitle="Review & Save"
 	badge={badgeLabel}
 	step={aiStep}
 	{progressPercent}
 	{progressLabel}
 	canStart={canGenerate}
-	startLabel="Generate Summary"
+	startLabel="Generate summary"
 	{canSave}
 	saveLabel="Save to Lorebook"
 	{isSaving}

@@ -5,7 +5,7 @@
  * One string names one declaration: the spec that contributed it and the
  * action's own key within that spec. Everything that keys on an action keys
  * on this — the *new* marker (`seen_actions`), a session's enablement row
- * (`session_functions`), the fire (`sessions:triggerFunction`'s `action`), a
+ * (`session_functions`), the fire (`sessions:fireAction`'s `action`), a
  * binding's R-6 check, a list's `{#each}` key. Never the function: several
  * actions, and several specs, may share one function, and two actions on one
  * function with different audiences are two different things a person may
@@ -35,20 +35,12 @@ export const CORE_ACTION_SPEC = CORE_ACTION_SPEC_ID
  */
 export { ACTION_IDENTITY, ACTION_IDENTITY_MAX_LENGTH }
 
-/** `core:spec/narrate` + `narrate` → `core:spec/narrate#narrate`. */
-export const actionIdentity = (a: { specSlug: string; key: string }): string =>
-	`${a.specSlug}#${a.key}`
-
-/** A well-formed identity, or null. Shape only — nothing about whether it names anything. */
-export function parseActionIdentity(
-	raw: unknown
-): { specSlug: string; key: string } | null {
-	if (typeof raw !== "string") return null
-	if (raw.length > ACTION_IDENTITY_MAX_LENGTH || !ACTION_IDENTITY.test(raw))
-		return null
-	const i = raw.lastIndexOf("#")
-	return { specSlug: raw.slice(0, i), key: raw.slice(i + 1) }
-}
+/**
+ * Build and split an identity — the SDK's, beside the grammar (core's
+ * conversation reads them there too). Shape only: whether one names anything
+ * is the list's business.
+ */
+export { actionIdentity, parseActionIdentity } from "@serene-pub/sdk"
 
 /** Is this identity one of core's message verbs (`core#…`)? */
 export const isCoreActionIdentity = (identity: string): boolean =>

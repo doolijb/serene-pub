@@ -164,17 +164,21 @@ const SERVICE_LABEL: Record<DestinationKind, string> = {
 /** The connection types each kind accepts, per scope. */
 function typesFor(kind: DestinationKind, scope: FinderScope): string[] {
 	if (kind === "koboldcpp")
-		// ONE KoboldCPP destination per install, whichever scope is on: the
-		// managed image connection is the same install's second row (U1 folds
-		// it into the text one's view), and the download's `kind` — not the
-		// connection — is what decides which directory the file lands in.
+		// ONE KoboldCPP destination per install, whichever scope is on: one
+		// endpoint serves chat and images, and the download's `kind` — not the
+		// connection — decides which directory the file lands in. ⏳ The image
+		// id is listed until the boot fold has retired it.
 		return [
 			CONNECTION_TYPE.KOBOLDCPP_MANAGED,
 			CONNECTION_TYPE.KOBOLDCPP_MANAGED_IMAGE
 		]
 	if (kind === "ollama")
+		// One Ollama connection per host serves every modality it has (owner
+		// ruling 2026-09-25), so the chat row IS the embeddings destination.
+		// `ollama-embeddings` stays listed after it only so a row the merge has
+		// not reached yet still takes a download; the merge leaves none.
 		return scope === "embeddings"
-			? [CONNECTION_TYPE.OLLAMA_EMBEDDINGS]
+			? [CONNECTION_TYPE.OLLAMA, CONNECTION_TYPE.OLLAMA_EMBEDDINGS]
 			: [CONNECTION_TYPE.OLLAMA]
 	return scope === "entities"
 		? [CONNECTION_TYPE.LOCAL_ONNX_NER]
@@ -232,16 +236,24 @@ export function destinationsFor(
 	return out
 }
 
-/** The caller's connection if it can take this scope, else the first. */
+/**
+ * The caller's connection if it can take this scope; else the first that can
+ * take a download NOW; else the first.
+ *
+ * "The first" alone defaulted Chat to a KoboldCPP that was not installed while
+ * Ollama sat running beside it (walk 2026-09-24, plan C6) — the finder's first
+ * screen offered Get buttons that led nowhere.
+ */
 export function pickDestination(
 	destinations: readonly Destination[],
-	connectionId?: number | null
+	connectionId?: number | null,
+	isReady: (destination: Destination) => boolean = () => true
 ): Destination | null {
 	if (connectionId != null) {
 		const asked = destinations.find((d) => d.connectionId === connectionId)
 		if (asked) return asked
 	}
-	return destinations[0] ?? null
+	return destinations.find(isReady) ?? destinations[0] ?? null
 }
 
 /** Where a destination's files land, as a sentence fragment. */
@@ -266,7 +278,7 @@ export function landingNote(
 /**
  * Substring, case-insensitive, over whichever fields a row has.
  *
- * Deliberately not fuzzy: the names here are `TheBloke/Mistral-7B-Instruct`
+ * Never fuzzy: the names here are `TheBloke/Mistral-7B-Instruct`
  * and `bge-small-en-v1.5`, and a fuzzy match over strings that dense returns
  * everything for almost every query.
  */
@@ -334,6 +346,8 @@ export interface FinderRow {
 	/** The middle clause: "7B", "384 dims", "9 labels". */
 	facts: string | null
 	description: string | null
+	/** Human tags from the list's own vocabulary — see `displayTags`. */
+	tags: string[]
 	tier: FinderTier | null
 	/** The file this row would fetch, when the catalogue quotes one. */
 	bytes: number | null
@@ -345,9 +359,17 @@ export interface FinderRow {
 	downloading: boolean
 }
 
-/** "1.4 GB · 7B · A small instruct model" — absent clauses simply drop. */
+/**
+ * "TheBloke · 1.4 GB · 7B" — the FACTS line. Absent clauses simply drop.
+ *
+ * ⚠ **The description is not in here**, and was until 2026-09-25. Four clauses
+ * joined with `·` into one `truncate` line meant the description was cut off
+ * on all but the widest column — the row quoted a sentence it never showed.
+ * It has its own line-clamped line on the card now, so this carries only what
+ * fits: who published it, how big it is, and what shape it is.
+ */
 export function secondLine(row: FinderRow): string {
-	return [repoOwner(row.name), row.sizeLabel, row.facts, row.description]
+	return [repoOwner(row.name), row.sizeLabel, row.facts]
 		.filter((part): part is string => !!part && part.length > 0)
 		.join(" · ")
 }
@@ -396,6 +418,8 @@ type KcppRecommended = Sockets.KoboldCPP.RecommendedModels.RecommendedModel
 export interface OllamaRecommended {
 	name: string
 	pull?: string
+	/** The list's tag vocabulary; `embedding` marks an embedding model. */
+	tags?: string[]
 	/** GB, as the YAML quotes it. */
 	size?: number
 	recommended_vram?: number
@@ -480,6 +504,7 @@ export function kcppRecommendedRows(
 				sizeLabel: formatBytes(bytes),
 				facts: m.parameterSize || null,
 				description: m.description || null,
+				tags: displayTags(m.tags),
 				tier: label
 					? {
 							label,
@@ -519,6 +544,9 @@ export function ollamaRecommendedRows(
 				sizeLabel: formatBytes(bytes),
 				facts: m.details?.parameter_size || null,
 				description: m.details?.description || null,
+				// `embedding` is the kind, already said by the scope this row
+				// was fetched for — not a chip anyone needs to read.
+				tags: displayTags(m.tags).filter((t) => t !== "embedding"),
 				tier: label
 					? {
 							label,
@@ -538,12 +566,14 @@ export function ollamaRecommendedRows(
 }
 
 /**
- * The rows a local ONNX connection already carries.
+ * The rows a local ONNX connection could still fetch.
  *
  * Its "recommended list" is the connection's own models: the fetched
  * catalogue is projected into `connection_models` at sync, so there is no
- * second list to merge — a row is either on disk, downloading, or waiting to
- * be fetched, and all three belong in the same group.
+ * second list to merge. A model already ON DISK is left out: this is a list of
+ * downloads, and one that mixed in the models already here was the complaint
+ * (walk 2026-09-24, plan C2). The finder says how many are here instead, and
+ * links to them. Arriving and failed rows stay — they are downloads too.
  */
 export function onnxRecommendedRows(
 	models: readonly OnnxModelRow[],
@@ -551,6 +581,7 @@ export function onnxRecommendedRows(
 	modality: "embeddings" | "entities"
 ): FinderRow[] {
 	return models
+		.filter((m) => m.local?.state !== "on_disk")
 		.filter((m) =>
 			matchesQuery(ctx.query, m.name, m.local?.catalog?.description)
 		)
@@ -577,6 +608,8 @@ export function onnxRecommendedRows(
 					formatMegabytes(catalog?.sizeMb),
 				facts,
 				description: catalog?.description || null,
+				// The ONNX catalogue carries no tag vocabulary.
+				tags: [],
 				tier: label
 					? { label, matches: fitFor(bytes, ctx.tier) === "fits" }
 					: null,
@@ -599,6 +632,42 @@ export interface HubRow {
 	detail: string
 	/** How many files the picker will have to show. */
 	fileCount: number
+	/** The repo's own sentence. Null when the Hub was quiet. */
+	description: string | null
+	/** Human tags only — see `displayTags`. Empty when there are none. */
+	tags: string[]
+}
+
+/**
+ * The tags worth showing a person.
+ *
+ * ⚠ **Machine metadata is dropped.** Hugging Face answers with the licence,
+ * the region, the arXiv id, the base model and the datasets all spelled as
+ * `prefix:value` tags, mixed in with the human ones (`text-generation`,
+ * `conversational`, `en`). The old Ollama manager rendered
+ * `tags.slice(0, 4)` raw, so a row's four chips were routinely
+ * `license:apache-2.0`, `region:us`, `arxiv:2401.04088`, `base_model:…` —
+ * four chips and not one of them a fact anybody reads a chip for.
+ *
+ * The licence is not lost: `hubDetail` already lifts it into the facts line,
+ * which is where one belongs.
+ *
+ * Deduped and order-preserving, because the Hub repeats itself.
+ */
+export function displayTags(
+	tags: readonly string[] | null | undefined
+): string[] {
+	const seen = new Set<string>()
+	const out: string[] = []
+	for (const raw of tags ?? []) {
+		const tag = String(raw ?? "").trim()
+		if (!tag || tag.includes(":")) continue
+		const key = tag.toLowerCase()
+		if (seen.has(key)) continue
+		seen.add(key)
+		out.push(tag)
+	}
+	return out
 }
 
 /** "1.2M" / "12k" / "431" — compact, because the row has three other clauses. */
@@ -664,12 +733,15 @@ export function kcppHubRows(models: readonly KcppResult[]): HubRow[] {
 		key: `hub:${m.name}`,
 		name: m.name,
 		fileCount: m.pullOptions?.length ?? 0,
+		description: m.description || null,
+		// The KoboldCPP search answers with no tags at all — not an empty
+		// list it could have filled, a field it does not send.
+		tags: [],
 		detail: hubDetail({
 			fileCount: m.pullOptions?.length ?? 0,
 			downloads: m.downloads,
-			// The KoboldCPP search answers with no tags, so no licence clause
-			// is available on this side — see the module header's rule about
-			// absent clauses.
+			// No tags, so no licence clause is available on this side — see
+			// the module header's rule about absent clauses.
 			license: null
 		})
 	}))
@@ -680,6 +752,8 @@ export function ollamaHubRows(models: readonly OllamaHubResult[]): HubRow[] {
 		key: `hub:${m.name}`,
 		name: m.name,
 		fileCount: m.pullOptions?.length ?? 0,
+		description: m.description || null,
+		tags: displayTags(m.tags),
 		detail: hubDetail({
 			fileCount: m.pullOptions?.length ?? 0,
 			downloads: m.downloads,

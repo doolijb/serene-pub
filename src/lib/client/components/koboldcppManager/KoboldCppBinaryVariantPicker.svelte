@@ -1,5 +1,6 @@
 <script lang="ts">
 	import * as Icons from "@lucide/svelte"
+	import Select from "$lib/client/components/inputs/Select.svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { useInterest } from "$lib/client/sockets/interest.svelte"
 	import { toaster } from "$lib/client/utils/toaster"
@@ -194,34 +195,38 @@
 
 	<!-- Version picker -->
 	<div>
-		<label
+		<!-- Select carries the real (visually hidden) label. -->
+		<span
 			class="text-surface-600-400 mb-1 block text-xs font-medium"
-			for="versionSelect"
+			aria-hidden="true"
 		>
 			Version
-		</label>
+		</span>
 		{#if loadingVersions}
 			<div class="flex items-center gap-2 text-xs">
 				<Icons.Loader2 size={12} class="animate-spin" />
 				Loading versions…
 			</div>
 		{:else}
-			<select
-				id="versionSelect"
-				class="select w-full text-sm"
+			<Select
+				label="Version"
+				labelHidden
+				class="w-full text-sm"
+				options={[
+					{
+						value: "latest",
+						label: `Latest${versions[0] ? ` (${versions[0].tag})` : ""}`
+					},
+					...versions
+						.filter((v) => !v.isLatest)
+						.map((v) => ({ value: v.tag, label: v.tag }))
+				]}
 				bind:value={selectedTag}
-				onchange={() => fetchVariants(selectedTag)}
+				onValueChange={(v) => {
+					if (v) fetchVariants(v)
+				}}
 				disabled={isDownloading}
-			>
-				<option value="latest">
-					Latest{versions[0] ? ` (${versions[0].tag})` : ""}
-				</option>
-				{#each versions as v}
-					{#if !v.isLatest}
-						<option value={v.tag}>{v.tag}</option>
-					{/if}
-				{/each}
-			</select>
+			/>
 		{/if}
 	</div>
 
@@ -313,7 +318,7 @@
 		{#each sortedPlatforms as platform}
 			<div>
 				<p
-					class="text-surface-700-300 mb-2 text-xs font-semibold tracking-wide uppercase"
+					class="text-surface-600-400 mb-2 text-xs"
 				>
 					{platformLabel[platform] ?? platform}
 				</p>
@@ -340,7 +345,7 @@
 									{variant.description}
 								</p>
 							</div>
-							<span class="text-surface-400 shrink-0 text-xs">
+							<span class="text-surface-600-400 shrink-0 text-xs">
 								{formatSize(variant.sizeBytes)}
 							</span>
 						</button>

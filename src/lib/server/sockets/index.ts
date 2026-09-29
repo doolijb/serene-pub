@@ -22,22 +22,20 @@ import { registerLocalOnnxModelHandlers } from "./localOnnxModels"
 import { registerConnectionDefaultsHandlers } from "./connectionDefaults"
 import { registerImageHandlers } from "./images"
 import { registerPluginHandlers } from "./plugins"
+import { registerComponentHandlers } from "./components"
 import { registerSamplingConfigHandlers } from "./samplingConfigs"
 import { registerCompletionTemplateHandlers } from "./completionTemplates"
 import { registerCharacterHandlers } from "./characters"
 import { registerCharacterFolderHandlers } from "./characterFolders"
 import { registerSpriteHandlers } from "./sprites"
-import { registerContextConfigHandlers } from "./contextConfigs"
 import { registerSessionHandlers } from "./sessions"
-import { registerPromptConfigHandlers } from "./promptConfigs"
-import { registerNarratorPromptConfigHandlers } from "./narratorPromptConfigs"
-import { registerGraphBuildConfigHandlers } from "./graphBuildConfigs"
 import { registerUserHandlers } from "./users"
 import { registerUserSettingsHandlers } from "./userSettings"
 import { registerLanguageHandlers } from "./language"
 import { registerLorebookHandlers } from "./lorebooks"
 import { registerEntryHandlers } from "./entries"
 import { registerAmendmentHandlers } from "./amendments"
+import { registerLorebookStoryTimeHandlers } from "./lorebookStoryTime"
 import { registerBindingSuggestionHandlers } from "./bindingSuggestions"
 import { registerMediaHandlers } from "./media"
 import { registerTagHandlers } from "./tags"
@@ -49,14 +47,12 @@ import { registerVectorizationHandlers } from "./vectorization"
 import { registerNerHandlers } from "./ner"
 import { registerSceneHandlers } from "./scenes"
 import { registerNarrativeGraphHandlers } from "./narrativeGraph"
-import { registerSummarizePromptConfigHandlers } from "./summarizePromptConfigs"
 import { registerImportHandlers } from "./import"
 import { registerSetupHandlers } from "./setup"
 import { registerTaskQueueHandlers } from "./taskQueue"
 import { registerActivityHandlers } from "./activity"
 import { registerCustomThemeHandlers } from "./customThemes"
 import { registerWidgetStyleHandlers } from "./widgetStyles"
-import { registerLayoutHandlers } from "./layouts"
 import { registerStateHandlers } from "./state"
 import { registerCardSourceHandlers } from "./cardSources"
 import { registerPipelineHandlers } from "./pipelines"
@@ -64,12 +60,22 @@ import { registerSessionAdminHandlers } from "./sessionAdmin"
 import { registerTunnelHandlers } from "./tunnels"
 import { registerAllowedHostHandlers } from "./allowedHosts"
 import { registerBackupHandlers } from "./backups"
+import { registerAdminOverviewHandlers } from "./adminOverview"
+import { registerAdminLogbookHandlers } from "./adminLogbook"
+import {
+	logbookBegin,
+	logbookCommit,
+	logbookWants
+} from "$lib/server/adminLogbook/record"
 import { registerTotpHandlers } from "./totp"
 import { registerAccountHandlers } from "./account"
 import { registerInviteHandlers } from "./invites"
 import { registerJumpHandlers } from "./jump"
+import { registerNotificationHandlers } from "./notifications"
+import { installUserPush, pushToUser } from "./utils/userPush"
+import { installAdminOverviewStale } from "$lib/server/admin/overviewStale"
+import { installViewingIo } from "$lib/server/notifications/viewing"
 import { isBlockedDuringSetup } from "$lib/server/auth/setupGate"
-import { archivedWrite } from "./legacyArchive"
 import { redactConnections } from "$lib/server/connections/visibility"
 import { isGatedEvent, scopeOfPayload } from "$lib/shared/sockets/interest"
 import {
@@ -88,6 +94,14 @@ export function connectSockets(io: {
 	// room and what each of them declared. See `./interest.ts`.
 	sockets: InterestIo["sockets"]
 }) {
+	// The one "push to a person from anywhere" path (review gate, cap pause,
+	// notifications) — bound here because this is where `io` exists.
+	installUserPush(io)
+	// `admin:overviewStale` to every connected admin — rides the push above.
+	installAdminOverviewStale(io, pushToUser)
+	// What each tab is looking at, read when a notification is raised.
+	installViewingIo(io)
+
 	io.on("connect", (socket) => {
 		// authMiddleware (registered via io.use before connectSockets runs)
 		// authenticates the connection and sets socket.user before "connect"
@@ -247,6 +261,7 @@ export function connectSockets(io: {
 		registerConnectionDefaultsHandlers(socket, emitToUser, register)
 		registerImageHandlers(socket, emitToUser, register)
 		registerPluginHandlers(socket, emitToUser, register)
+		registerComponentHandlers(socket, emitToUser, register)
 		registerOllamaHandlers(socket, emitToUser, register)
 		registerKoboldCppHandlers(socket, emitToUser, register)
 		registerSystemSettingsHandlers(socket, emitToUser, register)
@@ -254,15 +269,11 @@ export function connectSockets(io: {
 		registerCharacterFolderHandlers(socket, emitToUser, register)
 		registerSpriteHandlers(socket, emitToUser, register)
 		registerCardSourceHandlers(socket, emitToUser, register)
-		registerContextConfigHandlers(socket, emitToUser, register)
-		registerPromptConfigHandlers(socket, emitToUser, register)
-		registerNarratorPromptConfigHandlers(socket, emitToUser, register)
-		registerGraphBuildConfigHandlers(socket, emitToUser, register)
-		registerSummarizePromptConfigHandlers(socket, emitToUser, register)
 		registerSessionHandlers(socket, emitToUser, register)
 		registerLorebookHandlers(socket, emitToUser, register)
 		registerEntryHandlers(socket, emitToUser, register)
 		registerAmendmentHandlers(socket, emitToUser, register)
+		registerLorebookStoryTimeHandlers(socket, emitToUser, register)
 		registerBindingSuggestionHandlers(socket, emitToUser, register)
 		registerTagHandlers(socket, emitToUser, register)
 		registerMediaHandlers(socket, emitToUser, register)
@@ -277,17 +288,19 @@ export function connectSockets(io: {
 		registerActivityHandlers(socket)
 		registerCustomThemeHandlers(socket, emitToUser, register)
 		registerWidgetStyleHandlers(socket, emitToUser, register)
-		registerLayoutHandlers(socket, emitToUser, register)
 		registerStateHandlers(socket, emitToUser, register)
 		registerPipelineHandlers(socket, emitToUser, register)
 		registerSessionAdminHandlers(socket, emitToUser, register)
 		registerTunnelHandlers(socket, emitToUser, register)
 		registerAllowedHostHandlers(socket, emitToUser, register)
 		registerBackupHandlers(socket, emitToUser, register)
+		registerAdminOverviewHandlers(socket, emitToUser, register)
+		registerAdminLogbookHandlers(socket, emitToUser, register)
 		registerTotpHandlers(socket, emitToUser, register)
 		registerAccountHandlers(socket, emitToUser, register)
 		registerInviteHandlers(socket, emitToUser, register)
 		registerJumpHandlers(socket, emitToUser, register)
+		registerNotificationHandlers(socket, emitToUser, register)
 		console.log(`Socket connected: ${socket.id} for user ${userId}`)
 	})
 }
@@ -352,10 +365,8 @@ function register(
 	socket.on(handler.event, async (message: any) => {
 		// A session that still owes setup — a password to choose, a second
 		// factor to enrol (27 §1) — may only use what it needs to finish.
-		// Enforced
-		// here rather than per-handler for the same reason as the archived
-		// check below — a handler added later cannot forget a gate it never
-		// had to know about.
+		// Enforced here rather than per-handler so a handler added later
+		// cannot forget a gate it never had to know about.
 		//
 		// The flag is computed once at handshake. A tab that verifies elsewhere
 		// keeps a stale `true` until it reconnects, which fails closed (it sees
@@ -374,15 +385,6 @@ function register(
 			return
 		}
 
-		// The 0.5 config tables are readable and nothing else. Checked here
-		// rather than in each of their handlers so a handler added to one of
-		// those namespaces later cannot forget — see `legacyArchive.ts`.
-		const archived = archivedWrite(handler.event)
-		if (archived) {
-			emitToUser(archived.event, { error: archived.message })
-			return
-		}
-
 		// Many handlers catch their own errors, emit a specific
 		// `{event}:error` with a useful message via emitToUser, then
 		// re-throw so this wrapper's catch below also runs (eg. for
@@ -391,14 +393,27 @@ function register(
 		// generic, less useful message — without needing every handler to
 		// coordinate this explicitly.
 		let specificErrorEmitted = false
+		// The admin logbook (`server/adminLogbook`): null unless this event is
+		// one it records and the actor is an admin. The payload a handler
+		// emits on its own event stands in for a reply it did not return.
+		// Checked synchronously first, so an unrecorded event (nearly all of
+		// them) starts its handler on the same tick it always did.
+		const logbook = logbookWants(socket.user, handler.event, message)
+			? await logbookBegin(socket.user, handler.event, message)
+			: null
+		let emitted: unknown = undefined
 		const trackedEmitToUser = (event: string, data: any) => {
 			if (event === `${handler.event}:error`) specificErrorEmitted = true
+			if (logbook && event === handler.event && typeof data !== "function")
+				emitted = data
 			// Forwarded, not discarded: a handler that passes a thunk gets back
 			// the promise it may want to await before it returns.
 			return emitToUser(event, data)
 		}
 		try {
-			await handler.handler(socket, message, trackedEmitToUser)
+			const result = await handler.handler(socket, message, trackedEmitToUser)
+			if (logbook && !specificErrorEmitted)
+				void logbookCommit(logbook, result ?? emitted)
 		} catch (error) {
 			console.error(`Error handling event ${handler.event}:`, error)
 			if (specificErrorEmitted) return

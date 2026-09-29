@@ -110,10 +110,10 @@
 </script>
 
 <svelte:head>
-	<title>Edit User — Document View — Serene Pub</title>
+	<title>Edit user — Document View — Serene Pub</title>
 </svelte:head>
 
-<h1>Edit User</h1>
+<h1>Edit user</h1>
 <p><a href="/document-view/settings/users">Back to Users</a></p>
 
 {#if !userCtx.user?.isAdmin}
@@ -141,7 +141,7 @@
 			/>
 		</div>
 		<div class="a11y-field">
-			<label for="a11y-user-display-name">Display Name</label>
+			<label for="a11y-user-display-name">Display name</label>
 			<input
 				id="a11y-user-display-name"
 				type="text"
@@ -150,7 +150,7 @@
 			/>
 		</div>
 		<div class="a11y-field">
-			<label for="a11y-user-passphrase">New Passphrase</label>
+			<label for="a11y-user-passphrase">New passphrase</label>
 			<p class="a11y-hint">Leave blank to keep the current passphrase.</p>
 			<input
 				id="a11y-user-passphrase"
@@ -170,7 +170,7 @@
 			<label for="a11y-user-is-admin">Admin</label>
 		</div>
 		<button type="submit" class="a11y-btn" disabled={saving}>
-			{saving ? "Saving…" : "Save Changes"}
+			{saving ? "Saving…" : "Save changes"}
 		</button>
 		<button
 			type="button"
@@ -178,7 +178,7 @@
 			onclick={deleteUser}
 			disabled={deleting}
 		>
-			{deleting ? "Deleting…" : "Delete User"}
+			{deleting ? "Deleting…" : "Delete user"}
 		</button>
 	</form>
 {/if}

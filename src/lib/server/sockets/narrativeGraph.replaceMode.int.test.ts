@@ -13,9 +13,11 @@
  * a real merge hierarchy in parentNodeId, a past merge's restorable
  * relationship content in bindingMergeLogs. Both are left untouched now.
  *
- * The relationship layer itself is still safe to wipe wholesale on replace
- * (proposal.relationships is genuinely freshly derived) — that part is
- * unchanged and still covered below.
+ * The relationship layer is wiped wholesale on replace — EVERY link, entry
+ * endpoints and hand-drawn ones included, which the builder never re-derives.
+ * That is ruled behaviour (owner ruling 6, 2026-09-28); the confirmation warns
+ * with `narrativeGraph:list`'s `relationshipCounts` first. Pinned in
+ * narrativeGraph.linksAndLines.int.test.ts.
  */
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest"
 import fs from "fs/promises"

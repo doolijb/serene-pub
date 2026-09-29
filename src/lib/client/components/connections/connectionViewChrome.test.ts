@@ -2,8 +2,12 @@ import { describe, expect, test } from "vitest"
 import {
 	modelsHeadline,
 	statusLine,
+	activeApiTab,
+	apiConnectionTabs,
+	showsTabStrip,
 	type ChromeFacts
 } from "./connectionViewChrome"
+import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 
 const facts = (over: Partial<ChromeFacts> = {}): ChromeFacts => ({
 	lastTest: null,
@@ -88,4 +92,41 @@ test("modelsHeadline counts and names the missing", () => {
 	expect(modelsHeadline({ modelCount: 12, missingCount: 2 })).toBe(
 		"12 models · 2 no longer listed"
 	)
+})
+
+describe("an API connection's tabs", () => {
+	test("a listing API gets Models then Settings", () => {
+		expect(apiConnectionTabs(CONNECTION_TYPE.ANTHROPIC).map((t) => t.value)).toEqual([
+			"models",
+			"settings"
+		])
+	})
+
+	test("an API that names only its loaded model gets Settings alone", () => {
+		expect(apiConnectionTabs(CONNECTION_TYPE.LLAMACPP).map((t) => t.value)).toEqual([
+			"settings"
+		])
+	})
+
+	test("one tab draws no strip; two do", () => {
+		expect(showsTabStrip(apiConnectionTabs(CONNECTION_TYPE.LLAMACPP))).toBe(false)
+		expect(showsTabStrip(apiConnectionTabs(CONNECTION_TYPE.OPENAI))).toBe(true)
+	})
+
+	test("a picked tab is kept while it exists", () => {
+		const tabs = apiConnectionTabs(CONNECTION_TYPE.OPENAI)
+		expect(activeApiTab(tabs, "settings", false)).toBe("settings")
+	})
+
+	test("an unfinished connection opens on Settings, where the key goes", () => {
+		const tabs = apiConnectionTabs(CONNECTION_TYPE.OPENAI)
+		expect(activeApiTab(tabs, null, true)).toBe("settings")
+		// A finished one opens on its models.
+		expect(activeApiTab(tabs, null, false)).toBe("models")
+	})
+
+	test("a remembered tab that no longer exists falls back, never to nothing", () => {
+		const tabs = apiConnectionTabs(CONNECTION_TYPE.LLAMACPP)
+		expect(activeApiTab(tabs, "models", false)).toBe("settings")
+	})
 })

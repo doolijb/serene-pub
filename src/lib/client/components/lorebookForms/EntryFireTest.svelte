@@ -20,9 +20,9 @@
 	 * · **Explicit, never live.** A turn is a real pipeline run with a real
 	 *   embedding call in it. It happens when the author presses the button and
 	 *   at no other time — no debounce, no `$effect` that watches the content.
-	 * · **A conversation is part of the question.** An entry is not read in in
+	 * · **A session is part of the question.** An entry is not read in in
 	 *   the abstract, so the picker is not a refinement, it is the other half of
-	 *   what was asked. It offers the conversations bound to *this* lorebook,
+	 *   what was asked. It offers the sessions bound to *this* lorebook,
 	 *   newest first, and defaults to the newest — the one the author was most
 	 *   likely just reading.
 	 * · **"No" always arrives with a reason.** The verdict sentence, the
@@ -40,6 +40,7 @@
 	 * says so about the third rather than pretending to record it.
 	 */
 	import * as Icons from "@lucide/svelte"
+	import Select from "$lib/client/components/inputs/Select.svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 	import { getInterestContext } from "$lib/client/sockets/interest.svelte"
 	import type { EntryTypeId } from "$lib/shared/entries/types"
@@ -54,7 +55,7 @@
 		/** The stored entry being asked about. */
 		entryId: number
 		typeId: EntryTypeId
-		/** Only conversations reading this lorebook can answer. */
+		/** Only sessions reading this lorebook can answer. */
 		lorebookId: number
 		/** Whether the entry is switched on — an "off" entry explains itself. */
 		enabled?: boolean
@@ -85,11 +86,11 @@
 	/** The server's own sentence when it refused, shown in place. */
 	let refusal = $state<string | null>(null)
 	/**
-	 * Which conversation the question in flight named.
+	 * Which session the question in flight named.
 	 *
 	 * Held apart from `sessionId` because the picker's value is the *next*
 	 * question and this is the one outstanding — a list refresh that retires
-	 * the selected conversation mid-run must not make the answer unmatchable.
+	 * the selected session mid-run must not make the answer unmatchable.
 	 */
 	let asked = $state<number | null>(null)
 
@@ -109,9 +110,9 @@
 	 * The turn, explained.
 	 *
 	 * ⚠ **Only what this panel asked for.** The answer echoes the
-	 * conversation and nothing else, and the channel is shared with the
+	 * session and nothing else, and the channel is shared with the
 	 * composer's own "What would fire now" — whose answer is about the draft
-	 * sitting in its box rather than about the conversation as it stands. So
+	 * sitting in its box rather than about the session as it stands. So
 	 * an answer arriving while this panel is not waiting is somebody else's.
 	 */
 	const onAnswer = (res: Sockets.Pipelines.PreviewRetrieval.Response) => {
@@ -137,7 +138,7 @@
 	}
 
 	/**
-	 * The conversation picker's list, asked for and listened for in one: the
+	 * The session picker's list, asked for and listened for in one: the
 	 * interest sync naming `sessions:list` leaves ahead of the request, so the
 	 * handler answering it already sees the key. BARE — the list is this user's
 	 * own and has no session to be scoped to.
@@ -168,7 +169,7 @@
 		refusal = null
 		asked = sessionId
 		running = true
-		// No draft: the question is what this conversation would read in as
+		// No draft: the question is what this session would read in as
 		// it stands, which is the turn the author is about to provoke rather
 		// than one they are halfway through typing.
 		socket.emit("pipelines:previewRetrieval", {
@@ -205,29 +206,30 @@
 	data-lore-signals
 >
 	{#if !sessionsLoaded}
-		<p class="text-surface-600-400 text-xs">Looking for conversations…</p>
+		<p class="text-surface-600-400 text-xs">Looking for sessions…</p>
 	{:else if !sessions.length}
 		<p class="text-surface-600-400 text-xs">
-			No conversation uses this lorebook yet. An entry is only read in
-			against a conversation, so there is nothing to test it on until one
+			No session uses this lorebook yet. An entry is only read in
+			against a session, so there is nothing to test it on until one
 			does.
 		</p>
 	{:else}
 		<div class="flex flex-wrap items-center gap-2">
 			<span class="text-sm">Against</span>
-			<label class="sr-only" for="{uid}-session">
-				Conversation to test against
-			</label>
-			<select
-				id="{uid}-session"
-				class="select compact min-w-0 flex-1 text-sm"
-				bind:value={sessionId}
+			<Select
+				label="Session to test against"
+				labelHidden
+				class="min-w-0 flex-1 text-sm"
 				disabled={running}
-			>
-				{#each sessions as s (s.id)}
-					<option value={s.id}>{s.name || "Untitled Session"}</option>
-				{/each}
-			</select>
+				options={sessions.map((s) => ({
+					value: String(s.id),
+					label: s.name || "Untitled session"
+				}))}
+				bind:value={
+					() => (sessionId == null ? "" : String(sessionId)),
+					(v) => (sessionId = v ? Number(v) : null)
+				}
+			/>
 			<span class="text-surface-600-400 text-xs">newest turn</span>
 			<button
 				class="btn btn-sm preset-filled-primary-500 shrink-0"
@@ -236,7 +238,7 @@
 				type="button"
 			>
 				{#if running}
-					<Icons.LoaderCircle size={14} class="animate-spin" />
+					<Icons.Loader2 size={14} class="animate-spin" />
 					Running…
 				{:else}
 					<Icons.FlaskConical size={14} /> Test
@@ -246,7 +248,7 @@
 
 		{#if running}
 			<p class="text-surface-600-400 text-xs">
-				Compiling the turn this conversation would send next. Nothing is
+				Compiling the turn this session would send next. Nothing is
 				sent and nothing is saved.
 			</p>
 		{/if}
@@ -357,7 +359,7 @@
 				This ranking is wrong
 			</button>
 		</div>
-		<p class="text-surface-600-400 text-[0.68rem]">
+		<p class="text-surface-600-400 text-[11px]">
 			Feedback is not collected yet.
 		</p>
 	</div>

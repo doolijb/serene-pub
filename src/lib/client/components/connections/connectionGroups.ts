@@ -4,7 +4,7 @@
  *
  * ## The division is the decision
  *
- * The list used to be one flat run of connections sorted by type. But the
+ * The list is not one flat run of connections sorted by type, because the
  * question a person is actually holding when they look at it is not "which
  * adapter is this" — it is **where do my words go, and does this cost money**.
  * Those are the same split: a runtime this pub runs is private and free and

@@ -157,6 +157,66 @@ describe("which set a line's speaker is shown in", () => {
 		expect(missing).toMatchObject({ set: "default", decidedBy: "default", missing: "winter" })
 	}, 60_000)
 
+	test("resolves at the session's reading: its fork cut and its story clock (finding #39)", async () => {
+		const { spriteChoicesFor } = await import("$lib/server/sprites/choices")
+		const { session, message, bindingId, lorebookId } = await scene("sprites-choices-reading", {
+			lorebook: true
+		})
+		// Main puts her in armour at Y10. A branch forked at Y5 never sees it.
+		await testDb.insert(schema.castAmendments).values({
+			lorebookId: lorebookId!,
+			lorebookBindingId: bindingId!,
+			branchId: null,
+			year: 10,
+			fields: { spriteSet: "armour" }
+		})
+		const [fork] = await testDb
+			.insert(schema.lorebookBranches)
+			.values({ lorebookId: lorebookId!, name: "The quiet year", forkYear: 5 })
+			.returning()
+
+		// Main at the head: Y10 has happened.
+		const head = await spriteChoicesFor(testDb as any, { sessionId: session.id, messageId: message.id })
+		expect(head).toMatchObject({ set: "armour", decidedBy: "amendment" })
+
+		// Main with the story clock at Y3: Y10 has not happened yet.
+		await testDb
+			.update(schema.sessions)
+			.set({ storyClockYear: 3 })
+			.where(eq(schema.sessions.id, session.id))
+		const early = await spriteChoicesFor(testDb as any, { sessionId: session.id, messageId: message.id })
+		expect(early).toMatchObject({ set: "default", decidedBy: "default" })
+
+		// The branch at its head: main's Y10 is past the Y5 fork, so cut.
+		await testDb
+			.update(schema.sessions)
+			.set({ storyClockYear: null, lorebookBranchId: fork.id })
+			.where(eq(schema.sessions.id, session.id))
+		const branch = await spriteChoicesFor(testDb as any, { sessionId: session.id, messageId: message.id })
+		expect(branch).toMatchObject({ set: "default", decidedBy: "default" })
+	}, 60_000)
+
+	test("a card swap to a card with no art falls back to the member's own card", async () => {
+		const { spriteChoicesFor } = await import("$lib/server/sprites/choices")
+		const { session, message, bindingId, lorebookId, character, user } = await scene(
+			"sprites-choices-swap-bare",
+			{ lorebook: true }
+		)
+		const [bare] = await testDb
+			.insert(schema.characters)
+			.values({ userId: user.id, name: "Verity, older", description: "" })
+			.returning()
+		await testDb.insert(schema.castAmendments).values({
+			lorebookId: lorebookId!,
+			lorebookBindingId: bindingId!,
+			branchId: null,
+			year: 20,
+			fields: { characterId: bare.id }
+		})
+		const c = await spriteChoicesFor(testDb as any, { sessionId: session.id, messageId: message.id })
+		expect(c).toMatchObject({ characterId: character.id, set: "default", has: true })
+	}, 60_000)
+
 	test("a narrator's line has nothing to choose", async () => {
 		const { spriteChoicesFor } = await import("$lib/server/sprites/choices")
 		const { session } = await scene("sprites-choices-narrator")

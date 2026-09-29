@@ -42,12 +42,12 @@ const cast = (over: Record<string, unknown> = {}) => ({
 	sessionCharacters: [
 		{
 			character: { id: 11, name: "Vell", nickname: null },
-			isActive: true,
+			enabled: true,
 			removedAt: null
 		},
 		{
 			character: { id: 12, name: "Aro", nickname: null },
-			isActive: true,
+			enabled: true,
 			removedAt: null
 		}
 	],
@@ -196,17 +196,17 @@ describe("cast-choices", () => {
 				sessionCharacters: [
 					{
 						character: { id: 11, name: "Vell" },
-						isActive: true,
+						enabled: true,
 						removedAt: null
 					},
 					{
 						character: { id: 12, name: "Aro" },
-						isActive: true,
+						enabled: true,
 						removedAt: new Date()
 					},
 					{
 						character: { id: 13, name: "Ines" },
-						isActive: false,
+						enabled: false,
 						removedAt: null
 					}
 				],
@@ -223,13 +223,13 @@ describe("cast-choices", () => {
 		const r = await choices({
 			cast: cast({
 				sessionCharacters: [
-					{ character: { id: 11, name: "  " }, isActive: true, removedAt: null },
+					{ character: { id: 11, name: "  " }, enabled: true, removedAt: null },
 					{
 						character: { id: 12, name: null, nickname: "The Warden" },
-						isActive: true,
+						enabled: true,
 						removedAt: null
 					},
-					{ character: { id: 12, name: "Aro" }, isActive: true, removedAt: null }
+					{ character: { id: 12, name: "Aro" }, enabled: true, removedAt: null }
 				],
 				sessionPersonas: [{ persona: { id: 12, name: "Aro" }, removedAt: null }]
 			}),

@@ -204,7 +204,7 @@ export global {
 		 * `connections:test` on unsaved form state) has none, and
 		 * `BaseConnectionAdapter.wireMode` falls back through the row's own
 		 * declaration. It is also the field a test SETS to pin a mode, which is
-		 * what replaced the `extraJson.useSession` / `prerenderPrompt` flags the
+		 * what replaced the `extraJson.useChat` / `prerenderPrompt` flags the
 		 * adapters used to read.
 		 */
 		wireMode?: WireMode | null
@@ -367,12 +367,6 @@ export global {
 		typeof schema.sessionCharacters.$inferSelect
 	export type InsertSessionCharacter =
 		typeof schema.sessionCharacters.$inferInsert
-
-	// Session Lorebook types
-	export type SelectSessionLorebook =
-		typeof schema.sessionLorebooks.$inferSelect
-	export type InsertSessionLorebook =
-		typeof schema.sessionLorebooks.$inferInsert
 
 	export type SelectSystemSettings = typeof schema.systemSettings.$inferSelect
 	export type InsertSystemSettings = typeof schema.systemSettings.$inferInsert

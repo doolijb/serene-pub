@@ -7,8 +7,12 @@
  * (`resolvePortrayals` with the viewer as the asker): `participant` and
  * `person` hold for a member, `owner` for the session's owner, `user:<id>` for
  * that user, a `character:` or `envoy:` for whoever portrays it — and `ai`
- * for nobody here, since a person is not the model's context. A key stored
- * with no audience is pipelines only (R59) and is never in a view.
+ * for nobody here, since a person is not the model's context.
+ *
+ * Who may see a key is its owner's **annex declaration**'s to say (ruling
+ * 2026-09-26), never what a write stored beside the value: a key declared
+ * for pipelines only, and a key no declaration covers — legacy data written
+ * before the ruling — is pipelines only (R59) and never in a view.
  */
 
 import { eq } from "drizzle-orm"
@@ -24,6 +28,7 @@ import { resolvePortrayals } from "$lib/server/pipelines/runtime/portrayals"
 import { checkSessionAccess } from "$lib/server/utils/sessionAccess"
 import type { SessionIo } from "$lib/server/pipelines/runtime/liveRow"
 import { emitToUserRedacted } from "$lib/server/sockets/utils/broadcastHelpers"
+import { declaredAudiences } from "$lib/server/sessions/annexFields"
 
 export type AnnexView = Record<string, Record<string, unknown>>
 
@@ -38,13 +43,16 @@ export async function annexViewFor(
 	const [row] = await db
 		.select({
 			annex: schema.sessions.annex,
-			audiences: schema.sessions.annexAudiences
+			genreId: schema.sessions.genreId
 		})
 		.from(schema.sessions)
 		.where(eq(schema.sessions.id, sessionId))
 		.limit(1)
 	if (!row) return null
-	const audiences = (row.audiences ?? {}) as DataAudiences
+	const audiences: DataAudiences = await declaredAudiences(
+		db,
+		row.genreId ?? "core:genre/chat"
+	)
 	// Only well-formed references reach the resolver: one malformed row must
 	// not fail every member's view (it holds for nobody instead).
 	const refs = [
@@ -81,19 +89,15 @@ export async function pushAnnexViews(
 	const [session] = await db
 		.select({
 			ownerId: schema.sessions.userId,
-			audiences: schema.sessions.annexAudiences
+			genreId: schema.sessions.genreId
 		})
 		.from(schema.sessions)
 		.where(eq(schema.sessions.id, sessionId))
 		.limit(1)
 	if (!session) return
 	// Nothing anybody may see: every view is `{}`, and was before.
-	if (
-		!Object.values(session.audiences ?? {}).some(
-			(keys) => Object.keys(keys ?? {}).length
-		)
-	)
-		return
+	const audiences = await declaredAudiences(db, session.genreId ?? "core:genre/chat")
+	if (!Object.values(audiences).some((keys) => Object.keys(keys ?? {}).length)) return
 	const guests = await db
 		.select({ userId: schema.sessionGuests.userId })
 		.from(schema.sessionGuests)

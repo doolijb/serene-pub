@@ -85,7 +85,7 @@ export class PromptBlockFormatter {
 	/**
 	 * The role-array emitter, HAND-WRITTEN AND DELIBERATELY NOT DATA-DRIVEN.
 	 *
-	 * The split-session template row carries empty framing (see
+	 * The split-chat template row carries empty framing (see
 	 * `completionTemplates.ts`) precisely so that nothing here can read a marker
 	 * out of a row an admin edited. The emitted marker, `ROLE_MARKER_PATTERN`
 	 * and `parseSplitChatPrompt` are a three-way correspondence maintained by
@@ -94,7 +94,7 @@ export class PromptBlockFormatter {
 	 * Byte-identical to the `case PromptFormats.SPLIT_CHAT:` arm it was lifted
 	 * out of — only the leading indentation changed.
 	 */
-	private static splitSessionBlock(role: BlockRole, content: string): string {
+	private static splitChatBlock(role: BlockRole, content: string): string {
 		// Use /<@role:(user|assistant|system)>\s*/g, i.e. <@role:user>\n {content} \n
 		//
 		// content is user-controlled (chat messages, character/persona
@@ -166,7 +166,7 @@ export class PromptBlockFormatter {
 		// `renderMode`, never a substring test on the name. `/split/i` used to
 		// decide this, so a template called "my split format" took this branch.
 		if (template.renderMode === "role_array")
-			return PromptBlockFormatter.splitSessionBlock(role, content)
+			return PromptBlockFormatter.splitChatBlock(role, content)
 
 		const { prefix, suffix } = framingFor(template, role)
 		return prefix + content + (includeClose ? suffix : "")

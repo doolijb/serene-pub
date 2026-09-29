@@ -12,6 +12,7 @@ import {
 	orderOnnxRows,
 	removeAllowed,
 	rowAction,
+	listsAvailableModels,
 	type EndpointKind
 } from "./modelManagement"
 
@@ -260,5 +261,41 @@ describe("size and token formatting", () => {
 		expect(formatProgress(0, 133_000_000, "MB")).toBe("0.0 of 133 MB")
 		expect(formatProgress(10, 0, "MB")).toBeNull()
 		expect(formatProgress(10, undefined, "GB")).toBeNull()
+	})
+})
+
+describe("which endpoints earn a Models tab", () => {
+	test("an API that lists a choosable set gets one", () => {
+		for (const type of [
+			CONNECTION_TYPE.OPENAI,
+			CONNECTION_TYPE.ANTHROPIC,
+			CONNECTION_TYPE.LM_STUDIO,
+			CONNECTION_TYPE.OPENAI_EMBEDDINGS,
+			CONNECTION_TYPE.OLLAMA,
+			CONNECTION_TYPE.OLLAMA_EMBEDDINGS,
+			CONNECTION_TYPE.KOBOLDCPP_MANAGED,
+			CONNECTION_TYPE.LOCAL_ONNX_EMBEDDINGS,
+			CONNECTION_TYPE.LOCAL_ONNX_NER
+		])
+			expect(listsAvailableModels(type), type).toBe(true)
+	})
+
+	test("an endpoint that names only the one model it loaded does not", () => {
+		// llama.cpp answers with the model it was started on; external
+		// KoboldCPP has no admin API. Nothing to choose between either way.
+		expect(listsAvailableModels(CONNECTION_TYPE.LLAMACPP)).toBe(false)
+		expect(listsAvailableModels(CONNECTION_TYPE.KOBOLDCPP)).toBe(false)
+	})
+
+	test("a type nobody named defaults to listing", () => {
+		// Hiding a listing API's models is the worse mistake — they would be
+		// unselectable — so the unknown case leans toward the tab.
+		expect(listsAvailableModels("some-future-api")).toBe(true)
+	})
+
+	test("no type, no tab", () => {
+		expect(listsAvailableModels(null)).toBe(false)
+		expect(listsAvailableModels(undefined)).toBe(false)
+		expect(listsAvailableModels("")).toBe(false)
 	})
 })

@@ -19,6 +19,7 @@ import {
 	SHIPPED_VARIABLE_TEMPLATES,
 	seedKeyFor
 } from "$lib/server/pipelines/entities/variableLayouts"
+import { coreObjectLayouts } from "$lib/server/pipelines/entities/objectVariableLayouts"
 
 export interface VariableTemplateSeedResult {
 	created: string[]
@@ -44,8 +45,16 @@ export async function seedVariableTemplates(
 		refreshed: []
 	}
 
-	for (const t of SHIPPED_VARIABLE_TEMPLATES) {
-		const seedKey = seedKeyFor(t)
+	// The hand-written rows, then an automatic "JSON" row for every core OBJECT
+	// variable nothing above lays out (owner ruling 2026-09-27: an object
+	// variable is never rendered without a layout). Same seed-key pattern,
+	// same refresh — the automatic source is code-derived too.
+	const rows = [
+		...SHIPPED_VARIABLE_TEMPLATES.map((t) => ({ ...t, seedKey: seedKeyFor(t) })),
+		...coreObjectLayouts()
+	]
+	for (const t of rows) {
+		const seedKey = t.seedKey
 		const [existing] = await db
 			.select()
 			.from(schema.pipelineVariableTemplates)

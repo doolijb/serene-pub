@@ -49,8 +49,7 @@
 	}: Props = $props()
 
 	const label = (decl: FieldDecl, key: string): string => {
-		const l = decl.label ?? decl.i18n
-		return i18nTextIn(l) ?? key
+		return i18nTextIn(decl.label) ?? key
 	}
 	const describe = (decl: FieldDecl): string => {
 		return i18nTextIn(decl.description) ?? ""
@@ -82,7 +81,7 @@
 
 <div class="flex flex-col gap-4">
 	{#if !groups.length}
-		<p class="text-muted-foreground py-6 text-center text-sm">
+		<p class="text-surface-600-400 py-6 text-center text-sm">
 			This configuration’s shape declares no parameters.
 		</p>
 	{/if}
@@ -90,7 +89,7 @@
 	{#each groups as g (g.group)}
 		<section class="flex flex-col gap-2">
 			<p
-				class="text-muted-foreground border-surface-500/20 border-b pb-1 text-xs font-semibold tracking-wide uppercase"
+				class="text-surface-600-400 border-surface-500/20 border-b pb-1 text-xs"
 			>
 				{g.group}
 			</p>
@@ -128,7 +127,7 @@
 							{#if describe(decl)}
 								<span
 									id="se-{key}-desc"
-									class="text-muted-foreground text-xs"
+									class="text-surface-600-400 text-xs"
 								>
 									{describe(decl)}
 								</span>

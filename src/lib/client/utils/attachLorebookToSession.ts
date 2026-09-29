@@ -1,13 +1,16 @@
 import type { TypedSocket } from "$lib/client/sockets/typedSocket"
 
 /**
- * Attach (or, with `null`, detach) a lorebook on a session.
+ * Read a lorebook into a session (or, with `null`, stop reading one).
  *
- * Exists so the two callers — SummarizeLoreModal's "create and attach" flow and
- * the Lorebooks sidebar's opt-in checkbox — share one implementation rather than
- * emitting the event by hand in two places. The handler itself lives, oddly, in
- * `src/lib/server/sockets/summarize.ts`, which is easy to lose track of; keeping
- * the client side in one function makes that indirection findable.
+ * The one client-side emit of `sessions:setLorebook`, so its callers share
+ * one implementation rather than each emitting the event by hand:
+ * SummarizeLoreModal's create-and-read flow, LorebookActions' "read the new
+ * book into this session" switch on the create modal, and the lorebook
+ * workspace's Read into this session / Stop reading control (book menu, Book
+ * settings and the list of books). The handler itself lives, oddly, in
+ * `src/lib/server/sockets/summarize.ts`, which is easy to lose track of;
+ * keeping the client side in one function makes that indirection findable.
  */
 export function attachLorebookToSession(
 	socket: TypedSocket,

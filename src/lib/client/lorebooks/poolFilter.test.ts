@@ -20,7 +20,7 @@ function item(over: Partial<PoolItem> & { id: number }): PoolItem {
 		kind: WORLD,
 		name: `Entry ${over.id}`,
 		content: "",
-		keys: "",
+		keys: [],
 		pinned: false,
 		off: false,
 		archived: false,
@@ -88,9 +88,9 @@ describe("filterPool", () => {
 
 	it("splits the pool on whether an entry has keywords", () => {
 		const pool = [
-			item({ id: 1, keys: "umber, umber city" }),
-			item({ id: 2, keys: "" }),
-			item({ id: 3, keys: "   " })
+			item({ id: 1, keys: ["umber", "umber city"] }),
+			item({ id: 2, keys: [] }),
+			item({ id: 3, keys: ["   "] })
 		]
 		expect(
 			filterPool(pool, { ...emptyFilters(), keywords: "has" }).map(
@@ -106,8 +106,8 @@ describe("filterPool", () => {
 
 	it("searches name, keywords and content, case-insensitively", () => {
 		const pool = [
-			item({ id: 1, name: "Umber City", keys: "stacks" }),
-			item({ id: 2, name: "The Archive", keys: "umber, vault" }),
+			item({ id: 1, name: "Umber City", keys: ["stacks"] }),
+			item({ id: 2, name: "The Archive", keys: ["umber", "vault"] }),
 			item({ id: 3, name: "Verity's Oath", content: "Sworn in UMBER." }),
 			item({ id: 4, name: "Nothing" })
 		]
@@ -188,9 +188,9 @@ describe("filterPool", () => {
 
 	it("narrows to loose ends, which are unkeyworded and never read in", () => {
 		const pool = [
-			item({ id: 1, keys: "umber" }),
-			item({ id: 2, keys: "" }),
-			item({ id: 3, keys: "" })
+			item({ id: 1, keys: ["umber"] }),
+			item({ id: 2, keys: [] }),
+			item({ id: 3, keys: [] })
 		]
 		expect(
 			filterPool(

@@ -37,7 +37,11 @@
 
 import { hostElementContext } from "./context.svelte"
 import { mount, unmount, untrack, type Component } from "svelte"
-import { SP_HOST_ELEMENTS, hostEventAllowed, type HostElementSpec } from "@serene-pub/sdk"
+import {
+	SP_HOST_ELEMENTS,
+	hostEventAllowed,
+	type HostElementSpec
+} from "@serene-pub/sdk"
 
 /** One child element an sp element reads as data. */
 export interface SpElementItem {
@@ -89,7 +93,8 @@ export interface SpElementDef {
 }
 
 /** A boolean attribute is present-or-absent on the wire. */
-export const flag = (v: string | null | undefined): boolean => v !== null && v !== undefined && v !== "false"
+export const flag = (v: string | null | undefined): boolean =>
+	v !== null && v !== undefined && v !== "false"
 
 /**
  * The attributes a portalled panel copies from its element's widget box so
@@ -98,7 +103,9 @@ export const flag = (v: string | null | undefined): boolean => v !== null && v !
  */
 export function portalScope(host: Element): Record<string, string> {
 	const out: Record<string, string> = {}
-	const scope = host.closest("[data-widget-instance]")?.getAttribute("data-widget-instance")
+	const scope = host
+		.closest("[data-widget-instance]")
+		?.getAttribute("data-widget-instance")
 	if (scope) out["data-widget-instance"] = scope
 	const owner = host.closest("[data-sp-owner]")?.getAttribute("data-sp-owner")
 	if (owner) out["data-sp-owner"] = owner
@@ -121,7 +128,8 @@ export const mirrorTrigger =
 			for (const [k, v] of Object.entries(aria()))
 				if (!k.startsWith("aria-")) continue
 				// `false` is a value for ARIA (`aria-expanded="false"`), not an absence.
-				else if (v === undefined || v === null) control.removeAttribute(k)
+				else if (v === undefined || v === null)
+					control.removeAttribute(k)
 				else control.setAttribute(k, String(v))
 		}
 		apply()
@@ -137,18 +145,28 @@ export const mirrorTrigger =
  * `<body>`. Only when focus would otherwise be lost (on the body, or inside
  * the panel that is closing): a click elsewhere keeps its own focus.
  */
-export function returnFocus(box: HTMLElement | null, panel?: Element | null): void {
+export function returnFocus(
+	box: HTMLElement | null,
+	panel?: Element | null
+): void {
 	queueMicrotask(() => {
 		const active = document.activeElement
-		const lost = !active || active === document.body || (!!panel && panel.contains(active))
+		const lost =
+			!active ||
+			active === document.body ||
+			(!!panel && panel.contains(active))
 		if (!lost) return
 		;(box?.firstElementChild as HTMLElement | null)?.focus?.()
 	})
 }
 
 /** A wrapper's attributes without its ARIA, which `mirrorTrigger` moves to the control. */
-export const withoutAria = (attributes: Record<string, unknown>): Record<string, unknown> =>
-	Object.fromEntries(Object.entries(attributes).filter(([k]) => !k.startsWith("aria-")))
+export const withoutAria = (
+	attributes: Record<string, unknown>
+): Record<string, unknown> =>
+	Object.fromEntries(
+		Object.entries(attributes).filter(([k]) => !k.startsWith("aria-"))
+	)
 
 const INTERNAL = Symbol("sp-element-internal")
 
@@ -162,7 +180,10 @@ type Internal = Node & { [INTERNAL]?: true }
  * Build the element class for one sp element. Only called in a browser: a
  * class extending `HTMLElement` cannot be evaluated during SSR.
  */
-export function makeSpElementClass(tag: string, def: SpElementDef): CustomElementConstructor {
+export function makeSpElementClass(
+	tag: string,
+	def: SpElementDef
+): CustomElementConstructor {
 	const spec = (SP_HOST_ELEMENTS as Record<string, HostElementSpec>)[tag]
 	if (!spec) throw new Error(`${tag} is not in the host-element vocabulary`)
 	const dataTags = new Set(def.dataChildren ?? [])
@@ -208,7 +229,8 @@ export function makeSpElementClass(tag: string, def: SpElementDef): CustomElemen
 			// has not, and is exactly who must not hear it.
 			for (const name of spec.events)
 				this.addEventListener(name, (e) => {
-					if (this.#isOwnMarkup(e.target as Node | null)) e.stopImmediatePropagation()
+					if (this.#isOwnMarkup(e.target as Node | null))
+						e.stopImmediatePropagation()
 				})
 		}
 
@@ -284,10 +306,19 @@ export function makeSpElementClass(tag: string, def: SpElementDef): CustomElemen
 						// Bubbles, so a native page's `onchange` on the element
 						// (a delegated handler) hears it.
 						if (hostEventAllowed(tag, event))
-							self.dispatchEvent(new CustomEvent(event, { detail, bubbles: true }))
+							self.dispatchEvent(
+								new CustomEvent(event, {
+									detail,
+									bubbles: true
+								})
+							)
 					},
-					slot: (name = "") => (el: HTMLElement) => self.#claim(name, el),
-					seatItem: (node: Node) => (el: HTMLElement) => self.#seatItemIn(node, el),
+					slot:
+						(name = "") =>
+						(el: HTMLElement) =>
+							self.#claim(name, el),
+					seatItem: (node: Node) => (el: HTMLElement) =>
+						self.#seatItemIn(node, el),
 					host: this,
 					state: this.spState
 				}
@@ -301,7 +332,9 @@ export function makeSpElementClass(tag: string, def: SpElementDef): CustomElemen
 				attributes: true,
 				characterData: true
 			})
-			this.#doorWatch = new MutationObserver((records) => this.#reconcile(records))
+			this.#doorWatch = new MutationObserver((records) =>
+				this.#reconcile(records)
+			)
 			this.#watch(this)
 			this.#watch(this.#park)
 			for (const c of this.#slots.values()) this.#watch(c)
@@ -320,7 +353,12 @@ export function makeSpElementClass(tag: string, def: SpElementDef): CustomElemen
 			try {
 				untrack(fn)
 			} catch (e) {
-				if (String((e as Error)?.message ?? e).includes("state_unsafe_mutation")) queueMicrotask(fn)
+				if (
+					String((e as Error)?.message ?? e).includes(
+						"state_unsafe_mutation"
+					)
+				)
+					queueMicrotask(fn)
 				else throw e
 			}
 		}
@@ -336,7 +374,6 @@ export function makeSpElementClass(tag: string, def: SpElementDef): CustomElemen
 			}
 		}
 
-
 		disconnectedCallback() {
 			// Deferred: a receiver MOVES an element by removing and re-inserting
 			// it, and one torn down on the first half loses its state.
@@ -346,7 +383,8 @@ export function makeSpElementClass(tag: string, def: SpElementDef): CustomElemen
 				this.#doorWatch?.disconnect()
 				this.#dataObserver = this.#doorWatch = null
 				// Children go back to the park so a later connect finds them.
-				for (const n of this.#logical) if (n.parentNode !== this.#park) this.#park?.appendChild(n)
+				for (const n of this.#logical)
+					if (n.parentNode !== this.#park) this.#park?.appendChild(n)
 				unmount(this.#app)
 				this.#app = null
 				this.#slots.clear()
@@ -354,7 +392,11 @@ export function makeSpElementClass(tag: string, def: SpElementDef): CustomElemen
 			})
 		}
 
-		attributeChangedCallback(name: string, _old: string | null, value: string | null) {
+		attributeChangedCallback(
+			name: string,
+			_old: string | null,
+			value: string | null
+		) {
 			// The host re-adding its own root hook (`#addHook`) is not a write
 			// of the component's: nothing to tell. Every other write counts,
 			// the same value included — a write is a command.
@@ -367,7 +409,11 @@ export function makeSpElementClass(tag: string, def: SpElementDef): CustomElemen
 			// targets (`.sp-<name>`, R22) is the host's and stays.
 			// `classList.add` rewrites the attribute even when the token is
 			// already there, which would call this again — hence the check.
-			if (name === "class" && this.isConnected && !this.classList.contains(tag))
+			if (
+				name === "class" &&
+				this.isConnected &&
+				!this.classList.contains(tag)
+			)
 				this.#addHook()
 		}
 
@@ -387,7 +433,9 @@ export function makeSpElementClass(tag: string, def: SpElementDef): CustomElemen
 		}
 		override get children(): HTMLCollection {
 			this.#flush()
-			return this.#logical.filter((n) => n.nodeType === 1) as unknown as HTMLCollection
+			return this.#logical.filter(
+				(n) => n.nodeType === 1
+			) as unknown as HTMLCollection
 		}
 		override get firstChild(): ChildNode | null {
 			this.#flush()
@@ -395,7 +443,9 @@ export function makeSpElementClass(tag: string, def: SpElementDef): CustomElemen
 		}
 		override get lastChild(): ChildNode | null {
 			this.#flush()
-			return (this.#logical[this.#logical.length - 1] as ChildNode) ?? null
+			return (
+				(this.#logical[this.#logical.length - 1] as ChildNode) ?? null
+			)
 		}
 		override hasChildNodes(): boolean {
 			return this.#logical.length > 0
@@ -410,7 +460,11 @@ export function makeSpElementClass(tag: string, def: SpElementDef): CustomElemen
 		override removeChild<T extends Node>(node: T): T {
 			if ((node as Internal)[INTERNAL]) return super.removeChild(node)
 			const at = this.#logical.indexOf(node)
-			if (at === -1) throw new DOMException("not a child of this element", "NotFoundError")
+			if (at === -1)
+				throw new DOMException(
+					"not a child of this element",
+					"NotFoundError"
+				)
 			this.#logical.splice(at, 1)
 			node.parentNode?.removeChild(node)
 			this.#readItems()
@@ -421,11 +475,19 @@ export function makeSpElementClass(tag: string, def: SpElementDef): CustomElemen
 			return this.removeChild(old)
 		}
 		override append(...nodes: Array<Node | string>): void {
-			for (const n of nodes) this.#place(typeof n === "string" ? document.createTextNode(n) : n, null)
+			for (const n of nodes)
+				this.#place(
+					typeof n === "string" ? document.createTextNode(n) : n,
+					null
+				)
 		}
 		override prepend(...nodes: Array<Node | string>): void {
 			const first = this.#logical[0] ?? null
-			for (const n of nodes) this.#place(typeof n === "string" ? document.createTextNode(n) : n, first)
+			for (const n of nodes)
+				this.#place(
+					typeof n === "string" ? document.createTextNode(n) : n,
+					first
+				)
 		}
 		override replaceChildren(...nodes: Array<Node | string>): void {
 			for (const n of [...this.#logical]) this.removeChild(n)
@@ -456,12 +518,24 @@ export function makeSpElementClass(tag: string, def: SpElementDef): CustomElemen
 			)
 		}
 
+		/**
+		 * Is `t` markup this element drew for itself — the icon's `svg`, a
+		 * field's `textarea` — rather than a node the component placed? The
+		 * component knows nothing of such a node, so an event starting there
+		 * is re-delivered to one it does (`ComponentMount`).
+		 */
+		ownsMarkup(t: Node | null): boolean {
+			return this.#isOwnMarkup(t)
+		}
+
 		/** Is an event target this element's OWN rendered markup (not a slotted child's)? */
 		#isOwnMarkup(t: Node | null): boolean {
 			if (!t || t === this || !this.contains(t)) return false
 			if (this.#park?.contains(t)) return false
-			for (const c of this.#slots.values()) if (c.contains(t)) return false
-			for (const c of this.#seatedItems.values()) if (c.contains(t)) return false
+			for (const c of this.#slots.values())
+				if (c.contains(t)) return false
+			for (const c of this.#seatedItems.values())
+				if (c.contains(t)) return false
 			return true
 		}
 
@@ -473,10 +547,12 @@ export function makeSpElementClass(tag: string, def: SpElementDef): CustomElemen
 		}
 
 		#place<T extends Node>(node: T, ref: Node | null): T {
-			if ((node as Internal)[INTERNAL]) return super.insertBefore(node, ref)
+			if ((node as Internal)[INTERNAL])
+				return super.insertBefore(node, ref)
 			// A fragment inserts its children, in order, and is left empty.
 			if (node.nodeType === Node.DOCUMENT_FRAGMENT_NODE) {
-				for (const child of Array.from(node.childNodes)) this.#place(child, ref)
+				for (const child of Array.from(node.childNodes))
+					this.#place(child, ref)
 				return node
 			}
 			// Moving within this element: out of the logical list first.
@@ -496,7 +572,11 @@ export function makeSpElementClass(tag: string, def: SpElementDef): CustomElemen
 				this.#takeDirect()
 				at = this.#logical.indexOf(ref)
 			}
-			if (ref && at === -1) throw new DOMException("the reference is not a child", "NotFoundError")
+			if (ref && at === -1)
+				throw new DOMException(
+					"the reference is not a child",
+					"NotFoundError"
+				)
 			if (at === -1) this.#logical.push(node)
 			else this.#logical.splice(at, 0, node)
 			this.#seat(node)
@@ -516,7 +596,9 @@ export function makeSpElementClass(tag: string, def: SpElementDef): CustomElemen
 			if (!home) return
 			// The next logical sibling already in the same home keeps the order.
 			const i = this.#logical.indexOf(node)
-			const next = this.#logical.slice(i + 1).find((n) => n.parentNode === home) ?? null
+			const next =
+				this.#logical.slice(i + 1).find((n) => n.parentNode === home) ??
+				null
 			home.insertBefore(node, next)
 		}
 
@@ -525,7 +607,12 @@ export function makeSpElementClass(tag: string, def: SpElementDef): CustomElemen
 			this.#seatedItems.set(node, el)
 			this.#watch(el)
 			// Its content is still data the component reads (`items`).
-			this.#dataObserver?.observe(el, { subtree: true, childList: true, attributes: true, characterData: true })
+			this.#dataObserver?.observe(el, {
+				subtree: true,
+				childList: true,
+				attributes: true,
+				characterData: true
+			})
 			this.#seat(node)
 			return () => {
 				if (this.#seatedItems.get(node) !== el) return
@@ -537,11 +624,13 @@ export function makeSpElementClass(tag: string, def: SpElementDef): CustomElemen
 		#claim(name: string, el: HTMLElement): () => void {
 			this.#slots.set(name, el)
 			this.#watch(el)
-			for (const n of this.#logical) if (this.#slotOf(n) === name) this.#seat(n)
+			for (const n of this.#logical)
+				if (this.#slotOf(n) === name) this.#seat(n)
 			return () => {
 				if (this.#slots.get(name) !== el) return
 				this.#slots.delete(name)
-				for (const n of this.#logical) if (n.parentNode === el) this.#seat(n)
+				for (const n of this.#logical)
+					if (n.parentNode === el) this.#seat(n)
 			}
 		}
 
@@ -564,25 +653,39 @@ export function makeSpElementClass(tag: string, def: SpElementDef): CustomElemen
 					if ((n as Internal)[INTERNAL]) continue
 					const at = this.#logical.indexOf(n)
 					// Moved between our own containers is still ours.
-					if (at !== -1 && !this.#isSeated(n) && n.parentNode !== this) {
+					if (
+						at !== -1 &&
+						!this.#isSeated(n) &&
+						n.parentNode !== this
+					) {
 						this.#logical.splice(at, 1)
 						changed = true
 					}
 				}
 				if (r.target === this) continue
 				for (const n of Array.from(r.addedNodes)) {
-					if ((n as Internal)[INTERNAL] || this.#logical.includes(n)) continue
+					if ((n as Internal)[INTERNAL] || this.#logical.includes(n))
+						continue
 					if (n.parentNode !== r.target) continue
 					// Before the next sibling we know: Svelte always inserts
 					// BEFORE an anchor, and the node before it in this container
 					// may be a slot's neighbour, not the list's.
 					let next = n.nextSibling
-					while (next && !this.#logical.includes(next)) next = next.nextSibling
-					if (next) this.#logical.splice(this.#logical.indexOf(next), 0, n)
+					while (next && !this.#logical.includes(next))
+						next = next.nextSibling
+					if (next)
+						this.#logical.splice(this.#logical.indexOf(next), 0, n)
 					else {
 						let prev = n.previousSibling
-						while (prev && !this.#logical.includes(prev)) prev = prev.previousSibling
-						this.#logical.splice(prev ? this.#logical.indexOf(prev) + 1 : this.#logical.length, 0, n)
+						while (prev && !this.#logical.includes(prev))
+							prev = prev.previousSibling
+						this.#logical.splice(
+							prev
+								? this.#logical.indexOf(prev) + 1
+								: this.#logical.length,
+							0,
+							n
+						)
 					}
 					landed.push(n)
 					changed = true
@@ -601,7 +704,8 @@ export function makeSpElementClass(tag: string, def: SpElementDef): CustomElemen
 			for (const n of arrived) {
 				// Before the next direct child the list already holds, else last.
 				let next = n.nextSibling
-				while (next && !this.#logical.includes(next)) next = next.nextSibling
+				while (next && !this.#logical.includes(next))
+					next = next.nextSibling
 				const at = next ? this.#logical.indexOf(next) : -1
 				if (at === -1) this.#logical.push(n)
 				else this.#logical.splice(at, 0, n)
@@ -613,15 +717,23 @@ export function makeSpElementClass(tag: string, def: SpElementDef): CustomElemen
 			if (!dataTags.size) return
 			const items: SpElementItem[] = []
 			for (const n of this.#logical) {
-				if (n.nodeType !== 1 || !dataTags.has((n as Element).localName)) continue
+				if (n.nodeType !== 1 || !dataTags.has((n as Element).localName))
+					continue
 				const el = n as HTMLElement
 				const attrs: Record<string, string | null> = {}
-				for (const a of el.getAttributeNames()) attrs[a] = el.getAttribute(a)
-				items.push({ tag: el.localName, attrs, text: (el.textContent ?? "").trim(), el })
+				for (const a of el.getAttributeNames())
+					attrs[a] = el.getAttribute(a)
+				items.push({
+					tag: el.localName,
+					attrs,
+					text: (el.textContent ?? "").trim(),
+					el
+				})
 			}
 			// Only a real change re-renders: the component's own render is
 			// under the same observer.
-			const bare = (xs: SpElementItem[]) => JSON.stringify(xs.map(({ el: _, ...i }) => i))
+			const bare = (xs: SpElementItem[]) =>
+				JSON.stringify(xs.map(({ el: _, ...i }) => i))
 			if (bare(items) !== bare(this.#view.items)) this.#view.items = items
 		}
 	}

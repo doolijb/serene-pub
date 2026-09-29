@@ -6,13 +6,13 @@
 	import { SvelteSet } from "svelte/reactivity"
 	import { flip } from "svelte/animate"
 	import { fade } from "svelte/transition"
+	import { MOTION, motionDuration } from "$lib/client/utils/motion"
 	import { Dialog, Popover, Portal } from "@skeletonlabs/skeleton-svelte"
 	import FileDropzone from "$lib/client/components/FileDropzone.svelte"
 	import * as Icons from "@lucide/svelte"
 	import PanelFilterInput from "$lib/client/components/panels/PanelFilterInput.svelte"
 	import PanelSplit from "$lib/client/components/panels/PanelSplit.svelte"
 	import { ViewModeTracker } from "$lib/client/shell/viewMode.svelte"
-	import { goto } from "$app/navigation"
 	import CharacterForm from "../characterForms/CharacterForm.svelte"
 	import CharacterCreator from "../modals/CharacterCreatorModal.svelte"
 	import CharacterUnsavedChangesModal from "../modals/CharacterUnsavedChangesModal.svelte"
@@ -27,6 +27,7 @@
 	import CharacterMoveToFolderModal from "../modals/CharacterMoveToFolderModal.svelte"
 	import EmptyState from "../EmptyState.svelte"
 	import ImportConflictModal from "../modals/ImportConflictModal.svelte"
+	import { describeOverwriteLosses } from "$lib/client/lorebooks/overwriteLosses"
 	import CharacterExportModal from "../modals/CharacterExportModal.svelte"
 	import { downloadBlob } from "$lib/client/utils/downloadBlob"
 	import type { SocketEventMap } from "$lib/client/sockets/typedSocket"
@@ -86,9 +87,16 @@
 	// embedded book's uuid matched a lorebook this user already has, but its
 	// content differs.
 	let lorebookImportConflict:
-		| { existingLorebook: any; lorebookData: object }
+		| Sockets.Lorebooks.Import.Response["conflict"]
 		| undefined = $state(undefined)
 	let showLorebookImportConflictModal = $state(false)
+	/**
+	 * Set while THIS panel has a `lorebooks:import` / `importResolve` in
+	 * flight. The replies are bare and reach every tab and every surface the
+	 * person has open (the Lorebooks workspace imports too), so a reply is
+	 * this panel's to toast or prompt on only when it asked (finding #155).
+	 */
+	let lorebookImportPending = $state(false)
 	// Set when characters:importCard comes back with status "conflict" — the
 	// card's uuid matched a character this user already has, but its
 	// content differs.
@@ -621,19 +629,12 @@
 		showImportModal = true
 	}
 
-	// The mobile overlay has to close before we navigate, or this sidebar
-	// stays open in front of the library page. No viewport check of its own:
-	// `closePanel({ panel: "mobile" })` already answers `true` untouched when
-	// the shell is not in its mobile layout, and a second, differently-spelled
-	// copy of that threshold here was a second place for it to drift.
-	//
-	// 🚧 Still a navigation to the library page — embedding the browser in this
-	// view is a later decision, not this pass's.
-	async function handleBrowseClick() {
-		const closed = await panelsCtx.closePanel({ panel: "mobile" })
-		if (!closed) return
-		goto("/library/characters")
-		panelsCtx.fullPageView = null
+	// The library is a view of its own (the Library), opened beside this one
+	// as a tab at the width the sidebar is at — no navigation, so the page
+	// underneath and this view's state both stay where they were. What it
+	// imports shows up here, and its "Open in Characters" comes back.
+	function handleBrowseClick() {
+		panelsCtx.openView("library", { toggle: false })
 	}
 
 	/** Whether the toolbar's New popout is showing. */
@@ -806,6 +807,7 @@
 		const req = {
 			lorebookData: importingLorebook!
 		}
+		lorebookImportPending = true
 		socket.emit("lorebooks:import", req)
 		showLorebookImportConfirmationModal = false
 		importingLorebook = null
@@ -814,6 +816,7 @@
 
 	function handleOverwriteLorebookImportConflict() {
 		if (!lorebookImportConflict) return
+		lorebookImportPending = true
 		socket.emit("lorebooks:importResolve", {
 			action: "overwrite",
 			lorebookData: lorebookImportConflict.lorebookData,
@@ -825,6 +828,7 @@
 
 	function handleImportLorebookAsNewFromConflict() {
 		if (!lorebookImportConflict) return
+		lorebookImportPending = true
 		socket.emit("lorebooks:importResolve", {
 			action: "createNew",
 			lorebookData: lorebookImportConflict.lorebookData,
@@ -954,7 +958,7 @@
 		}
 		if (msg.status === "unchanged") {
 			toaster.success({
-				title: "Character Already Imported",
+				title: "Character already imported",
 				description: `"${msg.character?.nickname || msg.character?.name}" is unchanged — using the existing character.`
 			})
 			return
@@ -966,12 +970,12 @@
 		// is the opposite of what happened.
 		if (msg.warnings?.length) {
 			toaster.warning({
-				title: `Character Imported With Warnings`,
+				title: `Character imported with warnings`,
 				description: `${msg.character!.nickname || msg.character!.name} was imported. ${msg.warnings.join(" ")}`
 			})
 		} else {
 			toaster.success({
-				title: `Character Imported`,
+				title: `Character imported`,
 				description: `Character ${msg.character!.nickname || msg.character!.name} imported successfully.`
 			})
 		}
@@ -987,12 +991,12 @@
 		importingLorebook = msg.book || null
 		if (msg.warnings?.length) {
 			toaster.warning({
-				title: `Character Imported With Warnings`,
+				title: `Character imported with warnings`,
 				description: `${msg.character.nickname || msg.character.name} was imported. ${msg.warnings.join(" ")}`
 			})
 		} else {
 			toaster.success({
-				title: `Character Imported`,
+				title: `Character imported`,
 				description: `Character ${msg.character.nickname || msg.character.name} imported successfully.`
 			})
 		}
@@ -1013,7 +1017,7 @@
 	) {
 		downloadBlob(msg)
 		toaster.success({
-			title: "Character Exported",
+			title: "Character exported",
 			description: `Character card exported as ${msg.filename}`
 		})
 	}
@@ -1025,6 +1029,8 @@
 	}
 
 	function handleLorebooksImport(msg: Sockets.Lorebooks.Import.Response) {
+		if (!lorebookImportPending) return
+		lorebookImportPending = false
 		if (msg.status === "conflict" && msg.conflict) {
 			lorebookImportConflict = msg.conflict
 			showLorebookImportConflictModal = true
@@ -1032,31 +1038,37 @@
 		}
 		if (msg.status === "unchanged") {
 			toaster.success({
-				title: "Lorebook Already Imported",
+				title: "Lorebook already imported",
 				description: `"${msg.lorebook?.name}" is unchanged — using the existing lorebook.`
 			})
 			return
 		}
 		toaster.success({
-			title: `Lorebook Imported`,
+			title: `Lorebook imported`,
 			description: `Lorebook imported successfully.`
 		})
 	}
 
 	function handleLorebooksImportError(msg: Sockets.ErrorResponse) {
+		if (!lorebookImportPending) return
+		lorebookImportPending = false
 		toaster.error({ title: msg.error || "Failed to import lorebook" })
 	}
 
 	function handleLorebooksImportResolve(
 		msg: Sockets.Lorebooks.ImportResolve.Response
 	) {
+		if (!lorebookImportPending) return
+		lorebookImportPending = false
 		toaster.success({
-			title: `Lorebook Imported`,
+			title: `Lorebook imported`,
 			description: `Lorebook imported successfully.`
 		})
 	}
 
 	function handleLorebooksImportResolveError(msg: Sockets.ErrorResponse) {
+		if (!lorebookImportPending) return
+		lorebookImportPending = false
 		toaster.error({
 			title: msg.error || "Failed to resolve lorebook import"
 		})
@@ -1198,8 +1210,8 @@
 		<div class="flex flex-col gap-2" role="list" aria-label={label}>
 			{#each items as c (c.id)}
 				<div
-					animate:flip={{ duration: 200 }}
-					out:fade={{ duration: 150 }}
+					animate:flip={{ duration: motionDuration(MOTION.base) }}
+					out:fade={{ duration: motionDuration(MOTION.fast) }}
 					class="rounded-lg"
 				>
 					<CharacterListItem
@@ -1238,8 +1250,8 @@
 		>
 			{#each items as c (c.id)}
 				<div
-					animate:flip={{ duration: 200 }}
-					out:fade={{ duration: 150 }}
+					animate:flip={{ duration: motionDuration(MOTION.base) }}
+					out:fade={{ duration: motionDuration(MOTION.fast) }}
 					class="rounded-lg"
 				>
 					<CharacterCardItem
@@ -1383,13 +1395,13 @@
 												tabindex={i === newMenuIndex
 													? 0
 													: -1}
-												class="hover:bg-surface-800 flex items-start gap-3 rounded-lg px-2.5 py-2 text-left"
+												class="hover:bg-surface-200-800 flex items-start gap-3 rounded-lg px-2.5 py-2 text-left"
 												onclick={() =>
 													runNewMenuItem(item)}
 											>
 												<item.icon
 													size={18}
-													class="text-surface-400 mt-0.5 shrink-0"
+													class="text-surface-600-400 mt-0.5 shrink-0"
 													aria-hidden="true"
 												/>
 												<span class="min-w-0">
@@ -1399,7 +1411,7 @@
 														{item.title}
 													</span>
 													<span
-														class="text-surface-500 block text-xs"
+														class="text-surface-600-400 block text-xs"
 													>
 														{item.blurb}
 													</span>
@@ -1423,6 +1435,7 @@
 							id="character-search"
 							bind:value={search}
 							placeholder="characters"
+					singular="character"
 							count={characterList.length}
 							aria-label="Filter characters by name, description, or tags"
 						/>
@@ -1531,7 +1544,7 @@
 						class="mb-3 flex min-w-0 shrink-0 flex-wrap items-center gap-2"
 					>
 						<span
-							class="bg-surface-800 text-surface-300 flex min-w-0 items-center gap-1 rounded-full px-2.5 py-1 text-xs"
+							class="bg-surface-200-800 text-surface-800-200 flex min-w-0 items-center gap-1 rounded-full px-2.5 py-1 text-xs"
 						>
 							<span class="min-w-0 truncate">
 								{activeFilterLabel}
@@ -1553,7 +1566,7 @@
 						<div class="flex items-center justify-center py-8">
 							<Icons.Loader2
 								size={20}
-								class="text-surface-400 animate-spin"
+								class="text-surface-600-400 animate-spin"
 							/>
 						</div>
 					{:else if filteredCharacters.length === 0}
@@ -1567,13 +1580,19 @@
 										? "No personas yet — mark a character as one from its ⋯ menu."
 										: activeChip !== "all"
 											? "No characters carry this tag."
-											: "No characters yet — create one to get started."}
+											: "No characters yet — create one, or browse ready-made ones from the community."}
 							ctaLabel={listIsNarrowed
 								? undefined
-								: "New Character"}
+								: "New character"}
 							onCta={listIsNarrowed
 								? undefined
 								: handleCreateClick}
+							secondaryLabel={listIsNarrowed
+								? undefined
+								: "Browse Characters"}
+							onSecondary={listIsNarrowed
+								? undefined
+								: handleBrowseClick}
 						/>
 					{:else}
 						<!-- Top level first, under no header: the folders are
@@ -1626,7 +1645,7 @@
 				     overlay out of the drag the pane is tracking. -->
 				{#if isCardDragOver}
 					<div
-						class="border-primary-500/70 bg-surface-950/80 text-surface-200 pointer-events-none absolute inset-2 flex items-center justify-center rounded-[12px] border-2 border-dashed text-sm"
+						class="border-primary-500/70 bg-surface-50-950/80 text-surface-800-200 pointer-events-none absolute inset-2 flex items-center justify-center rounded-[12px] border-2 border-dashed text-sm"
 					>
 						Drop to import this card
 					</div>
@@ -1659,7 +1678,7 @@
 							id="delete-modal-title"
 							class="mb-2 text-lg font-bold"
 						>
-							Delete Character?
+							Delete character?
 						</h2>
 						<p id="delete-modal-description" class="mb-4">
 							Are you sure you want to delete this character? This
@@ -1710,7 +1729,7 @@
 					class="card bg-surface-100-900 w-[min(95vw,560px)] space-y-4 p-4 shadow-xl"
 				>
 					<div class="p-6">
-						<h2 class="mb-2 text-lg font-bold">Import Character</h2>
+						<h2 class="mb-2 text-lg font-bold">Import a character</h2>
 						<div class="space-y-2">
 							<div>
 								<p
@@ -1761,7 +1780,7 @@
 					class="card bg-surface-100-900 border-surface-300-700 max-w-[95vw] space-y-4 border p-4 shadow-xl"
 				>
 					<div class="p-6">
-						<h2 class="mb-2 text-lg font-bold">Import Lorebook?</h2>
+						<h2 class="mb-2 text-lg font-bold">Import the lorebook?</h2>
 						<p class="mb-4">
 							A lorebook is associated with this character card.
 							Would you like to import it?
@@ -1770,9 +1789,10 @@
 							class="mb-2 block font-semibold"
 							for="lorebookName"
 						>
-							Lorebook Name
+							Lorebook name
 						</label>
 						<input
+							id="lorebookName"
 							name="lorebookName"
 							type="text"
 							class="input mb-4 w-full"
@@ -1789,7 +1809,7 @@
 								class="btn preset-filled-primary-500"
 								onclick={confirmLorebookImport}
 							>
-								Import Lorebook
+								Import lorebook
 							</button>
 						</div>
 					</div>
@@ -1808,6 +1828,7 @@
 		}}
 		entityLabel="Lorebook"
 		existingName={lorebookImportConflict.existingLorebook.name}
+		losses={describeOverwriteLosses(lorebookImportConflict.losses)}
 		onOverwrite={handleOverwriteLorebookImportConflict}
 		onImportAsNew={handleImportLorebookAsNewFromConflict}
 		onCancel={handleCancelLorebookImportConflict}

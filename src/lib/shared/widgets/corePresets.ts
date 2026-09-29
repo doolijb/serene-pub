@@ -7,17 +7,18 @@
  * `CORE_WIDGETS` (`@serene-pub/core-catalog`, `ui/sessions/widgets.ts`) is the
  * announcement: which widgets exist, what they request, and — for a widget
  * whose look the SDK owns — the presets it ships. The five message packs are
- * NOT the SDK's look: every selector in them (`.sp-msg`, `.sp-msg-avatar`) is a
- * class the APP's SessionMessage authors, and the SDK has no view of that
- * markup at all. So the app contributes them for its own primary widget here,
+ * NOT the SDK's look: every selector in them names a widget part of the
+ * message (`[data-widget-part~="messages.message"]`, `messages.message-avatar`;
+ * STYLE-GUIDE §6.16), and the SDK's catalog carries no look for them. So the app contributes them for its own primary widget here,
  * and `withCorePresets` is the single seam the boot seed passes them through.
  * Nothing in the SDK changed.
  *
  * The composer is part of that same widget and its look is a SETTING on it
  * (`CORE_WIDGETS`'s `composer` field), not a skin: a style is CSS over one
  * widget's markup, and which of three shapes the field takes is a fact the
- * component reads, not a stylesheet. A message pack therefore carries no
- * `.sp-compose` / `.sp-composer` rule.
+ * component reads, not a stylesheet. A message pack therefore carries no rule
+ * for the compose block or the composer's parts (`messages.compose`,
+ * `messages.composer-*`; STYLE-GUIDE §6.16).
  *
  * ## The `default` slot carries Stage
  *
@@ -29,22 +30,25 @@
  * `stage` would silently un-style every existing session on upgrade, and
  * dropping `default` entirely would leave the fallback to `defaultStyleFor`'s
  * "first row for the widget", which is list order — i.e. alphabetical by title,
- * i.e. Bubbles. **Stage is a display name only** (NOMENCLATURE §23): the
- * reading column is `.sp-column`, never `.sp-stage`.
+ * i.e. Bubbles. The reading column itself is the stage too (NOMENCLATURE §23,
+ * reversed 2026-09-28): the log's rows are the part `messages.stage`.
  *
  * ## The markup a pack is written against
  *
  * `messageLayouts.css` holds the zero-styled base: the four-cell grid
- * (`avatar identity controls` over `content`), the avatar sized by `--sp-av`
+ * (`avatar identity controls` over `content`: the parts `messages.message-avatar`,
+ * `-identity`, `-controls`, `-content` under `messages.message`, in a
+ * `messages.message-row`), the avatar sized by `--sp-av`
  * and `--sp-av-radius`, the control boxes, and the shared message-STATE
  * overlays (selected / dim / editing / hidden). A pack restructures by
  * overriding `grid-template-areas` and the four cells; it never restyles a
  * state, so selection and the editing outline are one treatment everywhere.
  *
  * Story prose is set in two tones (STYLE-GUIDE §3.3) through a pair of custom
- * properties the pack OWNS and `app.css` reads: `--sp-body` colours the prose
- * and `--sp-quote` colours dialogue inside quotation marks, both resolved
- * under `.sp-conversation`. A pack that sets neither gets one flat tone.
+ * properties the pack OWNS and `messageLayouts.css` reads: `--sp-body` colours
+ * the prose (`messages.prose`) and `--sp-quote` colours dialogue inside
+ * quotation marks, both resolved under the widget's root (`messages.root`). A
+ * pack that sets neither gets one flat tone.
  *
  * ## Colour: roles, and a light/dark pair for anything that needs one
  *
@@ -57,7 +61,7 @@
  * `color-scheme` Skeleton sets on `:root` and needs no ancestor selector. A
  * clone of a pack inherits the pairing and keeps working in both modes.
  *
- * Each pack opens by naming its palette on `.sp-conversation` — the two prose
+ * Each pack opens by naming its palette on the root (`messages.root`) — the two prose
  * tones plus who-is-speaking and the aside tone — so a person editing a clone
  * changes one block rather than hunting through rules.
  */
@@ -72,7 +76,7 @@ import type { ResolvableStyle } from "./resolve"
  */
 const STAGE_CSS = `/* Stage — prose in a reading column, the cast in lamp gold, the persona's turn
    on a card, narration a centred aside with no portrait. */
-.sp-conversation {
+[data-widget-part~="messages.root"] {
 	--sp-quote: light-dark(var(--color-surface-950), var(--color-surface-50));
 	--sp-body: light-dark(var(--color-surface-700), var(--color-surface-300));
 	--sp-speaker: light-dark(var(--color-primary-700), var(--color-primary-500));
@@ -85,7 +89,7 @@ const STAGE_CSS = `/* Stage — prose in a reading column, the cast in lamp gold
 		color-mix(in oklab, var(--color-surface-950) 55%, transparent)
 	);
 }
-.sp-msg {
+[data-widget-part~="messages.message"] {
 	position: relative;
 	column-gap: 0.75rem;
 	row-gap: 0.25rem;
@@ -94,29 +98,29 @@ const STAGE_CSS = `/* Stage — prose in a reading column, the cast in lamp gold
 }
 /* Guarded on the NORMAL state so the shared selected / dim / editing overlay
    keeps the message under the pointer. */
-.sp-msg[data-msg-state="normal"]:hover,
-.sp-msg[data-msg-state="normal"]:focus-within {
+[data-widget-part~="messages.message"][data-msg-state="normal"]:hover,
+[data-widget-part~="messages.message"][data-msg-state="normal"]:focus-within {
 	background: var(--sp-stage-hover);
 }
-.sp-msg-avatar {
+[data-widget-part~="messages.message-avatar"] {
 	--sp-av: 2.5rem;
 	--sp-av-radius: 9999px;
 }
-.sp-msg-name {
+[data-widget-part~="messages.message-name"] {
 	color: var(--sp-speaker);
 }
-.sp-msg[data-msg-author="persona"] .sp-msg-name {
+[data-widget-part~="messages.message"][data-msg-author="persona"] [data-widget-part~="messages.message-name"] {
 	color: var(--sp-speaker-persona);
 }
-.sp-msg-body {
+[data-widget-part~="messages.message-body"] {
 	font-family: var(--sp-prose);
-	font-size: 17px;
+	font-size: calc(17px * var(--sp-prose-scale, 1));
 	line-height: 1.65;
 }
 /* The scene's edge: a 2px rule in the row's own --sp-scene, at the leading edge
    INSIDE the message's padding box, where a scrolling log cannot clip it and
    no horizontal scrollbar can appear. */
-.sp-msg-row[style*="--sp-scene"] .sp-msg::before {
+[data-widget-part~="messages.message-row"][style*="--sp-scene"] [data-widget-part~="messages.message"]::before {
 	content: "";
 	position: absolute;
 	inset-block: 10px;
@@ -127,7 +131,7 @@ const STAGE_CSS = `/* Stage — prose in a reading column, the cast in lamp gold
 	opacity: 0.55;
 }
 /* The persona's turn reads as a card; the cast's sits straight on the page. */
-.sp-msg[data-msg-author="persona"] .sp-msg-content {
+[data-widget-part~="messages.message"][data-msg-author="persona"] [data-widget-part~="messages.message-content"] {
 	background: var(--sp-stage-card);
 	border: 1px solid var(--sp-stage-edge);
 	border-radius: 12px;
@@ -135,25 +139,25 @@ const STAGE_CSS = `/* Stage — prose in a reading column, the cast in lamp gold
 	margin-top: 6px;
 }
 /* Narration: centred italic, no portrait, the name reduced to a quiet label. */
-.sp-msg[data-msg-role="narration"] {
+[data-widget-part~="messages.message"][data-msg-role="narration"] {
 	grid-template-columns: minmax(0, 1fr) auto;
 	grid-template-areas:
 		"identity controls"
 		"content  content";
 }
-.sp-msg[data-msg-role="narration"] .sp-msg-avatar {
+[data-widget-part~="messages.message"][data-msg-role="narration"] [data-widget-part~="messages.message-avatar"] {
 	display: none;
 }
-.sp-msg[data-msg-role="narration"] .sp-msg-name {
+[data-widget-part~="messages.message"][data-msg-role="narration"] [data-widget-part~="messages.message-name"] {
 	font-size: 12px;
 	font-weight: 400;
 	color: var(--color-surface-500);
 }
-.sp-msg[data-msg-role="narration"] .sp-msg-body {
+[data-widget-part~="messages.message"][data-msg-role="narration"] [data-widget-part~="messages.message-body"] {
 	--sp-body: var(--sp-aside);
 	--sp-quote: var(--sp-aside);
 	justify-content: center;
-	font-size: 16px;
+	font-size: calc(16px * var(--sp-prose-scale, 1));
 	font-style: italic;
 	text-align: center;
 }`
@@ -161,7 +165,7 @@ const STAGE_CSS = `/* Stage — prose in a reading column, the cast in lamp gold
 /** BUBBLES — a portrait beside a speech bubble; the persona's mirrored right. */
 const BUBBLES_CSS = `/* Bubbles — portrait beside a speech bubble, the persona's turn mirrored to the
    trailing edge, narration a centred dashed strip. */
-.sp-conversation {
+[data-widget-part~="messages.root"] {
 	--sp-quote: light-dark(var(--color-surface-950), var(--color-surface-50));
 	--sp-body: light-dark(var(--color-surface-700), var(--color-surface-300));
 	--sp-speaker: light-dark(var(--color-primary-700), var(--color-primary-500));
@@ -180,7 +184,7 @@ const BUBBLES_CSS = `/* Bubbles — portrait beside a speech bubble, the persona
 	--sp-bub-persona: light-dark(var(--color-surface-50), var(--color-surface-950));
 	--sp-bub-persona-edge: light-dark(var(--color-surface-300), var(--color-surface-800));
 }
-.sp-msg {
+[data-widget-part~="messages.message"] {
 	/* The trailing 1fr column absorbs the body's width so the name and controls
 	   in row 1 stay adjacent (a small gap) instead of the controls being shoved
 	   to the far edge. */
@@ -192,24 +196,24 @@ const BUBBLES_CSS = `/* Bubbles — portrait beside a speech bubble, the persona
 	max-width: 82%;
 	padding: 0.15rem;
 }
-.sp-msg-controls {
+[data-widget-part~="messages.message-controls"] {
 	min-inline-size: 0;
 }
-.sp-msg-avatar {
+[data-widget-part~="messages.message-avatar"] {
 	--sp-av: 2rem;
 }
-.sp-msg-name {
+[data-widget-part~="messages.message-name"] {
 	color: var(--sp-speaker);
 }
-.sp-msg[data-msg-author="persona"] .sp-msg-name {
+[data-widget-part~="messages.message"][data-msg-author="persona"] [data-widget-part~="messages.message-name"] {
 	color: var(--sp-speaker-persona);
 }
-.sp-msg-content {
+[data-widget-part~="messages.message-content"] {
 	width: 100%;
 }
-.sp-msg-body {
+[data-widget-part~="messages.message-body"] {
 	font-family: inherit;
-	font-size: 15px;
+	font-size: calc(15px * var(--sp-prose-scale, 1));
 	line-height: 1.55;
 	width: fit-content;
 	max-width: 100%;
@@ -221,18 +225,18 @@ const BUBBLES_CSS = `/* Bubbles — portrait beside a speech bubble, the persona
 }
 /* The persona's turn mirrors: bubble and portrait on the trailing edge, with
    the controls beside the portrait, which is that side's anchor. */
-.sp-msg:is([data-msg-role="user"], [data-msg-author="persona"]) {
+[data-widget-part~="messages.message"]:is([data-msg-role="user"], [data-msg-author="persona"]) {
 	margin-left: auto;
 	grid-template-columns: minmax(0, 1fr) auto auto;
 	grid-template-areas:
 		"identity avatar controls"
 		"content  avatar controls";
 }
-.sp-msg:is([data-msg-role="user"], [data-msg-author="persona"]) .sp-msg-identity {
+[data-widget-part~="messages.message"]:is([data-msg-role="user"], [data-msg-author="persona"]) [data-widget-part~="messages.message-identity"] {
 	flex-direction: row-reverse;
 	text-align: right;
 }
-.sp-msg:is([data-msg-role="user"], [data-msg-author="persona"]) .sp-msg-body {
+[data-widget-part~="messages.message"]:is([data-msg-role="user"], [data-msg-author="persona"]) [data-widget-part~="messages.message-body"] {
 	margin-left: auto;
 	background: var(--sp-bub-persona);
 	border-color: var(--sp-bub-persona-edge);
@@ -240,7 +244,7 @@ const BUBBLES_CSS = `/* Bubbles — portrait beside a speech bubble, the persona
 	border-top-right-radius: 0.3rem;
 }
 /* Narration: a centred dashed strip on the page ground, no portrait. */
-.sp-msg[data-msg-role="narration"] {
+[data-widget-part~="messages.message"][data-msg-role="narration"] {
 	margin-inline: auto;
 	max-width: 70%;
 	grid-template-columns: auto minmax(0, 1fr) auto;
@@ -248,10 +252,10 @@ const BUBBLES_CSS = `/* Bubbles — portrait beside a speech bubble, the persona
 		"identity identity controls"
 		"content  content  content";
 }
-.sp-msg[data-msg-role="narration"] .sp-msg-avatar {
+[data-widget-part~="messages.message"][data-msg-role="narration"] [data-widget-part~="messages.message-avatar"] {
 	display: none;
 }
-.sp-msg[data-msg-role="narration"] .sp-msg-body {
+[data-widget-part~="messages.message"][data-msg-role="narration"] [data-widget-part~="messages.message-body"] {
 	--sp-body: var(--sp-aside);
 	margin-inline: auto;
 	background: transparent;
@@ -264,7 +268,7 @@ const BUBBLES_CSS = `/* Bubbles — portrait beside a speech bubble, the persona
 /** NOVEL — flowing prose at a reading measure. No bubbles, no portraits. */
 const NOVEL_CSS = `/* Novel — flowing prose at a reading measure. No portraits, no cards; the
    speaker's name is a quiet label above the passage, in sentence case. */
-.sp-conversation {
+[data-widget-part~="messages.root"] {
 	--sp-quote: light-dark(var(--color-surface-950), var(--color-surface-50));
 	--sp-body: light-dark(var(--color-surface-700), var(--color-surface-300));
 	/* The persona's passages sit a shade closer to the ink than the cast's —
@@ -272,31 +276,31 @@ const NOVEL_CSS = `/* Novel — flowing prose at a reading measure. No portraits
 	--sp-body-persona: light-dark(var(--color-surface-800), var(--color-surface-200));
 	--sp-aside: light-dark(var(--color-surface-600), var(--color-surface-400));
 }
-.sp-msg {
+[data-widget-part~="messages.message"] {
 	grid-template-areas:
 		"identity identity controls"
 		"content  content  content";
 	padding: 0.35rem 0.25rem;
 	max-width: 100%;
 }
-.sp-msg-avatar {
+[data-widget-part~="messages.message-avatar"] {
 	display: none;
 }
-.sp-msg-name {
+[data-widget-part~="messages.message-name"] {
 	font-size: 12px;
 	font-weight: 600;
 	color: var(--color-surface-500);
 }
-.sp-msg-body {
+[data-widget-part~="messages.message-body"] {
 	font-family: var(--sp-prose);
-	font-size: 17px;
+	font-size: calc(17px * var(--sp-prose-scale, 1));
 	line-height: 1.75;
 }
-.sp-msg:is([data-msg-role="user"], [data-msg-author="persona"]) .sp-msg-body {
+[data-widget-part~="messages.message"]:is([data-msg-role="user"], [data-msg-author="persona"]) [data-widget-part~="messages.message-body"] {
 	--sp-body: var(--sp-body-persona);
 }
 /* Narration runs the full measure in italic. */
-.sp-msg[data-msg-role="narration"] .sp-msg-body {
+[data-widget-part~="messages.message"][data-msg-role="narration"] [data-widget-part~="messages.message-body"] {
 	--sp-body: var(--sp-aside);
 	font-style: italic;
 }`
@@ -306,14 +310,14 @@ const COMPACT_CSS = `/* Compact — one dense line per message. The name is its 
    BEFORE the text rather than a word inside the same line box: name and body
    are separate grid cells, which no amount of inline flow can make share one
    line, so the text hangs under itself as an IRC client's does. */
-.sp-conversation {
+[data-widget-part~="messages.root"] {
 	--sp-quote: light-dark(var(--color-surface-950), var(--color-surface-50));
 	--sp-body: light-dark(var(--color-surface-700), var(--color-surface-300));
 	--sp-speaker: light-dark(var(--color-primary-700), var(--color-primary-500));
 	--sp-speaker-persona: light-dark(var(--color-surface-800), var(--color-surface-200));
 	--sp-aside: light-dark(var(--color-surface-600), var(--color-surface-400));
 }
-.sp-msg {
+[data-widget-part~="messages.message"] {
 	grid-template-columns: auto auto minmax(0, 1fr) auto;
 	grid-template-areas: "avatar identity content controls";
 	align-items: start;
@@ -321,207 +325,272 @@ const COMPACT_CSS = `/* Compact — one dense line per message. The name is its 
 	row-gap: 0;
 	padding: 0.1rem 0.25rem;
 }
-.sp-msg-controls {
+[data-widget-part~="messages.message-controls"] {
 	min-inline-size: 0;
 }
-.sp-msg-avatar {
+[data-widget-part~="messages.message-avatar"] {
 	--sp-av: 1.75rem;
 	--sp-av-radius: 0.5rem;
 	align-self: start;
 }
 /* One line means one line: the badges ride beside the name rather than wrapping
    under it, and a long name truncates instead of eating the text column. */
-.sp-msg-identity {
+[data-widget-part~="messages.message-identity"] {
 	flex-wrap: nowrap;
 	max-inline-size: 11rem;
 	white-space: nowrap;
 }
-.sp-msg-name {
+[data-widget-part~="messages.message-name"] {
 	font-size: 15px;
 	color: var(--sp-speaker);
 }
-.sp-msg[data-msg-author="persona"] .sp-msg-name {
+[data-widget-part~="messages.message"][data-msg-author="persona"] [data-widget-part~="messages.message-name"] {
 	color: var(--sp-speaker-persona);
 }
-.sp-msg-body {
+[data-widget-part~="messages.message-body"] {
 	font-family: inherit;
-	font-size: 15px;
+	font-size: calc(15px * var(--sp-prose-scale, 1));
 	line-height: 1.5;
 }
-.sp-msg-body :where(p) {
+[data-widget-part~="messages.message-body"] :where(p) {
 	margin-block: 0.15em;
 }
-.sp-msg-time {
+[data-widget-part~="messages.message-time"] {
 	font-size: 11px;
 }
 /* Narration: an italic line with neither portrait nor attribution. */
-.sp-msg[data-msg-role="narration"] {
+[data-widget-part~="messages.message"][data-msg-role="narration"] {
 	grid-template-columns: minmax(0, 1fr) auto;
 	grid-template-areas: "content controls";
 }
-.sp-msg[data-msg-role="narration"] .sp-msg-avatar,
-.sp-msg[data-msg-role="narration"] .sp-msg-identity {
+[data-widget-part~="messages.message"][data-msg-role="narration"] [data-widget-part~="messages.message-avatar"],
+[data-widget-part~="messages.message"][data-msg-role="narration"] [data-widget-part~="messages.message-identity"] {
 	display: none;
 }
-.sp-msg[data-msg-role="narration"] .sp-msg-body {
+[data-widget-part~="messages.message"][data-msg-role="narration"] [data-widget-part~="messages.message-body"] {
 	--sp-body: var(--sp-aside);
 	font-style: italic;
+}
+/* A narrow box has no room for the name's column beside the text: the text
+   drops under the name row, beside the portrait, rather than into a sliver. */
+@container sp-widget (max-width: 36rem) {
+	[data-widget-part~="messages.message"] {
+		grid-template-columns: auto minmax(0, 1fr) auto;
+		grid-template-areas:
+			"avatar identity controls"
+			"avatar content  content";
+	}
+	[data-widget-part~="messages.message-identity"] {
+		max-inline-size: none;
+	}
 }`
 
 /**
- * CAMEO — a profile card: a squircle portrait on a soft, borderless surface,
- * with the name row set above the card.
+ * CAMEO — after Moonlit Echoes' "Echo" style: a large, unframed portrait laid
+ * into the leading edge of a glass card and fading into it.
  */
-const CAMEO_CSS = `/* Dreamlit Cameo — a profile card: a ringed squircle portrait on a soft,
-   borderless surface, the name row set above it, the persona's turn mirrored.
+const CAMEO_CSS = `/* Dreamlit Cameo — after Moonlit Echoes' "Echo" message style: each line is a
+   soft glass card, and the speaker's portrait is LARGE and unframed, laid into
+   the card's leading edge and fading into it (toward the text and at the
+   bottom), so the face sits partly under the glass rather than in a box of
+   its own. The persona's turn mirrors to the trailing edge. In a narrow box
+   the portrait goes behind the text, faint, and the text takes the width.
 
-   The query container the portrait sizes against is the widget's OWN root box,
-   not the reading column: a skin is injected scoped to a \`display: contents\`
-   wrapper, which has no box and so cannot be a container itself. \`cqi\` then
-   resolves the portrait against the widget WIDTH on either axis. */
-:root > * {
-	container-type: inline-size;
-}
-.sp-conversation {
+   The portrait's size answers the widget's box (\`cqi\`, the \`sp-widget\`
+   container the host gives every widget), never the window. */
+[data-widget-part~="messages.root"] {
 	--sp-quote: light-dark(var(--color-surface-950), var(--color-surface-50));
 	--sp-body: light-dark(var(--color-surface-700), var(--color-surface-300));
 	--sp-speaker: light-dark(var(--color-primary-700), var(--color-primary-500));
 	--sp-speaker-persona: light-dark(var(--color-surface-800), var(--color-surface-200));
 	--sp-aside: light-dark(var(--color-surface-600), var(--color-surface-400));
-	--sp-portrait: clamp(4.5rem, 20cqi, 6rem);
-	--sp-cameo-card: light-dark(
-		color-mix(in oklab, var(--color-surface-50) 70%, transparent),
-		color-mix(in oklab, var(--color-surface-950) 60%, transparent)
+	--sp-portrait: clamp(8rem, 30cqi, 13rem);
+	--sp-cameo-glass: light-dark(
+		color-mix(in oklab, var(--color-surface-50) 74%, transparent),
+		color-mix(in oklab, var(--color-surface-900) 58%, transparent)
 	);
-	--sp-cameo-edge: light-dark(var(--color-surface-300), var(--color-surface-800));
+	--sp-cameo-glass-hover: light-dark(
+		color-mix(in oklab, var(--color-surface-50) 90%, transparent),
+		color-mix(in oklab, var(--color-surface-900) 78%, transparent)
+	);
+	--sp-cameo-edge: light-dark(
+		color-mix(in oklab, var(--color-surface-400) 40%, transparent),
+		color-mix(in oklab, var(--color-surface-500) 24%, transparent)
+	);
 	--sp-cameo-glow: light-dark(
-		color-mix(in oklab, var(--color-surface-500) 28%, transparent),
-		color-mix(in oklab, var(--color-surface-950) 55%, transparent)
+		color-mix(in oklab, var(--color-surface-500) 30%, transparent),
+		color-mix(in oklab, var(--color-surface-950) 70%, transparent)
 	);
 }
-.sp-msg {
+/* The card: the name row over the text, both clear of the portrait's
+   leading part (the inset), and at least as tall as the portrait wants. */
+[data-widget-part~="messages.message"] {
+	--sp-cameo-inset: max(1.1rem, calc(var(--sp-portrait) * 0.72));
 	position: relative;
-	/* Row 1 = the name and controls ABOVE the card; row 2 = the card itself
-	   (portrait beside body). */
-	grid-template-columns: auto minmax(0, 1fr) auto;
-	grid-template-areas:
-		"identity identity controls"
-		"avatar   content  content";
-	column-gap: 0.9rem;
-	row-gap: 0.25rem;
-	padding: 0;
-}
-/* The CARD: an absolutely-positioned pseudo placed INTO row 2, so it measures
-   itself against the grid rather than against a guessed header height, and its
-   shadow is never clipped by a cell. */
-.sp-msg::before {
-	content: "";
-	grid-row: 2;
-	grid-column: 1 / -1;
-	position: absolute;
-	inset: 0;
-	border-radius: 14px;
-	background: var(--sp-cameo-card);
-	box-shadow: 0 8px 26px -18px var(--sp-cameo-glow);
-	backdrop-filter: blur(6px);
-	z-index: 0;
-	pointer-events: none;
-}
-/* Name row, above the card. */
-.sp-msg-identity {
-	align-self: center;
-	padding-inline-start: 1.15rem;
-	z-index: 1;
-}
-.sp-msg-name {
-	font-size: 18px;
-	letter-spacing: -0.01em;
-	color: var(--sp-speaker);
-}
-.sp-msg[data-msg-author="persona"] .sp-msg-name {
-	color: var(--sp-speaker-persona);
-}
-.sp-msg-controls {
-	/* row-reverse puts the swipe controls BEFORE the menu (⟨ 1/2 ⟩ · ⋮). */
-	flex-direction: row-reverse;
-	min-inline-size: 0;
-	padding-inline-end: 0.35rem;
-	z-index: 1;
-}
-/* The portrait: a squircle with a 2px ring, sitting on the card. */
-.sp-msg-avatar {
-	--sp-av: var(--sp-portrait);
-	--sp-av-radius: 22px;
-	position: relative;
-	align-self: start;
-	margin-block: 0.9rem;
-	margin-inline-start: 0.9rem;
-	z-index: 1;
-}
-.sp-msg-avatar-img,
-.sp-msg-avatar-glyph {
-	box-shadow: 0 0 0 2px var(--sp-cameo-edge);
-}
-.sp-msg:is([data-msg-role="user"], [data-msg-author="persona"]) .sp-msg-avatar-img,
-.sp-msg:is([data-msg-role="user"], [data-msg-author="persona"]) .sp-msg-avatar-glyph {
-	box-shadow: 0 0 0 2px var(--color-primary-500);
-}
-/* Body sits on the card; a square-ish floor keeps it at least as tall as the
-   portrait is wide. */
-.sp-msg-content {
-	position: relative;
-	z-index: 1;
-	align-self: stretch;
-	min-block-size: var(--sp-portrait);
-	padding-block: 0.9rem 0.95rem;
-	padding-inline-end: 1.15rem;
-}
-.sp-msg-body {
-	font-family: var(--sp-prose);
-	font-size: 17px;
-	line-height: 1.65;
-}
-/* The persona's turn mirrors: name right-aligned, portrait on the trailing
-   edge of the card. */
-.sp-msg:is([data-msg-role="user"], [data-msg-author="persona"]) {
-	grid-template-areas:
-		"identity identity controls"
-		"content  content  avatar";
-}
-.sp-msg:is([data-msg-role="user"], [data-msg-author="persona"]) .sp-msg-identity {
-	padding-inline: 0 1.15rem;
-	justify-content: flex-end;
-	text-align: right;
-}
-.sp-msg:is([data-msg-role="user"], [data-msg-author="persona"]) .sp-msg-avatar {
-	margin-inline: 0 0.9rem;
-}
-.sp-msg:is([data-msg-role="user"], [data-msg-author="persona"]) .sp-msg-content {
-	padding-inline: 1.15rem 0;
-}
-/* Narration: no portrait; a dashed card at the full measure, centred. */
-.sp-msg[data-msg-role="narration"] {
 	grid-template-columns: minmax(0, 1fr) auto;
 	grid-template-areas:
 		"identity controls"
 		"content  content";
+	align-content: start;
+	column-gap: 0.75rem;
+	row-gap: 0.35rem;
+	min-block-size: calc(var(--sp-portrait) * 0.9);
+	padding-block: 0.8rem 1rem;
+	padding-inline: var(--sp-cameo-inset) 1.1rem;
+	border-radius: 18px;
 }
-.sp-msg[data-msg-role="narration"] .sp-msg-avatar {
+/* The glass, behind the card's own ground: the shared selected / editing
+   overlays still paint over it. */
+[data-widget-part~="messages.message"]::before {
+	content: "";
+	position: absolute;
+	inset: 0;
+	z-index: -1;
+	border-radius: inherit;
+	background: var(--sp-cameo-glass);
+	border: 1px solid var(--sp-cameo-edge);
+	box-shadow: 0 14px 34px -24px var(--sp-cameo-glow);
+	backdrop-filter: blur(10px);
+	pointer-events: none;
+	transition: background-color 150ms ease-out;
+}
+[data-widget-part~="messages.message"][data-msg-state="normal"]:hover::before,
+[data-widget-part~="messages.message"][data-msg-state="normal"]:focus-within::before {
+	background: var(--sp-cameo-glass-hover);
+}
+/* A line in a scene carries the scene's colour along its leading edge. */
+[data-widget-part~="messages.message-row"][style*="--sp-scene"] [data-widget-part~="messages.message"]::before {
+	border-inline-start: 2px solid color-mix(in oklab, var(--sp-scene) 70%, transparent);
+}
+/* The portrait: laid into the card's leading edge, the card's full height,
+   no frame — it fades toward the text and at the bottom. */
+[data-widget-part~="messages.message-avatar"] {
+	--sp-av: var(--sp-portrait);
+	--sp-av-radius: 0;
+	grid-area: auto;
+	position: absolute;
+	inset-block: 0;
+	inset-inline-start: 0;
+	inline-size: var(--sp-portrait);
+	overflow: hidden;
+	border-start-start-radius: 18px;
+	border-end-start-radius: 18px;
+	-webkit-mask-image:
+		linear-gradient(to right, #000 38%, transparent 100%),
+		linear-gradient(to bottom, #000 55%, transparent 100%);
+	-webkit-mask-composite: source-in;
+	mask-image:
+		linear-gradient(to right, #000 38%, transparent 100%),
+		linear-gradient(to bottom, #000 55%, transparent 100%);
+	mask-composite: intersect;
+}
+[data-widget-part~="messages.message-avatar-button"] {
+	inline-size: 100%;
+	block-size: 100%;
+}
+[data-widget-part~="messages.message-avatar-img"] {
+	object-fit: cover;
+	object-position: 50% 18%;
+}
+/* No picture: the speaker's initial, large and faint, as a watermark. */
+[data-widget-part~="messages.message-avatar-glyph"] {
+	inline-size: 100%;
+	block-size: 100%;
+	align-items: flex-start;
+	padding-block-start: 0.4rem;
+	font-size: calc(var(--sp-portrait) * 0.6);
+	background: linear-gradient(
+		160deg,
+		color-mix(in oklab, var(--color-primary-500) 22%, transparent),
+		transparent 75%
+	);
+	color: color-mix(in oklab, var(--color-primary-500) 55%, transparent);
+}
+/* The text rides above the portrait. */
+[data-widget-part~="messages.message-identity"],
+[data-widget-part~="messages.message-controls"],
+[data-widget-part~="messages.message-content"] {
+	position: relative;
+	z-index: 1;
+}
+[data-widget-part~="messages.message-controls"] {
+	min-inline-size: 0;
+}
+[data-widget-part~="messages.message-name"] {
+	font-size: 18px;
+	letter-spacing: -0.01em;
+	color: var(--sp-speaker);
+}
+[data-widget-part~="messages.message"][data-msg-author="persona"] [data-widget-part~="messages.message-name"] {
+	color: var(--sp-speaker-persona);
+}
+[data-widget-part~="messages.message-content"] {
+	min-inline-size: 0;
+}
+[data-widget-part~="messages.message-body"] {
+	font-family: var(--sp-prose);
+	font-size: calc(17px * var(--sp-prose-scale, 1));
+	line-height: 1.65;
+}
+/* The persona's turn mirrors: the portrait on the trailing edge, fading the
+   other way, the name row set to the end. */
+[data-widget-part~="messages.message"]:is([data-msg-role="user"], [data-msg-author="persona"]) {
+	grid-template-columns: auto minmax(0, 1fr);
+	grid-template-areas:
+		"controls identity"
+		"content  content";
+	padding-inline: 1.1rem var(--sp-cameo-inset);
+}
+[data-widget-part~="messages.message"]:is([data-msg-role="user"], [data-msg-author="persona"]) [data-widget-part~="messages.message-identity"] {
+	justify-content: flex-end;
+	text-align: right;
+}
+[data-widget-part~="messages.message"]:is([data-msg-role="user"], [data-msg-author="persona"]) [data-widget-part~="messages.message-controls"] {
+	justify-self: start;
+	flex-direction: row-reverse;
+}
+[data-widget-part~="messages.message"]:is([data-msg-role="user"], [data-msg-author="persona"]) [data-widget-part~="messages.message-avatar"] {
+	inset-inline: auto 0;
+	border-radius: 0;
+	border-start-end-radius: 18px;
+	border-end-end-radius: 18px;
+	-webkit-mask-image:
+		linear-gradient(to left, #000 38%, transparent 100%),
+		linear-gradient(to bottom, #000 55%, transparent 100%);
+	mask-image:
+		linear-gradient(to left, #000 38%, transparent 100%),
+		linear-gradient(to bottom, #000 55%, transparent 100%);
+}
+/* Narration: no portrait; the card at the full measure, its text centred. */
+[data-widget-part~="messages.message"][data-msg-role="narration"] {
+	min-block-size: 0;
+	padding-inline: 1.1rem;
+}
+[data-widget-part~="messages.message"][data-msg-role="narration"] [data-widget-part~="messages.message-avatar"] {
 	display: none;
 }
-.sp-msg[data-msg-role="narration"] .sp-msg-content {
-	min-block-size: 0;
-	padding: 0.75rem 1.15rem;
-	text-align: center;
+[data-widget-part~="messages.message"][data-msg-role="narration"]::before {
+	border-style: dashed;
+	box-shadow: none;
 }
-.sp-msg[data-msg-role="narration"] .sp-msg-body {
+[data-widget-part~="messages.message"][data-msg-role="narration"] [data-widget-part~="messages.message-body"] {
 	--sp-body: var(--sp-aside);
 	justify-content: center;
 	font-style: italic;
+	text-align: center;
 }
-.sp-msg[data-msg-role="narration"]::before {
-	border: 1px dashed var(--sp-cameo-edge);
-	box-shadow: none;
+/* A narrow box: the portrait goes behind the text, faint, and the text takes
+   the card's width. */
+@container sp-widget (max-width: 36rem) {
+	[data-widget-part~="messages.message"],
+	[data-widget-part~="messages.message"]:is([data-msg-role="user"], [data-msg-author="persona"]) {
+		--sp-portrait: clamp(7rem, 45cqi, 10rem);
+		min-block-size: 0;
+		padding-inline: 1rem;
+	}
+	[data-widget-part~="messages.message-avatar"] {
+		opacity: 0.3;
+	}
 }`
 
 /* ── the decls ───────────────────────────────────────────────────────── */

@@ -9,15 +9,23 @@
 
 import {
 	CHARACTER_LORE_TYPE_ID,
+	ENTRY_TYPE_IDS,
 	HISTORY_TYPE_ID,
-	WORLD_LORE_TYPE_ID
+	ITEM_TYPE_ID,
+	LOCATION_TYPE_ID,
+	WORLD_LORE_TYPE_ID,
+	type EntryTypeId
 } from "$lib/shared/entries/types"
 import {
 	LORE_SCOPES,
+	reduce,
 	SCOPE_KIND,
 	SCOPE_LABELS,
+	type LoreRoute,
 	type LoreScope
-} from "./loreRoute"
+} from "$lib/shared/lorebooks/loreRoute"
+import type { StoryDate } from "$lib/shared/lorebooks/storyDate"
+import { momentKey } from "./timelineStrip"
 import {
 	emptyFilters,
 	hasKeywords,
@@ -34,8 +42,59 @@ export const POOL_KINDS = [
 	WORLD_LORE_TYPE_ID,
 	CHARACTER_LORE_TYPE_ID,
 	HISTORY_TYPE_ID,
+	ITEM_TYPE_ID,
 	SCENE_KIND
 ] as const
+
+/**
+ * The entry types the workspace loads for the whole book.
+ *
+ * Derived from `POOL_KINDS`, so the rail's copy of the book cannot drift from
+ * the pool's again (#89: items were drawn by the pool and never loaded), plus
+ * places — `core:entry/location` entries, the one definition the rail's
+ * Places count and the Places board share — which the Places scope and the
+ * Time lens narrow to without the pool drawing them.
+ */
+export const BOOK_ENTRY_TYPES: readonly EntryTypeId[] = [
+	...(POOL_KINDS.filter((kind) => kind !== SCENE_KIND) as EntryTypeId[]),
+	LOCATION_TYPE_ID
+]
+
+/**
+ * How many entries the book holds on the line being read, from the server's
+ * figures: every entry type, archived rows out. Undefined while the figures
+ * are on their way.
+ */
+export function entryTotal(
+	counts: Record<string, number> | null
+): number | undefined {
+	if (!counts) return undefined
+	return ENTRY_TYPE_IDS.reduce((total, t) => total + (counts[t] ?? 0), 0)
+}
+
+/**
+ * The kinds of entry the Time lens draws for a scope (#88).
+ *
+ * The line is the scope's, as every other lens is: World draws world lore,
+ * Places its location entries, Cast the lore anchored to members. `all` is
+ * every kind the pool draws, and Scenes keeps History — a scene has no date
+ * of its own and sits at its history entry's.
+ */
+export function timeLensKinds(scope: LoreScope): readonly string[] {
+	if (scope === "all")
+		return POOL_KINDS.filter((kind) => kind !== SCENE_KIND)
+	if (scope === "scenes") return [HISTORY_TYPE_ID]
+	return scopeKinds(scope)
+}
+
+/** The rows the Time lens draws for a scope. */
+export function timeLensEntries<T extends { typeId?: string | null }>(
+	rows: readonly T[],
+	scope: LoreScope
+): T[] {
+	const kinds = timeLensKinds(scope)
+	return rows.filter((row) => kinds.includes(row.typeId ?? ""))
+}
 
 /** The two orderings the pool header offers. */
 export const POOL_SORTS = [
@@ -55,12 +114,14 @@ export interface ScopeFacet {
 }
 
 /**
- * The kinds one scope's pool draws.
+ * The kinds one scope narrows to.
  *
- * Empty for `all`, which is every kind, and for `places`, which no declared
- * kind carries a role for yet.
+ * Empty for `all`, which is every kind. `places` is its location entries —
+ * the one definition of a place (decided 2026-09-28), which the pool does
+ * not draw as a door of its own.
  */
 export function scopeKinds(scope: LoreScope): string[] {
+	if (scope === "places") return [LOCATION_TYPE_ID]
 	const kind = SCOPE_KIND[scope]
 	return kind ? [kind] : []
 }
@@ -160,19 +221,79 @@ export function readingLine(
 /**
  * What the session reading this book is doing with it.
  *
- * ⚠ "as of now" is not decoration. Retrieval never reads as-of, so the session
- * is always at now on its own line — the sentence says it because the author
- * standing at Y2 needs to know the model is not standing there with them.
+ * ⚠ **Where the session stands is not decoration.** Retrieval reads the book
+ * on the session's line AT its story clock when the session has one, and at
+ * the head of the line ("now") when it does not (owner ruling 3,
+ * 2026-09-28) — never at the moment the author has dragged to. The sentence
+ * names that date because an author standing at Y2 needs to know whether the
+ * model is standing there with them. `at` is the session's clock, spelled,
+ * or null when it follows the line's present.
  */
 export function readingIntoSentence(
 	lineName: string,
-	reached: number | null
+	reached: number | null,
+	at: string | null = null
 ): string {
 	const read =
 		reached === null || reached === 0
 			? "nothing reached the last turn"
 			: `${plural(reached, "entry", "entries")} reached the last turn`
-	return `Reading this book on ${lineName}, as of now · ${read}`
+	const when = at ? `as of ${at}, the session's clock` : "as of now"
+	return `Reading this book on ${lineName}, ${when} · ${read}`
+}
+
+/**
+ * The moment address a session reads its book at: its story clock, or
+ * undefined (now, the head of the line) when it follows the line's present.
+ */
+export function sessionMomentKey(
+	clock: StoryDate | null | undefined
+): string | undefined {
+	return clock ? momentKey(clock) : undefined
+}
+
+/**
+ * The route that stands where the session stands: its line, at its clock.
+ *
+ * ONE route from both actions, so the workspace can go there in one guarded
+ * transition (`loreRoute.navigateTo`) — two navigations raced and left the
+ * reader at the old moment (#81).
+ */
+export function matchSessionRoute(
+	route: LoreRoute,
+	session: { branchId: number | null; clock: StoryDate | null }
+): LoreRoute {
+	return reduce(
+		reduce(route, {
+			type: "setMoment",
+			moment: sessionMomentKey(session.clock)
+		}),
+		{ type: "setBranch", branch: session.branchId ?? undefined }
+	)
+}
+
+/** The verbs for reading a book into the open session (NOMENCLATURE §8). */
+export const READ_INTO_SESSION = "Read into this session"
+export const STOP_READING = "Stop reading"
+
+/** The one action a book offers the open session, named. */
+export function readingActionLabel(readingHere: boolean): string {
+	return readingHere ? STOP_READING : READ_INTO_SESSION
+}
+
+/**
+ * The confirmation shown when reading this book would stop the session
+ * reading another one — a session reads one book at a time.
+ */
+export function replaceReadingSentence(
+	sessionName: string,
+	currentBook: string,
+	nextBook: string
+): string {
+	return (
+		`${sessionName} reads ${currentBook}. Reading ${nextBook} into it ` +
+		`instead stops reading ${currentBook}; nothing in either book changes.`
+	)
 }
 
 export type SavedScopeId = "needs-keywords" | "loose-ends" | "pinned"
@@ -255,6 +376,9 @@ export interface FacetCounts {
 	off: number
 	archived: number
 	machineWritten: number
+	/** The saved scopes' questions, so their chips can stand in compact too. */
+	needsKeywords: number
+	looseEnds: number
 	total: number
 }
 
@@ -276,6 +400,8 @@ export function facetCounts(
 		off: 0,
 		archived: 0,
 		machineWritten: 0,
+		needsKeywords: 0,
+		looseEnds: 0,
 		total: items.length
 	}
 	for (const item of items) {
@@ -285,6 +411,10 @@ export function facetCounts(
 		if (item.off) out.off++
 		if (item.archived) out.archived++
 		if (item.machineWritten) out.machineWritten++
+		// The same rule the rail's saved-scope figures use, so the chip and
+		// the rail never disagree about how many there are.
+		if (matchesSaved("needs-keywords", item, readInKeys)) out.needsKeywords++
+		if (matchesSaved("loose-ends", item, readInKeys)) out.looseEnds++
 	}
 	const declared = POOL_KINDS.filter((kind) => byKind.has(kind))
 	const others = [...byKind.keys()].filter(
@@ -295,4 +425,16 @@ export function facetCounts(
 		count: byKind.get(kind) ?? 0
 	}))
 	return out
+}
+
+/**
+ * What a list says when its search and filters leave nothing — a different
+ * fact from a scope with nothing in it, which is what the first-run copy is
+ * for. The search is quoted back when there is one.
+ */
+export function nothingMatchesLine(search: string): string {
+	const q = search.trim()
+	return q
+		? `Nothing matches “${q}” with these filters.`
+		: "Nothing matches these filters."
 }

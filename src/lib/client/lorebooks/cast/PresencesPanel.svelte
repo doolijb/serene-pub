@@ -214,8 +214,8 @@
 					<div class="flex items-center gap-2">
 						<span
 							class="badge shrink-0 {here
-								? 'preset-filled-primary-500'
-								: 'preset-tonal-surface'} text-[10px]"
+								? 'preset-tonal-primary'
+								: 'preset-tonal-surface'} text-[11px]"
 						>
 							at {p.personalPosition}
 						</span>
@@ -224,7 +224,7 @@
 						</span>
 						{#if p.branchId != null}
 							<span
-								class="badge preset-tonal-primary shrink-0 text-[10px]"
+								class="badge preset-tonal-primary shrink-0 text-[11px]"
 							>
 								{lineName} only
 							</span>
@@ -257,7 +257,7 @@
 						{/if}
 					</div>
 					{#if p.note}
-						<p class="text-surface-600-400 text-[0.68rem] italic">
+						<p class="text-surface-600-400 text-[11px] italic">
 							{p.note}
 						</p>
 					{/if}
@@ -291,7 +291,7 @@
 			<div class="grid grid-cols-2 gap-3">
 				<fieldset class="flex flex-col gap-1">
 					<legend
-						class="text-surface-700-300 text-xs font-semibold uppercase"
+						class="text-surface-600-400 text-xs font-semibold"
 					>
 						They arrive
 					</legend>
@@ -321,7 +321,7 @@
 				</fieldset>
 				<fieldset class="flex flex-col gap-1">
 					<legend
-						class="text-surface-700-300 text-xs font-semibold uppercase"
+						class="text-surface-600-400 text-xs font-semibold"
 					>
 						They leave
 					</legend>
@@ -403,12 +403,12 @@
 			{/if}
 
 			<div class="flex items-center gap-2">
-				<p class="text-surface-600-400 min-w-0 flex-1 text-[0.68rem]">
+				<p class="text-surface-600-400 min-w-0 flex-1 text-[11px]">
 					Written to <strong>{lineName}</strong>{#if branchId != null}, so
 						it is not a presence on main.{/if}
 				</p>
 				<button
-					class="btn btn-sm preset-filled-success-500"
+					class="btn btn-sm preset-filled-primary-500"
 					type="button"
 					disabled={blocked}
 					onclick={place}

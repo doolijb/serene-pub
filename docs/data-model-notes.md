@@ -33,7 +33,7 @@ same URL and key and each with its own probe, so testing one said nothing
 about the others and changing the key meant editing three rows.
 
 **Rows, not a JSON array on the connection.** `connection_defaults.connection_model_id`
-and the pipeline config's provider slot both REFERENCE a model, and a
+and the pipeline config's connection slot both REFERENCE a model, and a
 reference needs an id a foreign key can clear. In an array the index would be
 the reference, and deleting the second of three models would silently repoint
 every selection that named the third.
@@ -44,8 +44,9 @@ migration that introduced this table created, and NULL means "whatever the
 endpoint says" — the backfill copied the model string and nothing else, so
 every merged pair was byte-identical to the row it replaced. `capabilities`
 follows the same shape `connections.capabilities` uses (`{resolved,
-overrides, probe}`); see `resolveModelCapabilities` for how a model's layer
-sits over the endpoint's.
+overrides, probe}`); see `layerCapabilities` in `server/connections/models.ts`
+for how a model's layer sits over the endpoint's (resolved live at every run,
+never cached on either row).
 
 > "Endpoint/Model split. We would still need to be able to manage different
 > models independently with their own settings, and choose via

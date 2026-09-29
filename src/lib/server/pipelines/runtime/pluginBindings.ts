@@ -26,12 +26,12 @@
  * manifest is the one source of truth (F6), never a naming convention guessed
  * from the id.
  *
- * ⏳ `nodeDefinitions` used to be read as that map, and a *hand-written*
- * app-runtime manifest still spells it there. `serene-pub build` writes
- * `nodeDefinitions` as the ARRAY of definition summaries the audit screen and
- * the registry projection read (D-6b), so the map moved under `hooks` beside
- * the handler list it names. Both spellings are read here, the packaged one
- * first; the array form is not a map and is skipped rather than half-read.
+ * A *hand-written* app-runtime manifest may spell the map as
+ * `nodeDefinitions`. `serene-pub build` writes `nodeDefinitions` as the ARRAY
+ * of definition summaries the audit screen and the registry projection read
+ * (D-6b), so the packaged map lives under `hooks` beside the handler list it
+ * names. Both spellings are read here, the packaged one first; the array form
+ * is not a map and is skipped rather than half-read.
  *
  * ## Determinism
  *
@@ -62,8 +62,7 @@ import { isHookCtxKind } from "$lib/server/plugins/hookCtx"
 /**
  * The map-shaped binding source on a stored manifest, in reading order:
  * `hooks.nodeHandlers` (what `serene-pub build` writes, D-6b), then the
- * app-runtime `nodeDefinitions` map, then ⏳ `nodeTypes` — the pre-rename key,
- * for plugins packaged against the previous SDK; drop after one release.
+ * app-runtime `nodeDefinitions` map.
  *
  * An entry is only read when it IS a map: the packaged `nodeDefinitions` is an
  * array of summaries, and reading an array's indices as pins would bind
@@ -79,7 +78,6 @@ function bindingSource(manifest: unknown): Record<string, unknown> {
 	return (
 		asMap(m?.hooks?.nodeHandlers) ??
 		asMap(m?.nodeDefinitions) ??
-		asMap(m?.nodeTypes) ??
 		{}
 	)
 }

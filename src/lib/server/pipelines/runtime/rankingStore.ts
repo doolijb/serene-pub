@@ -193,6 +193,14 @@ export interface RankingScope {
 	runRowId: number
 	sessionId: number | null
 	userId: number | null
+	/**
+	 * The session's lore rollup moved (R81): called once, AFTER the
+	 * transaction committed, when this run rolled up at least one
+	 * `lore-entry` subject for a session — so a reader told of it reads what
+	 * was written. Never for a session-less run, one that ranked no lore, or
+	 * one whose write failed. Its own failure is logged, never the store's.
+	 */
+	onLoreRanked?: (sessionId: number) => void | Promise<void>
 }
 
 /** Record every ranking the receipt holds. Returns how many rankings were written. */
@@ -212,6 +220,8 @@ export async function recordRankings(
 	)
 	const relationships = relationshipsFromReceipt(receipt)
 	let written = 0
+	/** Did this run roll up a lore entry for its session? Read only once committed. */
+	let loreRanked = false
 	try {
 		// One transaction: a ranking without its decisions, or decisions
 		// without their rollup, is a store that lies (§3.9). Only `tx` inside.
@@ -311,12 +321,22 @@ export async function recordRankings(
 							lastScore: sql`excluded.last_score`
 						}
 					})
+				loreRanked = [...bySubject.values()].some((r) => r.subjectKind === LORE_ENTRY_SUBJECT)
 			}
 			if (written) await pruneRankings(tx, scope.sessionId)
 		})
 	} catch (err) {
 		written = 0
+		loreRanked = false
 		console.warn("[rankings] could not record this run's rankings — the turn was unaffected:", err)
+	}
+	// Committed: now a reader told of it reads what was written (R81).
+	if (loreRanked && scope.sessionId != null && scope.onLoreRanked) {
+		try {
+			await scope.onLoreRanked(scope.sessionId)
+		} catch (err) {
+			console.warn("[rankings] could not tell the session its lore was ranked:", err)
+		}
 	}
 	return written
 }

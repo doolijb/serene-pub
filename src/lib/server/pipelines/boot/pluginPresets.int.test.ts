@@ -17,7 +17,7 @@
  *    everyday act.
  */
 
-import { describe, it, expect, beforeAll, vi } from "vitest"
+import { describe, it, expect, beforeAll, afterAll, vi } from "vitest"
 import { eq } from "drizzle-orm"
 import type { TestDb } from "$lib/server/utils/testDb"
 import { syncPluginPresets } from "$lib/server/pipelines/boot/registrySync"
@@ -45,8 +45,8 @@ const manifest = (overrides: Record<string, unknown> = {}) => ({
 			description: "The board, everything default.",
 			bindings: {
 				"core:event/session-created@1": { spec: "acme.dice:spec/create-board" },
-				// A config slug, which is what a declaration carries and what
-				// the column cannot hold — see `syncPluginPresets`.
+				// A config slug of that spec — resolved to the row install wrote,
+				// and none was written here. See `syncPluginPresets`.
 				"core:event/message-respond@1": {
 					spec: "acme.dice:spec/roll",
 					config: "loud"
@@ -92,7 +92,14 @@ const presetRow = async () =>
 			.limit(1)
 	)[0] as any
 
+// Listings treat every plugin as switched off while the subsystem is off.
+const flagWas = process.env.SP_PLUGINS_ENABLED
+afterAll(() => {
+	if (flagWas === undefined) delete process.env.SP_PLUGINS_ENABLED
+	else process.env.SP_PLUGINS_ENABLED = flagWas
+})
 beforeAll(async () => {
+	process.env.SP_PLUGINS_ENABLED = "1"
 	db = (await import("$lib/server/db")).db as unknown as TestDb
 	const row = await install({ enabled: true, manifest: manifest() })
 	pluginRowId = row.id
@@ -114,15 +121,20 @@ describe("plugin presets", () => {
 		).toBe(false)
 	})
 
-	it("keeps a declared config slug out of the id column", async () => {
-		// The column holds a `pipeline_configs.id`, which is an instance fact;
-		// the declaration carries a slug in the package's own namespace. There
-		// is nothing to resolve it against, so the binding lands without one and
-		// the spec's shipped default applies.
+	it("keeps a config slug that resolves to no installed row out of the id column, and says so", async () => {
+		// The column holds a `pipeline_configs.id`, an instance fact; the
+		// declaration carries a slug of the binding's spec. Nothing installed
+		// 'loud' here, so the binding lands without one and the spec's shipped
+		// default applies — never a guessed row. The resolving case is
+		// `plugins/installConfigs.int.test.ts`.
 		const row = await presetRow()
 		expect(row.bindings["core:event/message-respond@1"]).toEqual({
 			spec: "acme.dice:spec/roll"
 		})
+		const again = await syncPluginPresets(db)
+		expect(again.unresolvedConfigs).toEqual([
+			`${SEED_KEY} core:event/message-respond@1`
+		])
 	})
 
 	it("is idempotent, and never rewrites the administrator's switch", async () => {
@@ -193,52 +205,9 @@ describe("plugin presets", () => {
 		expect((await presetRow()).enabled).toBe(true)
 	})
 
-	it("reads a bare binding key from a previous-SDK manifest as the event id, once, and says so", async () => {
-		// A package built before R-4 keys its bindings by bare genre-event
-		// name. Written verbatim, that key would undo migration 0134's fold
-		// on every boot and the run's lookup by id would find nothing — a
-		// preset binding nothing, silently (U3 review, W6). One release of
-		// normalisation, then the bare key is refused at packaging only.
-		// A bare key only ever meant a CORE event, so this is exercised
-		// under a core genre — see the non-core case below.
-		const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
-		try {
-			await install({
-				enabled: true,
-				manifest: manifest({
-					genre: "core:genre/chat",
-					bindings: {
-						"session-created": { spec: "acme.dice:spec/create-board" },
-						"message-respond": { spec: "acme.dice:spec/roll" }
-					}
-				})
-			})
-			const report = await syncPluginPresets(db)
-			expect(report.normalisedBindingKeys).toEqual([SEED_KEY])
-			expect(Object.keys((await presetRow()).bindings).sort()).toEqual([
-				"core:event/message-respond@1",
-				"core:event/session-created@1"
-			])
-			// Logged once per preset per sync, not once per key.
-			expect(
-				warn.mock.calls.filter(([m]) =>
-					String(m).includes(`preset ${SEED_KEY} binds`)
-				).length
-			).toBe(1)
-			// And an id-keyed manifest is written as it is, with nothing to say.
-			await install({ enabled: true, manifest: manifest() })
-			const clean = await syncPluginPresets(db)
-			expect(clean.normalisedBindingKeys).toEqual([])
-		} finally {
-			warn.mockRestore()
-		}
-	})
-
-	it("skips a bare binding key declared under a non-core genre, and says so", async () => {
-		// The previous-SDK bare key only ever resolved to `core:event/<name>@1`
-		// — a plugin's own genre owns no bare-named events, so normalising it
-		// here would bind against an id nobody declared. `acme.dice:genre/board`
-		// is not core, so the binding is dropped rather than guessed at.
+	it("skips a binding keyed by anything but an event id, and says so once", async () => {
+		// `announce.build()` refuses a bare key at packaging; one that reaches
+		// the sync anyway is dropped and reported, never written.
 		const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
 		try {
 			await install({
@@ -251,7 +220,6 @@ describe("plugin presets", () => {
 			})
 			const report = await syncPluginPresets(db)
 			expect(report.skippedBindingKeys).toEqual([SEED_KEY])
-			expect(report.normalisedBindingKeys).toEqual([])
 			expect((await presetRow()).bindings).toEqual({})
 			expect(
 				warn.mock.calls.filter(([m]) =>
@@ -267,12 +235,9 @@ describe("plugin presets", () => {
 		}
 	})
 
-	it("promotes a bare included key exactly one action declares, keeps the rest bare, and says so once — never refusing (W1)", async () => {
-		// A manifest packaged by a previous SDK may include an action by bare
-		// function key. Written verbatim it would put the pre-identity shape
-		// back on every boot; refused, the preset would vanish. So it runs
-		// the lenient normaliser: a key one action of the genre declares
-		// becomes that identity, the rest stay bare and are reported.
+	it("drops an included entry that is not an identity, keeps the identities, and says so once", async () => {
+		// `preset()` refuses a bare key at packaging; one that reaches the
+		// sync anyway is dropped and reported, never written.
 		const { spec, compile, use } = await import("@serene-pub/sdk")
 		const C = await import("@serene-pub/contracts")
 		const { saveDocument } = await import("$lib/server/pipelines/boot/store")
@@ -292,6 +257,7 @@ describe("plugin presets", () => {
 									key: fn,
 									venue: { kind: "composer" },
 									label: { en: fn },
+									description: { en: "A test action." },
 									...(slash ? { slash } : {})
 								}
 							]
@@ -322,9 +288,7 @@ describe("plugin presets", () => {
 			const report = await syncPluginPresets(db)
 			expect(report.bareIncludedKeys).toEqual([SEED_KEY])
 			expect((await presetRow()).includedActions).toEqual([
-				"acme.dice:spec/reroll#reroll",
-				"cheat",
-				"teleport"
+				"acme.dice:spec/reroll#reroll"
 			])
 			// Logged once per preset per sync, not once per key.
 			expect(
@@ -392,5 +356,92 @@ describe("plugin presets", () => {
 			admin.presets.some((p: any) => p.id === withdrawn.id),
 			"the admin list still shows a withdrawn preset"
 		).toBe(true)
+	})
+})
+
+/**
+ * Whose binding it is (the plugin-config posture, `plugins/install.ts`).
+ *
+ * The shipped row is immutable — selectable and copyable, never edited in
+ * place — so a sync re-forcing it is how an update ships a new binding. A row
+ * under the seed key that is NOT immutable has been made somebody's: neither a
+ * re-sync nor an update writes its content again. Before this, every sync
+ * rewrote `bindings`, and an administrator's rebinding was reset at the next
+ * boot.
+ */
+describe("plugin presets: a person's choice survives, a shipped change reaches the untouched", () => {
+	const respondTo = (spec: string) =>
+		manifest({
+			bindings: {
+				"core:event/session-created@1": { spec: "acme.dice:spec/create-board" },
+				"core:event/message-respond@1": { spec }
+			}
+		})
+
+	it("lands the shipped row immutable and ships an update's changed binding into it", async () => {
+		await install({ enabled: true, manifest: respondTo("acme.dice:spec/roll") })
+		await syncPluginPresets(db)
+		expect((await presetRow()).isImmutable).toBe(true)
+
+		await install({ enabled: true, manifest: respondTo("acme.dice:spec/roll-v2") })
+		await syncPluginPresets(db)
+		const row = await presetRow()
+		expect(row.isImmutable).toBe(true)
+		expect(row.bindings["core:event/message-respond@1"]).toEqual({
+			spec: "acme.dice:spec/roll-v2"
+		})
+	})
+
+	it("adopts a mutable row still equal to what ships — untouched, so updates reach it", async () => {
+		// A row projected before shipped presets were immutable: nobody
+		// changed it, and a sync proves so by finding it equal.
+		await db
+			.update(schema.sessionPresets)
+			.set({ isImmutable: false })
+			.where(eq(schema.sessionPresets.seedKey, SEED_KEY))
+		const report = await syncPluginPresets(db)
+		expect(report.kept).toEqual([])
+		expect((await presetRow()).isImmutable).toBe(true)
+
+		await install({ enabled: true, manifest: respondTo("acme.dice:spec/roll-v3") })
+		await syncPluginPresets(db)
+		expect((await presetRow()).bindings["core:event/message-respond@1"]).toEqual({
+			spec: "acme.dice:spec/roll-v3"
+		})
+	})
+
+	it("keeps an administrator's rebinding across a re-sync and a plugin update", async () => {
+		const mine = {
+			"core:event/session-created@1": { spec: "acme.dice:spec/create-board" },
+			"core:event/message-respond@1": { spec: "admin:spec/my-roll", config: 4242 }
+		}
+		await db
+			.update(schema.sessionPresets)
+			.set({ isImmutable: false, bindings: mine, name: "My board" })
+			.where(eq(schema.sessionPresets.seedKey, SEED_KEY))
+
+		const resync = await syncPluginPresets(db)
+		expect(resync.kept).toEqual([SEED_KEY])
+		expect((await presetRow()).bindings).toEqual(mine)
+
+		await install({ enabled: true, manifest: respondTo("acme.dice:spec/roll-v4") })
+		await syncPluginPresets(db)
+		const row = await presetRow()
+		expect(row.bindings, "an update must not reset a person's binding").toEqual(mine)
+		expect(row.name).toBe("My board")
+		expect(row.isImmutable).toBe(false)
+	})
+
+	it("still withdraws and restores a row that is somebody's", async () => {
+		await install({ enabled: false, manifest: respondTo("acme.dice:spec/roll-v4") })
+		expect((await syncPluginPresets(db)).withdrawn).toEqual([SEED_KEY])
+		await install({ enabled: true, manifest: respondTo("acme.dice:spec/roll-v5") })
+		const report = await syncPluginPresets(db)
+		expect(report.restored).toEqual([SEED_KEY])
+		const row = await presetRow()
+		expect(row.withdrawnAt).toBeNull()
+		expect(row.bindings["core:event/message-respond@1"].spec).toBe(
+			"admin:spec/my-roll"
+		)
 	})
 })

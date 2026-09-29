@@ -2,7 +2,7 @@
  * Round-11 audit fix (MEDIUM): every candidate query inside
  * scopedRankBySimilarity had no LIMIT — fetched every matching row,
  * scored all of them in JS, only sliced to topK after sorting the full
- * set. Separately, RagInfillEngine.ts re-ran the entire fetch-and-score up
+ * set. Separately, the 0.5 RAG path re-ran the entire fetch-and-score up
  * to 5 times per generation turn (once per query-message embedding), even
  * though the candidate pool never changes within a turn. Fixed by
  * splitting fetchScopedCandidates() (DB-bound, cacheable) from
@@ -382,5 +382,75 @@ describe("fetchScopedCandidates — the two source vocabularies", () => {
 				sources: ["history" as any]
 			})
 		).rejects.toThrow(/unknown source/)
+	})
+})
+
+describe("fetchScopedCandidates — the session's reading (findings #38, #143, #150)", () => {
+	test("every declared type is searched; another line's rows are not; amendments resolve the text", async () => {
+		const { fetchScopedCandidates, getSessionRagContext } = await import("./ragContext")
+		const user = await makeUser("ragcontext-reading-user")
+		const [lorebook] = await testDb
+			.insert(schema.lorebooks)
+			.values({ name: "Lines", userId: user.id })
+			.returning()
+		const [fork] = await testDb
+			.insert(schema.lorebookBranches)
+			.values({ lorebookId: lorebook.id, name: "Fork" })
+			.returning()
+		const row = async (typeId: string, title: string, extra: Record<string, unknown> = {}) =>
+			(
+				await testDb
+					.insert(schema.lorebookEntries)
+					.values({
+						lorebookId: lorebook.id,
+						typeId,
+						typeVersion: 1,
+						position: Math.floor(Math.random() * 1e9),
+						title,
+						content: `About ${title}.`,
+						...extra
+					} as any)
+					.returning({ id: schema.lorebookEntries.id })
+			)[0]!.id
+		const place = await row("core:entry/location", "The Docks")
+		const item = await row("core:entry/item", "Rusty key")
+		const forkOnly = await row("core:entry/world-lore", "Fork lore", { branchId: fork.id })
+		const amended = await row("core:entry/world-lore", "Old name")
+		const offLater = await row("core:entry/world-lore", "Switched off at Y2")
+		await seedEntryVectors(testDb, [place, item, forkOnly, amended, offLater], [1, 0, 0], MODEL_ID)
+		await testDb.insert(schema.entryAmendments).values([
+			{ lorebookId: lorebook.id, entryId: amended, year: 2, fields: { name: "New name", content: "Rewritten." } },
+			{ lorebookId: lorebook.id, entryId: offLater, year: 2, fields: { enabled: false } }
+		])
+		const seat = async (values: Record<string, unknown>) =>
+			(
+				await testDb
+					.insert(schema.sessions)
+					.values({ userId: user.id, isGroup: false, lorebookId: lorebook.id, ...values } as any)
+					.returning()
+			)[0]!.id
+
+		const fetch = async (sessionId: number) =>
+			(
+				await fetchScopedCandidates(await getSessionRagContext(sessionId), {
+					modelId: MODEL_ID,
+					sources: ["worldLore"]
+				})
+			).candidates as any[]
+
+		const main = await fetch(await seat({}))
+		const ids = main.map((c) => c.id)
+		expect(ids).toEqual(expect.arrayContaining([place, item, amended]))
+		expect(ids).not.toContain(forkOnly)
+		expect(ids).not.toContain(offLater)
+		expect(main.find((c) => c.id === amended)).toMatchObject({ name: "New name", content: "Rewritten." })
+
+		const onFork = (await fetch(await seat({ lorebookBranchId: fork.id }))).map((c) => c.id)
+		expect(onFork).toContain(forkOnly)
+
+		// Before Y2 neither amendment has happened.
+		const early = await fetch(await seat({ storyClockYear: 1 }))
+		expect(early.map((c) => c.id)).toContain(offLater)
+		expect(early.find((c) => c.id === amended)).toMatchObject({ name: "Old name" })
 	})
 })

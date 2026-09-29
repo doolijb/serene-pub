@@ -20,6 +20,7 @@ import {
 	genre,
 	_clearAttributeSlots
 } from "@serene-pub/sdk"
+import "@serene-pub/core-catalog"
 import type { TestDb } from "$lib/server/utils/testDb"
 
 let testDb: TestDb
@@ -45,6 +46,7 @@ afterAll(async () => {
 })
 
 const HP = "core:slot/hp@1"
+const INVENTORY = "core:slot/inventory@1"
 
 /**
  * ⚠ A session resolves the slots ITS GENRE brings, so the sessions below carry
@@ -62,17 +64,33 @@ function declareSlots() {
 		config: { min: 0, max: 20 },
 		default: 20
 	})
+	// Phase 3b: an item moving is an add/remove on this list stat.
+	const inventory = defineAttributeSlot(INVENTORY, {
+		shape: "core:stat-shape/list@1",
+		descriptor: "What they carry.",
+		appliesTo: ["cast", "world"]
+	})
 	genre(GENRE, {
 		name: { en: "Stats" },
 		family: "test",
-		slots: [hp],
+		slots: [hp, inventory],
 		events: {}
 	})
+	// A genre that does not carry inventory, for the refusal.
+	genre(BARE_GENRE, { name: { en: "Bare" }, family: "test", slots: [hp], events: {} })
 }
+
+const BARE_GENRE = "test:genre/stats-bare"
+const inventoryAdd = (ownerId: number, entryId: number, count: number) => ({
+	owner: { kind: "session_cast", id: ownerId },
+	slotId: INVENTORY,
+	op: "add",
+	items: [{ entryId, count }]
+})
 
 let n = 0
 
-async function world() {
+async function world(genreId = GENRE) {
 	const suffix = `${++n}`
 	const { createTestUser } = await import("$lib/server/utils/testDb")
 	const user = await createTestUser(testDb, `state-node-${suffix}`)
@@ -94,15 +112,17 @@ async function world() {
 			userId: user.id,
 			isGroup: false,
 			name: `Run ${suffix}`,
-			genreId: GENRE
+			genreId
 		})
 		.returning()
 	await testDb
 		.insert(schema.sessionCharacters)
 		.values({ sessionId: session.id, characterId: verity.id })
 	await testDb
-		.insert(schema.sessionLorebooks)
-		.values({ sessionId: session.id, lorebookId: lorebook.id })
+		// The real shape: the lorebook is the session row's own binding.
+		.update(schema.sessions)
+		.set({ lorebookId: lorebook.id })
+		.where(eq(schema.sessions.id, session.id))
 	const [key] = await testDb
 		.insert(schema.lorebookEntries)
 		.values({
@@ -189,11 +209,7 @@ describe("core:task/set-state@1", () => {
 						slotId: HP,
 						value: 14
 					},
-					{
-						owner: { kind: "session_cast", id: w.verity.id },
-						entryId: w.key.id,
-						delta: 1
-					}
+					inventoryAdd(w.verity.id, w.key.id, 1)
 				]
 			},
 			{} as any
@@ -303,11 +319,12 @@ describe("core:query/session-state@1", () => {
 		// what a session tracks — and a state-keeper shown that list can never
 		// name the slot nobody has set yet.
 		declareSlots()
-		const w = await world()
+		const w = await world(BARE_GENRE)
 		const { stateFor } = await import("$lib/server/state/resolve")
 		const state = await stateFor(testDb as unknown as Db, w.session.id)
 		expect(state.slots).toEqual([
-			{ id: HP, key: "hp", type: "integer", appliesTo: ["cast"] }
+			// `field` since phase 2 (stat shapes): the slot's value as a FieldDecl.
+			{ id: HP, key: "hp", type: "integer", field: { type: "integer" }, appliesTo: ["cast"] }
 		])
 	})
 
@@ -405,7 +422,7 @@ describe("the three tools", () => {
 		).toBe(20)
 	})
 
-	test("give_item and take_item are one edge each, signed", async () => {
+	test("give_item and take_item are an inventory add and remove, counted", async () => {
 		declareSlots()
 		const w = await world()
 		const proposals: any[] = []
@@ -419,17 +436,28 @@ describe("the three tools", () => {
 			toolCtx(w, proposals) as any
 		)
 		expect(proposals).toEqual([
+			inventoryAdd(w.verity.id, w.key.id, 2),
 			{
 				owner: { kind: "session_cast", id: w.verity.id },
-				entryId: w.key.id,
-				delta: 2
-			},
-			{
-				owner: { kind: "session_cast", id: w.verity.id },
-				entryId: w.key.id,
-				delta: -1
+				slotId: INVENTORY,
+				op: "remove",
+				items: [{ entryId: w.key.id, count: 1 }]
 			}
 		])
+		// Through the real gate: proposed, accepted, counted.
+		const { proposeChange, decideProposal } = await import("$lib/server/state/write")
+		const { valueOf } = await import("$lib/server/state/resolve")
+		const db = testDb as unknown as Db
+		const ctx = { sessionId: w.session.id, updatedBy: "run:tool" }
+		for (const p of proposals) await decideProposal(db, await proposeChange(db, ctx, p), true)
+		expect(
+			await valueOf(db, {
+				sessionId: w.session.id,
+				owner: { kind: "session_cast", id: w.verity.id },
+				slotId: INVENTORY
+			})
+			// One held is stored bare (phase 4).
+		).toEqual([{ entryId: w.key.id }])
 	})
 
 	test("a name nobody in the scene answers to is refused by name", async () => {
@@ -508,7 +536,7 @@ describe("R-15 · staleness and order at the nodes (U5f)", () => {
 		expect(out.value.refused).toEqual([])
 		expect(out.value.changes).toHaveLength(2)
 		expect(out.value.changes.every((c: any) => c.base === 7)).toBe(true)
-		expect(out.value.changes.some((c: any) => c.entryId === w.key.id)).toBe(true)
+		expect(out.value.changes).toContainEqual({ ...inventoryAdd(w.verity.id, w.key.id, 1), base: 7 })
 		// No base wired: none is invented.
 		const bare: any = await resolve(
 			{
@@ -542,7 +570,7 @@ describe("R-15 · staleness and order at the nodes (U5f)", () => {
 				base: 1,
 				changes: [
 					{ owner: verity, slotId: HP, value: 5 },
-					{ owner: verity, entryId: w.key.id, delta: 1 }
+					inventoryAdd(w.verity.id, w.key.id, 1)
 				]
 			},
 			{} as any
@@ -581,4 +609,208 @@ describe("R-15 · staleness and order at the nodes (U5f)", () => {
 			.where(eq(schema.stateProposals.id, proposed.value.proposed[0]))
 		expect(row!.baseVersion).toBe(2)
 	}, 60_000)
+})
+
+/**
+ * Phase 3b: the keeper's item arm resolves onto the inventory stat, and item
+ * supply is checked only where a genre wired `core:query/item-supply@1`'s
+ * answer onto the resolver (Adventure does) — core itself never enforces it.
+ */
+describe("the item arm and item supply (phase 3b)", () => {
+	const castRead = (w: Awaited<ReturnType<typeof world>>) =>
+		({
+			read: async () => [{ character: { id: w.verity.id, name: w.verity.name } }]
+		}) as any
+
+	async function items(w: Awaited<ReturnType<typeof world>>) {
+		const entry = async (title: string, fields: Record<string, unknown>, position: number) =>
+			(
+				await testDb
+					.insert(schema.lorebookEntries)
+					.values({
+						lorebookId: w.lorebook.id,
+						typeId: "core:entry/item",
+						typeVersion: 1,
+						position,
+						title,
+						content: "…",
+						fields
+					})
+					.returning()
+			)[0]!
+		return {
+			crown: await entry("The Crown", { supply: "unique" }, 10),
+			arrows: await entry("Arrows", { supply: "limited", supplyLimit: 3 }, 11)
+		}
+	}
+
+	test("a supply check refuses an over-limit grant, and a take frees what it held", async () => {
+		declareSlots()
+		const w = await world()
+		const { crown, arrows } = await items(w)
+		const db = testDb as unknown as Db
+		const { applyChange } = await import("$lib/server/state/write")
+		const { itemSupplyFor } = await import("$lib/server/state/supply")
+		// The crown is already in Verity's pack; two of three arrows are held.
+		await applyChange(db, { sessionId: w.session.id, updatedBy: "user" }, {
+			owner: { kind: "session", id: w.session.id },
+			slotId: INVENTORY,
+			value: [{ entryId: crown.id }, { entryId: arrows.id, count: 2 }]
+		})
+		const supply = await itemSupplyFor(db, w.session.id)
+		const resolve = await node("core:query/resolve-state-changes@1")
+		const out: any = await resolve(
+			{
+				scope: { sessionId: w.session.id },
+				supply,
+				changes: [
+					{ owner: w.verity.name, entryId: crown.id, delta: 1 },
+					{ owner: w.verity.name, entryId: arrows.id, delta: 2 },
+					{ owner: w.verity.name, entryId: arrows.id, delta: 1 }
+				]
+			},
+			castRead(w)
+		)
+		expect(out.value.refused).toEqual([
+			"The Crown is unique and is already held, so it cannot be handed out again.",
+			"only 1 of Arrows is left (of 3), so 2 cannot be handed out."
+		])
+		expect(out.value.changes).toEqual([inventoryAdd(w.verity.id, arrows.id, 1)])
+
+		// The world gives the crown up in the same turn it hands it on: the
+		// take is counted first, whatever order the model wrote them in.
+		const handed: any = await resolve(
+			{
+				scope: { sessionId: w.session.id },
+				supply: await itemSupplyFor(db, w.session.id),
+				changes: [
+					{ owner: w.verity.name, entryId: crown.id, delta: 1 },
+					{ owner: "world", entryId: crown.id, delta: -1 }
+				]
+			},
+			castRead(w)
+		)
+		expect(handed.value.refused).toEqual([])
+		expect(handed.value.changes.map((c: any) => [c.owner.kind, c.op])).toEqual([
+			["session", "remove"],
+			["session_cast", "add"]
+		])
+
+		// Unwired, nothing is checked: core never enforces supply.
+		const unwired: any = await resolve(
+			{
+				scope: { sessionId: w.session.id },
+				changes: [{ owner: w.verity.name, entryId: crown.id, delta: 1 }]
+			},
+			castRead(w)
+		)
+		expect(unwired.value.refused).toEqual([])
+		expect(unwired.value.changes).toHaveLength(1)
+	})
+
+	test("a session that does not track inventory refuses the item line by name", async () => {
+		declareSlots()
+		const w = await world(BARE_GENRE)
+		const resolve = await node("core:query/resolve-state-changes@1")
+		const out: any = await resolve(
+			{
+				scope: { sessionId: w.session.id },
+				changes: [
+					{ owner: w.verity.name, entryId: w.key.id, delta: 1 },
+					{ owner: w.verity.name, slot: "hp", value: "12" }
+				]
+			},
+			castRead(w)
+		)
+		expect(out.value.refused).toEqual([expect.stringMatching(/is not tracked in this session/)])
+		expect(out.value.changes).toHaveLength(1)
+		expect(out.value.changes[0].slotId).toBe(HP)
+	})
+})
+
+/**
+ * 2026-09-27 (owner ruling): the keeper's item arm is `inventory`, the stat it
+ * resolves onto (was `possessions`; no alias — owner: "keep it clean"). The
+ * arm's NAME never reaches `resolve-state-changes` — the keeper's `path` joins
+ * `values` and the item arm into one list first — so the shipped path is what
+ * has to say `inventory`.
+ */
+describe("the keeper's inventory arm (2026-09-27)", () => {
+	const castRead = (w: Awaited<ReturnType<typeof world>>) =>
+		({
+			read: async () => [{ character: { id: w.verity.id, name: w.verity.name } }]
+		}) as any
+
+	const KEEPERS: Array<[slug: string, nodeKey: string]> = [
+		["core:spec/adventure-respond", "keeperWrite"],
+		["core:spec/lair-respond", "keep.played.keeperWrite"],
+		["core:spec/whodunit-respond", "keeperWrite"]
+	]
+	const shippedPath = async (slug: string, nodeKey: string) => {
+		const { coreAnnouncement } = await import("@serene-pub/core-catalog")
+		const doc = (coreAnnouncement().document as any).pipelines.find((p: any) => p.id === slug)
+		const preset = doc.presets.find((p: any) => p.default)
+		return preset.values.find((v: any) => v.nodeKey === nodeKey)?.value?.path as string
+	}
+
+	/** Answer → shipped path → resolver → set-state apply → the held list. */
+	async function applyAnswer(
+		w: Awaited<ReturnType<typeof world>>,
+		answer: Record<string, unknown>,
+		path: string
+	) {
+		const { selectJsonPaths } = await import("./bindings")
+		const { items } = selectJsonPaths(answer, path)
+		const resolve = await node("core:query/resolve-state-changes@1")
+		const resolved: any = await resolve(
+			{ scope: { sessionId: w.session.id }, changes: items },
+			castRead(w)
+		)
+		expect(resolved.value.refused).toEqual([])
+		const setState = await node("core:task/set-state@1")
+		const out: any = await setState(
+			{
+				scope: { sessionId: w.session.id },
+				params: { mode: "apply" },
+				changes: resolved.value.changes
+			},
+			{} as any
+		)
+		const { valueOf } = await import("$lib/server/state/resolve")
+		return {
+			changes: resolved.value.changes,
+			applied: out.value.applied,
+			held: await valueOf(testDb as unknown as Db, {
+				sessionId: w.session.id,
+				owner: { kind: "session_cast", id: w.verity.id },
+				slotId: INVENTORY
+			})
+		}
+	}
+
+	test("every shipped keeper selects `values,inventory`, and its inventory arm applies", async () => {
+		declareSlots()
+		for (const [slug, nodeKey] of KEEPERS)
+			expect(await shippedPath(slug, nodeKey), slug).toBe("values,inventory")
+		const w = await world()
+		const got = await applyAnswer(
+			w,
+			{
+				values: [{ owner: w.verity.name, slot: "hp", value: "12" }],
+				inventory: [{ owner: w.verity.name, entryId: w.key.id, delta: 2 }]
+			},
+			await shippedPath("core:spec/adventure-respond", "keeperWrite")
+		)
+		expect(got.changes).toHaveLength(2)
+		expect(got.changes[1]).toEqual(inventoryAdd(w.verity.id, w.key.id, 2))
+		expect(got.applied).toHaveLength(2)
+		expect(got.held).toEqual([{ entryId: w.key.id, count: 2 }])
+	})
+
+	test("the retired name is not read: an answer written with `possessions` moves nothing", async () => {
+		const { selectJsonPaths } = await import("./bindings")
+		const line = { owner: "Verity", entryId: 1, delta: 1 }
+		expect(selectJsonPaths({ values: [], possessions: [line] }, "values,inventory").items).toEqual([])
+		expect(selectJsonPaths({ values: [], inventory: [line] }, "values,inventory").items).toEqual([line])
+	})
 })

@@ -6,7 +6,7 @@
  * because the frame is a document of its own) and what the FRAME does with it.
  *
  * The frame half is tested against the SHIPPED sample rather than a reference
- * copy of it: `static/dev-frame-panel.html` is the only frame in the tree that
+ * copy of it: `frames/devFramePanel.fixture.html` (the retired sample frame's document, R74) is the only frame in the tree that
  * speaks this message, and a reference implementation next to it would be the
  * thing under test while the real one drifted. The script is lifted out of the
  * file and run against a hand-built DOM — the repo has no jsdom, and the ten
@@ -111,11 +111,11 @@ interface FakeEl {
 /** Just enough DOM for the sample's `style` branch, and nothing more. */
 function mountSample() {
 	const html = fs.readFileSync(
-		path.join(process.cwd(), "static/dev-frame-panel.html"),
+		path.join(process.cwd(), "src/lib/client/components/frames/devFramePanel.fixture.html"),
 		"utf8"
 	)
 	const script = /<script>([\s\S]*?)<\/script>/.exec(html)?.[1]
-	if (!script) throw new Error("dev-frame-panel.html has no inline script")
+	if (!script) throw new Error("devFramePanel.fixture.html has no inline script")
 
 	const byId = new Map<string, FakeEl>()
 	const rootVars = new Map<string, string>()
@@ -162,7 +162,7 @@ function mountSample() {
 	}
 }
 
-describe("dev-frame-panel.html applies the style message", () => {
+describe("the frame fixture applies the style message", () => {
 	test("acks init, then takes a style", () => {
 		const f = mountSample()
 		expect(f.posted).toEqual([{ t: "ready" }])

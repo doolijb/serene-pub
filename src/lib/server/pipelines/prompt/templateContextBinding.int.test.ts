@@ -3,7 +3,7 @@
  *
  * `promptFields.test.ts` pins the rules and `templateContext.test.ts` pins the
  * rendering; both run on literals. This one exists for the seam between them
- * and the database — the join that carries visibility, and the scope check that
+ * and the database — the join that carries `enabled`, and the scope check that
  * decides whether a spec may read this session's cast at all.
  *
  * The split into two nodes was not a design preference; it was F11 enforced by
@@ -19,7 +19,7 @@ import { createTestDb, type TestDb } from "$lib/server/utils/testDb"
 import { createHost, HostScopeError } from "$lib/server/pipelines/runtime/host"
 import { coreBindings } from "$lib/server/pipelines/runtime/bindings"
 import * as schema from "$lib/server/db/schema"
-import { SessionCharacterVisibility as V } from "$lib/shared/constants/SessionCharacterVisibility"
+import { bootstrapPipelines } from "$lib/server/pipelines/boot/bootstrap"
 
 let db: TestDb
 let sessionId: number
@@ -29,6 +29,8 @@ let caraId: number
 
 beforeAll(async () => {
 	db = await createTestDb()
+	// The genre registry: the cast read resolves `characterDetail` through it.
+	await bootstrapPipelines(db)
 	const [user] = await db
 		.insert(schema.users)
 		.values({ username: "cast-test", isAdmin: false })
@@ -74,14 +76,12 @@ beforeAll(async () => {
 		{
 			sessionId,
 			characterId: aliceId,
-			isActive: true,
-			visibility: V.VISIBLE
+			isActive: true
 		},
 		{
 			sessionId,
 			characterId: caraId,
-			isActive: false,
-			visibility: V.VISIBLE
+			isActive: false
 		}
 	])
 	await db
@@ -145,15 +145,30 @@ describe("the cast query", () => {
 		expect(r.value.cast.sessionPersonas[0].persona.name).toBe("Bob")
 	})
 
-	it("carries visibility and activity through the join", async () => {
-		// A plain character read would lose both, and they are what decide
-		// whether a character appears in the prompt and whether they are named.
+	it("carries every seat, a switched-off one included, with enabled", async () => {
+		// A plain character read would lose it, and it is what decides whether
+		// a character is named and given a turn. The switched-off seat is IN
+		// the read (2026-09-27): readers filter on `enabled` themselves.
 		const r = await readCast()
-		const cara = r.value.cast.sessionCharacters.find(
-			(cc: any) => cc.character.id === caraId
-		)
-		expect(cara.isActive).toBe(false)
-		expect(cara.visibility).toBe(V.VISIBLE)
+		const byId = (id: number) =>
+			r.value.cast.sessionCharacters.find(
+				(cc: any) => cc.character.id === id
+			)
+		expect(byId(aliceId).enabled).toBe(true)
+		expect(byId(caraId).enabled).toBe(false)
+		// One name for it on the read — the table's `is_active` stays behind
+		// the seam — and the retired per-seat visibility is not read at all.
+		expect("isActive" in byId(caraId)).toBe(false)
+		expect("visibility" in byId(caraId)).toBe(false)
+		// A persona seat has no switch and says so.
+		expect(r.value.cast.sessionPersonas[0].enabled).toBe(true)
+	})
+
+	it("carries the session's characterDetail, defaulted at read", async () => {
+		// The chat genre declares the field (default `full`); the host
+		// resolves it through `genreFieldsFor` and puts it on the cast.
+		const r = await readCast()
+		expect(r.value.cast.characterDetail).toBe("full")
 	})
 
 	it("refuses another session's cast rather than returning an empty one", async () => {
@@ -194,6 +209,32 @@ describe("the context task", () => {
 		)
 		expect(cards.map((c: any) => c.name).sort()).toEqual(["Alice", "Cara"])
 		expect(r.value.templateContext.characterNames).toBe("Alice")
+	})
+
+	it("trims the cards to the characterDetail the cast read carries", async () => {
+		const cast = (await readCast()).value.cast
+		const cardsAt = async (characterDetail: string) => {
+			const r = await buildFrom({ ...cast, characterDetail })
+			return {
+				cards: JSON.parse(
+					r.value.templateContext.characters
+						.split("```json\n")[1]!
+						.split("\n```")[0]!
+				) as Array<Record<string, unknown>>,
+				names: r.value.templateContext.characterNames as string
+			}
+		}
+		const full = await cardsAt("full")
+		const baseline = await buildFrom(cast)
+		// `full` is what the cast rendered at before the field existed.
+		expect((await buildFrom({ ...cast, characterDetail: "full" })).value.templateContext).toEqual(
+			baseline.value.templateContext
+		)
+		expect(full.cards.map((c) => c.name).sort()).toEqual(["Alice", "Cara"])
+
+		const only = await cardsAt("speaker-only")
+		expect(only.cards.map((c) => c.name)).toEqual(["Alice"])
+		expect(only.names).toBe("")
 	})
 
 	it("interpolates the cards against the resolved names", async () => {

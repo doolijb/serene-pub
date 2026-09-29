@@ -155,8 +155,8 @@ class OllamaAdapter extends BaseConnectionAdapter {
 	 * nothing", which omits the field entirely.
 	 *
 	 * ⚠ **This read `extraJson.think` until the ruling of 2026-09-12.**
-	 * Reasoning effort is a sampling parameter chosen per stage, not a property
-	 * of the compute: with the flag on the connection, every stage sharing one
+	 * Reasoning effort is a sampling parameter chosen per step, not a property
+	 * of the compute: with the flag on the connection, every step sharing one
 	 * Ollama row thought exactly as hard as every other, and the only way to
 	 * split them was a second connection to the same server. A stale `think`
 	 * key left in an existing row's `extraJson` is read by nothing now. That is
@@ -255,7 +255,7 @@ class OllamaAdapter extends BaseConnectionAdapter {
 		 *
 		 * ## What this replaced, twice over
 		 *
-		 * The setting was `extraJson.useSession`, read in this file with TWO
+		 * The setting was `extraJson.useChat`, read in this file with TWO
 		 * different defaults — `!!x` in the `compilePrompt` override above and
 		 * `x ?? true` here — so a connection whose `extraJson` had no such key
 		 * (the column defaults to `{}`) had a completion prompt built and a chat
@@ -272,10 +272,10 @@ class OllamaAdapter extends BaseConnectionAdapter {
 		 * and read by the render as well as by this send — so the payload and the
 		 * request are the same decision rather than two that happen to agree.
 		 */
-		const useSession = this.isChatWire
+		const useChat = this.isChatWire
 		let req: GenerateRequest | ChatRequest
 
-		if (useSession) {
+		if (useChat) {
 			// Checked rather than asserted: `messages!` on a completion-shaped
 			// payload sent `undefined`, and a refusal that names the
 			// disagreement is worth more than a request that quietly loses the
@@ -378,7 +378,7 @@ class OllamaAdapter extends BaseConnectionAdapter {
 		// adapter rendered it, filled in below as the response is read. The host
 		// is the same one `getClient` resolves, so the URL names where this went.
 		const wire = this.beginExchange({
-			url: `${normalizeBaseUrl(this.connection.baseUrl) || CONNECTION_DEFAULTS[CONNECTION_TYPE.OLLAMA].baseUrl}${useSession ? "/api/chat" : "/api/generate"}`,
+			url: `${normalizeBaseUrl(this.connection.baseUrl) || CONNECTION_DEFAULTS[CONNECTION_TYPE.OLLAMA].baseUrl}${useChat ? "/api/chat" : "/api/generate"}`,
 			body: req
 		})
 
@@ -406,7 +406,7 @@ class OllamaAdapter extends BaseConnectionAdapter {
 						ollama.abort()
 					})
 					try {
-						if (useSession) {
+						if (useChat) {
 							// Use Ollama's session api
 							const result = await ollama.chat({
 								...(req as ChatRequest),
@@ -513,7 +513,7 @@ class OllamaAdapter extends BaseConnectionAdapter {
 					ollama.abort()
 				}, LLM_NONSTREAMING_TIMEOUT_MS)
 				try {
-					if (useSession) {
+					if (useChat) {
 						// Use Ollama's session api
 						const res = await ollama.chat({
 							...(req as ChatRequest),
@@ -617,6 +617,25 @@ class OllamaAdapter extends BaseConnectionAdapter {
 	}
 }
 
+/**
+ * What one listed model is FOR, in the app's modality words, from Ollama's own
+ * per-model `capabilities` (`completion`, `embedding`, `vision`, `tools`, …).
+ *
+ * Only a one-sided answer is an answer: `embedding` without `completion` is an
+ * embedding model, `completion` without `embedding` a text model. Both, or
+ * neither — and an Ollama older than the field, which sends no array at all —
+ * is undefined, which the sync stores as NULL and `capabilityRefusal` leaves
+ * ungated. Refusing on silence would hide every model on an older host.
+ */
+export function ollamaModelModality(entry: unknown): string | undefined {
+	const caps = (entry as { capabilities?: unknown } | null)?.capabilities
+	if (!Array.isArray(caps)) return undefined
+	const embeds = caps.includes("embedding")
+	const completes = caps.includes("completion")
+	if (embeds === completes) return undefined
+	return embeds ? "embeddings" : "text-gen"
+}
+
 async function listModels(
 	connection: SelectConnection
 ): Promise<{ models: any[]; error?: string }> {
@@ -627,7 +646,12 @@ async function listModels(
 		})
 		const res = await ollama.list()
 		if (res && Array.isArray(res.models)) {
-			return { models: res.models }
+			return {
+				models: res.models.map((m) => {
+					const modality = ollamaModelModality(m)
+					return modality ? { ...m, modality } : m
+				})
+			}
 		} else {
 			return {
 				models: [],

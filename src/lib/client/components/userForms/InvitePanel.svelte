@@ -15,6 +15,7 @@
 		useInterest
 	} from "$lib/client/sockets/interest.svelte"
 	import QrCode from "$lib/client/components/auth/QrCode.svelte"
+	import Select from "$lib/client/components/inputs/Select.svelte"
 
 	let {
 		compact = false,
@@ -158,14 +159,12 @@
 				use, or in two hours.
 			</p>
 
-			<label class="label">
-				<span class="label-text text-xs">Address to share</span>
-				<select class="select select-sm" bind:value={selectedHost}>
-					{#each choices as c (c.origin)}
-						<option value={c.origin}>{c.label}</option>
-					{/each}
-				</select>
-			</label>
+			<Select
+				label="Address to share"
+				class="text-xs"
+				options={choices.map((c) => ({ value: c.origin, label: c.label }))}
+				bind:value={selectedHost}
+			/>
 
 			<div class="flex flex-wrap items-start gap-3">
 				<QrCode
@@ -229,15 +228,19 @@
 			removes two-factor, and signs out their other sessions.
 		</p>
 		<div class="flex flex-wrap items-end gap-2">
-			<label class="label min-w-0 flex-1">
-				<span class="label-text text-xs">Account</span>
-				<select class="select select-sm" bind:value={accountUserId}>
-					<option value={null}>Choose an account…</option>
-					{#each users as u (u.id)}
-						<option value={u.id}>{u.username}</option>
-					{/each}
-				</select>
-			</label>
+			<Select
+				label="Account"
+				placeholder="Choose an account…"
+				class="min-w-0 flex-1 text-xs"
+				options={users.map((u) => ({
+					value: String(u.id),
+					label: u.username
+				}))}
+				bind:value={
+					() => (accountUserId == null ? "" : String(accountUserId)),
+					(v) => (accountUserId = v ? Number(v) : null)
+				}
+			/>
 			<button
 				type="button"
 				class="btn btn-sm preset-tonal-error"

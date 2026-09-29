@@ -80,7 +80,7 @@ an explanation; copy it to the path above and edit it there. Common ones:
 
    - PORT=3000                    change the web UI's port
    - HOST=127.0.0.1               local connections only
-   - SERENE_AUTO_OPEN=1           don't open a browser tab on startup
+   - AUTO_OPEN_CLIENT=0           don't open Serene Pub on startup
    - SERENE_PUB_DATA_DIR=...      keep your data somewhere else entirely
 
 Why the data directory and not this folder? Because an update replaces the

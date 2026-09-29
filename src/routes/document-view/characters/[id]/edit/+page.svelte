@@ -178,10 +178,10 @@
 </script>
 
 <svelte:head>
-	<title>Edit Character — Document View — Serene Pub</title>
+	<title>Edit character — Document View — Serene Pub</title>
 </svelte:head>
 
-<h1>Edit Character</h1>
+<h1>Edit character</h1>
 <p><a href="/document-view/characters">Back to Characters</a></p>
 
 {#if !loaded}
@@ -246,7 +246,7 @@
 			></textarea>
 		</div>
 		<div class="a11y-field">
-			<label for="a11y-char-first-message">First Message</label>
+			<label for="a11y-char-first-message">First message</label>
 			<textarea
 				id="a11y-char-first-message"
 				bind:value={firstMessage}
@@ -289,7 +289,7 @@
 		</div>
 		{#if isOwner}
 			<button type="submit" class="a11y-btn" disabled={saving}>
-				{saving ? "Saving…" : "Save Changes"}
+				{saving ? "Saving…" : "Save changes"}
 			</button>
 			<button
 				type="button"
@@ -297,7 +297,7 @@
 				onclick={deleteCharacter}
 				disabled={deleting}
 			>
-				{deleting ? "Deleting…" : "Delete Character"}
+				{deleting ? "Deleting…" : "Delete character"}
 			</button>
 		{/if}
 	</form>

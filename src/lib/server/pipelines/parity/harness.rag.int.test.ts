@@ -331,7 +331,6 @@ async function seedRag(
 		sessionId: session.id,
 		characterId: alice.id,
 		isActive: true,
-		visibility: "visible"
 	})
 	await db
 		.insert(schema.sessionPersonas)

@@ -282,7 +282,7 @@
 								subStatus?.status === "stopping" ||
 								subStatus?.isExternal}
 							title={subStatus?.isExternal
-								? "This instance wasn't started by this Manager, so it can't be stopped from here"
+								? "This instance wasn't started by Serene Pub, so it can't be stopped from here"
 								: undefined}
 						>
 							{#if stopping}<Icons.Loader2
@@ -315,7 +315,7 @@
 						class="text-warning-700-300 mt-0.5 shrink-0"
 					/>
 					<p class="text-warning-700-300 text-xs">
-						This is an external KoboldCPP instance the Manager found
+						This is an external KoboldCPP instance Serene Pub found
 						already running on the configured port, not one it
 						started itself — Stop and Unload aren't available for
 						it, and its admin password may not match, which can make
@@ -335,12 +335,12 @@
 			<!-- Loaded model -->
 			<div>
 				<p
-					class="text-surface-700-300 mb-1 text-xs font-semibold tracking-wide uppercase"
+					class="text-surface-600-400 mb-1 text-xs"
 				>
 					Loaded model
 				</p>
 				<div class="flex items-center gap-2">
-					<Icons.Brain size={14} class="text-surface-400 shrink-0" />
+					<Icons.Brain size={14} class="text-surface-600-400 shrink-0" />
 					<span class="min-w-0 flex-1 truncate text-xs">
 						{currentModel ?? "No model loaded"}
 						{#if currentModel && currentContext}
@@ -355,7 +355,7 @@
 							onclick={unloadModel}
 							disabled={unloading}
 							title={subStatus?.isExternal
-								? "This instance's admin password may not match the Manager's — unload may fail"
+								? "This instance's admin password may not match Serene Pub's — unload may fail"
 								: "Unload model from memory"}
 						>
 							{#if unloading}<Icons.Loader2
@@ -380,7 +380,7 @@
 			{#if currentModel}
 				<div>
 					<p
-						class="text-surface-700-300 mb-1 text-xs font-semibold tracking-wide uppercase"
+						class="text-surface-600-400 mb-1 text-xs"
 					>
 						Loaded config
 					</p>
@@ -465,7 +465,7 @@
 							onclick={() => (showFullConfigModal = true)}
 						>
 							<Icons.FileText size={12} />
-							View Full Config
+							View full config
 						</button>
 					{:else}
 						<p class="text-surface-700-300 text-xs italic">
@@ -480,7 +480,7 @@
 			{#if koboldCppSettingsCtx.settings?.koboldCppManagedBinaryVariant}
 				<div>
 					<p
-						class="text-surface-700-300 mb-1 text-xs font-semibold tracking-wide uppercase"
+						class="text-surface-600-400 mb-1 text-xs"
 					>
 						Binary
 					</p>
@@ -507,6 +507,7 @@
 			onclick={refreshPerf}
 			disabled={isLoadingPerf}
 			title="Refresh stats"
+			aria-label="Refresh stats"
 		>
 			<Icons.RefreshCw
 				size={14}
@@ -519,7 +520,7 @@
 		<div class="flex items-center justify-center py-10">
 			<Icons.Loader2
 				size={24}
-				class="text-muted-foreground animate-spin"
+				class="text-surface-600-400 animate-spin"
 			/>
 		</div>
 	{:else if perf}
@@ -545,16 +546,16 @@
 		<!-- Speed stats -->
 		<div class="card bg-surface-100-800 p-4">
 			<h4
-				class="text-muted-foreground mb-3 text-xs font-semibold tracking-wide uppercase"
+				class="text-surface-600-400 mb-3 text-xs"
 			>
-				Generation Speed
+				Generation speed
 			</h4>
 			<div class="grid grid-cols-1 gap-3 @lg/view:grid-cols-2">
 				<div class="text-center">
 					<div class="text-2xl font-bold tabular-nums">
 						{formatSpeed(perf.avgGenSpeed)}
 					</div>
-					<div class="text-muted-foreground text-xs">
+					<div class="text-surface-600-400 text-xs">
 						Avg generation
 					</div>
 				</div>
@@ -562,7 +563,7 @@
 					<div class="text-2xl font-bold tabular-nums">
 						{formatSpeed(perf.avgPromptSpeed)}
 					</div>
-					<div class="text-muted-foreground text-xs">
+					<div class="text-surface-600-400 text-xs">
 						Avg prompt processing
 					</div>
 				</div>
@@ -573,25 +574,25 @@
 		{#if perf.lastTokenCount > 0}
 			<div class="card bg-surface-100-800 p-4">
 				<h4
-					class="text-muted-foreground mb-3 text-xs font-semibold tracking-wide uppercase"
+					class="text-surface-600-400 mb-3 text-xs"
 				>
-					Last Request
+					Last request
 				</h4>
 				<div class="space-y-2 text-sm">
 					<div class="flex justify-between">
-						<span class="text-muted-foreground">
+						<span class="text-surface-600-400">
 							Tokens processed
 						</span>
 						<span class="font-mono">{perf.lastTokenCount}</span>
 					</div>
 					<div class="flex justify-between">
-						<span class="text-muted-foreground">Prompt time</span>
+						<span class="text-surface-600-400">Prompt time</span>
 						<span class="font-mono">
 							{perf.lastProcess.toFixed(2)}s
 						</span>
 					</div>
 					<div class="flex justify-between">
-						<span class="text-muted-foreground">
+						<span class="text-surface-600-400">
 							Generation time
 						</span>
 						<span class="font-mono">
@@ -605,21 +606,21 @@
 		<!-- System stats -->
 		<div class="card bg-surface-100-800 p-4">
 			<h4
-				class="text-muted-foreground mb-3 text-xs font-semibold tracking-wide uppercase"
+				class="text-surface-600-400 mb-3 text-xs"
 			>
 				System
 			</h4>
 			<div class="space-y-2 text-sm">
 				<div class="flex justify-between">
-					<span class="text-muted-foreground">Uptime</span>
+					<span class="text-surface-600-400">Uptime</span>
 					<span class="font-mono">{formatUptime(perf.uptime)}</span>
 				</div>
 				<div class="flex justify-between">
-					<span class="text-muted-foreground">Total generations</span>
+					<span class="text-surface-600-400">Total generations</span>
 					<span class="font-mono">{perf.totalGens}</span>
 				</div>
 				<div class="flex justify-between">
-					<span class="text-muted-foreground">Queue depth</span>
+					<span class="text-surface-600-400">Queue depth</span>
 					<span
 						class="font-mono {perf.queue > 0
 							? 'text-warning-500'
@@ -650,7 +651,7 @@
 			>
 				<header class="flex items-center gap-3">
 					<Icons.FileText class="text-primary-500 h-5 w-5 shrink-0" />
-					<h2 class="text-lg font-bold">Loaded Config</h2>
+					<h2 class="text-lg font-bold">Loaded config</h2>
 				</header>
 				<p class="text-surface-700-300 text-xs">
 					The exact .kcpps config sent to KoboldCPP when this model

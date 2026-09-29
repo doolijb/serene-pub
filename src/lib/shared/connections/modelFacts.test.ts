@@ -3,7 +3,8 @@ import {
 	factsAreEmpty,
 	formatContext,
 	formatPrice,
-	readModelFacts
+	readModelFacts,
+	readStoredFacts
 } from "./modelFacts"
 import { normalizeProbedModels } from "./probedModels"
 
@@ -241,5 +242,32 @@ describe("formatPrice", () => {
 
 	it("spells a currency that is not dollars", () => {
 		expect(formatPrice(3, "EUR")).toBe("EUR 3.00")
+	})
+})
+
+describe("a stored facts column, read back", () => {
+	it("returns a stored row's facts, validated", () => {
+		expect(
+			readStoredFacts({ contextWindow: 8192, source: "list", family: "llama" })
+		).toEqual({ contextWindow: 8192, source: "list", family: "llama" })
+	})
+
+	it("gives a legacy row with no source the default, instead of passing it through unchecked", () => {
+		// The case the old `as ModelFacts` cast hid: a row that predates
+		// `source` would have reached the client missing a required field.
+		expect(readStoredFacts({ contextWindow: 4096 })?.source).toBe("host")
+	})
+
+	it("drops a field that is the wrong shape rather than trusting it", () => {
+		const facts = readStoredFacts({ contextWindow: "lots", family: "qwen" })
+		expect(facts?.contextWindow).toBeUndefined()
+		expect(facts?.family).toBe("qwen")
+	})
+
+	it("reads an absent or empty column as no facts, so the wire omits the key", () => {
+		expect(readStoredFacts(null)).toBeNull()
+		expect(readStoredFacts(undefined)).toBeNull()
+		expect(readStoredFacts({})).toBeNull()
+		expect(readStoredFacts("nonsense")).toBeNull()
 	})
 })

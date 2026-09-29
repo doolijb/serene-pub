@@ -24,7 +24,8 @@
  * describing code it has not seen.
  */
 
-import { eq } from "drizzle-orm"
+import { and, eq } from "drizzle-orm"
+import { notCoreRow } from "$lib/server/plugins/frameHost"
 import * as schema from "$lib/server/db/schema"
 import {
 	CORE_TOOLS,
@@ -118,7 +119,7 @@ export async function toolProviders(
 				manifest: schema.plugins.manifest
 			})
 			.from(schema.plugins)
-			.where(eq(schema.plugins.enabled, true))
+			.where(and(eq(schema.plugins.enabled, true), notCoreRow()))
 
 		for (const row of rows)
 			for (const binding of pluginToolsOf(row.pluginId, row.manifest)) {

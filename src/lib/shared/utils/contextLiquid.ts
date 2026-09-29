@@ -53,6 +53,10 @@ import type {
 } from "liquidjs"
 import type { CompletionTemplate } from "$lib/shared/constants/completionTemplates"
 import { PromptBlockFormatter, type BlockRole } from "./PromptBlockFormatter"
+import {
+	CONTEXT_LIQUID_REFUSED_TAGS,
+	LIQUID_PARSE_LIMIT
+} from "./templateCheckOptions"
 
 /**
  * Hard ceiling on one render, in milliseconds.
@@ -63,9 +67,6 @@ import { PromptBlockFormatter, type BlockRole } from "./PromptBlockFormatter"
  * near (`engineHost.ts` boxes those at 3s across a worker round trip).
  */
 const LIQUID_RENDER_LIMIT_MS = 3_000
-
-/** Characters one `parse()` may consume — a template is a row, not a corpus. */
-const LIQUID_PARSE_LIMIT = 1_000_000
 
 /** Objects one render may allocate, the `concat`/`join` runaway ceiling. */
 const LIQUID_MEMORY_LIMIT = 100_000_000
@@ -93,8 +94,12 @@ const NO_FILESYSTEM = {
 	containsSync: () => false
 }
 
-/** `{% include %}` and friends: a parse-time refusal that names the tag. */
-function refusedTag(name: string) {
+/**
+ * `{% include %}` and friends: a parse-time refusal that names the tag. The
+ * sentence lives with the names (`templateCheckOptions.ts`) so the SDK's
+ * checker refuses in the same words.
+ */
+function refusedTag(message: string) {
 	return class extends Tag {
 		constructor(
 			token: TagToken,
@@ -102,11 +107,7 @@ function refusedTag(name: string) {
 			liquid: Liquid
 		) {
 			super(token, remainTokens, liquid)
-			throw new Error(
-				`'${name}' is not available: a context template is a row in a table, ` +
-					`so there is no file for it to pull in. Put the shared text in the ` +
-					`template itself.`
-			)
+			throw new Error(message)
 		}
 		*render() {}
 	}
@@ -260,8 +261,8 @@ export function createContextLiquid({
 		memoryLimit: LIQUID_MEMORY_LIMIT
 	})
 
-	for (const name of ["include", "render", "layout"])
-		liquid.registerTag(name, refusedTag(name) as any)
+	for (const [name, message] of Object.entries(CONTEXT_LIQUID_REFUSED_TAGS))
+		liquid.registerTag(name, refusedTag(message) as any)
 
 	liquid.registerTag("systemBlock", blockTag("system", promptFormat) as any)
 	liquid.registerTag(

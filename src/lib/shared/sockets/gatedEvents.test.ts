@@ -48,6 +48,8 @@ const MIGRATED_FAMILIES = [
 	"widgetStyles:",
 	"state:",
 	"backups:",
+	// The admin overhaul (2026-09-27): client/admin/adminHealth.svelte.ts.
+	"admin:",
 	// slice 2 (2026-09-14): every client consumer listed beside the entries.
 	"sessions:",
 	// slice 3 (2026-09-14): pipelines — a mixed family, never a restricted prefix.
@@ -77,19 +79,17 @@ const MIGRATED_FAMILIES = [
 	"taskQueue:",
 	"activity:",
 	"import:",
-	"worldSummarizeConfigs:",
-	"sceneSummarizeConfigs:",
+	// C6 P4 (2026-09-26): authored components arrive gated — the family was
+	// born after the sweep; its consumers (the admin components pages, and the
+	// session page for `components:changed`) are on the registry by construction.
+	"components:",
 	"users:",
 	"userSettings:",
 	"systemSettings:",
 	"plugins:",
 	"totp:",
 	"completionTemplates:",
-	"contextConfigs:",
 	"samplingConfigs:",
-	"promptConfigs:",
-	"narratorPromptConfigs:",
-	"graphBuildConfigs:",
 	"customThemes:",
 	"tunnels:",
 	"invites:",
@@ -97,20 +97,25 @@ const MIGRATED_FAMILIES = [
 	"account:",
 	"allowedHosts:",
 	// slice 8 (2026-09-15): the connections group, deferred until the
-	// model-column work settled; `ner:`, `images:` and
-	// `characterSummarizeConfigs:` had their last consumers in these files.
+	// model-column work settled; `ner:` and `images:` had their last
+	// consumers in these files.
 	"connections:",
 	"connectionDefaults:",
 	"koboldcpp:",
 	"ollama:",
 	"ner:",
 	"images:",
-	"characterSummarizeConfigs:",
 	// The Jump overlay (2026-09-15). A new family rather than a migrated one:
 	// its only consumer is the overlay the shell lane builds on top of it, and
 	// the interest registry is the one listener path a client has since phase 4
 	// retired `on`/`off` — so it cannot be written off the registry.
-	"jump:"
+	"jump:",
+	// Per-user plugin settings (2026-09-26): born gated, its one consumer
+	// (settingsTabs/PluginUserSettingsCard.svelte) on the registry.
+	"pluginUserSettings:",
+	// Notifications (2026-09-28): born gated; its consumer is the shell's
+	// notifications store, declared at init scope in both shells.
+	"notifications:"
 ]
 
 /**
@@ -338,6 +343,34 @@ describe("isScopedEvent", () => {
 		expect(isScopedEvent("sessionMessage")).toBe(true)
 		expect(isScopedEvent("state:changed")).toBe(true)
 		expect(isScopedEvent("backups:list")).toBe(false)
+	})
+})
+
+describe("names no server emits", () => {
+	test("are neither gated nor scoped (2026-09-28)", () => {
+		// Each of these answers on its family's LIST (`amendments:list`,
+		// `bindingSuggestions:list`) or — `lorebooks:export`, while export is
+		// paused — only on its `:error`. A table entry for a name nothing
+		// emits reads as a contract and checks nothing.
+		for (const event of [
+			"amendments:create",
+			"amendments:update",
+			"amendments:delete",
+			"amendments:fork",
+			"amendments:renameBranch",
+			"amendments:deleteBranch",
+			"amendments:place",
+			"amendments:unplace",
+			"bindingSuggestions:add",
+			"bindingSuggestions:ignore",
+			"bindingSuggestions:unignore",
+			"lorebooks:export"
+		]) {
+			expect(isGatedEvent(event), event).toBe(false)
+			expect(isScopedEvent(event), event).toBe(false)
+		}
+		expect(isGatedEvent("amendments:list")).toBe(true)
+		expect(isScopedEvent("amendments:list")).toBe(true)
 	})
 })
 

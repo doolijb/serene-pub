@@ -376,7 +376,7 @@ describe("a prompt edited in the panel", () => {
 		expect(resolved!.value).toBe("SPEAK ONLY IN RIDDLES")
 		// A whole named configuration sits at `preset` in the chain (12 §2):
 		// under an individual override, over the instance default.
-		expect(resolved!.scopeKind).toBe("preset")
+		expect(resolved!.scopeKind).toBe("config")
 	})
 
 	it("reaches the node as text when picked as an override, too", async () => {

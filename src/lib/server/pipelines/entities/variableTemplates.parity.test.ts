@@ -3,6 +3,7 @@ import {
 	SHIPPED_VARIABLE_TEMPLATES,
 	renderVariable,
 	shippedByKey,
+	SHIPPED_BAND_KEYS,
 	wrapFor
 } from "$lib/server/pipelines/entities/variableLayouts"
 import { CORE_TEMPLATE_ENGINE } from "$lib/server/pipelines/prompt/renderers"
@@ -417,6 +418,17 @@ describe("the shipped set", () => {
 					// One key, one variable — across every node. Two nodes
 					// rendering `history` as different variables would make
 					// "the history layout" ambiguous in a picker.
+					if (renders[key]) expect(renders[key]).toBe(variableId)
+					renders[key] = variableId
+				}
+		// …and every declared band core ships a layout for (2026-09-27:
+		// `docsExcerpts`, docs-search's band). Not in any `renders` — it
+		// reaches Assemble through `rendersBands` — but it is offered in the
+		// same picker, so it needs a row just the same.
+		for (const d of allDefinitions())
+			for (const [key, v] of Object.entries(((d as any).bands ?? {}) as Record<string, any>))
+				if (SHIPPED_BAND_KEYS.has(key)) {
+					const variableId = typeof v === "string" ? v : v?.id
 					if (renders[key]) expect(renders[key]).toBe(variableId)
 					renders[key] = variableId
 				}

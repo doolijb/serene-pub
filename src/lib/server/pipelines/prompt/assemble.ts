@@ -34,18 +34,23 @@ import { parseSplitChatPrompt } from "$lib/shared/utils/parseSplitChatPrompt"
 import { PromptFormats } from "$lib/shared/constants/PromptFormats"
 import type { WireMode } from "$lib/shared/connectionAdapters/wireMode"
 import { entryDeclarations } from "$lib/server/entries/declarations"
-import type { EntryOrderKey, EntryRoles } from "@serene-pub/sdk"
+import type { EntryOrderKey, EntryRoles, StoryCalendar } from "@serene-pub/sdk"
+import { formatStoryTime, FORBIDDEN_TEMPLATE_NAMES } from "@serene-pub/sdk"
 import {
 	renderTemplate,
 	type RenderRun
 } from "$lib/server/pipelines/prompt/renderers"
 import {
 	renderVariable,
+	shippedByKey,
+	SHIPPED_BAND_KEYS,
 	type ResolvedLayouts
 } from "$lib/server/pipelines/entities/variableLayouts"
 import type { Decision } from "$lib/server/pipelines/ranking/select"
+import type { RetrievalBand } from "$lib/server/pipelines/ranking/weights"
 import { applyPromptBlocks } from "$lib/server/pipelines/prompt/promptBlocks"
-import { isShippedPromptBlocks } from "@serene-pub/sdk"
+import { isShippedPromptBlocks, isBandKey, bandKeySuggestion } from "@serene-pub/sdk"
+import { assemble as assembleContract } from "@serene-pub/contracts"
 
 /**
  * **One retrieved item, with its verdict** — what selection hands to rendering.
@@ -124,7 +129,10 @@ export function allocate(
 			content: contentOf(d.candidate.payload),
 			tokens: d.candidate.tokens,
 			name: typeof payload.name === "string" ? payload.name : undefined,
-			meta: orderMeta(d.candidate.source, payload),
+			meta:
+				d.candidate.source === RECALLED_LINES_BAND
+					? recalledLineMeta(payload)
+					: orderMeta(d.candidate.source, payload),
 			included: d.included,
 			why: [d.why, `score ${d.score.toFixed(3)}`, d.reason]
 		}
@@ -258,10 +266,7 @@ const partOf = (a: Allocation, field: string): number =>
  * appended zero-padded to two, and an absent middle key skipped rather than
  * terminating the string.
  */
-const orderKeyOf = (
-	a: Allocation,
-	order: readonly EntryOrderKey[]
-): string => {
+const orderKeyOf = (a: Allocation, order: readonly EntryOrderKey[]): string => {
 	const meta = a.meta as Record<string, unknown> | undefined
 	const parts = order.map((k) => meta?.[k.field])
 	let key = String(parts[0] ?? 0)
@@ -285,20 +290,70 @@ const orderKeyOf = (
  */
 function currentDateOf(
 	allocations: readonly Allocation[],
-	roles: EntryRoles | undefined
-): { year: number; month?: number; day?: number } | undefined {
-	const order = roles?.order
-	const newest = order
-		? sortByOrder(allocations, order)[0]
-		: allocations[0]
-	if (!newest?.meta) return undefined
-	const m = newest.meta as { year?: number; month?: number; day?: number }
-	if (m.year === undefined) return undefined
-	return {
-		year: m.year,
-		...(m.month != null ? { month: m.month } : {}),
-		...(m.day != null ? { day: m.day } : {})
+	roles: EntryRoles | undefined,
+	/**
+	 * The book's story time, off the template context (`session_cast` →
+	 * build-template-context; DESIGN-story-time P5 + the lorebook clock).
+	 * Absent on every caller without a book, which keeps this byte-identical.
+	 */
+	storyTime?: unknown
+):
+	| {
+			year: number
+			month?: number
+			day?: number
+			hour?: number
+			minute?: number
+			label?: string
+	  }
+	| undefined {
+	const story = storyTime as
+		| {
+				now?: {
+					from?: string
+					year: number
+					month?: number
+					day?: number
+					hour?: number
+					minute?: number
+				} | null
+				calendar?: StoryCalendar | null
+		  }
+		| undefined
+	// A stored clock wins — the session's own (story-time P3), else its
+	// line's: it is where the story stands, set on purpose. Without one, the
+	// newest ALLOCATED history entry, as always.
+	let date:
+		| { year: number; month?: number; day?: number; hour?: number; minute?: number }
+		| undefined
+	const clock =
+		story?.now?.from === "clock" || story?.now?.from === "session" ? story.now : undefined
+	if (clock) {
+		date = {
+			year: clock.year,
+			...(clock.month != null ? { month: clock.month } : {}),
+			...(clock.day != null ? { day: clock.day } : {}),
+			...(clock.hour != null
+				? { hour: clock.hour, minute: clock.minute ?? 0 }
+				: {})
+		}
+	} else {
+		const order = roles?.order
+		const newest = order ? sortByOrder(allocations, order)[0] : allocations[0]
+		if (!newest?.meta) return undefined
+		const m = newest.meta as { year?: number; month?: number; day?: number }
+		if (m.year === undefined) return undefined
+		date = {
+			year: m.year,
+			...(m.month != null ? { month: m.month } : {}),
+			...(m.day != null ? { day: m.day } : {})
+		}
 	}
+	// `label` only under a declared calendar, so a free-form book's layout
+	// reads exactly the parts it always did.
+	return story?.calendar
+		? { ...date, label: formatStoryTime(date, story.calendar) }
+		: date
 }
 
 /**
@@ -323,6 +378,38 @@ function orderMeta(
 	const lead = payload[order[0].field]
 	if (lead === undefined || lead === null) return undefined
 	return Object.fromEntries(order.map((k) => [k.field, payload[k.field]]))
+}
+
+/**
+ * The band entity-search's recalled lines travel in (`bands: {
+ * recalledLines }` on its contract), and the one part of a line the
+ * allocation carries beyond its speaker (`name`) and text (`content`): its
+ * turn, for the layout's `Earlier (turn 12)`.
+ */
+const RECALLED_LINES_BAND = "recalledLines"
+
+const recalledLineMeta = (
+	payload: Record<string, unknown>
+): Record<string, unknown> | undefined =>
+	typeof payload.turn === "number" ? { turn: payload.turn } : undefined
+
+/**
+ * Recalled lines as `core:var/recalled-lines@1` declares them —
+ * `{ speaker, turn, text }`, oldest first — or `undefined` when none was
+ * included, so `{{#if recalledLines}}` is false.
+ */
+function recalledLinesOf(
+	allocations: readonly Allocation[]
+): Array<{ speaker: string; turn: number | undefined; text: string }> | undefined {
+	const lines = allocations
+		.filter((a) => a.content)
+		.map((a) => ({
+			speaker: a.name ?? "",
+			turn: typeof a.meta?.turn === "number" ? a.meta.turn : undefined,
+			text: a.content
+		}))
+		.sort((a, z) => (a.turn ?? 0) - (z.turn ?? 0))
+	return lines.length ? lines : undefined
 }
 
 /**
@@ -401,6 +488,13 @@ export interface RenderInput extends RenderRun {
 	prompts?: Record<string, unknown>
 	/** Everything else the template references — characters, personas, scenario. */
 	templateContext?: Record<string, unknown>
+	/**
+	 * The annex as a template reads it — `annex.<owner>.<key>` (typed
+	 * templates P6): every declared key of every owner in scope, from
+	 * `core:query/session-annex@1` with `view: 'template'` on Assemble's
+	 * `annex` port. Absent when the port is unwired, and then so is `annex`.
+	 */
+	annex?: unknown
 	messages: ReadonlyArray<{
 		id: number
 		role: string
@@ -482,7 +576,7 @@ export interface RenderedContext {
 	 * The format the render ACTUALLY used, for the receipt.
 	 *
 	 * Published from here rather than re-derived by the caller, because the
-	 * caller cannot know it: in chat wire mode this node renders `split_session`
+	 * caller cannot know it: in chat wire mode this node renders `split_chat`
 	 * and the connection's own format has no effect on a single byte, so a
 	 * receipt stamped from the connection would name a format the prompt was not
 	 * written in. Exactly the lie `dispatch.ts` already removed one layer down —
@@ -517,7 +611,7 @@ export interface RenderedContext {
  *
  * For core's own engine that is the same construction the legacy path uses, so
  * helper behaviour is identical by construction rather than by review — a
- * template that rendered differently here than in `KeywordInfillEngine` would
+ * template that rendered differently here than in the 0.5 keyword path would
  * be a parity failure nobody could localise, because both sides would look
  * correct in isolation.
  *
@@ -541,9 +635,6 @@ export async function render(input: RenderInput): Promise<RenderedContext> {
 			: applyPromptBlocks(input.template, input.engine, input.blocks)
 
 	const included = input.allocation.blocks.filter((a) => a.included)
-	const bySource = (source: string) =>
-		included.filter((a) => a.source === source).map((a) => a.content)
-
 	const allocationsFrom = (source: string) =>
 		included.filter((a) => a.source === source)
 
@@ -563,26 +654,44 @@ export async function render(input: RenderInput): Promise<RenderedContext> {
 	const layout = (key: string, value: unknown) =>
 		renderVariable(input.variables, key, value, input)
 
-	// Laid out ahead of the object literal because layouts may render through
-	// a plugin's engine now — an await inside the literal would read fine and
-	// interleave the three renders with whatever else the executor is doing.
-	// Sequential on purpose: three renders per turn is not a fan-out worth the
-	// nondeterministic completion order in a trace.
-	const worldLoreRoles = rolesOfSource("worldLore")
+	/**
+	 * **The bands, in one loop** (typed templates P2).
+	 *
+	 * The resolved band set is core's three — `worldLore`, `characterLore`,
+	 * `history`, declared by the lore queries — followed by every band this
+	 * node's `variables` slot resolved beyond its own `renders`: the bands
+	 * declared upstream of `candidates` (`rendersBands`, SDK `rendersAt`). Each
+	 * is laid out through its variable's selected layout, with the in-code
+	 * floor when none is selected; `characterLore` is the one exception, the
+	 * raw list it has always been (`rendersBands.raw`).
+	 *
+	 * Laid out ahead of the object literal because layouts may render through
+	 * a plugin's engine — an await inside the literal would read fine and
+	 * interleave the renders with whatever else the executor is doing.
+	 * Sequential on purpose: a handful of renders per turn is not a fan-out
+	 * worth the nondeterministic completion order in a trace.
+	 */
+	const declared = declaredBandKeys(input.variables)
+	const laidOut: Record<string, unknown> = {}
+	for (const key of [...CORE_RENDERED_BANDS, ...declared])
+		laidOut[key] = await bandValue(key, allocationsFrom(key), layout, {
+			selected: !!input.variables?.[key]?.source
+		})
 	const historyRoles = rolesOfSource("history")
 	const historyAllocations = allocationsFrom("history")
-	const worldLoreLaidOut = await layout(
-		"worldLore",
-		objectByRole(allocationsFrom("worldLore"), worldLoreRoles)
-	)
-	const historyLaidOut = await layout(
-		"history",
-		objectByRole(historyAllocations, historyRoles)
-	)
 	const currentDateLaidOut = await layout(
 		"currentDate",
-		currentDateOf(historyAllocations, historyRoles)
+		currentDateOf(
+			historyAllocations,
+			historyRoles,
+			(input.templateContext as { storyTime?: unknown } | undefined)
+				?.storyTime
+		)
 	)
+
+	refuseBandCollisions(declared, input.prompts, input.templateContext)
+	const bandsInPlay = includedBandKeys(included, laidOut, declared)
+	const annex = templateAnnexValue(input.annex, input.prompts, input.templateContext)
 
 	// Named *and shaped* the way the existing templates already expect. The
 	// names alone were not enough: the first parity run rendered
@@ -602,13 +711,14 @@ export async function render(input: RenderInput): Promise<RenderedContext> {
 		// isolation; only a byte comparison showed it.
 		...(input.prompts ?? {}),
 		...(input.templateContext ?? {}),
-		worldLore: worldLoreLaidOut,
+		worldLore: laidOut.worldLore,
 		// Not laid out, and not an oversight: nothing renders this. Lore bound
 		// to a character is folded into that character inside `characters`,
 		// under an `"extra lore"` key (docs/context-templates.md is explicit).
-		// A layout for it would be a setting that changes nothing.
-		characterLore: bySource("characterLore"),
-		history: historyLaidOut,
+		// A layout for it would be a setting that changes nothing — which is
+		// why the variables slot names it `raw`.
+		characterLore: laidOut.characterLore,
+		history: laidOut.history,
 		currentDate: currentDateLaidOut,
 		sessionMessages: input.messages,
 		// Script injections, resolved from depth to a render index — the same
@@ -624,6 +734,15 @@ export async function render(input: RenderInput): Promise<RenderedContext> {
 			input.messages.length
 		),
 		budget: input.allocation.budget,
+		// Every band declared upstream, at the top level under its own key —
+		// `{{{secretEntry}}}`. After the spreads, and refused above if one of
+		// them already holds the name, so nothing shadows anything silently.
+		// Absent on a core turn, whose context is the one it was.
+		...Object.fromEntries(declared.map((key) => [key, laidOut[key]])),
+		// The annex, from Assemble's `annex` port (P6) — absent, not `{}`,
+		// when the port is unwired, which is also when the typed scope has
+		// no `annex`: the two say the same thing.
+		...(annex ? { annex } : {}),
 		// Last, so the resolved block wins over the placeholder the template
 		// context carries.
 		...(input.postHistory ? { postHistory: input.postHistory } : {})
@@ -635,7 +754,7 @@ export async function render(input: RenderInput): Promise<RenderedContext> {
 	 *
 	 * ## Chat wire mode
 	 *
-	 * `split_session` is not a format. It emits `<@role:…>` markers into one
+	 * `split_chat` is not a format. It emits `<@role:…>` markers into one
 	 * string and parses them straight back out into a messages array, so it is a
 	 * transport for getting structure through a string-shaped seam — which is
 	 * exactly what a chat-shaped API needs and what the connection's own
@@ -758,6 +877,8 @@ export async function render(input: RenderInput): Promise<RenderedContext> {
 	// prompt with a section missing should meet "prompt blocks, in order: …"
 	// before anything about role structure.
 	const notes: string[] = [...packed.notes]
+	for (const band of unrenderedBands(bandsInPlay, packed.template, declared))
+		notes.push(unrenderedBandNote(band, declared.includes(band)))
 	if (isSplit && messages!.length === 0 && rendered.trim() !== "") {
 		messages!.push({ role: "user", content: rendered })
 		notes.push(
@@ -794,6 +915,294 @@ export async function render(input: RenderInput): Promise<RenderedContext> {
 		...(notes.length ? { notes } : {})
 	}
 }
+
+/**
+ * The bands Assemble renders through variables of its own — never a plugin band.
+ *
+ * Core's five retrieval bands, not only the three with a variable here:
+ * `relationships` reaches the template through `relationshipsPerspectives` /
+ * `relationshipsKnown` (built upstream from the same candidates), and
+ * `messages` is the transcript's band. Treating either as a plugin band would be
+ * a second spelling of something that already has one. The transcript renders
+ * from `sessionMessages`, never from this band's allocations — which is why
+ * entity-search's recalled lines are a declared band of their own
+ * (`recalledLines`, 2026-09-27) rather than candidates in this one.
+ */
+const CORE_BANDS: ReadonlySet<string> = new Set([
+	"worldLore",
+	"history",
+	"characterLore",
+	"relationships",
+	"messages"
+] satisfies RetrievalBand[])
+
+/**
+ * Core's three declared bands, in the order Assemble has always laid them out
+ * and placed them — `worldLore`, `characterLore`, `history` — which is what
+ * keeps the parity corpus byte-identical through the loop that replaced the
+ * three calls.
+ */
+const CORE_RENDERED_BANDS = ["worldLore", "characterLore", "history"] as const
+
+/**
+ * The bands this node exposes with no layout — `rendersBands.raw` on
+ * Assemble's `variables` slot, read from the contract rather than restated.
+ */
+const RAW_BANDS: ReadonlySet<string> = new Set(
+	assembleContract.descriptor.slots?.variables?.rendersBands?.raw ?? []
+)
+
+/** Assemble's static `renders` — its own variables, which are not bands. */
+const OWN_RENDERS: ReadonlySet<string> = new Set(
+	Object.keys(assembleContract.descriptor.slots?.variables?.renders ?? {})
+)
+
+/**
+ * The bands this node's `variables` slot resolved beyond its own renders.
+ *
+ * `world.ts` resolves the slot per key: its own `renders`, and — the slot
+ * being open (`rendersBands`) — one key per band declared upstream of
+ * `candidates` (SDK `rendersAt`, projected by the panel). So a key here that
+ * is not one of Assemble's own, not a core band and not a key core ships a
+ * layout for is a declared band. The last test is what keeps a caller that
+ * hands in every shipped layout (a preview's `bareLayouts`) from promoting
+ * `characters` into a band — except for the keys core ships a layout for
+ * *because* they are a declared band (`SHIPPED_BAND_KEYS`: `docsExcerpts`).
+ */
+export function declaredBandKeys(variables: ResolvedLayouts | undefined): string[] {
+	if (!variables) return []
+	return Object.keys(variables).filter(
+		(key) =>
+			!OWN_RENDERS.has(key) &&
+			!CORE_BANDS.has(key) &&
+			(!shippedByKey.has(key) || SHIPPED_BAND_KEYS.has(key)) &&
+			isBandKey(key)
+	)
+}
+
+/**
+ * One band's value as the template sees it.
+ *
+ * - `characterLore` (raw): the included entries' text, as a list — what it
+ *   has always been.
+ * - core's laid-out two: the role-shaped object through the selected layout,
+ *   exactly the two calls this replaced.
+ * - a declared band: the title-keyed object (a minified-JSON array of the
+ *   contents when no allocation carries a title), through the variable's
+ *   selected layout; with none selected, the in-code floor is that value as
+ *   minified JSON — the bytes the P0 alias has always rendered. `undefined`
+ *   when nothing of the band was included, so `{{#if secretEntry}}` is false.
+ * - `recalledLines`: its declared list shape (`recalledLinesOf`), not the
+ *   title-keyed object, always through its layout — selected or not, since
+ *   its floor is the shipped "Lines" expression, not JSON. `undefined` when
+ *   no line was included.
+ */
+async function bandValue(
+	key: string,
+	allocations: readonly Allocation[],
+	layout: (key: string, value: unknown) => Promise<string>,
+	opts: { selected: boolean }
+): Promise<unknown> {
+	if (RAW_BANDS.has(key)) return allocations.map((a) => a.content)
+	if (key === RECALLED_LINES_BAND) {
+		const lines = recalledLinesOf(allocations)
+		return lines === undefined ? undefined : await layout(key, lines)
+	}
+	const value = bandObjectOf(key, allocations)
+	if (CORE_BANDS.has(key) || opts.selected) return await layout(key, value)
+	return value === undefined ? undefined : JSON.stringify(value)
+}
+
+/** The title-keyed object for a band, else its contents as a list, else `undefined`. */
+function bandObjectOf(
+	key: string,
+	allocations: readonly Allocation[]
+): Record<string, string> | string[] | undefined {
+	const obj = objectByRole(allocations, rolesOfSource(key))
+	if (obj || CORE_BANDS.has(key)) return obj
+	const contents = allocations.map((a) => a.content).filter(Boolean)
+	return contents.length ? contents : undefined
+}
+
+/**
+ * A declared band may not take a name the template context already holds.
+ *
+ * Declaration-time checks (`checkBandDeclarations`, `rendersAt`) refuse a band
+ * shadowing a registered variable or Assemble's own names; this is the one
+ * collision only the run can see — a key a context builder or the prompts
+ * slot put in scope that nothing declares. Refused naming both, never
+ * resolved by spread order.
+ */
+export function refuseBandCollisions(
+	declared: readonly string[],
+	prompts: Record<string, unknown> | undefined,
+	templateContext: unknown
+): void {
+	const ctx = (templateContext ?? {}) as Record<string, unknown>
+	for (const key of declared) {
+		const holder =
+			prompts && Object.prototype.hasOwnProperty.call(prompts, key)
+				? "a field of this node's prompts slot"
+				: Object.prototype.hasOwnProperty.call(ctx, key)
+					? "the template context its builder supplied"
+					: undefined
+		if (holder)
+			throw new Error(
+				`band '${key}', declared upstream of this node's candidates, collides with ` +
+					`'${key}' from ${holder}. A band key is a top-level template name and means ` +
+					`one thing — rename the band on the source that declares it.`
+			)
+	}
+}
+
+const FORBIDDEN_IN_TEMPLATES = new Set(
+	FORBIDDEN_TEMPLATE_NAMES.map((n) => n.toLowerCase())
+)
+
+/** A copy of `value` with every key a template may never reach removed, at any depth. */
+function withoutForbiddenNames(value: unknown): unknown {
+	if (Array.isArray(value)) return value.map(withoutForbiddenNames)
+	if (!value || typeof value !== "object") return value
+	const out: Record<string, unknown> = {}
+	for (const [k, v] of Object.entries(value as Record<string, unknown>))
+		if (!FORBIDDEN_IN_TEMPLATES.has(k.toLowerCase())) out[k] = withoutForbiddenNames(v)
+	return out
+}
+
+/**
+ * The annex as the template reads it (typed templates P6): the `annex` port's
+ * value when it is an object with at least one owner, else nothing.
+ *
+ * The port carries `core:query/session-annex@1`'s template view — declared
+ * keys of the owners in scope only — so there is nothing to filter by
+ * audience here (owner ruling Q1). A name no template may reach
+ * (`FORBIDDEN_TEMPLATE_NAMES`) is still dropped at any depth: the typed scope
+ * already refuses a declaration that names one (law T1), and this is the
+ * run-time half of the same rule, so an older stored declaration cannot carry
+ * one into a prompt. A prompts field or a builder key named `annex` is
+ * refused, as a band's name is: one top-level name, one meaning.
+ */
+export function templateAnnexValue(
+	annex: unknown,
+	prompts: Record<string, unknown> | undefined,
+	templateContext: unknown
+): Record<string, unknown> | undefined {
+	if (!annex || typeof annex !== "object" || Array.isArray(annex)) return undefined
+	const ctx = (templateContext ?? {}) as Record<string, unknown>
+	const holder =
+		prompts && Object.prototype.hasOwnProperty.call(prompts, "annex")
+			? "a field of this node's prompts slot"
+			: Object.prototype.hasOwnProperty.call(ctx, "annex")
+				? "the template context its builder supplied"
+				: undefined
+	if (holder)
+		throw new Error(
+			`this node's annex port is wired, and 'annex' also arrives from ${holder}. ` +
+				`'annex' is where a template reads the annex (annex.<owner>.<key>) — rename the other.`
+		)
+	const kept = withoutForbiddenNames(annex) as Record<string, unknown>
+	return Object.keys(kept).length ? kept : undefined
+}
+
+/**
+ * Every included band core has no variable for, by key — each band a source
+ * emitted with content, and each declared band with a non-empty value. What
+ * the receipt checks the template against.
+ */
+function includedBandKeys(
+	included: readonly Allocation[],
+	laidOut: Record<string, unknown>,
+	declared: readonly string[]
+): string[] {
+	const out = new Set(Object.keys(pluginBandsOf(included) ?? {}))
+	for (const key of declared) {
+		const v = laidOut[key]
+		if (typeof v === "string" && v !== "") out.add(key)
+	}
+	return [...out]
+}
+
+/**
+ * Every INCLUDED band core has no variable for, as the template sees it.
+ *
+ * Typed templates P0: a plugin source that declares its own band (Twenty
+ * Questions' `secret-entry`) had its candidates ranked, budgeted and included —
+ * and then dropped here, because only core's three were ever read. The value is
+ * the title-keyed object `objectByRole` builds, minified, which is the same
+ * shape `{{{worldLore}}}` renders; when no allocation carries a title the
+ * contents go out as a minified JSON array instead, so a nameless candidate is
+ * still never lost. Only the allocation projection enters — nothing else.
+ *
+ * `undefined` when there are none. Keys are what the receipt checks; a band
+ * its source never declared reaches no template name.
+ */
+export function pluginBandsOf(
+	included: readonly Allocation[]
+): Record<string, string> | undefined {
+	const bySource = new Map<string, Allocation[]>()
+	for (const a of included) {
+		if (CORE_BANDS.has(a.source)) continue
+		const list = bySource.get(a.source)
+		if (list) list.push(a)
+		else bySource.set(a.source, [a])
+	}
+	if (!bySource.size) return undefined
+
+	const out: Record<string, string> = {}
+	for (const [source, allocations] of bySource) {
+		const obj = objectByRole(allocations, rolesOfSource(source))
+		const contents = allocations.map((a) => a.content).filter(Boolean)
+		if (obj) out[source] = JSON.stringify(obj)
+		else if (contents.length) out[source] = JSON.stringify(contents)
+	}
+	return Object.keys(out).length ? out : undefined
+}
+
+const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+
+/**
+ * The bands the template never places.
+ *
+ * A **declared** band (typed templates P2) is placed by its top-level name —
+ * `{{{secretEntry}}}`, `{{ secretEntry }}`, `{{#if secretEntry}}`. A band its
+ * source never declared has no name in the template, so it is never placed.
+ * A plugin engine's own syntax may not be recognised; the cost is a note that
+ * is wrong, never a prompt that is.
+ */
+export function unrenderedBands(
+	bands: readonly string[],
+	template: string,
+	declared: readonly string[] = []
+): string[] {
+	if (!bands.length) return []
+	// Tags only, so the word in the template's prose is not a reference.
+	const tags = (
+		template.match(/\{\{[\s\S]*?\}\}|\{%[\s\S]*?%\}/g) ?? []
+	).join("\n")
+	return bands.filter(
+		(key) =>
+			!(
+				declared.includes(key) &&
+				new RegExp(`(?<![\\w.$-])${escapeRegExp(key)}(?![\\w$-])`).test(tags)
+			)
+	)
+}
+
+/**
+ * The receipt's sentence for a band nothing placed — naming the fix.
+ *
+ * A declared band is placed by its own name. An undeclared one has no name in
+ * a template until its source declares it, under the identifier the
+ * declaration requires (`bandKeySuggestion`).
+ */
+export const unrenderedBandNote = (band: string, declared = false): string =>
+	declared
+		? `band '${band}' was ranked and included but the template does not ` +
+			`render it — place it with {{{${band}}}}`
+		: `band '${band}' was ranked and included but no template can render ` +
+			`it: its source does not declare it. Declare it on that source ` +
+			`(bands: { ${bandKeySuggestion(band)}: … }) and place it with ` +
+			`{{{${bandKeySuggestion(band)}}}}`
 
 /**
  * `{{a.b}}`, `{{#each xs}}` — what the template asked for, for diagnostics.

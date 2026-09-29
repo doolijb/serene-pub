@@ -11,7 +11,7 @@
  *
  * `off` forces the single-request branch, which every text adapter has and
  * every image backend can do by simply not being polled. It is the cheap answer
- * for a stage nobody is watching — a summarizer, a state keeper, a planner.
+ * for a step nobody is watching — a summarizer, a state keeper, a planner.
  *
  * There is deliberately no `on`. Turning streaming ON is a claim about the
  * connection rather than about this step: an adapter with no streaming branch

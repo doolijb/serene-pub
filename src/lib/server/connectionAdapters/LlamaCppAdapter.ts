@@ -366,7 +366,7 @@ class LlamaCppAdapter extends BaseConnectionAdapter {
 	 * `reasoningBudget` outright — a number somebody typed is a choice, and the
 	 * table is only the translation of a word.
 	 */
-	private reasoningParams(useSession: boolean): Record<string, unknown> {
+	private reasoningParams(useChat: boolean): Record<string, unknown> {
 		const { level, budget } = reasoningOf(this.sampling)
 		if (!level) return {}
 		// ⚠ CHAT WIRE ONLY, and the reason is already written down two hundred
@@ -377,7 +377,7 @@ class LlamaCppAdapter extends BaseConnectionAdapter {
 		// control that stores a value nothing reads. A model's `<think>` tags
 		// still arrive inline in `content` there, which the shared parser
 		// handles; what cannot be done on that route is CHOOSING.
-		if (!useSession) {
+		if (!useChat) {
 			this.noteIgnoredSampler("reasoning")
 			if (budget !== undefined) this.noteIgnoredSampler("reasoningBudget")
 			return {}
@@ -400,7 +400,7 @@ class LlamaCppAdapter extends BaseConnectionAdapter {
 		/**
 		 * Which of llama-server's two endpoints this request goes to.
 		 *
-		 * The same `useSession = this.isChatWire` idiom as `OllamaAdapter` and
+		 * The same `useChat = this.isChatWire` idiom as `OllamaAdapter` and
 		 * `KoboldCppAdapter`, and it arrived here for the same reason they have
 		 * it: wire mode is a CONNECTION CAPABILITY, resolved once from the row's
 		 * four layers and read by the render as well as by this send, so the
@@ -415,7 +415,7 @@ class LlamaCppAdapter extends BaseConnectionAdapter {
 		 * `wire_chat` as supported-but-not-defaulted so an upgrading install
 		 * keeps the completion leg it was already on.
 		 */
-		const useSession = this.isChatWire
+		const useChat = this.isChatWire
 		// The stop sequences this request will send — composed by
 		// `connections/stops.ts` and handed over at construction, never built
 		// here (ruling 2026-09-10). The chat branch below used to be given
@@ -427,13 +427,13 @@ class LlamaCppAdapter extends BaseConnectionAdapter {
 
 		const baseUrl =
 			normalizeBaseUrl(this.connection.baseUrl) || "http://localhost:8080"
-		const endpoint = useSession
+		const endpoint = useChat
 			? `${baseUrl}/v1/chat/completions`
 			: `${baseUrl}/completion`
 
 		let req: Record<string, any>
 
-		if (useSession) {
+		if (useChat) {
 			// Checked rather than asserted, the same way `OllamaAdapter` and
 			// `KoboldCppAdapter` check it. `compiledPrompt.messages!` on a
 			// completion-shaped payload sends `undefined`, `JSON.stringify`
@@ -574,7 +574,7 @@ class LlamaCppAdapter extends BaseConnectionAdapter {
 				 * rather than `_`-prefixed now: the chat branch feeds it, and no
 				 * field is invented on the native route to match. Which channel
 				 * a given generation uses follows the connection's wire mode,
-				 * one value resolved once (`useSession` above).
+				 * one value resolved once (`useChat` above).
 				 */
 				completionResult: async (
 					contentCb: (chunk: string) => void,
@@ -630,7 +630,7 @@ class LlamaCppAdapter extends BaseConnectionAdapter {
 									// which the native route has no equivalent
 									// of at all (see the note on this
 									// callback's `_thinkingCb` history below).
-									const delta = useSession
+									const delta = useChat
 										? data.choices?.[0]?.delta
 										: data
 									const thinking = delta?.reasoning_content
@@ -653,7 +653,7 @@ class LlamaCppAdapter extends BaseConnectionAdapter {
 									// already handed its result back — see
 									// `BaseConnectionAdapter.stopHit`.
 									if (
-										!useSession &&
+										!useChat &&
 										typeof data?.stopping_word ===
 											"string" &&
 										data.stopping_word.length > 0
@@ -712,13 +712,13 @@ class LlamaCppAdapter extends BaseConnectionAdapter {
 				// reasoning in its own field; the native route answers flat and
 				// carries it inline in `content`, which is the whole of the
 				// long note on the streaming callback above.
-				const message = useSession
+				const message = useChat
 					? (result as any)?.choices?.[0]?.message
 					: undefined
-				const content = useSession
+				const content = useChat
 					? message?.content || ""
 					: result?.content || result?.response || ""
-				const thinkingContent = useSession
+				const thinkingContent = useChat
 					? typeof message?.reasoning_content === "string" &&
 						message.reasoning_content.length > 0
 						? message.reasoning_content
@@ -730,7 +730,7 @@ class LlamaCppAdapter extends BaseConnectionAdapter {
 				// can be filled honestly (ruling 2026-09-10). The OAI-compat
 				// route answers `finish_reason: "stop"` and names nothing, so
 				// it stays undefined there.
-				this.stopHit = !useSession ? result?.stopping_word : undefined
+				this.stopHit = !useChat ? result?.stopping_word : undefined
 				return {
 					completionResult: content,
 					compiledPrompt,
@@ -738,7 +738,7 @@ class LlamaCppAdapter extends BaseConnectionAdapter {
 					...(thinkingContent ? { thinkingContent } : {}),
 					// Recorded, never acted on: see `TextGenResult.tokensCached`.
 					...cacheUsageFrom(
-						useSession ? (result as any)?.usage : result
+						useChat ? (result as any)?.usage : result
 					)
 				}
 			} catch (e: any) {

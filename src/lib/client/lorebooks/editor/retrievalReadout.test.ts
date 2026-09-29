@@ -197,6 +197,47 @@ describe("the decisions key", () => {
 		expect(lastSyncKeys()).toEqual([])
 	})
 
+	test("a pair named before the first open is asked by that open", async () => {
+		// The workspace's `$effect` (ask) runs ahead of its `onMount` (open).
+		const readout = await loadReadout()
+		readout.ask(1, 2)
+		expect(requests()).toEqual([])
+		readout.open(socket as any, { isAdmin: false })
+		await settle()
+		expect(
+			requests().filter((e) => e.event === "entries:recentDecisions")
+		).toEqual([
+			{
+				event: "entries:recentDecisions",
+				payload: { lorebookId: 1, sessionId: 2 }
+			}
+		])
+		expect(lastSyncKeys()).toContain("entries:recentDecisions#1")
+		readout.close(socket as any)
+	})
+
+	test("open then ask asks exactly once", async () => {
+		const readout = await loadReadout()
+		readout.open(socket as any, { isAdmin: false })
+		readout.ask(1, 2)
+		expect(
+			requests().filter((e) => e.event === "entries:recentDecisions")
+		).toHaveLength(1)
+		readout.close(socket as any)
+	})
+
+	test("a second editor opening does not re-ask", async () => {
+		const readout = await loadReadout()
+		readout.ask(1, 2)
+		readout.open(socket as any)
+		readout.open(socket as any)
+		expect(
+			requests().filter((e) => e.event === "entries:recentDecisions")
+		).toHaveLength(1)
+		readout.close(socket as any)
+		readout.close(socket as any)
+	})
+
 	test("another book's decisions are not delivered to this one", async () => {
 		const readout = await loadReadout()
 		readout.open(socket as any, { isAdmin: true })

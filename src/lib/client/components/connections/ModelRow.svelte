@@ -17,8 +17,23 @@
 	 *    Green on every row said "healthy" four times about a thing that was
 	 *    merely offered; red on every row put the one irreversible action under
 	 *    the thumb, on the row, four times over.
-	 * 2. **A row is a row.** 15px name, 12px muted second line, actions in a
-	 *    `⋯` menu (STYLE-GUIDE §6.4). A card per item is for items with images.
+	 * 2. **The anatomy is a row's**: 15px name, 12px muted second line, actions
+	 *    in a `⋯` menu (STYLE-GUIDE §6.4) — never a `Size:`/`Modified:`
+	 *    key-value table.
+	 *
+	 *    ⚠ **Amended 2026-09-25 (owner): the CONTAINER is a card.** The rule
+	 *    this file was written to enforce was never "no card" — it was no
+	 *    key-value table and no filled green button beside a filled red one.
+	 *    Both still hold and both are still enforced below. What moved is the
+	 *    box around them, so a model you HAVE and a model you could DOWNLOAD
+	 *    read as one kind of thing (`ModelFinderView`'s cards, same day).
+	 *
+	 *    ⚠ The cost is real and was the original argument: a card is ~88px
+	 *    against a row's 44px, so a 400px dock shows three or four models where
+	 *    it showed seven. `panel-card`'s own padding, not a tighter override —
+	 *    the ask was to match the download cards and those are `p-4`, and two
+	 *    padding utilities on one element resolve by emit order, which is not a
+	 *    thing to make a layout depend on.
 	 * 3. **Facts go on one line, not in a table.** `Q4_K_M · 7 GB · 32k` reads
 	 *    in one pass; a right-aligned two-column table of three rows does not,
 	 *    and it cost 60px to say less.
@@ -66,6 +81,12 @@
 		/** Offer the quiet Use button. */
 		canUse?: boolean
 		useLabel?: string
+		/**
+		 * The dock's short word. "Use" suits a host's model; a local ONNX row's
+		 * one action is Download, Cancel, Retry or Make active, and "Use" on a
+		 * row that has not been downloaded named the wrong press.
+		 */
+		useShortLabel?: string
 		selected?: boolean
 		actions?: readonly ModelRowAction[]
 		onOpen?: () => void
@@ -78,6 +99,7 @@
 		note = null,
 		canUse = false,
 		useLabel = "Use",
+		useShortLabel = "Use",
 		selected = false,
 		actions = [],
 		onOpen,
@@ -94,7 +116,7 @@
 	 * The quiet line: quantisation, size, context.
 	 *
 	 * ⚠ The admin's `contextWindow` override wins over `facts.contextWindow`,
-	 * and that order is the whole reason both exist. A person who capped a
+	 * and that order is why both exist. A person who capped a
 	 * window at 8k must see 8k here — showing the host's 200k would be this row
 	 * quoting a number the resolver will not use.
 	 */
@@ -116,15 +138,15 @@
 </script>
 
 <div
-	class="group flex min-h-11 items-center gap-2 rounded-[10px] {selected
-		? 'sidebar-row-active'
+	class="panel-card group flex items-center gap-2 {selected
+		? 'ring-primary-500 ring-offset-surface-50 dark:ring-offset-surface-950 ring-2 ring-offset-2'
 		: ''}"
 >
 	<button
 		type="button"
-		class="focus-visible:ring-primary-500 flex min-w-0 flex-1 items-center gap-2 rounded-[10px] px-2 py-1.5 text-left focus-visible:ring-2 focus-visible:outline-none {selected
-			? ''
-			: 'hover:preset-tonal-primary'} {missing ? 'opacity-55' : ''}"
+		class="focus-visible:ring-primary-500 flex min-w-0 flex-1 items-center gap-2 rounded-lg text-left focus-visible:ring-2 focus-visible:outline-none {missing
+			? 'opacity-55'
+			: ''}"
 		aria-current={selected ? "true" : undefined}
 		title={display.identifier}
 		onclick={() => onOpen?.()}
@@ -137,7 +159,7 @@
 				</span>
 				{#each defaultFor as capability (capability)}
 					<span
-						class="preset-tonal-primary text-primary-900 dark:text-primary-300 flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-bold"
+						class="preset-tonal-primary text-primary-900 dark:text-primary-300 flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-bold"
 					>
 						<Icons.Star
 							size={9}
@@ -149,7 +171,7 @@
 				{/each}
 				{#if missing}
 					<span
-						class="border-surface-300-700 text-surface-600-400 shrink-0 rounded border px-1.5 py-0.5 text-[10px] font-medium"
+						class="border-surface-300-700 text-surface-600-400 shrink-0 rounded border px-1.5 py-0.5 text-[11px] font-medium"
 					>
 						No longer listed
 					</span>
@@ -177,8 +199,8 @@
 		>
 			<!-- "Use" in the dock, the whole verb where there is room: the long
 			     label took the width the model's name needed. -->
-			<span class="@min-[560px]/view:hidden">Use</span>
-			<span class="hidden @min-[560px]/view:inline">{useLabel}</span>
+			<span class="@lg/view:hidden">{useShortLabel}</span>
+			<span class="hidden @lg/view:inline">{useLabel}</span>
 		</button>
 	{/if}
 

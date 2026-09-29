@@ -26,7 +26,7 @@ import type { StatusText } from "@serene-pub/sdk"
  *  · `reply` — a turn filling a message row (`runReply`); stopped when the
  *    row it fills is among the released, or when it has not made one yet.
  *  · `action` — a contributed function a person triggered
- *    (`sessions:triggerFunction`): a render, a summary, a tool. Stopped only
+ *    (`sessions:fireAction`): a render, a summary, a tool. Stopped only
  *    when its live row — if it has one — is among the released.
  *  · `maintenance` — nothing a person is watching from the composer; never
  *    stopped by a message's Stop. Reserved: nothing registers one yet.

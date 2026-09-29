@@ -25,8 +25,15 @@ import {
 	isEnvoyConfigKey,
 	fieldLabel,
 	scriptPointsOf,
-	type ParamDecl,
-	type SlotDecl
+	rendersAt,
+	templateScopeAt,
+	templateScopeReport,
+	type ScopeSource,
+	type SpecDocument,
+	type TemplateScope,
+	type FieldDecl,
+	type SlotDecl,
+	type ScriptPointDecl
 } from "@serene-pub/sdk"
 import { type Decl } from "$lib/server/pipelines/config/panel/types"
 
@@ -96,15 +103,15 @@ const PARAM_CONTROL: Record<string, string> = {
  * than as nothing.
  */
 function itemDeclOf(
-	item: ParamDecl | undefined,
+	item: FieldDecl | undefined,
 	language?: string
 ): Decl["item"] | undefined {
 	if (!item) return undefined
 	const fields = Object.entries(item.fields ?? {}).map(([key, raw]) => {
-		const f = raw as ParamDecl
+		const f = raw as FieldDecl
 		return {
 			key,
-			label: i18nText(f.label ?? f.i18n, language) ?? humanizeCamel(key),
+			label: i18nText(f.label, language) ?? humanizeCamel(key),
 			control: PARAM_CONTROL[f.type] ?? "string",
 			...(f.of ? { of: f.of } : {}),
 			...(f.members
@@ -112,7 +119,7 @@ function itemDeclOf(
 						members: f.members.map((m) => ({
 							key: m.key,
 							label:
-								i18nText(m.label ?? m.i18n, language) ??
+								i18nText(m.label, language) ??
 								humanizeCamel(m.key),
 							...(i18nText(m.description, language)
 								? {
@@ -185,7 +192,13 @@ export const i18nText = (v: unknown, language?: string): string | undefined =>
 function declsForSlot(
 	nodeKey: string,
 	slotName: string,
-	decl: SlotDecl,
+	/** `bandKeys` from `openRenders`, `templateScope` from `templateScopeFor`. */
+	decl: SlotDecl & {
+		bandKeys?: readonly string[]
+		templateScope?: TemplateScope
+		templateDeclarers?: Record<string, TemplateDeclarer>
+		templateUntyped?: string[]
+	},
 	typeLabel: string,
 	definitionId: string,
 	nodeKind: string
@@ -203,7 +216,7 @@ function declsForSlot(
 		nodeKind,
 		...((decl as { quick?: boolean }).quick ? { quick: true } : {}),
 		...(decl.engine ? { engine: decl.engine } : {}),
-		...(decl.engines?.length ? { engines: [...decl.engines] } : {})
+		...(decl.acceptedEngines?.length ? { acceptedEngines: [...decl.acceptedEngines] } : {})
 	}
 
 	// One option, not one per declared field. A prompt is a **swappable entity**
@@ -249,6 +262,11 @@ function declsForSlot(
 	// keeps those separate (F20).
 	if (decl.kind === "variables")
 		return Object.entries(decl.renders ?? {}).map(([key, variableId]) => {
+			// A band declared upstream (typed templates P2) — `declarations()`
+			// has already opened `renders` to include it (`rendersAt`).
+			const band = (decl as { bandKeys?: readonly string[] }).bandKeys?.includes(
+				key
+			)
 			// The registry is a fact about the running build; the declaration
 			// came from a row. A variable whose plugin is disabled is therefore
 			// normal, not an error — it falls back to the humanized key rather
@@ -265,6 +283,7 @@ function declsForSlot(
 				variableId: variableId as string,
 				label: i18nText(v?.i18n?.name) ?? humanizeCamel(key),
 				...(description ? { description } : {}),
+				...(band ? { band: true as const } : {}),
 				control: "variable-template-ref"
 			}
 		})
@@ -276,7 +295,7 @@ function declsForSlot(
 	// gate keeps the heading it has always had beside the switch's.
 	if (decl.kind === "parameters" || decl.kind === "settings")
 		return Object.entries(decl.schema ?? {}).map(([param, raw]) => {
-			const p = raw as ParamDecl
+			const p = raw as FieldDecl
 			const paramDescription = i18nText(p?.description)
 			return {
 				...base,
@@ -302,7 +321,7 @@ function declsForSlot(
 					? {
 							members: p.members.map((m) => ({
 								key: m.key,
-								label: i18nText(m.i18n) ?? humanizeCamel(m.key),
+								label: i18nText(m.label) ?? humanizeCamel(m.key),
 								...(i18nText(m.description)
 									? { description: i18nText(m.description)! }
 									: {}),
@@ -353,7 +372,19 @@ function declsForSlot(
 				nodeDefinitionId: poolKeyFor(definitionId),
 				label: humanizeCamel(slotName),
 				...(slotDescription ? { description: slotDescription } : {}),
-				control: "context-template-ref"
+				control: "context-template-ref",
+				// Typed templates P3 — `declarations()` computed it over the
+				// stored document (`templateScopeFor`).
+				...(decl.templateScope ? { templateScope: decl.templateScope } : {}),
+				...(decl.templateDeclarers
+					? { templateDeclarers: decl.templateDeclarers }
+					: {}),
+				...(decl.templateUntyped?.length
+					? { templateUntyped: decl.templateUntyped }
+					: {}),
+				// The definition's own names — the library's scope, where no
+				// step is in view (P7).
+				...(decl.variables ? { templateStaticScope: decl.variables } : {})
 			}
 		]
 
@@ -512,6 +543,137 @@ export async function subscription(db: Db, specVersionId: number) {
  * tail; an envoy's step sorts past the end, because `read.ts` pulls it out
  * of the spine into its own trailing group.
  */
+/**
+ * A `variables` slot with `rendersBands`, its `renders` opened (typed
+ * templates P2): the static keys plus every band declared upstream of the
+ * named in-port — SDK `rendersAt` over the stored document, reading each
+ * node's in-ports and declared bands from its **registry row** (`ports`, and
+ * `policy.bands`), never from a loaded plugin (F6). The band keys ride along
+ * as `bandKeys` so each option can say it is one.
+ *
+ * A collision — two upstream declarers naming one band differently, or a band
+ * shadowing a name the node renders itself — throws `BandCollisionError`
+ * naming both: the document is broken the same way for every reader, and a
+ * pipeline that cannot say what its template receives must not run.
+ */
+export async function openRenders(
+	docOf: () => Promise<SpecDocument>,
+	nodeKey: string,
+	decl: SlotDecl,
+	byPin: Map<string, any>
+): Promise<SlotDecl & { bandKeys: string[] }> {
+	const doc = await docOf()
+	const renders = rendersAt(doc, nodeKey, decl, rowSource(byPin))
+	const own = new Set(Object.keys(decl.renders ?? {}))
+	return {
+		...decl,
+		renders,
+		bandKeys: Object.keys(renders).filter((k) => !own.has(k))
+	}
+}
+
+/**
+ * A node's definition as the SDK's document walks read it, from its
+ * **registry row** — slots, ports, and the policy half (`bands`,
+ * `portSchemas`) — never from a loaded plugin (F6).
+ */
+export const rowSource =
+	(byPin: Map<string, any>) =>
+	(n: { definitionId: string; definitionVersion: number }): ScopeSource | undefined => {
+		const row = byPin.get(`${n.definitionId}@${n.definitionVersion}`)
+		return row
+			? {
+					slots: row.slots ?? {},
+					ports: row.ports ?? {},
+					bands: row.policy?.bands ?? undefined,
+					portSchemas: row.policy?.portSchemas ?? undefined
+				}
+			: undefined
+	}
+
+/**
+ * What a `template` slot can reference at this node of the stored document
+ * (typed templates P3): SDK `templateScopeAt` over the rows — the node's own
+ * names, its prompts, the context builder's declared keys, the bands
+ * declared upstream, `annex.<owner>.<key>` and `state` typed for the spec's
+ * genre. Carried on the `context-template-ref` option for the editor (P7).
+ *
+ * Throws on a root two declarers claim, and on a forbidden kind — for the
+ * reason `openRenders` does: the document is broken the same way for every
+ * reader.
+ */
+export async function templateScopeFor(
+	docOf: () => Promise<SpecDocument>,
+	nodeKey: string,
+	slotName: string,
+	byPin: Map<string, any>
+): Promise<TemplateScope> {
+	return templateScopeAt(await docOf(), nodeKey, {
+		slot: slotName,
+		describe: rowSource(byPin)
+	})
+}
+
+/**
+ * Who supplies a template root, in words (typed templates P7). `group`
+ * is how the editor ranks and groups a completion; never a node key.
+ */
+export interface TemplateDeclarer {
+	label: string
+	group: "self" | "promptFields" | "builder" | "band" | "annex"
+}
+
+/**
+ * `templateScopeFor`, plus who declares each root and which producers feed
+ * it untyped — both as LABELS (a type's own name), for the editor's hover,
+ * tree and lint. The SDK's declarer strings name node keys
+ * (`'context' (core:task/…@1).templateContext`); the payload carries no
+ * topology (05 §0a), so each is rewritten to the definition's display name.
+ */
+export async function templateScopeDetailFor(
+	docOf: () => Promise<SpecDocument>,
+	nodeKey: string,
+	slotName: string,
+	byPin: Map<string, any>
+): Promise<{
+	scope: TemplateScope
+	declarers: Record<string, TemplateDeclarer>
+	untyped: string[]
+}> {
+	const report = templateScopeReport(await docOf(), nodeKey, {
+		slot: slotName,
+		describe: rowSource(byPin)
+	})
+	const nameOf = (pin: string) => {
+		const at = pin.lastIndexOf("@")
+		const definitionId = at === -1 ? pin : pin.slice(0, at)
+		return (
+			i18nText(byPin.get(pin)?.i18n?.name) ?? humanizeTypeId(definitionId)
+		)
+	}
+	const DECLARER = /^'([^']*)' \(([^)]*)\)(.*)$/
+	const read = (by: string): TemplateDeclarer => {
+		const m = DECLARER.exec(by)
+		if (!m) return { label: "Annex declarations", group: "annex" }
+		const [, key, pin, tail] = m as unknown as [string, string, string, string]
+		const name = nameOf(pin)
+		const slot = / slot '([^']*)'$/.exec(tail)?.[1]
+		if (slot !== undefined)
+			return key === nodeKey && slot === slotName
+				? { label: `This step (${name})`, group: "self" }
+				: { label: `${name} prompts`, group: "promptFields" }
+		if (tail.startsWith(".")) return { label: name, group: "builder" }
+		return { label: `${name} (band)`, group: "band" }
+	}
+	return {
+		scope: report.scope,
+		declarers: Object.fromEntries(
+			Object.entries(report.declarers).map(([root, by]) => [root, read(by)])
+		),
+		untyped: [...new Set(report.untyped.map((by) => read(by).label))]
+	}
+}
+
 export async function declarations(
 	db: Db,
 	specVersionId: number
@@ -550,6 +712,14 @@ export async function declarations(
 	const byPin = new Map<string, any>(
 		(registry as any[]).map((r) => [`${r.definitionId}@${r.version}`, r])
 	)
+
+	// The stored document, read once and only if a slot needs it — an open
+	// `renders` (typed templates P2) walks its edges.
+	let docPromise: Promise<SpecDocument> | undefined
+	const docOf = () =>
+		(docPromise ??= import("$lib/server/pipelines/boot/store").then((m) =>
+			m.loadDocument(db, specVersionId)
+		))
 
 	const out: Decl[] = []
 	for (const node of nodes as any[]) {
@@ -611,7 +781,23 @@ export async function declarations(
 				...declsForSlot(
 					node.nodeKey,
 					slotName,
-					forThisNode,
+					forThisNode.kind === "variables" && forThisNode.rendersBands
+						? await openRenders(docOf, node.nodeKey, forThisNode, byPin)
+						: forThisNode.kind === "template"
+							? {
+									...forThisNode,
+									...(await templateScopeDetailFor(
+										docOf,
+										node.nodeKey,
+										slotName,
+										byPin
+									).then((d) => ({
+										templateScope: d.scope,
+										templateDeclarers: d.declarers,
+										templateUntyped: d.untyped
+									})))
+								}
+							: forThisNode,
 					typeLabel,
 					node.definitionId,
 					String(row.kind ?? "")
@@ -624,13 +810,9 @@ export async function declarations(
 		// the executor's `ctx.scripts.applyText` reads it, so what the panel
 		// writes is what the broker runs. Read from the row like everything
 		// else (F6). What the point accepts is the point's own declaration
-		// (R-11) — read through the SDK's one reader, which folds a row
-		// written before points carried `accepts` to the text-transform kind,
-		// the only kind a point can mean without saying.
+		// (R-11) — read through the SDK's one reader.
 		for (const point of scriptPointsOf({
-			scriptPoints: (row.scriptPoints ?? []) as Array<
-				Record<string, unknown>
-			>
+			scriptPoints: (row.scriptPoints ?? []) as ScriptPointDecl[]
 		})) {
 			const description = i18nText(point.description)
 			out.push({

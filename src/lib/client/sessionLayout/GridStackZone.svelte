@@ -19,8 +19,13 @@
 		 * space left between them. Full-width by default (w = the zone's columns).
 		 */
 		place?: "top" | "bottom" | "fill"
-		/** A required widget (chat) — movable/resizable but not removable. */
-		locked?: boolean
+		/**
+		 * Set on the card the primary floor keeps (./primaryFloor: the last
+		 * placed instance of the genre's primary widget): it offers no remove
+		 * control and shows this note in its place. Movable and resizable like
+		 * any card, into any zone — placement is free (brief 7a).
+		 */
+		floorNote?: string
 		/** Edges the widget anchors to within its cell (toggled in the editor). */
 		anchor?: GsAnchor
 		/** Tab-group membership: cards sharing a group id render as one tab set. */
@@ -28,8 +33,8 @@
 		/**
 		 * Docked in a side column (ruled 2026-09-10). ABSENT MEANS PINNED — the
 		 * only value ever written is the explicit `false`, so an arrangement
-		 * saved before the field existed reads as everything pinned, which is
-		 * exactly what it used to do. See `itemPinned` / `withPins`.
+		 * without the field reads as everything pinned. See `itemPinned` /
+		 * `withPins`.
 		 */
 		pinned?: boolean
 	}
@@ -101,26 +106,6 @@
 		pinned?: boolean
 		/** Flip that state. Absent = this zone cannot be pinned (the middle). */
 		onTogglePin?: () => void
-		/**
-		 * May a REQUIRED widget be dropped into this zone? The middle can (it is
-		 * where the conversation lives); a side zone cannot.
-		 *
-		 * `locked` on a `GsItem` is how required reaches this component, and it
-		 * used to mean only "hide the remove button" — so `messages` was fully
-		 * draggable INTO a side rail. The arrangement then moved it while the
-		 * widget grid went on holding it in the middle, and the session drew the
-		 * conversation twice. The refusal belongs here, at the drop, because
-		 * here is the only place that can say no while the card is still in the
-		 * air: gridstack's `acceptWidgets` callback is handed the dragged
-		 * `.grid-stack-item`, and a required card stamps `data-required` on its
-		 * content (see `cardHtml`). Dragging INSIDE the owning zone is
-		 * untouched — gridstack short-circuits `accept` for a card already in
-		 * the grid — so the card stays as movable and resizable as it ever was.
-		 *
-		 * `commitArrangement` keeps the same rule a second time, for a blob
-		 * written before this existed.
-		 */
-		acceptsRequired?: boolean
 		onChange?: (layout: GsLayout) => void
 		onRemove?: (id: string) => void
 		/**
@@ -150,7 +135,6 @@
 		frame,
 		pinned,
 		onTogglePin,
-		acceptsRequired = true,
 		onChange,
 		onRemove,
 		onDropped,
@@ -327,8 +311,10 @@
 		group = it.group,
 		groupPinned = it.pinned
 	): string {
-		const rm = it.locked
-			? ""
+		// The card the primary floor keeps says why it has no ×, where the ×
+		// would be — a control that is simply missing reads as a bug.
+		const rm = it.floorNote
+			? `<span class="gsc-floor" role="note" title="${esc(it.floorNote)}" aria-label="${esc(it.floorNote)}"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></span>`
 			: `<button class="gsc-btn gsc-x" data-remove="${esc(it.id)}" title="Remove ${esc(it.title)}" aria-label="Remove ${esc(it.title)}">&times;</button>`
 		// Position controls — snap the widget to fill/dock without dragging — then
 		// the anchor-edge cluster (toggle which edges the widget sticks to).
@@ -350,10 +336,7 @@
 		// recover it there (see `dropped`). Absent means pinned, so the only
 		// value worth carrying is the explicit `false`.
 		const pdata = groupPinned === false ? ` data-pinned="false"` : ""
-		// What a side zone's `acceptWidgets` reads to refuse this card in
-		// mid-air (see the prop). `locked` is how required reaches a GsItem.
-		const rdata = it.locked ? ` data-required=""` : ""
-		return `<div class="gsc ${anchorClasses(a)}${gcls}"${gstyle}${gdata}${pdata}${rdata}><span class="gsc-title">${esc(it.title)}</span><span class="gsc-ctrls">${ctrls}${rm}</span></div>`
+		return `<div class="gsc ${anchorClasses(a)}${gcls}"${gstyle}${gdata}${pdata}><span class="gsc-title">${esc(it.title)}</span><span class="gsc-ctrls">${ctrls}${rm}</span></div>`
 	}
 
 	// Whole cells that fit a measured length (partials culled, not drawn).
@@ -445,15 +428,10 @@
 				float: true, // free placement — a card stays where you drop it
 				animate: true,
 				// Accept items dragged in from the OTHER zones (cross-zone drag)
-				// — except a REQUIRED card in a zone that may not hold one (see
-				// the `acceptsRequired` prop). gridstack hands the callback the
-				// dragged `.grid-stack-item`, so the stamp is looked for on it
-				// and inside it; a card already in this grid never reaches here.
-				acceptWidgets: acceptsRequired
-					? true
-					: (el: Element) =>
-							!el.querySelector?.("[data-required]") &&
-							!el.matches?.("[data-required]"),
+				// — every card, the conversation included: placement is free
+				// (brief 7a), and the one rule left, the primary floor, is about
+				// the whole layout rather than any zone.
+				acceptWidgets: true,
 				removable: false,
 				// The drag helper lives on <body> so it isn't clipped by a zone's
 				// bounds and can travel across zones.
@@ -495,8 +473,8 @@
 				group: it.group,
 				pinned: it.pinned
 			})
-			// NB: not gridstack-`locked` — a required widget (chat) is still fully
-			// draggable/resizable; `locked` in GsItem only hides its remove button.
+			// NB: never gridstack-`locked` — the card the floor keeps is still
+			// fully draggable/resizable; `floorNote` only replaces its ×.
 			grid!.addWidget({
 				id: it.id,
 				x: p.x,
@@ -666,7 +644,7 @@
 				if (!node?.el) return
 				const a = act.getAttribute("data-act")
 				// The pin is the ZONE's, not this card's: it moves no cell, so it
-				// is deliberately not a gesture — pinning a rail must not make a
+				// is intentionally not a gesture — pinning a rail must not make a
 				// previewed width's clamp count as an arrangement the user made.
 				if (a === "pin") {
 					onTogglePin?.()
@@ -958,6 +936,18 @@
 	:global(.grid-stack .gsc-x) {
 		opacity: 0.85; /* remove stays visible even without hover */
 		font-size: 1rem;
+	}
+	/* Where the × would be on the card the primary floor keeps: a lock that
+	   says why (its title and label), visible like the × it stands in for. */
+	:global(.grid-stack .gsc-floor) {
+		flex: none;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		inline-size: 1.2rem;
+		block-size: 1.2rem;
+		opacity: 0.85;
+		cursor: help;
 	}
 	:global(.grid-stack .gsc-btn:hover) {
 		background: color-mix(in oklab, black 28%, transparent);

@@ -255,7 +255,7 @@
 <h2>Profile</h2>
 <form onsubmit={saveDisplayName}>
 	<div class="a11y-field">
-		<label for="a11y-settings-display-name">Display Name</label>
+		<label for="a11y-settings-display-name">Display name</label>
 		<input
 			id="a11y-settings-display-name"
 			type="text"
@@ -269,14 +269,14 @@
 		class="a11y-btn a11y-btn-small"
 		disabled={displayNameSaving}
 	>
-		{displayNameSaving ? "Saving…" : "Save Display Name"}
+		{displayNameSaving ? "Saving…" : "Save display name"}
 	</button>
 	{#if displayNameStatus}
 		<p role="status">{displayNameStatus}</p>
 	{/if}
 </form>
 
-<h2>{hasPassphrase ? "Change Passphrase" : "Set a Passphrase"}</h2>
+<h2>{hasPassphrase ? "Change passphrase" : "Set a passphrase"}</h2>
 <form onsubmit={savePassphrase}>
 	{#if passphraseError}
 		<div class="a11y-status a11y-status-error" role="alert">
@@ -286,7 +286,7 @@
 	{#if hasPassphrase}
 		<div class="a11y-field">
 			<label for="a11y-settings-current-passphrase">
-				Current Passphrase
+				Current passphrase
 			</label>
 			<input
 				id="a11y-settings-current-passphrase"
@@ -299,7 +299,7 @@
 		</div>
 	{/if}
 	<div class="a11y-field">
-		<label for="a11y-settings-new-passphrase">New Passphrase</label>
+		<label for="a11y-settings-new-passphrase">New passphrase</label>
 		<input
 			id="a11y-settings-new-passphrase"
 			type="password"
@@ -317,8 +317,8 @@
 		{passphraseSaving
 			? "Saving…"
 			: hasPassphrase
-				? "Change Passphrase"
-				: "Set Passphrase"}
+				? "Change passphrase"
+				: "Set passphrase"}
 	</button>
 	{#if passphraseStatus}
 		<p role="status">{passphraseStatus}</p>
@@ -341,7 +341,7 @@
 		onclick={() => changeFontScale(-1)}
 		disabled={fontScaleIndex === 0}
 	>
-		Decrease Text Size
+		Decrease text size
 	</button>
 	<span>{Math.round(FONT_SCALE_STEPS[fontScaleIndex] * 100)}%</span>
 	<button
@@ -350,7 +350,7 @@
 		onclick={() => changeFontScale(1)}
 		disabled={fontScaleIndex === FONT_SCALE_STEPS.length - 1}
 	>
-		Increase Text Size
+		Increase text size
 	</button>
 </div>
 
@@ -373,7 +373,7 @@
 		class="a11y-btn a11y-btn-secondary"
 		onclick={browseStandardSite}
 	>
-		Browse Standard Site Temporarily
+		Browse standard site temporarily
 	</button>
 	{#if accessibilityModeStore.persisted}
 		<button
@@ -393,5 +393,5 @@
 	onclick={logout}
 	disabled={loggingOut}
 >
-	{loggingOut ? "Logging out…" : "Log Out"}
+	{loggingOut ? "Logging out…" : "Log out"}
 </button>

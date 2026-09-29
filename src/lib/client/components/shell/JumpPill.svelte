@@ -74,7 +74,7 @@
 	<button
 		type="button"
 		bind:offsetWidth={pillWidth}
-		class="bg-surface-950/90 border-surface-800 text-surface-400 hover:text-surface-50 hover:border-surface-700 focus-visible:outline-primary-500 fixed top-2 right-4 z-[44] flex h-[34px] w-[34px] items-center justify-center gap-2 rounded-lg border text-sm backdrop-blur transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 lg:w-auto lg:justify-start lg:px-2.5"
+		class="bg-surface-50/90 dark:bg-surface-950/90 border-surface-200-800 text-surface-600-400 hover:text-surface-950-50 hover:border-surface-300-700 focus-visible:outline-primary-500 fixed top-2 right-4 z-[44] flex h-[34px] w-[34px] items-center justify-center gap-2 rounded-lg border text-sm backdrop-blur transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 lg:w-auto lg:justify-start lg:px-2.5"
 		title="{label} ({hint})"
 		aria-label="{label} ({hint})"
 		aria-keyshortcuts={isMac ? "Meta+K" : "Control+K"}

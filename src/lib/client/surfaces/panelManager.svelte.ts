@@ -45,12 +45,15 @@ export interface WitnessedMessage {
 	generationOutcome?: string | null
 }
 
-/** The synthetic primary when a mode declares none — the standard chat log. */
+/**
+ * The synthetic primary when a mode declares none — the standard chat log,
+ * core's conversation (the layout mounts it itself, as core's remote).
+ */
 const DEFAULT_PRIMARY: ModePanel = {
 	id: "conversation",
 	title: "Conversation",
 	role: "primary",
-	surface: { kind: "native", component: "conversation" },
+	surface: { kind: "remote", owner: "core", component: "messages" },
 	defaultActive: true
 }
 
@@ -73,6 +76,7 @@ function toInstance(p: ModePanel, layout?: LayoutBlob): PanelInstance {
 		surface: p.surface,
 		src: p.src,
 		...(p.grants?.length ? { grants: p.grants } : {}),
+		...(p.reads ? { reads: p.reads } : {}),
 		channels: p.channels ?? [],
 		...(p.settings
 			? { settings: p.settings as PanelInstance["settings"] }
@@ -239,9 +243,15 @@ export class SurfaceManager implements WidgetEventSource {
 		this.#schedulePersist()
 	}
 
+	/**
+	 * Deactivate a panel its declaration lets close. The role does not decide
+	 * it: the layout keeps its last primary instance by never offering to
+	 * remove it (the primary floor, sessionLayout/primaryFloor), and a primary
+	 * stays drawn wherever it is placed whatever `active` says.
+	 */
 	close(id: string) {
 		const p = this.#find(id)
-		if (!p || p.role === "primary" || !p.layout.closable) return
+		if (!p || !p.layout.closable) return
 		p.active = false
 		if (this.drawerOpenId === id) this.drawerOpenId = null
 		this.#schedulePersist()
@@ -343,8 +353,29 @@ export class SurfaceManager implements WidgetEventSource {
 		this.#emit({ kind: "event:recorded", event: e.event, payload: e.payload, at: e.at })
 	}
 
+	/**
+	 * A turn ranked this session's lore (R81): the page hands over the
+	 * server's `sessions:loreRanked` push and every subscriber hears
+	 * `lore:ranked`. Who of them may pass it on to its widget is each
+	 * delivery's to ask (`widgetEventHeard`: core's, or a plugin's granted
+	 * `lore`) — the fan-out itself stays one.
+	 */
+	announceLoreRanked() {
+		this.#emit({ kind: "lore:ranked" })
+	}
+
+	/**
+	 * 🚧 A lore entry's marks changed — the viewer's own `entries:setMarks`
+	 * reply, from any tab or widget: every subscriber hears `lore:marked`,
+	 * scoped as `lore:ranked` is, and a lore reader showing that entry asks
+	 * again.
+	 */
+	announceLoreMarked(entryId: number) {
+		this.#emit({ kind: "lore:marked", entryId })
+	}
+
 	/* ── the session-level widget event source (PLAN 25) ──────────────────
-	 * Every widget's own bus (`WidgetHost` for a native one, `PluginFrame` for
+	 * Every widget's wire (`ComponentMount` for a remote one, `PluginFrame` for
 	 * a frame) fans out from here and filters to its declared channels. The
 	 * manager is where these are born because it is already the one thing that
 	 * sees session-wide activity — the page hands it every arriving channel —

@@ -40,8 +40,10 @@ import { buildSystemSettingsGet } from "./systemSettings"
 import { S, type CapabilityId } from "@serene-pub/sdk"
 import {
 	aggregateCombos,
+	compareCombos,
 	type RegistryDefinitionRow
 } from "$lib/shared/capabilities/combos"
+import { SECTION_STAR_CAPABILITIES } from "$lib/shared/constants/connectionSections"
 import { samplingShapeForCapability } from "$lib/shared/capabilities/samplingShape"
 import {
 	judgeAgainst,
@@ -86,7 +88,7 @@ function requireAdmin(
  * `removed` — unpublished by this build. A default for a capability only such a
  * node demands is a default for nothing, on a screen that would then list it.
  */
-async function combosFor(database: typeof db) {
+export async function combosFor(database: typeof db) {
 	const rows = (await database
 		.select({
 			definitionId: schema.pipelineDefinitionRegistry.definitionId,
@@ -100,7 +102,34 @@ async function combosFor(database: typeof db) {
 				"removed"
 			])
 		)) as RegistryDefinitionRow[]
-	return aggregateCombos(rows)
+	const combos = aggregateCombos(rows)
+	/**
+	 * Plus every capability a Connections section's star registers.
+	 *
+	 * `text->entities` is demanded by no node definition and declared by no
+	 * manifest entry — the NER lane reads its star directly — so the union
+	 * above never lists it, and Defaults could neither show nor set the one
+	 * job the entity lane runs on. A star the Connections view can press is a
+	 * default this screen must be able to show; the list is closed and
+	 * already shared, so nothing here is a hardcoded capability. `servable`
+	 * is set because a section exists only for connections this build can
+	 * create — it is wording, never a gate (see `ComboRow`).
+	 */
+	for (const id of SECTION_STAR_CAPABILITIES) {
+		const existing = combos.find((c) => c.id === id)
+		if (existing) {
+			existing.servable = true
+			continue
+		}
+		combos.push({
+			id,
+			demanded: false,
+			servable: true,
+			requiredBy: [],
+			optionalFor: []
+		})
+	}
+	return combos.sort((a, b) => compareCombos(a.id, b.id))
 }
 
 /**

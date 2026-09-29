@@ -77,7 +77,7 @@ export interface RunProgress {
 	 * stopped it.
 	 *
 	 * Present only on the terminal frame, from the two callers that build
-	 * one today (the reply road, an action's `triggerFunction` run). A
+	 * one today (the reply road, an action's `sessions:fireAction` run). A
 	 * future `pipelines:progress` emitter that has not set it yet still
 	 * reaches a sane reading — a client falls back to `done` + `error` +
 	 * `cancelled` as three flags when this is absent. Image generation is

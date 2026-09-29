@@ -37,8 +37,10 @@ import {
 	declareInterest,
 	requestWithInterest
 } from "$lib/client/sockets/interest.svelte"
+import { untrack } from "svelte"
 import { typedSocketOrNull } from "$lib/client/sockets/typedSocket"
 import { resolveStyle } from "$lib/shared/widgets/resolve"
+import { widgetOfInstance } from "$lib/shared/widgets/instanceId"
 import {
 	legacyPackPin,
 	type LegacyStylePacks
@@ -998,24 +1000,37 @@ export function setWidgetStylePins(next: unknown): void {
 				out[widgetId] = { id, slug }
 		}
 	}
-	pins = out
-	// The last thing a new style waits for: the row can be in the cache a beat
-	// before the pin that points this widget at it comes back round.
-	checkSaveLanded()
+	// The page calls this from an EFFECT, so nothing below may be read
+	// tracked: asking the held save whether it landed reads `pins`, `rows`
+	// and `pendingSave`, and a tracked read of the pins just written re-ran
+	// that effect on its own write until Svelte killed it
+	// (`effect_update_depth_exceeded`, 2026-09-28) — the new style's editor
+	// stuck on "Saving…", and no pin reached the store again until a reload.
+	untrack(() => {
+		pins = out
+		// The last thing a new style waits for: the row can be in the cache a
+		// beat before the pin that points this widget at it comes back round.
+		checkSaveLanded()
+	})
 }
 
 /**
  * The style a widget should wear right now: its pin if it still reconciles,
  * else the widget's default — the quiet degrade `resolveStyle` is built for.
+ *
+ * `widgetId` is the placed id (a **widget instance id**, S1): a copy such as
+ * `messages#sanctum` keeps its own pin, and resolves among its WIDGET's style
+ * rows — so an unpinned copy wears what the widget itself would.
  */
 export function resolveWidgetStyle(
 	widgetId: string
 ): WidgetStyleRow | undefined {
+	const widget = widgetOfInstance(widgetId)
 	// The pin first, then the legacy pack choice DERIVED as one — see
 	// `legacyPacks` above. Both then go through the same `resolveStyle`, so a
 	// legacy id that no longer reconciles degrades exactly as a pin does.
-	const pin = pins[widgetId] ?? legacyPackPin(widgetId, legacyPacks, rows)
-	return resolveStyle(widgetId, pin, rows)
+	const pin = pins[widgetId] ?? legacyPackPin(widget, legacyPacks, rows)
+	return resolveStyle(widget, pin, rows)
 }
 
 /**
@@ -1068,11 +1083,17 @@ export function setWidgetStylePin(
  * still be repainting a widget with CSS nobody can see or cancel.
  */
 export function setWidgetStyleMode(on: boolean): void {
-	styleMode = on
-	if (on) return
-	armed = nextArmed(armed, { type: "exit" })
-	preview = null
-	dropSaveHold()
+	// Called from SessionLayout's effect: untracked, or that effect would
+	// depend on `armed` and re-run whenever the settings modal arms a widget
+	// OUTSIDE style mode (the phone editor opens the modal with no mode) —
+	// and the re-run's "exit" would disarm it and drop its live preview.
+	untrack(() => {
+		styleMode = on
+		if (on) return
+		armed = nextArmed(armed, { type: "exit" })
+		preview = null
+		dropSaveHold()
+	})
 }
 
 /** The css/vars a widget renders now — its draft if one is open, else its row. */

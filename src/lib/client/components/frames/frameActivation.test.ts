@@ -18,19 +18,22 @@ import {
 const NOW = 1_000_000
 
 describe("which verbs need a person behind them", () => {
-	it("the six that change a message; not stop, not branch, not a contributed action", () => {
+	it("the six that change a message and the turn controls that start a turn; not stop, not branch, not a contributed action", () => {
 		expect([...STATE_CHANGING_CORE_VERBS].sort()).toEqual(
-			["continue", "delete", "edit", "hide", "retry", "swipe"].sort()
+			["advance", "delete", "edit", "extend", "hide", "narrate", "pick", "retry", "swipe"].sort()
 		)
 		for (const key of STATE_CHANGING_CORE_VERBS) expect(needsActivation(key)).toBe(true)
 		expect(needsActivation("stop")).toBe(false)
 		expect(needsActivation("branch")).toBe(false)
 	})
 
-	it("retry and continue are confirm-gated from a frame (both spend tokens); delete is not listed here because the host's modal already asks", () => {
-		expect([...CONFIRMED_FRAME_VERBS].sort()).toEqual(["continue", "retry"])
+	it("retry, extend, advance and narrate are confirm-gated from a frame (all spend tokens); delete and pick are not listed here because the host's modal already asks", () => {
+		expect([...CONFIRMED_FRAME_VERBS].sort()).toEqual(["advance", "extend", "narrate", "retry"])
+		expect(needsConfirmation("narrate")).toBe(true)
+		expect(needsConfirmation("pick")).toBe(false)
+		expect(needsConfirmation("advance")).toBe(true)
 		expect(needsConfirmation("retry")).toBe(true)
-		expect(needsConfirmation("continue")).toBe(true)
+		expect(needsConfirmation("extend")).toBe(true)
 		expect(needsConfirmation("delete")).toBe(false)
 		expect(needsConfirmation("hide")).toBe(false)
 	})
@@ -142,12 +145,12 @@ describe("the verdict on a frame's invoke", () => {
 		)
 	})
 
-	it("admits continue on a recent activation only with a question to put to the person first", () => {
-		const v = frameInvokeVerdict({ specSlug: "core", key: "continue" }, fresh, NOW)
+	it("admits extend on a recent activation only with a question to put to the person first", () => {
+		const v = frameInvokeVerdict({ specSlug: "core", key: "extend" }, fresh, NOW)
 		expect(v.allowed).toBe(true)
 		if (v.allowed) expect(v.confirm).toMatch(/spends tokens/)
 		expect(
-			frameInvokeVerdict({ specSlug: "core", key: "continue" }, stale, NOW).allowed
+			frameInvokeVerdict({ specSlug: "core", key: "extend" }, stale, NOW).allowed
 		).toBe(false)
 	})
 

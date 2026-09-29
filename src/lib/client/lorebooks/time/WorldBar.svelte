@@ -150,7 +150,7 @@
 								</span>
 								{#if who.aspect}
 									<span
-										class="text-surface-600-400 block truncate text-[0.68rem]"
+										class="text-surface-600-400 block truncate text-[11px]"
 									>
 										{who.aspect}
 									</span>
@@ -160,7 +160,7 @@
 								<!-- Two of them at one moment: the case a single
 								     resolved row cannot express. -->
 								<span
-									class="chip preset-tonal-primary shrink-0 text-[0.62rem]"
+									class="chip preset-tonal-primary shrink-0 text-[11px]"
 								>
 									also here
 								</span>

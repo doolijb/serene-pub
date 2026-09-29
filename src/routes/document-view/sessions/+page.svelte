@@ -64,7 +64,7 @@
 	<ul class="a11y-list">
 		{#each sessions as session (session.id)}
 			<li class="a11y-list-item">
-				<h2>{session.name || "Unnamed Session"}</h2>
+				<h2>{session.name || "Unnamed session"}</h2>
 				<p>{participantSummary(session)}</p>
 				{#if session.isGuest}
 					<p class="a11y-hint">You're a guest in this session.</p>
@@ -91,7 +91,7 @@
 							onclick={() =>
 								deleteSession(
 									session.id!,
-									session.name || "Unnamed Session"
+									session.name || "Unnamed session"
 								)}
 						>
 							Delete

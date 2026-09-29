@@ -1,0 +1,1 @@
+ALTER TABLE "connection_models" ADD COLUMN "modality" text;

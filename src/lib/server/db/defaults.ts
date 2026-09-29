@@ -21,6 +21,9 @@ import {
 } from "$lib/server/utils/graphPrompts"
 import { backfillMissingBindingNames } from "$lib/server/utils/characterBindingSync"
 import { backfillRelationshipHistoryEntries } from "$lib/server/utils/graphBackfill"
+import { mergeOllamaEmbeddingsType } from "$lib/server/connections/ollamaMultiModality"
+import { foldKoboldCppManagedImage } from "$lib/server/connections/koboldCppManagedFold"
+import { refreshConnectionCapabilityCaches } from "$lib/server/connections/resolve"
 
 export async function sync() {
 	console.log("Syncing database defaults...")
@@ -1034,6 +1037,50 @@ export async function sync() {
 		await backfillMissingBindingNames(db)
 	} catch (error) {
 		console.error("Error backfilling lorebook binding names:", error)
+	}
+
+	try {
+		// One Ollama connection per host serves every modality it has (owner
+		// ruling 2026-09-25): old `ollama-embeddings` rows are renamed onto
+		// `ollama` in place, and every Ollama row's capability cache learns it
+		// can embed. Here rather than in a migration because the cache is
+		// derived from the manifest in TypeScript — and the 2026-09-06 ruling
+		// puts anything that must persist through this sync. Idempotent; a
+		// settled install does no writes. `db` passed in, like the two above,
+		// for the packaged-build reason given there.
+		await mergeOllamaEmbeddingsType(db)
+	} catch (error) {
+		console.error("Error merging Ollama embeddings connections:", error)
+	}
+
+	try {
+		// Managed KoboldCPP image connections fold into THE managed endpoint —
+		// one process, one row that chats and draws. References are repointed
+		// before anything is deleted (see the module header). BEFORE the cache
+		// refresh, so a renamed row resolves as the type it now is. `db`
+		// passed in for the packaged-build reason given above.
+		const { folded, renamed } = await foldKoboldCppManagedImage(db)
+		if (folded || renamed)
+			console.log(
+				`[connections] Folded ${folded} managed KoboldCPP image connection(s) into the managed endpoint; renamed ${renamed} in place.`
+			)
+	} catch (error) {
+		console.error("Error folding managed KoboldCPP image connections:", error)
+	}
+
+	try {
+		// Every connection's cached capabilities, rebuilt from the CURRENT
+		// manifest. Nothing did this on load before, so a capability added to
+		// the manifest never reached an existing row in the picker. AFTER the
+		// Ollama rename, so a renamed row resolves as the type it now is.
+		// Idempotent; a settled install writes nothing.
+		const { refreshed } = await refreshConnectionCapabilityCaches(db)
+		if (refreshed)
+			console.log(
+				`[connections] Refreshed ${refreshed} connection capability cache(s) from the manifest.`
+			)
+	} catch (error) {
+		console.error("Error refreshing connection capability caches:", error)
 	}
 
 	try {

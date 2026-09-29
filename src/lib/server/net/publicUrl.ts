@@ -3,7 +3,7 @@
  * request HTTPS?"
  *
  * Before this module those two questions had four independent implementations
- * — the socket endpoint's protocol guess, the cookie Secure flag, SvelteKit's
+ * — the (since retired) socket endpoint's protocol guess, the cookie Secure flag, SvelteKit's
  * own event.url, and the HSTS header — each reading different environment
  * variables and disagreeing in different deployments. `PUBLIC_URL` replaces
  * the pile of fragments (SOCKETS_HTTPS_HOSTS + SOCKETS_HTTP_MODE + HOST_HEADER
@@ -148,32 +148,6 @@ export function resolveRequestPublicHost(event: PublicUrlRequestLike): string {
 	return (event.url?.hostname ?? "localhost").toLowerCase()
 }
 
-export type PublicOriginSource = "public-url" | "detected"
-
-/**
- * The origin a browser on the other end of this request actually sees.
- *
- * `PUBLIC_URL` applies only when the request arrived on ITS hostname. A
- * request to http://localhost:3000 while PUBLIC_URL names a tunnel domain is
- * genuinely not that public URL, and treating it as one is precisely the bug
- * that made the old global override unusable on any install reachable both
- * ways.
- */
-export function resolveRequestPublicOrigin(event: PublicUrlRequestLike): {
-	origin: string
-	source: PublicOriginSource
-} {
-	const host = resolveRequestPublicHost(event)
-	const configured = getConfiguredPublicUrl()
-	if (configured && configured.hostname.toLowerCase() === host) {
-		return { origin: configured.origin, source: "public-url" }
-	}
-	const scheme = isRequestHttps(event) ? "https" : "http"
-	const hostWithPort =
-		event.request?.headers?.get("host") || event.url?.host || host
-	return { origin: `${scheme}://${hostWithPort}`, source: "detected" }
-}
-
 /**
  * Whether this request reached the client over HTTPS.
  *
@@ -224,63 +198,6 @@ export function isRequestHttps(event: PublicUrlRequestLike): boolean {
 	}
 
 	return false
-}
-
-/** The protocol the socket server BINDS with (as opposed to the protocol a
- * browser should use to reach it). Defaults to http; see the note in
- * isRequestHttps about why the advertised protocol is computed separately. */
-export function getSocketsHttpMode() {
-	const mode = process.env.SOCKETS_HTTP_MODE
-	if (!mode) return "http"
-	const normalized = mode.trim().toLowerCase()
-	if (normalized === "https" || normalized === "http") return normalized
-	return "http"
-}
-
-export function getSocketsPort() {
-	return process.env.SOCKETS_PORT || "3001"
-}
-
-/**
- * The URL the browser should open its socket connection to.
- *
- * Order:
- *  1. An explicit full override (SOCKETS_ENDPOINT, or its legacy
- *     PUBLIC_SOCKETS_ENDPOINT spelling). Global — same answer for every
- *     request — which is why it is a last resort rather than the main path.
- *  2. A matching PUBLIC_URL: return that origin with NO port appended. This
- *     is the same-origin topology every hosting recipe recommends, where the
- *     proxy routes /socket.io/ to SOCKETS_PORT on the public port. Appending
- *     :3001 there produced a URL the proxy cannot serve at all — Cloudflare,
- *     for instance, proxies neither arbitrary ports nor tunnels them — and was
- *     the concrete failure that motivated this whole module.
- *  3. Otherwise auto-detect per request, exactly as before.
- *
- * The separate-public-port topology (socket server exposed on its own port)
- * keeps case 1 as its escape hatch, so it needs no new variable.
- */
-export function getPublicSocketsEndpoint(event?: PublicUrlRequestLike): string {
-	const configured = (
-		process.env.SOCKETS_ENDPOINT ||
-		process.env.PUBLIC_SOCKETS_ENDPOINT ||
-		""
-	).trim()
-	if (configured) return configured
-
-	if (!event) {
-		// No request context (startup banner, describe-config). Report what a
-		// request to the configured public host would get.
-		const url = getConfiguredPublicUrl()
-		if (url) return url.origin
-		return `${getSocketsHttpMode()}://localhost:${getSocketsPort()}`
-	}
-
-	const { origin, source } = resolveRequestPublicOrigin(event)
-	if (source === "public-url") return origin
-
-	const host = resolveRequestPublicHost(event)
-	const scheme = isRequestHttps(event) ? "https" : "http"
-	return `${scheme}://${host}:${getSocketsPort()}`
 }
 
 /** One-line summary for the startup banner. */

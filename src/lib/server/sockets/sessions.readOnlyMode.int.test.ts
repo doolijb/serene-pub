@@ -52,7 +52,7 @@ describe("a session whose mode is not registered", () => {
 		const { sessionMessagesSendPersonaMessageHandler } = await import(
 			"./sessions"
 		)
-		const { sessionsTriggerFunctionHandler } = await import("./sessions")
+		const { sessionsFireActionHandler } = await import("./sessions")
 		const schema = await import("$lib/server/db/schema")
 		const { createTestUser } = await import("$lib/server/utils/testDb")
 
@@ -73,7 +73,7 @@ describe("a session whose mode is not registered", () => {
 		)
 		expect(sent.error).toContain("read-only")
 
-		const fired = await sessionsTriggerFunctionHandler.handler(
+		const fired = await sessionsFireActionHandler.handler(
 			fakeSocket(user.id),
 			{ sessionId: session.id, key: "anything" },
 			noopEmit

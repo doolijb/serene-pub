@@ -109,7 +109,12 @@ describe("state is the resolver's answer", () => {
 		const doc = await publishedValues(db, w.session.id)
 		expect(doc.state.world).toEqual({})
 		expect(doc.state.slots).toEqual([])
-		expect(doc.session.fields).toEqual({})
+		// Chat's own fields, at their declared defaults (B16x) — no world.
+		expect(doc.session.fields).toEqual({
+			autoAdvance: "round",
+			characterDetail: "full",
+			turnMode: "rules"
+		})
 		expect(doc.session.generating).toBe(false)
 		expect(doc.item).toBeUndefined()
 	}, 60_000)
@@ -148,14 +153,21 @@ describe("session.generating", () => {
 })
 
 describe("session.fields", () => {
-	it("is the stored value of a declared key and nothing else", async () => {
+	it("is the stored value of a declared key, else its default, and nothing else", async () => {
 		const w = await session(ADVENTURE_GENRE_ID)
 		await db
 			.update(schema.sessions)
 			.set({ genreFields: { tone: "grim", smuggled: "no" } })
 			.where(eq(schema.sessions.id, w.session.id))
 		const doc = await publishedValues(db, w.session.id)
-		expect(doc.session.fields).toEqual({ tone: "grim" })
+		// Stored wins; unstored declared keys resolve to their defaults
+		// (B16x); the undeclared key never arrives.
+		expect(doc.session.fields).toEqual({
+			tone: "grim",
+			difficulty: "normal",
+			trustNarrator: false,
+			characterDetail: "full"
+		})
 	}, 60_000)
 })
 
@@ -180,7 +192,11 @@ describe("item", () => {
 			greeting: false,
 			// Which channel the row is on (R-C) — `main` for a chat, which is
 			// every row a genre with one channel ever writes.
-			channel: "main"
+			channel: "main",
+			// Who spoke it (lair re-plan R11): a narrator row is nobody in
+			// particular, and no character's line.
+			speaker: null,
+			characterLine: false
 		})
 		const nw = await itemValuesFor(db, w.session.id, newer.id, {
 			userId: stranger.id
@@ -257,7 +273,24 @@ describe("item", () => {
 			hasSwipes: true,
 			greeting: false,
 			// A row with no channel reads as `main`, the column's own default.
-			channel: "main"
+			channel: "main",
+			speaker: null,
+			characterLine: false
 		})
+		// Who spoke (R11): a character's reply is theirs and a character's
+		// line; an envoy's line is the envoy's; a persona line is the
+		// person's, voiced as that character.
+		expect(
+			itemValuesOf({ id: 4, role: "assistant", characterId: 7 }, { isNewest: false, mine: false })
+		).toMatchObject({ speaker: "character:7", characterLine: true })
+		expect(
+			itemValuesOf(
+				{ id: 5, role: "assistant", metadata: { speaker: "envoy:castellan" } },
+				{ isNewest: false, mine: false }
+			)
+		).toMatchObject({ speaker: "envoy:castellan", characterLine: false })
+		expect(
+			itemValuesOf({ id: 6, role: "user", personaId: 9 }, { isNewest: false, mine: true })
+		).toMatchObject({ speaker: "character:9", characterLine: false })
 	})
 })

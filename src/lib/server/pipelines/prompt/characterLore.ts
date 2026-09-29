@@ -78,11 +78,11 @@ export function populateLorebookEntryBindings<T extends LorebookEntry>(
 }
 
 /**
- * Character-lore privacy rule, shared by KeywordInfillEngine and
- * RagInfillEngine: a characterLoreEntry bound to a specific character is
+ * Character-lore privacy rule, shared by the 0.5 keyword path and
+ * the 0.5 RAG path: a characterLoreEntry bound to a specific character is
  * that character's own private self-knowledge — visible only when
- * generating as that exact character, regardless of sessionCharacters.visibility
- * (HIDDEN/MINIMAL only governs description-block display, not lore) or
+ * generating as that exact character, regardless of the session's
+ * `characterDetail` (which governs the card, not lore) or
  * whether that character is even attached to this session. World lore has no
  * such binding and is never gated by this function.
  *

@@ -565,14 +565,14 @@
 				class="bg-surface-200-800/90 pointer-events-auto flex items-center gap-1 rounded px-2 py-1 backdrop-blur-sm"
 			>
 				<Icons.Crosshair size={12} class="text-primary-400 shrink-0" />
-				<span class="text-surface-200 max-w-36 truncate text-xs">
+				<span class="text-surface-800-200 max-w-36 truncate text-xs">
 					{perspectiveNodeName}
 				</span>
 				<span class="text-surface-700-300 ml-0.5 text-xs">
 					· direct
 				</span>
 				<button
-					class="text-surface-700-300 hover:text-surface-200 ml-1 p-1.5"
+					class="text-surface-700-300 hover:text-surface-800-200 ml-1 p-1.5"
 					onclick={clearPerspective}
 					title="Clear perspective (or click background)"
 					aria-label="Clear perspective"
@@ -586,7 +586,7 @@
 
 		<!-- Fullscreen toggle -->
 		<button
-			class="bg-surface-200-800/80 text-surface-400 hover:text-surface-200 pointer-events-auto rounded p-1.5 backdrop-blur-sm"
+			class="bg-surface-200-800/80 text-surface-600-400 hover:text-surface-800-200 pointer-events-auto rounded p-1.5 backdrop-blur-sm"
 			onclick={toggleFullscreen}
 			title={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
 			aria-label={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
@@ -849,7 +849,7 @@
 
 	{#if nodes.length === 0}
 		<div
-			class="text-surface-400 absolute inset-0 flex items-center justify-center text-sm"
+			class="text-surface-600-400 absolute inset-0 flex items-center justify-center text-sm"
 		>
 			No nodes in graph yet.
 		</div>
@@ -858,7 +858,7 @@
 	<!-- ── Bottom-left: zoom level + reset ─────────────────────────────── -->
 	<div class="absolute bottom-2 left-2 flex items-center gap-1">
 		<button
-			class="bg-surface-200-800/80 text-surface-400 hover:text-surface-200 rounded px-2 py-1 text-xs backdrop-blur-sm"
+			class="bg-surface-200-800/80 text-surface-600-400 hover:text-surface-800-200 rounded px-2 py-1 text-xs backdrop-blur-sm"
 			onclick={resetView}
 			title="Reset zoom and pan (click)"
 		>
@@ -869,7 +869,7 @@
 	<!-- ── Bottom-right: legend ────────────────────────────────────────── -->
 	<details class="absolute right-2 bottom-2 text-xs" style="bottom: 2.5rem">
 		<summary
-			class="bg-surface-200-800/80 text-surface-400 cursor-pointer rounded px-2 py-1 backdrop-blur-sm select-none"
+			class="bg-surface-200-800/80 text-surface-600-400 cursor-pointer rounded px-2 py-1 backdrop-blur-sm select-none"
 		>
 			Legend
 		</summary>
@@ -879,8 +879,8 @@
 		>
 			<div class="space-y-1">
 				<p
-					class="text-surface-700-300 font-semibold tracking-wide uppercase"
-					style="font-size:9px"
+					class="text-surface-600-400 font-semibold"
+					style="font-size:11px"
 				>
 					Node state
 				</p>
@@ -915,7 +915,7 @@
 								/>
 							{/if}
 						</svg>
-						<span class="text-surface-300 capitalize">{state}</span>
+						<span class="text-surface-800-200 capitalize">{state}</span>
 					</div>
 				{/each}
 				<div class="mt-0.5 flex items-center gap-1.5">
@@ -937,7 +937,7 @@
 							opacity="0.9"
 						/>
 					</svg>
-					<span class="text-surface-300">legendary</span>
+					<span class="text-surface-800-200">legendary</span>
 				</div>
 				<div class="mt-0.5 flex items-center gap-1.5">
 					<svg width="16" height="16" class="shrink-0">
@@ -951,13 +951,13 @@
 							opacity="0.9"
 						/>
 					</svg>
-					<span class="text-surface-300">entry</span>
+					<span class="text-surface-800-200">entry</span>
 				</div>
 			</div>
 			<div class="border-surface-600 space-y-1 border-t pt-2">
 				<p
-					class="text-surface-700-300 font-semibold tracking-wide uppercase"
-					style="font-size:9px"
+					class="text-surface-600-400 font-semibold"
+					style="font-size:11px"
 				>
 					Edge status
 				</p>
@@ -974,7 +974,7 @@
 								stroke-dasharray={dash}
 							/>
 						</svg>
-						<span class="text-surface-300">{status}</span>
+						<span class="text-surface-800-200">{status}</span>
 					</div>
 				{/each}
 			</div>

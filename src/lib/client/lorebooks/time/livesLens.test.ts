@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
-import { buildAxis, overlaps, ratioOf } from "./livesLens"
+import { buildAxis, overlaps, pinMarksOf, ratioOf } from "./livesLens"
 import type { Presence } from "$lib/shared/lorebooks/presence"
+import { lineOf } from "$lib/shared/lorebooks/lineReading"
 
 const p = (
 	over: Partial<Presence> & {
@@ -148,6 +149,29 @@ describe("the axis", () => {
 		).toHaveLength(2)
 	})
 
+	it("reads through the whole line: parent's presences before the fork cut, main's after it cut (ruling 5)", () => {
+		const line = lineOf(9, [
+			{ id: 7, forkYear: 510, forkedFromBranchId: null },
+			{ id: 9, forkYear: 530, forkedFromBranchId: 7 }
+		] as any)
+		const presences = [
+			// main, before the first fork: every line reads it
+			p({ id: 1, personalPosition: 20, fromYear: 500 }),
+			// main, after branch 7 forked at 510: cut from 7 and from 9
+			p({ id: 2, personalPosition: 30, fromYear: 520 }),
+			// the parent line, before 9 forked from it at 530
+			p({ id: 3, personalPosition: 40, fromYear: 525, branchId: 7 }),
+			// the parent line, after 9 forked: cut from 9
+			p({ id: 4, personalPosition: 50, fromYear: 540, branchId: 7 }),
+			// a sibling line
+			p({ id: 5, personalPosition: 60, fromYear: 505, branchId: 8 })
+		]
+		const axis = buildAxis(cast, presences, [{ year: 500 }, { year: 600 }], {
+			line
+		})
+		expect(axis.lanes[0].runs.map((r) => r.presenceId)).toEqual([1, 3])
+	})
+
 	it("orders a lane's runs by when they begin", () => {
 		const axis = buildAxis(
 			cast,
@@ -173,5 +197,33 @@ describe("the axis", () => {
 	it("a book with nothing in it draws nothing and does not divide by zero", () => {
 		const axis = buildAxis([], [], [])
 		expect(axis).toMatchObject({ min: 0, max: 0, lanes: [], cursor: null })
+	})
+})
+
+describe("pinMarksOf", () => {
+	const axis = { min: 1000000, max: 2000000 }
+	it("two history entries on one date are one diamond with a unique key", () => {
+		const marks = pinMarksOf(
+			[
+				{ year: 150, month: 3, day: 2 },
+				{ year: 150, month: 3, day: 2 },
+				{ year: 180, month: null, day: null }
+			],
+			axis
+		)
+		expect(marks).toHaveLength(2)
+		expect(new Set(marks.map((m) => m.key)).size).toBe(2)
+	})
+	it("places by date, as a percentage", () => {
+		const [mark] = pinMarksOf([{ year: 150, month: null, day: null }], axis)
+		expect(mark.left).toBe(50)
+	})
+	it("a zero span draws no diamonds", () => {
+		expect(
+			pinMarksOf([{ year: 1, month: null, day: null }], {
+				min: 5,
+				max: 5
+			})
+		).toEqual([])
 	})
 })

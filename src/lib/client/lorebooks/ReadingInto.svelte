@@ -1,7 +1,9 @@
 <script lang="ts">
 	import * as Icons from "@lucide/svelte"
 	import { goto } from "$app/navigation"
-	import { readingIntoSentence } from "./scopes"
+	import type { StoryDate } from "$lib/shared/lorebooks/storyDate"
+	import { formatDate } from "./sections/historyDates"
+	import { readingIntoSentence, sessionMomentKey } from "./scopes"
 
 	/**
 	 * The session reading this book, at the top of the rail.
@@ -12,10 +14,11 @@
 	 * an author actually has open — *is what I am looking at what the model
 	 * sees?* — and because branches made the answer able to be **no**.
 	 *
-	 * ⚠ **The session is always at now, on its own line.** Retrieval does not
-	 * read as-of; the Moment bar is the author's tool. So this block is also
-	 * the one place that says when your reading and the session's have parted,
-	 * and the one click that puts them back together.
+	 * ⚠ **The session reads its own line, at its own story clock** — or at
+	 * now when it follows the line's present (owner ruling 3, 2026-09-28).
+	 * The Moment bar is the author's tool, not the session's. So this block
+	 * is also the one place that says when your reading and the session's
+	 * have parted, and the one click that puts them back together.
 	 *
 	 * ⚠ Drawn only when a session is reading this book. With none, the rail
 	 * keeps its quiet footer line — an empty block with a heading would teach
@@ -30,10 +33,15 @@
 		sessionBranchId: number | null
 		/** The line the READER is on. NULL = main. */
 		branchId: number | null
-		/** The moment the reader is at. Absent is now, where the session is. */
+		/** The moment the reader is at. Absent is now. */
 		moment?: string
+		/**
+		 * The session's story clock, or null when it follows the line's
+		 * present (it then reads at now).
+		 */
+		sessionStoryClock?: StoryDate | null
 		branches: readonly Sockets.Amendments.Branch[]
-		/** Put the reader where the session is: its line, and now. */
+		/** Put the reader where the session is: its line, at its clock. */
 		onMatch: () => void
 	}
 
@@ -44,6 +52,7 @@
 		sessionBranchId,
 		branchId,
 		moment,
+		sessionStoryClock = null,
 		branches,
 		onMatch
 	}: Props = $props()
@@ -55,9 +64,18 @@
 
 	let sessionLine = $derived(nameOf(sessionBranchId))
 	/** Whether the reader is somewhere the session is not. */
-	let parted = $derived(!!moment || branchId !== sessionBranchId)
+	let parted = $derived(
+		(moment ?? undefined) !== sessionMomentKey(sessionStoryClock) ||
+			branchId !== sessionBranchId
+	)
 
-	let sentence = $derived(readingIntoSentence(sessionLine, reached))
+	let sentence = $derived(
+		readingIntoSentence(
+			sessionLine,
+			reached,
+			sessionStoryClock ? formatDate(sessionStoryClock) : null
+		)
+	)
 </script>
 
 <section

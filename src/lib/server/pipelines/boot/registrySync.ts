@@ -40,11 +40,7 @@
 
 import { eq, and, isNull } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
-import {
-	listGenreActions,
-	promoteIncludedActions,
-	type GenreAction
-} from "$lib/server/pipelines/entities/sessionGenres"
+import { parseActionIdentity } from "$lib/shared/actions/identity"
 import {
 	snapshotRegistry,
 	definitionContract,
@@ -60,6 +56,8 @@ import {
 	type TemplateSeed
 } from "@serene-pub/sdk"
 import { poolKeyFor } from "$lib/shared/pipelines/poolKey"
+import { notCoreRow } from "$lib/server/plugins/frameHost"
+import { objectLayoutSeedsFor } from "$lib/server/pipelines/entities/objectVariableLayouts"
 
 export interface SyncResult {
 	inserted: string[]
@@ -176,7 +174,6 @@ function projectedColumns(entry: RegistryEntry, release: string) {
 		configSchema: (entry.configSchema as any) ?? null,
 		causesEvent: entry.causesEvent ?? null,
 		causesEventFrom: entry.causesEventFrom ?? null,
-		audienceFrom: entry.audienceFrom ?? null,
 		payloads: entry.payloads ?? null,
 		isPublic: entry.public ?? false,
 		// The contract flags and declarations beside `optional` (plans/31
@@ -620,7 +617,6 @@ function rowToEntry(r: any): RegistryEntry {
 		i18n: r.i18n ?? undefined,
 		causesEvent: r.causesEvent ?? undefined,
 		causesEventFrom: r.causesEventFrom ?? undefined,
-		audienceFrom: r.audienceFrom ?? undefined,
 		payloads: r.payloads ?? undefined,
 		// ⚠ `|| undefined`, matching `optional` two lines up, and for a reason
 		// the round-trip test found rather than reasoned about: the column is
@@ -663,28 +659,56 @@ export interface PluginPresetSyncReport {
 	withdrawn: string[]
 	restored: string[]
 	/**
-	 * Presets whose manifest keyed a binding by bare event name and were read
-	 * as the event id (`core:event/<name>@1`) — one release, see the site.
-	 */
-	normalisedBindingKeys: string[]
-	/**
-	 * Presets whose manifest keyed a binding by bare event name under a
-	 * non-core genre — a bare key only ever meant `core:event/<name>@1`, so
-	 * one declared against a plugin's own genre cannot be normalised and the
-	 * binding is dropped rather than pointed at the wrong event.
+	 * Presets whose manifest keyed a binding by something that is not an
+	 * event id — skipped and reported, never written. `announce.build()`
+	 * refuses such a key at packaging.
 	 */
 	skippedBindingKeys: string[]
 	/**
-	 * Presets whose manifest included an action by bare function key that
-	 * no single action of the genre declares, so it was written bare — see
-	 * the site (third pass, W1). A bare key exactly one action declares is
-	 * promoted to that identity and not reported.
+	 * Presets whose manifest included an action by something that is not an
+	 * identity (`<spec slug>#<key>`) — dropped and reported, never written.
+	 * `preset()` refuses such an entry at packaging.
 	 */
 	bareIncludedKeys: string[]
+	/**
+	 * `<preset seed key> <event>` for each binding whose declared config slug
+	 * resolved to no row of the package's on that binding's spec — landed
+	 * without a config, so the spec's shipped default applies.
+	 */
+	unresolvedConfigs: string[]
+	/**
+	 * Rows under a declared seed key that are somebody's — not immutable, and
+	 * not equal to what ships — so the sync leaves their content alone.
+	 */
+	kept: string[]
 }
 
 /** `plugin:<plugin id>:<declared slug>` — the idempotence key, never a row id. */
 const presetSeedKey = (pluginId: string, slug: string) =>
+	`plugin:${pluginId}:${slug}`
+
+/**
+ * `plugin:<plugin id>:<spec id>#<config slug>` — a shipped config's seed key.
+ *
+ * The spec is part of the identity because a config slug is unique **per
+ * spec**, not per package: the SDK's `configFindings` refuses a duplicate
+ * `spec#slug` and nothing else, and `PresetBinding.config` is "a config slug
+ * of that spec". Keyed by slug alone, two specs shipping `…-default` shared one
+ * key and the second install moved the first's row onto its own spec. The
+ * `spec#slug` spelling is the SDK's own for the same pair.
+ *
+ * Here rather than in `plugins/install.ts`, which writes the rows, because
+ * `syncPluginPresets` resolves a binding's config through it and install
+ * already imports this module.
+ */
+export const pluginConfigSeedKey = (
+	pluginId: string,
+	specId: string,
+	slug: string
+) => `plugin:${pluginId}:${specId}#${slug}`
+
+/** ⏳ The key install wrote before the spec joined it; read only to adopt a row. */
+export const legacyPluginConfigSeedKey = (pluginId: string, slug: string) =>
 	`plugin:${pluginId}:${slug}`
 
 /**
@@ -719,15 +743,25 @@ const presetSeedKey = (pluginId: string, slug: string) =>
  * an extension off is a reversible, everyday act. Re-enabling clears the mark
  * and the administrator's `enabled` decision is exactly where they left it.
  *
- * ## What is deliberately dropped
+ * ## A binding's config is resolved to the row install wrote
  *
- * A declared binding's `config` is a **config slug** in the package's own
- * namespace; the column holds a `pipeline_configs.id`, which is an instance
- * fact. There is no projection of plugin configs to resolve it against, so the
- * binding lands without one and the spec's shipped default applies —
- * `corePresetSeeds()` states the same rule for core's own presets. A preset that
- * silently pointed at the wrong config row would be worse than one that points
- * at the default.
+ * A declared binding's `config` is a **config slug of that binding's spec**;
+ * the column holds a `pipeline_configs.id`, an instance fact. Install projects
+ * each shipped config under {@link pluginConfigSeedKey} (package, spec, slug),
+ * so the binding resolves by that key — and only to a row on the binding's own
+ * spec. A slug that resolves to nothing (the config was refused at install, or
+ * the package never shipped it) lands without a config, the spec's shipped
+ * default applies, and it is reported in `unresolvedConfigs`: a preset silently
+ * pointing at the wrong row would be worse than one pointing at the default.
+ *
+ * ## Shipped rows are immutable; a person's row is never rewritten
+ *
+ * The posture a plugin's shipped configs and core's presets take. The row a
+ * declaration projects is `is_immutable`, and a sync re-forces it, so a new
+ * shipped binding reaches every preset nobody edited. A row under the seed key
+ * that is not immutable is somebody's: the sync restores it from withdrawal
+ * and writes nothing else, reported in `kept`. A person changes a shipped
+ * preset by duplicating it, and the copy has no seed key.
  */
 export async function syncPluginPresets(
 	db: Db
@@ -736,15 +770,16 @@ export async function syncPluginPresets(
 		projected: [],
 		withdrawn: [],
 		restored: [],
-		normalisedBindingKeys: [],
 		skippedBindingKeys: [],
-		bareIncludedKeys: []
+		bareIncludedKeys: [],
+		unresolvedConfigs: [],
+		kept: []
 	}
 
-	const plugins = await db.select().from(schema.plugins)
+	const plugins = await db.select().from(schema.plugins).where(notCoreRow())
 	const declared = new Map<
 		string,
-		{ ownerId: number; decl: Record<string, any> }
+		{ ownerId: number; pluginId: string; decl: Record<string, any> }
 	>()
 	for (const p of plugins as any[]) {
 		if (!p.enabled) continue
@@ -763,6 +798,7 @@ export async function syncPluginPresets(
 				continue
 			declared.set(presetSeedKey(p.pluginId, decl.slug), {
 				ownerId: p.id,
+				pluginId: p.pluginId,
 				decl
 			})
 		}
@@ -772,83 +808,82 @@ export async function syncPluginPresets(
 	const bySeedKey = new Map(
 		(rows as any[]).filter((r) => r.seedKey).map((r) => [r.seedKey, r])
 	)
-	// The genre's offered actions, read once per genre across the presets
-	// that share it — what a bare included key is promoted against.
-	const offeredByGenre = new Map<string, GenreAction[]>()
-	const offeredFor = async (genreId: string): Promise<GenreAction[]> => {
-		let offered = offeredByGenre.get(genreId)
-		if (!offered) {
-			offered = await listGenreActions(db, genreId)
-			offeredByGenre.set(genreId, offered)
-		}
-		return offered
+	// A shipped config's id, by seed key and only on the spec it was read
+	// for — the key already names the spec, and the join says the row still
+	// belongs to it.
+	const configIdFor = async (
+		pluginId: string,
+		specSlug: string,
+		slug: string
+	): Promise<number | null> => {
+		const [row] = await db
+			.select({ id: schema.pipelineConfigs.id })
+			.from(schema.pipelineConfigs)
+			.innerJoin(
+				schema.pipelineSpecs,
+				eq(schema.pipelineSpecs.id, schema.pipelineConfigs.specId)
+			)
+			.where(
+				and(
+					eq(
+						schema.pipelineConfigs.seedKey,
+						pluginConfigSeedKey(pluginId, specSlug, slug)
+					),
+					eq(schema.pipelineSpecs.slug, specSlug)
+				)
+			)
+			.limit(1)
+		return row?.id ?? null
 	}
 
-	for (const [seedKey, { ownerId, decl }] of declared) {
-		const bindings: Record<string, { spec: string }> = {}
+	for (const [seedKey, { ownerId, pluginId, decl }] of declared) {
+		const bindings: Record<string, { spec: string; config?: number }> = {}
 		for (const [key, b] of Object.entries(decl.bindings ?? {})) {
 			if (!b || typeof (b as any).spec !== "string") continue
-			// ⏳ TEMPORARY — remove in the release after 0.6, with
-			// `sdk/src/deprecated.ts`. A manifest packaged by the previous SDK
-			// keys its bindings by bare genre-event name (`message-respond`);
-			// 0134 rekeyed the stored rows by event id, and writing the
-			// manifest's key verbatim here would revert that fold on every
-			// boot, so the run's lookup by id finds nothing and the preset
-			// binds nothing, silently (U3 review, W6). Normalised to the id,
-			// logged once per preset (seedKey). `announce.build()` refuses a
-			// bare key on packaging now, so no new manifest carries one; when
-			// this goes, a bare key must be skipped and reported, never
-			// written.
-			let event = key
+			// Keyed by event id; `announce.build()` refuses anything else at
+			// packaging, so a manifest carrying one is skipped and reported.
 			if (!isEventId(key)) {
-				// A bare key only ever meant `core:event/<name>@1` — a plugin's
-				// own genre owns no bare-named events, so normalising here would
-				// bind against an id nobody declared. Skipped instead.
-				if (!(decl.genre as string).startsWith("core:")) {
-					if (!report.skippedBindingKeys.includes(seedKey)) {
-						report.skippedBindingKeys.push(seedKey)
-						console.warn(
-							`[pipelines] preset ${seedKey} binds '${key}' by bare name under non-core genre '${decl.genre}'; ` +
-								`skipped — repackage the plugin against the current SDK`
-						)
-					}
-					continue
-				}
-				const normalised = `core:event/${key}@1`
-				if (!isEventId(normalised)) continue
-				if (!report.normalisedBindingKeys.includes(seedKey)) {
-					report.normalisedBindingKeys.push(seedKey)
+				if (!report.skippedBindingKeys.includes(seedKey)) {
+					report.skippedBindingKeys.push(seedKey)
 					console.warn(
-						`[pipelines] preset ${seedKey} binds '${key}' by bare name; ` +
-							`read as '${normalised}' — repackage the plugin against the current SDK`
+						`[pipelines] preset ${seedKey} binds '${key}', which is not an event id; ` +
+							`skipped — repackage the plugin against the current SDK`
 					)
 				}
-				event = normalised
+				continue
 			}
-			bindings[event] = { spec: (b as any).spec }
+			const event = key
+			const specSlug = (b as any).spec as string
+			const configSlug = (b as any).config
+			let config: number | null = null
+			if (typeof configSlug === "string" && configSlug) {
+				config = await configIdFor(pluginId, specSlug, configSlug)
+				if (config == null) {
+					report.unresolvedConfigs.push(`${seedKey} ${event}`)
+					console.warn(
+						`[pipelines] preset ${seedKey} binds '${event}' with config '${configSlug}', ` +
+							`which is not installed for '${specSlug}'; bound without one — the ` +
+							`spec's shipped default applies`
+					)
+				}
+			}
+			bindings[event] =
+				config == null ? { spec: specSlug } : { spec: specSlug, config }
 		}
 
-		// The included set is stored by identity (W-A). `preset()` refuses a
-		// bare key on packaging now, so only a manifest packaged by a previous
-		// SDK carries one; written verbatim it would put back, on every boot,
-		// a shape the reader promotes only by its ⏳ fallback (third pass,
-		// W1). Promoted here by the shared rule — a bare key exactly one
-		// action of the genre declares becomes that identity — and the rest
-		// kept bare and said once per preset, never refused: a boot that
-		// refuses a preset is a boot that offers nothing.
+		// The included set is stored by identity (W-A); `preset()` refuses
+		// anything else at packaging, so an entry that is not one is dropped
+		// and reported once per preset, never written.
 		let includedActions: string[] | null = null
 		if (Array.isArray(decl.actions?.include)) {
-			const promoted = promoteIncludedActions(
-				await offeredFor(decl.genre as string),
-				(decl.actions.include as unknown[]).map(String)
-			)
-			includedActions = promoted.included
-			if (promoted.bare.length && !report.bareIncludedKeys.includes(seedKey)) {
+			const entries = (decl.actions.include as unknown[]).map(String)
+			const bare = entries.filter((k) => !parseActionIdentity(k))
+			includedActions = [...new Set(entries.filter((k) => parseActionIdentity(k)))]
+			if (bare.length && !report.bareIncludedKeys.includes(seedKey)) {
 				report.bareIncludedKeys.push(seedKey)
 				console.warn(
-					`[pipelines] preset ${seedKey} includes ${promoted.bare.map((k) => `'${k}'`).join(", ")} ` +
-						`by bare function key and no single action of '${decl.genre}' declares ` +
-						`${promoted.bare.length === 1 ? "it" : "them"}; written bare — ` +
+					`[pipelines] preset ${seedKey} includes ${bare.map((k) => `'${k}'`).join(", ")}, ` +
+						`which ${bare.length === 1 ? "is not an identity" : "are not identities"}; dropped — ` +
 						`repackage the plugin naming each action by identity ('<spec slug>#<key>')`
 				)
 			}
@@ -874,7 +909,11 @@ export async function syncPluginPresets(
 			await db.insert(schema.sessionPresets).values({
 				seedKey,
 				...projected,
-				enabled: decl.enabled === true
+				enabled: decl.enabled === true,
+				// Shipped, so selectable and copyable but never edited in
+				// place — the posture core's presets and a plugin's shipped
+				// configs take. A person's change goes to a duplicate.
+				isImmutable: true
 			})
 			report.projected.push(seedKey)
 			continue
@@ -885,9 +924,47 @@ export async function syncPluginPresets(
 		if (existing.ownerPluginId !== ownerId) continue
 
 		if (existing.withdrawnAt) report.restored.push(seedKey)
+
+		// Whose content it is — the shipped-config rule (`plugins/install.ts`).
+		// An immutable row is the shipped row, and re-forcing it is how an
+		// update ships a new binding. A row that is NOT immutable has been made
+		// somebody's: its bindings, name and curation are theirs, and neither a
+		// re-sync nor an update writes them again (the defect: every sync
+		// rewrote `bindings`, so an administrator's rebinding lasted until the
+		// next boot). ⏳ Rows projected before shipped presets were immutable
+		// are all mutable; one still equal to the projection is untouched and
+		// adopted as shipped. At boot the manifest is the one last synced, so
+		// "equal" is "still what we last shipped"; a row that differs is kept,
+		// which only costs an untouched row an update it could not be told
+		// apart from an edit.
+		if (!existing.isImmutable) {
+			const untouched = (
+				[
+					"name",
+					"description",
+					"genreId",
+					"bindings",
+					"includedActions",
+					"defaults"
+				] as const
+			).every(
+				(k) =>
+					JSON.stringify(sortDeep(existing[k] ?? null)) ===
+					JSON.stringify(sortDeep((projected as any)[k] ?? null))
+			)
+			if (!untouched) {
+				report.kept.push(seedKey)
+				if (existing.withdrawnAt)
+					await db
+						.update(schema.sessionPresets)
+						.set({ withdrawnAt: null })
+						.where(eq(schema.sessionPresets.id, existing.id))
+				continue
+			}
+		}
 		await db
 			.update(schema.sessionPresets)
-			.set({ ...projected, withdrawnAt: null })
+			.set({ ...projected, isImmutable: true, withdrawnAt: null })
 			.where(eq(schema.sessionPresets.id, existing.id))
 	}
 
@@ -958,8 +1035,7 @@ export function declaredTemplateSeeds(
 ): TemplateSeed[] {
 	const m = manifest && typeof manifest === "object" ? (manifest as any) : undefined
 	const out: TemplateSeed[] = Array.isArray(m?.templates) ? [...m.templates] : []
-	if (!Array.isArray(m?.prompts)) return out
-	for (const decl of m.prompts) {
+	for (const decl of Array.isArray(m?.prompts) ? m.prompts : []) {
 		if (!decl || typeof decl !== "object") continue
 		const slug = typeof decl.slug === "string" ? decl.slug : ""
 		// A slug outside the name grammar produces an id `templateSeedProblems`
@@ -975,7 +1051,134 @@ export function declaredTemplateSeeds(
 			body: decl.fields
 		} as TemplateSeed)
 	}
+	// Last, so a layout the package ships for a variable always wins: every
+	// OBJECT variable the manifest declares and lays out nowhere gets an
+	// automatic "JSON" layout (owner ruling 2026-09-27; see
+	// `objectVariableLayouts.ts`). Read here so the projection below writes,
+	// refreshes and withdraws it exactly like a declared one.
+	out.push(...(objectLayoutSeedsFor(m, pluginId, out) as TemplateSeed[]))
 	return out
+}
+
+/** The row fields one declaration projects to, per kind. */
+function projectionOf(
+	kind: PluginTemplateKind,
+	t: TemplateSeed,
+	ownerId: number
+): Record<string, unknown> {
+	const name = t.label ?? parseTemplateId(t.id)!.name
+	if (kind === "prompts")
+		return {
+			nodeDefinitionId: poolKeyFor(t.nodeDefinitionId!),
+			slot: t.slot!,
+			name,
+			fields: t.body as Record<string, string>,
+			// A shipped row belongs to no pipeline of this instance's —
+			// `created_for_spec_id` is grouping in the picker and would
+			// need a local spec id, which a manifest cannot carry.
+			createdForSpecId: null,
+			ownerPluginId: ownerId
+		}
+	if (kind === "template")
+		return {
+			nodeDefinitionId: poolKeyFor(t.nodeDefinitionId!),
+			engine: t.engine!,
+			name,
+			source: t.body as string,
+			createdForSpecId: null,
+			ownerPluginId: ownerId
+		}
+	return {
+		variableId: t.variableId!,
+		engine: t.engine!,
+		name,
+		source: t.body as string,
+		ownerPluginId: ownerId
+	}
+}
+
+function tableFor(kind: PluginTemplateKind) {
+	return kind === "prompts"
+		? schema.pipelinePrompts
+		: kind === "template"
+			? schema.pipelineContextTemplates
+			: schema.pipelineVariableTemplates
+}
+
+/**
+ * Write one template seed as its package's row: insert it, or refresh and
+ * un-withdraw the row this package already owns under that id. A row under the
+ * id that another owner holds is refused, never taken. Returns what happened.
+ */
+async function writeTemplateSeed(
+	db: Db,
+	id: string,
+	kind: PluginTemplateKind,
+	seed: TemplateSeed,
+	ownerId: number
+): Promise<"projected" | "restored" | "present" | { refused: string }> {
+	const table = tableFor(kind)
+	const [existing] = (await db
+		.select()
+		.from(table)
+		.where(eq(table.templateId, id))
+		.limit(1)) as any[]
+
+	// A row under this id that a plugin does not own is not this sync's to
+	// write. `template_id` is unique across the table, so this is the only
+	// way one package's row could quietly become another's.
+	if (existing && existing.ownerPluginId !== ownerId)
+		return {
+			refused: `a row already holds that id and this package does not own it`
+		}
+
+	const values = projectionOf(kind, seed, ownerId)
+	try {
+		if (!existing) {
+			await db
+				.insert(table as any)
+				.values({ ...values, templateId: id, isImmutable: true })
+			return "projected"
+		}
+		await db
+			.update(table as any)
+			.set({ ...values, withdrawnAt: null, updatedAt: new Date() })
+			.where(eq(table.id, existing.id))
+		return existing.withdrawnAt ? "restored" : "present"
+	} catch (e) {
+		// Almost always the pool's unique name index: two packages shipping
+		// "Terse" for one node, or one package shipping it twice. Refused
+		// per declaration rather than thrown, because a sync that throws
+		// costs every OTHER package its templates for one package's clash.
+		return { refused: e instanceof Error ? e.message : String(e) }
+	}
+}
+
+/**
+ * Project one package's AUTOMATIC object layouts now — at install, the moment
+ * its variables are registered (owner ruling 2026-09-27), rather than waiting
+ * for the next template sync. The same seeds `declaredTemplateSeeds` hands
+ * that sync, written by the same writer, so the two can never disagree and a
+ * later sync refreshes rather than duplicates. Returns a sentence per refusal.
+ */
+export async function projectObjectVariableLayouts(
+	db: Db,
+	manifest: unknown,
+	pluginId: string,
+	ownerId: number
+): Promise<string[]> {
+	const refused: string[] = []
+	for (const seed of declaredTemplateSeeds(manifest, pluginId)) {
+		if (!(seed as { automatic?: boolean }).automatic) continue
+		const problems = templateSeedProblems(seed, pluginId)
+		if (problems.length) {
+			refused.push(`layout '${seed.id}': ${problems.join(" ")}`)
+			continue
+		}
+		const out = await writeTemplateSeed(db, seed.id, "variables", seed, ownerId)
+		if (typeof out === "object") refused.push(`layout '${seed.id}': ${out.refused}`)
+	}
+	return refused
 }
 
 /**
@@ -1028,14 +1231,19 @@ export async function syncPluginTemplates(
 		console.warn(`[pipelines] plugin template ${id} was refused: ${why}`)
 	}
 
-	const plugins = await db.select().from(schema.plugins)
+	const plugins = await db.select().from(schema.plugins).where(notCoreRow())
 	const declared = new Map<
 		string,
 		{ ownerId: number; kind: PluginTemplateKind; seed: TemplateSeed }
 	>()
 	for (const p of plugins as any[]) {
-		if (!p.enabled) continue
-		const templates = declaredTemplateSeeds(p.manifest, p.pluginId)
+		// A disabled package's declared rows are withdrawn — but its automatic
+		// object layouts are not: they follow its VARIABLES, which stay
+		// registered while the package is installed (`pluginVariables.ts`),
+		// and a picker already hides a disabled package's rows (R67).
+		const templates = declaredTemplateSeeds(p.manifest, p.pluginId).filter(
+			(t) => p.enabled || (t as { automatic?: boolean }).automatic
+		)
 		if (!templates.length) continue
 		for (const raw of templates) {
 			const seed = raw as TemplateSeed
@@ -1063,87 +1271,11 @@ export async function syncPluginTemplates(
 		}
 	}
 
-	/** The row fields one declaration projects to, per kind. */
-	const projectionOf = (
-		kind: PluginTemplateKind,
-		t: TemplateSeed,
-		ownerId: number
-	): Record<string, unknown> => {
-		const name = t.label ?? parseTemplateId(t.id)!.name
-		if (kind === "prompts")
-			return {
-				nodeDefinitionId: poolKeyFor(t.nodeDefinitionId!),
-				slot: t.slot!,
-				name,
-				fields: t.body as Record<string, string>,
-				// A shipped row belongs to no pipeline of this instance's —
-				// `created_for_spec_id` is grouping in the picker and would
-				// need a local spec id, which a manifest cannot carry.
-				createdForSpecId: null,
-				ownerPluginId: ownerId
-			}
-		if (kind === "template")
-			return {
-				nodeDefinitionId: poolKeyFor(t.nodeDefinitionId!),
-				engine: t.engine!,
-				name,
-				source: t.body as string,
-				createdForSpecId: null,
-				ownerPluginId: ownerId
-			}
-		return {
-			variableId: t.variableId!,
-			engine: t.engine!,
-			name,
-			source: t.body as string,
-			ownerPluginId: ownerId
-		}
-	}
-
-	const tableFor = (kind: PluginTemplateKind) =>
-		kind === "prompts"
-			? schema.pipelinePrompts
-			: kind === "template"
-				? schema.pipelineContextTemplates
-				: schema.pipelineVariableTemplates
-
 	for (const [id, { ownerId, kind, seed }] of declared) {
-		const table = tableFor(kind)
-		const [existing] = (await db
-			.select()
-			.from(table)
-			.where(eq(table.templateId, id))
-			.limit(1)) as any[]
-
-		// A row under this id that a plugin does not own is not this sync's to
-		// write. `template_id` is unique across the table, so this is the only
-		// way one package's row could quietly become another's.
-		if (existing && existing.ownerPluginId !== ownerId) {
-			refuse(id, `a row already holds that id and this package does not own it`)
-			continue
-		}
-
-		const values = projectionOf(kind, seed, ownerId)
-		try {
-			if (!existing) {
-				await db
-					.insert(table as any)
-					.values({ ...values, templateId: id, isImmutable: true })
-				report.projected.push(id)
-				continue
-			}
-			if (existing.withdrawnAt) report.restored.push(id)
-			await db
-				.update(table as any)
-				.set({ ...values, withdrawnAt: null, updatedAt: new Date() })
-				.where(eq(table.id, existing.id))
-		} catch (e) {
-			// Almost always the pool's unique name index: two packages shipping
-			// "Terse" for one node, or one package shipping it twice. Refused
-			// per declaration rather than thrown, because a sync that throws
-			// costs every OTHER package its templates for one package's clash.
-			refuse(id, e instanceof Error ? e.message : String(e))
-		}
+		const out = await writeTemplateSeed(db, id, kind, seed, ownerId)
+		if (typeof out === "object") refuse(id, out.refused)
+		else if (out === "projected") report.projected.push(id)
+		else if (out === "restored") report.restored.push(id)
 	}
 
 	// Withdrawal marks, it never deletes — see the header.

@@ -24,6 +24,8 @@
  */
 
 import { randomUUID } from "node:crypto"
+import { eq, sql } from "drizzle-orm"
+import * as schema from "$lib/server/db/schema"
 import {
 	getDefinition,
 	reviewSchemaFor,
@@ -339,4 +341,62 @@ export function createReviewer(scope: {
 			scope.onParked?.()
 		})
 	}
+}
+
+/**
+ * **An answer rejected at review that wrote nothing is no answer** (lair pass
+ * R9, owner F5, 2026-09-28) — how a form's answer run stands once it ended.
+ *
+ * A form is answered once (W7): `fireAction` stamps `answered` on the block
+ * when the answer's run lands. A run whose gated write the person REJECTED
+ * halted there. What that means for the form is decided on recorded facts,
+ * never on the genre:
+ *
+ *  - **`no-answer`** — it halted on a reject at review (`receipt.reviews`)
+ *    and left no `pipeline_run_artifacts` rows: nothing it did happened, so
+ *    the form is open again. The caller clears any `answered` mark,
+ *    re-announces the row and raises the form's open-form notification
+ *    again. In the Lair: a rejected room draft re-opens the knock — the room
+ *    is still undescribed, and the knock's job is to ask for it.
+ *  - **`answered`** — it landed, or it was rejected after it had already
+ *    written something (a row before its gate): its effects happened, so the
+ *    form stays answered.
+ *  - **`unsettled`** — any other end (an error, a cancel, a halt that was
+ *    not a reject): the form is left exactly as it was, as before this rule.
+ *
+ * `runId` is the run's own id (`pipeline_runs.run_id`); the receipt was saved
+ * before the run returned (`runSpec`).
+ */
+export type AnswerStanding = "answered" | "no-answer" | "unsettled"
+
+/** The executor's halt reason for a write the reviewer rejected (`executor.ts`, the review gate). */
+const REVIEW_REJECTED_REASON = "rejected at review"
+
+export async function answerStanding(
+	db: Db,
+	receipt: {
+		runId: string
+		outcome: string
+		haltReason?: string
+		reviews?: ReadonlyArray<{ action: string }>
+	}
+): Promise<AnswerStanding> {
+	if (receipt.outcome === "ok") return "answered"
+	// The review record, or — on a compacted receipt, whose reviews are
+	// dropped with its nodes (an event-triggered halt) — the executor's
+	// halt reason for a reject (`REVIEW_REJECTED_REASON`).
+	const rejected =
+		receipt.outcome === "halt" &&
+		((receipt.reviews ?? []).some((r) => r.action === "reject") ||
+			receipt.haltReason === REVIEW_REJECTED_REASON)
+	if (!rejected) return "unsettled"
+	const [wrote] = await db
+		.select({ n: sql<number>`count(*)::int` })
+		.from(schema.pipelineRunArtifacts)
+		.innerJoin(
+			schema.pipelineRuns,
+			eq(schema.pipelineRuns.id, schema.pipelineRunArtifacts.runId)
+		)
+		.where(eq(schema.pipelineRuns.runId, receipt.runId))
+	return (wrote?.n ?? 0) > 0 ? "answered" : "no-answer"
 }

@@ -12,7 +12,14 @@
 import { eq } from "drizzle-orm"
 import { i18nFindings } from "@serene-pub/sdk"
 import { plugins, pluginHookInvocations } from "$lib/server/db/schema"
-import { hookSettingsFor } from "./settingsHost"
+import {
+	loadPluginUserSettingsRows,
+	settingsDelivery,
+	type PluginUserSettingsRow
+} from "./settingsHost"
+import { isPluginSlug } from "./frameHost"
+import { markAdminOverviewStale } from "$lib/server/admin/overviewStale"
+import { isReservedAuthoredNamespace } from "$lib/shared/widgets/authoredOwner"
 import type { InvocationRecord, PluginDescriptor } from "./SandboxManager"
 import type { SandboxKind } from "./types"
 import {
@@ -38,7 +45,10 @@ interface PluginRow {
 	settings?: Record<string, unknown> | null
 }
 
-function rowToDescriptor(row: PluginRow): PluginDescriptor {
+function rowToDescriptor(
+	row: PluginRow,
+	userRows: readonly PluginUserSettingsRow[] = []
+): PluginDescriptor {
 	const backends = (
 		Array.isArray(row.backends) ? row.backends : ["quickjs"]
 	).filter((b): b is SandboxKind => b === "quickjs" || b === "ses")
@@ -57,20 +67,11 @@ function rowToDescriptor(row: PluginRow): PluginDescriptor {
 		// Grants derive from the *effective* set (declared − admin-denied); an admin
 		// storage-quota override rides on top of the effective storage grant.
 		...permissionGrants(row.manifest, row.adminDenied, row.storageQuotaOverride),
-		// Manifest-declared settings, resolved for the owning hook (12 §6).
-		// Handles for the hook, plaintext kept host-side for the fetch bridge
-		// and the scrub (R63).
-		...(() => {
-			const s = hookSettingsFor(row.manifest, row.settings)
-			return s
-				? {
-						settings: s.settings,
-						...(Object.keys(s.secrets).length
-							? { secrets: s.secrets, lentSecrets: s.lent, secretNonce: s.nonce }
-							: {})
-					}
-				: {}
-		})()
+		// Manifest-declared settings, resolved for the owning hook (12 §6):
+		// the instance's, and each user's own for user-scoped fields. Handles
+		// for the hook, plaintext kept host-side for the fetch bridge and the
+		// scrub (R63).
+		...settingsDelivery(row.manifest, row.settings, userRows)
 	}
 }
 
@@ -87,13 +88,33 @@ function permissionGrants(
 	}
 }
 
+/**
+ * `notCoreRow` (`frameHost`) at the two boot reads, which also SAY so: never loaded, so
+ * nothing registers under the app's own name. Said once per boot read; the
+ * row stays for an administrator to remove.
+ */
+function notCore<T extends { pluginId: string }>(rows: T[]): T[] {
+	return rows.filter((r) => {
+		if (r.pluginId !== "core") return true
+		console.warn(
+			"[plugins] a stored plugin claims the id 'core', which is the app's own — not loaded; remove it"
+		)
+		return false
+	})
+}
+
 /** Every enabled plugin, as manager descriptors. */
 export async function loadEnabledPlugins(db: Db): Promise<PluginDescriptor[]> {
 	const rows: PluginRow[] = await db
 		.select()
 		.from(plugins)
 		.where(eq(plugins.enabled, true))
-	return rows.map(rowToDescriptor)
+	const kept = notCore(rows)
+	const userRows = await loadPluginUserSettingsRows(
+		db,
+		kept.map((r) => r.pluginId)
+	)
+	return kept.map((r) => rowToDescriptor(r, userRows.get(r.pluginId)))
 }
 
 /**
@@ -109,9 +130,11 @@ export async function loadEnabledPlugins(db: Db): Promise<PluginDescriptor[]> {
 export async function loadPluginManifests(
 	db: Db
 ): Promise<Array<{ pluginId: string; manifest: unknown }>> {
-	return db
-		.select({ pluginId: plugins.pluginId, manifest: plugins.manifest })
-		.from(plugins)
+	return notCore(
+		await db
+			.select({ pluginId: plugins.pluginId, manifest: plugins.manifest })
+			.from(plugins)
+	)
 }
 
 /** Append one invocation to the log. Denormalized identity — no FK to plugins. */
@@ -179,8 +202,37 @@ export function manifestDisplayTextFindings(
 	]
 }
 
+/**
+ * The install's check on the id itself: a plugin's id is its SDK slug — one
+ * URL segment (`/plugin-ui/<id>/…`) — and never `core`, the app's own owner
+ * id, which core's widgets are answered as and a page trusts. Held here, on
+ * the one write every install path makes (`plugins:install`,
+ * `plugins:installLocal`, the `plugin-install` script), not only where a
+ * package is read (`readPluginPackage`). Empty when the id is sound.
+ */
+export function pluginIdFindings(pluginId: unknown): string[] {
+	if (typeof pluginId !== "string" || !isPluginSlug(pluginId))
+		return [
+			`id ${JSON.stringify(pluginId)} is not a plugin slug — lowercase letters, ` +
+				`digits, dots and hyphens ('chariot.dice-tray')`
+		]
+	if (pluginId === "core")
+		return ["id 'core' is the app's own — a plugin cannot take it"]
+	// `authored.<id>` is the owner of an authored component (C6): a plugin
+	// under it would share that component's UI worker and answer as it.
+	if (isReservedAuthoredNamespace(pluginId))
+		return [
+			`id '${pluginId}' is in the 'authored' namespace, which this instance keeps for ` +
+				`components authored in the app — a plugin cannot take it`
+		]
+	return []
+}
+
 export async function upsertPlugin(db: Db, input: InstallInput): Promise<void> {
-	const findings = manifestDisplayTextFindings(input.manifest)
+	const findings = [
+		...pluginIdFindings(input.pluginId),
+		...manifestDisplayTextFindings(input.manifest)
+	]
 	if (findings.length)
 		throw new Error(
 			`plugin '${input.pluginId}' cannot be installed: ${findings.join("; ")}`
@@ -191,18 +243,39 @@ export async function upsertPlugin(db: Db, input: InstallInput): Promise<void> {
 	const backends: SandboxKind[] = input.backends.length
 		? input.backends
 		: ["quickjs"]
-	const prior: { bundleHash: string; enabled: boolean }[] = await db
-		.select({ bundleHash: plugins.bundleHash, enabled: plugins.enabled })
+	const prior: {
+		bundleHash: string
+		enabled: boolean
+		version: string
+		updateFromVersion: string | null
+	}[] = await db
+		.select({
+			bundleHash: plugins.bundleHash,
+			enabled: plugins.enabled,
+			version: plugins.version,
+			updateFromVersion: plugins.updateFromVersion
+		})
 		.from(plugins)
 		.where(eq(plugins.pluginId, input.pluginId))
 	const enabled =
 		prior[0] && prior[0].bundleHash === input.bundleHash
 			? prior[0].enabled
 			: false
+	const version = input.version ?? "0.0.0"
+	// A reinstall that replaced the bundle (or its version) owes the new
+	// bundle an `update` callback on its first run (lifecycle.ts). The oldest
+	// version not yet announced wins: two reinstalls before that run are one
+	// upgrade from where the plugin actually was.
+	const replaced =
+		!!prior[0] &&
+		(prior[0].bundleHash !== input.bundleHash || prior[0].version !== version)
+	const updateFromVersion = replaced
+		? (prior[0].updateFromVersion ?? prior[0].version)
+		: (prior[0]?.updateFromVersion ?? null)
 	const values = {
 		pluginId: input.pluginId,
 		name: input.name,
-		version: input.version ?? "0.0.0",
+		version,
 		bundleSource: input.bundleSource,
 		bundleHash: input.bundleHash,
 		backends,
@@ -210,12 +283,15 @@ export async function upsertPlugin(db: Db, input: InstallInput): Promise<void> {
 		sequential: input.sequential ?? false,
 		enabled,
 		manifest: input.manifest ?? {},
+		updateFromVersion,
 		updatedAt: new Date()
 	}
 	await db
 		.insert(plugins)
 		.values(values)
 		.onConflictDoUpdate({ target: plugins.pluginId, set: values })
+	// A changed bundle arrives disabled: the Overview's `plugins:awaitingReview`.
+	markAdminOverviewStale()
 }
 
 export async function setEnabled(
@@ -227,6 +303,8 @@ export async function setEnabled(
 		.update(plugins)
 		.set({ enabled, updatedAt: new Date() })
 		.where(eq(plugins.pluginId, pluginId))
+	// Re-enabling a changed bundle is its re-review (see `upsertPlugin`).
+	markAdminOverviewStale()
 }
 
 export async function setBackendPref(
@@ -260,6 +338,8 @@ export async function setAdminDenied(
 		.update(plugins)
 		.set({ adminDenied: denied, updatedAt: new Date() })
 		.where(eq(plugins.pluginId, pluginId))
+	// Review marks live here: `needsReview` may have just turned false.
+	markAdminOverviewStale()
 }
 
 /**
@@ -282,5 +362,12 @@ export async function removePlugin(db: Db, pluginId: string): Promise<void> {
 	// Its events stop being recordable at once (E1b).
 	const { withdrawPluginEvents } = await import("./pluginEvents")
 	withdrawPluginEvents(pluginId)
+	// …and its annex declaration (ruling 2026-09-26).
+	const { withdrawPluginAnnex } = await import("./pluginAnnex")
+	withdrawPluginAnnex(pluginId)
+	// …and its context variables (typed templates, 2026-09-27).
+	const { withdrawPluginVariables } = await import("./pluginVariables")
+	withdrawPluginVariables(pluginId)
 	await db.delete(plugins).where(eq(plugins.pluginId, pluginId))
+	markAdminOverviewStale()
 }

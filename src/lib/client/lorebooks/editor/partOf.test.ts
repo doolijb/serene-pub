@@ -13,6 +13,7 @@ import {
 	canFileUnder,
 	containedBy,
 	deleteWarning,
+	descendantCount,
 	descendantKeys
 } from "./partOf"
 
@@ -22,7 +23,7 @@ function item(over: Partial<PoolItem> & { id: number }): PoolItem {
 		kind: "core:entry/world-lore",
 		name: `Entry ${over.id}`,
 		content: "",
-		keys: "",
+		keys: [],
 		pinned: false,
 		off: false,
 		archived: false,
@@ -140,5 +141,62 @@ describe("deleteWarning", () => {
 
 	it("says nothing about contents when nothing is filed under it", () => {
 		expect(deleteWarning(0)).not.toContain("Contains")
+	})
+
+	it("says a shared entry leaves every line, and names the line-only way", () => {
+		const text = deleteWarning(0, { everyLine: true })
+		expect(text).toContain("removes it from every line")
+		expect(text).toContain("Off for a while")
+		expect(deleteWarning(2, { everyLine: true })).toContain("Contains 2")
+	})
+
+	it("says nothing about lines for an entry that is not shared", () => {
+		expect(deleteWarning(0)).not.toContain("every line")
+	})
+})
+
+describe("descendantCount", () => {
+	it("counts the whole subtree, grandchildren included", () => {
+		// Umber City holds the Archive, which holds the stair: two go with it.
+		expect(descendantCount("entry#1", pool)).toBe(2)
+	})
+
+	it("leaves scenes out: the anchor cascade does not follow them", () => {
+		expect(descendantKeys("entry#1", pool).has("scene#5")).toBe(true)
+		expect(descendantCount("entry#1", pool)).toBe(2)
+	})
+
+	it("is zero for a leaf, and ends on a ring", () => {
+		expect(descendantCount("entry#4", pool)).toBe(0)
+		const a = item({ id: 6, parentKey: "entry#7" })
+		const b = item({ id: 7, parentKey: "entry#6" })
+		expect(descendantCount("entry#6", [a, b])).toBe(1)
+	})
+})
+
+describe("canFileUnder — never under another line's own entry", () => {
+	const shared = item({ id: 10, name: "Shared" })
+	const forkOnly = item({ id: 11, name: "Fork only", branchId: 7 })
+	const alsoFork = item({ id: 12, name: "Also fork", branchId: 7 })
+	const sibling = item({ id: 13, name: "Sibling", branchId: 8 })
+	const lines = [shared, forkOnly, alsoFork, sibling]
+
+	it("refuses a shared entry under a branch-only parent (the cascade would take it)", () => {
+		expect(canFileUnder("entry#10", "entry#11", lines)).toBe(false)
+	})
+
+	it("allows a branch entry under a parent on the same line, or a shared one", () => {
+		expect(canFileUnder("entry#12", "entry#11", lines)).toBe(true)
+		expect(canFileUnder("entry#12", "entry#10", lines)).toBe(true)
+	})
+
+	it("refuses a sibling line's parent", () => {
+		expect(canFileUnder("entry#12", "entry#13", lines)).toBe(false)
+	})
+
+	it("checks a row being written against the line it lands on, when told", () => {
+		expect(canFileUnder(null, "entry#11", lines, null)).toBe(false)
+		expect(canFileUnder(null, "entry#11", lines, 7)).toBe(true)
+		expect(anchorCandidates(null, lines, null).map((i) => i.id)).toEqual([10])
 	})
 })

@@ -43,7 +43,10 @@ const PINS = [
 	"core:entry/history@1",
 	// A place the story can be in, and can be walked out of (L3, 2026-09-17).
 	// World lore's shape; its exits are link rows, never a declared field.
-	"core:entry/location@1"
+	"core:entry/location@1",
+	// A thing somebody can hold, with a supply (attributes phase 3a,
+	// 2026-09-26). World lore's shape plus `supply` / `supplyLimit`.
+	"core:entry/item@1"
 ]
 
 const rowFor = async (typeId: string) => {
@@ -150,7 +153,7 @@ describe("core's entry types reach the registry", () => {
 					...base.entryShape.fields,
 					priority: {
 						...base.entryShape.fields!.priority!,
-						i18n: { en: "Importance" }
+						label: { en: "Importance" }
 					}
 				}
 			}
@@ -161,7 +164,7 @@ describe("core's entry types reach the registry", () => {
 		})
 		expect(r.updated).toEqual(["core:entry/world-lore@1"])
 		const row = await rowFor("core:entry/world-lore")
-		expect(row.configSchema.priority.i18n.en).toBe("Importance")
+		expect(row.configSchema.priority.label.en).toBe("Importance")
 
 		// Put the build's own wording back, so nothing after this reads a
 		// doctored row.
@@ -200,7 +203,7 @@ describe("which half of a declaration is frozen", () => {
 				...base.configSchema,
 				priority: {
 					...base.configSchema!.priority!,
-					i18n: { en: "Importance" },
+					label: { en: "Importance" },
 					description: { en: "Reworded after shipping." }
 				}
 			}

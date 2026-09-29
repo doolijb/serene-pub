@@ -49,8 +49,10 @@
 
 	interface Props {
 		onBack: () => void
+		/** Inside another view that owns the header: no nav header here. */
+		embedded?: boolean
 	}
-	let { onBack }: Props = $props()
+	let { onBack, embedded = false }: Props = $props()
 
 	const socket = useTypedSocket()
 	const userCtx: { user?: SelectUser } | undefined = getContext("userCtx")
@@ -166,13 +168,22 @@
 </script>
 
 <div class="flex h-full min-h-0 flex-col gap-3 p-1">
-	<PanelNavHeader
-		title="Downloads"
-		{onBack}
-		backLabel="Back to connections"
-		actionsLabel="Downloads"
-		{actions}
-	/>
+	{#if !embedded}
+		<PanelNavHeader
+			title="Downloads"
+			{onBack}
+			backLabel="Back to connections"
+			actionsLabel="Downloads"
+			menuItems={[
+				{
+					label: "Clear finished",
+					icon: Icons.Eraser,
+					disabled: !finished.length && !failed.length,
+					onSelect: () => downloads.clearFinished()
+				}
+			]}
+		/>
+	{/if}
 
 	{#if empty}
 		<!-- One sentence. Nothing is arriving, which is not a problem to
@@ -182,7 +193,7 @@
 		<div class="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto pb-2">
 			{#if inFlight.length}
 				<section class="flex flex-col gap-1.5">
-					<span class="text-surface-500 text-xs">
+					<span class="text-surface-600-400 text-xs">
 						In flight · {inFlight.length}
 					</span>
 					{#each inFlight as item (item.id)}
@@ -243,7 +254,7 @@
 
 			{#if finished.length}
 				<section class="flex flex-col gap-1.5">
-					<span class="text-surface-500 text-xs">
+					<span class="text-surface-600-400 text-xs">
 						Finished · {finished.length}
 					</span>
 					{#each finished as item (item.id)}
@@ -292,7 +303,7 @@
 
 			{#if failed.length}
 				<section class="flex flex-col gap-1.5">
-					<span class="text-surface-500 text-xs">
+					<span class="text-surface-600-400 text-xs">
 						Failed · {failed.length}
 					</span>
 					{#each failed as item (item.id)}
@@ -324,7 +335,7 @@
 				</section>
 			{/if}
 
-			<p class="text-surface-500 shrink-0 text-xs">
+			<p class="text-surface-600-400 shrink-0 text-xs">
 				One list for every destination. Cancel stops after the current
 				file; nothing is deleted for you.
 			</p>
@@ -332,14 +343,3 @@
 	{/if}
 </div>
 
-{#snippet actions()}
-	<button
-		type="button"
-		class="popover-menu-btn btn"
-		disabled={!finished.length && !failed.length}
-		onclick={() => downloads.clearFinished()}
-	>
-		<Icons.Eraser size={16} aria-hidden="true" />
-		Clear finished
-	</button>
-{/snippet}

@@ -13,7 +13,7 @@ That is the entire storage model: a user who has never opened the picker is *inh
 
 ## Choosing a Language During Setup
 
-The first step of the setup wizard — the **Welcome** screen — carries a language dropdown, before anything else it asks you.
+The first step of the setup wizard — the **Get started** screen — carries a language dropdown, before anything else it asks you.
 
 It is there rather than on a step of its own for a practical reason: a wizard step has to be able to say when it is finished, and "you have a language" is always true because there is always a default. A dedicated step would have re-opened the whole wizard for every existing user on upgrade, to ask a question that had already been answered for them. Welcome never counts as complete and everybody passes through it, which makes it the right home — and the language you read the rest of the wizard in is a sensible first question anyway.
 
@@ -66,7 +66,7 @@ Machine translation is worse than a human's. This is a starting point, not the d
 
 ### Turning it on
 
-**System Settings → Language → Automatic Translation** (admin only). Off by default, and an upgrade never turns it on for you.
+**Admin › General → Automatic translation** (admin only). Off by default, and an upgrade never turns it on for you.
 
 That default is deliberate. Turning it on is a decision to send text out of your server, so it is not something the app should quietly start doing on a self-hosted install. Two services are offered:
 
@@ -101,7 +101,7 @@ Every label an extension declares — a definition's name, a setting's label, an
 
 ## Troubleshooting
 
-**Everything is still in English after I changed my language.** Automatic translation is probably off. It is an admin setting under System Settings → Language, and it is off by default.
+**Everything is still in English after I changed my language.** Automatic translation is probably off. It is an admin setting under Admin › General → Automatic translation, and it is off by default.
 
 **Some text is translated and some is not.** Expected. Translation happens per string as screens are visited; anything not yet reached stays in English. If it never fills in, the translation service may be unreachable — untranslated strings are retried on later visits, so a temporary outage resolves itself.
 
@@ -113,7 +113,7 @@ Every label an extension declares — a definition's name, a setting's label, an
 
 ## Related
 
-- [System Settings](./system-settings.md) — where the instance default and automatic translation live.
+- [Instance Settings](./system-settings.md) — where the instance default and automatic translation live.
 - [Custom Themes & User Settings](./themes-and-settings.md) — the User tab, where your own language lives.
 - [Embeddings & RAG](./embeddings-and-rag.md) — what retrieval does today.
 - [Getting Started](./getting-started.md) — the setup wizard the language step is part of.

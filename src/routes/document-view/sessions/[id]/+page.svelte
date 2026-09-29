@@ -1,6 +1,15 @@
 <script lang="ts">
-	import { onMount, getContext } from "svelte"
+	import { onMount, getContext, untrack } from "svelte"
 	import { page } from "$app/state"
+	import { replaceState } from "$app/navigation"
+	import {
+		LANDING_SEEK_FRAMES,
+		landingTarget,
+		nextLandingStep,
+		readMessageLanding,
+		withoutLanding
+	} from "$lib/client/sessions/messageLanding"
+	import { landOn } from "$lib/client/utils/landOn"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import {
 		declareInterest,
@@ -177,7 +186,7 @@
 	let turnOrder = $state<TurnOrderView | null>(null)
 	const HEAD = "head"
 	const NARRATOR = "narrator"
-	let triggerResponseFrom: string = $state("")
+	let fireTurnFrom: string = $state("")
 	const headName = $derived.by(() => {
 		const head = turnOrder?.order[0]
 		if (!head) return null
@@ -196,18 +205,18 @@
 	// The selection follows the head each time the order moves; a manual
 	// pick holds until then.
 	$effect(() => {
-		triggerResponseFrom = turnOrder?.order.length && !headIsPerson ? HEAD : ""
+		fireTurnFrom = turnOrder?.order.length && !headIsPerson ? HEAD : ""
 	})
-	function triggerSelectedResponse() {
-		if (triggerResponseFrom === "") return
-		if (triggerResponseFrom === HEAD) {
+	function fireSelectedTurn() {
+		if (fireTurnFrom === "") return
+		if (fireTurnFrom === HEAD) {
 			socket.emit("sessions:fireTurn", { sessionId })
 			return
 		}
 		socket.emit("sessions:fireTurn", {
 			sessionId,
 			entry: {
-				ref: triggerResponseFrom === NARRATOR ? null : triggerResponseFrom,
+				ref: fireTurnFrom === NARRATOR ? null : fireTurnFrom,
 				via: "pick"
 			}
 		})
@@ -515,6 +524,45 @@
 		handleSessionMessagesCancel
 	)
 
+	/**
+	 * Landing on the message a link named (`?message=<id>[&block=<blockId>]`),
+	 * as the session page does: earlier pages load until it is here, then it
+	 * is centred, ringed and focused (so reading starts there), and the
+	 * params leave the address. This list draws no blocks, so a named block
+	 * lands on its message.
+	 */
+	const messageLanding = $derived(readMessageLanding(page.url.searchParams))
+	const messageLandingStep = $derived.by(() => {
+		if (!messageLanding || !loaded || !session || session.id !== sessionId) return null
+		return nextLandingStep(
+			messageLanding,
+			session.sessionMessages.map((m) => m.id),
+			{ hasOlder: !!pagination?.hasMore, loadingOlder }
+		)
+	})
+	function dropMessageLanding() {
+		try {
+			replaceState(withoutLanding(page.url), page.state)
+		} catch {
+			// Router not started: the params stay; nothing breaks.
+		}
+	}
+	$effect(() => {
+		const landing = messageLanding
+		const step = messageLandingStep
+		if (!landing || !step || step === "wait") return
+		if (step === "load-older") return void untrack(loadEarlier)
+		if (step === "give-up") return void untrack(dropMessageLanding)
+		let frames = 0
+		let raf = requestAnimationFrame(function seek() {
+			const hit = landingTarget(document, landing)
+			if (hit) landOn(hit.el, { focus: hit.focus })
+			if (hit || ++frames >= LANDING_SEEK_FRAMES) untrack(dropMessageLanding)
+			else raf = requestAnimationFrame(seek)
+		})
+		return () => cancelAnimationFrame(raf)
+	})
+
 	onMount(() => {
 		// "sessionMessage", "sessions:get", "sessions:addPersona",
 		// "sessions:turnOrder", "characters:list" and every
@@ -536,7 +584,7 @@
 <p>
 	<a href="/document-view/sessions">Back to Sessions</a>
 	{#if session?.sessionMessages}
-		· <a href="/document-view/sessions/{sessionId}/edit">Edit Session</a>
+		· <a href="/document-view/sessions/{sessionId}/edit">Edit session</a>
 	{/if}
 </p>
 
@@ -574,7 +622,7 @@
 				onclick={loadEarlier}
 				disabled={loadingOlder}
 			>
-				{loadingOlder ? "Loading…" : "Load Earlier Messages"}
+				{loadingOlder ? "Loading…" : "Load earlier messages"}
 			</button>
 		</p>
 	{/if}
@@ -583,7 +631,8 @@
 		{#each session.sessionMessages as msg, i (msg.id)}
 			{@const isLast = i === session.sessionMessages.length - 1}
 			{@const swipes = isLast && msg.characterId ? swipeInfo(msg) : null}
-			<li class="a11y-list-item">
+			<!-- `message-<id>`: what a `?message=<id>` link lands on (messageLanding.ts). -->
+			<li class="a11y-list-item" id="message-{msg.id}" tabindex="-1">
 				<h2>{speakerName(msg)}</h2>
 				{#if msg.isHidden}
 					<p class="a11y-hint">
@@ -626,14 +675,14 @@
 							class="a11y-btn a11y-btn-secondary a11y-btn-small"
 							onclick={() => swipeLeft(msg.id)}
 						>
-							Swipe Left (Previous Response)
+							Swipe left (previous response)
 						</button>
 						<button
 							type="button"
 							class="a11y-btn a11y-btn-secondary a11y-btn-small"
 							onclick={() => swipeRight(msg.id)}
 						>
-							Swipe Right (Next Response)
+							Swipe right (next response)
 						</button>
 						<button
 							type="button"
@@ -686,7 +735,7 @@
 				class="a11y-btn a11y-btn-danger a11y-btn-small"
 				onclick={cancelGeneration}
 			>
-				Stop Generating
+				Stop generating
 			</button>
 		</div>
 	{/if}
@@ -712,14 +761,14 @@
 					onclick={addOwnPersona}
 					disabled={addPersonaId === ""}
 				>
-					Join Session
+					Join session
 				</button>
 			</div>
 		</div>
 	{:else}
 		{#if userPersonasInSession.length > 1}
 			<div class="a11y-field">
-				<label for="a11y-session-speaking-as">Speaking As</label>
+				<label for="a11y-session-speaking-as">Speaking as</label>
 				<select
 					id="a11y-session-speaking-as"
 					bind:value={selectedPersonaId}
@@ -756,7 +805,7 @@
 				Send
 			</button>
 			<div class="a11y-field">
-				<label for="a11y-session-trigger-character">
+				<label for="a11y-session-fire-turn">
 					Get a Response From
 				</label>
 				<p class="a11y-hint">
@@ -774,8 +823,8 @@
 				</p>
 				<div class="a11y-inline-add">
 					<select
-						id="a11y-session-trigger-character"
-						bind:value={triggerResponseFrom}
+						id="a11y-session-fire-turn"
+						bind:value={fireTurnFrom}
 						disabled={!!generatingStatus}
 					>
 						<option value="">Choose…</option>
@@ -790,11 +839,11 @@
 					<button
 						type="button"
 						class="a11y-btn a11y-btn-secondary a11y-btn-small"
-						onclick={triggerSelectedResponse}
-						disabled={triggerResponseFrom === "" ||
+						onclick={fireSelectedTurn}
+						disabled={fireTurnFrom === "" ||
 							!!generatingStatus}
 					>
-						Get Response
+						Get response
 					</button>
 				</div>
 			</div>
@@ -805,7 +854,7 @@
 					onclick={regenerateLast}
 					disabled={!!generatingStatus}
 				>
-					Regenerate Last Response
+					Regenerate last response
 				</button>
 			{/if}
 		</form>

@@ -11,6 +11,8 @@ import {
 	collapsedOrder,
 	railFit,
 	resolveRailColumn,
+	rovingStep,
+	rovingStop,
 	type RailGroup
 } from "./sideRail"
 
@@ -436,5 +438,28 @@ describe("collapsedOrder — anchors mean order, and nothing else", () => {
 				at("a", 0, 0, { right: true })
 			])
 		).toEqual(["a", "b"])
+	})
+})
+
+describe("rail roving focus (one tab stop, arrows within)", () => {
+	it("steps on both arrow axes and wraps at either end", () => {
+		expect(rovingStep("ArrowDown", 0, 3)).toBe(1)
+		expect(rovingStep("ArrowRight", 2, 3)).toBe(0)
+		expect(rovingStep("ArrowUp", 0, 3)).toBe(2)
+		expect(rovingStep("ArrowLeft", 1, 3)).toBe(0)
+	})
+	it("Home and End jump to the ends", () => {
+		expect(rovingStep("Home", 2, 3)).toBe(0)
+		expect(rovingStep("End", 0, 3)).toBe(2)
+	})
+	it("leaves every other key, and an empty rail, alone", () => {
+		expect(rovingStep("Tab", 0, 3)).toBeNull()
+		expect(rovingStep("Enter", 0, 3)).toBeNull()
+		expect(rovingStep("ArrowDown", 0, 0)).toBeNull()
+	})
+	it("keeps the tab stop inside a rail that shrank", () => {
+		expect(rovingStop(undefined, 3)).toBe(0)
+		expect(rovingStop(5, 3)).toBe(2)
+		expect(rovingStop(1, 0)).toBe(0)
 	})
 })

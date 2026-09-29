@@ -40,7 +40,7 @@
 --
 -- ── Why `->>` here, where 0098 needed `->` ─────────────────────────────────
 --
--- 0098 compared `extra_json -> 'useSession'` against a jsonb LITERAL because
+-- 0098 compared `extra_json -> 'useChat'` against a jsonb LITERAL because
 -- its target was a boolean: `->>` renders both `false` and `"false"` as the
 -- text `false`, and under the code of that era those two meant opposite things.
 -- The hazard is two JSON types collapsing onto one text form, and this target

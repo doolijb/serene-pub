@@ -55,6 +55,14 @@
 		 * title and its chips on one line; the card grids want a little more.
 		 */
 		listWidth?: string
+		/**
+		 * Turns the split around: the LIST takes the room and the detail is
+		 * the column of this width. For a list that is the thing being looked
+		 * at — the Library's portrait grid — where a detail the size of a
+		 * card's worth of facts beside ~3000px of grid is the right trade and
+		 * a 340px grid beside it is not. Replaces `listWidth` when set.
+		 */
+		detailWidth?: string
 	}
 
 	let {
@@ -64,8 +72,15 @@
 		detail,
 		empty,
 		emptyMessage = "Nothing selected.",
-		listWidth = "340px"
+		listWidth = "340px",
+		detailWidth
 	}: Props = $props()
+
+	const columns = $derived(
+		detailWidth
+			? `minmax(0, 1fr) ${detailWidth}`
+			: `max(${listWidth}, min(22%, 560px)) minmax(0, 1fr)`
+	)
 
 	// Both panes scroll themselves rather than letting the shell's wrapper
 	// scroll the pair: in desk mode a single outer scrollbar would move the
@@ -75,13 +90,15 @@
 </script>
 
 {#if mode === "desk"}
-	<!-- `minmax(0, 1fr)` and not `1fr`: a grid track's automatic minimum is
+	<!-- The list is `listWidth` up to ~1600px of view, then grows with it
+	     to a 560px ceiling, so a 4K Focus is not two card columns beside an
+	     ocean. `minmax(0, 1fr)` and not `1fr`: a grid track's automatic minimum is
 	     min-content, so one long unbreakable string in the detail (a model id,
 	     a pasted URL) would otherwise widen the column and push the list off
 	     the panel instead of scrolling inside itself. -->
 	<div
 		class="grid min-h-0 flex-1"
-		style="grid-template-columns: {listWidth} minmax(0, 1fr);"
+		style="grid-template-columns: {columns};"
 	>
 		<div
 			class="{paneClass} border-surface-200 dark:border-surface-800 border-r"
@@ -90,11 +107,17 @@
 		</div>
 		<div class={paneClass}>
 			{#if hasDetail}
-				{@render detail()}
+				<!-- A reading width, centred in whatever room is left: at 4K
+				     the detail pane is ~3400px, and a description set across
+				     all of it is one unreadable line with its tabs a screen
+				     apart. The same 1120px the app's other reading columns use. -->
+				<div class="mx-auto flex w-full max-w-[1120px] min-h-0 flex-1 flex-col">
+					{@render detail()}
+				</div>
 			{:else if empty}
 				{@render empty()}
 			{:else}
-				<p class="text-muted m-auto px-6 text-center text-sm">
+				<p class="text-surface-600-400 m-auto px-6 text-center text-sm">
 					{emptyMessage}
 				</p>
 			{/if}

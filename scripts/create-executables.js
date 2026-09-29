@@ -50,11 +50,12 @@ async function createExecutables() {
 	// Ensure output directories exist
 	const distDir = path.join(__dirname, "..", "dist-assets")
 	const staticDir = path.join(__dirname, "..", "static")
-	const faviconSource = path.join(staticDir, "favicon.png")
+	// Shipped as favicon.png, the name the desktop entry and launchers use.
+	const faviconSource = path.join(staticDir, "icon-x256.png")
 
 	// Check if favicon exists
 	if (!fs.existsSync(faviconSource)) {
-		console.error("❌ favicon.png not found in static directory")
+		console.error("❌ icon-x256.png not found in static directory")
 		return
 	}
 

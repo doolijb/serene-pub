@@ -1,5 +1,5 @@
 /**
- * Who a stat belongs to, and how the five owner kinds line up into one chain.
+ * Who a stat belongs to, and how the owner kinds line up into one chain.
  *
  * Card is the template, lorebook is the world, session is the instance
  * (`DESIGN-stats-and-states.md`). Every read walks the same order —
@@ -13,13 +13,24 @@
  * world's weather.
  */
 
-/** The five, exactly as the CHECK constraint on the tables spells them. */
+/**
+ * The seven, exactly as the CHECK constraint on the tables spells them.
+ *
+ * 🚧 `location` and `session_location` (attributes phase 4, 2026-09-26): a
+ * place holds state of its own. `location` is the durable layer — a
+ * `core:entry/location` lore entry, by `lorebook_entries.id` — and
+ * `session_location` is this run's layer over it, by the SAME entry id
+ * (exactly as `session_cast` names the character a `card` names), kept
+ * apart per session by `session_id`.
+ */
 export const OWNER_KINDS = [
 	"card",
 	"cast_member",
 	"lorebook",
 	"session",
-	"session_cast"
+	"session_cast",
+	"location",
+	"session_location"
 ] as const
 
 export type OwnerKind = (typeof OWNER_KINDS)[number]
@@ -32,7 +43,8 @@ export const isOwnerKind = (v: unknown): v is OwnerKind =>
  *
  * `id` means a different table per kind — `characters.id` for `card` and
  * `session_cast`, `lorebook_bindings.id` for `cast_member`, `lorebooks.id`,
- * `sessions.id` — which is why there is no foreign key on the column and why
+ * `sessions.id`, `lorebook_entries.id` for `location` and `session_location`
+ * — which is why there is no foreign key on the column and why
  * this type is the only place the mapping is written down for code to read.
  */
 export interface StateOwner {
@@ -40,9 +52,13 @@ export interface StateOwner {
 	id: number
 }
 
-/** Which half of a declaration's `appliesTo` an owner kind belongs to. */
-export const ownerFacet = (kind: OwnerKind): "cast" | "world" =>
-	kind === "lorebook" || kind === "session" ? "world" : "cast"
+/** Which part of a declaration's `appliesTo` an owner kind belongs to. */
+export const ownerFacet = (kind: OwnerKind): "cast" | "world" | "location" =>
+	kind === "lorebook" || kind === "session"
+		? "world"
+		: kind === "location" || kind === "session_location"
+			? "location"
+			: "cast"
 
 /**
  * The layers a read falls through, nearest first.
@@ -74,6 +90,10 @@ export function resolutionChain(
 				chain.push({ kind: "lorebook", id: links.lorebookId })
 			return chain
 		}
+		case "session_location":
+			// This run's layer, then the place as the world knows it: the
+			// same entry id on both links, as a seat and its card share one.
+			return [owner, { kind: "location", id: owner.id }]
 		case "cast_member":
 			return links.characterId
 				? [owner, { kind: "card", id: links.characterId }]

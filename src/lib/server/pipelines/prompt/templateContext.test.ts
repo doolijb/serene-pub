@@ -183,7 +183,7 @@ describe("template context", () => {
 	})
 
 	it("carries no back-reference to a builder", async () => {
-		// `__promptBuilderInstance` was how the infill engines reached back into
+		// `__promptBuilderInstance` was how the 0.5 retrieval paths reached back into
 		// the builder mid-render. Its absence is the coupling being removed, not
 		// a field that was forgotten — a node cannot reach back into anything.
 		expect(

@@ -65,6 +65,8 @@
 				id: number
 				name: string
 				missingSince?: string | null
+				enabled?: boolean
+				satisfiableCapabilities?: readonly string[] | null
 			}[]
 		}[]
 		/** Switch the KoboldCPP manager on and create its connection when
@@ -199,14 +201,14 @@
 				i < stepIndex ? "done" : i === stepIndex ? "current" : "ahead"}
 			<li
 				class="flex items-center gap-1.5 {state === 'ahead'
-					? 'text-surface-500'
+					? 'text-surface-600-400'
 					: ''}"
 				aria-current={state === "current" ? "step" : undefined}
 			>
 				<span
 					class="grid size-5 place-items-center rounded-full text-[11px] {state ===
 					'current'
-						? 'preset-filled-primary-500'
+						? 'preset-tonal-primary ring-primary-500 ring-1'
 						: state === 'done'
 							? 'preset-tonal-primary'
 							: 'preset-tonal-surface'}"
@@ -238,7 +240,7 @@
 					your hardware and it downloads and starts on its own.
 				</p>
 				<KoboldCppBinaryVariantPicker onDownloadStarted={() => {}} />
-				<p class="text-surface-500 text-xs">
+				<p class="text-surface-600-400 text-xs">
 					Already running KoboldCPP yourself?
 					<button
 						type="button"
@@ -272,7 +274,9 @@
 				>
 					<Icons.Check size={22} />
 				</span>
-				<h3 class="funnel-display text-lg font-semibold">
+				<h3
+					class="[font-family:var(--typo-heading--font-family)] text-lg font-semibold"
+				>
 					Chat is set up
 				</h3>
 				<p class="text-surface-600-400 text-sm">{sentence}</p>
@@ -296,7 +300,7 @@
 					</button>
 				</div>
 			</section>
-			<p class="text-surface-500 px-0.5 text-xs">
+			<p class="text-surface-600-400 px-0.5 text-xs">
 				Images, embeddings and named entities can be set up later from
 				the readiness card.
 			</p>

@@ -10,8 +10,12 @@
  * nothing about what is stored.
  */
 
-import { dateValue, type StoryDate } from "../sections/historyDates"
-import { isInStoryAsOf, momentKey, momentValue } from "../time/moment"
+import type { StoryDate } from "../sections/historyDates"
+import { isInStoryAsOf, momentDate, momentKey } from "../time/moment"
+import {
+	rowsReadingOnLine,
+	type Line
+} from "$lib/shared/lorebooks/lineReading"
 
 /** A history entry, as little of it as a date needs. */
 export interface DatedEntryLike extends StoryDate {
@@ -23,14 +27,38 @@ export interface DatedEdgeLike {
 	historyEntryId: number | null
 }
 
-/** When an edge happened, or nothing when nothing dates it. */
-export function edgeDateValue(
+/**
+ * When an edge happened, or nothing when nothing dates it.
+ *
+ * ⚠ A DATE, ordered by `compareDates` — never the packed `dateValue`, which
+ * puts Y3 Mo. 1 Day 250 after Y3 Mo. 3 Day 50.
+ */
+export function edgeDate(
 	edge: DatedEdgeLike,
 	entries: readonly DatedEntryLike[]
-): number | null {
+): StoryDate | null {
 	if (edge.historyEntryId == null) return null
 	const entry = entries.find((e) => e.id === edge.historyEntryId)
-	return entry ? dateValue(entry) : null
+	return entry
+		? { year: entry.year, month: entry.month ?? null, day: entry.day ?? null }
+		: null
+}
+
+/**
+ * The edges the line being read can see (owner ruling 5).
+ *
+ * `line` carries the whole ancestor chain (`openBookTime.lineOf`), so a fork
+ * of a fork reads its parent's links too. A link on an ancestor line that is
+ * dated after the fork is CUT from the branch — the date is the history entry
+ * that dates it; an undated link is never cut. A sibling line's links never
+ * show.
+ */
+export function edgesOnLine<T extends DatedEdgeLike & { branchId?: number | null }>(
+	edges: readonly T[],
+	line: Line,
+	entries: readonly DatedEntryLike[]
+): T[] {
+	return rowsReadingOnLine(edges, line, (e) => edgeDate(e, entries))
 }
 
 /** The web as it stood at the moment: everything that had happened by then. */
@@ -39,9 +67,9 @@ export function edgesAtMoment<T extends DatedEdgeLike>(
 	moment: string | null | undefined,
 	entries: readonly DatedEntryLike[]
 ): T[] {
-	const at = momentValue(moment)
+	const at = momentDate(moment)
 	if (at == null) return [...edges]
-	return edges.filter((e) => isInStoryAsOf(edgeDateValue(e, entries), at))
+	return edges.filter((e) => isInStoryAsOf(edgeDate(e, entries), at))
 }
 
 export interface MomentSplit<T> {
@@ -62,12 +90,12 @@ export function splitByMoment<T extends DatedEdgeLike>(
 	moment: string | null | undefined,
 	entries: readonly DatedEntryLike[]
 ): MomentSplit<T> {
-	const at = momentValue(moment)
+	const at = momentDate(moment)
 	if (at == null) return { inStory: [...edges], later: [] }
 	const inStory: T[] = []
 	const later: T[] = []
 	for (const edge of edges)
-		(isInStoryAsOf(edgeDateValue(edge, entries), at)
+		(isInStoryAsOf(edgeDate(edge, entries), at)
 			? inStory
 			: later
 		).push(edge)

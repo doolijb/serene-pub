@@ -173,8 +173,6 @@ describe("who may load a concrete adapter module", () => {
 			"THE sanctioned site. Every import() here lives inside a thunk, which is what makes the whole architecture lazy.",
 		"src/lib/server/sockets/ollama.ts":
 			"Pre-existing STATIC import, for `ollamaAdapter.connectionDefaults` alone. It pulls the `ollama` client into the socket-registration graph at boot to read a constant — the defaults belong in $lib/shared/utils/connectionDefaults with the rest, and moving them would delete this entry. Harmless today only because it is not the LM Studio module.",
-		"src/lib/server/sockets/koboldcpp.ts":
-			"The same pre-existing shape: a STATIC import used only for `koboldCppManagedAdapter.connectionDefaults`. Same fix, same reason it is tolerated rather than approved.",
 		"src/lib/server/sockets/images.ts":
 			"Lazy import() inside a handler, of the managed image adapter. Loads on use, which is the rule; it predates the registry and should become a registry lookup.",
 		"src/lib/server/pipelines/runtime/dispatchImage.ts":
@@ -214,16 +212,13 @@ describe("who may load a concrete adapter module", () => {
 		).toEqual([])
 	})
 
-	test("only the two legacy sockets files load an adapter STATICALLY", () => {
+	test("only the one legacy sockets file loads an adapter STATICALLY", () => {
 		// The distinction the Android crash turns on. A lazy `import()` inside a
 		// handler costs nothing until that backend is used; a top-level import puts
 		// the module — and its backend SDK — in its importer's graph unconditionally,
-		// which for a socket module means at boot. These two are the only ones, and
-		// they are pinned by name so a third cannot arrive without this failing.
-		const STATIC_OK = [
-			"src/lib/server/sockets/ollama.ts",
-			"src/lib/server/sockets/koboldcpp.ts"
-		]
+		// which for a socket module means at boot. This is the only one, and it is
+		// pinned by name so a second cannot arrive without this failing.
+		const STATIC_OK = ["src/lib/server/sockets/ollama.ts"]
 		const offenders = ALL_IMPORTS.filter(
 			(i) =>
 				!inAdapterDir(i.file) &&

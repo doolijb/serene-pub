@@ -672,7 +672,7 @@ describe("sessions:layoutPreset — rename, delete, usage", () => {
 				.where(
 					eq(schema.sessionPanelLayouts.sessionId, s.session.id)
 				)
-			expect(layoutRow.layoutPresetId).toBeNull()
+			expect(layoutRow.startedFromLayoutPresetId).toBeNull()
 			const got = await sessionsPanelLayoutGetHandler.handler(
 				fakeSocket(s.owner.id),
 				{ sessionId: s.session.id } as any,

@@ -1,7 +1,9 @@
 /**
- * "Use this layout for my new Adventure sessions" — the `user_layout_defaults`
- * table (session layout v2 §4.2), one row per person per genre and the third
- * tier of the resolution chain (§4.4).
+ * "Use this layout for my new Adventure sessions" — a person's **new-session
+ * layout** (NOMENCLATURE §9), stored in the `user_layout_defaults` table, one
+ * row per person per genre. The table and this module keep their names (R5).
+ * ⏳ Nothing reads it until the copy model's first open lands (briefs 3 and 6a
+ * of `PLAN-layout-one-format-2026-09-28`).
  *
  * ## Why a table and not a user setting
  *
@@ -9,14 +11,14 @@
  * a settings blob keyed by genre id would keep rows for genres that have gone
  * away with nothing able to prune them. A row with a real FK is also what makes
  * "the preset I defaulted to was deleted" a `SET NULL` rather than a dangling
- * id — the person falls through to the genre's own layout, which is what they
+ * id — the person falls through to the genre default layout, which is what they
  * would have had before they chose.
  *
  * ## What it is not
  *
- * Not the ACTIVE layout: that is the `session_panel_layouts` row, per session.
- * Setting a default changes nothing about a session that already exists — it is
- * read when a session resolves and finds no preset of its own.
+ * Not a session's layout: that is the `session_panel_layouts` row, per session.
+ * Setting one changes nothing about a session that already exists — it is
+ * read only when a person opens a session they have no layout for yet.
  */
 import { and, eq } from "drizzle-orm"
 import { db } from "."
@@ -48,8 +50,8 @@ export async function getUserLayoutDefault(
  * Set — or, with `presetId: null`, clear — this person's default for a genre.
  *
  * The preset must be one they may APPLY: same genre, and visible to them.
- * Without that check any id at all could be defaulted to, and the chain would
- * then resolve a stranger's private layout for every new session they started.
+ * Without that check any id at all could be defaulted to, and a stranger's
+ * private layout would be copied into every new session they started.
  * Refused with the same sentence a missing id gets, so the id space cannot be
  * walked (the privacy order `layoutPresets.ts` keeps).
  */

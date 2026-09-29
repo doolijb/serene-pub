@@ -404,7 +404,7 @@ export function toCompiledPrompt(
 	 * and without it the split path silently loses its whole `meta`.
 	 *
 	 * Assemble publishes `{blocks, budget, rendered, messages, …}` — and in
-	 * split-session format `messages` is a real array, so the "already looks
+	 * split-chat format `messages` is a real array, so the "already looks
 	 * compiled" test below matched Assemble's OWN payload and returned it
 	 * untouched. The caller then got an allocation record where it expected
 	 * `{prompt, messages, meta}`: `sessions.ts`'s token count reads
@@ -491,7 +491,7 @@ export function toCompiledPrompt(
 			 * This replaces the legacy `meta.rag` rather than reproducing it.
 			 * Those fields — `messages.guaranteed`, `messages.ragOlder`,
 			 * `messages.filledIn`, `lore.*.pinned` vs `.rag` — are counters for
-			 * the *infill engine's internal phases*: a guaranteed window, then a
+			 * the *0.5 retrieval path's internal phases*: a guaranteed window, then a
 			 * RAG pass over older messages, then a fill pass. The pipeline has no
 			 * such phases. It scores candidates, allocates a budget, and records
 			 * per block why that block is in or out. Reporting the old numbers
@@ -1093,7 +1093,7 @@ export async function dispatchGeneration(
 		// The pipeline's own strip, and the reason no consumer of this function
 		// has to have one. `text` goes on a port and from there into a lore
 		// entry, a scene, a summary, a session message — durable records, every
-		// one of them, with no later stage that could tell reasoning from what
+		// one of them, with no later step that could tell reasoning from what
 		// the model meant to say. Reasoning already has a home on this result,
 		// so nothing is lost by moving it there.
 		//

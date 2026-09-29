@@ -148,6 +148,30 @@ export const startupTasks: StartupTask[] = [
 	},
 	{
 		/**
+		 * Authored components (C6): recompile every one whose artifact was
+		 * built by another toolchain or is gone from the component cache;
+		 * a failure lands in `last_error` and that widget is not offered.
+		 * Skipped with the extension subsystem off, and where the server has
+		 * no compiler (Android) — rows are then left exactly as they are.
+		 */
+		name: "components",
+		run: async () => {
+			const { bootAuthoredComponents } = await import(
+				"$lib/server/components/boot"
+			)
+			const r = await bootAuthoredComponents(db)
+			if (r.recompiled.length)
+				console.info(
+					`[components] recompiled ${r.recompiled.length} authored component(s) for this toolchain`
+				)
+			for (const f of r.failed)
+				console.warn(
+					`[components] authored.${f.id} does not compile and is not offered: ${f.error}`
+				)
+		}
+	},
+	{
+		/**
 		 * The event map's laws over what is installed (PLAN-turn-order §B3):
 		 * a listed event nothing fires (C28), a loop nothing stops (C29).
 		 * After `plugins`, so a plugin's genres and listeners are judged too.

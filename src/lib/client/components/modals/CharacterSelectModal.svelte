@@ -55,8 +55,9 @@
 				class="card bg-surface-100-900 relative max-h-[95dvh] w-[min(95vw,800px)] space-y-6 overflow-hidden p-6 shadow-xl"
 			>
 				<header class="flex items-center justify-between">
-					<h2 class="h2">Select Character</h2>
+					<h2 class="h2">Select character</h2>
 					<button
+						aria-label="Close"
 						class="btn btn-sm"
 						onclick={() => onOpenChange({ open: false })}
 					>
@@ -64,6 +65,7 @@
 					</button>
 				</header>
 				<input
+					aria-label="Search characters"
 					class="input w-full"
 					type="text"
 					placeholder="Search characters..."
@@ -77,7 +79,7 @@
 							: "No characters yet — create one to get started."}
 						ctaLabel={search || !onCreateNew
 							? undefined
-							: "New Character"}
+							: "New character"}
 						onCta={search ? undefined : onCreateNew}
 					/>
 				{:else}
@@ -89,7 +91,7 @@
 								{#if c.id}
 									<div class="flex p-1 lg:basis-1/2">
 										<button
-											class="group preset-outlined-surface-400-600 hover:preset-filled-surface-500 relative flex w-full gap-3 overflow-hidden rounded p-2"
+											class="group preset-outlined-surface-400-600 hover:bg-surface-200-800 relative flex w-full gap-3 overflow-hidden rounded p-2"
 											onclick={() =>
 												onSelect(
 													c as Partial<SelectCharacter> & {
@@ -143,7 +145,7 @@
 								class="btn btn-sm preset-tonal-primary flex items-center gap-1"
 								onclick={onCreateNew}
 							>
-								<Icons.Plus size={16} /> New Character
+								<Icons.Plus size={16} /> New character
 							</button>
 						</div>
 					{/if}

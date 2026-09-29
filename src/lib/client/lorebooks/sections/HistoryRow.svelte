@@ -60,11 +60,11 @@
 				pool.openCompile(source)
 			}}
 		>
-			<Icons.Loader size={11} class="inline animate-spin" /> Compiling…
+			<Icons.Loader2 size={11} class="inline animate-spin" /> Compiling…
 		</button>
 	{:else if compiling?.status === "review"}
 		<button
-			class="preset-filled-warning-500 rounded px-1.5 py-0.5 text-xs"
+			class="preset-tonal-surface rounded px-1.5 py-0.5 text-xs"
 			title="Review pending. Click to review"
 			onclick={(e) => {
 				e.stopPropagation()

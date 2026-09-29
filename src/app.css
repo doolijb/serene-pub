@@ -1,4 +1,15 @@
+/* Cascade layer order. Tailwind declares the first four; `sp-widgets` (the
+   default widget sheet, styles/widgets.css, and the conversation's pack base,
+   sessionLayout/messageLayouts.css) comes LAST, so it beats the utilities in a
+   widget's markup as the unlayered sheets it replaced did, while anything
+   unlayered — a widget style preset or a person's style — beats it outright.
+   Declared first so no import can fix the order another way. */
+@layer theme, base, components, utilities, sp-widgets;
+
 @import "tailwindcss";
+/* Core's components are built in the core library, outside `src/`: their
+   classes are this stylesheet's to generate. */
+@source "../node_modules/@serene-pub/core-catalog/components";
 @import "@fontsource/fira-mono";
 /* Self-hosted like fira-mono above — the theme names these two families
    (--typo-base--font-family / --typo-heading--font-family) and this is a
@@ -58,9 +69,10 @@
 @import "./lib/client/styles/docs.css";
 /* Core's base skin over the sp elements' parts (STYLE-GUIDE §6.10). */
 @import "./lib/client/styles/hostElements.css";
-/* The conversation widgets' structure, which a remote build cannot carry in
-   component <style> blocks (C0b). */
-@import "./lib/client/styles/conversation.css";
+/* The default style preset for session widgets: core's one widget sheet, in
+   `@layer sp-widgets` (ordered at the top of this file). A remote build
+   cannot carry component <style> blocks (C0b, F5), so it is page-loaded. */
+@import "./lib/client/styles/widgets.css";
 
 :root {
 	/* The prose face for story text in a session; STYLE-GUIDE §3.1. */
@@ -93,6 +105,29 @@
 	font-family: "Funnel Display", sans-serif;
 	font-optical-sizing: auto;
 	font-style: normal;
+}
+
+/* Landing ring: the element an address or a search brought the reader to
+   (admin `#field` targets). A ring outside the element, fading, so it never
+   shifts layout or fights the element's own background. */
+.sp-landed {
+	animation: sp-landed 1.6s ease-out;
+	border-radius: 0.5rem;
+}
+@keyframes sp-landed {
+	0%,
+	45% {
+		box-shadow: 0 0 0 3px var(--color-primary-500);
+	}
+	100% {
+		box-shadow: 0 0 0 3px transparent;
+	}
+}
+@media (prefers-reduced-motion: reduce) {
+	.sp-landed {
+		animation-duration: 2.4s;
+		animation-timing-function: steps(1, end);
+	}
 }
 
 @keyframes spin-slow {
@@ -130,21 +165,6 @@
 
 .rendered-chat-message-content img {
 	@apply border-surface-300-700 max-h-48 max-w-full cursor-pointer rounded-lg border object-cover;
-}
-
-/* The two tones story prose is set in (STYLE-GUIDE §3.3): dialogue inside
-   quotation marks is one colour and the narration around it another, so who is
-   speaking to whom reads before the words do. Which two colours is the widget
-   style's call — a pack sets `--sp-body` and `--sp-quote` on the conversation
-   and the message bodies under it inherit them here. Scoped to
-   `.sp-conversation` so it reaches session prose only; Document View keeps its
-   own greyscale palette and its own AAA promise. */
-.sp-conversation .rendered-session-message-content {
-	color: var(--sp-body, inherit);
-}
-
-.sp-conversation .rendered-session-message-content span.quoted-text {
-	color: var(--sp-quote, inherit);
 }
 
 .sidebar-list-item {
@@ -265,376 +285,6 @@
 	}
 }
 
-/* Shared button style for items inside a Popover.Content "kebab menu" style
-   dropdown (message options, character/persona/lorebook/chat item options,
-   composer "more tabs" menu, etc.) — plain text row with an icon that fills
-   in on hover, instead of a permanently-filled button, so a stack of several
-   menu items reads as one list rather than a wall of colored buttons. */
-.popover-menu-btn {
-	@apply flex h-min w-full items-center justify-start gap-2 px-2 text-[1em] disabled:opacity-25;
-}
-
-/* Shared header for the same popover menus — icon + title, consistent across
-   every "..." trigger in the app. */
-.popover-menu-title {
-	@apply flex items-center gap-2 text-lg font-bold;
-}
-
-/* The *new* mark on an action a person has not met yet (R-15, U5c): a quiet
-   badge on the menu row, a dot on the overflow trigger that lists one. The
-   mark is data (`isNew` off `sessions:actions`) and clears when the list that
-   shows it is opened; a CSS pack may restyle it, never remove the row. */
-.sp-action-new {
-	@apply preset-tonal-primary ml-auto rounded-full px-1.5 py-0 text-[0.65em] font-semibold tracking-wide uppercase;
-}
-.sp-action-new-dot {
-	@apply bg-primary-500 absolute -top-0.5 -right-0.5 size-2 rounded-full;
-}
-
-/* --- Chat message header controls -----------------------------------------
-
-   One shared size for every control in a chat message header: the "..."
-   trigger, Stop Generation, Cancel/Save while editing, the swipe arrows and
-   the summarization select buttons. Before this there were five different
-   boxes (38x38, ~140x30, 38x30, 70x30 and 32x32 round), so the header changed
-   height and the buttons visibly jumped every time a message moved between
-   normal / generating / editing / summarization.
-
-   Icon sizing lives here rather than at the call site because Skeleton's `btn`
-   utility contains `& > :where(svg, sp-icon) { width: var(--btn-size); height: ... }`,
-   which beats the width/height *attributes* Lucide emits — so the `size={N}`
-   prop on an icon inside a `.btn` is inert (everything rendered at 14px under
-   `btn-sm` regardless of what the prop said).
-
-   Deliberately plain unlayered rules rather than `@utility`, matching
-   .popover-menu-btn above: an unlayered rule beats every Tailwind utility,
-   which is what a fixed-size alignment contract needs — a call site adding
-   `p-2` or `h-6` must not be able to silently break the row. */
-:root {
-	/* Touch-comfortable on mobile, tighter on desktop. The button boxes, the
-	   control rows and the character-name line all read this one variable, so
-	   they stay in lockstep by construction. */
-	--msg-ctrl-size: 2.25rem; /* 36px */
-	--msg-ctrl-icon: 1.125rem; /* 18px */
-}
-
-@media (width >= 64rem) {
-	:root {
-		--msg-ctrl-size: 2rem; /* 32px */
-		--msg-ctrl-icon: 1rem; /* 16px */
-	}
-}
-
-/* Always used together with `btn` — the .btn:disabled / :active /
-   :focus-visible rules below key off `.btn` alone, so dropping it (e.g. in
-   favour of Skeleton's `btn-icon`) would silently lose the press feedback,
-   focus ring and disabled dimming. */
-.msg-ctrl-btn {
-	display: inline-flex;
-	flex: none;
-	align-items: center;
-	justify-content: center;
-	inline-size: var(--msg-ctrl-size);
-	block-size: var(--msg-ctrl-size);
-	padding: 0;
-
-	& > :where(svg, sp-icon) {
-		inline-size: var(--msg-ctrl-icon);
-		block-size: var(--msg-ctrl-icon);
-	}
-}
-
-/* Same box, but grows to fit a text label where one is shown. Labels in
-   message headers are `hidden lg:inline`, so this is square on mobile and
-   only widens on desktop. */
-.msg-ctrl-btn-labeled {
-	display: inline-flex;
-	flex: none;
-	align-items: center;
-	justify-content: center;
-	gap: --spacing(2);
-	inline-size: var(--msg-ctrl-size);
-	block-size: var(--msg-ctrl-size);
-	padding: 0;
-
-	& > :where(svg, sp-icon) {
-		inline-size: var(--msg-ctrl-icon);
-		block-size: var(--msg-ctrl-icon);
-	}
-
-	@media (width >= 64rem) {
-		inline-size: auto;
-		padding-inline: --spacing(3);
-	}
-}
-
-/* A horizontal band guaranteed to be exactly one control tall whatever it
-   holds. Used for the button rows AND for the character-name line — pinning
-   both to the same min-height is what makes the name sit level with the
-   buttons in every state. Sets no gap on purpose; call sites pick one. */
-.msg-ctrl-row {
-	display: flex;
-	align-items: center;
-	min-block-size: var(--msg-ctrl-size);
-}
-
-/* The right-hand control stack in a message header. The min-width reserves
-   room for two buttons so the "..." trigger never slides sideways as the
-   message moves between idle (1 button), editing (Cancel + Save) and
-   generating (Stop + "..."). The character name next to it already truncates,
-   so the only cost is slightly earlier ellipsis on very long names. */
-.msg-ctrl-col {
-	display: flex;
-	flex: none;
-	flex-direction: column;
-	gap: --spacing(2);
-	min-inline-size: calc(var(--msg-ctrl-size) * 2 + --spacing(2));
-}
-
-/* --- The session composer -------------------------------------------------
-
-   One card carries the field and a 32px footer; everything around it — the
-   Actions disclosure, the keyboard hint — is quiet text above or below it.
-
-   The chip rules matter most: the session page hands the composer its genre
-   actions and its turn controls as snippets of ordinary buttons, and the chip
-   shape those buttons take is set here, on the row that wraps them, so the
-   page has nothing to change. Unlayered, like .popover-menu-btn and
-   .msg-ctrl-btn above, so a rule here wins over the utility classes those
-   buttons already carry; `:where()` keeps the specificity at zero so a call
-   site can still override one property on purpose. */
-
-.composer-card {
-	@apply border-surface-300 bg-surface-50 dark:border-surface-800 dark:bg-surface-950 relative rounded-[14px] border;
-	@apply focus-within:border-primary-500 focus-within:ring-primary-500 focus-within:ring-1;
-}
-
-[data-composer-skin="minimal"] .composer-card {
-	@apply rounded-[9999px] px-2;
-}
-
-.composer-body {
-	@apply px-2 pt-2;
-}
-
-/* The field is the card, so the textarea brings no box of its own. */
-.composer-field {
-	@apply w-full resize-none border-none bg-transparent p-0 text-[15px] leading-[1.5] outline-none;
-	max-block-size: 9em; /* six lines, then it scrolls */
-	overflow-y: auto;
-}
-
-[data-composer-skin="minimal"] .composer-field {
-	max-block-size: 1.6em;
-}
-
-[data-composer-skin="writer"] .composer-field {
-	font-family: var(--sp-prose, inherit);
-	font-size: 17px;
-	line-height: 1.65;
-	min-block-size: 13.2em; /* eight lines of prose */
-	max-block-size: none;
-}
-
-/* The `/` palette (R-15 slash names, U5c): a listbox above the field inside
-   the card, drawn by the composer rather than portalled, so it moves with the
-   composer's position (top or bottom) and never floats over the log. */
-.composer-palette {
-	@apply border-surface-200 dark:border-surface-800 mb-1 flex max-h-56 flex-col gap-px overflow-y-auto border-b pb-1;
-}
-
-.composer-palette-btn {
-	@apply flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px];
-}
-
-.composer-palette-row.is-highlighted .composer-palette-btn {
-	@apply preset-tonal-primary;
-}
-
-.composer-palette-row.is-disabled .composer-palette-btn {
-	@apply cursor-not-allowed opacity-50;
-}
-
-.composer-palette-slash {
-	@apply font-mono text-[12px];
-}
-
-.composer-palette-label {
-	@apply text-surface-700 dark:text-surface-300 truncate;
-}
-
-.composer-palette-note {
-	@apply text-surface-500 ml-auto text-[11px];
-}
-
-.composer-preview {
-	font-family: var(--sp-prose, inherit);
-	font-size: 17px;
-	line-height: 1.65;
-	min-block-size: 1.65em;
-	max-block-size: 18em;
-	overflow-y: auto;
-}
-
-/* The draft's share of the context window, along the card's top inner edge. */
-.composer-meter {
-	@apply pointer-events-none absolute inset-x-0 top-0 h-[2px] overflow-hidden;
-	border-start-start-radius: inherit;
-	border-start-end-radius: inherit;
-}
-
-.composer-meter-fill {
-	@apply bg-surface-500 h-full;
-
-	&.is-high {
-		@apply bg-warning-500;
-	}
-}
-
-.composer-footer {
-	@apply flex items-center gap-1 p-2;
-}
-
-.composer-footer-end {
-	@apply ml-auto flex items-center gap-1;
-}
-
-.composer-persona-chip {
-	@apply inline-flex h-8 items-center gap-1.5 rounded-full py-0 pr-2 pl-1 text-[13px] leading-[1.45] font-medium;
-	@apply text-surface-700 dark:text-surface-200;
-	@apply max-lg:h-11 pointer-coarse:h-11;
-
-	&.is-button {
-		@apply hover:bg-surface-200 dark:hover:bg-surface-800 cursor-pointer;
-	}
-
-	&:focus-visible {
-		@apply outline-primary-500 outline-2 outline-offset-2;
-	}
-}
-
-[data-composer-skin="minimal"] .composer-persona-name,
-[data-composer-skin="minimal"] .composer-persona-chip > :where(svg, sp-icon) {
-	display: none;
-}
-
-.composer-icon-btn {
-	@apply inline-flex size-8 items-center justify-center rounded-full;
-	@apply max-lg:size-11 pointer-coarse:size-11;
-
-	/* The idle tint is unlayered, so it has to stand aside for the tonal
-	   preset an open panel or a pressed Preview carries. */
-	&:not(.is-active) {
-		@apply text-surface-600 dark:text-surface-400 hover:text-surface-900 dark:hover:text-surface-50;
-	}
-
-	&:focus-visible {
-		@apply outline-primary-500 outline-2 outline-offset-2;
-	}
-
-	& > :where(svg, sp-icon) {
-		@apply size-4;
-	}
-}
-
-/* The channel strip (R-C): which of the session's channels the next line
-   lands on. Drawn only when a genre declares more than one, so it is absent
-   from every session that has ever existed. */
-.composer-channels {
-	@apply inline-flex items-center gap-0.5;
-}
-
-.composer-channel-btn {
-	@apply inline-flex h-8 items-center justify-center rounded-full px-3 text-[13px] leading-[1.45] font-medium;
-	@apply max-lg:h-11 max-lg:px-4 pointer-coarse:h-11 pointer-coarse:px-4;
-
-	/* Unlayered, so it stands aside for the tonal preset the chosen one
-	   carries — the same arrangement `.composer-icon-btn` uses. */
-	&:not(.is-active) {
-		@apply text-surface-600 dark:text-surface-400 hover:text-surface-900 dark:hover:text-surface-50;
-	}
-
-	&:focus-visible {
-		@apply outline-primary-500 outline-2 outline-offset-2;
-	}
-}
-
-.composer-send {
-	@apply inline-flex h-8 items-center justify-center gap-1.5 rounded-full px-3 text-[13px] leading-[1.45] font-medium;
-	@apply max-lg:h-11 max-lg:px-4 pointer-coarse:h-11 pointer-coarse:px-4;
-
-	& > :where(svg, sp-icon) {
-		@apply size-4;
-	}
-}
-
-/* A panel taking the field area names itself and offers the way back. */
-.composer-pane-head {
-	@apply mb-1 flex items-center justify-between gap-2;
-}
-
-.composer-pane-title {
-	@apply text-surface-600 dark:text-surface-400 text-xs;
-}
-
-.composer-quiet-btn {
-	@apply text-surface-600 dark:text-surface-400 hover:text-surface-900 dark:hover:text-surface-50 inline-flex h-7 items-center gap-1 rounded-[6px] text-xs;
-	@apply pointer-coarse:h-11;
-
-	&:focus-visible {
-		@apply outline-primary-500 outline-2 outline-offset-2;
-	}
-}
-
-.composer-actions-toggle {
-	@apply text-surface-500 hover:text-surface-700 dark:hover:text-surface-300 inline-flex h-7 items-center gap-1 rounded-[6px] text-xs;
-	@apply pointer-coarse:h-11;
-
-	&:focus-visible {
-		@apply outline-primary-500 outline-2 outline-offset-2;
-	}
-
-	& > :where(svg, sp-icon) {
-		@apply transition-transform duration-150;
-	}
-}
-
-.composer-actions-row {
-	@apply flex flex-wrap items-center gap-1.5 pt-1 pb-1;
-}
-
-.composer-chips {
-	@apply flex flex-wrap items-center gap-1.5;
-}
-
-.composer-chips :where(button) {
-	@apply inline-flex h-8 items-center justify-center gap-1.5 rounded-full px-3 text-[13px] leading-[1.45] font-medium;
-	@apply pointer-coarse:h-11 pointer-coarse:px-4;
-}
-
-.composer-chips :where(button) > :where(svg, sp-icon) {
-	@apply size-4;
-}
-
-/* The genre's contributed actions read as the session's own vocabulary. */
-.composer-chips-tonal :where(button) {
-	@apply bg-surface-200 text-surface-700 dark:bg-surface-800 dark:text-surface-200 border-none;
-}
-
-/* The turn controls sit a step quieter than the genre's own actions. */
-.composer-chips-outlined :where(button) {
-	@apply border-surface-300 text-surface-600 dark:border-surface-800 dark:text-surface-400 border bg-transparent;
-}
-
-.composer-hint {
-	@apply text-surface-500 mt-1 flex flex-wrap items-center gap-1 text-xs;
-}
-
-.composer-kbd {
-	@apply border-surface-300 text-surface-600 dark:border-surface-800 dark:text-surface-400 rounded-[6px] border px-1 py-px text-[11px];
-	font-family: "Fira Mono", monospace;
-}
-
 /* Consistent press/focus/disabled feedback across every button in the app —
    Skeleton's own .btn utility (see node_modules/@skeletonlabs/skeleton) only
    implements a hover brightness effect; it has no built-in active/focus-visible
@@ -683,8 +333,8 @@
    relied on the animation to *draw* itself would be invisible to exactly the
    users most likely to need the guidance.
 
-   Unlayered, like .popover-menu-btn and .msg-ctrl-btn above, so a call site's
-   own utility classes can't silently cancel the cue. */
+   Unlayered, so a call site's own utility classes can't silently cancel the
+   cue: an unlayered rule beats every Tailwind utility. */
 @keyframes tutorial-glow {
 	0%,
 	100% {

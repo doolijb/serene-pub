@@ -2,7 +2,7 @@
  * The index's new rows, rendered.
  *
  * `render` from `svelte/server`, like `CharacterCreatorModal.ssr.test.ts`: the
- * repo has no browser test environment, and what these four components do IS
+ * repo has no browser test environment, and what these three components do IS
  * the markup — a dot, a sentence and at most one button, assembled from what
  * the pure modules next door decided. This pins that the assembly happens at
  * all, and the two U4 placeholders still standing with it, so a lane replacing
@@ -19,36 +19,13 @@ vi.mock("$lib/client/sockets/socketInstance", () => ({
 	getSocket: () => ({ emit: () => {}, on: () => {}, off: () => {} })
 }))
 
-import ReadinessCard from "./ReadinessCard.svelte"
 import ConnectionRow from "./ConnectionRow.svelte"
 import DownloadsTray from "./DownloadsTray.svelte"
 import AddMenu from "./AddMenu.svelte"
 import ModelFinderView from "./ModelFinderView.svelte"
 import DownloadsView from "./DownloadsView.svelte"
-import { defaultsSummary } from "./defaultsSummary"
-import { readinessRows } from "./readiness"
 
 describe("the index's rows render", () => {
-	test("readiness card", () => {
-		const rows = readinessRows(defaultsSummary([], {}).entries)
-		const html = render(ReadinessCard, {
-			props: {
-				rows,
-				sectionOrder: [
-					"text->text",
-					"text->image",
-					"text->embedding",
-					"text->entities"
-				],
-				onOpen: () => {},
-				onFix: () => {}
-			}
-		}).body
-		expect(html).toContain("What this pub can do")
-		expect(html).toContain("0 of 10 ready")
-		expect(html).toContain("Not set · sessions can't reply")
-		expect(html).toContain("6 more")
-	})
 	test("connection row fills its four slots", () => {
 		const html = render(ConnectionRow, {
 			props: {

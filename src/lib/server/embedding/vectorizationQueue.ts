@@ -48,12 +48,13 @@ import {
 } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import { castEdgeOnly, isCastEdge } from "$lib/server/utils/narrativeEdges"
+import { DEFAULT_VECTOR_NAME } from "$lib/server/utils/lorebookEntries"
 import {
-	CHARACTER_LORE_TYPE_ID,
-	DEFAULT_VECTOR_NAME,
-	HISTORY_TYPE_ID,
-	WORLD_LORE_TYPE_ID
-} from "$lib/server/utils/lorebookEntries"
+	ENTRY_INDEX_SOURCES,
+	embeddableEntryType,
+	entryTypesOfSource,
+	type EntryIndexSource
+} from "./entrySources"
 import {
 	embed,
 	isModelReady,
@@ -322,11 +323,9 @@ const embeddingWork: LaneWorkSource = {
 			case "message":
 				return pickSessionMessage(modelId, undefined, ref.id)
 			case "worldLore":
-				return pickWorldLoreEntry(modelId, undefined, ref.id)
 			case "characterLore":
-				return pickCharacterLoreEntry(modelId, undefined, ref.id)
 			case "historyEntry":
-				return pickHistoryEntry(modelId, undefined, ref.id)
+				return pickEntryOfSource(ref.source, modelId, undefined, ref.id)
 			case "narrativeNode":
 				return pickNarrativeNode(modelId, undefined, ref.id)
 			case "narrativeRelationship":
@@ -782,16 +781,14 @@ async function pickFromGroup(
 		if (item) return item
 	}
 
-	// 2. Lorebook content (world lore → character lore → history entries → narrative graph)
+	// 2. Lorebook content (world lore, places and items → character lore →
+	// history entries → narrative graph). Every declared entry type, by its
+	// index source (`entrySources.ts`, finding #150).
 	for (const lorebookId of group.lorebookIds) {
-		const wle = await pickWorldLoreEntry(currentModel, lorebookId)
-		if (wle) return wle
-
-		const cle = await pickCharacterLoreEntry(currentModel, lorebookId)
-		if (cle) return cle
-
-		const he = await pickHistoryEntry(currentModel, lorebookId)
-		if (he) return he
+		for (const source of ENTRY_INDEX_SOURCES) {
+			const entry = await pickEntryOfSource(source, currentModel, lorebookId)
+			if (entry) return entry
+		}
 
 		const nn = await pickNarrativeNode(currentModel, lorebookId)
 		if (nn) return nn
@@ -820,11 +817,13 @@ async function pickFromGroup(
 async function pickGlobalNextItem(
 	currentModel: string
 ): Promise<QueueItem | null> {
+	const message = await pickSessionMessage(currentModel)
+	if (message) return message
+	for (const source of ENTRY_INDEX_SOURCES) {
+		const entry = await pickEntryOfSource(source, currentModel)
+		if (entry) return entry
+	}
 	return (
-		(await pickSessionMessage(currentModel)) ??
-		(await pickWorldLoreEntry(currentModel)) ??
-		(await pickCharacterLoreEntry(currentModel)) ??
-		(await pickHistoryEntry(currentModel)) ??
 		(await pickNarrativeNode(currentModel)) ??
 		(await pickNarrativeRelationship(currentModel)) ??
 		(await pickCharacter(currentModel)) ??
@@ -962,7 +961,7 @@ async function pickSessionMessage(
 // (generateResponse.ts) — itself llmQueue's execute() callback, and llmQueue
 // has a single global lane (llmQueue.ts:85), so only one generation runs at
 // a time, server-wide. That makes a hung embed() call here worse than any
-// existing caller (e.g. RagInfillEngine's query-time batchEmbed(), which
+// existing caller (e.g. the 0.5 RAG path's query-time batchEmbed(), which
 // only blocks the one generation that triggered it): it would stall every
 // other user's queued session generation too. The two constants below guard
 // two different things:
@@ -1106,16 +1105,17 @@ export async function ensureSessionMessageEmbedded(
  * shapes, `[content]` for history, which has no title to prepend.
  */
 async function pickEntry(
-	typeId: string,
+	typeIds: readonly string[],
 	labelType: VectorizationItemLabel["type"],
-	labelFor: (row: { id: number; title: string | null }) => string,
-	withTitle: boolean,
 	currentModel: string,
 	lorebookId?: number,
 	onlyId?: number
 ): Promise<QueueItem | null> {
+	if (!typeIds.length) return null
 	const where = and(
-		eq(schema.lorebookEntries.typeId, typeId),
+		typeIds.length === 1
+			? eq(schema.lorebookEntries.typeId, typeIds[0]!)
+			: inArray(schema.lorebookEntries.typeId, [...typeIds]),
 		lorebookId
 			? eq(schema.lorebookEntries.lorebookId, lorebookId)
 			: undefined,
@@ -1126,6 +1126,7 @@ async function pickEntry(
 	const rows = await db
 		.select({
 			id: schema.lorebookEntries.id,
+			typeId: schema.lorebookEntries.typeId,
 			content: schema.lorebookEntries.content,
 			title: schema.lorebookEntries.title,
 			lorebookId: schema.lorebookEntries.lorebookId,
@@ -1139,18 +1140,21 @@ async function pickEntry(
 	if (!rows.length) return null
 	const {
 		id,
+		typeId,
 		content,
 		title,
 		lorebookId: rowLorebookId,
 		updatedAtRaw
 	} = rows[0]
+	const kind = embeddableEntryType(typeId)
 	// `title ? title + "\n" + content : content` — the type's `embedText` role
-	// spelled out: `[title, content]` for the two lore shapes, `[content]` for
+	// spelled out: `[title, content]` for the named shapes, `[content]` for
 	// history, which has no title to prepend.
-	const text = withTitle && title ? `${title}\n${content}` : content
+	const text = kind?.withTitle && title ? `${title}\n${content}` : content
+	const noun = kind?.noun ?? typeId
 	return queueItem({
 		type: labelType,
-		label: labelFor({ id, title }),
+		label: kind?.withTitle ? `${noun}: ${title || id}` : `${noun} #${id}`,
 		id,
 		lorebookId: rowLorebookId,
 		currentModel,
@@ -1166,46 +1170,20 @@ async function pickEntry(
 	})
 }
 
-const pickWorldLoreEntry = (
+/**
+ * The next row of one index source needing a vector — every declared type
+ * that indexes under it (`entrySources.ts`): world lore, places and items
+ * under `worldLore`; character lore; history under `historyEntry`.
+ */
+const pickEntryOfSource = (
+	source: EntryIndexSource,
 	currentModel: string,
 	lorebookId?: number,
 	onlyId?: number
 ) =>
 	pickEntry(
-		WORLD_LORE_TYPE_ID,
-		"worldLore",
-		(r) => `World lore: ${r.title || r.id}`,
-		true,
-		currentModel,
-		lorebookId,
-		onlyId
-	)
-
-const pickCharacterLoreEntry = (
-	currentModel: string,
-	lorebookId?: number,
-	onlyId?: number
-) =>
-	pickEntry(
-		CHARACTER_LORE_TYPE_ID,
-		"characterLore",
-		(r) => `Character lore: ${r.title || r.id}`,
-		true,
-		currentModel,
-		lorebookId,
-		onlyId
-	)
-
-const pickHistoryEntry = (
-	currentModel: string,
-	lorebookId?: number,
-	onlyId?: number
-) =>
-	pickEntry(
-		HISTORY_TYPE_ID,
-		"historyEntry",
-		(r) => `History entry #${r.id}`,
-		false,
+		entryTypesOfSource(source),
+		source,
 		currentModel,
 		lorebookId,
 		onlyId
@@ -1552,12 +1530,8 @@ export async function scopedMissingVectors(
 		: undefined
 
 	if (lorebookIds.length > 0) {
-		const entryTypes: Array<[string, string]> = [
-			[WORLD_LORE_TYPE_ID, "worldLore"],
-			[CHARACTER_LORE_TYPE_ID, "characterLore"],
-			[HISTORY_TYPE_ID, "historyEntry"]
-		]
-		for (const [typeId, source] of entryTypes) {
+		for (const source of ENTRY_INDEX_SOURCES) {
+			const typeIds = entryTypesOfSource(source)
 			if (room() <= 0) break
 			push(
 				source,
@@ -1572,7 +1546,7 @@ export async function scopedMissingVectors(
 								lorebookIds
 							),
 							eq(schema.lorebookEntries.enabled, true),
-							eq(schema.lorebookEntries.typeId, typeId),
+							inArray(schema.lorebookEntries.typeId, typeIds),
 							entryNeedsEmbedding(currentModel)
 						)
 					)

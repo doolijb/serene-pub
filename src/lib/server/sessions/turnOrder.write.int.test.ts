@@ -9,7 +9,7 @@
  *
  * Plus the keyed lock it rides on: `withKeyedLock(key, id, fn)` serialises
  * same-(key, id) callers and leaves different keys — and different ids —
- * fully parallel; `withSessionTriggerLock` is the `trigger` key.
+ * fully parallel; `withSessionGenerationLock` is the `generation` key.
  */
 
 import { beforeAll, describe, expect, it } from "vitest"
@@ -18,7 +18,7 @@ import * as schema from "$lib/server/db/schema"
 import { createTestDb, createTestUser, type TestDb } from "$lib/server/utils/testDb"
 import { EMPTY_TURN_ORDER, readTurnOrder, type TurnOrderV1 } from "@serene-pub/sdk"
 import { writeTurnOrder } from "./turnOrder"
-import { withKeyedLock, withSessionTriggerLock } from "$lib/server/utils/sessionTriggerLock"
+import { withKeyedLock, withSessionGenerationLock } from "$lib/server/utils/sessionGenerationLock"
 
 let db: TestDb
 let userId: number
@@ -145,14 +145,14 @@ describe("withKeyedLock", () => {
 				await wait(20)
 				seen.push("turnOrder:1")
 			}),
-			withKeyedLock("trigger", 1, async () => {
-				seen.push("trigger:1")
+			withKeyedLock("generation", 1, async () => {
+				seen.push("generation:1")
 			}),
 			withKeyedLock("turnOrder", 2, async () => {
 				seen.push("turnOrder:2")
 			})
 		])
-		expect(seen.slice(0, 2).sort()).toEqual(["trigger:1", "turnOrder:2"])
+		expect(seen.slice(0, 2).sort()).toEqual(["generation:1", "turnOrder:2"])
 		expect(seen[2]).toBe("turnOrder:1")
 	})
 
@@ -165,14 +165,14 @@ describe("withKeyedLock", () => {
 		expect(await withKeyedLock("turnOrder", 3, async () => "next")).toBe("next")
 	})
 
-	it("withSessionTriggerLock is the trigger key", async () => {
+	it("withSessionGenerationLock is the generation key", async () => {
 		const seen: string[] = []
 		await Promise.all([
-			withSessionTriggerLock(7, async () => {
+			withSessionGenerationLock(7, async () => {
 				await wait(20)
 				seen.push("first")
 			}),
-			withKeyedLock("trigger", 7, async () => {
+			withKeyedLock("generation", 7, async () => {
 				seen.push("second")
 			})
 		])

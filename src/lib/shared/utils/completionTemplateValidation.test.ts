@@ -37,7 +37,7 @@ describe("validateCompletionTemplate", () => {
 	it("accepts every FLAT template that ships", () => {
 		// The strongest evidence that the rules are not merely strict: the eight
 		// rows core seeds are the specification of what a template is, and seven
-		// of them are flat. `split_session` is the exception on purpose — it is
+		// of them are flat. `split_chat` is the exception on purpose — it is
 		// the one thing an admin may not author, and the rule below says so.
 		for (const t of BUILTIN_COMPLETION_TEMPLATES) {
 			const verdict = validateCompletionTemplate(t as any)
@@ -71,7 +71,7 @@ describe("validateCompletionTemplate", () => {
 				)
 		})
 		it("accepts the shapes the shipped keys already take", () => {
-			for (const key of ["vicuna", "llama2_inst", "split_session", "x9"])
+			for (const key of ["vicuna", "llama2_inst", "split_chat", "x9"])
 				expect(
 					validateCompletionTemplate(ok({ key })),
 					key

@@ -1,10 +1,8 @@
 /**
- * Round-10 audit fix (MEDIUM): contextConfigsUpdate/samplingConfigsUpdate
- * went straight to db.update(...).set(updateData) with no check that
- * updateData was non-empty — an {id}-only payload on a mutable row hit
- * Drizzle's empty .set() and threw, unlike the already-fixed
- * promptConfigsUpdate/narratorPromptConfigsUpdate/
- * summarizePromptConfigsUpdate (round 8). Also: samplingConfigsCreate used
+ * Round-10 audit fix (MEDIUM): samplingConfigsUpdate went straight to
+ * db.update(...).set(updateData) with no check that updateData was
+ * non-empty — an {id}-only payload on a mutable row hit Drizzle's empty
+ * .set() and threw. Also: samplingConfigsCreate used
  * to call samplingConfigsSetUserActive after insert, silently making every
  * newly created sampling config the instance-wide default — unlike every
  * sibling *ConfigsCreate handler.
@@ -26,7 +24,7 @@ import { releaseDataDir } from "$lib/server/utils/testDb"
 let testDb: TestDb
 let dataDir: string
 
-// samplingConfigs.ts/contextConfigs.ts transitively import $lib/server/auth
+// samplingConfigs.ts transitively imports $lib/server/auth
 // (via ./users), which needs getCryptoSecretKey() at import time — stubbed
 // directly here rather than via importOriginal(), which would otherwise
 // trigger $lib/server/db/index.ts's own module-level meta.json read/write
@@ -65,25 +63,6 @@ function fakeSocket(userId: number) {
 }
 
 const noopEmit = () => {}
-
-describe("contextConfigsUpdate — empty .set() guard", () => {
-	test("an {id}-only payload on a mutable row doesn't throw and returns the row unchanged", async () => {
-		const { contextConfigsUpdate } = await import("./contextConfigs")
-		const admin = await makeAdmin("config-crud-context-user")
-		const [config] = await testDb
-			.insert(schema.contextConfigs)
-			.values({ name: "My Context", template: "original" })
-			.returning()
-
-		const res = await contextConfigsUpdate.handler(
-			fakeSocket(admin.id),
-			{ contextConfig: { id: config.id } as any },
-			noopEmit
-		)
-		expect(res.contextConfig.id).toBe(config.id)
-		expect(res.contextConfig.template).toBe("original")
-	})
-})
 
 describe("samplingConfigsUpdate — empty .set() guard", () => {
 	test("an {id}-only payload on a mutable row doesn't throw and returns the row unchanged", async () => {

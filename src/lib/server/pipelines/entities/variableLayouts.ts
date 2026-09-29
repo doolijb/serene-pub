@@ -117,11 +117,24 @@ const asWritten = (v: unknown): string => (v == null ? "" : String(v))
  */
 const asCurrentDate = (v: unknown): string => {
 	if (v == null) return ""
-	const d = v as { year?: number; month?: number; day?: number }
+	const d = v as {
+		year?: number
+		month?: number
+		day?: number
+		hour?: number
+		minute?: number
+		label?: string
+	}
+	// A book with a declared calendar hands over its own spelling
+	// (DESIGN-story-time P5); a free-form one never sets `label`.
+	if (d.label) return d.label
 	if (d.year == null) return ""
 	let out = String(d.year)
 	if (d.month != null) out += `-${String(d.month).padStart(2, "0")}`
 	if (d.day != null) out += `-${String(d.day).padStart(2, "0")}`
+	// Only a stored clock carries a time of day; a history entry never does.
+	if (d.hour != null)
+		out += ` ${String(d.hour).padStart(2, "0")}:${String(d.minute ?? 0).padStart(2, "0")}`
 	return out
 }
 
@@ -144,6 +157,21 @@ const asIndentedJson = (v: unknown): string => {
 const asMinifiedJson = (v: unknown): string => {
 	const out = JSON.stringify(v)
 	return out === undefined ? "" : out
+}
+
+/**
+ * Recalled lines, one per line — the floor the shipped "Lines" layout
+ * reproduces byte for byte. A missing part renders empty, as Handlebars'
+ * `{{{x}}}` renders `undefined` and `null`.
+ */
+const asRecalledLines = (v: unknown): string => {
+	if (!Array.isArray(v)) return ""
+	const part = (x: unknown) => (x == null ? "" : String(x))
+	return v
+		.map((l: { turn?: unknown; speaker?: unknown; text?: unknown }) =>
+			`Earlier (turn ${part(l?.turn)}) — ${part(l?.speaker)}: ${part(l?.text)}`
+		)
+		.join("\n")
 }
 
 /**
@@ -320,6 +348,14 @@ interface VariableDefinition {
 	}
 	/** The heading and fence 0.5's context template wrote around it. */
 	wrapper?: { name: string; wrap: Wrap }
+	/**
+	 * A **declared band** core ships a layout for (typed templates P2): a
+	 * source definition's `bands` names this variable, so Assemble exposes the
+	 * key at the top level like any declared band — the layout here is what
+	 * the picker offers for it. Core's three lore bands are not marked: they
+	 * are Assemble's own and rendered by name.
+	 */
+	band?: true
 }
 
 /**
@@ -460,6 +496,46 @@ const VARIABLES: VariableDefinition[] = [
 			wrap: jsonBlock("World lore: ")
 		}
 	},
+	/**
+	 * The docs-search band (2026-09-27): the guide's documentation excerpts,
+	 * keyed "Page › Section", each value starting with the page's path.
+	 * Minified JSON like the lore it replaced, and no wrapper: the guide's
+	 * template writes the framing around it, because the framing is the
+	 * instruction ("these are the only docs you have") and belongs with the
+	 * `{{else}}` that says none matched.
+	 */
+	{
+		variableId: "core:var/docs-excerpts@1",
+		key: "docsExcerpts",
+		band: true,
+		content: {
+			name: "JSON",
+			source: recordEntries("docsExcerpts"),
+			render: asMinifiedJson,
+			explicit: true
+		}
+	},
+	/**
+	 * The recalled-lines band (2026-09-27): older transcript lines
+	 * entity-search found again, oldest first, one per line —
+	 * `Earlier (turn 12) — Mira: …`. The turn is what tells the model these
+	 * are not the conversation's latest lines, which is the whole difference
+	 * between a recalled line and the transcript. No wrapper: a template that
+	 * places `{{{recalledLines}}}` writes its own framing around it.
+	 */
+	{
+		variableId: "core:var/recalled-lines@1",
+		key: "recalledLines",
+		band: true,
+		content: {
+			name: "Lines",
+			source:
+				"{{#each recalledLines}}{{#unless @first}}\n{{/unless}}" +
+				"Earlier (turn {{{turn}}}) — {{{speaker}}}: {{{text}}}{{/each}}",
+			render: asRecalledLines,
+			explicit: true
+		}
+	},
 	{
 		variableId: "core:var/history@1",
 		key: "history",
@@ -539,10 +615,18 @@ const VARIABLES: VariableDefinition[] = [
 			// corpus checks: year, then `-MM` if there is a month, then `-DD`
 			// if there is a day.
 			name: "Numeric",
+			//
+			// A declared calendar's spelling (`label`, DESIGN-story-time P5)
+			// wins when present, and a stored clock's time of day follows the
+			// date; a free-form book with no clock sets neither, so its output
+			// is byte-identical to what it always was.
 			source:
+				"{{#if currentDate.label}}{{currentDate.label}}{{else}}" +
 				"{{currentDate.year}}" +
 				"{{#if (isSet currentDate.month)}}-{{pad currentDate.month 2}}{{/if}}" +
-				"{{#if (isSet currentDate.day)}}-{{pad currentDate.day 2}}{{/if}}",
+				"{{#if (isSet currentDate.day)}}-{{pad currentDate.day 2}}{{/if}}" +
+				"{{#if (isSet currentDate.hour)}} {{pad currentDate.hour 2}}:{{pad currentDate.minute 2}}{{/if}}" +
+				"{{/if}}",
 			render: asCurrentDate,
 			// Explicit: this source names the fields it renders, so the parity
 			// test has to feed it dates rather than strings. Without the flag
@@ -600,6 +684,14 @@ export const SHIPPED_VARIABLE_TEMPLATES: ShippedVariableTemplate[] =
 /** The row a fresh install selects for a key, and the floor for that key. */
 export const shippedByKey = new Map(
 	SHIPPED_VARIABLE_TEMPLATES.filter((t) => t.isDefault).map((t) => [t.key, t])
+)
+
+/**
+ * The keys core ships a layout for that are **declared bands** — exposed by
+ * Assemble at the top level like a plugin's, not rendered by name.
+ */
+export const SHIPPED_BAND_KEYS: ReadonlySet<string> = new Set(
+	VARIABLES.filter((v) => v.band).map((v) => v.key)
 )
 
 /** Every row core ships for a key, default first. */
@@ -695,8 +787,16 @@ export async function renderVariable(
 	if (def && def.content.render(value) === "") return ""
 
 	const shipped = shippedByKey.get(key)
+	// A key core ships nothing for is a plugin's band or a variable with an
+	// automatic layout (`objectVariableLayouts.ts`). An object there floors to
+	// that automatic layout's own output — minified JSON — and never to
+	// `String(value)`, which is `[object Object]` in someone's prompt.
 	const floor = () =>
-		shipped ? shipped.codeDefault(value) : asWritten(value)
+		shipped
+			? shipped.codeDefault(value)
+			: value !== null && typeof value === "object"
+				? asMinifiedJson(value)
+				: asWritten(value)
 
 	const chosen = layouts?.[key]
 	if (!chosen?.source) return floor()

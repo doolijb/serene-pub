@@ -20,8 +20,8 @@
  * honest answer there — so a forgotten one is not a type error; the projection
  * tests (`shared/widgets/context.test.ts`) prove what a populated section
  * does, never that a mount populated it; and the suite has no DOM, so no
- * render can read a context off a real host (see `SessionStage.ssr.test.ts`
- * on why a browser environment is not worth one assertion).
+ * render can read a context off a real host (a browser environment is not
+ * worth one assertion).
  *
  * So it is read off the source, like `socketEgress.test.ts` reads its emits.
  * A new mount added to one of these files fails here until it is threaded —
@@ -46,7 +46,6 @@ const PAGE = "src/routes/sessions/[id]/+page.svelte"
 const HOSTS = [
 	PAGE,
 	"src/lib/client/sessionLayout/SessionLayout.svelte",
-	"src/lib/client/sessionLayout/SessionStage.svelte",
 	"src/lib/client/components/surfaces/Panel.svelte",
 	"src/lib/client/components/surfaces/SurfaceGrid.svelte"
 ]
@@ -57,7 +56,6 @@ const MOUNTS = [
 	"PluginFrame",
 	"Panel",
 	"SessionLayout",
-	"SessionStage",
 	"SurfaceGrid"
 ]
 
@@ -164,11 +162,11 @@ describe("every widget mount is handed the session's actions", () => {
 		// a chip, a widget's `invoke`, all the same press to the server.
 		//
 		// Read off the source because the page has no DOM here: one
-		// `socket.emit("sessions:triggerFunction", …)`, and `runId` inside the
+		// `socket.emit("sessions:fireAction", …)`, and `runId` inside the
 		// object literal it sends.
 		const source = readFileSync(join(ROOT, PAGE), "utf8")
 		const sites = [
-			...source.matchAll(/socket\.emit\("sessions:triggerFunction"/g)
+			...source.matchAll(/socket\.emit\("sessions:fireAction"/g)
 		]
 		expect(
 			sites.map((s) => lineOf(source, s.index)),

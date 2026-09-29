@@ -16,7 +16,7 @@ function item(over: Partial<PoolItem> & { id: number }): PoolItem {
 		kind: "core:entry/world-lore",
 		name: `Entry ${over.id}`,
 		content: "",
-		keys: "",
+		keys: [],
 		pinned: false,
 		off: false,
 		archived: false,
@@ -31,7 +31,7 @@ function item(over: Partial<PoolItem> & { id: number }): PoolItem {
 	}
 }
 
-const city = item({ id: 1, name: "Umber City", keys: "umber, umber city" })
+const city = item({ id: 1, name: "Umber City", keys: ["umber", "umber city"] })
 const archive = item({
 	id: 2,
 	name: "The Archive",

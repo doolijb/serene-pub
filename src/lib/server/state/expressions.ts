@@ -39,6 +39,7 @@ import { Liquid, Tag } from "liquidjs"
 import type { TagToken, TopLevelToken } from "liquidjs"
 import type { SlotValue } from "@serene-pub/sdk"
 import { qualifiedSlotKey, slotKey } from "$lib/server/state/keys"
+import { INVENTORY_SLOT_ID } from "$lib/server/state/inventory"
 
 // ── Limits ──────────────────────────────────────────────────────────────────
 //
@@ -100,13 +101,6 @@ function refusedTag(name: string) {
 
 // ── The scope an expression sees ────────────────────────────────────────────
 
-/** One line of an owner's inventory, as the possession filters read it. */
-export interface PossessionLine {
-	entryId: number
-	name: string
-	quantity: number
-}
-
 /**
  * What an expression is evaluated against.
  *
@@ -124,7 +118,6 @@ export interface ExpressionScope {
 	state: Record<string, unknown>
 	owner: Record<string, SlotValue>
 	who: Record<string, unknown>
-	possessions?: PossessionLine[]
 	change?: {
 		slotId: string
 		value?: SlotValue
@@ -221,20 +214,38 @@ function slotFilter(scope: ExpressionScope, id: unknown): unknown {
 	return undefined
 }
 
-/** How many of a thing this owner is carrying, by entry id or by name. */
+/**
+ * How many of a thing this owner is carrying, by entry id or by name — read
+ * from the owner's `inventory` stat (phase 3b: the possession edges these
+ * filters read before are retired). A reference counts its held count
+ * (absent = 1) and matches by id or by its title; a word counts one and
+ * matches by itself.
+ */
 function heldCount(scope: ExpressionScope, subject: unknown): number {
-	const lines = scope.possessions ?? []
+	const owner = scope.owner ?? {}
+	const bag =
+		owner[qualifiedSlotKey(INVENTORY_SLOT_ID)] ?? owner[slotKey(INVENTORY_SLOT_ID)]
+	const items: unknown[] = Array.isArray(bag) ? bag : []
+	const lines = items.map((item) =>
+		item && typeof item === "object"
+			? {
+					entryId: (item as { entryId?: number }).entryId,
+					name: String((item as { name?: unknown }).name ?? ""),
+					count: Number((item as { count?: unknown }).count ?? 1) || 1
+				}
+			: { entryId: undefined, name: String(item ?? ""), count: 1 }
+	)
 	if (typeof subject === "number")
 		return lines
 			.filter((l) => l.entryId === subject)
-			.reduce((n, l) => n + l.quantity, 0)
+			.reduce((n, l) => n + l.count, 0)
 	const name = String(subject ?? "")
 		.trim()
 		.toLowerCase()
 	if (!name) return 0
 	return lines
-		.filter((l) => (l.name ?? "").trim().toLowerCase() === name)
-		.reduce((n, l) => n + l.quantity, 0)
+		.filter((l) => l.name.trim().toLowerCase() === name)
+		.reduce((n, l) => n + l.count, 0)
 }
 
 // ── The instance ────────────────────────────────────────────────────────────

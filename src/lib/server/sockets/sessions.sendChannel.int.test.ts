@@ -116,7 +116,6 @@ beforeAll(async () => {
 		sessionId,
 		characterId: verity.id,
 		isActive: true,
-		visibility: "visible"
 	} as any)
 	const [author] = await testDb
 		.insert(schema.characters)

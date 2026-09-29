@@ -1,7 +1,7 @@
 /**
  * Shared browsing-library types, used both server-side (CardSource
  * implementations, socket handlers) and client-side (library pages,
- * LibraryPortraitCard/LibraryDetailsModal).
+ * LibraryPortraitCard, LibraryResultRow, LibraryDetail).
  */
 
 /** Identifies which CardSource produced a given catalog entry. */

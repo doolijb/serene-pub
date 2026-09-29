@@ -147,7 +147,7 @@
 					{#if description}
 						<p
 							id="new-name-modal-description"
-							class="text-muted-foreground"
+							class="text-surface-600-400"
 						>
 							{description}
 						</p>
@@ -162,7 +162,7 @@
 								? 'border-error-500'
 								: ''}"
 							type="text"
-							placeholder="Enter a name..."
+							placeholder="Enter a name…"
 							aria-required="true"
 							aria-invalid={!!shownError}
 							aria-describedby={shownError
@@ -229,9 +229,8 @@
 						}}
 						disabled={!isValid}
 						type="button"
-						aria-label="Confirm and create new item"
 					>
-						Confirm
+						Create
 					</button>
 				</footer>
 			</Dialog.Content>

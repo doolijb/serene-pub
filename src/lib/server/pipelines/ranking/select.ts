@@ -1,5 +1,5 @@
 /**
- * Scoring and selection — the pure half of what the infill engines do between
+ * Scoring and selection — the pure half of what the 0.5 retrieval paths do between
  * retrieval and rendering.
  *
  * Two functions, and the split matters: `score` turns signals into a number,

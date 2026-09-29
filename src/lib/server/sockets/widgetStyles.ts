@@ -144,6 +144,9 @@ async function announcedWidgetIds(): Promise<Set<string>> {
 		.where(eq(schema.widgetStyles.source, "system"))
 	for (const r of seeded) ids.add(r.widgetSlug)
 	for (const id of await enabledPluginWidgetIds(db)) ids.add(id)
+	// And every offered authored component's (C6), under `authored.<id>:<slug>`.
+	const { offeredAuthoredWidgetIds } = await import("$lib/server/components/offer")
+	for (const id of await offeredAuthoredWidgetIds(db)) ids.add(id)
 	return ids
 }
 
@@ -281,7 +284,7 @@ function cleanVisibility(
  * The row this verb is about, and whether the caller may MANAGE it.
  *
  * ⚠ A row the caller cannot even see answers with the same sentence a missing
- * one gets — `entries:testRetrieval`'s rule, for the same reason: otherwise an
+ * one gets — the rule every owner-scoped probe follows, for the same reason: otherwise an
  * id probe distinguishes "not yours" from "not there" and enumerates other
  * people's private styles one number at a time.
  */

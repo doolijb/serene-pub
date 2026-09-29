@@ -1,0 +1,212 @@
+{
+	"name": "Emberfall",
+	"description": "A mountain town under an old dragon's shadow.",
+	"scan_depth": 5,
+	"token_budget": 800,
+	"recursive_scanning": false,
+	"extensions": {
+		"serenepub": {
+			"version": 1,
+			"uuid": "5a3c1f7e-2b8d-4e61-9f0a-7c2d4b6e8a10",
+			"characters": [
+				{
+					"localId": 1,
+					"card": {
+						"spec": "chara_card_v3",
+						"spec_version": "3.0",
+						"data": {
+							"name": "Maren",
+							"description": "The blacksmith of Emberfall.",
+							"personality": "Gruff, loyal.",
+							"scenario": "",
+							"first_mes": "What do you need forged?",
+							"mes_example": "",
+							"creator_notes": "",
+							"system_prompt": "",
+							"post_history_instructions": "",
+							"alternate_greetings": [],
+							"tags": ["smith", "emberfall"],
+							"creator": "tester",
+							"character_version": "",
+							"extensions": {
+								"depth_prompt": { "prompt": "", "depth": 4, "role": "system" },
+								"serenepub": {
+									"uuid": "0f1e2d3c-4b5a-4968-8776-a5b4c3d2e1f0",
+									"aliases": ["the smith"],
+									"summary": "Emberfall's blacksmith."
+								}
+							}
+						}
+					}
+				}
+			],
+			"personas": [
+				{
+					"localId": 3,
+					"card": {
+						"name": "Traveller",
+						"description": "A wanderer come to Emberfall.",
+						"creator": "",
+						"extensions": {
+							"serenepub": {
+								"uuid": "7d6c5b4a-3928-4716-a5f4-e3d2c1b0a9f8",
+								"aliases": ["the wanderer"],
+								"summary": "The player's traveller."
+							}
+						}
+					}
+				}
+			],
+			"bindings": [
+				{ "localId": 2, "bindingText": "{{char:1}}", "kind": "character", "characterLocalId": 1, "personaLocalId": null },
+				{ "localId": 4, "bindingText": "{{char:2}}", "kind": "persona", "characterLocalId": null, "personaLocalId": 3 },
+				{ "localId": 5, "bindingText": "{{char:3}}", "kind": "persona", "characterLocalId": null, "personaLocalId": null },
+				{ "localId": 6, "bindingText": "{{char:4}}", "kind": "character", "characterLocalId": null, "personaLocalId": null }
+			],
+			"narrativeGraph": {
+				"version": 1,
+				"nodes": [
+					{ "localId": 8, "name": "Maren", "nodeState": "active", "nodeVisibility": "normal", "aliases": ["the smith"], "absorbedAliases": [], "summary": "Emberfall's blacksmith.", "bindingLocalId": 2, "parentLocalId": null, "historyEntryLocalId": null, "sceneLocalId": null, "characterUuids": [] },
+					{ "localId": 9, "name": "Traveller", "nodeState": "active", "nodeVisibility": "normal", "aliases": ["the wanderer"], "absorbedAliases": [], "summary": null, "bindingLocalId": 4, "parentLocalId": null, "historyEntryLocalId": null, "sceneLocalId": null, "characterUuids": [] },
+					{ "localId": 10, "name": "The innkeeper", "nodeState": "active", "nodeVisibility": "normal", "aliases": ["barkeep"], "absorbedAliases": ["old Tam"], "summary": "Runs the Cinder Cup.", "bindingLocalId": 5, "parentLocalId": null, "historyEntryLocalId": 1, "sceneLocalId": 7, "characterUuids": [] },
+					{ "localId": 11, "name": "", "nodeState": "dormant", "nodeVisibility": "normal", "aliases": [], "absorbedAliases": [], "summary": null, "bindingLocalId": 6, "parentLocalId": 8, "historyEntryLocalId": null, "sceneLocalId": null, "characterUuids": [] }
+				],
+				"relationships": [
+					{ "fromLocalId": 8, "toLocalId": 9, "relationshipType": "ally", "description": "Maren trusts the traveller.", "visibility": "acknowledged", "status": "active", "reason": null, "historyEntryLocalId": null, "sceneLocalId": null },
+					{ "fromLocalId": 10, "toLocalId": 8, "relationshipType": "owes", "description": "The innkeeper owes Maren for the new hearth.", "visibility": "secret", "status": "active", "reason": "the hearth", "historyEntryLocalId": 1, "sceneLocalId": 7 }
+				]
+			}
+		}
+	},
+	"entries": [
+		{
+			"keys": ["emberfall", "ember fall"],
+			"content": "Emberfall clings to the mountain's flank.",
+			"enabled": true,
+			"insertion_order": 0,
+			"case_sensitive": false,
+			"use_regex": false,
+			"constant": false,
+			"id": 101,
+			"name": "Emberfall",
+			"comment": "Emberfall",
+			"priority": 2,
+			"extensions": { "position": 0, "depth": 4, "serenepub": { "entryType": "world", "category": "place" } }
+		},
+		{
+			"keys": ["dragon(s)?", "wyrm"],
+			"content": "An old dragon sleeps under the peak.",
+			"enabled": true,
+			"insertion_order": 1,
+			"case_sensitive": false,
+			"use_regex": true,
+			"constant": false,
+			"id": 102,
+			"name": "The dragon",
+			"comment": "The dragon",
+			"priority": 3,
+			"extensions": { "serenepub": { "entryType": "world" } }
+		},
+		{
+			"keys": ["maren"],
+			"content": "{{char:1}} once forged a blade for the king.",
+			"enabled": true,
+			"insertion_order": 2,
+			"case_sensitive": false,
+			"use_regex": false,
+			"constant": false,
+			"id": 201,
+			"name": "Maren's secret",
+			"comment": "Maren's secret",
+			"priority": 1,
+			"extensions": { "serenepub": { "entryType": "character", "bindingLocalId": 2 } }
+		},
+		{
+			"keys": ["traveller"],
+			"content": "{{char:2}} left home after the flood.",
+			"enabled": true,
+			"insertion_order": 3,
+			"case_sensitive": true,
+			"use_regex": false,
+			"constant": false,
+			"id": 202,
+			"name": "Traveller's past",
+			"comment": "Traveller's past",
+			"priority": 1,
+			"extensions": { "serenepub": { "entryType": "character", "bindingLocalId": 4 } }
+		},
+		{
+			"keys": ["innkeeper", "tam"],
+			"content": "{{char:3}} waters the ale.",
+			"enabled": false,
+			"insertion_order": 4,
+			"case_sensitive": false,
+			"use_regex": false,
+			"constant": false,
+			"id": 203,
+			"name": "Innkeeper's habit",
+			"comment": "Innkeeper's habit",
+			"priority": 1,
+			"extensions": { "serenepub": { "entryType": "character", "bindingLocalId": 5 } }
+		},
+		{
+			"keys": ["rumour"],
+			"content": "Nobody knows who {{char:4}} is.",
+			"enabled": true,
+			"insertion_order": 5,
+			"case_sensitive": false,
+			"use_regex": false,
+			"constant": true,
+			"id": 204,
+			"name": "Unbound rumour",
+			"comment": "Unbound rumour",
+			"priority": 1,
+			"extensions": { "serenepub": { "entryType": "character" } }
+		},
+		{
+			"keys": ["hearth"],
+			"content": "Maren rebuilt the inn's hearth.",
+			"enabled": true,
+			"insertion_order": 6,
+			"case_sensitive": false,
+			"use_regex": false,
+			"constant": false,
+			"id": 301,
+			"extensions": {
+				"serenepub": {
+					"entryType": "history",
+					"localId": 1,
+					"year": 1203,
+					"month": 4,
+					"day": 12,
+					"isCompleted": true,
+					"graphed": true,
+					"scenes": [
+						{ "localId": 7, "name": "The new hearth", "summary": "Maren fits the hearth; the innkeeper cannot pay.", "participantCharacters": [2, 5], "mentionedCharacters": [4] }
+					]
+				}
+			}
+		},
+		{
+			"keys": [],
+			"content": "The first snow of 1204.",
+			"enabled": true,
+			"insertion_order": 7,
+			"case_sensitive": false,
+			"use_regex": false,
+			"constant": false,
+			"id": 302,
+			"extensions": {
+				"serenepub": {
+					"entryType": "history",
+					"localId": 2,
+					"year": 1204,
+					"month": null,
+					"day": null,
+					"isCompleted": false,
+					"graphed": false
+				}
+			}
+		}
+	]
+}

@@ -120,6 +120,26 @@ function okClause(stateWord: string): string {
 	return stateWord === "ready" ? "listed" : stateWord
 }
 
+/**
+ * The mark for a capability that READS something other than text.
+ *
+ * The output kind alone gave vision (`text+image->text`) the text mark, a
+ * "T", beside a sentence about looking at pictures (walk 2026-09-24, plan
+ * C8). What such a capability takes in is what tells it apart.
+ */
+const READING_ICONS: Record<string, string> = {
+	"text+image->text": "Eye",
+	"text+document->text": "FileText",
+	"audio->text": "AudioLines"
+}
+function iconFor(capability: string, outputKind: string | undefined): string {
+	return (
+		READING_ICONS[capability] ??
+		OUTPUT_KIND_ICONS[outputKind ?? ""] ??
+		"Boxes"
+	)
+}
+
 /** One row, from the summary entry and whatever the view could add to it. */
 export function readinessRow(
 	entry: DefaultsSummaryEntry,
@@ -128,7 +148,7 @@ export function readinessRow(
 	const base = {
 		capability: entry.capability,
 		label: entry.label,
-		icon: OUTPUT_KIND_ICONS[entry.outputKind ?? ""] ?? "Boxes",
+		icon: iconFor(entry.capability, entry.outputKind),
 		set: entry.set,
 		connectionId: entry.connection?.id,
 		modelId: entry.model?.id
@@ -234,56 +254,4 @@ export function readinessRows(
 	factsFor: (entry: DefaultsSummaryEntry) => EntryFacts = () => ({})
 ): ReadinessRow[] {
 	return entries.map((entry) => readinessRow(entry, factsFor(entry)))
-}
-
-/** The card's caption: how many transforms are actually ready to run. */
-export function readyCount(rows: readonly ReadinessRow[]): number {
-	return rows.filter((r) => r.state === "ok").length
-}
-
-/**
- * Split the rows into the four a person came for and the six behind the fold.
- *
- * `order` is the section star capabilities, in section order. Anything a
- * section does not claim goes behind the fold, which is what keeps a plugin's
- * transform out of the top of the card without hiding it.
- */
-export function splitReadiness(
-	rows: readonly ReadinessRow[],
-	order: readonly string[]
-): { sections: ReadinessRow[]; rest: ReadinessRow[] } {
-	const sections: ReadinessRow[] = []
-	for (const capability of order) {
-		const row = rows.find((r) => r.capability === capability)
-		if (row) sections.push(row)
-	}
-	const rest = rows.filter((r) => !sections.includes(r))
-	return { sections, rest }
-}
-
-/** What the fold row says before it is opened. */
-export interface FoldSummary {
-	count: number
-	/** "vision, documents, image editing, speech…" */
-	names: string
-	setCount: number
-}
-
-export function foldSummary(
-	rest: readonly ReadinessRow[],
-	limit = 4
-): FoldSummary {
-	const labels = rest.map((r) => lowerFirst(r.label))
-	const shown = labels.slice(0, limit)
-	return {
-		count: rest.length,
-		names: shown.join(", ") + (labels.length > shown.length ? "…" : ""),
-		setCount: rest.filter((r) => r.set).length
-	}
-}
-
-/** "Image editing" mid-sentence is "image editing". Acronyms are left alone. */
-function lowerFirst(label: string): string {
-	if (label.length > 1 && label[1] === label[1].toUpperCase()) return label
-	return label.charAt(0).toLowerCase() + label.slice(1)
 }

@@ -5,11 +5,12 @@
  *
  * A stat is declared once, attached where it is true by default, and valued
  * where play happens. Every read resolves down the same chain configuration
- * already does — **session → lorebook → card → declaration default** — with
- * absence meaning *inherit*, never zero. A session that never touched Health
- * reads the world's; a world that never touched it reads the card's; a card
- * that never touched it reads the declaration's default; and a slot with no
- * default is **absent**, which is not the same claim as `0`.
+ * already does — **session → lorebook → card → sheet default → declaration
+ * default** — with absence meaning *inherit*, never zero. A session that never
+ * touched Health reads the world's; a world that never touched it reads the
+ * card's; a card that never touched it reads what the session's sheet naming
+ * the slot says it starts at, else the declaration's default (`defaultFor`);
+ * and a slot with neither is **absent**, which is not the same claim as `0`.
  *
  * ## The vocabulary is sheets, not a registry walk
  *
@@ -75,11 +76,18 @@ import {
 	getAttributeSheet,
 	getAttributeSlot,
 	getGenre,
+	genreAllowsCustomAttributes,
 	genreSheets,
+	slotPickable,
+	slotEarshot,
 	resolveSlotConfig,
 	slotDerivation,
-	attributeSlots,
 	derivations,
+	isSlotLoreRef,
+	slotField,
+	slotStatShapeId,
+	sheetSlotAppliesTo,
+	type FieldDecl,
 	type AttributeSheetDecl,
 	type AttributeSlotDecl,
 	type SheetSlotEntry,
@@ -92,6 +100,12 @@ import {
 	type StateOwner
 } from "$lib/server/state/owners"
 import { deriveValue } from "$lib/server/state/derive"
+// THE comparator for the book's calendar (one comparator per calendar): the
+// shared one, which delegates to the SDK's `compareStoryTimes`.
+import { storyNowOf } from "$lib/server/state/storyTime"
+import { rowsOnReading, sessionReadingOf, type LineReading } from "$lib/server/state/reading"
+import { MAIN_HEAD, placesOnReading } from "$lib/server/state/entriesOnReading"
+import type { StoryDate } from "$lib/shared/lorebooks/storyDate"
 import { castKey, qualifiedSlotKey, slotKey } from "$lib/server/state/keys"
 import {
 	createExpressionBudget,
@@ -121,13 +135,33 @@ export interface CastMemberLink {
 	position: number
 }
 
+/**
+ * 🚧 One place in the session's world that can hold state (attributes phase
+ * 4): a `core:entry/location` lore entry of the session's lorebook. Its
+ * owners are `location` (the entry, durable) and `session_location` (this
+ * run's layer), both by `entryId`.
+ */
+export interface LocationLink {
+	entryId: number
+	name: string
+}
+
 /** The session facts every resolution needs, read once. */
 export interface SessionLinks {
 	sessionId: number
 	lorebookId: number | null
 	cast: CastMemberLink[]
+	/** 🚧 The world's locations (phase 4), by entry id; none without a lorebook. */
+	locations: LocationLink[]
 	/** The story date, when the world has one — what `age` is measured against. */
 	storyDate: { year: number; month?: number; day?: number } | null
+	/**
+	 * 🚧 Where the session reads its book (`state/reading.ts`): its line, its
+	 * moment and the fork cut — which durable rows it inherits. Absent or null
+	 * reads every durable row on main's terms (no book, or a caller that
+	 * built links by hand).
+	 */
+	reading?: LineReading | null
 }
 
 /**
@@ -144,6 +178,10 @@ export interface TrackedSlot {
 	/** The bare name a template addresses and a model writes: `time-of-day`. */
 	key: string
 	type: AttributeSlotDecl["type"]
+	/** 🚧 The catalogue stat shape the slot names (`core:stat-shape/list@1`), when it names one. */
+	shape?: string
+	/** 🚧 What the value is, as a field (`slotField`); absent for a derived slot. */
+	field?: FieldDecl
 	appliesTo: AttributeSlotDecl["appliesTo"]
 	/**
 	 * A sheet entry said a session of this shape must have a value (R7).
@@ -156,6 +194,13 @@ export interface TrackedSlot {
 	 * carries no key at all.
 	 */
 	retired?: boolean
+	/**
+	 * 🚧 Only the holder's own voice may read it (earshot, lair pass R1):
+	 * every other prompt is built without it — see `withinEarshot` in
+	 * `pipelines/prompt/adventureContext.ts`. Present only when `'holder'`,
+	 * so the ordinary slot, heard by all, carries no key at all.
+	 */
+	earshot?: "holder"
 	/** The sheet that first named it, when a sheet did. */
 	sheetId?: string
 }
@@ -176,6 +221,12 @@ export interface CastEntry {
 	/** The slug this entry is indexed under: `state.cast.verity`. */
 	key: string
 	name: string
+	/**
+	 * The seat is switched on in the cast list (2026-09-27). Every seated
+	 * member is in `state.cast`, switched off or not; this is how a pipeline
+	 * or a widget tells them apart. A persona is always `true`.
+	 */
+	enabled: boolean
 	[slot: string]: SlotValue
 }
 
@@ -217,11 +268,35 @@ export interface WhoKeys {
 	active: CastEntry[]
 }
 
+/**
+ * 🚧 One location, as `state.locations` holds it (phase 4): its values, plus
+ * who it is — the same three identity keys a cast entry carries.
+ */
+export interface LocationEntry {
+	/** `lorebook_entries.id` — the id a `session_location` owner names. */
+	id: number
+	/** The slug this entry is indexed under: `state.locations.harbor`. */
+	key: string
+	name: string
+	[slot: string]: SlotValue
+}
+
+/** 🚧 The locations, by entry id and by slug, over one set of objects (as `CastIndex`). */
+export interface LocationIndex {
+	byId: Record<string, LocationEntry>
+	[slug: string]: LocationEntry | Record<string, LocationEntry>
+}
+
 /** The shape `stateFor` returns and `core:query/session-state@1` publishes. */
 export interface ResolvedState {
 	world: Record<string, SlotValue>
 	cast: CastIndex
-	possessions: Record<string, PossessionLine[]>
+	/**
+	 * 🚧 Each location of the session's world and its values (phase 4).
+	 * Empty (`{ byId: {} }`) when the session tracks nothing a location
+	 * carries: a place is listed only where it could hold something.
+	 */
+	locations: LocationIndex
 	/** This session's vocabulary, in sheet order. */
 	slots: TrackedSlot[]
 	/** The roles, as a sibling of the cast. */
@@ -250,12 +325,6 @@ export async function stateVersionOf(
 	return row?.version ?? 0
 }
 
-export interface PossessionLine {
-	entryId: number
-	name: string
-	quantity: number
-}
-
 // ── Keys a template reads ───────────────────────────────────────────────────
 //
 // Re-exported rather than re-declared: they moved to `keys.ts` so the
@@ -277,7 +346,7 @@ type Layered = { validFromMessageId: number | null; id: number }
  * what makes a template-layer row lose to a session-layer one written at
  * message 47 without either of them having to know the other exists.
  */
-function inForce<T extends Layered>(rows: T[]): T | undefined {
+export function inForce<T extends Layered>(rows: T[]): T | undefined {
 	let best: T | undefined
 	for (const row of rows) {
 		if (!best) {
@@ -299,6 +368,29 @@ const ownerMatches = (
 // ── Reads ───────────────────────────────────────────────────────────────────
 
 /**
+ * The session's lorebook, as the ids every state read scopes to — none or one.
+ *
+ * ⚠ **`sessions.lorebook_id`, never `session_lorebooks`.** A session's lorebook
+ * is one binding on the session row; the junction is unused legacy that
+ * nothing writes (sockets/sessions.ts). State read the junction, so for every
+ * session created the real way the lorebook layer, a list's lore references
+ * and item supply found no lorebook at all (found 2026-09-26 by the phase 3c
+ * live check). An array so the callers that scope by "the session's
+ * lorebooks" read the same answer, and so a second binding would be one line.
+ */
+export async function sessionLorebookIds(
+	db: Db,
+	sessionId: number
+): Promise<number[]> {
+	const [row] = await db
+		.select({ lorebookId: schema.sessions.lorebookId })
+		.from(schema.sessions)
+		.where(eq(schema.sessions.id, sessionId))
+		.limit(1)
+	return row?.lorebookId != null ? [row.lorebookId] : []
+}
+
+/**
  * Everything a session needs to resolve anything: its world, its cast, and each
  * cast member's binding into that world.
  *
@@ -315,11 +407,7 @@ export async function sessionLinks(
 	db: Db,
 	sessionId: number
 ): Promise<SessionLinks> {
-	const books = await db
-		.select({ lorebookId: schema.sessionLorebooks.lorebookId })
-		.from(schema.sessionLorebooks)
-		.where(eq(schema.sessionLorebooks.sessionId, sessionId))
-	const lorebookId = books[0]?.lorebookId ?? null
+	const lorebookId = (await sessionLorebookIds(db, sessionId))[0] ?? null
 
 	const seated = await db
 		.select({
@@ -423,57 +511,69 @@ export async function sessionLinks(
 	for (const member of cast)
 		member.castMemberId = bindingFor.get(member.characterId) ?? null
 
+	// The session's line and story clock (ruling 15, story-time P3): which
+	// durable rows it inherits, and where its story's now stands.
+	const reading = lorebookId ? await sessionReadingOf(db, sessionId) : null
 	return {
 		sessionId,
 		lorebookId,
-		storyDate: await storyDateOf(db, lorebookId),
-		cast
+		storyDate: await storyDateOf(db, lorebookId, reading?.branchId ?? null, {
+			sessionStoryClock: reading?.moment ?? null,
+			forkedAt: reading?.forkedAt ?? null,
+			line: reading?.line ?? null
+		}),
+		reading,
+		cast,
+		locations: await locationsOf(db, lorebookId, reading)
 	}
 }
 
 /**
- * The world's present date — the most recent dated history entry, which is what
- * `core:var/current-date@1` already means by "the story's present date".
+ * 🚧 The world's locations (phase 4): every live `core:entry/location` entry
+ * of the lorebook on the session's line, titled as amended by its moment, in
+ * entry order (finding #41 — one reader with `lorebookState.lorebookLinks`).
+ * An archived one is not a place in the story any more; its stored values
+ * stay and are simply not read. A sibling fork's own place is not a place in
+ * this session's story at all.
+ */
+async function locationsOf(
+	db: Db,
+	lorebookId: number | null,
+	reading: LineReading | null
+): Promise<LocationLink[]> {
+	if (!lorebookId) return []
+	return await placesOnReading(db, lorebookId, reading ?? MAIN_HEAD)
+}
+
+/**
+ * The world's present date — what `core:var/current-date@1` means by "the
+ * story's present date", and what `age` is measured against.
+ *
+ * The line's stored clock when it has one; otherwise the newest history entry
+ * the line can see (`storyNowOf`, DESIGN-story-time §3). Branch-aware: a
+ * session on a branch reads that branch's present, never main's.
  *
  * Null when the world has none, and that is the ordinary case: a chat has no
  * clock, so `age` is absent rather than wrong.
  */
-async function storyDateOf(
+export async function storyDateOf(
 	db: Db,
-	lorebookId: number | null
+	lorebookId: number | null,
+	branchId: number | null = null,
+	opts: {
+		sessionStoryClock?: StoryDate | null
+		forkedAt?: StoryDate | null
+		line?: import("$lib/shared/lorebooks/lineReading").Line | null
+	} = {}
 ): Promise<SessionLinks["storyDate"]> {
-	if (!lorebookId) return null
-	const rows = await db
-		.select({ fields: schema.lorebookEntries.fields })
-		.from(schema.lorebookEntries)
-		.where(
-			and(
-				eq(schema.lorebookEntries.lorebookId, lorebookId),
-				eq(schema.lorebookEntries.typeId, "core:entry/history")
-			)
-		)
-	let best: SessionLinks["storyDate"] = null
-	for (const row of rows) {
-		const f = (row.fields ?? {}) as Record<string, unknown>
-		const year = Number(f.year)
-		if (!Number.isFinite(year)) continue
-		const month = Number.isFinite(Number(f.month))
-			? Number(f.month)
-			: undefined
-		const day = Number.isFinite(Number(f.day)) ? Number(f.day) : undefined
-		const candidate = { year, month, day }
-		if (!best || compareDates(candidate, best) > 0) best = candidate
+	const now = await storyNowOf(db, lorebookId, branchId, opts)
+	if (!now) return null
+	return {
+		year: now.year,
+		...(now.month != null ? { month: now.month } : {}),
+		...(now.day != null ? { day: now.day } : {})
 	}
-	return best
 }
-
-const compareDates = (
-	a: NonNullable<SessionLinks["storyDate"]>,
-	b: NonNullable<SessionLinks["storyDate"]>
-): number =>
-	a.year - b.year ||
-	(a.month ?? 0) - (b.month ?? 0) ||
-	(a.day ?? 0) - (b.day ?? 0)
 
 // ── Resolution ──────────────────────────────────────────────────────────────
 
@@ -486,8 +586,8 @@ export interface ValueQuery {
 /**
  * One owner's value for one slot, resolved down the chain.
  *
- * `undefined` means **absent** — no layer has one and the declaration has no
- * default. Distinct from `null`, which is a layer saying "cleared"; that read
+ * `undefined` means **absent** — no layer has one, and neither the session's
+ * sheet entry for the slot nor the declaration has a default (`defaultFor`). Distinct from `null`, which is a layer saying "cleared"; that read
  * falls through to the layer below it, which is what makes clearing a session
  * value mean "go back to inheriting" rather than "this is now nothing".
  *
@@ -499,26 +599,71 @@ export interface ValueQuery {
  */
 export async function valueOf(
 	db: Db,
-	query: ValueQuery
+	query: ValueQuery,
+	/**
+	 * What the caller already read for THIS session, so a read per slot per
+	 * owner (`stateFor`) does not re-read the links and the vocabulary each
+	 * time. Omitted, both are read here — the vocabulary only when no layer
+	 * answers.
+	 */
+	known: { links?: SessionLinks | null; vocabulary?: Vocabulary } = {}
 ): Promise<SlotValue | undefined> {
 	const decl = getAttributeSlot(query.slotId)
-	const links = query.sessionId
-		? await sessionLinks(db, query.sessionId)
-		: null
+	const links =
+		known.links !== undefined
+			? known.links
+			: query.sessionId
+				? await sessionLinks(db, query.sessionId)
+				: null
 	const chain = chainFor(query.owner, links)
-	const rows = await valueRows(db, chain, [query.slotId], query.sessionId)
+	const rows = await valueRows(db, chain, [query.slotId], query.sessionId, links?.reading)
 
 	if (decl?.type === "derived")
 		return deriveValue(decl, {
 			storyDate: links?.storyDate ?? null,
-			read: async (slotId) => valueOf(db, { ...query, slotId })
+			read: async (slotId) => valueOf(db, { ...query, slotId }, { ...known, links })
 		})
 
+	const found = fromLayers(rows, chain, query.slotId)
+	if (found !== undefined) return found
+	const vocabulary =
+		known.vocabulary ??
+		(query.sessionId && links
+			? await vocabularyFor(db, query.sessionId, links)
+			: undefined)
+	return defaultFor(decl, vocabulary)
+}
+
+/**
+ * The bottom of the chain, once no owner layer answers: the **sheet entry's**
+ * `default` (the session's vocabulary entry for the slot — the first sheet
+ * that names it, as `configFor` takes that sheet's `config`), then the
+ * declaration's own. A sheet default is the sheet's deviation from the
+ * declaration's (SDK `SheetSlotEntry.default`), so it sits where the sheet's
+ * config sits: furthest of the layers, above the declaration. Outside a
+ * session there is no vocabulary, so only the declaration answers.
+ */
+export function defaultFor(
+	decl: AttributeSlotDecl | undefined,
+	vocabulary: Vocabulary | undefined
+): SlotValue | undefined {
+	if (!decl) return undefined
+	const fromSheet = vocabulary?.entryFor(decl.id)?.default
+	return fromSheet !== undefined ? fromSheet : decl.default
+}
+
+/**
+ * The first layer down the chain that holds a value for the slot, or
+ * `undefined` when none does (the caller falls back to the default).
+ */
+function fromLayers(
+	rows: Array<Layered & { ownerKind: string; ownerId: number; slotId: string; value: { v: unknown } | null }>,
+	chain: StateOwner[],
+	slotId: string
+): SlotValue | undefined {
 	for (const layer of chain) {
 		const row = inForce(
-			rows.filter(
-				(r) => ownerMatches(r, layer) && r.slotId === query.slotId
-			)
+			rows.filter((r) => ownerMatches(r, layer) && r.slotId === slotId)
 		)
 		if (!row) continue
 		const v = row.value?.v as SlotValue
@@ -526,7 +671,7 @@ export async function valueOf(
 		if (v === null || v === undefined) continue
 		return v
 	}
-	return decl?.default
+	return undefined
 }
 
 /**
@@ -595,7 +740,9 @@ function chainFor(owner: StateOwner, links: SessionLinks | null): StateOwner[] {
  * true of the character everywhere and are meant to be read here.
  */
 const ownedBySession = (
-	column: typeof schema.attributeValues.sessionId,
+	column:
+		| typeof schema.attributeValues.sessionId
+		| typeof schema.attributeConfigs.sessionId,
 	sessionId: number | undefined
 ) =>
 	typeof sessionId === "number"
@@ -606,10 +753,16 @@ async function valueRows(
 	db: Db,
 	owners: StateOwner[],
 	slotIds: string[],
-	sessionId?: number
+	sessionId?: number,
+	/**
+	 * 🚧 The session's reading: the durable rows it inherits are those on its
+	 * line, main's cut at the fork, and none dated after its moment
+	 * (`rowsOnReading`, rulings 15 and 16). Its own rows pass untouched.
+	 */
+	reading?: LineReading | null
 ) {
 	if (!owners.length || !slotIds.length) return []
-	return await db
+	const rows = await db
 		.select()
 		.from(schema.attributeValues)
 		.where(
@@ -626,6 +779,7 @@ async function valueRows(
 				ownedBySession(schema.attributeValues.sessionId, sessionId)
 			)
 		)
+	return reading ? await rowsOnReading(db, rows, reading) : rows
 }
 
 async function configRows(
@@ -671,9 +825,15 @@ export interface Vocabulary {
 	slots: TrackedSlot[]
 }
 
-/** Declarations in a stable order, so a contested bare key always goes the same way. */
-const declaredSlots = (): AttributeSlotDecl[] =>
-	[...attributeSlots()].sort((a, b) => a.id.localeCompare(b.id))
+/** A slot's stat shape as the vocabulary carries it: the catalogue id it names, and its field. */
+export function trackedShape(decl: AttributeSlotDecl): { shape?: string; field?: FieldDecl } {
+	const shape = slotStatShapeId(decl)
+	const field = slotField(decl)
+	return {
+		...(shape === undefined ? {} : { shape }),
+		...(field === undefined ? {} : { field })
+	}
+}
 
 /**
  * Which sheets these owners have, in chain order then `position` order.
@@ -730,13 +890,94 @@ export async function sheetsForOwners(
 	return out
 }
 
+/**
+ * 🚧 The session's **world attributes** (ruled 2026-09-25): what its world
+ * brings — the sheets on its lorebook and on its cast members, and every slot
+ * the world's timeline holds a value for ("historical sheets"). Empty when the
+ * session reads none (its genre denies custom attributes, or it switched them
+ * off) or has no world. Character cards bring nothing: a card is the same in
+ * every story, and what one story tracks of a character is its cast member's.
+ */
+export async function worldAttributesFor(
+	db: Db,
+	links: SessionLinks,
+	/** Undefined for a lorebook read with no session (`lorebookState.ts`). */
+	sessionId: number | undefined,
+	on: boolean
+): Promise<{ sheets: AttributeSheetDecl[]; recorded: string[] }> {
+	if (!on || !links.lorebookId) return { sheets: [], recorded: [] }
+	const owners: StateOwner[] = [{ kind: "lorebook", id: links.lorebookId }]
+	for (const member of links.cast)
+		if (member.castMemberId) owners.push({ kind: "cast_member", id: member.castMemberId })
+	// Its places too (phase 4): a sheet on a location entry, and what the
+	// timeline recorded of one, are the world's as much as its cast's are.
+	for (const place of links.locations) owners.push({ kind: "location", id: place.entryId })
+	const sheets = await sheetsForOwners(db, owners, sessionId)
+	const castMemberIds = owners.filter((o) => o.kind === "cast_member").map((o) => o.id)
+	const locationIds = owners.filter((o) => o.kind === "location").map((o) => o.id)
+	const rows = await db
+		.selectDistinct({ slotId: schema.attributeValues.slotId })
+		.from(schema.attributeValues)
+		.where(
+			and(
+				isNull(schema.attributeValues.sessionId),
+				or(
+					and(
+						eq(schema.attributeValues.ownerKind, "lorebook"),
+						eq(schema.attributeValues.ownerId, links.lorebookId)
+					),
+					castMemberIds.length
+						? and(
+								eq(schema.attributeValues.ownerKind, "cast_member"),
+								inArray(schema.attributeValues.ownerId, castMemberIds)
+							)
+						: undefined,
+					locationIds.length
+						? and(
+								eq(schema.attributeValues.ownerKind, "location"),
+								inArray(schema.attributeValues.ownerId, locationIds)
+							)
+						: undefined
+				)
+			)
+		)
+		.orderBy(asc(schema.attributeValues.slotId))
+	return {
+		sheets,
+		recorded: rows.map((r) => r.slotId).filter((id) => {
+			const decl = getAttributeSlot(id)
+			return !decl || slotPickable(decl)
+		})
+	}
+}
+
+/** The session's own owners — itself, its cast seats and its places — nearest last. */
+const ownOwnersOf = (links: SessionLinks, sessionId: number): StateOwner[] => [
+	...links.cast.map((m) => ({ kind: "session_cast" as const, id: m.characterId })),
+	...links.locations.map((l) => ({ kind: "session_location" as const, id: l.entryId })),
+	{ kind: "session", id: sessionId }
+]
+
+/** 🚧 The session's attribute picks, by slot: `false` drops, `true` adds. */
+export async function attributePicksFor(db: Db, sessionId: number): Promise<Map<string, boolean>> {
+	const rows = await db
+		.select({ slotId: schema.sessionAttributePicks.slotId, enabled: schema.sessionAttributePicks.enabled })
+		.from(schema.sessionAttributePicks)
+		.where(eq(schema.sessionAttributePicks.sessionId, sessionId))
+	return new Map(rows.map((r) => [r.slotId, r.enabled]))
+}
+
 /** Which owner kinds live inside a session, and therefore carry its id. */
 export const isSessionScoped = (kind: OwnerKind): boolean =>
-	kind === "session" || kind === "session_cast"
+	kind === "session" || kind === "session_cast" || kind === "session_location"
 
 /**
- * The slots THIS session tracks: its genre's sheets and loose slots, plus the
- * sheets its owners have, down the chain (R6).
+ * The slots THIS session tracks (ruled 2026-09-25): its genre's **baseline**
+ * (sheets and loose slots, always), and — only when the genre allows custom
+ * attributes — its **world attributes** (`worldAttributesFor`, on unless the
+ * session switched them off) and its **own** (sheets on its own owners, and
+ * picks), less every slot a pick dropped. The genre decides whether anything
+ * beyond its baseline may come in; the session decides which.
  *
  * ⚠ **Not every declaration, and the difference is the whole of "a newcomer in
  * a chat session never sees a bar."** The declaration registry is global — a
@@ -746,40 +987,55 @@ export const isSessionScoped = (kind: OwnerKind): boolean =>
  * standard Chat session on an instance that merely HAS an adventure genre
  * installed, and the Stats widget would draw it.
  *
- * A genre this build does not declare AND whose owners hold no sheets resolves
- * to every declaration rather than to none, and that is the deliberate
- * direction to be wrong in: a plugin genre whose package failed to load should
- * show a player the values they already have, not silently empty their session.
- * The chat genre declares no slots, so the case this protects is exactly the
- * case it is for.
+ * A genre this process does not hold — a plugin genre whose package is
+ * disabled, uninstalled or failed to load — resolves to **no vocabulary**, and
+ * that is the direction to be wrong in (fail closed): falling back to every
+ * declaration put core's case, gold, floor and hp on a Twenty Questions
+ * session. Values already stored are untouched and come back the moment the
+ * genre is registered again (`plugins/pluginGenres.ts`).
  */
+/**
+ * 🚧 A declaration as one session carries it: the same slot, on the owners
+ * its sheet put it on. Returned as-is when nothing narrows it, so the
+ * ordinary slot is still the registry's own object.
+ */
+export function onOwners(
+	decl: AttributeSlotDecl,
+	appliesTo: AttributeSlotDecl["appliesTo"] | undefined
+): AttributeSlotDecl {
+	if (!appliesTo || appliesTo.length === decl.appliesTo.length) return decl
+	return Object.freeze({ ...decl, appliesTo: Object.freeze([...appliesTo]) })
+}
+
+/** What a session of a genre this process does not hold tracks: nothing. */
+const emptyVocabulary = (): Vocabulary => ({
+	entries: [],
+	entryFor: () => undefined,
+	slots: []
+})
+
 export async function vocabularyFor(
 	db: Db,
 	sessionId: number,
 	links?: SessionLinks | null
 ): Promise<Vocabulary> {
 	const [row] = await db
-		.select({ genreId: schema.sessions.genreId })
+		.select({
+			genreId: schema.sessions.genreId,
+			worldAttributes: schema.sessions.worldAttributes
+		})
 		.from(schema.sessions)
 		.where(eq(schema.sessions.id, sessionId))
 		.limit(1)
 	const resolved = links ?? (await sessionLinks(db, sessionId))
-	const genre = getGenre(row?.genreId ?? "")
-
-	// Nearest owner last, so `sheetsForOwners` takes a sheet at the furthest owner
-	// that has it — the same direction configuration layers in.
-	const owners: StateOwner[] = []
-	if (resolved.lorebookId)
-		owners.push({ kind: "lorebook", id: resolved.lorebookId })
-	for (const member of resolved.cast) {
-		owners.push({ kind: "card", id: member.characterId })
-		if (member.castMemberId)
-			owners.push({ kind: "cast_member", id: member.castMemberId })
-		owners.push({ kind: "session_cast", id: member.characterId })
-	}
-	owners.push({ kind: "session", id: sessionId })
-
-	const sheets = [...genreSheets(row?.genreId ?? ""), ...(await sheetsForOwners(db, owners, sessionId))]
+	const genreId = row?.genreId ?? ""
+	const genre = getGenre(genreId)
+	// A genre this process does not hold states no vocabulary: see above.
+	if (!genre) return emptyVocabulary()
+	const custom = genreAllowsCustomAttributes(genre)
+	const world = await worldAttributesFor(db, resolved, sessionId, custom && row?.worldAttributes !== false)
+	const picks = custom ? await attributePicksFor(db, sessionId) : new Map<string, boolean>()
+	const dropped = (slotId: string) => picks.get(slotId) === false
 
 	const entries: VocabularyEntry[] = []
 	const byId = new Map<string, VocabularyEntry>()
@@ -790,7 +1046,12 @@ export async function vocabularyFor(
 	) => {
 		if (!decl || byId.has(decl.id)) return
 		const v: VocabularyEntry = {
-			decl,
+			// 🚧 The owners THIS sheet puts it on (2026-09-26): a premade stat
+			// that fits the world and the cast — `location` — is carried
+			// where the genre's sheet says, and every reader downstream (the
+			// state bag, the keeper's guide, the write gate, write-back) sees
+			// the narrowed declaration rather than the catalogue's.
+			decl: onOwners(decl, entry && sheetSlotAppliesTo(entry, decl)),
 			...(entry?.required === undefined
 				? {}
 				: { required: entry.required }),
@@ -801,14 +1062,27 @@ export async function vocabularyFor(
 		byId.set(decl.id, v)
 		entries.push(v)
 	}
-	for (const sheet of sheets)
+	// The baseline — the genre's sheets and loose slots — always, and first:
+	// a pick never drops it.
+	for (const sheet of genreSheets(genreId))
 		for (const entry of sheet.slots)
 			take(getAttributeSlot(entry.id), entry, sheet.id)
-	for (const decl of genre?.slots ?? []) take(getAttributeSlot(decl.id))
-
-	// Nothing said what this session tracks: fall back to the whole registry
-	// rather than to nothing, for the reason in the doc comment above.
-	if (!entries.length && !genre) for (const decl of declaredSlots()) take(decl)
+	for (const decl of genre.slots ?? []) take(getAttributeSlot(decl.id))
+	if (custom) {
+		// The world's (on unless switched off), then the session's own; a
+		// pick drops either, slot by slot, and a pick adds a slot of its own.
+		// A slot a mechanism keeps (`pickable: false`) comes in with the
+		// baseline or not at all.
+		const pickableSlot = (slotId: string) => {
+			const decl = getAttributeSlot(slotId)
+			return decl && slotPickable(decl) ? decl : undefined
+		}
+		for (const sheet of [...world.sheets, ...(await sheetsForOwners(db, ownOwnersOf(resolved, sessionId), sessionId))])
+			for (const entry of sheet.slots)
+				if (!dropped(entry.id)) take(pickableSlot(entry.id), entry, sheet.id)
+		for (const slotId of world.recorded) if (!dropped(slotId)) take(pickableSlot(slotId))
+		for (const [slotId, enabled] of picks) if (enabled) take(pickableSlot(slotId))
+	}
 
 	return {
 		entries,
@@ -817,9 +1091,11 @@ export async function vocabularyFor(
 			id: e.decl.id,
 			key: slotKey(e.decl.id),
 			type: e.decl.type,
+			...trackedShape(e.decl),
 			appliesTo: e.decl.appliesTo,
 			...(e.required === undefined ? {} : { required: e.required }),
 			...(e.decl.retired ? { retired: true as const } : {}),
+			...(slotEarshot(e.decl) === "holder" ? { earshot: "holder" as const } : {}),
 			...(e.sheetId === undefined ? {} : { sheetId: e.sheetId })
 		}))
 	}
@@ -841,7 +1117,8 @@ export interface StateForOptions {
 
 /**
  * Everything a session's surfaces and templates read: `{ world, cast,
- * possessions, slots, who }`.
+ * slots, who, version }`. What somebody carries is their `inventory` stat
+ * (phase 3b retired the possession edges), resolved like any other value.
  *
  * Keyed for a template rather than for the database — `state.world.weather`,
  * `state.cast.verity.hp` — because that is the vocabulary the conditions design
@@ -867,14 +1144,19 @@ export async function stateFor(
 	const vocabulary = await vocabularyFor(db, sessionId, links)
 	const declared = vocabulary.entries.map((e) => e.decl)
 
+	const known = { links, vocabulary }
 	const world: Record<string, SlotValue> = {}
 	for (const decl of declared.filter((d) => d.appliesTo.includes("world")))
 		await writeKeys(world, decl, declared, () =>
-			valueOf(db, {
-				sessionId,
-				owner: { kind: "session", id: sessionId },
-				slotId: decl.id
-			})
+			valueOf(
+				db,
+				{
+					sessionId,
+					owner: { kind: "session", id: sessionId },
+					slotId: decl.id
+				},
+				known
+			)
 		)
 
 	// The id index first, and the slugs from it (R17) — one set of objects.
@@ -883,15 +1165,20 @@ export async function stateFor(
 		const entry: CastEntry = {
 			id: member.characterId,
 			key: castKey(member.name),
-			name: member.name
+			name: member.name,
+			enabled: member.isActive
 		}
 		for (const decl of declared.filter((d) => d.appliesTo.includes("cast")))
 			await writeKeys(entry, decl, declared, () =>
-				valueOf(db, {
-					sessionId,
-					owner: { kind: "session_cast", id: member.characterId },
-					slotId: decl.id
-				})
+				valueOf(
+					db,
+					{
+						sessionId,
+						owner: { kind: "session_cast", id: member.characterId },
+						slotId: decl.id
+					},
+					known
+				)
 			)
 		byId[String(member.characterId)] = entry
 	}
@@ -902,28 +1189,117 @@ export async function stateFor(
 		// and one reachable slug, rather than one of them silently vanishing.
 		if (!(entry.key in cast)) cast[entry.key] = entry
 
-	const possessions = await possessionsFor(db, links)
+	const locations = await locationsFor(db, sessionId, links, vocabulary)
+
 	const who = await whoFor(db, sessionId, links, byId, opts)
+	await nameLoreRefs(db, [world, ...Object.values(byId), ...Object.values(locations.byId)])
 
 	const state: ResolvedState = {
 		world,
 		cast,
-		possessions,
+		locations,
 		slots: vocabulary.slots,
 		who,
 		version
 	}
 
 	// After the chain and after `who`, because an expression may read either.
-	deriveExpressions(state, vocabulary, links, possessions, opts)
+	deriveExpressions(state, vocabulary, links, opts)
 	return state
+}
+
+/**
+ * 🚧 `state.locations` (phase 4): every location of the session's world with
+ * its values for the slots a location carries, down `session_location` →
+ * `location` → sheet default → declaration default. One read of the rows for every place, rather than a
+ * `valueOf` per place per slot — a world may name dozens of places. None at
+ * all when the session tracks no slot a location carries.
+ *
+ * ⚠ An expression-derived slot reads absent on a location: expressions are
+ * evaluated over the cast and the world (`deriveExpressions`), and a place
+ * has no scope there yet. A core derivation (`deriveValue`) still computes.
+ */
+async function locationsFor(
+	db: Db,
+	sessionId: number,
+	links: SessionLinks,
+	vocabulary: Vocabulary
+): Promise<LocationIndex> {
+	const declared = vocabulary.entries.map((e) => e.decl)
+	const byId: Record<string, LocationEntry> = {}
+	const index: LocationIndex = { byId }
+	const carried = declared.filter((d) => d.appliesTo.includes("location"))
+	if (!carried.length || !links.locations.length) return index
+	const stored = carried.filter((d) => d.type !== "derived")
+	const owners: StateOwner[] = links.locations.flatMap((l) => [
+		{ kind: "session_location" as const, id: l.entryId },
+		{ kind: "location" as const, id: l.entryId }
+	])
+	const rows = await valueRows(db, owners, stored.map((d) => d.id), sessionId, links.reading)
+	for (const place of links.locations) {
+		const entry: LocationEntry = { id: place.entryId, key: castKey(place.name), name: place.name }
+		const owner: StateOwner = { kind: "session_location", id: place.entryId }
+		const chain = resolutionChain(owner, {})
+		for (const decl of carried)
+			await writeKeys(entry, decl, declared, async () =>
+				decl.type === "derived"
+					? valueOf(db, { sessionId, owner, slotId: decl.id }, { links, vocabulary })
+					: (fromLayers(rows, chain, decl.id) ?? defaultFor(decl, vocabulary))
+			)
+		byId[String(place.entryId)] = entry
+	}
+	// First claimant keeps the slug, as the cast's do.
+	for (const entry of Object.values(byId)) if (!(entry.key in index)) index[entry.key] = entry
+	return index
+}
+
+/**
+ * 🚧 Fill in the title of every lore reference a list holds (`{ entryId }` →
+ * `{ entryId, name }`), so a template and a widget can say it. One query for
+ * the whole state, and only when a list holds a reference at all. The title is
+ * READ, never stored (`slotValueForStorage` drops it on the way back in) — a
+ * copied title is a second answer that goes stale on the first rename. An
+ * entry that does not exist keeps its bare id: shown, never dropped.
+ */
+export async function nameLoreRefs(
+	db: Db,
+	bags: Record<string, unknown>[]
+): Promise<void> {
+	const ids = new Set<number>()
+	for (const bag of bags)
+		for (const value of Object.values(bag)) {
+			if (Array.isArray(value)) {
+				for (const item of value) if (isSlotLoreRef(item)) ids.add(item.entryId)
+			}
+			// 🚧 One reference on its own: a location that is a place entry.
+			else if (isSlotLoreRef(value)) ids.add(value.entryId)
+		}
+	if (!ids.size) return
+	const rows = await db
+		.select({ id: schema.lorebookEntries.id, title: schema.lorebookEntries.title })
+		.from(schema.lorebookEntries)
+		.where(inArray(schema.lorebookEntries.id, [...ids]))
+	const titles = new Map(rows.map((r) => [r.id, r.title]))
+	// A new array per value: a declaration's default may be frozen, and the
+	// bare and qualified keys of one value are rewritten alike.
+	for (const bag of bags)
+		for (const [key, value] of Object.entries(bag))
+			if (Array.isArray(value) && value.some(isSlotLoreRef))
+				// `{ ...item }` keeps the held count (phase 3a); only the name is added.
+				bag[key] = value.map((item) =>
+					isSlotLoreRef(item) && titles.get(item.entryId)
+						? { ...item, name: titles.get(item.entryId)! }
+						: item
+				)
+			else if (isSlotLoreRef(value) && titles.get(value.entryId))
+				bag[key] = { ...value, name: titles.get(value.entryId)! }
 }
 
 /**
  * One value under both its keys: the qualified one always, the bare one when
  * this declaration is the first claimant of it.
  */
-async function writeKeys(
+export async function writeKeys(
 	bag: Record<string, SlotValue>,
 	decl: AttributeSlotDecl,
 	all: AttributeSlotDecl[],
@@ -957,7 +1333,6 @@ function deriveExpressions(
 	state: ResolvedState,
 	vocabulary: Vocabulary,
 	links: SessionLinks,
-	possessions: Record<string, PossessionLine[]>,
 	opts: StateForOptions
 ): void {
 	const derived = vocabulary.entries
@@ -973,17 +1348,12 @@ function deriveExpressions(
 	const order = derivationOrder(derived)
 	const seed = opts.seed ?? `state:${links.sessionId}`
 
-	const into = (
-		bag: Record<string, SlotValue>,
-		ownerKey: string,
-		lines: PossessionLine[]
-	) => {
+	const into = (bag: Record<string, SlotValue>, ownerKey: string) => {
 		for (const decl of order) {
 			const scope: ExpressionScope = {
 				state: state as unknown as Record<string, unknown>,
 				owner: bag,
-				who: state.who as unknown as Record<string, unknown>,
-				possessions: lines
+				who: state.who as unknown as Record<string, unknown>
 			}
 			const result = evaluate(decl.derive!, scope, {
 				seedLabel: `${seed}:derive:${ownerKey}:${decl.id}`,
@@ -1005,16 +1375,12 @@ function deriveExpressions(
 
 	for (const decl of order)
 		if (decl.appliesTo.includes("world")) {
-			into(state.world, "world", possessions.world ?? [])
+			into(state.world, "world")
 			break
 		}
 	for (const entry of Object.values(state.cast.byId))
 		if (order.some((d) => d.appliesTo.includes("cast")))
-			into(
-				entry as Record<string, SlotValue>,
-				String(entry.id),
-				possessions[entry.key] ?? []
-			)
+			into(entry as Record<string, SlotValue>, String(entry.id))
 }
 
 /**
@@ -1255,61 +1621,6 @@ async function nextTurn(
 	if (typeof ref !== "string" || !ref.startsWith("character:")) return null
 	const id = Number(ref.slice("character:".length))
 	return Number.isInteger(id) ? id : null
-}
-
-/**
- * Who is carrying what, grouped by owner, with the entry's own name.
- *
- * An item is an entry, so the name comes from the lorebook rather than from the
- * edge — which is the point of storing possession as an edge at all: rename the
- * entry and every inventory that holds it renames with it.
- */
-async function possessionsFor(
-	db: Db,
-	links: SessionLinks
-): Promise<Record<string, PossessionLine[]>> {
-	const rows = await db
-		.select({
-			ownerKind: schema.sessionPossessions.ownerKind,
-			ownerId: schema.sessionPossessions.ownerId,
-			entryId: schema.sessionPossessions.entryId,
-			quantity: schema.sessionPossessions.quantity,
-			validFromMessageId: schema.sessionPossessions.validFromMessageId,
-			id: schema.sessionPossessions.id,
-			name: schema.lorebookEntries.title
-		})
-		.from(schema.sessionPossessions)
-		.leftJoin(
-			schema.lorebookEntries,
-			eq(schema.lorebookEntries.id, schema.sessionPossessions.entryId)
-		)
-		.where(eq(schema.sessionPossessions.sessionId, links.sessionId))
-
-	const nameOf = new Map(links.cast.map((c) => [c.characterId, c.name]))
-	const out: Record<string, PossessionLine[]> = {}
-	// One edge per (owner, entry): the row in force, exactly as a value is.
-	const byEdge = new Map<string, typeof rows>()
-	for (const row of rows) {
-		const key = `${row.ownerKind}:${row.ownerId}:${row.entryId}`
-		byEdge.set(key, [...(byEdge.get(key) ?? []), row])
-	}
-	for (const group of byEdge.values()) {
-		const row = inForce(group)
-		if (!row || row.quantity <= 0) continue
-		const key =
-			row.ownerKind === "session"
-				? "world"
-				: castKey(nameOf.get(row.ownerId) ?? "")
-		out[key] = [
-			...(out[key] ?? []),
-			{
-				entryId: row.entryId,
-				name: row.name ?? "",
-				quantity: row.quantity
-			}
-		]
-	}
-	return out
 }
 
 export type { OwnerKind, StateOwner }

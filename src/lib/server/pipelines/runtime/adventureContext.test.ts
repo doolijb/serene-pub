@@ -33,8 +33,7 @@ const CAST = {
 				name: "Verity",
 				description: "A quiet archivist who remembers everything."
 			},
-			isActive: true,
-			visibility: "visible"
+			enabled: true,
 		}
 	],
 	sessionPersonas: [
@@ -46,8 +45,7 @@ const CAST = {
 /** A session mid-play: the world has a clock and a sky, Verity has her bars. */
 const STATE = {
 	world: { "time-of-day": "morning", weather: "clear" },
-	cast: { verity: { hp: 20, stamina: 10, mood: "calm", trust: 0 } },
-	possessions: {}
+	cast: { verity: { hp: 20, stamina: 10, mood: "calm", trust: 0 } }
 }
 
 const PLAN = {
@@ -157,7 +155,7 @@ describe("the narrator is anchored", () => {
 			"core:task/build-scene-context@1",
 			shipped("core:task/build-scene-context", "adventure-narrator"),
 			{
-				state: { world: {}, cast: {}, possessions: {} },
+				state: { world: {}, cast: {} },
 				plan: PLAN,
 				fields: FIELDS
 			}

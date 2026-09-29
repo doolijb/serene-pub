@@ -1,4 +1,5 @@
 <script lang="ts">
+	import Select from "$lib/client/components/inputs/Select.svelte"
 	import * as Icons from "@lucide/svelte"
 	import { getCharacterLoreVisibility } from "$lib/shared/utils/characterLoreVisibility"
 	import type { EntryEditorProps } from "./types"
@@ -46,23 +47,31 @@
 />
 
 <div class="flex flex-col gap-1">
-	<label
+	<!-- Visible caption keeps its link icon; Select carries the real label. -->
+	<span
 		class="flex items-center gap-1 text-sm font-semibold"
-		for="cleBinding"
+		aria-hidden="true"
 	>
 		Cast member
-		<Icons.Link2 size={13} class="text-surface-400 relative top-[1px]" />
-	</label>
-	<select
-		id="cleBinding"
-		class="select preset-filled-surface-200-800 w-full rounded-lg"
-		bind:value={draft.lorebookBindingId}
-	>
-		<option value={null}>None (Unbound)</option>
-		{#each bindings as binding (binding.id)}
-			<option value={binding.id}>{bindingLabel(binding)}</option>
-		{/each}
-	</select>
+		<Icons.Link2 size={13} class="text-surface-600-400 relative top-[1px]" />
+	</span>
+	<Select
+		label="Cast member"
+		labelHidden
+		class="w-full"
+		options={[
+			{ value: "", label: "None (Unbound)" },
+			...bindings.map((binding) => ({
+				value: String(binding.id),
+				label: bindingLabel(binding)
+			}))
+		]}
+		value={draft.lorebookBindingId == null
+			? ""
+			: String(draft.lorebookBindingId)}
+		onValueChange={(v) =>
+			(draft.lorebookBindingId = v === "" ? null : Number(v))}
+	/>
 	<p
 		class="text-xs"
 		class:text-warning-500={needsAttention}

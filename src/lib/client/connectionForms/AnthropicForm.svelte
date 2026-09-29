@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { TokenCounterOptions } from "$lib/shared/constants/TokenCounters"
 	import { Switch } from "@skeletonlabs/skeleton-svelte"
+	import Select from "$lib/client/components/inputs/Select.svelte"
 	import { onMount } from "svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { useInterest } from "$lib/client/sockets/interest.svelte"
@@ -8,8 +9,8 @@
 
 	/**
 	 * ⚠ `thinking` and `thinkingBudget` are gone from this form (ruling
-	 * 2026-09-12): reasoning is a SAMPLING parameter now, chosen per stage on
-	 * the sampling config rather than once for every stage this connection
+	 * 2026-09-12): reasoning is a SAMPLING parameter now, chosen per step on
+	 * the sampling config rather than once for every step this connection
 	 * serves. Stale keys in an existing row's `extraJson` are read by nothing —
 	 * the column is jsonb, so an unread key costs nothing and no migration
 	 * clears them. Do not re-add the toggle here.
@@ -114,18 +115,12 @@
 		</p>
 	{/if}
 
-	<div class="mt-2 flex flex-col gap-1">
-		<label class="font-semibold" for="tokenCounter">Token Counter</label>
-		<select
-			id="tokenCounter"
-			bind:value={connection.tokenCounter}
-			class="select bg-background border-muted w-full rounded border"
-		>
-			{#each TokenCounterOptions.options as t}
-				<option value={t.value}>{t.label}</option>
-			{/each}
-		</select>
-	</div>
+	<Select
+		class="mt-2"
+		label="Token Counter"
+		options={TokenCounterOptions.options}
+		bind:value={connection.tokenCounter}
+	/>
 
 	<div class="mt-2 flex flex-col gap-1">
 		<label class="font-semibold" for="apiKey">API Key</label>

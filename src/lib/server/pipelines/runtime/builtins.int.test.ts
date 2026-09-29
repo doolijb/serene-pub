@@ -141,7 +141,6 @@ async function makeSession(tag: string, genreId?: string) {
 		sessionId: session.id,
 		characterId,
 		isActive: true,
-		visibility: "visible"
 	})
 	const [user] = await db
 		.insert(schema.sessionMessages)
@@ -686,7 +685,7 @@ describe("floors and opt-ins", () => {
 		)
 		expect(view.messageVerbs).toEqual({
 			retry: true,
-			continue: true,
+			extend: true,
 			stepBack: true,
 			delete: false,
 			hide: true,

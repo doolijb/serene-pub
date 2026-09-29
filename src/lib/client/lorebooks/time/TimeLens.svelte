@@ -5,6 +5,8 @@
 	import { declareInterest } from "$lib/client/sockets/interest.svelte"
 	import { interestKey } from "$lib/shared/sockets/interest"
 	import { toaster } from "$lib/client/utils/toaster"
+	import { awaitReply, isReplyTimeout } from "$lib/client/utils/awaitReply"
+	import { changedFields } from "$lib/shared/lorebooks/amendments"
 	import CompileHistoryEntryModal from "$lib/client/components/modals/CompileHistoryEntryModal.svelte"
 	import type { BindingWithRelations } from "$lib/client/components/lorebookForms/entryManager"
 	import { HISTORY_TYPE_ID } from "$lib/shared/entries/types"
@@ -20,7 +22,7 @@
 	import type { PoolSource } from "../sections/types"
 	import { buildTicks, ratioOf } from "../timelineStrip"
 	import DatedEntryPanel from "./DatedEntryPanel.svelte"
-	import { dateAtRatio } from "./moment"
+	import { dateAtRatio, parseMoment } from "./moment"
 	import { findGaps } from "./timeGaps"
 	import {
 		buildLanes,
@@ -54,7 +56,11 @@
 		/** What the scope this line is of is called. */
 		scopeTitle: string
 		mode: "desk" | "compact"
-		/** Every entry the book holds, whatever kind. */
+		/**
+		 * The scope's entries on the line being read (#88): World lore under
+		 * World, Location entries under Places, every pool kind under All.
+		 * Search and the pool's facet chips narrow the pool, not the line.
+		 */
 		entries: TimeEntryRow[]
 		scenes: TimeSceneRow[]
 		/** The session reading this book, which stands at now. */
@@ -90,8 +96,16 @@
 	let showAllUndated = $state(false)
 	/** The undated row being dragged, so the line knows what it is offered. */
 	let dragged = $state<TimeEntryRow | null>(null)
-	/** Whether a create of ours is in flight, so another one is not ours. */
-	let awaitingCreate = $state(false)
+	/**
+	 * The draft as it was BUILT, which is what a save diffs against.
+	 *
+	 * ⚠ The line draws rows as they READ — amendments resolved in — so the
+	 * draft holds amended values too. Writing it whole baked every one of
+	 * them into the base; a save writes `changedFields(draft, pristineDraft)`.
+	 */
+	let pristineDraft = $state<Record<string, any> | null>(null)
+	/** A write of ours is in flight; Save stands down until it is answered. */
+	let saving = $state(false)
 
 	let route = $derived(loreRoute.route)
 
@@ -152,12 +166,17 @@
 		selected ? items.find((i) => i.key === `entry#${selected.id}`) : null
 	)
 
+	/**
+	 * Whether the AUTHOR changed anything — against the draft as built, not
+	 * the row as it reads now, which moves on its own when an amendment lands
+	 * or the moment is dragged.
+	 */
 	let dirty = $derived.by(() => {
 		if (!draft) return false
 		if (creating) return !!draft.content?.trim()
-		if (!selected) return false
+		if (!selected || !pristineDraft) return false
 		return (
-			JSON.stringify(descriptor.toDraft(selected as PoolSource)) !==
+			JSON.stringify(pristineDraft) !==
 			JSON.stringify($state.snapshot(draft))
 		)
 	})
@@ -213,9 +232,9 @@
 
 	function discardDraft() {
 		creating = false
-		awaitingCreate = false
 		draft = null
 		draftKey = null
+		pristineDraft = null
 		pendingDate = null
 		hasUnsavedChanges = false
 	}
@@ -230,6 +249,7 @@
 			...(date ?? {}),
 			content
 		}
+		pristineDraft = { ...$state.snapshot(draft) }
 	}
 
 	async function closePanel() {
@@ -239,29 +259,105 @@
 		if (!wasCreating) void loreRoute.navigate({ type: "back" })
 	}
 
-	function save() {
-		if (!draft) return
+	/** A reply that never came is said here; a refusal Layout already toasts. */
+	function reportUnanswered(err: unknown, title: string) {
+		if (isReplyTimeout(err))
+			toaster.error({
+				title,
+				description:
+					"The server did not answer in time. Your changes are still here."
+			})
+	}
+
+	const trimmed = (v: unknown) => (typeof v === "string" ? v.trim() : "")
+
+	async function save() {
+		if (!draft || saving) return
 		if (!descriptor.validate(draft, dated as PoolSource[], true)) return
 		const payload = $state.snapshot(draft) as Record<string, any>
 		if (creating) {
-			socket.emit("entries:create", {
-				entry: {
-					...payload,
-					typeId: HISTORY_TYPE_ID,
-					lorebookId
-				} as any
-			})
+			// ⚠ An entry created while reading a line belongs to that line,
+			// as the entry editor's create does.
+			if (route.branch != null) payload.branchId = route.branch
+			saving = true
+			// The draft stays until the row exists: a refusal must not throw
+			// the author's text away.
+			let created: Sockets.Entries.Create.Response
+			try {
+				created = await awaitReply({
+					socket,
+					event: "entries:create",
+					params: {
+						entry: {
+							...payload,
+							typeId: HISTORY_TYPE_ID,
+							lorebookId
+						} as any
+					},
+					replyKey: interestKey("entries:create", lorebookId),
+					errorEvent: "entries:create:error",
+					fallbackError: "The history entry could not be created.",
+					match: (data) =>
+						data.entry?.lorebookId === lorebookId &&
+						data.entry.typeId === HISTORY_TYPE_ID &&
+						trimmed(data.entry.content) === trimmed(payload.content)
+				})
+			} catch (err) {
+				saving = false
+				reportUnanswered(err, "History was not created")
+				return
+			}
+			saving = false
 			toaster.success({ title: "History created" })
+			// Opened where it landed on the line — unless the author has
+			// since moved on to something else.
+			if (!creating || draftKey !== "new") return
 			discardDraft()
-			// Set after the draft is dropped, because dropping it is what
-			// clears the last create this lens was waiting on.
-			awaitingCreate = true
+			void loreRoute.navigate({
+				type: "openEntry",
+				entryId: created.entry.id
+			})
 			return
 		}
-		socket.emit("entries:update", {
-			entry: { ...payload, typeId: HISTORY_TYPE_ID } as any
-		})
+		// ⚠ The DIFF, never the whole draft (see `pristineDraft`).
+		const fields = changedFields(payload, pristineDraft ?? {})
+		if (!Object.keys(fields).length) {
+			toaster.error({ title: "Nothing has changed" })
+			return
+		}
+		const id = payload.id as number
+		saving = true
+		let saved: Sockets.Entries.Update.Response
+		try {
+			saved = await awaitReply({
+				socket,
+				event: "entries:update",
+				params: {
+					entry: { ...fields, id, typeId: HISTORY_TYPE_ID } as any
+				},
+				replyKey: interestKey("entries:update", lorebookId),
+				errorEvent: "entries:update:error",
+				fallbackError: "The history entry could not be saved.",
+				match: (data) => data.entry?.id === id
+			})
+		} catch (err) {
+			saving = false
+			reportUnanswered(err, "History was not saved")
+			return
+		}
+		saving = false
 		toaster.success({ title: "History updated" })
+		// Settle the draft on what was sent — the saved text is now "as
+		// built" — keeping anything typed while the save was in flight.
+		if (draftKey === `entry#${id}` && draft) {
+			if (
+				JSON.stringify($state.snapshot(draft)) ===
+				JSON.stringify(payload)
+			) {
+				draft = descriptor.toDraft(saved.entry as PoolSource)
+				pristineDraft = { ...$state.snapshot(draft) }
+			} else pristineDraft = { ...payload }
+		}
 	}
 
 	/** Where along the line a pointer is, as a fraction of the track. */
@@ -354,10 +450,25 @@
 			})
 		) {
 			draftKey = key
-			if (!creating)
+			if (!creating) {
 				draft = source ? descriptor.toDraft(source as PoolSource) : null
+				pristineDraft = draft ? { ...$state.snapshot(draft) } : null
+			}
 		}
 		if (pendingDate && draft) applyPendingDate()
+	})
+
+	/**
+	 * A clean draft follows the row it shows when the row moves under it —
+	 * an amendment lands, the moment is dragged. Edits in flight are never
+	 * discarded to follow a reading.
+	 */
+	$effect(() => {
+		if (creating || !selected || !draft || !pristineDraft || dirty) return
+		const fresh = descriptor.toDraft(selected as PoolSource)
+		if (JSON.stringify(fresh) === JSON.stringify(pristineDraft)) return
+		draft = fresh
+		pristineDraft = { ...$state.snapshot(fresh) }
 	})
 
 	$effect(() => {
@@ -369,37 +480,16 @@
 		bindings = msg.lorebookBindingList as BindingWithRelations[]
 	}
 
-	/** A dated entry this lens wrote opens where it landed on the line. */
-	function handleEntryCreated(msg: Sockets.Entries.Create.Response) {
-		const entry = msg.entry
-		if (
-			!awaitingCreate ||
-			!entry ||
-			entry.lorebookId !== lorebookId ||
-			entry.typeId !== HISTORY_TYPE_ID
-		)
-			return
-		awaitingCreate = false
-		void loreRoute.navigate({ type: "openEntry", entryId: entry.id })
-	}
-
 	/**
-	 * Both keys name the open book — `entries:create` is scoped on
-	 * `payload.entry.lorebookId`, which is the id the handler above already
-	 * refuses anything else on. Effects rather than `useInterest` because
-	 * `lorebookId` is a prop and the key moves with it; declared above
-	 * `onMount` so the interest exists before the request goes out.
+	 * The book's cast, keyed on the open book. An effect rather than
+	 * `useInterest` because `lorebookId` is a prop and the key moves with
+	 * it; declared above `onMount` so the interest exists before the request
+	 * goes out. (A create's own reply is waited on in `save`.)
 	 */
 	$effect(() =>
 		declareInterest<"lorebooks:bindingList">(
 			interestKey("lorebooks:bindingList", lorebookId),
 			handleBindingList
-		)
-	)
-	$effect(() =>
-		declareInterest<"entries:create">(
-			interestKey("entries:create", lorebookId),
-			handleEntryCreated
 		)
 	)
 
@@ -424,7 +514,7 @@
 		onclick={() => openItem(item)}
 	>
 		<span
-			class="text-surface-700-300 w-16 shrink-0 text-[10px] tracking-wide uppercase"
+			class="text-surface-600-400 w-16 shrink-0 text-xs"
 		>
 			{kindLabelOf(item)}
 		</span>
@@ -454,7 +544,7 @@
 			</span>
 			<button
 				type="button"
-				class="btn btn-sm preset-filled-success-500 shrink-0"
+				class="btn btn-sm preset-filled-primary-500 shrink-0"
 				title="A new entry on the line carries a date"
 				onclick={() => startCreate()}
 			>
@@ -540,7 +630,7 @@
 							{/each}
 							{#if lane.items.length === 0}
 								<span
-									class="text-surface-700-300 absolute top-1/2 left-2 -translate-y-1/2 text-[10px] italic"
+									class="text-surface-700-300 absolute top-1/2 left-2 -translate-y-1/2 text-[11px] italic"
 								>
 									Nothing dated on this lane yet
 								</span>
@@ -560,15 +650,10 @@
 						class="text-surface-600-400 shrink-0"
 						aria-hidden="true"
 					/>
+					<!-- No "mark as intentional" control until a book can keep a
+					     dismissed-gap list: a button that can never be pressed is a
+					     promise the lens cannot keep. -->
 					<span class="min-w-0 flex-1">{gap.sentence}</span>
-					<button
-						type="button"
-						class="btn btn-sm preset-tonal-surface shrink-0"
-						disabled
-						title="Marking a gap as intentional is not built yet"
-					>
-						Mark the gap as intentional
-					</button>
 				</div>
 			{/each}
 
@@ -662,7 +747,8 @@
 				(selected ? formatDate(selected as StoryDate) : "")}
 			readIn={selected ? readInOf(selected.id) : null}
 			{dirty}
-			canSave={descriptor.validate(draft, dated as PoolSource[])}
+			canSave={!saving &&
+				descriptor.validate(draft, dated as PoolSource[])}
 			onSave={save}
 			onClose={closePanel}
 			onRecompile={recompile}
@@ -707,6 +793,7 @@
 			if (!e.open) compileTarget = null
 		}}
 		historyEntry={compileTarget as any}
-		onSaved={() => (compileOpen = false)}
+		moment={parseMoment(route.moment)}
+		branchId={route.branch ?? null}
 	/>
 {/if}

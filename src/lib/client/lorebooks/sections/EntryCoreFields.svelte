@@ -48,7 +48,7 @@
 			Name <span class="text-error-500">*</span>
 			<Icons.ScanEye
 				size={13}
-				class="text-surface-400 relative top-[1px]"
+				class="text-surface-600-400 relative top-[1px]"
 			/>
 		</label>
 		<input
@@ -63,23 +63,36 @@
 {/if}
 
 <div class="flex flex-col gap-1">
-	<label
+	<!-- A span, not a label: the editor is a contenteditable div, which a
+	     label cannot target. It names the editor through aria-labelledby. -->
+	<span
 		class="flex items-center gap-1 text-sm font-semibold"
-		for="{idPrefix}Content"
+		id="{idPrefix}ContentLabel"
 	>
 		Content
-		<Icons.ScanEye size={13} class="text-surface-400 relative top-[1px]" />
-	</label>
+		<Icons.ScanEye
+			size={13}
+			class="text-surface-600-400 relative top-[1px]"
+			aria-hidden="true"
+		/>
+	</span>
 	<LoreContentField
 		bind:content={draft.content}
 		bind:lorebookBindingList={bindings as any}
+		labelledBy="{idPrefix}ContentLabel"
 	/>
 </div>
 
 <KeywordChips
 	bind:keys={draft.keys}
 	{idPrefix}
+	regex={!!draft.useRegex || draft.matchMode === "regex"}
 	semantic={vectorizationEnabled}
 />
 
-<PartOfField bind:draft pool={poolCtx.pool} {idPrefix} />
+<PartOfField
+	bind:draft
+	pool={poolCtx.pool}
+	newRowBranchId={poolCtx.newRowBranchId}
+	{idPrefix}
+/>

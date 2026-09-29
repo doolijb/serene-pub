@@ -57,9 +57,10 @@
 </script>
 
 {#if isLocal}
-	<p class="text-muted mt-4 text-xs">
+	<p class="text-surface-600-400 mt-4 text-xs">
 		Runs in this process on the CPU. Nothing leaves the machine, and there
-		is no host or key to set. Pick a model below; it downloads once.
+		is no host or key to set. Pick a model from the list above; it downloads
+		once.
 	</p>
 {/if}
 
@@ -76,9 +77,9 @@
 			onblur={commitTtl}
 			aria-describedby="ner-ttl-help"
 		/>
-		<span class="text-muted text-sm">minutes</span>
+		<span class="text-surface-600-400 text-sm">minutes</span>
 	</div>
-	<p id="ner-ttl-help" class="text-muted text-xs">
+	<p id="ner-ttl-help" class="text-surface-600-400 text-xs">
 		Unload the model after this long with nothing to scan. Set 0 to keep it
 		loaded. Scanning resumes on its own either way; a cold start costs the
 		load.

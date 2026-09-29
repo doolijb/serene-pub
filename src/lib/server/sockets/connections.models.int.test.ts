@@ -79,6 +79,16 @@ const endpoint = (id: number) =>
 		.limit(1)
 		.then((r) => r[0])
 
+/**
+ * A distinct host per fixture, the way the name is distinct per fixture.
+ *
+ * One Ollama connection per host (owner ruling 2026-09-25): `connections:create`
+ * refuses a second to a host that already has one, so fixtures sharing
+ * `localhost:11434` would all fail after the first. None of these tests is
+ * about hosts — Ollama is just a convenient type — so each simply gets its own.
+ */
+let fixtureHost = 0
+
 async function createConnection(model: string | null, name = "fixture") {
 	const { connectionsCreate } = await import("./connections")
 	const res = await connectionsCreate.handler(
@@ -87,7 +97,7 @@ async function createConnection(model: string | null, name = "fixture") {
 			connection: {
 				name: `${name} ${Math.random()}`,
 				type: CONNECTION_TYPE.OLLAMA,
-				baseUrl: "http://localhost:11434",
+				baseUrl: `http://ollama-fixture-${++fixtureHost}.test:11434`,
 				...(model === null ? {} : { model })
 			} as any
 		},

@@ -35,7 +35,7 @@
 <div
 	class="flex h-full w-full items-stretch overflow-hidden rounded-md border transition-colors
 		{active
-		? 'preset-filled-primary-500 border-primary-500'
+		? 'preset-tonal-primary border-primary-500'
 		: `bg-surface-100-900 border-surface-300-700 ${wire.stepKey ? 'hover:border-primary-500/60' : 'opacity-55'}`}
 		{wire.stepKey ? 'cursor-pointer' : 'cursor-default'}"
 	title={wire.stepKey
@@ -72,7 +72,7 @@
 		</span>
 		{#if counts?.overridden}
 			<span
-				class="preset-filled-secondary-500 shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-semibold"
+				class="preset-filled-secondary-500 shrink-0 rounded-full px-1.5 py-0.5 text-[11px] font-semibold"
 				title="{counts.overridden} set here, not inherited"
 			>
 				{counts.overridden}
@@ -80,7 +80,7 @@
 		{/if}
 		{#if wire.toggleable}
 			<span
-				class="shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-semibold
+				class="shrink-0 rounded-full px-1.5 py-0.5 text-[11px] font-semibold
 					{wire.enabledDefault ? 'preset-tonal-surface' : 'preset-tonal-error'}"
 				title={wire.enabledDefault
 					? "Optional — on by default"

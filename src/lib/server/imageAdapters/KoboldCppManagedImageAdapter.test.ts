@@ -10,7 +10,7 @@
  *     resting state, so a correctly configured image connection reported
  *     "Reachable, but it has no image API."
  *   - A1111's `listModels` returns the checkpoints the server already holds. The
- *     Manager holds none until a render asks for one, so the Checkpoint dropdown
+ *     the managed KoboldCPP holds none until a render asks for one, so the Checkpoint dropdown
  *     came back empty and there was nothing to pick.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest"
@@ -58,7 +58,7 @@ const connection = (over: Record<string, unknown> = {}) =>
 		type: "koboldcpp_managed_image",
 		modality: "image-gen",
 		// Stale on purpose. A managed row's own URL is a display value; the
-		// Manager's settings say where the process actually is.
+		// the managed KoboldCPP's settings say where the process actually is.
 		baseUrl: "http://localhost:9999",
 		model: "sdxl-turbo-q8.gguf",
 		extraJson: {},
@@ -98,10 +98,10 @@ describe("testConnection", () => {
 		expect(res.error).toBeUndefined()
 	})
 
-	it("asks the Manager's address, not the row's own", async () => {
+	it("asks the managed KoboldCPP's address, not the row's own", async () => {
 		// A port changed after the connection was created lives only in
 		// koboldcpp_settings; testing the row's stale copy would report a working
-		// Manager as unreachable.
+		// the managed KoboldCPP as unreachable.
 		const adapter = await load()
 		await adapter.testConnection(connection())
 		expect(pinged).toEqual(["http://localhost:5001"])
@@ -138,14 +138,14 @@ describe("testConnection", () => {
 		expect(res.ok).toBe(true)
 	})
 
-	it("says the Manager is disabled rather than reporting a bare connection failure", async () => {
+	it("says KoboldCPP, run by Serene Pub, is turned off rather than reporting a bare connection failure", async () => {
 		// This type has no server of its own to point at, so "disabled" is the
 		// whole diagnosis and a fetch error would bury it.
 		settings.koboldCppManagerEnabled = false
 		const adapter = await load()
 		const res = await adapter.testConnection(connection())
 		expect(res.ok).toBe(false)
-		expect(res.error).toMatch(/Manager is disabled/i)
+		expect(res.error).toMatch(/run by Serene Pub, is turned off/i)
 		// And nothing was pinged: there is nothing to ping.
 		expect(pinged).toEqual([])
 	})
@@ -173,7 +173,7 @@ describe("testConnection", () => {
 })
 
 describe("listModels", () => {
-	it("offers the image models the Manager knows about, not the server's checkpoints", async () => {
+	it("offers the image models the managed KoboldCPP knows about, not the server's checkpoints", async () => {
 		const adapter = await load()
 		const res = await adapter.listModels(connection())
 		expect(res.models).toEqual([
@@ -203,10 +203,10 @@ describe("listModels", () => {
 	})
 
 	it("leaves an unclassified file out, because a <select> cannot say 'Unverified'", async () => {
-		// The Manager shows `unknown` in both lists with a badge and a one-click
+		// The managed KoboldCPP shows `unknown` in both lists with a badge and a one-click
 		// override. A bare dropdown has neither, so an unknown offered here is
 		// indistinguishable from a verified one — the route for a new
-		// architecture is to mark it in the Manager.
+		// architecture is to mark it in the managed KoboldCPP.
 		models.push({
 			filename: "brand-new-arch.gguf",
 			kind: "unknown",

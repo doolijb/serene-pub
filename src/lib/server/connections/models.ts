@@ -11,7 +11,7 @@
  * `connections` is the ENDPOINT: where the compute is, what the key is, which
  * wire protocol it speaks. `connection_models` is what is reachable through it.
  * A selection anywhere in the app — a capability default, a pipeline config's
- * provider slot, and since 0130 those two are the whole list — is a PAIR, and
+ * connection slot, and since 0130 those two are the whole list — is a PAIR, and
  * both halves are required:
  * connections have no default model, so a pair naming only the endpoint is
  * incomplete and resolves as unconfigured rather than guessing.
@@ -41,7 +41,7 @@
  * static manifest only, which is what makes the capability merge legal here.
  */
 
-import { and, asc, count, eq, inArray } from "drizzle-orm"
+import { and, asc, eq, inArray } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import type { CapabilityOverrides, CapabilitySet } from "@serene-pub/sdk"
 import {
@@ -79,6 +79,12 @@ export type ResolvedConnectionPair = SelectConnection & {
 	 * not a side effect of a schema change.
 	 */
 	contextWindow: number | null
+	/**
+	 * What the model is FOR (`text-gen`, `embeddings`, `image-gen`), as the
+	 * host said, or null when it said nothing. `capabilityRefusal` refuses a
+	 * transform of another modality — see `modelModalityAllows`.
+	 */
+	connectionModelModality: string | null
 }
 
 /**
@@ -198,7 +204,8 @@ export function mergeEndpointModel(
 			model: null,
 			connectionModelId: null,
 			connectionModelName: null,
-			contextWindow: null
+			contextWindow: null,
+			connectionModelModality: null
 		}
 	const capabilities = layerCapabilities(endpoint, model)
 	const merged: ResolvedConnectionPair = {
@@ -231,7 +238,8 @@ export function mergeEndpointModel(
 		capabilities: capabilities as Record<string, unknown>,
 		connectionModelId: model.id,
 		connectionModelName: model.name,
-		contextWindow: model.contextWindow ?? null
+		contextWindow: model.contextWindow ?? null,
+		connectionModelModality: model.modality ?? null
 	}
 	// The cache, rebuilt from the LAYERED durable halves — see
 	// `layerCapabilities`. Written onto the merged object only; neither stored
@@ -280,7 +288,15 @@ export async function ensureConnectionModel(
 	db: Db,
 	connectionId: number,
 	model: string | null | undefined,
-	name?: string | null
+	name?: string | null,
+	/**
+	 * What the model is for, when the caller KNOWS — the managed KoboldCPP's Use-for
+	 * handlers read it off the same registry its listing does. Written on
+	 * insert, and onto an existing row that says otherwise, so the default
+	 * registered right after is judged by the right modality rather than
+	 * waiting for the next sync.
+	 */
+	modality?: string | null
 ): Promise<SelectConnectionModel | undefined> {
 	const identifier = (model ?? "").trim()
 	if (!identifier) return undefined
@@ -294,14 +310,23 @@ export async function ensureConnectionModel(
 			)
 		)
 		.limit(1)
-	if (existing) return existing
+	if (existing) {
+		if (!modality || existing.modality === modality) return existing
+		const [updated] = await db
+			.update(schema.connectionModels)
+			.set({ modality })
+			.where(eq(schema.connectionModels.id, existing.id))
+			.returning()
+		return updated
+	}
 	const [row] = await db
 		.insert(schema.connectionModels)
 		.values({
 			connectionId,
 			model: identifier,
 			name: (name ?? "").trim() || identifier,
-			enabled: true
+			enabled: true,
+			modality: modality ?? null
 		})
 		.returning()
 	return row
@@ -395,21 +420,16 @@ export async function endpointIdsServingModel(
 /**
  * Forget a model that is no longer on disk, everywhere it is named.
  *
- * It deletes the MODEL, and the endpoint only if that empties it. The managed
- * delete paths used to run `DELETE FROM connections WHERE model = $1`, and
- * their own comment gave the reason: "a connection names exactly one model".
- * That sentence is false, and the statement it justified became a way to
- * delete an endpoint serving four other ggufs because one of them was removed
- * from the Manager's directory.
+ * It deletes the MODEL rows and never an endpoint. Every caller is a runtime
+ * with ONE endpoint for the whole host or process — an Ollama per host, the
+ * managed KoboldCPP — so an endpoint left with no models is that runtime with
+ * nothing downloaded, which is a state to show ("No models yet"), not a
+ * connection to remove. Removing it would take the runtime's view, its
+ * settings and every registration naming it down with the last model.
  *
- * So: drop the model rows, then drop the endpoints that are left with nothing.
- * For every row the managed flows actually create — one connection, one model —
- * that is byte-identical to the old behaviour, including the
- * `connection_defaults` release the FK cascade performs on the way out (a
- * registration that named a deleted model is cleared to endpoint-only, which
- * now resolves as incomplete rather than stranded). For a connection somebody
- * added a second model to by hand it is the answer they would expect and the
- * old statement could not give.
+ * A registration that named a deleted model keeps its endpoint and loses the
+ * model (`connection_defaults.connection_model_id` is ON DELETE SET NULL), and
+ * resolves as incomplete, with the fix attached.
  */
 export async function forgetModelEverywhere(
 	db: Db,
@@ -426,18 +446,4 @@ export async function forgetModelEverywhere(
 				eq(schema.connectionModels.model, model)
 			)
 		)
-	const remaining = await db
-		.select({
-			connectionId: schema.connectionModels.connectionId,
-			n: count()
-		})
-		.from(schema.connectionModels)
-		.where(inArray(schema.connectionModels.connectionId, ids))
-		.groupBy(schema.connectionModels.connectionId)
-	const survivors = new Set(remaining.map((r) => r.connectionId))
-	const emptied = ids.filter((id) => !survivors.has(id))
-	if (emptied.length)
-		await db
-			.delete(schema.connections)
-			.where(inArray(schema.connections.id, emptied))
 }

@@ -389,7 +389,7 @@ describe("entries from different tables can share an id", () => {
  * Two co-occurrence definitions, one per source.
  *
  * 0.5 asked world lore whether the *entry* named a cast member
- * (`KeywordInfillEngine:1111`), and character lore whether the entry's own
+ * (the 0.5 keyword path), and character lore whether the entry's own
  * character **spoke in the guaranteed window** (`:1161-1175`). One function
  * answered both for a while, so character lore got the world-lore answer —
  * which a character-lore entry satisfies by construction, since it names its
@@ -622,6 +622,49 @@ describe("selective logic — found, and then excluded", () => {
 		const r = run([entry()], ["the ashguard rode north"])
 		expect(r.candidates).toHaveLength(1)
 		expect(r.skipped).toEqual([])
+	})
+
+	/**
+	 * Finding #152. On a recursion pass the KEY window is the triggering
+	 * entries' text, but the condition is about the scene: "not when statue
+	 * is present" must see the statue standing in the conversation. 0.5.x had
+	 * no recursion and no selective logic, so SillyTavern's reading (the whole
+	 * scan buffer) is the one kept.
+	 */
+	it("on a recursion pass, reads the condition against the conversation too", () => {
+		const lair = entry({
+			id: 1,
+			name: "The Lair",
+			keys: "lair",
+			content: "Something vast sleeps here: a dragon."
+		})
+		const wyrm = conditioned({ id: 2, name: "The Wyrm", content: "Scales like coins." })
+		const r = run([lair, wyrm], ["we reached the lair, past the old statue"], {
+			retrieval: { ...DEFAULT_RETRIEVAL, maxRecursionDepth: 1 }
+		})
+		expect(r.candidates.map((c) => c.id)).toEqual([1])
+		const skipped = r.skipped.find((s) => s.id === 2)
+		expect(skipped?.kind).toBe("excluded")
+		expect(skipped?.reason).toContain("statue")
+	})
+
+	it("…and a condition the recursion text satisfies still holds", () => {
+		const lair = entry({
+			id: 1,
+			name: "The Lair",
+			keys: "lair",
+			content: "A dragon sleeps beside a broken statue."
+		})
+		const wyrm = conditioned({
+			id: 2,
+			name: "The Wyrm",
+			selectiveLogic: "andAny",
+			content: "Scales like coins."
+		})
+		const r = run([lair, wyrm], ["we reached the lair"], {
+			retrieval: { ...DEFAULT_RETRIEVAL, maxRecursionDepth: 1 }
+		})
+		expect(r.candidates.map((c) => c.id).sort()).toEqual([1, 2])
 	})
 })
 

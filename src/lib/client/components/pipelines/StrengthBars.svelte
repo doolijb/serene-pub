@@ -59,20 +59,19 @@
 
 	/**
 	 * The same palette `ShareBar` uses, and the same reason for it: a band's
-	 * colour is an identity rather than a severity, so the hues sit at one
-	 * lightness and chroma and stay evenly spaced perceptually.
+	 * colour is an identity rather than a severity, so the bands take the
+	 * theme's role colours at one stop.
 	 *
 	 * Shared by copy rather than by import, because the two controls are
 	 * deliberately different components and a shared constants module between
 	 * them would be the first step back toward being one.
 	 */
 	const TONES = [
-		"oklch(0.72 0.13 250)",
-		"oklch(0.72 0.13 160)",
-		"oklch(0.72 0.13 60)",
-		"oklch(0.72 0.13 20)",
-		"oklch(0.72 0.13 310)",
-		"oklch(0.72 0.13 200)"
+		"var(--color-primary-500)",
+		"var(--color-secondary-500)",
+		"var(--color-tertiary-500)",
+		"var(--color-success-500)",
+		"var(--color-surface-500)"
 	]
 	const toneOf = (m: Member, i: number) => TONES[(m.tone ?? i) % TONES.length]
 
@@ -165,7 +164,7 @@
 				{/if}
 			</div>
 			{#if m.description}
-				<p class="text-surface-600-400 text-[0.7rem] leading-snug">
+				<p class="text-surface-600-400 text-[11px] leading-snug">
 					{m.description}
 				</p>
 			{/if}

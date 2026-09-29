@@ -51,6 +51,7 @@ package-lock.json
 !/DOCKER.md
 !/NOMENCLATURE.md
 !/STYLE-GUIDE.md
+!/CONTRIBUTING.md
 /AI-TEMP/*
 .opencode
 
@@ -70,3 +71,5 @@ package-lock.json
 *.jks
 release.keystore.base64
 .playwright-mcp/*
+# C7 gate pack goldens are ~190 MB each (computed-style exhibits); kept locally, never pushed
+/scripts/c7Gate/goldens/pack-*.json

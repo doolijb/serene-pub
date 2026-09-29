@@ -216,12 +216,51 @@ describe("key matching", () => {
 	})
 })
 
+describe("key lists (finding #146)", () => {
+	it("an array is one element per key and is never re-split on commas", () => {
+		expect(splitKeys(["(a|b){1,2}", " Smith, John ", ""])).toEqual([
+			"(a|b){1,2}",
+			"Smith, John"
+		])
+		// The legacy comma string is split, as it always was.
+		expect(splitKeys("a, b ,,c")).toEqual(["a", "b", "c"])
+	})
+
+	it("a regex with a {m,n} quantifier matches when handed as a list", () => {
+		const w = buildScanWindow(msgs("she said abab loudly"), 10)
+		expect(
+			keywordSignal({ keys: ["(ab){2,3}"], matchMode: "regex" }, w)
+		).toBe(1)
+		// The same key through the comma string is torn in two and misses.
+		expect(keywordSignal({ keys: "(ab){2,3}", matchMode: "regex" }, w)).toBe(0)
+	})
+
+	it("a literal key with a comma survives as one key", () => {
+		const w = buildScanWindow(msgs("a letter to Smith, John"), 10)
+		expect(keywordMatch({ keys: ["Smith, John"] }, w).hits.map((h) => h.key)).toEqual([
+			"Smith, John"
+		])
+	})
+})
+
 describe("other signals", () => {
-	it("name match is a lowercase substring of the window", () => {
+	it("name match is a case-insensitive whole-word match in the window", () => {
 		const w = buildScanWindow(msgs("Kaelen drew his blade"), 10)
 		expect(nameMatchSignal("kaelen", w)).toBe(1)
 		expect(nameMatchSignal("Rowan", w)).toBe(0)
 		expect(nameMatchSignal(null, w)).toBe(0)
+	})
+
+	it("a title inside another word is no match — it admits, so it must be a word (finding #147)", () => {
+		const w = buildScanWindow(msgs("the crash of Alchemy's furnace"), 10)
+		expect(nameMatchSignal("ash", w)).toBe(0)
+		expect(nameMatchSignal("Al", w)).toBe(0)
+		// Multi-word titles still match as words, whatever the case.
+		const road = buildScanWindow(msgs("They met at THE ASHGUARD gate."), 10)
+		expect(nameMatchSignal("The Ashguard", road)).toBe(1)
+		// A title with pattern characters is matched literally.
+		const dr = buildScanWindow(msgs("Ask Dr. (Vell) first"), 10)
+		expect(nameMatchSignal("Dr. (Vell)", dr)).toBe(1)
 	})
 
 	/**
@@ -229,7 +268,7 @@ describe("other signals", () => {
 	 *
 	 * World lore asks whether the entry names a cast member; character lore
 	 * asks whether the entry's own character **spoke in the guaranteed
-	 * window** (`KeywordInfillEngine:1161-1175`). The two were computed by one
+	 * window** (the 0.5 keyword path). The two were computed by one
 	 * function for a while, which made character lore's answer a fact about the
 	 * entry's wording — and since a character-lore entry names its own
 	 * character by construction, that scored every present character's private

@@ -8,7 +8,7 @@
  * state keeper answers with `{beats, speakers, worldHints}` and proposes
  * nothing.
  *
- * So the JSON stages read the conversation as prose. The cut happens on the way
+ * So the JSON steps read the conversation as prose. The cut happens on the way
  * into their prompt and never on the stored row: the block is part of what the
  * model actually said, a swipe and an edit both work from the stored text, and a
  * repair that rewrites history would make the receipt disagree with the session.

@@ -3,7 +3,7 @@
  *
  * The handler compiles a real turn against a session so the composer can ask
  * "what would fire if I sent this?", which makes every gate in front of it
- * load-bearing in the same way `entries:testRetrieval`'s are: a turn is a real
+ * load-bearing (the retired `entries:testRetrieval` had the same gates): a turn is a real
  * run with a real embedding call behind it, and the precedent for running one
  * with only the caller's *session* in scope is `triggerGenerateMessage`, where
  * a guest could drive generations they had no business driving.

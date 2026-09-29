@@ -44,26 +44,35 @@ import {
 	eq,
 	gte,
 	inArray,
-	isNotNull,
-	isNull,
 	lte,
 	or,
 	sql
 } from "drizzle-orm"
-import type { AnyPgColumn } from "drizzle-orm/pg-core"
 import type { Handler } from "$lib/shared/events"
 import { relistBindings, syncLorebookBindings } from "./lorebooks"
 import { autoEnqueueLorebook } from "$lib/server/embedding/vectorizationQueue"
 import { enqueueLorebookAnnotation } from "$lib/server/annotations/queue"
-import { bandOfType, entryDeclaration } from "$lib/server/entries/declarations"
+import { entryDeclaration } from "$lib/server/entries/declarations"
 // Imported, never copied: session access is owner-OR-guest and every handler
 // that decided that for itself got it wrong in one direction or the other.
 import { checkSessionAccess } from "$lib/server/utils/sessionAccess"
-import { TRAVEL_LINK_TYPES } from "$lib/shared/lorebooks/linkVocabulary"
+import { nextStoryDate } from "$lib/shared/lorebooks/storyDate"
+import { MAIN_LINE, type Line } from "$lib/shared/lorebooks/lineReading"
+import { LOCATION_TYPE_ID } from "$lib/shared/entries/types"
+import { assertDateLands, bookCalendarOf } from "$lib/server/state/storyTime"
+import { BranchRefusal, lineOfBook, sessionReadingOf } from "$lib/server/state/reading"
+import { MAIN_HEAD, entryAt, entryOverlaysFor } from "$lib/server/state/entriesOnReading"
+import { splitKeys, type KeyList } from "$lib/server/pipelines/ranking/signals"
+import {
+	historyDateColumns,
+	onLineAtSql,
+	onLineSql
+} from "$lib/server/state/lineSql"
 import {
 	DEFAULT_VECTOR_NAME,
 	ENTRY_TYPE_IDS,
 	HISTORY_TYPE_ID,
+	assertDeclaredFields,
 	entryInsert,
 	inBookOfType,
 	isEntryTypeId,
@@ -174,6 +183,16 @@ async function clearEntryVectors(entryId: number) {
 		)
 }
 
+/**
+ * Whether an update's column half touches what the default space embeds.
+ *
+ * The vectorizer embeds `[title, content]` (history: `[content]`) —
+ * `pickEntry` in `vectorizationQueue.ts`. Nothing in `fields` is embedded.
+ */
+export function touchesEmbeddedText(columns: Record<string, unknown>): boolean {
+	return "title" in columns || "content" in columns
+}
+
 /** The entry plus its lorebook's name and owner, for the ownership checks. */
 async function findOwnedEntry(id: number, typeId: string) {
 	const [row] = await db
@@ -264,7 +283,10 @@ async function assertEntryBranch(
 async function assertAnchorEntry(
 	anchorEntryId: number | null | undefined,
 	lorebookId: number,
-	entryId?: number
+	entryId: number | undefined,
+	/** The line the CHILD is on (null = shared). */
+	childBranchId: number | null,
+	dbOrTx: Db = db
 ) {
 	if (anchorEntryId == null) return
 	if (entryId != null && anchorEntryId === entryId)
@@ -274,14 +296,28 @@ async function assertAnchorEntry(
 	for (let depth = 0; depth < MAX_ANCHOR_DEPTH; depth++) {
 		if (cursor == null) return
 		const row:
-			| { lorebookId: number; anchorEntryId: number | null }
-			| undefined = await db.query.lorebookEntries.findFirst({
+			| {
+					lorebookId: number
+					anchorEntryId: number | null
+					branchId: number | null
+			  }
+			| undefined = await dbOrTx.query.lorebookEntries.findFirst({
 			where: eq(schema.lorebookEntries.id, cursor),
-			columns: { lorebookId: true, anchorEntryId: true }
+			columns: { lorebookId: true, anchorEntryId: true, branchId: true }
 		})
 		if (!row) throw new Error("Parent entry not found.")
 		if (row.lorebookId !== lorebookId)
 			throw new Error("Parent entry not found.")
+		// ⚠ The direct parent only: a parent that passes is itself under the
+		// same rule. `anchor_entry_id` cascades, so a shared (or other-line)
+		// entry filed under a line's own entry would be deleted with that
+		// line — the child must be on the parent's line, or the parent shared.
+		if (depth === 0 && row.branchId != null && row.branchId !== childBranchId)
+			throw new Error(
+				childBranchId == null
+					? "An entry on main cannot be filed under one that exists only on a branch."
+					: "An entry cannot be filed under one that exists only on another line."
+			)
 		if (entryId != null && row.anchorEntryId === entryId)
 			throw new Error(
 				"That would file the entry under one of its own children."
@@ -305,18 +341,19 @@ async function applyEntryUpdate(
 	id: number,
 	typeId: string,
 	columns: Record<string, any>,
-	fields: Record<string, unknown>
+	fields: Record<string, unknown>,
+	dbOrTx: Db = db
 ) {
 	const set = {
 		...columns,
 		...(Object.keys(fields).length ? { fields: mergeFields(fields) } : {})
 	}
 	if (!Object.keys(set).length)
-		return db
+		return dbOrTx
 			.select()
 			.from(schema.lorebookEntries)
 			.where(entryOfType(id, typeId))
-	return db
+	return dbOrTx
 		.update(schema.lorebookEntries)
 		.set(set)
 		.where(entryOfType(id, typeId))
@@ -480,8 +517,25 @@ export const createEntryHandler: Handler<
 			)
 
 		await assertAnchorInBook(data.lorebookBindingId, data.lorebookId)
-		await assertAnchorEntry(data.anchorEntryId, data.lorebookId)
 		await assertEntryBranch((data as any).branchId, data.lorebookId)
+		await assertAnchorEntry(
+			data.anchorEntryId,
+			data.lorebookId,
+			undefined,
+			(data as any).branchId ?? null
+		)
+		// Declared fields are typed; a wrong-typed value is refused here,
+		// never stored in jsonb where no column type could refuse it.
+		assertDeclaredFields(typeId, data)
+		// A dated entry's date must land in the book's calendar, once it
+		// declares one (DESIGN-story-time §0: validated at entry, so the
+		// preflight list can never refill).
+		if (entryDeclaration(typeId)?.roles.order && data.year != null)
+			await assertDateLands(db, data.lorebookId, {
+				year: Number(data.year),
+				month: data.month ?? null,
+				day: data.day ?? null
+			})
 
 		// Advisory lock scoped to lorebookId — without it, two concurrent
 		// creates read the same free position and the second one raises a
@@ -597,30 +651,72 @@ export const updateEntryHandler: Handler<
 				existing.entry.lorebookId
 			)
 
-		// The re-parent. Same book, real row, not itself, and no walk back to
-		// itself — checked here rather than trusted, because the tree the
-		// workspace draws is this column and nothing else.
-		if (Object.prototype.hasOwnProperty.call(updateData, "anchorEntryId"))
-			await assertAnchorEntry(
-				updateData.anchorEntryId,
-				existing.entry.lorebookId,
-				params.entry.id
+		assertDeclaredFields(typeId, updateData)
+		const reparents = Object.prototype.hasOwnProperty.call(
+			updateData,
+			"anchorEntryId"
+		)
+
+		// A moved date must land in the book's calendar (see create). The
+		// parts not being changed are the stored ones.
+		if (
+			entryDeclaration(typeId)?.roles.order &&
+			["year", "month", "day"].some((k) =>
+				Object.prototype.hasOwnProperty.call(updateData, k)
 			)
+		) {
+			const was = toEntryRow(existing.entry) as Record<string, any>
+			const pick = (k: string) =>
+				Object.prototype.hasOwnProperty.call(updateData, k)
+					? updateData[k]
+					: was[k]
+			if (pick("year") != null)
+				await assertDateLands(db, existing.entry.lorebookId, {
+					year: Number(pick("year")),
+					month: pick("month") ?? null,
+					day: pick("day") ?? null
+				})
+		}
 
 		// ⚠ `fields` is merged, never replaced: `graphed` and `isCompleted` are
 		// machine-written by the graph builder and the summarizer concurrently
 		// with a user editing `content`, and a whole-object jsonb write from
 		// either side clobbers the other.
 		const { columns, fields } = splitUpdate(typeId, updateData)
-		const [updatedRow] = await applyEntryUpdate(
-			params.entry.id,
-			typeId,
-			columns,
-			fields
-		)
-		// The legacy update nulled the row's embedding so the queue would
-		// re-vectorize it; the vectors are rows of their own now.
-		await clearEntryVectors(params.entry.id)
+		// The re-parent. Same book, real row, not itself, no walk back to
+		// itself, and never under another line's own entry — checked here
+		// rather than trusted, because the tree the workspace draws is this
+		// column and nothing else. Serialised with the book's other writes
+		// (the create's advisory lock): two concurrent re-parents each
+		// passing the walk alone could otherwise close a cycle together.
+		const [updatedRow] = reparents
+			? await db.transaction(async (tx) => {
+					await tx.execute(
+						sql`select pg_advisory_xact_lock(${existing.entry.lorebookId})`
+					)
+					await assertAnchorEntry(
+						updateData.anchorEntryId,
+						existing.entry.lorebookId,
+						params.entry.id,
+						existing.entry.branchId ?? null,
+						tx
+					)
+					return applyEntryUpdate(
+						params.entry.id,
+						typeId,
+						columns,
+						fields,
+						tx
+					)
+				})
+			: await applyEntryUpdate(params.entry.id, typeId, columns, fields)
+		// The content vector goes stale only when what it embeds changed —
+		// the title and the content (the type's `embedText` role). An
+		// archive toggle, a re-parent, a date or a mark embeds nothing new,
+		// and dropping the vector for one took the entry out of vector
+		// retrieval until the queue caught up.
+		if (touchesEmbeddedText(columns))
+			await clearEntryVectors(params.entry.id)
 
 		const entry = toEntryRow(updatedRow)
 		if (emitToUser) emitToUser("entries:update", { entry })
@@ -640,9 +736,10 @@ export const updateEntryHandler: Handler<
  * An entry's two marks — **Off** (`enabled`) and **Pin** (`constant`) — and
  * nothing else (L1, R58). For the book's owner or an admin. Never touches
  * the vectors: a mark changes whether retrieval may use the entry, not what
- * it says, so it forces no re-embed (the whole-entry `entries:update` does,
- * on every save). Book-level: dated marks per branch wait for the
- * amendments work.
+ * it says, so it forces no re-embed (neither does `entries:update`, unless
+ * the title or the content changed). Writes the base row only (undated, on
+ * main); a dated or per-branch mark is an entry amendment (see
+ * `offWindowAmendments`).
  */
 export const entrySetMarksHandler: Handler<
 	Sockets.Entries.SetMarks.Params,
@@ -686,6 +783,9 @@ export const entrySetMarksHandler: Handler<
 		if (emitToUser) emitToUser("entries:update", { entry })
 		const res = {
 			entryId: params.entryId,
+			// Whose book: a page tells its widgets of a mark only in its own
+			// session's book (`hearLoreMarked`).
+			lorebookId: updated.lorebookId,
 			off: updated.enabled === false,
 			pinned: updated.constant === true
 		}
@@ -744,7 +844,22 @@ export const entrySessionEntriesHandler: Handler<
 			eq(st.subjectKind, "lore-entry"),
 			sql`${st.subjectId} = ${e.id}::text`
 		)
-		const wheres = [eq(e.lorebookId, session.lorebookId), eq(e.archived, false)]
+		// The session's reading (ruling 15): its line — with the ancestor
+		// chain and every fork cut — and its story clock. A fork's own rows
+		// are not another fork's, and a history entry dated past the clock
+		// has not happened yet in this session. The same rule retrieval
+		// applies (`onLineAtSql`), so what is listed is what can fire.
+		const reading = await sessionReadingOf(db, params.sessionId)
+		const wheres = [
+			eq(e.lorebookId, session.lorebookId),
+			eq(e.archived, false),
+			onLineAtSql(
+				e.branchId,
+				historyDateColumns(e.fields),
+				reading?.line ?? MAIN_LINE,
+				reading?.moment ?? null
+			)
+		]
 		if (q)
 			wheres.push(
 				sql`(coalesce(${e.title}, '') ILIKE ${"%" + q + "%"} OR array_to_string(${e.keys}, ' ') ILIKE ${"%" + q + "%"})`
@@ -752,6 +867,11 @@ export const entrySessionEntriesHandler: Handler<
 		if (params.filter === "fired") wheres.push(eq(st.lastIncluded, true))
 		if (params.filter === "pinned") wheres.push(eq(e.constant, true))
 		if (params.filter === "off") wheres.push(eq(e.enabled, false))
+		// 🚧 A state widget's item picker asks for item entries first (phase 3c).
+		const typeIds = Array.isArray(params.typeIds)
+			? params.typeIds.filter((t): t is string => typeof t === "string" && t.length > 0)
+			: []
+		if (typeIds.length) wheres.push(inArray(e.typeId, typeIds))
 		const order =
 			params.sort === "lastRead"
 				? [sql`${st.lastJudgedAt} DESC NULLS LAST`, asc(e.id)]
@@ -794,6 +914,31 @@ export const entrySessionEntriesHandler: Handler<
 			offset = n ? Math.floor((n - 1) / limit) * limit : 0
 			if (n) rows = await page(offset)
 		}
+		// Each listed row as the session reads it: its title, keys and marks
+		// with the line's amendments applied by the session's clock, so the
+		// widget names an entry what the prompt calls it. (The search, the
+		// filters and the sort still read the stored columns.)
+		const overlays = await entryOverlaysFor(
+			db,
+			session.lorebookId,
+			reading ?? MAIN_HEAD,
+			rows.map((r) => r.id)
+		)
+		rows = rows.map((r) => {
+			const seen = entryAt(
+				{ id: r.id, name: r.title, keys: r.keys, enabled: r.enabled, constant: r.constant },
+				overlays,
+				reading ?? MAIN_HEAD
+			)
+			return {
+				...r,
+				title: typeof seen.name === "string" ? seen.name : r.title,
+				// An amendment saved from the editor writes the comma string.
+				keys: splitKeys(seen.keys as KeyList),
+				enabled: seen.enabled as boolean,
+				constant: seen.constant as boolean
+			}
+		})
 		return answer({
 			sessionId: params.sessionId,
 			lorebookId: session.lorebookId,
@@ -842,7 +987,8 @@ export const deleteEntryHandler: Handler<
 		const res: Sockets.Entries.Delete.Response = {
 			success: "Entry deleted successfully.",
 			lorebookId: existing.entry.lorebookId,
-			entryId: params.id
+			entryId: params.id,
+			typeId
 		}
 		if (emitToUser) emitToUser("entries:delete", res)
 		await afterWrite(
@@ -895,7 +1041,11 @@ export const updateEntryPositionsHandler: Handler<
 
 		await reorderEntries(params.positions)
 
-		const res = { success: "Entry positions updated successfully." }
+		const res: Sockets.Entries.UpdatePositions.Response = {
+			success: "Entry positions updated successfully.",
+			lorebookId: params.lorebookId,
+			typeId
+		}
 		if (emitToUser) {
 			emitToUser("entries:updatePositions", res)
 			await relistEntries(socket, params.lorebookId, typeId, emitToUser)
@@ -977,8 +1127,9 @@ export async function reorderEntries(
  *
  * A type that declares no `order` field role has no notion of a "next" one, and
  * this
- * refuses rather than inventing one. For a type that does, the arithmetic is
- * still a calendar day — history is the only ordered type there is, and a
+ * refuses rather than inventing one. For a type that does, the step is
+ * `nextStoryDate`'s: rolled over by the book's declared calendar, and not at
+ * all in a free-form book. History is the only ordered type there is, and a
  * second one would want a **named policy**, the way the anchor field role does,
  * rather than a branch here.
  */
@@ -1000,10 +1151,25 @@ export const iterateNextEntryHandler: Handler<
 		if (!existing || existing.lorebookUserId !== userId)
 			throw new Error("Entry not found or access denied.")
 
+		// The line the new entry lands on: the one being read, as the create
+		// path takes it — checked against the book. Absent, it is the source
+		// entry's own line, so "next" from a fork's own entry stays on the
+		// fork rather than landing on main.
+		const branchId =
+			params.branchId !== undefined
+				? (params.branchId ?? null)
+				: (existing.entry.branchId ?? null)
+		await assertEntryBranch(branchId, existing.entry.lorebookId)
+
 		const from = toEntryRow(existing.entry) as LorebookEntry<
 			typeof HISTORY_TYPE_ID
 		>
-		const { year, month, day } = nextDate(from)
+		// Rolled over by the book's calendar when it declares one; free-form
+		// (the default) never rolls over.
+		const { year, month, day } = nextStoryDate(
+			from,
+			await bookCalendarOf(db, existing.entry.lorebookId)
+		)
 		const position = existing.entry.position + 1
 
 		// Shift every entry already at or past the target position forward by
@@ -1055,7 +1221,7 @@ export const iterateNextEntryHandler: Handler<
 						typeId,
 						lorebookId: existing.entry.lorebookId,
 						// Blank: the point is a fresh entry on the next date.
-						keys: "",
+						keys: [],
 						content: "",
 						useRegex: from.useRegex,
 						caseSensitive: from.caseSensitive,
@@ -1068,8 +1234,9 @@ export const iterateNextEntryHandler: Handler<
 						year,
 						month,
 						day,
-						position
-					})
+						position,
+						branchId
+					} as any)
 				)
 				.returning()
 		})
@@ -1089,287 +1256,6 @@ export const iterateNextEntryHandler: Handler<
 	}
 }
 
-/** One day on, Gregorian, leap years included. */
-function nextDate(from: {
-	year: number
-	month: number | null
-	day: number | null
-}) {
-	let year = from.year ?? 1
-	let month = from.month ?? 1
-	let day = (from.day ?? 1) + 1
-
-	const daysInMonth = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
-	if (year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0))
-		daysInMonth[1] = 29
-
-	if (day > daysInMonth[month - 1]) {
-		day = 1
-		month += 1
-		if (month > 12) {
-			month = 1
-			year += 1
-		}
-	}
-	return { year, month, day }
-}
-
-/**
- * "Would this entry fire?" — asked in the editor, answered by a real turn.
- *
- * The six steps this replaces were: save, open a session, send a message, find
- * the run in the admin pipelines area, open its receipt, read the retrieval
- * panel. Every one of those steps existed to *manufacture a turn*, because a
- * retrieval decision only exists for one — the panel says so itself. This
- * manufactures the turn instead, and asks it one question.
- *
- * ⚠ **It reads the stored row, not the editor's draft.** The pipeline gathers
- * lore out of the database, so an unsaved edit cannot be tested and pretending
- * otherwise would report a verdict about text the run never saw. The client
- * offers this from the *view* of a saved entry for exactly that reason.
- *
- * Three things it deliberately does not do:
- *
- *  1. **It records nothing.** `skipReceipt`, for `promptTokenCount`'s reason:
- *     this is a question somebody asks repeatedly while editing one entry, and
- *     a run row per ask buries the run history that the receipt reader exists
- *     to search. Nothing effectful runs either — `preview` halts at the
- *     pre-call substrate, so no message is written and nothing is sent.
- *  2. **It invents no vocabulary.** The answer is one `Pipelines.RetrievalRow`,
- *     projected by the same `explainRetrieval` the receipt's panel reads, so
- *     "excluded_share_cap" means here what it means there. A second projection
- *     would be a second definition of what a decision is.
- *  3. **It does not guess the outcome from silence.** No row means no mechanism
- *     reported on this entry at all, and that is returned as an absence with
- *     the run's own notes beside it rather than as "it did not fire".
- */
-export const testEntryRetrievalHandler: Handler<
-	Sockets.Entries.TestRetrieval.Params,
-	Sockets.Entries.TestRetrieval.Response
-> = {
-	event: "entries:testRetrieval",
-	handler: async (socket, params, emitToUser) => {
-		const userId = socket.user!.id
-		const typeId = assertTypeId(params.typeId)
-
-		/**
-		 * One channel, always answered.
-		 *
-		 * A refusal comes back as `error` on the event itself rather than as a
-		 * throw, following `sessions:promptTokenCount` — the whole point of
-		 * this surface is that "no" arrives with a reason, and `register()`'s
-		 * synthesised `:error` carries the generic sentence instead of the
-		 * specific one.
-		 */
-		const answer = (
-			part: Omit<
-				Sockets.Entries.TestRetrieval.Response,
-				"id" | "typeId" | "sessionId"
-			>
-		) => {
-			const res: Sockets.Entries.TestRetrieval.Response = {
-				id: params.id,
-				typeId,
-				sessionId: params.sessionId,
-				...part
-			}
-			if (emitToUser) emitToUser("entries:testRetrieval", res)
-			return res
-		}
-
-		// A payload naming no conversation is a question with half its subject
-		// missing, and the access check below would otherwise reach the
-		// database with an undefined id.
-		if (typeof params.sessionId !== "number")
-			return answer({
-				error: "Pick a conversation to test this entry against."
-			})
-
-		// ⚠ **Two checks, and neither stands in for the other.** This runs a
-		// pipeline against a session on behalf of a caller who named an entry,
-		// so both objects have to be theirs to name: the entry by the file's
-		// own ownership rule, the session by the shared owner-OR-guest one that
-		// `triggerGenerateMessage` learned to apply the hard way.
-		const owned = await findOwnedEntry(params.id, typeId)
-		if (!owned || owned.lorebookUserId !== userId)
-			return answer({ error: "Entry not found or access denied." })
-
-		const access = await checkSessionAccess(params.sessionId, userId)
-		if (!access.hasAccess)
-			return answer({
-				// The same sentence a missing session gets, so an inaccessible
-				// one stays indistinguishable from one that is not there.
-				error: "Session not found or access denied."
-			})
-
-		const [session] = await db
-			.select({ lorebookId: schema.sessions.lorebookId })
-			.from(schema.sessions)
-			.where(eq(schema.sessions.id, params.sessionId))
-			.limit(1)
-		if (!session)
-			return answer({ error: "Session not found or access denied." })
-
-		// Answered here rather than by running the turn: retrieval reads the
-		// session's own lorebook, so an entry in a different one is not a "no",
-		// it is a question that cannot be asked. Running anyway would spend a
-		// full turn to report an absence with no reason attached — which is the
-		// exact failure this surface exists to remove.
-		if (session.lorebookId !== owned.entry.lorebookId)
-			return answer({
-				error:
-					"That conversation reads a different lorebook, so this entry " +
-					"can never fire in it. Pick a conversation bound to this lorebook."
-			})
-
-		/**
-		 * Whose turn, and what was last said.
-		 *
-		 * Both read the way the comparison tool reads them (`comparePrompts`):
-		 * a test has to pick somebody, and the first active character is who
-		 * the app would pick for a plain reply. Nothing is drafted — the
-		 * question is whether the entry fires against the conversation **as it
-		 * stands**, so unlike `promptTokenCount` there is no draft message to
-		 * splice in.
-		 */
-		const [speaker] = await db
-			.select({ characterId: schema.sessionCharacters.characterId })
-			.from(schema.sessionCharacters)
-			.where(
-				and(
-					eq(schema.sessionCharacters.sessionId, params.sessionId),
-					eq(schema.sessionCharacters.isActive, true),
-					isNull(schema.sessionCharacters.removedAt)
-				)
-			)
-			.orderBy(asc(schema.sessionCharacters.position))
-			.limit(1)
-		const [last] = await db
-			.select({ content: schema.sessionMessages.content })
-			.from(schema.sessionMessages)
-			.where(eq(schema.sessionMessages.sessionId, params.sessionId))
-			.orderBy(desc(schema.sessionMessages.id))
-			.limit(1)
-
-		const { runTurn } = await import(
-			"$lib/server/pipelines/runtime/runTurn"
-		)
-		let receipt: any
-		try {
-			receipt = await runTurn({
-				db,
-				sessionId: params.sessionId,
-				userId,
-				currentCharacterId: speaker?.characterId ?? null,
-				text: last?.content ?? "",
-				preview: true,
-				skipReceipt: true
-			})
-		} catch (error) {
-			console.error("Error in testEntryRetrievalHandler:", error)
-			return answer({
-				error: `The turn could not be run: ${
-					error instanceof Error ? error.message : String(error)
-				}`
-			})
-		}
-
-		// A preview always halts — that is what it is — so the outcome cannot
-		// tell success from failure. The payload can: no preview report means
-		// the run gave up before it ever reached the pre-call substrate, and
-		// the honest answer is which node gave up and why.
-		if (!receipt?.preview)
-			return answer({
-				error:
-					`The turn could not be compiled: ${receipt?.outcome}` +
-					(receipt?.haltNodeKey
-						? ` at '${receipt.haltNodeKey}'`
-						: "") +
-					(receipt?.haltReason ? ` — ${receipt.haltReason}` : "")
-			})
-
-		const { explainRetrieval } = await import("./pipelines")
-		const { entrySourceHash } = await import("$lib/server/annotations")
-
-		const band = bandOfType(typeId)
-		const row = owned.entry
-		const explanation = explainRetrieval(
-			receipt,
-			// One entry, because one entry was asked about. The fingerprint is
-			// over the same three columns the run hashed, so the projection's
-			// drift check agrees with itself rather than calling a row edited
-			// between reading it and scoring it.
-			new Map([
-				[
-					`${band}:${row.id}`,
-					{
-						id: row.id,
-						typeId: row.typeId,
-						lorebookId: row.lorebookId,
-						title: row.title,
-						keys: Array.isArray(row.keys) ? row.keys : [],
-						constant: !!row.constant,
-						enabled: !!row.enabled,
-						fingerprint: entrySourceHash(row)
-					}
-				]
-			]),
-			{
-				// ⚠ `entriesRead: false` **is** the honest value with a
-				// one-entry map: the map is not a reading of the lorebook, and
-				// a projection told otherwise would report every other row as a
-				// deleted entry. Nothing is lost — provenance is meaningless on
-				// a run that happened a moment ago against the live rows.
-				entriesRead: false,
-				// The default cap trims the tail of a long list for a panel
-				// that renders all of it. This reads one row out and discards
-				// the rest, so a cap here would only be a way to lose the row
-				// that was asked about in a large lorebook.
-				limit: Number.MAX_SAFE_INTEGER
-			}
-		)
-
-		const mine = explanation.rows.filter(
-			(r) => r.source === band && r.id === row.id
-		)
-		// The store's own projection of this preview (L1): never stored, and
-		// the same rows a real turn would have recorded. An inclusion by any
-		// ranking wins, as above.
-		const { projectReceiptRankings } = await import(
-			"$lib/server/pipelines/runtime/rankingStore"
-		)
-		let decision: Sockets.Entries.TestRetrieval.Response["decision"]
-		for (const ranking of projectReceiptRankings(receipt)) {
-			const d = ranking.rows.find(
-				(r) => r.subjectKind === "lore-entry" && r.subjectId === String(row.id)
-			)
-			if (!d || (decision?.included && !d.included)) continue
-			const matched = (
-				d.detail as { matched?: Array<{ key: string; fuzzy?: boolean }> } | null
-			)?.matched?.filter((m) => !m.fuzzy)
-			decision = {
-				included: d.included,
-				reason: d.reason,
-				rank: d.rank ?? null,
-				// Rank's own denominator: the lore entries this ranking read in.
-				of: ranking.rows.filter((r) => r.subjectKind === "lore-entry" && r.included).length,
-				tokens: d.tokens ?? null,
-				matched: Array.isArray(matched) ? matched.map((m) => m.key) : []
-			}
-		}
-		return answer({
-			...(decision ? { decision } : {}),
-			// Two gather branches can both decide the same candidate. "Did it
-			// fire" is answered by whether *any* of them let it in, so an
-			// inclusion wins over a rejection of the same row.
-			row: mine.find((r) => r.outcome === "included") ?? mine[0],
-			ranked: explanation.ranked,
-			notes: explanation.notes,
-			warnings: explanation.warnings
-		})
-	}
-}
-
 /**
  * The two doors whose rows are not entries, under the names the wire uses.
  *
@@ -1381,30 +1267,15 @@ const SCENE_KIND = "scene"
 const CAST_KIND = "cast"
 
 /**
- * The third such door: entries that are somewhere rather than something.
+ * The third such door: places.
  *
- * ⚠ **Not a type and not a facet on the row** — an entry is a place because of
- * its *edges*, so this is a count over `narrative_relationships` and nothing
- * about the entry itself decides it. Two ways to qualify, either one enough: an
- * edge whose other end is also an entry (a road between two places), or an edge
- * whose type is one a person travels along (`TRAVEL_LINK_TYPES` — the same list
- * the picker offers, so the count and the vocabulary cannot drift apart).
+ * ⚠ **A place is a `core:entry/location` entry** — one definition, shared by
+ * this count and the Places board (decided 2026-09-28). Never count "an
+ * entry on a travel edge or an entry-to-entry edge" here: the board does not
+ * use that definition, and the rail and the board would disagree about the
+ * same book.
  */
 const PLACE_KIND = "places"
-
-/**
- * "Shared, or on this line" — the one condition every branch-aware read uses.
- *
- * ⚠ Main is `IS NULL` alone, not "no condition". A fork's own rows are rows
- * main does not have, so an unfiltered read is not main's reading; it is both
- * lines at once. (The mirror of `rowsOnLine` in
- * `$lib/shared/lorebooks/amendments.ts`, and the two must agree.)
- */
-function onLineSql(column: AnyPgColumn, branchId: number | null | undefined) {
-	return branchId == null
-		? isNull(column)
-		: or(isNull(column), eq(column, branchId))!
-}
 
 export const entryCountsHandler: Handler<
 	Sockets.Entries.Counts.Params,
@@ -1416,6 +1287,17 @@ export const entryCountsHandler: Handler<
 		const book = await findOwnedBook(params.lorebookId, userId)
 		if (!book) throw new Error("Lorebook not found.")
 
+		// The line being read, with its ancestor chain and fork cuts (ruling
+		// 5). A branch of another book is refused, never counted as main.
+		let line: Line
+		try {
+			line = await lineOfBook(db, params.lorebookId, params.branchId ?? null)
+		} catch (e) {
+			if (e instanceof BranchRefusal)
+				throw new Error("That branch is not a line of this lorebook.")
+			throw e
+		}
+
 		// Every declared kind starts at zero, so a door the book has nothing
 		// behind reads "0" rather than going blank — an absent figure is how a
 		// reader learns a count has not arrived, and it must not also be how
@@ -1425,6 +1307,10 @@ export const entryCountsHandler: Handler<
 		counts[SCENE_KIND] = 0
 		counts[CAST_KIND] = 0
 
+		// ⚠ The pool's own rule: archived rows are out (the default list
+		// hides them), rows on a line outside the chain are out, and a shared
+		// history entry dated after a fork is cut from the branch — the same
+		// `rowReadsOnLine` the workspace filters its rows by.
 		const byType = await db
 			.select({
 				typeId: schema.lorebookEntries.typeId,
@@ -1434,7 +1320,12 @@ export const entryCountsHandler: Handler<
 			.where(
 				and(
 					eq(schema.lorebookEntries.lorebookId, params.lorebookId),
-					onLineSql(schema.lorebookEntries.branchId, params.branchId)
+					eq(schema.lorebookEntries.archived, false),
+					onLineAtSql(
+						schema.lorebookEntries.branchId,
+						historyDateColumns(schema.lorebookEntries.fields),
+						line
+					)
 				)
 			)
 			.groupBy(schema.lorebookEntries.typeId)
@@ -1446,7 +1337,7 @@ export const entryCountsHandler: Handler<
 			.where(
 				and(
 					eq(schema.scenes.lorebookId, params.lorebookId),
-					onLineSql(schema.scenes.branchId, params.branchId)
+					onLineSql(schema.scenes.branchId, line)
 				)
 			)
 		counts[SCENE_KIND] = Number(scenes?.total ?? 0)
@@ -1457,46 +1348,7 @@ export const entryCountsHandler: Handler<
 			.where(eq(schema.lorebookBindings.lorebookId, params.lorebookId))
 		counts[CAST_KIND] = Number(cast?.total ?? 0)
 
-		// One row per qualifying entry, whichever end of the edge it is on —
-		// `union` rather than `or` across two columns so an entry with a road
-		// at each end is one place rather than two.
-		const travelTypes = [...TRAVEL_LINK_TYPES]
-		const qualifies = (mine: AnyPgColumn, other: AnyPgColumn) =>
-			db
-				.select({ entryId: sql<number>`${mine}` })
-				.from(schema.narrativeRelationships)
-				.where(
-					and(
-						eq(
-							schema.narrativeRelationships.lorebookId,
-							params.lorebookId
-						),
-						isNotNull(mine),
-						or(
-							isNotNull(other),
-							inArray(
-								sql`lower(trim(${schema.narrativeRelationships.relationshipType}))`,
-								travelTypes
-							)
-						)
-					)
-				)
-		const placeRows = await db
-			.select({ total: sql<number>`count(*)::int` })
-			.from(
-				qualifies(
-					schema.narrativeRelationships.fromEntryId,
-					schema.narrativeRelationships.toEntryId
-				)
-					.union(
-						qualifies(
-							schema.narrativeRelationships.toEntryId,
-							schema.narrativeRelationships.fromEntryId
-						)
-					)
-					.as("places")
-			)
-		counts[PLACE_KIND] = Number(placeRows[0]?.total ?? 0)
+		counts[PLACE_KIND] = counts[LOCATION_TYPE_ID] ?? 0
 
 		const res = { lorebookId: params.lorebookId, counts }
 		emitToUser("entries:counts", res)
@@ -1515,8 +1367,8 @@ export const entryRecentDecisionsHandler: Handler<
 
 		/**
 		 * ⚠ **Two checks, and neither stands in for the other** — the same
-		 * rule `entries:testRetrieval` is scoped by. The book is the asker's
-		 * by this file's ownership rule; the conversation is theirs by the
+		 * rule `pipelines:previewRetrieval` is scoped by. The book is the
+		 * asker's by this file's ownership rule; the session is theirs by the
 		 * shared owner-OR-guest one.
 		 */
 		// The book's owner — decisions on guests' turns in their sessions
@@ -1559,7 +1411,7 @@ export const entryRecentDecisionsHandler: Handler<
 			.from(schema.sessions)
 			.where(eq(schema.sessions.id, params.sessionId))
 			.limit(1)
-		// A conversation reading another book decided nothing about this
+		// A session reading another book decided nothing about this
 		// book's rows. That is an empty answer rather than a refusal: the
 		// question was asked and it has a true answer.
 		if (!session || session.lorebookId !== params.lorebookId)
@@ -1702,7 +1554,6 @@ export function registerEntryHandlers(
 	register(socket, deleteEntryHandler, emitToUser)
 	register(socket, updateEntryPositionsHandler, emitToUser)
 	register(socket, iterateNextEntryHandler, emitToUser)
-	register(socket, testEntryRetrievalHandler, emitToUser)
 	register(socket, entryCountsHandler, emitToUser)
 	register(socket, entryRecentDecisionsHandler, emitToUser)
 }

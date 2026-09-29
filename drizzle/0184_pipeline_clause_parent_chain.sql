@@ -1,0 +1,1 @@
+ALTER TABLE "pipeline_clauses" ADD COLUMN "parent_clause_chain" text;

@@ -20,7 +20,8 @@
  */
 
 import { and, asc, eq, inArray } from "drizzle-orm"
-import { i18nText, isEventId, sessionEvents, type EnabledWhen } from "@serene-pub/sdk"
+import { notCoreRow } from "$lib/server/plugins/frameHost"
+import { i18nText, isEventId, sessionEvents, type EnabledWhen, type NodeSwap } from "@serene-pub/sdk"
 import * as schema from "$lib/server/db/schema"
 import { answersEvent } from "$lib/server/pipelines/entities/presetBindings"
 import { parseActionIdentity } from "$lib/shared/actions/identity"
@@ -370,11 +371,21 @@ export async function mayStandIn(
  * ports agree; a strategy has no slots to disagree about). Returns the same
  * document object — `loadPublished` builds it fresh from rows per run, so
  * mutating the copy is safe by construction.
+ *
+ * `swaps`, when given, is filled with every node a rebind actually replaced
+ * — the pin it displaced and the scope that chose it — for the executor to
+ * record on that node's receipt row (`RunOptions.swaps`, F2). A rebind that
+ * degraded to the pin, or that names the pin, is not a swap and is not
+ * reported.
  */
 export async function applyNodeRebinds(
 	db: Db,
 	doc: any,
-	opts: { specSlug: string; sessionId?: number | null }
+	opts: {
+		specSlug: string
+		sessionId?: number | null
+		swaps?: Record<string, NodeSwap>
+	}
 ): Promise<any> {
 	try {
 		const [spec] = await db
@@ -437,6 +448,11 @@ export async function applyNodeRebinds(
 			const [bare, version] = String(winner.definitionId).split("@")
 			node.definitionId = bare
 			node.definitionVersion = Number(version)
+			if (opts.swaps)
+				opts.swaps[node.key] = {
+					pin: pinnedId,
+					by: winner.scopeKind === "session" ? "session" : "instance"
+				}
 		}
 		return doc
 	} catch {
@@ -650,7 +666,7 @@ export async function listSessionNodeSwaps(
 			disabledSwaps: schema.plugins.disabledSwaps
 		})
 		.from(schema.plugins)
-		.where(eq(schema.plugins.enabled, true))
+		.where(and(eq(schema.plugins.enabled, true), notCoreRow()))
 		.orderBy(asc(schema.plugins.id))
 	for (const p of plugins) {
 		const swaps = ((p.manifest as { swaps?: unknown })?.swaps ?? []) as Array<{

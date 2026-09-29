@@ -4,6 +4,7 @@ import {
 	CAST_KIND,
 	facetCounts,
 	mergeCastCount,
+	nothingMatchesLine,
 	poolSummary,
 	railScopes,
 	readingLine,
@@ -11,8 +12,17 @@ import {
 	savedScopeCount,
 	savedScopeFilters,
 	readingIntoSentence,
-	scopeKinds
+	scopeKinds,
+	BOOK_ENTRY_TYPES,
+	entryTotal,
+	matchSessionRoute,
+	readingActionLabel,
+	replaceReadingSentence,
+	sessionMomentKey,
+	timeLensEntries,
+	timeLensKinds
 } from "./scopes"
+import { emptyRoute, type LoreRoute } from "$lib/shared/lorebooks/loreRoute"
 import { emptyFilters, SCENE_KIND, type PoolItem } from "./poolFilter"
 
 const WORLD = "core:entry/world-lore"
@@ -25,7 +35,7 @@ function item(over: Partial<PoolItem> & { id: number }): PoolItem {
 		kind: WORLD,
 		name: `Entry ${over.id}`,
 		content: "",
-		keys: "",
+		keys: [],
 		pinned: false,
 		off: false,
 		archived: false,
@@ -65,7 +75,8 @@ describe("railScopes — the kind facets, with their figures", () => {
 			world: 12,
 			history: 9,
 			scenes: 2,
-			places: 0
+			places: 0,
+			items: 0
 		})
 	})
 
@@ -83,18 +94,21 @@ describe("railScopes — the kind facets, with their figures", () => {
 			"world",
 			"history",
 			"scenes",
-			"places"
+			"places",
+			"items"
 		])
 		expect(scopes.filter((s) => s.empty).map((s) => s.id)).toEqual([
 			"history",
 			"scenes",
-			"places"
+			"places",
+			"items"
 		])
 	})
 
 	it("says nothing about a figure that has not arrived", () => {
 		const scopes = railScopes(null)
 		expect(scopes.map((s) => s.count)).toEqual([
+			undefined,
 			undefined,
 			undefined,
 			undefined,
@@ -109,6 +123,14 @@ describe("railScopes — the kind facets, with their figures", () => {
 		expect(scopeKinds("world")).toEqual([WORLD])
 		expect(scopeKinds("all")).toEqual([])
 		expect(scopeKinds("cast")).toEqual([CHARACTER])
+		expect(scopeKinds("items")).toEqual(["core:entry/item"])
+	})
+
+	it("counts items as a scope of their own, and in the whole pool (phase 3c)", () => {
+		const by = Object.fromEntries(
+			railScopes({ ...COUNTS, "core:entry/item": 4 }).map((s) => [s.id, s.count])
+		)
+		expect(by).toMatchObject({ all: 34, items: 4, world: 12 })
 	})
 })
 
@@ -212,11 +234,11 @@ describe("readingLine — which session the book is read into", () => {
  */
 describe("saved scopes", () => {
 	const pool = [
-		item({ id: 1, keys: "umber" }),
-		item({ id: 2, keys: "" }),
-		item({ id: 3, keys: "   " }),
-		item({ id: 4, keys: "", pinned: true }),
-		item({ id: 5, keys: "", archived: true })
+		item({ id: 1, keys: ["umber"] }),
+		item({ id: 2, keys: [] }),
+		item({ id: 3, keys: ["   "] }),
+		item({ id: 4, keys: [], pinned: true }),
+		item({ id: 5, keys: [], archived: true })
 	]
 	const readIn = new Set(["entry#2"])
 
@@ -287,6 +309,13 @@ describe("facetCounts — what the chips under the pool header say", () => {
 		expect(counts.total).toBe(5)
 	})
 
+	it("counts the saved scopes by the rail's own rule (archived answers none)", () => {
+		const counts = facetCounts(pool, readIn)
+		// No keywords: 1 and 2 were read in; 3 is live; 4 is archived; 5 a scene.
+		expect(counts.needsKeywords).toBe(4)
+		expect(counts.looseEnds).toBe(2)
+	})
+
 	it("counts a kind the pool does not hold as absent rather than as zero", () => {
 		expect(
 			facetCounts([item({ id: 1 })], new Set()).kinds.map((k) => k.kind)
@@ -317,5 +346,112 @@ describe("readingIntoSentence", () => {
 
 	it("one entry is singular", () => {
 		expect(readingIntoSentence("main", 1)).toContain("1 entry reached")
+	})
+})
+
+describe("readingIntoSentence — the session's clock (ruling 3, #145)", () => {
+	it("names the session's clock when it keeps one", () => {
+		expect(readingIntoSentence("main", 2, "Year 3, Mo. 2")).toBe(
+			"Reading this book on main, as of Year 3, Mo. 2, the session's clock · 2 entries reached the last turn"
+		)
+	})
+})
+
+describe("sessionMomentKey / matchSessionRoute — stand where the session stands", () => {
+	const base: LoreRoute = {
+		...emptyRoute(),
+		lorebookId: 4,
+		moment: "Y1-5",
+		branch: 7
+	}
+
+	it("a session with no clock reads at now", () => {
+		expect(sessionMomentKey(null)).toBeUndefined()
+		expect(sessionMomentKey({ year: 3, month: 2, day: null })).toBe("Y3-2")
+	})
+
+	it("moves line AND moment in one route, so one guarded transition does both (#81)", () => {
+		const next = matchSessionRoute(base, { branchId: null, clock: null })
+		expect(next.branch).toBeUndefined()
+		expect(next.moment).toBeUndefined()
+		const atClock = matchSessionRoute(base, {
+			branchId: 9,
+			clock: { year: 12, month: 1, day: 4 }
+		})
+		expect(atClock.branch).toBe(9)
+		expect(atClock.moment).toBe("Y12-1-4")
+		expect(atClock.lorebookId).toBe(4)
+	})
+})
+
+describe("reading verbs (NOMENCLATURE §8)", () => {
+	it("offers one action, named by what it does", () => {
+		expect(readingActionLabel(false)).toBe("Read into this session")
+		expect(readingActionLabel(true)).toBe("Stop reading")
+	})
+
+	it("the replace confirmation names both books and says nothing changes in them", () => {
+		const sentence = replaceReadingSentence("The Open Door", "Old Book", "New Book")
+		expect(sentence).toContain("The Open Door reads Old Book")
+		expect(sentence).toContain("stops reading Old Book")
+		expect(sentence).toContain("nothing in either book changes")
+	})
+})
+
+describe("book entry types and figures (#85, #89)", () => {
+	it("loads every entry kind the pool draws, items included, plus places", () => {
+		expect(BOOK_ENTRY_TYPES).toContain("core:entry/item")
+		expect(BOOK_ENTRY_TYPES).toContain("core:entry/location")
+		expect(BOOK_ENTRY_TYPES).toContain(HISTORY)
+		expect(BOOK_ENTRY_TYPES).not.toContain(SCENE_KIND)
+	})
+
+	it("totals every entry type, and leaves scenes and cast out", () => {
+		expect(entryTotal(null)).toBeUndefined()
+		expect(
+			entryTotal({
+				[WORLD]: 2,
+				"core:entry/location": 1,
+				"core:entry/item": 3,
+				[SCENE_KIND]: 9,
+				cast: 4
+			})
+		).toBe(6)
+	})
+
+	it("a place is a location entry — the Places scope narrows to them", () => {
+		expect(scopeKinds("places")).toEqual(["core:entry/location"])
+	})
+})
+
+describe("timeLensEntries — the Time lens honours the scope (#88)", () => {
+	const rows = [
+		{ id: 1, typeId: WORLD },
+		{ id: 2, typeId: HISTORY },
+		{ id: 3, typeId: "core:entry/location" },
+		{ id: 4, typeId: CHARACTER }
+	]
+
+	it("narrows to the scope's kind", () => {
+		expect(timeLensEntries(rows, "world").map((r) => r.id)).toEqual([1])
+		expect(timeLensEntries(rows, "places").map((r) => r.id)).toEqual([3])
+		expect(timeLensEntries(rows, "cast").map((r) => r.id)).toEqual([4])
+	})
+
+	it("all is every pool kind; scenes keeps History, where scenes sit", () => {
+		expect(timeLensEntries(rows, "all").map((r) => r.id)).toEqual([1, 2, 4])
+		expect(timeLensKinds("scenes")).toEqual([HISTORY])
+	})
+})
+
+describe("nothingMatchesLine", () => {
+	it("quotes the search back when there is one", () => {
+		expect(nothingMatchesLine("  harbour ")).toBe(
+			"Nothing matches “harbour” with these filters."
+		)
+	})
+
+	it("speaks of the filters alone when nothing is typed", () => {
+		expect(nothingMatchesLine("")).toBe("Nothing matches these filters.")
 	})
 })

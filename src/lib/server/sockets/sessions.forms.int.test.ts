@@ -2,7 +2,7 @@
  * Forms, over the real handlers (plans/29 R-15 *Forms* · *The line*; R-21
  * (5); 09-B B9, F39; plans/30 U5d, 2026-09-17).
  *
- * What is pinned, every one through `sessions:triggerFunction` and the runs
+ * What is pinned, every one through `sessions:fireAction` and the runs
  * it starts — never `runSpec` directly:
  *
  *  1. **A spec writes a choices block.** The message gains ONE `core:blocks`
@@ -238,7 +238,7 @@ async function sessionWithTom(tag: string) {
 	const tom = await character(owner.id, `Tom ${tag}`)
 	await testDb
 		.insert(schema.sessionCharacters)
-		.values({ sessionId: session!.id, characterId: tom, isActive: true, visibility: "visible" })
+		.values({ sessionId: session!.id, characterId: tom, isActive: true })
 	return { owner, guest, session: session!, tom }
 }
 
@@ -267,6 +267,14 @@ async function publishAskAndAnswer(
 		 * narrator's road — instead of writing `blocks` verbatim.
 		 */
 		askJson?: { addressee?: string; question: string; options: Array<{ key: string; label: string }> }
+		/**
+		 * A line Answer writes BEFORE its `save` (lair pass R9): a run that
+		 * wrote something before its gate — so a reject at that gate still
+		 * leaves an effect behind.
+		 */
+		answerFirst?: string
+		/** What Answer collects (R3), for a form-venue action's collect modal (R9). */
+		answerCollects?: Record<string, unknown>
 	} = {}
 ) {
 	const { spec, compile } = await import("@serene-pub/sdk")
@@ -288,7 +296,8 @@ async function publishAskAndAnswer(
 				{
 					key: askFn,
 					venue: { kind: "composer" },
-					label: { en: "Ask" }
+					label: { en: "Ask" },
+					description: { en: "A test action." }
 				},
 				...((opts.askActions ?? []) as any[])
 			]
@@ -336,7 +345,9 @@ async function publishAskAndAnswer(
 					key: answerFn,
 					venue: { kind: opts.answerVenue ?? "form" },
 					audience: { see: ["participant"], act: ["participant"] },
-					label: { en: "Answer" }
+					...(opts.answerCollects ? { collects: opts.answerCollects } : {}),
+					label: { en: "Answer" },
+					description: { en: "A test action." }
 				}
 			]
 		}
@@ -366,16 +377,28 @@ async function publishAskAndAnswer(
 							})
 						)
 						.build()
-				: answerBuilder
-						.task("answer", ($) => C.readAnswer.v1({ payload: $.input.payload, form: $.input.form }))
-						.outlet("save", ($) =>
-							C.createMessage.v1({
-								text: $.answer.label,
-								characterId: $.answer.characterId,
-								speaker: $.answer.addressee
-							})
-						)
-						.build()
+				: opts.answerFirst !== undefined
+					? answerBuilder
+							.task("answer", ($) => C.readAnswer.v1({ payload: $.input.payload, form: $.input.form }))
+							.outlet("said", () => C.createMessage.v1({ narration: true, text: opts.answerFirst! }))
+							.outlet("save", ($) =>
+								C.createMessage.v1({
+									text: $.answer.label,
+									characterId: $.answer.characterId,
+									speaker: $.answer.addressee
+								})
+							)
+							.build()
+					: answerBuilder
+							.task("answer", ($) => C.readAnswer.v1({ payload: $.input.payload, form: $.input.form }))
+							.outlet("save", ($) =>
+								C.createMessage.v1({
+									text: $.answer.label,
+									characterId: $.answer.characterId,
+									speaker: $.answer.addressee
+								})
+							)
+							.build()
 	)
 	const batch = new Set([askId, answerId])
 	await saveDocument(testDb as any, ask, { publish: true, batch })
@@ -397,8 +420,8 @@ const festival = (addressee: string) => (ids: Ids): MessageBlock[] => [
 ]
 
 async function fire(userId: number, params: Record<string, unknown>) {
-	const { sessionsTriggerFunctionHandler } = await import("./sessions")
-	return sessionsTriggerFunctionHandler.handler(fakeSocket(userId), params as any, noopEmit)
+	const { sessionsFireActionHandler } = await import("./sessions")
+	return sessionsFireActionHandler.handler(fakeSocket(userId), params as any, noopEmit)
 }
 
 /**
@@ -892,9 +915,9 @@ describe("R-15 · Elara asks Tom, and the AI answers as Tom", () => {
 		const written = (await lastBlockTree(session.id))!
 		const block = written.blocks[0] as any
 
-		const { sessionsTriggerFunctionHandler } = await import("./sessions")
+		const { sessionsFireActionHandler } = await import("./sessions")
 		const pushes: Array<{ event: string; data: any }> = []
-		const ack = await sessionsTriggerFunctionHandler.handler(
+		const ack = await sessionsFireActionHandler.handler(
 			fakeSocket(owner.id),
 			{
 				sessionId: session.id,
@@ -921,7 +944,7 @@ describe("R-15 · Elara asks Tom, and the AI answers as Tom", () => {
 		await vi.waitFor(
 			() =>
 				expect(
-					pushes.some((p) => p.event === "sessions:triggerFunction" && p.data.success)
+					pushes.some((p) => p.event === "sessions:fireAction" && p.data.success)
 				).toBe(true),
 			{ timeout: 30_000, interval: 100 }
 		)
@@ -1174,8 +1197,8 @@ describe("W-a · every fire leaves a row under the id the answer named", () => {
 		firedSpec: string,
 		hook: () => void
 	) {
-		const { sessionsTriggerFunctionHandler } = await import("./sessions")
-		return sessionsTriggerFunctionHandler.handler(
+		const { sessionsFireActionHandler } = await import("./sessions")
+		return sessionsFireActionHandler.handler(
 			fakeSocket(userId),
 			params as any,
 			(event: string, data: any) => {
@@ -1411,8 +1434,8 @@ describe("the review's rulings (2026-09-17)", () => {
 			],
 			{
 				askActions: [
-					{ key: "dup-a", venue: { kind: "composer" }, label: { en: "A" } },
-					{ key: "dup-b", venue: { kind: "composer" }, label: { en: "B" } }
+					{ key: "dup-a", venue: { kind: "composer" }, label: { en: "A" }, description: { en: "A test action." } },
+					{ key: "dup-b", venue: { kind: "composer" }, label: { en: "B" }, description: { en: "A test action." } }
 				]
 			}
 		)
@@ -1444,7 +1467,8 @@ describe("the review's rulings (2026-09-17)", () => {
 								key: "legacy-grant",
 								venue: { kind: "composer" },
 								effects: "world",
-								label: { en: "Grant" }
+								label: { en: "Grant" },
+								description: { en: "A test action." }
 							}
 						]
 					}
@@ -1524,7 +1548,8 @@ describe("the review's rulings (2026-09-17)", () => {
 								key: "foreign-grant",
 								venue: { kind: "composer" },
 								effects: "world",
-								label: { en: "Grant" }
+								label: { en: "Grant" },
+								description: { en: "A test action." }
 							}
 						]
 					}
@@ -1615,9 +1640,9 @@ describe("the review's rulings (2026-09-17)", () => {
 	test("the click's ack carries the tree's progress: the answer run's stage and statuses ride the root's card (S4)", async () => {
 		const { owner, session, tom } = await sessionWithTom("progress")
 		const { askId, askFn } = await publishAskAndAnswer("progress", festival(`character:${tom}`))
-		const { sessionsTriggerFunctionHandler } = await import("./sessions")
+		const { sessionsFireActionHandler } = await import("./sessions")
 		const frames: any[] = []
-		const res = await sessionsTriggerFunctionHandler.handler(
+		const res = await sessionsFireActionHandler.handler(
 			fakeSocket(owner.id),
 			{ sessionId: session.id, action: `${askId}#${askFn}`, runId: "root-progress" } as any,
 			(event: string, data: unknown) => {
@@ -1664,8 +1689,8 @@ describe("the review's rulings (2026-09-17)", () => {
 				taxonomy: { role: "action"},
 				contributes: {
 					actions: [
-						{ key: "twice", venue: { kind: "composer" }, label: { en: "Twice" } },
-						{ key: "pick", venue: { kind: "form" }, label: { en: "Pick" } }
+						{ key: "twice", venue: { kind: "composer" }, label: { en: "Twice" }, description: { en: "A test action." } },
+						{ key: "pick", venue: { kind: "form" }, label: { en: "Pick" }, description: { en: "A test action." } }
 					]
 				}
 			})
@@ -2083,7 +2108,7 @@ describe("R-15 · staleness and order", () => {
 		for (const characterId of [ann, bob])
 			await testDb
 				.insert(schema.sessionCharacters)
-				.values({ sessionId: session.id, characterId, isActive: true, visibility: "visible" })
+				.values({ sessionId: session.id, characterId, isActive: true })
 		const three = (ids: Ids): MessageBlock[] =>
 			[tom, ann, bob].map((who, i) => ({
 				...festival(`character:${who}`)(ids)[0]!,
@@ -2192,7 +2217,8 @@ describe("F41 · the effects line", () => {
 							key: "grant",
 							venue: { kind: "composer" },
 							effects: "world",
-							label: { en: "Grant" }
+							label: { en: "Grant" },
+							description: { en: "A test action." }
 						}
 					]
 				}
@@ -2213,11 +2239,13 @@ describe("F41 · the effects line", () => {
 		} as SpecDocument
 	}
 
-	test("a world action in a message venue, or widened to a participant, is refused at saveDocument", async () => {
+	// A widget venue since 2026-09-28: a message's own ⋮ is the owner's side of
+	// the line (lair re-plan R11, File as a room) — and saves.
+	test("a world action in a widget venue, or widened to a participant, is refused at saveDocument", async () => {
 		const { saveDocument } = await import("$lib/server/pipelines/boot/store")
 		await expect(
-			saveDocument(testDb as any, await worldDoc({ kind: "message" }), { publish: true })
-		).rejects.toThrow(/'world' action may not appear in the 'message' venue/)
+			saveDocument(testDb as any, await worldDoc({ kind: "widget" }), { publish: true })
+		).rejects.toThrow(/'world' action may not appear in the 'widget' venue/)
 		await expect(
 			saveDocument(testDb as any, await worldDoc({ kind: "composer" }, ["participant"]), {
 				publish: true
@@ -2241,7 +2269,8 @@ describe("F41 · the effects line", () => {
 						{
 							key: "world-ask",
 							venue: { kind: "composer" },
-							label: { en: "Ask" }
+							label: { en: "Ask" },
+							description: { en: "A test action." }
 						},
 						{
 							key: "grant",
@@ -2250,7 +2279,8 @@ describe("F41 · the effects line", () => {
 							// `/grant` in the same genre (V2: one name, one action).
 							slash: "grant-block",
 							effects: "world",
-							label: { en: "Grant" }
+							label: { en: "Grant" },
+							description: { en: "A test action." }
 						}
 					]
 				}
@@ -2369,13 +2399,15 @@ describe("F41 · the effects line", () => {
 						{
 							key: "owner-ask",
 							venue: { kind: "composer" },
-							label: { en: "Ask" }
+							label: { en: "Ask" },
+							description: { en: "A test action." }
 						},
 						{
 							key: "mine",
 							venue: { kind: "composer" },
 							effects: "world",
-							label: { en: "Mine" }
+							label: { en: "Mine" },
+							description: { en: "A test action." }
 						}
 					]
 				}
@@ -2467,13 +2499,15 @@ describe("F41 · the effects line", () => {
 							{
 								key: `ask-${k}`,
 								venue: { kind: "composer" },
-								label: { en: "Ask" }
+								label: { en: "Ask" },
+								description: { en: "A test action." }
 							},
 							{
 								key: `mine-${k}`,
 								venue: { kind: "composer" },
 								effects: "world",
-								label: { en: "Mine" }
+								label: { en: "Mine" },
+								description: { en: "A test action." }
 							}
 						]
 					}
@@ -2574,5 +2608,168 @@ describe("F41 · the effects line", () => {
 		expect((await runsOf(session.id)).map((r) => r.specSlug)).toContain(
 			"core:spec/test-grant"
 		)
+	})
+})
+
+/**
+ * **An answer rejected at review that wrote nothing is no answer** (lair pass
+ * R9, 2026-09-28) — a core rule, keyed on recorded facts (the receipt's
+ * reviews, `pipeline_run_artifacts`), never on a genre. And the form-venue
+ * action's collects reach the client (R3's note, checked and fixed in R9).
+ */
+describe("R9 · a rejected answer, and what a form-venue press collects", () => {
+	/** Answer's `save` parks for review in this session. */
+	async function gateSave(answerId: string, sessionId: number) {
+		const schema = await import("$lib/server/db/schema")
+		const [answerSpec] = await testDb
+			.select({ id: schema.pipelineSpecs.id })
+			.from(schema.pipelineSpecs)
+			.where(eq(schema.pipelineSpecs.slug, answerId))
+		await testDb.insert(schema.pipelineNodeOverrides).values({
+			specId: answerSpec!.id,
+			scopeKind: "session",
+			scopeId: sessionId,
+			nodeKey: "save",
+			slot: "settings",
+			path: "review",
+			value: "on"
+		})
+	}
+
+	/** A question put to nobody — the owner answers it — and Answer's own write gated. */
+	const plain = (ids: Ids): MessageBlock[] => [
+		{
+			kind: "choices",
+			question: "Will you come to the festival?",
+			actions: [
+				{ fn: ids.answerFn, action: ids.answerAction, label: "Yes", choice: "yes" },
+				{ fn: ids.answerFn, action: ids.answerAction, label: "No", choice: "no" }
+			]
+		}
+	]
+
+	/** Ask, then press Answer's Yes; resolve its review with `decision`; wait for the run to end. */
+	async function askAndDecide(tag: string, decision: "reject", opts: { answerFirst?: string } = {}) {
+		const { owner, session } = await sessionWithTom(tag)
+		const { askId, askFn, answerId, answerFn } = await publishAskAndAnswer(tag, plain, {
+			answerVenue: "message",
+			...opts
+		})
+		await gateSave(answerId, session.id)
+		const { pendingReviewsFor, resolveReview } = await import(
+			"$lib/server/pipelines/runtime/reviewGate"
+		)
+		for (const r of pendingReviewsFor(owner.id)) resolveReview(r.id, owner.id, "reject")
+		expect((await fire(owner.id, { sessionId: session.id, action: `${askId}#${askFn}` })).error).toBeUndefined()
+		const written = (await lastBlockTree(session.id))!
+		const block = written.blocks[0] as any
+		const regarding = `session:${session.id}/form:${written.messageId}/${block.id}`
+		// The person had already seen to the open-form notification — read
+		// and cleared — before pressing.
+		const schema = await import("$lib/server/db/schema")
+		await testDb
+			.update(schema.notifications)
+			.set({ clearedAt: new Date() })
+			.where(eq(schema.notifications.regarding, regarding))
+		const ack = await fire(owner.id, {
+			sessionId: session.id,
+			action: `${answerId}#${answerFn}`,
+			messageId: written.messageId,
+			blockId: block.id,
+			payload: { choice: "yes" }
+		})
+		expect(ack).toMatchObject({ parked: true })
+		const [review] = pendingReviewsFor(owner.id)
+		resolveReview(review!.id, owner.id, decision)
+		await vi.waitFor(
+			async () =>
+				expect(
+					(await runsOf(session.id)).find((r) => r.specSlug === answerId)?.outcome
+				).toBe("halt"),
+			{ timeout: 30_000, interval: 100 }
+		)
+		return { owner, session, written, block, regarding, answerId, answerFn }
+	}
+
+	async function lastBlockTreeOn(messageId: number) {
+		const { blockTreesOf } = await import("$lib/server/messages/blocks")
+		return (await blockTreesOf(testDb as any, messageId))[0] ?? null
+	}
+
+	async function openNotifications(regarding: string) {
+		const schema = await import("$lib/server/db/schema")
+		const rows = await testDb
+			.select()
+			.from(schema.notifications)
+			.where(eq(schema.notifications.regarding, regarding))
+		return rows.filter((r: any) => r.clearedAt === null)
+	}
+
+	test("rejected having written nothing: no answer — the form is open, its notification raised again, and a second press answers", async () => {
+		const { owner, session, written, block, regarding, answerId, answerFn } = await askAndDecide(
+			"reject-nothing",
+			"reject"
+		)
+		await vi.waitFor(async () => expect(await openNotifications(regarding)).toHaveLength(1), {
+			timeout: 10_000,
+			interval: 100
+		})
+		expect(((await lastBlockTreeOn(written.messageId))![0] as any).answered).toBeUndefined()
+		const { openFormOf } = await import("$lib/server/messages/blocks")
+		expect(await openFormOf(testDb as any, session.id)).toMatchObject({
+			messageId: written.messageId,
+			blockId: block.id
+		})
+		// And it can be answered: this time the owner approves.
+		const { pendingReviewsFor, resolveReview } = await import(
+			"$lib/server/pipelines/runtime/reviewGate"
+		)
+		const again = await fire(owner.id, {
+			sessionId: session.id,
+			action: `${answerId}#${answerFn}`,
+			messageId: written.messageId,
+			blockId: block.id,
+			payload: { choice: "no" }
+		})
+		expect(again).toMatchObject({ parked: true })
+		const [review] = pendingReviewsFor(owner.id)
+		resolveReview(review!.id, owner.id, "approve")
+		await vi.waitFor(
+			async () =>
+				expect(((await lastBlockTreeOn(written.messageId))![0] as any).answered).toMatchObject({
+					choice: "no"
+				}),
+			{ timeout: 30_000, interval: 100 }
+		)
+	})
+
+	test("rejected after it had already written a row: its effects happened, so the form stays answered", async () => {
+		const { written, regarding } = await askAndDecide("reject-after-write", "reject", {
+			answerFirst: "The lanterns are lit before anyone answers."
+		})
+		await vi.waitFor(
+			async () =>
+				expect(((await lastBlockTreeOn(written.messageId))![0] as any).answered).toMatchObject({
+					choice: "yes"
+				}),
+			{ timeout: 10_000, interval: 100 }
+		)
+		expect(await openNotifications(regarding)).toHaveLength(0)
+	})
+
+	test("a form-venue action's collects reach the client — listed in no venue, carried beside them", async () => {
+		const { owner, session } = await sessionWithTom("form-collects")
+		const { answerId, answerFn } = await publishAskAndAnswer("form-collects", festival("owner"), {
+			answerVenue: "form",
+			answerCollects: { text: { need: "required", label: { en: "Why?" } } }
+		})
+		const { buildSessionActions } = await import("./sessions")
+		const res = await buildSessionActions(session.id, owner.id, "main")
+		expect(Object.keys(res.venues)).not.toContain("form")
+		expect(res.formCollects?.[`${answerId}#${answerFn}`]).toEqual({
+			name: "Answer",
+			description: "A test action.",
+			collects: { text: { need: "required", label: "Why?" } }
+		})
 	})
 })

@@ -93,7 +93,7 @@
 <!-- `aria-current` and not only colour: selection is a fact about the list,
      and the bar plus the tonal surface say it to everyone who can see them. -->
 <div
-	class="card {rowPreset} {rowHover} relative flex w-full gap-2 overflow-hidden rounded-lg py-2 pr-3 pl-2 {classes}"
+	class="card {rowPreset} {rowHover} relative flex w-full gap-2 overflow-hidden rounded-[10px] py-2 pr-3 pl-2 {classes}"
 	role="listitem"
 	aria-current={active ? "true" : undefined}
 >
@@ -107,7 +107,7 @@
 				type="button"
 			>
 				<span
-					class="text-muted-foreground my-auto h-fit w-8 flex-shrink-0 text-center text-xs"
+					class="text-surface-600-400 my-auto h-fit w-8 flex-shrink-0 text-center text-xs"
 					aria-hidden="true"
 				>
 					{id}

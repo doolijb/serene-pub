@@ -26,8 +26,8 @@ export interface PoolItem {
 	kind: string
 	name: string
 	content: string
-	/** Comma-delimited, as authored. */
-	keys: string
+	/** One element per key, as stored (finding #146). */
+	keys: string[]
 	pinned: boolean
 	/**
 	 * Switched off and kept in front of the author. Listed like any other row,
@@ -43,6 +43,11 @@ export interface PoolItem {
 	machineWritten: boolean
 	/** The row this one hangs off, by key, or null for a root. */
 	parentKey: string | null
+	/**
+	 * The line the row belongs to: null = shared (main), else the branch
+	 * that owns it. Optional so a row built elsewhere reads as shared.
+	 */
+	branchId?: number | null
 	/** The `order` role's value — History's date. Its position elsewhere. */
 	order: number
 	position: number
@@ -98,7 +103,8 @@ export function activeFilterCount(filters: PoolFilters): number {
 	return n
 }
 
-export const hasKeywords = (item: PoolItem) => item.keys.trim().length > 0
+export const hasKeywords = (item: PoolItem) =>
+	item.keys.some((k) => k.trim().length > 0)
 
 /**
  * The pool, narrowed.
@@ -132,7 +138,7 @@ export function filterPool(
 		if (!needle) return true
 		return (
 			item.name.toLowerCase().includes(needle) ||
-			item.keys.toLowerCase().includes(needle) ||
+			item.keys.some((k) => k.toLowerCase().includes(needle)) ||
 			item.content.toLowerCase().includes(needle)
 		)
 	})

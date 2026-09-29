@@ -1,10 +1,10 @@
 /**
  * Getting a managed KoboldCPP to hold the IMAGE model before the render starts.
  *
- * A connection names exactly one model. A `koboldcpp_managed` row names a text
- * GGUF; a `koboldcpp_managed_image` row names an image one. Which of them is
- * RESIDENT is neither row's business — the model manager decides that, and while
- * its answer is "one at a time" a render evicts the chat model on the way in.
+ * The managed KoboldCPP endpoint carries text and image models, each with its
+ * `modality`. Which of them is RESIDENT is the model manager's business, and
+ * while its answer is "one at a time" a render evicts the chat model on the way
+ * in.
  *
  * Everything here is a property that fails SILENTLY if it breaks:
  *
@@ -17,8 +17,8 @@
  *      is indistinguishable from a hang.
  *   3. **The load is inside the queue.** Outside it, a chat message can swap the
  *      model in the window between the load and the render.
- *   4. **A managed TEXT row never loads an image model**, whatever else it says
- *      about itself.
+ *   4. **A TEXT model never reaches the image loader**, whatever the endpoint
+ *      says about itself — its modality refuses it at the guard.
  */
 
 import { describe, it, expect, beforeEach, vi } from "vitest"
@@ -27,7 +27,7 @@ import { transformIdOf } from "$lib/shared/capabilities/sides"
 const PNG_1x1 =
 	"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
 
-/** The Manager's real address — never the row's own column. */
+/** The managed KoboldCPP's real address — never the row's own column. */
 const MANAGER_URL = "http://192.168.1.50:5001"
 
 /** The order preflight and render actually happened in. */
@@ -98,7 +98,7 @@ vi.mock("$lib/server/utils/tokenCrypto", () => ({
 /**
  * The loader, stubbed at the seam this milestone introduced.
  *
- * `ensureManagedReady` is the ONE entry point for "make the Manager hold this" —
+ * `ensureManagedReady` is the ONE entry point for "make the managed KoboldCPP hold this" —
  * the same function the text path calls with a text spec. Stubbing it here
  * records what was ASKED FOR without deciding anything about residency, which is
  * the split the whole design rests on: a connection says which model it needs,
@@ -116,7 +116,7 @@ vi.mock("$lib/server/koboldcpp/managedPreflight", () => ({
 		if (!onDisk.includes(spec.file))
 			throw new Error(`Model file not found: ${spec.file}`)
 		await new Promise((r) => setTimeout(r, 20))
-		if (preflightFails) throw new Error("KoboldCPP Manager is disabled.")
+		if (preflightFails) throw new Error("KoboldCPP, run by Serene Pub, is turned off.")
 		log.push("preflight:done")
 		return { baseUrl: MANAGER_URL }
 	}
@@ -142,7 +142,7 @@ const imageConnection = {
 	type: "koboldcpp_managed_image",
 	name: "SDXL Turbo",
 	modality: "image-gen",
-	// Stale on purpose: the port was changed in the Manager after this row was
+	// Stale on purpose: the port was changed in the managed KoboldCPP after this row was
 	// created, which is the case resolveBaseUrl exists for.
 	baseUrl: "http://localhost:5001",
 	extraJson: {}
@@ -434,7 +434,7 @@ describe("loading a managed KoboldCPP's image model before the render", () => {
 		// Since 0128 the refusal arrives one layer earlier: a registration
 		// naming only the endpoint is incomplete, so resolution never merges a
 		// model and the loader is never asked for one. What matters either way
-		// is that nothing reaches the Manager.
+		// is that nothing reaches the managed KoboldCPP.
 		capabilityDefaults = {
 			"text->image": {
 				capability: "text->image",
@@ -453,7 +453,7 @@ describe("loading a managed KoboldCPP's image model before the render", () => {
 	it("reports a failed load instead of a render that cannot work", async () => {
 		preflightFails = true
 		await expect(dispatch(withModel(5))).rejects.toThrow(
-			/Manager is disabled/
+			/run by Serene Pub, is turned off/
 		)
 		expect(log).not.toContain("render")
 	})
@@ -477,35 +477,24 @@ describe("loading a managed KoboldCPP's image model before the render", () => {
 		expect(log).toEqual(["render"])
 	})
 
-	it("refuses a managed TEXT connection whose resolved cache went stale", async () => {
-		// The reported bug, and the row that used to get past everything. Such a
-		// row names a text GGUF, so an image load built from `connection.model`
-		// would hand the image loader an LLM.
-		//
-		// This test used to force the row PAST the guard and assert the deeper
-		// defence — that nothing downstream said "load an image model" — because
-		// a stale `resolved` cache genuinely could do that: the manifest stopped
-		// GRANTING `text->image` for this type, and the guard read the cache, so
-		// a set written before the declaration changed sailed through.
-		//
-		// `storedCapabilities` now intersects that cache with what the type still
-		// declares, so the stale half is inert at the point it is read and the
-		// refusal happens at the guard — with a sentence naming the capability,
-		// rather than as a mystery three layers down. The deeper defence is no
-		// longer reachable for this type at all, which is the improvement; the
-		// external-KoboldCPP case above still exercises the render path for a row
-		// whose `text->image` is real.
+	it("refuses a TEXT model on the managed endpoint, before any load", async () => {
+		// The managed endpoint draws — its capability layers say `text->image`
+		// — but one of its models is a text GGUF, and an image load built from
+		// `connection.model` would hand the image loader an LLM. The model's own
+		// modality is what refuses it, at the guard, with a sentence naming the
+		// capability rather than a mystery three layers down.
 		connectionsById[7] = {
 			...imageConnection,
 			id: 7,
 			type: "koboldcpp_managed",
-			name: "Managed Kobold (text)",
-			capabilities: { resolved: { "text->image": 1 } }
+			name: "Managed Kobold",
+			capabilities: { resolved: { "text->text": 2, "text->image": 1 } }
 		}
 		const textPair = withModel(7, "MN-12B-Lyra-v4.gguf")
+		modelsById[textPair.connectionModelId].modality = "text-gen"
 		Object.assign(capabilityDefaults["text->image"], textPair)
 		await expect(dispatch(textPair)).rejects.toThrow(
-			/cannot do Image generation/i
+			/This model cannot do Image generation/i
 		)
 		expect(request).toBeNull()
 		expect(log).toEqual([])

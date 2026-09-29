@@ -47,10 +47,10 @@
 		{@const pend = pendingFor(step.key)}
 		<button
 			type="button"
-			class="group card flex w-full items-center gap-3 p-3 text-left transition-all
+			class="group flex w-full items-center gap-3 rounded-[10px] p-3 text-left transition-colors
 				{isActive
-				? 'preset-filled-primary-500 shadow-lg'
-				: 'preset-tonal hover:preset-tonal-primary'}"
+				? 'sidebar-row-active'
+				: 'bg-surface-50-950 hover:bg-surface-200-800'}"
 			aria-current={isActive ? "step" : undefined}
 			onclick={() => onSelect(step.key)}
 		>
@@ -86,7 +86,7 @@
 			{/if}
 			{#if counts.overridden}
 				<span
-					class="preset-filled-secondary-500 rounded-full px-2 py-0.5 text-[10px] font-semibold"
+					class="preset-filled-secondary-500 rounded-full px-2 py-0.5 text-[11px] font-semibold"
 					title="{counts.overridden} set here, not inherited"
 				>
 					{counts.overridden}

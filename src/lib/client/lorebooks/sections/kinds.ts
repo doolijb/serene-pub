@@ -1,6 +1,7 @@
 import {
 	CHARACTER_LORE_TYPE_ID,
 	HISTORY_TYPE_ID,
+	ITEM_TYPE_ID,
 	WORLD_LORE_TYPE_ID
 } from "$lib/shared/entries/types"
 import { SCENE_KIND } from "../poolFilter"
@@ -18,6 +19,7 @@ const LABELS: Record<string, string> = {
 	[WORLD_LORE_TYPE_ID]: "World lore",
 	[CHARACTER_LORE_TYPE_ID]: "Character lore",
 	[HISTORY_TYPE_ID]: "History",
+	[ITEM_TYPE_ID]: "Items",
 	[SCENE_KIND]: "Scenes"
 }
 

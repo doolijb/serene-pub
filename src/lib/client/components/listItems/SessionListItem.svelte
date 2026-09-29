@@ -1,7 +1,7 @@
 <script lang="ts">
-	import { Popover, Portal } from "@skeletonlabs/skeleton-svelte"
 	import * as Icons from "@lucide/svelte"
 	import SidebarListItem from "../SidebarListItem.svelte"
+	import RowMenu from "../menus/RowMenu.svelte"
 	import { avatarSrc } from "$lib/client/utils/media"
 	import { lastActivityAt, timeAgoShort } from "$lib/client/utils/timeAgo"
 	import { statusText } from "$lib/client/i18n/state.svelte"
@@ -14,6 +14,8 @@
 		) => void
 		onEdit?: (id: number) => void
 		onDelete?: (id: number) => void
+		/** Star or unstar the session; offered to its owner only. */
+		onToggleFavorite?: (id: number, isFavorite: boolean) => void
 		showControls?: boolean
 		contentTitle?: string
 		classes?: string
@@ -34,6 +36,13 @@
 		 * run ended. Absent, the row reads the list's own `runStatus`.
 		 */
 		runStatus?: StatusText | null
+		/**
+		 * How the row draws its cast. `cover` is the 40px picture with the
+		 * second member badged on; `stack` is the Sessions sidebar's grouped
+		 * list — up to three 26px avatars overlapping, a 14px name and a 12px
+		 * time — where the row is one of many a reader scans by who is in it.
+		 */
+		layout?: "cover" | "stack"
 	}
 
 	let {
@@ -41,15 +50,16 @@
 		onclick,
 		onEdit,
 		onDelete,
+		onToggleFavorite,
 		showControls = true,
 		contentTitle = "Go to session",
 		classes = "",
 		active = false,
 		showGenre = false,
-		runStatus
+		runStatus,
+		layout = "cover"
 	}: Props = $props()
 
-	let menuOpen = $state(false)
 
 	function handleClick() {
 		onclick?.(session)
@@ -71,6 +81,16 @@
 	 */
 	const isGroup = $derived(cast.length > 1)
 	const badgeSrc = $derived(isGroup ? avatarSrc(cast[1]) : undefined)
+
+	/** The stack's avatars: the first three of the cast, then a count. */
+	const STACK_MAX = 3
+	const stack = $derived(cast.slice(0, STACK_MAX))
+	const stackOverflow = $derived(Math.max(0, cast.length - STACK_MAX))
+
+	/** The letter a cast member without a picture shows in the stack. */
+	function initialOf(c: (typeof cast)[number]): string {
+		return (c?.nickname || c?.name || "?").trim().charAt(0).toUpperCase()
+	}
 
 	const name = $derived(session.name || "Untitled Session")
 
@@ -113,57 +133,120 @@
 	showIndex={false}
 >
 	{#snippet content()}
-		<span class="relative block size-10 shrink-0">
-			{#if coverSrc}
-				<img
-					src={coverSrc}
-					alt=""
-					loading="lazy"
-					class="size-10 rounded-[9px] object-cover object-top"
-				/>
-			{:else}
-				<span
-					class="bg-surface-200-800 grid size-10 place-items-center rounded-[9px]"
-				>
-					<Icons.MessageSquare
-						size={18}
-						class="text-surface-600-400"
-						aria-hidden="true"
-					/>
-				</span>
-			{/if}
-			{#if isGroup}
-				<!-- The ring is the row's own ground, so the badge reads as a
-				     notch cut out of the cover rather than a second sticker
-				     sitting on it. -->
-				{#if badgeSrc}
+		{#if layout === "stack"}
+			<!-- Fixed width, whatever the cast size, so every name in the
+			     list starts at the same x. The ring is the row's own ground,
+			     which is what separates one overlapping face from the next. -->
+			<span
+				class="flex w-12 shrink-0 items-center"
+				title={castNames || undefined}
+			>
+				{#if stack.length === 0}
+					<span
+						class="bg-surface-200-800 grid size-[26px] place-items-center rounded-full"
+					>
+						<Icons.MessageSquare
+							size={14}
+							class="text-surface-600-400"
+							aria-hidden="true"
+						/>
+					</span>
+				{:else}
+					{#each stack as member, i (i)}
+						{@const src = avatarSrc(member)}
+						<span
+							class="ring-surface-200-800 relative block size-[26px] shrink-0 overflow-hidden rounded-full ring-2 {i >
+							0
+								? '-ml-[15px]'
+								: ''}"
+							style="z-index: {STACK_MAX - i}"
+						>
+							{#if src}
+								<img
+									{src}
+									alt=""
+									loading="lazy"
+									class="size-full object-cover object-top"
+								/>
+							{:else}
+								<span
+									class="bg-surface-300-700 text-surface-700-300 grid size-full place-items-center text-[11px] font-medium"
+									aria-hidden="true"
+								>
+									{initialOf(member)}
+								</span>
+							{/if}
+						</span>
+					{/each}
+				{/if}
+				{#if stackOverflow > 0}
+					<span class="sr-only">and {stackOverflow} more</span>
+				{/if}
+			</span>
+		{:else}
+			<span class="relative block size-10 shrink-0">
+				{#if coverSrc}
 					<img
-						src={badgeSrc}
+						src={coverSrc}
 						alt=""
 						loading="lazy"
-						class="ring-surface-200-800 absolute -right-0.5 -bottom-0.5 size-5 rounded-[6px] object-cover object-top ring-2"
+						class="size-10 rounded-[9px] object-cover object-top"
 					/>
 				{:else}
 					<span
-						class="bg-surface-300-700 ring-surface-200-800 absolute -right-0.5 -bottom-0.5 grid size-5 place-items-center rounded-[6px] ring-2"
+						class="bg-surface-200-800 grid size-10 place-items-center rounded-[9px]"
 					>
-						<Icons.UsersRound
-							size={12}
+						<Icons.MessageSquare
+							size={18}
 							class="text-surface-600-400"
 							aria-hidden="true"
 						/>
 					</span>
 				{/if}
-			{/if}
-		</span>
+				{#if isGroup}
+					<!-- The ring is the row's own ground, so the badge reads as a
+				     notch cut out of the cover rather than a second sticker
+				     sitting on it. -->
+					{#if badgeSrc}
+						<img
+							src={badgeSrc}
+							alt=""
+							loading="lazy"
+							class="ring-surface-200-800 absolute -right-0.5 -bottom-0.5 size-5 rounded-[6px] object-cover object-top ring-2"
+						/>
+					{:else}
+						<span
+							class="bg-surface-300-700 ring-surface-200-800 absolute -right-0.5 -bottom-0.5 grid size-5 place-items-center rounded-[6px] ring-2"
+						>
+							<Icons.UsersRound
+								size={12}
+								class="text-surface-600-400"
+								aria-hidden="true"
+							/>
+						</span>
+					{/if}
+				{/if}
+			</span>
+		{/if}
 		<div class="flex min-w-0 flex-1 flex-col gap-0.5">
 			<div class="flex min-w-0 items-center gap-1.5">
 				<span
-					class="truncate text-left text-[15px] font-medium"
+					class="truncate text-left font-medium {layout === 'stack'
+						? 'text-sm'
+						: 'text-[15px]'}"
 					id="session-name-{session.id}"
 				>
 					{name}
 				</span>
+				{#if session.isFavorite}
+					<!-- A glyph on the name, as on a character's row: the row's
+					     edge is the selected state's. -->
+					<Icons.Star
+						size={13}
+						class="text-primary-500 shrink-0 fill-current"
+						aria-label="Favorite"
+					/>
+				{/if}
 				{#if showGenre && session.genreName}
 					<!-- The session's genre. The open session is already marked
 					     by the selected-row treatment (see SidebarListItem's
@@ -192,19 +275,25 @@
 				     keeps a long name from pushing the timestamp off the row. -->
 				<span class="ml-auto flex shrink-0 items-center gap-1">
 					{#if isYourTurn}
-						<!-- Ember means the model has moved and is waiting on
-						     you — the same signal as the generating chip, one
-						     step later. Never colour alone: the dot carries a
+						<!-- Primary, the app's "waiting on YOU" colour
+						     (STYLE-GUIDE §2): the model has moved and nothing
+						     has failed. Never colour alone: the dot carries a
 						     title and an off-screen label. -->
 						<span
-							class="bg-warning-500 size-1.5 rounded-full"
+							class="bg-primary-500 size-1.5 rounded-full"
 							title="Your turn"
 							aria-hidden="true"
 						></span>
 						<span class="sr-only">Your turn</span>
 					{/if}
 					{#if relative}
-						<span class="text-surface-500 text-[11px]">
+						<!-- Muted, not quiet: a time is text the reader
+						     came for, and quiet text fails AA (§6.4). -->
+						<span
+							class="text-surface-600-400 {layout === 'stack'
+								? 'text-xs'
+								: 'text-[11px]'}"
+						>
 							{relative}
 						</span>
 					{/if}
@@ -240,92 +329,42 @@
 	{/snippet}
 	{#snippet controls()}
 		{#if showControls && session.canEdit && (onclick || onEdit || onDelete)}
-			<div role="none" onclick={(e) => e.stopPropagation()}>
-				<Popover
-					open={menuOpen}
-					onOpenChange={(e) => (menuOpen = e.open)}
-					positioning={{ placement: "bottom-end" }}
-				>
-					<Popover.Trigger
-						class="btn btn-sm hover:bg-primary-600-400 shrink-0 p-3 {menuOpen
-							? 'bg-primary-600-400'
-							: ''}"
-						aria-label="Session options"
-					>
-						<Icons.EllipsisVertical size={16} />
-					</Popover.Trigger>
-					<Portal>
-						<Popover.Positioner class="z-[1000]!">
-							<Popover.Content
-								class="card bg-surface-200-800 w-[min(90vw,240px)] space-y-4 p-4 shadow-xl"
-							>
-								<header class="popover-menu-title">
-									<Icons.MessageSquare
-										size={18}
-										aria-hidden="true"
-									/>
-									<p>Session Options</p>
-								</header>
-								<article class="flex flex-col gap-2">
-									{#if onclick}
-										<button
-											class="btn btn-sm popover-menu-btn hover:preset-filled-primary-500"
-											onclick={() => {
-												menuOpen = false
-												handleClick()
-											}}
-											type="button"
-										>
-											<Icons.Eye
-												size={16}
-												aria-hidden="true"
-											/>
-											<span>View</span>
-										</button>
-									{/if}
-									{#if onEdit}
-										<button
-											class="btn btn-sm popover-menu-btn hover:preset-filled-success-500"
-											onclick={() => {
-												menuOpen = false
-												onEdit?.(session.id!)
-											}}
-											type="button"
-										>
-											<Icons.Pencil
-												size={16}
-												aria-hidden="true"
-											/>
-											<span>Edit</span>
-										</button>
-									{/if}
-									{#if onDelete && session.isOwner}
-										<button
-											class="btn btn-sm popover-menu-btn hover:preset-filled-error-500"
-											onclick={() => {
-												menuOpen = false
-												onDelete?.(session.id!)
-											}}
-											type="button"
-										>
-											<Icons.Trash2
-												size={16}
-												aria-hidden="true"
-											/>
-											<span>Delete</span>
-										</button>
-									{/if}
-								</article>
-								<Popover.Arrow>
-									<Popover.ArrowTip
-										class="!bg-surface-200 dark:!bg-surface-800"
-									/>
-								</Popover.Arrow>
-							</Popover.Content>
-						</Popover.Positioner>
-					</Portal>
-				</Popover>
-			</div>
+			<RowMenu
+				label="Session"
+				triggerClass="btn btn-sm hover:bg-surface-200-800 data-[state=open]:bg-surface-200-800 shrink-0 p-3"
+				items={[
+					onclick && {
+						label: "View",
+						icon: Icons.Eye,
+						onSelect: handleClick
+					},
+					onEdit && {
+						label: "Edit",
+						icon: Icons.Pencil,
+						onSelect: () => onEdit?.(session.id!)
+					},
+					onToggleFavorite &&
+						session.isOwner && {
+							label: session.isFavorite ? "Unstar" : "Star",
+							icon: session.isFavorite
+								? Icons.StarOff
+								: Icons.Star,
+							onSelect: () =>
+								onToggleFavorite?.(
+									session.id!,
+									!session.isFavorite
+								)
+						},
+					onDelete && session.isOwner && { separator: true },
+					onDelete &&
+						session.isOwner && {
+							label: "Delete",
+							icon: Icons.Trash2,
+							destructive: true,
+							onSelect: () => onDelete?.(session.id!)
+						}
+				]}
+			/>
 		{/if}
 	{/snippet}
 </SidebarListItem>

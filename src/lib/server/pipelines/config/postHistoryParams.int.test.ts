@@ -1,5 +1,5 @@
 /**
- * The post-history trigger reaches every stage that assembles a prompt.
+ * The post-history trigger reaches every step that assembles a prompt.
  *
  * The two numbers a person sets on a Session Prompt — how deep the reminder
  * sits and how long the session must be before it appears at all — are a

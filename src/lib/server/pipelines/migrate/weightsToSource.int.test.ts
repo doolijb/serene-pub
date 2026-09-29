@@ -547,7 +547,7 @@ describe("a pipeline that scans through one node owns its three lore bands there
 		const sourced: any = resolveConfigSources(world as any, ["lore"])
 		expect(sourced.lore.params.worldLoreShare).toMatchObject({
 			value: 0.3,
-			scopeKind: "preset"
+			scopeKind: "config"
 		})
 		expect(sourced.lore.params.historyMaxEntries).toMatchObject({ value: 4 })
 		// The untouched bands read the declaration — the same numbers the

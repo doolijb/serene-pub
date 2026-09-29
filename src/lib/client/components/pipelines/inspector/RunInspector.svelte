@@ -2,7 +2,7 @@
 	/**
 	 * What one run did — the receipt, read.
 	 *
-	 * Two levels and no third (handover §4.5): the stage list is level one and
+	 * Two levels and no third (handover §4.5): the step list is level one and
 	 * the detail pane beside it is level two. Everything on screen comes from
 	 * `receiptView`, which is pure and asserted against saved receipts, so this
 	 * file decides layout and nothing else.
@@ -178,7 +178,7 @@
 	const ms = (n: number) =>
 		n >= 1000 ? `${(n / 1000).toFixed(1)} s` : `${n} ms`
 
-	/** The run's own outcome, in the same four tones the stage rows use. */
+	/** The run's own outcome, in the same four tones the step rows use. */
 	const runTone = $derived(
 		run?.outcome === "ok" ? "ok" : run?.outcome === "err" ? "error" : "halt"
 	)
@@ -282,7 +282,7 @@
 				<span>{ms(run.elapsedMs)}</span>
 				<span>{run.tokensSpent || 0} tokens</span>
 				{#if triggerSource}
-					<span>triggered by {triggerSource}</span>
+					<span>started by {triggerSource}</span>
 				{/if}
 				{#if run.isPreview}
 					<span
@@ -344,7 +344,7 @@
 
 		{#if !rows.length}
 			<p class="text-surface-600-400 text-sm">
-				This receipt records no stages. A run that halts before anything
+				This receipt records no steps. A run that halts before anything
 				effectful keeps attribution only.
 			</p>
 		{:else}
@@ -352,7 +352,7 @@
 				<!-- ── level one: what ran, in order ───────────────────── -->
 				<ul
 					class="border-surface-300-700 flex max-h-[22rem] shrink-0 flex-col overflow-y-auto rounded-lg border lg:max-h-[34rem] lg:w-80"
-					aria-label="Stages, in the order they ran"
+					aria-label="Steps, in the order they ran"
 				>
 					{#each rows as row (row.seq)}
 						<li>
@@ -381,20 +381,40 @@
 									<span class={badgeClass[row.badge]}>
 										{row.result}
 									</span>
+									{#if row.refused.length}
+										<!-- A refusal is a result, so the outcome
+										     stays ok; this says so in words, not
+										     only in the warning tone. -->
+										<span
+											class="chip preset-tonal-warning shrink-0 rounded-full px-1.5 py-0 text-[11px]"
+											data-run-refused={row.refused.length}
+											title="This step finished but turned some of its input down. Open it to read why."
+										>
+											{row.refused.length} refused
+										</span>
+									{/if}
 								</span>
 								<span
-									class="text-surface-600-400 flex items-center gap-2 pl-7 text-[0.68rem]"
+									class="text-surface-600-400 flex items-center gap-2 pl-7 text-[11px]"
 								>
 									<span class="min-w-0 truncate">
 										{row.definitionId}
 									</span>
+									{#if row.swap}
+										<span
+											class="shrink-0"
+											title={`Swapped in by the ${row.swap.by} for ${row.swap.pin}`}
+										>
+											swap
+										</span>
+									{/if}
 									<span class="flex-1"></span>
 									{#if row.isOracle}
 										<span
 											class="inline-flex shrink-0 items-center gap-1"
 											title={row.model
 												? `Model: ${row.model}`
-												: "This stage called a model."}
+												: "This step called a model."}
 										>
 											<Icons.Cpu size={11} />
 											{row.model ? "model" : "model call"}
@@ -409,7 +429,7 @@
 					{/each}
 				</ul>
 
-				<!-- ── level two: one stage, in detail ──────────────────── -->
+				<!-- ── level two: one step, in detail ──────────────────── -->
 				<div class="min-w-0 flex-1">
 					{#if selected}
 						<div
@@ -423,6 +443,19 @@
 							>
 								{selected.definitionId}
 							</span>
+							{#if selected.swap}
+								<span
+									class="text-surface-600-400 text-xs"
+									data-run-swap={selected.swap.by}
+								>
+									swapped in by: {selected.swap.by} · replaces
+									<span class="font-mono">{selected.swap.pin}</span>
+								</span>
+							{:else if selected.pinned}
+								<span class="text-surface-600-400 text-xs">
+									the spec's pin
+								</span>
+							{/if}
 							{#if selected.model}
 								<span
 									class="chip preset-tonal-surface rounded-full px-2 py-0.5 font-mono text-xs"
@@ -447,6 +480,45 @@
 							>
 								{selected.reason}
 							</p>
+						{/if}
+						{#if selected.refused.length}
+							<div
+								class="preset-tonal-warning mb-2 rounded-lg p-2 text-xs"
+								data-run-refusals
+							>
+								<p class="font-semibold">
+									{selected.refused.length} refused. The step still
+									finished; only these parts of its input were
+									turned down.
+								</p>
+								<ul class="mt-1 list-disc space-y-0.5 pl-4">
+									{#each selected.refused as sentence, i (i)}
+										<li>{sentence}</li>
+									{/each}
+								</ul>
+							</div>
+						{/if}
+						{#if selected.layers.length}
+							<details class="mb-2 text-xs" data-run-layers>
+								<summary
+									class="text-surface-600-400 cursor-pointer"
+								>
+									Where its values came from ({selected.layers
+										.length})
+								</summary>
+								<ul class="mt-1 space-y-0.5 pl-4">
+									{#each selected.layers as l (`${l.slot}\u0000${l.path}`)}
+										<li class="flex flex-wrap gap-x-2">
+											<span class="font-mono">
+												{l.slot}{l.path ? `.${l.path}` : ""}
+											</span>
+											<span class="text-surface-600-400">
+												from: {l.label}
+											</span>
+										</li>
+									{/each}
+								</ul>
+							</details>
 						{/if}
 
 						<Tabs
@@ -493,10 +565,10 @@
 										{prompt.source === "wire"
 											? "The turns as sent by the adapter."
 											: prompt.source === "sent"
-												? "The payload this stage sent."
+												? "The payload this step sent."
 												: prompt.source === "prepared"
-													? "The payload this stage was handed. It halted before sending."
-													: "The payload this stage rendered."}
+													? "The payload this step was handed. It halted before sending."
+													: "The payload this step rendered."}
 										{#if prompt.totalTokens != null}
 											· {prompt.totalTokens} tokens
 										{/if}
@@ -529,7 +601,7 @@
 											>
 												<thead>
 													<tr
-														class="text-surface-600-400 border-surface-300-700 border-b text-left text-[0.68rem] tracking-wider uppercase"
+														class="text-surface-600-400 border-surface-300-700 border-b text-left text-xs"
 													>
 														<th class="px-2 py-1.5">
 															Source
@@ -604,7 +676,7 @@
 													class="border-surface-300-700 rounded-lg border"
 												>
 													<p
-														class="text-surface-600-400 border-surface-300-700 border-b px-2 py-1 text-[0.68rem] tracking-wider uppercase"
+														class="text-surface-600-400 border-surface-300-700 border-b px-2 py-1 text-xs"
 													>
 														{message.role}
 													</p>
@@ -631,7 +703,7 @@
 								{/if}
 								{#if output.empty}
 									<p class="text-surface-600-400 text-xs">
-										This stage published nothing.
+										This step published nothing.
 									</p>
 								{:else}
 									<div class="flex flex-col gap-2">
@@ -640,13 +712,13 @@
 												class="border-surface-300-700 rounded-lg border"
 											>
 												<p
-													class="text-surface-600-400 border-surface-300-700 border-b px-2 py-1 font-mono text-[0.68rem]"
+													class="text-surface-600-400 border-surface-300-700 border-b px-2 py-1 font-mono text-[11px]"
 												>
 													{text.key}
 												</p>
 												{#if text.note}
 													<p
-														class="text-surface-600-400 border-surface-300-700 border-b px-2 py-1 text-[0.68rem]"
+														class="text-surface-600-400 border-surface-300-700 border-b px-2 py-1 text-[11px]"
 													>
 														{text.note}
 													</p>
@@ -699,7 +771,7 @@
 												wire when the turns inline them
 											{/if}
 										{:else}
-											This stage recorded no wire kind.
+											This step recorded no wire kind.
 										{/if}
 										{#if wire.structured}
 											· structured output:
@@ -724,10 +796,10 @@
 											class="border-surface-300-700 mb-3 rounded-lg border"
 										>
 											<div
-												class="border-surface-300-700 text-surface-600-400 flex flex-wrap items-baseline gap-x-2 gap-y-1 border-b px-2 py-1 text-[0.68rem]"
+												class="border-surface-300-700 text-surface-600-400 flex flex-wrap items-baseline gap-x-2 gap-y-1 border-b px-2 py-1 text-[11px]"
 											>
 												<span
-													class="font-mono tracking-wider uppercase"
+													class="font-mono uppercase"
 												>
 													{call.method}
 												</span>
@@ -761,7 +833,7 @@
 													class="flex flex-col gap-1"
 												>
 													<p
-														class="text-surface-600-400 text-[0.68rem] tracking-wider uppercase"
+														class="text-surface-600-400 text-xs"
 													>
 														Request
 													</p>
@@ -786,7 +858,7 @@
 													class="flex flex-col gap-1"
 												>
 													<p
-														class="text-surface-600-400 text-[0.68rem] tracking-wider uppercase"
+														class="text-surface-600-400 text-xs"
 													>
 														Response
 													</p>
@@ -803,7 +875,7 @@
 													{/if}
 													{#if call.truncated}
 														<p
-															class="text-surface-600-400 text-[0.68rem]"
+															class="text-surface-600-400 text-[11px]"
 														>
 															Kept to the first 64
 															KB. The rest of the
@@ -832,7 +904,7 @@
 												</div>
 												{#if call.redacted.length}
 													<p
-														class="text-surface-600-400 text-[0.68rem]"
+														class="text-surface-600-400 text-[11px]"
 													>
 														Replaced before this was
 														stored: {call.redacted.join(
@@ -850,7 +922,7 @@
 										>
 											<thead>
 												<tr
-													class="text-surface-600-400 border-surface-300-700 border-b text-left text-[0.68rem] tracking-wider uppercase"
+													class="text-surface-600-400 border-surface-300-700 border-b text-left text-xs"
 												>
 													<th class="px-2 py-1.5">
 														Stop sequence
@@ -934,7 +1006,7 @@
 								{#if selected.notes.length}
 									<ul
 										class="list-disc pl-5 text-xs"
-										aria-label="Stage notes"
+										aria-label="Step notes"
 									>
 										{#each selected.notes as note, i (i)}
 											<li>{note}</li>
@@ -942,7 +1014,7 @@
 									</ul>
 								{:else}
 									<p class="text-surface-600-400 text-xs">
-										This stage recorded no notes.
+										This step recorded no notes.
 									</p>
 								{/if}
 							</Tabs.Content>

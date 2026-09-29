@@ -1,5 +1,6 @@
 import { browser } from "$app/environment"
 import { replaceState } from "$app/navigation"
+import { page } from "$app/state"
 import { untrack } from "svelte"
 import {
 	emptyRoute,
@@ -9,7 +10,7 @@ import {
 	toHash,
 	type LoreAction,
 	type LoreRoute
-} from "./loreRoute"
+} from "$lib/shared/lorebooks/loreRoute"
 
 /**
  * The lorebook workspace's route, held once and mirrored to the URL fragment.
@@ -73,7 +74,19 @@ class LoreRouteStore {
 	}
 
 	async navigate(action: LoreAction): Promise<void> {
-		const next = reduce(this.#route, action)
+		return this.navigateTo(reduce(this.#route, action))
+	}
+
+	/**
+	 * Goes to a route built from several actions at once, through the same
+	 * guard as `navigate`.
+	 *
+	 * ⚠ One transition, one guard. Two `navigate` calls in a row race: both
+	 * reduce the route as it stood before either landed, and while the first
+	 * waits on the unsaved-changes prompt the second's route wins and the
+	 * first is written over it (#81).
+	 */
+	async navigateTo(next: LoreRoute): Promise<void> {
 		if (sameRoute(next, this.#route)) return
 		if (!(await this.confirmLeave())) return
 		this.#route = next
@@ -130,8 +143,13 @@ class LoreRouteStore {
 				// sees, including the popstate a hand-edited hash fires before
 				// hashchange; the mirror would then write the old address back
 				// over the new one. It depends on the route and nothing else.
+				//
+				// The entry's shallow state is carried through, never replaced
+				// with `{}`: the shell keeps "this view is in Focus over a
+				// page" there (`page.state.focus`), and an empty object reads
+				// as Back — picking a category dropped the view out of Focus.
 				if (url.href !== location.href)
-					untrack(() => replaceState(url, {}))
+					untrack(() => replaceState(url, { ...page.state }))
 			})
 		})
 		return () => {

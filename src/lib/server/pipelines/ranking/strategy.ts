@@ -100,8 +100,8 @@ const rankKey = (item: RankedItem) => `${item.source}:${item.id}`
  * hit was worth 1/60 in one and 1/61 in the other. Same algorithm, two
  * denominators, and nothing anywhere said which was meant.
  *
- * The 0-based form wins on evidence rather than taste. It is what 0.5's
- * `RagInfillEngine` computed, so it is what the frozen RAG parity goldens
+ * The 0-based form wins on evidence rather than taste. It is what
+ * the 0.5 RAG path computed, so it is what the frozen RAG parity goldens
  * record — changing the semantic mechanism to the other convention would move the
  * gate that measures 0.6 against 0.5, which is the one thing the gate must not
  * be adjusted to accommodate. (Cormack's paper writes `1 / (k + r)` over

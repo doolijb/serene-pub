@@ -1,0 +1,849 @@
+{
+	"a paged list": {
+		"drawn": {
+			"message": null,
+			"search": {
+				"placeholder": "Search 3 entries",
+				"label": "Search entries by title or key"
+			},
+			"radiogroup": "Show",
+			"radios": [
+				{
+					"label": "All",
+					"checked": true
+				},
+				{
+					"label": "Read",
+					"checked": false
+				},
+				{
+					"label": "Pinned",
+					"checked": false
+				},
+				{
+					"label": "Off",
+					"checked": false
+				}
+			],
+			"sort": {
+				"value": "lastRead",
+				"options": [
+					[
+						"lastRead",
+						"Last read"
+					],
+					[
+						"timesRead",
+						"Times read"
+					],
+					[
+						"rank",
+						"Rank"
+					],
+					[
+						"name",
+						"Name"
+					]
+				]
+			},
+			"rows": [
+				{
+					"text": "Mira mira, the smith read 3 of 4 · last at rank 2 · <ago>",
+					"struck": false,
+					"buttons": [
+						{
+							"label": "Pin Mira",
+							"pressed": "false",
+							"title": "Pin: always read",
+							"disabled": false
+						},
+						{
+							"label": "Turn Mira off",
+							"pressed": "false",
+							"title": "Turn off: never read",
+							"disabled": false
+						}
+					]
+				},
+				{
+					"text": "The Old Mill read 0 of 2 · left out last time",
+					"struck": true,
+					"buttons": [
+						{
+							"label": "Pin The Old Mill",
+							"pressed": "false",
+							"title": "Pin: always read",
+							"disabled": false
+						},
+						{
+							"label": "Turn The Old Mill off",
+							"pressed": "true",
+							"title": "Off: never read",
+							"disabled": false
+						}
+					]
+				}
+			],
+			"buttons": [
+				{
+					"label": "Refresh",
+					"pressed": null,
+					"title": "Refresh",
+					"disabled": false
+				},
+				{
+					"label": "Previous",
+					"pressed": null,
+					"title": null,
+					"disabled": true
+				},
+				{
+					"label": "Next",
+					"pressed": null,
+					"title": null,
+					"disabled": false
+				}
+			],
+			"pager": "Previous 1–2 of 3 Next"
+		},
+		"toasts": []
+	},
+	"the whole list, sorted by rank": {
+		"drawn": {
+			"message": null,
+			"search": {
+				"placeholder": "Search 3 entries",
+				"label": "Search entries by title or key"
+			},
+			"radiogroup": "Show",
+			"radios": [
+				{
+					"label": "All",
+					"checked": true
+				},
+				{
+					"label": "Read",
+					"checked": false
+				},
+				{
+					"label": "Pinned",
+					"checked": false
+				},
+				{
+					"label": "Off",
+					"checked": false
+				}
+			],
+			"sort": {
+				"value": "rank",
+				"options": [
+					[
+						"lastRead",
+						"Last read"
+					],
+					[
+						"timesRead",
+						"Times read"
+					],
+					[
+						"rank",
+						"Rank"
+					],
+					[
+						"name",
+						"Name"
+					]
+				]
+			},
+			"rows": [
+				{
+					"text": "Mira mira, the smith read 3 of 4 · last at rank 2 · <ago>",
+					"struck": false,
+					"buttons": [
+						{
+							"label": "Pin Mira",
+							"pressed": "false",
+							"title": "Pin: always read",
+							"disabled": false
+						},
+						{
+							"label": "Turn Mira off",
+							"pressed": "false",
+							"title": "Turn off: never read",
+							"disabled": false
+						}
+					]
+				},
+				{
+					"text": "The Old Mill read 0 of 2 · left out last time",
+					"struck": true,
+					"buttons": [
+						{
+							"label": "Pin The Old Mill",
+							"pressed": "false",
+							"title": "Pin: always read",
+							"disabled": false
+						},
+						{
+							"label": "Turn The Old Mill off",
+							"pressed": "true",
+							"title": "Off: never read",
+							"disabled": false
+						}
+					]
+				},
+				{
+					"text": "Entry #3 Not read in this session yet",
+					"struck": false,
+					"buttons": [
+						{
+							"label": "Pin entry 3",
+							"pressed": "true",
+							"title": "Pinned: always read",
+							"disabled": false
+						},
+						{
+							"label": "Turn entry 3 off",
+							"pressed": "false",
+							"title": "Turn off: never read",
+							"disabled": false
+						}
+					]
+				}
+			],
+			"buttons": [
+				{
+					"label": "Refresh",
+					"pressed": null,
+					"title": "Refresh",
+					"disabled": false
+				}
+			],
+			"pager": ""
+		},
+		"toasts": []
+	},
+	"an empty book": {
+		"drawn": {
+			"message": null,
+			"search": {
+				"placeholder": "Search 0 entries",
+				"label": "Search entries by title or key"
+			},
+			"radiogroup": "Show",
+			"radios": [
+				{
+					"label": "All",
+					"checked": true
+				},
+				{
+					"label": "Read",
+					"checked": false
+				},
+				{
+					"label": "Pinned",
+					"checked": false
+				},
+				{
+					"label": "Off",
+					"checked": false
+				}
+			],
+			"sort": {
+				"value": "lastRead",
+				"options": [
+					[
+						"lastRead",
+						"Last read"
+					],
+					[
+						"timesRead",
+						"Times read"
+					],
+					[
+						"rank",
+						"Rank"
+					],
+					[
+						"name",
+						"Name"
+					]
+				]
+			},
+			"rows": [
+				{
+					"text": "This lorebook has no entries yet.",
+					"struck": false,
+					"buttons": []
+				}
+			],
+			"buttons": [
+				{
+					"label": "Refresh",
+					"pressed": null,
+					"title": "Refresh",
+					"disabled": false
+				}
+			],
+			"pager": ""
+		},
+		"toasts": []
+	},
+	"a book that is its owner's alone (a guest's view)": {
+		"drawn": {
+			"message": "These entries are the lorebook owner's to manage.",
+			"search": null,
+			"radiogroup": null,
+			"radios": [],
+			"sort": null,
+			"rows": null,
+			"buttons": [],
+			"pager": ""
+		},
+		"toasts": []
+	},
+	"a session with no lorebook": {
+		"drawn": {
+			"message": "This session reads no lorebook.",
+			"search": null,
+			"radiogroup": null,
+			"radios": [],
+			"sort": null,
+			"rows": null,
+			"buttons": [],
+			"pager": ""
+		},
+		"toasts": []
+	},
+	"loading: nothing answered yet": {
+		"drawn": {
+			"message": null,
+			"search": {
+				"placeholder": "Search entries",
+				"label": "Search entries by title or key"
+			},
+			"radiogroup": "Show",
+			"radios": [
+				{
+					"label": "All",
+					"checked": true
+				},
+				{
+					"label": "Read",
+					"checked": false
+				},
+				{
+					"label": "Pinned",
+					"checked": false
+				},
+				{
+					"label": "Off",
+					"checked": false
+				}
+			],
+			"sort": {
+				"value": "lastRead",
+				"options": [
+					[
+						"lastRead",
+						"Last read"
+					],
+					[
+						"timesRead",
+						"Times read"
+					],
+					[
+						"rank",
+						"Rank"
+					],
+					[
+						"name",
+						"Name"
+					]
+				]
+			},
+			"rows": [],
+			"buttons": [
+				{
+					"label": "Refresh",
+					"pressed": null,
+					"title": "Refresh",
+					"disabled": false
+				}
+			],
+			"pager": ""
+		},
+		"toasts": []
+	},
+	"the Off filter": {
+		"drawn": {
+			"message": null,
+			"search": {
+				"placeholder": "Search 1 entries",
+				"label": "Search entries by title or key"
+			},
+			"radiogroup": "Show",
+			"radios": [
+				{
+					"label": "All",
+					"checked": false
+				},
+				{
+					"label": "Read",
+					"checked": false
+				},
+				{
+					"label": "Pinned",
+					"checked": false
+				},
+				{
+					"label": "Off",
+					"checked": true
+				}
+			],
+			"sort": {
+				"value": "lastRead",
+				"options": [
+					[
+						"lastRead",
+						"Last read"
+					],
+					[
+						"timesRead",
+						"Times read"
+					],
+					[
+						"rank",
+						"Rank"
+					],
+					[
+						"name",
+						"Name"
+					]
+				]
+			},
+			"rows": [
+				{
+					"text": "The Old Mill read 0 of 2 · left out last time",
+					"struck": true,
+					"buttons": [
+						{
+							"label": "Pin The Old Mill",
+							"pressed": "false",
+							"title": "Pin: always read",
+							"disabled": false
+						},
+						{
+							"label": "Turn The Old Mill off",
+							"pressed": "true",
+							"title": "Off: never read",
+							"disabled": false
+						}
+					]
+				}
+			],
+			"buttons": [
+				{
+					"label": "Refresh",
+					"pressed": null,
+					"title": "Refresh",
+					"disabled": false
+				}
+			],
+			"pager": ""
+		},
+		"toasts": []
+	},
+	"a filter that matches nothing": {
+		"drawn": {
+			"message": null,
+			"search": {
+				"placeholder": "Search 0 entries",
+				"label": "Search entries by title or key"
+			},
+			"radiogroup": "Show",
+			"radios": [
+				{
+					"label": "All",
+					"checked": false
+				},
+				{
+					"label": "Read",
+					"checked": false
+				},
+				{
+					"label": "Pinned",
+					"checked": false
+				},
+				{
+					"label": "Off",
+					"checked": true
+				}
+			],
+			"sort": {
+				"value": "lastRead",
+				"options": [
+					[
+						"lastRead",
+						"Last read"
+					],
+					[
+						"timesRead",
+						"Times read"
+					],
+					[
+						"rank",
+						"Rank"
+					],
+					[
+						"name",
+						"Name"
+					]
+				]
+			},
+			"rows": [
+				{
+					"text": "Nothing matches.",
+					"struck": false,
+					"buttons": []
+				}
+			],
+			"buttons": [
+				{
+					"label": "Refresh",
+					"pressed": null,
+					"title": "Refresh",
+					"disabled": false
+				}
+			],
+			"pager": ""
+		},
+		"toasts": []
+	},
+	"the next page": {
+		"drawn": {
+			"message": null,
+			"search": {
+				"placeholder": "Search 3 entries",
+				"label": "Search entries by title or key"
+			},
+			"radiogroup": "Show",
+			"radios": [
+				{
+					"label": "All",
+					"checked": true
+				},
+				{
+					"label": "Read",
+					"checked": false
+				},
+				{
+					"label": "Pinned",
+					"checked": false
+				},
+				{
+					"label": "Off",
+					"checked": false
+				}
+			],
+			"sort": {
+				"value": "lastRead",
+				"options": [
+					[
+						"lastRead",
+						"Last read"
+					],
+					[
+						"timesRead",
+						"Times read"
+					],
+					[
+						"rank",
+						"Rank"
+					],
+					[
+						"name",
+						"Name"
+					]
+				]
+			},
+			"rows": [
+				{
+					"text": "Entry #3 Not read in this session yet",
+					"struck": false,
+					"buttons": [
+						{
+							"label": "Pin entry 3",
+							"pressed": "true",
+							"title": "Pinned: always read",
+							"disabled": false
+						},
+						{
+							"label": "Turn entry 3 off",
+							"pressed": "false",
+							"title": "Turn off: never read",
+							"disabled": false
+						}
+					]
+				}
+			],
+			"buttons": [
+				{
+					"label": "Refresh",
+					"pressed": null,
+					"title": "Refresh",
+					"disabled": false
+				},
+				{
+					"label": "Previous",
+					"pressed": null,
+					"title": null,
+					"disabled": false
+				},
+				{
+					"label": "Next",
+					"pressed": null,
+					"title": null,
+					"disabled": true
+				}
+			],
+			"pager": "Previous 3–3 of 3 Next"
+		},
+		"toasts": []
+	},
+	"a mark set": {
+		"drawn": {
+			"message": null,
+			"search": {
+				"placeholder": "Search 3 entries",
+				"label": "Search entries by title or key"
+			},
+			"radiogroup": "Show",
+			"radios": [
+				{
+					"label": "All",
+					"checked": true
+				},
+				{
+					"label": "Read",
+					"checked": false
+				},
+				{
+					"label": "Pinned",
+					"checked": false
+				},
+				{
+					"label": "Off",
+					"checked": false
+				}
+			],
+			"sort": {
+				"value": "lastRead",
+				"options": [
+					[
+						"lastRead",
+						"Last read"
+					],
+					[
+						"timesRead",
+						"Times read"
+					],
+					[
+						"rank",
+						"Rank"
+					],
+					[
+						"name",
+						"Name"
+					]
+				]
+			},
+			"rows": [
+				{
+					"text": "Mira mira, the smith read 3 of 4 · last at rank 2 · <ago>",
+					"struck": false,
+					"buttons": [
+						{
+							"label": "Pin Mira",
+							"pressed": "true",
+							"title": "Pinned: always read",
+							"disabled": false
+						},
+						{
+							"label": "Turn Mira off",
+							"pressed": "false",
+							"title": "Turn off: never read",
+							"disabled": false
+						}
+					]
+				},
+				{
+					"text": "The Old Mill read 0 of 2 · left out last time",
+					"struck": true,
+					"buttons": [
+						{
+							"label": "Pin The Old Mill",
+							"pressed": "false",
+							"title": "Pin: always read",
+							"disabled": false
+						},
+						{
+							"label": "Turn The Old Mill off",
+							"pressed": "true",
+							"title": "Off: never read",
+							"disabled": false
+						}
+					]
+				},
+				{
+					"text": "Entry #3 Not read in this session yet",
+					"struck": false,
+					"buttons": [
+						{
+							"label": "Pin entry 3",
+							"pressed": "true",
+							"title": "Pinned: always read",
+							"disabled": false
+						},
+						{
+							"label": "Turn entry 3 off",
+							"pressed": "false",
+							"title": "Turn off: never read",
+							"disabled": false
+						}
+					]
+				}
+			],
+			"buttons": [
+				{
+					"label": "Refresh",
+					"pressed": null,
+					"title": "Refresh",
+					"disabled": false
+				}
+			],
+			"pager": ""
+		},
+		"toasts": []
+	},
+	"a refused mark": {
+		"drawn": {
+			"message": null,
+			"search": {
+				"placeholder": "Search 3 entries",
+				"label": "Search entries by title or key"
+			},
+			"radiogroup": "Show",
+			"radios": [
+				{
+					"label": "All",
+					"checked": true
+				},
+				{
+					"label": "Read",
+					"checked": false
+				},
+				{
+					"label": "Pinned",
+					"checked": false
+				},
+				{
+					"label": "Off",
+					"checked": false
+				}
+			],
+			"sort": {
+				"value": "lastRead",
+				"options": [
+					[
+						"lastRead",
+						"Last read"
+					],
+					[
+						"timesRead",
+						"Times read"
+					],
+					[
+						"rank",
+						"Rank"
+					],
+					[
+						"name",
+						"Name"
+					]
+				]
+			},
+			"rows": [
+				{
+					"text": "Mira mira, the smith read 3 of 4 · last at rank 2 · <ago>",
+					"struck": false,
+					"buttons": [
+						{
+							"label": "Pin Mira",
+							"pressed": "false",
+							"title": "Pin: always read",
+							"disabled": false
+						},
+						{
+							"label": "Turn Mira off",
+							"pressed": "false",
+							"title": "Turn off: never read",
+							"disabled": false
+						}
+					]
+				},
+				{
+					"text": "The Old Mill read 0 of 2 · left out last time",
+					"struck": true,
+					"buttons": [
+						{
+							"label": "Pin The Old Mill",
+							"pressed": "false",
+							"title": "Pin: always read",
+							"disabled": false
+						},
+						{
+							"label": "Turn The Old Mill off",
+							"pressed": "true",
+							"title": "Off: never read",
+							"disabled": false
+						}
+					]
+				},
+				{
+					"text": "Entry #3 Not read in this session yet",
+					"struck": false,
+					"buttons": [
+						{
+							"label": "Pin entry 3",
+							"pressed": "true",
+							"title": "Pinned: always read",
+							"disabled": false
+						},
+						{
+							"label": "Turn entry 3 off",
+							"pressed": "false",
+							"title": "Turn off: never read",
+							"disabled": false
+						}
+					]
+				}
+			],
+			"buttons": [
+				{
+					"label": "Refresh",
+					"pressed": null,
+					"title": "Refresh",
+					"disabled": false
+				}
+			],
+			"pager": ""
+		},
+		"toasts": [
+			{
+				"title": "Not changed",
+				"description": "only the book's owner may mark its entries"
+			}
+		]
+	}
+}

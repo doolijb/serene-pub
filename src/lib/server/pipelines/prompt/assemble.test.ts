@@ -24,8 +24,10 @@ import {
 	registerRenderer,
 	_resetRenderers,
 	TemplateEngineError,
-	CORE_TEMPLATE_ENGINE
+	CORE_TEMPLATE_ENGINE,
+	CORE_LIQUID_ENGINE
 } from "$lib/server/pipelines/prompt/renderers"
+import { SHIPPED_CONTEXT_TEMPLATE } from "$lib/server/pipelines/entities/contextTemplateDefaults"
 import { PromptFormats } from "$lib/shared/constants/PromptFormats"
 
 const decision = (over: Partial<Decision> = {}): Decision => ({
@@ -107,7 +109,7 @@ describe("rendering", () => {
 	/**
 	 * Chat wire mode: the render produces MESSAGES, from the guarded path only.
 	 *
-	 * `split_session` is the one template with `renderMode: "role_array"`, and
+	 * `split_chat` is the one template with `renderMode: "role_array"`, and
 	 * `wireMode: "chat"` selects it whatever the connection's own format says —
 	 * a chat connection has no prompt format at all, so the delimiters it carries
 	 * have nothing to wrap.
@@ -147,7 +149,7 @@ describe("rendering", () => {
 			})
 			expect(JSON.stringify(r.messages)).not.toContain("<|im_start|>")
 			// And the receipt names what was USED, not what the row said.
-			expect(r.promptFormat).toBe("split_session")
+			expect(r.promptFormat).toBe("split_chat")
 		})
 
 		it("degrades a block-less template to one user message, loudly", async () => {
@@ -194,7 +196,9 @@ describe("rendering", () => {
 			// role-array TEMPLATE by picking a different one. Same wording the
 			// throw carried.
 			expect(note).toContain("this connection is chat wire mode")
-			expect(note).toContain("set this connection to completion wire mode")
+			expect(note).toContain(
+				"set this connection to completion wire mode"
+			)
 		})
 
 		it("names the OTHER fix when it is the template, not the connection", async () => {
@@ -311,7 +315,7 @@ describe("rendering", () => {
 		expect(r.rendered).toBe("90")
 	})
 
-	it("a split-session format yields role-tagged messages rather than one string", async () => {
+	it("a split-chat format yields role-tagged messages rather than one string", async () => {
 		// Decided here rather than by the caller, so the preview and the send
 		// cannot disagree about which shape they are comparing.
 		//
@@ -324,7 +328,7 @@ describe("rendering", () => {
 		// independently of how it is called.
 		const r = await render({
 			...base,
-			promptFormat: "split_session",
+			promptFormat: "split_chat",
 			template: "{{#systemBlock}}hi{{/systemBlock}}"
 		})
 		expect(r.rendered).toBeUndefined()
@@ -567,5 +571,342 @@ describe("objectByRole", () => {
 		expect(
 			objectByRole([allocation({ name: "N", content: "c" })], undefined)
 		).toEqual({ N: "c" })
+	})
+})
+
+/**
+ * A band core has no variable for and its source never DECLARED — Twenty
+ * Questions' `secret-entry` before it declared one — has no template name, so
+ * it is named on the receipt rather than dropped without trace. Bands are
+ * top-level names only; there is no `bands` object.
+ *
+ * The fixture is the TQ respond path in miniature: world lore beside the
+ * script-picked secret in its own `priority: 'always'` band, and a `briefing`
+ * band the ranker excluded.
+ */
+describe("plugin bands", () => {
+	beforeEach(() => _resetRenderers())
+
+	const secret = decision({
+		candidate: {
+			id: "secret-entry:7",
+			source: "secret-entry",
+			tokens: 6,
+			signals: {},
+			payload: {
+				id: "secret-entry:7",
+				name: "The Brass Lantern",
+				content: "A lantern that never goes out."
+			}
+		},
+		reason: "reserved_minimum"
+	})
+	const briefing = decision({
+		candidate: {
+			id: "briefing:1",
+			source: "briefing",
+			tokens: 4,
+			signals: {},
+			payload: { name: "Rules", content: "Answer yes or no." }
+		},
+		included: false,
+		reason: "excluded_token_limit"
+	})
+	const withBands = {
+		allocation: allocate([decision(), secret, briefing], {
+			budgetTotal: 100
+		}),
+		engine: CORE_TEMPLATE_ENGINE,
+		messages: [{ id: 1, role: "user", content: "is it alive?" }]
+	}
+	const coreOnly = {
+		...withBands,
+		allocation: allocate([decision()], { budgetTotal: 100 })
+	}
+	const SECRET_JSON = JSON.stringify({
+		"The Brass Lantern": "A lantern that never goes out."
+	})
+
+	it("puts no `bands` object in the context", async () => {
+		const r = await render({
+			...withBands,
+			template:
+				"[{{bands.secret-entry}}][{{bands.briefing}}][{{bands.worldLore}}]"
+		})
+		expect(r.rendered).toBe("[][][]")
+	})
+
+	it("names an included band the template never renders on the receipt", async () => {
+		const r = await render({ ...withBands, template: "{{{worldLore}}}" })
+		expect(r.notes).toEqual([
+			"band 'secret-entry' was ranked and included but no template can " +
+				"render it: its source does not declare it. Declare it on that " +
+				"source (bands: { secretEntry: … }) and place it with {{{secretEntry}}}"
+		])
+	})
+
+	it("leaves core's three byte-identical, through the shipped template", async () => {
+		const templates = [
+			SHIPPED_CONTEXT_TEMPLATE,
+			"{{{worldLore}}}|{{{history}}}|{{{currentDate}}}|{{characterLore}}"
+		]
+		for (const template of templates) {
+			const a = await render({ ...coreOnly, template })
+			const b = await render({ ...withBands, template })
+			expect(b.rendered).toBe(a.rendered)
+		}
+	})
+})
+
+/**
+ * Typed templates P2: a band its source DECLARES is a top-level template name.
+ *
+ * The resolved band set reaches `render` as the keys of the `variables` slot
+ * — `world.ts` resolves one per band `rendersAt` found upstream, with no
+ * layout (`{ engine }`) until somebody selects one. The fixture is the Twenty
+ * Questions secret under its identifier key, `secretEntry`.
+ */
+describe("declared bands", () => {
+	beforeEach(() => _resetRenderers())
+
+	const secret = decision({
+		candidate: {
+			id: "secret-entry:7",
+			source: "secretEntry",
+			tokens: 6,
+			signals: {},
+			payload: {
+				id: "secret-entry:7",
+				name: "The Brass Lantern",
+				content: "A lantern that never goes out."
+			}
+		},
+		reason: "reserved_minimum"
+	})
+	const SECRET_JSON = JSON.stringify({
+		"The Brass Lantern": "A lantern that never goes out."
+	})
+	const declared = {
+		allocation: allocate([decision(), secret], { budgetTotal: 100 }),
+		engine: CORE_TEMPLATE_ENGINE,
+		messages: [{ id: 1, role: "user", content: "is it alive?" }],
+		// What world.ts resolves for a declared band nobody gave a layout.
+		variables: { secretEntry: { engine: CORE_TEMPLATE_ENGINE } }
+	}
+
+	it("exposes a declared band at the top level, through the in-code floor", async () => {
+		const r = await render({ ...declared, template: "{{{secretEntry}}}" })
+		expect(r.rendered).toBe(SECRET_JSON)
+		expect(r.notes).toBeUndefined()
+	})
+
+	it("renders a declared band through its selected layout", async () => {
+		const r = await render({
+			...declared,
+			variables: {
+				secretEntry: {
+					engine: CORE_TEMPLATE_ENGINE,
+					source:
+						"{{#each secretEntry}}Secret: {{@key}} — {{this}}{{/each}}"
+				}
+			},
+			template: "<{{{secretEntry}}}>"
+		})
+		expect(r.rendered).toBe(
+			"<Secret: The Brass Lantern — A lantern that never goes out.>"
+		)
+	})
+
+	it("loops every declared band, each through its own layout", async () => {
+		const briefing = decision({
+			candidate: {
+				id: "briefing:1",
+				source: "briefing",
+				tokens: 4,
+				signals: {},
+				payload: { name: "Rules", content: "Answer yes or no." }
+			}
+		})
+		const r = await render({
+			...declared,
+			allocation: allocate([decision(), secret, briefing], {
+				budgetTotal: 100
+			}),
+			variables: {
+				secretEntry: { engine: CORE_TEMPLATE_ENGINE },
+				briefing: {
+					engine: CORE_TEMPLATE_ENGINE,
+					source: "{{#each briefing}}{{this}}{{/each}}"
+				}
+			},
+			template: "{{{secretEntry}}}|{{{briefing}}}"
+		})
+		expect(r.rendered).toBe(`${SECRET_JSON}|Answer yes or no.`)
+	})
+
+	it("is falsy when nothing of the band was included", async () => {
+		const r = await render({
+			...declared,
+			allocation: allocate([decision()], { budgetTotal: 100 }),
+			template: "{{#if secretEntry}}yes{{else}}no{{/if}}"
+		})
+		expect(r.rendered).toBe("no")
+	})
+
+	it("names the top-level spelling when a declared band is not placed", async () => {
+		const r = await render({ ...declared, template: "{{{worldLore}}}" })
+		expect(r.notes).toEqual([
+			"band 'secretEntry' was ranked and included but the template does " +
+				"not render it — place it with {{{secretEntry}}}"
+		])
+	})
+
+	it("refuses a declared band that collides with the template context, naming both", async () => {
+		await expect(
+			render({
+				...declared,
+				templateContext: { secretEntry: "from the builder" },
+				template: "{{{secretEntry}}}"
+			})
+		).rejects.toThrow(
+			/band 'secretEntry'.*collides with 'secretEntry' from the template context/
+		)
+	})
+
+	it("never promotes a shipped layout key into a band", async () => {
+		// A preview hands in every shipped layout (`bareLayouts`) — `characters`
+		// among them. It is a core variable, not a band, and stays the
+		// template context's.
+		const r = await render({
+			...declared,
+			variables: {
+				...declared.variables,
+				characters: { engine: CORE_TEMPLATE_ENGINE, source: "X" }
+			},
+			templateContext: { characters: "the cast" },
+			template: "{{{characters}}}"
+		})
+		expect(r.rendered).toBe("the cast")
+	})
+
+	it("leaves core's three byte-identical when a band is declared", async () => {
+		const coreOnly = {
+			...declared,
+			allocation: allocate([decision()], { budgetTotal: 100 }),
+			variables: undefined
+		}
+		const templates = [
+			SHIPPED_CONTEXT_TEMPLATE,
+			"{{{worldLore}}}|{{{history}}}|{{{currentDate}}}|{{characterLore}}"
+		]
+		for (const template of templates) {
+			const a = await render({ ...coreOnly, template })
+			const b = await render({ ...declared, template })
+			expect(b.rendered).toBe(a.rendered)
+		}
+	})
+})
+
+/**
+ * `recalledLines` — older transcript lines `core:query/entity-search@1`
+ * recalls on its `messages` out-port, in their own declared band (owner
+ * ruling 2026-09-27, option b). They sat in the transcript's `messages` band
+ * before, budgeted and rendered nowhere; now a template places them with
+ * `{{{recalledLines}}}`, per genre, through the shipped "Lines" layout, and a
+ * template that does not place them gets the declared-band note. Nothing
+ * places them automatically, and no shipped template does.
+ *
+ * The fixture is entity-search's own candidate shape: lines from turns 3 and
+ * 9 recalled on a shared entity (ranked newest-first), beside a recent window
+ * of turns 40–41. `variables` is what the world resolves at an Assemble the
+ * band reaches — the key, with the shipped row or no source at all.
+ */
+describe("recalled lines", () => {
+	beforeEach(() => _resetRenderers())
+
+	const LINE_3 = "I hid the brass key under the chapel floor."
+	const LINE_9 = "The chapel? It burned."
+	const recalledLine = (id: number, turn: number, name: string, content: string) =>
+		decision({
+			candidate: {
+				id,
+				source: "recalledLines",
+				tokens: 12,
+				signals: { entityCooccurrence: 1 },
+				presetScore: 0.8,
+				payload: {
+					id,
+					name,
+					content,
+					turn,
+					foundBy: "entity-search",
+					sharedEntities: ["brass key"]
+				}
+			}
+		})
+	const input = {
+		allocation: allocate(
+			[
+				decision(),
+				recalledLine(9, 9, "Ada", LINE_9),
+				recalledLine(3, 3, "Mira", LINE_3)
+			],
+			{ budgetTotal: 200 }
+		),
+		engine: CORE_TEMPLATE_ENGINE,
+		messages: [
+			{ id: 40, role: "user", name: "Ada", content: "", message: "Where is the key?" },
+			{ id: 41, role: "assistant", name: "Mira", content: "", message: "Mira shrugs." }
+		],
+		variables: { recalledLines: { engine: CORE_TEMPLATE_ENGINE } }
+	}
+	const PLACED =
+		"{{#if recalledLines}}Earlier in this conversation:\n{{{recalledLines}}}\n{{/if}}" +
+		"{{#each sessionMessages}}{{{name}}}: {{{message}}}\n{{/each}}"
+
+	it("renders where a template places {{{recalledLines}}}, oldest first, through the Lines layout", async () => {
+		const r = await render({ ...input, template: PLACED })
+		expect(r.rendered).toBe(
+			"Earlier in this conversation:\n" +
+				`Earlier (turn 3) — Mira: ${LINE_3}\n` +
+				`Earlier (turn 9) — Ada: ${LINE_9}\n` +
+				"Ada: Where is the key?\nMira: Mira shrugs.\n"
+		)
+		expect(r.notes).toBeUndefined()
+	})
+
+	it("renders through the selected layout when one is chosen", async () => {
+		const r = await render({
+			...input,
+			variables: {
+				recalledLines: {
+					engine: CORE_TEMPLATE_ENGINE,
+					source: "{{#each recalledLines}}[{{{turn}}}] {{{speaker}}}: {{{text}}};{{/each}}"
+				}
+			},
+			template: "{{{recalledLines}}}"
+		})
+		expect(r.rendered).toBe(`[3] Mira: ${LINE_3};[9] Ada: ${LINE_9};`)
+	})
+
+	it("unplaced, it is budgeted and the receipt names the fix", async () => {
+		expect(input.allocation.budget.used).toBe(34)
+		const r = await render({ ...input, template: SHIPPED_CONTEXT_TEMPLATE })
+		expect(r.rendered).not.toContain(LINE_3)
+		expect(r.rendered).toContain("Where is the key?")
+		expect(r.notes).toEqual([
+			"band 'recalledLines' was ranked and included but the template does " +
+				"not render it — place it with {{{recalledLines}}}"
+		])
+	})
+
+	it("is absent when no line was included, so {{#if recalledLines}} is false", async () => {
+		const r = await render({
+			...input,
+			allocation: allocate([decision()], { budgetTotal: 200 }),
+			template: PLACED
+		})
+		expect(r.rendered).toBe("Ada: Where is the key?\nMira: Mira shrugs.\n")
+		expect(r.notes).toBeUndefined()
 	})
 })

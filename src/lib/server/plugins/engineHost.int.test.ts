@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from "vitest"
+import { describe, it, expect, beforeAll, afterAll, vi } from "vitest"
 import { eq } from "drizzle-orm"
 import { createTestDb, type TestDb } from "$lib/server/utils/testDb"
 import * as schema from "$lib/server/db/schema"
@@ -49,7 +49,7 @@ beforeAll(async () => {
 		bundleSource: BUNDLE,
 		bundleHash: "h-engine-test",
 		enabled: true,
-		manifest: { engines: { [ENGINE]: "render" } }
+		manifest: { templateEngines: { [ENGINE]: "render" } }
 	})
 	mgr.register({
 		id: "acme/x",
@@ -86,7 +86,7 @@ describe("a plugin's template engine", () => {
 		// reconcile replaces the forwarding renderer because the hook moved.
 		await db
 			.update(schema.plugins)
-			.set({ manifest: { engines: { [ENGINE]: "renderWrong" } } })
+			.set({ manifest: { templateEngines: { [ENGINE]: "renderWrong" } } })
 			.where(eq(schema.plugins.pluginId, "acme/x"))
 		await syncPluginEngines(db, mgr)
 
@@ -147,9 +147,63 @@ describe("declaration validation", () => {
 
 	it("reads a manifest tolerantly", () => {
 		expect(engineTypesOf(null)).toEqual({})
-		expect(engineTypesOf({ engines: "nope" })).toEqual({})
+		expect(engineTypesOf({ templateEngines: "nope" })).toEqual({})
 		expect(
-			engineTypesOf({ engines: { [ENGINE]: "render", bad: 7 } })
+			engineTypesOf({ templateEngines: { [ENGINE]: "render", bad: 7 } })
 		).toEqual({ [ENGINE]: "render" })
+	})
+
+	it("reads `templateEngines`, the key the packager writes", () => {
+		expect(
+			engineTypesOf({
+				engines: { "serene-pub": ">=0.7 <0.8" },
+				templateEngines: { [ENGINE]: "render" }
+			})
+		).toEqual({ [ENGINE]: "render" })
+	})
+
+	it("never reads a bare `engines` version range as an engine", () => {
+		// `engines` is npm-style ranges (`{ 'serene-pub': '<range>' }`) — not
+		// template engines, and not malformed ones either.
+		expect(
+			engineTypesOf({ engines: { "serene-pub": ">=0.6.0", node: ">=24" } })
+		).toEqual({})
+		expect(
+			engineTypesOf({
+				engines: { "serene-pub": ">=0.6.0", node: ">=24", [ENGINE]: "render" }
+			})
+		).toEqual({})
+	})
+})
+
+describe("a manifest carrying a Serene Pub version range", () => {
+	it("loads with no 'engine skipped' warning, and a real engine still registers", async () => {
+		await db
+			.update(schema.plugins)
+			.set({
+				enabled: true,
+				manifest: {
+					engines: { "serene-pub": ">=0.6.0" },
+					templateEngines: { [ENGINE]: "render" }
+				}
+			})
+			.where(eq(schema.plugins.pluginId, "acme/x"))
+		await db.insert(schema.plugins).values({
+			pluginId: "acme/range-only",
+			name: "Range only",
+			bundleSource: "module.exports = { hooks: {} }",
+			bundleHash: "h-range-only",
+			enabled: true,
+			manifest: { engines: { "serene-pub": ">=0.6.0" } }
+		})
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+		try {
+			await syncPluginEngines(db, mgr)
+			const lines = warn.mock.calls.map((c) => c.join(" "))
+			expect(lines.filter((l) => /engine skipped/.test(l))).toEqual([])
+		} finally {
+			warn.mockRestore()
+		}
+		expect(knownEngines().map((e) => e.id)).toContain(ENGINE)
 	})
 })

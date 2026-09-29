@@ -30,12 +30,12 @@
 		{#if present.length > 0}
 			<div class="flex flex-wrap items-center gap-1">
 				<span
-					class="text-surface-700-300 shrink-0 text-[10px] font-semibold tracking-wide uppercase"
+					class="text-surface-600-400 shrink-0 text-xs font-semibold"
 				>
 					Present:
 				</span>
 				{#each present as id (id)}
-					<span class="chip preset-tonal-primary py-0 text-[10px]">
+					<span class="chip preset-tonal-primary py-0 text-[11px]">
 						{pool.bindingName(id)}
 					</span>
 				{/each}
@@ -44,12 +44,12 @@
 		{#if mentioned.length > 0}
 			<div class="flex flex-wrap items-center gap-1">
 				<span
-					class="text-surface-700-300 shrink-0 text-[10px] font-semibold tracking-wide uppercase"
+					class="text-surface-600-400 shrink-0 text-xs font-semibold"
 				>
 					Mentioned:
 				</span>
 				{#each mentioned as id (id)}
-					<span class="chip preset-tonal-surface py-0 text-[10px]">
+					<span class="chip preset-tonal-surface py-0 text-[11px]">
 						{pool.bindingName(id)}
 					</span>
 				{/each}

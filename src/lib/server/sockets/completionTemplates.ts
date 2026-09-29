@@ -130,7 +130,7 @@ export const completionTemplatesGet: Handler<
  * template an admin authored could be saved, referenced and rendered, and never
  * appear in the control that selects it.
  *
- * `is_selectable` is the filter, which is how `split_session` stays out: it is a
+ * `is_selectable` is the filter, which is how `split_chat` stays out: it is a
  * transport bridge, not a text format a person chooses.
  *
  * Admin-only like the rest, because the picker it feeds only ever renders on a
@@ -446,7 +446,7 @@ export const completionTemplatesClone: Handler<
 				isImmutable: false,
 				seedKey: null,
 				/**
-				 * ⚠ Flat, even when cloning `split_session`.
+				 * ⚠ Flat, even when cloning `split_chat`.
 				 *
 				 * That row's markers are emitted by hand-written code and its
 				 * framing is deliberately EMPTY, so a role-array clone would

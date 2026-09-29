@@ -5,19 +5,29 @@
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { useInterest } from "$lib/client/sockets/interest.svelte"
 	import { toaster } from "$lib/client/utils/toaster"
-	import { downloadBlob } from "$lib/client/utils/downloadBlob"
 	import { attachLorebookToSession } from "$lib/client/utils/attachLorebookToSession"
 	import FileDropzone from "$lib/client/components/FileDropzone.svelte"
 	import NewLorebookDialog from "$lib/client/components/lorebookForms/NewLorebookDialog.svelte"
 	import ImportConflictModal from "$lib/client/components/modals/ImportConflictModal.svelte"
-	import LorebookExportOptionsModal from "$lib/client/components/modals/LorebookExportOptionsModal.svelte"
+	import { LOREBOOK_EXPORT_PAUSED } from "$lib/shared/lorebooks/exportPaused"
 	import { copyName } from "./bookCopy"
+	import { describeOverwriteLosses } from "./overwriteLosses"
 
 	/**
 	 * Everything that happens to a lorebook as a whole — create, import,
-	 * export, delete — with its modals and the socket traffic they need. The
+	 * copy, delete — with its modals and the socket traffic they need. The
 	 * workspace decides *when* one of these opens; what each one then does
 	 * lives here, so the workspace is about navigation and nothing else.
+	 *
+	 * ⚠ Every reply here is BARE and `emitToUser` reaches every tab the person
+	 * has open, so each handler acts only on the request THIS component made
+	 * (a pending flag set when it emitted). Another tab's import must not open
+	 * a conflict prompt here, toast here, or move this reader.
+	 *
+	 * Export is DISABLED (owner ruling 2026-09-28): the action stays visible
+	 * but disabled where it is offered, with `LOREBOOK_EXPORT_PAUSED` as the
+	 * reason. `exportingId` is kept only so a surface that still sets it gets
+	 * that sentence instead of a file.
 	 */
 	interface Props {
 		creating: boolean
@@ -38,6 +48,13 @@
 		onDeleted?: (id: number) => void
 		/** So the copy is what the workspace is looking at afterwards. */
 		onDuplicated?: (id: number) => void
+		/** So a book this tab just made is what the workspace opens. */
+		onCreated?: (id: number) => void
+		/**
+		 * So a book this tab just imported (or the existing one an unchanged
+		 * file matched) is what the workspace opens.
+		 */
+		onImported?: (id: number) => void
 	}
 
 	let {
@@ -48,7 +65,9 @@
 		duplicating = $bindable(null),
 		canOfferAttachToSession,
 		onDeleted,
-		onDuplicated
+		onDuplicated,
+		onCreated,
+		onImported
 	}: Props = $props()
 
 	const socket = useTypedSocket()
@@ -56,7 +75,7 @@
 
 	let importingBook: SpecV3.Lorebook | undefined = $state(undefined)
 	let importConflict:
-		| { existingLorebook: any; lorebookData: object }
+		| Sockets.Lorebooks.Import.Response["conflict"]
 		| undefined = $state(undefined)
 	let showImportConflictModal: boolean = $state(false)
 
@@ -68,10 +87,25 @@
 	 */
 	let pendingAttachName: string | null = $state(null)
 
+	/** Set when this tab emitted `lorebooks:create`; the name it asked for. */
+	let pendingCreateName: string | null = $state(null)
+	/** Set while this tab has an import or import-resolve in flight. */
+	let importPending: boolean = $state(false)
+	/** The book this tab asked to delete, until the server answers. */
+	let pendingDeleteId: number | null = $state(null)
+
 	/** What the copy will be called, as the reader may still edit it. */
 	let duplicateName: string = $state("")
-	/** A copy is a whole export and import, so the button says it is working. */
+	/** A copy of a large book takes a moment, so the button says it is working. */
 	let duplicatePending: boolean = $state(false)
+
+	// Export is paused: a surface that still asks for it gets the reason, and
+	// nothing is sent.
+	$effect(() => {
+		if (exportingId === null) return
+		exportingId = null
+		toaster.info({ title: LOREBOOK_EXPORT_PAUSED })
+	})
 
 	// The suggestion follows the book being copied and nothing else: a
 	// keystroke in the box changes `duplicateName` alone, so what the reader
@@ -94,6 +128,7 @@
 		// `attachToSession` is meaningless if the modal rendered no switch.
 		pendingAttachName =
 			details.attachToSession && canOfferAttachToSession ? trimmed : null
+		pendingCreateName = trimmed
 		const req: Sockets.Lorebooks.Create.Params = { name: trimmed }
 		socket.emit("lorebooks:create", req)
 	}
@@ -168,20 +203,11 @@
 			const req: Sockets.Lorebooks.Import.Params = {
 				lorebookData: importingBook
 			}
+			importPending = true
 			socket.emit("lorebooks:import", req)
 			importing = false
 			importingBook = undefined
 		}
-	}
-
-	function handleConfirmExportOptions(options: {
-		includeCharacters: boolean
-		includePersonas: boolean
-		includeNarrativeGraph: boolean
-	}) {
-		if (exportingId === null) return
-		socket.emit("lorebooks:export", { id: exportingId, ...options })
-		exportingId = null
 	}
 
 	function handleOverwriteImportConflict() {
@@ -191,6 +217,7 @@
 			lorebookData: importConflict.lorebookData,
 			existingId: importConflict.existingLorebook.id
 		}
+		importPending = true
 		socket.emit("lorebooks:importResolve", req)
 		showImportConflictModal = false
 		importConflict = undefined
@@ -203,19 +230,24 @@
 			lorebookData: importConflict.lorebookData,
 			existingId: importConflict.existingLorebook.id
 		}
+		importPending = true
 		socket.emit("lorebooks:importResolve", req)
 		showImportConflictModal = false
 		importConflict = undefined
 	}
 
+	/**
+	 * Asks; the toast and leaving the open book wait for the server's answer
+	 * (finding #84) — a refused delete leaves the book where it was, and the
+	 * catch-all says why.
+	 */
 	function handleDeleteConfirm() {
 		if (deletingId === null) return
 		const id = deletingId
 		const req: Sockets.Lorebooks.Delete.Params = { id }
+		pendingDeleteId = id
 		socket.emit("lorebooks:delete", req)
-		toaster.success({ title: "Lorebook Deleted" })
 		deletingId = null
-		onDeleted?.(id)
 	}
 
 	function handleDuplicateConfirm() {
@@ -243,7 +275,7 @@
 		duplicating = null
 		duplicatePending = false
 		toaster.success({
-			title: "Lorebook Duplicated",
+			title: "Lorebook duplicated",
 			description: `"${msg.lorebook.name}" is ready.`
 		})
 		onDuplicated?.(msg.lorebook.id)
@@ -263,8 +295,12 @@
 
 	function handleLorebooksCreate(msg: Sockets.Lorebooks.Create.Response) {
 		if (!msg.lorebook) return
+		// Only this tab's own create (see the component note).
+		if (pendingCreateName === null || msg.lorebook.name !== pendingCreateName)
+			return
+		pendingCreateName = null
 		toaster.success({
-			title: "Lorebook Created",
+			title: "Lorebook created",
 			description: `"${msg.lorebook.name}" created successfully.`
 		})
 		// Server automatically emits updated list
@@ -280,9 +316,12 @@
 				msg.lorebook.id
 			)
 		}
+		onCreated?.(msg.lorebook.id)
 	}
 
 	function handleLorebooksImport(msg: Sockets.Lorebooks.Import.Response) {
+		if (!importPending) return
+		importPending = false
 		if (msg.status === "conflict" && msg.conflict) {
 			importConflict = msg.conflict
 			showImportConflictModal = true
@@ -290,51 +329,65 @@
 		}
 		if (msg.status === "unchanged") {
 			toaster.success({
-				title: "Already Imported",
-				description: `"${msg.lorebook?.name}" is unchanged. Using the existing lorebook.`
+				title: "Already imported",
+				description: `"${msg.lorebook?.name}" is unchanged. Opening the lorebook you already have.`
 			})
+			if (msg.lorebook) onImported?.(msg.lorebook.id)
 			return
 		}
-		toaster.success({ title: "Lorebook Imported" })
+		toaster.success({ title: "Lorebook imported" })
+		if (msg.lorebook) onImported?.(msg.lorebook.id)
 	}
 
+	/**
+	 * Toasted here, for this tab's request only; Layout leaves this event to
+	 * its listeners (HANDLED_ERROR_EVENTS), so it is said once.
+	 */
 	function handleLorebooksImportError(msg: Sockets.ErrorResponse) {
+		if (!importPending) return
+		importPending = false
 		toaster.error({ title: msg.error || "Failed to import lorebook" })
 	}
 
-	function handleLorebooksImportResolve() {
-		toaster.success({ title: "Lorebook Imported" })
+	function handleLorebooksImportResolve(
+		msg: Sockets.Lorebooks.ImportResolve.Response
+	) {
+		if (!importPending) return
+		importPending = false
+		toaster.success({ title: "Lorebook imported" })
+		if (msg.lorebook) onImported?.(msg.lorebook.id)
 	}
 
 	function handleLorebooksImportResolveError(msg: Sockets.ErrorResponse) {
+		if (!importPending) return
+		importPending = false
 		toaster.error({
 			title: msg.error || "Failed to resolve lorebook import"
 		})
 	}
 
-	function handleLorebooksExport(msg: Sockets.Lorebooks.Export.Response) {
-		downloadBlob(msg)
-		toaster.success({
-			title: "Lorebook Exported",
-			description: `Lorebook exported as ${msg.filename}`
-		})
+	function handleLorebooksDelete(msg: Sockets.Lorebooks.Delete.Response) {
+		// This tab's own delete only; every tab's list refreshes on its own.
+		if (pendingDeleteId === null) return
+		if (msg.id !== undefined && msg.id !== pendingDeleteId) return
+		const id = pendingDeleteId
+		pendingDeleteId = null
+		toaster.success({ title: "Lorebook deleted" })
+		onDeleted?.(id)
 	}
 
-	function handleLorebooksExportError(msg: Sockets.ErrorResponse) {
-		toaster.error({ title: msg.error || "Failed to export lorebook" })
-	}
-
-	function handleLorebooksDelete() {
-		toaster.success({ title: "Lorebook Deleted" })
+	/** The refusal is toasted by Layout's catch-all; stop waiting on it. */
+	function handleLorebooksDeleteError() {
+		pendingDeleteId = null
 	}
 
 	/**
 	 * Every key here is BARE. These are the book-level actions — make, bring
-	 * in, take out, copy, remove — and not one of their replies names a book
-	 * in `SCOPED_EVENTS`, so a scoped key would match nothing at all. The bar
-	 * is the same for the five `:error` events beside them: never gated (plan
-	 * ruling 2 — an error is not an output to skip), but the registry is the
-	 * only listener path.
+	 * in, copy, remove — and not one of their replies names a book in
+	 * `SCOPED_EVENTS`, so a scoped key would match nothing at all. The bar is
+	 * the same for the `:error` events beside them: never gated (plan ruling
+	 * 2 — an error is not an output to skip), but the registry is the only
+	 * listener path.
 	 */
 	useInterest<"lorebooks:create">("lorebooks:create", handleLorebooksCreate)
 	useInterest<"lorebooks:import">("lorebooks:import", handleLorebooksImport)
@@ -350,12 +403,11 @@
 		"lorebooks:importResolve:error",
 		handleLorebooksImportResolveError
 	)
-	useInterest<"lorebooks:export">("lorebooks:export", handleLorebooksExport)
-	useInterest<"lorebooks:export:error">(
-		"lorebooks:export:error",
-		handleLorebooksExportError
-	)
 	useInterest<"lorebooks:delete">("lorebooks:delete", handleLorebooksDelete)
+	useInterest<"lorebooks:delete:error">(
+		"lorebooks:delete:error",
+		handleLorebooksDeleteError
+	)
 	useInterest<"lorebooks:duplicate">(
 		"lorebooks:duplicate",
 		handleLorebooksDuplicate
@@ -388,23 +440,13 @@
 		}}
 		entityLabel="Lorebook"
 		existingName={importConflict.existingLorebook.name}
+		losses={describeOverwriteLosses(importConflict.losses)}
 		onOverwrite={handleOverwriteImportConflict}
 		onImportAsNew={handleImportAsNewFromConflict}
 		onCancel={() => {
 			showImportConflictModal = false
 			importConflict = undefined
 		}}
-	/>
-{/if}
-
-{#if exportingId !== null}
-	<LorebookExportOptionsModal
-		open={exportingId !== null}
-		onOpenChange={(e) => {
-			if (!e.open) exportingId = null
-		}}
-		onConfirm={handleConfirmExportOptions}
-		onCancel={() => (exportingId = null)}
 	/>
 {/if}
 
@@ -427,7 +469,7 @@
 					class="card bg-surface-100-900 border-surface-300-700 max-w-[95vw] space-y-4 border p-4 shadow-xl"
 				>
 					<div class="p-6">
-						<h2 class="mb-2 text-lg font-bold">Import Lorebook</h2>
+						<h2 class="mb-2 text-lg font-bold">Import lorebook</h2>
 						{#if !importingBook}
 							<label class="mb-2" for="file-upload">
 								Select a file.
@@ -443,7 +485,7 @@
 								id="name"
 								type="text"
 								bind:value={importingBook.name}
-								placeholder="Lorebook Name"
+								placeholder="Lorebook name"
 								class="input"
 							/>
 						{/if}
@@ -496,10 +538,10 @@
 							Duplicate lorebook
 						</h2>
 						<p class="text-surface-700-300 mb-4 text-sm">
-							The copy holds everything the book holds: entries
-							and where they are filed, the cast, the
-							relationships, the scenes. Nothing is read into a
-							session until you say so.
+							An exact copy: every entry on every branch, the
+							cast and their dated changes, the links, the
+							scenes, the tags and the story's calendar. Nothing
+							is read into a session until you say so.
 						</p>
 						<label class="mb-2 block" for="duplicate-name">
 							Name
@@ -555,7 +597,7 @@
 				>
 					<div class="p-6">
 						<h2 class="text-error-500 mb-2 text-lg font-bold">
-							Delete Lorebook?
+							Delete lorebook?
 						</h2>
 						<p class="mb-4">
 							Are you sure you want to delete this lorebook? This

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import Select from "$lib/client/components/inputs/Select.svelte"
 	import type { Snippet } from "svelte"
 	import { Switch } from "@skeletonlabs/skeleton-svelte"
 	import { Priorities } from "$lib/shared/constants/Priorities"
@@ -13,11 +14,12 @@
 	 * come and go, so this is always drawn and always here — under the fields
 	 * every entry has, above the account of what the run did.
 	 *
-	 * Recursion depth and the entry's condition sit outside the gate that
-	 * hides Use Regex and Case Sensitive: both are properties of the keyword
-	 * mechanism, and the keyword mechanism still runs with vectorization on —
-	 * an entry set to `keyword` or `both`, and every `rag` entry on an instance
-	 * whose model is not loaded, goes through it.
+	 * ⚠ **Nothing here hides when vectorization is on** — not Use regex, Case
+	 * sensitive or Priority. The keyword mechanism still runs with
+	 * vectorization on — an entry set to `keyword` or `both`, and every `rag`
+	 * entry on an instance whose model is not loaded, goes through it — and the
+	 * ranker adds the priority bonus either way. A hidden control that still
+	 * changes matching is a setting nobody can see or undo.
 	 */
 	interface Props {
 		draft: Record<string, any>
@@ -47,56 +49,64 @@
 		Regex, case, recursion, priority, conditions
 	</summary>
 	<div class="mt-2 flex flex-col gap-3 text-sm">
-		{#if !vectorizationEnabled}
-			<Switch
-				name="{idPrefix}Regex"
-				checked={draft.useRegex || false}
-				onCheckedChange={(e) => (draft.useRegex = e.checked)}
-				class="flex w-full items-center justify-between gap-2"
-			>
-				<Switch.Label>Use Regex</Switch.Label>
-				<Switch.Control class={switchClass}>
-					<Switch.Thumb />
-				</Switch.Control>
-				<Switch.HiddenInput />
-			</Switch>
-			<Switch
-				name="{idPrefix}Case"
-				checked={draft.caseSensitive || false}
-				onCheckedChange={(e) => (draft.caseSensitive = e.checked)}
-				class="flex w-full items-center justify-between gap-2"
-			>
-				<Switch.Label>Case Sensitive</Switch.Label>
-				<Switch.Control class={switchClass}>
-					<Switch.Thumb />
-				</Switch.Control>
-				<Switch.HiddenInput />
-			</Switch>
+		{#if vectorizationEnabled}
+			<p class="text-surface-600-400 text-xs">
+				Use regex and Case sensitive apply to keyword matching, which
+				still runs with embeddings on for entries that match by keyword.
+			</p>
 		{/if}
+		<Switch
+			name="{idPrefix}Regex"
+			checked={draft.useRegex || false}
+			onCheckedChange={(e) => (draft.useRegex = e.checked)}
+			class="flex w-full items-center justify-between gap-2"
+		>
+			<Switch.Label>Use regex</Switch.Label>
+			<Switch.Control class={switchClass}>
+				<Switch.Thumb />
+			</Switch.Control>
+			<Switch.HiddenInput />
+		</Switch>
+		<Switch
+			name="{idPrefix}Case"
+			checked={draft.caseSensitive || false}
+			onCheckedChange={(e) => (draft.caseSensitive = e.checked)}
+			class="flex w-full items-center justify-between gap-2"
+		>
+			<Switch.Label>Case sensitive</Switch.Label>
+			<Switch.Control class={switchClass}>
+				<Switch.Thumb />
+			</Switch.Control>
+			<Switch.HiddenInput />
+		</Switch>
 		<div class="flex w-full items-center justify-between gap-2">
-			<label for="{idPrefix}Recursion">Recursion depth</label>
-			<select
-				id="{idPrefix}Recursion"
-				class="select preset-filled-surface-200-800 w-max max-w-xs rounded-lg text-sm"
+			<!-- The visible text is the row's caption; Select carries the real
+			     (sr-only) label so the row keeps its side-by-side layout. -->
+			<span aria-hidden="true">Recursion depth</span>
+			<Select
+				label="Recursion depth"
+				labelHidden
+				class="w-48 max-w-xs text-sm"
+				options={[
+					{ value: "", label: "Use pipeline default" },
+					{ value: "0", label: "Session only" },
+					{ value: "1", label: "1 level deep" },
+					{ value: "2", label: "2 levels deep" },
+					{ value: "3", label: "3 levels deep" }
+				]}
 				value={String(draft.recursionDepth ?? "")}
-				onchange={(e) => {
+				onValueChange={(v) => {
 					// "" is not 0. Empty means the entry has no opinion and the
 					// pipeline's ceiling decides, which is a different answer
-					// from "conversation only" and has to survive as null.
-					const v = e.currentTarget.value
+					// from "session only" and has to survive as null.
 					draft.recursionDepth = v === "" ? null : Number(v)
 				}}
-			>
-				<option value="">Use pipeline default</option>
-				<option value="0">Conversation only</option>
-				<option value="1">1 level deep</option>
-				<option value="2">2 levels deep</option>
-				<option value="3">3 levels deep</option>
-			</select>
+			/>
 		</div>
 		<EntryConditionField
 			bind:selectiveLogic={draft.selectiveLogic}
 			bind:secondaryKeys={draft.secondaryKeys}
+			regex={!!draft.useRegex || draft.matchMode === "regex"}
 			{idPrefix}
 		/>
 		<Switch
@@ -127,24 +137,26 @@
 			</Switch.Control>
 			<Switch.HiddenInput />
 		</Switch>
-		{#if showPriority && !vectorizationEnabled}
+		{#if showPriority}
 			<div class="flex w-full items-center justify-between gap-2">
-				<label
-					for="{idPrefix}Priority"
-					class:opacity-50={draft.constant}
-				>
+				<span aria-hidden="true" class:opacity-50={draft.constant}>
 					Priority
-				</label>
-				<select
-					id="{idPrefix}Priority"
-					class="select preset-filled-surface-200-800 w-max max-w-xs rounded-lg text-sm"
-					bind:value={draft.priority}
+				</span>
+				<Select
+					label="Priority"
+					labelHidden
+					class="w-48 max-w-xs text-sm"
+					options={Priorities.map((p) => ({
+						value: String(p.value),
+						label: p.label
+					}))}
+					value={draft.priority == null ? "" : String(draft.priority)}
 					disabled={draft.constant || false}
-				>
-					{#each Priorities as priority (priority.value)}
-						<option value={priority.value}>{priority.label}</option>
-					{/each}
-				</select>
+					onValueChange={(v) => {
+						// Priorities are numbers; a clear leaves the stored one.
+						if (v) draft.priority = Number(v)
+					}}
+				/>
 			</div>
 		{/if}
 		{@render extra?.()}

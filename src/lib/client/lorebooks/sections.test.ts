@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { LORE_SCOPES, SCOPE_LABELS, type LoreScope } from "./loreRoute"
+import { LORE_SCOPES, SCOPE_LABELS, type LoreScope } from "$lib/shared/lorebooks/loreRoute"
 import type { PoolItem } from "./poolFilter"
 import { containedBy } from "./editor/partOf"
 import {
@@ -29,7 +29,8 @@ describe("section descriptors", () => {
 			"world",
 			"characters",
 			"history",
-			"scenes"
+			"scenes",
+			"items"
 		])
 	})
 
@@ -92,6 +93,9 @@ describe("section descriptors", () => {
 		// draws the pool.
 		expect(descriptorFor("cast")).toBeUndefined()
 		expect(descriptorFor("places")).toBeUndefined()
+		// Items are a door of their own (phase 3c), not world lore under All entries.
+		expect(descriptorFor("items")?.typeId).toBe("core:entry/item")
+		expect(descriptorForKind("core:entry/item")?.id).toBe("items")
 	})
 
 	it("keeps Character Lore as a door with no scope, because Cast holds it", () => {
@@ -130,7 +134,7 @@ function poolItem(key: string, kind: string): PoolItem {
 		kind,
 		name: key,
 		content: "",
-		keys: "",
+		keys: [],
 		pinned: false,
 		off: false,
 		archived: false,

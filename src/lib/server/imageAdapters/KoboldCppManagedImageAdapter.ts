@@ -1,5 +1,5 @@
 /**
- * Image generation through the KoboldCPP Manager.
+ * Image generation through KoboldCPP, run by Serene Pub.
  *
  * The render is A1111's, verbatim — `Adapter` below IS `A1111Adapter`, and
  * `/sdapi/v1/txt2img` is the same endpoint against the same process. What this
@@ -11,21 +11,22 @@
  *     only one model is resident at a time, is its normal resting state — so a
  *     correctly configured image connection reported "Reachable, but it has no
  *     image API." The honest question here is not "can it draw right now" but
- *     "is the Manager up, and does the model this row names exist", because
+ *     "is the managed KoboldCPP up, and does the model this row names exist", because
  *     loading it is deferred to render time on purpose.
  *   - **"Which models can I pick?"** A1111 lists the checkpoints the server
- *     already holds. The Manager holds none until asked; the list that matters
+ *     already holds. The managed KoboldCPP holds none until asked; the list that matters
  *     is the image models on disk, which is `local_models`.
  *
- * Both also have to resolve WHERE the process is from the Manager's settings
+ * Both also have to resolve WHERE the process is from the managed KoboldCPP's settings
  * rather than from `connection.baseUrl` — a managed row's own URL is not
  * authoritative and is not kept in sync (see dispatchImage.resolveBaseUrl,
  * which documents the same trap for the render path).
  *
- * ## One model, and it is this row's
+ * ## Its models, and which one is resident
  *
- * A connection names exactly one model; this one names an image model. Whether
- * it is RESIDENT is a separate question with a separate owner — the model
+ * The managed endpoint carries text and image models; this module serves its
+ * image ones (`modality: "image-gen"`). Whether one is RESIDENT is a separate
+ * question with a separate owner — the model
  * manager decides what koboldcpp holds, and today's answer is "one thing at a
  * time". Nothing here asserts anything about that, which is why a test can pass
  * against a process currently holding an LLM.
@@ -103,7 +104,7 @@ const PROFILE_DEFAULTS = {
 	sdQuant: "off"
 }
 
-/** Where the Manager says its koboldcpp is — never the row's own column. */
+/** Where Serene Pub's KoboldCPP settings say the process is — never the row's own column. */
 function managerBaseUrl(
 	settings: { koboldCppManagerBaseUrl?: string | null } | undefined,
 	connection: SelectConnection
@@ -116,7 +117,7 @@ function managerBaseUrl(
 }
 
 /**
- * Is the Manager up, and is the model this row names actually there?
+ * Is the managed KoboldCPP up, and is the model this row names actually there?
  *
  * Deliberately NOT "can it draw right now". The image model is loaded on demand
  * at render time, exactly as an LLM is, so a process holding a text model is the
@@ -140,11 +141,11 @@ async function testConnection(
 		if (!settings?.koboldCppManagerEnabled)
 			return {
 				ok: false,
-				error: "The KoboldCPP Manager is disabled. Enable it in Settings — this connection type has no server of its own to reach."
+				error: "KoboldCPP, run by Serene Pub, is turned off. Turn it on from Connections → Add → KoboldCPP, run by Serene Pub — this connection type has no server of its own to reach."
 			}
 
 		// Not answering is only a FAULT in external mode, and the rule is the
-		// preflight's own: the Manager starts its own subprocess on demand, so a
+		// preflight's own: Serene Pub starts its KoboldCPP subprocess on demand, so a
 		// cold instance is the expected state and failing the test for it would
 		// be the same mistake as asking `/sdapi/v1/sd-models` — a working
 		// connection reported broken because nothing has needed it yet. In
@@ -154,7 +155,7 @@ async function testConnection(
 		if (!reachable && settings.koboldCppManagedMode !== "managed")
 			return {
 				ok: false,
-				error: `Nothing is answering at ${baseUrl}, and the Manager is in "${settings.koboldCppManagedMode ?? "unset"}" mode, so it will not start one. Start KoboldCPP yourself, or switch the Manager to Managed mode in Settings.`
+				error: `Nothing is answering at ${baseUrl}, and KoboldCPP, run by Serene Pub, is in "${settings.koboldCppManagedMode ?? "unset"}" mode, so it will not start one. Start KoboldCPP yourself, or switch it to Managed mode in its Settings tab.`
 			}
 
 		if (connection.model) {
@@ -176,7 +177,7 @@ async function testConnection(
 			if (!resolved)
 				return {
 					ok: false,
-					error: `The Manager is up, but the image model "${connection.model}" is not in its models directory. Pick another in the KoboldCPP Manager's Models tab, or clear this connection's Checkpoint field and test again to list what is there.`
+					error: `KoboldCPP, run by Serene Pub, is up, but the image model "${connection.model}" is not in its models directory. Pick another in its Models tab, or clear this connection's Checkpoint field and test again to list what is there.`
 				}
 		}
 
@@ -201,18 +202,18 @@ async function testConnection(
 }
 
 /**
- * The image models the Manager knows about — what fills the Checkpoint dropdown.
+ * The image models the managed KoboldCPP knows about — what fills the Checkpoint dropdown.
  *
  * Not the server's checkpoint list (it has none) and not a directory scan: the
- * `local_models` table is what the Manager's own listing maintains, kind and
+ * `local_models` table is what the managed KoboldCPP's own listing maintains, kind and
  * all, and reading it here means the two screens cannot disagree about what
  * exists.
  *
- * `kind: "unknown"` is excluded, unlike in the Manager itself. There a file the
+ * `kind: "unknown"` is excluded, unlike in the managed KoboldCPP itself. There a file the
  * classifier could not read shows in both lists with an "Unverified" badge and a
  * one-click override; a bare `<select>` has neither, so an unknown offered here
  * would be indistinguishable from a verified one and would fail at load. The
- * route for a new architecture is to mark it in the Manager, which is also where
+ * route for a new architecture is to mark it in the managed KoboldCPP, which is also where
  * the evidence for the decision is.
  */
 async function listModels(
@@ -226,7 +227,7 @@ async function listModels(
 
 		// The connection's OWN model is always listed, whatever its kind says.
 		//
-		// `unknown` is deliberately selectable in the Manager — overriding an
+		// `unknown` is deliberately selectable in the managed KoboldCPP — overriding an
 		// unverified file is exactly how it stops being unverified — so a
 		// connection can legitimately name a model this filter drops. Leaving it
 		// out makes the settings dropdown render with nothing selected, and the

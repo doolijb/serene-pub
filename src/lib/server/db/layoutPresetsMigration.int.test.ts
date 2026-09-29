@@ -119,11 +119,9 @@ describe("0141's data step", () => {
 		expect(byName("Impossible").visibility).toBe("private")
 	})
 
-	test("leaves the legacy blob exactly as it was", () => {
+	test("leaves the layout blob exactly as it was", () => {
 		expect(byName("Default").layout).toEqual({ zoneLayout: {} })
 		expect(byName("My Layout!").layout).toEqual({ widgetGrid: {} })
-		// …and adds no document: nothing invents one from a legacy blob.
-		expect(byName("Default").document).toBeNull()
 	})
 
 	test("the constraints it was ordered before are live afterwards", async () => {

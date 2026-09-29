@@ -58,8 +58,8 @@
 	// Initialize extraFields from connection.extraJson, but don't make it reactive to connection changes
 	/**
 	 * ⚠ `think` is gone from here (ruling 2026-09-12): reasoning is a SAMPLING
-	 * parameter now, chosen per stage on the sampling config rather than once
-	 * for every stage this connection serves. It was doubly dead, since no LM
+	 * parameter now, chosen per step on the sampling config rather than once
+	 * for every step this connection serves. It was doubly dead, since no LM
 	 * Studio adapter ever read `extraJson.think`, but a commented-out control
 	 * is still a thing somebody uncomments. Do not re-add it.
 	 */
@@ -186,7 +186,7 @@
 					</p>
 				{/if}
 			</div>
-			<!-- "Use Session Mode" lived here. It is a CAPABILITY now —
+			<!-- "Use Chat Mode" lived here. It is a CAPABILITY now —
 			     Chat messages / Text completion, in the Capabilities panel
 			     below, graded through the same four layers as everything else
 			     and with a hand-set value outranking every later test. -->

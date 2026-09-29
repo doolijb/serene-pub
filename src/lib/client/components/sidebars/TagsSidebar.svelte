@@ -11,6 +11,8 @@
 	import LorebookListItem from "../listItems/LorebookListItem.svelte"
 	import EmptyState from "../EmptyState.svelte"
 	import PanelNavHeader from "../panels/PanelNavHeader.svelte"
+	import DetailHero from "../panels/DetailHero.svelte"
+	import Select from "../inputs/Select.svelte"
 	import PanelFilterInput from "../panels/PanelFilterInput.svelte"
 	import PanelSplit from "../panels/PanelSplit.svelte"
 	import { ViewModeTracker } from "$lib/client/shell/viewMode.svelte"
@@ -104,131 +106,143 @@
 		})
 	)
 
+	/** "3 characters · 1 lorebook" — what the tag is on, for the hero. */
+	const tagUsage = $derived(
+		[
+			[relatedCharacters.length, "character", "characters"],
+			[relatedLorebooks.length, "lorebook", "lorebooks"],
+			[relatedSessions.length, "session", "sessions"]
+		]
+			.filter(([n]) => (n as number) > 0)
+			.map(([n, one, many]) => `${n} ${n === 1 ? one : many}`)
+			.join(" · ")
+	)
+
 	// Color preset options
 	const colorPresetOptions = [
 		{
 			value: "preset-filled-primary-500",
-			label: "Primary Filled",
+			label: "Primary filled",
 			type: "filled",
 			color: "primary"
 		},
 		{
 			value: "preset-tonal-primary",
-			label: "Primary Tonal",
+			label: "Primary tonal",
 			type: "tonal",
 			color: "primary"
 		},
 		{
 			value: "preset-outlined-primary-500",
-			label: "Primary Outlined",
+			label: "Primary outlined",
 			type: "outlined",
 			color: "primary"
 		},
 		{
 			value: "preset-filled-secondary-500",
-			label: "Secondary Filled",
+			label: "Secondary filled",
 			type: "filled",
 			color: "secondary"
 		},
 		{
 			value: "preset-tonal-secondary",
-			label: "Secondary Tonal",
+			label: "Secondary tonal",
 			type: "tonal",
 			color: "secondary"
 		},
 		{
 			value: "preset-outlined-secondary-500",
-			label: "Secondary Outlined",
+			label: "Secondary outlined",
 			type: "outlined",
 			color: "secondary"
 		},
 		{
 			value: "preset-filled-tertiary-500",
-			label: "Tertiary Filled",
+			label: "Tertiary filled",
 			type: "filled",
 			color: "tertiary"
 		},
 		{
 			value: "preset-tonal-tertiary",
-			label: "Tertiary Tonal",
+			label: "Tertiary tonal",
 			type: "tonal",
 			color: "tertiary"
 		},
 		{
 			value: "preset-outlined-tertiary-500",
-			label: "Tertiary Outlined",
+			label: "Tertiary outlined",
 			type: "outlined",
 			color: "tertiary"
 		},
 		{
 			value: "preset-filled-success-500",
-			label: "Success Filled",
+			label: "Success filled",
 			type: "filled",
 			color: "success"
 		},
 		{
 			value: "preset-tonal-success",
-			label: "Success Tonal",
+			label: "Success tonal",
 			type: "tonal",
 			color: "success"
 		},
 		{
 			value: "preset-outlined-success-500",
-			label: "Success Outlined",
+			label: "Success outlined",
 			type: "outlined",
 			color: "success"
 		},
 		{
 			value: "preset-filled-warning-500",
-			label: "Warning Filled",
+			label: "Warning filled",
 			type: "filled",
 			color: "warning"
 		},
 		{
 			value: "preset-tonal-warning",
-			label: "Warning Tonal",
+			label: "Warning tonal",
 			type: "tonal",
 			color: "warning"
 		},
 		{
 			value: "preset-outlined-warning-500",
-			label: "Warning Outlined",
+			label: "Warning outlined",
 			type: "outlined",
 			color: "warning"
 		},
 		{
 			value: "preset-filled-error-500",
-			label: "Error Filled",
+			label: "Error filled",
 			type: "filled",
 			color: "error"
 		},
 		{
 			value: "preset-tonal-error",
-			label: "Error Tonal",
+			label: "Error tonal",
 			type: "tonal",
 			color: "error"
 		},
 		{
 			value: "preset-outlined-error-500",
-			label: "Error Outlined",
+			label: "Error outlined",
 			type: "outlined",
 			color: "error"
 		},
 		{
 			value: "preset-filled-surface-500",
-			label: "Surface Filled",
+			label: "Surface filled",
 			type: "filled",
 			color: "surface"
 		},
 		{
 			value: "preset-tonal-surface",
-			label: "Surface Tonal",
+			label: "Surface tonal",
 			type: "tonal",
 			color: "surface"
 		},
 		{
 			value: "preset-outlined-surface-500",
-			label: "Surface Outlined",
+			label: "Surface outlined",
 			type: "outlined",
 			color: "surface"
 		}
@@ -407,7 +421,7 @@
 
 	function handleTagsCreate(msg: any) {
 		toaster.success({
-			title: "Tag Created",
+			title: "Tag created",
 			description: `Tag "${msg.tag.name}" created successfully.`
 		})
 	}
@@ -415,14 +429,14 @@
 	function handleTagsUpdate(msg: any) {
 		selectedTag = msg.tag
 		toaster.success({
-			title: "Tag Updated",
+			title: "Tag updated",
 			description: `Tag "${msg.tag.name}" updated successfully.`
 		})
 	}
 
 	function handleTagsDelete(msg: any) {
 		toaster.success({
-			title: "Tag Deleted",
+			title: "Tag deleted",
 			description: "Tag deleted successfully."
 		})
 	}
@@ -488,7 +502,7 @@
 				<div class="mb-4">
 					<div class="mb-4">
 						<PanelNavHeader
-							title={selectedTag.name}
+							title="Tag"
 							onBack={vm.mode === "desk"
 								? undefined
 								: () => {
@@ -496,13 +510,21 @@
 									}}
 							backLabel="Back to tags"
 							actionsLabel="Tag"
+							menuItems={[
+								{
+									label: "Delete",
+									icon: Icons.Trash2,
+									destructive: true,
+									onSelect: handleDeleteClick
+								}
+							]}
 						>
 							{#snippet primaryAction()}
 								<button
 									class="btn btn-sm preset-filled-surface-400-600 shrink-0 p-2"
 									onclick={handleEditClick}
-									title="Edit Tag"
-									aria-label="Edit Tag"
+									title="Edit tag"
+									aria-label="Edit tag"
 									type="button"
 								>
 									<Icons.Pencil
@@ -511,27 +533,22 @@
 									/>
 								</button>
 							{/snippet}
-							{#snippet actions()}
-								<button
-									class="btn btn-sm popover-menu-btn hover:preset-filled-error-500"
-									onclick={handleDeleteClick}
-									type="button"
-								>
-									<Icons.Trash2
-										size={16}
-										aria-hidden="true"
-									/>
-									<span>Delete</span>
-								</button>
-							{/snippet}
 						</PanelNavHeader>
 					</div>
+
+					<DetailHero
+						class="mb-4"
+						title={selectedTag.name}
+						icon={Icons.Tag}
+						subtitle={tagUsage || undefined}
+						chips={tagChip}
+					/>
 
 					{#if selectedTag.description}
 						<div
 							class="border-primary-500 bg-surface-50-950 mb-4 rounded-lg border p-4"
 						>
-							<p class="text-muted-foreground text-sm">
+							<p class="text-surface-600-400 text-sm">
 								{selectedTag.description}
 							</p>
 						</div>
@@ -541,7 +558,7 @@
 					{#if relatedCharacters.length > 0}
 						<div class="mb-6">
 							<h3
-								class="mb-3 flex items-center gap-2 text-lg font-semibold"
+								class="mb-3 flex items-center gap-2 text-sm font-medium"
 							>
 								<Icons.User size={18} />
 								Characters ({relatedCharacters.length})
@@ -564,7 +581,7 @@
 					{#if relatedLorebooks.length > 0}
 						<div class="mb-6">
 							<h3
-								class="mb-3 flex items-center gap-2 text-lg font-semibold"
+								class="mb-3 flex items-center gap-2 text-sm font-medium"
 							>
 								<Icons.Book size={18} />
 								Lorebooks ({relatedLorebooks.length})
@@ -586,7 +603,7 @@
 					{#if relatedSessions.length > 0}
 						<div class="mb-6">
 							<h3
-								class="mb-3 flex items-center gap-2 text-lg font-semibold"
+								class="mb-3 flex items-center gap-2 text-sm font-medium"
 							>
 								<Icons.MessageSquare size={18} />
 								Sessions ({relatedSessions.length})
@@ -610,7 +627,7 @@
 			{:else if isCreating}
 				<!-- Create tag form -->
 				<div>
-					<h1 class="mb-4 text-lg font-bold">Create New Tag</h1>
+					<h1 class="mb-4 text-lg font-bold">Create a tag</h1>
 					<div
 						class="mt-4 mb-4 flex gap-2"
 						role="group"
@@ -628,7 +645,7 @@
 							disabled={Object.keys(validationErrors).length >
 								0 || !newTagName.trim()}
 						>
-							Create Tag
+							Create tag
 						</button>
 					</div>
 					<div class="space-y-4">
@@ -677,9 +694,10 @@
 								class="mb-1 block font-semibold"
 								for="tagDescription"
 							>
-								Description (Optional)
+								Description (optional)
 							</label>
 							<textarea
+								id="tagDescription"
 								name="tagDescription"
 								class="input w-full"
 								bind:value={newTagDescription}
@@ -688,32 +706,20 @@
 							></textarea>
 						</div>
 						<div>
-							<label
-								class="mb-1 block font-semibold"
-								for="colorPreset"
-							>
-								Color Preset
-							</label>
-							<select
-								name="colorPreset"
-								class="input w-full"
+							<Select
+								label="Color preset"
+								options={colorPresetOptions}
 								bind:value={newTagColorPreset}
-							>
-								{#each colorPresetOptions as option}
-									<option value={option.value}>
-										{option.label}
-									</option>
-								{/each}
-							</select>
+							/>
 							<div class="mt-2">
-								<span class="text-muted-foreground text-sm">
+								<span class="text-surface-600-400 text-sm">
 									Preview:
 								</span>
 								<button
 									type="button"
 									class="chip {newTagColorPreset} ml-2"
 								>
-									{newTagName.trim() || "Tag Preview"}
+									{newTagName.trim() || "Tag preview"}
 								</button>
 							</div>
 						</div>
@@ -722,7 +728,7 @@
 			{:else if isEditing}
 				<!-- Edit tag form -->
 				<div>
-					<h1 class="mb-4 text-lg font-bold">Edit Tag</h1>
+					<h1 class="mb-4 text-lg font-bold">Edit tag</h1>
 					<div
 						class="mt-4 mb-4 flex gap-2"
 						role="group"
@@ -740,7 +746,7 @@
 							disabled={Object.keys(editValidationErrors).length >
 								0 || !editTagName.trim()}
 						>
-							Update Tag
+							Update tag
 						</button>
 					</div>
 					<div class="space-y-4">
@@ -789,9 +795,10 @@
 								class="mb-1 block font-semibold"
 								for="editTagDescription"
 							>
-								Description (Optional)
+								Description (optional)
 							</label>
 							<textarea
+								id="editTagDescription"
 								name="editTagDescription"
 								class="input w-full"
 								bind:value={editTagDescription}
@@ -800,32 +807,20 @@
 							></textarea>
 						</div>
 						<div>
-							<label
-								class="mb-1 block font-semibold"
-								for="editColorPreset"
-							>
-								Color Preset
-							</label>
-							<select
-								name="editColorPreset"
-								class="input w-full"
+							<Select
+								label="Color preset"
+								options={colorPresetOptions}
 								bind:value={editTagColorPreset}
-							>
-								{#each colorPresetOptions as option}
-									<option value={option.value}>
-										{option.label}
-									</option>
-								{/each}
-							</select>
+							/>
 							<div class="mt-2">
-								<span class="text-muted-foreground text-sm">
+								<span class="text-surface-600-400 text-sm">
 									Preview:
 								</span>
 								<button
 									type="button"
 									class="chip {editTagColorPreset} ml-2"
 								>
-									{editTagName.trim() || "Tag Preview"}
+									{editTagName.trim() || "Tag preview"}
 								</button>
 							</div>
 						</div>
@@ -840,7 +835,7 @@
 				<button
 					class="btn btn-sm preset-filled-primary-500"
 					onclick={handleCreateClick}
-					title="Create New Tag"
+					title="Create a tag"
 				>
 					<Icons.Plus size={16} />
 					New
@@ -851,6 +846,7 @@
 				<PanelFilterInput
 					bind:value={search}
 					placeholder="tags"
+					singular="tag"
 					count={tagsList.length}
 					aria-label="Filter tags by name or description"
 				/>
@@ -860,7 +856,7 @@
 				<div class="flex items-center justify-center py-8">
 					<Icons.Loader2
 						size={20}
-						class="text-surface-400 animate-spin"
+						class="text-surface-600-400 animate-spin"
 					/>
 				</div>
 			{:else if filteredTags.length === 0}
@@ -869,7 +865,7 @@
 					message={search
 						? `No tags found matching "${search}".`
 						: "No tags yet — create one to get started."}
-					ctaLabel={search ? undefined : "New Tag"}
+					ctaLabel={search ? undefined : "New tag"}
 					onCta={search ? undefined : () => (isCreating = true)}
 				/>
 			{:else}
@@ -919,7 +915,7 @@
 					class="card bg-surface-100-900 max-w-[95vw] space-y-4 p-4 shadow-xl"
 				>
 					<div class="p-6">
-						<h2 class="mb-2 text-lg font-bold">Delete Tag?</h2>
+						<h2 class="mb-2 text-lg font-bold">Delete tag?</h2>
 						<p class="mb-4">
 							Are you sure you want to delete the tag "{tagToDelete?.name}"?
 							This action cannot be undone and will remove the tag
@@ -945,3 +941,11 @@
 		</Portal>
 	</Dialog>
 {/if}
+
+{#snippet tagChip()}
+	{#if selectedTag}
+		<span class="chip {selectedTag.colorPreset || 'preset-filled-primary-500'}">
+			{selectedTag.name}
+		</span>
+	{/if}
+{/snippet}

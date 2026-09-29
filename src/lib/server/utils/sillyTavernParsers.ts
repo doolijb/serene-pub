@@ -66,7 +66,16 @@ export interface SillyTavernPersona {
 	position?: number
 }
 
-export interface SessionMessage {
+/*
+ * SillyTavern's chat files, in SillyTavern's own words (NOMENCLATURE R5):
+ * ST calls a conversation a *chat*. Each one imports as a Serene Pub session,
+ * but these shapes describe ST's bytes and keep ST's names — the
+ * `SillyTavern` prefix is what keeps them from colliding with our own
+ * session and message types (R1).
+ */
+
+/** One message line of a SillyTavern chat `.jsonl`. */
+export interface SillyTavernChatMessage {
 	name: string
 	is_user: boolean
 	is_name?: boolean
@@ -78,23 +87,31 @@ export interface SessionMessage {
 	is_system?: boolean
 }
 
-export interface SessionHeader {
+/** The metadata line a SillyTavern chat `.jsonl` opens with. */
+export interface SillyTavernChatHeader {
 	user_name: string
 	character_name: string
 	create_date: string
 	chat_metadata?: Record<string, any>
 }
 
-export interface GroupSession {
+/**
+ * A SillyTavern group, `groups/<id>.json`. Its current chat's history is
+ * `group chats/<chat_id>.jsonl`; `chats` lists every chat the group has had.
+ */
+export interface SillyTavernGroup {
 	id: string
 	name: string
 	members: string[]
 	disabled_members?: string[]
 	avatar_url?: string
 	allow_self_responses?: boolean
-	activation_strategy?: string
-	generation_mode?: string
+	/** ST's `group_activation_strategy`: 0 natural, 1 list, 2 manual, 3 pooled. */
+	activation_strategy?: number | string
+	generation_mode?: number | string
 	chat_metadata?: Record<string, any>
+	chat_id?: string
+	chats?: string[]
 	created?: number
 }
 
@@ -185,29 +202,89 @@ export async function readCharacterFile(
 }
 
 /**
- * Parse JSONL session file
+ * Parse a SillyTavern chat `.jsonl`: a metadata header line, then one line
+ * per message. A group chat written by an older SillyTavern has no header —
+ * its first line is already a message (it carries `mes`) — so it is kept as
+ * one, under an empty header.
  */
-export async function parseSessionFile(
-	filePath: string
-): Promise<{ header: SessionHeader; messages: SessionMessage[] } | null> {
+export async function parseSillyTavernChatFile(filePath: string): Promise<{
+	header: SillyTavernChatHeader
+	messages: SillyTavernChatMessage[]
+} | null> {
 	try {
 		const content = await fsPromises.readFile(filePath, "utf8")
-		const lines = content.trim().split("\n")
+		const lines = content
+			.trim()
+			.split("\n")
+			.filter((line) => line.trim() !== "")
 
 		if (lines.length === 0) {
 			return null
 		}
 
-		const header = JSON.parse(lines[0]) as SessionHeader
-		const messages = lines
-			.slice(1)
-			.map((line) => JSON.parse(line) as SessionMessage)
+		const first = JSON.parse(lines[0])
+		const headerless = typeof first?.mes === "string"
+		const header: SillyTavernChatHeader = headerless
+			? { user_name: "", character_name: "", create_date: "" }
+			: (first as SillyTavernChatHeader)
+		const messages = (headerless ? lines : lines.slice(1)).map(
+			(line) => JSON.parse(line) as SillyTavernChatMessage
+		)
 
 		return { header, messages }
 	} catch (error) {
-		console.error(`Error parsing session file ${filePath}:`, error)
+		console.error(`Error parsing SillyTavern chat file ${filePath}:`, error)
 		return null
 	}
+}
+
+/**
+ * The personas a SillyTavern `settings.json` declares.
+ *
+ * ST keys every persona by its AVATAR FILE in `User Avatars/`
+ * (`"user-default.png"`), not by name: `power_user.personas` maps that file
+ * to the persona's name, and `power_user.persona_descriptions` maps it to
+ * `{ description, … }`. A key present in either map is a persona; one with no
+ * name entry falls back to the file name without its extension.
+ */
+export function listSillyTavernPersonas(settings: any): SillyTavernPersona[] {
+	const power = settings?.power_user ?? {}
+	const names: Record<string, unknown> =
+		power.personas && typeof power.personas === "object"
+			? power.personas
+			: {}
+	const descriptions: Record<string, unknown> =
+		power.persona_descriptions &&
+		typeof power.persona_descriptions === "object"
+			? power.persona_descriptions
+			: {}
+	const out: SillyTavernPersona[] = []
+	for (const avatar of new Set([
+		...Object.keys(names),
+		...Object.keys(descriptions)
+	])) {
+		const named = names[avatar]
+		const described = descriptions[avatar]
+		const name =
+			typeof named === "string" && named.trim()
+				? named
+				: avatar.replace(/\.[^./]+$/, "")
+		const description =
+			described && typeof described === "object"
+				? String((described as any).description ?? "")
+				: ""
+		const position =
+			described && typeof described === "object"
+				? (described as any).position
+				: undefined
+		out.push({
+			name,
+			avatar,
+			description,
+			...(typeof position === "number" ? { position } : {})
+		})
+	}
+	return out
 }
 
 /**
@@ -255,7 +332,11 @@ export function normalizeTimestamp(timestamp: number | string): Date {
  * to each. Only `manual` is a rebind.
  */
 export function mapGroupReplyStrategy(
-	strategy: string | undefined
+	strategy: number | string | undefined
 ): string | null {
-	return strategy === "manual" ? "core:task/turn-manual@1" : null
+	// ST writes the numeric enum (`group_activation_strategy.MANUAL` = 2);
+	// the string form is accepted for hand-written files.
+	return strategy === 2 || strategy === "manual"
+		? "core:task/turn-manual@1"
+		: null
 }

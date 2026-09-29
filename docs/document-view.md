@@ -1,10 +1,10 @@
 # Document View (Accessibility Mode)
 
-Document View is a second, fully separate interface for Serene Pub — high contrast, keyboard-navigable, and built for screen readers, with one plain page per feature instead of the standard app's sidebars and panels. It isn't a retrofit of the regular UI; it's an independent set of pages that talks to the same server over the same events, so anything you do there shows up in the standard app and vice versa. Nothing about the standard interface changes because Document View exists — you only ever see it if you go looking for it.
+Document View is a second, fully separate interface for Serene Pub — high contrast, keyboard-navigable, and built for screen readers, with one plain page per feature instead of the standard app's sidebars and views. It isn't a retrofit of the regular UI; it's an independent set of pages that talks to the same server over the same events, so anything you do there shows up in the standard app and vice versa. Nothing about the standard interface changes because Document View exists — you only ever see it if you go looking for it.
 
 ## Overview
 
-Document View lives at `/document-view` and mirrors the standard app's main areas — Home, Sessions, Characters, Personas, Connections, and so on — as their own dedicated pages, each independently reachable and screen-reader-friendly on its own. It deliberately doesn't cover every feature of the standard site (see [What's Different From the Standard Site](#whats-different-from-the-standard-site) below); it covers the everyday path of sessionting, managing characters and personas, and the admin configuration needed to get there.
+Document View lives at `/document-view` and mirrors the standard app's main areas — Home, Sessions, Characters, Connections, and so on — as their own dedicated pages, each independently reachable and screen-reader-friendly on its own. It deliberately doesn't cover every feature of the standard site (see [What's Different From the Standard Site](#whats-different-from-the-standard-site) below); it covers the everyday path of starting sessions, managing characters and personas, and the admin configuration needed to get there.
 
 Design commitments that hold across every page:
 
@@ -36,7 +36,7 @@ An admin can also make Document View the default for anyone who hasn't visited y
 Every page shares the same header and navigation:
 
 - **Header** — the "Serene Pub — Document View (Accessible)" brand link (back to Home), a dark/light mode toggle, an **A−** / **A+** text-size stepper with a live percentage readout between them, and a **Browse Standard Site** button.
-- **Main navigation** — a plain list of links: Home, Sessions, Characters, Personas, Documentation, Settings, Help, and About are always shown. Connections, System Settings, and (once the relevant manager is turned on) Ollama Manager and KoboldCPP Manager only appear for admins; Users only appears for admins once accounts are enabled. This mirrors the same gating the standard app's own sidebars use.
+- **Main navigation** — a plain list of links: Home, Sessions, Characters, Documentation, Settings, Help, and About are always shown. Connections, System Settings, and (once the relevant one is turned on) Ollama, managed and KoboldCPP, run by Serene Pub only appear for admins, and never in the Android app, which can't run either; Users only appears for admins once accounts are enabled. This mirrors the same gating the standard app's own sidebars use.
 
 ## Pages
 
@@ -49,28 +49,28 @@ Shows the same setup wizard as the standard site's home page while anything requ
 The session list, a new-session form, and a session view/edit pair. A few things work a little differently here than in the standard session window, to suit a page-based, screen-reader-first interaction model:
 
 - Every message from a character or persona has a **View `<name>`** link to a read-only detail page (their description, personality, scenario, or first message); if it belongs to you, that page also has an **Edit** link.
-- The **last** message in a session, if it's from a character, gets **Swipe Left (Previous Response)** / **Swipe Right (Next Response)** and **Regenerate** buttons, plus a "Response X of Y" indicator.
+- The **last** message in a session, if it's from a character, gets **Swipe left (previous response)** / **Swipe right (next response)** and **Regenerate** buttons for the session's owner, plus a "Response X of Y" indicator.
 - Hidden ("ghosted") messages — excluded from what the AI sees but still visible in the transcript — show a note explaining that, and any message you own has a **Hide from AI** / **Unhide** toggle.
 - **Get a Response From** says who is next in the session's turn order and selects them by default. Choose someone else, or the narrator, to make them reply instead. When it is your turn to write, it says so and nothing is preselected.
 - "Skip to latest message" and "Skip to message box" links sit right below the session title, so a screen-reader or keyboard user can jump straight past the message history instead of tabbing through it.
 
-The edit page covers the session's name, characters, personas, guests, the turn-order strategy and any other step the session may swap (each with its own **Apply**), the fields its genre declares (such as **Auto-advance**), scenario, and tags. It does **not** cover attaching a lorebook, per-character visibility/disable toggles, or per-session AI-override settings (sampling/context/prompt configs) — sessions created or edited here use whatever the system defaults are. Use the standard site for those. See [Sessions](./sessions.md) for the full picture of what a session can do.
+The edit page covers the session's name, characters, personas, guests, the turn-order strategy and any other step the session may swap (each with its own **Apply**), the fields its genre declares (such as **Auto-advance**), scenario, and tags. It does **not** cover reading a lorebook into the session, switching a participant on or off, or the session's preset and actions — use the standard site for those. See [Sessions](./sessions.md) for the full picture of what a session can do.
 
 ### Characters and Personas
 
-Each has a list page, a simplified create form, an edit form, a read-only view page, and a **Browse Library** page for the same community character/persona library the standard site uses (see [Characters](./characters.md) and [Personas](./personas.md)). The simplified forms cover Name, Nickname, Description, Personality, Scenario, and First Message for characters (Name, Description, and a "set as default" toggle for personas) — no avatar/gallery management, advanced fields, or lorebook bindings. Use the standard site for those.
+Characters (personas included, since a persona is a character you play) have a list page, a simplified create form, an edit form, a read-only view page, and a **Browse Library** page for the same community character library the standard site's Library view browses (see [Characters](./characters.md) and [Personas](./personas.md)). The simplified forms cover Name, Nickname, Description, Personality, Scenario, and First Message, plus a **Persona** checkbox (a persona is simply a character you play) and, on the edit form, **Default persona** — no avatar/gallery management, advanced fields, or lorebook bindings. Use the standard site for those.
 
 ### Documentation
 
 A search-and-browse view of this same set of docs, reflowed for Document View — search matches both whole pages and individual headings within them, and every in-doc link stays inside Document View instead of dropping you back onto the standard site mid-read.
 
-### Connections, Ollama Manager, KoboldCPP Manager (Admin Only)
+### Connections, Ollama (managed), KoboldCPP (run by Serene Pub) (Admin Only)
 
-List, create, edit, and set-default for AI service connections, plus the same download/browse/connect workflows as the standard site's Ollama and KoboldCPP managers when those are turned on. See [Connections](./connections.md).
+List, create, edit, and set-default for AI service connections, plus the same download/browse/connect workflows as the standard site's managed Ollama and KoboldCPP run by Serene Pub when those are turned on. See [Connections](./connections.md).
 
 ### System Settings (Admin Only)
 
-Covers the Ollama Manager and KoboldCPP Manager toggles and URLs, Context Debugging, and CharaVault connection — see [System Settings](./system-settings.md) for what each of these does. Embeddings/RAG setup isn't available here (it requires choosing a model, which doesn't yet have a Document View page) — a status line shows whether it's enabled and points you to the standard site to configure it.
+Covers the Ollama, managed and KoboldCPP, run by Serene Pub toggles (plus the KoboldCPP server URL; Ollama's address is set on its connection in the standard site), Context Debugging, and CharaVault connection — see [System Settings](./system-settings.md) for what each of these does. Embeddings/RAG setup isn't available here (it requires choosing an embedding connection, which doesn't yet have a Document View page) — a status line shows whether one is in use and points you to the standard site to configure it.
 
 **Enabling User Accounts** works a little differently than the standard site's toggle: it's presented as one-way-on rather than a switch, since turning it on immediately requires everyone — including you — to start logging in. Before you can enable it, you need a passphrase set on your own account; the page shows your username plainly and asks you to make a note of it, since you'll need both it and your new passphrase to log back in once accounts are required. Turning accounts back **off** isn't available from Document View — use the standard site's System Settings if you need to. See [Users & Accounts](./users-and-accounts.md).
 
@@ -93,14 +93,14 @@ Two different actions, both in the header or the Settings page:
 - **Browse Standard Site** — temporary, for this browser tab only. It takes you to the standard site's equivalent page (the same open session, for example) without forgetting your Document View preference — reloading or clicking around the standard site keeps you there, since the whole point is to let you actually use it for a while, but a fresh tab (or explicitly switching back) returns you to Document View. Pressing Ctrl+Shift+Y does the exact same thing from anywhere.
 - **Turn Off Document View** (Settings page only) — a deliberate, permanent opt-out that clears your stored preference. You can always turn it back on again with any of the entry points above.
 
-Switching between interfaces tries to land you on the equivalent page rather than always bouncing to home — an open session maps to the same session, for instance — falling back to each interface's home page when there's no direct equivalent (most sidebar-only standard-site panels, and most admin manager/settings pages, don't have a one-to-one Document View page to map to and vice versa).
+Switching between interfaces tries to land you on the equivalent page rather than always bouncing to home — an open session maps to the same session, for instance — falling back to each interface's home page when there's no direct equivalent (most sidebar-only standard-site views, and most admin manager/settings pages, don't have a one-to-one Document View page to map to and vice versa).
 
 ## What's Different From the Standard Site
 
 Document View intentionally covers a smaller surface than the full app, favoring a simple, reliable, page-per-feature model over one-to-one parity. Not available yet, all reachable from the standard site instead:
 
-- Lorebooks (World/Character/History/Graph tabs), Tags, Prompt Configs, Sampling Configs, and Context Configs have no Document View pages at all.
-- Session editing excludes lorebook attachment, per-character visibility/disable, and per-session AI overrides.
+- Lorebooks, Tags, Sampling Configs, Pipelines and Context Templates have no Document View pages at all.
+- Session editing excludes reading a lorebook into the session, switching participants on or off, and the session's preset and actions.
 - Character and persona forms are simplified — no avatar/gallery management or advanced fields.
 - Embeddings/RAG setup (choosing and downloading a model).
 - Custom theme creation/editing, background images, and CharaVault's browsing UI (though connecting/disconnecting CharaVault itself works from System Settings).

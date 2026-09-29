@@ -71,7 +71,7 @@
 				>
 					<span class="min-w-0 flex-1 truncate text-xs font-semibold">
 						{row.edge.label}
-						<span class="text-surface-400">{row.arrow}</span>
+						<span class="text-surface-600-400">{row.arrow}</span>
 						{row.otherName}
 					</span>
 					<span class="text-surface-600-400 shrink-0 text-[11px]">
@@ -79,14 +79,14 @@
 					</span>
 					{#if row.cut}
 						<span
-							class="badge preset-tonal-error shrink-0 text-[10px]"
+							class="badge preset-tonal-error shrink-0 text-[11px]"
 						>
 							cut
 						</span>
 					{/if}
 					{#if later}
 						<span
-							class="badge preset-tonal-surface shrink-0 text-[10px]"
+							class="badge preset-tonal-surface shrink-0 text-[11px]"
 						>
 							{later}
 						</span>

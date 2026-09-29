@@ -2,20 +2,17 @@
 	/**
 	 * A runtime this pub RUNS, as its connection's own view.
 	 *
-	 * The Ollama Manager and the KoboldCPP Manager used to be rail items and
-	 * panels of their own, reached by an "Open … manager" door on a connection
-	 * and gated by a switch in Settings → System that had to be found FIRST or
-	 * the door opened onto a disabled screen. The 2026-09-17 concept ruling
-	 * (R2) folds each of them into the connection it is about: tapping the
+	 * A runtime's manager is not a rail item or a panel of its own, and no
+	 * switch in Settings → System gates reaching it. The 2026-09-17 concept
+	 * ruling (R2) folds each manager into the connection it is about: tapping the
 	 * KoboldCPP row in the index opens THIS, and this IS the manager.
 	 *
 	 * ## What is here, and what is borrowed
 	 *
 	 * The status card, the tab strip and the setup routing are this file's.
-	 * Everything inside a tab is the manager's existing component, unchanged —
-	 * `KoboldCppModelsTab`, `KoboldCppSettingsTab`, `OllamaInstalledTab` and
-	 * the rest. The fold is a change of address, not a rewrite: a person who
-	 * knew where the Text/Image toggle was still finds it where it was.
+	 * The tabs are components of their own: `ManagedModelsTab` (the runtime's
+	 * models, in modality lanes), the model finder, the downloads list,
+	 * `KoboldCppSettingsTab` and the connection's settings.
 	 *
 	 * The connection's OWN settings — name, form, notes, capabilities, stop
 	 * scripts, Save/Reset — arrive as the `connectionSettings` snippet rather
@@ -29,6 +26,8 @@
 	 * retired — and Downloads is the manager's own list until the one
 	 * downloads view (R4) can be filtered by destination.
 	 */
+	import ModelFinderView from "./ModelFinderView.svelte"
+	import DownloadsView from "./DownloadsView.svelte"
 	import { getContext, onMount } from "svelte"
 	import type { Snippet } from "svelte"
 	import * as Icons from "@lucide/svelte"
@@ -43,12 +42,13 @@
 	import KoboldCppSetupScreen from "$lib/client/components/koboldcppManager/KoboldCppSetupScreen.svelte"
 	import KoboldCppBinaryVariantPicker from "$lib/client/components/koboldcppManager/KoboldCppBinaryVariantPicker.svelte"
 
-	import OllamaSettingsTab from "$lib/client/components/ollamaManager/OllamaSettingsTab.svelte"
+	import { isLoopbackAddress } from "$lib/shared/connections/host"
 	import { declareInterest } from "$lib/client/sockets/interest.svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 	import { toaster } from "$lib/client/utils/toaster"
 	import { downloads } from "./downloads.svelte"
 	import {
+		duplicateOllamaHosts,
 		capabilitiesServedBy,
 		contextLabel,
 		downloadSourcesFor,
@@ -56,6 +56,7 @@
 		kcppLoadedLine,
 		kcppPerfLine,
 		kcppProcessLine,
+		kcppInstallState,
 		managedLabel,
 		managedStage,
 		managedTabs,
@@ -75,7 +76,7 @@
 		isAdmin: boolean
 		/** Every transform's registered pair, for the Remove dialog's cost. */
 		capabilityDefaults: Record<string, CapabilityDefaultRef | undefined>
-		/** This runtime's rows — KoboldCPP has two, text and image. */
+		/** This runtime's rows, for the Remove dialog's cost. */
 		managedConnectionIds: readonly number[]
 		/**
 		 * The whole list, so the Models tab can read THIS runtime's rows.
@@ -88,19 +89,31 @@
 		connections?: readonly (Sockets.Connections.List.Row & { id: number })[]
 		/** Open one model's own view. */
 		onOpenModel?: (connectionId: number, modelId: number) => void
+		/**
+		 * Register one model as the default for one capability, through the
+		 * panel's own flow — which asks first when that throws stored work
+		 * away (switching embeddings rebuilds the index).
+		 */
+		onSetDefault?: (
+			capability: string,
+			connectionId: number,
+			model: { id: number; name: string }
+		) => void
 		onBack: () => void
-		/** Open the model finder scoped to this connection (ruling R3). */
-		onGetModels: (connectionId: number) => void
-		/** The one downloads view across every destination (R4). */
-		onOpenDownloads: () => void
 		/** Ask the host for its models again. */
 		onRefreshModels: () => void
 		/** Switch the manager off and delete its rows. Confirmed here first. */
 		onRemove: () => void
-		/** Open another connection — the KoboldCPP image row, from the Image list. */
+		/** Open another connection — a same-host duplicate, from its notice. */
 		onOpenConnection: (connectionId: number) => void
 		/** The connection's own form, notes, capabilities and stop scripts. */
 		connectionSettings?: Snippet
+		/**
+		 * The open tab. Bindable and held by the panel, per connection, so it
+		 * survives the dock ↔ full-page swap that remounts this view (plan
+		 * 2026-09-24 B6) — held here it reset to Models on every swap.
+		 */
+		tab?: string
 	}
 	let {
 		kind,
@@ -111,13 +124,13 @@
 		managedConnectionIds,
 		connections = [],
 		onOpenModel,
+		onSetDefault,
 		onBack,
-		onGetModels,
-		onOpenDownloads,
 		onRefreshModels,
 		onRemove,
 		onOpenConnection,
-		connectionSettings
+		connectionSettings,
+		tab = $bindable("models")
 	}: Props = $props()
 
 	const socket = useTypedSocket()
@@ -146,6 +159,14 @@
 	const hasBinary = $derived(
 		!!koboldCppSettingsCtx.settings?.koboldCppManagedBinaryVariant
 	)
+	/**
+	 * The same reading the index row makes (`kcppInstallState`), so the row
+	 * and this view cannot disagree about whether the install is here.
+	 */
+	const installState = $derived(
+		kcppInstallState(koboldCppSettingsCtx.settings)
+	)
+	const offline = $derived(isKcpp && installState === "offline")
 	/** The picker was asked for by hand: Change binary, or a re-download. */
 	let pickerRequested = $state(false)
 	/**
@@ -179,12 +200,24 @@
 	let ollamaModelCount = $state<number | null>(null)
 	let ollamaRunningCount = $state<number | null>(null)
 	let ollamaUpdateAvailable = $state(false)
+	let ollamaLatestVersion = $state<string | null>(null)
+	/**
+	 * This connection's row. An Ollama view reads its host from HERE, never
+	 * from the manager's global address: every Ollama connection is managed
+	 * against its own host (plan 2026-09-24 B4).
+	 */
+	const ownRow = $derived(connections.find((c) => c.id === connectionId))
+	/** Only a host on this machine can be updated from this machine. */
+	const ollamaIsLocal = $derived(isLoopbackAddress(ownRow?.baseUrl ?? ""))
+	/** An answer for another connection's view, or for the legacy path. */
+	const notOurs = (msg: { connectionId?: number | null } | undefined) =>
+		msg?.connectionId != null && msg.connectionId !== connectionId
 
 	// ── The address field, revealed by "Change address" ─────────────────────
 	const savedAddress = $derived(
 		isKcpp
 			? (koboldCppSettingsCtx.settings?.koboldCppManagerBaseUrl ?? "")
-			: (ollamaSettingsCtx.settings?.ollamaManagerBaseUrl ?? "")
+			: (ownRow?.baseUrl ?? "")
 	)
 	let showAddress = $state(false)
 	let savingAddress = $state(false)
@@ -212,7 +245,6 @@
 		})
 	)
 	const tabs = $derived(managedTabs(stage))
-	let tab = $state("models")
 
 	// ── The status card's three lines ───────────────────────────────────────
 	// The uptime is a clock, not a fact that arrives with a push: derived from
@@ -235,6 +267,16 @@
 			},
 			now
 		)
+	)
+	/** Offline outranks whatever the process last said: nothing can run. */
+	const statusLine = $derived(
+		offline
+			? {
+					dot: "quiet" as StatusDot,
+					label: "Offline",
+					meta: "Switched off"
+				}
+			: processLine
 	)
 	const loadedLine = $derived(kcppLoadedLine(resident?.resident))
 	const perfLine = $derived(kcppPerfLine(perf))
@@ -284,23 +326,19 @@
 	)
 
 	/**
-	 * This runtime's own rows, out of the list.
-	 *
-	 * KoboldCPP has two — the text endpoint this view IS, and an image sibling
-	 * the index folds into it — and the Models tab lists both under their own
-	 * headings. Ollama has one, so `imageConnection` is undefined and the
-	 * heading is dropped with it.
+	 * The endpoint this view IS. One row per runtime: a KoboldCPP's text and
+	 * image models are both its `models`, each carrying its modality, and the
+	 * Models tab lays them out in lanes.
 	 */
 	const textConnection = $derived(
 		connections.find((c) => c.id === connectionId)
 	)
-	const imageConnection = $derived(
-		connections.find(
-			(c) =>
-				c.id !== connectionId &&
-				managedConnectionIds.includes(c.id) &&
-				c.modality === "image-gen"
-		)
+	/**
+	 * Other Ollama connections to this same host — see `duplicateOllamaHosts`.
+	 * A managed KoboldCPP never has one: the boot fold keeps it to one row.
+	 */
+	const sameHostRows = $derived(
+		kind === "ollama" ? duplicateOllamaHosts(textConnection, connections) : []
 	)
 
 	let showDetails = $state(false)
@@ -323,7 +361,12 @@
 	// ── Presses ─────────────────────────────────────────────────────────────
 	function startProcess() {
 		starting = true
-		socket.emit("koboldcpp:startSubprocess", {})
+		// Offline = switched off with the install kept: Start turns the
+		// manager back on in the same call (ruled 2026-09-24).
+		socket.emit(
+			"koboldcpp:startSubprocess",
+			offline ? { enable: true } : {}
+		)
 	}
 	function stopProcess() {
 		stopping = true
@@ -339,10 +382,7 @@
 			socket.emit("koboldcpp:version", {
 				baseUrl: addressField.trim() || undefined
 			})
-		else
-			socket.emit("ollama:version", {
-				baseUrl: addressField.trim() || undefined
-			})
+		else socket.emit("ollama:version", { connectionId })
 	}
 	function saveAddress() {
 		if (!addressField.trim()) {
@@ -350,11 +390,9 @@
 			return
 		}
 		savingAddress = true
-		if (isKcpp)
-			socket.emit("koboldcpp:setBaseUrl", {
-				baseUrl: addressField.trim()
-			})
-		else socket.emit("ollama:setBaseUrl", { baseUrl: addressField.trim() })
+		// KoboldCPP only: an Ollama connection's address is its own form's
+		// Base URL field, on the Settings tab.
+		socket.emit("koboldcpp:setBaseUrl", { baseUrl: addressField.trim() })
 	}
 	/** Back to "managed or external?" — the setup screen chooses again. */
 	function reconfigure() {
@@ -440,41 +478,40 @@
 		binaryUpdateAvailable = !!msg.isUpdateAvailable
 	}
 	function handleOllamaVersion(msg: Sockets.Ollama.Version.Response) {
+		if (notOurs(msg)) return
 		isTesting = false
 		ollamaVersion = msg.version ?? null
 		ollamaReachable = !!msg.version
 	}
-	function handleOllamaVersionError() {
+	function handleOllamaVersionError(msg: Sockets.ErrorResponse) {
+		// The server scopes this error with the connection it was about.
+		if (notOurs(msg as { connectionId?: number | null })) return
 		isTesting = false
 		ollamaReachable = false
 	}
 	function handleOllamaModels(msg: Sockets.Ollama.ModelsList.Response) {
+		if (notOurs(msg)) return
 		ollamaModelCount = msg.models?.length ?? 0
 	}
 	function handleOllamaRunning(
 		msg: Sockets.Ollama.ListRunningModels.Response
 	) {
+		if (notOurs(msg)) return
 		ollamaRunningCount = msg.runningModels?.length ?? 0
-	}
-	function handleOllamaSetBaseUrl(msg: Sockets.Ollama.SetBaseUrl.Response) {
-		savingAddress = false
-		if (msg.success) {
-			toaster.success({ title: "Address updated" })
-			showAddress = false
-			checkOllama()
-		} else toaster.error({ title: "Couldn't save the address" })
 	}
 	function handleOllamaUpdate(
 		msg: Sockets.Ollama.IsUpdateAvailable.Response
 	) {
+		if (notOurs(msg)) return
 		ollamaUpdateAvailable = !!msg.isUpdateAvailable
+		ollamaLatestVersion = msg.latestVersion ?? null
 	}
 
 	function checkOllama() {
 		isTesting = true
-		socket.emit("ollama:version", {})
-		socket.emit("ollama:modelsList", {})
-		socket.emit("ollama:listRunningModels", {})
+		socket.emit("ollama:version", { connectionId })
+		socket.emit("ollama:modelsList", { connectionId })
+		socket.emit("ollama:listRunningModels", { connectionId })
 	}
 
 	/**
@@ -557,10 +594,6 @@
 				"ollama:listRunningModels",
 				handleOllamaRunning
 			),
-			declareInterest<"ollama:setBaseUrl">(
-				"ollama:setBaseUrl",
-				handleOllamaSetBaseUrl
-			),
 			declareInterest<"ollama:isUpdateAvailable">(
 				"ollama:isUpdateAvailable",
 				handleOllamaUpdate
@@ -579,13 +612,11 @@
 	/**
 	 * A tab opening another connection.
 	 *
-	 * `KoboldCppModelsTab`'s Image list is the only way to the
-	 * `koboldcpp_managed_image` row — U1 hides it from the index, because one
-	 * install is one row there. That tab navigates the way it always has, by
-	 * writing `digest.connectionId` and opening the Connections view, and the
-	 * sidebar only READS the digest when it mounts — so from inside an
-	 * already-open Connections view the press did nothing at all. Consumed
-	 * here instead, which is the one place that knows a managed view is open.
+	 * `KoboldCppModelsTab` navigates by writing `digest.connectionId` and
+	 * opening the Connections view, and the sidebar only READS the digest when
+	 * it mounts — so from inside an already-open Connections view the press
+	 * would do nothing. Consumed here instead, which is the one place that
+	 * knows a managed view is open.
 	 */
 	$effect(() => {
 		const wanted = panelsCtx?.digest?.connectionId
@@ -612,9 +643,74 @@
 	onMount(() => {
 		if (!isAdmin || isKcpp) return
 		checkOllama()
-		socket.emit("ollama:isUpdateAvailable", {})
+		socket.emit("ollama:isUpdateAvailable", { connectionId })
 	})
 </script>
+
+<!--
+	The Ollama Settings tab's own part: the version, whether a newer one exists,
+	and how to get it. Name and address are the connection form below it — the
+	same fields every connection has (plan 2026-09-24 C4). This replaced the
+	legacy managed-Ollama page (logo hero, orange panel, a second address
+	field that wrote the manager's global).
+-->
+{#snippet ollamaVersionSection()}
+	<section class="panel-card flex flex-col gap-2" aria-label="Version">
+		<div class="flex min-w-0 flex-wrap items-center gap-2 text-sm">
+			<span class="font-medium">Version</span>
+			<span class="text-surface-600-400">
+				{ollamaVersion ??
+					(ollamaReachable === false ? "not reachable" : "…")}
+			</span>
+			{#if ollamaUpdateAvailable && ollamaLatestVersion}
+				<span class="text-surface-600-400">·</span>
+				<span
+					class="preset-tonal-primary rounded-full px-2 py-0.5 text-[11px]"
+				>
+					{ollamaLatestVersion} available
+				</span>
+			{/if}
+		</div>
+		{#if ollamaUpdateAvailable && !ollamaIsLocal}
+			<p class="text-surface-600-400 text-xs">
+				This Ollama runs on another machine — update it there.
+			</p>
+		{/if}
+		<div class="flex flex-wrap items-center gap-2">
+			{#if ollamaUpdateAvailable && ollamaIsLocal}
+				<a
+					class="btn btn-sm preset-tonal-primary"
+					href="https://ollama.com/download"
+					target="_blank"
+					rel="noopener noreferrer"
+				>
+					<Icons.Download size={13} aria-hidden="true" />
+					Download update
+				</a>
+			{/if}
+			<button
+				type="button"
+				class="btn btn-sm preset-tonal"
+				onclick={() => {
+					checkOllama()
+					socket.emit("ollama:isUpdateAvailable", { connectionId })
+				}}
+				disabled={isTesting}
+			>
+				{#if isTesting}
+					<Icons.Loader2 size={13} class="animate-spin" />
+				{:else}
+					<Icons.RefreshCw size={13} aria-hidden="true" />
+				{/if}
+				Check for updates
+			</button>
+		</div>
+		<p class="text-surface-600-400 text-[11px]">
+			Ollama is developed and owned by Ollama, Inc. Serene Pub is an
+			independent integration, not affiliated with or endorsed by it.
+		</p>
+	</section>
+{/snippet}
 
 {#snippet statusDot(dot: StatusDot)}
 	<span
@@ -660,30 +756,46 @@
 		backLabel="Back to connections"
 		actionsLabel={label}
 		primaryAction={serviceChip}
-		{actions}
+		menuItems={[
+			{ label: "Rename", icon: Icons.Pencil, onSelect: rename },
+			{
+				label: "Refresh models",
+				icon: Icons.RefreshCw,
+				onSelect: onRefreshModels
+			},
+			{ separator: true },
+			{
+				label: isKcpp
+					? `Remove ${label} from this pub`
+					: "Remove this connection",
+				icon: Icons.Trash2,
+				destructive: true,
+				onSelect: () => (confirmRemove = true)
+			}
+		]}
 	/>
 
 	<div class="flex min-h-0 flex-1 flex-col gap-3">
 		<!-- ── The status card ──────────────────────────────────────────── -->
 		<!-- Not before a binary is recorded: the process line would say
 		     "Stopped" and offer Start with nothing on disk to start. -->
-		{#if isKcpp && isManaged && hasBinary && processLine}
+		{#if isKcpp && isManaged && hasBinary && statusLine}
 			<section class="panel-card flex flex-col gap-2" aria-label="Status">
 				<div class="flex min-w-0 items-center gap-2">
-					{@render statusDot(processLine.dot)}
+					{@render statusDot(statusLine.dot)}
 					<span class="shrink-0 text-sm font-medium">
-						{processLine.label}
+						{statusLine.label}
 					</span>
-					{#if processLine.meta}
+					{#if statusLine.meta}
 						<span
 							class="text-surface-600-400 min-w-0 flex-1 truncate text-xs"
 						>
-							· {processLine.meta}
+							· {statusLine.meta}
 						</span>
 					{:else}
 						<span class="flex-1"></span>
 					{/if}
-					{#if subStatus?.status === "running" || subStatus?.status === "starting" || subStatus?.status === "stopping"}
+					{#if !offline && (subStatus?.status === "running" || subStatus?.status === "starting" || subStatus?.status === "stopping")}
 						<button
 							type="button"
 							class="btn btn-sm preset-tonal shrink-0"
@@ -731,7 +843,7 @@
 					{#if loadedLine.loaded}
 						<button
 							type="button"
-							class="btn btn-sm hover:preset-tonal text-surface-400 shrink-0"
+							class="btn btn-sm hover:preset-tonal text-surface-600-400 shrink-0"
 							onclick={unloadModel}
 							disabled={unloading}
 						>
@@ -758,7 +870,7 @@
 						</span>
 						<button
 							type="button"
-							class="btn btn-sm hover:preset-tonal text-surface-400 shrink-0"
+							class="btn btn-sm hover:preset-tonal text-surface-600-400 shrink-0"
 							aria-expanded={showDetails}
 							onclick={() => (showDetails = !showDetails)}
 						>
@@ -829,7 +941,7 @@
 					</button>
 					<button
 						type="button"
-						class="btn btn-sm hover:preset-tonal text-surface-400"
+						class="btn btn-sm hover:preset-tonal text-surface-600-400"
 						aria-expanded={showAddress}
 						onclick={() => (showAddress = !showAddress)}
 					>
@@ -855,14 +967,16 @@
 						</span>
 					{/if}
 					{#if ollamaUpdateAvailable}
-						<a
+						<!-- To the version line on Settings, which says what
+						     the update is and whether it can be had from here
+						     (plan 2026-09-24 C4). -->
+						<button
+							type="button"
 							class="preset-tonal-primary shrink-0 rounded-full px-2 py-0.5 text-[11px]"
-							href="https://ollama.com/download"
-							target="_blank"
-							rel="noopener noreferrer"
+							onclick={() => (tab = "settings")}
 						>
 							Update available
-						</a>
+						</button>
 					{/if}
 				</div>
 				{#if ollamaReachable === false}
@@ -883,11 +997,12 @@
 							{/if}
 							Check again
 						</button>
+						<!-- The address is this connection's own Base URL, on
+						     the Settings tab — one field, not a second copy. -->
 						<button
 							type="button"
-							class="btn btn-sm hover:preset-tonal text-surface-400"
-							aria-expanded={showAddress}
-							onclick={() => (showAddress = !showAddress)}
+							class="btn btn-sm hover:preset-tonal text-surface-600-400"
+							onclick={() => (tab = "settings")}
 						>
 							Change address
 						</button>
@@ -905,9 +1020,6 @@
 							/>
 						</a>
 					</div>
-					{#if showAddress}
-						{@render addressRow("http://localhost:11434")}
-					{/if}
 				{/if}
 			</section>
 		{/if}
@@ -951,7 +1063,7 @@
 					</button>
 					<button
 						type="button"
-						class="btn btn-sm hover:preset-tonal text-surface-400"
+						class="btn btn-sm hover:preset-tonal text-surface-600-400"
 						onclick={reconfigure}
 					>
 						Let Serene Pub run KoboldCPP
@@ -959,6 +1071,41 @@
 				</div>
 			</div>
 		{:else}
+			{#if sameHostRows.length}
+				<!-- The rename that merged `ollama-embeddings` into `ollama` was
+				     in place, so a host that had both is shown twice. Said rather
+				     than left for somebody to notice two identical rows. Delete is
+				     already guarded: its confirmation names any default the row
+				     serves. -->
+				<div
+					class="panel-card preset-tonal-warning flex flex-col gap-2 text-sm"
+					role="status"
+				>
+					<p>
+						{sameHostRows.length === 1
+							? "Another connection points at this same Ollama:"
+							: "Other connections point at this same Ollama:"}
+					</p>
+					<ul class="flex flex-col gap-1">
+						{#each sameHostRows as row (row.id)}
+							<li>
+								<button
+									type="button"
+									class="anchor underline underline-offset-2"
+									onclick={() => row.id != null && onOpenConnection(row.id)}
+								>
+									{row.name}
+								</button>
+							</li>
+						{/each}
+					</ul>
+					<p class="text-xs">
+						One Ollama connection serves both chat and embeddings for its host,
+						so you only need one. Either can be deleted — check which one is
+						set as a default first.
+					</p>
+				</div>
+			{/if}
 			<PanelTabStrip
 				tabs={tabStrip}
 				bind:value={tab}
@@ -976,11 +1123,11 @@
 						<ManagedModelsTab
 							kind={isKcpp ? "koboldcpp" : "ollama"}
 							connection={textConnection}
-							{imageConnection}
 							{capabilityDefaults}
 							{isAdmin}
 							onOpenModel={(c, m) => onOpenModel?.(c, m)}
-							onGetModels={() => onGetModels(connectionId)}
+							onSetDefault={(cap, c, m) => onSetDefault?.(cap, c, m)}
+							onGetModels={() => (tab = "get")}
 							onRefresh={onRefreshModels}
 						/>
 					{/if}
@@ -992,19 +1139,16 @@
 					hidden={tab !== "get"}
 				>
 					{#if tab === "get"}
-						<div class="flex flex-col gap-2 py-4">
-							<button
-								type="button"
-								class="btn preset-tonal w-full"
-								onclick={() => onGetModels(connectionId)}
-							>
-								<Icons.Download size={16} aria-hidden="true" />
-								Get a model
-							</button>
-							<p class="text-surface-600-400 text-xs">
-								Recommended lists and Hugging Face, scoped to
-								this connection.
-							</p>
+						<!-- The one finder (R3), in place and scoped to this
+						     connection — it was a button that left the view
+						     for the same finder (plan 2026-09-24 C3). -->
+						<div class="flex flex-col py-3">
+							<ModelFinderView
+								{connectionId}
+								inTab
+								onBack={() => (tab = "models")}
+								{onOpenConnection}
+							/>
 						</div>
 					{/if}
 				</div>
@@ -1015,22 +1159,17 @@
 					hidden={tab !== "downloads"}
 				>
 					{#if tab === "downloads"}
-						<!-- A door, not a list: the downloads view is ONE list
-						     across every destination (R4), so a per-manager copy
-						     here would be the split the ruling removed. -->
-						<div class="flex flex-col gap-2 py-4">
-							<button
-								type="button"
-								class="btn preset-tonal w-full"
-								onclick={onOpenDownloads}
-							>
-								<Icons.Download size={16} aria-hidden="true" />
-								See downloads
-							</button>
-							<p class="text-surface-600-400 text-xs">
-								Everything this pub is fetching, for every
-								connection, in one list.
-							</p>
+						<!-- The ONE downloads list, in place (R4): every
+						     destination, never a per-runtime copy — NOMENCLATURE
+						     §23 retired the per-manager Downloads tab because each
+						     showed only what it had started. It was a single
+						     button leading to this same list (plan 2026-09-24
+						     C3). -->
+						<div class="flex flex-col py-3">
+							<DownloadsView
+								embedded
+								onBack={() => (tab = "models")}
+							/>
 						</div>
 					{/if}
 				</div>
@@ -1049,7 +1188,7 @@
 										(pickerRequested = true)}
 								/>
 							{:else}
-								<OllamaSettingsTab />
+								{@render ollamaVersionSection()}
 							{/if}
 
 							{@render connectionSettings?.()}
@@ -1082,7 +1221,9 @@
 										<span
 											class="text-error-500 block text-sm"
 										>
-											Remove {label} from this pub
+											{isKcpp
+												? `Remove ${label} from this pub`
+												: "Remove this connection"}
 										</span>
 										<span
 											class="text-surface-600-400 block text-xs"
@@ -1124,28 +1265,6 @@
 	</span>
 {/snippet}
 
-{#snippet actions()}
-	<button type="button" class="popover-menu-btn btn" onclick={rename}>
-		<Icons.Pencil size={16} aria-hidden="true" />
-		Rename
-	</button>
-	<button
-		type="button"
-		class="popover-menu-btn btn"
-		onclick={onRefreshModels}
-	>
-		<Icons.RefreshCw size={16} aria-hidden="true" />
-		Refresh models
-	</button>
-	<button
-		type="button"
-		class="popover-menu-btn btn text-error-500"
-		onclick={() => (confirmRemove = true)}
-	>
-		<Icons.Trash2 size={16} aria-hidden="true" />
-		Remove {label} from this pub
-	</button>
-{/snippet}
 
 <Dialog open={confirmRemove} onOpenChange={(e) => (confirmRemove = e.open)}>
 	<Portal>
@@ -1173,7 +1292,7 @@
 						class="btn preset-tonal"
 						onclick={() => (confirmRemove = false)}
 					>
-						Keep {label}
+						{isKcpp ? `Keep ${label}` : "Keep it"}
 					</button>
 					<button
 						type="button"

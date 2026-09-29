@@ -20,10 +20,9 @@
  * `connection_models` check constraint refuses anyway — and which would mean
  * "the server's default model" on most services and an error on the rest.
  *
- * ⚠ It also no longer DISCARDS. Until 2026-09-23 `readOne` kept two fields and
- * dropped every other key on the entry, which is why nothing downstream could
- * say how big a context was or what a message cost — the facts arrived on every
- * sync and died here. `readModelFacts` reads them; `modelSync` stores them.
+ * ⚠ It never DISCARDS the rest of an entry: dropping its other keys leaves
+ * nothing downstream able to say how big a context is or what a message
+ * costs. `readModelFacts` reads them; `modelSync` stores them.
  */
 import { readModelFacts, type ModelFacts } from "./modelFacts"
 
@@ -41,6 +40,14 @@ export interface ProbedModel {
 	 * `connection_models.context_window`.
 	 */
 	facts?: ModelFacts
+	/**
+	 * What the model is FOR, when the adapter could tell — `text-gen`,
+	 * `embeddings`, `image-gen`. Read only from an explicit `modality` string
+	 * on the entry: each adapter translates its host's own vocabulary (Ollama's
+	 * `capabilities`, the managed KoboldCPP's model registry) into this word, so this
+	 * reader never has to learn a host's dialect.
+	 */
+	modality?: string
 }
 
 /** Read one entry, in any of the shapes the adapters produce. */
@@ -61,7 +68,16 @@ function readOne(entry: unknown): ProbedModel | null {
 	const name =
 		typeof e.name === "string" && e.name.trim() ? e.name.trim() : model
 	const facts = readModelFacts(e)
-	return facts ? { model, name, facts } : { model, name }
+	const modality =
+		typeof e.modality === "string" && e.modality.trim()
+			? e.modality.trim()
+			: undefined
+	return {
+		model,
+		name,
+		...(facts ? { facts } : {}),
+		...(modality ? { modality } : {})
+	}
 }
 
 /**

@@ -177,7 +177,7 @@
 					</button>
 					{#each defaults as capability (capability)}
 						<span
-							class="preset-tonal-primary text-primary-900 dark:text-primary-300 flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-bold"
+							class="preset-tonal-primary text-primary-900 dark:text-primary-300 flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-bold"
 						>
 							<Icons.Star
 								size={9}
@@ -189,7 +189,7 @@
 					{/each}
 					{#if missing}
 						<span
-							class="border-surface-300-700 text-surface-600-400 shrink-0 rounded border px-1.5 py-0.5 text-[10px]"
+							class="border-surface-300-700 text-surface-600-400 shrink-0 rounded border px-1.5 py-0.5 text-[11px]"
 						>
 							No longer listed
 						</span>
@@ -244,14 +244,14 @@
 				<span role="cell" class="flex min-w-0 items-center gap-1.5">
 					{#if model.facts?.inputModalities?.includes("image")}
 						<span
-							class="preset-tonal-surface text-surface-700-300 shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold"
+							class="preset-tonal-surface text-surface-700-300 shrink-0 rounded px-1.5 py-0.5 text-[11px] font-semibold"
 						>
 							Vision
 						</span>
 					{/if}
 					{#if display.parameters}
 						<span
-							class="preset-tonal-surface text-surface-700-300 shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold"
+							class="preset-tonal-surface text-surface-700-300 shrink-0 rounded px-1.5 py-0.5 text-[11px] font-semibold"
 						>
 							{display.parameters}
 						</span>

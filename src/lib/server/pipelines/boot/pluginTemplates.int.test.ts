@@ -312,3 +312,130 @@ describe("the manifest is stored verbatim, so the rule runs again here", () => {
 		)
 	})
 })
+
+/**
+ * Owner ruling 2026-09-27: every OBJECT variable gets a layout of its own,
+ * automatically — a package that declares one and ships no layout for it
+ * still gets a "JSON" row in the picker. Primitives get none.
+ */
+describe("an object variable gets an automatic layout", () => {
+	const VP = "acme.vars"
+	const OBJECT_VAR = `${VP}:var/ledger@1`
+	const PRIMITIVE_VAR = `${VP}:var/mood@1`
+	const AUTO_ID = `${VP}:template/ledger-json@1`
+	const varsManifest = (over: Record<string, unknown> = {}) => ({
+		slug: VP,
+		variables: [
+			{
+				id: OBJECT_VAR,
+				scope: { ledger: { type: "record", of: { type: "string" } } },
+				sample: { Rent: "Due Friday." }
+			},
+			{
+				id: PRIMITIVE_VAR,
+				scope: { mood: { type: "string" } },
+				sample: "calm"
+			}
+		],
+		...over
+	})
+	const rowsFor = async (variableId: string) =>
+		(await db
+			.select()
+			.from(schema.pipelineVariableTemplates)
+			.where(eq(schema.pipelineVariableTemplates.variableId, variableId))) as any[]
+	let autoRowId: number
+
+	it("projects one immutable JSON row for the object variable, none for the primitive", async () => {
+		// Installed and NOT enabled: the row follows the variable, which is
+		// registered while the package is installed.
+		await install({ pluginId: VP, enabled: false, manifest: varsManifest() })
+		const report = await syncPluginTemplates(db)
+		expect(report.refused).toEqual([])
+		expect(report.projected).toContain(AUTO_ID)
+
+		const [row, ...more] = await rowsFor(OBJECT_VAR)
+		expect(more).toEqual([])
+		expect(row.templateId).toBe(AUTO_ID)
+		expect(row.name).toBe("JSON")
+		expect(row.source).toBe("{{{json ledger}}}")
+		expect(row.engine).toBe(HANDLEBARS)
+		expect(row.isImmutable).toBe(true)
+		expect(row.withdrawnAt).toBeNull()
+		expect(row.ownerPluginId).not.toBeNull()
+		autoRowId = row.id
+
+		expect(await rowsFor(PRIMITIVE_VAR)).toEqual([])
+	})
+
+	it("is idempotent — a re-sync keeps the one row and its id", async () => {
+		await syncPluginTemplates(db)
+		const report = await syncPluginTemplates(db)
+		expect(report.projected).not.toContain(AUTO_ID)
+		const rows = await rowsFor(OBJECT_VAR)
+		expect(rows.map((r) => r.id)).toEqual([autoRowId])
+	})
+
+	it("an edited copy survives a re-sync, and the automatic row itself stays as shipped", async () => {
+		const {
+			duplicateVariableTemplate,
+			updateVariableTemplate,
+			VariableTemplateNotUsableError
+		} = await import("$lib/server/pipelines/entities/variableTemplates")
+		const copy = await duplicateVariableTemplate(db, autoRowId, "Ledger prose")
+		await updateVariableTemplate(db, copy.id, {
+			source: "{{#each ledger}}{{@key}}: {{this}}\n{{/each}}"
+		})
+		await expect(
+			updateVariableTemplate(db, autoRowId, { source: "edited in place" })
+		).rejects.toBeInstanceOf(VariableTemplateNotUsableError)
+
+		await syncPluginTemplates(db)
+		const { projectObjectVariableLayouts } = await import("./registrySync")
+		const [plugin] = await db
+			.select()
+			.from(schema.plugins)
+			.where(eq(schema.plugins.pluginId, VP))
+		expect(
+			await projectObjectVariableLayouts(db, varsManifest(), VP, plugin!.id)
+		).toEqual([])
+
+		const rows = await rowsFor(OBJECT_VAR)
+		expect(rows.length).toBe(2)
+		const kept = rows.find((r) => r.id === copy.id)
+		expect(kept.source).toBe("{{#each ledger}}{{@key}}: {{this}}\n{{/each}}")
+		expect(kept.name).toBe("Ledger prose")
+		expect(rows.find((r) => r.id === autoRowId).source).toBe("{{{json ledger}}}")
+	})
+
+	it("steps aside when the package ships its own layout for the variable", async () => {
+		const own = {
+			id: `${VP}:template/ledger-lines@1`,
+			kind: "variables",
+			variableId: OBJECT_VAR,
+			engine: HANDLEBARS,
+			label: "Lines",
+			body: "{{#each ledger}}{{@key}}{{/each}}"
+		}
+		await install({
+			pluginId: VP,
+			enabled: true,
+			manifest: varsManifest({ templates: [own] })
+		})
+		const report = await syncPluginTemplates(db)
+		expect(report.projected).toContain(own.id)
+		expect(report.withdrawn).toContain(AUTO_ID)
+
+		await install({ pluginId: VP, enabled: false, manifest: varsManifest() })
+		const back = await syncPluginTemplates(db)
+		expect(back.restored).toContain(AUTO_ID)
+	})
+
+	it("is withdrawn, never deleted, when the package is uninstalled", async () => {
+		await db.delete(schema.plugins).where(eq(schema.plugins.pluginId, VP))
+		const report = await syncPluginTemplates(db)
+		expect(report.withdrawn).toContain(AUTO_ID)
+		const row = (await rowsFor(OBJECT_VAR)).find((r) => r.id === autoRowId)
+		expect(row.withdrawnAt).toBeInstanceOf(Date)
+	})
+})

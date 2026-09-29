@@ -126,6 +126,7 @@ type OllamaQuants = Record<
 	string,
 	{
 		modelName?: string
+		connectionId?: number | null
 		status?: string
 		isDone: boolean
 		files?: Record<string, { total: number; completed: number }>
@@ -150,6 +151,11 @@ export function ollamaItems(quants: OllamaQuants | undefined): DownloadItem[] {
 			source: "ollama",
 			destinationLabel: "Ollama",
 			name: pull.modelName || key,
+			// Keyed by connection since plan 2026-09-24 B4: the same tag
+			// pulled on two hosts is two downloads, and cancel names both.
+			...(pull.connectionId != null
+				? { connectionId: pull.connectionId }
+				: {}),
 			downloadedBytes: completed,
 			totalBytes: total || undefined,
 			state: pull.isDone
@@ -378,7 +384,13 @@ class DownloadsStore {
 				break
 			case "ollama":
 				socket.emit("ollama:cancelPull", {
-					modelName: item.id.slice("ollama:".length)
+					modelName:
+						item.connectionId != null
+							? item.name
+							: item.id.slice("ollama:".length),
+					...(item.connectionId != null
+						? { connectionId: item.connectionId }
+						: {})
 				})
 				break
 			case "onnx": {

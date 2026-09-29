@@ -250,6 +250,26 @@ describe("castArrivals — the first dated thing naming each member", () => {
 		])
 	})
 
+	it("orders by the calendar, not the packed value (radix-100 collision)", () => {
+		const collide = [
+			{ id: 30, typeId: HISTORY_TYPE_ID, year: 2, month: 1, day: 1 },
+			// Day 150 of Year 1 packs past Year 2 (10000 + 15000 > 20101).
+			{ id: 31, typeId: HISTORY_TYPE_ID, year: 1, month: 1, day: 150 }
+		]
+		const items = storyItems({
+			entries: collide,
+			scenes: [
+				{ id: 40, historyEntryId: 30, participantCharacters: [9] },
+				{ id: 41, historyEntryId: 31, participantCharacters: [9] }
+			]
+		})
+		expect(items.filter((i) => i.kind === "history").map((i) => i.id)).toEqual(
+			[31, 30]
+		)
+		// Member 9 arrives at Y1 day 150, not at Y2.
+		expect(castArrivals(items).get(9)).toBe(items.find((i) => i.id === 31)!.value)
+	})
+
 	it("leaves out a member only something undated names", () => {
 		const items = storyItems({
 			entries,

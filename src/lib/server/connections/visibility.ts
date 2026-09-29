@@ -77,7 +77,7 @@ import type { ConnectionIdentity } from "$lib/shared/connections/identity"
  * Names rather than paths, because the same fact is spelled at a dozen depths:
  * `connection` is a resolved slot inside a node's receipt input, an echoed test
  * payload, and a review form field; `connectionId` is a capability default, a
- * pipeline config's provider slot, and a progress event's subject. A path list would have to
+ * pipeline config's connection slot, and a progress event's subject. A path list would have to
  * be extended by whoever adds the thirteenth, which is the failure mode this
  * whole module exists to remove.
  *

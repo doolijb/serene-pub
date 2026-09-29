@@ -16,7 +16,7 @@ import { contextBudgetFrom } from "$lib/server/pipelines/runtime/contextWindow"
 import { slotModelId } from "$lib/shared/connections/slotRef"
 import { i18nText } from "$lib/server/pipelines/config/panel/declarations"
 import * as schema from "$lib/server/db/schema"
-import { mayWrite, type ScopeKind } from "@serene-pub/sdk"
+import { mayWrite } from "@serene-pub/sdk"
 import {
 	choiceSets,
 	choicesFor
@@ -30,7 +30,10 @@ import {
 } from "$lib/server/pipelines/config/panel/declarations"
 import { optionId } from "$lib/server/pipelines/config/panel/ids"
 import { promptPoolKeyFor } from "$lib/server/pipelines/entities/promptPool"
-import { acceptedEngines } from "$lib/shared/pipelines/templateEngines"
+import {
+	acceptedEnginesOf,
+	CORE_TEMPLATE_ENGINE
+} from "$lib/shared/pipelines/templateEngines"
 import {
 	visibleTo,
 	writeScopeFor
@@ -60,7 +63,7 @@ const addr = (nodeKey: string, slot: string, path: string) =>
  * The three layers, as lookups (12 §2 as simplified 2026-08-24).
  *
  * Author defaults come off the declarations; the selected config projects in
- * at `preset` (its historical key); the session's overrides are the only scoped
+ * at `config` (`preset` until 2026-09-26); the session's overrides are the only scoped
  * rows left. The former instance and user maps are gone with their layers —
  * migration 0140 folded instance rows into configs and removed the rest.
  */
@@ -287,7 +290,7 @@ export async function namespaceView(
 			source = "session"
 		} else if (chain.preset.has(key)) {
 			value = chain.preset.get(key)
-			source = "preset"
+			source = "config"
 		}
 
 		// The selected prompt row rides along on a prompts-ref, so the
@@ -415,6 +418,10 @@ export async function namespaceView(
 							name: contextTemplateRow.name,
 							source: (contextTemplateRow.source ?? "") as string,
 							readOnly: !!contextTemplateRow.isImmutable,
+							// The language it is written in, so the editor
+							// completes and lints the right one (P7).
+							engine: (contextTemplateRow.engine ??
+								CORE_TEMPLATE_ENGINE) as string,
 							// Read back off the choice the picker already
 							// computed rather than re-deriving it here — two
 							// places deciding "which group is this in" is two
@@ -447,7 +454,18 @@ export async function namespaceView(
 			// written in are a fact about the slot, and the button that asks
 			// for one is shown when nothing is selected.
 			...(d.control === "context-template-ref"
-				? { templateEngines: acceptedEngines(d) }
+				? { acceptedEngines: acceptedEnginesOf(d) }
+				: {}),
+			// Typed templates P3: what the template can reference here.
+			...(d.control === "context-template-ref" && d.templateScope
+				? { scope: d.templateScope }
+				: {}),
+			// P7: who supplies each name, as labels, and the untyped feeds.
+			...(d.control === "context-template-ref" && d.templateDeclarers
+				? { scopeDeclarers: d.templateDeclarers }
+				: {}),
+			...(d.control === "context-template-ref" && d.templateUntyped?.length
+				? { scopeUntyped: d.templateUntyped.map((label) => ({ label })) }
 				: {}),
 			...(promptRow
 				? {
@@ -516,15 +534,16 @@ export async function namespaceView(
 			source,
 			// The same decision resolveWriteScope enforces, asked without
 			// throwing: session writes need the session column and the non-admin
-			// prompts line; config writes are the admin's, on the preset column
+			// prompts line; config writes are the admin's, on the config column
 			// (a config's values are what the whole instance resolves — R-10
-			// folded `instance` into `preset`, the selected config).
+			// folded `instance` into `config`, the selected config; spelled
+			// `preset` until 2026-09-26).
 			writable:
 				effScope === "session"
-					? mayWrite(d.matrixSlot, "session" as ScopeKind) &&
+					? mayWrite(d.matrixSlot, "session") &&
 						(viewer.isAdmin || d.matrixSlot === "prompts")
 					: viewer.isAdmin &&
-						mayWrite(d.matrixSlot, "preset" as ScopeKind),
+						mayWrite(d.matrixSlot, "config"),
 			overriddenHere:
 				effScope === "session"
 					? !!chain.session?.has(key)
@@ -641,16 +660,17 @@ export async function namespaceView(
 	/**
 	 * Which options carry the window: a `share` control, and — since the
 	 * shares moved onto the sources (R-7 P5) — each source's own `share`
-	 * number in the weights facet. The number beside a relative share is the
-	 * window it is a share OF, which is the one fact that makes a ratio
-	 * readable.
+	 * number in the weights facet — bare, or band-namespaced on a source
+	 * publishing more than one band (`recalledLinesShare`, NOMENCLATURE §7).
+	 * The number beside a relative share is the window it is a share OF,
+	 * which is the one fact that makes a ratio readable.
 	 */
 	const windowCarriers = new Set(
 		decls
 			.filter(
 				(d) =>
 					d.control === "share" ||
-					(d.path === "share" &&
+					((d.path === "share" || /^[a-z][A-Za-z0-9]*Share$/.test(d.path)) &&
 						d.facet === "weights" &&
 						d.control === "number")
 			)
@@ -785,7 +805,7 @@ export async function namespaceView(
 				: null
 		})),
 		modeActions: await (async () => {
-			const { genreOfSpec, listGenreTriggers } = await import(
+			const { genreOfSpec, listGenreActions } = await import(
 				"$lib/server/pipelines/entities/sessionGenres"
 			)
 			const genreId = await genreOfSpec(db, at.slug)
@@ -793,7 +813,7 @@ export async function namespaceView(
 			// A disabled plugin's actions are not offered to include (R67).
 			const { disabledPlugins } = await import("$lib/server/plugins/disabledPlugins")
 			const off = await disabledPlugins(db)
-			return (await listGenreTriggers(db, genreId))
+			return (await listGenreActions(db, genreId))
 				.filter((t) => !off.ownsId(t.specSlug))
 				.map((t) => ({
 				key: t.key,

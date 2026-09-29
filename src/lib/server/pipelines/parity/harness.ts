@@ -587,7 +587,7 @@ export const ragParityPipeline = () =>
 			)
 			// Ordering within the mechanism is `rank`'s job; fitting the result to a
 			// budget is `select`'s, and it is the same node the keyword path
-			// uses. Two stages rather than one because they answer different
+			// uses. Two steps rather than one because they answer different
 			// questions — "which of these is most relevant" and "which of them
 			// fit" — and a plugin replacing one should not have to reimplement
 			// the other.

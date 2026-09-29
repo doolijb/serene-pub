@@ -42,14 +42,14 @@ changing something specific, like the port.
 
 Settings go in a ".env" file in your DATA directory, not in this folder:
 
-      %APPDATA%\SerenePub\.env
+      %LOCALAPPDATA%\SerenePub\Data\.env
 
 ".env.example" (at the top of this folder) lists every available setting with
 an explanation; copy it to the path above and edit it there. Common ones:
 
    - PORT=3000                    change the web UI's port
    - HOST=127.0.0.1               local connections only
-   - SERENE_AUTO_OPEN=1           don't open a browser tab on startup
+   - AUTO_OPEN_CLIENT=0           don't open Serene Pub on startup
    - SERENE_PUB_DATA_DIR=...      keep your data somewhere else entirely
 
 Why the data directory and not this folder? Because an update replaces the
@@ -94,8 +94,8 @@ Uninstall
 
 - Delete this folder to remove the program.
 - Your characters, sessions and settings live separately, in
-  %APPDATA%\SerenePub — delete that too if you want everything gone, or keep it
-  to carry your data to a future install.
+  %LOCALAPPDATA%\SerenePub\Data — delete %LOCALAPPDATA%\SerenePub too if you
+  want everything gone, or keep it to carry your data to a future install.
 
 Feedback & Help
 ---------------

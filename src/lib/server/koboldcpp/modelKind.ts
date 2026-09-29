@@ -30,7 +30,7 @@
  *
  * Nothing here throws. A truncated download, a ComfyUI-format GGUF, an
  * unreadable file and a brand-new architecture all land on `unknown`, which is
- * a visible state in the Manager with a user override attached — not a silent
+ * a visible state in the managed KoboldCPP with a user override attached — not a silent
  * mis-file.
  */
 
@@ -73,7 +73,7 @@ const ARCH_KEY = "general.architecture"
  *
  * These lists WILL go stale, and a new architecture lands as `unknown` rather
  * than being guessed at. That is the designed outcome — it is also what makes
- * the Manager's "It's a text model / It's an image model" override load-bearing
+ * the managed KoboldCPP's "It's a text model / It's an image model" override load-bearing
  * rather than decorative.
  */
 const DIFFUSION_ARCHS = [

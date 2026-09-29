@@ -13,6 +13,7 @@ import { describe, expect, it } from "vitest"
 import {
 	CONNECTION_SECTIONS,
 	MODALITY_FOR_STAR_CAPABILITY,
+	modalityOfTransform,
 	SECTION_STAR_CAPABILITIES,
 	sectionForCapability,
 	sectionForModality
@@ -90,7 +91,6 @@ describe("the section table", () => {
 				"description",
 				"icon",
 				"starVerb",
-				"servicePicker",
 				"emptyMessage"
 			] as const)
 				expect(s[key], `${s.modality}.${key} is blank`).toBeTruthy()
@@ -103,7 +103,6 @@ describe("the section table", () => {
 				s.label,
 				s.description,
 				s.starVerb,
-				s.servicePicker,
 				s.emptyMessage
 			])
 				expect(v).not.toContain("—")
@@ -192,5 +191,21 @@ describe("modalityOf is an open vocabulary", () => {
 			CONNECTION_TYPE.isImage(CONNECTION_TYPE.LOCAL_ONNX_EMBEDDINGS)
 		).toBe(false)
 		expect(CONNECTION_TYPE.isImage(CONNECTION_TYPE.OPENAI)).toBe(false)
+	})
+})
+
+describe("which modality a transform belongs to", () => {
+	it("is read off what it produces, inputs included or not", () => {
+		expect(modalityOfTransform("text->text")).toBe("text-gen")
+		expect(modalityOfTransform("text+image->text")).toBe("text-gen")
+		expect(modalityOfTransform("text->image")).toBe("image-gen")
+		expect(modalityOfTransform("text+image->image")).toBe("image-gen")
+		expect(modalityOfTransform("text->embedding")).toBe("embeddings")
+		expect(modalityOfTransform("text->entities")).toBe("ner")
+	})
+
+	it("is null for a feature, and for an output no section owns", () => {
+		expect(modalityOfTransform("tools")).toBeNull()
+		expect(modalityOfTransform("text->audio")).toBeNull()
 	})
 })

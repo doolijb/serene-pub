@@ -15,7 +15,7 @@ import { requestWithInterest } from "$lib/client/sockets/interest.svelte"
  * rendered, and never appear in the control that selects it. A feature whose
  * whole surface is a picker, missing from the picker.
  *
- * The server filters on `is_selectable`, which is how `split_session` stays out
+ * The server filters on `is_selectable`, which is how `split_chat` stays out
  * of it: a transport bridge is not a text format a person chooses.
  *
  * ## The constant survives as the FALLBACK, and only as that

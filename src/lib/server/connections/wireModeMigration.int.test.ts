@@ -1,10 +1,10 @@
 /**
  * 0098: the old wire-mode flags' INTENT survives becoming a capability.
  *
- * Every one of `extra_json.useSession`, `extra_json.prerenderPrompt` and
+ * Every one of `extra_json.useChat`, `extra_json.prerenderPrompt` and
  * Anthropic's unconditional true defaulted to chat, so a connection that never
  * touched them is unaffected by the change. The one that DID touch them is what
- * this file is about: somebody who switched Session Mode off, or Prerender
+ * this file is about: somebody who switched Use Chat Mode off, or Prerender
  * Prompt on, chose text completion deliberately, and dropping the flag without
  * moving that choice would silently flip them to the other method — on the send
  * path, with nothing reporting it. Which is the same shape as the defect wire
@@ -77,9 +77,9 @@ async function migrated(
 }
 
 describe("a deliberate text-completion choice survives the change", () => {
-	it("turns KoboldCPP's useSession:false into a hand-set override", async () => {
+	it("turns KoboldCPP's useChat:false into a hand-set override", async () => {
 		const row = await migrated(CONNECTION_TYPE.KOBOLDCPP, {
-			useSession: false,
+			useChat: false,
 			stream: false
 		})
 		// ⚠ `wire_chat: false`, not `wire_completion: true`. The tie-break
@@ -89,6 +89,42 @@ describe("a deliberate text-completion choice survives the change", () => {
 			wire_chat: false
 		})
 		expect(resolveWireMode(row as any)).toBe("completion")
+	}, 60_000)
+
+	it("reads a 0.5.x row as it was written: useChat:false stays in completion mode", async () => {
+		// The exact `extra_json` 0.5.3's KoboldCppForm wrote. `useChat` is the
+		// stored key, chat-completions wire vocabulary; the 2026-08-24 session
+		// rename respelled it `useSession` with no data migration, and a 0098
+		// reading that spelling left every 0.5.x text-completion KoboldCPP
+		// connection to land on chat after the upgrade. No alias is read: the
+		// key is `useChat`, in 0.5.x and now.
+		const row = await migrated(CONNECTION_TYPE.KOBOLDCPP, {
+			stream: true,
+			useChat: false,
+			useMemory: false,
+			memory: "",
+			trimStop: true,
+			renderSpecial: false,
+			bypassEos: false,
+			grammarRetainState: false,
+			logprobs: false,
+			replaceInstructPlaceholders: false,
+			enableThinking: null
+		})
+		expect((row.capabilities as any).overrides).toEqual({
+			wire_chat: false
+		})
+		expect(resolveWireMode(row as any)).toBe("completion")
+
+		// LM Studio's 0.5.3 form wrote the same key alongside its own.
+		const lmStudio = await migrated(CONNECTION_TYPE.LM_STUDIO, {
+			stream: true,
+			think: false,
+			ttl: 60,
+			raw: true,
+			useChat: false
+		})
+		expect(resolveWireMode(lmStudio as any)).toBe("completion")
 	}, 60_000)
 
 	it("turns the OpenAI adapter's prerenderPrompt:true into the same override", async () => {
@@ -108,7 +144,7 @@ describe("a deliberate text-completion choice survives the change", () => {
 		// undo it.
 		const row = await migrated(
 			CONNECTION_TYPE.KOBOLDCPP,
-			{ useSession: false },
+			{ useChat: false },
 			{
 				overrides: { "text+image->text": false },
 				probe: {
@@ -127,19 +163,19 @@ describe("a deliberate text-completion choice survives the change", () => {
 })
 
 describe("what it deliberately leaves alone", () => {
-	it("does not touch a connection that was in session mode", async () => {
+	it("does not touch a connection that was in chat mode", async () => {
 		// Chat is what every one of those flags defaulted to and what the
 		// tie-break picks, so an explicit `true` needs no override at all —
 		// writing one would pin a value that is currently free to follow a
 		// preset or a probe.
 		const row = await migrated(CONNECTION_TYPE.KOBOLDCPP, {
-			useSession: true
+			useChat: true
 		})
 		expect(row.capabilities).toEqual({})
 		expect(resolveWireMode(row as any)).toBe("chat")
 	}, 60_000)
 
-	it("does not read an ABSENT useSession as a choice", async () => {
+	it("does not read an ABSENT useChat as a choice", async () => {
 		// `OllamaAdapter` read the same setting with two different defaults in
 		// one file and its own comment calls that a bug. Absence there is an
 		// accident, not intent, and encoding it would make the bug durable.
@@ -151,12 +187,12 @@ describe("what it deliberately leaves alone", () => {
 	it('does not read the STRING "false" as the boolean flag', async () => {
 		// ⚠ The mutation that `->>` would pass and `->` catches. `extra_json` is
 		// an untyped column the connection form spreads verbatim, and the old
-		// read was `extraJson?.useSession ?? true` — which takes a non-empty
+		// read was `extraJson?.useChat ?? true` — which takes a non-empty
 		// string as TRUTHY. So a row carrying `"false"` was in chat mode, and a
 		// text-level match would have flipped it to completion while claiming to
 		// preserve intent.
 		const row = await migrated(CONNECTION_TYPE.KOBOLDCPP, {
-			useSession: "false"
+			useChat: "false"
 		})
 		expect(row.capabilities).toEqual({})
 		expect(resolveWireMode(row as any)).toBe("chat")

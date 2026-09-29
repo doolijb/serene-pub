@@ -244,8 +244,13 @@ export interface PanelEdge {
 	otherKey: string
 	otherName: string
 	provenanceWord: string
-	/** An edge whose status is anything but active has been cut. */
+	/**
+	 * A broken edge — the one status that means the tie was cut. A resolved
+	 * or evolved edge is not cut; it says its own word (`statusWord`).
+	 */
 	cut: boolean
+	/** The status, said beside the edge when it is not `active`; else null. */
+	statusWord: string | null
 }
 
 export function panelEdges(
@@ -267,7 +272,9 @@ export function panelEdges(
 			otherKey,
 			otherName: names.get(otherKey) ?? otherKey,
 			provenanceWord: PROVENANCE_WORDS[edge.provenance],
-			cut: edge.status !== "active"
+			cut: edge.status === "broken",
+			statusWord:
+				edge.status && edge.status !== "active" ? edge.status : null
 		})
 	}
 	return rows
@@ -363,4 +370,30 @@ export function ceilingLine(facts: CeilingFacts): string | null {
 	if (facts.cappedType && facts.ceiling != null)
 		parts.push(`${facts.cappedType} hit the ceiling of ${facts.ceiling}`)
 	return parts.join(" · ")
+}
+
+/** What a Rebuild would delete, counted by the kinds of ends a link joins. */
+export interface LinkCounts {
+	total: number
+	entryToEntry: number
+	castToEntry: number
+}
+
+/**
+ * The counts after one link came (`+1`) or went (`-1`), so the Rebuild
+ * warning stays true without re-reading the whole graph.
+ */
+export function bumpLinkCounts(
+	counts: LinkCounts,
+	rel: Pick<RelationshipLike, "from" | "to">,
+	by: 1 | -1
+): LinkCounts {
+	const entries =
+		(rel.from.kind === "entry" ? 1 : 0) + (rel.to.kind === "entry" ? 1 : 0)
+	const clamp = (n: number) => Math.max(0, n)
+	return {
+		total: clamp(counts.total + by),
+		entryToEntry: clamp(counts.entryToEntry + (entries === 2 ? by : 0)),
+		castToEntry: clamp(counts.castToEntry + (entries === 1 ? by : 0))
+	}
 }

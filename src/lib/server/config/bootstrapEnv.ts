@@ -3,21 +3,16 @@
  * to, which proxies it trusts, and which deprecated variables are still in
  * play. Imported first by hooks.server.ts so it runs once, before any request.
  *
- * The banner exists because the hosting configuration was previously
- * unknowable from the outside: an operator could set SOCKETS_HTTPS_HOSTS and
- * HOST_HEADER, have one of them silently not apply, and have no way to tell
- * short of curling an internal API route. Printing the resolved answer turns
+ * The banner makes the hosting configuration knowable from the outside: an
+ * operator can set SOCKETS_HTTPS_HOSTS and HOST_HEADER, have one of them
+ * silently not apply, and have no other way to tell short of curling an
+ * internal API route. Printing the resolved answer turns
  * "why is my socket URL wrong" into a line of log output.
  */
 import dotenv from "dotenv"
 import { dev } from "$app/environment"
 import { installPrettyConsole } from "$lib/server/utils/prettyConsole"
-import {
-	describePublicUrlConfig,
-	getConfiguredPublicUrl,
-	getPublicSocketsEndpoint,
-	getSocketsPort
-} from "$lib/server/net/publicUrl"
+import { describePublicUrlConfig } from "$lib/server/net/publicUrl"
 import {
 	describeOriginAllowlistConfig,
 	isWildcardAllowed
@@ -67,6 +62,8 @@ const PREFIX = "[Serene Pub]"
 const DEPRECATED_VARS: {
 	name: string
 	replacement: (value: string) => string
+	/** Not read: setting it changes nothing. */
+	ignored?: true
 }[] = [
 	{
 		name: "SOCKETS_HTTPS_HOSTS",
@@ -82,8 +79,9 @@ const DEPRECATED_VARS: {
 	},
 	{
 		name: "PUBLIC_SOCKETS_ENDPOINT",
+		ignored: true,
 		replacement: () =>
-			"SOCKETS_ENDPOINT=<same value>, or drop it — PUBLIC_URL covers same-origin setups"
+			"nothing — delete it; sockets share the app's own address, so it is no longer needed"
 	}
 ]
 
@@ -95,16 +93,8 @@ export function buildStartupBanner(): string[] {
 		`${PREFIX} Local URL:   http://localhost:${process.env.PORT || "3000"}`
 	)
 
-	const socketUrl = getPublicSocketsEndpoint()
-	const sameOrigin =
-		getConfiguredPublicUrl() !== null &&
-		!process.env.SOCKETS_ENDPOINT &&
-		!process.env.PUBLIC_SOCKETS_ENDPOINT
-	lines.push(
-		sameOrigin
-			? `${PREFIX} Socket URL:  ${socketUrl}   (same origin — your proxy must route /socket.io/ to port ${getSocketsPort()})`
-			: `${PREFIX} Socket URL:  ${socketUrl}`
-	)
+	// No socket line: Socket.IO is attached to this same listener, so the
+	// socket address IS the page's address (Public/Local URL above).
 
 	const proxies = process.env.TRUSTED_PROXIES?.trim()
 	lines.push(
@@ -214,7 +204,7 @@ function buildLegacyEnvFileNotice(): string[] | null {
 
 /**
  * The one-time migration notice. Returns null when nothing deprecated is in
- * use, so a modern install prints nothing. Deliberately not a per-request
+ * use, so a modern install prints nothing. Intentionally not a per-request
  * warning: these are configuration facts, not events.
  */
 export function buildLegacyMigrationNotice(): string[] | null {
@@ -223,12 +213,15 @@ export function buildLegacyMigrationNotice(): string[] | null {
 	const active = DEPRECATED_VARS.filter((v) => process.env[v.name]?.trim())
 	if (active.length > 0) {
 		lines.push(
-			`${PREFIX} DEPRECATED hosting variables are in use. They still work and ` +
-				"nothing is broken, but one PUBLIC_URL replaces all of them:"
+			active.some((v) => v.ignored)
+				? `${PREFIX} DEPRECATED hosting variables are in use. Those marked (ignored) ` +
+						"no longer do anything; the rest still work, but one PUBLIC_URL replaces them:"
+				: `${PREFIX} DEPRECATED hosting variables are in use. They still work and ` +
+						"nothing is broken, but one PUBLIC_URL replaces all of them:"
 		)
 		for (const v of active) {
 			const value = process.env[v.name]!.trim()
-			lines.push(`${PREFIX}   ${v.name}=${value}`)
+			lines.push(`${PREFIX}   ${v.name}=${value}${v.ignored ? " (ignored)" : ""}`)
 			lines.push(`${PREFIX}       -> ${v.replacement(value)}`)
 		}
 		lines.push(

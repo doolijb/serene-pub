@@ -86,6 +86,29 @@ describe("firstModelToRegister — the flow's one side effect", () => {
 	test("nothing to register before a model lands", () => {
 		expect(firstModelToRegister(facts())).toBeNull()
 	})
+	test("skips a model that cannot chat, or is switched off", () => {
+		const mixed = {
+			...kcpp,
+			models: [
+				{
+					id: 7,
+					name: "sdxl",
+					satisfiableCapabilities: ["text->image"]
+				},
+				{ id: 8, name: "Off", enabled: false },
+				{ id: 9, name: "Nemo", satisfiableCapabilities: ["text->text"] }
+			]
+		}
+		expect(firstModelToRegister(facts({ connection: mixed }))).toEqual({
+			connectionId: 3,
+			model: { id: 9, name: "Nemo" }
+		})
+		expect(
+			firstModelToRegister(
+				facts({ connection: { ...kcpp, models: [mixed.models[0]] } })
+			)
+		).toBeNull()
+	})
 })
 
 test("findKcppTextConnection ignores the image twin and hosts", () => {

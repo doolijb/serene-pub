@@ -335,7 +335,6 @@ beforeAll(async () => {
 			sessionId: session.id,
 			characterId,
 			isActive: true,
-			visibility: "visible"
 		})
 		await db
 			.insert(schema.sessionPersonas)
@@ -447,7 +446,7 @@ describe("completion wire, ChatML, against a real model", () => {
 		expect(prompt).toContain("<|im_end|>")
 		expect(prompt).not.toMatch(VICUNA_MARKER)
 		expect(prompt).toContain(USER_LINE)
-		// The transport markers of chat wire's split_session emit have no
+		// The transport markers of chat wire's split_chat emit have no
 		// business in a flat render.
 		expect(prompt).not.toContain("<@role:")
 

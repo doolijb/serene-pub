@@ -6,8 +6,9 @@
 		appVersionDisplay
 	} from "$lib/shared/constants/version"
 
-	// Admin-only, matching UpdateNoticeBar and the settings sidebar: only an
-	// admin can act on an update notice. AccessibleShell provides userCtx.
+	// Admin-only, matching the update-available notification: only an admin
+	// can act on it. In-place status beside the version, not an interruption.
+	// AccessibleShell provides userCtx.
 	const userCtx: UserCtx | undefined = getContext("userCtx")
 </script>
 
@@ -81,6 +82,6 @@
 </p>
 <p>
 	<a href="/document-view/help">
-		See the Keyboard Shortcuts and full page list on the Help page.
+		See the keyboard shortcuts and full page list on the Help page.
 	</a>
 </p>

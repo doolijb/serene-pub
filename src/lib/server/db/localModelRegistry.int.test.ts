@@ -253,7 +253,7 @@ describe("0096 renames the table without losing what is in it", () => {
 		// Column by column rather than a count: a migration that kept the row
 		// count while blanking `model_url` and `description` would pass a
 		// length check and still have thrown away everything a user cares to
-		// read on the Manager screen. `id` is in here too — a connection names
+		// read on the managed KoboldCPP screen. `id` is in here too — a connection names
 		// a model by filename, but a re-created table would restart the
 		// identity sequence and nothing else would notice.
 		for (const [i, row] of after.entries()) {

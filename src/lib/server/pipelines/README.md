@@ -1,10 +1,10 @@
 # `pipelines/`
 
-Everything that turns _a chat and its configuration_ into _a prompt sent to a model_.
+Everything that turns _a session and its configuration_ into _a prompt sent to a model_.
 
 This replaced the 0.5 prompt builder in 0.6. If you are looking for
-`utils/promptBuilder/`, it is gone — [what it did and where each piece
-went](../../../../docs-dev/DECOMPOSITION.md).
+`utils/promptBuilder/`, it is gone; its pieces live in the groups below
+(`prompt/`, `ranking/`, `entities/`).
 
 ## The one-paragraph version
 
@@ -16,21 +16,21 @@ which template. A **binding** is core's implementation of one node definition �
 **executor** (in the SDK) walks the spec, resolves each node's configuration,
 and calls its binding.
 
-Configuration resolves through four scopes, most specific first (R-10, 2026-09-16 — `preset` is the selected config, the one place an administrator's edit lands):
+Configuration resolves through four scopes, most specific first (`SCOPE_ORDER` in the SDK's `config.ts`; `config` is the selected configuration, the one place an administrator's edit lands):
 
-    session → preset → defaults → author
+    session → config → defaults → author
 
 ## Where do I find…
 
 | I want to…                                                         | Start at                                                                                                         |
 | ------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------- |
 | follow one session turn end to end                                 | [`utils/runReply.ts`](../utils/runReply.ts) → [`runtime/runTurn.ts`](runtime/runTurn.ts) → [`runtime/liveRow.ts`](runtime/liveRow.ts) |
-| see what pipelines ship                                            | [`specs/index.ts`](specs/index.ts)                                                                               |
+| see what pipelines ship                                            | `@serene-pub/core-catalog` (re-exported by [`specs/index.ts`](specs/index.ts))                                   |
 | change what a prompt says                                          | [`entities/prompts.ts`](entities/prompts.ts), or the seeded text in [`boot/seedPrompts.ts`](boot/seedPrompts.ts) |
 | change how the context is laid out                                 | [`entities/contextTemplateDefaults.ts`](entities/contextTemplateDefaults.ts)                                     |
 | change how one variable renders (the JSON, the fences, the titles) | [`entities/variableLayouts.ts`](entities/variableLayouts.ts)                                                     |
-| understand what the Pipelines sidebar shows                        | [`config/panel/`](config/panel/)                                                                                 |
-| know why a setting resolved the way it did                         | [`config/world.ts`](config/world.ts) — the six-scope projection                                                  |
+| understand what the Pipelines view shows                           | [`config/panel/`](config/panel/)                                                                                 |
+| know why a setting resolved the way it did                         | [`config/world.ts`](config/world.ts) — the scope-chain projection                                               |
 | find where lore is chosen                                          | [`ranking/`](ranking/) — `select.ts` for the decision, `weights.ts` for every constant                           |
 | know what actually ran                                             | [`runtime/receipts.ts`](runtime/receipts.ts)                                                                     |
 | add a node definition                                                    | a descriptor in the SDK, then a binding in [`runtime/bindings.ts`](runtime/bindings.ts)                          |
@@ -47,17 +47,20 @@ refreshed on upgrade. `store.ts` is the row ↔ document mapping.
 
 ### `specs/` — the pipelines core ships
 
-`respond` (answer a message), `narrate`, `summarize` (four of them),
-`graphBuild`. A spec is a declaration: nodes, wiring, and defaults. No logic.
+The specs and genres themselves live in `@serene-pub/core-catalog`
+(`../serene-pub-sdk/core-catalog`); SP boot-seeds from that package. The files
+here are one-line re-exports that keep the app's import paths stable, so edit
+the catalog, not them. A spec is a declaration: nodes, wiring, and defaults.
+No logic.
 
 ### `config/` — what a user chose
 
-The six-scope resolution and everything the admin UI reads.
+The scope-chain resolution and everything the admin UI reads.
 `world.ts` projects Serene Pub's existing settings into the pipeline config
 model; `named.ts` is saved configs; `library.ts` is the workspace's one-shot
 read.
 
-[`config/panel/`](config/panel/) is the sidebar's own layer, split by job —
+[`config/panel/`](config/panel/) is the Pipelines view's own layer, split by job —
 `types` (vocabulary), `ids` (opaque handles), `declarations` (what can be
 configured), `choices` (what a reference may name), `scopes` (who may write),
 `read`, `write`. Import from the directory, not from the files behind it.
@@ -73,12 +76,12 @@ _what they render_, not by which pipeline renders it — that reuse is the point
 
 `templateContext.ts` gathers the data, `assemble.ts` renders it against the
 context template, `promptFields.ts`/`contextFields.ts` decide which text lands
-in which field. `preview.ts` does the same with no chat, for the editor.
+in which field. `preview.ts` does the same with no session, for the editor.
 
 ### `ranking/` — choosing what fits
 
-Which lore, which history, which messages survive the token budget. Two arms
-(keyword and semantic) over shared scoring. Every tunable constant is in
+Which lore, which history, which messages survive the token budget. Retrieval
+mechanisms (keyword and semantic among them) over shared scoring. Every tunable constant is in
 `weights.ts` with the line it came from.
 
 ### `runtime/` — running it

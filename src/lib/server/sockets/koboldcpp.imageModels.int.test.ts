@@ -146,12 +146,9 @@ const modelRow = (filename: string) =>
 		where: eq(schema.localModels.filename, filename)
 	})
 
-const imageConnections = () =>
+const managedConnections = () =>
 	testDb.query.connections.findMany({
-		where: eq(
-			schema.connections.type,
-			CONNECTION_TYPE.KOBOLDCPP_MANAGED_IMAGE
-		)
+		where: eq(schema.connections.type, CONNECTION_TYPE.KOBOLDCPP_MANAGED)
 	})
 
 const modelsForConnection = (connectionId: number) =>
@@ -166,7 +163,7 @@ const connectionsServing = async (model: string) => {
 		.from(schema.connectionModels)
 		.where(eq(schema.connectionModels.model, model))
 	const ids = new Set(rows.map((r) => r.connectionId))
-	return (await imageConnections()).filter((c) => ids.has(c.id))
+	return (await managedConnections()).filter((c) => ids.has(c.id))
 }
 
 const imageDefault = () =>
@@ -527,7 +524,7 @@ describe("koboldcpp:downloadModel — declaring a kind and picking a directory",
 	})
 })
 
-describe("koboldcpp:connectImageModel — one image model, one connection", () => {
+describe("koboldcpp:connectImageModel — the managed endpoint, an image model on it", () => {
 	beforeAll(async () => {
 		await setImageModelsDir(imageModelsDir)
 	})
@@ -564,12 +561,14 @@ describe("koboldcpp:connectImageModel — one image model, one connection", () =
 		const res = await connectImageModel(filename)
 
 		expect(res.success).toBeTruthy()
-		const [conn] = await imageConnections()
+		const [conn] = await managedConnections()
 		// The endpoint row carries no model: the identifier lives on a
-		// `connection_models` row hanging off it.
+		// `connection_models` row hanging off it, which says what it is FOR —
+		// the endpoint also chats, so the model is what keeps this one out of
+		// the chat picker.
 		const models = await modelsForConnection(conn.id)
-		expect(models.map((m) => m.model)).toContain(filename)
-		expect(conn.modality).toBe("image-gen")
+		const row = models.find((m) => m.model === filename)
+		expect(row?.modality).toBe("image-gen")
 		expect((conn.capabilities as any).resolved["text->image"]).toBe(1)
 	})
 
@@ -581,7 +580,7 @@ describe("koboldcpp:connectImageModel — one image model, one connection", () =
 		// registering `text->image` must leave `text->text` alone. Nothing
 		// derives a capability from a connection, precisely because this managed
 		// KoboldCPP can serve both.
-		const [conn] = await imageConnections()
+		const [conn] = await managedConnections()
 		const textDefault = await testDb.query.connectionDefaults.findFirst({
 			where: byCapability("text->text")
 		})
@@ -614,6 +613,24 @@ describe("koboldcpp:connectImageModel — one image model, one connection", () =
 			)
 			.limit(1)
 		expect((await imageDefault())!.connectionModelId).toBe(modelRow.id)
+	})
+
+	test("chat and images land on ONE endpoint — it is one process", async () => {
+		const { koboldCppConnectModelHandler } = await import("./koboldcpp")
+		await koboldCppConnectModelHandler.handler(
+			socket,
+			{ modelName: "some-chat-model.gguf" },
+			noopEmit
+		)
+		const endpoints = await managedConnections()
+		expect(endpoints.length).toBe(1)
+		const models = await modelsForConnection(endpoints[0].id)
+		expect(
+			Object.fromEntries(models.map((m) => [m.model, m.modality]))
+		).toMatchObject({
+			"sdxl-turbo-q8.gguf": "image-gen",
+			"some-chat-model.gguf": "text-gen"
+		})
 	})
 
 	test("a text model is refused rather than pointed at sdmodel", async () => {
@@ -680,11 +697,10 @@ describe("koboldcpp:deleteModel — the connections that named the file", () => 
 		)
 	}
 
-	test("an image connection naming the deleted file goes with it", async () => {
-		// A connection whose model file is gone fails at render time with
-		// nothing on the Connections screen to explain it. The text side has
-		// always been cleaned up here; missing the image type would leave
-		// exactly that.
+	test("the model naming the deleted file goes; the endpoint stays", async () => {
+		// A model row whose file is gone fails at render time with nothing on
+		// the Connections screen to explain it. The ENDPOINT is the process and
+		// outlives any one file.
 		const filename = "about-to-be-deleted.gguf"
 		await fs.writeFile(path.join(modelsDir, filename), SD_GGUF)
 		await testDb.insert(schema.localModels).values({
@@ -702,9 +718,10 @@ describe("koboldcpp:deleteModel — the connections that named the file", () => 
 		expect(res.success).toBe(true)
 		expect(await modelRow(filename)).toBeUndefined()
 		expect(await connectionsServing(filename)).toEqual([])
-		// ON DELETE SET NULL releases the slot rather than stranding it at an id
-		// nothing answers to.
-		expect((await imageDefault())?.connectionId ?? null).toBeNull()
+		expect((await managedConnections()).length).toBe(1)
+		// ON DELETE SET NULL releases the model half rather than stranding it
+		// at an id nothing answers to; the registration resolves as incomplete.
+		expect((await imageDefault())?.connectionModelId ?? null).toBeNull()
 	})
 
 	test("a filename that tries to leave the models directory is refused", async () => {

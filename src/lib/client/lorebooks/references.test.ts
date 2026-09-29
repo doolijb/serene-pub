@@ -16,7 +16,7 @@ function item(over: Partial<PoolItem> & { id: number }): PoolItem {
 		kind: "core:entry/world-lore",
 		name: `Entry ${over.id}`,
 		content: "",
-		keys: "",
+		keys: [],
 		pinned: false,
 		off: false,
 		archived: false,
@@ -57,13 +57,18 @@ describe("mentions", () => {
 
 describe("keywordsOf", () => {
 	it("reads the keywords as authored, in order", () => {
-		expect(keywordsOf(item({ id: 1, keys: "umber, umber city" }))).toEqual([
-			"umber",
-			"umber city"
-		])
+		expect(
+			keywordsOf(item({ id: 1, keys: ["umber", "umber city"] }))
+		).toEqual(["umber", "umber city"])
 	})
 
-	it("drops the blanks a trailing comma leaves behind", () => {
-		expect(keywordsOf(item({ id: 1, keys: " , ,  " }))).toEqual([])
+	it("drops blank keys", () => {
+		expect(keywordsOf(item({ id: 1, keys: [" ", "", "  "] }))).toEqual([])
+	})
+
+	it("never re-splits a key that holds a comma (#146)", () => {
+		expect(
+			keywordsOf(item({ id: 1, keys: ["\\w{2,4}", "Smith, John"] }))
+		).toEqual(["\\w{2,4}", "Smith, John"])
 	})
 })

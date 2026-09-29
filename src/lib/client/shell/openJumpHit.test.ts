@@ -6,6 +6,8 @@
  * opens — change one on purpose and this says so.
  */
 import { describe, expect, test, vi } from "vitest"
+import { adminRouter } from "$lib/client/admin/adminRouter.svelte"
+import { helpRouter } from "./helpRouter.svelte"
 import { openJumpHit } from "./openJumpHit"
 import type { JumpHit } from "$lib/shared/sockets/jump"
 
@@ -16,9 +18,15 @@ vi.mock("$app/navigation", () => ({
 
 function fakeCtx() {
 	const openPanel = vi.fn()
+	const openView = vi.fn()
 	return {
-		panelsCtx: { digest: {} as any, openPanel } as unknown as PanelsCtx,
-		openPanel
+		panelsCtx: {
+			digest: {} as any,
+			openPanel,
+			openView
+		} as unknown as PanelsCtx,
+		openPanel,
+		openView
 	}
 }
 
@@ -66,10 +74,78 @@ describe("openJumpHit — the panel kinds", () => {
 	)
 })
 
-describe("openJumpHit — the page kinds", () => {
-	test("a session and a user navigate, and open no panel", async () => {
+/**
+ * Shift Enter / Shift click: the same address, the view opened full page
+ * (`fullPage` is today's name for Focus). Never the sidebar call as well —
+ * one open, not two.
+ */
+describe("openJumpHit — focused", () => {
+	test.each([
+		[{ kind: "character", id: 7, title: "c" }, "characters"],
+		[{ kind: "lorebook", id: 9, title: "b" }, "lorebooks"],
+		[{ kind: "entry", id: 3, parentId: 9, title: "e" }, "lorebooks"],
+		[{ kind: "tag", id: 4, title: "t" }, "tags"],
+		[{ kind: "connection", id: 5, title: "x" }, "connections"],
+		[{ kind: "doc", id: "tags", title: "Tags" }, "help"]
+	] as [JumpHit, string][])(
+		"a $kind hit opens its view focused",
+		async (hit, key) => {
+			const { panelsCtx, openPanel, openView } = fakeCtx()
+			await openJumpHit(panelsCtx, hit, { focus: true })
+			expect(openView).toHaveBeenCalledWith(key, {
+				toggle: false,
+				fullPage: true
+			})
+			expect(openPanel).not.toHaveBeenCalled()
+		}
+	)
+
+	test("the address is the same as the sidebar's", async () => {
+		const { panelsCtx } = fakeCtx()
+		await openJumpHit(
+			panelsCtx,
+			{ kind: "entry", id: 3, parentId: 9, title: "e" },
+			{ focus: true }
+		)
+		expect(panelsCtx.digest).toEqual({
+			lore: { lorebookId: 9, scope: "all", entryId: 3 }
+		})
+	})
+
+	test("a page stays a page: a session navigates; a user opens Admin focused", async () => {
 		goto.mockClear()
-		const { panelsCtx, openPanel } = fakeCtx()
+		const { panelsCtx, openPanel, openView } = fakeCtx()
+		await openJumpHit(
+			panelsCtx,
+			{ kind: "session", id: 11, title: "A session" },
+			{ focus: true }
+		)
+		await openJumpHit(
+			panelsCtx,
+			{ kind: "user", id: 12, title: "Someone" },
+			{ focus: true }
+		)
+		await openJumpHit(
+			panelsCtx,
+			{ kind: "doc", id: "tags", title: "Tags" },
+			{ focus: true }
+		)
+		expect(goto.mock.calls).toEqual([["/sessions/11"]])
+		// Admin and Help are views, not pages: each opens focused.
+		expect(openView.mock.calls).toEqual([
+			["admin", { toggle: false, fullPage: true }],
+			["help", { toggle: false, fullPage: true }]
+		])
+		expect(helpRouter.slug).toBe("tags")
+		expect(adminRouter.path).toBe("/admin/users/12")
+		expect(openPanel).not.toHaveBeenCalled()
+	})
+})
+
+describe("openJumpHit — the page kinds", () => {
+	test("a session navigates; a user opens the Admin view at its page", async () => {
+		goto.mockClear()
+		const { panelsCtx, openPanel, openView } = fakeCtx()
 		await openJumpHit(panelsCtx, {
 			kind: "session",
 			id: 11,
@@ -80,7 +156,10 @@ describe("openJumpHit — the page kinds", () => {
 			id: 12,
 			title: "Someone"
 		})
-		expect(goto.mock.calls).toEqual([["/sessions/11"], ["/admin/users/12"]])
+		expect(goto.mock.calls).toEqual([["/sessions/11"]])
+		expect(openView.mock.calls).toEqual([
+			["admin", { toggle: false, fullPage: undefined }]
+		])
 		expect(openPanel).not.toHaveBeenCalled()
 		// NOT `digest.sessionId`, which opens the sidebar's edit form instead.
 		expect(panelsCtx.digest).toEqual({})
@@ -88,9 +167,8 @@ describe("openJumpHit — the page kinds", () => {
 })
 
 /**
- * The docs are the one kind whose destination depends on where the jump was
- * made FROM, and the one kind whose id is not a number — so both halves of the
- * branch are pinned, and so is the guard it has to run in front of.
+ * The docs are the one kind whose id is not a number, so the branch is pinned,
+ * and so is the guard it has to run in front of.
  */
 describe("openJumpHit — the documentation", () => {
 	const hit: JumpHit = {
@@ -101,78 +179,22 @@ describe("openJumpHit — the documentation", () => {
 		subtitle: "Getting around"
 	}
 
-	test("from anywhere else it addresses the Help view, then opens it", async () => {
+	test("it moves the Help view to the section, then opens it", async () => {
 		const { panelsCtx, openPanel } = fakeCtx()
 		goto.mockClear()
-		await openJumpHit(panelsCtx, hit, { pathname: "/sessions/3" })
-		expect(panelsCtx.digest).toEqual({
-			help: { slug: "getting-around", anchor: "the-rail" }
-		})
+		await openJumpHit(panelsCtx, hit)
+		expect(helpRouter.slug).toBe("getting-around")
+		expect(helpRouter.anchor.anchor).toBe("the-rail")
 		expect(openPanel).toHaveBeenCalledWith({ key: "help", toggle: false })
 		expect(goto).not.toHaveBeenCalled()
-	})
-
-	// Already reading the documentation as a full page: stay on it rather than
-	// opening a 400px column over the page in front of you.
-	test("from /docs it navigates, and opens no panel", async () => {
-		const { panelsCtx, openPanel } = fakeCtx()
-		goto.mockClear()
-		await openJumpHit(panelsCtx, hit, { pathname: "/docs/sessions" })
-		expect(goto).toHaveBeenCalledWith("/docs/getting-around#the-rail")
-		expect(openPanel).not.toHaveBeenCalled()
 		expect(panelsCtx.digest).toEqual({})
 	})
 
-	test("a page's own H1 carries no anchor into either destination", async () => {
+	test("a page's own H1 carries no anchor", async () => {
 		const top: JumpHit = { kind: "doc", id: "sessions", title: "Sessions" }
 		const { panelsCtx } = fakeCtx()
-		goto.mockClear()
-		await openJumpHit(panelsCtx, top, { pathname: "/docs" })
-		expect(goto).toHaveBeenCalledWith("/docs/sessions")
-
-		const second = fakeCtx()
-		await openJumpHit(second.panelsCtx, top, { pathname: "/" })
-		expect(second.panelsCtx.digest).toEqual({
-			help: { slug: "sessions", anchor: undefined }
-		})
-	})
-})
-
-describe("openJumpHit — a hit it cannot address", () => {
-	test("an entry with no parent opens nothing rather than the wrong book", async () => {
-		const { panelsCtx, openPanel } = fakeCtx()
-		await openJumpHit(panelsCtx, {
-			kind: "entry",
-			id: 3,
-			title: "An entry"
-		})
-		expect(openPanel).not.toHaveBeenCalled()
-		expect(panelsCtx.digest).toEqual({})
-	})
-
-	test("a non-numeric id opens nothing — every kind but the docs", async () => {
-		// `JumpHit.id` is `number | string`; every digest key and route below
-		// the guard is numeric, so an id that is neither is not an address.
-		const { panelsCtx, openPanel } = fakeCtx()
-		await openJumpHit(panelsCtx, {
-			kind: "character",
-			id: "abc",
-			title: "Nobody"
-		})
-		expect(openPanel).not.toHaveBeenCalled()
-		expect(panelsCtx.digest).toEqual({})
-
-		// The carve-out: a doc hit is addressed BY a slug, so it has to be
-		// taken before the guard rather than dropped by it.
-		const docs = fakeCtx()
-		await openJumpHit(
-			docs.panelsCtx,
-			{ kind: "doc", id: "tags", title: "Tags" },
-			{ pathname: "/" }
-		)
-		expect(docs.openPanel).toHaveBeenCalledWith({
-			key: "help",
-			toggle: false
-		})
+		await openJumpHit(panelsCtx, top)
+		expect(helpRouter.slug).toBe("sessions")
+		expect(helpRouter.anchor.anchor).toBe("")
 	})
 })

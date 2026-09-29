@@ -16,9 +16,9 @@ describe("actionIdentity", () => {
 		// The composer used to key chips by `specSlug + function`, so a plugin
 		// declaring a second action on `summarize` beside core's rendered a
 		// duplicate-key error. Two actions on one function are two keys.
-		const core = { specSlug: "core:spec/summarize", key: "summarize", function: "summarize" }
-		const plugin = { specSlug: "acme:spec/sum", key: "summarize", function: "summarize" }
-		const twoInOneSpec = { specSlug: "acme:spec/sum", key: "summarize-short", function: "summarize" }
+		const core = { specSlug: "core:spec/summarize", key: "summarize" }
+		const plugin = { specSlug: "acme:spec/sum", key: "summarize" }
+		const twoInOneSpec = { specSlug: "acme:spec/sum", key: "summarize-short" }
 		const keys = [core, plugin, twoInOneSpec].map(actionIdentity)
 		expect(new Set(keys).size).toBe(3)
 		expect(keys).toEqual([

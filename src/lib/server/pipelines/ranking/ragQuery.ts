@@ -6,7 +6,7 @@
  * embedding of "[Alice]: the wall fell" is closer to lore about Alice and about
  * walls than the embedding of "*the wall fell*" is to either.
  *
- * Extracted from `RagInfillEngine`, where it was private, so the pipeline
+ * Extracted from the 0.5 RAG path, where it was private, so the pipeline
  * embeds the same strings. Two formattings of a query is two different sets of
  * retrieved results with no way to tell which is which.
  */

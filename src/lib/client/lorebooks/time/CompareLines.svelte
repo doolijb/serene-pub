@@ -100,7 +100,7 @@
 		{#if only.length}
 			<div class="flex flex-col gap-1">
 				<h4
-					class="text-surface-600-400 text-[0.68rem] tracking-wider uppercase"
+					class="text-surface-600-400 text-xs"
 				>
 					Only on {lineName}
 				</h4>
@@ -130,7 +130,7 @@
 		{#if differs.length}
 			<div class="flex min-h-0 flex-col gap-1">
 				<h4
-					class="text-surface-600-400 text-[0.68rem] tracking-wider uppercase"
+					class="text-surface-600-400 text-xs"
 				>
 					Read differently
 				</h4>
@@ -149,7 +149,7 @@
 							{#each d.fields as field (field)}
 								<div class="flex flex-col gap-1">
 									<span
-										class="text-surface-600-400 text-[0.68rem] tracking-wider uppercase"
+										class="text-surface-600-400 text-xs"
 									>
 										{labelOf(field)}
 									</span>
@@ -157,11 +157,11 @@
 									     column is narrow: two readings are only
 									     comparable if both are legible. -->
 									<div
-										class="grid grid-cols-1 gap-2 @md/view:grid-cols-2"
+										class="grid grid-cols-1 gap-2 @lg/view:grid-cols-2"
 									>
 										<div class="flex flex-col gap-0.5">
 											<span
-												class="text-surface-600-400 text-[0.68rem]"
+												class="text-surface-600-400 text-[11px]"
 											>
 												main
 											</span>
@@ -173,7 +173,7 @@
 										</div>
 										<div class="flex flex-col gap-0.5">
 											<span
-												class="text-primary-500 text-[0.68rem]"
+												class="text-primary-500 text-[11px]"
 											>
 												{lineName}
 											</span>

@@ -75,7 +75,7 @@
 				<h3 class="min-w-0 flex-1 truncate text-xs font-semibold">
 					{group.label}
 				</h3>
-				<span class="text-muted shrink-0 text-[11px]">
+				<span class="text-surface-600-400 shrink-0 text-[11px]">
 					{group.setCount} of {group.total}
 				</span>
 			</header>
@@ -96,14 +96,14 @@
 									{entry.label}
 								</span>
 								<span
-									class="text-muted shrink-0 font-mono text-[10px]"
+									class="text-surface-600-400 shrink-0 font-mono text-[11px]"
 								>
 									{entry.capability}
 								</span>
 							</span>
 							{#if entry.set && entry.model}
 								<span
-									class="text-muted flex items-center gap-1.5 text-[11px]"
+									class="text-surface-600-400 flex items-center gap-1.5 text-[11px]"
 								>
 									<span
 										class="size-1.5 shrink-0 rounded-full {DOT_CLASS[
@@ -128,7 +128,7 @@
 									Not set — sessions cannot reply until it is
 								</span>
 							{:else}
-								<span class="text-muted text-[11px]">
+								<span class="text-surface-600-400 text-[11px]">
 									Not set · pick in
 									<a
 										class="anchor"
@@ -156,7 +156,7 @@
 							{@render body()}
 							<Icons.ChevronRight
 								size={14}
-								class="text-muted mt-1.5 shrink-0"
+								class="text-surface-600-400 mt-1.5 shrink-0"
 								aria-hidden="true"
 							/>
 						</button>
@@ -172,7 +172,7 @@
 		</section>
 	{/each}
 
-	<p class="text-muted px-0.5 text-[11px] leading-relaxed">
+	<p class="text-surface-600-400 px-0.5 text-[11px] leading-relaxed">
 		A default is an endpoint and a model together, one per transform. Change
 		them in <a class="anchor" href="/admin/defaults">Admin → Defaults</a>
 		, or from any model's

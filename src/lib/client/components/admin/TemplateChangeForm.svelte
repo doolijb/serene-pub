@@ -11,7 +11,11 @@
 	 * change it), same rule as everywhere else.
 	 */
 	import * as Icons from "@lucide/svelte"
-	import { goto } from "$app/navigation"
+	import Select from "$lib/client/components/inputs/Select.svelte"
+	import { getContext, untrack } from "svelte"
+	import { adminGoto as goto, adminUnsavedEdits } from "$lib/client/admin/adminRouter.svelte"
+	import { UnsavedEdits } from "$lib/client/forms/unsavedEdits.svelte"
+	import { ADMIN_SPLIT } from "$lib/client/components/admin/AdminSplit.svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import {
 		requestWithInterest,
@@ -24,7 +28,7 @@
 		CORE_TEMPLATE_ENGINE,
 		splitPoolKey
 	} from "$lib/shared/pipelines/poolKey"
-	
+
 	import { toaster } from "$lib/client/utils/toaster"
 
 	type Template = Sockets.Pipelines.Library.LibraryTemplate
@@ -38,7 +42,15 @@
 	}
 	let { kind, basePath, id }: Props = $props()
 
+	/** The compact back link's words: "Back to context templates". */
+	const backLabel = $derived(
+		kind === "context" ? "context templates" : "variable templates"
+	)
+
 	const socket = useTypedSocket()
+	const split = getContext<{ mode: "desk" | "compact" } | undefined>(
+		ADMIN_SPLIT
+	)
 
 	let view = $state<Sockets.Pipelines.Library.Response>({})
 	let loading = $state(true)
@@ -67,33 +79,43 @@
 	let pools = $derived(
 		(kind === "context"
 			? (view.contextPools ?? [])
-			: (view.variablePools ?? [])) as Array<{ id: string; label: string }>
+			: (view.variablePools ?? [])) as Array<{
+			id: string
+			label: string
+		}>
 	)
 	let readonly = $derived(!!row?.isImmutable)
 
-	// Seed drafts exactly once, when the row first arrives.
+	/**
+	 * Unsaved edits against the row as last pushed. Every push of the
+	 * library moves the saved snapshot and only a clean form is overwritten,
+	 * so the echo of this page's own save makes it clean. Create mode's
+	 * snapshot is the blank form it opened on: nothing typed, nothing to lose.
+	 */
+	const edits = new UnsavedEdits(() => ({ name, source, poolId }))
 	$effect(() => {
-		if (seeded || loading) return
+		if (loading) return
 		if (id != null) {
 			if (!row) return
-			name = row.name
-			source = row.source
-			poolId = row.poolId
+			const next = { name: row.name, source: row.source, poolId: row.poolId }
+			untrack(() =>
+				edits.adoptSaved(next, (n) => {
+					name = n.name
+					source = n.source
+					poolId = n.poolId
+				})
+			)
 			seeded = true
-		} else {
+		} else if (!seeded) {
 			poolId = pools[0]?.id ?? ""
 			seeded = true
+			untrack(() => edits.markSaved())
 		}
 	})
+	adminUnsavedEdits(() => edits.dirty)
 
-	let dirty = $derived(
-		seeded &&
-			(id == null ||
-				(row &&
-					(name !== row.name ||
-						source !== row.source ||
-						poolId !== row.poolId)))
-	)
+	/** Save is offered on any edit, and always in create mode. */
+	let dirty = $derived(seeded && (id == null || edits.dirty))
 
 	/**
 	 * The language this row is written in.
@@ -225,6 +247,7 @@
 				engine
 			})
 			toaster.success({ title: "Template created" })
+			edits.forget()
 			goto(basePath)
 		}
 	}
@@ -248,81 +271,76 @@
 		)
 			return
 		socket.emit("pipelines:libraryDeleteTemplate", { kind, id })
+		edits.forget()
 		goto(basePath)
 	}
 </script>
 
-<div class="mb-4 flex flex-wrap items-center gap-3">
-	<div class="min-w-0 flex-1">
-		<p class="text-surface-600-400 text-xs">
-			<a href={basePath} class="hover:underline">
-				{kind === "context" ? "Context templates" : "Variable templates"}
-			</a>
-			/
-			<strong>{id != null ? (row?.name ?? "…") : "New"}</strong>
-		</p>
-		<h2 class="flex items-center gap-2 text-lg font-semibold">
-			{#if kind === "context"}
-				<Icons.LayoutTemplate size={20} />
-			{:else}
-				<Icons.Braces size={20} />
-			{/if}
-			{id != null ? (row?.name ?? "Template") : "New template"}
-			{#if readonly}
-				<span
-					class="preset-tonal-surface rounded-full px-2 py-0.5 text-xs font-normal"
-					>built-in · read-only</span
-				>
-			{/if}
-		</h2>
-	</div>
-	<a class="btn btn-sm preset-tonal-surface" href={basePath}>
-		<Icons.ArrowLeft size={16} /> Back to list
+{#if split?.mode !== "desk"}
+	<a
+		href={basePath}
+		class="text-surface-600-400 hover:text-surface-950-50 mb-3 inline-flex items-center gap-1 self-start text-[13px]"
+	>
+		<Icons.ChevronLeft size={14} /> Back to {backLabel}
 	</a>
-</div>
+{/if}
+
+<h2
+	class="text-surface-950-50 mb-4 flex flex-wrap items-center gap-2 [font-family:var(--typo-heading--font-family)] text-base font-semibold"
+>
+	{id != null ? (row?.name ?? "Template") : "New template"}
+	{#if readonly}
+		<span
+			class="preset-tonal-surface rounded-full px-2 py-0.5 font-sans text-xs font-normal"
+		>
+			built-in · read-only
+		</span>
+	{/if}
+</h2>
 
 {#if loading}
 	<p class="text-surface-600-400 text-sm">Loading…</p>
 {:else if id != null && !row}
-	<div
-		class="card preset-filled-surface-100-900 text-surface-600-400 px-3 py-8 text-center text-sm"
-	>
+	<div class="panel-card text-surface-600-400 py-8 text-center text-sm">
 		This template no longer exists.
-		<a class="underline" href={basePath}>Back to the list</a>.
+		<a class="underline" href={basePath}>Back to the list</a>
+		.
 	</div>
 {:else}
-	<div class="form-max flex flex-col gap-4">
-		<div
-			class="card preset-filled-surface-100-900 flex flex-col gap-3 p-4 shadow-sm"
-		>
+	<div class="flex flex-col gap-4">
+		<div class="panel-card flex flex-col gap-3">
 			<div class="field-row">
 				<label class="flex flex-col gap-1 text-sm">
 					<span class="font-medium">Name</span>
 					<input
 						class="input"
 						bind:value={name}
-						readonly={readonly}
+						{readonly}
 						placeholder="Template name"
 					/>
 				</label>
-				<label class="flex flex-col gap-1 text-sm">
-					<span class="font-medium">
-						{kind === "context" ? "Step (pool)" : "Variable"}
-					</span>
-					{#if id == null}
-						<select class="select" bind:value={poolId}>
-							{#each pools as p (p.id)}
-								<option value={p.id}>{p.label}</option>
-							{/each}
-						</select>
-					{:else}
+				{#if id == null}
+					<Select
+						class="text-sm"
+						label={kind === "context" ? "Step (pool)" : "Variable"}
+						options={pools.map((p) => ({
+							value: p.id,
+							label: p.label
+						}))}
+						bind:value={poolId}
+					/>
+				{:else}
+					<label class="flex flex-col gap-1 text-sm">
+						<span class="font-medium">
+							{kind === "context" ? "Step (pool)" : "Variable"}
+						</span>
 						<input
 							class="input"
 							value={row?.poolLabel ?? poolId}
 							readonly
 						/>
-					{/if}
-				</label>
+					</label>
+				{/if}
 				<!-- No Engine select: the engine is half of the pool key, so the
 				     Pool control above already chooses it — its labels read
 				     "Assemble · Handlebars". A second control for the same fact
@@ -391,9 +409,7 @@
 		</div>
 
 		{#if preview}
-			<div
-				class="card preset-filled-surface-100-900 flex flex-col gap-2 p-4 text-sm shadow-sm"
-			>
+			<div class="panel-card flex flex-col gap-2 text-sm">
 				<h3 class="text-sm font-semibold">Preview</h3>
 				{#if preview.error}
 					<p class="text-error-500 text-xs">{preview.error}</p>
@@ -407,14 +423,14 @@
 				{/if}
 				{#if preview.rendered != null}
 					<pre
-						class="bg-surface-200-800 overflow-x-auto rounded p-2 font-mono text-xs whitespace-pre-wrap">{preview.rendered}</pre>
+						class="bg-surface-50-950 overflow-x-auto rounded-[10px] p-2 font-mono text-xs whitespace-pre-wrap">{preview.rendered}</pre>
 				{/if}
 				{#if preview.messages?.length}
 					{#each preview.messages as m, i (i)}
 						<div class="text-xs">
 							<span class="font-semibold">{m.role}:</span>
 							<pre
-								class="bg-surface-200-800 mt-1 overflow-x-auto rounded p-2 font-mono whitespace-pre-wrap">{m.content}</pre>
+								class="bg-surface-50-950 mt-1 overflow-x-auto rounded-[10px] p-2 font-mono whitespace-pre-wrap">{m.content}</pre>
 						</div>
 					{/each}
 				{/if}
@@ -424,9 +440,6 @@
 {/if}
 
 <style>
-	.form-max {
-		max-width: 64rem;
-	}
 	.field-row {
 		display: grid;
 		gap: 1rem;

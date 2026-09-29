@@ -36,7 +36,7 @@ import {
 	declarations,
 	humanizeTypeId
 } from "$lib/server/pipelines/config/panel"
-import { getVariable } from "@serene-pub/sdk"
+import { getVariable, type TemplateScope } from "@serene-pub/sdk"
 import {
 	contextPoolKeyFor,
 	poolKeyFor
@@ -46,7 +46,7 @@ import {
 	CORE_TEMPLATE_ENGINE,
 	knownEngines
 } from "$lib/server/pipelines/prompt/renderers"
-import { acceptedEngines } from "$lib/shared/pipelines/templateEngines"
+import { acceptedEnginesOf } from "$lib/shared/pipelines/templateEngines"
 
 /**
  * An engine id as the name of a language, for a heading.
@@ -137,6 +137,12 @@ export interface LibraryTemplate {
 export interface LibraryPool {
 	id: string
 	label: string
+	/**
+	 * A context pool only: the node definition's own declared template names
+	 * — its static scope. The library has no step in view, so this is all it
+	 * can type; a row is checked against each step when it is picked (P7).
+	 */
+	scope?: TemplateScope
 }
 
 export interface LibraryView {
@@ -173,6 +179,13 @@ export interface LibraryView {
 	 * single entry means the picker never appears at all.
 	 */
 	engines: Array<{ id: string; owner: string }>
+	/**
+	 * Sampling config id → the pipelines whose `sampling-ref` slots pick it,
+	 * by display name. Sampling configs are not library rows (they live in
+	 * Admin → Sampling), but "which pipelines use this" is the same walk, so
+	 * it is answered here rather than by a second copy of `usageIndex`.
+	 */
+	samplingUsedBy: Record<number, string[]>
 }
 
 /**
@@ -236,12 +249,15 @@ export async function libraryView(db: Db): Promise<LibraryView> {
 	const promptSlots = new Set<string>()
 	const templateSlots = new Set<string>()
 	const variableSlots = new Set<string>()
+	const samplingSlots = new Set<string>()
 	/**
 	 * Declared pools, keyed by the whole pool key so two languages of one node
 	 * type stay two headings. Filled from the declarations rather than from the
 	 * rows — see `LibraryView.contextPools`.
 	 */
 	const nodeTypeLabels = new Map<string, string>()
+	/** Context pool key → the definition's static template scope (P7). */
+	const nodeTypeScopes = new Map<string, TemplateScope>()
 	const variableLabels = new Map<string, string>()
 	const promptLabels = new Map<string, string>()
 
@@ -277,7 +293,7 @@ export async function libraryView(db: Db): Promise<LibraryView> {
 				// a heading per pool and the empty one is somewhere to write
 				// the first row. A slot that declares nothing renders in
 				// core's, which is what the column default says.
-				const engines = acceptedEngines(d)
+				const engines = acceptedEnginesOf(d)
 				if (d.control === "prompts-ref") {
 					promptSlots.add(d.slot)
 					if (d.nodeDefinitionId)
@@ -290,6 +306,7 @@ export async function libraryView(db: Db): Promise<LibraryView> {
 							`${d.typeLabel || humanizeTypeId(d.nodeDefinitionId)} · ${d.label}`
 						)
 				}
+				if (d.control === "sampling-ref") samplingSlots.add(d.slot)
 				if (d.control === "variable-template-ref" && d.variableId) {
 					variableSlots.add(d.slot)
 					for (const engine of engines)
@@ -300,11 +317,17 @@ export async function libraryView(db: Db): Promise<LibraryView> {
 				}
 				if (d.control === "context-template-ref" && d.nodeDefinitionId) {
 					templateSlots.add(d.slot)
-					for (const engine of engines)
+					for (const engine of engines) {
 						nodeTypeLabels.set(
 							contextPoolKeyFor(d.nodeDefinitionId, engine),
 							`${humanizeTypeId(d.nodeDefinitionId)} · ${languageOf(engine)}`
 						)
+						if (d.templateStaticScope)
+							nodeTypeScopes.set(
+								contextPoolKeyFor(d.nodeDefinitionId, engine),
+								d.templateStaticScope
+							)
+					}
 				}
 			}
 		}
@@ -413,9 +436,15 @@ export async function libraryView(db: Db): Promise<LibraryView> {
 		}
 	})
 
-	const asPools = (labels: Map<string, string>): LibraryPool[] =>
+	const asPools = (
+		labels: Map<string, string>,
+		scopes?: Map<string, TemplateScope>
+	): LibraryPool[] =>
 		[...labels]
-			.map(([id, label]) => ({ id, label }))
+			.map(([id, label]) => {
+				const scope = scopes?.get(id)
+				return { id, label, ...(scope ? { scope } : {}) }
+			})
 			.sort((a, b) => a.label.localeCompare(b.label))
 
 	return {
@@ -423,9 +452,15 @@ export async function libraryView(db: Db): Promise<LibraryView> {
 		prompts,
 		contextTemplates,
 		variableTemplates,
-		contextPools: asPools(nodeTypeLabels),
+		contextPools: asPools(nodeTypeLabels, nodeTypeScopes),
 		variablePools: asPools(variableLabels),
 		promptPools: asPools(promptLabels),
-		engines: knownEngines()
+		engines: knownEngines(),
+		samplingUsedBy: Object.fromEntries(
+			[...(await usageIndex(db, samplingSlots))].map(([id, names]) => [
+				id,
+				[...names].sort()
+			])
+		)
 	}
 }

@@ -20,6 +20,7 @@
 	 */
 	import * as Icons from "@lucide/svelte"
 	import { Popover, Portal } from "@skeletonlabs/skeleton-svelte"
+	import { addMenuItemKeys } from "./addMenuItems"
 
 	interface Props {
 		/** The New connection dialog — any service or preset. */
@@ -34,6 +35,11 @@
 		onAddByName: () => void
 		/** Hidden when no connection accepts a hand-typed model. */
 		canAddByName?: boolean
+		/**
+		 * Hides the KoboldCPP and Ollama items — false in the Android app, where
+		 * the server refuses both (`canRunLocalRuntimes`).
+		 */
+		canRunLocalRuntimes?: boolean
 	}
 	let {
 		onAddConnection,
@@ -41,13 +47,14 @@
 		onAddOllama,
 		onGetModel,
 		onAddByName,
-		canAddByName = true
+		canAddByName = true,
+		canRunLocalRuntimes = true
 	}: Props = $props()
 
 	let open = $state(false)
 	let focusIndex = $state(0)
 
-	const items = $derived([
+	const allItems = $derived([
 		{
 			key: "connection",
 			icon: Icons.Cable,
@@ -79,18 +86,22 @@
 		// `Keyboard` because the distinguishing fact IS the typing: this is
 		// the item for a host that serves no list, so the model's id comes
 		// off the person's fingers rather than off a catalogue.
-		...(canAddByName
-			? [
-					{
-						key: "by-name",
-						icon: Icons.Keyboard,
-						title: "A model by name",
-						blurb: "When a host doesn't list its models",
-						run: onAddByName
-					}
-				]
-			: [])
+		{
+			key: "by-name",
+			icon: Icons.Keyboard,
+			title: "A model by name",
+			blurb: "When a host doesn't list its models",
+			run: onAddByName
+		}
 	] as const)
+
+	const items = $derived.by(() => {
+		const keys: readonly string[] = addMenuItemKeys({
+			canAddByName,
+			canRunLocalRuntimes
+		})
+		return allItems.filter((item) => keys.includes(item.key))
+	})
 
 	function run(item: (typeof items)[number]) {
 		open = false
@@ -173,7 +184,7 @@
 									{item.title}
 								</span>
 								<span
-									class="text-surface-600 dark:text-surface-500 block text-xs"
+									class="text-surface-600-400 block text-xs"
 								>
 									{item.blurb}
 								</span>

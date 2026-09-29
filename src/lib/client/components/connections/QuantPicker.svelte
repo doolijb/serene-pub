@@ -87,7 +87,7 @@
 		good: "text-success-500",
 		warn: "text-warning-500",
 		bad: "text-error-500",
-		muted: "text-surface-500"
+		muted: "text-surface-600-400"
 	}
 </script>
 
@@ -105,7 +105,7 @@
 				<header class="flex min-w-0 items-start gap-2">
 					<div class="min-w-0 flex-1">
 						<Dialog.Title
-							class="funnel-display text-base font-semibold"
+							class="[font-family:var(--typo-heading--font-family)] text-base font-semibold"
 						>
 							Pick a size
 						</Dialog.Title>

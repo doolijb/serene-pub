@@ -396,19 +396,19 @@
 </script>
 
 <svelte:head>
-	<title>KoboldCPP Manager — Document View — Serene Pub</title>
+	<title>KoboldCPP, run by Serene Pub — Document View — Serene Pub</title>
 </svelte:head>
 
-<h1>KoboldCPP Manager</h1>
+<h1>KoboldCPP, run by Serene Pub</h1>
 
 {#if !userCtx.user?.isAdmin}
 	<p>Admin access required.</p>
 {:else if !koboldCppSettingsCtx.settings?.koboldCppManagerEnabled}
 	<p>
-		The KoboldCPP Manager is turned off. Enable it from System Settings
+		KoboldCPP, run by Serene Pub, is turned off. Enable it from System settings
 		first.
 	</p>
-	<p><a href="/document-view/settings/system">Go to System Settings</a></p>
+	<p><a href="/document-view/settings/system">Go to System settings</a></p>
 {:else}
 	{#if status}
 		<div class="a11y-status" role="status">
@@ -442,7 +442,7 @@
 
 	<form onsubmit={saveModelsDir}>
 		<div class="a11y-field">
-			<label for="a11y-kcpp-models-dir">Models Directory</label>
+			<label for="a11y-kcpp-models-dir">Models directory</label>
 			<p class="a11y-hint">
 				Folder on the server where .gguf model files are stored.
 			</p>
@@ -458,7 +458,7 @@
 			class="a11y-btn a11y-btn-small"
 			disabled={savingField === "modelsDir"}
 		>
-			{savingField === "modelsDir" ? "Saving…" : "Save Directory"}
+			{savingField === "modelsDir" ? "Saving…" : "Save directory"}
 		</button>
 	</form>
 
@@ -536,12 +536,12 @@
 				class="a11y-btn a11y-btn-small"
 				disabled={savingField === "adminPassword"}
 			>
-				{savingField === "adminPassword" ? "Saving…" : "Save Password"}
+				{savingField === "adminPassword" ? "Saving…" : "Save password"}
 			</button>
 		</form>
 	{/if}
 
-	<h2>Recommended Models</h2>
+	<h2>Recommended models</h2>
 	{#if !recommendedLoaded}
 		<p>Loading…</p>
 	{:else if recommendedModels.length === 0}
@@ -582,7 +582,7 @@
 	<h2>Search for Models</h2>
 	<form onsubmit={searchModels}>
 		<div class="a11y-field">
-			<label for="a11y-kcpp-search">Search Term</label>
+			<label for="a11y-kcpp-search">Search term</label>
 			<input id="a11y-kcpp-search" type="text" bind:value={searchTerm} />
 		</div>
 		<button

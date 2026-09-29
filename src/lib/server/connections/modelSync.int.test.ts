@@ -234,6 +234,73 @@ describe("syncConnectionModels — one listing, one endpoint", () => {
 	})
 })
 
+describe("a model's modality, as the listing says", () => {
+	test("is stored on insert, replaced when the host revises it, cleared when it stops saying", async () => {
+		const { syncConnectionModels } = await import("./modelSync")
+		const c = await endpoint("modality")
+		await syncConnectionModels(db, c.id, {
+			models: [
+				{ model: "nomic-embed-text", modality: "embeddings" },
+				{ model: "llama3.1:8b", modality: "text-gen" },
+				{ model: "mystery" }
+			]
+		})
+		const first = await modelsOf(c.id)
+		expect(first.map((r) => [r.model, r.modality])).toEqual([
+			["llama3.1:8b", "text-gen"],
+			["mystery", null],
+			["nomic-embed-text", "embeddings"]
+		])
+
+		await syncConnectionModels(db, c.id, {
+			models: [
+				{ model: "nomic-embed-text", modality: "embeddings" },
+				// An older host: no capabilities array, so nothing claimed.
+				{ model: "llama3.1:8b" },
+				{ model: "mystery", modality: "text-gen" }
+			]
+		})
+		const second = await modelsOf(c.id)
+		expect(second.map((r) => [r.model, r.modality])).toEqual([
+			["llama3.1:8b", null],
+			["mystery", "text-gen"],
+			["nomic-embed-text", "embeddings"]
+		])
+	})
+
+	test("an embedding model on a chat-and-embed endpoint satisfies only embeddings", async () => {
+		const { syncConnectionModels } = await import("./modelSync")
+		const { mergeEndpointModel } = await import("./models")
+		const { capabilityRefusal } = await import(
+			"$lib/server/pipelines/runtime/capabilityGuard"
+		)
+		const [c] = await db
+			.insert(schema.connections)
+			.values({
+				name: `both ${Math.random()}`,
+				type: CONNECTION_TYPE.OLLAMA,
+				baseUrl: "http://both.test:11434",
+				modality: "text-gen",
+				capabilities: {
+					resolved: { "text->text": 2, "text->embedding": 2 }
+				}
+			})
+			.returning()
+		await syncConnectionModels(db, c.id, {
+			models: [
+				{ model: "nomic-embed-text", modality: "embeddings" },
+				{ model: "llama3.1:8b", modality: "text-gen" }
+			]
+		})
+		const [chat, embed] = await modelsOf(c.id)
+		const pair = (m: typeof chat) => mergeEndpointModel(c as any, m as any)
+		expect(capabilityRefusal(pair(embed), "text->text")).not.toBeNull()
+		expect(capabilityRefusal(pair(embed), "text->embedding")).toBeNull()
+		expect(capabilityRefusal(pair(chat), "text->embedding")).not.toBeNull()
+		expect(capabilityRefusal(pair(chat), "text->text")).toBeNull()
+	})
+})
+
 describe("syncConnectionModelsById — staleness and the adapter", () => {
 	test("skips a fresh listing unless forced, and asks the host when forced", async () => {
 		const { syncConnectionModelsById } = await import("./modelSync")

@@ -30,6 +30,7 @@ import {
 	type LorebookEntry,
 	type NewLorebookEntry
 } from "$lib/server/utils/lorebookEntries"
+import { splitKeys, type KeyList } from "$lib/server/pipelines/ranking/signals"
 
 /**
  * A fixture row, stated partially.
@@ -38,7 +39,9 @@ import {
  * `id` is optional and honoured, because several suites pin ids so their
  * assertions can name a row.
  */
-type EntryOverrides<T extends EntryTypeId> = Partial<NewLorebookEntry<T>> & {
+type EntryOverrides<T extends EntryTypeId> = WithKeyLists<
+	Partial<NewLorebookEntry<T>>
+> & {
 	// Both server-allocated on the real write path, and both legitimately
 	// stated by a fixture: several suites pin an id so their assertions can
 	// name a row, and several pin a position so their ordering assertions mean
@@ -46,6 +49,27 @@ type EntryOverrides<T extends EntryTypeId> = Partial<NewLorebookEntry<T>> & {
 	id?: number
 	position?: number
 }
+/**
+ * Keys as a fixture may state them: the list the wire carries, or a comma
+ * string for brevity (`"gate, warden"`). A string is split once, here, on the
+ * way in — the writer's legacy boundary — never on the wire (finding #146).
+ */
+type WithKeyLists<T> = Omit<T, "keys" | "secondaryKeys"> & {
+	keys?: KeyList
+	secondaryKeys?: KeyList
+}
+
+/** An in-memory builder's overrides, with its keys normalised to the list. */
+const keyedOverrides = <T extends { keys?: KeyList; secondaryKeys?: KeyList }>(
+	overrides: T
+) => ({
+	...overrides,
+	...(overrides.keys === undefined ? {} : { keys: splitKeys(overrides.keys) }),
+	...(overrides.secondaryKeys === undefined
+		? {}
+		: { secondaryKeys: splitKeys(overrides.secondaryKeys) })
+})
+
 type SeedRow<T extends EntryTypeId> = EntryOverrides<T> & {
 	lorebookId: number
 }
@@ -120,7 +144,7 @@ export function makeInfillOptions(overrides: Partial<any> = {}): any {
 		seedName: "Alice",
 		personaName: "Test User",
 		templateContext: makeTemplateContext(),
-		useSessionFormat: false,
+		useChatFormat: false,
 		tokenLimit: 100_000,
 		contextThresholdPercent: 1,
 		tokenCounter: makeTokenCounter(),
@@ -135,7 +159,7 @@ export function makeInfillOptions(overrides: Partial<any> = {}): any {
 // ─── In-memory entry builders ───────────────────────────────────────────────
 
 export function worldLoreEntry(
-	overrides: Partial<LorebookEntry<typeof WORLD_LORE_TYPE_ID>> = {}
+	overrides: WithKeyLists<Partial<LorebookEntry<typeof WORLD_LORE_TYPE_ID>>> = {}
 ): LorebookEntry<typeof WORLD_LORE_TYPE_ID> {
 	const id = overrides.id ?? nextId()
 	return {
@@ -144,10 +168,10 @@ export function worldLoreEntry(
 		typeId: WORLD_LORE_TYPE_ID,
 		name: `World Lore ${id}`,
 		category: null,
-		keys: "",
+		keys: [],
 		// No condition — the state every stored row lands in, spelled as the
 		// pair that means it: no keys, no mode. See `selectiveLogicHolds`.
-		secondaryKeys: "",
+		secondaryKeys: [],
 		selectiveLogic: null,
 		useRegex: false,
 		// Null, not zero: an entry nobody has ruled on defers to the node.
@@ -172,12 +196,12 @@ export function worldLoreEntry(
 		embedding: null,
 		embeddingModel: null,
 		vectorizedAt: null,
-		...overrides
+		...keyedOverrides(overrides)
 	}
 }
 
 export function characterLoreEntry(
-	overrides: Partial<LorebookEntry<typeof CHARACTER_LORE_TYPE_ID>> = {}
+	overrides: WithKeyLists<Partial<LorebookEntry<typeof CHARACTER_LORE_TYPE_ID>>> = {}
 ): LorebookEntry<typeof CHARACTER_LORE_TYPE_ID> {
 	const id = overrides.id ?? nextId()
 	return {
@@ -186,10 +210,10 @@ export function characterLoreEntry(
 		typeId: CHARACTER_LORE_TYPE_ID,
 		lorebookBindingId: null,
 		name: `Character Lore ${id}`,
-		keys: "",
+		keys: [],
 		// No condition — the state every stored row lands in, spelled as the
 		// pair that means it: no keys, no mode. See `selectiveLogicHolds`.
-		secondaryKeys: "",
+		secondaryKeys: [],
 		selectiveLogic: null,
 		useRegex: false,
 		// Null, not zero: an entry nobody has ruled on defers to the node.
@@ -214,12 +238,12 @@ export function characterLoreEntry(
 		embedding: null,
 		embeddingModel: null,
 		vectorizedAt: null,
-		...overrides
+		...keyedOverrides(overrides)
 	} as LorebookEntry<typeof CHARACTER_LORE_TYPE_ID>
 }
 
 export function historyEntry(
-	overrides: Partial<LorebookEntry<typeof HISTORY_TYPE_ID>> = {}
+	overrides: WithKeyLists<Partial<LorebookEntry<typeof HISTORY_TYPE_ID>>> = {}
 ): LorebookEntry<typeof HISTORY_TYPE_ID> {
 	const id = overrides.id ?? nextId()
 	return {
@@ -231,10 +255,10 @@ export function historyEntry(
 		year: 1000,
 		month: null,
 		day: null,
-		keys: "",
+		keys: [],
 		// No condition — the state every stored row lands in, spelled as the
 		// pair that means it: no keys, no mode. See `selectiveLogicHolds`.
-		secondaryKeys: "",
+		secondaryKeys: [],
 		selectiveLogic: null,
 		useRegex: false,
 		// Null, not zero: an entry nobody has ruled on defers to the node.
@@ -260,7 +284,7 @@ export function historyEntry(
 		embedding: null,
 		embeddingModel: null,
 		vectorizedAt: null,
-		...overrides
+		...keyedOverrides(overrides)
 	} as LorebookEntry<typeof HISTORY_TYPE_ID>
 }
 
@@ -343,7 +367,8 @@ export function sessionCharacter(
 		characterId: char.id,
 		position: 0,
 		isActive: true,
-		visibility: "visible",
+		// The cast read's name for `is_active` (host, `session_cast`).
+		enabled: true,
 		...overrides,
 		character: char
 	} as any

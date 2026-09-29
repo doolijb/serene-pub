@@ -30,7 +30,11 @@
 	import type { Snippet } from "svelte"
 	import { onMount } from "svelte"
 	import * as Icons from "@lucide/svelte"
-	import { createViewMode, type ViewMode } from "$lib/client/utils/viewMode.svelte"
+	import Select from "$lib/client/components/inputs/Select.svelte"
+	import {
+		createViewMode,
+		type ViewMode
+	} from "$lib/client/utils/viewMode.svelte"
 
 	interface Props {
 		rows: Row[]
@@ -50,6 +54,17 @@
 		cell: Snippet<[Row, AdminColumn<Row>]>
 		/** Optional per-row click (Django's "row opens the change form"). */
 		onRowClick?: (row: Row) => void
+		/**
+		 * The list pane of an `AdminSplit`: one row per item (title, a meta
+		 * line, an optional badge) instead of a table or cards, sized for a
+		 * ~360px column. `rowTitle` is required in this mode.
+		 */
+		compact?: boolean
+		rowTitle?: (row: Row) => string
+		rowMeta?: (row: Row) => string | undefined
+		rowBadge?: (row: Row) => string | undefined
+		/** The row the detail pane is showing. */
+		isSelected?: (row: Row) => boolean
 	}
 
 	let {
@@ -64,7 +79,12 @@
 		defaultSortDir = "asc",
 		storageKey,
 		cell,
-		onRowClick
+		onRowClick,
+		compact = false,
+		rowTitle,
+		rowMeta,
+		rowBadge,
+		isSelected
 	}: Props = $props()
 
 	let search = $state("")
@@ -106,6 +126,7 @@
 		return () => ro.disconnect()
 	})
 	let effectiveView = $derived<ViewMode>(narrow ? "cards" : viewPref.value)
+	let rowsMode = $derived(compact && !!rowTitle)
 
 	// Card layout roles derived from the columns themselves: the first labeled
 	// column titles the card, unlabeled columns are actions.
@@ -192,7 +213,9 @@
 	$effect(() => {
 		if (page >= pageCount) page = pageCount - 1
 	})
-	let pageRows = $derived(filtered.slice(page * perPage, (page + 1) * perPage))
+	let pageRows = $derived(
+		filtered.slice(page * perPage, (page + 1) * perPage)
+	)
 	let showingFrom = $derived(filtered.length === 0 ? 0 : page * perPage + 1)
 	let showingTo = $derived(Math.min((page + 1) * perPage, filtered.length))
 </script>
@@ -217,19 +240,20 @@
 
 		<!-- Sort (card view) + view toggle, anchored to the right edge. -->
 		<div class="ml-auto flex shrink-0 items-center gap-2">
-			{#if effectiveView === "cards" && sortableCols.length}
-				<label class="flex items-center gap-1 text-xs">
-					<span class="text-surface-600-400">Sort</span>
-					<select
-						class="select w-auto py-1 text-xs"
+			{#if effectiveView === "cards" && sortableCols.length && !rowsMode}
+				<div class="flex items-center gap-1 text-xs">
+					<span class="text-surface-600-400" aria-hidden="true">Sort</span>
+					<Select
+						class="w-40"
+						label="Sort cards by"
+						labelHidden
+						options={sortableCols.map((col) => ({
+							value: col.key,
+							label: col.label
+						}))}
 						bind:value={sortKey}
-						aria-label="Sort cards by"
-					>
-						{#each sortableCols as col (col.key)}
-							<option value={col.key}>{col.label}</option>
-						{/each}
-					</select>
-				</label>
+					/>
+				</div>
 				<button
 					class="btn btn-sm preset-tonal-surface p-2"
 					onclick={() =>
@@ -245,11 +269,11 @@
 				</button>
 			{/if}
 
-			{#if !narrow}
+			{#if !narrow && !rowsMode}
 				<div class="flex gap-1" role="group" aria-label="View mode">
 					<button
 						class="btn btn-sm p-2 {effectiveView === 'list'
-							? 'preset-filled-primary-500'
+							? 'preset-tonal-primary'
 							: 'preset-tonal-surface'}"
 						onclick={() => (viewPref.value = "list")}
 						title="Table view"
@@ -260,7 +284,7 @@
 					</button>
 					<button
 						class="btn btn-sm p-2 {effectiveView === 'cards'
-							? 'preset-filled-primary-500'
+							? 'preset-tonal-primary'
 							: 'preset-tonal-surface'}"
 						onclick={() => (viewPref.value = "cards")}
 						title="Card view"
@@ -275,30 +299,65 @@
 	</div>
 
 	{#if loading}
-		<div
-			class="card preset-filled-surface-100-900 text-surface-600-400 px-3 py-8 text-center text-sm shadow-sm"
-		>
+		<div class="panel-card text-surface-600-400 py-8 text-center text-sm">
 			<span class="inline-flex items-center gap-2">
 				<Icons.Loader2 size={14} class="animate-spin" /> Loading…
 			</span>
 		</div>
 	{:else if !pageRows.length}
-		<div
-			class="card preset-filled-surface-100-900 text-surface-600-400 px-3 py-8 text-center text-sm shadow-sm"
-		>
+		<div class="panel-card text-surface-600-400 py-8 text-center text-sm">
 			{search ? "No matches." : emptyMessage}
 		</div>
+	{:else if rowsMode}
+		<!-- ── rows: the list pane of an AdminSplit ───────────────── -->
+		<ul class="flex flex-col gap-1">
+			{#each pageRows as row, i (i)}
+				{@const selected = isSelected?.(row) ?? false}
+				{@const meta = rowMeta?.(row)}
+				{@const badge = rowBadge?.(row)}
+				<li>
+					<button
+						type="button"
+						class="hover:bg-surface-200-800 focus-visible:outline-primary-500 flex min-h-11 w-full items-center gap-3 rounded-[10px] px-3 py-2 text-left focus-visible:outline-2 {selected
+							? 'sidebar-row-active'
+							: ''}"
+						aria-current={selected ? "true" : undefined}
+						onclick={() => onRowClick?.(row)}
+					>
+						<span class="min-w-0 flex-1">
+							<span
+								class="text-surface-950-50 block truncate text-sm font-medium"
+							>
+								{rowTitle!(row)}
+							</span>
+							{#if meta}
+								<span
+									class="text-surface-600-400 block truncate text-xs"
+								>
+									{meta}
+								</span>
+							{/if}
+						</span>
+						{#if badge}
+							<span
+								class="text-surface-600-400 border-surface-200-800 shrink-0 rounded-full border px-2 py-0.5 text-[11px]"
+							>
+								{badge}
+							</span>
+						{/if}
+					</button>
+				</li>
+			{/each}
+		</ul>
 	{:else if effectiveView === "list"}
 		<!-- ── table view ─────────────────────────────────────────── -->
-		<div
-			class="card preset-filled-surface-100-900 overflow-x-auto shadow-sm"
-		>
+		<div class="panel-card overflow-x-auto p-0!">
 			<table class="w-full min-w-[560px] border-collapse text-sm">
 				<thead>
 					<tr>
 						{#each columns as col (col.key)}
 							<th
-								class="admin-th border-surface-200-800 text-surface-700-300 border-b px-3 py-2.5 text-left text-[0.72rem] font-semibold tracking-wider uppercase {col.class ??
+								class="bg-surface-200-800 border-surface-200-800 text-surface-700-300 border-b px-3 py-2.5 text-left text-xs font-semibold {col.class ??
 									''}"
 							>
 								{#if col.value}
@@ -331,7 +390,7 @@
 				<tbody>
 					{#each pageRows as row, i (i)}
 						<tr
-							class="border-surface-200-800 even:bg-surface-950/4 dark:even:bg-surface-50/4 hover:bg-primary-500/10 border-b transition-colors last:border-b-0"
+							class="border-surface-200-800 even:bg-surface-950/4 dark:even:bg-surface-50/4 hover:bg-surface-200-800 border-b transition-colors last:border-b-0"
 							class:cursor-pointer={!!onRowClick}
 							onclick={() => onRowClick?.(row)}
 						>
@@ -340,7 +399,23 @@
 									class="px-3 py-2.5 align-middle {col.class ??
 										''}"
 								>
-									{@render cell(row, col)}
+									<!-- The row's click is a mouse convenience; the
+									     title cell is the keyboard's way in, as a
+									     real button (a <tr> is not focusable). -->
+									{#if onRowClick && col === titleCol}
+										<button
+											type="button"
+											class="text-left hover:underline focus-visible:underline"
+											onclick={(e) => {
+												e.stopPropagation()
+												onRowClick(row)
+											}}
+										>
+											{@render cell(row, col)}
+										</button>
+									{:else}
+										{@render cell(row, col)}
+									{/if}
 								</td>
 							{/each}
 						</tr>
@@ -358,13 +433,17 @@
 				     because action-column buttons render inside it. -->
 				<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
 				<div
-					class="card preset-filled-surface-100-900 hover:border-primary-500/50 flex flex-col gap-2 border border-transparent p-3 shadow-sm transition-colors"
+					class="panel-card flex flex-col gap-2 transition-colors"
 					class:cursor-pointer={!!onRowClick}
+					class:admin-card-link={!!onRowClick}
 					onclick={() => onRowClick?.(row)}
 					role={onRowClick ? "button" : undefined}
 					tabindex={onRowClick ? 0 : undefined}
 					onkeydown={(e) => {
-						if (onRowClick && (e.key === "Enter" || e.key === " ")) {
+						if (
+							onRowClick &&
+							(e.key === "Enter" || e.key === " ")
+						) {
 							e.preventDefault()
 							onRowClick(row)
 						}
@@ -379,7 +458,7 @@
 						<dl class="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
 							{#each bodyCols as col (col.key)}
 								<dt
-									class="text-surface-600-400 text-[0.68rem] font-semibold tracking-wider uppercase"
+									class="text-surface-600-400 text-xs font-semibold"
 								>
 									{col.label}
 								</dt>
@@ -409,20 +488,22 @@
 				Showing {showingFrom}–{showingTo} of {filtered.length}
 				{#if filtered.length !== rows.length}(filtered from {rows.length}){/if}
 			</span>
-			<label class="flex items-center gap-1">
-				<span>· Per page</span>
-				<select
-					class="select w-auto py-0.5 text-xs"
-					value={perPage}
-					onchange={(e) =>
-						setPerPage(Number(e.currentTarget.value))}
-					aria-label="Rows per page"
-				>
-					{#each PAGE_SIZES as n (n)}
-						<option value={n}>{n}</option>
-					{/each}
-				</select>
-			</label>
+			<span class="flex items-center gap-1">
+				<span aria-hidden="true">· Per page</span>
+				<Select
+					class="w-24"
+					label="Rows per page"
+					labelHidden
+					options={PAGE_SIZES.map((n) => ({
+						value: String(n),
+						label: String(n)
+					}))}
+					value={String(perPage)}
+					onValueChange={(v) => {
+						if (v) setPerPage(Number(v))
+					}}
+				/>
+			</span>
 		</span>
 		{#if pageCount > 1}
 			<span class="flex items-center gap-2">
@@ -447,13 +528,14 @@
 </div>
 
 <style>
-	/* The header band: one more tonal ink layer over the card's own 10%, so
-	   it harmonizes with `preset-tonal` in every theme instead of jumping to
-	   a fixed surface shade. */
-	.admin-th {
-		background: color-mix(
+	/* A clickable card's hover edge. Plain CSS rather than a `hover:` utility:
+	   `panel-card` sets its border under a `dark:` variant, which would win
+	   over a bare `hover:border-*` in dark mode. */
+	.admin-card-link:hover,
+	.admin-card-link:focus-visible {
+		border-color: color-mix(
 			in oklab,
-			light-dark(var(--color-surface-950), var(--color-surface-50)) 8%,
+			var(--color-primary-500) 50%,
 			transparent
 		);
 	}

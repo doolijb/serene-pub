@@ -9,6 +9,15 @@ import {
 	type ConnectionIdentity
 } from "$lib/server/connections/visibility"
 import type { StatusText } from "@serene-pub/sdk"
+import {
+	clearNotifications,
+	raiseNotification
+} from "$lib/server/notifications/store"
+import {
+	REPLY_FAILED,
+	regardingFor,
+	sessionHref
+} from "$lib/shared/notifications/kinds"
 
 /**
  * What a failure says when its own words cannot be shown.
@@ -127,17 +136,27 @@ export async function persistGenerationErrorRow(
 	sessionId: number,
 	generatingMessageId: number,
 	err: unknown,
-	/**
-	 * The queue item this failure belongs to, where the caller holds one.
-	 *
-	 * ⚠ A run may only fail the row it still owns. `isGenerating` alone is true
-	 * again the moment a regenerate starts, so a late failure from a detached or
-	 * superseded run would stop the generation that replaced it and show its
-	 * error instead. A caller with no queue item — a refusal raised before one
-	 * exists — passes nothing and fences on `isGenerating` as before.
-	 */
-	queueItemId?: string
+	opts: {
+		/**
+		 * The queue item this failure belongs to, where the caller holds one.
+		 *
+		 * ⚠ A run may only fail the row it still owns. `isGenerating` alone is
+		 * true again the moment a regenerate starts, so a late failure from a
+		 * detached or superseded run would stop the generation that replaced it
+		 * and show its error instead. A caller with no queue item — a refusal
+		 * raised before one exists — passes nothing and fences on
+		 * `isGenerating` as before.
+		 */
+		queueItemId?: string
+		/**
+		 * Who pressed for this reply — told by a `reply-failed` notification
+		 * when THIS call is the one that failed the row. Absent (a run nobody
+		 * asked for), the row still fails and nobody is notified.
+		 */
+		userId?: number
+	} = {}
 ) {
+	const { queueItemId, userId } = opts
 	const raw = friendlyErrorFromUnknown(err)
 	// The server log is the administrator's, and always has been.
 	console.error("[generationStatus] generation failed:", err)
@@ -187,5 +206,66 @@ export async function persistGenerationErrorRow(
 		// before the failure is visible from this moment and may be the line
 		// the session's cards quote.
 		broadcastSessionRow(socketIo, sessionId)
+	}
+	// `updated` is the once-only fact: the fence lets exactly one failure
+	// through per generation, so a second call for the same row raises
+	// nothing. After the row write, outside any transaction, and never able
+	// to throw into the failure path it reports on.
+	if (updated && userId != null)
+		await raiseReplyFailed(
+			userId,
+			sessionId,
+			generatingMessageId,
+			error.message
+		)
+}
+
+/**
+ * The message a reply failed on was regenerated, swiped or deleted: its
+ * `reply-failed` notification is superseded, for everyone it was raised for.
+ * Never throws (the store swallows).
+ */
+export async function clearReplyFailed(
+	sessionId: number,
+	messageId: number
+): Promise<void> {
+	await clearNotifications(
+		{ regarding: regardingFor.replyFailed(sessionId, messageId) },
+		"superseded"
+	)
+}
+
+/** Longest `{error}` a reply-failed notification carries. */
+const REPLY_FAILED_ERROR_MAX = 160
+
+async function raiseReplyFailed(
+	userId: number,
+	sessionId: number,
+	messageId: number,
+	message: string
+): Promise<void> {
+	try {
+		const [session] = await db
+			.select({ name: schema.sessions.name })
+			.from(schema.sessions)
+			.where(eq(schema.sessions.id, sessionId))
+			.limit(1)
+		const text = message.trim()
+		const errorText =
+			text.length > REPLY_FAILED_ERROR_MAX
+				? `${text.slice(0, REPLY_FAILED_ERROR_MAX - 1).trimEnd()}…`
+				: text
+		await raiseNotification({
+			userIds: [userId],
+			kind: REPLY_FAILED.id,
+			regarding: regardingFor.replyFailed(sessionId, messageId),
+			href: sessionHref(sessionId, messageId),
+			vars: {
+				session: session?.name?.trim() || "Untitled session",
+				error: errorText
+			}
+		})
+	} catch (err) {
+		console.error("[generationStatus] could not raise reply-failed:", err)
 	}
 }

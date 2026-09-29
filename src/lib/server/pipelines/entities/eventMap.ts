@@ -46,6 +46,7 @@
  */
 
 import { and, asc, eq, inArray } from "drizzle-orm"
+import { notCoreRow } from "$lib/server/plugins/frameHost"
 import * as schema from "$lib/server/db/schema"
 import { allEvents, getDefinition, i18nText, isEventId, packageEventById, sessionEvents } from "@serene-pub/sdk"
 import { subscriptionsOf } from "$lib/server/plugins/eventHost"
@@ -313,7 +314,7 @@ export async function eventMap(
 				adminDenied: schema.plugins.adminDenied
 			})
 			.from(schema.plugins)
-			.where(eq(schema.plugins.enabled, true))
+			.where(and(eq(schema.plugins.enabled, true), notCoreRow()))
 	const pluginListeners = new Map<string, string>()
 	for (const row of pluginRows) {
 		const { subscriptions } = subscriptionsOf(row)

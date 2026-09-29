@@ -22,11 +22,18 @@ import { cellsFromPx, type WidgetConfig, type Zone } from "./widgetGrid"
  * model, given the manager's live panel instances. Strips (top/bottom) are
  * out of scope — Plan 25 has no top/bottom zones, only anchored widgets, and
  * folding strips in is a separate design question, not this bridge's job.
+ *
+ * Placement is free (brief 7a): a side may hold the conversation — any
+ * `messages` instance, the bare id included, which is drawn like the log and
+ * is never a panel instance (`isConversation` says which ids those are) — and
+ * a genre's own primary panel (R71). Both GROW down the rail: a conversation
+ * given its content height would have no box of its own to scroll in.
  */
 export function widgetsFromSideZones(
 	zones: ResolvedZone[],
 	instances: PanelInstance[],
-	cell: number
+	cell: number,
+	isConversation: (id: string) => boolean = () => false
 ): WidgetConfig[] {
 	const byId = new Map(instances.map((p) => [p.id, p]))
 	const widgets: WidgetConfig[] = []
@@ -39,7 +46,9 @@ export function widgetsFromSideZones(
 		const pinned = z.mode === "rail"
 		z.def.widgets.forEach((panelId, order) => {
 			const inst = byId.get(panelId)
-			if (!inst || inst.role === "primary") return
+			const conversation = isConversation(panelId)
+			if (!inst && !conversation) return
+			const grows = conversation || inst?.role === "primary"
 			widgets.push({
 				id: panelId,
 				zone,
@@ -48,7 +57,10 @@ export function widgetsFromSideZones(
 				// The interim rail's single shared pixel width, expressed as the
 				// nearest stable cell count (cellsFromPx is built for exactly
 				// this: a measured/declared px size -> a whole-cell size).
-				size: { w: { cells: cellsFromPx(z.width, cell) }, h: "fixed" },
+				size: {
+					w: { cells: cellsFromPx(z.width, cell) },
+					h: grows ? "grow" : "fixed"
+				},
 				// Stacked top-down at full column width with natural height —
 				// mirrors today's `.zone-stack` (align-content:start, auto rows).
 				anchor: { top: true, left: true, right: true },
@@ -57,4 +69,46 @@ export function widgetsFromSideZones(
 		})
 	}
 	return widgets
+}
+
+/**
+ * One widget a side or strip zone draws: a panel instance, or a conversation
+ * (`panel: null`) — any `messages` instance, which is never a panel instance
+ * and draws through the log's own renderer wherever it sits.
+ */
+export interface ZoneEntry {
+	id: string
+	title: string
+	icon?: string
+	panel: PanelInstance | null
+}
+
+/**
+ * What a zone's widget list draws, lists and counts, in the list's order:
+ * every id that names a panel instance (a genre's own primary included, R71)
+ * or a conversation (`isConversation`), and nothing that names neither (a
+ * plugin since disabled, a retired id).
+ *
+ * ONE reader for the rail, the icon strip, the strips, the editor's side
+ * lists, the side counts and the phone's panels menu (brief 7a). The rail used
+ * to keep panel instances alone, so a side holding only a Messages widget drew
+ * nothing on the desktop and opened blank on the phone.
+ */
+export function zoneEntries(
+	ids: readonly string[],
+	instances: readonly PanelInstance[],
+	isConversation: (id: string) => boolean,
+	conversationTitle: (id: string) => string
+): ZoneEntry[] {
+	const byId = new Map(instances.map((p) => [p.id, p]))
+	const out: ZoneEntry[] = []
+	for (const id of ids) {
+		if (isConversation(id)) {
+			out.push({ id, title: conversationTitle(id), icon: "MessagesSquare", panel: null })
+			continue
+		}
+		const p = byId.get(id)
+		if (p) out.push({ id: p.id, title: p.title, icon: p.icon, panel: p })
+	}
+	return out
 }

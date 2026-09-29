@@ -13,16 +13,37 @@ export {
 	compareDates,
 	dateFromValue,
 	dateValue,
-	formatDate,
-	formatDateValue,
 	type StoryDate
 } from "$lib/shared/lorebooks/storyDate"
 
 import {
 	compareDates,
-	dateValue,
+	formatDate as formatThrough,
+	formatDateValue as formatValueThrough,
+	type StoryCalendar,
 	type StoryDate
 } from "$lib/shared/lorebooks/storyDate"
+import { openBookTime } from "../time/bookTime.svelte"
+
+/**
+ * A date as the open book spells it — through its declared calendar, or
+ * free-form (`Year 3, Mo. 2, Day 12`) when it declares none. Pass a calendar
+ * to spell for some other book.
+ */
+export function formatDate(
+	date: StoryDate,
+	calendar: StoryCalendar | null = openBookTime.calendar
+): string {
+	return formatThrough(date, calendar)
+}
+
+/** A placement value, spelled the same way. */
+export function formatDateValue(
+	value: number,
+	calendar: StoryCalendar | null = openBookTime.calendar
+): string {
+	return formatValueThrough(value, calendar)
+}
 
 /**
  * The exclusive range an existing entry's date must stay inside.

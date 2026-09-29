@@ -1962,7 +1962,7 @@
 								"content": "Verity:"
 							}
 						],
-						"promptFormat": "split_session",
+						"promptFormat": "split_chat",
 						"usedVariables": [
 							"systemBlock",
 							"currentDate",
@@ -2064,7 +2064,7 @@
 								"content": "Verity:"
 							}
 						],
-						"promptFormat": "split_session",
+						"promptFormat": "split_chat",
 						"usedVariables": [
 							"systemBlock",
 							"currentDate",
@@ -2202,7 +2202,7 @@
 								"content": "Verity:"
 							}
 						],
-						"promptFormat": "split_session",
+						"promptFormat": "split_chat",
 						"usedVariables": [
 							"systemBlock",
 							"currentDate",
@@ -2436,7 +2436,7 @@
 							"content": "Verity:"
 						}
 					],
-					"promptFormat": "split_session",
+					"promptFormat": "split_chat",
 					"usedVariables": [
 						"systemBlock",
 						"currentDate",

@@ -7,7 +7,7 @@
  * shared `id="characterCreatorStepName"` and every `<label for>` resolved to
  * whichever came first in the DOM. The ids are `$props.id()`-derived now.
  *
- * `render` from `svelte/server`, like `SessionStage.ssr.test.ts`: the repo
+ * `render` from `svelte/server`: the repo
  * has no browser test environment, and the markup is what this is about.
  * Two instances in one document are not renderable this way, so the pin is
  * the next best thing — the id is not the literal, it is what the label and

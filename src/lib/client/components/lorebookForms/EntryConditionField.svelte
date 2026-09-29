@@ -1,4 +1,6 @@
 <script lang="ts">
+	import Select from "$lib/client/components/inputs/Select.svelte"
+	import KeywordChips from "$lib/client/lorebooks/editor/KeywordChips.svelte"
 	/**
 	 * The condition an entry fires under — "not when *statue* is present".
 	 *
@@ -30,8 +32,13 @@
 	interface Props {
 		/** `andAny` / `andAll` / `notAny` / `notAll`, or null for no condition. */
 		selectiveLogic: string | null
-		/** Comma-separated, exactly as the primary keywords are authored. */
-		secondaryKeys: string
+		/**
+		 * One element per key, exactly as the primary keywords are authored —
+		 * a list, so a regex key's comma is never read as a separator (#146).
+		 */
+		secondaryKeys: string[]
+		/** Whether the entry matches its keys as regular expressions. */
+		regex?: boolean
 		/** Distinguishes this instance's inputs from the sibling tab's. */
 		idPrefix: string
 	}
@@ -39,6 +46,7 @@
 	let {
 		selectiveLogic = $bindable(),
 		secondaryKeys = $bindable(),
+		regex = false,
 		idPrefix
 	}: Props = $props()
 
@@ -54,45 +62,38 @@
 		{ value: "notAny", label: "Never when one of these is mentioned" },
 		{ value: "notAll", label: "Never when all of these are mentioned" }
 	]
-
-	const modeId = $derived(`${idPrefix}Condition`)
-	const keysId = $derived(`${idPrefix}ConditionKeys`)
 </script>
 
 <div class="flex flex-col gap-2">
 	<div class="flex w-full items-center justify-between gap-2">
-		<label for={modeId}>Extra condition</label>
-		<select
-			id={modeId}
-			class="select preset-filled-surface-200-800 w-max max-w-xs rounded-lg text-sm"
-			value={selectiveLogic ?? ""}
-			onchange={(e) => {
-				// "" is the absence of a condition and has to survive as null —
-				// the same distinction `recursionDepth` makes just above this
-				// in every one of these editors. A stored "" would be a fifth
-				// mode nothing implements.
-				const v = e.currentTarget.value
-				selectiveLogic = v === "" ? null : v
-			}}
-		>
-			<option value="">None</option>
-			{#each MODES as mode (mode.value)}
-				<option value={mode.value}>{mode.label}</option>
-			{/each}
-		</select>
+		<!-- Visual only: the Select names itself with the same words. -->
+		<span aria-hidden="true">Extra condition</span>
+		<Select
+			label="Extra condition"
+			labelHidden
+			class="w-full max-w-xs text-sm"
+			options={[{ value: "", label: "None" }, ...MODES]}
+			bind:value={
+				() => selectiveLogic ?? "",
+				(v) => {
+					// "" is the absence of a condition and has to survive as
+					// null — the same distinction `recursionDepth` makes just
+					// above this in every one of these editors. A stored ""
+					// would be a fifth mode nothing implements.
+					selectiveLogic = v === "" ? null : v
+				}
+			}
+		/>
 	</div>
 	{#if selectiveLogic}
 		<div class="flex flex-col gap-1">
-			<label class="text-surface-700-300 text-xs" for={keysId}>
-				Condition keywords
-				<span class="font-normal">(comma separated)</span>
-			</label>
-			<input
-				id={keysId}
-				class="input preset-filled-surface-200-800 w-full rounded-lg"
-				type="text"
-				bind:value={secondaryKeys}
-				placeholder="statue, mural"
+			<KeywordChips
+				bind:keys={secondaryKeys}
+				{idPrefix}
+				idSuffix="ConditionKeys"
+				label="Condition keywords"
+				placeholder="statue"
+				{regex}
 			/>
 			<p class="text-surface-700-300 text-xs">
 				Checked only after this entry's own keywords have matched. Leave

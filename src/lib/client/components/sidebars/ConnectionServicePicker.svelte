@@ -19,6 +19,8 @@
 		groupConnectionServiceItems,
 		filterConnectionServiceItems,
 		filterConnectionServiceItemsByModality,
+		CATEGORY_LABELS,
+		type ConnectionServiceCategory,
 		type ConnectionServiceItem
 	} from "$lib/shared/utils/connectionServiceItems"
 	import { CONNECTION_SECTIONS } from "$lib/shared/constants/connectionSections"
@@ -28,8 +30,23 @@
 		label: string
 		/** Seed the modality toggle (e.g. the Embeddings section). */
 		initialModality?: string
+		/**
+		 * Open narrowed to one category — the "Something I already run" door
+		 * opens on Local / Self-hosted (ruled 2026-09-24). Clearable.
+		 */
+		initialCategory?: ConnectionServiceCategory
 	}
-	let { selectedItem = $bindable(), label, initialModality }: Props = $props()
+	let {
+		selectedItem = $bindable(),
+		label,
+		initialModality,
+		initialCategory
+	}: Props = $props()
+	/** The person pressed "Show all": the seeded category stops applying. */
+	let categoryCleared = $state(false)
+	const category = $derived(
+		categoryCleared ? null : (initialCategory ?? null)
+	)
 
 	// Static for the app's lifetime (built from CONNECTION_TYPES +
 	// OPENAI_COMPATIBLE_PRESETS, neither of which change at runtime) — computed
@@ -40,7 +57,12 @@
 	// on an image connection stays on Image. A hand-set choice wins; the seed
 	// applies until then, read through a derived so it is not captured once.
 	let modalityOverride = $state<string | null>(null)
-	const modality = $derived(modalityOverride ?? initialModality ?? selectedItem?.modality ?? "text-gen")
+	const modality = $derived(
+		modalityOverride ??
+			initialModality ??
+			selectedItem?.modality ??
+			"text-gen"
+	)
 	function setModality(m: string) {
 		if (m === modality) return
 		modalityOverride = m
@@ -56,7 +78,7 @@
 		filterConnectionServiceItems(
 			filterConnectionServiceItemsByModality(ALL_ITEMS, modality),
 			search
-		)
+		).filter((i) => !category || i.category === category)
 	)
 	let groups = $derived(groupConnectionServiceItems(visibleItems))
 </script>
@@ -73,7 +95,7 @@
 			type="button"
 			class="flex items-center gap-1.5 px-3 py-1.5 text-sm {modality ===
 			s.modality
-				? 'preset-filled-primary-500'
+				? 'preset-tonal-primary'
 				: 'preset-tonal-surface'}"
 			aria-pressed={modality === s.modality}
 			onclick={() => setModality(s.modality)}
@@ -85,10 +107,24 @@
 </div>
 
 <span class="font-semibold">{label}</span>
+{#if category}
+	<p
+		class="text-surface-600-400 mt-1 flex flex-wrap items-center gap-2 text-xs"
+	>
+		Showing {CATEGORY_LABELS[category]} only
+		<button
+			type="button"
+			class="anchor"
+			onclick={() => (categoryCleared = true)}
+		>
+			Show all
+		</button>
+	</p>
+{/if}
 <div class="relative mt-1">
 	<Icons.Search
 		size={14}
-		class="text-muted pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2"
+		class="text-surface-600-400 pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2"
 		aria-hidden="true"
 	/>
 	<input
@@ -109,13 +145,11 @@
 	aria-label={label}
 >
 	{#if groups.length === 0}
-		<p class="text-surface-700-300 p-2 text-sm">
-			No matching service.
-		</p>
+		<p class="text-surface-700-300 p-2 text-sm">No matching service.</p>
 	{/if}
 	{#each groups as group (group.category)}
 		<p
-			class="text-surface-700-300 px-1 pt-1 text-xs font-semibold tracking-wide uppercase"
+			class="text-surface-600-400 px-1 pt-1 text-xs"
 		>
 			{group.label}
 		</p>
@@ -126,16 +160,16 @@
 				role="radio"
 				aria-checked={active}
 				onclick={() => (selectedItem = item)}
-				class="card flex w-full cursor-pointer items-start justify-between gap-2 rounded-xl p-3 text-left {active
-					? 'preset-filled-primary-500'
-					: 'preset-filled-surface-100-900 hover:preset-tonal-primary'}"
+				class="card preset-filled-surface-100-900 flex w-full cursor-pointer items-start justify-between gap-2 rounded-xl p-3 text-left {active
+					? 'ring-primary-500 ring-offset-surface-50 dark:ring-offset-surface-950 ring-2 ring-offset-2'
+					: 'hover:preset-tonal-primary'}"
 			>
 				<span class="min-w-0">
 					<span class="block truncate text-sm font-semibold">
 						{item.label}
 					</span>
 					<span
-						class="text-muted mt-0.5 block text-xs {active
+						class="text-surface-600-400 mt-0.5 block text-xs {active
 							? 'opacity-80'
 							: ''}"
 					>

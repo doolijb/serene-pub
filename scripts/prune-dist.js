@@ -125,8 +125,29 @@ export function pruneDist(outDir, target) {
 	// linux-x64; every currently-built desktop target is glibc.
 	rm(path.join(nm, "@img/sharp-libvips-linuxmusl-x64"))
 
-	// 11. SSR sourcemaps: build/client emits none, so this is purely a
-	// vite build --ssr asymmetry with no benefit once shipped.
+	// 8. esbuild — the component compiler's bundler (C6 P3, in-app authoring).
+	// Its native binary arrives as the optionalDependency
+	// `@esbuild/<platform>-<arch>`, and npm installs only the host's; CI
+	// builds each target on its own OS, so this normally finds exactly one.
+	// Kept to the target's own anyway, so a node_modules prepared on another
+	// machine can never ship a second platform's ~10 MB binary.
+	for (const scope of esbuildScopes(nm)) {
+		for (const name of fs.readdirSync(scope)) {
+			if (name !== `${target.platform}-${target.arch}`) rm(path.join(scope, name))
+		}
+	}
+	// 9. esbuild's install script (on Unix) replaces the tiny JS launcher at
+	// esbuild/bin/esbuild with a COPY of the native binary, for CLI start-up
+	// speed. The app only uses the JS API, which resolves the binary from
+	// `@esbuild/<platform>-<arch>/bin/esbuild` (esbuild lib/main.js
+	// generateBinPath), so the copy is a second 10 MB nothing reads. The
+	// launcher is ~9 KB; anything over 1 MB is the copy.
+	const esbuildBin = path.join(nm, "esbuild/bin/esbuild")
+	if (fs.existsSync(esbuildBin) && fs.statSync(esbuildBin).size > 1024 * 1024) rm(esbuildBin)
+
+	// 11. Server sourcemaps: adapter-node bundles build/server with its own
+	// rollup pass, which hard-codes `sourcemap: true` in its output options.
+	// build/client emits none, and nothing reads them once shipped.
 	rmMatching(path.join(outDir, "build/server"), (name) =>
 		name.endsWith(".map")
 	)
@@ -151,6 +172,25 @@ export function pruneDist(outDir, target) {
 		path.join(outDir, "build/client"),
 		(name) => name.endsWith(".gz") || name.endsWith(".br")
 	)
+}
+
+/** Every `@esbuild` scope directory: the top level's and any a package nests. */
+function esbuildScopes(nm) {
+	const out = []
+	const top = path.join(nm, "@esbuild")
+	if (fs.existsSync(top)) out.push(top)
+	if (!fs.existsSync(nm)) return out
+	for (const entry of fs.readdirSync(nm, { withFileTypes: true })) {
+		if (!entry.isDirectory()) continue
+		const parents = entry.name.startsWith("@")
+			? fs.readdirSync(path.join(nm, entry.name)).map((n) => path.join(nm, entry.name, n))
+			: [path.join(nm, entry.name)]
+		for (const p of parents) {
+			const nested = path.join(p, "node_modules/@esbuild")
+			if (fs.existsSync(nested)) out.push(nested)
+		}
+	}
+	return out
 }
 
 /**
@@ -211,6 +251,25 @@ export function pruneAndroidAssets(assetsDir) {
 	}
 	const gptTok = path.join(nm, "gpt-tokenizer")
 	for (const dir of ["dist", "cjs", "src"]) rm(path.join(gptTok, dir))
+
+	// 2b. The component compiler (C6 P3). There is NO compiler on Android
+	// (owner ruling 2026-09-25: nodejs-mobile 18 cannot start esbuild's Go
+	// service, and authoring on a phone is impractical). The server already
+	// reports "no compiler" there (components/compile.ts checks
+	// SERENE_PUB_PLATFORM first), so these are files nothing can load:
+	//   - esbuild and every @esbuild/* native binary (desktop-only builds);
+	//   - Svelte's COMPILER — the runtime (svelte/src/internal, …) stays,
+	//     because the server bundle imports it; nothing in the runtime imports
+	//     the compiler;
+	//   - the CLI's in-memory compiler module. `component-source` (the pure
+	//     path/limit/hash helpers the component store imports) stays.
+	rm(path.join(nm, "esbuild"))
+	for (const scope of esbuildScopes(nm)) rm(scope)
+	rm(path.join(nm, "svelte/compiler"))
+	rm(path.join(nm, "svelte/src/compiler"))
+	rmMatching(path.join(nm, "@serene-pub/cli/dist"), (name) =>
+		/^componentCompile\.(js|d\.ts)(\.map)?$/.test(name)
+	)
 
 	// 3. `intl` is deliberately NOT removed here — see this function's own
 	// doc comment. Removing it would break date/number formatting on-device.

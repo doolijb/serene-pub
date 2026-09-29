@@ -1,0 +1,1 @@
+ALTER TABLE "pipeline_definition_registry" DROP COLUMN "audience_from";

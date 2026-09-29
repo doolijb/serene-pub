@@ -63,22 +63,22 @@ async function install(pluginId: string, bundleSource: string): Promise<void> {
 
 describe("plugin row store", () => {
 	it("commits a diff and reads it back", async () => {
-		await install("acme/rows", "module.exports = { hooks: {} }")
-		await commitPluginRows(db, "acme/rows", [
+		await install("acme.rows", "module.exports = { hooks: {} }")
+		await commitPluginRows(db, "acme.rows", [
 			{ op: "put", key: "a", value: { n: 1 }, bytes: 9, updatedAt: NOW },
 			{ op: "put", key: "b", value: "two", bytes: 6, updatedAt: NOW }
 		])
-		expect(await loadPluginRows(db, "acme/rows")).toEqual([
+		expect(await loadPluginRows(db, "acme.rows")).toEqual([
 			{ key: "a", value: { n: 1 }, bytes: 9, updatedAt: NOW },
 			{ key: "b", value: "two", bytes: 6, updatedAt: NOW }
 		])
 
 		// A put on an existing key is an upsert, not a duplicate.
-		await commitPluginRows(db, "acme/rows", [
+		await commitPluginRows(db, "acme.rows", [
 			{ op: "put", key: "a", value: { n: 2 }, bytes: 9, updatedAt: NOW },
 			{ op: "delete", key: "b" }
 		])
-		expect(await loadPluginRows(db, "acme/rows")).toEqual([
+		expect(await loadPluginRows(db, "acme.rows")).toEqual([
 			{ key: "a", value: { n: 2 }, bytes: 9, updatedAt: NOW }
 		])
 	})
@@ -86,11 +86,11 @@ describe("plugin row store", () => {
 	it("stores JSON null as a value, distinct from a missing key", async () => {
 		// SQL NULL in this column IS the extension's null — the column is
 		// nullable precisely so `put(key, null)` can be stored at all.
-		await install("acme/nulls", "module.exports = { hooks: {} }")
-		await commitPluginRows(db, "acme/nulls", [
+		await install("acme.nulls", "module.exports = { hooks: {} }")
+		await commitPluginRows(db, "acme.nulls", [
 			{ op: "put", key: "n", value: null, bytes: 5, updatedAt: NOW }
 		])
-		const rows = await loadPluginRows(db, "acme/nulls")
+		const rows = await loadPluginRows(db, "acme.nulls")
 		expect(rows).toHaveLength(1)
 		expect(rows[0]!.value).toBeNull()
 	})
@@ -100,9 +100,9 @@ describe("plugin row store", () => {
 		// extension's load can reach the other's value. There is no parameter
 		// anywhere on the surface a hook calls that names a plugin, so this is
 		// the only place the scope could be got wrong.
-		await install("acme/one", "module.exports = { hooks: {} }")
-		await install("acme/two", "module.exports = { hooks: {} }")
-		await commitPluginRows(db, "acme/one", [
+		await install("acme.one", "module.exports = { hooks: {} }")
+		await install("acme.two", "module.exports = { hooks: {} }")
+		await commitPluginRows(db, "acme.one", [
 			{
 				op: "put",
 				key: "secret",
@@ -111,7 +111,7 @@ describe("plugin row store", () => {
 				updatedAt: NOW
 			}
 		])
-		await commitPluginRows(db, "acme/two", [
+		await commitPluginRows(db, "acme.two", [
 			{
 				op: "put",
 				key: "secret",
@@ -121,59 +121,59 @@ describe("plugin row store", () => {
 			}
 		])
 		expect(
-			(await loadPluginRows(db, "acme/one")).map((r) => r.value)
+			(await loadPluginRows(db, "acme.one")).map((r) => r.value)
 		).toEqual(["one's"])
 		expect(
-			(await loadPluginRows(db, "acme/two")).map((r) => r.value)
+			(await loadPluginRows(db, "acme.two")).map((r) => r.value)
 		).toEqual(["two's"])
 		// And a delete is scoped too: one extension cannot erase the other's.
-		await commitPluginRows(db, "acme/one", [
+		await commitPluginRows(db, "acme.one", [
 			{ op: "delete", key: "secret" }
 		])
-		expect(await loadPluginRows(db, "acme/one")).toEqual([])
-		expect(await loadPluginRows(db, "acme/two")).toHaveLength(1)
+		expect(await loadPluginRows(db, "acme.one")).toEqual([])
+		expect(await loadPluginRows(db, "acme.two")).toHaveLength(1)
 	})
 
 	it("uninstalling an extension takes its rows with it", async () => {
 		// The SDK promises an extension that "the host removes the extension's
 		// namespace afterwards regardless"; the FK is that promise, kept by the
 		// database rather than by a cleanup path someone has to remember.
-		await install("acme/gone", "module.exports = { hooks: {} }")
-		await commitPluginRows(db, "acme/gone", [
+		await install("acme.gone", "module.exports = { hooks: {} }")
+		await commitPluginRows(db, "acme.gone", [
 			{ op: "put", key: "k", value: 1, bytes: 2, updatedAt: NOW }
 		])
-		await removePlugin(db, "acme/gone")
+		await removePlugin(db, "acme.gone")
 		expect(
 			await db
 				.select()
 				.from(pluginRows)
-				.where(eq(pluginRows.pluginId, "acme/gone"))
+				.where(eq(pluginRows.pluginId, "acme.gone"))
 		).toEqual([])
 	})
 
 	it("clears an extension's rows without uninstalling it", async () => {
-		await install("acme/clear", "module.exports = { hooks: {} }")
-		await commitPluginRows(db, "acme/clear", [
+		await install("acme.clear", "module.exports = { hooks: {} }")
+		await commitPluginRows(db, "acme.clear", [
 			{ op: "put", key: "k", value: 1, bytes: 2, updatedAt: NOW }
 		])
-		await clearPluginRows(db, "acme/clear")
-		expect(await loadPluginRows(db, "acme/clear")).toEqual([])
+		await clearPluginRows(db, "acme.clear")
+		expect(await loadPluginRows(db, "acme.clear")).toEqual([])
 		expect(
 			await db
 				.select()
 				.from(plugins)
-				.where(eq(plugins.pluginId, "acme/clear"))
+				.where(eq(plugins.pluginId, "acme.clear"))
 		).toHaveLength(1)
 	})
 
 	it("rejects a malformed change before it reaches the table", async () => {
-		await install("acme/bad", "module.exports = { hooks: {} }")
+		await install("acme.bad", "module.exports = { hooks: {} }")
 		await expect(
-			commitPluginRows(db, "acme/bad", [
+			commitPluginRows(db, "acme.bad", [
 				{ op: "put", key: "", value: 1, bytes: 1, updatedAt: NOW }
 			])
 		).rejects.toThrow(/unusable key/)
-		expect(await loadPluginRows(db, "acme/bad")).toEqual([])
+		expect(await loadPluginRows(db, "acme.bad")).toEqual([])
 	})
 })
 
@@ -208,11 +208,11 @@ describe("rows through the manager, end to end", () => {
 	}
 
 	it("a returning hook's rows land, and are there for the next call", async () => {
-		await install("acme/bump", HOOK)
+		await install("acme.bump", HOOK)
 		const dir = tmp()
 		const mgr = manager(dir)
 		mgr.register({
-			id: "acme/bump",
+			id: "acme.bump",
 			name: "Bump",
 			bundleSource: HOOK,
 			bundleHash: "h",
@@ -224,13 +224,13 @@ describe("rows through the manager, end to end", () => {
 		mgr.markReady()
 
 		const first = await mgr.callHook(
-			"acme/bump",
+			"acme.bump",
 			"bump",
 			{},
 			{ kind: "outlet", timeoutMs: 5000 }
 		)
 		expect(first.ok && first.value).toBe("first")
-		expect(await loadPluginRows(db, "acme/bump")).toEqual([
+		expect(await loadPluginRows(db, "acme.bump")).toEqual([
 			{
 				key: "counter",
 				value: 1,
@@ -244,27 +244,27 @@ describe("rows through the manager, end to end", () => {
 		// The next call reads what the last one committed — the snapshot is a
 		// real read, not an empty start.
 		const second = await mgr.callHook(
-			"acme/bump",
+			"acme.bump",
 			"bump",
 			{},
 			{ kind: "outlet", timeoutMs: 5000 }
 		)
 		expect(second.ok && second.value).toBe(1)
-		expect((await loadPluginRows(db, "acme/bump"))[0]!.value).toBe(2)
+		expect((await loadPluginRows(db, "acme.bump"))[0]!.value).toBe(2)
 		expect(
 			fs.readFileSync(
-				path.join(dir, "extensions_data", "acme_bump", "side.txt"),
+				path.join(dir, "extensions_data", "acme.bump", "side.txt"),
 				"utf8"
 			)
 		).toBe("wrote 2")
 	}, 60_000)
 
 	it("a killed hook commits neither its rows nor its files", async () => {
-		await install("acme/doom", HOOK)
+		await install("acme.doom", HOOK)
 		const dir = tmp()
 		const mgr = manager(dir)
 		mgr.register({
-			id: "acme/doom",
+			id: "acme.doom",
 			name: "Doom",
 			bundleSource: HOOK,
 			bundleHash: "h",
@@ -276,7 +276,7 @@ describe("rows through the manager, end to end", () => {
 		mgr.markReady()
 
 		const running = mgr.callHook(
-			"acme/doom",
+			"acme.doom",
 			"doom",
 			{},
 			{ kind: "outlet", timeoutMs: 30_000, runId: "run-1" }
@@ -291,8 +291,8 @@ describe("rows through the manager, end to end", () => {
 		expect(r.ok).toBe(false)
 
 		await sleep(200)
-		expect(await loadPluginRows(db, "acme/doom")).toEqual([])
-		const storeDir = path.join(dir, "extensions_data", "acme_doom")
+		expect(await loadPluginRows(db, "acme.doom")).toEqual([])
+		const storeDir = path.join(dir, "extensions_data", "acme.doom")
 		expect(fs.existsSync(storeDir) ? fs.readdirSync(storeDir) : []).toEqual(
 			[]
 		)
@@ -305,7 +305,7 @@ describe("rows through the manager, end to end", () => {
 		const dir = tmp()
 		const mgr = manager(dir)
 		mgr.register({
-			id: "acme/unregistered",
+			id: "acme.unregistered",
 			name: "Unregistered",
 			bundleSource: HOOK,
 			bundleHash: "h",
@@ -316,7 +316,7 @@ describe("rows through the manager, end to end", () => {
 		})
 		mgr.markReady()
 		const r = await mgr.callHook(
-			"acme/unregistered",
+			"acme.unregistered",
 			"bump",
 			{},
 			{ kind: "outlet", timeoutMs: 5000 }

@@ -23,7 +23,7 @@
 		onclose,
 		onSelect,
 		onMultiSelect,
-		title = "Select User",
+		title = "Select user",
 		description,
 		multiSelect = false
 	}: Props = $props()
@@ -130,7 +130,7 @@
 						aria-label="Close"
 						onclick={onclose}
 					>
-						<Icons.X size={20} />
+						<Icons.X size={20} aria-hidden="true" />
 					</button>
 				</header>
 				{#if description}
@@ -139,7 +139,8 @@
 				<input
 					class="input w-full"
 					type="text"
-					placeholder="Search users..."
+					placeholder="Search users…"
+					aria-label="Search users"
 					bind:value={search}
 				/>
 				<div class="max-h-[60dvh] min-h-0 overflow-y-auto">
@@ -152,10 +153,13 @@
 						{#each filtered as user}
 							{#if user.id}
 								<button
-									class="preset-outlined-surface-400-600 hover:preset-filled-surface-500 relative flex w-full items-center gap-3 overflow-hidden rounded p-3 {multiSelect &&
+									class="preset-outlined-surface-400-600 hover:bg-surface-200-800 relative flex w-full items-center gap-3 overflow-hidden rounded p-3 {multiSelect &&
 									selectedUserIds.has(user.id)
-										? 'preset-filled-primary-500'
+										? 'sidebar-row-active'
 										: ''}"
+									aria-pressed={multiSelect
+										? selectedUserIds.has(user.id)
+										: undefined}
 									onclick={() => handleUserSelect(user.id!)}
 								>
 									<div class="flex flex-1 items-center gap-3">
@@ -194,7 +198,7 @@
 							onclick={handleConfirmMultiSelect}
 							disabled={selectedUserIds.size === 0}
 						>
-							Add {selectedUserIds.size} Guest{selectedUserIds.size !==
+							Add {selectedUserIds.size} guest{selectedUserIds.size !==
 							1
 								? "s"
 								: ""}

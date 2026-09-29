@@ -44,7 +44,7 @@ const widget = (
 ): WidgetDecl => ({
 	id,
 	title: id,
-	surface: { kind: "native", component: id },
+	component: id,
 	...(channels ? { channels } : {}),
 	settings
 })

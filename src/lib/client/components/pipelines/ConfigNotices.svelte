@@ -15,7 +15,9 @@
 	 * that is gone belongs to the configuration named above it. Back-fills
 	 * appear here too, quieter — they answer the same question ("why is this
 	 * different today") and a reader who has to look in two places will look in
-	 * neither.
+	 * neither. So do misfits (typed templates P5): a selected context template
+	 * that names something its step does not supply. Startup writes those and
+	 * removes them once the template fits again; nothing was refused or changed.
 	 *
 	 * Dismissing writes `acknowledged_at` on the row, so a notice stays
 	 * dismissed across tabs, reloads and reboots. Nothing here is remembered
@@ -114,21 +116,34 @@
 
 	const culled = $derived(notices.filter((n) => n.kind === "culled"))
 	const unbound = $derived(notices.filter((n) => n.kind === "unbound"))
+	const misfit = $derived(notices.filter((n) => n.kind === "misfit"))
+	/** Only misfits: nothing about a version change to say. */
+	const onlyMisfits = $derived(misfit.length === notices.length)
 
-	/** The badge word per kind — what happened, in one word. */
+	/** The badge word per kind — what happened, in one or two words. */
 	const badge = (kind: Sockets.Pipelines.ConfigNotice["kind"]) =>
-		kind === "culled" ? "removed" : kind === "unbound" ? "cannot run" : "added"
+		kind === "culled"
+			? "removed"
+			: kind === "unbound"
+				? "cannot run"
+				: kind === "misfit"
+					? "doesn't fit"
+					: "added"
 </script>
 
 {#if notices.length}
 	<section
-		class="card preset-filled-surface-100-900 border-warning-500 space-y-2 border-l-4 p-3"
-		aria-label="What the last version change did to this configuration"
+		class="panel-card border-l-warning-500 space-y-2 border-l-4"
+		aria-label={onlyMisfits
+			? "Templates this configuration selects that don't fit"
+			: "What the last version change did to this configuration"}
 	>
 		<div class="flex flex-wrap items-center gap-2">
 			<h3 class="flex items-center gap-1 text-sm font-semibold">
 				<Icons.TriangleAlert size={15} class="text-warning-500" />
-				This configuration changed with a new version
+				{onlyMisfits
+					? "A template here doesn't fit its step"
+					: "This configuration changed with a new version"}
 			</h3>
 			{#if notices.length > 1}
 				<button
@@ -140,31 +155,50 @@
 				</button>
 			{/if}
 		</div>
-		<p class="text-surface-600-400 text-xs">
-			{#if culled.length}
-				A published version no longer has {culled.length === 1
-					? "a setting this configuration held"
-					: "settings this configuration held"}, so
-				{culled.length === 1 ? "its value was" : "their values were"}
-				removed. What {culled.length === 1 ? "it" : "they"} held is kept
-				below.
-			{:else if unbound.length}
-				This pipeline places {unbound.length === 1 ? "a node" : "nodes"}
-				this build does not run. A run stops there until the node is
-				bound or taken out of the pipeline.
-			{:else}
-				New settings arrived at the values the pipeline ships.
-			{/if}
-		</p>
+		{#if misfit.length}
+			<p class="text-surface-600-400 text-xs">
+				{misfit.length === 1
+					? "This step's template uses names the step doesn't supply."
+					: "These steps' templates use names the steps don't supply."}
+				Nothing was changed: {misfit.length === 1
+					? "the step still uses it. Edit the template or pick another"
+					: "the steps still use them. Edit the templates or pick others"};
+				this clears the next time Serene Pub starts.
+			</p>
+		{/if}
+		{#if !onlyMisfits}
+			<p class="text-surface-600-400 text-xs">
+				{#if culled.length}
+					A published version no longer has {culled.length === 1
+						? "a setting this configuration held"
+						: "settings this configuration held"}, so
+					{culled.length === 1
+						? "its value was"
+						: "their values were"}
+					removed. What {culled.length === 1 ? "it" : "they"} held is kept
+					below.
+				{:else if unbound.length}
+					This pipeline places {unbound.length === 1
+						? "a node"
+						: "nodes"}
+					this build does not run. A run stops there until the node is
+					bound or taken out of the pipeline.
+				{:else}
+					New settings arrived at the values the pipeline ships.
+				{/if}
+			</p>
+		{/if}
 		<ul class="flex flex-col gap-1">
 			{#each notices as n (n.id)}
 				<li
-					class="preset-tonal-surface flex flex-wrap items-center gap-2 rounded p-2 text-sm"
+					class="bg-surface-50-950 flex flex-wrap items-center gap-2 rounded-[10px] p-2 text-sm"
 				>
 					<span
-						class="{n.kind === 'culled' || n.kind === 'unbound'
+						class="{n.kind === 'culled' ||
+						n.kind === 'unbound' ||
+						n.kind === 'misfit'
 							? 'preset-tonal-warning'
-							: 'preset-tonal-surface'} rounded-full px-2 py-0.5 text-[0.68rem]"
+							: 'preset-tonal-surface'} rounded-full px-2 py-0.5 text-[11px]"
 					>
 						{badge(n.kind)}
 					</span>

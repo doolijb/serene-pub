@@ -137,7 +137,7 @@ const EXPECTED: Record<string, Record<string, [string, string]>> = {
 			"### Instruction:\nhello"
 		]
 	},
-	split_session: {
+	split_chat: {
 		system: ["<@role:system>\nhello\n", "<@role:system>\nhello\n"],
 		user: ["<@role:user>\nhello\n", "<@role:user>\nhello\n"],
 		assistant: ["<@role:assistant>\nhello\n", "<@role:assistant>\nhello\n"],
@@ -184,7 +184,7 @@ const EXPECTED_STOPS: Record<string, string[]> = {
 		"assistant:",
 		"Assistant:"
 	],
-	split_session: [
+	split_chat: [
 		"system:",
 		"System:",
 		"user:",
@@ -267,7 +267,7 @@ describe("stop strings come off the row and keep their old values", () => {
 	}
 
 	it("covers all eight, which the switch it replaced did not", () => {
-		// ⚠ The old switch had five arms. Claude, Instruct and split-session
+		// ⚠ The old switch had five arms. Claude, Instruct and split-chat
 		// reached the generic list through `default:` — the same bytes, but by
 		// accident, and nothing made adding a format add its stop strings.
 		// Every template now carries its own, so the question cannot go
@@ -339,7 +339,7 @@ describe("the three states that mean 'no template'", () => {
 	})
 })
 
-describe("split_session is referenceable, not authorable", () => {
+describe("split_chat is referenceable, not authorable", () => {
 	const split = completionTemplateOf(PromptFormats.SPLIT_CHAT)
 
 	it("is the only role_array template, and it is not selectable", () => {

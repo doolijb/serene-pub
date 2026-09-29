@@ -29,7 +29,7 @@
 		/>
 	{/if}
 	{#if activity?.status === "running"}
-		<Icons.Loader
+		<Icons.Loader2
 			size={13}
 			class="text-primary-500 shrink-0 animate-spin"
 			aria-label="Processing"

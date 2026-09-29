@@ -106,21 +106,30 @@ describe("bookReadout — what this book holds", () => {
 		])
 	})
 
-	it("names the branches there are and says branching is not built", () => {
+	it("says main only when the book has no branches", () => {
 		expect(lineOf("branches")).toEqual({
 			id: "branches",
-			label: "Branches",
+			label: "Lines",
 			count: 1,
-			detail: ["main", "branching is not built yet"]
+			detail: ["main only"]
 		})
 	})
 
-	it("says nothing is mapped when no place is", () => {
+	it("names every line when the book has branches (#90, #133)", () => {
+		const line = lineOf("branches", {
+			branches: ["main", "marrow-stays", "the long winter"]
+		})
+		expect(line.count).toBe(3)
+		expect(line.detail).toEqual(["main, marrow-stays, the long winter"])
+		expect(line.detail.join(" ")).not.toContain("not built")
+	})
+
+	it("says there are no places when no Location entry exists", () => {
 		expect(lineOf("places")).toEqual({
 			id: "places",
 			label: "Places",
 			count: 0,
-			detail: ["nothing mapped yet"]
+			detail: ["no Location entries yet"]
 		})
 	})
 

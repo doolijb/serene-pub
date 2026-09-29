@@ -2,7 +2,8 @@
  * Frame panels through the real server resolution (plan 21 §7 / §9). A mode
  * declares a panel whose surface is a plugin frame; `sessions:view` must return
  * it in `modePanels` with a resolved `/plugin-ui/...` src when the owning plugin
- * is installed, pass native panels through untouched, and drop a frame whose
+ * is installed, serve core's own component from `/core-ui` (dropping one core
+ * does not declare), and drop a frame whose
  * plugin is absent to a placeholder (no src) — never an error.
  *
  * And, since the namespacing ruling (2026-09-17), the other half: a plugin's
@@ -14,6 +15,7 @@
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest"
 import { eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
+import { HOST_ELEMENTS_VERSION, WIDGET_PROTOCOL, currentBuiltAgainst } from "@serene-pub/sdk"
 import type { TestDb } from "$lib/server/utils/testDb"
 
 let testDb: TestDb
@@ -42,7 +44,7 @@ async function makeUser(name: string) {
 	return createTestUser(testDb, name)
 }
 
-/** A mode that declares a frame panel + a native panel, and (optionally) an
+/** A mode that declares a frame panel + core components, and (optionally) an
  * installed plugin that owns the frame. */
 async function scenario(installPlugin: boolean) {
 	const k = n++
@@ -86,13 +88,23 @@ async function scenario(installPlugin: boolean) {
 					title: "Map",
 					role: "secondary",
 					surface: { kind: "frame", pluginId, entry: "ui/map.html" },
-					channels: ["map"]
+					channels: ["map"],
+					// R75: what it reads — a name that is no base section is
+					// dropped, never trusted off the stored declaration.
+					reads: ["settings", "made-up"]
 				},
 				{
 					id: "notes",
 					title: "Notes",
 					role: "secondary",
-					surface: { kind: "native", component: "sample-notes" }
+					component: "scene-portraits"
+				},
+				// A component core does not declare: `/core-ui` would 404.
+				{
+					id: "ghost",
+					title: "Ghost",
+					role: "secondary",
+					component: "sample-notes"
 				}
 			]
 		}
@@ -107,6 +119,14 @@ async function scenario(installPlugin: boolean) {
 }
 
 describe("sessions:view — frame panels (21)", () => {
+	// Plugin frames are part of the extension subsystem (SP_PLUGINS_ENABLED).
+	beforeAll(() => {
+		vi.stubEnv("SP_PLUGINS_ENABLED", "1")
+	})
+	afterAll(() => {
+		vi.unstubAllEnvs()
+	})
+
 	test("resolves a mode's frame panel src when its plugin is installed", async () => {
 		const { sessionsViewHandler } = await import("./sessions")
 		const s = await scenario(true)
@@ -120,14 +140,21 @@ describe("sessions:view — frame panels (21)", () => {
 		expect(map.surface).toMatchObject({ kind: "frame", pluginId: s.pluginId })
 		expect(map.src).toBe(`/plugin-ui/${s.pluginId}/ui/map.html`)
 		expect(map.channels).toEqual(["map"])
+		// Only the sections it reads are sent to it (R75).
+		expect(map.reads).toEqual(["settings"])
 
-		// native panel passes through with no src
+		// Core's own component: core's remote, served by `/core-ui` (R79).
 		const notes = res.modePanels.find((p) => p.id === "notes")!
-		expect(notes.surface).toMatchObject({
-			kind: "native",
-			component: "sample-notes"
+		expect(notes.surface).toEqual({
+			kind: "remote",
+			owner: "core",
+			component: "scene-portraits"
 		})
-		expect(notes.src).toBeUndefined()
+		expect(notes.src).toBe("/core-ui/scene-portraits")
+		// One core does not declare is not offered, rather than offered broken.
+		expect(res.modePanels.some((p) => p.id === "ghost")).toBe(false)
+		// No `reads` declared: every section, as before R75.
+		expect(notes.reads).toBeUndefined()
 
 		// the same plugin's panel also shows in the global panel list
 		expect(res.panels.some((f) => f.panelId === "map")).toBe(true)
@@ -190,7 +217,7 @@ describe("sessions:view — frame panels (21)", () => {
 						id: "map",
 						title: "The genre's own map",
 						role: "secondary",
-						surface: { kind: "native", component: "sample-notes" },
+						component: "scene-portraits",
 						settings: { zoom: { type: "number", default: 1 } }
 					}
 				]
@@ -243,7 +270,7 @@ describe("sessions:view — frame panels (21)", () => {
 		// carries ITS declared settings too.
 		const genreMap = res.modePanels.find((p) => p.id === "map")!
 		expect(genreMap.title).toBe("The genre's own map")
-		expect(genreMap.surface).toMatchObject({ kind: "native" })
+		expect(genreMap.surface).toMatchObject({ kind: "remote", owner: "core" })
 		expect(genreMap.settings).toEqual({
 			zoom: { type: "number", default: 1 }
 		})
@@ -259,6 +286,20 @@ describe("sessions:view — frame panels (21)", () => {
 				.map((f) => f.panelId)
 				.sort()
 		).toEqual(["log", "map"])
+	})
+
+	test("a plugin's own frame panel reads every section: the ⏳ frame-panel shape declares no `reads`", async () => {
+		const s = await pluginOnlyScenario()
+		// Even one written into the stored manifest by hand is not carried:
+		// `FramePanelDecl` has no `reads`, so `surfacesOf` never reads one.
+		const [row] = await testDb.select().from(schema.plugins).where(eq(schema.plugins.pluginId, s.pluginId))
+		const manifest = row.manifest as { surfaces: { panels: Array<Record<string, unknown>> } }
+		manifest.surfaces.panels[0].reads = ["settings"]
+		await testDb.update(schema.plugins).set({ manifest }).where(eq(schema.plugins.pluginId, s.pluginId))
+		const res = await view(s.owner.id, s.session.id)
+		const tray = res.modePanels.find((p) => p.id === `${s.pluginId}:map`)!
+		expect(tray.src).toBe(`/plugin-ui/${s.pluginId}/ui/tray.html`)
+		expect(tray).not.toHaveProperty("reads")
 	})
 
 	test("disabling the plugin takes its widgets off the wire, and nothing else", async () => {
@@ -284,5 +325,232 @@ describe("sessions:view — frame panels (21)", () => {
 		expect(res.panels.some((f) => f.pluginId === s.pluginId)).toBe(false)
 		// The genre's own widget is not collateral.
 		expect(res.modePanels.some((p) => p.id === "map")).toBe(true)
+	})
+})
+
+/**
+ * R71: a package's top-level `widgets`, offered in every session of a genre
+ * they are scoped to — with the base sections each reads (R75), clamped off
+ * the stored manifest by the SDK's one rule.
+ */
+describe("sessions:view — package widgets (R71) carry what they read (R75)", () => {
+	// Package widgets are part of the extension subsystem (SP_PLUGINS_ENABLED).
+	beforeAll(() => {
+		vi.stubEnv("SP_PLUGINS_ENABLED", "1")
+	})
+	afterAll(() => {
+		vi.unstubAllEnvs()
+	})
+
+	async function packageScenario(adminDenied?: (manifest: Record<string, unknown>) => string[]) {
+		const k = n++
+		const owner = await makeUser(`pkg-owner-${k}`)
+		const pluginId = `acme.hud-${k}`
+		const manifest = {
+			widgets: [
+				{ id: "hud", title: "HUD", component: "hud", reads: ["settings", "made-up", "settings", "session_full"] },
+				{ id: "all", title: "Everything", component: "all" },
+				// The twenty-questions shape: scopes declared ONLY on a top-level widget.
+				{ id: "log", title: "Log", component: "log", scopes: ["session:full", "session:state"] },
+				// Asks for a scope of its own — granted only if its plugin was.
+				{ id: "greedy", title: "Greedy", component: "log", scopes: ["characters"] },
+				// F1: built against a host contract this host does / does not speak.
+				{ id: "today", title: "Today", component: "today" },
+				{ id: "future", title: "Future", component: "future" },
+				{ id: "old-vocab", title: "Old vocabulary", component: "old-vocab" }
+			],
+			components: [
+				{ slug: "hud", entry: "ui/hud.js" },
+				{ slug: "all", entry: "ui/all.js" },
+				{ slug: "log", entry: "ui/log.mjs" },
+				{ slug: "today", entry: "ui/today.js", builtAgainst: currentBuiltAgainst({ sdk: "0.6.0" }) },
+				{ slug: "future", entry: "ui/future.js", builtAgainst: { widgetProtocol: WIDGET_PROTOCOL + 1, hostElements: HOST_ELEMENTS_VERSION } },
+				{ slug: "old-vocab", entry: "ui/old-vocab.js", builtAgainst: { widgetProtocol: WIDGET_PROTOCOL, hostElements: "0.3" } }
+			]
+		}
+		await testDb.insert(schema.plugins).values({
+			pluginId,
+			name: "HUD",
+			bundleSource: "// x",
+			bundleHash: "deadbeef",
+			enabled: true,
+			manifest,
+			...(adminDenied ? { adminDenied: adminDenied(manifest) } : {})
+		})
+		const typeId = `core:inlet/pkgmode-${k}`
+		await testDb.insert(schema.pipelineDefinitionRegistry).values({
+			definitionId: typeId,
+			version: 1,
+			kind: "inlet",
+			status: "live",
+			sessionShape: { panels: [] }
+		})
+		const [session] = await testDb
+			.insert(schema.sessions)
+			.values({ userId: owner.id, isGroup: false, genreId: `${typeId}@1` })
+			.returning()
+		return { owner, session, pluginId }
+	}
+
+	test("a declared list is clamped to base sections, once each; an absent one is left off (reads all)", async () => {
+		const s = await packageScenario()
+		const { sessionsViewHandler } = await import("./sessions")
+		const res = await sessionsViewHandler.handler(fakeSocket(s.owner.id), { sessionId: s.session.id } as any, noop)
+		const hud = res.modePanels.find((p) => p.id === `${s.pluginId}:hud`)!
+		expect(hud.surface).toEqual({ kind: "remote", owner: s.pluginId, component: "hud" })
+		expect(hud.reads).toEqual(["settings"])
+		const all = res.modePanels.find((p) => p.id === `${s.pluginId}:all`)!
+		expect(all).not.toHaveProperty("reads")
+	})
+
+	test("a top-level widget's scopes are refused until reviewed, then reach that widget's grants", async () => {
+		const unreviewed = await packageScenario()
+		const { sessionsViewHandler } = await import("./sessions")
+		const before = await sessionsViewHandler.handler(fakeSocket(unreviewed.owner.id), { sessionId: unreviewed.session.id } as any, noop)
+		expect(before.modePanels.find((p) => p.id === `${unreviewed.pluginId}:log`)).not.toHaveProperty("grants")
+
+		const { reviewMarks, declaredPermissions } = await import("$lib/server/plugins/permissions")
+		const s = await packageScenario((m) => reviewMarks(declaredPermissions(m)))
+		const res = await sessionsViewHandler.handler(fakeSocket(s.owner.id), { sessionId: s.session.id } as any, noop)
+		expect(res.modePanels.find((p) => p.id === `${s.pluginId}:log`)!.grants).toEqual(["session:full", "session:state"])
+		// Per widget: one that asked nothing is given nothing; each gets only what IT asked,
+		// never a sibling's grant.
+		expect(res.modePanels.find((p) => p.id === `${s.pluginId}:hud`)).not.toHaveProperty("grants")
+		expect(res.modePanels.find((p) => p.id === `${s.pluginId}:greedy`)!.grants).toEqual(["characters"])
+	})
+
+	test("a denied scope stays out of the widget's grants", async () => {
+		const { reviewMarks, declaredPermissions } = await import("$lib/server/plugins/permissions")
+		const s = await packageScenario((m) => [
+			...reviewMarks(declaredPermissions(m)),
+			"widget:session:full",
+			"widget:characters"
+		])
+		const { sessionsViewHandler } = await import("./sessions")
+		const res = await sessionsViewHandler.handler(fakeSocket(s.owner.id), { sessionId: s.session.id } as any, noop)
+		expect(res.modePanels.find((p) => p.id === `${s.pluginId}:log`)!.grants).toEqual(["session:state"])
+		// A widget cannot get a scope its plugin was not granted.
+		expect(res.modePanels.find((p) => p.id === `${s.pluginId}:greedy`)).not.toHaveProperty("grants")
+	})
+
+	test("F1: a component built for a protocol or vocabulary major this host lacks is not offered; one without a record is", async () => {
+		const s = await packageScenario()
+		const { sessionsViewHandler } = await import("./sessions")
+		const res = await sessionsViewHandler.handler(fakeSocket(s.owner.id), { sessionId: s.session.id } as any, noop)
+		const offered = (id: string) => res.modePanels.some((p) => p.id === `${s.pluginId}:${id}`)
+		expect(offered("today")).toBe(true)
+		expect(offered("hud")).toBe(true) // no builtAgainst: built before the record
+		expect(offered("future")).toBe(false)
+		expect(offered("old-vocab")).toBe(false)
+	})
+
+	test("F1: the admin plugins list says which components this host will not mount, and why", async () => {
+		const s = await packageScenario()
+		const [row] = await testDb.select().from(schema.plugins).where(eq(schema.plugins.pluginId, s.pluginId))
+		const { toPluginRow } = await import("./plugins")
+		expect(toPluginRow(row as never).componentRefusals).toEqual([
+			{ slug: "future", reason: `built for widget protocol ${WIDGET_PROTOCOL + 1}; this host speaks ${WIDGET_PROTOCOL}` },
+			{ slug: "old-vocab", reason: `built for host-element vocabulary 0.3; this host has ${HOST_ELEMENTS_VERSION}` }
+		])
+	})
+
+	test("with SP_PLUGINS_ENABLED off no package widget is offered", async () => {
+		const s = await packageScenario()
+		const { sessionsViewHandler } = await import("./sessions")
+		vi.stubEnv("SP_PLUGINS_ENABLED", "")
+		try {
+			const res = await sessionsViewHandler.handler(fakeSocket(s.owner.id), { sessionId: s.session.id } as any, noop)
+			expect(res.modePanels.some((p) => p.id.startsWith(`${s.pluginId}:`))).toBe(false)
+		} finally {
+			vi.stubEnv("SP_PLUGINS_ENABLED", "1")
+		}
+	})
+})
+
+/**
+ * With the extension subsystem off (SP_PLUGINS_ENABLED unset) no plugin UI of
+ * any kind is offered: not a genre's frame panel, not a plugin's own
+ * `surfaces.panels` (⏳ `res.panels` or `modePanels`), not a genre's
+ * `shape.view` session-view — while core's own components still are.
+ */
+describe("sessions:view — with SP_PLUGINS_ENABLED off no plugin UI is offered", () => {
+	beforeAll(() => {
+		vi.stubEnv("SP_PLUGINS_ENABLED", "")
+	})
+	afterAll(() => {
+		vi.unstubAllEnvs()
+	})
+
+	async function flagOffScenario() {
+		const k = n++
+		const owner = await makeUser(`off-owner-${k}`)
+		const pluginId = `acme.offview-${k}`
+		await testDb.insert(schema.plugins).values({
+			pluginId,
+			name: "Off",
+			bundleSource: "// x",
+			bundleHash: "deadbeef",
+			enabled: true,
+			manifest: {
+				surfaces: {
+					panels: [{ id: "tray", entry: "ui/tray.html", title: "Tray" }],
+					"session-view": { entry: "ui/view.html", title: "View" }
+				}
+			}
+		})
+		const typeId = `core:inlet/offmode-${k}`
+		await testDb.insert(schema.pipelineDefinitionRegistry).values({
+			definitionId: typeId,
+			version: 1,
+			kind: "inlet",
+			status: "live",
+			sessionShape: {
+				view: pluginId,
+				panels: [
+					{
+						id: "map",
+						title: "Map",
+						role: "secondary",
+						surface: { kind: "frame", pluginId, entry: "ui/tray.html" }
+					},
+					{ id: "notes", title: "Notes", role: "secondary", component: "scene-portraits" }
+				]
+			}
+		})
+		const [session] = await testDb
+			.insert(schema.sessions)
+			.values({ userId: owner.id, isGroup: false, genreId: `${typeId}@1` })
+			.returning()
+		return { owner, session, pluginId }
+	}
+
+	const view = async (userId: number, sessionId: number) => {
+		const { sessionsViewHandler } = await import("./sessions")
+		return sessionsViewHandler.handler(fakeSocket(userId), { sessionId } as any, noop)
+	}
+
+	test("offers no frame panel, plugin panel or session view; core's component stays", async () => {
+		const s = await flagOffScenario()
+		const res = await view(s.owner.id, s.session.id)
+		expect(res.panels).toEqual([])
+		expect(res.sessionView).toBeUndefined()
+		expect(res.modePanels.some((p) => p.id === "map")).toBe(false)
+		expect(res.modePanels.some((p) => p.id.startsWith(`${s.pluginId}:`))).toBe(false)
+		expect(res.modePanels.some((p) => (p.src ?? "").startsWith("/plugin-ui/"))).toBe(false)
+		expect(res.modePanels.find((p) => p.id === "notes")?.src).toBe("/core-ui/scene-portraits")
+	})
+
+	test("the same session with the flag on offers all of it", async () => {
+		const s = await flagOffScenario()
+		vi.stubEnv("SP_PLUGINS_ENABLED", "1")
+		try {
+			const res = await view(s.owner.id, s.session.id)
+			expect(res.panels.some((p) => p.pluginId === s.pluginId)).toBe(true)
+			expect(res.sessionView?.src).toBe(`/plugin-ui/${s.pluginId}/ui/view.html`)
+			expect(res.modePanels.find((p) => p.id === "map")?.src).toBe(`/plugin-ui/${s.pluginId}/ui/tray.html`)
+			expect(res.modePanels.some((p) => p.id === `${s.pluginId}:tray`)).toBe(true)
+		} finally {
+			vi.stubEnv("SP_PLUGINS_ENABLED", "")
+		}
 	})
 })

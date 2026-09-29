@@ -209,10 +209,9 @@ class NodeService : Service() {
             // a system browser tab — meaningless here (the WebView already shows
             // the page) and fatal: there's no xdg-open binary on Android, and the
             // resulting ENOENT is an unhandled child_process 'error' event, which
-            // crashes the whole in-process Node runtime. Same convention Docker
-            // already uses (see DOCKER.md) to disable this, despite the confusing
-            // name — "1" means "disable", not "enable".
-            "SERENE_AUTO_OPEN=1"
+            // crashes the whole in-process Node runtime. Same switch Docker
+            // uses (see DOCKER.md).
+            "AUTO_OPEN_CLIENT=0"
         )
 
         Thread {

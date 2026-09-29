@@ -169,7 +169,7 @@ const isFiniteNumber = (v: unknown): v is number =>
 	typeof v === "number" && Number.isFinite(v)
 
 /** An `enum`'s allowed values, from `of` or from `members`' keys. */
-const enumOptions = (decl: any): string[] | null => {
+const enumValues = (decl: any): string[] | null => {
 	const from =
 		(Array.isArray(decl?.of) && decl.of) ||
 		(Array.isArray(decl?.members) && decl.members.map((m: any) => m?.key))
@@ -235,7 +235,7 @@ export function entryCheckExpression(
 		}
 
 		if (decl.type === "enum") {
-			const opts = enumOptions(decl)
+			const opts = enumValues(decl)
 			if (opts)
 				conjuncts.push(
 					`(CASE WHEN jsonb_typeof(${get}) = 'string' THEN "fields"->>${k} IN (${opts

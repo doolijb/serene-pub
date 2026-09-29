@@ -29,8 +29,10 @@ import {
 	type FormAddressedPayload,
 	type FormBlock,
 	type NodeEvent,
+	type NodeSwap,
 	type ParticipantRef,
 	type Receipt,
+	type ReceiptMeta,
 	type StatusText
 } from "@serene-pub/sdk"
 import {
@@ -76,7 +78,10 @@ import {
 } from "$lib/server/pipelines/runtime/liveRow"
 import { noteRun } from "$lib/server/pipelines/runtime/capPause"
 import { createStatusRelay } from "$lib/server/pipelines/runtime/runStatus"
-import { narratingProvider } from "$lib/server/pipelines/runtime/specShape"
+import {
+	stepStatuses,
+	streamingSteps
+} from "$lib/server/pipelines/runtime/specShape"
 import {
 	ownPresence,
 	resolvePortrayals,
@@ -92,6 +97,7 @@ import {
 import { resolveChannel } from "$lib/server/messages/channels"
 import type { PluginHookDispatch } from "$lib/server/pipelines/scripts/pluginDispatch"
 import type { RunProgress } from "$lib/shared/sockets/progress"
+import type { FormAwaitingPerson } from "$lib/server/notifications/openForm"
 import { v4 as uuidv4 } from "uuid"
 import { eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
@@ -129,7 +135,7 @@ export interface TurnRequest {
 	/** The message that triggered this turn. */
 	text: string
 	/**
-	 * Text an in-progress reply has already produced — a **continue** (ruling
+	 * Text an in-progress reply has already produced — an **extend** (ruling
 	 * 2026-09-08, D-2).
 	 *
 	 * Absent on every other turn. It travels to the input node's
@@ -156,7 +162,14 @@ export interface TurnRequest {
 	 */
 	channel?: string
 	/**
-	 * The reply row this turn re-drives — a regenerate, swipe or continue of a
+	 * How this turn was reached — the fired entry's `via` (`strategy`,
+	 * `script`, `voice`, `pick`, or `narrate` for the `core#narrate` press;
+	 * lair pass R8). On the inlet's `via` port, where a genre routes on it.
+	 * Absent is empty.
+	 */
+	via?: string
+	/**
+	 * The reply row this turn re-drives — a regenerate, swipe or extend of a
 	 * message that already exists. On the inlet's `messageId` port; the spec's
 	 * placeholder outlet claims it instead of inserting. Absent on a fresh turn.
 	 */
@@ -214,7 +227,7 @@ export interface TurnRequest {
 	 */
 	skipReceipt?: boolean
 	/** Run-level facts the dispatch decided — see `SpecRunRequest.meta`. */
-	meta?: Record<string, unknown>
+	meta?: ReceiptMeta
 }
 
 /**
@@ -287,14 +300,14 @@ export interface SpecRunRequest {
 	input: unknown
 	/**
 	 * The message verb re-driving this run's row — `regenerate`, `swipe` or
-	 * `continue` — when one is (R-15, 2026-09-16). Reaches the host scope,
+	 * `extend` — when one is (R-15, 2026-09-16). Reaches the host scope,
 	 * where `update-message`'s finishing write puts it on the
 	 * `message-updated` it records for the next reply's inlet: a rewrite is
 	 * a change to history a pipeline has seen, and which verb made it is
 	 * the fact worth carrying. Absent on a fresh turn and on every run that
 	 * is not a reply.
 	 */
-	verb?: "regenerate" | "swipe" | "continue"
+	verb?: "regenerate" | "swipe" | "extend"
 	/**
 	 * Which channel this run's trigger is on (R-C, 2026-09-17). Reaches the
 	 * host scope, which is where the turn's channel becomes the declared
@@ -317,7 +330,7 @@ export interface SpecRunRequest {
 	 * block; reaches the host scope, where `create-message` stamps it on the
 	 * rows it writes as `metadata.answersForm`. See `HostScope.answersForm`.
 	 */
-	answersForm?: { messageId: number; blockId: string }
+	answersForm?: { messageId: number; blockId: string; toOwner?: boolean }
 	/**
 	 * Rows this run is producing that the caller already knows about. The
 	 * host records everything the run writes as it is written, so almost no
@@ -401,8 +414,11 @@ export interface SpecRunRequest {
 	 * ⚠ Not for anything a node can say. A node's own account belongs on its
 	 * node row, where the trail is queryable; this is only for the facts that
 	 * were decided before the first node existed.
+	 *
+	 * Typed by the SDK (`ReceiptMeta`, F2) and recorded by the executor
+	 * through `RunOptions.meta`, never stamped on after the run.
 	 */
-	meta?: Record<string, unknown>
+	meta?: ReceiptMeta
 	skipReceipt?: boolean
 	/**
 	 * Where this run stands in a tree of runs (01 §8; U5d): set by a
@@ -509,9 +525,13 @@ async function runSpecOnce(request: SpecRunRequest): Promise<Receipt> {
 	const { applyNodeRebinds } = await import(
 		"$lib/server/pipelines/entities/bindings"
 	)
+	// Which nodes a swap answered, for the receipt (F2): `run` records it
+	// per row as `swap`, and `null` — the pin ran — everywhere else.
+	const swaps: Record<string, NodeSwap> = {}
 	const doc = await applyNodeRebinds(request.db, loaded, {
 		specSlug: specId,
-		sessionId: request.sessionId
+		sessionId: request.sessionId,
+		swaps
 	})
 
 	// Whose document this is (D-6) — read from the spec ROW, joined to the
@@ -554,6 +574,14 @@ async function runSpecOnce(request: SpecRunRequest): Promise<Receipt> {
 	const addressed: Array<{ payload: FormAddressedPayload; form: FormBlock }> = []
 
 	/**
+	 * The forms this run put to a person (or to nobody — the owner's), each
+	 * raised as an `open-form` notification after the receipt is saved, for
+	 * the reason `addressed` waits: the row is announced once the write has
+	 * landed, never from inside an outlet (PLAN-notifications §5).
+	 */
+	const formsAwaitingPeople: FormAwaitingPerson[] = []
+
+	/**
 	 * The fires this run's `answer-form` commits collected (U5d review, W2):
 	 * each is the click an oracle's answer makes, dispatched through
 	 * `fireAction` **after this run's receipt is saved** — outside any node
@@ -565,10 +593,11 @@ async function runSpecOnce(request: SpecRunRequest): Promise<Receipt> {
 
 	/**
 	 * The run's live row — core's half of the pipeline owning its row. Which
-	 * oracle streams is read off the document once (`narratingProvider`): a
-	 * multi-stage spec's planner and keeper must not write JSON into the row
-	 * the narrator is filling. The executor says WHICH row; this says what
-	 * happens to it.
+	 * oracle streams is DECLARED by the document (`streamingSteps`, lair pass
+	 * B3 / D6): a multi-step spec's planner and keeper must not write JSON
+	 * into the row the narrator is filling, and a spec that declares nothing
+	 * streams nothing. The executor says WHICH row; this says what happens
+	 * to it.
 	 */
 	const live = createLiveRow({
 		db: request.db,
@@ -576,7 +605,7 @@ async function runSpecOnce(request: SpecRunRequest): Promise<Receipt> {
 		sessionId: request.sessionId,
 		runId,
 		userId: request.userId,
-		streamingNode: narratingProvider(doc)
+		streamingNodes: streamingSteps(doc)
 	})
 
 	/**
@@ -633,7 +662,10 @@ async function runSpecOnce(request: SpecRunRequest): Promise<Receipt> {
 					speaker: request.speaker,
 					sideCharacterName: request.sideCharacter?.name ?? null,
 					userId: request.userId,
-					onStatus: request.onStatus
+					onStatus: request.onStatus,
+					// What each step says while it runs, as the spec declared
+					// it (lair pass B18 / D5) — never a node key.
+					declared: stepStatuses(doc)
 				})
 
 	const scope: HostScope = {
@@ -682,6 +714,7 @@ async function runSpecOnce(request: SpecRunRequest): Promise<Receipt> {
 		auto: request.auto,
 		lineage: request.lineage,
 		addressed,
+		formsAwaitingPeople,
 		fires,
 		artifacts,
 		io: request.io,
@@ -788,6 +821,13 @@ async function runSpecOnce(request: SpecRunRequest): Promise<Receipt> {
 		preview: request.preview,
 		// Pinned on the receipt at construction — before node 1 runs.
 		portrayals,
+		// The swaps seated above, so each row says pin or swap (F2).
+		swaps,
+		// How the run was reached — a session preset's fallback — recorded
+		// on the receipt as `meta` (SDK `ReceiptMeta`) at construction.
+		...(request.meta && Object.keys(request.meta).length
+			? { meta: request.meta }
+			: {}),
 		// Where this run stands in its tree, likewise (01 §8; U5d).
 		lineage: request.lineage,
 		// Core's bindings, with a plugin's process-transport nodes beside
@@ -836,7 +876,14 @@ async function runSpecOnce(request: SpecRunRequest): Promise<Receipt> {
 					})
 				}
 			: {}),
-		onNode: request.onNode,
+		onNode: status
+			? (event) => {
+					// A declared step status shows from the node's start, so a
+					// step whose handler says nothing still says what it is.
+					if (event.phase === "start") status.started(event.nodeKey)
+					request.onNode?.(event)
+				}
+			: request.onNode,
 		// A node's status, as the handler wrote it; the relay fills
 		// `{speaker}` and routes it (R-19). Absent on a pre-call preview.
 		...(status ? { onStatus: (nodeKey, text) => status.set(nodeKey, text) } : {}),
@@ -895,20 +942,6 @@ async function runSpecOnce(request: SpecRunRequest): Promise<Receipt> {
 		})
 	})
 
-	/**
-	 * How the run was reached, stamped on the receipt before it is stored or
-	 * returned.
-	 *
-	 * On the receipt rather than in a column beside it: a substitution is
-	 * something the reader of *this run* needs, and the receipt is the one
-	 * thing every explain surface already loads. Merged rather than assigned,
-	 * so a second dispatch fact later does not have to displace this one.
-	 */
-	if (request.meta && Object.keys(request.meta).length) {
-		const carrier = receipt as Receipt & { meta?: Record<string, unknown> }
-		carrier.meta = { ...(carrier.meta ?? {}), ...request.meta }
-	}
-
 	// Recorded before returning, and never allowed to fail the turn. A run that
 	// produced a good reply and then could not write its own receipt has still
 	// produced a good reply.
@@ -925,9 +958,26 @@ async function runSpecOnce(request: SpecRunRequest): Promise<Receipt> {
 			 * *and* create rows of its own — and the old "the Consumer's id
 			 * wins, else the caller's" could only ever record one of them.
 			 */
-			artifacts
+			artifacts,
+			// The session hears its lore was ranked once the store commits (R81).
+			io: request.io
 		})
 
+	/**
+	 * The forms this run put to a person, announced now: whatever the run's
+	 * outcome, a form it wrote is on the row and waits. Before the AI's
+	 * dispatch below, which may take a model call. Never throws.
+	 */
+	if (formsAwaitingPeople.length) {
+		try {
+			const { raiseOpenForms } = await import(
+				"$lib/server/notifications/openForm"
+			)
+			await raiseOpenForms(request.db, request.sessionId, formsAwaitingPeople)
+		} catch (err) {
+			console.warn(`[forms] open-form notifications for run ${runId} failed:`, err)
+		}
+	}
 	/**
 	 * The forms this run put to the AI, answered now (R-15 *Forms*; U5d):
 	 * each is a `form-addressed` dispatch — a child run, receipted with this
@@ -1021,7 +1071,7 @@ async function dispatchFires(
 		// was receipted above.)
 		if (receipt.outcome !== "ok") continue
 		try {
-			await announceChildStage(request, receipt, fire.specId)
+			await announceChildRun(request, receipt, fire.specId)
 			const outcome = await fireAction(request.db, {
 				sessionId: request.sessionId,
 				action: fire.action,
@@ -1076,7 +1126,7 @@ async function dispatchFires(
  * status is about the node that set it, and that node's run has ended; the
  * child's own statuses replace the stage as they arrive, as before.
  */
-async function announceChildStage(
+async function announceChildRun(
 	request: SpecRunRequest,
 	receipt: Receipt,
 	specId: string
@@ -1144,7 +1194,7 @@ async function dispatchAddressedForms(
 	for (const { payload, form } of addressed) {
 		const parsed = parseParticipantRef(payload.addressee)
 		try {
-			if (answerSpec) await announceChildStage(request, receipt, answerSpec)
+			if (answerSpec) await announceChildRun(request, receipt, answerSpec)
 			await dispatchSessionEvent(request.db, {
 				sessionId: request.sessionId,
 				userId: request.userId,
@@ -1225,7 +1275,7 @@ export async function runTurn(request: TurnRequest): Promise<Receipt> {
 	 *
 	 * The run's owner, as a participant reference: their persona in this
 	 * session where they have one (`character:<id>` — a persona IS a
-	 * character since 0132, and a line written as them is written as that
+	 * character, and a line written as them is written as that
 	 * character), else themselves. The same resolution a form answered by
 	 * nobody in particular already used, so the two cannot disagree about who
 	 * a person is here.
@@ -1273,7 +1323,7 @@ export async function runTurn(request: TurnRequest): Promise<Receipt> {
 		input: {
 			text: request.text,
 			/**
-			 * The continue verb's one value (ruling 2026-09-08, D-2). Empty on
+			 * The extend verb's one value (ruling 2026-09-08, D-2). Empty on
 			 * every other turn — the port resolves, the seed line renders
 			 * empty, and the model starts the reply as it always did. Specs
 			 * whose input type declares no such port never resolve it.
@@ -1288,6 +1338,9 @@ export async function runTurn(request: TurnRequest): Promise<Receipt> {
 			 * never resolve it.
 			 */
 			channel: resolveChannel(request.channel),
+			// How the turn was reached (R8) — always supplied, for the same
+			// reason `channel` is: a junction compares against it.
+			via: request.via ?? "",
 			// The side-character trigger's first step, on the input node's own
 			// port — so the receipt answers "why did this turn sound like
 			// Vell" afterwards rather than only the trigger knowing. Null on

@@ -1,13 +1,21 @@
 /**
- * The `session_layout_presets` table's server module (PLAN 25 redesign,
- * 2026-08-30): the boot seed reconciler, plus the reads the socket handlers
- * resolve a session's active layout through.
+ * The `session_layout_presets` table's server module: the core seed
+ * reconciler, the reads a session's layout is answered from, and the verbs a
+ * person manages their own **session layout presets** with (save, rename,
+ * re-capture, share, clone, delete).
  *
- * Seeds one shipped **default** preset per genre and prunes the defaults of
- * genres it is syncing whose seed key is no longer shipped — the same "seed the
- * defaults, remove defaults no longer in the list" pass `widgetStyles.ts` runs
- * for widget skins, which this deliberately mirrors statement for statement.
- * Runs on boot, right after the pipeline specs the genre list is read from.
+ * Every row stores ONE format, the **session layout** (NOMENCLATURE §9): the
+ * live blob the screen draws, `{ zoneLayout?, widgetGrid?, arrangedGrid?,
+ * widgetSettings? }`, verbatim in `layout`. The retired layout document
+ * (LayoutDoc v2) and its columns are gone (plan
+ * `PLAN-layout-one-format-2026-09-28`, brief 2).
+ *
+ * Seeds one shipped **genre default layout** per genre and prunes the defaults
+ * of genres it is syncing whose seed key is no longer shipped — the same "seed
+ * the defaults, remove defaults no longer in the list" pass `widgetStyles.ts`
+ * runs for widget skins, which this deliberately mirrors statement for
+ * statement. Runs on boot, right after the pipeline specs the genre list is
+ * read from.
  *
  * ## The upgrade-safety landmine (why this looks the way it does)
  *
@@ -23,21 +31,15 @@
  *   • Rows are inserted with NO explicit id — the identity sequence assigns one —
  *     so there is no id collision with user rows and no `resyncIdSequences` need.
  *
- * ## Why the shipped default is an EMPTY layout — and the one exception
+ * ## Why most shipped defaults are an EMPTY layout
  *
  * `{}` means "no overrides", which is precisely what the client renders when a
- * user has saved nothing: the app's own built-in arrangement. That makes the
- * default preset a real, selectable row that means "the shipped layout" —
- * applying it clears your overrides — while keeping the preset system inert for
- * everyone who never touches it. See `$lib/shared/sessionLayout/presets` for
- * how the layers compose.
- *
- * A genre may nevertheless ship an arrangement (`SeedableGenre.layout`), and
- * the Adventure genre does: a world strip above the conversation, the party
- * docked down the right. That is a genre saying what its surface IS, which is
- * a different statement from a user saving one, and it still composes the same
- * way — under the user's own `layoutSettings` and under their own arrangement,
- * so anybody who has moved a panel keeps what they moved.
+ * user has saved nothing: the app's own built-in arrangement. A genre may
+ * nevertheless ship an arrangement (`SeedableGenre.layout`), and the core
+ * genres with a surface of their own do (Adventure's world strip above the
+ * conversation, the party docked down the right). ⏳ Until the copy model
+ * lands (brief 3) a session's own slots are still drawn over this row's
+ * (`$lib/shared/sessionLayout/presets`).
  *
  * ## Prune scope
  *
@@ -66,35 +68,29 @@ import { db } from "."
 import * as schema from "./schema"
 import {
 	DEFAULT_PRESET_NAME,
-	layoutPresetSeedKey,
-	presetWidgetSettings
+	layoutPresetSeedKey
 } from "$lib/shared/sessionLayout/presets"
-import {
-	BUILT_IN_LAYOUT_DOC,
-	builtInLayoutDoc
-} from "$lib/shared/sessionLayout/document"
 import {
 	canManage,
 	canSee,
 	canShare,
-	type LayoutActor,
-	type LayoutPresetOrigin
+	type LayoutActor
 } from "./layoutPermissions"
-import { readWidgetSettings } from "./widgetSettings"
-import { validateLayoutDoc } from "@serene-pub/sdk"
-import type { LayoutDecls, LayoutDoc, LayoutPreset } from "@serene-pub/sdk"
-import type {
-	LayoutPresetRow,
-	LayoutTier,
-	LayoutVisibility,
-	ResolvedLayout
-} from "$lib/shared/sockets/layouts"
+import { getGenre, i18nText } from "@serene-pub/sdk"
+import type { GenreLayoutDecl } from "@serene-pub/sdk"
+
+/** Who may see a row. Core and plugin rows are always `shared`. */
+export type LayoutVisibility = "shared" | "private"
+
+/** A session layout, as every `layout` column stores it: verbatim JSON. */
+type SessionLayoutBlob = Record<string, unknown>
 
 /** The genres to seed a default preset for. */
 export interface SeedableGenre {
 	genreId: string
 	/**
-	 * The preset's name. Absent means `Default`.
+	 * The preset's name. Absent means the name the core genre declares for its
+	 * first layout, else `Default`.
 	 *
 	 * A genre that ships an arrangement of its own gets to name it — "Adventure"
 	 * rather than "Default" — because the presets list shows it beside a user's
@@ -103,21 +99,12 @@ export interface SeedableGenre {
 	 */
 	name?: string
 	/**
-	 * ⏳ The LEGACY arrangement, verbatim. Absent means `{}` — "no overrides",
-	 * i.e. the app's own built-in layout, which is what keeps the preset system
-	 * inert for every genre that does not ship one (see the header).
+	 * The **session layout** this genre ships, verbatim. Absent means `{}` —
+	 * "no overrides", i.e. the app's own built-in layout, which is what keeps
+	 * the preset system inert for every genre that does not ship one (see the
+	 * header).
 	 */
-	layout?: Record<string, unknown>
-	/**
-	 * The v2 **layout preset** this genre ships: the document plus the
-	 * per-instance settings and style pins that came with it.
-	 *
-	 * Absent means "look it up": the reconciler asks `coreLayoutV2(genreId)`,
-	 * so the boot task does not have to union a second catalog list the way it
-	 * unions the legacy one. Passed explicitly by tests and by any caller that
-	 * wants to say something the catalog does not.
-	 */
-	preset?: LayoutPreset
+	layout?: SessionLayoutBlob
 }
 
 /** What a reseed stamps on the rows it wrote, and which app version wrote them. */
@@ -130,16 +117,9 @@ export interface SyncLayoutPresetsOptions {
  * Reconcile the shipped per-genre default presets against
  * `session_layout_presets`. Idempotent: safe to run every boot.
  *
- * ## Two documents per row, until P6
- *
- * Every seeded row gets BOTH the legacy `layout` blob (from the genre's
- * `SeedableGenre.layout`, i.e. `CORE_LAYOUT_PRESETS`) and the v2 `document`
- * (from `CORE_LAYOUTS_V2`, else the built-in floor). The legacy renderer is
- * still the one most people are looking at, and a row that stopped carrying
- * its blob would blank their session the moment they upgraded; a row that
- * carried no document would make the v2 stage fall through to the floor for a
- * genre that ships a whole surface. So both, written from one pass, until the
- * legacy half is deleted.
+ * A row's `layout` comes from `SeedableGenre.layout` (the boot task passes
+ * core-catalog's `CORE_LAYOUT_PRESETS`), and its name from the entry, else
+ * the core genre's declared first layout, else `Default`.
  */
 export async function syncLayoutPresets(
 	genres: SeedableGenre[],
@@ -186,19 +166,9 @@ export async function syncLayoutPresets(
 		// genre default's key, but the scope is stated rather than inferred.
 		if (found && found.origin === "plugin") continue
 		const shipped = byGenre.get(genreId)
-		// A genre that ships no document of its own still gets one: the
-		// built-in floor, stored rather than implied, so the `genre` tier of
-		// the chain answers for every genre and the floor is only reached by a
-		// session whose genre has no row at all.
-		const v2 = shipped?.preset ??
-			(await coreLayoutPreset(genreId)) ?? { layout: builtInLayoutDoc() }
-		const name = shipped?.name ?? (await coreLayoutName(genreId)) ?? DEFAULT_PRESET_NAME
+		const name =
+			shipped?.name ?? (await coreLayoutName(genreId)) ?? DEFAULT_PRESET_NAME
 		const layout = shipped?.layout ?? {}
-		// A shipped document that does not validate is REPORTED and left out
-		// rather than written: the chain falls through a null document to the
-		// built-in floor, which is a session that draws. Writing a refused
-		// document would put the failure in every reader instead of in the log.
-		const document = v2 ? await checkedShippedDoc(v2.layout, seedKey) : null
 		const shippedFields = {
 			genreId,
 			origin: "core" as const,
@@ -208,9 +178,6 @@ export async function syncLayoutPresets(
 			name,
 			visibility: "shared" as const,
 			layout,
-			document,
-			widgetSettings: v2?.widgetSettings ?? null,
-			widgetStyles: v2?.widgetStyles ?? null,
 			seededByVersion: options.version ?? null
 		}
 		if (!found) {
@@ -265,69 +232,36 @@ export async function syncLayoutPresets(
 export const DEFAULT_LAYOUT_SLUG = "default"
 
 /**
- * The declaration sets `validateLayoutDoc` reads, loaded once.
- *
- * Deferred rather than imported at the top for the reason every other
- * core-catalog read in this layer is deferred: this module is pulled in by the
- * boot path, and the catalog registers types as a side effect of being
- * imported. Both sets only affect WARNINGS (an unknown widget id, an
- * undeclared look key), so a build that somehow cannot load them still refuses
- * exactly the documents it should.
+ * The layout a CORE genre declares first (`GenreDecl.layouts[0]`, the
+ * genre's default — R71). Read for its NAME only: core's arrangement arrives
+ * as a session layout through `SeedableGenre.layout`. Core's genres register
+ * when the catalog is imported, which is why the import comes first; a
+ * plugin's genre is its own sync's business (./pluginLayouts), never this
+ * reconciler's.
  */
-let declsPromise: Promise<LayoutDecls> | null = null
-async function layoutDecls(): Promise<LayoutDecls> {
-	declsPromise ??= import("@serene-pub/core-catalog").then((m) => ({
-		widgets: m.CORE_WIDGETS,
-		looks: m.CORE_LOOKS
-	}))
-	return declsPromise
+async function coreGenreLayout(
+	genreId: string
+): Promise<GenreLayoutDecl | null> {
+	if (!genreId.startsWith("core:")) return null
+	await import("@serene-pub/core-catalog")
+	return getGenre(genreId)?.layouts?.[0] ?? null
 }
 
-/** The v2 preset a core genre ships, if it ships one. */
-async function coreLayoutPreset(genreId: string): Promise<LayoutPreset | null> {
-	const { coreLayoutV2 } = await import("@serene-pub/core-catalog")
-	return coreLayoutV2(genreId)?.preset ?? null
-}
-
-/** …and the name it ships it under. */
+/** The name a core genre ships its default layout under. */
 async function coreLayoutName(genreId: string): Promise<string | null> {
-	const { coreLayoutV2 } = await import("@serene-pub/core-catalog")
-	return coreLayoutV2(genreId)?.name ?? null
-}
-
-/**
- * A shipped document, or null with one log line. Never throws: a boot that
- * refuses a genre is a boot that offers nothing.
- */
-async function checkedShippedDoc(
-	doc: LayoutDoc,
-	seedKey: string
-): Promise<LayoutDoc | null> {
-	const verdict = validateLayoutDoc(doc, await layoutDecls())
-	if (!verdict.ok) {
-		console.warn(
-			`[layouts] shipped layout ${seedKey} was refused and not stored: ` +
-				verdict.errors.join(" ")
-		)
-		return null
-	}
-	if (verdict.warnings.length)
-		console.warn(
-			`[layouts] shipped layout ${seedKey}: ${verdict.warnings.join(" ")}`
-		)
-	return doc
+	return i18nText((await coreGenreLayout(genreId))?.name) ?? null
 }
 
 /* ── reads ──────────────────────────────────────────────────────────────
- * Visibility is the ruled matrix (§4.5), and it lives in ONE predicate:
- * `visibleTo`. A caller sees every shipped row that has not been withdrawn,
- * every shared row, and their own — never anybody else's private one, admin
- * included. Enforced in the query rather than by the caller remembering to
- * filter, because this is the only place that reads the table.
+ * Visibility is the ruled matrix (`layoutPermissions.ts`), and it lives in ONE
+ * predicate: `visibleTo`. A caller sees every shipped row that has not been
+ * withdrawn, every shared row, and their own — never anybody else's private
+ * one, admin included. Enforced in the query rather than by the caller
+ * remembering to filter, because this is the only place that reads the table.
  */
 
-/** ⏳ The legacy wire row, which `LayoutPresetRow` is a superset of. */
-type LegacyLayoutPreset = Sockets.Sessions.LayoutPreset
+/** One row on the wire. */
+type LayoutPresetWire = Sockets.Sessions.LayoutPreset
 
 type PresetRow = typeof schema.sessionLayoutPresets.$inferSelect
 
@@ -339,22 +273,14 @@ type PresetRow = typeof schema.sessionLayoutPresets.$inferSelect
  * Spelled out field by field, so a column added later never joins the wire
  * silently.
  */
-function toWire(row: PresetRow): LayoutPresetRow {
+function toWire(row: PresetRow): LayoutPresetWire {
 	return {
 		id: row.id,
 		name: row.name,
 		genreId: row.genreId,
-		// ⏳ LEGACY: what the pre-v2 client reads as "not yours to manage".
+		// Not the caller's to manage: core's and a plugin's rows.
 		isDefault: row.authorUserId === null,
-		layout: row.layout && typeof row.layout === "object" ? row.layout : {},
-		origin: (row.origin as LayoutPresetOrigin) ?? "user",
-		visibility: (row.visibility as LayoutVisibility) ?? "private",
-		slug: row.slug ?? "",
-		description: row.description ?? null,
-		document: (row.document as LayoutDoc | null) ?? null,
-		pluginId: row.pluginId ?? null,
-		authorUserId: row.authorUserId ?? null,
-		updatedAt: row.updatedAt.toISOString()
+		layout: row.layout && typeof row.layout === "object" ? row.layout : {}
 	}
 }
 
@@ -389,7 +315,7 @@ const ORIGIN_ORDER: Record<string, number> = { core: 0, plugin: 1, user: 2 }
 export async function listLayoutPresets(
 	genreId: string,
 	userId: number
-): Promise<LayoutPresetRow[]> {
+): Promise<LayoutPresetWire[]> {
 	const rows = await db
 		.select()
 		.from(schema.sessionLayoutPresets)
@@ -431,14 +357,14 @@ export async function canApplyLayoutPreset(
 }
 
 /**
- * ⏳ LEGACY. The `layout` BLOB of the preset a session is actually on, already
- * through its whole fallback chain: the pinned preset if it still resolves for
- * this caller, else the genre's shipped default, else `{}`.
+ * ⏳ The `layout` of the preset a session is drawn over, already through its
+ * whole fallback chain: the pinned preset if it still resolves for this
+ * caller, else the genre's shipped default, else `{}`. Brief 3's copy model
+ * retires it: a session's own row becomes the whole layout.
  *
  * `{}` is not a failure mode — it is what the shipped default itself carries,
  * and it composes to "no base at all" (see `presetBase`), which is exactly what
- * every session rendered before presets existed. The v2 chain is
- * `resolveLayoutFor`, which never reads this column.
+ * every session rendered before presets existed.
  */
 export async function resolveActivePresetLayout(
 	genreId: string,
@@ -482,29 +408,6 @@ export const LAYOUT_PRESET_NAME_MAX = 80
 
 /** The longest a description may be. One line about a layout, not an essay. */
 export const LAYOUT_PRESET_DESCRIPTION_MAX = 400
-
-/** What a document that does not validate is refused with, its errors appended. */
-export const LAYOUT_DOC_REFUSED = "That layout can't be stored"
-
-/**
- * Validate a document on its way to storage, or refuse it with a sentence.
- *
- * Every write path in this module goes through here — §4.6's "the server runs
- * `validateLayoutDoc` on every write and refuses with a sentence". Warnings are
- * not refusals: an unknown widget id draws a labelled placeholder, which is
- * what keeps uninstalling a plugin from stranding somebody's layout.
- */
-export async function checkLayoutDoc(
-	doc: unknown
-): Promise<{ ok: true; document: LayoutDoc } | Refused> {
-	const verdict = validateLayoutDoc(doc, await layoutDecls())
-	if (!verdict.ok)
-		return {
-			ok: false,
-			error: `${LAYOUT_DOC_REFUSED} — ${verdict.errors.join(" ")}`
-		}
-	return { ok: true, document: doc as LayoutDoc }
-}
 
 /** The name, trimmed and bounded; the description likewise, or null. */
 const cleanName = (name: unknown): string =>
@@ -565,11 +468,8 @@ async function freeUserSlug(
 interface UserPresetContent {
 	name: string
 	description: string | null
-	document: LayoutDoc | null
-	widgetSettings: Record<string, Record<string, unknown>> | null
-	widgetStyles: Record<string, { id: number; slug: string }> | null
-	/** ⏳ The legacy blob. `{}` reads as "no overrides" to the pre-v2 client. */
-	layout: Record<string, unknown>
+	/** The session layout, verbatim. `{}` reads as "no overrides". */
+	layout: SessionLayoutBlob
 }
 
 /**
@@ -620,35 +520,19 @@ async function insertUserPreset(
 }
 
 /**
- * Save the caller's layout as a new user-authored preset.
- *
- * Takes the v2 `preset` (document + per-instance settings + style pins), the
- * ⏳ legacy `layout` blob, or both — because the pre-v2 client still calls this
- * with a blob and the v2 editor calls it with a document, and one row has to
- * serve both readers until P6. A v2 save writes `layout: {}`, which the legacy
- * client reads as "no overrides" rather than as a crash.
+ * Save the caller's session layout as a new user-authored preset. The row is
+ * private, and its slug is taken from the name.
  */
 export async function saveUserLayoutPreset(args: {
 	genreId: string
 	userId: number
 	name: string
 	description?: string
-	preset?: LayoutPreset
-	/** ⏳ LEGACY. */
-	layout?: Record<string, unknown>
-}): Promise<LayoutPresetRow> {
-	const checked = args.preset
-		? await checkLayoutDoc(args.preset.layout)
-		: null
-	// The legacy caller has no document to refuse; a v2 one that fails throws,
-	// because its handler has already run the same check and reported it.
-	if (checked && !checked.ok) throw new Error(checked.error)
+	layout: SessionLayoutBlob
+}): Promise<LayoutPresetWire> {
 	const row = await insertUserPreset(args.genreId, args.userId, {
 		name: cleanName(args.name),
 		description: cleanDescription(args.description),
-		document: checked?.ok ? checked.document : null,
-		widgetSettings: args.preset?.widgetSettings ?? null,
-		widgetStyles: args.preset?.widgetStyles ?? null,
 		layout: args.layout ?? {}
 	})
 	return toWire(row)
@@ -732,7 +616,7 @@ export async function renameUserLayoutPreset(args: {
 	userId: number
 	isAdmin?: boolean
 	name: string
-}): Promise<{ ok: true; preset: LayoutPresetRow } | Refused> {
+}): Promise<{ ok: true; preset: LayoutPresetWire } | Refused> {
 	const name = cleanName(args.name)
 	if (!name) return { ok: false, error: LAYOUT_PRESET_NEEDS_NAME }
 	const found = await manageablePreset(
@@ -770,12 +654,14 @@ function manageWrite(presetId: number, row: PresetRow): SQL | undefined {
 	)
 }
 
-/** How many `session_panel_layouts` rows are pinned to a preset. */
+/** How many `session_panel_layouts` rows name a preset (`layout_preset_id`). */
 async function pinnedSessionCount(presetId: number): Promise<number> {
 	const [row] = await db
 		.select({ n: count() })
 		.from(schema.sessionPanelLayouts)
-		.where(eq(schema.sessionPanelLayouts.layoutPresetId, presetId))
+		.where(
+			eq(schema.sessionPanelLayouts.startedFromLayoutPresetId, presetId)
+		)
 	return Number(row?.n ?? 0)
 }
 
@@ -786,7 +672,7 @@ async function pinnedSessionCount(presetId: number): Promise<number> {
  * Nothing is stranded and nothing cascades away: `layout_preset_id` is
  * `ON DELETE SET NULL` on both `session_panel_layouts` and
  * `user_layout_defaults`, so a session that was pinned to this preset — and a
- * person who defaulted to it — quietly falls back through the chain with their
+ * person who defaulted to it — quietly falls back to the genre default layout with their
  * own layout blob and widget settings untouched. That is the intended
  * behaviour, which is exactly why the count is taken FIRST: after the delete
  * the FK has already erased the evidence, and a client that wants to warn
@@ -849,10 +735,9 @@ export async function layoutPresetUsage(args: {
 /**
  * Rename, re-describe or RE-CAPTURE one of the caller's own presets.
  *
- * A re-capture replaces the document, the pinned settings and the style pins
- * together — they are one statement about how the surface looks, and updating
- * the document alone would leave the old pins addressing instance keys that are
- * no longer in it. Omitting `preset` leaves all three exactly as they were.
+ * A re-capture replaces the whole `layout` — arrangement, widget settings and
+ * style pins together, because they are one statement about how the surface
+ * looks. Omitting `layout` leaves it exactly as it was.
  */
 export async function updateUserLayoutPreset(args: {
 	presetId: number
@@ -860,8 +745,8 @@ export async function updateUserLayoutPreset(args: {
 	isAdmin?: boolean
 	name?: string
 	description?: string
-	preset?: LayoutPreset
-}): Promise<{ ok: true; preset: LayoutPresetRow } | Refused> {
+	layout?: SessionLayoutBlob
+}): Promise<{ ok: true; preset: LayoutPresetWire } | Refused> {
 	const found = await manageablePreset(
 		args.presetId,
 		{ id: args.userId, isAdmin: args.isAdmin },
@@ -877,12 +762,10 @@ export async function updateUserLayoutPreset(args: {
 	}
 	if (args.description !== undefined)
 		patch.description = cleanDescription(args.description)
-	if (args.preset !== undefined) {
-		const checked = await checkLayoutDoc(args.preset.layout)
-		if (!checked.ok) return checked
-		patch.document = checked.document
-		patch.widgetSettings = args.preset.widgetSettings ?? null
-		patch.widgetStyles = args.preset.widgetStyles ?? null
+	if (args.layout !== undefined) {
+		if (!args.layout || typeof args.layout !== "object")
+			return { ok: false, error: "Invalid layout" }
+		patch.layout = args.layout
 	}
 	if (!Object.keys(patch).length)
 		return { ok: true, preset: toWire(found.row) }
@@ -899,10 +782,9 @@ export async function updateUserLayoutPreset(args: {
 /**
  * Publish one of the caller's own presets to the instance, or take it back.
  *
- * Taking a shared row private does not un-apply it: a session already pinned to
- * it keeps its `layout_preset_id`, and resolution then falls through for
- * everyone but the author — which is the same degradation a deleted preset
- * gives, and the reason nothing here touches other people's rows.
+ * Taking a shared row private touches nobody else's row: a session that names
+ * it keeps its `layout_preset_id`, and the row simply stops answering for
+ * everyone but the author — the same degradation a deleted preset gives.
  */
 export async function shareLayoutPreset(args: {
 	presetId: number
@@ -910,7 +792,7 @@ export async function shareLayoutPreset(args: {
 	isAdmin?: boolean
 	isGuest?: boolean
 	visibility: LayoutVisibility
-}): Promise<{ ok: true; preset: LayoutPresetRow } | Refused> {
+}): Promise<{ ok: true; preset: LayoutPresetWire } | Refused> {
 	if (args.visibility !== "shared" && args.visibility !== "private")
 		return { ok: false, error: "A layout can only be private or shared." }
 	const actor: LayoutActor = {
@@ -939,16 +821,16 @@ export async function shareLayoutPreset(args: {
 /**
  * Copy any preset the caller can SEE into a new private row of their own.
  *
- * Seeing it is the whole permission, because the copy SNAPSHOTS the document,
- * the settings and the pins and keeps no reference back: the original moving
- * does not move the copy, and nothing is taken from its owner. This is how a
+ * Seeing it is the whole permission, because the copy SNAPSHOTS the layout
+ * and the description and keeps no reference back: the original moving does
+ * not move the copy, and nothing is taken from its owner. This is how a
  * built-in becomes editable.
  */
 export async function cloneLayoutPreset(args: {
 	presetId: number
 	userId: number
 	name?: string
-}): Promise<{ ok: true; preset: LayoutPresetRow } | Refused> {
+}): Promise<{ ok: true; preset: LayoutPresetWire } | Refused> {
 	if (!Number.isInteger(args.presetId))
 		return { ok: false, error: LAYOUT_PRESET_UNKNOWN }
 	const [source] = await db
@@ -965,238 +847,7 @@ export async function cloneLayoutPreset(args: {
 	const row = await insertUserPreset(source.genreId, args.userId, {
 		name,
 		description: source.description ?? null,
-		document: (source.document as LayoutDoc | null) ?? null,
-		widgetSettings: source.widgetSettings ?? null,
-		widgetStyles: source.widgetStyles ?? null,
-		// ⏳ The legacy blob comes along, so the pre-v2 client can apply the
-		// copy and see what the original showed it.
 		layout: source.layout ?? {}
 	})
 	return { ok: true, preset: toWire(row) }
-}
-
-/**
- * One preset as a portable `LayoutPreset` — what `import` reads back and what a
- * plugin would ship. Anything the caller can see, which includes the built-ins:
- * exporting is reading, and a clone can already take a copy of one.
- */
-export async function exportLayoutPreset(args: {
-	presetId: number
-	userId: number
-}): Promise<
-	| {
-			ok: true
-			presetId: number
-			genreId: string
-			name: string
-			description: string | null
-			preset: LayoutPreset
-	  }
-	| Refused
-> {
-	if (!Number.isInteger(args.presetId))
-		return { ok: false, error: LAYOUT_PRESET_UNKNOWN }
-	const [row] = await db
-		.select()
-		.from(schema.sessionLayoutPresets)
-		.where(eq(schema.sessionLayoutPresets.id, args.presetId))
-		.limit(1)
-	if (!row || !canSee(row, { id: args.userId }))
-		return { ok: false, error: LAYOUT_PRESET_UNKNOWN }
-	const document = (row.document as LayoutDoc | null) ?? null
-	if (!document)
-		return {
-			ok: false,
-			error: "That layout has nothing to export yet — open and save it once."
-		}
-	const preset: LayoutPreset = { layout: document }
-	if (row.widgetSettings) preset.widgetSettings = row.widgetSettings
-	if (row.widgetStyles) preset.widgetStyles = row.widgetStyles
-	return {
-		ok: true,
-		presetId: row.id,
-		genreId: row.genreId,
-		name: row.name,
-		description: row.description ?? null,
-		preset
-	}
-}
-
-/**
- * Read a `LayoutPreset` back in as a new private row of the caller's.
- *
- * Validated like every other write: a file somebody edited by hand is exactly
- * the untrusted document `validateLayoutDoc` exists for.
- */
-export async function importLayoutPreset(args: {
-	genreId: string
-	userId: number
-	name?: string
-	description?: string
-	preset: LayoutPreset
-}): Promise<{ ok: true; preset: LayoutPresetRow } | Refused> {
-	const bundle = args.preset
-	if (!bundle || typeof bundle !== "object" || !("layout" in bundle))
-		return {
-			ok: false,
-			error: `${LAYOUT_DOC_REFUSED} — it carries no layout document.`
-		}
-	const checked = await checkLayoutDoc(bundle.layout)
-	if (!checked.ok) return checked
-	const name = cleanName(args.name ?? "Imported layout")
-	if (!name) return { ok: false, error: LAYOUT_PRESET_NEEDS_NAME }
-	const row = await insertUserPreset(args.genreId, args.userId, {
-		name,
-		description: cleanDescription(args.description),
-		document: checked.document,
-		widgetSettings: bundle.widgetSettings ?? null,
-		widgetStyles: bundle.widgetStyles ?? null,
-		// An imported layout is a v2 document; the legacy client reads `{}` as
-		// "no overrides" and renders its own built-in arrangement.
-		layout: {}
-	})
-	return { ok: true, preset: toWire(row) }
-}
-
-/* ── the resolution chain (§4.4) ────────────────────────────────────────── */
-
-/** The row a tier answered with, and which tier that was. */
-interface Answer {
-	row: PresetRow | null
-	tier: LayoutTier
-}
-
-/** One preset by id, if this caller may see it AND it carries a document. */
-async function documentedPreset(
-	presetId: number | null | undefined,
-	userId: number
-): Promise<PresetRow | null> {
-	if (presetId == null || !Number.isInteger(presetId)) return null
-	const [row] = await db
-		.select()
-		.from(schema.sessionLayoutPresets)
-		.where(eq(schema.sessionLayoutPresets.id, presetId))
-		.limit(1)
-	if (!row || !canSee(row, { id: userId })) return null
-	return row.document ? row : null
-}
-
-/**
- * The document this person sees in this session, and everything that came with
- * it (§4.4).
- *
- * ```
- * document = active.document
- *         ?? preset(active.layout_preset_id).document
- *         ?? preset(user_layout_defaults[user, genre]).document
- *         ?? preset(seed_key = layout:<genre>:default).document
- *         ?? BUILT_IN
- * ```
- *
- * Whole documents at each step, never per slot: a layout is one statement about
- * a surface, and merging two of them would produce a third that nobody wrote.
- *
- * ⚠ The ⏳ legacy `layout` blobs are NOT consulted here. A session whose only
- * arrangement is a pre-v2 blob resolves to the tier below it — the client reads
- * its own blob through `fromLegacy` until P6 — so this never invents a
- * document from one.
- */
-export async function resolveLayoutFor(
-	sessionId: number,
-	userId: number
-): Promise<ResolvedLayout> {
-	const [active] = await db
-		.select()
-		.from(schema.sessionPanelLayouts)
-		.where(
-			and(
-				eq(schema.sessionPanelLayouts.sessionId, sessionId),
-				eq(schema.sessionPanelLayouts.userId, userId)
-			)
-		)
-		.limit(1)
-
-	const [session] = await db
-		.select({ genreId: schema.sessions.genreId })
-		.from(schema.sessions)
-		.where(eq(schema.sessions.id, sessionId))
-		.limit(1)
-	const genreId = session?.genreId ?? null
-
-	const answer = await (async (): Promise<Answer> => {
-		// 1. The person's own document for this session.
-		if (active?.document)
-			return { row: null, tier: "session" }
-		// 2. The preset they applied.
-		const pinned = await documentedPreset(active?.layoutPresetId, userId)
-		if (pinned) return { row: pinned, tier: "preset" }
-		if (!genreId) return { row: null, tier: "built-in" }
-		// 3. Their default for this genre.
-		const [def] = await db
-			.select({ layoutPresetId: schema.userLayoutDefaults.layoutPresetId })
-			.from(schema.userLayoutDefaults)
-			.where(
-				and(
-					eq(schema.userLayoutDefaults.userId, userId),
-					eq(schema.userLayoutDefaults.genreId, genreId)
-				)
-			)
-			.limit(1)
-		const preferred = await documentedPreset(def?.layoutPresetId, userId)
-		if (preferred) return { row: preferred, tier: "user-default" }
-		// 4. The genre's own.
-		const [shipped] = await db
-			.select()
-			.from(schema.sessionLayoutPresets)
-			.where(
-				and(
-					eq(
-						schema.sessionLayoutPresets.seedKey,
-						layoutPresetSeedKey(genreId)
-					),
-					isNull(schema.sessionLayoutPresets.withdrawnAt)
-				)
-			)
-			.limit(1)
-		if (shipped?.document) return { row: shipped, tier: "genre" }
-		// 5. The floor.
-		return { row: null, tier: "built-in" }
-	})()
-
-	const document =
-		answer.tier === "session"
-			? ((active!.document as LayoutDoc) ?? builtInLayoutDoc())
-			: ((answer.row?.document as LayoutDoc | undefined) ??
-				builtInLayoutDoc())
-
-	// The person's own values sit OVER the chosen preset's pins, per widget and
-	// per field — `presetWidgetSettings` is the one merge rule, reused rather
-	// than restated, and it reads the pins out of a `widgetSettings` key.
-	const own = await readWidgetSettings(sessionId, userId)
-	const settings = presetWidgetSettings(
-		{ widgetSettings: answer.row?.widgetSettings ?? {} },
-		own
-	)
-
-	const activePins =
-		active?.layoutSettings &&
-		typeof active.layoutSettings === "object" &&
-		typeof (active.layoutSettings as Record<string, unknown>)
-			.widgetStyles === "object"
-			? ((active.layoutSettings as Record<string, unknown>)
-					.widgetStyles as Record<string, { id: number; slug: string }>)
-			: {}
-	const stylePins = { ...(answer.row?.widgetStyles ?? {}), ...activePins }
-
-	return {
-		sessionId,
-		document,
-		// A session on a preset reports it even when its own document answered:
-		// that is the row "Reset" puts it back to.
-		presetId: answer.row?.id ?? active?.layoutPresetId ?? null,
-		origin: (answer.row?.origin as LayoutPresetOrigin | undefined) ?? null,
-		tier: answer.tier,
-		settings,
-		stylePins
-	}
 }

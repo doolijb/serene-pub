@@ -4,10 +4,9 @@
 	 *
 	 * ## Slots, not a sentence
 	 *
-	 * The row used to be a title, a chip and one `·`-joined status line, and in
-	 * a 400px column that line truncated from the right — where the fact is.
-	 * The shipped panel read `9 models · api.anthropic.com · checked 2 min…`.
-	 * So the row is now a grid of four fixed slots, filled by
+	 * A `·`-joined status line truncates from the right in a 400px column —
+	 * where the fact is (`9 models · api.anthropic.com · checked 2 min…`).
+	 * So the row is a grid of four fixed slots, filled by
 	 * `connectionRowStatus` and composed by nobody:
 	 *
 	 *     ▣  Anthropic          ● Ready
@@ -196,7 +195,7 @@
 				{/if}
 				{#each defaultFor as capability (capability)}
 					<span
-						class="preset-tonal-primary text-primary-900 dark:text-primary-300 flex shrink-0 items-center gap-0.5 rounded px-1 py-0.5 text-[10px] font-bold"
+						class="preset-tonal-primary text-primary-900 dark:text-primary-300 flex shrink-0 items-center gap-0.5 rounded px-1 py-0.5 text-[11px] font-bold"
 					>
 						<Icons.Star
 							size={8}

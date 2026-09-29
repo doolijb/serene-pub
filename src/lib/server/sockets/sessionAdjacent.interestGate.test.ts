@@ -319,6 +319,7 @@ vi.mock(
 )
 
 import { connectSockets } from "./index"
+import { interestKey } from "$lib/shared/sockets/interest"
 import { taskQueue } from "$lib/server/utils/taskQueue"
 import { activityError, activityStore } from "$lib/server/utils/activityStore"
 
@@ -532,6 +533,35 @@ describe("scenes:create — the two session cascades", () => {
 				.map((e) => e.target)
 				.sort()
 		).toEqual(["s1", "s2"])
+	})
+})
+
+describe("scenes:listByLorebook — the reply a lorebook view asks for", () => {
+	// Every lorebook view declares this event SCOPED to its book, so a reply
+	// whose payload does not name the book resolves to no scope and is sent to
+	// nobody. It shipped that way — `{ sceneList }` alone — and every
+	// lorebook-side scene list went silent. Asserted on the payload the real
+	// handler emits through the real gate, not on a copy of its shape.
+	test("reaches the socket holding the book's key, naming the book", async () => {
+		const h = fresh()
+		const owner = h.connect("s1", ADMIN)
+		await owner.declare(interestKey("scenes:listByLorebook", 1))
+
+		await owner.fire("scenes:listByLorebook", { lorebookId: 1 })
+
+		const sent = h.emits.find((e) => e.event === "scenes:listByLorebook")
+		expect(sent?.target).toBe("s1")
+		expect(sent?.data.lorebookId).toBe(1)
+	})
+
+	test("does not reach a socket reading another book", async () => {
+		const h = fresh()
+		const other = h.connect("s1", ADMIN)
+		await other.declare(interestKey("scenes:listByLorebook", 2))
+
+		await other.fire("scenes:listByLorebook", { lorebookId: 1 })
+
+		expect(events(h)).not.toContain("scenes:listByLorebook")
 	})
 })
 

@@ -33,6 +33,12 @@ export interface LorePoolCtx {
 	 */
 	readonly links: readonly RefLink[]
 	/**
+	 * The line a row written here lands on — the line being read (null =
+	 * main). A new row may only be filed under an entry it can see from
+	 * there: never another line's own entry (`canFileUnder`).
+	 */
+	readonly newRowBranchId: number | null
+	/**
 	 * Which conversation is reading this book, for the copy that names it.
 	 * Both null when none is.
 	 */
@@ -81,6 +87,7 @@ export function setLorePoolCtx(ctx: LorePoolCtx): void {
 const INERT: LorePoolCtx = {
 	pool: [],
 	links: [],
+	newRowBranchId: null,
 	reading: { sessionId: null, sessionName: null },
 	reparent: () => {},
 	scenesOf: () => [],

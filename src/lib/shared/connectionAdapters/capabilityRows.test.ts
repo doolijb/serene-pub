@@ -71,11 +71,10 @@ describe("the three states", () => {
 
 describe("the adapter gates the key space", () => {
 	test("a capability the adapter never declared gets no row, even when the column carries one", () => {
-		// The reported bug, in its durable form: KOBOLDCPP_MANAGED declares no
-		// text->image at all, so junk left in the column by an earlier type must
-		// not resurrect as a switch.
+		// ANTHROPIC declares no text->image at all, so junk left in the column
+		// by an earlier type must not resurrect as a switch.
 		const view = buildCapabilityRows({
-			type: CONNECTION_TYPE.KOBOLDCPP_MANAGED,
+			type: CONNECTION_TYPE.ANTHROPIC,
 			capabilities: {
 				resolved: { "text->image": 1 },
 				overrides: { "text->image": 1 }

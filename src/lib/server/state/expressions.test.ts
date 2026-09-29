@@ -33,12 +33,21 @@ const scope = (over: Partial<ExpressionScope> = {}): ExpressionScope => ({
 		world: { weather: "storm", core_weather: "storm" },
 		cast: { byId: {}, verity: { id: 1, key: "verity", name: "Verity", hp: 4 } }
 	},
-	owner: { id: 1, key: "verity", name: "Verity", hp: 4, core_hp: 4, mood: "wary" },
+	owner: {
+		id: 1,
+		key: "verity",
+		name: "Verity",
+		hp: 4,
+		core_hp: 4,
+		mood: "wary",
+		// Phase 3b: `has`/`count` read the owner's inventory stat.
+		core_inventory: [
+			{ entryId: 7, name: "A rusty key" },
+			{ entryId: 9, name: "Arrows", count: 12 },
+			"rope"
+		]
+	} as ExpressionScope["owner"],
 	who: {},
-	possessions: [
-		{ entryId: 7, name: "A rusty key", quantity: 1 },
-		{ entryId: 9, name: "Arrows", quantity: 12 }
-	],
 	...over
 })
 
@@ -93,6 +102,8 @@ describe("the filters", () => {
 		expect(value("'A sword' | has")).toBe(false)
 		expect(value("9 | count")).toBe(12)
 		expect(value("'A sword' | count")).toBe(0)
+		// A word in the list is one of itself.
+		expect(value("'rope' | count")).toBe(1)
 	})
 
 	test("count of a list is its length — one question, one filter", () => {

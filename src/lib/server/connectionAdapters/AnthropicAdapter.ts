@@ -346,8 +346,8 @@ class AnthropicAdapter extends BaseConnectionAdapter {
 	 *
 	 * ⚠ **This read `extraJson.thinking` and `extraJson.thinkingBudget` until
 	 * the ruling of 2026-09-12.** Reasoning effort is a sampling parameter
-	 * chosen per stage, not a property of the compute: with the toggle on the
-	 * connection, every stage sharing one Anthropic row thought exactly as hard
+	 * chosen per step, not a property of the compute: with the toggle on the
+	 * connection, every step sharing one Anthropic row thought exactly as hard
 	 * as every other, and the only way to split them was a second connection
 	 * carrying the same key. Stale `thinking`/`thinkingBudget` keys left in an
 	 * existing row's `extraJson` are read by nothing now — `extraJson` is jsonb
@@ -538,7 +538,7 @@ class AnthropicAdapter extends BaseConnectionAdapter {
 			this.connection.extraJson?.stream ?? true
 		)
 
-		// No `useSessionFormat` argument, and its removal is the fix rather than a
+		// No `useChatFormat` argument, and its removal is the fix rather than a
 		// tidy-up. It was read inside `compilePrompt(args)` — which the pipeline
 		// never reaches, because `withCompiledPrompt` returns the injected payload
 		// before the argument is looked at. So the flag was set on the legacy path

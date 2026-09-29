@@ -183,5 +183,8 @@ describe("narrativeGraph:checkNodeMergeReferences (PGlite integration)", () => {
 		)
 
 		expect(res.referencedByMergeLog).toBe(false)
+		// The reply names the member it counted, so a dialog can tell its
+		// own answer from another's.
+		expect(res.nodeId).toBe(node.id)
 	})
 })

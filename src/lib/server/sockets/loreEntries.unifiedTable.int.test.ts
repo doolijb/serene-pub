@@ -116,9 +116,9 @@ describe("an entry written through entries:create lands in lorebook_entries", ()
 		// the type that declares them.
 		expect(row.fields).toEqual({ category: "factions", priority: 3 })
 		// `text[]`, so a delimiter-containing keyword is representable at last
-		// — and the wire still gets the delimited string it always got.
+		// — and the wire carries the same list, never a joined string (#146).
 		expect(row.keys).toEqual(["ashguard", "riders"])
-		expect(worldLoreEntry.keys).toBe("ashguard, riders")
+		expect(worldLoreEntry.keys).toEqual(["ashguard", "riders"])
 		expect(worldLoreEntry.name).toBe("The Ashguard")
 		expect(worldLoreEntry.category).toBe("factions")
 		expect(worldLoreEntry.priority).toBe(3)
@@ -825,7 +825,7 @@ describe("a reorder is a permutation, and lands as one", () => {
  * control that saves and comes back empty with nothing to report it.
  */
 describe("an entry's condition round-trips through the socket", () => {
-	test("stores the pair as authored and hands back the delimited string", async () => {
+	test("stores the pair as authored and hands back the list", async () => {
 		const { createEntryHandler } = await import("./entries")
 		const user = await makeUser("condition-create-user")
 		const lorebook = await makeLorebook(user.id, "Condition Book")
@@ -849,7 +849,7 @@ describe("an entry's condition round-trips through the socket", () => {
 		const row = await storedRow(entry.id)
 		expect(row.secondaryKeys).toEqual(["statue", "mural"])
 		expect(row.selectiveLogic).toBe("notAny")
-		expect(entry.secondaryKeys).toBe("statue, mural")
+		expect(entry.secondaryKeys).toEqual(["statue", "mural"])
 		expect(entry.selectiveLogic).toBe("notAny")
 	})
 

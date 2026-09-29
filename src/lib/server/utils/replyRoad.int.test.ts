@@ -199,7 +199,6 @@ async function makeSession(tag: string) {
 		sessionId: session.id,
 		characterId,
 		isActive: true,
-		visibility: "visible"
 	})
 	await db.insert(schema.sessionMessages).values({
 		sessionId: session.id,
@@ -567,8 +566,8 @@ describe("the pipeline owns its row", () => {
 		).toBe(existing.id)
 	})
 
-	it("a continue keeps the partial and joins the reply onto it", async () => {
-		const sessionId = await makeSession("continue")
+	it("an extend keeps the partial and joins the reply onto it", async () => {
+		const sessionId = await makeSession("extend")
 		const PARTIAL = "Long ago,"
 		const [existing] = await db
 			.insert(schema.sessionMessages)
@@ -583,7 +582,7 @@ describe("the pipeline owns its row", () => {
 			} as any)
 			.returning()
 		const outcome = await reply(sessionId, {
-			kind: "continue",
+			kind: "extend",
 			messageId: existing.id
 		})
 		expect(outcome.ok, outcome.error).toBe(true)
@@ -602,7 +601,7 @@ describe("the pipeline owns its row", () => {
 			.from(schema.sessionChanges)
 			.where(eq(schema.sessionChanges.sessionId, sessionId))
 		expect(changes.map((c) => [c.event, c.messageId, (c.payload as any).verb])).toEqual([
-			["core:event/message-updated@1", existing.id, "continue"],
+			["core:event/message-updated@1", existing.id, "extend"],
 			["core:event/message-completed@1", existing.id, undefined]
 		])
 		expect(changes[0]!.runId).toBe(outcome.receipt!.runId)
@@ -908,24 +907,26 @@ describe("Stop is a run-level guarantee", () => {
 			textLength: CHUNKS[0]!.trim().length
 		})
 
-		// The card was told — per stage while the run went, not only at the
-		// end. The oracle's start is the frame that names the stage; a card
+		// The card was told — per step while the run went, not only at the
+		// end. The oracle's start is the frame that names the step; a card
 		// that saw only `done` was the U3 rename's dead comparison
 		// (`kind !== "provider"` against an executor that says `oracle`).
 		const frames = events
 			.filter((e) => e.event === "pipelines:progress")
 			.map((e) => e.data)
 		const generate = frames.find((f) => f.nodeKey === "generate")
-		expect(generate, "no progress frame for the generate stage").toBeTruthy()
+		expect(generate, "no progress frame for the generate step").toBeTruthy()
+		// The step word is generic (B18, 2026-09-27): a node key is never
+		// shown as a status; `nodeKey` still names the step for the card.
 		expect(generate).toMatchObject({
 			runId: started.data.runId,
 			sessionId,
-			stage: "generate"
+			stage: (await import("$lib/server/utils/runReply")).STEP_WORD
 		})
 		// Clause-interior oracles don't count as steps — the two embeds inside
 		// the retrieval gathers fire before the reply's generate, but they are
 		// not spine Providers, so they never inflate `steps` past the spine
-		// count `runStarted` announced. `generate` is the spine's first stage.
+		// count `runStarted` announced. `generate` is the spine's first step.
 		expect(generate.step).toBe(1)
 		expect(generate.steps).toBe(started.data.steps)
 		expect(started.data.steps).toBeGreaterThanOrEqual(1)

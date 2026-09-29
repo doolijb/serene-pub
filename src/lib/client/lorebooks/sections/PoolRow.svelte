@@ -15,7 +15,7 @@
 
 <div class="mb-1 flex flex-wrap items-center gap-2 text-sm font-semibold">
 	<span class="min-w-[10ch] flex-1 truncate">{item.name}</span>
-	<span class="badge preset-tonal-surface shrink-0 text-[10px]">
+	<span class="badge preset-tonal-surface shrink-0 text-[11px]">
 		{kindLabel(item.kind)}
 	</span>
 </div>

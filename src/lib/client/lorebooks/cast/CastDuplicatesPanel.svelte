@@ -8,6 +8,7 @@
 	} from "$lib/client/sockets/interest.svelte"
 	import { interestKey } from "$lib/shared/sockets/interest"
 	import { toaster } from "$lib/client/utils/toaster"
+	import { undoMergeToast } from "./castSave"
 
 	/**
 	 * Two people who are one person, and the way back from saying so.
@@ -61,11 +62,16 @@
 		fetchAll()
 	}
 
+	/**
+	 * An undo says who is back, and — when the server could not put
+	 * everything back — how many relationships and dated rows stayed lost,
+	 * because an end, a line or a session was deleted since the merge.
+	 */
 	function handleUndoMerge(msg: Sockets.NarrativeGraph.UndoMerge.Response) {
-		toaster.success({
-			title: "Merge undone",
-			description: `"${msg.restoredNode.name}" restored.`
-		})
+		const toast = undoMergeToast(msg)
+		const shown = { title: toast.title, description: toast.description }
+		if (toast.kind === "warning") toaster.warning(shown)
+		else toaster.success(shown)
 		fetchAll()
 	}
 
@@ -147,7 +153,7 @@
 					</span>
 					<div class="flex shrink-0 gap-2">
 						<button
-							class="btn btn-sm preset-filled-warning-500"
+							class="btn btn-sm preset-tonal-surface"
 							type="button"
 							onclick={() => absorb(candidate)}
 						>
@@ -155,7 +161,7 @@
 							absorb
 						</button>
 						<button
-							class="text-surface-500 hover:underline"
+							class="text-surface-600-400 hover:underline"
 							type="button"
 							onclick={() => dismiss(candidate)}
 						>
@@ -171,7 +177,7 @@
 		<div>
 			<button
 				type="button"
-				class="text-surface-500 flex items-center gap-1 text-xs hover:underline"
+				class="text-surface-600-400 flex items-center gap-1 text-xs hover:underline"
 				aria-expanded={showLogs}
 				onclick={() => (showLogs = !showLogs)}
 			>

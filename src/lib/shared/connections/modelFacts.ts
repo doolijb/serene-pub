@@ -166,7 +166,7 @@ function compact(facts: ModelFacts): ModelFacts {
  * OpenRouter (and any OpenAI-compatible host generous enough to copy it).
  *
  * ⚠ Its prices are **per token, as strings** — `"0.000003"` — so the ×1e6 here
- * is the whole reason this is not a field copy. A free model prices at `"0"`,
+ * is why this is not a field copy. A free model prices at `"0"`,
  * which is a real answer and must survive as `0` rather than being dropped as
  * falsy.
  */
@@ -238,9 +238,32 @@ function readLmStudio(e: Record<string, unknown>): ModelFacts {
  * producer knew more than a guess from key names ever could.
  */
 function readDeclared(e: Record<string, unknown>): ModelFacts | null {
-	const declared = e.facts
-	if (!declared || typeof declared !== "object") return null
-	const f = declared as Record<string, unknown>
+	return readFactsObject(e.facts)
+}
+
+/**
+ * A `connection_models.facts` column value, read back as facts.
+ *
+ * ⚠ **Validated, never cast.** The column is `jsonb`, so it comes back as
+ * `Record<string, unknown>`, and asserting it straight to `ModelFacts` is a
+ * lie TypeScript refuses: a stored object need not carry `source`. Today it always does (every write goes through the sync,
+ * from `readModelFacts`), but that is an invariant of one writer, not of the
+ * column, and a row written by an older build or a future second writer would
+ * have reached the client with fields nothing had checked. This is the same
+ * field-by-field reader a producer's declared facts go through, so the two can
+ * never disagree about what a fact is.
+ *
+ * `null` for an absent or empty column — the read site then omits `facts`
+ * entirely, so a consumer branches on presence rather than on `{}`.
+ */
+export function readStoredFacts(value: unknown): ModelFacts | null {
+	const facts = readFactsObject(value)
+	return facts && !factsAreEmpty(facts) ? facts : null
+}
+
+function readFactsObject(value: unknown): ModelFacts | null {
+	if (!value || typeof value !== "object") return null
+	const f = value as Record<string, unknown>
 	const pricing = f.pricing as Record<string, unknown> | undefined
 	return compact({
 		contextWindow: num(f.contextWindow),

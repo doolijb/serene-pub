@@ -42,9 +42,13 @@
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { useInterest } from "$lib/client/sockets/interest.svelte"
 	import { KeyboardNavigationManager } from "$lib/client/utils/keyboardNavigation"
-	import { openJumpHit } from "$lib/client/shell/openJumpHit"
+	import { openAdminAddress, openJumpHit } from "$lib/client/shell/openJumpHit"
 	import { matchDocSections } from "$lib/client/shell/docsJump"
 	import { adminNavItems } from "$lib/client/shell/adminNav"
+	import {
+		adminSettings,
+		matchAdminSettings
+	} from "$lib/client/shell/adminSettings"
 	import {
 		ADMIN_SCOPE_KEY,
 		EVERYWHERE_LABEL,
@@ -97,6 +101,14 @@
 		doc: Icons.BookOpen
 	}
 
+	/** The footer's key hints, in the order a person reaches for them. */
+	const KEY_HINTS: { keys: string[]; label: string }[] = [
+		{ keys: ["↑", "↓"], label: "move" },
+		{ keys: ["Enter"], label: "open" },
+		{ keys: ["Shift", "Enter"], label: "open focused" },
+		{ keys: ["Backspace"], label: "widen" }
+	]
+
 	interface JumpRow {
 		/** Unique within the list; becomes the option's DOM id. */
 		id: string
@@ -110,7 +122,12 @@
 		 * "character".
 		 */
 		hint?: JumpHit["hint"]
-		action: () => void | Promise<void>
+		/**
+		 * `focus` is Shift Enter / Shift click: open the hit's view full page
+		 * rather than in the sidebar. A row that is a page (admin, a session)
+		 * is a page either way and ignores it.
+		 */
+		action: (opts?: { focus?: boolean }) => void | Promise<void>
 	}
 
 	interface JumpRowGroup {
@@ -167,7 +184,9 @@
 	function hitRow(
 		hit: JumpHit,
 		id: string,
-		onPick?: (h: JumpHit) => void | Promise<void>
+		onPick?: (h: JumpHit) => void | Promise<void>,
+		/** The registered view `onPick` belongs to — what "focused" grows. */
+		viewKey?: string
 	): JumpRow {
 		return {
 			id,
@@ -175,13 +194,21 @@
 			subtitle: hit.subtitle,
 			icon: KIND_ICONS[hit.kind] ?? Icons.CornerDownRight,
 			hint: hit.hint,
-			action: async () => {
+			action: async ({ focus = false } = {}) => {
 				jumpCtx.close()
 				// A row that came from a view is opened the way that view
 				// opens its own rows; anything else goes through the one
 				// resolver that knows where each kind lives.
-				if (onPick) await onPick(hit)
-				else await openJumpHit(panelsCtx, hit)
+				if (onPick) {
+					await onPick(hit)
+					// The view is already open — focused is that same view
+					// grown to full page, after it has picked its row.
+					if (focus && viewKey)
+						panelsCtx.openView(viewKey, {
+							toggle: false,
+							fullPage: true
+						})
+				} else await openJumpHit(panelsCtx, hit, { focus })
 			}
 		}
 	}
@@ -198,7 +225,9 @@
 		return reg
 			.getHits()
 			.slice(0, GROUP_CAP)
-			.map((hit, i) => hitRow(hit, `view-${i}`, reg.onPick))
+			.map((hit, i) =>
+				hitRow(hit, `view-${i}`, reg.onPick, scope.key ?? undefined)
+			)
 	})
 
 	/** A `kind:` scope's group, taken out of the one unrestricted reply. */
@@ -226,11 +255,35 @@
 				title: item.label,
 				subtitle: item.href,
 				icon: (Icons as any)[item.icon] ?? Icons.ShieldCheck,
-				action: async () => {
+				action: async (opts?: { focus?: boolean }) => {
 					jumpCtx.close()
-					await goto(item.href)
+					openAdminAddress(panelsCtx, item.href, opts)
 				}
 			}))
+	})
+
+	/**
+	 * Admin settings, one row per field (`adminSettings.ts`): "tunnel" lands
+	 * on the tunnel card, "backup now" on the button. Same audience and
+	 * scopes as the pages lane.
+	 */
+	const settingRows = $derived.by<JumpRow[]>(() => {
+		if (!ready || !isAdmin) return []
+		if (!isAdminScope && scope.key !== null) return []
+		return matchAdminSettings(
+			adminSettings({ accountsEnabled }),
+			trimmed,
+			GROUP_CAP
+		).map((row, i) => ({
+			id: `admin-setting-${i}`,
+			title: row.label,
+			subtitle: row.page,
+			icon: Icons.Settings2,
+			action: async (opts?: { focus?: boolean }) => {
+				jumpCtx.close()
+				openAdminAddress(panelsCtx, row.href, opts)
+			}
+		}))
 	})
 
 	/**
@@ -324,11 +377,15 @@
 				out.push({ label: KIND_SCOPE_LABELS.doc, rows: docRows })
 			if (adminRows.length)
 				out.push({ label: "Admin pages", rows: adminRows })
+			if (settingRows.length)
+				out.push({ label: "Admin settings", rows: settingRows })
 			return out
 		}
 		if (isAdminScope) {
 			if (adminRows.length)
 				out.push({ label: "Admin pages", rows: adminRows })
+			if (settingRows.length)
+				out.push({ label: "Admin settings", rows: settingRows })
 		} else if (isDocScope) {
 			if (docRows.length)
 				out.push({ label: KIND_SCOPE_LABELS.doc, rows: docRows })
@@ -413,6 +470,17 @@
 		jumpCtx.query = carried
 	}
 
+	/**
+	 * Backspace on an empty box: one step out — the view's scope to the
+	 * route's, the route's to Everywhere (`JumpCtx.widen`). The box stays
+	 * empty: the shell's own box may hold text from before the view took the
+	 * scope, and an empty box is what the person just backspaced to.
+	 */
+	function widenScope() {
+		jumpCtx.widen()
+		jumpCtx.query = ""
+	}
+
 	function handleInput(event: Event & { currentTarget: HTMLInputElement }) {
 		const raw = event.currentTarget.value
 		const parsed = parseKindPrefix(raw)
@@ -462,14 +530,14 @@
 				const row = activeRow
 				if (!row) return
 				event.preventDefault()
-				void row.action()
+				void row.action({ focus: event.shiftKey })
 				return
 			}
 			case "Backspace":
 				// Only on an EMPTY box: otherwise this is an ordinary delete.
 				if (jumpCtx.query !== "" || scope.key === null) return
 				event.preventDefault()
-				dropScope()
+				widenScope()
 				return
 		}
 	}
@@ -508,7 +576,7 @@
 			class="fixed inset-0 z-50 flex items-start justify-center"
 		>
 			<Dialog.Content
-				class="bg-surface-950 border-surface-800 flex max-h-[80vh] w-full flex-col overflow-hidden rounded-b-2xl border shadow-2xl lg:mt-[12vh] lg:max-h-[64vh] lg:w-[min(640px,92vw)] lg:rounded-2xl"
+				class="bg-surface-50-950 border-surface-200-800 @container/jump flex max-h-[80vh] w-full flex-col overflow-hidden rounded-b-2xl border shadow-2xl lg:mt-[12vh] lg:max-h-[64vh] lg:w-[min(640px,92vw)] lg:rounded-2xl"
 				role="dialog"
 				aria-modal="true"
 				aria-label="Jump to anything"
@@ -516,22 +584,23 @@
 			>
 				<!-- ══ the input row ═══════════════════════════════════════ -->
 				<div
-					class="border-surface-800 flex h-14 shrink-0 items-center gap-2 border-b px-3"
+					class="border-surface-200-800 flex h-14 shrink-0 items-center gap-2 border-b px-3"
 				>
 					<Icons.Search
 						class="text-surface-500 size-4 shrink-0"
 						aria-hidden="true"
 					/>
 					{#if scope.key !== null}
-						<!-- The scope chip. Its × is the same thing Backspace
-						     on an empty box does. -->
+						<!-- The scope chip. Its × drops straight to Everywhere;
+						     Backspace on an empty box widens one step at a
+						     time (view → route → Everywhere). -->
 						<span
-							class="bg-surface-800 text-surface-100 flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-xs"
+							class="bg-surface-200-800 text-surface-900-100 flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-xs"
 						>
 							{scope.label}
 							<button
 								type="button"
-								class="hover:text-surface-50 text-surface-400 focus-visible:outline-primary-500 -mr-0.5 flex items-center rounded transition-colors focus-visible:outline-1"
+								class="hover:text-surface-950-50 text-surface-600-400 focus-visible:outline-primary-500 -mr-0.5 flex items-center rounded transition-colors focus-visible:outline-1"
 								aria-label="Search everywhere instead of {scope.label}"
 								onmousedown={(e) => e.preventDefault()}
 								onclick={dropScope}
@@ -562,7 +631,7 @@
 						bind:this={inputEl}
 						type="text"
 						role="combobox"
-						class="text-surface-50 placeholder:text-surface-500 focus:ring-primary-500 min-w-0 flex-1 border-0 bg-transparent p-0 text-base shadow-none outline-none focus:ring-2"
+						class="text-surface-950-50 placeholder:text-surface-500 focus:ring-primary-500 min-w-0 flex-1 border-0 bg-transparent p-0 text-base shadow-none outline-none focus:ring-2"
 						placeholder={jumpCtx.placeholder}
 						aria-label={jumpCtx.placeholder}
 						aria-expanded={flatRows.length > 0}
@@ -594,7 +663,7 @@
 					tabindex="-1"
 				>
 					{#if !ready}
-						<p class="text-surface-500 px-3 py-4 text-sm">
+						<p class="text-surface-600-400 px-3 py-4 text-sm">
 							{scope.key === null
 								? "Type to jump anywhere"
 								: `Type to search ${scope.label}`}
@@ -603,7 +672,7 @@
 						{#each groups as group (group.label)}
 							<div role="group" aria-label={group.label}>
 								<div
-									class="text-surface-500 px-3 pt-3 pb-1 text-[11px]"
+									class="text-surface-600-400 px-3 pt-3 pb-1 text-[11px]"
 									aria-hidden="true"
 								>
 									{group.label}
@@ -615,7 +684,7 @@
 						{/each}
 
 						{#if nothingMatches}
-							<p class="text-surface-500 px-3 py-4 text-sm">
+							<p class="text-surface-600-400 px-3 py-4 text-sm">
 								Nothing matches
 							</p>
 						{/if}
@@ -624,13 +693,36 @@
 						{/if}
 					{/if}
 				</div>
+
+				<!-- ══ the key hints ═══════════════════════════════════════
+				     Only where there is room: under 480px (the sheet on a
+				     phone) the row would wrap into a second footer, and the
+				     keys it names are not the phone's keys anyway. Decorative
+				     for AT — the combobox already announces its own keys. -->
+				<div
+					class="border-surface-200-800 text-surface-500 hidden shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-t px-3 py-2 text-[11px] @min-[480px]/jump:flex"
+					aria-hidden="true"
+				>
+					{#each KEY_HINTS as hint (hint.label)}
+						<span class="flex items-center gap-1">
+							{#each hint.keys as key (key)}
+								<kbd
+									class="border-surface-300-700 text-surface-600-400 rounded border px-1 py-px font-mono text-[11px]"
+								>
+									{key}
+								</kbd>
+							{/each}
+							{hint.label}
+						</span>
+					{/each}
+				</div>
 			</Dialog.Content>
 		</Dialog.Positioner>
 	</Portal>
 </Dialog>
 
-<!-- One row. The selected convention is tonal surface plus a 3px inset
-     `primary-500` bar — never a filled primary background. -->
+<!-- One row. The selected convention is `.sidebar-row-active` (tonal surface
+     plus a 3px inset `primary-500` bar) — never a filled primary background. -->
 {#snippet resultRow(row: JumpRow)}
 	{@const isActive = activeRow?.id === row.id}
 	<button
@@ -641,19 +733,19 @@
 		tabindex="-1"
 		data-jump-active={isActive ? "true" : undefined}
 		class="flex h-11 w-full items-center gap-3 px-3 text-left transition-colors {isActive
-			? 'bg-surface-900 shadow-[inset_3px_0_0_0_var(--color-primary-500)]'
+			? 'sidebar-row-active'
 			: ''}"
 		onmouseenter={() => {
 			const index = flatRows.findIndex((r) => r.id === row.id)
 			if (index >= 0) highlight = index
 		}}
 		onmousedown={(e) => e.preventDefault()}
-		onclick={() => void row.action()}
+		onclick={(e) => void row.action({ focus: e.shiftKey })}
 	>
-		<row.icon class="text-surface-400 size-4 shrink-0" aria-hidden="true" />
+		<row.icon class="text-surface-600-400 size-4 shrink-0" aria-hidden="true" />
 		<span class="min-w-0 flex-1">
 			<span
-				class="text-surface-50 flex min-w-0 items-center gap-1 text-sm"
+				class="text-surface-950-50 flex min-w-0 items-center gap-1 text-sm"
 			>
 				<span class="truncate">{row.title}</span>
 				{#if row.hint === "persona"}
@@ -666,7 +758,7 @@
 				{/if}
 			</span>
 			{#if row.subtitle}
-				<span class="text-surface-400 block truncate text-xs">
+				<span class="text-surface-600-400 block truncate text-xs">
 					{row.subtitle}
 				</span>
 			{/if}

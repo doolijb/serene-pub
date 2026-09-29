@@ -30,55 +30,35 @@ export interface AdminNavGroup {
 /** The path the Users section lives at; see `adminNavFor`. */
 export const ADMIN_USERS_HREF = "/admin/users"
 
+/**
+ * Grouped by the job a person came to do (ruled 2026-09-27, the admin
+ * overhaul), not by the table behind it. An empty `group` draws no label:
+ * Overview stands alone at the top. Instance is what Settings and Servers
+ * were, split by topic; `/admin/settings` and `/admin/servers` redirect.
+ */
 export const ADMIN_NAV: AdminNavGroup[] = [
 	{
-		group: "System",
+		group: "",
+		items: [{ href: "/admin", label: "Overview", icon: "Gauge" }]
+	},
+	{
+		group: "Models",
 		items: [
-			{
-				href: "/admin/settings",
-				label: "Settings",
-				icon: "Settings"
-			},
-			{ href: "/admin/servers", label: "Servers", icon: "Server" },
+			// Defaults first: it is the question the other two answer —
+			// which connection, with which sampling, does each job.
+			{ href: "/admin/defaults", label: "Defaults", icon: "Target" },
+			{ href: "/admin/connections", label: "Connections", icon: "Cable" },
 			{
 				href: "/admin/sampling",
 				label: "Sampling",
 				icon: "SlidersHorizontal"
-			},
-			// Between Sampling and Connections because it is the thing
-			// that JOINS them: a connection and a sampling config are the
-			// two halves of one capability's default. It reads in the
-			// order the work happens — configure the parts, then say what
-			// the instance uses them for.
-			{
-				href: "/admin/defaults",
-				label: "Defaults",
-				icon: "Target"
-			},
-			{
-				href: "/admin/connections",
-				label: "Connections",
-				icon: "Cable"
 			}
 		]
 	},
 	{
-		group: "Access",
-		items: [{ href: ADMIN_USERS_HREF, label: "Users", icon: "Users" }]
-	},
-	{
-		group: "Sessions",
+		group: "People",
 		items: [
-			{
-				href: "/admin/session-genres",
-				label: "Genres",
-				icon: "Shapes"
-			},
-			{
-				href: "/admin/session-presets",
-				label: "Presets",
-				icon: "Ticket"
-			},
+			{ href: ADMIN_USERS_HREF, label: "Users", icon: "Users" },
 			{
 				href: "/admin/sessions",
 				label: "Sessions",
@@ -87,23 +67,28 @@ export const ADMIN_NAV: AdminNavGroup[] = [
 		]
 	},
 	{
-		group: "Content",
+		group: "Play",
 		items: [
-			{
-				href: "/admin/pipelines",
-				label: "Pipelines",
-				icon: "Workflow"
-			},
-			{
-				href: "/admin/pipelines/events",
-				label: "Events",
-				icon: "Zap"
-			},
+			{ href: "/admin/session-genres", label: "Genres", icon: "Shapes" },
+			{ href: "/admin/session-presets", label: "Presets", icon: "Ticket" }
+		]
+	},
+	{
+		group: "Pipelines",
+		items: [
+			{ href: "/admin/pipelines", label: "Pipelines", icon: "Workflow" },
+			{ href: "/admin/pipelines/events", label: "Events", icon: "Zap" },
 			{
 				href: "/admin/configurations",
 				label: "Configurations",
 				icon: "SlidersVertical"
 			},
+			{ href: "/admin/scripts", label: "Scripts", icon: "SquareCode" }
+		]
+	},
+	{
+		group: "Writing",
+		items: [
 			{
 				href: "/admin/prompts",
 				label: "Prompts",
@@ -126,13 +111,37 @@ export const ADMIN_NAV: AdminNavGroup[] = [
 				href: "/admin/variable-templates",
 				label: "Variable templates",
 				icon: "Braces"
+			}
+		]
+	},
+	{
+		group: "Extensions",
+		items: [
+			{ href: "/admin/plugins", label: "Plugins", icon: "Puzzle" },
+			// Beside Plugins because both put widgets on a session page: a
+			// plugin's arrive packaged, an authored component is written here.
+			{ href: "/admin/components", label: "Components", icon: "Blocks" }
+		]
+	},
+	{
+		group: "Instance",
+		items: [
+			{ href: "/admin/general", label: "General", icon: "Settings" },
+			{ href: "/admin/network", label: "Network", icon: "Globe" },
+			{
+				href: "/admin/data",
+				label: "Data and backups",
+				icon: "Database"
 			},
 			{
-				href: "/admin/scripts",
-				label: "Scripts",
-				icon: "SquareCode"
+				href: "/admin/diagnostics",
+				label: "Diagnostics",
+				icon: "Activity"
 			},
-			{ href: "/admin/plugins", label: "Plugins", icon: "Puzzle" }
+			// Who changed what, and when — every section's changes in one
+			// list (the admin logbook). A change form links here with
+			// `?type=…&id=…` for one object's history.
+			{ href: "/admin/history", label: "History", icon: "History" }
 		]
 	}
 ]

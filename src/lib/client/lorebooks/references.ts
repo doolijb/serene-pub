@@ -1,4 +1,5 @@
 import type { PoolItem } from "./poolFilter"
+import { keyList } from "$lib/shared/entries/keyList"
 
 /**
  * Whether one row is named in some text — the matcher every reference is built
@@ -29,10 +30,10 @@ export function mentions(text: string, keyword: string): boolean {
 	return new RegExp(`${left}${pattern}${right}`, "i").test(text)
 }
 
-/** The keywords as authored: comma-delimited, trimmed, blanks dropped. */
+/**
+ * The keywords as authored: the stored list, trimmed, blanks dropped. Never
+ * re-split — a key may hold a comma (finding #146).
+ */
 export function keywordsOf(item: PoolItem): string[] {
-	return item.keys
-		.split(",")
-		.map((k) => k.trim())
-		.filter(Boolean)
+	return keyList(item.keys)
 }

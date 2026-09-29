@@ -2,11 +2,11 @@
  * "Make sure the managed koboldcpp is up with the model I need loaded."
  *
  * Lifted wholesale out of `KoboldCppManagedAdapter.preflight()`, because both
- * kinds of managed connection need exactly this and only one of them has a
- * generation attached. A `koboldcpp_managed` row asks for its text GGUF before
- * writing a reply; a `koboldcpp_managed_image` row asks for its image model
- * before drawing. Same process, same admin API, same subprocess manager, same
- * baseUrl-keyed TTL — the only thing that differs is which model is named.
+ * kinds of managed request need exactly this and only one of them has a
+ * generation attached. A reply asks for its text GGUF before writing; a render
+ * asks for its image model before drawing. Same process, same admin API, same
+ * subprocess manager, same baseUrl-keyed TTL — the only thing that differs is
+ * which model is named.
  *
  * Living here rather than on the adapter removes two traps rather than handling
  * them:
@@ -96,7 +96,7 @@ export async function ensureManagedReady(
 	const settings = await db.query.koboldCppSettings.findFirst()
 	if (!settings?.koboldCppManagerEnabled) {
 		throw new Error(
-			"KoboldCPP Manager is disabled. Enable it in Settings to use this connection."
+			"KoboldCPP, run by Serene Pub, is turned off. Turn it on from Connections → Add → KoboldCPP, run by Serene Pub, to use this connection."
 		)
 	}
 	if (!spec.file) {
@@ -105,7 +105,7 @@ export async function ensureManagedReady(
 	const adminDir = settings.koboldCppManagedBinaryDir
 	if (!adminDir) {
 		throw new Error(
-			"KoboldCPP Manager needs an Admin Directory configured — set one in Settings."
+			"KoboldCPP, run by Serene Pub needs an admin directory configured — set one in its Settings tab."
 		)
 	}
 
@@ -159,11 +159,11 @@ async function attemptLoad(
 		// Nothing is listening and we're not allowed to spawn anything —
 		// left uncaught, this surfaces as a bare "fetch failed"/ECONNREFUSED
 		// from ensureModelLoaded() below, which reads like an app bug rather
-		// than a config/timing issue (e.g. Manager was switched to
+		// than a config/timing issue (e.g. the managed KoboldCPP was switched to
 		// "External" or disabled from the settings screen — possibly
 		// mid-generation — while nothing external was actually running).
 		throw new Error(
-			`KoboldCPP is not reachable at ${baseUrl} and the Manager is in "${settings.koboldCppManagedMode ?? "unset"}" mode, so it can't be auto-started. Either start KoboldCPP externally, or switch the Manager to "Managed" mode in Settings.`
+			`KoboldCPP is not reachable at ${baseUrl} and KoboldCPP, run by Serene Pub, is in "${settings.koboldCppManagedMode ?? "unset"}" mode, so it can't be auto-started. Either start KoboldCPP externally, or switch it to "Managed" mode in its Settings tab.`
 		)
 	}
 	if (settings.koboldCppManagedMode === "managed" && !alreadyResponding) {
@@ -234,7 +234,7 @@ async function attemptLoad(
 		// working" and a file the user can go and look at.
 		const named = `The ${request.kind} model "${request.file}" failed to load`
 		// An externally-owned instance almost certainly has a different
-		// --adminpassword and --admindir than this Manager is configured
+		// --adminpassword and --admindir than this managed KoboldCPP is configured
 		// with, so the admin API call above (reload_config) is expected to
 		// be rejected — surface that explanation instead of the raw,
 		// undiagnosable "rejected the request" error.
@@ -245,7 +245,7 @@ async function attemptLoad(
 		}
 		if (subprocessManager.isExternal()) {
 			throw new Error(
-				`${named}. KoboldCPP is running on this port but wasn't started by this Manager, so its admin password/directory don't match — model loading was rejected: ${err?.message || err}. Stop the external instance and let the Manager start its own, or point this Manager at a different port.`
+				`${named}. KoboldCPP is running on this port but wasn't started by Serene Pub, so its admin password/directory don't match — model loading was rejected: ${err?.message || err}. Stop the external instance and let Serene Pub start its own, or point KoboldCPP, run by Serene Pub, at a different port.`
 			)
 		}
 		throw new Error(`${named}: ${err?.message || err}`)

@@ -27,6 +27,13 @@ import {
  */
 export const STANDARD_GENRE_ID = "core:genre/chat"
 
+/**
+ * The Guide genre — one envoy answering about the app, no characters. Stated
+ * here for the same reason as the standard genre: the client reads no SDK
+ * catalogue. The home wizard's "Talk to an AI" starts one.
+ */
+export const GUIDE_GENRE_ID = "core:genre/guide"
+
 export type GenreRow = Sockets.Sessions.Genres.Response["genres"][number]
 export type GenreShape = GenreRow["shape"]
 export type PresetRow = Sockets.SessionAdmin.PresetRow
@@ -159,6 +166,19 @@ export function oneClickStart(
 	}
 }
 
+/**
+ * How many of something a genre takes, in words: "exactly 1", "1–3",
+ * "at least 1", "up to 4", or "" when neither bound holds. `floor` is what the
+ * form requires (`participantFloors`), `max` the shape's cap.
+ */
+export function castCountHint(floor: number, max: number | undefined): string {
+	if (max != null && floor > 0 && max <= floor) return `exactly ${floor}`
+	if (max != null && floor > 0) return `${floor}–${max}`
+	if (floor > 0) return `at least ${floor}`
+	if (max != null) return `up to ${max}`
+	return ""
+}
+
 /** One line of shape facts for a genre card — presentation over the same
  * shape the server validates against. */
 export function genreFacts(shape: GenreShape | null | undefined): string {
@@ -169,7 +189,9 @@ export function genreFacts(shape: GenreShape | null | undefined): string {
 		const bounds =
 			b.min > 0
 				? b.max != null
-					? `${b.min}–${b.max}`
+					? b.max === b.min
+						? `exactly ${b.min}`
+						: `${b.min}–${b.max}`
 					: `${b.min}+`
 				: b.max != null
 					? `up to ${b.max}`
@@ -199,6 +221,48 @@ export function autoSessionName(
 	const everyone = [...cast, ...personaNames.filter(Boolean)]
 	const last = everyone.pop()!
 	return `${everyone.join(", ")} and ${last}`
+}
+
+/**
+ * The name the session is created with: what the person typed, trimmed, or —
+ * left blank — the automatic name (`autoSessionName`).
+ */
+export function finalSessionName(typed: string, automatic: string): string {
+	return typed.trim() || automatic
+}
+
+/** The fields `playAsOptions` reads off a `characters:list` row. */
+export interface PlayAsCandidate {
+	id: number
+	name?: string | null
+	isPersona?: boolean | null
+	isDefaultPersona?: boolean | null
+}
+
+/**
+ * Who the person can play as: every character they have, not only the flagged
+ * personas. A persona is a character carrying `isPersona`, and the seat takes
+ * any of them — the server flags an unflagged one the moment it is seated
+ * (`markCharacterAsPersona`), so a library with no personas yet can still
+ * start a session.
+ *
+ * Personas lead — the default persona first — then everyone else, each group
+ * by name. A character already in the cast is left out: nobody plays a
+ * character the session also voices.
+ */
+export function playAsOptions<T extends PlayAsCandidate>(
+	characters: T[],
+	castIds: number[]
+): T[] {
+	const cast = new Set(castIds)
+	const rank = (c: T) =>
+		c.isDefaultPersona ? 0 : c.isPersona ? 1 : 2
+	return characters
+		.filter((c) => !cast.has(c.id))
+		.sort(
+			(a, b) =>
+				rank(a) - rank(b) || (a.name || "").localeCompare(b.name || "")
+		)
 }
 
 /** What a genre's shape allows, applied to what the flow currently holds. */
@@ -407,6 +471,27 @@ export class StartSessionFlow {
 		}
 		if (rows.some((p) => p.id === this.presetId)) return
 		this.choosePreset((rows.find((p) => p.isDefault) ?? rows[0]).id)
+	}
+
+	/**
+	 * Add or take away a cast member, up to the genre's cap. A character the
+	 * person was playing leaves the player seat as it joins the cast.
+	 */
+	toggleCharacter(id: number) {
+		if (this.characterIds.includes(id)) {
+			this.characterIds = this.characterIds.filter((c) => c !== id)
+			return
+		}
+		const max = this.shape?.characters?.max ?? Infinity
+		if (this.characterIds.length >= max) return
+		this.characterIds = [...this.characterIds, id]
+		if (this.personaIds.includes(id))
+			this.personaIds = this.personaIds.filter((p) => p !== id)
+	}
+
+	/** Seat the person as this character — any character, flagged or not. */
+	playAs(id: number) {
+		this.personaIds = [id]
 	}
 
 	/** Re-fit held fields, cast and lorebook to the chosen genre's shape. */

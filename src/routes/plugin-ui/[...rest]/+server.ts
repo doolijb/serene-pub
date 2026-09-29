@@ -11,7 +11,8 @@
  * load. What's served is vendor code a plugin shipped — never user data; the
  * data plane is the MessageChannel the host feeds, which *is* session-scoped.
  * Only enabled plugins serve at all, so the surface follows the admin's
- * switch.
+ * switch — and nothing serves while the extension subsystem is off
+ * (`SP_PLUGINS_ENABLED`): a 404, as if no plugin were installed.
  *
  * Every response carries the CSP composed from the plugin's grants: the same
  * declared, admin-deniable `network:<host>` permission that governs the
@@ -20,16 +21,19 @@
  */
 import { createHash } from "node:crypto"
 import type { RequestHandler } from "@sveltejs/kit"
-import { eq } from "drizzle-orm"
+import { and, eq } from "drizzle-orm"
 import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
 import {
 	readPluginFile,
 	frameCsp,
+	notCoreRow,
 	parseFrameSrc
 } from "$lib/server/plugins/frameHost"
+import { pluginsEnabled } from "$lib/server/plugins/flag"
 
 export const GET: RequestHandler = async (event) => {
+	if (!pluginsEnabled()) return new Response("Not found", { status: 404 })
 	const parsed = parseFrameSrc(event.params.rest)
 	if (!parsed) return new Response("Not found", { status: 404 })
 	const { pluginId, path } = parsed
@@ -41,7 +45,8 @@ export const GET: RequestHandler = async (event) => {
 			adminDenied: schema.plugins.adminDenied
 		})
 		.from(schema.plugins)
-		.where(eq(schema.plugins.pluginId, pluginId))
+		// `core` is never a plugin's frame: a page answers core's owner as its own.
+		.where(and(eq(schema.plugins.pluginId, pluginId), notCoreRow()))
 		.limit(1)
 	if (!plugin?.enabled) return new Response("Not found", { status: 404 })
 

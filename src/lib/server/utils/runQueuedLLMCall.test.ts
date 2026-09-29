@@ -176,7 +176,7 @@ describe("runQueuedLLMCall — signal bridge", () => {
  * Everything this wrapper answers goes somewhere durable — a lore summary, a
  * graph node, a session title, a generated field. None of those has a reader
  * that could tell reasoning from what the model meant to say, and there is no
- * later stage that could take it back out.
+ * later step that could take it back out.
  */
 describe("runQueuedLLMCall — reasoning never reaches the text", () => {
 	const run = (adapter: any) =>

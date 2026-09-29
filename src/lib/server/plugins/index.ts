@@ -19,12 +19,15 @@ import {
 	registerPluginDefinitions
 } from "./pluginDefinitions"
 import { registerPluginEvents } from "./pluginEvents"
+import { registerPluginAnnex } from "./pluginAnnex"
+import { syncPluginVariables } from "./pluginVariables"
 import { makePluginRowPort } from "./rowStore"
 import { pluginsEnabled } from "./flag"
 import { syncPluginEngines } from "./engineHost"
 import { pluginEvents, syncPluginEventHooks } from "./eventHost"
 import { setRunStopObserver } from "$lib/server/pipelines/runtime/runRegistry"
 import { reserveAttributeOwner } from "@serene-pub/sdk"
+import { firePendingUpdate, fireShutdown } from "./lifecycle"
 
 let manager: SandboxManager | null = null
 let dbRef: Db | null = null
@@ -73,6 +76,16 @@ export async function bootstrapPlugins(db: Db): Promise<void> {
 	})
 
 	if (pluginsEnabled()) {
+		// Every INSTALLED package's context variables first (typed templates,
+		// 2026-09-27): a banded definition below is refused by `register()`
+		// while its band's variable is unknown here. Installed, not enabled —
+		// they follow the plugin row like its genres (`pluginVariables.ts`).
+		try {
+			for (const line of await syncPluginVariables(db))
+				console.warn(`[plugins] variable ${line}`)
+		} catch (e) {
+			console.warn("[plugins] variable registration failed:", e)
+		}
 		// Every installed package's node definitions, back in this process's
 		// registry (D-6b). The rows in `pipeline_definition_registry` are what
 		// a panel reads and what routes a node to its owner; the executor
@@ -89,11 +102,26 @@ export async function bootstrapPlugins(db: Db): Promise<void> {
 				const registered = registerPluginDefinitions(declarations)
 				// Its declared events too, from the same manifest (E1b).
 				const events = registerPluginEvents(row.manifest, row.pluginId)
-				for (const line of [...refused, ...registered.refused, ...events])
+				// And its annex declaration (ruling 2026-09-26).
+				const annex = registerPluginAnnex(row.manifest, row.pluginId)
+				for (const line of [...refused, ...registered.refused, ...events, ...annex])
 					console.warn(`[plugins] '${row.pluginId}': ${line}`)
 			}
 		} catch (e) {
 			console.warn("[plugins] node-definition registration failed:", e)
+		}
+
+		// Every INSTALLED plugin's genres (enabled or not — disabling only
+		// hides them from listings, owner ruling 2026-09-26), with the
+		// attribute slots and sheets they bring — without them a plugin genre
+		// states no vocabulary and every stat write in its sessions is refused
+		// as undeclared.
+		try {
+			const { syncPluginGenres } = await import("./pluginGenres")
+			for (const line of await syncPluginGenres(db))
+				console.warn(`[plugins] genre ${line}`)
+		} catch (e) {
+			console.warn("[plugins] genre registration failed:", e)
 		}
 
 		const descriptors = await loadEnabledPlugins(db)
@@ -108,6 +136,16 @@ export async function bootstrapPlugins(db: Db): Promise<void> {
 				mgr.register(d)
 			} catch (e) {
 				console.warn(`[plugins] skipping '${d.id}': ${String(e)}`)
+			}
+		}
+		// A bundle replaced while the app was down (or enabled with the sandbox
+		// off) is running for the first time: its `update` comes before its
+		// `startup`, exactly as on an enable (lifecycle.ts).
+		for (const d of descriptors) {
+			try {
+				await firePendingUpdate(db, mgr, d.id)
+			} catch (e) {
+				console.warn(`[plugins] '${d.id}' pending update failed:`, e)
 			}
 		}
 		// Startup lifecycle hooks: sequential, before the gate opens. A plugin
@@ -185,6 +223,23 @@ export async function bootstrapPlugins(db: Db): Promise<void> {
 	}
 
 	mgr.markReady()
+}
+
+/**
+ * The `plugins` managed service's shutdown: every registered plugin's
+ * `shutdown` callback (bounded — never holds up exit), then the teardown.
+ * Only when the sandbox is on and a manager exists; a shutdown never builds
+ * a manager just to find it empty.
+ */
+export async function shutdownPluginsGracefully(): Promise<void> {
+	if (manager && pluginsEnabled()) {
+		try {
+			await fireShutdown(manager)
+		} catch (e) {
+			console.warn("[plugins] shutdown callbacks failed:", e)
+		}
+	}
+	await shutdownPlugins()
 }
 
 /** Tear down the manager (tests / shutdown). */

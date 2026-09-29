@@ -62,20 +62,6 @@ describe("hookKindsOf", () => {
 		// non-string hook values are dropped
 		expect(hookKindsOf({ hookKinds: { x: 5, y: "ok" } })).toEqual({ y: "ok" })
 	})
-
-	it("still reads the pre-rename `hookTypes` key, for one release (2026-09-16)", () => {
-		// A plugin packaged against the previous SDK keeps dispatching; the new
-		// key wins when both are present.
-		expect(
-			hookKindsOf({ hookTypes: { "a:script:text/transform@1": "trim" } })
-		).toEqual({ "a:script:text/transform@1": "trim" })
-		expect(
-			hookKindsOf({
-				hookKinds: { "a:script:text/transform@1": "new" },
-				hookTypes: { "a:script:text/transform@1": "old" }
-			})
-		).toEqual({ "a:script:text/transform@1": "new" })
-	})
 })
 
 describe("makePluginHookDispatch", () => {

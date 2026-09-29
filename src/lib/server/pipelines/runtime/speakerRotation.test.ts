@@ -149,11 +149,11 @@ describe("user-split", () => {
 describe("the cast read, reduced to seats", () => {
 	const cast = {
 		sessionCharacters: [
-			{ isActive: true, position: 2, character: { id: 3, name: "C", userId: 1 } },
-			{ isActive: false, position: 0, character: { id: 1, name: "A", userId: 1 } },
-			{ isActive: true, position: 1, removedAt: new Date(), character: { id: 2, userId: 1 } },
-			{ isActive: true, position: 0, character: { id: 4, name: "D", userId: 2 } },
-			{ isActive: true, position: 5, character: null }
+			{ enabled: true, position: 2, character: { id: 3, name: "C", userId: 1 } },
+			{ enabled: false, position: 0, character: { id: 1, name: "A", userId: 1 } },
+			{ enabled: true, position: 1, removedAt: new Date(), character: { id: 2, userId: 1 } },
+			{ enabled: true, position: 0, character: { id: 4, name: "D", userId: 2 } },
+			{ enabled: true, position: 5, character: null }
 		],
 		sessionPersonas: [
 			{ persona: { id: 7, userId: 1 } },

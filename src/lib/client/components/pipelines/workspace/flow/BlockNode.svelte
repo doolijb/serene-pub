@@ -74,14 +74,14 @@
 	<Handle type="target" position={targetPosition} class="!opacity-0" />
 	<div
 		class="flex items-center gap-1.5 overflow-hidden rounded-t-md px-2.5 py-1.5
-			{active ? 'preset-filled-primary-500' : ''} {block.stepKey ? 'cursor-pointer' : ''}"
+			{active ? 'preset-tonal-primary' : ''} {block.stepKey ? 'cursor-pointer' : ''}"
 		aria-current={active ? "step" : undefined}
 		title={block.stepKey
 			? "This construct has settings of its own"
 			: undefined}
 	>
 		<span
-			class="flex shrink-0 items-center gap-1 text-[10px] font-bold tracking-[.15em] uppercase
+			class="flex shrink-0 items-center gap-1 text-xs font-medium
 				{active ? '' : 'text-surface-600-400'}"
 		>
 			{#if block.kind === "loop"}
@@ -107,7 +107,7 @@
 		</span>
 		{#if counts?.overridden}
 			<span
-				class="preset-filled-secondary-500 ml-auto shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-semibold"
+				class="preset-filled-secondary-500 ml-auto shrink-0 rounded-full px-1.5 py-0.5 text-[11px] font-semibold"
 				title="{counts.overridden} set here, not inherited"
 			>
 				{counts.overridden}
@@ -116,10 +116,10 @@
 	</div>
 	{#if block.kind === "loop"}
 		<div
-			class="text-surface-600-400 pointer-events-none absolute right-2 bottom-1 flex items-center gap-1 text-[10px] tracking-wide uppercase"
+			class="text-surface-600-400 pointer-events-none absolute right-2 bottom-1 flex items-center gap-1 text-xs"
 		>
 			<Icons.CornerLeftUp size={11} aria-hidden="true" />
-			repeats
+			Repeats
 		</div>
 	{/if}
 	<Handle type="source" position={sourcePosition} class="!opacity-0" />

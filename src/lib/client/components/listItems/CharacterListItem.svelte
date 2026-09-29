@@ -1,9 +1,9 @@
 <script lang="ts">
 	import { avatarSrc } from "$lib/client/utils/media"
-	import { Popover, Portal } from "@skeletonlabs/skeleton-svelte"
 	import * as Icons from "@lucide/svelte"
 	import SidebarListItem from "../SidebarListItem.svelte"
 	import EmbeddingStatusIcon from "../EmbeddingStatusIcon.svelte"
+	import RowMenu from "../menus/RowMenu.svelte"
 
 	interface Props {
 		character: Sockets.Characters.List.Response["characterList"][0]
@@ -45,8 +45,6 @@
 		classes = "",
 		active = false
 	}: Props = $props()
-
-	let menuOpen = $state(false)
 
 	function handleClick() {
 		onclick?.(character)
@@ -91,11 +89,11 @@
 			/>
 		{:else}
 			<span
-				class="bg-surface-800 grid h-10 w-10 shrink-0 place-items-center rounded-[9px]"
+				class="bg-surface-200-800 grid h-10 w-10 shrink-0 place-items-center rounded-[9px]"
 			>
 				<Icons.UsersRound
 					size={20}
-					class="text-surface-400"
+					class="text-surface-600-400"
 					aria-hidden="true"
 				/>
 			</span>
@@ -153,7 +151,7 @@
 				</div>
 				{#if character.description}
 					<div
-						class="text-surface-400 truncate text-left text-xs"
+						class="text-surface-600-400 truncate text-left text-xs"
 						id="character-desc-{character.id}"
 					>
 						{character.description}
@@ -170,7 +168,7 @@
 						{tags[0].name}
 					</span>
 					{#if tags.length > 1}
-						<span class="text-surface-500 text-[11px]">
+						<span class="text-surface-600-400 text-[11px]">
 							+{tags.length - 1}
 						</span>
 					{/if}
@@ -180,164 +178,54 @@
 	{/snippet}
 	{#snippet controls()}
 		{#if showControls && (onclick || onEdit || onExport || onDelete || onTogglePersona || onSetDefaultPersona || onMoveToFolder)}
-			<div role="none" onclick={(e) => e.stopPropagation()}>
-				<Popover
-					open={menuOpen}
-					onOpenChange={(e) => (menuOpen = e.open)}
-					positioning={{ placement: "bottom-end" }}
-				>
-					<Popover.Trigger
-						class="btn btn-sm hover:bg-primary-600-400 shrink-0 p-3 {menuOpen
-							? 'bg-primary-600-400'
-							: ''}"
-						aria-label="Character options"
-					>
-						<Icons.EllipsisVertical size={16} />
-					</Popover.Trigger>
-					<Portal>
-						<Popover.Positioner class="z-[1000]!">
-							<Popover.Content
-								class="card bg-surface-200-800 w-[min(90vw,240px)] space-y-4 p-4 shadow-xl"
-							>
-								<header class="popover-menu-title">
-									<Icons.User size={18} aria-hidden="true" />
-									<p>Character Options</p>
-								</header>
-								<article class="flex flex-col gap-2">
-									{#if onclick}
-										<button
-											class="btn btn-sm popover-menu-btn hover:preset-filled-primary-500"
-											onclick={() => {
-												menuOpen = false
-												handleClick()
-											}}
-											type="button"
-										>
-											<Icons.Eye
-												size={16}
-												aria-hidden="true"
-											/>
-											<span>View</span>
-										</button>
-									{/if}
-									{#if onEdit}
-										<button
-											class="btn btn-sm popover-menu-btn hover:preset-filled-success-500"
-											onclick={() => {
-												menuOpen = false
-												onEdit?.(character.id!)
-											}}
-											type="button"
-										>
-											<Icons.Pencil
-												size={16}
-												aria-hidden="true"
-											/>
-											<span>Edit</span>
-										</button>
-									{/if}
-									{#if onTogglePersona}
-										<button
-											class="btn btn-sm popover-menu-btn hover:preset-filled-primary-500"
-											onclick={() => {
-												menuOpen = false
-												onTogglePersona?.(character)
-											}}
-											type="button"
-										>
-											<Icons.UserRound
-												size={16}
-												aria-hidden="true"
-											/>
-											<span>
-												{character.isPersona
-													? "Not a persona"
-													: "Use as persona"}
-											</span>
-										</button>
-									{/if}
-									{#if onSetDefaultPersona}
-										<button
-											class="btn btn-sm popover-menu-btn hover:preset-filled-primary-500"
-											onclick={() => {
-												menuOpen = false
-												onSetDefaultPersona?.(
-													character.id!
-												)
-											}}
-											type="button"
-											disabled={character.isDefaultPersona}
-										>
-											<Icons.UserRoundCheck
-												size={16}
-												aria-hidden="true"
-											/>
-											<span>
-												{character.isDefaultPersona
-													? "Default persona"
-													: "Set as default persona"}
-											</span>
-										</button>
-									{/if}
-									{#if onMoveToFolder}
-										<button
-											class="btn btn-sm popover-menu-btn hover:preset-filled-primary-500"
-											onclick={() => {
-												menuOpen = false
-												onMoveToFolder?.(character)
-											}}
-											type="button"
-										>
-											<Icons.FolderInput
-												size={16}
-												aria-hidden="true"
-											/>
-											<span>Move to folder…</span>
-										</button>
-									{/if}
-									{#if onExport}
-										<button
-											class="btn btn-sm popover-menu-btn hover:preset-filled-success-500"
-											onclick={() => {
-												menuOpen = false
-												onExport?.(character)
-											}}
-											type="button"
-										>
-											<Icons.Download
-												size={16}
-												aria-hidden="true"
-											/>
-											<span>Export</span>
-										</button>
-									{/if}
-									{#if onDelete}
-										<button
-											class="btn btn-sm popover-menu-btn hover:preset-filled-error-500"
-											onclick={() => {
-												menuOpen = false
-												onDelete?.(character.id!)
-											}}
-											type="button"
-										>
-											<Icons.Trash2
-												size={16}
-												aria-hidden="true"
-											/>
-											<span>Delete</span>
-										</button>
-									{/if}
-								</article>
-								<Popover.Arrow>
-									<Popover.ArrowTip
-										class="!bg-surface-200 dark:!bg-surface-800"
-									/>
-								</Popover.Arrow>
-							</Popover.Content>
-						</Popover.Positioner>
-					</Portal>
-				</Popover>
-			</div>
+			<RowMenu
+				label="Character"
+				triggerClass="btn btn-sm hover:bg-surface-200-800 data-[state=open]:bg-surface-200-800 shrink-0 p-3"
+				items={[
+					onclick && {
+						label: "View",
+						icon: Icons.Eye,
+						onSelect: handleClick
+					},
+					onEdit && {
+						label: "Edit",
+						icon: Icons.Pencil,
+						onSelect: () => onEdit?.(character.id!)
+					},
+					onTogglePersona && {
+						label: character.isPersona
+							? "Not a persona"
+							: "Use as persona",
+						icon: Icons.UserRound,
+						onSelect: () => onTogglePersona?.(character)
+					},
+					onSetDefaultPersona && {
+						label: character.isDefaultPersona
+							? "Default persona"
+							: "Set as default persona",
+						icon: Icons.UserRoundCheck,
+						disabled: !!character.isDefaultPersona,
+						onSelect: () => onSetDefaultPersona?.(character.id!)
+					},
+					onMoveToFolder && {
+						label: "Move to folder…",
+						icon: Icons.FolderInput,
+						onSelect: () => onMoveToFolder?.(character)
+					},
+					onExport && {
+						label: "Export",
+						icon: Icons.Download,
+						onSelect: () => onExport?.(character)
+					},
+					onDelete && { separator: true },
+					onDelete && {
+						label: "Delete",
+						icon: Icons.Trash2,
+						destructive: true,
+						onSelect: () => onDelete?.(character.id!)
+					}
+				]}
+			/>
 		{/if}
 	{/snippet}
 </SidebarListItem>

@@ -32,10 +32,10 @@
 				class="card bg-surface-100-900 border-surface-300-700 w-[min(95vw,640px)] space-y-6 border p-6 shadow-xl"
 			>
 				<header class="flex items-center justify-between">
-					<h2 class="h2">Select Model Version</h2>
+					<h2 class="h2">Select model version</h2>
 					<button
 						onclick={onClose}
-						class="btn-icon btn-icon-sm"
+						class="btn btn-icon btn-icon-sm"
 						aria-label="Close"
 					>
 						<Icons.X size={16} />
@@ -55,7 +55,7 @@
 								<h3
 									class="text-primary-800 dark:text-primary-200 mb-2 font-semibold"
 								>
-									Choose Your Model Version
+									Choose your model version
 								</h3>
 								<p class="text-primary-700-300 mb-3 text-sm">
 									To download <strong>{modelName}</strong>

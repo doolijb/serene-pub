@@ -269,3 +269,45 @@ export function tierOrder<R extends TierSortable>(
 		out.push({ tier: null, label: null, rows: [...untiered].sort(bySize) })
 	return out
 }
+
+/** The two halves of a local ONNX list: what is here, and what could be. */
+export interface PresenceSplit<R extends TierSortable> {
+	/**
+	 * On disk, arriving, or failed — everything this machine holds or is
+	 * fetching, the active model first, then by tier and size. A row the
+	 * server has not answered for yet lands here too: it is not known to be
+	 * missing, and filing it under "available" would claim it is.
+	 */
+	here: R[]
+	/** Not downloaded, grouped by tier the way the recommended list is. */
+	available: TierGroup<R>[]
+	/** Rows in `available`, for the collapsed header's count. */
+	availableCount: number
+}
+
+/**
+ * Split an ONNX endpoint's rows by where the files are.
+ *
+ * The endpoint table grouped by tier alone, so three models on disk sat among
+ * seven that were not, told apart by a chip in the second-last column (walk
+ * 2026-09-24, plan C1). Every ONNX list — the table, the docked list, the
+ * capability chooser, the finder — reads this one split.
+ */
+export function splitByPresence<R extends TierSortable>(
+	rows: readonly R[],
+	isActive: (row: R) => boolean = () => false
+): PresenceSplit<R> {
+	const here: R[] = []
+	const notHere: R[] = []
+	for (const row of rows) {
+		if (row.local?.state === "not_downloaded") notHere.push(row)
+		else here.push(row)
+	}
+	const tiered = tierOrder(here).flatMap((g) => g.rows)
+	const active = tiered.filter(isActive)
+	return {
+		here: [...active, ...tiered.filter((r) => !isActive(r))],
+		available: tierOrder(notHere),
+		availableCount: notHere.length
+	}
+}

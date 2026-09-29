@@ -263,6 +263,48 @@ describe("jump:search — query semantics", () => {
 		expect(group(res, "entry")).toBeUndefined()
 	})
 
+	test("an archived entry and a fork's own entry are not hits — the book opens on main's default list", async () => {
+		const [fork] = await testDb
+			.insert(schema.lorebookBranches)
+			.values({ lorebookId: aliceLorebook.id, name: "Ashford burns" })
+			.returning()
+		const extra = await testDb
+			.insert(schema.lorebookEntries)
+			.values(
+				worldLoreValues([
+					{
+						lorebookId: aliceLorebook.id,
+						name: "Quillmoor shelf",
+						keys: "quillmoor",
+						content: "Shelved.",
+						archived: true
+					},
+					{
+						lorebookId: aliceLorebook.id,
+						name: "Quillmoor fork",
+						keys: "quillmoor",
+						content: "Only on the fork.",
+						branchId: fork.id
+					} as any,
+					{
+						lorebookId: aliceLorebook.id,
+						name: "Quillmoor main",
+						keys: "quillmoor",
+						content: "Everyone's."
+					}
+				])
+			)
+			.returning()
+		try {
+			const res = await jump(fakeSocket(alice.id), { query: "quillmoor" })
+			expect(titles(res, "entry")).toEqual(["Quillmoor main"])
+		} finally {
+			for (const row of extra)
+				await testDb.delete(schema.lorebookEntries).where(eq(schema.lorebookEntries.id, row.id))
+			await testDb.delete(schema.lorebookBranches).where(eq(schema.lorebookBranches.id, fork.id))
+		}
+	})
+
 	test("a keyword-only match still finds the entry", async () => {
 		const res = await jump(fakeSocket(alice.id), { query: "ashford" })
 		expect(group(res, "entry")!.hits[0].id).toBe(aliceEntry.id)

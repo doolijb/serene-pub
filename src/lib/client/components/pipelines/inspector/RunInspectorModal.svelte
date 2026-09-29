@@ -21,7 +21,7 @@
 
 {#if runId}
 	<div
-		class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+		class="fixed inset-0 z-50 flex items-center justify-center bg-surface-950/60 p-4"
 		role="dialog"
 		aria-modal="true"
 		aria-label="Run inspector"
@@ -34,7 +34,7 @@
 				<div class="min-w-0 flex-1">
 					<p class="font-semibold">What this run did</p>
 					<p class="text-surface-600-400 text-xs">
-						Every stage in the order it ran, and what each one was
+						Every step in the order it ran, and what each one was
 						given and produced.
 					</p>
 				</div>

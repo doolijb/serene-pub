@@ -295,6 +295,25 @@ async function collectGraphLayers(params: {
 		params
 	const db = params.db ?? defaultDb
 
+	/**
+	 * The session's line (findings #0/#143): an edge drawn on another line is
+	 * that line's story, and one dated (by its history entry) after the
+	 * session's clock or its line's fork cut has not happened here. The same
+	 * rule every durable row and the link hop take (`rowsOnReading`). With no
+	 * reading of this book — main at its head: shared edges only.
+	 */
+	const { sessionReadingOf, rowsOnReading } = await import(
+		"$lib/server/state/reading"
+	)
+	const found = await sessionReadingOf(db, sessionId)
+	const reading = found && found.lorebookId === lorebookId ? found : null
+	const onLine = async <T extends { branchId?: number | null; historyEntryId?: number | null }>(
+		rows: T[]
+	): Promise<T[]> =>
+		reading
+			? await rowsOnReading(db, rows, reading)
+			: rows.filter((r) => r.branchId == null)
+
 	// Find the speaker's binding and node. One column: the speaker is a
 	// character whether the model or a user is voicing them, and the character
 	// id is preferred only because a turn carrying both is a character's turn.
@@ -323,13 +342,15 @@ async function collectGraphLayers(params: {
 	// projections of them — and an endpoint that is an entry has no node to
 	// name, no visibility to filter on and no alias to suppress.
 	const speakerRels = (
-		await db.query.narrativeRelationships.findMany({
-			where: and(
-				eq(schema.narrativeRelationships.lorebookId, lorebookId),
-				castEdgeOnly,
-				eq(schema.narrativeRelationships.fromNodeId, speakerNodeId)
-			)
-		})
+		await onLine(
+			await db.query.narrativeRelationships.findMany({
+				where: and(
+					eq(schema.narrativeRelationships.lorebookId, lorebookId),
+					castEdgeOnly,
+					eq(schema.narrativeRelationships.fromNodeId, speakerNodeId)
+				)
+			})
+		)
 	).filter(isCastEdge)
 
 	const l1NodeIds = [
@@ -350,7 +371,7 @@ async function collectGraphLayers(params: {
 	// Check which of those parents already have a direct rel from speaker
 	const speakerToParentRels =
 		aliasTargetParentIds.size > 0
-			? await db.query.narrativeRelationships.findMany({
+			? await onLine(await db.query.narrativeRelationships.findMany({
 					where: and(
 						eq(
 							schema.narrativeRelationships.lorebookId,
@@ -365,8 +386,8 @@ async function collectGraphLayers(params: {
 							...aliasTargetParentIds
 						])
 					),
-					columns: { toNodeId: true }
-				})
+					columns: { toNodeId: true, branchId: true, historyEntryId: true }
+				}))
 			: []
 	const parentWithDirectRel = new Set(
 		speakerToParentRels.map((r) => r.toNodeId)
@@ -453,7 +474,7 @@ async function collectGraphLayers(params: {
 		if (participantParentIds.length > 0) {
 			// Fetch direct rels from participant parent nodes → speaker
 			const directRels = (
-				await db.query.narrativeRelationships.findMany({
+				await onLine(await db.query.narrativeRelationships.findMany({
 					where: and(
 						eq(
 							schema.narrativeRelationships.lorebookId,
@@ -473,7 +494,7 @@ async function collectGraphLayers(params: {
 							"public"
 						] as RelationshipVisibility[])
 					)
-				})
+				}))
 			).filter(isCastEdge)
 			const coveredByDirect = new Set(directRels.map((r) => r.fromNodeId))
 			l2Rels = [...directRels]
@@ -495,7 +516,7 @@ async function collectGraphLayers(params: {
 				})
 				const aliasChildIds = aliasChildren.map((n) => n.id)
 				if (aliasChildIds.length > 0) {
-					const aliasRels =
+					const aliasRels = await onLine(
 						await db.query.narrativeRelationships.findMany({
 							where: and(
 								eq(
@@ -520,6 +541,7 @@ async function collectGraphLayers(params: {
 								)
 							)
 						})
+					)
 					l2Rels.push(...aliasRels.filter(isCastEdge))
 				}
 			}
@@ -552,17 +574,19 @@ async function collectGraphLayers(params: {
 	const legendary: LegendaryLayer[] = []
 	for (const node of legendaryNodes) {
 		const pubRels = (
-			await db.query.narrativeRelationships.findMany({
-				where: and(
-					eq(schema.narrativeRelationships.lorebookId, lorebookId),
-					castEdgeOnly,
-					eq(schema.narrativeRelationships.fromNodeId, node.id),
-					eq(
-						schema.narrativeRelationships.visibility,
-						"public" as RelationshipVisibility
+			await onLine(
+				await db.query.narrativeRelationships.findMany({
+					where: and(
+						eq(schema.narrativeRelationships.lorebookId, lorebookId),
+						castEdgeOnly,
+						eq(schema.narrativeRelationships.fromNodeId, node.id),
+						eq(
+							schema.narrativeRelationships.visibility,
+							"public" as RelationshipVisibility
+						)
 					)
-				)
-			})
+				})
+			)
 		).filter(isCastEdge)
 		const l3NodeIds = [
 			...new Set([node.id, ...pubRels.map((r) => r.toNodeId)])

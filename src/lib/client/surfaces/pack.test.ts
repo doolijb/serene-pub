@@ -15,7 +15,7 @@ function inst(
 		id,
 		title: id,
 		role,
-		surface: { kind: "native", component: id },
+		surface: { kind: "remote", owner: "core", component: id },
 		channels: [],
 		layout: normalizeLayout(
 			opts.span ? { span: { ideal: opts.span } } : undefined,

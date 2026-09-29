@@ -40,6 +40,8 @@
  */
 
 import { getVariable, allVariables, sampleValues } from "@serene-pub/sdk"
+import { assemble as assembleContract } from "@serene-pub/contracts"
+
 import { PromptFormats } from "$lib/shared/constants/PromptFormats"
 import { parseSplitChatPrompt } from "$lib/shared/utils/parseSplitChatPrompt"
 import {
@@ -106,6 +108,11 @@ function structuralContext(): Record<string, unknown> {
 	}
 }
 
+/** Assemble's raw bands (`rendersBands.raw`), from the contract. */
+const RAW_BAND_KEYS: ReadonlySet<string> = new Set(
+	assembleContract.descriptor.slots?.variables?.rendersBands?.raw ?? []
+)
+
 /**
  * Every declared variable's sample, rendered through the layout in force.
  *
@@ -119,7 +126,12 @@ export async function sampleContext(
 	for (const decl of allVariables()) {
 		const values = sampleValues(decl)
 		for (const key of Object.keys(decl.scope))
-			out[key] = await renderVariable(layouts, key, values[key])
+			// A band Assemble exposes raw (`rendersBands.raw` — `characterLore`)
+			// reaches a template as its value, never through a layout, so the
+			// preview shows it the way a run does.
+			out[key] = RAW_BAND_KEYS.has(key)
+				? values[key]
+				: await renderVariable(layouts, key, values[key])
 	}
 	return out
 }

@@ -21,7 +21,7 @@
  *    hosts and speak different routes, so a flag can only reach one of them.
  *
  * Every exported function below stays backend-agnostic on purpose: callers
- * (vectorizationQueue.ts, RagInfillEngine.ts, promptBuilder/index.ts's RAG
+ * (vectorizationQueue.ts, the 0.5 RAG path, promptBuilder/index.ts's RAG
  * availability gate) never need to know which backend is active. That's
  * also what makes per-row staleness detection work for both backends with
  * no extra code — getLoadedModelId() returns whatever identifier is
@@ -511,7 +511,7 @@ export function getLoadedEmbeddingModelId(): string | null {
  * and validated, ready to embed. False for a merely "enabled" but
  * unconfigured/unvalidated/failed state — callers (notably the RAG
  * availability gate in promptBuilder/index.ts) rely on this distinction to
- * skip RagInfillEngine rather than surface broken/empty RAG context.
+ * skip the 0.5 RAG path rather than surface broken/empty RAG context.
  */
 export function isModelReady(): boolean {
 	if (activeBackend === "local")

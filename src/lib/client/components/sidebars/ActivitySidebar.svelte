@@ -3,12 +3,24 @@
 	import { goto } from "$app/navigation"
 	import { getContext } from "svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
+	import EmptyState from "$lib/client/components/EmptyState.svelte"
+	import { notifications } from "$lib/client/notifications/notifications.svelte"
+	import {
+		notificationKind,
+		type NotificationLevel,
+		type NotificationRow
+	} from "$lib/shared/notifications/kinds"
+	import { statusText } from "$lib/client/i18n/state.svelte"
+	import { openHref } from "$lib/client/shell/openHref"
+	import { isPlainClick } from "$lib/client/shell/viewLinks"
+	import { timeAgo } from "$lib/client/utils/timeAgo"
 
 	interface Props {
 		onclose?: () => Promise<boolean> | undefined
 	}
 
 	let { onclose = $bindable() }: Props = $props()
+	const uid = $props.id()
 
 	const socket = useTypedSocket()
 
@@ -46,6 +58,64 @@
 	)
 	let queueCount = $derived(taskQueueCtx?.tasks?.length ?? 0)
 
+	/**
+	 * Waiting on you: open notifications, unread first, then read. The store
+	 * already orders newest raise first and `sort` is stable, so each half
+	 * keeps that order.
+	 */
+	let waiting = $derived(
+		[...notifications.open].sort(
+			(a, b) => Number(!!a.readAt) - Number(!!b.readAt)
+		)
+	)
+	let earlier = $derived(notifications.cleared)
+	/** The Activity tab's count, in its copy (STYLE-GUIDE §10: no badges). */
+	let tabCount = $derived(waiting.length + activityCount)
+	let nothingHere = $derived(
+		waiting.length === 0 && earlier.length === 0 && !hasActivity
+	)
+
+	/**
+	 * The level as words — the dot is never the only carrier (§6.11). The same
+	 * words the admin Overview's rows use, so one dot reads one way; never
+	 * "Needs you", which is the admin attention list's name (R1).
+	 */
+	const LEVEL_WORD: Record<NotificationLevel, string> = {
+		error: "Problem",
+		attention: "To do",
+		info: "For your information"
+	}
+	const LEVEL_DOT: Record<NotificationLevel, string> = {
+		error: "bg-error-500",
+		attention: "bg-primary-500",
+		info: "bg-surface-500"
+	}
+
+	function rowText(row: NotificationRow) {
+		const kind = notificationKind(row.kind)
+		const vars = row.vars ?? {}
+		return {
+			title: kind ? statusText({ i18n: kind.title, vars }) : row.kind,
+			detail: kind?.detail
+				? statusText({ i18n: kind.detail, vars })
+				: "",
+			cta: kind ? statusText({ i18n: kind.cta, vars }) : "Open"
+		}
+	}
+
+	/**
+	 * The CTA is a real link, so a modified click still opens a new tab and
+	 * an `/admin` or `/docs` href is already taken over by the shell's own
+	 * view-link handler (Layout.svelte). A plain click on anything else —
+	 * a session page, a lore address — goes through `openHref`.
+	 */
+	function followCta(event: MouseEvent, row: NotificationRow) {
+		notifications.read([row.id])
+		if (!isPlainClick(event)) return
+		event.preventDefault()
+		void openHref(panelsCtx, row.href)
+	}
+
 	let isAdmin = $derived(!!userCtx?.user?.isAdmin)
 	let isOwnActivity = $derived(!!build && build.userId === userCtx?.user?.id)
 	let canStop = $derived(
@@ -70,6 +140,15 @@
 				"visibilitychange",
 				onVisibilityChange
 			)
+	})
+
+	/** "3 minutes ago" goes stale; tick while someone is looking. */
+	let now = $state(Date.now())
+	$effect(() => {
+		if (panelsCtx.activeView !== "activity" || !pageVisible) return
+		now = Date.now()
+		const interval = setInterval(() => (now = Date.now()), 30_000)
+		return () => clearInterval(interval)
 	})
 
 	/**
@@ -185,6 +264,67 @@
 	}
 </script>
 
+{#snippet notificationRow(row: NotificationRow, past: boolean)}
+	{@const text = rowText(row)}
+	{@const unread = !past && !row.readAt}
+	<li class="flex items-start gap-3 px-4 py-3">
+		<span
+			class="mt-1.5 size-2 shrink-0 rounded-full {past
+				? 'bg-surface-500'
+				: LEVEL_DOT[row.level]}"
+			aria-hidden="true"
+		></span>
+		<div class="min-w-0 flex-1 space-y-1">
+			<p
+				class="text-sm {unread
+					? 'text-surface-950-50 font-semibold'
+					: past
+						? 'text-surface-600-400'
+						: 'text-surface-800-200'}"
+			>
+				<span class="sr-only">{LEVEL_WORD[row.level]}:</span>
+				{text.title}
+			</p>
+			{#if text.detail}
+				<p class="text-surface-600-400 line-clamp-2 text-xs">
+					{text.detail}
+				</p>
+			{/if}
+			<p class="text-surface-600-400 text-xs">
+				{#if unread}<span class="text-surface-800-200 font-semibold"
+						>New</span
+					>
+					·
+				{/if}<time
+					datetime={(past ? row.clearedAt : null) ?? row.lastRaisedAt}
+					>{timeAgo(
+						(past ? row.clearedAt : null) ?? row.lastRaisedAt,
+						now
+					)}</time
+				>
+			</p>
+			<a
+				href={row.href}
+				class="btn btn-sm preset-tonal mt-1"
+				onclick={(e) => followCta(e, row)}
+			>
+				{text.cta}
+			</a>
+		</div>
+		{#if !past}
+			<button
+				type="button"
+				class="text-surface-600-400 hover:text-surface-950-50 inline-flex size-8 shrink-0 items-center justify-center rounded-md transition-colors pointer-coarse:size-11"
+				onclick={() => notifications.dismiss([row.id])}
+				title="Dismiss"
+				aria-label="Dismiss"
+			>
+				<Icons.X size={14} />
+			</button>
+		{/if}
+	</li>
+{/snippet}
+
 <!-- Tabs -->
 <div class="border-surface-200-800 flex shrink-0 border-b">
 	<button
@@ -195,12 +335,8 @@
 		onclick={() => (activeTab = "activity")}
 	>
 		Activity
-		{#if hasActivity}
-			<span
-				class="bg-primary-500/20 text-primary-500 ml-1 inline-flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px]"
-			>
-				{activityCount}
-			</span>
+		{#if tabCount > 0}
+			<span class="tabular-nums opacity-80">{tabCount}</span>
 		{/if}
 	</button>
 	{#if isAdmin}
@@ -211,13 +347,9 @@
 				: 'text-surface-700-300 hover:text-surface-700-300'}"
 			onclick={() => (activeTab = "queue")}
 		>
-			LLM Queue
+			LLM queue
 			{#if queueCount > 0}
-				<span
-					class="bg-warning-500/20 text-warning-500 ml-1 inline-flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px]"
-				>
-					{queueCount}
-				</span>
+				<span class="tabular-nums opacity-80">{queueCount}</span>
 			{/if}
 		</button>
 	{/if}
@@ -226,6 +358,24 @@
 <!-- Content -->
 <div class="flex-1 overflow-y-auto">
 	{#if activeTab === "activity"}
+		{#if waiting.length > 0}
+			<section aria-labelledby="{uid}-waiting">
+				<h3
+					id="{uid}-waiting"
+					class="text-surface-600-400 px-4 pt-4 text-xs"
+				>
+					Waiting on you
+				</h3>
+				<ul>
+					{#each waiting as row (row.id)}
+						{@render notificationRow(row, false)}
+					{/each}
+				</ul>
+			</section>
+		{/if}
+		{#if hasActivity}
+			<h3 class="text-surface-600-400 px-4 pt-4 text-xs">In progress</h3>
+		{/if}
 		{#if build}
 			<div class="m-4 mb-0">
 				<div
@@ -259,9 +409,10 @@
 						</div>
 						{#if build.status !== "building"}
 							<button
-								class="text-surface-400 hover:text-surface-600-400 shrink-0 transition-colors"
+								class="text-surface-600-400 hover:text-surface-950-50 shrink-0 transition-colors"
 								onclick={() => graphBuildsCtx?.clearBuild()}
 								title="Dismiss"
+								aria-label="Dismiss"
 							>
 								<Icons.X size={14} />
 							</button>
@@ -294,7 +445,7 @@
 							</div>
 							{#if build.currentPair}
 								<p
-									class="text-surface-400 truncate font-mono text-xs"
+									class="text-surface-600-400 truncate font-mono text-xs"
 								>
 									{build.currentPair}
 								</p>
@@ -322,21 +473,21 @@
 									class="btn btn-sm preset-filled-surface-400-600"
 									onclick={openModal}
 								>
-									<Icons.Eye size={14} /> View Progress
+									<Icons.Eye size={14} /> View progress
 								</button>
 							{:else if build.status === "review"}
 								<button
 									class="btn btn-sm preset-filled-primary-500"
 									onclick={openModal}
 								>
-									<Icons.Check size={14} /> Review & Apply
+									<Icons.Check size={14} /> Review and apply
 								</button>
 							{:else if build.status === "error"}
 								<button
 									class="btn btn-sm preset-tonal-error"
 									onclick={openModal}
 								>
-									<Icons.AlertCircle size={14} /> View Error
+									<Icons.AlertCircle size={14} /> View error
 								</button>
 							{/if}
 						{/if}
@@ -400,23 +551,25 @@
 								carry the run.
 							-->
 							<button
-								class="text-surface-400 hover:text-error-500 shrink-0 transition-colors"
+								class="text-surface-600-400 hover:text-error-500 shrink-0 transition-colors"
 								onclick={() =>
 									socket.emit("activity:cancel", {
 										id: activity.activityId
 									})}
 								title="Stop processing"
+								aria-label="Stop processing"
 							>
 								<Icons.Square size={14} />
 							</button>
 						{:else}
 							<button
-								class="text-surface-400 hover:text-surface-600-400 shrink-0 transition-colors"
+								class="text-surface-600-400 hover:text-surface-950-50 shrink-0 transition-colors"
 								onclick={() =>
 									sceneSummarizesCtx.dismiss(
 										activity.activityId
 									)}
 								title="Dismiss"
+								aria-label="Dismiss"
 							>
 								<Icons.X size={14} />
 							</button>
@@ -468,7 +621,7 @@
 					{#if isOwn && activity.status === "review"}
 						<div class="flex items-center gap-2">
 							<button
-								class="btn btn-sm preset-filled-warning-500"
+								class="btn btn-sm preset-filled-primary-500"
 								onclick={() => {
 									sceneSummarizesCtx.setReviewSceneId(
 										activity.sceneId
@@ -476,7 +629,7 @@
 									navigateToScene(activity)
 								}}
 							>
-								<Icons.Eye size={14} /> Review Results
+								<Icons.Eye size={14} /> Review results
 							</button>
 						</div>
 					{:else if isOwn && activity.status === "error"}
@@ -545,23 +698,25 @@
 								cannot stop is worse than no background run.
 							-->
 							<button
-								class="text-surface-400 hover:text-error-500 shrink-0 transition-colors"
+								class="text-surface-600-400 hover:text-error-500 shrink-0 transition-colors"
 								onclick={() =>
 									socket.emit("activity:cancel", {
 										id: activity.activityId
 									})}
 								title="Stop summarizing"
+								aria-label="Stop summarizing"
 							>
 								<Icons.Square size={14} />
 							</button>
 						{:else}
 							<button
-								class="text-surface-400 hover:text-surface-600-400 shrink-0 transition-colors"
+								class="text-surface-600-400 hover:text-surface-950-50 shrink-0 transition-colors"
 								onclick={() =>
 									sessionSummarizesCtx.dismiss(
 										activity.activityId
 									)}
 								title="Dismiss"
+								aria-label="Dismiss"
 							>
 								<Icons.X size={14} />
 							</button>
@@ -623,12 +778,13 @@
 						</div>
 						{#if activity.status !== "running"}
 							<button
-								class="text-surface-400 hover:text-surface-600-400 shrink-0 transition-colors"
+								class="text-surface-600-400 hover:text-surface-950-50 shrink-0 transition-colors"
 								onclick={() =>
 									compileEntriesCtx.dismiss(
 										activity.activityId
 									)}
 								title="Dismiss"
+								aria-label="Dismiss"
 							>
 								<Icons.X size={14} />
 							</button>
@@ -674,7 +830,7 @@
 					{#if isOwn && activity.status === "review"}
 						<div class="flex items-center gap-2">
 							<button
-								class="btn btn-sm preset-filled-warning-500"
+								class="btn btn-sm preset-filled-primary-500"
 								onclick={() => {
 									compileEntriesCtx.setReviewHistoryEntryId(
 										activity.historyEntryId
@@ -682,7 +838,7 @@
 									navigateToCompileEntry(activity)
 								}}
 							>
-								<Icons.Eye size={14} /> Review & Apply
+								<Icons.Eye size={14} /> Review and apply
 							</button>
 						</div>
 					{:else if isOwn && activity.status === "error"}
@@ -698,13 +854,26 @@
 				</div>
 			</div>
 		{/each}
-		{#if !build && sceneActivities.length === 0 && compileActivities.length === 0}
-			<div
-				class="text-surface-700-300 flex flex-col items-center gap-2 py-12 text-sm"
-			>
-				<Icons.CheckCircle size={28} class="opacity-30" />
-				No active tasks
-			</div>
+		{#if earlier.length > 0}
+			<section aria-labelledby="{uid}-earlier">
+				<h3
+					id="{uid}-earlier"
+					class="text-surface-600-400 px-4 pt-4 text-xs"
+				>
+					Earlier
+				</h3>
+				<ul>
+					{#each earlier as row (row.id)}
+						{@render notificationRow(row, true)}
+					{/each}
+				</ul>
+			</section>
+		{/if}
+		{#if nothingHere}
+			<EmptyState
+				icon={Icons.CheckCircle}
+				message="Nothing is waiting on you."
+			/>
 		{:else}
 			<div class="h-4"></div>
 		{/if}
@@ -747,7 +916,7 @@
 								></div>
 								<Icons.ChevronDown
 									size={14}
-									class="text-surface-400 transition-transform {expanded
+									class="text-surface-600-400 transition-transform {expanded
 										? 'rotate-180'
 										: ''}"
 								/>

@@ -89,7 +89,7 @@ export function parseSplitChatPrompt(
  * for the ones that do not, because a lorebook that only records a year should
  * not render as though it recorded a day.
  *
- * Lifted out of `KeywordInfillEngine`, where it was private, so the pipeline's
+ * Lifted out of the 0.5 keyword path, where it was private, so the pipeline's
  * assembler produces the same keys rather than a second formatting of the same
  * data. Two implementations of a date key is two sets of `{{#if}}` branches in
  * a user's story string that quietly stop matching.

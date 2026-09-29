@@ -83,7 +83,7 @@
 			<Icons.X size={16} aria-hidden="true" />
 		</button>
 		<span
-			class="text-surface-700-300 shrink-0 text-[10px] tracking-wide uppercase"
+			class="text-surface-600-400 shrink-0 text-xs"
 		>
 			History
 		</span>
@@ -94,7 +94,7 @@
 			{isNew ? "Not saved yet" : dirty ? "Unsaved changes" : "Saved"}
 		</span>
 		<button
-			class="btn btn-sm preset-filled-success-500 shrink-0"
+			class="btn btn-sm preset-filled-primary-500 shrink-0"
 			type="button"
 			disabled={!canSave}
 			onclick={onSave}
@@ -165,13 +165,12 @@
 	</div>
 
 	<div class="flex flex-col gap-1">
-		<label class="text-sm font-semibold" for="dteContent">Content</label>
-		<div id="dteContent">
-			<LoreContentField
-				bind:content={draft.content}
-				bind:lorebookBindingList={bindings as any}
-			/>
-		</div>
+		<span class="text-sm font-semibold" id="dteContentLabel">Content</span>
+		<LoreContentField
+			bind:content={draft.content}
+			bind:lorebookBindingList={bindings as any}
+			labelledBy="dteContentLabel"
+		/>
 	</div>
 
 	{#if !isNew}
@@ -208,12 +207,12 @@
 								onclick={() => onOpenScene(scene.id)}
 							>
 								<span
-									class="text-surface-700-300 shrink-0 text-[10px] tracking-wide uppercase"
+									class="text-surface-600-400 shrink-0 text-xs"
 								>
 									Scene
 								</span>
 								<span class="min-w-0 flex-1 truncate text-left">
-									{scene.name || "Unnamed Scene"}
+									{scene.name || "Unnamed scene"}
 								</span>
 								<span
 									class="text-surface-700-300 shrink-0 text-xs"

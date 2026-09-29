@@ -82,9 +82,24 @@ const PUBLISHED: Record<string, string> = {
 	"core:spec/chat-turn-order@1.0.0": "2d13f7b17a0fb",
 	"core:spec/guide-turn-order@1.0.0": "1e155929f443a5",
 	"core:spec/writing-room-turn-order@1.0.0": "12a3845234143f",
-	"core:spec/adventure-turn-order@1.0.0": "b605f68c2205f",
-	"core:spec/lair-turn-order@1.0.0": "6bc2842fd6676",
-	"core:spec/whodunit-turn-order@1.0.0": "6a86fc61965f4",
+	// Moved 2026-09-27 (lair pass B9): the `TURN_ORDER_NARRATOR_EVENTS` list gains `message-deleted` and
+	// `message-hidden`, so Continue re-decides after a delete or a hide.
+	// Proven: with those two event ids removed, the document hashes back to
+	// the old pin. (was 'b605f68c2205f')
+	"core:spec/adventure-turn-order@1.0.0": "61d38f952d6ab",
+	// Moved 2026-09-27 (lair pass B9): the `TURN_ORDER_NARRATOR_EVENTS` list gains `message-deleted` and
+	// `message-hidden`, so Continue re-decides after a delete or a hide.
+	// Proven: with those two event ids removed, the document hashes back to
+	// the old pin. (was '6bc2842fd6676')
+	// Moved 2026-09-28 (lair re-plan R6): the genre carries the Sanctum and
+	// the Castellan, and the history preset reads `channel: '*'`. Proven (SDK and app pins alike): the SDK sources copied with only R6's edits reverted hash back to the old pin.
+	// (was "1a9cbfafa790bf")
+	"core:spec/lair-turn-order@1.0.0": "1bee84716ce1fa",
+	// Moved 2026-09-27 (lair pass B9): the `TURN_ORDER_NARRATOR_EVENTS` list gains `message-deleted` and
+	// `message-hidden`, so Continue re-decides after a delete or a hide.
+	// Proven: with those two event ids removed, the document hashes back to
+	// the old pin. (was '6a86fc61965f4')
+	"core:spec/whodunit-turn-order@1.0.0": "4337e87a91f96",
 	/**
 	 * ⚠ Every respond spec bumped a semver at A6 (§4.4, §7): the `speaker`
 	 * node moved to the turn-order spec and `placeholder` returned to
@@ -94,18 +109,62 @@ const PUBLISHED: Record<string, string> = {
 	 * `speaker` node was `turn-manual`, whose whole job was recording the
 	 * action's explicit pick, and a pick never enters a strategy now.
 	 */
-	"core:spec/respond@1.21.0": "1970a642240009",
-	"core:spec/guide-respond@1.1.0": "b0c3e32a16d1d",
-	"core:spec/writing-room-respond@1.1.0": "6f13ddc7e1241",
-	"core:spec/writing-room-continue@1.1.0": "1c840e424672ef",
-	"core:spec/writing-room-rewrite@1.1.0": "fccbddab17e0a",
-	"core:spec/writing-room-expand@1.1.0": "d22df61829b8a",
-	"core:spec/writing-room-tighten@1.1.0": "75942fb0cdc59",
-	"core:spec/writing-room-brainstorm@1.1.0": "147a45688788ba",
-	"core:spec/writing-room-critique@1.1.0": "18b10044e3c21",
-	"core:spec/writing-room-add-to-bible@1.1.0": "ed2170a1e7971",
+	// Moved 2026-09-27 (lair pass B3/B18): the streaming stage and the stage
+	// statuses are declared on `expose` (`stream`, `status`). Proven: with those
+	// two keys stripped, the document hashes back to the old pin. (was '1970a642240009')
+	"core:spec/respond@1.21.0": "ab24c4c296be8",
+	// Moved 2026-09-27 (lair pass B3/B18): the streaming stage and the stage
+	// statuses are declared on `expose` (`stream`, `status`). Proven: with those
+	// two keys stripped, the document hashes back to the old pin. (was 'b0c3e32a16d1d')
+	"core:spec/guide-respond@1.1.0": "6739b2495986b",
+	// New 2026-09-27 (guide grounding): the guide's own context template as
+	// the spec's default `guide` preset — docs in the declared `docsExcerpts`
+	// band, an `{{else}}` that says nothing matched. Bumped, not repinned: a
+	// new version row. The graph is 1.1.0's; only `version` and `presets` differ.
+	"core:spec/guide-respond@1.2.0": "1c41387d959cdd",
+	// Moved 2026-09-27 (lair pass B3/B18): the streaming stage and the stage
+	// statuses are declared on `expose` (`stream`, `status`). Proven: with those
+	// two keys stripped, the document hashes back to the old pin. (was '6f13ddc7e1241')
+	// Moved 2026-09-27 (W2 consolidation): the streaming law is now "at most
+	// one per execution path", so both branch stages (`turn.manuscript.write`,
+	// `turn.talk.say`) declare `expose.stream` and whichever branch runs
+	// streams. Proven: with `stream` stripped from those two nodes, the
+	// document hashes back to the old pin. (was '102effcbd882e3')
+	"core:spec/writing-room-respond@1.1.0": "18b3c8b9ec2e12",
+	// Moved 2026-09-27 (lair pass B3/B18): the streaming stage and the stage
+	// statuses are declared on `expose` (`stream`, `status`). Proven: with those
+	// two keys stripped, the document hashes back to the old pin. (was '1c840e424672ef')
+	"core:spec/writing-room-continue@1.1.0": "cf7818846114d",
+	// Moved 2026-09-27 (lair pass B3/B18): the streaming stage and the stage
+	// statuses are declared on `expose` (`stream`, `status`). Proven: with those
+	// two keys stripped, the document hashes back to the old pin. (was 'fccbddab17e0a')
+	"core:spec/writing-room-rewrite@1.1.0": "10391e65343d7d",
+	// Moved 2026-09-27 (lair pass B3/B18): the streaming stage and the stage
+	// statuses are declared on `expose` (`stream`, `status`). Proven: with those
+	// two keys stripped, the document hashes back to the old pin. (was 'd22df61829b8a')
+	"core:spec/writing-room-expand@1.1.0": "ab1561a70f11",
+	// Moved 2026-09-27 (lair pass B3/B18): the streaming stage and the stage
+	// statuses are declared on `expose` (`stream`, `status`). Proven: with those
+	// two keys stripped, the document hashes back to the old pin. (was '75942fb0cdc59')
+	"core:spec/writing-room-tighten@1.1.0": "120227cc43d3b8",
+	// Moved 2026-09-27 (lair pass B3/B18): the streaming stage and the stage
+	// statuses are declared on `expose` (`stream`, `status`). Proven: with those
+	// two keys stripped, the document hashes back to the old pin. (was '147a45688788ba')
+	"core:spec/writing-room-brainstorm@1.1.0": "8ad18e5b812c5",
+	// Moved 2026-09-27 (lair pass B3/B18): the streaming stage and the stage
+	// statuses are declared on `expose` (`stream`, `status`). Proven: with those
+	// two keys stripped, the document hashes back to the old pin. (was '18b10044e3c21')
+	"core:spec/writing-room-critique@1.1.0": "1f41d641120480",
+	// Moved 2026-09-27 (lair pass B3/B18): the streaming stage and the stage
+	// statuses are declared on `expose` (`stream`, `status`). Proven: with those
+	// two keys stripped, the document hashes back to the old pin. (was 'ed2170a1e7971')
+	"core:spec/writing-room-add-to-bible@1.1.0": "137125cc21370c",
 	"core:spec/writing-room-export@1.1.0": "c963cdf7f631c",
-	"core:spec/create-chat@2.2.0": "765f3317d71e6",
+	// Moved 2026-09-27 (characterDetail genre field): Chat and Adventure
+	// declare `fields.characterDetail` (CHARACTER_DETAIL_FIELD: full / brief /
+	// speaker-only). Proven: a copy of core-catalog/src with just those two
+	// field lines removed from genres.ts hashes back to the old pin. (was '765f3317d71e6')
+	"core:spec/create-chat@2.2.0": "193fca0f5fc4ae",
 	/**
 	 * The guide genre (plans/29 R-18; U5g, 2026-09-16) — two new slugs, and
 	 * nothing above them moves. `create-guide` carries the genre's
@@ -123,7 +182,15 @@ const PUBLISHED: Record<string, string> = {
 	// opens no scene; the declaration is what the write sites refuse from.
 	// `create-chat` and `adventure-create` are untouched — neither declares
 	// `writes`, and a genre that says nothing still means both on.
-	"core:spec/create-guide@1.0.0": "1febb9fe3bd3f5",
+	// (was "1febb9fe3bd3f5") — moved 2026-09-26: the mascot is the genre's
+	// `fallback` envoy (ruled that day: everyone has a name — a line nobody
+	// claims in a guide session is the Guide's). Nothing else moved.
+	// (was "3be276ae1ff00") — moved 2026-09-27 (guide grounding): the
+	// mascot's system prompt (excerpts or nothing, a copied path, "I couldn't
+	// find that in the docs") and its envoy description, both carried on the
+	// genre declaration. Proven: those two strings restored in the document
+	// hash back to the old pin.
+	"core:spec/create-guide@1.0.0": "1305f4e75ffa6d",
 	// (was "1d39898d4c7a0c") — W9 shape pins, see the note above adventure-ask.
 	"core:spec/guide-respond@1.0.0": "b7997d7b1d904",
 	/**
@@ -138,12 +205,21 @@ const PUBLISHED: Record<string, string> = {
 	 * open `session-action` slot.
 	 */
 	// (was "1c67b7acb698cf") — moved with the genre surface, U5d; see create-chat.
-	"core:spec/adventure-create@1.0.0": "4b16999c12ab3",
+	// Moved 2026-09-27 (lair pass B9): the genre's `events` map gains `message-deleted` and
+	// `message-hidden`, so Continue re-decides after a delete or a hide.
+	// Proven: with those two event ids removed, the document hashes back to
+	// the old pin. (was '4b16999c12ab3')
+	// Moved 2026-09-27 (characterDetail genre field): Chat and Adventure
+	// declare `fields.characterDetail` (CHARACTER_DETAIL_FIELD: full / brief /
+	// speaker-only). Proven: a copy of core-catalog/src with just those two
+	// field lines removed from genres.ts hashes back to the old pin. (was '4e1033c247420')
+	// Moved 2026-09-28 (enum option labels on Adventure's tone/difficulty); was e611ef3a97923.
+	"core:spec/adventure-create@1.0.0": "17f29013f5ffc6",
 	// ⚠ MOVED, in place, while the genre is still unreleased: the planner and
 	// the keeper now pin `core:oracle/generate-json@1` instead of
 	// `generate-text` + `parse-json`, their transcript comes from
 	// `core:task/prose-transcript@1`, and the narrator builds its own. A live
-	// playtest showed why: asked as ordinary replies, both JSON stages wrote the
+	// playtest showed why: asked as ordinary replies, both JSON steps wrote the
 	// character's next paragraph and appended the document under it, and the
 	// keeper reproduced the PLANNER's schema it had read in the transcript.
 	// `core:spec/respond@1.20.0` is untouched.
@@ -189,7 +265,14 @@ const PUBLISHED: Record<string, string> = {
 	// reference the voice's context node already resolved. The spine's
 	// character-lore lane stays the narrator's.
 	// (was "1d49758bb5b83c")
-	"core:spec/adventure-respond@1.0.0": "6147f53a5ed3f",
+	// Moved (attributes phase 3b, 2026-09-26): an `itemSupply` query
+	// (`core:query/item-supply@1`) wired into `keeperResolve.supply`, so a
+	// unique item already held is not handed out again. (was "6147f53a5ed3f")
+	// Moved 2026-09-27 (owner ruling): the keeper's item arm renamed `possessions` → `inventory` (schema + preset `path: values,inventory`); proven: core-catalog/src with those edits reverted hashes to the old pin (was "5302994c7c0ce").
+	// Moved 2026-09-27 (lair pass B3/B18): the streaming stage and the stage
+	// statuses are declared on `expose` (`stream`, `status`). Proven: with those
+	// two keys stripped, the document hashes back to the old pin. (was '1ae9c2a766fbb3')
+	"core:spec/adventure-respond@1.0.0": "11d5443563fd16",
 	// ⚠ MOVED, unreleased-genre terms (R-8, 2026-09-15): the three actions'
 	// `contextBudget` shares the writing step's connection for the model's
 	// own window, like every other budget node.
@@ -213,7 +296,13 @@ const PUBLISHED: Record<string, string> = {
 	// `contributes.actions[].function` — the key is the identity, and the
 	// compiled document carries one word for it. Content of the
 	// contribution, not of the run. The 28 old hashes are in git.
-	"core:spec/adventure-look@1.0.0": "15bfea21b5acfe",
+	// Moved 2026-09-27 (lair pass B3/B18): the streaming stage and the stage
+	// statuses are declared on `expose` (`stream`, `status`). Proven: with those
+	// two keys stripped, the document hashes back to the old pin. (was '15bfea21b5acfe')
+	// Moved 2026-09-28 (action legend): its action now carries the required
+	// `description`. Proven: with `description` stripped from its actions, the
+	// document hashes back to the old pin. (was "15ca173678f13")
+	"core:spec/adventure-look@1.0.0": "e40f2bd858568",
 	// ⚠ MOVED, in place, on the same unreleased-genre terms: Rest and Time
 	// passes ask `core:oracle/generate-json@1` for the keeper's own shape
 	// instead of parsing prose out of a prefilled reply.
@@ -230,7 +319,14 @@ const PUBLISHED: Record<string, string> = {
 	// sends changes. (was "4e32a33712802")
 	// (was "3755831896611") — W9 shape pins, see the note above adventure-ask.
 	// (was "1a5601d7f3d4c") — `base` wired, U5f; see adventure-respond.
-	"core:spec/adventure-rest@1.0.0": "1594b5fa34f7cc",
+	// Moved 2026-09-27 (owner ruling): the same item-arm rename (keeper schema + `write` path); proven: core-catalog/src with those edits reverted hashes to the old pin (was "1594b5fa34f7cc").
+	// Moved 2026-09-27 (lair pass B3/B18): the streaming stage and the stage
+	// statuses are declared on `expose` (`stream`, `status`). Proven: with those
+	// two keys stripped, the document hashes back to the old pin. (was '26b527a812aa')
+	// Moved 2026-09-28 (action legend): its action now carries the required
+	// `description`. Proven: with `description` stripped from its actions, the
+	// document hashes back to the old pin. (was "35793c9c2f752")
+	"core:spec/adventure-rest@1.0.0": "fb3f827cea808",
 	// (was "135459cfe7c4c0" — R-8, see `adventure-look`)
 	// Hash moved (R-12, 2026-09-16): the generating step no longer wires
 	// `prompts: slot.prompts({ node: … })` — `core:oracle/generate-*@1`
@@ -244,7 +340,14 @@ const PUBLISHED: Record<string, string> = {
 	// sends changes. (was "17168783bd30d0")
 	// (was "1173a06c378df0") — W9 shape pins, see the note above adventure-ask.
 	// (was "283effed6289d") — `base` wired, U5f; see adventure-respond.
-	"core:spec/adventure-advance-time@1.0.0": "c9dfbd1a0aa41",
+	// Moved 2026-09-27 (owner ruling): the same item-arm rename (keeper schema + `write` path); proven: core-catalog/src with those edits reverted hashes to the old pin (was "c9dfbd1a0aa41").
+	// Moved 2026-09-27 (lair pass B3/B18): the streaming stage and the stage
+	// statuses are declared on `expose` (`stream`, `status`). Proven: with those
+	// two keys stripped, the document hashes back to the old pin. (was '1dad606f0de694')
+	// Moved 2026-09-28 (action legend): its action now carries the required
+	// `description`. Proven: with `description` stripped from its actions, the
+	// document hashes back to the old pin. (was "1133a732627f04")
+	"core:spec/adventure-advance-time@1.0.0": "19809118179cf8",
 	/**
 	 * Forms (plans/29 R-15 *Forms*; 30 §U5d, 2026-09-17) — five new slugs,
 	 * and the three create specs above move with their genre surface. The
@@ -278,15 +381,27 @@ const PUBLISHED: Record<string, string> = {
 	 * no shipped spec wires the transcript as candidates, no pin moved.)
 	 */
 	// (was "b2c4f4431d9a2") — W9 shape pins, see the note above adventure-ask.
-	"core:spec/adventure-ask@1.0.0": "f223539fbe04a",
+	// Moved 2026-09-27 (lair pass B3/B18): the streaming stage and the stage
+	// statuses are declared on `expose` (`stream`, `status`). Proven: with those
+	// two keys stripped, the document hashes back to the old pin. (was 'f223539fbe04a')
+	"core:spec/adventure-ask@1.0.0": "358cb55e1154a",
 	// (was "1387dc7a4901d6") — W9 shape pins, see the note above adventure-ask.
 	"core:spec/adventure-answer@1.0.0": "11363c44f7099c",
 	// (was "a2ddb2700ce09") — W9 shape pins, see the note above adventure-ask.
-	"core:spec/answer-form-chat@1.0.0": "4398d5e3dcebc",
+	// Moved 2026-09-27 (lair pass B3/B18): the streaming stage and the stage
+	// statuses are declared on `expose` (`stream`, `status`). Proven: with those
+	// two keys stripped, the document hashes back to the old pin. (was '4398d5e3dcebc')
+	"core:spec/answer-form-chat@1.0.0": "ef5be600b6ed7",
 	// (was "b89f3d6c0484b") — W9 shape pins, see the note above adventure-ask.
-	"core:spec/answer-form-adventure@1.0.0": "837f6311648d6",
+	// Moved 2026-09-27 (lair pass B3/B18): the streaming stage and the stage
+	// statuses are declared on `expose` (`stream`, `status`). Proven: with those
+	// two keys stripped, the document hashes back to the old pin. (was '837f6311648d6')
+	"core:spec/answer-form-adventure@1.0.0": "d38acc496a3c1",
 	// (was "1ddc286846b82d") — W9 shape pins, see the note above adventure-ask.
-	"core:spec/answer-form-guide@1.0.0": "1ff7e25eba1d7a",
+	// Moved 2026-09-27 (lair pass B3/B18): the streaming stage and the stage
+	// statuses are declared on `expose` (`stream`, `status`). Proven: with those
+	// two keys stripped, the document hashes back to the old pin. (was '1ff7e25eba1d7a')
+	"core:spec/answer-form-guide@1.0.0": "811b474234fb8",
 	"core:spec/create-chat@2.1.0": "ea80f2679383c",
 	"core:spec/create-chat@2.0.0": "a6281141b21ea",
 	// 1.16.0 / 1.10.0: the three lore gather branches and the narrator's trigger query
@@ -487,7 +602,13 @@ const PUBLISHED: Record<string, string> = {
 	// character's row carries `metadata.speaker = character:<id>`, the same
 	// shape 0138 writes for a migrated row. (was "e3ab80dc58afa")
 	// (was "174220ef023ed7") — W9 shape pins, see the note above adventure-ask.
-	"core:spec/narrate-character@1.0.0": "199a1f680b0bc3",
+	// Moved 2026-09-27 (lair pass B3/B18): the streaming stage and the stage
+	// statuses are declared on `expose` (`stream`, `status`). Proven: with those
+	// two keys stripped, the document hashes back to the old pin. (was '199a1f680b0bc3')
+	// Moved 2026-09-28 (action legend): its action now carries the required
+	// `description`. Proven: with `description` stripped from its actions, the
+	// document hashes back to the old pin. (was "f3c5ad02f3015")
+	"core:spec/narrate-character@1.0.0": "6043f75b3991a",
 	// (was "b6ba835e86244", then "431aa4254af1", then "12971669b900fd",
 	//  then "bc304a8a52b71")
 	// ⚠ MOVED on the same terms as `narrate-character` above (09-B B4):
@@ -515,7 +636,13 @@ const PUBLISHED: Record<string, string> = {
 	// Content of the contribution, not of the run: nothing the pipeline
 	// sends changes. (was "11ca2223b19a22")
 	// (was "3d0b93608ab5b") — W9 shape pins, see the note above adventure-ask.
-	"core:spec/narrate@1.11.0": "d361fe0665805",
+	// Moved 2026-09-27 (lair pass B3/B18): the streaming stage and the stage
+	// statuses are declared on `expose` (`stream`, `status`). Proven: with those
+	// two keys stripped, the document hashes back to the old pin. (was 'd361fe0665805')
+	// Moved 2026-09-28 (action legend): its action now carries the required
+	// `description`. Proven: with `description` stripped from its actions, the
+	// document hashes back to the old pin. (was "c6565cafeca6e")
+	"core:spec/narrate@1.11.0": "1dd6ec23b03422",
 	// ⚠ `core:spec/respond@1.20.0`'s hash MOVED for the SECOND time without a
 	// bump, on the same terms as the two paragraphs above and paired with
 	// `drizzle/0106_continuation_prefill_reprojection`, which deletes its
@@ -713,7 +840,12 @@ const PUBLISHED: Record<string, string> = {
 	// (`[{ kind: 'composer' }]`), `quick` and `label` in place of `i18n`.
 	// Content of the contribution, not of the run: nothing the pipeline
 	// sends changes. (was "19cc4810162b94")
-	"core:spec/echo@1.0.0": "c8727abf46258",
+	// Moved 2026-09-28 (action legend): its action now carries the required
+	// `description`. Proven: with `description` stripped from its actions, the
+	// document hashes back to the old pin. (was "c8727abf46258")
+	"core:spec/echo@1.0.0": "11ae37dfe16695",
+	// 2026-09-26: annex fields — core's one pipeline for every declared field.
+	"core:spec/set-annex-field@1.0.0": "7e5c1e7091921",
 	/**
 	 * The built-in writes (U5b, R-15, 2026-09-16) — five NEW slugs, one per
 	 * message verb core implements: `core:inlet/built-in-request@1` straight
@@ -739,7 +871,14 @@ const PUBLISHED: Record<string, string> = {
 	// (`[{ kind: 'composer' }]`), `quick` and `label` in place of `i18n`.
 	// Content of the contribution, not of the run: nothing the pipeline
 	// sends changes. (was "19338b1db2497c")
-	"core:spec/generate-image@1.0.0": "167183f5f621cc",
+	// Moved 2026-09-28 (action legend): its action now carries the required
+	// `description`. Proven: with `description` stripped from its actions, the
+	// document hashes back to the old pin. (was "167183f5f621cc")
+	// Moved 2026-09-28 (lair re-plan R3, `collects`): its action declares `collects.text` ('What
+	// should the image show?', required) — it read `$.input.text` and got none since B10 — and the
+	// description says _Describe an image_. Proven: the built document with `collects` deleted and
+	// the old description hashes back to the old pin. (was "98d860e73c870")
+	"core:spec/generate-image@1.0.0": "13c2fc5dd571ad",
 	// 1.0.0: the tool-loop reference (20 §9, 01 §4a) — a bounded agentic turn
 	// written out, bound to no genre so it is never offered in a composer. New
 	// slug, not a bump: the 0.6 freeze forbids moving an existing semver and
@@ -761,17 +900,22 @@ const PUBLISHED: Record<string, string> = {
 	// panel from rendering a copy. Nothing the run sends changes.
 	// (was "9420cfdf9c246")
 	// (was "1d560d3f202dd5") — W9 shape pins, see the note above adventure-ask.
-	"core:spec/tool-loop@1.0.0": "182cfadc250d12",
+	// Moved 2026-09-27 (lair pass B3/B18): the streaming stage and the stage
+	// statuses are declared on `expose` (`stream`, `status`). Proven: with those
+	// two keys stripped, the document hashes back to the old pin. (was '182cfadc250d12')
+	"core:spec/tool-loop@1.0.0": "e8f879ce23fa7",
 	/**
 	 * The **Lair** genre (plans/genres-and-showcase-plugins §3, U3) — nine new
 	 * slugs, and nothing above them moves. Every node they pin is one core
 	 * already shipped; no existing spec or type was edited.
 	 *
-	 * `lair-respond` is the reverse crawler's turn: plan, then a junction that
-	 * either halts at a room nobody built (a `choices` block addressed to the
-	 * OWNER) or narrates — and, in `cast` style, gives one voice call per
-	 * character the planner named. The write is on the spine for both arms:
-	 * the reply is the run's one live row, opened before the junction (F7).
+	 * `lair-respond` is the reverse crawler's turn — the Castellan's (R8,
+	 * 2026-09-28): plan, then a junction that either halts at a room nobody
+	 * built (a Castellan question with a `choices` block addressed to the
+	 * OWNER) or plays — the beats row in the Sanctum, then one voice call per
+	 * character the planner named, the first streamed. Narrate is its own
+	 * branch, routed first. Each branch opens its own row (F7 per execution
+	 * path).
 	 *
 	 * ⚠ **Recorded before the catalog's `dist` carries them.** These pins were
 	 * computed from `core-catalog/src` (the SDK suite's `lair.test.ts` records
@@ -781,11 +925,114 @@ const PUBLISHED: Record<string, string> = {
 	 * being checked the moment the build catches up, which is exactly when a
 	 * drift would matter.
 	 */
-	"core:spec/lair-create@1.0.0": "14053b92f897da",
+	// Moved 2026-09-27 (lair pass B9): the genre's `events` map gains `message-deleted` and
+	// `message-hidden`, so Continue re-decides after a delete or a hide.
+	// Proven: with those two event ids removed, the document hashes back to
+	// the old pin. (was '14053b92f897da')
+	// Moved 2026-09-27 (lair pass B7, owner D4): the genre declares
+	// `messageVerbs: { continue: false }`. Proven: a copy of core-catalog/src
+	// without that line hashes back to the old pin. (was 'c72c2e0357622')
+	// Moved 2026-09-28 (rename, NOMENCLATURE §25): `messageVerbs: { continue:
+	// false }` is `{ extend: false }` (the verb is `core#extend`). Proven: a
+	// copy of core-catalog/src with only that key reverted hashes back to the
+	// old pin. (was '13a122e59e48b8')
+	// Moved 2026-09-28 (enum option labels on genre fields; proven in the SDK pin tests); was 4cc43f9196f51.
+	// Moved 2026-09-28 (lair re-plan R12, cast only): the embedded Lair shape drops
+	// `fields.turnStyle` and Pick's present-when; proven in the SDK pin tests
+	// (canonical diff, dist vs source). (was "db68e32f7f418")
+	// Moved 2026-09-28 (lair re-plan R2, retake): the embedded Lair shape
+	// declares `turnControls.retake: true`. Proven in the SDK pin tests: the
+	// built document with that one key deleted hashes back to the old pin.
+	// (was "599f52f417f68")
+	// Moved 2026-09-28 (lair re-plan R4, playerLabel): the create spec's `genre`
+	// row carries `playerLabel: { en: 'Dungeon Master' }`. Proven in the SDK pin
+	// tests: the built document with `genre.playerLabel` deleted hashes back to
+	// the old pin. (was "12208c611c679e")
+	// Moved 2026-09-28 (lair re-plan R6): `genre.envoys` (the Castellan) and
+	// `channels` (the Sanctum), and the greeting read and write (`welcome`,
+	// `greet.greets.write`, preset `lair`). Proven (SDK and app pins alike): the SDK sources copied with only R6's edits reverted hash back to the old pin. (was "114844f1333859")
+	// Moved 2026-09-28 (lair re-plan R13): the embedded Lair shape declares
+	// `fields.sanctumSteers` (on by default) and relabels `trustNarrator`
+	// (_Apply the Castellan's stat changes without asking_); the Castellan's
+	// prompt reads `{{sanctumSteers}}` and `{{scratchpad}}`. Proven (SDK and
+	// app pins alike): the SDK sources copied with only R13's edits reverted
+	// hash back to the old pin, and the golden with it. (was "1bc219796d240b")
+	"core:spec/lair-create@1.0.0": "cd14c9acfe99c",
 	// Moved (W1, 2026-09-17): the same per-voice lore lane Adventure's
 	// respond gained, inside the `cast` branch's `each`.
 	// (was "7557cc5126f8e")
-	"core:spec/lair-respond@1.0.0": "4f1008e05a481",
+	// Moved 2026-09-27 (owner ruling): the item-arm rename, and Lair reads `core:query/item-supply@1` into `keep.played.keeperResolve.supply`; proven: core-catalog/src with those edits reverted hashes to the old pin (was "4f1008e05a481").
+	// Moved 2026-09-27 (lair pass B3/B18): the streaming stage and the stage
+	// statuses are declared on `expose` (`stream`, `status`). Proven: with those
+	// two keys stripped, the document hashes back to the old pin. (was '922d63165f241')
+	// Moved 2026-09-27 (lair pass B5, owner D5): the Plan and Thinking folds —
+	// `planSection` (`core:task/list-section@1` over `planWrite.json`), its
+	// preset params, and `save` wiring `thinking` and `sections`. Proven: a
+	// copy of core-catalog/src with just those edits reverted hashes back to
+	// the old pin. (was '65d55afd66146')
+	// Moved 2026-09-27 (lair pass B11, Lair half): `direction: $.input.text`
+	// on `planContext` and `turn.play.sceneContext`. Proven: a copy of
+	// core-catalog/src with just those two wires reverted hashes back to the
+	// old pin. (was 'd4d32992afafb')
+	// Moved twice 2026-09-27 (lair wave 3). First (R1): `direction` →
+	// `turnDirection` on both contexts — that rename alone hashed to
+	// "10254b22ea51d". Then B12/B13: `gather.rooms` (lorebook-entries,
+	// location entries), `exit` + `exitCheck` (then `unlisted-name@1`) routing the
+	// `turn` junction, the knock's `referent`, `locationEntries` on both
+	// contexts. Measured step by step, only these edits between.
+	// (was "1517a24e807bc2")
+	// Moved 2026-09-27 (lair pass B15/B16, owner D1a/D2a): a `pick` junction
+	// on `input.characterId` — `picked` (the delver answers alone, streamed)
+	// or `planned` (the whole turn, every former spine node now under
+	// `pick.planned.`); the voices run after `save`, one complete row each.
+	// Proven: a copy of core-catalog/src with only lair.ts reverted hashes
+	// back to the old pin. (was "2629bfa0a7e2d")
+	// Moved 2026-09-28 (lair re-plan R12, cast only): the `voices` junction on
+	// `turnStyle` is a plain `each` (`pick.planned.voices.item.*`); proven in the
+	// SDK pin tests (canonical diff, dist vs source). (was "1c883db7b28f29")
+	// Moved 2026-09-28 (lair re-plan R7): `exitCheck` is
+	// `core:task/undescribed-name@1` (was `unlisted-name@1`), reading the rooms
+	// (`locationEntries`), a new `gather.lorebook` listing (every entry type,
+	// `entries`), `gather.history` (`messages`) and its params; the junction
+	// and the knock's `referent` read `undescribed`. Proven: a copy of
+	// core-catalog/src with only those lair.ts edits reverted (the old
+	// definition stubbed) hashes back to the old pin. (was "1721382a7b9fbd")
+	// Moved 2026-09-28 (lair re-plan R6): the `channel` junction — the
+	// Castellan's `channel.sanctum` branch; the story's nodes at
+	// `channel.story.*` — and the placeholder on `$.input.channel`. Proven (SDK and app pins alike): the SDK sources copied with only R6's edits reverted hash back to the old pin.
+	// (was "5d97100fa4cfe")
+	// Moved 2026-09-28 (lair re-plan R8, the Castellan's turn): a `via`
+	// junction first (`via.narrate`, the Castellan's narration on `main`; or
+	// `via.turn`, holding R6's `channel` junction); each branch opens its own
+	// row (F7 per execution path); the planned turn's `door` (knock row, or
+	// the play: the Sanctum beats row, the streamed lead delver, the rest);
+	// the narrator scene step, `planSection`, `turnText` and the spine
+	// placeholder retired; the keeper on the spine with `set-state.worldRow`
+	// = the beats row. Proven (SDK and app pins alike): a copy of the SDK sources (sdk, contracts, core-catalog) with only R8's edits reverted hashes back to the old pin, and the golden with it. (was "1c6d397bcec39f")
+	// Moved 2026-09-28 (lair re-plan R13, Sanctum talk steers the story):
+	// `gather.scratchpad` (the Castellan's AI view of the annex); the
+	// planner's `planned.steer` junction (an `unplayedOnly` Sanctum read and
+	// the scratchpad into `sideTalk`/`scratchpad`); the narration's `asked`
+	// pair and `talk` junction (`pressed` · `steered` · `none`) into
+	// `sideTalk`; the Sanctum branch's `pad`, its context's `fields`, and the
+	// scratchpad rewrite after the reply (`padExchange` …
+	// `padKeep.kept.write`). Proven with the lair-create pin above.
+	// (was "101726d7537e82")
+	// Moved 2026-09-28 (lair re-plan R9, the knock asks for a description):
+	// the knock's one option `describe` (_Describe <room>…_, labelled by
+	// `door.knock.named` + `door.knock.describeLabel`; was build · improvise);
+	// the union read `planned.exitProse` (`channel: '*'`, 40) feeding
+	// `exitCheck` with `channels: ['main', 'sanctum']`; the lead's and the
+	// voices' `locationPassage`. Proven (SDK and app pins alike): a copy of the
+	// SDK sources (sdk, contracts, core-catalog) with only R9's edits reverted
+	// hashes back to the old pin, to lair-room-answer's and to the golden.
+	// (was "1926a1f0104ff7")
+	// Moved 2026-09-28 (lair re-plan R10's fold-in of the R9 follow-up):
+	// `exitProse` reads `talkOnly: true`, so the Sanctum's beats row is never
+	// taken for a room's description. Proven: a copy of the SDK sources (sdk,
+	// contracts, core-catalog) with only R10's edits reverted hashes back to
+	// this old pin, lair-whisper's and the golden. (was "a4efff601d22a")
+	"core:spec/lair-respond@1.0.0": "91b5f45f61cf3",
 	// Moved twice on 2026-09-17. First (L3, contracts batch 2): `params:
 	// slot.params()` on the `create-lore-entry` node. That outlet now declares
 	// an `entryType` parameters slot, and a slot the spec never NAMES is not a
@@ -801,7 +1048,19 @@ const PUBLISHED: Record<string, string> = {
 	// be laid out. The exits stay prose: `create-lore-entry@1`'s `links` port is
 	// unwired because nothing in core parses a drafted `Exits:` line into names.
 	// (was 15ceae616882db, then 94ce032b7c0b)
-	"core:spec/lair-build-room@1.0.0": "33d82ec4ccd23",
+	// Moved 2026-09-27 (lair pass B3/B18): the streaming stage and the stage
+	// statuses are declared on `expose` (`stream`, `status`). Proven: with those
+	// two keys stripped, the document hashes back to the old pin. (was '164975f16c6c17')
+	// Moved 2026-09-28 (lair re-plan R3, `collects`): `composerText` became `collects.text` ('Room
+	// name'), and the description says _Name it_. Proven: the built document with `collects`
+	// deleted, `composerText` restored and the old description hashes back to the old pin. (was
+	// "147519b9d27469")
+	"core:spec/lair-build-room@1.0.0": "160737b487903c",
+	// New 2026-09-28 (lair re-plan R11): File as a room, on a message's ⋮.
+	// Proven (SDK and app pins alike): a copy of the SDK sources (sdk,
+	// contracts, core-catalog) with only R11's edits reverted has no such
+	// spec, and the golden and every other pin come back with it.
+	"core:spec/lair-file-room@1.0.0": "2e1e00db48eec",
 	// Moved (L1, 2026-09-17): the knock's options write the room. The one
 	// write-class outlet is `core:outlet/create-lore-entry` (was
 	// `create-message`), the `build` branch drafts the dungeon's room layout
@@ -811,13 +1070,75 @@ const PUBLISHED: Record<string, string> = {
 	// Moved again by the Lair finish lane: the room files as a
 	// `core:entry/location`, exactly as *Build room* now files one.
 	// (was "912b4d1226a36", then 1c5e452458312a, then 3899346f4eb21)
-	"core:spec/lair-room-answer@1.0.0": "334691209cc9f",
-	"core:spec/lair-whisper@1.0.0": "7056f498d2824",
-	"core:spec/lair-nudge@1.0.0": "13f22ac089c1d3",
-	"core:spec/lair-trap@1.0.0": "4b6a00eff51c8",
-	"core:spec/lair-reveal@1.0.0": "d8da18ba3b211",
+	// Moved 2026-09-27 (lair pass B3/B18): the streaming stage and the stage
+	// statuses are declared on `expose` (`stream`, `status`). Proven: with those
+	// two keys stripped, the document hashes back to the old pin. (was '334691209cc9f')
+	// Moved 2026-09-27 (lair pass B12): the build branch drafts the room with
+	// the model (`choice.build.*`, was a fixed template), `save.name` is the
+	// block's `referent`, and `onward` + `resume` write the master's line
+	// after the gate. Only these edits moved it. (was "1460f968fd6d09")
+	// Moved 2026-09-27 (lair pass W-GATE D3): `presentWhen` — present only
+	// while a knock is open. Proven: with that edit reverted in a copy of
+	// core-catalog/src it hashes back to the old pin. (was "1463350a023f68")
+	// Moved 2026-09-28 (lair re-plan R9): collects optional text (_Describe the
+	// room_); the `room` junction on `input.text` — `room.typed.save` (the
+	// typed text verbatim, review off) or `room.drafted.*` (the Castellan's
+	// draft, review on); the improvise branch retired. Proven with the
+	// lair-respond pin above. (was "18a1fa33f65921")
+	"core:spec/lair-room-answer@1.0.0": "15f936dc559f84",
+	// Moved 2026-09-27 (lair pass B3/B18): the streaming stage and the stage
+	// statuses are declared on `expose` (`stream`, `status`). Proven: with those
+	// two keys stripped, the document hashes back to the old pin. (was '1c2a2e148f7f4e')
+	// Moved 2026-09-27 (lair pass W-GATE D2): the typed line wired to
+	// `context.turnDirection`. Proven: with that edit reverted in a copy of
+	// core-catalog/src it hashes back to the old pin. (was "be6bf430fc3bd")
+	// Moved 2026-09-28 (lair re-plan R3, `collects`): `composerText` became `collects.text` ('What
+	// do you whisper?'). Proven: the built document with `collects` deleted and `composerText`
+	// restored hashes back to the old pin. (was "4ea205316b7e6")
+	// Moved 2026-09-28 (lair re-plan R10, whisper recipients): collects
+	// `recipients` (Who hears it, min 1, `overwrites` the whisper slot) and a
+	// new description; the graph is pure — inlet, state, `resolve` (`owners` =
+	// `input.recipients`), `apply` — the model call and its preset values
+	// gone. Proven with the lair-respond pin above. (was "76066b2c2a5ab")
+	"core:spec/lair-whisper@1.0.0": "17cf2e37e34e6",
+	// Moved 2026-09-28 (lair re-plan R3, `collects`): `composerText` became `collects.text`
+	// ('Direction the party should feel'). Proven: the built document with `collects` deleted and
+	// `composerText` restored hashes back to the old pin. (was "16413e137630d4")
+	// Moved 2026-09-28 (lair re-plan R8): the description tells the Castellan. Proven (SDK and app pins alike): a copy of the SDK sources (sdk, contracts, core-catalog) with only R8's edits reverted hashes back to the old pin, and the golden with it.
+	// (was "1877bfe4e0a7c3")
+	"core:spec/lair-nudge@1.0.0": "21b5bb80f5a13",
+	// Moved 2026-09-27 (lair pass B3/B18): the streaming stage and the stage
+	// statuses are declared on `expose` (`stream`, `status`). Proven: with those
+	// two keys stripped, the document hashes back to the old pin. (was '13c47a285b09c5')
+	// Moved 2026-09-27 (lair pass B17, owner D7a): a streamed Narrator row
+	// (placeholder + update with `thinking`), the typed text as
+	// `turnDirection`, status 'Springing a trap', new description. Proven: a
+	// copy of core-catalog/src with those edits reverted hashes back to the
+	// old pin. (was '1a76572366c955')
+	// Moved 2026-09-28 (lair re-plan R3, `collects`): `composerText: 'optional'` became
+	// `collects.text` with `ifEmpty`, and the description stops saying _Type_. Proven: the built
+	// document with `collects` deleted, `composerText` restored and the old description hashes
+	// back to the old pin. (was "13037fcf38e983")
+	// Moved 2026-09-28 (lair re-plan R8): the Castellan's row (`speaker:
+	// 'envoy:castellan'` on the placeholder) and description. Proven (SDK and app pins alike): a copy of the SDK sources (sdk, contracts, core-catalog) with only R8's edits reverted hashes back to the old pin, and the golden with it.
+	// (was "7908780de567e")
+	"core:spec/lair-trap@1.0.0": "5d480cd988aac",
+	// Moved 2026-09-27 (lair pass B3/B18): the streaming stage and the stage
+	// statuses are declared on `expose` (`stream`, `status`). Proven: with those
+	// two keys stripped, the document hashes back to the old pin. (was '194ea02b271eb3')
+	// Moved 2026-09-27 (lair pass B17, owner D7a): as the trap; status
+	// 'Revealing'. Proven the same way. (was '1a6fea0495e3bc')
+	// Moved 2026-09-28 (lair re-plan R3, `collects`): as the trap. Proven: the built document with
+	// `collects` deleted, `composerText` restored and the old description hashes back to the old
+	// pin. (was "1c5849cac7c2d2")
+	// Moved 2026-09-28 (lair re-plan R8): the Castellan's row (`speaker:
+	// 'envoy:castellan'` on the placeholder). Proven (SDK and app pins alike): a copy of the SDK sources (sdk, contracts, core-catalog) with only R8's edits reverted hashes back to the old pin, and the golden with it. (was "14a4a433b3e291")
+	"core:spec/lair-reveal@1.0.0": "87fe755438456",
 	/** The genre's answer pipeline — one graph, published once per shipped genre. */
-	"core:spec/answer-form-lair@1.0.0": "15c9296cf3ab70",
+	// Moved 2026-09-27 (lair pass B3/B18): the streaming stage and the stage
+	// statuses are declared on `expose` (`stream`, `status`). Proven: with those
+	// two keys stripped, the document hashes back to the old pin. (was '15c9296cf3ab70')
+	"core:spec/answer-form-lair@1.0.0": "1c32eb6a456349",
 	/**
 	 * The **Writing Room** (plans/genres-and-showcase-plugins §2, U2) — ten new
 	 * slugs, and nothing above them moves. Every node they pin is one core
@@ -840,7 +1161,10 @@ const PUBLISHED: Record<string, string> = {
 	 * SDK suite's `writingRoom.test.ts` records the same ten), skipped by
 	 * construction until `npm run sdk:build` catches up.
 	 */
-	"core:spec/writing-room-create@1.0.0": "bb48499be797a",
+	// (was "bb48499be797a") — moved 2026-09-26: the scribe is the genre's
+	// `fallback` envoy (everyone has a name). Nothing else moved.
+	// Moved 2026-09-28 (enum option labels on genre fields; proven in the SDK pin tests); was 943a1a6c85c8e.
+	"core:spec/writing-room-create@1.0.0": "8f52a9f7ab691",
 	"core:spec/writing-room-respond@1.0.0": "13252804b8a380",
 	"core:spec/writing-room-continue@1.0.0": "167b0adb63b018",
 	"core:spec/writing-room-rewrite@1.0.0": "31f36c88bf487",
@@ -873,7 +1197,10 @@ const PUBLISHED: Record<string, string> = {
 	 * specs from an explicit list rather than by scanning `CORE_SPECS`, so
 	 * this document has no pin on the SDK side — this line is its only guard.
 	 */
-	"core:spec/answer-form-writing-room@1.0.0": "7a5c89502dd7a",
+	// Moved 2026-09-27 (lair pass B3/B18): the streaming stage and the stage
+	// statuses are declared on `expose` (`stream`, `status`). Proven: with those
+	// two keys stripped, the document hashes back to the old pin. (was '7a5c89502dd7a')
+	"core:spec/answer-form-writing-room@1.0.0": "fed841c4b39d0",
 	/**
 	 * The **Whodunit** genre (plans/genres-and-showcase-plugins §4, U4) — seven
 	 * new slugs, and nothing above them moves. Every node they pin is one core
@@ -906,20 +1233,43 @@ const PUBLISHED: Record<string, string> = {
 	// that publish to nothing — the derivation is the record, and the one
 	// per-session store a spec can reach is the ledger two widgets render.
 	// (was "1e3ab7a4c2af5e", then "19d5dd6ff887f0")
-	"core:spec/whodunit-create@1.0.0": "fc0acbf4d8443",
+	// Moved 2026-09-27 (lair pass B9): the genre's `events` map gains `message-deleted` and
+	// `message-hidden`, so Continue re-decides after a delete or a hide.
+	// Proven: with those two event ids removed, the document hashes back to
+	// the old pin. (was 'fc0acbf4d8443')
+	// Moved 2026-09-28 (enum option labels on genre fields; proven in the SDK pin tests); was 9b2d3fa3ffe43.
+	"core:spec/whodunit-create@1.0.0": "16108807c385ec",
 	// Moved (W1, 2026-09-17): the same per-voice lore lane, pool and rank
 	// Adventure's and Lair's respond specs gained — a suspect reads their own
 	// private entries, and only their own. (was "112b003db90fdb")
-	"core:spec/whodunit-respond@1.0.0": "1cb242cfc9bd24",
+	// Moved 2026-09-27 (owner ruling): the item-arm rename (schema + preset path); proven: core-catalog/src with those edits reverted hashes to the old pin (was "1cb242cfc9bd24").
+	// Moved 2026-09-27 (lair pass B3/B18): the streaming stage and the stage
+	// statuses are declared on `expose` (`stream`, `status`). Proven: with those
+	// two keys stripped, the document hashes back to the old pin. (was '5a1ffcfdb0d1c')
+	"core:spec/whodunit-respond@1.0.0": "1b0072e773bf87",
 	// D-4a: the picker's `contextBudget → context → lines → prompt → write`
 	// chain — a whole `generate-json` call whose job was to read the cast back
 	// out as `{ key, label }` — is one `cast-choices` task, and the history lane
 	// that fed it went with it. The options are keyed by participant reference
 	// now, not by a name a model spelled. (was "80dd0b85bd53c")
-	"core:spec/whodunit-question@1.0.0": "5832beca7487a",
+	// Moved 2026-09-28 (lair re-plan R3, `collects`): its action declares `collects.text` ('Your
+	// question', required) — it read `$.input.text` and got none since B10 — and the description
+	// says _Ask the question_. Proven: the built document with `collects` deleted and the old
+	// description hashes back to the old pin. (was "5832beca7487a")
+	"core:spec/whodunit-question@1.0.0": "10aad2f952b459",
 	/** What the question's options fire — in no listing; see `whodunitActions.ts`. */
-	"core:spec/whodunit-answer@1.0.0": "b606e9189f9e5",
-	"core:spec/whodunit-search@1.0.0": "fb753d069204",
+	// Moved 2026-09-27 (lair pass B3/B18): the streaming stage and the stage
+	// statuses are declared on `expose` (`stream`, `status`). Proven: with those
+	// two keys stripped, the document hashes back to the old pin. (was 'b606e9189f9e5')
+	"core:spec/whodunit-answer@1.0.0": "dfd6a38157f33",
+	// Moved 2026-09-27 (owner ruling): the item-arm rename (keeper schema + preset path); proven: core-catalog/src with those edits reverted hashes to the old pin (was "fb753d069204").
+	// Moved 2026-09-27 (lair pass B3/B18): the streaming stage and the stage
+	// statuses are declared on `expose` (`stream`, `status`). Proven: with those
+	// two keys stripped, the document hashes back to the old pin. (was '1526fd39df4141')
+	// Moved 2026-09-28 (lair re-plan R3, `collects`): its action declares `collects.text`
+	// (optional, with `ifEmpty`). Proven: the built document with `collects` deleted hashes back
+	// to the old pin. (was "5953cdf645ad2")
+	"core:spec/whodunit-search@1.0.0": "15911a99f36e7a",
 	// The same removal as `whodunit-question`. (was "1041c44a77e79")
 	"core:spec/whodunit-accuse@1.0.0": "15fb4fa0bbffdd",
 	/**
@@ -936,7 +1286,10 @@ const PUBLISHED: Record<string, string> = {
 	 * ending's planner: told the verdict and the culprit through its context's
 	 * `fields`, and answering with beats alone. (was "8be81c0e7bbf5")
 	 */
-	"core:spec/whodunit-verdict@1.0.0": "ef322651da15",
+	// Moved 2026-09-27 (lair pass B3/B18): the streaming stage and the stage
+	// statuses are declared on `expose` (`stream`, `status`). Proven: with those
+	// two keys stripped, the document hashes back to the old pin. (was 'ef322651da15')
+	"core:spec/whodunit-verdict@1.0.0": "1d374c9d6eb81c",
 	/**
 	 * Whodunit's answer pipeline, added by the same ruling and the same one
 	 * graph — and this is the genre with the clearest use for it: a narrator
@@ -946,7 +1299,10 @@ const PUBLISHED: Record<string, string> = {
 	 * rather than a path. Inert until the build, as above;
 	 * `sdk-tests/whodunit.test.ts` records the same value.
 	 */
-	"core:spec/answer-form-whodunit@1.0.0": "93c213ce4323"
+	// Moved 2026-09-27 (lair pass B3/B18): the streaming stage and the stage
+	// statuses are declared on `expose` (`stream`, `status`). Proven: with those
+	// two keys stripped, the document hashes back to the old pin. (was '93c213ce4323')
+	"core:spec/answer-form-whodunit@1.0.0": "112c3e3dd021b3"
 }
 
 describe("published spec hashes", () => {

@@ -107,7 +107,7 @@
 					<h2 id="new-lorebook-title" class="h2">New lorebook</h2>
 					<p
 						id="new-lorebook-description"
-						class="text-muted-foreground text-sm"
+						class="text-surface-600-400 text-sm"
 					>
 						One name is all it needs. Everything else, cast, dates,
 						nesting, branches, appears as you use it.

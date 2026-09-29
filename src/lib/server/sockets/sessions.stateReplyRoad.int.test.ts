@@ -4,7 +4,7 @@
  *
  * `adventure.int.test.ts` runs the Adventure spec through `run()` with stubbed
  * bindings; `stateNodes.int.test.ts` drives `set-state` on its own. Neither
- * walks the road a live send takes — `sessions:triggerGenerateMessage` →
+ * walks the road a live send takes — `sessions:fireTurn` →
  * `runReply` → `runTurn` → the executor with the REAL host and the REAL oracle
  * bindings (the LLM queue, the live row, the run registry) — with the keeper
  * naming changes that `set-state` then has to write under U5f's locked
@@ -24,7 +24,7 @@
  * hard timer that fails loudly (`within`). A test that merely waited would
  * hang the suite exactly as a deadlocked run would.
  *
- * The faked model answers every stage with ONE document carrying the planner's
+ * The faked model answers every step with ONE document carrying the planner's
  * keys and the keeper's — the pattern `adventure.int.test.ts` states the
  * reason for — with a NON-EMPTY change list: the world's weather and a cast
  * member's mood. That is what makes `resolve-state-changes` → `set-state`
@@ -50,7 +50,7 @@ vi.mock("$lib/server/db", async () => {
 })
 
 /**
- * One answer for every stage. `generate-json` reads the lists its `path`
+ * One answer for every step. `generate-json` reads the lists its `path`
  * selects out of it; `generate-text` takes it as the prose. `value` is text,
  * as the shipped keeper schema declares it.
  */
@@ -63,7 +63,7 @@ const ANSWER = JSON.stringify({
 		{ owner: "world", slot: "weather", value: "storm" },
 		{ owner: "Elara", slot: "mood", value: "wary" }
 	],
-	possessions: []
+	inventory: []
 })
 
 class FakeAdapter implements FakeTextAdapter {
@@ -240,8 +240,10 @@ async function adventureSession(tag: string, opts: { trustNarrator: boolean }) {
 		})
 		.returning()
 	await testDb
-		.insert(schema.sessionLorebooks)
-		.values({ sessionId: session!.id, lorebookId: lorebook!.id })
+		// The real shape: the lorebook is the session row's own binding.
+		.update(schema.sessions)
+		.set({ lorebookId: lorebook!.id })
+		.where(eq(schema.sessions.id, session!.id))
 	const elara = await character(owner.id, "Elara")
 	const tom = await character(owner.id, "Tom")
 	for (const [characterId, position] of [
@@ -252,7 +254,6 @@ async function adventureSession(tag: string, opts: { trustNarrator: boolean }) {
 			sessionId: session!.id,
 			characterId,
 			isActive: true,
-			visibility: "visible",
 			position
 		})
 	const rook = await character(owner.id, "Rook", true)
@@ -332,22 +333,25 @@ async function reply(
 	w: Awaited<ReturnType<typeof adventureSession>>,
 	label: string
 ) {
-	const { triggerGenerateMessageHandler } = await import("./sessions")
+	const { sessionsFireTurnHandler } = await import("./sessions")
 	const { io, emitted } = recordingIo(w.owner.id, w.session.id)
 	const ownEmit = (event: string, payload: any) =>
 		emitted.push({ room: "caller", event, payload })
 	const res = await within(
 		label,
-		triggerGenerateMessageHandler.handler(
+		sessionsFireTurnHandler.handler(
 			fakeSocket(w.owner.id, io),
-			{ sessionId: w.session.id, characterId: w.elara, once: true } as any,
+			{
+				sessionId: w.session.id,
+				entry: { ref: `character:${w.elara}`, via: "pick" }
+			} as any,
 			ownEmit
 		)
 	)
 	return { res, emitted }
 }
 
-describe("the keeper's changes over sessions:triggerGenerateMessage", () => {
+describe("the keeper's changes over sessions:fireTurn", () => {
 	test("propose mode: the run completes, holds the two changes as proposals with base_version, and announces state:changed", async () => {
 		const schema = await import("$lib/server/db/schema")
 		const w = await adventureSession("propose", { trustNarrator: false })

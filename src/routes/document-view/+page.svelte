@@ -99,7 +99,7 @@
 				id: "rag",
 				label: "Retrieval-augmented context / embeddings (optional)",
 				description:
-					"Powers smarter recall of lore and history. Can be configured later in System Settings.",
+					"Powers smarter recall of lore and history. Can be configured later in System settings.",
 				done: setupData?.ragStepComplete ?? false,
 				skippable: "rag"
 			})
@@ -207,7 +207,7 @@
 			: ""}.
 	</p>
 
-	<h2>Recent Sessions</h2>
+	<h2>Recent sessions</h2>
 	{#if sessions.length === 0}
 		<p>
 			No sessions yet. <a href="/document-view/sessions/new">
@@ -230,7 +230,7 @@
 		<p><a href="/document-view/sessions">View all sessions</a></p>
 	{/if}
 
-	<h2>Quick Links</h2>
+	<h2>Quick links</h2>
 	<ul class="a11y-list">
 		<li class="a11y-list-item">
 			<a href="/document-view/characters">Characters</a>

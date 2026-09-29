@@ -67,7 +67,7 @@
 			type="button"
 			onclick={pool.onNavigateToGraph}
 		>
-			<Icons.GitGraph size={13} /> Build Graph ({readyToGraph.length} ready)
+			<Icons.GitGraph size={13} /> Build graph ({readyToGraph.length} ready)
 		</button>
 	{/if}
 	{#if scenes.length === 0}
@@ -92,10 +92,10 @@
 			>
 				<div class="flex min-w-0 items-center gap-1.5">
 					<span class="flex-1 truncate text-sm font-medium">
-						<span class="text-surface-400 mr-1 font-normal">
+						<span class="text-surface-600-400 mr-1 font-normal">
 							{sceneIdx + 1}.
 						</span>
-						{scene.name ?? "Unnamed Scene"}
+						{scene.name ?? "Unnamed scene"}
 					</span>
 					{#if scene.graphed}
 						<Icons.GitGraph
@@ -105,14 +105,14 @@
 						/>
 					{/if}
 					{#if isProcessing}
-						<Icons.Loader
+						<Icons.Loader2
 							size={13}
 							class="text-primary-500 shrink-0 animate-spin"
 							aria-label="Processing"
 						/>
 					{:else if pending}
 						<button
-							class="btn btn-sm preset-filled-warning-500 shrink-0 p-1"
+							class="btn btn-sm preset-tonal-surface shrink-0 p-1"
 							type="button"
 							title="Review pending summary"
 							aria-label="Review pending summary"
@@ -135,7 +135,7 @@
 								class="btn btn-sm preset-filled-surface-400-600 shrink-0 p-1"
 								title="More options"
 								aria-label="More options for {scene.name ??
-									'Unnamed Scene'}"
+									'Unnamed scene'}"
 							>
 								<Icons.Ellipsis size={14} />
 							</Popover.Trigger>
@@ -146,7 +146,7 @@
 									>
 										{#if pending}
 											<button
-												class="btn btn-sm preset-filled-warning-500 w-full justify-start"
+												class="btn btn-sm preset-tonal-surface w-full justify-start"
 												type="button"
 												onclick={() => {
 													openMenuSceneId = null

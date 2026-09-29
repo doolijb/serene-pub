@@ -37,8 +37,30 @@
 	let rootEl!: HTMLDivElement
 	let objectUrl = $state<string | null>(null)
 
+	/**
+	 * A cross-origin image is a plain `<img>`. `fetch` answers to the page's
+	 * `connect-src`, which admits only this origin and the socket, so fetching
+	 * a GitHub-hosted portrait was refused and every such card showed only its
+	 * placeholder; `img-src` admits any https image. The fetch-and-retry path
+	 * below is for this origin's own proxy (`/library/cardImage/…`), whose
+	 * 429/502 answers are the transient failures it exists to wait out.
+	 */
+	let crossOrigin = $derived.by(() => {
+		if (typeof window === "undefined") return false
+		try {
+			return new URL(src, window.location.href).origin !== window.location.origin
+		} catch {
+			return false
+		}
+	})
+	let nativeLoaded = $state(false)
+	let nativeFailed = $state(false)
+
 	$effect(() => {
 		const requestedSrc = src
+		nativeLoaded = false
+		nativeFailed = false
+		if (crossOrigin) return
 		const eager = loading !== "lazy"
 		let cancelled = false
 		let liveObjectUrl: string | null = null
@@ -160,7 +182,21 @@
 </script>
 
 <div bind:this={rootEl} class="contents">
-	{#if objectUrl}
+	{#if crossOrigin}
+		{#if (!nativeLoaded || nativeFailed) && fallback}
+			{@render fallback()}
+		{/if}
+		{#if !nativeFailed}
+			<img
+				{src}
+				{alt}
+				{loading}
+				class={className}
+				onload={() => (nativeLoaded = true)}
+				onerror={() => (nativeFailed = true)}
+			/>
+		{/if}
+	{:else if objectUrl}
 		<img src={objectUrl} {alt} class={className} />
 	{:else if fallback}
 		{@render fallback()}

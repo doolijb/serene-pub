@@ -3,7 +3,7 @@
  * configured with, in the SDK's one field language.
  *
  * A widget declares its settings as a `SettingsSchema`, the same `FieldDecl`
- * vocabulary a node's `params` use, so `SchemaForm` renders both. Core owns two
+ * vocabulary a node's `params` use, so `SchemaForm` renders both. Core owns three
  * keys on top of whatever the widget declares:
  *
  *   • `title` — an override of the descriptor's label, defaulting to it.
@@ -11,7 +11,12 @@
  *     only to a widget that declares channels, because a widget without them
  *     views the whole log and has no lane to narrow.
  *
- * Both are reserved: a widget declaring either key is ignored for that key.
+ *   • `hostCard` — whether the host draws its card (surface, border, title
+ *     bar) around the widget. Off by default: a placed widget sits flush in
+ *     its cell (ruled 2026-09-27; `sessionLayout/hostCard`). Offered to every
+ *     widget. Not `card`, which is a character file.
+ *
+ * All three are reserved: a widget declaring one is ignored for that key.
  *
  * ## Three uses, one function
  *
@@ -35,7 +40,7 @@ import {
 } from "@serene-pub/sdk"
 
 /** Keys core owns on every widget. A widget declaring one is ignored for it. */
-export const CORE_SETTING_KEYS = ["title", "lane"] as const
+export const CORE_SETTING_KEYS = ["title", "lane", "hostCard"] as const
 
 /** `FieldDecl.group` that puts a declared field behind the advanced disclosure. */
 export const BEHAVIOUR_GROUP = "behaviour"
@@ -102,6 +107,14 @@ export function coreSettingsSchema(decl: WidgetSettingsDecl): SettingsSchema {
 			min: 1,
 			default: DEFAULT_LANE
 		}
+	schema.hostCard = {
+		type: "boolean",
+		label: "Card",
+		description:
+			"Draw this widget in a card, with a border and a title bar. " +
+			"A widget opened over the session always has one.",
+		default: false
+	}
 	return schema
 }
 

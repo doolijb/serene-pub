@@ -167,3 +167,70 @@ export async function writeSessionGreetings(
 	}
 	return ids
 }
+
+/**
+ * A seated envoy's **declared greeting**, interpolated — the read half of
+ * `core:query/envoy-greeting@1` (lair re-plan R6, 2026-09-28): the line the
+ * Lair's Castellan opens every new session with.
+ *
+ * `undefined` — the write is skipped — when the envoy is not live-seated in
+ * the session, or declares no greeting. Interpolated with the same engine
+ * the cards' greetings use: `{{char}}` is the envoy's name, `{{user}}` and
+ * `{{playerLabel}}` the session's player label (R4; the cascade every reader
+ * uses), `{{characterNames}}` the party's names joined with "and" (empty at
+ * creation for a genre that seats nobody yet — the copy writes `{{#if}}`).
+ * No model call: a create run is a person waiting.
+ */
+export async function collectEnvoyGreeting(
+	db: Db,
+	sessionId: number,
+	envoyKey: string | undefined,
+	language = "en"
+): Promise<{ text: string; channel: string } | undefined> {
+	const key = envoyKey?.trim()
+	if (!key) return undefined
+	const { seatedEnvoys } = await import(
+		"$lib/server/pipelines/entities/envoys"
+	)
+	const seat = (await seatedEnvoys(db, sessionId)).find(
+		(e) => e.origin === "genre" && e.key === key && !e.removedAt
+	)
+	const greeting = seat?.greeting
+	if (!seat || !greeting) return undefined
+	const { i18nText } = await import("@serene-pub/sdk")
+	const template = i18nText(greeting.text, language)?.trim()
+	if (!template) return undefined
+	const name = i18nText(seat.name, language) || seat.key
+	const { playerLabelFor } = await import(
+		"$lib/server/pipelines/entities/sessionGenres"
+	)
+	const playerLabel = await playerLabelFor(db, sessionId)
+	const party = await db.query.sessionCharacters.findMany({
+		where: (cc, { and, eq, isNull, isNotNull }) =>
+			and(
+				eq(cc.sessionId, sessionId),
+				isNotNull(cc.characterId),
+				isNull(cc.removedAt)
+			),
+		with: { character: true },
+		orderBy: (cc, { asc }) => asc(cc.position)
+	})
+	const { joinWithAnd } = await import("$lib/shared/utils/joinWithAnd")
+	const characterNames = joinWithAnd(
+		party
+			.filter((cc) => cc.character && cc.isActive !== false)
+			.map((cc) => resolveCharacterName(cc.character!))
+	)
+	const engine = new InterpolationEngine()
+	const context = engine.createInterpolationContext({
+		currentCharacterName: name,
+		currentPersonaName: playerLabel,
+		additionalContext: {
+			...(playerLabel ? { playerLabel } : {}),
+			characterNames
+		}
+	})
+	const text = engine.interpolateString(template, context)?.trim()
+	if (!text) return undefined
+	return { text, channel: canonicalChannel(greeting.channel) }
+}

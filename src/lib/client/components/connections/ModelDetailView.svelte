@@ -15,6 +15,9 @@
 	 * again, remove it, or go to the connection whose runtime owns it.
 	 */
 	import * as Icons from "@lucide/svelte"
+	import PanelNavHeader from "$lib/client/components/panels/PanelNavHeader.svelte"
+	import DetailHero from "$lib/client/components/panels/DetailHero.svelte"
+	import Select from "$lib/client/components/inputs/Select.svelte"
 	import { Menu, Portal, Switch } from "@skeletonlabs/skeleton-svelte"
 	import { TokenCounterOptions } from "$lib/shared/constants/TokenCounters"
 	import { completionTemplateOptions } from "$lib/client/stores/completionTemplateOptions.svelte"
@@ -51,9 +54,9 @@
 		/**
 		 * Open the connection whose runtime owns this endpoint's models.
 		 *
-		 * It used to open a manager PANEL; the managers fold into their
-		 * connection with the 2026-09-17 ruling (R2), so the same press now
-		 * lands on that connection's view — which is where the models are.
+		 * The managers fold into their connection (2026-09-17 ruling R2), so
+		 * the press lands on that connection's view — which is where the
+		 * models are.
 		 */
 		onOpenManager: (manager: ModelManager) => void
 		/** The model row is gone (removed elsewhere) — leave the view. */
@@ -136,36 +139,28 @@
 	let confirmingRemove = $state(false)
 
 	const menuItem =
-		"hover:preset-tonal-primary data-[highlighted]:preset-tonal-primary flex cursor-pointer items-center justify-between gap-4 rounded px-2 py-1.5 text-sm"
+		"hover:bg-surface-200-800 data-[highlighted]:bg-surface-200-800 flex h-9 cursor-pointer items-center justify-between gap-4 rounded-[8px] px-2.5 text-[13px]"
 </script>
 
 <div class="flex h-full flex-col gap-3">
-	<div class="flex items-center gap-2">
-		<button
-			type="button"
-			class="btn btn-sm preset-filled-surface-400-600 p-2"
-			onclick={onBack}
-			title="Back"
-			aria-label="Back"
-		>
-			<Icons.ChevronLeft size={16} />
-		</button>
-		<div class="min-w-0 flex-1">
-			<h2 class="truncate text-sm font-semibold">
-				{row?.name ?? "Model"}
-			</h2>
-			<p class="text-muted truncate text-xs">
-				on {connectionName}{row && row.model !== row.name
-					? ` · ${row.model}`
-					: ""}
-			</p>
-		</div>
-	</div>
+	<PanelNavHeader
+		title="Model"
+		{onBack}
+		backLabel="Back"
+		titleClass="text-sm"
+	/>
+	<DetailHero
+		title="Model"
+		icon={Icons.Box}
+		subtitle="on {connectionName}{row && row.model !== row.name
+			? ` · ${row.model}`
+			: ''}"
+	/>
 
 	{#if models.loading}
-		<p class="text-muted text-sm">Loading model…</p>
+		<p class="text-surface-600-400 text-sm">Loading model…</p>
 	{:else if !row}
-		<p class="text-muted text-sm">
+		<p class="text-surface-600-400 text-sm">
 			This model is gone — removed here or in another tab.
 		</p>
 		<button
@@ -245,7 +240,7 @@
 					</div>
 				</div>
 			{:else}
-				<div class="text-muted flex items-center gap-2 text-xs">
+				<div class="text-surface-600-400 flex items-center gap-2 text-xs">
 					<Icons.Check size={12} aria-hidden="true" />
 					<span class="min-w-0 flex-1 truncate">
 						{#if models.modelsSync.at}
@@ -258,7 +253,7 @@
 					</span>
 					<button
 						type="button"
-						class="btn-icon btn-icon-sm hover:preset-tonal-surface"
+						class="btn btn-icon btn-icon-sm hover:preset-tonal-surface"
 						disabled={syncing}
 						onclick={onRefresh}
 						title="Ask the host again"
@@ -305,7 +300,7 @@
 						onchange={(e) =>
 							models.patch(row, { model: e.currentTarget.value })}
 					/>
-					<p class="text-muted text-xs">
+					<p class="text-surface-600-400 text-xs">
 						What the service knows it by — the text this connection
 						sends.
 					</p>
@@ -333,47 +328,35 @@
 					/>
 				</div>
 
-				<div class="flex flex-col gap-1">
-					<label class="text-xs font-semibold" for="model-template">
-						Completion template
-					</label>
-					<select
-						id="model-template"
-						class="select text-sm"
-						value={row.promptFormat ?? ""}
-						disabled={models.busy}
-						onchange={(e) =>
-							models.patch(row, {
-								promptFormat: e.currentTarget.value || null
-							})}
-					>
-						<option value="">From the connection</option>
-						{#each formatOptions.value as t (t.value)}
-							<option value={t.value}>{t.label}</option>
-						{/each}
-					</select>
-				</div>
+				<Select
+					label="Completion template"
+					value={row.promptFormat ?? ""}
+					disabled={models.busy}
+					options={[
+						{ value: "", label: "From the connection" },
+						...formatOptions.value.map((t) => ({
+							value: String(t.value),
+							label: t.label
+						}))
+					]}
+					onValueChange={(v) =>
+						models.patch(row, { promptFormat: v || null })}
+				/>
 
-				<div class="flex flex-col gap-1">
-					<label class="text-xs font-semibold" for="model-tokenizer">
-						Tokenizer
-					</label>
-					<select
-						id="model-tokenizer"
-						class="select text-sm"
-						value={row.tokenCounter ?? ""}
-						disabled={models.busy}
-						onchange={(e) =>
-							models.patch(row, {
-								tokenCounter: e.currentTarget.value || null
-							})}
-					>
-						<option value="">From the connection</option>
-						{#each TokenCounterOptions.options as t (t.value)}
-							<option value={t.value}>{t.label}</option>
-						{/each}
-					</select>
-				</div>
+				<Select
+					label="Tokenizer"
+					value={row.tokenCounter ?? ""}
+					disabled={models.busy}
+					options={[
+						{ value: "", label: "From the connection" },
+						...TokenCounterOptions.options.map((t) => ({
+							value: String(t.value),
+							label: t.label
+						}))
+					]}
+					onValueChange={(v) =>
+						models.patch(row, { tokenCounter: v || null })}
+				/>
 
 				<Switch
 					name="model-enabled"
@@ -397,7 +380,7 @@
 
 			<div class="flex flex-col gap-1.5">
 				<span class="text-xs font-semibold">Instance defaults</span>
-				<p class="text-muted text-xs">
+				<p class="text-surface-600-400 text-xs">
 					Which system defaults point at this model. "All" writes
 					every transform it can serve.
 				</p>
@@ -417,10 +400,10 @@
 					<Portal>
 						<Menu.Positioner class="z-[1000]!">
 							<Menu.Content
-								class="card preset-filled-surface-100-900 max-w-[90vw] min-w-56 overflow-y-auto p-1 shadow-xl"
+								class="bg-surface-50-950 border-surface-200-800 max-w-[90vw] min-w-56 overflow-y-auto rounded-[12px] border p-1 shadow-xl"
 							>
 								{#if !satisfiable.length}
-									<p class="text-muted p-2 text-xs">
+									<p class="text-surface-600-400 p-2 text-xs">
 										Nothing this model can be a default for
 										— the connection cannot do any of it.
 									</p>
@@ -453,7 +436,7 @@
 					</Portal>
 				</Menu>
 				{#if currentDefaults.length}
-					<p class="text-muted text-xs">
+					<p class="text-surface-600-400 text-xs">
 						Currently the default for
 						{currentDefaults
 							.map((c) => labelFor(c).replace(/^Use for /, ""))
@@ -484,7 +467,7 @@
 								onclick={() => models.remove(row)}
 							>
 								<Icons.Trash2 size={14} aria-hidden="true" />
-								Remove
+								Remove model
 							</button>
 						</div>
 					{:else}
@@ -499,7 +482,7 @@
 							Remove model
 						</button>
 						{#if !missing}
-							<p class="text-muted text-xs">
+							<p class="text-surface-600-400 text-xs">
 								A model the host lists comes back on the next
 								refresh — switch it off instead to hide it.
 							</p>
@@ -514,14 +497,14 @@
 						<Icons.ExternalLink size={14} aria-hidden="true" />
 						Manage in {manager.label}
 					</button>
-					<p class="text-muted text-xs">{sourceHint}</p>
+					<p class="text-surface-600-400 text-xs">{sourceHint}</p>
 				{:else if sourceHint}
-					<p class="text-muted text-xs">{sourceHint}</p>
+					<p class="text-surface-600-400 text-xs">{sourceHint}</p>
 				{/if}
 			</div>
 
 			{#if models.notice}
-				<p class="text-muted text-xs" role="status">{models.notice}</p>
+				<p class="text-surface-600-400 text-xs" role="status">{models.notice}</p>
 			{/if}
 		</div>
 	{/if}

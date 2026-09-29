@@ -124,7 +124,7 @@ describe("OpenAIChatAdapter — base URL trailing-slash normalization", () => {
 		openAIConstructorMock.mockClear()
 		modelsListMock.mockResolvedValue({ data: [] })
 		await exportsDefault.listModels(makeConnection({ baseUrl: "" }))
-		// The OpenAI Session connection type's own default baseUrl is "" (empty —
+		// The OpenAI Chat connection type's own default baseUrl is "" (empty —
 		// meaning "use the real OpenAI API," which the SDK does when baseURL
 		// is undefined), so the resolved value should be undefined, not "".
 		expect(openAIConstructorMock).toHaveBeenLastCalledWith(

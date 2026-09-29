@@ -107,7 +107,7 @@
 		<p>{character.scenario}</p>
 	{/if}
 	{#if character.firstMessage}
-		<h2>First Message</h2>
+		<h2>First message</h2>
 		<p>{character.firstMessage}</p>
 	{/if}
 {/if}

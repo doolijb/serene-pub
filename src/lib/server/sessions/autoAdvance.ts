@@ -83,7 +83,43 @@ export async function onTurnOrderChanged(
 		/** The order as written — read off the row when absent. */
 		turnOrder?: unknown
 		io?: SessionIo
+		/**
+		 * Told whether the head is about to fire, once the decision is made
+		 * and BEFORE the fire (lair pass B9): the `sessions:turnOrder` push
+		 * carries it as `autoAdvancing`, so a client that has just sent
+		 * knows at once whether a reply is coming. Called again with `false`
+		 * when a fire that was announced did not start after all.
+		 */
+		announce?: (autoAdvancing: boolean) => Promise<void>
 	}
+): Promise<AutoAdvanceOutcome> {
+	let announced: boolean | undefined
+	const say = async (autoAdvancing: boolean) => {
+		if (!opts.announce || announced === autoAdvancing) return
+		announced = autoAdvancing
+		try {
+			await opts.announce(autoAdvancing)
+		} catch (err) {
+			console.warn("[autoAdvance] the announcement failed:", err)
+		}
+	}
+	const outcome = await decideAndFire(db, opts, say)
+	// Whatever path ended it, a listener that did not fire says so — the
+	// one announcement a client waiting on a send must always get.
+	if (!outcome.fired) await say(false)
+	return outcome
+}
+
+async function decideAndFire(
+	db: Db,
+	opts: {
+		sessionId: number
+		userId: number
+		cause?: EventCause
+		turnOrder?: unknown
+		io?: SessionIo
+	},
+	say: (autoAdvancing: boolean) => Promise<void>
 ): Promise<AutoAdvanceOutcome> {
 	const cause = opts.cause
 	const kind = cause?.kind
@@ -143,6 +179,7 @@ export async function onTurnOrderChanged(
 	}
 
 	fired.set(opts.sessionId, spent + 1)
+	await say(true)
 	try {
 		const result = await fireTurnEntry(db, {
 			sessionId: opts.sessionId,

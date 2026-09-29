@@ -108,11 +108,11 @@
 	})
 
 	function handleUpdateOllamaManagerEnabled() {
-		status = "Ollama Manager setting saved."
+		status = "Managed Ollama setting saved."
 		announce(status)
 	}
 	function handleUpdateKoboldCppManagerEnabled() {
-		status = "KoboldCPP Manager setting saved."
+		status = "KoboldCPP, run by Serene Pub setting saved."
 		announce(status)
 	}
 	function handleKoboldcppSetBaseUrl() {
@@ -272,10 +272,10 @@
 </script>
 
 <svelte:head>
-	<title>System Settings — Document View — Serene Pub</title>
+	<title>System settings — Document View — Serene Pub</title>
 </svelte:head>
 
-<h1>System Settings</h1>
+<h1>System settings</h1>
 
 {#if !userCtx.user?.isAdmin}
 	<p>Admin access required.</p>
@@ -291,7 +291,7 @@
 		</div>
 	{/if}
 
-	<h2>Ollama Manager</h2>
+	<h2>Ollama, managed</h2>
 	<p class="a11y-hint">
 		Lets Serene Pub browse, download, and connect to models running in
 		Ollama.
@@ -303,14 +303,14 @@
 			checked={ollamaSettingsCtx.settings?.ollamaManagerEnabled}
 			onchange={(e) => toggleOllamaManager(e.currentTarget.checked)}
 		/>
-		<label for="a11y-sys-ollama-enabled">Enable Ollama Manager</label>
+		<label for="a11y-sys-ollama-enabled">Enable managed Ollama</label>
 	</div>
 	<p class="a11y-hint">
-		Base URL is only configured from the Ollama Manager panel (Connections),
-		not here.
+		Base URL is only configured from the Ollama connection's view
+		(Connections), not here.
 	</p>
 
-	<h2>KoboldCPP Manager</h2>
+	<h2>KoboldCPP, run by Serene Pub</h2>
 	<p class="a11y-hint">
 		Lets Serene Pub browse, download, and connect to models running in
 		KoboldCPP.
@@ -322,7 +322,7 @@
 			checked={koboldCppSettingsCtx.settings?.koboldCppManagerEnabled}
 			onchange={(e) => toggleKoboldCppManager(e.currentTarget.checked)}
 		/>
-		<label for="a11y-sys-kcpp-enabled">Enable KoboldCPP Manager</label>
+		<label for="a11y-sys-kcpp-enabled">Let Serene Pub run KoboldCPP</label>
 	</div>
 	<form onsubmit={saveKoboldCppBaseUrl}>
 		<div class="a11y-field">
@@ -336,7 +336,7 @@
 		<button type="submit" class="a11y-btn a11y-btn-small">Save URL</button>
 	</form>
 
-	<h2>Context Debugging</h2>
+	<h2>Context debugging</h2>
 	<p class="a11y-hint">
 		Shows extra technical detail about what's sent to the AI model, for
 		troubleshooting.
@@ -348,7 +348,7 @@
 			checked={systemSettingsCtx.settings?.contextDebuggingEnabled}
 			onchange={(e) => toggleContextDebugging(e.currentTarget.checked)}
 		/>
-		<label for="a11y-sys-context-debugging">Enable Context Debugging</label>
+		<label for="a11y-sys-context-debugging">Enable context debugging</label>
 	</div>
 
 	<h2>Embeddings</h2>
@@ -408,7 +408,7 @@
 		</form>
 	{/if}
 
-	<h2>User Accounts</h2>
+	<h2>User accounts</h2>
 	{#if systemSettingsCtx.settings?.isAccountsEnabled}
 		<p class="a11y-hint">
 			User accounts are required — everyone must log in with a username
@@ -417,7 +417,7 @@
 		<p>
 			<strong>Accounts are enabled.</strong>
 			This can't be turned off from Document View — use the standard site's
-			System Settings if you need to disable it.
+			System settings if you need to disable it.
 		</p>
 	{:else}
 		<p class="a11y-hint">
@@ -429,7 +429,7 @@
 		{#if !hasPassphrase}
 			<div class="a11y-field">
 				<label for="a11y-sys-accounts-passphrase">
-					Set a Passphrase
+					Set a passphrase
 				</label>
 				<p class="a11y-hint">
 					Required before accounts can be turned on — this is what
@@ -451,7 +451,7 @@
 			disabled={enablingAccounts ||
 				(!hasPassphrase && !newPassphrase.trim())}
 		>
-			{enablingAccounts ? "Enabling…" : "Enable User Accounts"}
+			{enablingAccounts ? "Enabling…" : "Enable user accounts"}
 		</button>
 	{/if}
 {/if}

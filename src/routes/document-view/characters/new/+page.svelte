@@ -70,10 +70,10 @@
 </script>
 
 <svelte:head>
-	<title>New Character — Document View — Serene Pub</title>
+	<title>New character — Document View — Serene Pub</title>
 </svelte:head>
 
-<h1>New Character</h1>
+<h1>New character</h1>
 <p><a href="/document-view/characters">Back to Characters</a></p>
 
 {#if error}
@@ -129,7 +129,7 @@
 		></textarea>
 	</div>
 	<div class="a11y-field">
-		<label for="a11y-char-first-message">First Message</label>
+		<label for="a11y-char-first-message">First message</label>
 		<p class="a11y-hint">
 			What the character says to start a conversation.
 		</p>
@@ -155,6 +155,6 @@
 		</p>
 	</div>
 	<button type="submit" class="a11y-btn" disabled={saving}>
-		{saving ? "Creating…" : "Create Character"}
+		{saving ? "Creating…" : "Create character"}
 	</button>
 </form>

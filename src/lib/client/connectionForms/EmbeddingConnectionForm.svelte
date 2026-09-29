@@ -76,7 +76,7 @@
 				: "https://api.openai.com/v1"}
 			aria-describedby="embedding-base-url-help"
 		/>
-		<p id="embedding-base-url-help" class="text-muted text-xs">
+		<p id="embedding-base-url-help" class="text-surface-600-400 text-xs">
 			{#if connection.type === CONNECTION_TYPE.OLLAMA_EMBEDDINGS}
 				Ollama's own address. Embeddings go to its native /api/embed
 				route, so do not add /v1 here.
@@ -105,16 +105,17 @@
 				placeholder="Optional, depending on the service"
 				aria-describedby="embedding-api-key-help"
 			/>
-			<p id="embedding-api-key-help" class="text-muted text-xs">
+			<p id="embedding-api-key-help" class="text-surface-600-400 text-xs">
 				Stored encrypted. Leave it empty for a service that does not ask
 				for one, such as LM Studio or llama.cpp.
 			</p>
 		</div>
 	{/if}
 {:else}
-	<p class="text-muted mt-4 text-xs">
+	<p class="text-surface-600-400 mt-4 text-xs">
 		Runs in this process on the CPU. Nothing leaves the machine, and there
-		is no host or key to set. Pick a model below; it downloads once.
+		is no host or key to set. Pick a model from the list above; it downloads
+		once.
 	</p>
 {/if}
 
@@ -131,9 +132,9 @@
 			onblur={commitTtl}
 			aria-describedby="embedding-ttl-help"
 		/>
-		<span class="text-muted text-sm">minutes</span>
+		<span class="text-surface-600-400 text-sm">minutes</span>
 	</div>
-	<p id="embedding-ttl-help" class="text-muted text-xs">
+	<p id="embedding-ttl-help" class="text-surface-600-400 text-xs">
 		{#if isLocal}
 			Unload the model after this long with nothing to do. Set 0 to keep
 			it loaded.

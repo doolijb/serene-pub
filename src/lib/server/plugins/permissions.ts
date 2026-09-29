@@ -37,6 +37,7 @@
  * events are only a consequence of a session, so there is nothing system-wide
  * to opt into yet.
  */
+import type { WidgetSectionScope } from "@serene-pub/sdk"
 
 export type PermissionKind = "system" | "resource" | "event"
 
@@ -75,22 +76,30 @@ export interface PluginManifest {
 	 * (transport, hook identity) — see the divergence note in project memory —
 	 * but permission-reading is made tolerant of both. An unrecognised key is
 	 * *surfaced* as a generic permission, never dropped: the audit screen must
-	 * show everything a manifest declared, or a denial cannot target it.
+	 * show everything a manifest declared, or a denial cannot target it. The
+	 * one exception is a key containing `#`, refused outright
+	 * (`isRefusedPermissionKey`): it could spell another permission's review.
 	 */
 	permissions?: DeclaredPermissions | string[]
 	/** Its genres, whose panels may declare `scopes` (read for `widget:<scope>`). */
 	genres?: unknown
+	/** Its package widgets (R71), each of which may declare `scopes` (read for `widget:<scope>`). */
+	widgets?: unknown
 }
 
 /**
  * The data a plugin's widget may ask for beyond the base sections
  * (`WidgetDecl.scopes`) — each a permission of its own, `widget:<scope>`,
- * reviewed and deniable like any other. Only `session:full` is supplied by
- * this build (the conversation dossier); the rest are declared-but-absent,
- * and a widget reads their absence.
+ * reviewed and deniable like any other. One label per scope in the SDK's one
+ * table (`WIDGET_SCOPED_SECTIONS`), held to it by the type: a scope added
+ * there without a sentence here does not compile, and could never be
+ * granted. `session:full` (the conversation dossier) and `session:state`
+ * (R72) are supplied by this build; `lore` is the grant to page the lore by
+ * request; the rest are declared-but-absent, and a widget reads their absence.
  */
-export const WIDGET_SCOPE_LABELS: Record<string, string> = {
+export const WIDGET_SCOPE_LABELS: Readonly<Record<WidgetSectionScope, string>> = {
 	"session:full": "Its widgets see the whole conversation as you do — the cast, your personas, your unsent draft and the session's state",
+	"session:state": "Its widgets see the session's stats and states",
 	persona: "Its widgets see your persona",
 	characters: "Its widgets see the session's characters",
 	lore: "Its widgets see the session's lore"
@@ -98,26 +107,31 @@ export const WIDGET_SCOPE_LABELS: Record<string, string> = {
 
 /**
  * The scopes a manifest's widgets declare, read off the declarations
- * themselves — never trusted to a compiled list, so a package cannot ask
- * for data through a panel and leave the request off its permissions.
+ * themselves — a genre's panels (`genres[].shape.panels[].scopes`) and the
+ * package's own widgets (R71, `widgets[].scopes`) alike — never trusted to a
+ * compiled list, so a package cannot ask for data through a widget and leave
+ * the request off its permissions.
  */
 export function declaredWidgetScopes(manifest: PluginManifest | null | undefined): string[] {
 	const out = new Set<string>()
+	const take = (decl: unknown) => {
+		const scopes = (decl as { scopes?: unknown } | null)?.scopes
+		for (const scope of Array.isArray(scopes) ? scopes : [])
+			if (typeof scope === "string" && Object.hasOwn(WIDGET_SCOPE_LABELS, scope)) out.add(scope)
+	}
 	const genres = Array.isArray(manifest?.genres) ? (manifest!.genres as unknown[]) : []
 	for (const g of genres) {
 		const panels = (g as { shape?: { panels?: unknown } } | null)?.shape?.panels
-		for (const panel of Array.isArray(panels) ? panels : [])
-			for (const scope of Array.isArray((panel as { scopes?: unknown })?.scopes)
-				? ((panel as { scopes: unknown[] }).scopes)
-				: [])
-				if (typeof scope === "string" && Object.hasOwn(WIDGET_SCOPE_LABELS, scope)) out.add(scope)
+		for (const panel of Array.isArray(panels) ? panels : []) take(panel)
 	}
+	for (const widget of Array.isArray(manifest?.widgets) ? (manifest!.widgets as unknown[]) : []) take(widget)
 	return [...out].sort()
 }
 
 /**
- * What one panel may read: the scopes it asked for that its plugin was
- * granted. A panel can narrow its plugin's grant, never widen it.
+ * What one panel — or one package widget (R71) — may read: the scopes it
+ * asked for that its plugin was granted. It can narrow its plugin's grant,
+ * never widen it.
  */
 export function panelGrants(
 	asked: unknown,
@@ -129,14 +143,53 @@ export function panelGrants(
 	return [...new Set(asked.filter((s): s is string => typeof s === "string" && granted.has(s)))]
 }
 
-/** The widget scopes an admin has granted this plugin (declared − denied − unreviewed). */
+/**
+ * The widget scopes an admin has granted this plugin (declared − denied −
+ * unreviewed) — only scopes this build knows (`WIDGET_SCOPE_LABELS`). A
+ * compiled `widget:<x>` this build does not recognise is surfaced for review
+ * as an unknown permission, and approving THAT grants no data: nothing here
+ * supplies `<x>`, and a scope a later build learns is reviewed again under
+ * its own sentence (`reviewMark`).
+ */
 export function grantedWidgetScopes(
 	manifest: PluginManifest | null | undefined,
 	adminDenied: string[] | null | undefined
 ): string[] {
 	return effectivePermissions(declaredPermissions(manifest), adminDenied)
-		.filter((p) => p.key.startsWith("widget:"))
+		.filter((p) => isWidgetScopePermission(p))
 		.map((p) => p.key.slice("widget:".length))
+}
+
+/**
+ * The permission each recognised widget scope is reviewed and granted as —
+ * `widget:<scope>`, account-affecting, labelled from the one table. The one
+ * spelling of that permission: a plugin's manifest reaches it through
+ * `declaredPermissions`, and an **authored component** (`server/components`),
+ * which has no manifest, through its own widget declaration's `scopes`.
+ * A scope this build does not know is dropped: nothing supplies it.
+ */
+export function widgetScopePermissions(scopes: unknown): Permission[] {
+	if (!Array.isArray(scopes)) return []
+	const known = new Set(
+		scopes.filter(
+			(s): s is WidgetSectionScope => typeof s === "string" && Object.hasOwn(WIDGET_SCOPE_LABELS, s)
+		)
+	)
+	return [...known].sort().map((scope) => ({
+		key: `widget:${scope}`,
+		kind: "resource" as const,
+		label: WIDGET_SCOPE_LABELS[scope],
+		accountAffecting: true
+	}))
+}
+
+/** A recognised widget scope's permission — `widget:<scope>` for a scope in the SDK's table. */
+function isWidgetScopePermission(p: Permission): boolean {
+	return (
+		p.kind === "resource" &&
+		p.key.startsWith("widget:") &&
+		Object.hasOwn(WIDGET_SCOPE_LABELS, p.key.slice("widget:".length))
+	)
 }
 
 const DEFAULT_STORAGE_QUOTA = 5 * 1024 * 1024
@@ -210,6 +263,9 @@ function toDeclared(
 	let network = false
 	for (const raw of permissions) {
 		if (typeof raw !== "string" || !raw) continue
+		// Refused before it is read at all (`isRefusedPermissionKey`) — not
+		// surfaced as unknown, not folded into a known permission.
+		if (isRefusedPermissionKey(raw)) continue
 		if (raw === "storage") storage = true
 		else if (raw.startsWith("storage:")) {
 			// The number is not validated here — `normalizeStorageQuota` in
@@ -229,7 +285,7 @@ function toDeclared(
 			resources.push(raw.slice("resource:".length))
 		else if (raw.startsWith("event:"))
 			events.push(raw.slice("event:".length))
-		// Read off the panels themselves (`declaredWidgetScopes`); the compiled
+		// Read off the panels and widgets themselves (`declaredWidgetScopes`); the compiled
 		// key is the CLI's echo of the same declaration.
 		else if (raw.startsWith("widget:") && Object.hasOwn(WIDGET_SCOPE_LABELS, raw.slice("widget:".length))) continue
 		else unknown.push(raw)
@@ -300,13 +356,7 @@ export function declaredPermissions(
 			label: `Event: ${e}`,
 			accountAffecting: true
 		})
-	for (const scope of declaredWidgetScopes(manifest))
-		out.push({
-			key: `widget:${scope}`,
-			kind: "resource",
-			label: WIDGET_SCOPE_LABELS[scope]!,
-			accountAffecting: true
-		})
+	out.push(...widgetScopePermissions(declaredWidgetScopes(manifest)))
 	// Keys the compiled form declared but this build does not recognise. Shown
 	// so an admin sees (and can deny) every declared permission; treated
 	// conservatively as a non-account-affecting system permission for display.
@@ -317,7 +367,28 @@ export function declaredPermissions(
 			label: `Declared permission: ${key}`,
 			accountAffecting: false
 		})
-	return out
+	// The object form names resources, events and hosts freely too, so the
+	// refusal is applied to the keys themselves, whichever shape built them.
+	return out.filter((p) => !isRefusedPermissionKey(p.key))
+}
+
+/**
+ * A declared key this build refuses outright: never listed, never reviewed,
+ * never granted, never marked. `#` is the separator `reviewMark` puts between
+ * a key and what it was reviewed as (`#scope`, `#{…payload}`), so a key that
+ * carries one can spell another permission's mark — a declared
+ * `widget:lore#scope` marks as `__reviewed:widget:lore#scope`, the review of
+ * the real `lore` scope, and `storage#{"quotaBytes":N}` marks as the review
+ * of the real storage request. Deciding such a key (even denying it) would
+ * grant the permission it imitates. With `#` out of every key, the key is
+ * everything before a mark's first `#`, and two permissions cannot share a
+ * mark. Dropping it is not hiding a request: a refused key can never be in
+ * force, so there is nothing for a denial to target. (No other key grammar
+ * exists here — an unrecognised key is still surfaced; this is the one
+ * character the review record cannot tell apart.)
+ */
+export function isRefusedPermissionKey(key: string): boolean {
+	return key.includes("#")
 }
 
 /* ── consent: the install-time review gate ───────────────────────────────── */
@@ -344,9 +415,18 @@ const REVIEW_PREFIX = "__reviewed:"
  * holds for any permission that grows a declaration later. It is a no-op for the
  * ones whose payload is already in the key (`network:<host>`) or absent
  * (resources, events).
+ *
+ * A recognised widget scope's mark also says it was reviewed AS that scope
+ * (`#scope`). A `widget:<x>` this build did not know was shown as an unknown
+ * permission ("Declared permission: widget:<x>", no data behind it), and its
+ * review stored the bare mark; a later build that learns `<x>` must ask
+ * again under the sentence that names the data, not carry that review over
+ * into a grant. (A consequence, once: a scope reviewed before this rule is
+ * asked about again.)
  */
 export function reviewMark(p: Permission | string): string {
 	if (typeof p === "string") return REVIEW_PREFIX + p
+	if (isWidgetScopePermission(p)) return `${REVIEW_PREFIX}${p.key}#scope`
 	return p.config
 		? `${REVIEW_PREFIX}${p.key}#${JSON.stringify(p.config)}`
 		: REVIEW_PREFIX + p.key

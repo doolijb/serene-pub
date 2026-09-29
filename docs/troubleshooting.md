@@ -1,27 +1,27 @@
 # Troubleshooting
 
-This page collects the most common ways Serene Pub gets stuck, organized by area, with a pointer to the full explanation elsewhere in the docs. If something here doesn't resolve it, [open an issue](https://github.com/doolijb/serene-pub/issues) or ask in [Discord](https://discord.gg/3kUx3MDcSa).
+This page collects the most common ways Serene Pub gets stuck, organized by area, with a pointer to the full explanation elsewhere in the docs. If something here doesn't resolve it, [open an issue](https://github.com/doolijb/serene-pub/issues) or ask in [Discord](https://discord.gg/3kUx3MDcSa). Attach a support report (Admin → Diagnostics → **Copy report**, see [Instance settings](./system-settings.md#support-report)): it carries the versions, settings, plugins and recent errors an answer usually needs, with secrets and names removed.
 
 ## Connections
 
 - **"Test: Failed!" on a connection.** The error shown directly under the Test Connection button is the real cause (bad Base URL, missing/incorrect API key, service not running, wrong port) — read it before assuming the connection type is broken. See [Connections](./connections.md).
 - **Model output is garbled, run-on, or ignores turn boundaries.** This is almost always the wrong **Prompt Format** for a text-completion connection — check it against the model's actual training format. See [Prompt Formats and Token Counters](./connections.md#prompt-formats-and-token-counters).
 - **Context budget seems off (too much or too little history/lore fits).** Check the connection's **Token Counter** — leaving it on the generic **Estimate** for a model with unusual tokenization can under- or over-estimate how much fits under the Sampling Config's Context Tokens limit.
-- **A custom Context Config broke every session using it.** A malformed Handlebars template can break generation instance-wide. Test edits on a low-stakes session before setting a custom Context Config as your default. See [Context Configs](./context-templates.md).
+- **A custom Context Template broke every session using it.** A template that parses but says the wrong thing can break generation for every pipeline that selects it. Test edits on a low-stakes session before selecting a custom template for the pipelines everyone uses. See [Context Templates](./context-templates.md).
 
-## KoboldCPP Manager
+## KoboldCPP, run by Serene Pub
 
-- **Binary download or auto-start failed.** The real underlying error is shown inline (download failure) or under the colored status dot on the **Performance** tab (start failure) — read that message first. See [Troubleshooting: download or start failures](./connections.md#troubleshooting-download-or-start-failures).
+- **Binary download or auto-start failed.** The real underlying error is shown inline (download failure) or under the status dot on the connection's status card (start failure) — read that message first. See [Troubleshooting: download or start failures](./connections.md#troubleshooting-download-or-start-failures).
 - **Failing right after setup on Docker or a NAS.** The most common cause is the app's data directory (where the KoboldCPP binary/admin directory live) being a mounted volume the container's user can't write to. Confirm the container can create directories and write files in its mounted data volume before assuming the download itself is broken.
 - **A model reload takes a while after switching connections or editing GPU Layers/Flash Attention/Batch Size.** This is expected — those settings only take effect the _next_ time the connection generates, and a reload can take up to 10 minutes for a large model. See the [reload-on-change note](./connections.md#power-user-note-gpu-layers-flash-attention-batch-size-and-reload-on-change).
 
-## Ollama Manager
+## Ollama, managed
 
 - **"Update Available" but nothing updates in-app.** Serene Pub can't update Ollama itself — the callout links out to `ollama.com/download` because updating the Ollama installation is outside Serene Pub's control.
 
 ## Embeddings & RAG
 
-- **The embeddings queue is stuck at "Idle" with items still waiting.** Check the **Settings** tab first: the queue silently stops if embeddings are disabled, if a local model failed to auto-load (not cached, or the server restarted and needs a reload), or if an External API config stopped validating. Reload/re-download the model, then press **Start** on the Queue tab. See [Troubleshooting a stuck or empty queue](./embeddings-and-rag.md#troubleshooting-a-stuck-or-empty-queue).
+- **The embeddings queue is stuck at "Idle" with items still waiting.** Check the starred embedding connection's detail first: the queue silently stops if embeddings are disabled, if a local model failed to auto-load (not cached, or the server restarted and needs a reload), or if an external API connection stopped validating. Reload/re-download the model, then press **Start** on the queue's status card. See [Troubleshooting a stuck or empty queue](./embeddings-and-rag.md#troubleshooting-a-stuck-or-empty-queue).
 - **A specific session's RAG notice never clears.** Use that notice's **Prioritize in queue** button to jump its content to the front of the embeddings queue.
 - **RAG doesn't seem to retrieve anything in a short session.** Sessions with 10 or fewer messages are expected to show no RAG activity — everything already fits in the guaranteed context window. See [Why some short sessions never show RAG activity](./embeddings-and-rag.md#why-some-short-sessions-never-show-rag-activity).
 
@@ -34,9 +34,9 @@ This page collects the most common ways Serene Pub gets stuck, organized by area
 
 ## Accounts & Login
 
-- **"Enable User Accounts" looks locked/greyed out.** This is intentional — enabling User Accounts is a one-way, permanent switch with no UI path back to single-user mode.
-- **A standard user or second admin forgot their passphrase.** An admin resets it from the Users panel — **Edit** the account and fill in **New Passphrase** / **Confirm Passphrase**; leaving those fields blank leaves the existing passphrase untouched.
-- **Locked out of the `admin` account after enabling User Accounts.** There's currently no self-service or API recovery path for this — no reset endpoint, no CLI script. The only way back in is direct database access to update the stored passphrase hash. Avoid this situation by keeping your admin passphrase somewhere safe and creating a second admin account once accounts are enabled. See [If the admin account itself is locked out](./users-and-accounts.md#if-the-admin-account-itself-is-locked-out).
+- **The "User accounts" switch looks locked/greyed out.** This is intentional — enabling User Accounts is a one-way, permanent switch with no UI path back to single-user mode.
+- **A standard user or second admin forgot their passphrase.** An admin resets it from the Users view — **Edit** the account and fill in **New passphrase** / **Confirm passphrase**; leaving those fields blank leaves the existing passphrase untouched.
+- **Locked out of the admin account after enabling User Accounts.** If another admin exists, they can reset it from the Users view. If not, set `SERENE_PUB_RECOVERY_KEY` (any new string you choose) and `SERENE_PUB_RECOVERY_PASSWORD` in the environment and restart: the first admin's passphrase is reset, its two-factor is cleared and its logins are revoked. See [Account recovery](./environment-variables.md#account-recovery) and [If the admin account itself is locked out](./users-and-accounts.md#if-the-admin-account-itself-is-locked-out).
 
 ## Database
 
@@ -66,7 +66,7 @@ Inside `<data directory>/data` you'll find:
 - **`meta.json`** — a small sibling file holding the schema version and `cryptoSecretKey`. That key encrypts stored API passphrases and signs login sessions, and it is **not** inside `serene-pub.db/` or inside any backup archive — a copy travels _beside_ each one instead, see below. Keep it. Losing it means re-entering every saved API key and everyone logging in again — but it also means a restored or brand-new database still works with your existing credentials, which is why it survives everything below.
 - **`backups/`** — `.tgz` archives of the whole `serene-pub.db/` folder, named `serene-pub-<version>-<timestamp>.tgz`. One is taken **once a day** and one **before a version upgrade runs migrations**; you can take one any time from **Settings → Data** or with `npm run db:recover -- --backup`. None are ever deleted automatically. A fresh install often has none at all.
 
-    Two settings in **Admin → Settings → Backups** control this: _Back up daily_ (on by default), and _Include user files_ (off by default). Neither ever deletes anything — turning daily backups off just stops new ones being taken.
+    Two settings on **Admin › Data and backups**, in the **Backup policy** card, control this: _Back up daily_ (on by default), and _Include user files_ (off by default). Neither ever deletes anything — turning daily backups off just stops new ones being taken.
 
 - **`backups/<archive>.tgz.meta.json`** — a copy of `meta.json` as it was when that backup was taken, kept _beside_ the archive rather than inside it so the archive stays exactly what `tar -xzf` and Serene Pub both expect. It is what lets a restored database's stored API passphrases still decrypt. Archives taken before this existed simply don't have one, and restore then keeps your current `meta.json`.
 - **`backups/<archive>.tgz.users.tgz`** — your user files (media and avatars: everything under `<data directory>/data/users/`), archived beside the dump when _Include user files_ is on. Present only for backups taken with that setting on, so most installs have none. Beside rather than inside for the same reason as `meta.json`, and separate because it is by far the larger of the two: a dump is measured in megabytes, a media library has no ceiling.
@@ -152,7 +152,7 @@ Do this with Serene Pub **stopped**. Nothing here deletes anything.
 
 #### Advanced: repairing the directory with `pg_resetwal`
 
-Only worth trying if the data since your last backup matters. Verified once, on 2026-08-12, with data fully intact — but it can also make things worse, which is why it is done on a copy.
+Only worth trying if the data since your last backup matters. It has recovered data fully intact before, but it can also make things worse, which is why it is done on a copy.
 
 This needs PostgreSQL 16 client binaries that Serene Pub does not ship (`apt-get download postgresql-16` then `dpkg -x`; the `.deb` is the route because the npm embedded-postgres package lacks `pg_resetwal`).
 
@@ -171,7 +171,7 @@ Partial or table-level repair isn't covered: none of the tooling for it ships wi
 
 ## Android
 
-Several features (local embedding models, the KoboldCPP/Ollama Managers, SillyTavern import, and a handful of connection types/token counters) aren't available on Android due to constraints of running a full server inside a mobile app. See [Android App](./android.md#feature-limitations) for the complete list before assuming something is broken.
+Several features (local embedding models, KoboldCPP or Ollama run by Serene Pub, SillyTavern import, and a handful of connection types/token counters) aren't available on Android due to constraints of running a full server inside a mobile app. See [Android App](./android.md#feature-limitations) for the complete list before assuming something is broken.
 
 ## Docker & Self-Hosting
 

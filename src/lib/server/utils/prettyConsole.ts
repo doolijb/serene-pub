@@ -1,4 +1,5 @@
 import pc from "picocolors"
+import { recordLogLine } from "./logRing"
 
 /**
  * Monkey-patches console.log/warn/error so any message starting with the
@@ -65,7 +66,10 @@ function makeWrapper(
 	method: ConsoleMethod,
 	original: (...args: any[]) => void
 ) {
-	return (...args: any[]) => {
+	const wrapper = (...args: any[]) => {
+		// Warnings and errors also land in the log ring, for the admin
+		// support report — before any styling, so the ring holds plain text.
+		if (method !== "log") recordLogLine(method, args)
 		const first = args[0]
 		// Only strings can be safely tag-matched/tinted — an Error, object,
 		// or already-ANSI-colored string (e.g. Vite's own prefixed output)
@@ -87,13 +91,23 @@ function makeWrapper(
 			original(tintForLevel(method, first), ...args.slice(1))
 		}
 	}
+	;(wrapper as any)[WRAPPED] = true
+	return wrapper
 }
+
+/**
+ * Marks our own wrapper. A Vite SSR reload can load this module a second
+ * time with `installed` back at false; without the mark the console would be
+ * wrapped twice and every warning would reach the log ring twice.
+ */
+const WRAPPED = Symbol.for("serene-pub.prettyConsole")
 
 let installed = false
 
 export function installPrettyConsole() {
 	if (installed) return
 	installed = true
+	if ((console.warn as any)[WRAPPED]) return
 	console.log = makeWrapper("log", console.log.bind(console))
 	console.warn = makeWrapper("warn", console.warn.bind(console))
 	console.error = makeWrapper("error", console.error.bind(console))

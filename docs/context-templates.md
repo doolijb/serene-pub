@@ -4,19 +4,21 @@ Where a [Sampling Config](./connections.md#sampling-configs) controls _how_ a mo
 
 A template says which language it is written in, and Serene Pub renders two: **Handlebars**, which everything shipped is written in and which every example on this page uses, and **Liquid**, described in [its own section below](#writing-a-template-in-liquid). Neither is more supported than the other; Handlebars is simply what the defaults are written in, and nothing about adding Liquid changed them.
 
-**Context Templates are distinct from Prompt Configs.** A [Prompt Config](./prompt-configs.md) supplies the free-text _instructions_ — writing style, tone, rules — that get slotted into the template via the `{{{instructions}}}` variable below. The template is the structure itself.
+**Context Templates are distinct from prompts.** A step's [prompt](./pipelines.md#prompts) supplies the free-text _instructions_ — writing style, tone, rules — that get slotted into the template via the `{{{instructions}}}` variable below. The template is the structure itself.
 
-**They are also distinct from variable layouts.** A template says _where_ the character cards sit; a [variable layout](#variable-layouts-where-the-headings-and-fences-come-from) says _how each one is written out_ — JSON or prose, with or without a heading. That split is new in 0.6 and is described in full below.
+**They are also distinct from variable layouts.** A template says _where_ the character cards sit; a [variable layout](#variable-layouts-where-the-headings-and-fences-come-from) says _how each one is written out_ — JSON or prose, with or without a heading. That split is described in full below.
 
 ## Where they live
 
-A Context Template is chosen per pipeline, in the **Pipelines** panel, on the step that assembles the prompt. That is a change from 0.5, where a single Context Config was selected instance-wide and per user.
+A Context Template is chosen per pipeline, in the **Pipelines** view, on the step that assembles the prompt.
 
 That pick is stored on the pipeline's selected **configuration** — see [Pipeline Configurations](./pipelines.md), which covers how a configuration stores what you changed and how to see or reset it.
 
 Templates are **shared across pipelines, not owned by one**. A template is compatible with the _kind of step_ that renders it, so one written while configuring session replies is equally selectable for the narrator — the two run the same assemble step and see the same values. The picker groups by where a template came from (this pipeline's, then the ones Serene Pub ships, then everything else that fits) so a long list stays navigable, but nothing is ever hidden from you.
 
-A pipeline with no assembling step — the summarizers, the graph builder — has no Context Template setting at all, so their settings never fill up with templates written for session.
+Administrators also see every template in one place: **Admin › Context templates** (`/admin/context-templates`), a list beside the template it opens. Each row names the step the template belongs to and how many pipelines use it, with a **Built-in** badge on the ones Serene Pub ships. **Admin › Variable templates** and **Admin › Completion templates** work the same way.
+
+A pipeline with no assembling step — the summarizers, the graph builder — has no Context Template setting at all, so their settings never fill up with templates written for session replies.
 
 ## Editing and creating your own
 
@@ -26,17 +28,28 @@ A template is an advanced, all-or-nothing thing to edit. A template that does no
 
 Deleting refuses while any pipeline or session still selects the template. Because templates are shared, that may well be a pipeline you are not looking at — point that setting elsewhere first, then delete.
 
-## Upgrading from 0.5: legacy Context Configs
+### The editor
 
-0.5 stored these in a **Context Configs** table, selected from a Contexts sidebar of its own. That sidebar is now a tab inside **Legacy configs**, alongside the old Prompt Configs. 0.6 replaces that with the table described here, and carries your data across: whatever each scope had selected is copied into the new table and re-selected, so prompts come out the same on the first boot after upgrading.
+Opened from a pipeline step, the editor knows exactly what that step supplies: its own names, the context builder's values, the bands declared upstream (such as `secretEntry`), `annex` where the step reads it, and `state`, each with its type. It helps in both languages:
 
-The old rows are kept, read-only, so nothing you wrote is lost while you check the migration landed. Nothing in 0.6 renders from them, and they are removed in a later release.
+- **Completion.** Type `{{` (or `{{{`) for the names in scope, each with its type and description. After a `.` it offers the fields of what you have written so far. An annex owner with a dot in its name is inserted with the brackets it needs: `annex.[showcase.twenty-questions]` in Handlebars, `annex["showcase.twenty-questions"]` in Liquid. A map whose keys are the data's own, like `state.cast`, offers a placeholder to type over (`‹member›`), then the fields of one entry. Inside `{{#each}}` it offers the element's fields, `this`, `@index`, `@first` and `@last`. Helpers come with a short signature (`pad n width`). `{{#` offers the blocks, and choosing one writes its closing tag too. In Liquid, `{% ` offers the tags (and the end tag of the block you are in), `|` offers the filters, and a `{% for item in list %}` item completes to the element's fields. Exact prefix matches come first, then looser ones, then the step's values before bands, the annex, `state` and helpers. **Ctrl+Space** reopens the list.
+- **Hover.** Put the caret on a name to see its type, description and who supplies it (_from Build template context_), or, when it does not resolve, the name you probably meant.
+- **Lint.** A name or field nothing supplies is underlined where you wrote it: a red wave for an error, an ember one for a warning. The list below the field says what is wrong and on which line. Where there is an obvious near miss it offers a **Use "message"** button, and **Ctrl+.** applies the same fix at the caret. These are the same checks as selecting and saving (see [Templates are checked when you save them](#templates-are-checked-when-you-save-them)), so the editor, the picker and the save never disagree.
+- **Variables available here.** Beside the field (below it when the view is narrow) is the step's scope as a tree, with types, descriptions and who supplies each value. Choosing a row inserts its path at the caret: bare inside a tag, wrapped as `{{{path}}}` (Liquid `{{ path }}`) outside one, and a list as its loop. The tree works from the keyboard: arrows move, Right opens, Left closes, Enter inserts.
+
+The **library** (`/pipelines/library`) has no step in view, so there the editor checks against the step type's own names and says so: _Checked against every step that uses it when you pick it._ A name it cannot see is a warning, not an error, because the step that picks the template may supply it.
+
+## Upgrading from 0.5
+
+0.5 stored its prompt templates in a table of their own, selected from a Contexts sidebar. 0.6 replaces that sidebar and table with the Context Templates described here, and carries your data across: whatever each scope had selected is copied into the new table and re-selected, so prompts come out the same on the first boot after upgrading.
+
+The old rows are kept in the database so nothing you wrote is lost, but they are no longer shown anywhere. Nothing in 0.6 renders from them, and they are removed in a later release.
 
 One thing the migration handles for you: a template you wrote yourself still contains its own headings and fences, because nothing rewrites your work. Those installs are pinned to the **bare** variable layouts so the heading is written once rather than twice — see below.
 
 ## The default template and available variables
 
-The built-in **Default** Context Config's template (shown here verbatim) illustrates every variable and helper Serene Pub currently interpolates:
+The built-in **Default** Context Template (shown here verbatim) illustrates every variable and helper Serene Pub currently interpolates:
 
 ````handlebars
 {{#systemBlock}}
@@ -132,17 +145,20 @@ Example dialogue:
 
 Available variables:
 
-- **`currentDate`**, **`instructions`** (from the active Session Prompt), **`characters`** and **`personas`** (each rendered as JSON), **`scenario`**, **`worldLore`**, **`history`**, and **`speakerRelationships`** — all optional (wrap them in `{{#if ...}}` since they may be empty). Each of these arrives already formatted by its **variable layout** — see below.
-- **`relationshipsPerspectives`** (how the speaking character regards the others) and **`relationshipsKnown`** (how they are regarded in return, plus any figures the world knows of) each arrive already wrapped in their heading and fence by their variable layout, like every other block above. They were one `speakerRelationships` block before 0.6; a cloned template still using that name will parse, but nothing supplies it any more, so it renders empty. It is built fresh for whoever is speaking: their own outgoing relationships, relationships other cast members in the session have pointed at them, and any bindings marked **legendary** (the one layer that also carries a binding's Summary). It is assembled independently of the infill engines below and is included on every generation that has a lorebook with a bound speaker.
-- **`narrativeGraph`** is a legacy variable that still parses but is **currently switched off at the source** — it always renders empty, so a `{{#if narrativeGraph}}` block never outputs anything. `speakerRelationships` replaced it. If you cloned the default template before that change, your relationships block is silently empty and should be swapped for `speakerRelationships`.
+- **`currentDate`**, **`instructions`** (the step's prompt, see [Pipelines → Prompts](./pipelines.md#prompts)), **`characters`** and **`personas`** (each rendered as JSON), **`scenario`**, **`worldLore`**, **`history`**, and the two relationship blocks, **`relationshipsPerspectives`** and **`relationshipsKnown`** — all optional (wrap them in `{{#if ...}}` since they may be empty). Each of these arrives already formatted by its **variable layout** — see below.
+- **`characters`** holds a card for every character in the cast, benched ones included, trimmed to the session's **Character detail** setting (Chat and Adventure; see [Sessions → Character detail](./sessions.md#character-detail)): at **Name and description** a card other than the speaker's has no `personality`, and at **Only whoever is speaking** only the speaker's card is there. **`characterNames`** (`{{characterNames}}`, "A, B, and C") names only the enabled characters, and is empty at **Only whoever is speaking**. Whether a character is benched is not a template variable — it is the `enabled` property on the cast a pipeline reads (see [Pipelines → The cast a pipeline reads](./pipelines.md#the-cast-a-pipeline-reads)).
+- **`relationshipsPerspectives`** (how the speaking character regards the others) and **`relationshipsKnown`** (how they are regarded in return, plus any figures the world knows of) each arrive already wrapped in their heading and fence by their variable layout, like every other block above. Together they are built fresh for whoever is speaking: their own outgoing relationships, relationships other cast members in the session have pointed at them, and any bindings marked **legendary** (the one layer that also carries a binding's Summary). They are assembled independently of the retrieval described below and are included on every generation that has a lorebook with a bound speaker.
+- **`narrativeGraph`** and **`speakerRelationships`** are retired names, and nothing supplies either any more. A template that still uses one saves with a warning and renders nothing in that place, and choosing it for a step is refused (see [Templates are checked when you save them](#templates-are-checked-when-you-save-them)). If you cloned the default template before the relationships block was split, replace that block with the `relationshipsPerspectives` and `relationshipsKnown` pair the default template uses now.
+- **`docsExcerpts`** — the Guide's documentation excerpts, found by the reply's **Docs search** step: a JSON object keyed by page and section, each value starting with `Path: /docs/…`. Only a pipeline with that step supplies it; its one layout is **JSON**, with no heading, because the Guide's own template writes the framing (and an `{{else}}` for a question nothing in the docs matched). See [Sessions → Guide](./sessions.md#guide).
+- **`recalledLines`** — older lines of the conversation that **Entity search** found again because they name what the scene is naming now, oldest first. Each line is an object with `speaker`, `turn` (its position in its channel's conversation, counting from 1) and `text`, and the shipped **Lines** layout renders one per line: `Earlier (turn 12) — Mira: I hid the brass key under the chapel floor.` It is never placed for you. A template shows recalled lines only where it writes `{{{recalledLines}}}`, and only when the pipeline ranks Entity search's **messages** output. No shipped pipeline or template does either yet. If a pipeline ranks recalled lines and its template does not place them, the run's receipt says `band 'recalledLines' was ranked and included but the template does not render it`. Those lines used budget and are not in the prompt. Entity search's **Earlier messages found by name** sets how many lines it may return (0, the default, turns it off), and **Share — recalled lines** sets how much of the context window they may take.
 - **`sessionMessages`** — an array iterated with `{{#each ... as |sessionMessage msgIndex|}}` (the `msgIndex` block param is what lets the post-history block below find its target position), each entry exposing `role`, `name`, and `message`.
 - **`postHistory`** — see below.
 
-Triple-brace `{{{...}}}` is used throughout to output raw text/JSON without HTML-escaping. Since 0.6 this matters more than it used to: a variable's value now carries its own heading and fence, so reading one through a double brace (`{{scenario}}`) HTML-escapes the fence itself and puts `&quot;&quot;&quot;` in your prompt. Use `{{{...}}}` for every variable in the list above.
+Triple-brace `{{{...}}}` is used throughout to output raw text/JSON without HTML-escaping. This matters: a variable's value carries its own heading and fence, so reading one through a double brace (`{{scenario}}`) HTML-escapes the fence itself and puts `&quot;&quot;&quot;` in your prompt. Use `{{{...}}}` for every variable in the list above.
 
 ### Variable layouts: where the headings and fences come from
 
-Notice that the template above contains no `Assistant Characters (AI-controlled):` heading and no ` ```json ` fence — just `{{{characters}}}`. Through 0.5 those were typed into the template. Since 0.6 they live in a **variable layout**: a small, reusable template that renders one variable, chosen per pipeline in the **Pipelines** sidebar.
+Notice that the template above contains no `Assistant Characters (AI-controlled):` heading and no ` ```json ` fence — just `{{{characters}}}`. They live in a **variable layout**: a small, reusable template that renders one variable, chosen per pipeline in the **Pipelines** view.
 
 The split is by responsibility. The context template owns _structure_ — message blocks, placement, `{{#if}}` and `{{#each}}` — and has no opinion about how the data inside is presented. A layout owns _presentation_ — the heading, the fence, the shape of the JSON, how each property is written out.
 
@@ -153,29 +169,31 @@ Two rows ship for each wrapped variable:
 - **Titled JSON block** / **Titled block** / **Sentence** — the heading and fence, exactly as 0.5 wrote them. This is what a new install selects, so upgrading changes nothing about your prompts.
 - **JSON** / **As written** — the value alone, with no heading.
 
-The shipped rows are immutable; customizing means duplicating one first, the same as with the Default Context Config itself.
+The shipped rows are immutable; customizing means duplicating one first, the same as with the Default Context Template itself.
 
 **If you wrote your own context template**, it still contains your own headings and fences — nothing rewrites a template you authored. Upgrading to 0.6 pins that template's pipelines to the bare **JSON** / **As written** layouts, so the wrapper keeps coming from where you put it and is not written twice. If you later strip the headings out of your template, switch those settings to the titled layouts to get them back.
 
 A variable with nothing in it renders nothing at all, heading included — so a `{{#if worldLore}}` guard around it behaves exactly as it always has.
 
+**Every variable that holds an object gets a layout.** An object is a value with named fields or keys — a character card, a lore record, Twenty Questions' `secretEntry` — or a list of them. When nothing ships a layout for one, Serene Pub adds a **JSON** layout for it by itself. For a plugin's variable that happens when the plugin is installed. The layout writes the value as compact JSON, which is exactly what the prompt got before, so selecting it changes nothing. It stays in the picker as long as the plugin is installed, and it is marked withdrawn when the plugin is removed. Like the shipped layouts it is immutable: duplicate it to write your own, and your copy is never touched when the plugin is updated or the instance restarts. A plugin that ships its own layout for a variable gets no JSON row for it. Plain text, numbers, true/false values and lists of text get no layout of their own.
+
 ### The postHistory object
 
 Rather than a single flat "post-history instructions" variable rendered once after the whole session history, the post-history reminder is a small object, `postHistory`, accessed with `{{#with ../postHistory}}` from inside the `{{#each sessionMessages}}` loop (the `../` reaches out of the each-block's own scope to the top-level `postHistory`):
 
-- **`targetIndex`** — which message index the reminder should render at. Computed from the active Session Prompt's **Post-History Depth** setting: depth 0 targets the last entry in `sessionMessages` (the seed/prefill placeholder the model continues writing from), depth _N_ targets _N_ real messages earlier than that. A depth larger than the available history clamps to the oldest position rather than vanishing.
+- **`targetIndex`** — which message index the reminder should render at. Computed from the assembly step's **Post-history depth** setting: depth 0 targets the last entry in `sessionMessages` (the seed/prefill placeholder the model continues writing from), depth _N_ targets _N_ real messages earlier than that. A depth larger than the available history clamps to the oldest position rather than vanishing.
 - **`hasContent`** — `true` when at least one of `instructions`, `charInstructions`, or `exampleDialogue` below is populated and the trigger admits the block; lets the template gate the whole reminder block in one check rather than three.
-- **`instructions`** — the active Session Prompt's own **Post-History Instructions** text (see [Prompt Configs](./prompt-configs.md)). The config's **Post-History Token Trigger** gates the whole block: below the threshold every part below is left empty, so a short session gets no reminder at all. The reminder only kicks in once the conversation is long enough that the system prompt feels distant.
-- **`charInstructions`** — the current character's own **Post-History Instructions** field (see [Characters](./characters.md)), a character-authored reinforcement note separate from the Session Prompt's `instructions` above. It rides in the same block and is gated by the same trigger.
-- **`exampleDialogue`** — the current character's **Example Dialogues** field. Unlike earlier versions of this template, example dialogue is rendered here (near the generation point) rather than up in the top system block — a model many turns deep into a conversation benefits more from seeing example dialogue right before it writes than from seeing it once, far above the recent history.
+- **`instructions`** — the step's prompt's own **Post-history instructions** text (see [Pipelines → Prompts](./pipelines.md#prompts)). The assembly step's **Post-history token trigger** gates the whole block: below the threshold every part below is left empty, so a short session gets no reminder at all. The reminder only kicks in once the conversation is long enough that the system prompt feels distant.
+- **`charInstructions`** — the current character's own **Post-History Instructions** field (see [Characters](./characters.md)), a character-authored reinforcement note separate from the prompt's `instructions` above. It rides in the same block and is gated by the same trigger.
+- **`exampleDialogue`** — the current character's **Example Dialogues** field. Example dialogue is rendered here (near the generation point) rather than up in the top system block — a model many turns deep into a conversation benefits more from seeing example dialogue right before it writes than from seeing it once, far above the recent history.
 
 The template checks `(and (eq msgIndex targetIndex) hasContent)` inside the loop so the reminder block renders exactly once, at exactly the right position, only when there's actually something to say.
 
-**Which stage the trigger applies to.** The depth and the trigger are settings on the step that _assembles_ a prompt, so every assembling stage in a pipeline reads them. A plain chat has one of those; a genre that plans a turn, narrates it, gives each speaking character a voice and then records what changed has four, and each one honours the same two numbers unless that step's own value is set in the pipeline panel (see [Pipelines](./pipelines.md)), which wins.
+**Which step the trigger applies to.** The depth and the trigger are settings on the step that _assembles_ a prompt, so every assembling step in a pipeline reads them. A Chat reply has one of those; a genre that plans a turn, narrates it, gives each speaking character a voice and then records what changed has four, and each one honours the same two numbers unless that step's own value is set in the Pipelines view (see [Pipelines](./pipelines.md)), which wins.
 
 **The block is one unit.** The trigger and the depth govern the reminder, the character reminder and the example dialogue together. Below the trigger none of them is rendered; above it all three render at the same position. A card author's note is not exempt: the trigger is the reader's ceiling on reminders of any origin.
 
-**Reading the decision back.** A suppressed reminder leaves nothing behind in the prompt, so the run inspector's Prompt tab states it outright for the stage that decided: _Post-history reminder: suppressed, 278 tokens is below the 100000 trigger_, or _included at message 12_, plus _Includes the character reminder_ or _Character reminder suppressed with it_ when the card carries one. The context-building stage one step earlier carries the reminder ungated and its Output tab labels it _carried, gated at assemble_, so the copy shown there is never mistaken for the verdict.
+**Reading the decision back.** A suppressed reminder leaves nothing behind in the prompt, so the run inspector's Prompt tab states it outright for the step that decided: _Post-history reminder: suppressed, 278 tokens is below the 100000 trigger_, or _included at message 12_, plus _Includes the character reminder_ or _Character reminder suppressed with it_ when the card carries one. The context-building step one step earlier carries the reminder ungated and its Output tab labels it _carried, gated at assemble_, so the copy shown there is never mistaken for the verdict.
 
 ### The injectionsByIndex map
 
@@ -185,34 +203,59 @@ This is deliberate: an injection is _data the template renders_, never a row spl
 
 **A `{{/each}}` boundary matters here.** `sessionMessages`' last entry is always the seed/prefill placeholder (`"Name: "`, the turn the model continues writing from) — it must stay the literal final block in the rendered output for that continuation to work. Rendering a post-history reminder _after_ `{{/each}}` instead of inside the loop (gated on the target message) would push a system block after the seed, breaking it into a standalone, non-continued turn.
 
-## Context Infill Engines
+### Stats: `state`
 
-Deciding _which_ lorebook entries and _which_ older session messages actually make it into `worldLore`, `history`, and each character's lore (see below) — out of everything that could — is the job of one of two Context Infill Engines. Both fill the same template variables in the same shapes; they differ only in _how_ they pick what qualifies. (`speakerRelationships` is not one of their outputs — it's built separately from the speaker's own graph bindings and doesn't change with the engine in use.)
+When a pipeline feeds the context step the **Session state** step's output, the template can read the session's stats (see [Stats and states](./stats-and-states.md#in-a-prompt)):
 
-### Which engine runs
+- `state.world.<stat>`: `{{state.world.weather}}`
+- `state.cast.<member>.<stat>`, plus the member's `id`, `key` and `name`: `{{state.cast.verity.hp}}` (the pipeline's copy of the state also carries `enabled`; a template's does not)
+- `state.locations.<place>.<stat>`, the same for a place: `{{state.locations.the_crypt.inventory}}`
 
-The RAG Infill Engine runs when all of the following are true: embeddings/vectorization is enabled system-wide, the embedding model is loaded and ready, and the current session hasn't opted out via its own "Ignore for this session" RAG toggle (see [Understanding RAG Notices](./embeddings-and-rag.md#understanding-rag-notices)). If any of those don't hold — or if the RAG engine fails for any reason — the Keyword Infill Engine runs instead, with nothing surfaced beyond a server-side warning log. In practice: turn Embeddings on and Serene Pub retrieves semantically; leave it off (or a session opts out) and it retrieves by keyword instead — one or the other is always active, never neither.
+A stat is under its short name (`hp`) and under its full one (`adventure_hp`), so two extensions that both declare `hp` stay reachable. Members and places are keyed by their slug.
 
-### Keyword Infill Engine
+Only the stats the session tracks are there, and nothing else. The id indexes, the list of stats, the roles and the state version are for pipelines and conditions, not templates. Their shapes come from the genre's stats, so the editor checks `state.cast.verity.hpp` against them. When a genre lets sessions add their own stats, the names can't be listed in advance and aren't checked. Nothing in the shipped pipelines wires `state` into a context step, so `{{#if state}}` is false there.
 
-Used whenever vectorization is off (see [Lorebooks: Two retrieval modes](./lorebooks.md#two-retrieval-modes-change-what-fields-you-see)). This isn't a plain "most recent N entries" fallback — it's a real relevance scorer that runs without needing any embeddings:
+### The annex: `annex`
 
-- **Keyword matching** — each entry's comma-separated **Keywords** field is checked against the last 10 messages (case-insensitive substring matching by default, or exact-case / regex if the entry's **Case Sensitive** / **Use Regex** switches are on).
-- Combined with several other cheap signals: whether the entry's own name is mentioned literally in that window, whether characters/personas already in the scene co-occur with it, a TF-IDF term-frequency score across the whole session, and how recently a matching keyword last appeared.
-- The entry's **Priority** level (see [Lorebooks](./lorebooks.md)) adds a flat bonus on top of that combined score — a high-priority entry with a weak keyword match can still outscore a low-priority entry with a stronger one.
-- Every candidate — world lore, character lore, and history entries, plus older session messages — is scored this way, merged into one ranked pool, and filled greedily until either a per-content-type count cap (up to 20 world lore entries, 15 character lore entries, 10 history entries, and 50 messages) or the available token budget is reached, whichever comes first.
+A plugin or genre keeps what it remembers between turns in the session's **annex**, and it declares every key it keeps (see [Sessions](./sessions.md)). A template can read those declared keys as `annex.<owner>.<key>`. Every declared key is included, whoever the key's own audience is: a declaration refuses secrets when a key is written, so nothing dangerous is ever stored there.
 
-### RAG Infill Engine
+An owner's id has dots in it, so name it with Handlebars' segment literal, in square brackets:
 
-Used whenever vectorization is enabled and ready. Selects by embedding similarity against the current conversation instead of keyword matching — the full mechanics (two-pass queries, Reciprocal Rank Fusion, Maximal Marginal Relevance re-ranking, per-content-type token budgets) are documented in [Embeddings & RAG](./embeddings-and-rag.md#how-serene-pub-ranks-retrieved-content).
+```handlebars
+{{#if annex.[showcase.twenty-questions].secret}}
+You are thinking of {{annex.[showcase.twenty-questions].secret.secretEntryName}}.
+{{/if}}
+```
 
-### What both engines guarantee, regardless of which one runs
+In Liquid, use a bracketed string: `{{ annex["showcase.twenty-questions"].secret.secretEntryName }}`.
 
-- The most recent 10 messages in a session are always included, never subject to either engine's selection.
-- A **Pinned** lorebook entry is always included, bypassing both keyword matching and semantic scoring entirely.
-- the two relationship blocks are identical either way — it's built outside both engines — and the `postHistory` object (above) is computed identically regardless of which engine selected the surrounding content.
+What arrives:
+
+- **Owners in scope only.** That means core and every plugin that is switched on. A switched-off plugin's keys stay stored but reach no template.
+- **Declared keys only.** A key must be declared for this session's genre. A key no declaration covers, such as data an older version wrote, never arrives.
+- **Only where it is wired.** The step's `annex` input must be fed by the **Session annex** step reading the template view (see [Pipelines](./pipelines.md)). No shipped pipeline wires it, and Twenty Questions still gets its secret into the prompt as the `secretEntry` band. At a step with nothing wired, `annex` is not in the template's scope at all, so a template that names it is refused when you select it, instead of quietly rendering nothing.
+
+## How entries and older messages are chosen
+
+Deciding _which_ lorebook entries and _which_ older session messages actually make it into `worldLore`, `history`, and each character's lore (see below) — out of everything that could — is the job of retrieval. It fills the same template variables in the same shapes however the content was found. (The relationship blocks are built separately, from the speaker's own graph bindings.)
+
+### Mechanisms add up
+
+Retrieval runs several **mechanisms** side by side, and each contributes **signals** to one ranked pool rather than one mechanism replacing another:
+
+- **Keyword** — each entry's **Keywords** (one keyword per chip) are checked against recent messages (case-insensitive substring matching by default, or exact-case / regex if the entry's **Case Sensitive** / **Use Regex** switches are on), together with other cheap signals: whether the entry's own name is mentioned as a whole word, whether characters and personas already in the scene co-occur with it, a term-frequency score across the session, and how recently a matching keyword last appeared.
+- **Semantic** — when embeddings are on and the embedding model is ready, entries and messages are also scored by embedding similarity against the conversation. The full mechanics are in [Embeddings & RAG](./embeddings-and-rag.md#how-serene-pub-ranks-retrieved-content). With embeddings off, or when a session opts out with its own "Ignore for this session" toggle (see [Understanding RAG Notices](./embeddings-and-rag.md#understanding-rag-notices)), this mechanism simply contributes nothing and the others still run.
+- **Entity** and **structural** signals — names recognised in the conversation, and how entries relate to each other and to the cast — add to the same scores where they apply.
+
+The entry's **Priority** (see [Lorebooks](./lorebooks.md)) adds a bonus on top of the combined score. Every candidate is then filled into its **band** (world lore, character lore, history, messages, and recalled lines where a pipeline ranks them) until the band's share of the token budget or its cap is reached.
+
+### What is always true
+
+- The most recent messages in a session are always included, never subject to selection.
+- A **Pinned** lorebook entry is always included, bypassing scoring entirely.
+- The two relationship blocks and the `postHistory` object (above) are computed the same way whatever was selected around them.
 - Within `{{{worldLore}}}` and `{{{history}}}`, entries are ordered by relevance (highest first), not by an entry's position or date in the lorebook — which entry ends up first can change from one generation to the next as the conversation moves. **Character Lore has no top-level template variable of its own** — qualifying entries are attached directly onto their bound character's own object inside `{{{characters}}}`, under an `"extra lore"` key, rather than appearing as a separate `{{characterLore}}` variable.
-- Under Keyword mode specifically, each content type has a hard count cap in addition to the token budget (see above); RAG mode uses its own per-type token budgets instead of a fixed entry count. Either way, once the model's context window is the tighter constraint, content simply stops being added for that generation — see [Sampling Configs](./connections.md#sampling-configs) for how Context Tokens sets that limit.
+- Once the model's context window is the tighter constraint, content simply stops being added for that generation — see [Sampling Configs](./connections.md#sampling-configs) for how Context Tokens sets that limit.
 
 ## Why character, persona, and lore data is JSON, not prose
 
@@ -222,7 +265,7 @@ The reasoning behind serializing the factual side as JSON specifically:
 
 - **Explicit key boundaries reduce attribute bleed.** In a group session with several characters, prose descriptions concatenated back-to-back are genuinely ambiguous for a model to attribute correctly — a trait mentioned near the end of one character's paragraph can get picked up as belonging to the next one. A JSON array of objects with explicit `name` keys removes that ambiguity structurally, independent of how any individual field is written.
 - **It's a base-model competency, not a roleplay one.** The instinct is that RP-oriented models — fine-tuned mostly on the prose/PList-style character cards common across other popular roleplay applications — would parse JSON _worse_ than the format they were tuned on. In practice, RP fine-tuning mostly reshapes _output_ voice and pacing, not _input_ parsing; general structured-data comprehension (reinforced heavily in most base/instruct training via function-calling and tool-use data) tends to survive underneath a lighter RP fine-tune layer largely intact.
-- **It keeps the retrieval paths consistent.** Both Context Infill Engines (keyword matching and RAG — see [Embeddings & RAG](./embeddings-and-rag.md)) serialize these same fields to JSON before injection, so switching retrieval modes doesn't also change the shape of what the model sees.
+- **It keeps retrieval consistent.** However an entry was found (by keyword, by meaning — see [Embeddings & RAG](./embeddings-and-rag.md) — or both), the same fields are serialized to JSON before injection, so turning embeddings on or off doesn't also change the shape of what the model sees.
 
 ## Writing a template in Liquid
 
@@ -236,7 +279,7 @@ The engine is chosen when a template is **created**, and it is read-only afterwa
 
 A template also has to land somewhere a step will look. Templates are grouped by _(what they render for, which language)_, so a Liquid template written for the assemble step appears under that step's Liquid heading, and is offered by a step that renders Liquid.
 
-**Where you can pick one.** A step declares which languages it renders, and the story string — the assemble step, the one this whole page is about — renders **both**. So a Liquid template is selectable anywhere that template is chosen: in a pipeline's own settings panel, where the picker lists Handlebars and Liquid templates together with each row's language in its subtitle, and in **Pipelines → Library**, where each language is its own heading. In the settings panel the `+` button splits into one per language, so "new Liquid template" is a single click; the Library's **New** button takes the language from the heading you create under. New templates default to Handlebars — the language everything shipped is written in — so nothing changes until you ask for Liquid by name. A step that renders only one language keeps a single `+` and a single heading.
+**Where you can pick one.** A step declares which languages it renders, and the story string — the assemble step, the one this whole page is about — renders **both**. So a Liquid template is selectable anywhere that template is chosen: in a pipeline's own settings, where the picker lists Handlebars and Liquid templates together with each row's language in its subtitle, and in **Pipelines → Library**, where each language is its own heading. In those settings the `+` button splits into one per language, so "new Liquid template" is a single click; the Library's **New** button takes the language from the heading you create under. New templates default to Handlebars — the language everything shipped is written in — so nothing changes until you ask for Liquid by name. A step that renders only one language keeps a single `+` and a single heading.
 
 ### The syntax, side by side
 
@@ -297,10 +340,18 @@ Both languages get the same two checks, and they are deliberately different in k
 
 **A template that does not parse is refused, and nothing is written.** The message is the engine's own, with the line it failed on. A malformed template stored is a pipeline that fails at generation time — far from the edit that caused it, with an error nobody reading a session can act on.
 
-**A template that references a name nothing supplies is saved, with a warning.** Writing `{{{speakerRelationship}}}` where the contract says `speakerRelationships` parses perfectly and renders an empty string — a whole block of world lore quietly missing from every prompt. The warning names the value and the line, and the editor shows it as you type as well as when you save.
+**A template that references a name nothing supplies is saved, with a warning.** Writing `{{{worldLoer}}}` where the contract says `worldLore` parses perfectly and renders an empty string — a whole block of world lore quietly missing from every prompt. The warning names the value and the line, and the editor shows it as you type as well as when you save. Saving only warns because a template is shared: it is checked against every pipeline step that could use it, and each warning names the pipeline (_In 'core:spec/respond' at 'prompt': …_). A template may fit one pipeline and not another, so that alone is no reason to refuse the save.
 
-The warnings are deliberately conservative. A name is only reported when it must come from the context: fields of a loop item, loop bindings, `{% assign %}`d names, `@key`/`forloop.last` and every helper or filter name are excluded. The cost is that a typo _inside_ a loop body goes unreported; the alternative is a panel with `each` and `upcase` in it, which teaches people to stop reading it.
+**Selecting it where it does not fit is refused.** When you choose a template for a step, it is checked against exactly what that step supplies. That means that step's context, its declared bands such as `secretEntry`, and its prompts. A template that uses a name nothing there supplies is refused, and the selection is not stored:
+
+> 'prompt' can't render 'Riddle layout': it uses `secretEntri`, which nothing supplies here. Did you mean `secretEntry`? Available: …
+
+Warnings never refuse. Nor does a name at a step where something upstream supplies values without saying what they are: the name may still arrive, so you get a warning instead. A pipeline's own templates are held to the same rule when it is published: a preset's template that does not fit its step is refused, and so is a plugin's shipped template when the plugin is packaged.
+
+**Templates you already chose are never refused afterwards.** At startup, Serene Pub checks every stored template choice against the step it is chosen for. It changes nothing. A choice that would be refused today is listed in the server log with the same sentence, and the pipeline keeps running exactly as before.
+
+The warnings are deliberately conservative. A name is only reported when it must come from the context: fields of a loop item, loop bindings, `{% assign %}`d names, `@key`/`forloop.last` and every helper or filter core registers are excluded. Where the value's shape is declared, a misspelled field is caught too — inside a loop, inside a condition like `(and a b)`, and in either language — and the warning suggests the name you probably meant. Where the shape is not declared (a value typed "any", a map keyed by whatever the data chose, a computed `lookup`), nothing is guessed. A Handlebars helper nobody registered is reported as well: it would fail when the prompt is built.
 
 ## Block helpers: systemBlock, assistantBlock, userBlock
 
-Three custom block helpers structure the output by speaker role: `{{#systemBlock}}...{{/systemBlock}}` wraps system-level content, `{{#assistantBlock}}...{{/assistantBlock}}` wraps a line spoken by an AI-controlled character, and `{{#userBlock}}...{{/userBlock}}` wraps a line spoken by the player's persona. The connection adapter is responsible for turning these blocks into whatever shape the target API needs — separate session messages with `system`/`assistant`/`user` roles for session-mode connections, or concatenated into one flat prompt (using the connection's selected [Prompt Format](./connections.md#prompt-formats-and-token-counters)) for text-completion connections. An `{{eq role "assistant"}}` helper is used inside the `{{#each sessionMessages}}` loop to branch on each message's role.
+Three custom block helpers structure the output by speaker role: `{{#systemBlock}}...{{/systemBlock}}` wraps system-level content, `{{#assistantBlock}}...{{/assistantBlock}}` wraps a line spoken by an AI-controlled character, and `{{#userBlock}}...{{/userBlock}}` wraps a line spoken by the player's persona. The connection adapter is responsible for turning these blocks into whatever shape the target API needs — separate chat messages with `system`/`assistant`/`user` roles for chat-mode connections, or concatenated into one flat prompt (using the connection's selected [Prompt Format](./connections.md#prompt-formats-and-token-counters)) for text-completion connections. An `{{eq role "assistant"}}` helper is used inside the `{{#each sessionMessages}}` loop to branch on each message's role.

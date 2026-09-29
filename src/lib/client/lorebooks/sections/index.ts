@@ -3,9 +3,11 @@ import { toaster } from "$lib/client/utils/toaster"
 import {
 	CHARACTER_LORE_TYPE_ID,
 	HISTORY_TYPE_ID,
+	ITEM_TYPE_ID,
 	WORLD_LORE_TYPE_ID
 } from "$lib/shared/entries/types"
-import { LORE_SCOPES, type LoreScope } from "../loreRoute"
+import { LORE_SCOPES, type LoreScope } from "$lib/shared/lorebooks/loreRoute"
+import { keyList } from "$lib/shared/entries/keyList"
 import { SCENE_KIND, type PoolItem } from "../poolFilter"
 import CharacterLoreEditor from "./CharacterLoreEditor.svelte"
 import CharacterLoreRow from "./CharacterLoreRow.svelte"
@@ -14,6 +16,9 @@ import HistoryEditor from "./HistoryEditor.svelte"
 import HistoryRow from "./HistoryRow.svelte"
 import HistoryListActions from "./HistoryListActions.svelte"
 import HistoryRowMenu from "./HistoryRowMenu.svelte"
+import ItemEditor from "./ItemEditor.svelte"
+import ItemRow from "./ItemRow.svelte"
+import { supplyProblem } from "./itemSupply"
 import PoolRow from "./PoolRow.svelte"
 import SceneEditor from "./SceneEditor.svelte"
 import SceneRow from "./SceneRow.svelte"
@@ -74,7 +79,7 @@ function entryPoolItem(source: PoolSource, kind: string): PoolItem {
 		kind,
 		name: source.name ?? "",
 		content: source.content ?? "",
-		keys: source.keys ?? "",
+		keys: keyList(source.keys),
 		pinned: !!source.constant,
 		off: source.enabled === false,
 		archived: source.archived === true,
@@ -83,6 +88,7 @@ function entryPoolItem(source: PoolSource, kind: string): PoolItem {
 			source.anchorEntryId != null
 				? `entry#${source.anchorEntryId}`
 				: null,
+		branchId: (source as { branchId?: number | null }).branchId ?? null,
 		order: source.position ?? 0,
 		position: source.position ?? 0,
 		priority: source.priority ?? 0,
@@ -91,8 +97,21 @@ function entryPoolItem(source: PoolSource, kind: string): PoolItem {
 	}
 }
 
-/** An entry's draft is the wire row itself; every column on it is editable. */
-const entryDraft = (source: PoolSource) => ({ ...source })
+/**
+ * An entry's draft is the wire row itself; every column on it is editable.
+ *
+ * The keys are read as the list they are (finding #146). A row resolved
+ * through an amendment stored before keys were a list may still carry the
+ * comma string; it becomes the list here, once, so the draft and the pristine
+ * copy built from it agree and the chips never re-split a key.
+ */
+const entryDraft = (source: PoolSource) => ({
+	...source,
+	...("keys" in source ? { keys: keyList(source.keys) } : {}),
+	...("secondaryKeys" in source
+		? { secondaryKeys: keyList(source.secondaryKeys) }
+		: {})
+})
 
 /** A named entry is nothing without its name — the list is a list of names. */
 function requireName(draft: Record<string, any>, warn?: boolean): boolean {
@@ -106,10 +125,10 @@ const namedEntryDraft = (lorebookId: number, typeId: string) => ({
 	lorebookId,
 	name: "",
 	content: "",
-	keys: "",
+	keys: [],
 	// The absence of a condition, spelled the way the column stores it: no
 	// keys and no mode. Either one alone is a rule about nothing.
-	secondaryKeys: "",
+	secondaryKeys: [],
 	selectiveLogic: null,
 	useRegex: false,
 	caseSensitive: false,
@@ -207,8 +226,8 @@ const history: SectionDescriptor = {
 		month: null,
 		day: null,
 		content: "",
-		keys: "",
-		secondaryKeys: "",
+		keys: [],
+		secondaryKeys: [],
 		selectiveLogic: null,
 		useRegex: false,
 		caseSensitive: false,
@@ -258,6 +277,48 @@ const history: SectionDescriptor = {
 	}
 }
 
+/**
+ * 🚧 Items (attributes phase 3c): world lore's shape plus a supply. A door
+ * of their own, so an item is written as one — its supply asked for — and
+ * found as one, rather than read as world lore under All entries.
+ */
+const items: SectionDescriptor = {
+	id: "items",
+	label: "Items",
+	icon: Icons.Package,
+	typeId: ITEM_TYPE_ID,
+	kind: ITEM_TYPE_ID,
+	store: "entries",
+	// The item type declares `sourceKind: "worldLore"`: it ranks in world lore's band.
+	vectorSource: "worldLore",
+	roles: new Set(["position"]),
+	row: ItemRow,
+	editor: ItemEditor,
+	inspector: [FIRES_TAB, REFERENCES_TAB],
+	emptyCopy: {
+		title: "No items yet",
+		body: "An item is a thing somebody can hold — a key, a sword, a letter — and how many of it the world has.",
+		action: "New item"
+	},
+	creatable: true,
+	newLabel: "New item",
+	newDraft: (lorebookId) => ({
+		...namedEntryDraft(lorebookId, ITEM_TYPE_ID),
+		category: null,
+		supply: "unlimited",
+		supplyLimit: null
+	}),
+	toPoolItem: (source) => entryPoolItem(source, ITEM_TYPE_ID),
+	toDraft: entryDraft,
+	title: (source) => source.name ?? "",
+	validate: (draft, _siblings, warn) => {
+		if (!requireName(draft, warn)) return false
+		const problem = supplyProblem(draft)
+		if (problem && warn) toaster.error({ title: problem })
+		return !problem
+	}
+}
+
 const scenes: SectionDescriptor = {
 	id: "scenes",
 	label: "Scenes",
@@ -283,7 +344,7 @@ const scenes: SectionDescriptor = {
 		kind: SCENE_KIND,
 		name: source.name ?? "Unnamed Scene",
 		content: source.summary ?? "",
-		keys: "",
+		keys: [],
 		pinned: false,
 		off: false,
 		archived: false,
@@ -291,6 +352,7 @@ const scenes: SectionDescriptor = {
 		// one from nothing.
 		machineWritten: true,
 		parentKey: `entry#${source.historyEntryId}`,
+		branchId: (source as { branchId?: number | null }).branchId ?? null,
 		order: source.id,
 		position: source.id,
 		priority: 0,
@@ -336,7 +398,8 @@ export const SECTION_DESCRIPTORS: SectionDescriptor[] = [
 	world,
 	characters,
 	history,
-	scenes
+	scenes,
+	items
 ]
 
 /**

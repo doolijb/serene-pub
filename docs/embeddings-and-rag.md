@@ -13,13 +13,13 @@ As a session gets long, older messages and related lore don't just disappear fro
 
 ### How retrieval fits into a generated reply
 
-When you send a message, Serene Pub's prompt builder checks whether embeddings are enabled and ready. If so, it runs a semantic search scoped to the current session: the session's own messages plus the content of the session's own lorebook only — deliberately _not_ a linked character's or persona's own separate lorebook, and not messages from other sessions, even ones sharing the same lorebook and cast. RAG only ever draws on the story world the session itself is scoped to, never on an unrelated lorebook a cast member happens to also be attached to elsewhere. Results are ranked by similarity, boosted slightly for recency, and capped per content type (a handful of messages, world lore entries, character lore entries, history entries, and narrative-graph relationships) so retrieved context doesn't crowd out the guaranteed recent messages. If embeddings are off or the model isn't ready, prompt building falls back to non-semantic (keyword/recency-based) content selection instead.
+When you send a message, Serene Pub's prompt builder checks whether embeddings are enabled and ready. If so, it runs a semantic search scoped to the current session: the session's own messages plus the content of the session's own lorebook only — deliberately _not_ a linked character's or persona's own separate lorebook, and not messages from other sessions, even ones sharing the same lorebook and cast. RAG only ever draws on the story world the session itself is scoped to, never on an unrelated lorebook a cast member happens to also be attached to elsewhere. Within that lorebook it reads what the session reads: the entries on the session's line, as they stand at its story clock (with the lorebook's dated changes applied), and never an archived or switched-off entry — see [Branches](./lorebooks.md#branches). Results are ranked by similarity, boosted slightly for recency, and capped per content type (a handful of messages, world lore entries, character lore entries, history entries, and narrative-graph relationships) so retrieved context doesn't crowd out the guaranteed recent messages. If embeddings are off or the model isn't ready, prompt building falls back to non-semantic (keyword/recency-based) content selection instead.
 
 ### What gets embedded
 
-Everything embeddings touch falls into one of these buckets: session messages, character descriptions, persona descriptions, and everything inside a lorebook — world lore entries, character lore entries, history entries, and (if the lorebook has one) narrative graph nodes and relationships. See [Lorebooks](./lorebooks.md) for what those lorebook content types are and how the narrative graph itself is built. A row only ever counts as "embedded" for the specific model (and, in External API mode, the specific endpoint) that produced it — switching models or backends effectively resets everything to needing re-embedding, as covered below.
+Everything embeddings touch falls into one of these buckets: session messages, character descriptions, persona descriptions, and everything inside a lorebook — world lore entries, character lore entries, history entries, places and items, and (if the lorebook has one) narrative graph nodes and relationships. Places and items are searched alongside world lore. See [Lorebooks](./lorebooks.md) for what those lorebook content types are and how the narrative graph itself is built. A row only ever counts as "embedded" for the specific model (and, in External API mode, the specific endpoint) that produced it — switching models or backends effectively resets everything to needing re-embedding, as covered below.
 
-Narrative graph **nodes** are embedded and tracked for staleness like everything else, but they're not actually part of RAG's similarity search — retrieval only searches messages, world lore, character lore, history entries, and narrative _relationships_. Graph context that reaches the prompt comes from relationship matches plus a direct node lookup, not from a node's own embedding being found by meaning.
+Narrative graph **nodes** are embedded and tracked for staleness like everything else, but they're not actually part of RAG's similarity search — retrieval only searches messages, world lore (places and items included), character lore, history entries, and narrative _relationships_. Graph context that reaches the prompt comes from relationship matches plus a direct node lookup, not from a node's own embedding being found by meaning.
 
 ### Why some short sessions never show RAG activity
 
@@ -27,7 +27,7 @@ RAG scoring only ever considers messages _older_ than the most recent ten in a s
 
 ## Embedding connections
 
-Embeddings are a section of the **Connections** sidebar, beside LLMs and Image. An embedding connection is a connection like any other: a service, a base URL and key where the service needs them, a model, and an idle TTL. Three services are offered:
+Embeddings are a section of the **Connections** sidebar, beside LLMs and Image. An embedding connection is a connection like any other: a service, a base URL and key where the service needs them, a model, and a model idle timeout. Three services are offered:
 
 - **Local ONNX** runs a model on this device: pick one from the recommended list in the Connections sidebar, download it, make it active, and it runs fully offline with no per-request cost. Downloading, cancelling, removing from disk and adding a model by Hugging Face id all happen in the sidebar — see [Local ONNX models](./connections.md#local-onnx-models). Not offered where the native runtime is unavailable (Android).
 - **OpenAI-compatible** points at any `/embeddings` endpoint: OpenAI, or a self-hosted LM Studio or llama.cpp server on your network.
@@ -35,7 +35,9 @@ Embeddings are a section of the **Connections** sidebar, beside LLMs and Image. 
 
 One embedding connection is starred, **Use for embeddings**, and that star is what turns retrieval by meaning on. With no star, retrieval runs on keywords alone. There is no separate switch.
 
-The onboarding wizard's Embeddings/RAG step explains this and offers **Open Embedding Connections**; the wizard waits for a starred connection before treating the step as done.
+The same choice is the **Embeddings** job on **Admin › Models › Defaults**: pick the connection and model there, or use **Open embedding connections** on that row to set one up. Changing it there rebuilds the index exactly as moving the star does. **Named entities** (the people-and-places scanner) is a job on the same page.
+
+The setup wizard does not ask about embeddings: they are optional, and nothing in setup waits on them. Turn them on here whenever you like.
 
 ### Choosing a local embedding model
 
@@ -53,13 +55,13 @@ Models you have placed under the local models folder with the embeddings modalit
 
 Every embedded row records which model and endpoint produced it. Starring a different embedding connection asks you to confirm and names the cost: "Every embedded row is re-indexed against the new model: N rows". On confirm the old vectors are deleted and the queue starts from the beginning against the new model. Starring a second connection that names the same endpoint and model is a no-op. Unstarring stops the queue and keeps the vectors.
 
-### Model idle TTL
+### Model idle timeout
 
-On a Local ONNX connection, **Idle TTL** unloads the model after that many minutes of inactivity, freeing RAM between bursts of embedding work. 0 keeps it loaded.
+On a Local ONNX connection, **Model idle timeout** unloads the model after that long with nothing to do, freeing RAM between bursts of embedding work. 0 keeps it loaded. On a hosted endpoint the field is kept for consistency but unloads nothing.
 
 ## Named entity connections
 
-Named entities are a fourth Connections section. One local service is offered (ONNX, token classification); its models come from the recommended list — from distilbert-NER (English; people, places, organisations, other; about 67 MB) up to larger and multilingual checkpoints that also emit dates — and are downloaded and made active from the Connections sidebar, exactly like embeddings. The form has no base URL or key, only an idle TTL.
+Named entities are a fourth Connections section. One local service is offered (ONNX, token classification); its models come from the recommended list — from distilbert-NER (English; people, places, organisations, other; about 67 MB) up to larger and multilingual checkpoints that also emit dates — and are downloaded and made active from the Connections sidebar, exactly like embeddings. The form has no base URL or key, only a model idle timeout.
 
 Starring one, **Use for entity extraction**, adds a tier to name extraction: the spans the model finds are stored beside the names the lorebook already knows, so an entry can be matched by what a scene calls it even in lower case. With no star the extraction lane runs on the lorebook's own names and capitalised words, which is a working state rather than an off one. A starred model that fails to load falls back to that state and says so.
 
@@ -74,29 +76,29 @@ The starred embedding connection shows its queue:
 - A **Recent** list of completed groups.
 - A **Load now** action and a download bar when the local model is not in memory, for example after a server restart.
 
-Within a group, content is embedded in a fixed order: session messages first, then lorebook content (world lore, character lore, history entries, narrative graph nodes, narrative graph relationships), then characters, then personas.
+Within a group, content is embedded in a fixed order: session messages first, then lorebook content (world lore, places, items, character lore, history entries, narrative graph nodes, narrative graph relationships), then characters, then personas.
 
 ### Understanding queue states
 
-The queue has three states, shown by both the sidebar's status card and the header navigation icon:
+The queue has three states, shown on the starred connection's status card:
 
 - **Idle** — nothing queued, or the queue has been explicitly stopped.
-- **Running** — actively embedding items one at a time; since Embeddings has no left-navigation icon of its own (see above), the header's **Connections** icon is what animates and turns green while this is happening.
+- **Running** — actively embedding items one at a time.
 - **Paused** — reserved for pausing the queue without fully stopping it (for example, to avoid competing with the model during an active session generation).
 
 ### Troubleshooting a stuck or empty queue
 
-If the queue looks stuck at "Idle" with items still needing embeddings, check the starred connection's detail panel first — the queue silently stops (and logs a warning server-side) if embeddings are disabled, if a local model fails to auto-load (most commonly because it isn't cached and can't be re-downloaded, or the server restarted and the model needs to be reloaded), or if an External API config has stopped validating. Reloading or re-downloading the model from the warning banner, then pressing Start on the Queue tab, resolves most local-mode cases. If a specific session's content never seems to finish indexing, the RAG notice inside that session has a "Prioritize in queue" button that jumps its content to the very front of the queue.
+If the queue looks stuck at "Idle" with items still needing embeddings, check the starred connection's detail first — the queue silently stops (and logs a warning server-side) if embeddings are disabled, if a local model fails to auto-load (most commonly because it isn't cached and can't be re-downloaded, or the server restarted and the model needs to be reloaded), or if an External API config has stopped validating. Reloading or re-downloading the model from the warning banner, then pressing **Start** on the status card, resolves most local-mode cases. If a specific session's content never seems to finish indexing, the RAG notice inside that session has a "Prioritize in queue" button that jumps its content to the very front of the queue.
 
 ## Understanding RAG Notices
 
-Inside a session, a **RAG notice** (the `RagNotice` component) can appear as a quiet line above the composer, beside the Actions label, once a conversation has grown past 10 messages — below that threshold everything already fits in the guaranteed context window, so the notice doesn't apply. It checks the embedding status of the session's older messages, its linked characters, personas, and lorebook content, and shows one of three variants:
+Inside a session, a **RAG notice** can appear as a quiet line above the composer, opposite the Actions label, once a conversation has grown past 10 messages — below that threshold everything already fits in the guaranteed context window, so the notice doesn't apply. It checks the embedding status of the session's older messages, its linked characters, personas, and lorebook content, and shows one of three variants:
 
-- **"RAG content not yet indexed"** — none of the applicable older content has been embedded yet, so RAG can't surface anything from this session.
-- **"RAG content indexed with a different model"** — everything was embedded with a previous model/backend and needs re-indexing with the currently active one.
-- **"Indexing in progress…"** — a mix of ready and pending content; shows a running count like "12 of 40 items indexed" and notes if the queue itself is paused.
+- **Not yet indexed** — none of the applicable older content has been embedded yet ("Older messages and characters aren't embedded yet, so RAG can't surface them."), so RAG can't surface anything from this session.
+- **Indexed with a different model** — everything was embedded with a previous model/backend and needs re-indexing with the currently active one, which the line names.
+- **Indexing in progress** — a mix of ready and pending content; shows a running count like "Indexing 12 of 40, lorebook entries pending." and adds "Queue paused." if the queue itself is paused.
 
-Each notice includes a **Prioritize in queue** button, which moves the session (and its linked lorebook/characters/personas) to the front of the embeddings queue, and an **Ignore for this session** button, which silences the notice for that specific session going forward (shown afterward as a small "RAG disabled for this session" line with a "Re-enable" link). Once every applicable item is fully indexed with the current model, the notice disappears on its own.
+Each notice includes a **Prioritize in queue** button, which moves the session (and its linked lorebook/characters/personas) to the front of the embeddings queue, and an **Ignore for this session** button, which silences the notice for that specific session going forward (shown afterward as a small "RAG is off for this session." line with a **Re-enable** link). Once every applicable item is fully indexed with the current model, the notice disappears on its own.
 
 ### The per-item vectorization status icon
 
@@ -104,7 +106,7 @@ Elsewhere in the UI (the character editor, for example), a small icon next to an
 
 ## How Serene Pub ranks retrieved content
 
-This is internal behavior — there's no UI to tune it — but understanding it helps explain why the model sometimes does or doesn't seem to "remember" something.
+Most of this is internal behavior with no knob of its own — the shares and ceilings that are tunable live on the pipeline's retrieval steps (see [Where the weights live](./pipelines.md#where-the-weights-live)) — but understanding it helps explain why the model sometimes does or doesn't seem to "remember" something.
 
 ### Two-pass semantic queries
 
@@ -122,7 +124,7 @@ Relationships are retrieved the same way lore is. Serene Pub walks the narrative
 
 They are ordered by three things, in this order:
 
-1. **Who is in the scene.** A relationship with someone in this chat's cast outranks one with a character who is only in the lorebook.
+1. **Who is in the scene.** A relationship with someone in this session's cast outranks one with a character who is only in the lorebook.
 2. **Whose relationship it is.** A tie the speaking character is party to outranks one between two other people.
 3. **What changed most recently.** Among relationships that tie on the first two, the ones edited most recently come first.
 
@@ -142,6 +144,6 @@ Bypassing the relevance contest also means bypassing token-budget trimming — p
 
 ## Context Debugging
 
-A System Settings toggle, **Enable Context Debugging**, is worth knowing about alongside RAG: when turned on, it adds a Statistics tab and a debug icon to session messages, computes full RAG and prompt-infill diagnostics for each generation, and saves that metadata alongside the message so you can inspect exactly what content the model saw — including which RAG results were retrieved — after the fact. This is an admin-only, opt-in setting since the extra computation and stored metadata add overhead; it's primarily useful when troubleshooting why a particular reply did or didn't seem to "remember" something. See [System Settings](./system-settings.md) for the rest of the settings on this screen.
+An instance setting, **Context debugging** (Admin › Diagnostics), is worth knowing about alongside RAG: when turned on, it adds a Statistics tab and a debug icon to session messages, computes full retrieval diagnostics (RAG included) for each generation, and saves that metadata alongside the message so you can inspect exactly what content the model saw — including which RAG results were retrieved — after the fact. This is an admin-only, opt-in setting since the extra computation and stored metadata add overhead; it's primarily useful when troubleshooting why a particular reply did or didn't seem to "remember" something. See [Instance Settings](./system-settings.md) for the rest of the instance settings.
 
 One diagnostic gotcha worth knowing: because the current and recent passes each compute their own adaptive similarity threshold, and the recorded value is simply whatever ran last, the "adaptive similarity threshold" figure shown in Prompt Details reflects only the **recent** pass's threshold, not the current pass's — keep that in mind if the number looks like it doesn't match what you'd expect from the most recent messages specifically.

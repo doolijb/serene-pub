@@ -9,7 +9,11 @@ import type { AddressInfo } from "net"
 // here exercises that path, and the real module is a SvelteKit virtual one.
 vi.mock("$app/environment", () => ({ dev: true, building: false }))
 
-import { concatenateBatch, stageFilesToServer } from "./sillyTavernFolderImport"
+import {
+	concatenateBatch,
+	resolvePickedFolder,
+	stageFilesToServer
+} from "./sillyTavernFolderImport"
 import {
 	_resetInterestForTests,
 	setInterestUser
@@ -27,6 +31,41 @@ beforeEach(() => {
 afterEach(() => {
 	_resetInterestForTests()
 	setSocket(null)
+})
+
+describe("resolvePickedFolder on a real SillyTavern tree", () => {
+	// SillyTavern's own folder names (R5): `chats/`, `group chats/`. A rename
+	// sweep once made this look for `sessions/`, and a real pick deferred —
+	// and so imported — no chat history at all.
+	const paths = [
+		"SillyTavern/data/default-user/settings.json",
+		"SillyTavern/data/default-user/characters/Aria.png",
+		"SillyTavern/data/default-user/chats/Aria/Aria - 2024-01-01@12h00m00s.jsonl",
+		"SillyTavern/data/default-user/groups/1700000000000.json",
+		"SillyTavern/data/default-user/group chats/2024-01-03@18h00m00s.jsonl",
+		"SillyTavern/data/default-user/worlds/Eldoria.json",
+		"SillyTavern/data/default-user/User Avatars/user-default.png",
+		"SillyTavern/data/default-user/backgrounds/forest.jpg"
+	]
+	const fileList = paths.map((p) => ({
+		name: p.split("/").pop()!,
+		webkitRelativePath: p
+	})) as unknown as FileList
+
+	test("defers the chat history and scans the rest", () => {
+		const picked = resolvePickedFolder(fileList)!
+		expect(picked.deferredFiles.map((f) => f.relativePath)).toEqual([
+			"chats/Aria/Aria - 2024-01-01@12h00m00s.jsonl",
+			"group chats/2024-01-03@18h00m00s.jsonl"
+		])
+		expect(picked.scanFiles.map((f) => f.relativePath)).toEqual([
+			"settings.json",
+			"characters/Aria.png",
+			"groups/1700000000000.json",
+			"worlds/Eldoria.json",
+			"User Avatars/user-default.png"
+		])
+	})
 })
 
 describe("concatenateBatch", () => {

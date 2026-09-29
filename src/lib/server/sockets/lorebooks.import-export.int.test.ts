@@ -68,6 +68,36 @@ async function makeUser(username: string) {
 	return createTestUser(testDb, username)
 }
 
+/**
+ * Export is disabled (owner ruling 2026-09-28) and its handler refuses; these
+ * round trips drive the dormant builder directly, which is the half the import's
+ * unchanged-vs-conflict check still uses.
+ */
+async function dormantExport(
+	socket: { user: { id: number } },
+	params: {
+		id: number
+		includeCharacters?: boolean
+		includePersonas?: boolean
+		includeNarrativeGraph?: boolean
+	},
+	_emit?: unknown
+) {
+	const { buildLorebookExportData } = await import(
+		"$lib/server/utils/lorebookExportBuilder"
+	)
+	const { id, ...options } = params
+	const { name, specBookWithGraph } = await buildLorebookExportData(
+		id,
+		socket.user.id,
+		options
+	)
+	return {
+		blob: Buffer.from(JSON.stringify(specBookWithGraph, null, 2), "utf-8"),
+		filename: `${name}.v3.json`
+	}
+}
+
 function fakeSocket(userId: number) {
 	return { user: { id: userId } } as any
 }
@@ -125,7 +155,6 @@ describe("lorebooks import/export (PGlite integration)", () => {
 	test("export then re-import unchanged reports status unchanged", async () => {
 		const {
 			lorebooksCreateHandler,
-			lorebookExportHandler,
 			lorebookImportHandler
 		} = await import("./lorebooks")
 		const user = await makeUser("lb-unchanged-user")
@@ -146,7 +175,7 @@ describe("lorebooks import/export (PGlite integration)", () => {
 			])
 		)
 
-		const exported = await lorebookExportHandler.handler(
+		const exported = await dormantExport(
 			fakeSocket(user.id),
 			{ id: lorebook.id },
 			noopEmit
@@ -171,7 +200,6 @@ describe("lorebooks import/export (PGlite integration)", () => {
 	test("an entry's condition survives export then re-import, through the real handlers", async () => {
 		const {
 			lorebooksCreateHandler,
-			lorebookExportHandler,
 			lorebookImportHandler
 		} = await import("./lorebooks")
 		const author = await makeUser("lb-condition-author")
@@ -219,7 +247,7 @@ describe("lorebooks import/export (PGlite integration)", () => {
 			])
 		)
 
-		const exported = await lorebookExportHandler.handler(
+		const exported = await dormantExport(
 			fakeSocket(author.id),
 			{ id: lorebook.id },
 			noopEmit
@@ -264,8 +292,8 @@ describe("lorebooks import/export (PGlite integration)", () => {
 		expect(copies.map(matcherFacts)).toEqual([
 			{
 				name: "Dragon",
-				keys: "dragon, wyrm",
-				secondaryKeys: "statue, mural",
+				keys: ["dragon", "wyrm"],
+				secondaryKeys: ["statue", "mural"],
 				selectiveLogic: "notAll",
 				matchMode: "word",
 				useRegex: false,
@@ -273,8 +301,8 @@ describe("lorebooks import/export (PGlite integration)", () => {
 			},
 			{
 				name: "Gate",
-				keys: "gate",
-				secondaryKeys: "ash",
+				keys: ["gate"],
+				secondaryKeys: ["ash"],
 				selectiveLogic: "andAll",
 				// Nothing in the file declares a whole-word intent for this
 				// one, so its column stays NULL — see matchModeOf.
@@ -303,7 +331,6 @@ describe("lorebooks import/export (PGlite integration)", () => {
 	test("two different users importing the same lorebook payload (shared uuid) both succeed and each keep that uuid", async () => {
 		const {
 			lorebooksCreateHandler,
-			lorebookExportHandler,
 			lorebookImportHandler
 		} = await import("./lorebooks")
 		const userA = await makeUser("lb-uuid-collision-user-a")
@@ -314,7 +341,7 @@ describe("lorebooks import/export (PGlite integration)", () => {
 			{ name: "Shared Book" },
 			noopEmit
 		)
-		const exported = await lorebookExportHandler.handler(
+		const exported = await dormantExport(
 			fakeSocket(userA.id),
 			{ id: lorebook.id },
 			noopEmit
@@ -351,7 +378,6 @@ describe("lorebooks import/export (PGlite integration)", () => {
 	test("editing an entry then re-importing conflicts, then resolves via overwrite/createNew", async () => {
 		const {
 			lorebooksCreateHandler,
-			lorebookExportHandler,
 			lorebookImportHandler,
 			lorebookImportResolveHandler
 		} = await import("./lorebooks")
@@ -373,7 +399,7 @@ describe("lorebooks import/export (PGlite integration)", () => {
 			])
 		)
 
-		const exported = await lorebookExportHandler.handler(
+		const exported = await dormantExport(
 			fakeSocket(user.id),
 			{ id: lorebook.id },
 			noopEmit
@@ -422,7 +448,6 @@ describe("lorebooks import/export (PGlite integration)", () => {
 	test("export with bound characters/personas, delete everything, re-import restores characters/personas/bindings/entry-binding-scoping", async () => {
 		const {
 			lorebooksCreateHandler,
-			lorebookExportHandler,
 			lorebookImportHandler
 		} = await import("./lorebooks")
 		const user = await makeUser("lb-restore-user")
@@ -464,7 +489,7 @@ describe("lorebooks import/export (PGlite integration)", () => {
 			])
 		)
 
-		const exported = await lorebookExportHandler.handler(
+		const exported = await dormantExport(
 			fakeSocket(user.id),
 			{ id: lorebook.id },
 			noopEmit
@@ -545,7 +570,6 @@ describe("lorebooks import/export (PGlite integration)", () => {
 	test("include flags toggled off omit characters/personas/narrativeGraph from export, bindings restore as empty slots", async () => {
 		const {
 			lorebooksCreateHandler,
-			lorebookExportHandler,
 			lorebookImportHandler
 		} = await import("./lorebooks")
 		const user = await makeUser("lb-flags-user")
@@ -564,7 +588,7 @@ describe("lorebooks import/export (PGlite integration)", () => {
 			binding: "{{char:1}}"
 		})
 
-		const exported = await lorebookExportHandler.handler(
+		const exported = await dormantExport(
 			fakeSocket(user.id),
 			{
 				id: lorebook.id,
@@ -604,7 +628,6 @@ describe("lorebooks import/export (PGlite integration)", () => {
 	test("a background binding's name/aliases survive export then re-import", async () => {
 		const {
 			lorebooksCreateHandler,
-			lorebookExportHandler,
 			lorebookImportHandler
 		} = await import("./lorebooks")
 		const user = await makeUser("lb-background-name-user")
@@ -622,7 +645,7 @@ describe("lorebooks import/export (PGlite integration)", () => {
 			aliases: ["Willow"]
 		})
 
-		const exported = await lorebookExportHandler.handler(
+		const exported = await dormantExport(
 			fakeSocket(user.id),
 			{ id: lorebook.id },
 			noopEmit
@@ -652,7 +675,6 @@ describe("lorebooks import/export (PGlite integration)", () => {
 	test("a character-linked binding exported with includeCharacters off still restores its name/aliases from the narrative graph node", async () => {
 		const {
 			lorebooksCreateHandler,
-			lorebookExportHandler,
 			lorebookImportHandler
 		} = await import("./lorebooks")
 		const user = await makeUser("lb-scoped-out-name-user")
@@ -673,7 +695,7 @@ describe("lorebooks import/export (PGlite integration)", () => {
 			aliases: ["Scoped"]
 		})
 
-		const exported = await lorebookExportHandler.handler(
+		const exported = await dormantExport(
 			fakeSocket(user.id),
 			{
 				id: lorebook.id,
@@ -720,7 +742,6 @@ describe("lorebooks import/export (PGlite integration)", () => {
 	test("absorbedAliases survive export then re-import after a graph absorb", async () => {
 		const {
 			lorebooksCreateHandler,
-			lorebookExportHandler,
 			lorebookImportHandler
 		} = await import("./lorebooks")
 		const { narrativeGraphMergeNodeHandler } = await import(
@@ -765,7 +786,7 @@ describe("lorebooks import/export (PGlite integration)", () => {
 			})
 		expect(survivorBeforeExport?.absorbedAliases).toContain("Ghost NPC")
 
-		const exported = await lorebookExportHandler.handler(
+		const exported = await dormantExport(
 			fakeSocket(user.id),
 			{ id: lorebook.id },
 			noopEmit
@@ -826,7 +847,7 @@ describe("lorebooks import/export (PGlite integration)", () => {
 			WORLD_LORE_TYPE_ID
 		)
 		expect(entries).toHaveLength(1)
-		expect(entries[0].keys).toBe("trigger")
+		expect(entries[0].keys).toEqual(["trigger"])
 		expect(entries[0].content).toBe("Some old-format lore")
 	})
 
@@ -973,7 +994,6 @@ describe("lorebooks import/export (PGlite integration)", () => {
 		test("overwrite: a mid-rebuild failure leaves the original content untouched", async () => {
 			const {
 				lorebooksCreateHandler,
-				lorebookExportHandler,
 				lorebookImportHandler,
 				lorebookImportResolveHandler
 			} = await import("./lorebooks")
@@ -1003,7 +1023,7 @@ describe("lorebooks import/export (PGlite integration)", () => {
 				])
 			)
 
-			const exported = await lorebookExportHandler.handler(
+			const exported = await dormantExport(
 				fakeSocket(user.id),
 				{ id: lorebook.id },
 				noopEmit
@@ -1062,7 +1082,6 @@ describe("lorebooks import/export (PGlite integration)", () => {
 		test("create: a mid-rebuild failure leaves no orphaned lorebook row", async () => {
 			const {
 				lorebooksCreateHandler,
-				lorebookExportHandler,
 				lorebookImportHandler
 			} = await import("./lorebooks")
 			const user = await makeUser("lb-txn-create-user")
@@ -1081,7 +1100,7 @@ describe("lorebooks import/export (PGlite integration)", () => {
 				binding: "{{char:1}}"
 			})
 
-			const exported = await lorebookExportHandler.handler(
+			const exported = await dormantExport(
 				fakeSocket(user.id),
 				{ id: lorebook.id },
 				noopEmit

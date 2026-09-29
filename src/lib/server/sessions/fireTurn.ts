@@ -68,6 +68,39 @@ export async function headTurnEntry(
 }
 
 /**
+ * The **carry-on** entry (lair pass B9, owner ruling D3 2026-09-27): what an
+ * owner's Continue fires when nothing is prepared, or `null` when the
+ * session's genre has no narrator to carry on.
+ *
+ * A narrator genre (`voice: 'narrator'`) prepares its one entry only when
+ * a person's line is newest, so after the narrator's own reply the order is
+ * empty by design — and "always keep a narrator prepared" was ruled out,
+ * because auto-advance would then loop to its cap. The press is the one
+ * thing that may ask the narrator to go on with no new direction. This only
+ * NAMES the entry; the socket handler decides who may press it.
+ */
+export async function carryOnEntry(
+	db: Db,
+	sessionId: number
+): Promise<TurnEntryV1 | null> {
+	const [session] = await db
+		.select({ genreId: schema.sessions.genreId })
+		.from(schema.sessions)
+		.where(eq(schema.sessions.id, sessionId))
+		.limit(1)
+	if (!session) return null
+	const { getSessionGenre, STANDARD_GENRE_ID } = await import(
+		"$lib/server/pipelines/entities/sessionGenres"
+	)
+	const genre = await getSessionGenre(
+		db,
+		session.genreId ?? STANDARD_GENRE_ID
+	)
+	const voice = (genre?.shape as { voice?: unknown } | undefined)?.voice
+	return voice === "narrator" ? { ref: null, via: "pick" } : null
+}
+
+/**
  * Is this entry a person's — shown as their turn, never generated (R15)?
  *
  * A persona is a character row flagged `is_persona` (0132), so the
@@ -135,6 +168,25 @@ export async function fireTurnEntry(
 			ref && ref.startsWith("character:")
 				? Number(ref.slice("character:".length))
 				: null
+		/**
+		 * The own voice off `main` is its fallback envoy TALKING (lair
+		 * re-plan R6) — the Castellan in the Sanctum — and needs that envoy
+		 * seated. Only that talk stops: story turns run under its name
+		 * whether it is seated or not.
+		 */
+		// A narration lands on `main` whichever composer fired it (R8), so a
+		// Narrate pressed in the Sanctum is not the envoy talking there.
+		if (ref === null && entry.channel && entry.via !== "narrate") {
+			const { ownVoiceSeatRefusal } = await import(
+				"$lib/server/pipelines/entities/envoys"
+			)
+			const unseated = await ownVoiceSeatRefusal(
+				db,
+				opts.sessionId,
+				entry.channel
+			)
+			if (unseated) return { fired: false, reason: unseated }
+		}
 		const { runReply } = await import("$lib/server/utils/runReply")
 		const outcome = await runReply({
 			socket: opts.socket ?? { io: opts.io },
@@ -154,6 +206,9 @@ export async function fireTurnEntry(
 						? { kind: "respond", speaker: ref as `envoy:${string}` }
 						: { kind: "respond" },
 			...(entry.channel ? { channel: entry.channel } : {}),
+			// How the entry was reached, for the inlet's `via` port (R8): a
+			// genre routes a `narrate` press ahead of everything else.
+			...(entry.via ? { via: entry.via } : {}),
 			// Whether this run was started by auto-advance, carried so every
 			// write it makes says so (§4.6).
 			auto: opts.cause.auto === true

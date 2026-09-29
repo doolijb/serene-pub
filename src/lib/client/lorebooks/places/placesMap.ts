@@ -4,9 +4,10 @@
  * Three layers, and each draws a different mark. Containment is the entry's
  * parent and gives the nested boxes; a travel edge between two entries gives a
  * labelled line between boxes; a cast member who lives in or keeps a place
- * gives a pin inside it. Nothing here decides that an entry *is* a place: an
- * entry is on the map when something joins it or holds it, which is the only
- * claim the data supports.
+ * gives a pin inside it. A place is a `core:entry/location` entry (`place`
+ * on the input — the same definition the rail's Places count reads), and a
+ * place is always a box; any other entry handed in is on the map only when
+ * something joins it or holds it.
  */
 
 import {
@@ -21,6 +22,13 @@ export interface PlaceEntryLike {
 	name: string
 	/** What it is filed under, by id, or null at the top level. */
 	parentId: number | null
+	/**
+	 * A declared place — a `core:entry/location` entry, the one definition
+	 * the rail's Places count uses too. A place is a box on the map whether or
+	 * not anything joins it yet; any other entry is on the map only when
+	 * something joins it or holds it.
+	 */
+	place?: boolean
 }
 
 /** An edge, as little of it as the map needs. */
@@ -32,11 +40,20 @@ export interface PlaceEdgeLike {
 	status?: string
 }
 
-/** A member standing somewhere, drawn inside the box they stand in. */
+/**
+ * A member standing somewhere, drawn inside the box they stand in.
+ *
+ * ONE pin per member per place: a member who both lives in and keeps a place
+ * is one person in one room, so their edges fold into one chip whose
+ * `relationshipType` names them all ("lives in, keeper of").
+ */
 export interface PlacePin {
+	/** `castId@entryId` — unique per pin by construction; the `{#each}` key. */
+	key: string
 	castId: number
 	name: string
 	entryId: number
+	/** Every pin edge from this member to this place, comma-joined as typed. */
 	relationshipType: string
 }
 
@@ -97,6 +114,7 @@ export function buildPlacesMap(input: PlacesMapInput): PlacesMap {
 
 	const links: PlaceLink[] = []
 	const pins: PlacePin[] = []
+	const pinByKey = new Map<string, PlacePin>()
 	for (const rel of input.relationships) {
 		if (
 			rel.from.kind === "entry" &&
@@ -114,16 +132,40 @@ export function buildPlacesMap(input: PlacesMapInput): PlacesMap {
 		const cast = rel.from.kind === "cast" ? rel.from : null
 		const entry = rel.to.kind === "entry" ? rel.to : null
 		if (!cast || !entry || !isPinLinkType(rel.relationshipType)) continue
-		pins.push({
+		// Two edges from one member to one place — two types, or one link
+		// recorded twice — are one pin. Keying the chips by member alone
+		// handed Svelte a duplicate key and crashed the board.
+		const key = `${cast.bindingId}@${entry.entryId}`
+		const existing = pinByKey.get(key)
+		if (existing) {
+			const types = existing.relationshipType.split(", ")
+			if (
+				!types.some(
+					(t) =>
+						t.trim().toLowerCase() ===
+						rel.relationshipType.trim().toLowerCase()
+				)
+			)
+				existing.relationshipType = [
+					...types,
+					rel.relationshipType
+				].join(", ")
+			continue
+		}
+		const pin: PlacePin = {
+			key,
 			castId: cast.bindingId,
 			name: input.castNames.get(cast.bindingId) ?? `#${cast.bindingId}`,
 			entryId: entry.entryId,
 			relationshipType: rel.relationshipType
-		})
+		}
+		pinByKey.set(key, pin)
+		pins.push(pin)
 	}
 
 	const mapped = new Set<number>()
 	for (const entry of input.entries) {
+		if (entry.place) mapped.add(entry.id)
 		if (entry.parentId != null && byId.has(entry.parentId)) {
 			mapped.add(entry.id)
 			mapped.add(entry.parentId)

@@ -10,7 +10,7 @@
  *    "Hello"}]}` — the literal word "Hello", from the empty-messages floor in
  *    `buildAnthropicMessages`, because the payload it was handed carried a flat
  *    `prompt` and no `messages` at all.
- *  - **KoboldCPP** with its default `extraJson.useSession: true` posted to
+ *  - **KoboldCPP** with its default `extraJson.useChat: true` posted to
  *    `/v1/chat/completions` with **no `messages` key**, because the branch read
  *    `compiledPrompt.messages!` and `JSON.stringify` drops `undefined`.
  *
@@ -201,7 +201,6 @@ beforeAll(async () => {
 		sessionId,
 		characterId: character.id,
 		isActive: true,
-		visibility: "visible"
 	})
 	await db
 		.insert(schema.sessionPersonas)
@@ -385,7 +384,7 @@ describe("a chat connection is sent the assembled prompt", () => {
 		// only happens when the payload carried a real system-role message.
 		expect(sent.system).toContain("You are narrating")
 
-		// And no marker survives into content. `split_session` is the transport
+		// And no marker survives into content. `split_chat` is the transport
 		// hack the messages are parsed back out of; a leaked `<@role:` would mean
 		// the parse did not run.
 		for (const m of sent.messages)

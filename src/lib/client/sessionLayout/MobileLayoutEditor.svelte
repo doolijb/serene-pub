@@ -12,8 +12,8 @@
 	 * The two gates that decide whether this is mounted at all — `mobileEdit`
 	 * and `liveStowed` — stay in SessionLayout, because the live session's own
 	 * mount reads them. This component is only what is drawn once they say yes,
-	 * and its sheet state is its own: closing the editor unmounts it, which is
-	 * what SessionLayout's `closeEditor` used to do by hand.
+	 * and its sheet state is its own: closing the editor unmounts it, which
+	 * resets that state with no work in SessionLayout's `closeEditor`.
 	 */
 	import type { Snippet } from "svelte"
 	import * as Icons from "@lucide/svelte"
@@ -34,10 +34,10 @@
 	} from "./mobileEdit"
 	import type { RenderUnit } from "./tabGroups"
 	import type { SimTier } from "./simulator"
-	// The same per-widget style controls, in the sheet a touch screen gets:
-	// there is no hover there, so the phone editor opens them full-screen
-	// instead of growing them on the widget.
-	import WidgetStyleOverlay from "./WidgetStyleOverlay.svelte"
+	// A widget's settings and style open in the one app-level modal — the same
+	// one the desktop editor's gear opens, a full-screen sheet at this width.
+	import { openWidgetSettings } from "./widgetSettingsModal.svelte"
+	import { isInstanceOf } from "$lib/shared/widgets/instanceId"
 
 	/** One side's previewed column, as SessionLayout's `previewColumn` returns it. */
 	type PreviewColumn = { frame: GsLayout; units: RenderUnit[] }
@@ -81,6 +81,12 @@
 		/** The one landing and the one removal, both SessionLayout's. */
 		place: (target: string, widgetId: string, beforeId?: string) => void
 		removeWidget: (widgetId: string) => void
+		/**
+		 * What the primary floor says about a widget (./primaryFloor): the note
+		 * shown in place of its ×, when it is the last instance of the genre's
+		 * primary widget, else null.
+		 */
+		floorNoteOf: (widgetId: string) => string | null
 		/** The layouts sheet. */
 		presets: Sockets.Sessions.LayoutPreset[]
 		activePreset: Sockets.Sessions.LayoutPreset | null
@@ -92,14 +98,6 @@
 		presetName: string
 		savePreset: () => void
 		resetLayout: () => void
-		/**
-		 * The widget whose style sheet is open. Bound rather than owned here:
-		 * SessionLayout reads it to turn style MODE on and to arm that one
-		 * widget's overlay (there is no hover on a touch screen), so the state
-		 * has to be visible where those effects are — and clearing it is still
-		 * `closeEditor`'s, for the same reason.
-		 */
-		styleSheetId: string | null
 		/** The sticky bar's two commit controls, SessionLayout's own. */
 		onCancel: () => void
 		onDone: () => void
@@ -129,13 +127,13 @@
 		paletteWidgets,
 		place,
 		removeWidget,
+		floorNoteOf,
 		presets,
 		activePreset,
 		applyPreset,
 		presetName = $bindable(),
 		savePreset,
 		resetLayout,
-		styleSheetId = $bindable(),
 		onCancel,
 		onDone,
 		presetPicture
@@ -246,7 +244,7 @@
 	function rowIcon(row: MobileRow) {
 		if (row.members.length > 1) return Icons.Layers
 		const id = row.members[0]
-		if (id === "messages") return middleWidgetIcon(id)
+		if (isInstanceOf(id, "messages")) return middleWidgetIcon(id)
 		const p = inst(id)
 		return p ? iconOf(p) : Icons.LayoutPanelTop
 	}
@@ -305,13 +303,10 @@
 
 	/** Escape closes the topmost sheet, innermost first. */
 	$effect(() => {
-		if (!pickerTarget && !presetSheet && !styleSheetId) return
+		if (!pickerTarget && !presetSheet) return
 		const onKey = (e: KeyboardEvent) => {
 			if (e.key !== "Escape") return
-			// The style sheet holds an editor of its own that answers Escape
-			// first; this only sees the key once that has let it through.
-			if (styleSheetId) styleSheetId = null
-			else if (pickerTarget) pickerTarget = null
+			if (pickerTarget) pickerTarget = null
 			else presetSheet = false
 		}
 		document.addEventListener("keydown", onKey)
@@ -383,9 +378,7 @@
 					class="medit-btn"
 					class:on={row.pinned}
 					aria-pressed={row.pinned}
-					aria-label={row.pinned
-						? `Unpin ${title}`
-						: `Pin ${title}`}
+					aria-label={row.pinned ? `Unpin ${title}` : `Pin ${title}`}
 					onclick={() => setRowPin(zone, row.key, !row.pinned)}
 				>
 					<Icons.Pin size={15} />
@@ -393,19 +386,36 @@
 			{/if}
 			<button
 				class="medit-btn"
-				aria-label="Settings and style for {title}"
-				onclick={() => (styleSheetId = row.members[0])}
+				aria-label="Open {title} settings"
+				aria-haspopup="dialog"
+				onclick={(e) =>
+					openWidgetSettings(
+						{
+							widgetId: row.members[0],
+							label: widgetLabel(row.members[0])
+						},
+						e.currentTarget
+					)}
 			>
-				<Icons.Palette size={15} />
+				<Icons.Settings size={15} />
 			</button>
 			{#if zoneId && row.members.length === 1}
-				<button
-					class="medit-btn"
-					aria-label="Remove {title}"
-					onclick={() => removeWidgetFrom(zone, row.members[0])}
-				>
-					<Icons.X size={15} />
-				</button>
+				{@const keep = floorNoteOf(row.members[0])}
+				{#if keep}
+					<!-- The primary floor keeps the last Messages: no ×, and
+					     the reason where the × would be. -->
+					<span class="medit-floor" role="note" title={keep} aria-label={keep}>
+						<Icons.Lock size={14} aria-hidden="true" />
+					</span>
+				{:else}
+					<button
+						class="medit-btn"
+						aria-label="Remove {title}"
+						onclick={() => removeWidgetFrom(zone, row.members[0])}
+					>
+						<Icons.X size={15} />
+					</button>
+				{/if}
 			{/if}
 		</div>
 		{#if row.members.length > 1}
@@ -432,19 +442,31 @@
 						</button>
 						<button
 							class="medit-btn"
-							aria-label="Settings and style for {widgetLabel(id)}"
-							onclick={() => (styleSheetId = id)}
+							aria-label="Open {widgetLabel(id)} settings"
+							aria-haspopup="dialog"
+							onclick={(e) =>
+								openWidgetSettings(
+									{ widgetId: id, label: widgetLabel(id) },
+									e.currentTarget
+								)}
 						>
-							<Icons.Palette size={14} />
+							<Icons.Settings size={14} />
 						</button>
 						{#if zoneId}
-							<button
-								class="medit-btn"
-								aria-label="Remove {widgetLabel(id)}"
-								onclick={() => removeWidgetFrom(zone, id)}
-							>
-								<Icons.X size={14} />
-							</button>
+							{@const keep = floorNoteOf(id)}
+							{#if keep}
+								<span class="medit-floor" role="note" title={keep} aria-label={keep}>
+									<Icons.Lock size={13} aria-hidden="true" />
+								</span>
+							{:else}
+								<button
+									class="medit-btn"
+									aria-label="Remove {widgetLabel(id)}"
+									onclick={() => removeWidgetFrom(zone, id)}
+								>
+									<Icons.X size={14} />
+								</button>
+							{/if}
 						{/if}
 					</li>
 				{/each}
@@ -464,8 +486,8 @@
 	</header>
 	<div class="medit-body">
 		<p class="medit-note">
-			A screen this narrow draws one widget under the next. Drag a
-			handle, or use the arrows, to change the order.
+			A screen this narrow draws one widget under the next. Drag a handle,
+			or use the arrows, to change the order.
 		</p>
 		{#each mobileZones as z (z.key)}
 			{@const ZoneIcon = z.icon}
@@ -489,13 +511,7 @@
 				</header>
 				<ul class="medit-list">
 					{#each z.rows as row, i (row.key)}
-						{@render mobileRowItem(
-							z.key,
-							z.zoneId,
-							z.rows,
-							row,
-							i
-						)}
+						{@render mobileRowItem(z.key, z.zoneId, z.rows, row, i)}
 					{/each}
 					{#if !z.rows.length}
 						<li class="medit-empty">Nothing here yet.</li>
@@ -552,8 +568,7 @@
 					onclick={() => {
 						const target = pickerTarget
 						pickerTarget = null
-						if (target)
-							addWidgetTo(target.zone, target.id, p.id)
+						if (target) addWidgetTo(target.zone, target.id, p.id)
 					}}
 				>
 					<IconCmp size={18} />
@@ -627,39 +642,6 @@
 				<Icons.RotateCcw size={14} />
 				Reset to default
 			</button>
-		</div>
-	</div>
-{/if}
-
-{#if styleSheetId}
-	<!-- The per-widget controls, full screen: there is no hover on a touch
-	     screen, so the overlay is armed for this one widget and given a box
-	     of its own to fill instead of a widget to sit on. -->
-	<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-	<div class="msheet-scrim" onclick={() => (styleSheetId = null)}></div>
-	<div
-		class="msheet msheet-full"
-		role="dialog"
-		aria-label="Settings for {widgetLabel(styleSheetId)}"
-		data-pop-keep
-	>
-		<header class="msheet-head">
-			<Icons.Palette size={14} />
-			<span>{widgetLabel(styleSheetId)}</span>
-			<span class="flex-1"></span>
-			<button
-				class="medit-btn"
-				aria-label="Close"
-				onclick={() => (styleSheetId = null)}
-			>
-				<Icons.X size={16} />
-			</button>
-		</header>
-		<div class="msheet-stage">
-			<WidgetStyleOverlay
-				widgetId={styleSheetId}
-				label={widgetLabel(styleSheetId)}
-			/>
 		</div>
 	</div>
 {/if}
@@ -745,7 +727,11 @@
 			color-mix(in oklab, currentColor 10%, transparent);
 	}
 	.medit-row.dragging {
-		background: color-mix(in oklab, var(--color-primary-500) 14%, transparent);
+		background: color-mix(
+			in oklab,
+			var(--color-primary-500) 14%,
+			transparent
+		);
 	}
 	.medit-line {
 		display: flex;
@@ -763,9 +749,7 @@
 		font-size: 0.85rem;
 	}
 	.medit-badge {
-		font-size: 0.65rem;
-		text-transform: uppercase;
-		letter-spacing: 0.04em;
+		font-size: 0.6875rem;
 		padding: 0.1rem 0.3rem;
 		border-radius: 0.25rem;
 		background: color-mix(in oklab, currentColor 12%, transparent);
@@ -799,9 +783,24 @@
 		opacity: 0.3;
 		cursor: default;
 	}
+	/* Where the × would be on the row the primary floor keeps: the reason, as
+	   a quiet lock (its label says it), taking the ×'s square so the row's
+	   controls do not shift. */
+	.medit-floor {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		inline-size: 2.25rem;
+		block-size: 2.25rem;
+		color: var(--color-surface-600-400);
+	}
 	.medit-btn.on {
 		color: var(--color-primary-500);
-		border-color: color-mix(in oklab, var(--color-primary-500) 40%, transparent);
+		border-color: color-mix(
+			in oklab,
+			var(--color-primary-500) 40%,
+			transparent
+		);
 	}
 	.medit-members {
 		flex-basis: 100%;
@@ -870,13 +869,6 @@
 		background: var(--color-surface-950);
 		color: var(--color-surface-contrast-950);
 	}
-	/* The style controls need the whole screen: the widget they edit is not on
-	   it, so the sheet is the only thing they have to fill. */
-	.msheet-full {
-		inset-block: 0;
-		max-block-size: none;
-		border-radius: 0;
-	}
 	.msheet-head {
 		display: flex;
 		align-items: center;
@@ -923,14 +915,6 @@
 		flex: 1;
 		min-inline-size: 0;
 	}
-	/* The containing block for the style overlay, which is `position: absolute;
-	   inset: 0` against the card it normally sits on. */
-	.msheet-stage {
-		position: relative;
-		flex: 1;
-		min-block-size: 0;
-	}
-
 	/* Duplicated from SessionLayout's Presets pane, not shared: Svelte scopes
 	   a component's CSS to its own markup, and the sheet's name box left that
 	   scope with the sheet. The desktop pane still carries the original. */

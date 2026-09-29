@@ -131,7 +131,7 @@
 
 {#if current}
 	<div
-		class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+		class="fixed inset-0 z-50 flex items-center justify-center bg-surface-950/60 p-4"
 		role="dialog"
 		aria-modal="true"
 		aria-label="Review a pipeline write"
@@ -143,7 +143,7 @@
 				<Icons.ShieldQuestion size={20} class="mt-0.5 shrink-0" />
 				<div class="min-w-0 flex-1">
 					<p class="font-semibold">Waiting for your review</p>
-					<p class="text-muted text-xs">
+					<p class="text-surface-600-400 text-xs">
 						A pipeline is paused before it acts. Nothing happens
 						until you decide — waiting costs nothing.
 						{#if queue.length > 1}

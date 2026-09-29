@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { getContext } from "svelte"
+	import { canRunLocalRuntimes } from "$lib/client/components/connections/addMenuItems"
 
 	let userCtx: UserCtx = getContext("userCtx")
 	let systemSettingsCtx: SystemSettingsCtx = getContext("systemSettingsCtx")
@@ -11,6 +12,12 @@
 	let isAdmin = $derived(!!userCtx.user?.isAdmin)
 	let isAccountsEnabled = $derived(
 		!!systemSettingsCtx.settings?.isAccountsEnabled
+	)
+	// The Android app can't run either local runtime (the server refuses to
+	// switch them on), so their pages are hidden there — as the shell's nav
+	// hides them.
+	let localRuntimes = $derived(
+		canRunLocalRuntimes(systemSettingsCtx.settings)
 	)
 
 	interface PageLink {
@@ -49,7 +56,7 @@
 					},
 					{
 						href: "/document-view/sessions/new",
-						label: "Start a New Session",
+						label: "Start a New session",
 						description:
 							"Create a session with one or more characters and personas.",
 						show: true
@@ -71,13 +78,13 @@
 					},
 					{
 						href: "/document-view/characters/new",
-						label: "Create a New Character",
+						label: "Create a New character",
 						description: "Simplified character creation.",
 						show: true
 					},
 					{
 						href: "/document-view/characters/browse",
-						label: "Browse Character Library",
+						label: "Browse character library",
 						description:
 							"Search and download community characters.",
 						show: true
@@ -107,26 +114,28 @@
 					},
 					{
 						href: "/document-view/ollama",
-						label: "Ollama Manager",
+						label: "Ollama, managed",
 						description:
 							"Browse, download, and connect Ollama models.",
 						show:
 							isAdmin &&
+							localRuntimes &&
 							!!ollamaSettingsCtx.settings?.ollamaManagerEnabled
 					},
 					{
 						href: "/document-view/koboldcpp",
-						label: "KoboldCPP Manager",
+						label: "KoboldCPP, run by Serene Pub",
 						description:
 							"Browse, download, and connect KoboldCPP models.",
 						show:
 							isAdmin &&
+							localRuntimes &&
 							!!koboldCppSettingsCtx.settings
 								?.koboldCppManagerEnabled
 					},
 					{
 						href: "/document-view/settings/system",
-						label: "System Settings",
+						label: "System settings",
 						description:
 							"Instance-wide settings: managers, accounts, summarization, and more.",
 						show: isAdmin
@@ -176,7 +185,7 @@
 
 <h1>Help</h1>
 
-<h2>Keyboard Shortcuts</h2>
+<h2>Keyboard shortcuts</h2>
 <p>
 	Every control in Document View is a plain link, button, or form field, so it
 	already works with standard browser keyboard behavior — nothing to learn
@@ -251,7 +260,7 @@
 	land somewhere useful after following a link.
 </p>
 
-<h2>All Pages</h2>
+<h2>All pages</h2>
 <p>
 	Every page currently available in Document View, grouped by area — only what
 	your account can access is listed.

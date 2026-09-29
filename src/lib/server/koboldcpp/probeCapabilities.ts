@@ -79,11 +79,11 @@ export function flagsFrom(data: unknown): KoboldCppFlags {
  * `websearch` and `admin` are deliberately absent — they are server features,
  * not things a model turns one kind of data into.
  *
- * ## ⚠ Three of these answers are currently DISCARDED, and that is correct
+ * ## ⚠ Two of these answers are currently DISCARDED, and that is correct
  *
- * `text->audio`, `audio->text` and `text->embedding` are no longer declared in
- * `ADAPTER_MANIFEST` for either KoboldCPP type, because no adapter implements
- * `synthesizeSpeech`, `transcribeAudio` or `embedText` — the manifest's key
+ * `text->audio` and `audio->text` are not declared in `ADAPTER_MANIFEST` for
+ * either KoboldCPP type, because no adapter implements `synthesizeSpeech` or
+ * `transcribeAudio` — the manifest's key
  * space is derived from which actions exist, so a capability nothing can call
  * cannot be declared. `resolveCapabilities` iterates `supports` only, so it
  * ignores an answer to a question that was never asked.

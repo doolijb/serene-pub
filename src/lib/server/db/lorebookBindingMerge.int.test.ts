@@ -75,6 +75,20 @@ async function insertLegacyPersona(opts: {
 }
 
 /**
+ * Same reason again: `schema.lorebooks` declares the story-time columns 0178
+ * added (`story_calendar`, `story_clock_*`), which don't exist at 124.
+ */
+async function insertLegacyLorebook(opts: { userId: number; name: string }) {
+	const result = await db.execute(sql`
+		INSERT INTO "lorebooks" ("user_id", "name")
+		VALUES (${opts.userId}, ${opts.name})
+		RETURNING "id"
+	`)
+	const rows = (result as any).rows ?? result
+	return rows[0] as { id: number }
+}
+
+/**
  * `schema.characters` (the CURRENT, head-of-branch schema) declares
  * `is_persona`/`is_default_persona`/`folder_id`, added by 0132 — a migration
  * that, like 0125, is above `UNDER_TEST_IDX` and so hasn't run yet at seed
@@ -289,10 +303,7 @@ beforeAll(async () => {
 		.values({ username: "binding-merge-user" })
 		.returning()
 	userId = user.id
-	const [lorebook] = await db
-		.insert(schema.lorebooks)
-		.values({ userId: user.id, name: "Book" })
-		.returning()
+	const lorebook = await insertLegacyLorebook({ userId: user.id, name: "Book" })
 	lorebookId = lorebook.id
 	const character = await insertLegacyCharacter({
 		userId: user.id,
@@ -426,10 +437,10 @@ beforeAll(async () => {
 	// character group and a duplicate of its persona group. Ordered so the
 	// persona merge comes first, which is what deletes the row the character
 	// group was about to be merged onto.
-	const [bookTwo] = await db
-		.insert(schema.lorebooks)
-		.values({ userId: user.id, name: "Both ends" })
-		.returning()
+	const bookTwo = await insertLegacyLorebook({
+		userId: user.id,
+		name: "Both ends"
+	})
 	bothBookId = bookTwo.id
 	const otherCharacter = await insertLegacyCharacter({
 		userId: user.id,

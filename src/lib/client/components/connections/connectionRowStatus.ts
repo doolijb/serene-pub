@@ -3,8 +3,7 @@
  *
  * ## Why this stopped being a sentence
  *
- * It used to answer `{ dot, sentence, action }`, and the sentence was facts
- * joined with " · ": `9 models · api.anthropic.com · checked 2 minutes ago`,
+ * A single status sentence — facts joined with " · ": `9 models · api.anthropic.com · checked 2 minutes ago`,
  * `Couldn't list models · Missing credentials`, `Running · Nemo 12B loaded · 3
  * on disk`. In a 400px column every one of those truncated, and they truncated
  * from the right — which is exactly where the fact lives. The shipped panel read
@@ -41,7 +40,7 @@
  * | `broken` | error | it was finished and it still failed |
  *
  * ⚠ `unfinished` is gold, not red, and it is never an alarm. It covers both "you
- * have not typed the key yet" and "three models the host used to list are gone"
+ * have not typed the key yet" and "three models the host listed before are gone"
  * — different sentences, one colour, because in both the next move is the
  * person's and nothing is on fire.
  *
@@ -63,6 +62,7 @@ import {
 	type LaneStatus,
 	type OllamaStatus
 } from "./endpointStatus"
+import type { KcppInstallState } from "./managedConnectionView"
 import type { EndpointKind } from "./modelManagement"
 
 /**
@@ -78,7 +78,7 @@ export type ConnectionState =
 
 /** The one action a row may offer. The row itself is what opens the connection. */
 export interface RowStatusAction {
-	verb: "stop" | "start" | "fix" | "refresh" | "setup"
+	verb: "stop" | "start" | "start-offline" | "fix" | "refresh" | "setup"
 	label: string
 	/** A `@lucide/svelte` export name, resolved by the component. */
 	icon: string
@@ -124,14 +124,12 @@ export interface RowStatusFacts {
 	kcpp?: KcppStatus | null
 	ollama?: OllamaStatus | null
 	lane?: LaneStatus | null
-	/** False only when the flag is known to be off. */
-	managerEnabled?: boolean
 	/**
-	 * False when the managed KoboldCPP has no mode chosen yet, or is managed
-	 * with no binary recorded — its view is still on a setup stage, and Start
-	 * has nothing to start. Undefined when unknown.
+	 * The managed KoboldCPP install, read by `kcppInstallState` — the SAME
+	 * reading its view makes, so the row and the view it opens cannot
+	 * disagree. Undefined for every other kind.
 	 */
-	kcppSetUp?: boolean
+	kcppInstall?: KcppInstallState
 	/** A forced listing is in flight for this connection. */
 	syncing?: boolean
 	/** "3 minutes ago". Injected so the row is testable. */
@@ -164,6 +162,17 @@ const STOP: RowStatusAction = {
 }
 const START: RowStatusAction = {
 	verb: "start",
+	label: "Start",
+	icon: "Play",
+	emphasis: "tonal"
+}
+/**
+ * Start for an install that is switched off: the press turns the manager back
+ * on AND starts it, in one server call (`koboldcpp:startSubprocess` with
+ * `enable`). Its own verb so the row's handler can say which.
+ */
+const START_OFFLINE: RowStatusAction = {
+	verb: "start-offline",
 	label: "Start",
 	icon: "Play",
 	emphasis: "tonal"
@@ -230,26 +239,47 @@ function managedStatus(
 	missing: number
 ): RowStatus {
 	const onDisk = plural(connection.models.length, "on disk", "on disk")
-	// The manager flag is what "Add → KoboldCPP, run by Serene Pub" sets, so
-	// a managed row with the flag off is one nobody has finished installing.
-	if (facts.managerEnabled === false)
-		return {
-			state: "unfinished",
-			label: "Not installed",
-			detail: "On this machine",
-			metric: null,
-			action: SET_UP
-		}
-	// The flag on but no mode or binary chosen: the view is on a setup stage
-	// and the process status, whatever it says, is about nothing yet.
-	if (facts.kcppSetUp === false)
-		return {
-			state: "unfinished",
-			label: "Not set up",
-			detail: "Choose how to run it",
-			metric: null,
-			action: SET_UP
-		}
+	switch (facts.kcppInstall) {
+		case "loading":
+			// Settings have not arrived. "Not installed" here was a guess, and
+			// it was the guess the row showed on every page load.
+			return {
+				state: "busy",
+				label: "Checking",
+				detail: null,
+				metric: null,
+				action: null
+			}
+		case "not-installed":
+			return {
+				state: "unfinished",
+				label: "Not installed",
+				detail: null,
+				metric: null,
+				action: SET_UP
+			}
+		case "offline":
+			// Switched off with the install kept — the files are still here, so
+			// the count is still true, and Start is the one press that helps.
+			return {
+				state: "idle",
+				label: "Offline",
+				detail: "Switched off",
+				metric: onDisk,
+				action: START_OFFLINE
+			}
+		case "no-mode":
+		case "no-binary":
+			// The view is on a setup stage and the process status, whatever it
+			// says, is about nothing yet.
+			return {
+				state: "unfinished",
+				label: "Not set up",
+				detail: "Choose how to run it",
+				metric: null,
+				action: SET_UP
+			}
+	}
 	const run = facts.kcpp?.run ?? null
 	const loaded = facts.kcpp?.loadedFiles?.[0] ?? null
 	switch (run) {

@@ -22,7 +22,7 @@
 -- LOSSIER migration than this one rather than none.
 --
 -- `LlamaCppAdapter` gained the chat leg instead (`isChatWire`, the same
--- `useSession` idiom Ollama and KoboldCPP use), so one row now reaches both of
+-- `useChat` idiom Ollama and KoboldCPP use), so one row now reaches both of
 -- llama-server's endpoints. The manifest declares `wire_chat` as
 -- SUPPORTED-BUT-NOT-DEFAULTED, which is what keeps every row below on the
 -- completion leg it was already being called by: `resolveCapabilities` gives a

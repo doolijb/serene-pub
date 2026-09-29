@@ -50,11 +50,15 @@ export function registerActivityHandlers(socket: any) {
 		})
 	})
 
-	socket.on("activity:dismiss", (req: { id: string }) => {
+	/**
+	 * `how: "acted"` is the save/apply paths saying the result was used — the
+	 * only other word a client may send. Anything else is a dismiss.
+	 */
+	socket.on("activity:dismiss", (req: Sockets.Activity.Dismiss.Request) => {
 		const activity = activityStore.getById(req?.id)
 		if (!activity) return
 		if (!isAdmin && activity.userId !== userId) return
-		activityStore.remove(req.id)
+		activityStore.remove(req.id, req.how === "acted" ? "acted" : "dismissed")
 	})
 
 	socket.on("activity:cancel", (req: { id: string }) => {

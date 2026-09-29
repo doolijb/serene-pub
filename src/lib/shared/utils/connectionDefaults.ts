@@ -90,13 +90,11 @@ export const CONNECTION_DEFAULTS = {
 			grammarRetainState: false,
 			logprobs: false,
 			replaceInstructPlaceholders: false,
-			// No sdModelFile here, deliberately — a connection names exactly ONE
-			// model, and this one names a text GGUF. An image model riding along
-			// in the same row would be a second model on a row that has no way
-			// to say which of the two `connection.model` means, which is the
-			// shape KOBOLDCPP_MANAGED_IMAGE exists to replace. What is RESIDENT
-			// in the process at any moment is the model manager's business
-			// (planResidency), not this row's.
+			// No sdModelFile here, deliberately — image models are this
+			// endpoint's own `connection_models` rows (modality `image-gen`),
+			// and the image load knobs live in `extraJson.profile`. What is
+			// RESIDENT in the process at any moment is the model manager's
+			// business (planResidency), not this row's.
 			managedConfig: {
 				gpuLayers: -1,
 				flashAttention: false,
@@ -107,7 +105,7 @@ export const CONNECTION_DEFAULTS = {
 	[CONNECTION_TYPE.KOBOLDCPP_MANAGED_IMAGE]: {
 		type: CONNECTION_TYPE.KOBOLDCPP_MANAGED_IMAGE,
 		// Display only, and the same value the managed text type carries: this
-		// type never reads its own baseUrl. The Manager's settings are
+		// type never reads its own baseUrl. The managed KoboldCPP's settings are
 		// authoritative for where the process actually is, which is why both the
 		// render path (dispatchImage.resolveBaseUrl) and the adapter's own
 		// testConnection resolve it from there instead.
@@ -116,7 +114,7 @@ export const CONNECTION_DEFAULTS = {
 		// is what shapeOfModality and the sidebar's Text/Image filter read.
 		modality: "image-gen",
 		// The image model this connection names. Empty until one is picked —
-		// either in the Manager ("Use for image generation") or from the
+		// either in the managed KoboldCPP ("Use for image generation") or from the
 		// Checkpoint list the form's Test button fills in.
 		model: "",
 		// No `profile` block, unlike managedConfig above — and the same choice
@@ -157,7 +155,7 @@ export const CONNECTION_DEFAULTS = {
 	 * `modality: "embeddings"` is the load-bearing field — it is what
 	 * `withConnectionDefaults` writes into `connections.modality`, which is what
 	 * the sidebar filters on and what `shapeOfModality` turns into the shape a
-	 * provider slot compares against. Without it a new embedding connection
+	 * connection slot compares against. Without it a new embedding connection
 	 * would be filed under Large Language Models.
 	 *
 	 * No `promptFormat` or `tokenCounter`: those are text-generation concerns,
@@ -212,7 +210,7 @@ export const CONNECTION_DEFAULTS = {
 }
 
 /**
- * OpenAI Session presets used in ConnectionsSidebar.
+ * OpenAI Chat presets used in ConnectionsSidebar.
  *
  * ## `slug`
  *

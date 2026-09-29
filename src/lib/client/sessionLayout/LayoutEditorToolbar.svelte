@@ -609,7 +609,7 @@
 		box-shadow: 0 6px 20px -12px rgba(0, 0, 0, 0.4);
 		overflow: hidden;
 		/* The start edge moves when the tab does (viewport on Move, the root's
-		   own edge on the others). Deliberately NOT transitioned: a tab switch
+		   own edge on the others). Intentionally NOT transitioned: a tab switch
 		   also swaps the canvas for the live session (or back), and in Chromium
 		   a slide on this property played out only after that mount had
 		   settled (the bar sat at its old edge for ~300ms, then jumped), which
@@ -699,8 +699,7 @@
 		padding-inline: 1rem;
 	}
 	/* Style tab: the whole panel is one line pointing at the widgets themselves,
-	   which is where the controls are. The segmented pack pickers that used to
-	   sit above it went with the packs (ruled 2026-08-30). */
+	   which is where the controls are. */
 	.pack-hint {
 		inline-size: 100%;
 		font-size: 12px;

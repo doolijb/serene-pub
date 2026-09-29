@@ -81,10 +81,10 @@
 							/>
 						</div>
 						<h3 class="text-foreground text-lg font-bold">
-							Install Model
+							Install model
 						</h3>
 					</div>
-					<p class="text-muted-foreground text-sm">
+					<p class="text-surface-600-400 text-sm">
 						Enter the model name to download. You can use formats
 						like "ollama pull model", "ollama run model", or just
 						"model".
@@ -97,7 +97,7 @@
 							class="text-foreground mb-1 block text-sm font-medium"
 							for="modelNameInput"
 						>
-							Model Name
+							Model name
 						</label>
 						<input
 							id="modelNameInput"
@@ -113,7 +113,7 @@
 					{#if inputValue.trim()}
 						<div class="bg-surface-100-900 rounded border p-3">
 							<div
-								class="text-muted-foreground mb-1 text-xs font-medium"
+								class="text-surface-600-400 mb-1 text-xs font-medium"
 							>
 								Will install:
 							</div>

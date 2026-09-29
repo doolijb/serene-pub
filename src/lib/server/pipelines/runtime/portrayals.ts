@@ -1,7 +1,7 @@
 /**
  * Who portrays X this turn — the resolver (plans/29 R-15 *audience*, R-21
  * (4); ruled 2026-09-15, built 2026-09-16 as U5a; *portrayal* ruled
- * 2026-09-16 — *voice* is the adventure stage and TTS).
+ * 2026-09-16 — *voice* is the adventure step and TTS).
  *
  * A participant reference is a name (`character:12`, `user:3`, `owner`,
  * `envoy:mascot` — `@serene-pub/sdk` `participants.ts`); this answers, for a

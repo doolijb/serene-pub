@@ -99,7 +99,6 @@ beforeAll(async () => {
 		sessionId: roomSessionId,
 		characterId: verityId,
 		isActive: true,
-		visibility: "visible"
 	} as any)
 
 	const [plain] = await db

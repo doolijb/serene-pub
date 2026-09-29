@@ -1,5 +1,9 @@
-import { HISTORY_TYPE_ID, WORLD_LORE_TYPE_ID } from "$lib/shared/entries/types"
-import type { LoreScope } from "./loreRoute"
+import {
+	HISTORY_TYPE_ID,
+	ITEM_TYPE_ID,
+	WORLD_LORE_TYPE_ID
+} from "$lib/shared/entries/types"
+import type { LoreScope } from "$lib/shared/lorebooks/loreRoute"
 
 /**
  * Which scope a deep link should open for one declared type.
@@ -16,5 +20,6 @@ import type { LoreScope } from "./loreRoute"
 export function entryTypeScope(typeId: string): LoreScope {
 	if (typeId === WORLD_LORE_TYPE_ID) return "world"
 	if (typeId === HISTORY_TYPE_ID) return "history"
+	if (typeId === ITEM_TYPE_ID) return "items"
 	return "all"
 }

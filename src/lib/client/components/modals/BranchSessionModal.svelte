@@ -80,16 +80,16 @@
 				class="card bg-surface-100-900 max-w-md space-y-6 p-6 shadow-xl"
 			>
 				<header class="flex justify-between">
-					<h2 id="modal-title" class="h2">Branch Session</h2>
+					<h2 id="modal-title" class="h2">Branch session</h2>
 				</header>
 				<article class="space-y-4">
-					<p id="modal-description" class="text-muted-foreground">
+					<p id="modal-description" class="text-surface-600-400">
 						Create a new session branch from this message. The new
 						session will include all messages up to this point.
 					</p>
 					<div class="form-field">
 						<label for="title-input" class="sr-only">
-							Session Title
+							Session title
 						</label>
 						<input
 							id="title-input"

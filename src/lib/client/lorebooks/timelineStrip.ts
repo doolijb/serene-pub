@@ -16,9 +16,21 @@
 import {
 	compareDates,
 	dateValue,
-	formatDateValue,
+	formatDate,
 	type StoryDate
 } from "./sections/historyDates"
+
+/**
+ * A story date as an address: `Y3`, `Y3-2`, `Y3-2-12`. Lossless — the one
+ * identity a date has on the axis (re-exported by `time/moment.ts`, which is
+ * where the route's reading of it lives).
+ */
+export function momentKey(date: StoryDate): string {
+	const parts = [`Y${date.year}`]
+	if (date.month != null) parts.push(String(date.month))
+	if (date.month != null && date.day != null) parts.push(String(date.day))
+	return parts.join("-")
+}
 
 /** A dated row — a history entry, as the axis reads it. */
 export interface DatedRow extends StoryDate {
@@ -27,7 +39,14 @@ export interface DatedRow extends StoryDate {
 
 export interface TimelineTick {
 	id: number
-	/** `year×10000 + month×100 + day`, which is the position's own unit. */
+	/** The tick's own date — what a click on it lands on. */
+	date: StoryDate
+	/** `momentKey(date)`: the tick's identity and the address it writes. */
+	key: string
+	/**
+	 * `year×10000 + month×100 + day` — PLACEMENT only. Two dates can share
+	 * one (a day past 100), so it never identifies or orders a tick.
+	 */
 	value: number
 	label: string
 	/** Where the tick sits along the axis, 0 at the start and 1 at the end. */
@@ -43,7 +62,8 @@ export interface TimelineTick {
  * bar could say "Nothing is dated yet" while an amendment sat at Y4 and the
  * banner above it said "Reading as of Year 4".
  *
- * ⚠ Deduped by DATE, not by row: several amendments on one day, or an
+ * ⚠ Deduped by DATE (its lossless key, never the packed value, which
+ * merges Mo. 1 Day 150 with Mo. 2 Day 50), not by row: several amendments on one day, or an
  * amendment dated at a history entry's date, are one place to stand. The
  * history entry wins the tick's id where both exist, so a tick keeps naming a
  * row the reader can open.
@@ -52,7 +72,7 @@ export interface TimelineTick {
  * identity.** Rows arrive from three tables — history entries, entry
  * amendments, cast amendments — whose ids collide freely. The DATE is the
  * identity here, because the axis holds one tick per date; `MomentBar` keys its
- * `{#each}` on `tick.value` for exactly this reason. Keying on the id raised
+ * `{#each}` on `tick.key` for exactly this reason. Keying on the id raised
  * `each_key_duplicate` the moment a cast amendment shared an id with an entry
  * amendment, which is to say almost immediately.
  */
@@ -60,11 +80,11 @@ export function momentAxisRows(
 	history: readonly DatedRow[],
 	amendments: readonly DatedRow[]
 ): DatedRow[] {
-	const byDate = new Map<number, DatedRow>()
+	const byDate = new Map<string, DatedRow>()
 	// History first, so it wins the id on a shared date.
 	for (const row of [...history, ...amendments]) {
-		const value = dateValue(row)
-		if (!byDate.has(value)) byDate.set(value, row)
+		const key = momentKey(row)
+		if (!byDate.has(key)) byDate.set(key, row)
 	}
 	return [...byDate.values()].sort(compareDates)
 }
@@ -84,12 +104,21 @@ export function buildTicks(rows: readonly DatedRow[]): TimelineTick[] {
 	const min = values[0]
 	const span = values[values.length - 1] - min
 	const last = sorted.length - 1
-	return sorted.map((row, i) => ({
-		id: row.id,
-		value: values[i],
-		label: formatDateValue(values[i]),
-		ratio: last === 0 ? 0 : span > 0 ? (values[i] - min) / span : i / last
-	}))
+	return sorted.map((row, i) => {
+		const date: StoryDate = {
+			year: row.year,
+			month: row.month ?? null,
+			day: row.month != null ? (row.day ?? null) : null
+		}
+		return {
+			id: row.id,
+			date,
+			key: momentKey(date),
+			value: values[i],
+			label: formatDate(date),
+			ratio: last === 0 ? 0 : span > 0 ? (values[i] - min) / span : i / last
+		}
+	})
 }
 
 /** The tick a click or a drag at this fraction of the axis lands on. */
@@ -122,13 +151,47 @@ export function ratioOf(
 	return position < ticks[0].value ? ticks[0].ratio : best
 }
 
-/** The rows dated after the cursor: true later, not yet true here. */
+/**
+ * The tick an arrow key moves to from `current` (a date, or null for now).
+ *
+ * By DATE, never by index: from now, back is the newest tick (not the one
+ * before it); from a moment between ticks, back is the last tick before it
+ * and forward the first after it. Forward past the newest tick is now
+ * (`null`); back from the oldest stays there. `undefined` = no ticks.
+ */
+export function stepTick(
+	ticks: readonly TimelineTick[],
+	current: StoryDate | null,
+	direction: "back" | "forward"
+): TimelineTick | null | undefined {
+	if (ticks.length === 0) return undefined
+	if (direction === "back") {
+		if (current === null) return ticks[ticks.length - 1]
+		let found: TimelineTick | null = null
+		for (const tick of ticks)
+			if (compareDates(tick.date, current) < 0) found = tick
+		return found ?? ticks[0]
+	}
+	if (current === null) return null
+	return ticks.find((tick) => compareDates(tick.date, current) > 0) ?? null
+}
+
+/**
+ * The rows dated after the moment: true later, not yet true here.
+ *
+ * ⚠ By `compareDates` on each row's own DATE against the cursor's KEY (its
+ * lossless address) — never the packed placement value, which collides once
+ * a month or a day passes 100 and then dims the wrong rows. An undated row
+ * is never later than anything.
+ */
 export function keysAfter(
-	items: readonly { key: string; order: number }[],
-	position: number | null
+	items: readonly { key: string; date: StoryDate | null }[],
+	at: StoryDate | null
 ): string[] {
-	if (position == null) return []
-	return items.filter((i) => i.order > position).map((i) => i.key)
+	if (at == null) return []
+	return items
+		.filter((i) => i.date != null && compareDates(i.date, at) > 0)
+		.map((i) => i.key)
 }
 
 /**

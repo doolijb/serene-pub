@@ -7,31 +7,62 @@
  * the six prompt texts each field draws from.
  *
  * Every rule below is the legacy rule, and the ones that are *only* expressible
- * as a rule — the visibility filters — are reproduced here with their asymmetry
- * intact. They look like duplicates and are not:
+ * as a rule — the detail and enabled filters — are reproduced here with their
+ * asymmetry intact. They look like duplicates and are not:
  *
- * - the **cards** include a character who is inactive, and exclude a hidden one
- *   unless they are the speaker (index.ts:288-306);
- * - the **names** exclude a character who is inactive *or* hidden, with no
- *   exception for the speaker (index.ts:260-271).
+ * - the **cards** include a character who is switched off (`enabled: false`),
+ *   and at `characterDetail: speaker-only` exclude everyone but the speaker;
+ * - the **names** exclude a character who is switched off, and at
+ *   `speaker-only` exclude everyone — with no exception for the speaker.
  *
- * So an inactive character can appear in the `characters` blob while being
- * absent from `{{characterNames}}`, and the speaker can appear in the blob
- * while hidden from the joined list. Collapsing the two filters into one — the
+ * So a switched-off character can appear in the `characters` blob while being
+ * absent from `{{characterNames}}`. Collapsing the two filters into one — the
  * obvious cleanup — changes prompts.
+ *
+ * ⚠ `characterDetail` replaced the per-character `session_characters.visibility`
+ * (retired 2026-09-27): the same three levels, now one genre field for the
+ * whole cast rather than a switch per seat. The levels keep the old rules
+ * exactly — `brief` is the old *minimal* (name, nickname and description; no
+ * personality), `speaker-only` the old *hidden* — so a session that never
+ * touched the old switch renders byte for byte what it did.
  */
 
-import { SessionCharacterVisibility } from "$lib/shared/constants/SessionCharacterVisibility"
 import { resolveCharacterName } from "$lib/shared/utils/resolveCharacterName"
 import { joinWithAnd } from "$lib/shared/utils/joinWithAnd"
 import * as F from "$lib/server/pipelines/prompt/contextFields"
 import { resolveSeedLine } from "$lib/server/pipelines/prompt/seedLine"
+import { ownVoiceName } from "$lib/shared/sessions/ownVoiceName"
 import type { ChannelVoice } from "$lib/server/messages/channels"
 import type { BuildContextInput } from "$lib/server/pipelines/prompt/templateContext"
 
+/**
+ * How much of a non-speaking character's card the prompt shows — the stored
+ * values of the genre field `characterDetail` (Chat, Adventure; 2026-09-27).
+ * The speaker's own card is always `full`, whatever the level.
+ */
+export const CHARACTER_DETAIL = {
+	/** Name, nickname, description and personality. The default. */
+	FULL: "full",
+	/** Name, nickname and description — who they are, not how they behave. */
+	BRIEF: "brief",
+	/** No card and no name for anyone but the speaker. */
+	SPEAKER_ONLY: "speaker-only"
+} as const
+
+export type CharacterDetail =
+	(typeof CHARACTER_DETAIL)[keyof typeof CHARACTER_DETAIL]
+
+/** A stored value read as a level; anything unrecognised is `full`. */
+export function characterDetailOf(value: unknown): CharacterDetail {
+	return value === CHARACTER_DETAIL.BRIEF ||
+		value === CHARACTER_DETAIL.SPEAKER_ONLY
+		? value
+		: CHARACTER_DETAIL.FULL
+}
+
 export interface SessionCharacterRow {
-	isActive?: boolean | null
-	visibility?: string | null
+	/** The seat is switched on in the cast list. Absent reads as on. */
+	enabled?: boolean | null
 	character: F.CharacterFields & { id?: number }
 }
 
@@ -49,6 +80,14 @@ export interface ResolveInput {
 	sessionScenario?: string | null
 	isGroup?: boolean
 	narratorName?: string
+	/**
+	 * The cast read's envoys — seated (`envoys`) and declared-only
+	 * (`declaredEnvoys`) — for the one thing this resolver takes from them:
+	 * the own voice's name on the seed line (lair re-plan R5), which is the
+	 * genre's fallback envoy when it declares one.
+	 */
+	envoys?: ReadonlyArray<{ name?: unknown; fallback?: boolean }>
+	declaredEnvoys?: ReadonlyArray<{ name?: unknown; fallback?: boolean }>
 	/**
 	 * The side character speaking this turn (ruling 2026-09-07) — a
 	 * **participant without a turn slot**.
@@ -69,7 +108,7 @@ export interface ResolveInput {
 	 * That side character's card, when the trigger picked a real character
 	 * rather than typing a name.
 	 *
-	 * Rendered at full visibility beside the cast's cards, because a model
+	 * Rendered in full beside the cast's cards, because a model
 	 * asked to speak as somebody needs to know who they are — that is what
 	 * "first-class presence" means in a prompt. Absent for a free-form name,
 	 * where there is no card to render and the name is all there is.
@@ -106,22 +145,28 @@ export interface ResolveInput {
 	 * byte-identical for them.
 	 */
 	turnChannelVoice?: ChannelVoice
+	/**
+	 * The session's `characterDetail` genre field, on the cast read (host,
+	 * `case "session_cast"`). Absent — a genre that declares no such field —
+	 * is `full`, which is what every character rendered at before it existed.
+	 */
+	characterDetail?: unknown
 }
 
-/** Card data for one character, at the visibility they are shown at. */
+/** Card data for one character, at the detail they are shown at. */
 function compileCharacter(
 	character: F.CharacterFields,
-	visibility?: string | null
+	detail: CharacterDetail
 ): Record<string, unknown> | null {
-	if (visibility === SessionCharacterVisibility.HIDDEN) return null
+	if (detail === CHARACTER_DETAIL.SPEAKER_ONLY) return null
 
 	const card: Record<string, unknown> = {
 		name: F.characterName(character),
 		nickname: F.characterNickname(character)
 	}
-	// MINIMAL shows who they are and nothing about how they behave.
+	// BRIEF shows who they are and nothing about how they behave.
 	card.description = F.characterDescription(character)
-	if (visibility !== SessionCharacterVisibility.MINIMAL)
+	if (detail !== CHARACTER_DETAIL.BRIEF)
 		card.personality = F.characterPersonality(character)
 
 	// Dropped rather than left null, because these cards are stringified into
@@ -154,44 +199,36 @@ export function resolveContextInput(input: ResolveInput): ResolvedContextInput {
 		sessionCharacters.find((cc) => cc.character.id === currentId)
 			?.character ?? null
 
-	// Cards: the speaker is always present and always at full visibility.
+	const detail = characterDetailOf(input.characterDetail)
+
+	// Cards: the speaker is always present and always in full.
 	const characters = sessionCharacters
-		.filter(
-			(cc) =>
-				cc.character.id === currentId ||
-				cc.visibility !== SessionCharacterVisibility.HIDDEN
-		)
 		.map((cc) =>
 			compileCharacter(
 				cc.character,
-				cc.character.id === currentId
-					? SessionCharacterVisibility.VISIBLE
-					: cc.visibility
+				cc.character.id === currentId ? CHARACTER_DETAIL.FULL : detail
 			)
 		)
 		.filter(Boolean) as Record<string, unknown>[]
 
-	// The side character's card, first, at full visibility — the same terms
-	// the speaking cast member gets. Only when they are genuinely outside the
+	// The side character's card, first, in full — the same terms the
+	// speaking cast member gets. Only when they are genuinely outside the
 	// cast: `current` finding them means the loop above already rendered them,
 	// and rendering twice would put one person in the prompt as two.
 	const sideCard =
 		!current && input.speakerCharacter
-			? compileCharacter(
-					input.speakerCharacter,
-					SessionCharacterVisibility.VISIBLE
-				)
+			? compileCharacter(input.speakerCharacter, CHARACTER_DETAIL.FULL)
 			: null
 	if (sideCard) characters.unshift(sideCard)
 
-	// Names: active and not hidden, no exception for the speaker.
-	const characterNames = sessionCharacters
-		.filter(
-			(cc) =>
-				cc.isActive &&
-				cc.visibility !== SessionCharacterVisibility.HIDDEN
-		)
-		.map((cc) => resolveCharacterName(cc.character as any))
+	// Names: switched on, and not at `speaker-only` — no exception for the
+	// speaker (the old *hidden* rule, kept exactly).
+	const characterNames =
+		detail === CHARACTER_DETAIL.SPEAKER_ONLY
+			? []
+			: sessionCharacters
+					.filter((cc) => cc.enabled !== false)
+					.map((cc) => resolveCharacterName(cc.character as any))
 
 	const personaNames = sessionPersonas.map((cp) => F.personaName(cp.persona))
 
@@ -264,7 +301,14 @@ export function resolveContextInput(input: ResolveInput): ResolvedContextInput {
 				? resolveCharacterName(current as any)
 				: null,
 			speakerName: input.speakerName,
-			narratorName: input.narratorName
+			// The pipeline's own voice (R5): the genre's fallback envoy —
+			// seated or only declared, off the cast read — else this
+			// prompt's narrator name. English: the prompt is what the
+			// model reads, and `en` is the entry every locale map has.
+			ownVoiceName: ownVoiceName({
+				envoys: [...(input.envoys ?? []), ...(input.declaredEnvoys ?? [])],
+				narratorName: input.narratorName
+			})
 		}).name
 	}
 }

@@ -1,5 +1,5 @@
 /**
- * One session's stats, states and possessions, read once and shared.
+ * One session's stats and states (an inventory is one), read once and shared.
  *
  * ## One read, one resolver
  *
@@ -53,13 +53,77 @@ type Descriptor = Sockets.State.SlotDescriptor
 type OwnerRow = Sockets.State.StateOwnerRow
 type Proposal = Sockets.State.ProposalRow
 
-const EMPTY: Resolved = { world: {}, cast: {}, possessions: {} }
+const EMPTY: Resolved = { world: {}, cast: {} }
 
 /** Which session every answer below is about; null before one is opened. */
 let openSessionId = $state<number | null>(null)
 let state = $state<Resolved>(EMPTY)
 let loaded = $state(false)
 let lastError = $state<string | null>(null)
+/**
+ * Why the last READ failed (`state:get:error`) — beside `lastError`, which
+ * every failure writes. What a widget is handed as `session_state.v1.error`:
+ * a write's failure is that write's own (R77), never a line every widget shows.
+ */
+let readError = $state<string | null>(null)
+
+/**
+ * The writes this tab has sent and not yet heard back about, by the
+ * `requestId` each was sent with.
+ *
+ * Matched by ID, never by order: the server's handlers are async and
+ * unserialised, and a reply or refusal reaches every tab of the user — so
+ * the next one to arrive may be another write's, or another tab's. The
+ * server echoes the id on both (`state:set` and `state:set:error`), and a
+ * reply settles the one write it names and nothing else. An `ownError` write
+ * reports its refusal to its caller alone; any other keeps the store-wide
+ * `lastError`.
+ */
+interface PendingSet {
+	ownError: boolean
+	resolve: () => void
+	reject: (e: Error) => void
+	timer: ReturnType<typeof setTimeout>
+}
+const pendingSets = new Map<string, PendingSet>()
+/**
+ * This tab's native writes that timed out in the session still open: a
+ * refusal arriving after its caller was told "unanswered" is still said
+ * store-wide, as a native write's refusal always was. (A widget's write owns
+ * its error, R77 — its caller already heard, so its late refusal is dropped.)
+ */
+const lateNativeSets = new Set<string>()
+/** How long a write may go unanswered before its caller is told so. */
+const SET_TIMEOUT_MS = 15_000
+/**
+ * The stem of this store's write ids: random per tab, so another tab's id
+ * — which reaches this tab too — never names a write of this one.
+ */
+const WRITE_ID_STEM = `set-${Math.random().toString(36).slice(2, 10)}-`
+let writesSent = 0
+
+/** Settle the write `requestId` names, if it is still waiting here. */
+function settleSet(requestId: unknown, error?: string): PendingSet | undefined {
+	if (typeof requestId !== "string") return undefined
+	const entry = pendingSets.get(requestId)
+	if (!entry) return undefined
+	pendingSets.delete(requestId)
+	clearTimeout(entry.timer)
+	if (error === undefined) entry.resolve()
+	else entry.reject(new Error(error))
+	return entry
+}
+
+/** Every write still waiting is abandoned — the session it was about has gone. */
+function abandonPendingSets(why: string): void {
+	const abandoned = [...pendingSets.values()]
+	pendingSets.clear()
+	lateNativeSets.clear()
+	for (const entry of abandoned) {
+		clearTimeout(entry.timer)
+		entry.reject(new Error(why))
+	}
+}
 
 /* SvelteMap, not a plain Map in `$state`: a plain Map's `set`/`delete` are
    invisible to the runtime, so a widget reading one would render the first
@@ -84,6 +148,8 @@ const mine = (sessionId: unknown): boolean =>
 
 function onGet(res: Sockets.State.Get.Response) {
 	if (!mine(res?.sessionId)) return
+	reading = false
+	readError = null
 	state = res.state ?? EMPTY
 	slots.clear()
 	for (const slot of res.slots ?? []) slots.set(slot.slotId, slot)
@@ -143,23 +209,62 @@ function onError(res: Sockets.ErrorResponse) {
 	lastError = res?.error ?? "That did not work."
 }
 
+/**
+ * A read failed: said store-wide as before, and kept as the read's own.
+ *
+ * Only a failure of a read of THIS session: the refusal reaches every tab of
+ * the user, so one that names another session (another tab's, or a late one
+ * for the session this tab just left) is not this one's to show. One that
+ * names none — a failure the server could not put into words — is taken only
+ * while this tab's own read is out.
+ */
+function onGetError(res: Sockets.State.Get.ErrorResponse) {
+	if (typeof res?.sessionId === "number" ? !mine(res.sessionId) : !reading)
+		return
+	reading = false
+	onError(res)
+	readError = res?.error ?? "That did not work."
+}
+
+/** A write landed: the one write its `requestId` names is settled, if it is this tab's. */
+function onSetReply(res: Sockets.State.Set.Response) {
+	if (!settleSet(res?.requestId) && typeof res?.requestId === "string")
+		lateNativeSets.delete(res.requestId)
+}
+
+/**
+ * A write was refused. The write its `requestId` names hears it; the
+ * store-wide `lastError` says it only when that write did not ask to own its
+ * error.
+ *
+ * A refusal naming no write waiting here is another tab's, or one of this
+ * tab's whose caller was already told (it timed out, or its session is gone):
+ * its writer heard it, so it is not said again here — except a native write
+ * that timed out in this session, whose refusal was always the store's to
+ * show. One naming no id at all (a refusal the server could not tie to a
+ * write) is said store-wide, as before.
+ */
+function onSetError(res: Sockets.State.Set.ErrorResponse) {
+	const error = res?.error ?? "That did not work."
+	const settled = settleSet(res?.requestId, error)
+	if (settled) {
+		if (!settled.ownError) lastError = error
+		return
+	}
+	if (res?.requestId === undefined) lastError = error
+	else if (lateNativeSets.delete(res.requestId)) lastError = error
+}
+
 const SETTLED_EVENTS = [
 	"state:set",
-	"state:give",
-	"state:take",
-	"state:transfer",
 	"state:configure",
 	"state:decide"
 ] as const
 
+/* `state:get:error` and `state:set:error` have handlers of their own below. */
 const ERROR_EVENTS = [
-	"state:get:error",
 	"state:ledger:error",
 	"state:proposals:error",
-	"state:set:error",
-	"state:give:error",
-	"state:take:error",
-	"state:transfer:error",
 	"state:configure:error",
 	"state:decide:error"
 ] as const
@@ -188,7 +293,10 @@ function start(): void {
 		),
 		...ERROR_EVENTS.map((e) =>
 			declareInterest<"state:get:error">(e, onError)
-		)
+		),
+		declareInterest<"state:get:error">("state:get:error", onGetError),
+		declareInterest<"state:set">("state:set", onSetReply),
+		declareInterest<"state:set:error">("state:set:error", onSetError)
 	]
 	declareChanged()
 }
@@ -236,6 +344,12 @@ export function stopSessionState(): void {
  */
 let askedFor: number | null = null
 let retry: ReturnType<typeof setTimeout> | null = null
+/**
+ * Is a read of the open session out and unanswered? What lets a read failure
+ * that names no session (`onGetError`) be taken as this tab's own. Plain: read
+ * by a handler, never rendered.
+ */
+let reading = false
 
 /** Ask for everything this session's surfaces read. */
 function refresh(): void {
@@ -251,6 +365,7 @@ function refresh(): void {
 		return
 	}
 	askedFor = openSessionId
+	reading = true
 	// Each reply is its request's own event, so these add no second subscriber
 	// (the handlers are the same references `start` declared) — what they add
 	// is the interest sync ahead of the request, which is what makes a gated
@@ -280,9 +395,12 @@ export function openSessionState(sessionId: number | null): void {
 	// (plan ruling 3).
 	declareChanged()
 	askedFor = null
+	reading = false
+	abandonPendingSets("the session changed before that write was answered")
 	state = EMPTY
 	loaded = false
 	lastError = null
+	readError = null
 	slots.clear()
 	owners.clear()
 	proposals.clear()
@@ -290,39 +408,9 @@ export function openSessionState(sessionId: number | null): void {
 	if (sessionId != null) refresh()
 }
 
-/** The bag a slot's value is filed under for this owner. */
-function bagFor(ownerKey: string): Record<string, unknown> {
-	if (ownerKey === "world") return state.world ?? {}
-	return state.cast?.[ownerKey] ?? {}
-}
-
 /**
- * One owner's value for one slot.
- *
- * Read by the QUALIFIED key, which every value is filed under; the bare key is
- * the first claimant's and is a display name, not an address.
- */
-function valueOf(ownerKey: string, slotId: string): unknown {
-	const slot = slots.get(slotId)
-	if (!slot) return undefined
-	const bag = bagFor(ownerKey)
-	return bag[slot.qualifiedKey]
-}
-
-/** The configuration in force for this owner's slot — a bar's bounds. */
-function configOf(ownerKey: string, slotId: string): Record<string, unknown> {
-	return owners.get(ownerKey)?.configs?.[slotId] ?? {}
-}
-
-/** The slots an owner may carry, in declaration order. */
-function slotsFor(ownerKey: string): Descriptor[] {
-	const owner = owners.get(ownerKey)
-	if (!owner) return []
-	return [...slots.values()].filter((s) => s.slotId in owner.configs)
-}
-
-/**
- * The live handle every widget, the ledger and the review panel share.
+ * The live handle the page's `session_state` projection (what core's state
+ * widgets read, R21), the ledger and the review panel share.
  *
  * A getter object rather than a snapshot, so a `$derived` in the caller re-runs
  * when an answer lands. Reading is free of side effects; `openSessionState` is
@@ -341,6 +429,10 @@ export function sessionState() {
 		get error() {
 			return lastError
 		},
+		/** Why the last read failed, or null — never a write's refusal (R77). */
+		get readError() {
+			return readError
+		},
 		get state() {
 			return state
 		},
@@ -350,19 +442,9 @@ export function sessionState() {
 		get owners() {
 			return owners
 		},
-		/** Every cast member, world excluded — the Stats widget's subjects. */
-		get cast() {
-			return [...owners.values()].filter((o) => o.kind === "session_cast")
-		},
-		get world() {
-			return owners.get("world") ?? null
-		},
 		get proposals() {
 			return [...proposals.values()]
 		},
-		valueOf,
-		configOf,
-		slotsFor,
 		/* ── naming a payload ───────────────────────────────────────────
 		 * A proposal names its owner by kind and id and its item by entry id,
 		 * because that is what a write needs. These turn one back into what a
@@ -376,17 +458,20 @@ export function sessionState() {
 		slotLabelFor(slotId: string): string | undefined {
 			return slots.get(slotId)?.label
 		},
+		/** An item's title, from any list the session resolved that references it (phase 3b: the inventory stat). */
 		itemNameFor(entryId: number): string | undefined {
-			for (const lines of Object.values(state.possessions ?? {}))
-				for (const line of lines)
-					if (line.entryId === entryId) return line.name
+			for (const bag of [state.world, ...Object.values(state.cast ?? {})])
+				for (const value of Object.values(bag ?? {}))
+					if (Array.isArray(value))
+						for (const item of value)
+							if (
+								item &&
+								typeof item === "object" &&
+								(item as { entryId?: unknown }).entryId === entryId &&
+								typeof (item as { name?: unknown }).name === "string"
+							)
+								return (item as { name: string }).name
 			return undefined
-		},
-		/** Does this owner have any value at all — is it in play? */
-		hasAnyValue(ownerKey: string): boolean {
-			return slotsFor(ownerKey).some(
-				(s) => valueOf(ownerKey, s.slotId) !== undefined
-			)
 		},
 		/** The ledger lines anchored to one message, owner by owner. */
 		ledgerFor(messageId: number) {
@@ -415,50 +500,54 @@ export function sessionState() {
 		 * it applies immediately and answers with the whole resolved state. The
 		 * gate below is for the model's proposals, which is the writer with no
 		 * authority of its own. */
+		/**
+		 * Set one owner's value. Resolves once written, rejects with the
+		 * server's sentence when refused — and a write that goes unanswered is
+		 * rejected too, so a caller is never left waiting.
+		 *
+		 * `ownError`: the refusal is the caller's alone (a widget's request,
+		 * R77) — the store-wide `error` is neither cleared nor written.
+		 * Without it the write behaves as it always has: the store's `error`
+		 * says why, and the returned promise may be ignored.
+		 */
 		set(
 			owner: Sockets.State.Owner,
 			slotId: string,
-			value: number | string | boolean | null
-		) {
-			if (openSessionId == null) return
-			lastError = null
+			/** A list is written whole, its items in order. */
+			value: Sockets.State.Set.Params["value"],
+			opts: { ownError?: boolean } = {}
+		): Promise<void> {
+			const ownError = !!opts.ownError
+			if (openSessionId == null)
+				return ownError
+					? Promise.reject(new Error("no session's state is open"))
+					: Promise.resolve()
+			if (!ownError) lastError = null
+			const requestId = `${WRITE_ID_STEM}${++writesSent}`
+			const written = new Promise<void>((resolve, reject) => {
+				pendingSets.set(requestId, {
+					ownError,
+					resolve,
+					reject,
+					timer: setTimeout(() => {
+						// Told now, and forgotten: its reply, if one still
+						// comes, names an id nothing waits on — it settles no
+						// other write (a native one's refusal is still said).
+						if (!pendingSets.delete(requestId)) return
+						if (!ownError) lateNativeSets.add(requestId)
+						reject(new Error("that write went unanswered"))
+					}, SET_TIMEOUT_MS)
+				})
+			})
+			// A caller that does not await (the page's own edits) must not
+			// raise an unhandled rejection; one that does still hears it.
+			written.catch(() => {})
 			requestWithInterest(
 				"state:set",
-				{ sessionId: openSessionId, owner, slotId, value },
-				onSettled
+				{ sessionId: openSessionId, owner, slotId, value, requestId },
+				onSetReply
 			)
-		},
-		give(owner: Sockets.State.Owner, entryId: number, quantity = 1) {
-			if (openSessionId == null) return
-			lastError = null
-			requestWithInterest(
-				"state:give",
-				{ sessionId: openSessionId, owner, entryId, quantity },
-				onSettled
-			)
-		},
-		take(owner: Sockets.State.Owner, entryId: number, quantity = 1) {
-			if (openSessionId == null) return
-			lastError = null
-			requestWithInterest(
-				"state:take",
-				{ sessionId: openSessionId, owner, entryId, quantity },
-				onSettled
-			)
-		},
-		transfer(
-			from: Sockets.State.Owner,
-			to: Sockets.State.Owner,
-			entryId: number,
-			quantity = 1
-		) {
-			if (openSessionId == null) return
-			lastError = null
-			requestWithInterest(
-				"state:transfer",
-				{ sessionId: openSessionId, from, to, entryId, quantity },
-				onSettled
-			)
+			return written
 		},
 		/** Accept or reject one held change. Nothing applies until this. */
 		decide(proposalId: number, accept: boolean) {

@@ -9,15 +9,17 @@
  * `textOf`: a block is not the body, and the row's `content` carries the
  * question in prose where a transcript needs it (`make-choices@1`'s `text`).
  *
- * The readers below are the host's: `sessions:triggerFunction` (through
+ * The readers below are the host's: `sessions:fireAction` (through
  * `fireAction`) reads the form a press names off the ROW, never off the
  * client, and the `answer-form` commit reads the same block the event named.
  */
 
-import { and, eq, inArray, sql } from "drizzle-orm"
+import { and, desc, eq, inArray, sql } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import {
 	findFormBlock,
+	formBlocksOf,
+	isFormStale,
 	type FormAnswered,
 	type FormBlock,
 	type MessageBlock
@@ -62,6 +64,65 @@ export async function loadFormBlock(
 }
 
 /**
+ * The session's **open form** on a channel (W-GATE D3, 2026-09-27): the
+ * newest form that is unanswered and not overtaken, with the action it is
+ * answered by — `session.openForm` in the published values, what an
+ * action's `presentWhen` reads (the Lair's *Answer the door* is present only
+ * while its knock is open).
+ *
+ * Only the channel's newest row can hold one, or — when that row is itself
+ * an answer (`metadata.answersForm`) — the row it answers: any other line
+ * overtakes every form above it (`stalenessHead`). The verdict is the door's
+ * own (`isFormStale` over `stalenessHead`), so a listing never offers what a
+ * press would be refused.
+ *
+ * `action` is the identity every option (or the form's one submit) fires;
+ * null when the options fire different actions — one value, so a predicate
+ * compares a string and never searches a list.
+ */
+export interface OpenForm {
+	messageId: number
+	blockId: string
+	action: string | null
+}
+
+export async function openFormOf(
+	db: Db,
+	sessionId: number,
+	channel = "main"
+): Promise<OpenForm | null> {
+	const [newest] = await db
+		.select({ id: schema.sessionMessages.id, metadata: schema.sessionMessages.metadata })
+		.from(schema.sessionMessages)
+		.where(
+			and(
+				eq(schema.sessionMessages.sessionId, sessionId),
+				eq(schema.sessionMessages.channel, channel)
+			)
+		)
+		.orderBy(desc(schema.sessionMessages.id))
+		.limit(1)
+	if (!newest) return null
+	const answers = Number(
+		(newest.metadata as { answersForm?: { messageId?: unknown } } | null)?.answersForm
+			?.messageId
+	)
+	const rowId = Number.isInteger(answers) && answers > 0 ? answers : newest.id
+	const forms = (await blockTreesOf(db, rowId)).flatMap((tree) => formBlocksOf(tree))
+	if (!forms.length) return null
+	const { stalenessHead } = await import("$lib/server/messages/channels")
+	const headNow = await stalenessHead(db, sessionId, channel, rowId)
+	for (const form of [...forms].reverse()) {
+		if (form.answered || isFormStale(form, headNow) || typeof form.id !== "string") continue
+		const fired =
+			form.kind === "choices" ? form.actions.map((o) => o.action ?? null) : [form.action ?? null]
+		const action = fired.length && fired.every((a) => a && a === fired[0]) ? fired[0]! : null
+		return { messageId: rowId, blockId: form.id, action }
+	}
+	return null
+}
+
+/**
  * The facts about a form a fire carries onto the run's input as `form` —
  * read off the stored block, so a spec's `read-answer@1` sees what the row
  * says and not what a client claimed. `characterId` is the addressee's row
@@ -72,6 +133,8 @@ export interface FormFacts {
 	messageId: number
 	kind: FormBlock["kind"]
 	question: string | null
+	/** What the question was about, by name — the block's `referent` (lair pass B12). */
+	referent?: string
 	addressee: string | null
 	characterId: number | null
 	/** `choices` only: the option key the press answered with, and its label. */
@@ -213,10 +276,49 @@ export async function recordFormSuperseded(
 }
 
 /** A copy of the tree with `answered` set on the form block `id` names. */
-function markBlock(blocks: MessageBlock[], id: string, answered: FormAnswered): MessageBlock[] {
+function markBlock(
+	blocks: MessageBlock[],
+	id: string,
+	answered: FormAnswered | null
+): MessageBlock[] {
 	return blocks.map((b) => {
-		if ((b.kind === "choices" || b.kind === "form") && b.id === id) return { ...b, answered }
+		if ((b.kind === "choices" || b.kind === "form") && b.id === id) {
+			if (answered) return { ...b, answered }
+			const { answered: _gone, ...open } = b
+			return open as MessageBlock
+		}
 		if (b.kind === "group") return { ...b, blocks: markBlock(b.blocks, id, answered) }
 		return b
 	})
+}
+
+/**
+ * Take a form's `answered` mark off again (lair pass R9): an answer rejected
+ * at review that wrote nothing is no answer (`answerStanding`,
+ * `reviewGate.ts`), so the block is open as it was before the press. In
+ * place, like `markFormAnswered`. True when a mark was there to take off.
+ */
+export async function clearFormAnswered(
+	db: Db,
+	messageId: number,
+	blockId: string
+): Promise<boolean> {
+	const parts = await db
+		.select({ id: schema.messageParts.id, data: schema.messageParts.data })
+		.from(schema.messageParts)
+		.where(eq(schema.messageParts.messageId, messageId))
+		.orderBy(schema.messageParts.step, schema.messageParts.revision, schema.messageParts.ordinal)
+	for (const part of parts) {
+		const blocks = (part.data as { blocks?: unknown } | null)?.blocks
+		if (!Array.isArray(blocks)) continue
+		const block = findFormBlock(blocks as MessageBlock[], blockId)
+		if (!block) continue
+		if (!block.answered) return false
+		await db
+			.update(schema.messageParts)
+			.set({ data: { ...(part.data ?? {}), blocks: markBlock(blocks as MessageBlock[], blockId, null) } })
+			.where(eq(schema.messageParts.id, part.id))
+		return true
+	}
+	return false
 }

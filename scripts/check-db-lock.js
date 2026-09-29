@@ -5,6 +5,7 @@ import os from "os"
 import path from "path"
 import { fileURLToPath } from "url"
 import { spawn } from "child_process"
+import envPaths from "env-paths"
 
 /**
  * The lock protocol itself is shared with the app, not restated here.
@@ -20,6 +21,7 @@ import { spawn } from "child_process"
  * outside any build.
  */
 import {
+	LOCK_DELEGATE_ENV,
 	checkDatabaseLock,
 	createLockHeartbeat,
 	describeLockHolder
@@ -76,42 +78,19 @@ function getDataDirectory() {
 		return path.join(envDataDir, "data")
 	}
 
-	// Fallback to envPaths logic - we need to import it dynamically
-	try {
-		// Simple fallback calculation without importing envPaths
-		// This mimics what envPaths would return for most systems
-		const platform = process.platform
-		const home =
-			process.env.HOME || process.env.USERPROFILE || process.env.HOMEPATH
-
-		let dataPath
-		if (platform === "darwin") {
-			dataPath = path.join(
-				home,
-				"Library",
-				"Application Support",
-				"SerenePub"
-			)
-		} else if (platform === "win32") {
-			dataPath = path.join(
-				process.env.APPDATA || path.join(home, "AppData", "Roaming"),
-				"SerenePub"
-			)
-		} else {
-			// Linux and others
-			const xdgDataHome =
-				process.env.XDG_DATA_HOME || path.join(home, ".local", "share")
-			dataPath = path.join(xdgDataHome, "SerenePub")
-		}
-
-		return path.join(dataPath, "data")
-	} catch (error) {
-		console.error("Failed to determine data directory:", error.message)
-		process.exit(1)
-	}
+	// The same resolution as getAppDataDir() in
+	// src/lib/server/utils/appDataDir.ts: `env-paths` itself, not a hand copy
+	// of its table. The hand copy put Windows under %APPDATA%\SerenePub\data,
+	// while the app keeps its data in %LOCALAPPDATA%\SerenePub\Data — so on
+	// Windows this locked a directory nothing else ever opened.
+	return path.join(envPaths("SerenePub", { suffix: "" }).data, "data")
 }
 
 function startLockUpdates(dataDir) {
+	// A data directory nothing has started against yet has no folder, and the
+	// heartbeat's first write used to fail with ENOENT — leaving the command
+	// running with no lock at all. Take the directory so the lock is real.
+	fs.mkdirSync(dataDir, { recursive: true })
 	lockHeartbeat = createLockHeartbeat({
 		metaPath: path.join(dataDir, "meta.json"),
 		dataDir,
@@ -161,7 +140,11 @@ async function checkForExistingLock(dataDir) {
 			)
 			break
 		case "self":
-			console.log("Database lock belongs to this process. Continuing...")
+			console.log(
+				result.evaluation.reason === "delegated"
+					? `Database lock is held for this command by ${describeLockHolder(result.evaluation)}. Continuing...`
+					: "Database lock belongs to this process. Continuing..."
+			)
 			break
 		default:
 			console.log("No database lock found. Continuing...")
@@ -205,7 +188,16 @@ async function runWithLock() {
 
 		const child = spawn(command, commandArgs, {
 			stdio: "inherit",
-			shell: true
+			shell: true,
+			// Name ourselves as the holder the command works under. Commands
+			// that open the database through the app's own module
+			// (`plugin:install`) take the lock again at import time, and
+			// without this they found our live lock, not their pid, and
+			// refused it — the wrapper refusing itself. See
+			// `isDelegatedHolder` in lock.js: only a descendant carrying this
+			// value, whose ancestor we are, is let through. A dev server
+			// started anywhere else never is.
+			env: { ...process.env, [LOCK_DELEGATE_ENV]: String(process.pid) }
 		})
 
 		child.on("close", (code) => {

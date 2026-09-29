@@ -511,7 +511,7 @@ export abstract class BaseConnectionAdapter implements AdapterActions {
 	 * is a different shape, not a different prompt path.
 	 *
 	 * ⚠ **`args` is empty and must stay empty.** It used to carry
-	 * `useSessionFormat`, set by six one-line `compilePrompt` overrides from each
+	 * `useChatFormat`, set by six one-line `compilePrompt` overrides from each
 	 * adapter's own `extraJson` flag — and the pipeline never reached any of
 	 * them, because `withCompiledPrompt` returns above before the argument is
 	 * read. That is the defect wire mode replaced: a per-call answer to a
@@ -1099,7 +1099,7 @@ export abstract class BaseConnectionAdapter implements AdapterActions {
 	 * ## What this replaced, and why it must never go back
 	 *
 	 * Every adapter used to answer this from a flag of its own —
-	 * `extraJson.useSession` on KoboldCPP, Ollama and LM Studio,
+	 * `extraJson.useChat` on KoboldCPP, Ollama and LM Studio,
 	 * `extraJson.prerenderPrompt` on OpenAI, an unconditional `true` on Anthropic
 	 * — and read it inside `compilePrompt(args)`. The pipeline hands its payload
 	 * over through `withCompiledPrompt`, which returns before `compilePrompt`
@@ -1165,7 +1165,7 @@ export abstract class BaseConnectionAdapter implements AdapterActions {
 	 *
 	 * Whether this connection MAY be continued. That is the `continue_reply`
 	 * capability, resolved through the four layers, and it is asked once —
-	 * server-side, before the turn starts, by `continueVerbRefusal`. Asking it
+	 * server-side, before the turn starts, by `extendVerbRefusal`. Asking it
 	 * again here would mean reading `capabilities.resolved`, which is a CACHE an
 	 * older build wrote and which an adapter has no way to refresh; the two
 	 * readings would then disagree exactly on upgrading installs.
@@ -1198,7 +1198,7 @@ export abstract class BaseConnectionAdapter implements AdapterActions {
 	 * `messages` but which — like the default character-perspective path —
 	 * still needs to produce a real `prompt` on any text-completion
 	 * connection. Without this, `prompt` was always left undefined here, so
-	 * any connection not in session-completion mode (e.g. KoboldCPP's default)
+	 * any connection not in chat-completion mode (e.g. KoboldCPP's default)
 	 * silently generated from an empty prompt — the exact bug Narrator
 	 * response had until it was fixed by delegating into the shared
 	 * context-block pipeline instead; summarizer mode intentionally stays
@@ -1246,7 +1246,7 @@ export abstract class BaseConnectionAdapter implements AdapterActions {
 	 * The text-completion prompt for a payload, whatever shape it arrived in.
 	 *
 	 * A compiled prompt carries `prompt` **or** `messages`, and which one
-	 * depends on the connection's own format: split-session renders a role
+	 * depends on the connection's own format: split-chat renders a role
 	 * array, everything else renders one string. An adapter's text-completion
 	 * branch reads `prompt` — and read it as `compiledPrompt.prompt!`, so a
 	 * payload built for a chat endpoint sent the backend `undefined`, which
@@ -1256,7 +1256,7 @@ export abstract class BaseConnectionAdapter implements AdapterActions {
 	 * all: the connection's format never reached the render, so every payload
 	 * was a flat string. Restoring that wire (assemble's `connection` slot) is
 	 * what makes this method necessary, and the shape it has to survive is a
-	 * connection whose format is `split_session` bound to an adapter branch that
+	 * connection whose format is `split_chat` bound to an adapter branch that
 	 * wants text — a contradictory configuration that is nonetheless reachable,
 	 * because the format and the endpoint mode are two independent fields.
 	 *
@@ -1305,7 +1305,7 @@ export abstract class BaseConnectionAdapter implements AdapterActions {
 		/**
 		 * The connection's own wire mode, not a caller's argument.
 		 *
-		 * This read `args.useSessionFormat`, which each adapter set from a local
+		 * This read `args.useChatFormat`, which each adapter set from a local
 		 * `extraJson` flag in its own `compilePrompt` override — six overrides
 		 * whose entire body was that one line, and which the pipeline path never
 		 * reached at all. The accessor is the same fact resolved once, so a
@@ -1325,7 +1325,7 @@ export abstract class BaseConnectionAdapter implements AdapterActions {
 			prompt: promptString,
 			messages,
 			meta: {
-				promptFormat: chatWire ? "session" : "text",
+				promptFormat: chatWire ? "chat" : "text",
 				templateName: "summarizer",
 				timestamp: new Date().toISOString(),
 				truncationReason: null,

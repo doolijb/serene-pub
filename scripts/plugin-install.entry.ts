@@ -50,62 +50,78 @@ if (!dir || flags.has("--help")) {
 	process.exit(dir ? 0 : 1)
 }
 
-const { db, dbReady } = await import("$lib/server/db")
-await dbReady
-
 /**
- * Core's own specs are published by the startup task, not by opening the
- * database — so on a data directory the app has never started against, every
- * package that references a core spec is refused for "not installed on this
- * instance", which is true and completely misleading. Run the same bootstrap
- * the app runs, which is idempotent by construction (`saveDocument` writes
- * nothing for a document it already holds) and is what the next `npm run dev`
- * would do anyway. `check-db-lock.js` has already established that no app has
- * this directory open.
+ * Every path after the database opens goes through `exitAfterClose`, so PGlite
+ * is closed (and the shutdown marker set to "clean") before the process exits —
+ * a success, a refused install and a thrown bootstrap alike.
  */
-const { bootstrapPipelines } = await import(
-	"$lib/server/pipelines/boot/bootstrap"
-)
-await bootstrapPipelines(db)
+const { exitAfterClose } = await import("./exitAfterClose")
 
-const { installPluginPackage } = await import("$lib/server/plugins/install")
-const { setEnabled } = await import("$lib/server/plugins/store")
+await exitAfterClose(
+	async () => {
+		const { db, dbReady } = await import("$lib/server/db")
+		await dbReady
 
-try {
-	const report = await installPluginPackage(db, resolve(dir))
-	process.stdout.write(`installed '${report.pluginId}'\n`)
-	for (const slug of report.specs) process.stdout.write(`  pipeline  ${slug}\n`)
-	for (const id of report.genresDeclared)
-		process.stdout.write(`  genre     ${id}\n`)
-	for (const key of report.configs) process.stdout.write(`  config    ${key}\n`)
-	process.stdout.write(`  files     ${report.files.stored}\n`)
-
-	if (flags.has("--enable")) {
-		await setEnabled(db, report.pluginId, true)
-		// Everything projected from the stored manifest follows the enable
-		// switch: presets, prompts, template engines, event subscriptions,
-		// layouts. Run them here so a `--enable` install is complete when the
-		// command returns rather than at the next boot.
-		const { syncPluginPresets, syncPluginTemplates } = await import(
-			"$lib/server/pipelines/boot/registrySync"
+		/**
+		 * Core's own specs are published by the startup task, not by opening the
+		 * database — so on a data directory the app has never started against, every
+		 * package that references a core spec is refused for "not installed on this
+		 * instance", which is true and completely misleading. Run the same bootstrap
+		 * the app runs, which is idempotent by construction (`saveDocument` writes
+		 * nothing for a document it already holds) and is what the next `npm run dev`
+		 * would do anyway. `check-db-lock.js` has already established that no app has
+		 * this directory open.
+		 */
+		const { bootstrapPipelines } = await import(
+			"$lib/server/pipelines/boot/bootstrap"
 		)
-		await syncPluginPresets(db)
-		await syncPluginTemplates(db)
-		const { syncPluginLayouts } = await import("$lib/server/db/pluginLayouts")
-		await syncPluginLayouts(db)
-		process.stdout.write(`  enabled\n`)
-	} else {
-		process.stdout.write(
-			`\nNot enabled. A fresh install is disabled until somebody switches it on, ` +
-				`and its declared permissions stay refused until an administrator reviews ` +
-				`them in Admin → Extensions. Re-run with --enable to switch it on.\n`
+		await bootstrapPipelines(db)
+
+		const { installPluginPackage } = await import(
+			"$lib/server/plugins/install"
 		)
+		const { setEnabled } = await import("$lib/server/plugins/store")
+
+		const report = await installPluginPackage(db, resolve(dir))
+		process.stdout.write(`installed '${report.pluginId}'\n`)
+		for (const slug of report.specs)
+			process.stdout.write(`  pipeline  ${slug}\n`)
+		for (const id of report.genresDeclared)
+			process.stdout.write(`  genre     ${id}\n`)
+		for (const key of report.configs)
+			process.stdout.write(`  config    ${key}\n`)
+		process.stdout.write(`  files     ${report.files.stored}\n`)
+
+		if (flags.has("--enable")) {
+			await setEnabled(db, report.pluginId, true)
+			// Everything projected from the stored manifest follows the enable
+			// switch: presets, prompts, template engines, event subscriptions,
+			// layouts. Run them here so a `--enable` install is complete when the
+			// command returns rather than at the next boot.
+			const { syncPluginPresets, syncPluginTemplates } = await import(
+				"$lib/server/pipelines/boot/registrySync"
+			)
+			await syncPluginPresets(db)
+			await syncPluginTemplates(db)
+			const { syncPluginLayouts } = await import(
+				"$lib/server/db/pluginLayouts"
+			)
+			await syncPluginLayouts(db)
+			process.stdout.write(`  enabled\n`)
+		} else {
+			process.stdout.write(
+				`\nNot enabled. A fresh install is disabled until somebody switches it on, ` +
+					`and its declared permissions stay refused until an administrator reviews ` +
+					`them in Admin → Extensions. Re-run with --enable to switch it on.\n`
+			)
+		}
+
+		for (const line of [...report.warnings, ...report.refused])
+			process.stderr.write(`warning: ${line}\n`)
+		return 0
+	},
+	async () => {
+		const { closeDatabase } = await import("$lib/server/db")
+		await closeDatabase()
 	}
-
-	for (const line of [...report.warnings, ...report.refused])
-		process.stderr.write(`warning: ${line}\n`)
-	process.exit(0)
-} catch (e) {
-	process.stderr.write(`${e instanceof Error ? e.message : String(e)}\n`)
-	process.exit(1)
-}
+)

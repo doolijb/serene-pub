@@ -20,7 +20,12 @@ import {
 	reasoningOf
 } from "$lib/shared/utils/samplerMappings"
 import { CONNECTION_DEFAULTS } from "$lib/shared/utils/connectionDefaults"
-import { fetchCurrentModelStatus } from "$lib/server/koboldcpp/kcppHttp"
+import {
+	fetchCurrentModelStatus,
+	fetchLoadedEmbeddingModel,
+	fetchLoadedImageModel,
+	KCPP_NO_TEXT_MODEL
+} from "$lib/server/koboldcpp/kcppHttp"
 import { normalizeBaseUrl } from "$lib/shared/utils/normalizeBaseUrl"
 import {
 	createIdleWatchdog,
@@ -31,7 +36,7 @@ import {
 // Plain/"dumb" KoboldCPP connection: the user runs and configures their own
 // koboldcpp instance entirely themselves. No admin API is assumed, so there's
 // no preflight — generateText() just sends the request. For a connection that
-// works with Serene Pub's KoboldCPP Manager (subprocess lifecycle, model
+// works with KoboldCPP, run by Serene Pub (subprocess lifecycle, model
 // swapping via the admin API), see KoboldCppManagedAdapter, which subclasses
 // this and only adds a preflight() step.
 /** What the model wrote, where the envelope counted it. */
@@ -120,7 +125,7 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 	 * nothing", which is the request this adapter has always sent.
 	 *
 	 * ⚠ **This read `extraJson.enableThinking` until the ruling of
-	 * 2026-09-12.** Reasoning effort is a sampling parameter chosen per stage,
+	 * 2026-09-12.** Reasoning effort is a sampling parameter chosen per step,
 	 * not a property of the compute: a connection-level tri-state gave the
 	 * planner nobody reads and the prose the reader is waiting for the same
 	 * answer, and there was no way to say otherwise short of a second
@@ -136,11 +141,11 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 	 * `enable_thinking` is a session-template variable, and the raw completion
 	 * endpoints never run the session-template pipeline.
 	 */
-	private enableThinkingFor(useSession: boolean): boolean | null {
+	private enableThinkingFor(useChat: boolean): boolean | null {
 		const { level, budget } = reasoningOf(this.sampling)
 		if (!level) return null
 		if (budget !== undefined) this.noteIgnoredSampler("reasoningBudget")
-		if (!useSession) {
+		if (!useChat) {
 			this.noteIgnoredSampler("reasoning")
 			return null
 		}
@@ -197,7 +202,7 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 		/**
 		 * Which of KoboldCPP's two endpoints this request goes to.
 		 *
-		 * This read `extraJson.useSession ?? true`, and that flag is gone. It was
+		 * This read `extraJson.useChat ?? true`, and that flag is gone. It was
 		 * an adapter-local answer to a question the RENDER also had to answer, and
 		 * on the pipeline path the two could not see each other: the render always
 		 * produced one flat string while this defaulted to the chat endpoint, so
@@ -210,13 +215,13 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 		 * A person who wants the other endpoint switches the capability, and that
 		 * hand-set value outranks every later test.
 		 */
-		const useSession = this.isChatWire
+		const useChat = this.isChatWire
 		// A fresh key per generation — lets abort() tell KoboldCPP exactly which
 		// in-flight generation to actually stop computing.
 		this.genKey = crypto.randomUUID()
 		// null = Auto (omit from request), true/false = explicit override
 		const enableThinking: boolean | null =
-			this.enableThinkingFor(useSession)
+			this.enableThinkingFor(useChat)
 
 		// The stop sequences this request will send — composed by
 		// `connections/stops.ts` and handed over at construction, never built
@@ -251,8 +256,8 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 		// Prepare the request body according to KoboldCPP API
 		let requestBody: Record<string, any>
 
-		if (useSession) {
-			// Use OpenAI-style session completion format. genkey is a KoboldCPP
+		if (useChat) {
+			// Use OpenAI-style chat completion format. genkey is a KoboldCPP
 			// extension the OpenAI-compat endpoint may or may not honor — harmless
 			// to include either way, and abort() below still works via the plain
 			// fetch abort for this mode regardless.
@@ -297,7 +302,7 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 				// that key is in the Tkinter GUI's own launch-config code,
 				// building the --jinja_kwargs CLI argument for someone
 				// running the GUI directly. The actual per-request path
-				// (sessioncompletions handler, ~L4348-4354) only reads a nested
+				// (chatcompletions handler, ~L4348-4354) only reads a nested
 				// chat_template_kwargs object and merges it over the
 				// server's cached/launch-time jinja kwargs — a top-level
 				// field here was silently ignored, so no enable_thinking
@@ -315,7 +320,7 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 		} else {
 			// Use text completion format. enable_thinking is deliberately
 			// omitted here — it's a session-template (Jinja) variable, only
-			// meaningful to the OpenAI-session-completions code path a model's
+			// meaningful to the OpenAI-chat-completions code path a model's
 			// template can reference; the raw completion endpoints don't run
 			// the session-template pipeline at all, so including it here was a
 			// silent no-op regardless of the Thinking/Reasoning setting.
@@ -358,7 +363,7 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 					})
 
 					try {
-						const endpoint = useSession
+						const endpoint = useChat
 							? `${baseUrl}/v1/chat/completions`
 							: `${baseUrl}/api/extra/generate/stream`
 
@@ -424,8 +429,8 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 									} catch (e) {
 										continue
 									}
-									if (useSession) {
-										// OpenAI session format
+									if (useChat) {
+										// OpenAI chat format
 										// A 200 stream doesn't guarantee a real
 										// completion — eg. no model loaded comes
 										// back as a single chunk with an empty
@@ -505,7 +510,7 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 			this.abortController = new AbortController()
 
 			try {
-				const endpoint = useSession
+				const endpoint = useChat
 					? `${baseUrl}/v1/chat/completions`
 					: `${baseUrl}/api/v1/generate`
 
@@ -560,7 +565,7 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 				// Silently accepting that as a successful-but-empty reply leaves
 				// the user staring at a blank message with no explanation.
 				if (
-					useSession &&
+					useChat &&
 					data.choices?.[0]?.finish_reason === "error"
 				) {
 					throw new Error(
@@ -570,11 +575,11 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 
 				let content: string
 				let thinkingContent: string | undefined
-				if (useSession) {
-					// OpenAI session format response
+				if (useChat) {
+					// OpenAI chat format response
 					content = data.choices?.[0]?.message?.content || ""
 					// See the streaming branch's identical read above for why
-					// this is only ever populated in session mode.
+					// this is only ever populated in chat mode.
 					thinkingContent =
 						data.choices?.[0]?.message?.reasoning_content ||
 						undefined
@@ -703,8 +708,12 @@ export async function testConnection(
 }
 
 // List models function — a dumb connection never assumes an admin API is
-// present, so this only ever reports the currently loaded model. See
-// KoboldCppManagedAdapter's listModels for the admin-API-backed version.
+// present, so this only ever reports the currently LOADED models, each with its
+// modality: the text model (`/api/v1/model`), the image model
+// (`/sdapi/v1/sd-models`) and the embedding model (named by a one-word
+// `/v1/embeddings` probe). Only modalities whose loaded model koboldcpp NAMES
+// are listed (owner ruling 2026-09-26) — a default must say which model it
+// uses, and stored vectors must say which model made them. See KoboldCppManagedAdapter's listModels for the admin-API version.
 //
 // The answer is the model's REAL name, or an empty list when nothing is
 // loaded, or an ERROR when the process could not be asked. Never a `[current]`
@@ -730,10 +739,36 @@ async function listModels(
 				models: [],
 				error: "Nothing is listening at this address."
 			}
-		if (!status.modelName) return { models: [] }
-		return {
-			models: [{ model: status.modelName, name: status.modelName }]
-		}
+		const image = await fetchLoadedImageModel(baseUrl)
+		// Half a listing would mark the other half's row missing.
+		if (!image.determined)
+			return {
+				models: [],
+				error: "KoboldCPP did not say which image model it has loaded — it may be mid-swap."
+			}
+		const embedding = await fetchLoadedEmbeddingModel(baseUrl)
+		if (!embedding.determined)
+			return {
+				models: [],
+				error: "KoboldCPP did not say which embedding model it has loaded — it may be busy."
+			}
+		const models: { model: string; name: string; modality: string }[] = []
+		// An image-only instance answers "inactive" here, which is not a model.
+		if (status.modelName && status.modelName !== KCPP_NO_TEXT_MODEL)
+			models.push({
+				model: status.modelName,
+				name: status.modelName,
+				modality: "text-gen"
+			})
+		if (image.name)
+			models.push({ model: image.name, name: image.name, modality: "image-gen" })
+		if (embedding.name)
+			models.push({
+				model: embedding.name,
+				name: embedding.name,
+				modality: "embeddings"
+			})
+		return { models }
 	} catch (e: any) {
 		return {
 			models: [],

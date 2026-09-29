@@ -1167,7 +1167,7 @@ describe("AnthropicAdapter — the node's streaming parameter", () => {
  * Reasoning, as a SAMPLING parameter (ruling 2026-09-12).
  *
  * This used to be `extraJson.thinking` and `extraJson.thinkingBudget` on the
- * CONNECTION, which gave every stage sharing an Anthropic row the same answer.
+ * CONNECTION, which gave every step sharing an Anthropic row the same answer.
  * The two halves of the vocabulary land on one field here, and the Messages API
  * refuses temperature/top_p/top_k beside an enabled one — which is why those
  * three are RECORDED rather than quietly left out.

@@ -1,18 +1,16 @@
 <script lang="ts">
-	import { getContext, onMount } from "svelte"
 	import * as Icons from "@lucide/svelte"
-	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
-	import { declareInterest } from "$lib/client/sockets/interest.svelte"
-	import { interestKey } from "$lib/shared/sockets/interest"
+	import { LOREBOOK_EXPORT_PAUSED } from "$lib/shared/lorebooks/exportPaused"
 	import EditLorebookForm from "$lib/client/components/lorebookForms/EditLorebookForm.svelte"
 	import {
 		CHARACTER_LORE_TYPE_ID,
-		HISTORY_TYPE_ID,
-		WORLD_LORE_TYPE_ID,
-		type EntryTypeId
+		HISTORY_TYPE_ID
 	} from "$lib/shared/entries/types"
 	import { bookReadout, nestingOf, READOUT_NOTE } from "./bookReadout"
-	import { formatDate } from "./sections/historyDates"
+	import { readingActionLabel } from "./scopes"
+	import { compareDates, formatDate } from "./sections/historyDates"
+	import StoryCalendarEditor from "./time/StoryCalendarEditor.svelte"
+	import StoryClockEditor from "./time/StoryClockEditor.svelte"
 
 	/**
 	 * Book settings: a readout of what the book holds, and the few behaviours
@@ -22,12 +20,35 @@
 	 * capability is available in every lorebook, and what the workspace offers
 	 * follows what the book actually holds. So this page counts, and the
 	 * counting is the point.
+	 *
+	 * ⚠ **The rows are the workspace's, on the line being read.** Never fetch
+	 * the whole book again and count every line's rows: that counts a fork's
+	 * entries on main (#90). The workspace already holds the rows resolved on
+	 * the line — the same ones the rail's chips and the pool read — so they
+	 * are handed in rather than asked for twice.
 	 */
 	interface Props {
 		lorebookId: number
 		bookName: string
+		/** The line being read, for the clock; null is main. */
+		branchId: number | null
+		branchName: string | null
+		/** Every line the book has, by name: "main" first, then its branches. */
+		branches: string[]
+		/** The story's present on that line: its clock, else its newest entry. */
+		present: {
+			date: Sockets.Lorebooks.StoryClock
+			from: "clock" | "history"
+		} | null
+		onSetClock: (clock: Sockets.Lorebooks.StoryClock | null) => void
 		/** The server's figures for this book, shared with the rail. */
 		counts: Record<string, number> | null
+		/** The book's entries on the line being read, by entry type id. */
+		rowsByType: Record<string, any[]>
+		/** The book's scenes on the line being read. */
+		scenes: readonly any[]
+		/** How many relationships the line draws. */
+		relationships: number
 		/** What the open session is called, when one reads this book. */
 		readingInto: string | null
 		canChangeReading: boolean
@@ -35,7 +56,6 @@
 		onClose: () => void
 		onChangeReading: () => void
 		onImport: () => void
-		onExport: () => void
 		/** Asks for a copy of this book; the prompt names it. */
 		onDuplicate: () => void
 		onDelete: () => void
@@ -44,50 +64,60 @@
 	let {
 		lorebookId,
 		bookName,
+		branchId,
+		branchName,
+		branches,
+		present,
+		onSetClock,
 		counts,
+		rowsByType,
+		scenes,
+		relationships,
 		readingInto,
 		canChangeReading,
 		hasUnsavedChanges = $bindable(false),
 		onClose,
 		onChangeReading,
 		onImport,
-		onExport,
 		onDuplicate,
 		onDelete
 	}: Props = $props()
 
-	const socket = useTypedSocket()
+	// Two editors on one page, one unsaved flag for the tab.
+	let formUnsaved = $state(false)
+	let calendarUnsaved = $state(false)
+	$effect(() => {
+		hasUnsavedChanges = formUnsaved || calendarUnsaved
+	})
 
-	const TYPES: EntryTypeId[] = [
-		WORLD_LORE_TYPE_ID,
-		CHARACTER_LORE_TYPE_ID,
-		HISTORY_TYPE_ID
-	]
+	/** Archived rows are out of every figure, as they are out of the rail's. */
+	let liveRowsByType = $derived(
+		Object.fromEntries(
+			Object.entries(rowsByType).map(([typeId, rows]) => [
+				typeId,
+				rows.filter((row) => !row?.archived)
+			])
+		) as Record<string, any[]>
+	)
 
-	let rowsByType = $state<Record<string, any[]>>({})
-	let scenes = $state<Sockets.Scenes.SceneWithMeta[]>([])
-	let relationships = $state<number>(0)
-
-	let allRows = $derived(TYPES.flatMap((t) => rowsByType[t] ?? []))
+	let allRows = $derived(Object.values(liveRowsByType).flat())
 	let nesting = $derived(nestingOf(allRows))
 
 	let castWithLore = $derived(
 		new Set(
-			(rowsByType[CHARACTER_LORE_TYPE_ID] ?? [])
+			(liveRowsByType[CHARACTER_LORE_TYPE_ID] ?? [])
 				.map((row) => row.lorebookBindingId)
 				.filter((id) => id != null)
 		).size
 	)
 
 	let dated = $derived.by(() => {
-		const rows = rowsByType[HISTORY_TYPE_ID] ?? []
-		if (!rows.length) return undefined
-		const sorted = [...rows].sort(
-			(a, b) =>
-				a.year - b.year ||
-				(a.month ?? 0) - (b.month ?? 0) ||
-				(a.day ?? 0) - (b.day ?? 0)
+		const rows = (liveRowsByType[HISTORY_TYPE_ID] ?? []).filter(
+			(row) => typeof row.year === "number"
 		)
+		if (!rows.length) return undefined
+		// The one comparator: a local copy is how one calendar gets two.
+		const sorted = [...rows].sort(compareDates)
 		return {
 			earliest: formatDate(sorted[0]),
 			latest: formatDate(sorted[sorted.length - 1])
@@ -97,7 +127,7 @@
 	/** A scene whose history entry nobody has compiled yet. */
 	let scenesWaiting = $derived.by(() => {
 		const done = new Set(
-			(rowsByType[HISTORY_TYPE_ID] ?? [])
+			(liveRowsByType[HISTORY_TYPE_ID] ?? [])
 				.filter((row) => row.isCompleted)
 				.map((row) => row.id)
 		)
@@ -123,61 +153,9 @@
 			capturedFrom,
 			nested: nesting.nested,
 			depth: nesting.depth,
-			branches: ["main"]
+			branches
 		})
 	)
-
-	function handleEntriesList(msg: Sockets.Entries.List.Response) {
-		if (msg.lorebookId !== lorebookId) return
-		rowsByType = { ...rowsByType, [msg.typeId]: msg.entryList as any[] }
-	}
-
-	function handleScenes(msg: Sockets.Scenes.ListByLorebook.Response) {
-		scenes = msg.sceneList
-	}
-
-	// One book is open at a time, and the interest key already names it, so
-	// there is nothing left here to filter on.
-	function handleGraph(msg: Sockets.NarrativeGraph.List.Response) {
-		// The scope the gate reads; checked here too, so a stale book's
-		// reply arriving after a switch cannot paint this one.
-		if (msg.lorebookId !== lorebookId) return
-		relationships = msg.relationships.length
-	}
-
-	/**
-	 * Three reads, all about the one book this page is counting.
-	 *
-	 * Effects rather than `useInterest` because the key moves: `lorebookId` is
-	 * a prop, and `useInterest` keeps the key it was first given. Declared
-	 * above `onMount` so the interest exists before the requests below go out
-	 * (effects run in creation order, and `onMount` is one of them).
-	 */
-	$effect(() =>
-		declareInterest<"entries:list">(
-			interestKey("entries:list", lorebookId),
-			handleEntriesList
-		)
-	)
-	$effect(() =>
-		declareInterest<"scenes:listByLorebook">(
-			interestKey("scenes:listByLorebook", lorebookId),
-			handleScenes
-		)
-	)
-	$effect(() =>
-		declareInterest<"narrativeGraph:list">(
-			interestKey("narrativeGraph:list", lorebookId),
-			handleGraph
-		)
-	)
-
-	onMount(() => {
-		for (const typeId of TYPES)
-			socket.emit("entries:list", { lorebookId, typeId })
-		socket.emit("scenes:listByLorebook", { lorebookId })
-		socket.emit("narrativeGraph:list", { lorebookId })
-	})
 </script>
 
 {#snippet behaviour(
@@ -222,11 +200,19 @@
 		</h2>
 	</div>
 
-	<EditLorebookForm {lorebookId} bind:hasUnsavedChanges />
+	<EditLorebookForm {lorebookId} bind:hasUnsavedChanges={formUnsaved} />
+
+	<StoryClockEditor {branchId} {branchName} {present} {onSetClock} />
+
+	<StoryCalendarEditor
+		{lorebookId}
+		sample={present?.date ?? null}
+		bind:hasUnsavedChanges={calendarUnsaved}
+	/>
 
 	<section class="card preset-filled-surface-100-900 space-y-3 p-3">
 		<p
-			class="text-primary-700-300 flex items-center gap-1.5 text-xs font-semibold tracking-wide uppercase"
+			class="text-primary-700-300 flex items-center gap-1.5 text-xs font-semibold"
 		>
 			<Icons.ListChecks size={13} aria-hidden="true" />
 			What this book holds
@@ -249,33 +235,20 @@
 		{@render behaviour(
 			"Reading into a session",
 			readingInto ?? "no session",
-			"The session this book is read into as it plays.",
+			readingInto
+				? "The session this book is read into as it plays."
+				: "No session reads this book. Open a session you own to read it in.",
 			{
-				label: "Change",
+				label: readingActionLabel(!!readingInto),
 				run: onChangeReading,
 				disabled: !canChangeReading
 			}
-		)}
-		{@render behaviour(
-			"Token ceiling",
-			"set by the session's pipeline",
-			"Highest-ranked entries fill the budget; the rest are cut. The figure lives in the pipeline's retrieval config."
-		)}
-		{@render behaviour(
-			"Relationship ceiling",
-			"set by the session's pipeline",
-			"How many relationships one cast member may send to the model. The figure lives in the pipeline's retrieval config."
-		)}
-		{@render behaviour(
-			"Capture scenes from this session",
-			"on request",
-			"Summarize to Lorebook on the session page captures a run of messages as a scene."
 		)}
 	</section>
 
 	<section class="card preset-filled-surface-100-900 space-y-3 p-3">
 		<p
-			class="text-primary-700-300 flex items-center gap-1.5 text-xs font-semibold tracking-wide uppercase"
+			class="text-primary-700-300 flex items-center gap-1.5 text-xs font-semibold"
 		>
 			<Icons.Book size={13} aria-hidden="true" />
 			This book
@@ -288,10 +261,13 @@
 			>
 				<Icons.Upload size={14} aria-hidden="true" /> Import
 			</button>
+			<!-- Export is paused (owner ruling 2026-09-28): visible, disabled,
+			     and the reason sits under the row. -->
 			<button
 				class="btn btn-sm preset-tonal-surface"
 				type="button"
-				onclick={onExport}
+				disabled
+				aria-describedby="book-settings-export-paused"
 			>
 				<Icons.Download size={14} aria-hidden="true" /> Export
 			</button>
@@ -312,5 +288,11 @@
 				Delete “{bookName}”
 			</button>
 		</div>
+		<p
+			id="book-settings-export-paused"
+			class="text-surface-600-400 text-xs"
+		>
+			{LOREBOOK_EXPORT_PAUSED}
+		</p>
 	</section>
 </div>

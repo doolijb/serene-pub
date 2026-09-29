@@ -237,7 +237,7 @@ async function gateScenario() {
 					id: "casefile",
 					title: "Case file",
 					role: "secondary",
-					surface: { kind: "native", component: "sample-notes" }
+					component: "scene-portraits"
 				}
 			]
 		}

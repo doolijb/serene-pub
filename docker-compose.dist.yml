@@ -14,18 +14,15 @@ services:
             PORT: 3000
 
 
-            # Disable automatic browser launch (always disabled in containers)
-            SERENE_AUTO_OPEN: 1
-
-
             # --- Optional overrides ---
 
             # Session token lifetime in hours (default: 168 = 7 days)
             # USER_TOKEN_EXPIRATION_HOURS: 168
 
-            # Override the directory where AI model caches (transformers) are stored.
-            # Defaults to $SERENE_PUB_DATA_DIR/transformers-cache, already inside the volume.
-            # TRANSFORMERS_CACHE: /data/transformers-cache
+            # Override where local embedding and named-entity models are stored
+            # (one directory for both). Defaults to $SERENE_PUB_DATA_DIR/models/embeddings
+            # and $SERENE_PUB_DATA_DIR/models/ner, already inside the volume.
+            # TRANSFORMERS_CACHE: /data/models/onnx
 
             # KoboldCPP managed-mode binary directory (only needed for managed KoboldCPP).
             # Mount your KoboldCPP binary into the container and set this path.

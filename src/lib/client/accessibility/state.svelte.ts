@@ -237,7 +237,9 @@ export function mapToAccessibleRoute(pathname: string): string {
 	const sessionMatch = pathname.match(/^\/sessions\/(\d+)\/?$/)
 	if (sessionMatch) return `/document-view/sessions/${sessionMatch[1]}`
 
-	if (pathname === "/library/characters") return "/document-view/characters"
+	// The Library view's address, and the page it replaced.
+	if (pathname === "/library" || pathname === "/library/characters")
+		return "/document-view/characters/browse"
 
 	if (pathname === "/docs") return "/document-view/docs"
 	// A doc slug can contain slashes and underscores: the SDK reference pages
@@ -267,8 +269,7 @@ export function mapToStandardRoute(pathname: string): string {
 	)
 	if (sessionMatch) return `/sessions/${sessionMatch[1]}`
 
-	if (pathname === "/document-view/characters/browse")
-		return "/library/characters"
+	if (pathname === "/document-view/characters/browse") return "/library"
 
 	if (pathname === "/document-view/docs") return "/docs"
 	const docMatch = pathname.match(

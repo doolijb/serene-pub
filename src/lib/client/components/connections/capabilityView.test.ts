@@ -18,7 +18,9 @@ import {
 	statusSentence,
 	type CapabilityConnection,
 	type CapabilityModel,
-	modelFactLine
+	modelFactLine,
+	localCatalogLine,
+	toDownloadSentence
 } from "./capabilityView"
 import { readinessRow } from "./readiness"
 
@@ -296,6 +298,53 @@ describe("the 'also able to' rows", () => {
 			"Alpha",
 			"Zebra"
 		])
+	})
+	// Plan 2026-09-24 A1/C2: the chooser lists what is HERE. A local model
+	// that is not downloaded is a count and a door to the finder, and one
+	// still arriving is shown but cannot be used — the server refuses both.
+	test("local models not downloaded are counted, never listed", () => {
+		const conn = connection({
+			type: "local-onnx",
+			models: [
+				model({ id: 1, name: "on-disk", local: { state: "on_disk" } }),
+				model({
+					id: 2,
+					name: "fetchable",
+					local: { state: "not_downloaded" }
+				}),
+				model({
+					id: 3,
+					name: "arriving",
+					local: { state: "downloading" }
+				})
+			]
+		})
+		const list = candidateRows([conn], "text->text")
+		expect(list.rows.map((r) => r.modelName)).toEqual([
+			"on-disk",
+			"arriving"
+		])
+		expect(list.toDownload).toBe(1)
+		expect(list.rows.map((r) => r.usable)).toEqual([true, false])
+	})
+	test("a host's models are always usable", () => {
+		expect(candidateRows([connection()], "text->text").rows[0].usable).toBe(
+			true
+		)
+	})
+	test("the download line", () => {
+		expect(toDownloadSentence(0)).toBeNull()
+		expect(toDownloadSentence(1)).toBe("1 more is available to download")
+		expect(toDownloadSentence(5)).toBe("5 more are available to download")
+	})
+	test("a local model's fact carries its size and dimensions", () => {
+		expect(
+			localCatalogLine({
+				state: "not_downloaded",
+				catalog: { sizeMb: 35, dimensions: 384 }
+			})
+		).toBe("35 MB · 384 dimensions")
+		expect(localCatalogLine(undefined)).toBe("")
 	})
 })
 

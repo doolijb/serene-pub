@@ -88,14 +88,14 @@
 					>
 						<Icons.Folder
 							size={18}
-							class="text-surface-400"
+							class="text-surface-600-400"
 							aria-hidden="true"
 						/>
 						{title}
 					</h2>
 					<div class="flex flex-col">
 						<label
-							class="text-surface-500 mb-1.5 text-xs"
+							class="text-surface-600-400 mb-1.5 text-xs"
 							for="character-folder-name"
 						>
 							Name

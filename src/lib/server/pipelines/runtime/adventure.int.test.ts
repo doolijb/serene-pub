@@ -97,7 +97,7 @@ const ANSWER = JSON.stringify({
 		{ owner: "Wren", slot: "hp", value: "14" },
 		{ owner: "world", slot: "weather", value: "fog" }
 	],
-	possessions: [],
+	inventory: [],
 	/**
 	 * The two keeper ACTIONS still read a `changes` list, because they still go
 	 * out through the prose door: this lane converted the respond pipeline's
@@ -171,7 +171,7 @@ const linesOf = (receipt: any, nodeKey: string): any[] =>
  *
  * `authorDefaults` is the floor a real install fills in through
  * `ensureDefaultConfig`: every assemble node points at a story string, the two
- * JSON stages at the lists they select, and the trusted branch at the one mode
+ * JSON steps at the lists they select, and the trusted branch at the one mode
  * that writes. Supplied here rather than resolved, for the reason in the
  * header — that the PRESET carries the same values is asserted next door.
  */
@@ -195,10 +195,10 @@ const WORLD: any = {
 		keeperPrompt: { ...template },
 		prompt: { ...template },
 		planWrite: { params: { path: "speakers" } },
-		keeperWrite: { params: { path: "values,possessions" } },
+		keeperWrite: { params: { path: "values,inventory" } },
 		// The two ACTIONS ask for the keeper's shape now too, so their
 		// generating step selects the same two arms the respond turn's does.
-		write: { ...window, params: { path: "values,possessions" } },
+		write: { ...window, params: { path: "values,inventory" } },
 		"commit.trusted.apply": { params: { mode: "apply" } },
 		// A window, so the budget the prompt is cut to is a real number.
 		scene: { ...window }
@@ -247,12 +247,14 @@ async function adventure(opts: { trustNarrator?: boolean } = {}) {
 			.insert(schema.sessionCharacters)
 			.values({ sessionId: session.id, characterId: c.id })
 	await db
-		.insert(schema.sessionLorebooks)
-		.values({ sessionId: session.id, lorebookId: lorebook.id })
+		// The real shape: the lorebook is the session row's own binding.
+		.update(schema.sessions)
+		.set({ lorebookId: lorebook.id })
+		.where(eq(schema.sessions.id, session.id))
 	/**
 	 * A previous reply with a planner's document stuck to the end of it.
 	 *
-	 * This is the contamination the JSON stages are cut off from, reproduced
+	 * This is the contamination the JSON steps are cut off from, reproduced
 	 * exactly as a live turn produced it: the model wrote the scene and then
 	 * appended the schema it had been shown. Left in the transcript, the next
 	 * planner reads its own shape back and the keeper reads the PLANNER's.
@@ -406,7 +408,7 @@ describe("a turn", () => {
 	}, 60_000)
 
 	/**
-	 * How each stage is put ON THE WIRE, which is a different question from
+	 * How each step is put ON THE WIRE, which is a different question from
 	 * whether the graph ran.
 	 *
 	 * Every assertion here corresponds to a live defect the first playtest
@@ -414,7 +416,7 @@ describe("a turn", () => {
 	 * narrator prefilled as a cast member, and a keeper answering in the
 	 * planner's schema because it had just read one in the transcript.
 	 */
-	it("asks the JSON stages a question and the narrator for narration", async () => {
+	it("asks the JSON steps a question and the narrator for narration", async () => {
 		const w = await adventure()
 		const doc = await published(ADVENTURE_RESPOND_SPEC_ID)
 		const receipt: any = await run(doc, {
@@ -460,7 +462,7 @@ describe("a turn", () => {
 			.where(eq(schema.sessionMessages.id, w.previous.id))
 		expect(stored!.content).toContain("worldHints")
 
-		// A — both JSON stages ask for a SHAPE rather than describing one.
+		// A — both JSON steps ask for a SHAPE rather than describing one.
 		for (const key of ["planWrite", "keeperWrite"]) {
 			const node = nodeOf(receipt, key)
 			expect(node?.definitionId, key).toBe("core:oracle/generate-json@1")
@@ -573,7 +575,7 @@ describe("a turn", () => {
 })
 
 /**
- * The post-history reminder, on a pipeline whose every stage assembles its own
+ * The post-history reminder, on a pipeline whose every step assembles its own
  * prompt.
  *
  * The trigger is a suppression: below it a short session gets no reminder,
@@ -585,7 +587,7 @@ describe("a turn", () => {
 describe("the narrator's post-history reminder", () => {
 	const REMINDER = "Remember: you are Narrator, not anybody in the scene."
 
-	/** The scene stage's own instructions, and its own trigger. */
+	/** The scene step's own instructions, and its own trigger. */
 	const worldWithTrigger = (trigger: number) => ({
 		...WORLD,
 		authorDefaults: {
@@ -642,7 +644,7 @@ describe("the narrator's post-history reminder", () => {
 		})
 	}, 60_000)
 
-	it("is suppressed below the trigger, at a stage that is not the reply's", async () => {
+	it("is suppressed below the trigger, at a step that is not the reply's", async () => {
 		const { node, rendered } = await sceneTurn(100000)
 		expect(rendered).not.toContain(REMINDER)
 		expect(rendered).not.toContain("Response reminder")
@@ -820,7 +822,7 @@ describe("core:query/resolve-state-changes@1", () => {
 		// keeper's whole document arriving where one change was expected.
 		const w = await adventure()
 		const { changes, refused } = await resolve(w, {
-			changes: [{ values: [], possessions: [] }]
+			changes: [{ values: [], inventory: [] }]
 		})
 		expect(changes).toEqual([])
 		expect(refused).toEqual([

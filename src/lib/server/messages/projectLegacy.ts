@@ -18,8 +18,18 @@
  * markdown 2 — rather than being packed. Gaps are legal (the address is
  * unique, not dense), and fixed slots make the projection deterministic and
  * idempotent: re-projecting a row always produces byte-identical parts.
+ *
+ * A revision carrying **folded sections** (B4; D5, 2026-09-27 —
+ * `metadata.sections`, or `swipes.sectionsHistory[i]`, read through the SDK's
+ * one `foldedSectionsOf`) lays them out after the instructions and shifts the
+ * other two down: instructions 0, sections 1…k, thinking k+1, markdown k+2 —
+ * a Plan reads above the reasoning and the reply. With no sections that is
+ * exactly 0, 1, 2, so every row written before B4 projects byte-identically.
+ * `MAX_FOLDED_SECTIONS` keeps the whole layout under the store's
+ * `NATIVE_ORDINAL_BASE`.
  */
 
+import { foldedSectionPart, foldedSectionsOf } from "@serene-pub/sdk"
 import type { ConnectionIdentity } from "$lib/shared/connections/identity"
 import type { messages, messageParts } from "$lib/server/db/schema"
 
@@ -44,8 +54,12 @@ export interface LegacyMessageRow {
 			currentIdx: number | null
 			history: string[]
 			thinkingHistory?: (string | null)[]
+			/** B4: each alternative's folded sections, parallel to `history`. */
+			sectionsHistory?: unknown[]
 		}
 		thinking?: string | null
+		/** B4: the row's folded sections while it has no alternatives. */
+		sections?: unknown
 		narratorInstructions?: string
 		narratorName?: string
 	} | null
@@ -111,12 +125,27 @@ export function projectLegacy(row: LegacyMessageRow): {
 				content: meta.narratorInstructions,
 				data: { title: "Instructions" }
 			})
+		// Folded sections (B4): the slots after the instructions, pushing
+		// thinking and the body down by as many as there are.
+		const sections = foldedSectionsOf(meta, i)
+		sections.forEach((section, k) => {
+			const part = foldedSectionPart(section)
+			parts.push({
+				step: 0,
+				revision: i,
+				ordinal: ORDINAL_THINKING + k,
+				type: part.type,
+				content: part.content,
+				data: { ...part.data }
+			})
+		})
+		const shift = sections.length
 		const thinking = thinkingFor(i)
 		if (thinking)
 			parts.push({
 				step: 0,
 				revision: i,
-				ordinal: ORDINAL_THINKING,
+				ordinal: ORDINAL_THINKING + shift,
 				type: "core:thinking",
 				content: thinking,
 				data: null
@@ -124,7 +153,7 @@ export function projectLegacy(row: LegacyMessageRow): {
 		parts.push({
 			step: 0,
 			revision: i,
-			ordinal: ORDINAL_MARKDOWN,
+			ordinal: ORDINAL_MARKDOWN + shift,
 			type: "core:markdown",
 			content: revisions[i] ?? "",
 			data: null

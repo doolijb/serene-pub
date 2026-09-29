@@ -119,7 +119,13 @@ export async function layoutPipeline(
 			elkEdges: []
 		}
 		const seen = new Set<string>()
-		const chains = new Map<string, WireNode[]>()
+		// A chain's members in position order: steps, and the nested blocks
+		// whose `parentClauseChain` names this branch.
+		const chains = new Map<string, Array<{ id: string; wire?: WireNode }>>()
+		const chainOf = (key: string) => {
+			if (!chains.has(key)) chains.set(key, [])
+			return chains.get(key)!
+		}
 
 		for (const n of graph.nodes) {
 			const container = containerWithin(n.clauseId, scopeId, clauseById)
@@ -130,17 +136,20 @@ export async function layoutPipeline(
 					scope.elkChildren.push(stepElk(n.key))
 					nodeData.set(n.key, { wire: n })
 				} else {
-					const chainKey = n.clauseChain ?? ""
-					if (!chains.has(chainKey)) chains.set(chainKey, [])
-					chains.get(chainKey)!.push(n)
+					chainOf(n.clauseChain ?? "").push({ id: n.key, wire: n })
 				}
 			} else if (container && !seen.has(container)) {
 				// A descendant of a block that sits in this scope: the block
 				// itself is the element here, built recursively once.
 				seen.add(container)
-				scope.sequence.push(container)
-				const inner = buildScope(container)
 				const block = clauseById.get(container)!
+				// Inside a block, a nested block belongs to the branch it runs
+				// in, between that branch's neighbours. A wire that names no
+				// branch (an older server) leaves it on the scope's spine.
+				const branch = scopeId !== null ? block.parentClauseChain : null
+				if (branch != null) chainOf(branch).push({ id: container })
+				else scope.sequence.push(container)
+				const inner = buildScope(container)
 				scope.elkChildren.push({
 					id: container,
 					layoutOptions: {
@@ -182,25 +191,27 @@ export async function layoutPipeline(
 				}
 				let prev = withLabel ? labelId : null
 				for (const m of members) {
-					scope.elkChildren.push(stepElk(m.key))
-					nodeData.set(m.key, { wire: m })
+					if (m.wire) {
+						scope.elkChildren.push(stepElk(m.id))
+						nodeData.set(m.id, { wire: m.wire })
+					}
 					if (prev !== null) {
 						scope.elkEdges.push({
-							id: `e:${prev}->${m.key}`,
+							id: `e:${prev}->${m.id}`,
 							sources: [prev],
-							targets: [m.key]
+							targets: [m.id]
 						})
 						flowEdges.push({
-							id: `e:${prev}->${m.key}`,
+							id: `e:${prev}->${m.id}`,
 							source: prev,
-							target: m.key,
+							target: m.id,
 							...edgeDefaults,
 							...(prev === labelId
 								? { markerEnd: undefined, style: "opacity:.55" }
 								: {})
 						})
 					}
-					prev = m.key
+					prev = m.id
 				}
 			}
 		}

@@ -63,7 +63,7 @@ export const load: LayoutServerLoad = async (event) => {
 	// That one means a pre-release never asks GitHub, so these are already
 	// undefined here; this one means that stays true even if some future
 	// caller populates locals another way. Every consumer of these two fields
-	// (UpdateNoticeBar, SettingsSidebar, the Document View about page) reads
+	// (the Admin Overview's "Get <tag>", the Document View about page) reads
 	// them from page data, so gating here covers all of them at once rather
 	// than asking each to remember.
 	return {

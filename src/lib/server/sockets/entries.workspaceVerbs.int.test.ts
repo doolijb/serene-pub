@@ -607,7 +607,8 @@ describe("entries:setMarks — Off and Pin, and nothing else (L1)", () => {
 			{ entryId: entry.id, off: true, pinned: true },
 			noopEmit
 		)
-		expect(res).toMatchObject({ off: true, pinned: true })
+		// The entry's book rides along, so a page tells only its own session's widgets.
+		expect(res).toMatchObject({ off: true, pinned: true, lorebookId: entry.lorebookId })
 		const [row] = await testDb
 			.select()
 			.from(schema.lorebookEntries)
@@ -625,6 +626,7 @@ describe("entries:setMarks — Off and Pin, and nothing else (L1)", () => {
 			noopEmit
 		)
 		expect(refused.error).toMatch(/access denied/)
+		expect(refused).not.toHaveProperty("lorebookId")
 	})
 })
 
@@ -677,6 +679,13 @@ describe("entries:sessionEntries — the lore entries widget's read (L1)", () =>
 		expect(wild.rows).toEqual([])
 		const under: any = await entrySessionEntriesHandler.handler(fakeSocket(owner.id), { sessionId: session.id, query: "The_Road" }, noopEmit)
 		expect(under.rows).toEqual([])
+
+		// 🚧 An item picker asks for item entries first (attributes phase 3c).
+		const key = await makeEntry(lorebook.id, { title: "Rusty Key", typeId: "core:entry/item" })
+		const items: any = await entrySessionEntriesHandler.handler(fakeSocket(owner.id), { sessionId: session.id, sort: "name", typeIds: ["core:entry/item"] }, noopEmit)
+		expect(items.rows.map((r: any) => [r.id, r.typeId])).toEqual([[key.id, "core:entry/item"]])
+		const everyType: any = await entrySessionEntriesHandler.handler(fakeSocket(owner.id), { sessionId: session.id, sort: "name", typeIds: [] }, noopEmit)
+		expect(everyType.rows.map((r: any) => r.title)).toEqual(["Rusty Key", "The Gate", "The Road"])
 
 		// The ask's token rides back, so a panel can drop a superseded reply.
 		const tagged: any = await entrySessionEntriesHandler.handler(fakeSocket(owner.id), { sessionId: session.id, request: "p:7" }, noopEmit)

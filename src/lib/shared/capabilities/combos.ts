@@ -188,7 +188,7 @@ export function aggregateCombos(rows: readonly RegistryDefinitionRow[]): ComboRo
  * `outputKindOf`); there are none today and a guess would be a lie in the
  * heading.
  */
-function compareCombos(a: string, b: string): number {
+export function compareCombos(a: string, b: string): number {
 	const rank = (id: string) => {
 		const kind = outputKindOf(id)
 		return kind ? IO_KINDS.indexOf(kind) : IO_KINDS.length

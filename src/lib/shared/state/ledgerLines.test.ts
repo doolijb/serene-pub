@@ -27,18 +27,14 @@ const value = (over: Partial<LedgerRow> = {}): LedgerRow => ({
 	...over
 })
 
-const item = (over: Partial<LedgerRow> = {}): LedgerRow => ({
-	id: 1,
-	kind: "possession",
-	messageId: 10,
-	ownerKey: "verity",
-	ownerLabel: "Verity",
-	entryId: 7,
-	itemName: "rusty key",
-	quantity: 1,
-	updatedBy: "user",
-	...over
-})
+/** An inventory row (phase 3b: items are the `inventory` stat's values, not edges). */
+const item = (over: Partial<LedgerRow> = {}): LedgerRow =>
+	value({
+		slotId: "core:slot/inventory@1",
+		slotLabel: "Inventory",
+		value: [{ entryId: 7, name: "rusty key" }],
+		...over
+	})
 
 describe("value lines", () => {
 	test("a change is measured against the row before it", () => {
@@ -85,38 +81,26 @@ describe("value lines", () => {
 	})
 })
 
-describe("possession lines", () => {
-	test("arriving, leaving and changing each read differently", () => {
+describe("inventory lines", () => {
+	test("an inventory reads as the list it became, measured against the one before", () => {
 		const lines = ledgerLines([
-			item({ id: 1, messageId: 10, quantity: 1 }),
-			item({ id: 2, messageId: 11, quantity: 3 }),
-			item({ id: 3, messageId: 12, quantity: 0 })
+			item({ id: 1, messageId: 10 }),
+			item({ id: 2, messageId: 11, value: [{ entryId: 7, name: "rusty key", count: 3 }] }),
+			item({ id: 3, messageId: 12, value: [] })
 		])
 		expect(lines.map((l) => l.text)).toEqual([
-			"+rusty key",
-			"rusty key ×1 → ×3",
-			"-rusty key"
+			"Inventory → rusty key",
+			"Inventory rusty key → rusty key ×3",
+			expect.stringMatching(/^Inventory rusty key ×3 → /)
 		])
 	})
 
-	test("arriving in a stack says how many", () => {
-		expect(ledgerLines([item({ quantity: 2 })])[0].text).toBe(
-			"+rusty key ×2"
-		)
-	})
-
-	test("one item's history is per owner, never pooled", () => {
+	test("one owner's inventory is never measured against another's", () => {
 		const lines = ledgerLines([
-			item({ id: 1, messageId: 10, quantity: 1 }),
-			item({
-				id: 2,
-				messageId: 11,
-				ownerKey: "marrow",
-				ownerLabel: "Marrow",
-				quantity: 1
-			})
+			item({ id: 1, messageId: 10 }),
+			item({ id: 2, messageId: 11, ownerKey: "marrow", ownerLabel: "Marrow" })
 		])
-		expect(lines.map((l) => l.text)).toEqual(["+rusty key", "+rusty key"])
+		expect(lines.map((l) => l.text)).toEqual(["Inventory → rusty key", "Inventory → rusty key"])
 	})
 })
 
@@ -131,7 +115,7 @@ describe("reading a message's ledger", () => {
 		)
 		expect(byMessage.get(10)?.map((l) => l.text)).toEqual([
 			"hp → 14",
-			"+rusty key"
+			"Inventory → rusty key"
 		])
 		expect(byMessage.get(11)?.map((l) => l.text)).toEqual(["hp 14 → 12"])
 	})
@@ -160,7 +144,7 @@ describe("reading a message's ledger", () => {
 		expect(groups.map((g) => g.ownerLabel)).toEqual(["Verity", "World"])
 		expect(groups[0].lines.map((l) => l.text)).toEqual([
 			"hp → 14",
-			"+rusty key"
+			"Inventory → rusty key"
 		])
 	})
 })
@@ -189,32 +173,34 @@ describe("a held change", () => {
 	})
 
 	test("an item arriving and an item leaving are different sentences", () => {
-		expect(
+		const inventory = (op: "add" | "remove", count: number) =>
 			describeProposal(
 				{
-					kind: "possession",
+					kind: "value",
 					payload: {
 						owner: { kind: "session_cast", id: 11 },
-						entryId: 7,
-						delta: 2
+						slotId: "core:slot/inventory@1",
+						op,
+						items: [{ entryId: 7, count }]
 					}
 				},
-				names
+				{ ...names, slotLabel: () => "Inventory" }
 			)
-		).toBe("Verity +rusty key ×2")
-		expect(
+		expect(inventory("add", 2)).toBe("Verity Inventory +rusty key ×2")
+		expect(inventory("remove", 1)).toBe("Verity Inventory -rusty key")
+	})
+
+	test("a place moved to reads by its title, never `entry N` (Lair W-GATE D4)", () => {
+		const move = (value: unknown, itemName?: (id: number) => string | undefined) =>
 			describeProposal(
-				{
-					kind: "possession",
-					payload: {
-						owner: { kind: "session_cast", id: 11 },
-						entryId: 7,
-						delta: -1
-					}
-				},
-				names
+				{ kind: "value", payload: { slotId: "core:slot/location@1", value } },
+				{ slotLabel: () => "Location", itemName }
 			)
-		).toBe("Verity -rusty key")
+		// The host named it on the way out…
+		expect(move({ entryId: 2, name: "The Guard Room" })).toBe("Location → The Guard Room")
+		// …or the surface can: the same names a list item reads by.
+		expect(move({ entryId: 2 }, () => "The Guard Room")).toBe("Location → The Guard Room")
+		expect(move([{ entryId: 2 }], () => "The Guard Room")).toBe("Location → The Guard Room")
 	})
 
 	test("a payload nothing can name still says something true", () => {

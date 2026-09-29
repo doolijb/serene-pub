@@ -212,3 +212,104 @@ describe("R63 · a node in another package's pipeline gets only what its owner l
 		expect((w as any).error).toMatch(/too short/)
 	})
 })
+
+/**
+ * Per-user settings (`scope: 'user'`): a hook acting for a person reads that
+ * person's value, then the instance's, then the declared default — and an
+ * instance field is never theirs to override.
+ */
+describe("user-scoped settings", () => {
+	const USER_SCHEMA: SettingsSchema = {
+		endpoint: { type: "string", default: "https://a.test" },
+		notation: { type: "string", default: "1d20", scope: "user" },
+		verbose: { type: "boolean", default: false, scope: "user" }
+	}
+	const USER_MANIFEST = { settings: USER_SCHEMA }
+
+	it("resolves the user's value → the instance value → the declared default", async () => {
+		const { resolveSettingsFor } = await import("./settingsHost")
+		// Nothing stored anywhere: the declared defaults.
+		expect(resolveSettingsFor(USER_SCHEMA, {}, undefined)).toMatchObject({
+			notation: "1d20",
+			verbose: false
+		})
+		// The instance's value beats the default.
+		expect(
+			resolveSettingsFor(USER_SCHEMA, { notation: "2d6" }, undefined)
+		).toMatchObject({ notation: "2d6" })
+		// The user's own value beats the instance's.
+		expect(
+			resolveSettingsFor(USER_SCHEMA, { notation: "2d6" }, { notation: "3d8" })
+		).toMatchObject({ notation: "3d8", verbose: false })
+		// A user row never reaches an instance field, even if one got stored.
+		expect(
+			resolveSettingsFor(
+				USER_SCHEMA,
+				{ endpoint: "https://instance.test" },
+				{ endpoint: "https://mine.test" }
+			)
+		).toMatchObject({ endpoint: "https://instance.test" })
+	})
+
+	it("the user write path refuses an instance field and accepts a user one", async () => {
+		const { applyUserSettingsWrite } = await import("./settingsHost")
+		const refused = applyUserSettingsWrite(USER_SCHEMA, {}, {
+			endpoint: "https://mine.test"
+		})
+		expect(refused).toMatchObject({ ok: false })
+		expect((refused as any).error).toMatch(/administrator/)
+		const ok = applyUserSettingsWrite(USER_SCHEMA, {}, { notation: "4d4" })
+		expect(ok).toEqual({ ok: true, next: { notation: "4d4" } })
+		// Clearing a value falls back to the instance's again.
+		const cleared = applyUserSettingsWrite(
+			USER_SCHEMA,
+			{ notation: "4d4" },
+			{ notation: null }
+		)
+		expect(cleared).toEqual({ ok: true, next: {} })
+	})
+
+	it("the user view shows only user-scoped fields, resolved, and which are the user's own", async () => {
+		const { pluginUserSettingsView } = await import("./settingsHost")
+		const view = pluginUserSettingsView(
+			USER_MANIFEST,
+			{ notation: "2d6", endpoint: "https://instance.test" },
+			{ verbose: true }
+		)!
+		expect(Object.keys(view.schema)).toEqual(["notation", "verbose"])
+		expect(view.values).toEqual({ notation: "2d6", verbose: true })
+		expect(view.own).toEqual(["verbose"])
+		expect(pluginUserSettingsView(MANIFEST, {}, {})).toBeNull()
+	})
+
+	it("the manager hands each call the settings of the user it acts for", async () => {
+		const { settingsDelivery } = await import("./settingsHost")
+		const delivery = settingsDelivery(USER_MANIFEST, { notation: "2d6" }, [
+			{ userId: 7, settings: { notation: "3d8" } }
+		])
+		const mgr = new SandboxManager({ onInvocation: () => {} })
+		try {
+			mgr.register({
+				id: "dice",
+				name: "Dice",
+				bundleSource:
+					"module.exports = { hooks: { v: (i) => i.settings.notation } }",
+				bundleHash: "h-dice",
+				backends: ["quickjs"],
+				backend: "quickjs",
+				sequential: false,
+				...delivery
+			})
+			mgr.markReady()
+			const call = (user?: string) =>
+				mgr.callHook("dice", "v", {}, { kind: "task", timeoutMs: 2000, user })
+			expect(((await call("7")) as any).value).toBe("3d8")
+			// Another user with no row of their own: the instance value.
+			expect(((await call("8")) as any).value).toBe("2d6")
+			// No user at all (a boot hook): the instance value.
+			expect(((await call()) as any).value).toBe("2d6")
+		} finally {
+			await mgr.dispose()
+		}
+	})
+})

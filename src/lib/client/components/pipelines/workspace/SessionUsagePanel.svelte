@@ -203,7 +203,7 @@
 									type="button"
 									class="chip rounded-full px-2.5 py-1 text-xs {order ===
 									o.key
-										? 'preset-filled-primary-500'
+										? 'preset-tonal-primary'
 										: 'preset-tonal-surface'}"
 									onclick={() => (order = o.key)}
 								>
@@ -223,7 +223,7 @@
 										{row.title}
 									</span>
 									<span
-										class="text-surface-600-400 text-[0.68rem] tracking-wider uppercase"
+										class="text-surface-600-400 text-xs"
 									>
 										{row.sourceLabel}
 									</span>

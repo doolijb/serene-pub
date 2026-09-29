@@ -17,6 +17,8 @@ import {
 	outputView,
 	postHistoryView,
 	promptView,
+	refusedCount,
+	refusedOf,
 	verdict,
 	lastStatusOf,
 	portrayalsLine,
@@ -29,7 +31,7 @@ import {
 const fixture = (name: string): InspectedRun =>
 	JSON.parse(readFileSync(join(__dirname, "__fixtures__", name), "utf8"))
 
-/** A four-stage adventure turn that ran to the end. */
+/** A four-step adventure turn that ran to the end. */
 const adventure = fixture("adventure-run.json")
 /** The same spec stopped at its first provider, as a preview. */
 const haltedPreview = fixture("halted-preview-run.json")
@@ -120,6 +122,66 @@ describe("nodeRows", () => {
 		expect(nodeRows(null)).toEqual([])
 		expect(nodeRows({})).toEqual([])
 		expect(nodeRows({ nodes: "not an array" })).toEqual([])
+	})
+})
+
+/**
+ * F2 (2026-09-26): the receipt says which layer answered each config value
+ * (`configLayers`) and whether the definition was the pin or a swap (`swap`).
+ * The inspector reads both as written — and says nothing where a receipt from
+ * before the fields carries neither.
+ */
+describe("where a node's values and definition came from", () => {
+	const receipt = {
+		nodes: [
+			{
+				seq: 1,
+				nodeKey: "strategy",
+				kind: "task",
+				definitionId: "core:task/turn-random@1",
+				result: "ok",
+				swap: { pin: "core:task/turn-round-robin@1", by: "session" },
+				configLayers: {
+					prompts: { system: "session" },
+					sampling: { temperature: "config", top_p: "defaults" },
+					params: { maxTokens: "author" }
+				}
+			},
+			{ seq: 2, nodeKey: "pinned", kind: "task", definitionId: "a:b/c@1", result: "ok", swap: null },
+			{ seq: 3, nodeKey: "old", kind: "task", definitionId: "a:b/c@1", result: "ok" }
+		]
+	}
+	const rows = nodeRows(receipt)
+
+	it("labels each value with its layer, in the chain's order", () => {
+		expect(rowOf(rows, "strategy").layers).toEqual([
+			{ slot: "prompts", path: "system", layer: "session", label: "session override" },
+			{ slot: "sampling", path: "temperature", layer: "config", label: "selected config" },
+			{ slot: "sampling", path: "top_p", layer: "defaults", label: "instance defaults" },
+			{ slot: "params", path: "maxTokens", layer: "author", label: "node default" }
+		])
+	})
+
+	it("names a swap, the pin it replaced and who seated it", () => {
+		expect(rowOf(rows, "strategy").swap).toEqual({
+			pin: "core:task/turn-round-robin@1",
+			by: "session"
+		})
+	})
+
+	it("reads `swap: null` as the pin, and an absent field as nothing said", () => {
+		expect(rowOf(rows, "pinned").swap).toBeNull()
+		expect(rowOf(rows, "pinned").pinned).toBe(true)
+		expect(rowOf(rows, "old").swap).toBeNull()
+		expect(rowOf(rows, "old").pinned).toBe(false)
+		expect(rowOf(rows, "old").layers).toEqual([])
+	})
+
+	it("reads a layer spelled `preset` (the pre-rename word) as the selected config", () => {
+		const [row] = nodeRows({
+			nodes: [{ seq: 1, nodeKey: "n", configLayers: { params: { k: "preset" } } }]
+		})
+		expect(row.layers[0]).toMatchObject({ layer: "config", label: "selected config" })
 	})
 })
 
@@ -285,7 +347,7 @@ const nodeWithExchange = (): ReceiptNode => ({
 					included: true
 				}
 			],
-			promptFormat: "split_session",
+			promptFormat: "split_chat",
 			totalTokens: 25
 		}
 	},
@@ -555,7 +617,7 @@ describe("promptView", () => {
 			"system",
 			"user"
 		])
-		expect(view!.promptFormat).toBe("split_session")
+		expect(view!.promptFormat).toBe("split_chat")
 		expect(view!.budget).toEqual({ total: 7296, used: 25, remaining: 7271 })
 	})
 
@@ -868,5 +930,31 @@ describe("postHistoryView", () => {
 	it("answers with nothing for a node that has no output at all", () => {
 		expect(postHistoryView(null)).toBeNull()
 		expect(postHistoryView({ nodeKey: "input", seq: 0 })).toBeNull()
+	})
+})
+
+describe("refusals on an output that finished ok", () => {
+	it("reads the refusal sentences off a set-state node that still said ok", () => {
+		const row = nodeRows(adventure.receipt).find(
+			(r) => r.nodeKey === "keeperResolve"
+		)!
+		expect(row.result).toBe("ok")
+		expect(row.refused).toHaveLength(1)
+		expect(row.refused[0]).toMatch(/there is no '' to set here/)
+		expect(refusedCount(row.raw.output)).toBe(1)
+	})
+
+	it("is generic: any output carrying a refused list counts, top level or on main", () => {
+		expect(refusedOf({ refused: ["a", "b"] })).toEqual(["a", "b"])
+		expect(refusedCount({ main: { refused: ["only on main"] } })).toBe(1)
+		expect(refusedCount({ refused: [" ", 3, "real"] })).toBe(1)
+	})
+
+	it("answers zero for no output, an empty list, or a list that is not one", () => {
+		expect(refusedCount(null)).toBe(0)
+		expect(refusedCount("text")).toBe(0)
+		expect(refusedCount({ refused: [] })).toBe(0)
+		expect(refusedCount({ refused: "no" })).toBe(0)
+		expect(refusedOf({ applied: [1] })).toEqual([])
 	})
 })

@@ -3,7 +3,7 @@
  * actual gate that decides whether this entry can ever reach a generated
  * prompt at all (see isCharacterLoreEntryVisible() in
  * src/lib/server/utils/promptBuilder/LorebookBindingUtils.ts, shared by both
- * the keyword and RAG infill engines): unbound entries are excluded
+ * the 0.5 keyword and RAG paths): unbound entries are excluded
  * unconditionally, and a character binding makes the entry that character's own
  * private self-knowledge (invisible to every other character, even ones in
  * the same session) — INCLUDING when that character is the one a user voices,

@@ -21,6 +21,7 @@
  * own; see `services/index.ts` for why that rule exists.
  */
 import type { RecoveryPaths } from "$lib/server/db/recovery"
+import { markAdminOverviewStale } from "$lib/server/admin/overviewStale"
 
 /** How often the question is asked. */
 const CHECK_INTERVAL_MS = 60 * 60 * 1000
@@ -50,6 +51,40 @@ export interface DailyBackupDeps {
 }
 
 /**
+ * The last attempt that failed, while no backup has been taken since.
+ *
+ * Read by the admin Overview (`data:backupFailed` in `admin/attention.ts`).
+ * In memory on purpose: the next hourly check decides again, and a restart
+ * starts clean rather than reporting a failure from a previous process. On
+ * `globalThis` so a Vite SSR reload of this module keeps it.
+ */
+export interface DailyBackupFailure {
+	/** ISO 8601. */
+	at: string
+	message: string
+}
+
+const FAILURE_KEY = Symbol.for("serene-pub.dailyBackup.lastFailure")
+
+function setLastFailure(next: DailyBackupFailure | null): void {
+	const g = globalThis as Record<symbol, unknown>
+	const had = g[FAILURE_KEY] != null
+	g[FAILURE_KEY] = next
+	// A new failure, or the first success after one: the Overview changed.
+	if (next || had) markAdminOverviewStale()
+}
+
+/** The last failed attempt, or null once a backup has been taken since. */
+export function lastDailyBackupFailure(): DailyBackupFailure | null {
+	return (
+		((globalThis as Record<symbol, unknown>)[FAILURE_KEY] as
+			| DailyBackupFailure
+			| null
+			| undefined) ?? null
+	)
+}
+
+/**
  * Take a backup if one is due.
  *
  * Never throws. This is called from boot reconciliation and from a timer, and
@@ -74,7 +109,11 @@ export async function maybeTakeDailyBackup(
 		const [newest] = listBackups(paths)
 		if (newest) {
 			const at = Date.parse(newest.modifiedAt)
-			if (Number.isFinite(at) && now - at < BACKUP_AGE_MS) return "fresh"
+			if (Number.isFinite(at) && now - at < BACKUP_AGE_MS) {
+				// A backup taken by hand since a failure answers it too.
+				setLastFailure(null)
+				return "fresh"
+			}
 		}
 
 		// A dump is a multi-megabyte synchronous read of the data directory. It
@@ -104,13 +143,15 @@ export async function maybeTakeDailyBackup(
 					: "") +
 				")"
 		)
+		setLastFailure(null)
 		return "taken"
 	} catch (error) {
-		console.warn(
-			`[backup] the daily backup did not run — ${String(
-				(error as Error)?.message ?? error
-			)}`
-		)
+		const message = String((error as Error)?.message ?? error)
+		console.warn(`[backup] the daily backup did not run — ${message}`)
+		setLastFailure({
+			at: new Date(deps.now?.() ?? Date.now()).toISOString(),
+			message
+		})
 		return "failed"
 	}
 }

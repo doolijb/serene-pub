@@ -131,7 +131,7 @@
 		userList = [...userList, response.user]
 		resetForm()
 		toaster.success({
-			title: "User Created",
+			title: "User created",
 			description: `User "${response.user.username}" has been created successfully.`
 		})
 	}
@@ -147,7 +147,7 @@
 		}
 		resetForm()
 		toaster.success({
-			title: "User Updated",
+			title: "User updated",
 			description: `User "${response.user.username}" has been updated successfully.`
 		})
 	}
@@ -159,7 +159,7 @@
 			userList = userList.filter((u) => u.id !== userToDelete!.id)
 			if (viewingUser?.id === userToDelete.id) viewingUser = undefined
 			toaster.success({
-				title: "User Deleted",
+				title: "User deleted",
 				description: `User has been deleted successfully.`
 			})
 		}
@@ -259,6 +259,7 @@
 				<PanelFilterInput
 					bind:value={search}
 					placeholder="users"
+					singular="user"
 					count={userList.length}
 					aria-label="Filter users by name or username"
 				/>
@@ -270,7 +271,7 @@
 					<div class="flex items-center justify-center py-8">
 						<Icons.Loader2
 							size={20}
-							class="text-surface-400 animate-spin"
+							class="text-surface-600-400 animate-spin"
 						/>
 					</div>
 				{:else if filteredUsers.length === 0}
@@ -383,7 +384,7 @@
 				class="card bg-surface-100-900 border-surface-300-700 max-w-[95vw] space-y-4 border p-4 shadow-xl"
 			>
 				<div class="p-6">
-					<h3 class="mb-4 text-lg font-semibold">Delete User</h3>
+					<h3 class="mb-4 text-lg font-semibold">Delete user?</h3>
 					<p class="text-surface-700-300 mb-6">
 						Are you sure you want to delete "{userToDelete?.displayName ||
 							userToDelete?.username}"? This action cannot be

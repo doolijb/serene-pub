@@ -4,6 +4,7 @@ import {
 	onnxModelHeadline,
 	onnxSizeLabel,
 	tierOrder,
+	splitByPresence,
 	type LocalOnnxState
 } from "./onnxModelFacts"
 
@@ -292,5 +293,61 @@ describe("tierOrder", () => {
 
 	test("no rows is no groups", () => {
 		expect(tierOrder([])).toEqual([])
+	})
+})
+
+describe("splitByPresence — here, and available to download", () => {
+	const row = (
+		id: number,
+		state: "on_disk" | "downloading" | "error" | "not_downloaded" | null,
+		tier: "fast" | "balanced" | "best" = "fast",
+		sizeMb = 100
+	) => ({
+		id,
+		local:
+			state == null
+				? undefined
+				: ({
+						state,
+						sizeBytes: null,
+						loaded: false,
+						addedByUser: false,
+						catalog: { tier, sizeMb }
+					} as any)
+	})
+
+	test("every state but not_downloaded is here", () => {
+		const split = splitByPresence([
+			row(1, "on_disk"),
+			row(2, "downloading"),
+			row(3, "error"),
+			row(4, "not_downloaded"),
+			row(5, null)
+		])
+		expect(split.here.map((r) => r.id).sort()).toEqual([1, 2, 3, 5])
+		expect(split.availableCount).toBe(1)
+		expect(split.available.flatMap((g) => g.rows).map((r) => r.id)).toEqual(
+			[4]
+		)
+	})
+
+	test("the active model leads; the rest keep tier then size order", () => {
+		const split = splitByPresence(
+			[
+				row(1, "on_disk", "best", 500),
+				row(2, "on_disk", "fast", 50),
+				row(3, "on_disk", "fast", 20)
+			],
+			(r) => r.id === 1
+		)
+		expect(split.here.map((r) => r.id)).toEqual([1, 3, 2])
+	})
+
+	test("available is grouped by tier", () => {
+		const split = splitByPresence([
+			row(1, "not_downloaded", "best"),
+			row(2, "not_downloaded", "fast")
+		])
+		expect(split.available.map((g) => g.tier)).toEqual(["fast", "best"])
 	})
 })

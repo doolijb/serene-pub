@@ -155,6 +155,7 @@
 					<button
 						class="btn btn-sm preset-tonal-surface"
 						title="Queue a reset to the inherited value"
+						aria-label="Queue a reset to the inherited value"
 						onclick={(e) => {
 							e.stopPropagation()
 							onQueueReset(row.option)
@@ -166,6 +167,7 @@
 				<button
 					class="btn btn-sm preset-tonal-surface"
 					title="Go to this setting"
+					aria-label="Go to this setting"
 					onclick={(e) => {
 						e.stopPropagation()
 						onJump(row.stepKey, row.option.id)

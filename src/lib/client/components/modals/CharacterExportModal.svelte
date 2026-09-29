@@ -7,6 +7,7 @@
 		useInterest
 	} from "$lib/client/sockets/interest.svelte"
 	import { toaster } from "$lib/client/utils/toaster"
+	import Select from "$lib/client/components/inputs/Select.svelte"
 
 	interface ExportableCharacter {
 		id: number
@@ -112,30 +113,33 @@
 			>
 				{#if character}
 					<div class="p-6">
-						<h2 class="mb-2 text-lg font-bold">Export Character</h2>
+						<h2 class="mb-2 text-lg font-bold">Export character</h2>
 						<p class="mb-4">
 							Choose the export format for "{character.nickname ||
 								character.name}". Sprites travel in CHARX only.
 						</p>
 						{#if exportableLorebooks.length > 0}
-							<label
-								class="mb-4 block text-sm"
-								for="export-lorebook-select"
-							>
-								<span class="mb-1 block font-semibold">
-									Include a lorebook (optional)
-								</span>
-								<select
-									id="export-lorebook-select"
-									class="select w-full"
-									bind:value={selectedExportLorebookId}
-								>
-									<option value={null}>None</option>
-									{#each exportableLorebooks as lb}
-										<option value={lb.id}>{lb.name}</option>
-									{/each}
-								</select>
-							</label>
+							<Select
+								label="Include a lorebook (optional)"
+								class="mb-4 text-sm"
+								options={[
+									{ value: "", label: "None" },
+									...exportableLorebooks.map((lb) => ({
+										value: String(lb.id),
+										label: lb.name
+									}))
+								]}
+								bind:value={
+									() =>
+										selectedExportLorebookId == null
+											? ""
+											: String(selectedExportLorebookId),
+									(v) =>
+										(selectedExportLorebookId = v
+											? Number(v)
+											: null)
+								}
+							/>
 						{/if}
 						<div class="flex flex-col gap-3">
 							<button
@@ -161,7 +165,7 @@
 										size={20}
 										aria-hidden="true"
 									/>
-									<span>Export as PNG Card</span>
+									<span>Export as PNG card</span>
 								</button>
 							{:else}
 								<button
@@ -173,7 +177,7 @@
 										size={20}
 										aria-hidden="true"
 									/>
-									<span>Export as PNG Card (No Avatar)</span>
+									<span>Export as PNG card (no avatar)</span>
 								</button>
 							{/if}
 						</div>

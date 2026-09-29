@@ -41,15 +41,31 @@
 		gap?: string
 		/** Visual-editor mode: fixed square cells + a cell-guide overlay. */
 		showCells?: boolean
+		/**
+		 * Widgets drawn `display: none` (marked `data-stage-hidden`) — still
+		 * MOUNTED, so an iframe keeps running — and left out of the tracks and
+		 * placements, so the rest take their room. Stage only uses it.
+		 */
+		hiddenIds?: ReadonlySet<string>
 	}
 
-	let { layout, zone, widget, gap = "0.5rem", showCells = false }: Props =
-		$props()
+	let {
+		layout,
+		zone,
+		widget,
+		gap = "0.5rem",
+		showCells = false,
+		hiddenIds
+	}: Props = $props()
 	let widgets = $derived(widgetsInZone(layout, zone))
+	/** The widgets that take tracks: every one, less `hiddenIds`. */
+	let drawn = $derived(
+		hiddenIds?.size ? widgets.filter((w) => !hiddenIds.has(w.id)) : widgets
+	)
 	let gridStyle = $derived(
 		showCells
-			? cellsGridStyle(widgets, layout.cell)
-			: zoneGridStyle(widgets, layout.cell)
+			? cellsGridStyle(drawn, layout.cell)
+			: zoneGridStyle(drawn, layout.cell)
 	)
 
 	/* ── real placement (PLAN 25) ──────────────────────────────────────────
@@ -81,9 +97,16 @@
 		const n = tracks && tracks !== "none" ? tracks.split(/\s+/).length : 1
 		columns = Math.max(1, n)
 	})
-	let placements = $derived(
-		stackPlacements(widgets, { columns, widthPx: zoneWidth })
-	)
+	let placements = $derived.by(() => {
+		const measured = { columns, widthPx: zoneWidth }
+		const all = stackPlacements(widgets, measured)
+		if (drawn === widgets) return all
+		// A hidden widget keeps the placement it had; a drawn one reports where
+		// it sits now that the hidden ones take no tracks.
+		const now = stackPlacements(drawn, measured)
+		const byId = new Map(drawn.map((w, i) => [w.id, now[i]]))
+		return widgets.map((w, i) => byId.get(w.id) ?? all[i])
+	})
 </script>
 
 <div
@@ -97,6 +120,7 @@
 		<div
 			class="widget"
 			data-widget-id={w.id}
+			data-stage-hidden={hiddenIds?.has(w.id) ? "" : undefined}
 			style={widgetItemStyle(w, layout.cell)}
 		>
 			{@render widget({ id: w.id, placement: placements[i] })}
@@ -105,6 +129,9 @@
 </div>
 
 <style>
+	.widget[data-stage-hidden] {
+		display: none;
+	}
 	.widget-zone {
 		container-type: inline-size; /* widgets reflow against the ZONE (§3) */
 		block-size: 100%;

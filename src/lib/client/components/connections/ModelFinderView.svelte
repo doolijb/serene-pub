@@ -95,6 +95,7 @@
 		writeMemoryTier,
 		type MemoryTier
 	} from "./memoryTier"
+	import { kcppInstallState } from "./managedConnectionView"
 
 	interface Props {
 		/** Scope the search to one transform, when the caller had one in mind. */
@@ -108,8 +109,27 @@
 		 * the host already decided what the model is for.
 		 */
 		embedded?: boolean
+		/**
+		 * Inside a managed connection's Get tab (plan 2026-09-24 C3): the
+		 * connection's view owns the header, and the destination IS that
+		 * connection, so the "Download to" pills are hidden. What it is for
+		 * stays — KoboldCPP holds chat and image models.
+		 */
+		inTab?: boolean
+		/**
+		 * Open a connection — the ONNX destination's "N already on this
+		 * machine" line goes to the list that holds them.
+		 */
+		onOpenConnection?: (connectionId: number) => void
 	}
-	let { capability, connectionId, onBack, embedded = false }: Props = $props()
+	let {
+		capability,
+		connectionId,
+		onBack,
+		embedded = false,
+		inTab = false,
+		onOpenConnection
+	}: Props = $props()
 
 	const socket = useTypedSocket()
 	const userCtx: { user?: SelectUser } | undefined = getContext("userCtx")
@@ -160,10 +180,34 @@
 	}
 
 	const destinations = $derived(destinationsFor(scope, connectionsList))
+	/**
+	 * The "For" pills. In a connection's Get tab only what THAT connection can
+	 * hold: the destination pills are hidden there, so picking Embeddings in
+	 * KoboldCPP's tab would quietly have sent the download somewhere else.
+	 */
+	const scopeOptions = $derived(
+		inTab && connectionId != null
+			? FINDER_SCOPES.filter((option) =>
+					destinationsFor(option.value, connectionsList).some(
+						(d) => d.connectionId === connectionId
+					)
+				)
+			: FINDER_SCOPES
+	)
 	let destinationOverride = $state<string | null>(null)
 	const destination = $derived.by(() => {
 		const chosen = destinations.find((d) => d.id === destinationOverride)
-		return chosen ?? pickDestination(destinations, connectionId)
+		return (
+			chosen ??
+			pickDestination(destinations, connectionId, (d) =>
+				// The managed KoboldCPP takes a file only once it is set up
+				// and switched on — the same reading its row makes.
+				d.kind === "koboldcpp"
+					? kcppInstallState(koboldCppSettingsCtx?.settings) ===
+						"ready"
+					: true
+			)
+		)
 	})
 
 	/** The list row a destination points at, for its models. */
@@ -384,6 +428,8 @@
 	})
 
 	const HUB_PAGE = 10
+	/** Four chips is what fits beside a Get button before the row wraps twice. */
+	const TAGS_SHOWN = 4
 	let hubShown = $state(HUB_PAGE)
 
 	let lastRecommendedAsk = ""
@@ -394,24 +440,31 @@
 		// Local ONNX has no second list to fetch: its catalogue is already
 		// projected into the connection's own models by the sync.
 		if (kind === "onnx") return
-		// See the header: the Ollama list is the chat GGUF YAML whatever is
-		// asked of it, so an embeddings destination gets no group at all.
-		if (kind === "ollama" && current !== "chat") return
+		// The Ollama list now has two halves in one file — chat, and
+		// embedding models tagged `embedding` (owner ruling 2026-09-25) — so
+		// both scopes an Ollama connection can take get a group.
+		if (kind === "ollama" && current !== "chat" && current !== "embeddings")
+			return
 		const signature = `${kind}:${current}`
 		if (signature === lastRecommendedAsk) return
 		lastRecommendedAsk = signature
 		loadingRecommended = true
-		// ⚠ Emptied on the way out, not on the way in: the KoboldCPP list is
-		// one variable for two kinds, so a chat→images switch would otherwise
-		// show the text catalogue under Images until the reply landed.
+		// ⚠ Emptied on the way out, not on the way in: each list is one
+		// variable for two kinds, so a scope switch would otherwise show the
+		// previous kind's catalogue under the new one until the reply landed.
+		// The Ollama list had one kind until embeddings and was never emptied.
 		kcppRecommended = []
 		kcppRecommendedFailed = false
+		ollamaRecommended = []
 		recommendedAsks.ask(() => {
 			if (kind === "koboldcpp")
 				socket.emit("koboldcpp:recommendedModels", {
 					kind: kcppKindForScope(current) ?? "text"
 				})
-			else socket.emit("ollama:recommendedModels", {})
+			else
+				socket.emit("ollama:recommendedModels", {
+					kind: current === "embeddings" ? "embedding" : "chat"
+				})
 		})
 	})
 
@@ -438,7 +491,8 @@
 			else
 				socket.emit("ollama:searchAvailableModels", {
 					searchTerm: term,
-					source: OllamaModelSearchSource.HUGGING_FACE
+					source: OllamaModelSearchSource.HUGGING_FACE,
+					kind: current === "embeddings" ? "embedding" : "chat"
 				})
 		})
 	})
@@ -462,7 +516,9 @@
 		if (dest.kind === "koboldcpp")
 			return kcppRecommendedRows(kcppRecommended, rowContext)
 		if (dest.kind === "ollama")
-			return scope === "chat"
+			// Chat and embeddings both: the server narrowed the list to the
+			// asked-for kind, so these rows are already the right half.
+			return scope === "chat" || scope === "embeddings"
 				? ollamaRecommendedRows(ollamaRecommended, rowContext)
 				: []
 		return onnxRecommendedRows(
@@ -473,6 +529,18 @@
 			scope === "entities" ? "entities" : "embeddings"
 		)
 	})
+
+	/**
+	 * Models an ONNX destination already has on disk. They are not in the
+	 * download list (`onnxRecommendedRows`); this count is where they went.
+	 */
+	const onnxOnDisk = $derived(
+		destination?.kind === "onnx"
+			? (destinationRow?.models ?? []).filter(
+					(m) => m.local?.state === "on_disk"
+				).length
+			: 0
+	)
 
 	/** Exactly one gold Get, on the first row that outright fits. */
 	const goldIndex = $derived(primaryRowIndex(recommendedRows))
@@ -564,7 +632,10 @@
 			// A recommended Ollama row names one exact tag; there is nothing
 			// to pick between.
 			const modelName = row.key.slice("ollama:".length)
-			socket.emit("ollama:pullModel", { modelName })
+			socket.emit("ollama:pullModel", {
+				modelName,
+				connectionId: dest.connectionId
+			})
 			started(row.name)
 			return
 		}
@@ -607,7 +678,10 @@
 		if (open.kind === "koboldcpp" && open.model)
 			startKcpp(open.model, quant)
 		else if (open.kind === "ollama" && quant.tag) {
-			socket.emit("ollama:pullModel", { modelName: quant.tag })
+			socket.emit("ollama:pullModel", {
+				modelName: quant.tag,
+				connectionId: destination?.connectionId
+			})
 			started(open.repo)
 		}
 	}
@@ -645,22 +719,39 @@
 			: (settings.koboldCppManagerModelsDir ?? null)
 	})
 
+	/** The KoboldCPP destination was picked by hand but cannot run yet. */
+	const kcppNotReady = $derived(
+		destination?.kind === "koboldcpp" &&
+			kcppInstallState(koboldCppSettingsCtx?.settings) !== "ready"
+	)
 	const note = $derived(
-		destination ? landingNote(destination, kcppModelsDir) : null
+		!destination
+			? null
+			: kcppNotReady
+				? "KoboldCPP isn't set up or switched on yet — files still land, but nothing can run them until it is"
+				: landingNote(destination, kcppModelsDir)
 	)
 
 	const hubGroupVisible = $derived(!!destination && !!debouncedQuery.trim())
 	const onnxHubVisible = $derived(destination?.kind === "onnx")
 </script>
 
-<div class="flex h-full min-h-0 flex-col gap-3 {embedded ? '' : 'p-1'}">
-	{#if !embedded}
+<div
+	class="flex h-full min-h-0 flex-col gap-3 {embedded || inTab ? '' : 'p-1'}"
+>
+	{#if !embedded && !inTab}
 		<PanelNavHeader
 			title="Get a model"
 			{onBack}
 			backLabel="Back to connections"
 			actionsLabel="Model finder"
-			{actions}
+			menuItems={[
+				{
+					label: "Change memory tier",
+					icon: Icons.MemoryStick,
+					onSelect: () => (tierOpen = true)
+				}
+			]}
 		/>
 	{/if}
 
@@ -673,9 +764,9 @@
 
 	<!-- WHAT IT IS FOR. One on, always. Hidden when the host chose it. -->
 	<div class="flex shrink-0 flex-col gap-1.5" class:hidden={embedded}>
-		<span class="text-surface-500 text-xs">For</span>
+		<span class="text-surface-600-400 text-xs">For</span>
 		<div class="flex flex-wrap gap-1.5" role="radiogroup" aria-label="For">
-			{#each FINDER_SCOPES as option (option.value)}
+			{#each scopeOptions as option (option.value)}
 				{@const on = scope === option.value}
 				<button
 					type="button"
@@ -694,8 +785,8 @@
 
 	<!-- WHERE IT GOES. Derived from the list, so a pill is never offered for
 	     a runtime this pub has no connection to. -->
-	<div class="flex shrink-0 flex-col gap-1.5">
-		<span class="text-surface-500 text-xs">Download to</span>
+	<div class="flex shrink-0 flex-col gap-1.5" class:hidden={inTab}>
+		<span class="text-surface-600-400 text-xs">Download to</span>
 		{#if destinations.length}
 			<div
 				class="flex flex-wrap gap-1.5"
@@ -748,58 +839,66 @@
 		     Rendered whether or not there is a destination, so the tier's own
 		     popover always has a trigger on screen. -->
 		<p
-			class="text-surface-500 flex min-w-0 flex-wrap items-center gap-1 text-xs"
+			class="text-surface-600-400 flex min-w-0 flex-wrap items-center gap-1 text-xs"
 		>
 			{#if note}
 				<span class="min-w-0 truncate">{note}</span>
-				<span aria-hidden="true">·</span>
+				{#if destination?.kind !== "onnx"}
+					<span aria-hidden="true">·</span>
+				{/if}
 			{/if}
-			<span>{tierLabel(tier)} tier</span>
-			<span aria-hidden="true">·</span>
-			<Popover
-				open={tierOpen}
-				onOpenChange={(e) => (tierOpen = e.open)}
-				positioning={{ placement: "bottom-start" }}
-			>
-				<Popover.Trigger
-					class="text-primary-700 dark:text-primary-500 hover:underline"
-					aria-label="Change memory tier"
-					aria-expanded={tierOpen}
+			<!-- The memory tier measures GGUF downloads against a graphics
+			     card. An ONNX model runs on the CPU, so the line would be a
+			     question with no bearing on the answer. -->
+			{#if destination?.kind !== "onnx"}
+				<span>{tierLabel(tier)} tier</span>
+				<span aria-hidden="true">·</span>
+				<Popover
+					open={tierOpen}
+					onOpenChange={(e) => (tierOpen = e.open)}
+					positioning={{ placement: "bottom-start" }}
 				>
-					Change
-				</Popover.Trigger>
-				<Portal>
-					<Popover.Positioner class="z-[1000]!">
-						<Popover.Content
-							class="card bg-surface-100-900 border-surface-300-700 w-[min(90vw,240px)] border p-2 shadow-xl"
-						>
-							<p class="text-surface-500 px-1.5 pb-1 text-xs">
-								How much memory does this machine have?
-							</p>
-							<div
-								class="flex flex-col gap-0.5"
-								role="radiogroup"
-								aria-label="Memory tier"
+					<Popover.Trigger
+						class="text-primary-700 dark:text-primary-500 hover:underline"
+						aria-label="Change memory tier"
+						aria-expanded={tierOpen}
+					>
+						Change
+					</Popover.Trigger>
+					<Portal>
+						<Popover.Positioner class="z-[1000]!">
+							<Popover.Content
+								class="card bg-surface-50-950 border-surface-200-800 w-[min(90vw,240px)] border p-2 shadow-xl"
 							>
-								{#each MEMORY_TIERS as option (option.value)}
-									{@const on = tier === option.value}
-									<button
-										type="button"
-										role="radio"
-										aria-checked={on}
-										class="flex h-9 w-full items-center rounded-lg px-2.5 text-left text-sm {on
-											? 'sidebar-row-active'
-											: 'hover:preset-tonal-primary'}"
-										onclick={() => pickTier(option.value)}
-									>
-										{option.label}
-									</button>
-								{/each}
-							</div>
-						</Popover.Content>
-					</Popover.Positioner>
-				</Portal>
-			</Popover>
+								<p class="text-surface-600-400 px-1.5 pb-1 text-xs">
+									How much memory does this machine have?
+								</p>
+								<div
+									class="flex flex-col gap-0.5"
+									role="radiogroup"
+									aria-label="Memory tier"
+								>
+									{#each MEMORY_TIERS as option (option.value)}
+										{@const on = tier === option.value}
+										<button
+											type="button"
+											role="radio"
+											aria-checked={on}
+											class="flex h-9 w-full items-center rounded-lg px-2.5 text-left text-sm {on
+												? 'sidebar-row-active'
+												: 'hover:bg-surface-200-800'}"
+											onclick={() =>
+												pickTier(option.value)}
+										>
+											{option.label}
+										</button>
+									{/each}
+								</div>
+							</Popover.Content>
+						</Popover.Positioner>
+					</Portal>
+				</Popover>
+			{/if}
 		</p>
 	</div>
 
@@ -810,8 +909,8 @@
 			<!-- The card above is the whole answer; a results list under it
 			     would be a list of things that cannot be downloaded. -->
 		{:else}
-			<section class="flex flex-col gap-1.5">
-				<span class="text-surface-500 text-xs">
+			<section class="flex flex-col gap-3">
+				<span class="text-surface-600-400 text-xs">
 					Recommended · {recommendedRows.length}
 					{recommendedRows.length === 1 ? "match" : "matches"}
 				</span>
@@ -835,14 +934,30 @@
 						{@render resultRow(row, index === goldIndex)}
 					{/each}
 				{/if}
+				{#if onnxOnDisk && destination}
+					<button
+						type="button"
+						class="hover:preset-tonal-primary text-surface-600-400 flex min-h-9 items-center gap-2 rounded-[10px] px-1.5 text-left text-xs"
+						onclick={() =>
+							destination &&
+							onOpenConnection?.(destination.connectionId)}
+						disabled={!onOpenConnection}
+					>
+						<Icons.HardDrive size={14} aria-hidden="true" />
+						{onnxOnDisk} already on this machine
+						{#if onOpenConnection}
+							<Icons.ChevronRight size={14} aria-hidden="true" />
+						{/if}
+					</button>
+				{/if}
 			</section>
 
 			{#if onnxHubVisible}
 				<!-- The local lists are curated and the Hub is not searchable
 				     for them in the same shape, so the Hub group here is one
 				     row: the id form the ONNX views already use. -->
-				<section class="flex flex-col gap-1.5">
-					<span class="text-surface-500 text-xs">Hugging Face</span>
+				<section class="flex flex-col gap-3">
+					<span class="text-surface-600-400 text-xs">Hugging Face</span>
 					{#if hubOpen}
 						<form
 							class="panel-card flex flex-col gap-2"
@@ -852,7 +967,7 @@
 							}}
 						>
 							<label
-								class="text-surface-500 text-xs"
+								class="text-surface-600-400 text-xs"
 								for="finder-hub-id"
 							>
 								Model id
@@ -916,8 +1031,8 @@
 					{/if}
 				</section>
 			{:else if hubGroupVisible}
-				<section class="flex flex-col gap-1.5">
-					<span class="text-surface-500 text-xs">
+				<section class="flex flex-col gap-3">
+					<span class="text-surface-600-400 text-xs">
 						Hugging Face · {hubRows.length}
 						{hubRows.length === 1 ? "result" : "results"}
 					</span>
@@ -962,19 +1077,16 @@
 	/>
 {/if}
 
-{#snippet actions()}
-	<button
-		type="button"
-		class="popover-menu-btn btn"
-		onclick={() => (tierOpen = true)}
-	>
-		<Icons.MemoryStick size={16} aria-hidden="true" />
-		Change memory tier
-	</button>
-{/snippet}
 
-<!-- One row anatomy, whichever catalogue the row came from: a tile, a name
-     with its tier chip, one second line, and at most one button. -->
+<!-- One card anatomy, whichever catalogue the row came from: a tile, a name
+     with its tier chip, a facts line, the repo's own sentence and its tags,
+     and at most one button.
+
+     ⚠ A CARD, not a 44px list row (2026-09-25). The row crushed owner, size,
+     shape AND description into one `truncate` line, so the sentence was
+     fetched, quoted and then cut off on every column narrower than absurd —
+     and tags were not carried at all. `.panel-card` per STYLE-GUIDE §6.4;
+     12px between cards per §4.3. -->
 {#snippet resultRow(row: FinderRow, gold: boolean)}
 	{@const live = row.downloading ? null : liveDownload(row)}
 	{@const busy = row.downloading || !!live}
@@ -986,117 +1098,165 @@
 		(live?.totalBytes
 			? ((live.downloadedBytes ?? 0) / live.totalBytes) * 100
 			: (live?.percent ?? null))}
-	<div class="flex min-h-11 items-center gap-2 rounded-[10px]">
-		<span
-			class="preset-tonal-surface grid size-8 shrink-0 place-items-center rounded-lg"
-			aria-hidden="true"
-		>
-			<Icons.Package size={16} />
-		</span>
-		<span class="min-w-0 flex-1">
-			<span class="flex min-w-0 items-center gap-1.5">
-				<span
-					class="min-w-0 truncate text-[15px] font-medium"
-					title={row.name}
-				>
-					{repoTitle(row.name)}
-				</span>
-				{#if row.tier}
-					<span
-						class="shrink-0 rounded-full px-1.5 py-0.5 text-[11px] {row
-							.tier.matches
-							? 'preset-tonal-primary'
-							: 'preset-tonal-surface'}"
-					>
-						{row.tier.label}
-					</span>
-				{/if}
+	<div class="panel-card flex flex-col gap-2">
+		<div class="flex items-start gap-2.5">
+			<span
+				class="preset-tonal-surface grid size-9 shrink-0 place-items-center rounded-[10px]"
+				aria-hidden="true"
+			>
+				<Icons.Package size={18} />
 			</span>
-			{#if busy}
-				<span class="flex min-w-0 items-center gap-1.5">
+			<div class="flex min-w-0 flex-1 flex-col gap-0.5">
+				<div class="flex min-w-0 flex-wrap items-center gap-1.5">
 					<span
-						class="bg-surface-300-700 h-1.5 min-w-0 flex-1 overflow-hidden rounded-full"
-						role="progressbar"
-						aria-label={`Downloading ${row.name}`}
-						aria-valuenow={percent ?? undefined}
-						aria-valuemin={0}
-						aria-valuemax={100}
+						class="min-w-0 truncate text-[15px] font-medium"
+						title={row.name}
 					>
+						{repoTitle(row.name)}
+					</span>
+					{#if row.tier}
 						<span
-							class="bg-warning-500 block h-full rounded-full transition-[width]"
-							style={`width: ${Math.round(percent ?? 0)}%`}
-						></span>
-					</span>
-					<span class="text-surface-600-400 shrink-0 text-[11px]">
-						{formatProgress(
-							live?.downloadedBytes,
-							live?.totalBytes,
-							"GB"
-						) ?? `${Math.round(percent ?? 0)}%`}
-					</span>
-				</span>
-			{:else}
-				<span class="text-surface-600-400 block truncate text-xs">
+							class="shrink-0 rounded-full px-2 py-0.5 text-[11px] {row
+								.tier.matches
+								? 'preset-tonal-primary'
+								: 'preset-tonal-surface'}"
+						>
+							{row.tier.label}
+						</span>
+					{/if}
+				</div>
+				<span class="text-surface-600-400 truncate text-xs">
 					{secondLine(row)}
 				</span>
+			</div>
+			{#if busy}
+				<button
+					type="button"
+					class="btn btn-sm hover:preset-tonal-surface text-surface-600-400 shrink-0 text-xs"
+					onclick={() => cancelRow(row)}
+					aria-label={`Cancel — ${row.name}`}
+				>
+					Cancel
+				</button>
+			{:else if row.presence}
+				<span
+					class="preset-tonal-success shrink-0 rounded-full px-2 py-0.5 text-[11px]"
+				>
+					{row.presence === "on_disk" ? "On disk" : "Pulled"}
+				</span>
+			{:else}
+				<button
+					type="button"
+					class="btn btn-sm shrink-0 text-xs {gold
+						? 'preset-filled-primary-500'
+						: 'preset-tonal-surface'}"
+					onclick={() => getRecommended(row)}
+					aria-label={`Get ${row.name}`}
+				>
+					Get
+				</button>
 			{/if}
-		</span>
+		</div>
+
+		{#if row.description}
+			<!-- Clamped, not truncated: two lines of a sentence is a sentence,
+			     one line of it cut mid-word is a tease. -->
+			<p class="text-surface-700-300 line-clamp-2 text-xs leading-relaxed">
+				{row.description}
+			</p>
+		{/if}
+
+		{@render tagPills(row.tags)}
+
 		{#if busy}
-			<button
-				type="button"
-				class="btn btn-sm hover:preset-tonal-surface text-surface-600-400 shrink-0 text-xs"
-				onclick={() => cancelRow(row)}
-				aria-label={`Cancel — ${row.name}`}
-			>
-				Cancel
-			</button>
-		{:else if row.presence}
-			<span
-				class="preset-tonal-success shrink-0 rounded-full px-2 py-0.5 text-[11px]"
-			>
-				{row.presence === "on_disk" ? "On disk" : "Pulled"}
-			</span>
-		{:else}
-			<button
-				type="button"
-				class="btn btn-sm shrink-0 text-xs {gold
-					? 'preset-filled-primary-500'
-					: 'preset-tonal-surface'}"
-				onclick={() => getRecommended(row)}
-				aria-label={`Get ${row.name}`}
-			>
-				Get
-			</button>
+			<div class="flex min-w-0 items-center gap-2">
+				<span
+					class="bg-surface-300-700 h-1.5 min-w-0 flex-1 overflow-hidden rounded-full"
+					role="progressbar"
+					aria-label={`Downloading ${row.name}`}
+					aria-valuenow={percent ?? undefined}
+					aria-valuemin={0}
+					aria-valuemax={100}
+				>
+					<span
+						class="bg-warning-500 block h-full rounded-full transition-[width]"
+						style={`width: ${Math.round(percent ?? 0)}%`}
+					></span>
+				</span>
+				<span class="text-surface-600-400 shrink-0 text-[11px]">
+					{formatProgress(
+						live?.downloadedBytes,
+						live?.totalBytes,
+						"GB"
+					) ?? `${Math.round(percent ?? 0)}%`}
+				</span>
+			</div>
 		{/if}
 	</div>
 {/snippet}
 
 {#snippet hubResultRow(row: HubRow)}
-	<div class="flex min-h-11 items-center gap-2 rounded-[10px]">
-		<span
-			class="preset-tonal-surface grid size-8 shrink-0 place-items-center rounded-lg"
-			aria-hidden="true"
-		>
-			<Icons.Globe size={16} />
-		</span>
-		<span class="min-w-0 flex-1">
+	<div class="panel-card flex flex-col gap-2">
+		<div class="flex items-start gap-2.5">
 			<span
-				class="block truncate text-[15px] font-medium"
-				title={row.name}
+				class="preset-tonal-surface grid size-9 shrink-0 place-items-center rounded-[10px]"
+				aria-hidden="true"
 			>
-				{repoTitle(row.name)}
+				<Icons.Globe size={18} />
 			</span>
-			<span class="text-surface-600-400 block truncate text-xs">
-				{row.detail}
-			</span>
-		</span>
-		<button
-			type="button"
-			class="btn btn-sm preset-tonal-surface shrink-0 text-xs"
-			onclick={() => getHub(row)}
-			aria-label={`Get ${row.name}`}
-		>
-			Get
-		</button>
+			<div class="flex min-w-0 flex-1 flex-col gap-0.5">
+				<span
+					class="truncate text-[15px] font-medium"
+					title={row.name}
+				>
+					{repoTitle(row.name)}
+				</span>
+				<span class="text-surface-600-400 truncate text-xs">
+					{row.detail}
+				</span>
+			</div>
+			<button
+				type="button"
+				class="btn btn-sm preset-tonal-surface shrink-0 text-xs"
+				onclick={() => getHub(row)}
+				aria-label={`Get ${row.name}`}
+			>
+				Get
+			</button>
+		</div>
+
+		{#if row.description}
+			<p class="text-surface-700-300 line-clamp-2 text-xs leading-relaxed">
+				{row.description}
+			</p>
+		{/if}
+
+		{@render tagPills(row.tags)}
 	</div>
+{/snippet}
+
+<!-- One tag row for both cards, so a recommended model and a searched one
+     can never render the same vocabulary two ways. -->
+{#snippet tagPills(tags: readonly string[])}
+	{@const shown = tags.slice(0, TAGS_SHOWN)}
+	{#if shown.length}
+		<!-- Tonal, never `preset-filled-*`: a filled preset is a button, not a
+		     badge (STYLE-GUIDE §2.4). The old Ollama manager badged these
+		     filled-tertiary and filled-secondary, which is the convention that
+		     was retired app-wide at 3.62:1. -->
+		<div class="flex flex-wrap items-center gap-1.5">
+			{#each shown as tag (tag)}
+				<span
+					class="preset-tonal-surface text-surface-700-300 rounded-full px-2 py-0.5 text-[11px]"
+				>
+					{tag}
+				</span>
+			{/each}
+			{#if tags.length > shown.length}
+				<span class="text-surface-600-400 text-[11px]">
+					+{tags.length - shown.length} more
+				</span>
+			{/if}
+		</div>
+	{/if}
 {/snippet}

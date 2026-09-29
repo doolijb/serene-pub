@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { Switch } from "@skeletonlabs/skeleton-svelte"
 	import TotpSettings from "./TotpSettings.svelte"
+	import PluginUserSettingsCard from "./PluginUserSettingsCard.svelte"
 	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
 	import { getContext, onDestroy } from "svelte"
 	import { goto } from "$app/navigation"
@@ -14,6 +15,10 @@
 		disableAccessibility
 	} from "$lib/client/accessibility/state.svelte"
 	import { z } from "zod"
+	import {
+		passphraseSchema,
+		PASSPHRASE_RULE_HINT
+	} from "$lib/shared/validation/passphrase"
 	import * as Icons from "@lucide/svelte"
 	import LanguagePicker from "$lib/client/components/inputs/LanguagePicker.svelte"
 	import { languageDefinition } from "$lib/shared/i18n/languages"
@@ -126,7 +131,7 @@
 		isUpdatingDisplayName = false
 		displayNameError = message.error || "Failed to update display name"
 		toaster.error({
-			title: "Display Name Error",
+			title: "Display name error",
 			description: message.error || "Failed to update display name"
 		})
 	}
@@ -137,7 +142,7 @@
 		isChangingPassword = false
 		passwordError = message.error || "Failed to change passphrase"
 		toaster.error({
-			title: "Passphrase Error",
+			title: "Passphrase error",
 			description: message.error || "Failed to change passphrase"
 		})
 	}
@@ -147,7 +152,7 @@
 	) {
 		isLoggingOut = false
 		toaster.error({
-			title: "Logout Error",
+			title: "Logout error",
 			description: message.error || "Failed to logout"
 		})
 	}
@@ -204,17 +209,6 @@
 		// one piece of state the parent shares with it.
 		hasUnsavedChanges = false
 	})
-
-	// Passphrase validation schema
-	const passphraseSchema = z
-		.string()
-		.min(6, "Passphrase must be at least 6 characters long")
-		.regex(/[a-z]/, "Passphrase must contain at least one lowercase letter")
-		.regex(/[A-Z]/, "Passphrase must contain at least one uppercase letter")
-		.regex(
-			/[^a-zA-Z0-9]/,
-			"Passphrase must contain at least one special character"
-		)
 
 	// Display name validation schema
 	const displayNameSchema = z
@@ -425,7 +419,7 @@
 <div class="flex flex-col gap-4">
 	<!-- Language -->
 	<div class="card preset-filled-surface-100-900 p-4">
-		<h3 class="mb-2 text-lg font-semibold">{t("Language")}</h3>
+		<h3 class="mb-2 text-sm font-medium">{t("Language")}</h3>
 		<p class="text-surface-700-300 mb-3 text-sm">
 			{t(
 				"The language this interface is drawn in. Leave it on the server default to follow whatever an administrator has set for everyone."
@@ -449,7 +443,7 @@
 		class="card preset-filled-surface-100-900 divide-surface-300-700 divide-y p-4"
 	>
 		<div class="flex flex-col gap-2 pb-4">
-			<p class="text-muted-foreground text-sm">
+			<p class="text-surface-600-400 text-sm">
 				Shows every field on the character form (advanced/less-common
 				ones included), instead of just the commonly-used subset.
 			</p>
@@ -466,13 +460,13 @@
 				</Switch.Control>
 				<Switch.HiddenInput />
 				<Switch.Label class="font-semibold">
-					Show All Character Fields
+					Show all character fields
 				</Switch.Label>
 			</Switch>
 		</div>
 
 		<div class="flex flex-col gap-2 pt-4">
-			<p class="text-muted-foreground text-sm">
+			<p class="text-surface-600-400 text-sm">
 				Writing a character — or a persona — from the Characters panel's
 				"New" menu opens a quick, simplified creator instead of the full
 				character form. Turn off to always go straight to the full form.
@@ -490,7 +484,7 @@
 				</Switch.Control>
 				<Switch.HiddenInput />
 				<Switch.Label class="font-semibold">
-					Easy Character Creation
+					Easy character creation
 				</Switch.Label>
 			</Switch>
 		</div>
@@ -498,7 +492,7 @@
 
 	<!-- Document View Section -->
 	<div class="card preset-filled-surface-100-900 p-4">
-		<h3 class="mb-2 text-lg font-semibold">Document View</h3>
+		<h3 class="mb-2 text-sm font-medium">Document View</h3>
 		<p class="text-surface-700-300 mb-3 text-sm">
 			A simplified, high-contrast, keyboard- and screen-reader-friendly
 			alternative to this interface. You can also switch to it any time
@@ -531,10 +525,13 @@
 		{/if}
 	</div>
 
+	<!-- Extension settings that are this person's own (scope: 'user') -->
+	<PluginUserSettingsCard />
+
 	<!-- Import Section -->
 	{#if userCtx.user?.isAdmin && !systemSettingsCtx.settings?.isAndroidWrapper}
 		<div class="card preset-filled-surface-100-900 p-4">
-			<h3 class="mb-4 text-lg font-semibold">Data Import</h3>
+			<h3 class="mb-4 text-sm font-medium">Data import</h3>
 			<p class="text-surface-700-300 mb-3 text-sm">
 				Import your characters, personas, sessions, and lorebooks from
 				other applications.
@@ -555,12 +552,12 @@
 		<TotpSettings />
 
 		<div class="card preset-filled-surface-100-900 p-4">
-			<h3 class="mb-4 text-lg font-semibold">User Profile</h3>
+			<h3 class="mb-4 text-sm font-medium">User profile</h3>
 
 			<!-- Display Name -->
 			<div class="mb-4 flex flex-col gap-2">
 				<label for="display-name" class="font-semibold">
-					Display Name
+					Display name
 				</label>
 				<div class="flex gap-2">
 					<input
@@ -581,7 +578,7 @@
 					>
 						{#if isUpdatingDisplayName}
 							<Icons.Loader2 size={16} class="animate-spin" />
-							Updating...
+							Updating…
 						{:else}
 							Update
 						{/if}
@@ -596,22 +593,22 @@
 			<div class="flex flex-col gap-2">
 				<button
 					type="button"
-					class="btn preset-filled-secondary-500 mx-auto w-fit"
+					class="btn preset-tonal-surface mx-auto w-fit"
 					onclick={openChangePasswordModal}
 				>
 					<Icons.Key size={16} />
-					Change Passphrase
+					Change passphrase
 				</button>
 
 				<button
 					type="button"
-					class="btn preset-filled-error-500 mx-auto w-fit"
+					class="btn preset-tonal-error mx-auto w-fit"
 					onclick={logout}
 					disabled={isLoggingOut}
 				>
 					{#if isLoggingOut}
 						<Icons.Loader2 size={16} class="animate-spin" />
-						Logging Out...
+						Logging out…
 					{:else}
 						<Icons.LogOut size={16} />
 						Logout
@@ -638,9 +635,9 @@
 				class="card bg-surface-100-900 max-w-lg space-y-6 p-6 shadow-xl"
 			>
 				<header class="flex items-center justify-between">
-					<h2 class="text-xl font-bold">Change Passphrase</h2>
+					<h2 class="text-xl font-bold">Change passphrase</h2>
 					<button
-						class="btn-ghost"
+						class="btn btn-icon preset-tonal-surface"
 						aria-label="Close"
 						onclick={closeChangePasswordModal}
 					>
@@ -651,7 +648,7 @@
 				<article class="space-y-4">
 					<div>
 						<label for="current-password" class="font-semibold">
-							Current Passphrase
+							Current passphrase
 						</label>
 						<input
 							id="current-password"
@@ -665,7 +662,7 @@
 
 					<div>
 						<label for="new-password" class="font-semibold">
-							New Passphrase
+							New passphrase
 						</label>
 						<input
 							id="new-password"
@@ -675,15 +672,14 @@
 							placeholder="Enter new passphrase"
 							disabled={isChangingPassword}
 						/>
-						<p class="text-muted-foreground mt-1 text-sm">
-							Must be at least 6 characters with uppercase,
-							lowercase, and special character
+						<p class="text-surface-600-400 mt-1 text-sm">
+							{PASSPHRASE_RULE_HINT}
 						</p>
 					</div>
 
 					<div>
 						<label for="confirm-password" class="font-semibold">
-							Confirm New Passphrase
+							Confirm new passphrase
 						</label>
 						<input
 							id="confirm-password"
@@ -702,7 +698,7 @@
 					<footer class="flex justify-end gap-2">
 						<button
 							type="button"
-							class="btn btn-sm variant-ghost"
+							class="btn btn-sm preset-tonal-surface"
 							onclick={closeChangePasswordModal}
 							disabled={isChangingPassword}
 						>
@@ -710,7 +706,7 @@
 						</button>
 						<button
 							type="button"
-							class="btn btn-sm variant-filled-primary"
+							class="btn btn-sm preset-filled-primary-500"
 							onclick={changePassword}
 							disabled={isChangingPassword ||
 								!currentPassword ||
@@ -719,9 +715,9 @@
 						>
 							{#if isChangingPassword}
 								<Icons.Loader2 size={16} class="animate-spin" />
-								Changing...
+								Changing…
 							{:else}
-								Change Passphrase
+								Change passphrase
 							{/if}
 						</button>
 					</footer>

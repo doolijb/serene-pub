@@ -173,8 +173,8 @@ class A1111Adapter extends BaseImageAdapter {
 		}
 		// KoboldCPP is the exception among the four: it holds exactly one image
 		// model at a time and has no checkpoint list to switch between. Which
-		// model that is was decided before this request — by the `.kcpps` the
-		// Manager wrote, or by the `--sdmodel` an external instance was started
+		// model that is was decided before this request — by the `.kcpps`
+		// Serene Pub wrote, or by the `--sdmodel` an external instance was started
 		// with — so `sd_model_checkpoint` is a per-request answer to a question
 		// nobody can ask here.
 		//
@@ -184,7 +184,7 @@ class A1111Adapter extends BaseImageAdapter {
 		// as a checkpoint name. On KOBOLDCPP_MANAGED_IMAGE it genuinely IS the
 		// image model — and still must not be sent, because naming it here would
 		// claim the backend can switch to it mid-request when what actually
-		// loads it is a full model swap through the Manager.
+		// loads it is a full model swap through the managed KoboldCPP.
 		//
 		// Today's build ignores an override it doesn't recognise; a stricter one
 		// would reject the render, so send nothing rather than something

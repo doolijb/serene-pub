@@ -18,6 +18,11 @@
 		 *  rather than "has an error". Ignored when `hasError` is set: one
 		 *  signal per tab, and a fault outranks a state. */
 		hasActivity?: boolean
+		/** An optional count shown beside the label at 11px, muted — how
+		 *  many things the panel holds. Left off, nothing renders. It sits
+		 *  outside the truncating label so a trimmed label keeps its count,
+		 *  and it is part of the tab's accessible name ("Nodes 12"). */
+		count?: number
 	}
 </script>
 
@@ -91,7 +96,7 @@
 </script>
 
 <div
-	class="border-surface-800 flex shrink-0 border-b {className}"
+	class="border-surface-200-800 flex shrink-0 border-b {className}"
 	role="tablist"
 	aria-label={ariaLabel}
 >
@@ -108,7 +113,7 @@
 			bind:this={tabRefs[tab.value]}
 			class="flex h-10 min-w-0 flex-1 items-center justify-center gap-2 border-b-2 px-1 text-[13px] {selected
 				? 'border-primary-500 text-primary-500 font-medium'
-				: 'text-surface-400 hover:text-surface-200 border-transparent'}"
+				: 'text-surface-600-400 hover:text-surface-800-200 border-transparent'}"
 			onclick={() => (value = tab.value)}
 			onkeydown={(e) => handleKeydown(e, i)}
 		>
@@ -135,6 +140,12 @@
 					<span class="sr-only">(in progress)</span>
 				{/if}
 			</span>
+			{#if tab.count != null}
+				<span
+					class="text-surface-600-400 shrink-0 text-[11px] font-normal tabular-nums"
+					>{tab.count}</span
+				>
+			{/if}
 		</button>
 	{/each}
 </div>

@@ -140,8 +140,10 @@ async function world() {
 		.insert(schema.sessionCharacters)
 		.values({ sessionId: session.id, characterId: character.id })
 	await db
-		.insert(schema.sessionLorebooks)
-		.values({ sessionId: session.id, lorebookId: lorebook.id })
+		// The real shape: the lorebook is the session row's own binding.
+		.update(schema.sessions)
+		.set({ lorebookId: lorebook.id })
+		.where(eq(schema.sessions.id, session.id))
 	const [binding] = await db
 		.insert(schema.lorebookBindings)
 		.values({
@@ -519,6 +521,30 @@ describe("who", () => {
 		// The asking user's own persona — a character, seated as their voice.
 		expect(state.who.user?.id).toBe(w.player.id)
 		expect(state.who.user).toBe(state.cast.byId[String(w.player.id)])
+	})
+
+	test("a switched-off seat stays in the cast with enabled: false, and out of who.active", async () => {
+		declareSlots()
+		const w = await peopled()
+		const { and, eq } = await import("drizzle-orm")
+		await db
+			.update(schema.sessionCharacters)
+			.set({ isActive: false })
+			.where(
+				and(
+					eq(schema.sessionCharacters.sessionId, w.session.id),
+					eq(schema.sessionCharacters.characterId, w.marrow.id)
+				)
+			)
+		const { stateFor } = await import("$lib/server/state/resolve")
+		const state = await stateFor(db, w.session.id)
+		// Listed, and filterable (2026-09-27)…
+		expect(state.cast.byId[String(w.marrow.id)]?.enabled).toBe(false)
+		expect(state.cast.byId[String(w.verity.id)]?.enabled).toBe(true)
+		// …a persona has no switch…
+		expect(state.cast.byId[String(w.player.id)]?.enabled).toBe(true)
+		// …and `who.active` still means the switched-on characters only.
+		expect(state.who.active.map((e) => e.id)).toEqual([w.verity.id])
 	})
 
 	test("a speaker nobody is in this cast leaves the key absent", async () => {

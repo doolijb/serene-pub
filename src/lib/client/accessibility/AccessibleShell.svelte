@@ -14,6 +14,8 @@
 	import { page } from "$app/state"
 	import { goto } from "$app/navigation"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import { getSocket } from "$lib/client/sockets/socketInstance"
+	import { notifications } from "$lib/client/notifications/notifications.svelte"
 	import {
 		INTEREST_CONTEXT,
 		interestContextValue,
@@ -144,9 +146,19 @@
 	onMount(() => {
 		const offLanguageCatalog = registerLanguageSocket()
 		socket.emit("systemSettings:get", {})
+		// Notifications: held for as long as this shell exists, like Layout's
+		// (the rail dot and the Activity list read one store). A reconnect
+		// missed whatever was pushed while the socket was down, so the list is
+		// asked for again — a named handler, removed by reference.
+		const disconnectNotifications = notifications.connect()
+		const io = getSocket()?.io
+		const onReconnect = () => notifications.refresh()
+		io?.on("reconnect", onReconnect)
 
 		return () => {
 			offLanguageCatalog()
+			io?.off("reconnect", onReconnect)
+			disconnectNotifications()
 		}
 	})
 
@@ -233,7 +245,7 @@
 			},
 			{
 				href: "/document-view/ollama",
-				label: "Ollama Manager",
+				label: "Ollama, managed",
 				show:
 					isAdmin &&
 					!isAndroidWrapper &&
@@ -241,7 +253,7 @@
 			},
 			{
 				href: "/document-view/koboldcpp",
-				label: "KoboldCPP Manager",
+				label: "KoboldCPP, run by Serene Pub",
 				show:
 					isAdmin &&
 					!isAndroidWrapper &&

@@ -113,7 +113,7 @@ export interface ImageCall {
 	 *
 	 * On an image backend there is no token stream, so what `off` turns off is
 	 * the PROGRESS: the poll an adapter runs beside the render and the preview
-	 * frames it decodes. A background stage pays for neither, which is the whole
+	 * frames it decodes. A background step pays for neither, which is the whole
 	 * of what the parameter buys here.
 	 *
 	 * Absent and `auto` are the same render.
@@ -179,25 +179,25 @@ function threadsFrom(value: unknown): number | undefined {
 }
 
 /**
- * Make sure the KoboldCPP Manager is up with THIS connection's image model.
+ * Make sure KoboldCPP, run by Serene Pub is up with THIS connection's image model.
  *
  * The text path has always done this — the managed adapter's preflight starts
- * the subprocess if the Manager owns one, waits out a slow load, and retries.
+ * the subprocess if the managed KoboldCPP owns one, waits out a slow load, and retries.
  * The image path had no equivalent, so rendering on a cold managed instance
  * failed with a bare connection error pointing at the image adapter, which is
  * the wrong file to go looking in.
  *
  * The same mechanism rather than a second one — same `ensureManagedReady`, same
  * `reload_config`, same baseUrl-keyed TTL — but it is now two questions with two
- * answers rather than one. A connection names exactly one model; a managed text
- * row names a text GGUF and this one names an image model. Which of them is
- * RESIDENT is neither row's business: the model manager decides that, and while
+ * answers rather than one: the managed endpoint carries text and image models,
+ * and a render asks for one of its image ones. Which is RESIDENT is the model
+ * manager's decision, and while
  * its answer is "one at a time" a render here evicts the chat model and the next
  * message reloads it. That is why the `loading` stage is announced before the
  * call and not after — the swap is minutes, not moments, and a progress bar that
  * jumps straight to "sampling" makes it look like a hang.
  *
- * Only for the managed image type. An external KoboldCPP, an A1111, a Forge —
+ * Only for the managed KoboldCPP. An external KoboldCPP, an A1111, a Forge —
  * nobody asked this app to start those, and trying would be a surprise.
  */
 async function ensureManagedInstanceReady(
@@ -207,15 +207,15 @@ async function ensureManagedInstanceReady(
 		onProgress?: (p: ImageGenProgress) => void
 	}
 ): Promise<void> {
-	if (connection.type !== CONNECTION_TYPE.KOBOLDCPP_MANAGED_IMAGE) return
+	if (!CONNECTION_TYPE.isManagedKoboldCpp(connection.type)) return
 	// Ahead of the loader's own "No model selected", because that sentence has no
 	// idea which of possibly several connections sent it, and because a row
 	// pointing at nothing is not worth a spawn and two retries.
 	if (!connection.model)
 		throw new ImageDispatchError(
 			`The connection set for image generation has no image model selected. ` +
-				`Pick one in its connection settings, or use "Use for image ` +
-				`generation" in the KoboldCPP Manager.`,
+				`Pick one in its connection settings, or use "Use for images" ` +
+				`in the Models tab of KoboldCPP, run by Serene Pub.`,
 			connectionIdentity(connection)
 		)
 
@@ -272,7 +272,7 @@ async function touchManagedTtl(
 	db: Db,
 	connection: SelectConnection
 ): Promise<void> {
-	if (connection.type !== CONNECTION_TYPE.KOBOLDCPP_MANAGED_IMAGE) return
+	if (!CONNECTION_TYPE.isManagedKoboldCpp(connection.type)) return
 	try {
 		const [{ resetTtl, getLoadedSignature }, subprocessManager] =
 			await Promise.all([
@@ -304,7 +304,7 @@ async function touchManagedTtl(
  * Where a managed connection's koboldcpp actually is.
  *
  * A managed row's own `baseUrl` is not authoritative and is not kept in sync —
- * the managed text adapter overwrites it from the Manager's settings on every
+ * the managed text adapter overwrites it from the managed KoboldCPP's settings on every
  * preflight, neither managed connection form treats it as more than a display
  * value, and changing the managed port updates only `koboldcpp_settings`. The
  * text path never notices, because that overwrite happens on the instance it is
@@ -321,7 +321,7 @@ async function resolveBaseUrl(
 	db: Db,
 	connection: SelectConnection
 ): Promise<string> {
-	if (connection.type !== CONNECTION_TYPE.KOBOLDCPP_MANAGED_IMAGE)
+	if (!CONNECTION_TYPE.isManagedKoboldCpp(connection.type))
 		return connection.baseUrl ?? ""
 	const settings = await db.query.koboldCppSettings.findFirst()
 	return settings?.koboldCppManagerBaseUrl ?? connection.baseUrl ?? ""
@@ -424,7 +424,7 @@ export async function dispatchImage(
 				}
 			: connection
 
-	// For a managed connection this is the Manager's address, not the row's —
+	// For a managed connection this is the managed KoboldCPP's address, not the row's —
 	// see resolveBaseUrl. Applied to the adapter's copy AND to the queue key, so
 	// two rows on one process still serialize against each other.
 	const baseUrl = await resolveBaseUrl(db, connection)

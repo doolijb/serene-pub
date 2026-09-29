@@ -41,7 +41,7 @@ const built = (slug: string) => {
 }
 
 describe("the Adventure genre declares itself", () => {
-	it("validates, and brings the seven slots the design names", () => {
+	it("validates, and brings the eight slots the design names", () => {
 		expect(adventureGenre.id).toBe(ADVENTURE_GENRE_ID)
 		expect(adventureGenre.shape?.lorebook).toBe("required")
 		expect(adventureGenre.shape?.voice).toBe("narrator")
@@ -56,19 +56,23 @@ describe("the Adventure genre declares itself", () => {
 			"core:slot/trust@1",
 			"core:slot/location@1",
 			"core:slot/time-of-day@1",
-			"core:slot/weather@1"
+			"core:slot/weather@1",
+			// Phase 3b: possessions retired onto the inventory stat.
+			"core:slot/inventory@1"
 		])
 	})
 
-	it("declares the three session fields, with the safe default on the one that matters", () => {
+	it("declares the four session fields, with the safe default on the one that matters", () => {
 		const fields = adventureGenre.shape?.fields ?? {}
 		expect(Object.keys(fields).sort()).toEqual([
+			"characterDetail",
 			"difficulty",
 			"tone",
 			"trustNarrator"
 		])
 		// The one field with a safety meaning: off means the model asks.
 		expect(fields.trustNarrator?.default).toBe(false)
+		expect(fields.characterDetail?.default).toBe("full")
 	})
 
 	it("every slot carries a model-facing descriptor", () => {
@@ -190,7 +194,7 @@ describe("the turn is a multi-agent turn", () => {
 		).toBeUndefined()
 	})
 
-	it("asks both JSON stages for a shape rather than describing one", () => {
+	it("asks both JSON steps for a shape rather than describing one", () => {
 		// The defect this closes: asked as ordinary replies, the planner and the
 		// keeper were roleplay continuations with a schema in their
 		// instructions, so the model wrote the character's next paragraph and
@@ -209,7 +213,7 @@ describe("the turn is a multi-agent turn", () => {
 		)
 	})
 
-	it("ships the paths the two JSON stages select, as choices and not as literals", () => {
+	it("ships the paths the two JSON steps select, as choices and not as literals", () => {
 		const preset = doc().presets.find((p: any) => p.default)
 		const at = (nodeKey: string) =>
 			preset?.values.find((v: any) => v.nodeKey === nodeKey)?.value
@@ -217,7 +221,7 @@ describe("the turn is a multi-agent turn", () => {
 		// Two paths, joined in order: a schema can only be strict about a list
 		// whose items are all one shape, and `resolve-state-changes` takes one
 		// list.
-		expect(at("keeperWrite")).toEqual({ path: "values,possessions" })
+		expect(at("keeperWrite")).toEqual({ path: "values,inventory" })
 	})
 
 	it("wires the planner's world hints into the resolver", () => {
@@ -236,7 +240,7 @@ describe("the turn is a multi-agent turn", () => {
 		).toBe(true)
 	})
 
-	it("gives the narrator the shipped story string, like every other stage", () => {
+	it("gives the narrator the shipped story string, like every other step", () => {
 		// The genre shipped an assembly template of its own whose every
 		// variable was wrong: `{{{system}}}` and `{{{chatMessages}}}` do not
 		// exist, so the narrator's prompt arrived with no instructions and no
@@ -281,7 +285,7 @@ describe("the two keeper actions", () => {
 			expect(
 				preset?.values.find((v: any) => v.nodeKey === "write")?.value,
 				slug
-			).toEqual({ path: "values,possessions" })
+			).toEqual({ path: "values,inventory" })
 		}
 	})
 })
@@ -379,7 +383,7 @@ describe("the preset and the prompts", () => {
 
 	it("the planner and the keeper prompts name the keys their pipeline selects", () => {
 		// The prose and the schema on the wire say the same thing, and both are
-		// contract: `path` selects `speakers` on one and `values,possessions` on
+		// contract: `path` selects `speakers` on one and `values,inventory` on
 		// the other, so a model that reads only the words still answers with the
 		// names the pipeline reads back.
 		const planner = CORE_PROMPTS.find(
@@ -390,7 +394,9 @@ describe("the preset and the prompts", () => {
 			p.seedKey.endsWith("adventure-keeper")
 		)!
 		expect(keeper.fields.systemPrompt).toContain("values")
-		expect(keeper.fields.systemPrompt).toContain("possessions")
+		// The item arm is `inventory` since 2026-09-27 (was `possessions`).
+		expect(keeper.fields.systemPrompt).toContain("- inventory:")
+		expect(keeper.fields.systemPrompt).not.toContain("possessions")
 	})
 
 	it("the narrator prompt interpolates the tone field the genre declares", () => {
@@ -411,10 +417,10 @@ describe("the Adventure layout", () => {
 	it("docks the party down the right and puts the world above the messages", () => {
 		const l = layout().layout as any
 		expect(l.zoneLayout.zones.right.pinned).toBe(true)
+		// No Inventory: R79 removed that widget for now.
 		expect(l.zoneLayout.zones.right.widgets).toEqual([
 			"scene-portraits",
-			"stats",
-			"inventory"
+			"stats"
 		])
 		// Unpinned: an icon strip that pops over the conversation, which is what
 		// "collapsed to the rail" means.
@@ -452,6 +458,9 @@ describe("parity", () => {
 	// Then "2c62eb10ed01b", before the sprite tail (DESIGN-sprites §5,
 	// 2026-09-24) appended `sprites` and its junction after `save` — also not
 	// adventure's.
-		expect(canonicalHash(built(RESPOND_SPEC_ID))).toBe("1970a642240009")
+		// Moved 2026-09-27 (lair pass B3/B18): the streaming stage and the stage
+		// statuses are declared on `expose` (`stream`, `status`). Proven: with those
+		// two keys stripped, the document hashes back to the old pin. (was '1970a642240009')
+		expect(canonicalHash(built(RESPOND_SPEC_ID))).toBe("ab24c4c296be8")
 	})
 })

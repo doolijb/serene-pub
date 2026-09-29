@@ -52,7 +52,7 @@
 					>
 						<span class="flex items-baseline gap-2">
 							<span
-								class="text-surface-600-400 shrink-0 text-[0.68rem] tracking-wider uppercase"
+								class="text-surface-600-400 shrink-0 text-xs"
 							>
 								{kindLabel(row.item.kind)}
 							</span>
@@ -63,14 +63,14 @@
 							</span>
 							{#if row.tag}
 								<span
-									class="badge preset-tonal-surface shrink-0 text-[0.62rem]"
+									class="badge preset-tonal-surface shrink-0 text-[11px]"
 								>
 									{row.tag}
 								</span>
 							{/if}
 						</span>
 						{#each row.clauses as clause (clause)}
-							<span class="text-surface-600-400 text-[0.68rem]">
+							<span class="text-surface-600-400 text-[11px]">
 								{clause}
 							</span>
 						{/each}
@@ -84,6 +84,6 @@
 		</p>
 	{/if}
 	{#each macros as line (line)}
-		<p class="text-surface-600-400 text-[0.68rem]">{line}</p>
+		<p class="text-surface-600-400 text-[11px]">{line}</p>
 	{/each}
 </div>

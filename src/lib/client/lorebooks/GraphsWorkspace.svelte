@@ -1,4 +1,5 @@
 <script lang="ts">
+	import Select from "$lib/client/components/inputs/Select.svelte"
 	import * as Icons from "@lucide/svelte"
 	import { getContext, onDestroy, onMount } from "svelte"
 	import { SvelteSet } from "svelte/reactivity"
@@ -14,18 +15,30 @@
 	import EmptyState from "$lib/client/components/EmptyState.svelte"
 	import GraphBuildModal from "$lib/client/components/modals/GraphBuildModal.svelte"
 	import AbsorbBindingModal from "$lib/client/components/modals/AbsorbBindingModal.svelte"
+	import { toaster } from "$lib/client/utils/toaster"
+	import DeleteCastMemberModal from "./cast/DeleteCastMemberModal.svelte"
+	import { deletedMemberToast, type PrivateLoreChoice } from "./cast/castSave"
 	import {
-		CHARACTER_LORE_TYPE_ID,
+		ENTRY_TYPE_IDS,
 		HISTORY_TYPE_ID,
-		WORLD_LORE_TYPE_ID
+		LOCATION_TYPE_ID
 	} from "$lib/shared/entries/types"
+	import { rowsReadingOnLine } from "$lib/shared/lorebooks/lineReading"
+	import { awaitReply, isReplyTimeout } from "$lib/client/utils/awaitReply"
+	import { formatDate } from "./sections/historyDates"
+	import { openBookTime } from "./time/bookTime.svelte"
 	import LinkForm from "./graphs/LinkForm.svelte"
 	import NodePanel from "./graphs/NodePanel.svelte"
 	import RelationshipsCanvas from "./graphs/RelationshipsCanvas.svelte"
 	import PlacesBoard from "./places/PlacesBoard.svelte"
 	import { buildPlacesMap } from "./places/placesMap"
-	import { edgesAtMoment, type DatedEntryLike } from "./graphs/asOf"
 	import {
+		edgesAtMoment,
+		edgesOnLine,
+		type DatedEntryLike
+	} from "./graphs/asOf"
+	import {
+		bumpLinkCounts,
 		castKey,
 		ceilingFactsFrom,
 		ceilingLine,
@@ -42,7 +55,10 @@
 	} from "./graphs/graphModel"
 	import {
 		createLinkParams,
+		isReplyFor,
 		newLinkDraft,
+		whenAtMoment,
+		whenOptions,
 		type LinkDraft
 	} from "./graphs/linkDraft"
 	import {
@@ -53,9 +69,9 @@
 	} from "./graphs/sceneGaps"
 	import { loreRoute } from "./loreRoute.svelte"
 	import { graphBuildReason, type LoreDrawing } from "./graphs"
-	import { SCOPE_KIND, SCOPE_LABELS } from "./loreRoute"
+	import { SCOPE_KIND, SCOPE_LABELS } from "$lib/shared/lorebooks/loreRoute"
 	import { stateBadge, visibilityBadge } from "./cast/castVocabulary"
-	import { momentLabel } from "./time/moment"
+	import { momentDate, momentLabel } from "./time/moment"
 
 	/**
 	 * The drawings the lorebook can make, over the scope being read.
@@ -98,16 +114,23 @@
 	const socket = useTypedSocket()
 	const graphBuildsCtx: GraphBuildsCtx = getContext("graphBuildsCtx")
 	const userCtx: { user?: SelectUser } = getContext("userCtx")
+	/**
+	 * The session open beside the workspace, when there is one. "Extend from
+	 * this session" reads that session's scenes alone (#51), so it is only
+	 * offered when the open session is the one reading this book.
+	 */
+	const openSessionCtx: OpenSessionCtx | undefined =
+		getContext("openSessionCtx")
 
 	/** The build runs on this pipeline's per-step config. */
 	const GRAPH_PIPELINE_SLUG = "core:spec/graph-build"
 
-	/** The kinds that can be a node, a box on the map, or a date on an edge. */
-	const ENTRY_KINDS = [
-		WORLD_LORE_TYPE_ID,
-		CHARACTER_LORE_TYPE_ID,
-		HISTORY_TYPE_ID
-	] as const
+	/**
+	 * The kinds that can be a node, a box on the map, or a date on an edge:
+	 * every declared entry type, so the Places lens has its locations and the
+	 * Items scope its items (#117).
+	 */
+	const ENTRY_KINDS = ENTRY_TYPE_IDS
 
 	const RELATIONSHIP_STATUSES = [
 		"active",
@@ -167,6 +190,12 @@
 	let unresolvedCastSceneCount = $state(0)
 	let namelessBindingCount = $state(0)
 	let totalDirectHistoryEntryCount = $state(0)
+	/** What a Rebuild would delete — the confirmation warns with it. */
+	let relationshipCounts = $state<Sockets.NarrativeGraph.RelationshipCounts>({
+		total: 0,
+		entryToEntry: 0,
+		castToEntry: 0
+	})
 
 	/**
 	 * Nothing shuts the build: summarizing is a capability every instance has.
@@ -183,7 +212,10 @@
 
 	let selectedRel = $state<NarrativeRelationship | null>(null)
 	let editingRel = $state<NarrativeRelationship | null>(null)
+	/** A relationship edit is on its way; only the edit form reads it. */
 	let isSaving = $state(false)
+	/** Why the last relationship edit failed, said in the form. */
+	let relError = $state<string | null>(null)
 
 	/**
 	 * Edges this session made, by id.
@@ -197,9 +229,27 @@
 
 	let linkDraft = $state<LinkDraft | null>(null)
 	let isConnecting = $state(false)
+	/** Why the last Name it failed, said in the link form. */
+	let linkError = $state<string | null>(null)
+	/**
+	 * Which create/edit is the live one. A reply to an attempt the form has
+	 * since been cancelled or restarted past must not close the new one.
+	 */
+	let linkAttempt = 0
+	let relAttempt = 0
 
-	let pendingDeleteNodeId = $state<number | null>(null)
-	let pendingDeleteReferenced = $state(false)
+	/**
+	 * The member whose delete is being asked about. The same dialog and flow
+	 * Cast uses, so the graph lens asks about their private lore too (owner
+	 * ruling 4) rather than deleting past the question.
+	 */
+	let deleteTarget = $state<NarrativeNode | null>(null)
+	let deleteCheck =
+		$state<Sockets.NarrativeGraph.CheckNodeMergeReferences.Response | null>(
+			null
+		)
+	let deleteCheckError = $state<string | null>(null)
+	let deleting = $state(false)
 
 	let mergeTarget = $state<NarrativeNode | null>(null)
 	let showMergeModal = $state(false)
@@ -209,9 +259,58 @@
 
 	let route = $derived(loreRoute.route)
 
-	let historyEntries = $derived(
+	/**
+	 * The line being read, with its ancestor chain (owner ruling 5) — the
+	 * one rule the pool, the counts and the server read by.
+	 */
+	let line = $derived(openBookTime.lineOf(route.branch ?? null))
+
+	/** A row's own story date (only History carries one), for the fork cut. */
+	function rowDate(row: any) {
+		return typeof row?.year === "number"
+			? { year: row.year, month: row.month ?? null, day: row.day ?? null }
+			: null
+	}
+
+	/**
+	 * The entries this line reads, archived ones left out (the pool's and the
+	 * rail's rule). A shared row dated after the fork is cut from a branch.
+	 */
+	let lineEntriesByKind = $derived.by(() => {
+		const out: Record<string, any[]> = {}
+		for (const [kind, rows] of Object.entries(entriesByKind))
+			out[kind] = rowsReadingOnLine(
+				rows.filter((r) => !r.archived),
+				line,
+				rowDate
+			)
+		return out
+	})
+
+	/** Every history entry the book holds — what dates any link. */
+	let allHistoryEntries = $derived(
 		(entriesByKind[HISTORY_TYPE_ID] ?? []) as DatedEntryLike[]
 	)
+	/** The history entries on this line — what a link here can be dated by. */
+	let historyEntries = $derived(
+		(lineEntriesByKind[HISTORY_TYPE_ID] ?? []) as (DatedEntryLike & {
+			name?: string | null
+		})[]
+	)
+
+	/** The When picker's options, spelled through the book's calendar. */
+	let linkWhenOptions = $derived(
+		whenOptions(historyEntries, (d) => formatDate(d))
+	)
+
+	/**
+	 * The links this line reads (#124): its own, its ancestors' up to each
+	 * fork, never a sibling's.
+	 */
+	let lineRelationships = $derived(
+		edgesOnLine(relationships, line, allHistoryEntries)
+	)
+	let lineScenes = $derived(rowsReadingOnLine(scenes as any[], line) as SceneRow[])
 
 	/**
 	 * The entries the scope holds.
@@ -230,7 +329,7 @@
 	let scopeEntries = $derived.by(() => {
 		const out: { id: number; name: string }[] = []
 		for (const kind of scopeKinds)
-			for (const row of entriesByKind[kind] ?? [])
+			for (const row of lineEntriesByKind[kind] ?? [])
 				out.push({ id: row.id, name: (row.name ?? "").trim() })
 		return out
 	})
@@ -239,9 +338,11 @@
 	let parentNodes = $derived(nodes.filter((n) => !n.parentNodeId))
 
 	let visibleRelationships = $derived(
-		edgesAtMoment(relationships, route.moment, historyEntries)
+		edgesAtMoment(lineRelationships, route.moment, allHistoryEntries)
 	)
-	let heldBack = $derived(relationships.length - visibleRelationships.length)
+	let heldBack = $derived(
+		lineRelationships.length - visibleRelationships.length
+	)
 
 	let selectedKey = $derived<string | null>(
 		route.castId != null
@@ -267,13 +368,27 @@
 	)
 	let panelRows = $derived(panelEdges(selectedKey, edges, names))
 
-	let edgedPairs = $derived(edgedCastPairs(relationships))
-	let scenesWithNothingNamed = $derived(scenesNamingNone(scenes, edgedPairs))
+	/**
+	 * Whether the column beside the canvas has anything to say. The graph
+	 * lists its nodes there; the Places map is its own list, so beside it the
+	 * column appears only for something picked (#122).
+	 */
+	let hasSideColumn = $derived(
+		drawing === "relationships" ||
+			linkDraft !== null ||
+			selectedRel !== null ||
+			selectedNode !== null
+	)
+
+	let edgedPairs = $derived(edgedCastPairs(lineRelationships))
+	let scenesWithNothingNamed = $derived(
+		scenesNamingNone(lineScenes, edgedPairs)
+	)
 
 	/** Scenes the open member was in that the graph names nothing about. */
 	let notDrawn = $derived.by(() => {
 		if (selectedNode?.kind !== "cast") return []
-		return unnamedPairsFor(selectedNode.id, scenes, edgedPairs).map(
+		return unnamedPairsFor(selectedNode.id, lineScenes, edgedPairs).map(
 			(pair) => ({
 				otherId: pair.otherId,
 				sceneIds: pair.sceneIds,
@@ -303,17 +418,18 @@
 		new Map(parentNodes.map((n) => [n.id, displayName(n)]))
 	)
 
-	let placeEntries = $derived.by(() => {
-		const out: { id: number; name: string; parentId: number | null }[] = []
-		for (const kind of scopeKinds)
-			for (const row of entriesByKind[kind] ?? [])
-				out.push({
-					id: row.id,
-					name: (row.name ?? "").trim() || `#${row.id}`,
-					parentId: row.anchorEntryId ?? null
-				})
-		return out
-	})
+	/**
+	 * The book's places: its location entries on this line, archived ones
+	 * left out — the one definition the rail's Places count uses (#117).
+	 */
+	let placeEntries = $derived(
+		(lineEntriesByKind[LOCATION_TYPE_ID] ?? []).map((row) => ({
+			id: row.id as number,
+			name: ((row.name ?? "") as string).trim() || `#${row.id}`,
+			parentId: (row.anchorEntryId ?? null) as number | null,
+			place: true
+		}))
+	)
 
 	let placesMap = $derived(
 		buildPlacesMap({
@@ -340,8 +456,37 @@
 			? graphBuildsCtx.activeBuild
 			: null
 	)
+	/**
+	 * The session an Extend reads, or null for the whole book: the open
+	 * session, when it is the one reading this book (#51).
+	 */
+	let extendSessionId = $derived(
+		openSessionCtx?.sessionId != null &&
+			openSessionCtx.lorebookId === lorebookId
+			? openSessionCtx.sessionId
+			: null
+	)
+	/** That session's scenes the graph has not read, split by readiness. */
+	let sessionUngraphed = $derived.by(() => {
+		let ready = 0
+		let unsummarized = 0
+		if (extendSessionId === null) return { ready, unsummarized }
+		for (const s of scenes) {
+			if (s.sessionId !== extendSessionId || s.graphed) continue
+			if (s.summary?.trim()) ready++
+			else unsummarized++
+		}
+		return { ready, unsummarized }
+	})
 	let extendReadyCount = $derived(
-		ungraphedSceneCount + ungraphedHistoryEntryCount
+		extendSessionId !== null
+			? sessionUngraphed.ready
+			: ungraphedSceneCount + ungraphedHistoryEntryCount
+	)
+	let extendUnsummarizedCount = $derived(
+		extendSessionId !== null
+			? sessionUngraphed.unsummarized
+			: ungraphedUnsummarizedCount
 	)
 	let buildProgressPercent = $derived.by(() => {
 		if (!activeBuild || activeBuild.status !== "building") return 0
@@ -396,10 +541,30 @@
 		return node?.name?.trim() || node?.binding || ""
 	}
 
-	function dateLabel(entry: DatedEntryLike): string {
-		return `Year ${entry.year}${entry.month ? `, Mo. ${entry.month}` : ""}${
-			entry.day ? `, Day ${entry.day}` : ""
-		}`
+	/**
+	 * Why a link cannot be changed from the line being read, or null.
+	 *
+	 * A link belongs to one line. Editing or deleting one another line owns
+	 * while reading a branch would rewrite that line — main included — so
+	 * from here it is read, not written (#124).
+	 */
+	function relLockedReason(
+		rel: Pick<NarrativeRelationship, "branchId"> | null | undefined
+	): string | null {
+		if (!rel) return null
+		const here = route.branch ?? null
+		const owner = rel.branchId ?? null
+		if (owner === here) return null
+		return `This link belongs to ${openBookTime.lineName(owner)}. Open that line to change it.`
+	}
+
+	/** A new link starts dated by the entry dated the moment being read. */
+	function draftBetween(from: GraphNode, to: GraphNode): LinkDraft {
+		return newLinkDraft(
+			from,
+			to,
+			whenAtMoment(historyEntries, momentDate(route.moment))
+		)
 	}
 
 	/** Opening a node is opening the thing it stands for. */
@@ -416,8 +581,8 @@
 
 	function selectNode(node: GraphNode | null) {
 		selectedRel = null
-		editingRel = null
-		linkDraft = null
+		resetRelForm()
+		resetLinkForm()
 		if (!node) {
 			void loreRoute.navigate({ type: "openCastMember", castId: null })
 			return
@@ -425,7 +590,9 @@
 		void loreRoute.navigate(
 			node.kind === "cast"
 				? { type: "openCastMember", castId: node.id }
-				: { type: "openEntry", entryId: node.id }
+				: // An entry node is not the selected member's lore: let go
+					// of the member, or it stays selected over the entry (#118).
+					{ type: "openEntry", entryId: node.id, castId: null }
 		)
 		if (mode === "compact") canvasOpen = false
 	}
@@ -434,8 +601,27 @@
 		const rel = relationships.find((r) => r.id === edge.id) ?? null
 		if (!rel) return
 		selectedRel = rel
-		editingRel = null
+		resetRelForm()
+		resetLinkForm()
+		// Compact shows one screen at a time: the edge panel is the other
+		// one, so leave the canvas for it (#119).
+		if (mode === "compact") canvasOpen = false
+	}
+
+	/** Close the link form and forget any create still in flight. */
+	function resetLinkForm() {
 		linkDraft = null
+		isConnecting = false
+		linkError = null
+		linkAttempt++
+	}
+
+	/** Close the relationship edit and forget any save still in flight. */
+	function resetRelForm() {
+		editingRel = null
+		isSaving = false
+		relError = null
+		relAttempt++
 	}
 
 	function openScene(sceneId: number) {
@@ -472,25 +658,79 @@
 
 	function startLink(from: GraphNode, to: GraphNode) {
 		selectedRel = null
-		editingRel = null
-		linkDraft = newLinkDraft(from, to)
+		resetRelForm()
+		resetLinkForm()
+		linkDraft = draftBetween(from, to)
+		if (mode === "compact") canvasOpen = false
 	}
 
-	function submitLink() {
-		if (!linkDraft) return
-		isConnecting = true
-		socket.emit(
-			"narrativeGraph:createRelationship",
-			createLinkParams(lorebookId, linkDraft)
+	/**
+	 * Name it. The form stays open, saying why, until the server answers —
+	 * a refusal or silence clears "saving" rather than leaving it stuck
+	 * (#53). The link is drawn on the line being read (#124).
+	 */
+	async function submitLink() {
+		if (!linkDraft || isConnecting) return
+		const params = createLinkParams(
+			lorebookId,
+			linkDraft,
+			route.branch ?? null
 		)
+		const attempt = ++linkAttempt
+		isConnecting = true
+		linkError = null
+		try {
+			await awaitReply({
+				socket,
+				event: "narrativeGraph:createRelationship",
+				params,
+				errorEvent: "narrativeGraph:createRelationship:error",
+				match: (msg) => isReplyFor(params, msg.relationship),
+				fallbackError: "The link could not be saved."
+			})
+			if (attempt !== linkAttempt) return
+			linkDraft = null
+		} catch (err) {
+			if (attempt !== linkAttempt) return
+			linkError = isReplyTimeout(err)
+				? "The server did not answer. Nothing was saved; try again."
+				: err instanceof Error
+					? err.message
+					: "The link could not be saved."
+		} finally {
+			if (attempt === linkAttempt) isConnecting = false
+		}
 	}
 
-	function saveRel() {
-		if (!editingRel) return
+	async function saveRel() {
+		if (!editingRel || isSaving) return
+		const id = editingRel.id
+		const attempt = ++relAttempt
 		isSaving = true
-		socket.emit("narrativeGraph:updateRelationship", {
-			relationship: editingRel
-		} satisfies Sockets.NarrativeGraph.UpdateRelationship.Params)
+		relError = null
+		try {
+			await awaitReply({
+				socket,
+				event: "narrativeGraph:updateRelationship",
+				params: {
+					relationship: $state.snapshot(editingRel)
+				} satisfies Sockets.NarrativeGraph.UpdateRelationship.Params,
+				errorEvent: "narrativeGraph:updateRelationship:error",
+				match: (msg) => msg.relationship.id === id,
+				fallbackError: "The relationship could not be saved."
+			})
+			if (attempt !== relAttempt) return
+			editingRel = null
+		} catch (err) {
+			if (attempt !== relAttempt) return
+			relError = isReplyTimeout(err)
+				? "The server did not answer. Nothing was saved; try again."
+				: err instanceof Error
+					? err.message
+					: "The relationship could not be saved."
+		} finally {
+			if (attempt === relAttempt) isSaving = false
+		}
 	}
 
 	function deleteRel(id: number) {
@@ -499,12 +739,76 @@
 		} satisfies Sockets.NarrativeGraph.DeleteRelationship.Params)
 	}
 
-	function requestDeleteNode(id: number) {
-		pendingDeleteNodeId = id
-		pendingDeleteReferenced = false
-		socket.emit("narrativeGraph:checkNodeMergeReferences", {
-			nodeId: id
-		} satisfies Sockets.NarrativeGraph.CheckNodeMergeReferences.Params)
+	/** How many links a member is an end of, on every line. */
+	function linkCountOf(nodeId: number): number {
+		return relationships.filter(
+			(r) =>
+				(r.from.kind === "cast" && r.from.bindingId === nodeId) ||
+				(r.to.kind === "cast" && r.to.bindingId === nodeId)
+		).length
+	}
+
+	/**
+	 * Open the delete dialog and ask how much private lore the member
+	 * anchors — the dialog's question depends on it (ruling 4).
+	 */
+	async function requestDeleteNode(node: NarrativeNode) {
+		deleteTarget = node
+		deleteCheck = null
+		deleteCheckError = null
+		try {
+			const res = await awaitReply({
+				socket,
+				event: "narrativeGraph:checkNodeMergeReferences",
+				params: { nodeId: node.id },
+				errorEvent: "narrativeGraph:checkNodeMergeReferences:error",
+				fallbackError: "The server could not count it.",
+				match: (data) => data.nodeId === node.id
+			})
+			if (deleteTarget?.id === node.id) deleteCheck = res
+		} catch (err) {
+			if (deleteTarget?.id === node.id)
+				deleteCheckError = err instanceof Error ? err.message : String(err)
+		}
+	}
+
+	function cancelDeleteNode() {
+		if (deleting) return
+		deleteTarget = null
+		deleteCheck = null
+		deleteCheckError = null
+	}
+
+	async function confirmDeleteNode(privateLore: PrivateLoreChoice) {
+		const target = deleteTarget
+		if (!target || deleting) return
+		const name = displayName(target)
+		deleting = true
+		let res: Sockets.NarrativeGraph.DeleteNode.Response
+		try {
+			res = await awaitReply({
+				socket,
+				event: "narrativeGraph:deleteNode",
+				params: { id: target.id, privateLore },
+				errorEvent: "narrativeGraph:deleteNode:error",
+				fallbackError: "The cast member could not be deleted.",
+				match: (data) => data.id === target.id
+			})
+		} catch (err) {
+			deleting = false
+			// A refusal Layout's `:error` catch-all has already toasted is
+			// not toasted again; silence is said here, since nothing else will.
+			if (isReplyTimeout(err))
+				toaster.error({
+					title: `${name} was not deleted`,
+					description: "The server did not answer in time."
+				})
+			return
+		}
+		deleting = false
+		deleteTarget = null
+		deleteCheck = null
+		toaster.success({ title: deletedMemberToast(name, res.deletedLoreCount) })
 	}
 
 	// Named so `off` can name them too: a bare off() removes every listener for
@@ -527,6 +831,11 @@
 		totalDirectHistoryEntryCount = msg.totalDirectHistoryEntryCount ?? 0
 		unresolvedCastSceneCount = msg.unresolvedCastSceneCount ?? 0
 		namelessBindingCount = msg.namelessBindingCount ?? 0
+		relationshipCounts = msg.relationshipCounts ?? {
+			total: msg.relationships.length,
+			entryToEntry: 0,
+			castToEntry: 0
+		}
 		clearLoadTimer()
 		loadError = null
 		isLoading = false
@@ -543,53 +852,67 @@
 		scenes = msg.sceneList ?? []
 	}
 
+	// ⚠ The write replies below are BARE (not in SCOPED_EVENTS), so every
+	// tab hears every book's writes. Each one checks the book it names before
+	// it touches this canvas (#55, #158).
+
 	function handleUpdateNode(msg: Sockets.NarrativeGraph.UpdateNode.Response) {
+		if (msg.node.lorebookId !== lorebookId) return
 		nodes = nodes.map((n) => (n.id === msg.node.id ? msg.node : n))
-		isSaving = false
 	}
 
-	function handleDeleteNode() {
-		// The selection is whoever was deleted, or nobody worth holding onto
-		// through a reload: either way the canvas comes back with no node open.
-		if (route.castId != null)
+	function handleDeleteNode(msg: Sockets.NarrativeGraph.DeleteNode.Response) {
+		if (msg.lorebookId !== lorebookId) return
+		// Only the deleted member's selection goes; anyone else stays open.
+		if (route.castId === msg.id)
 			void loreRoute.navigate({ type: "openCastMember", castId: null })
 		load()
-	}
-
-	function handleCheckMergeReferences(
-		msg: Sockets.NarrativeGraph.CheckNodeMergeReferences.Response
-	) {
-		pendingDeleteReferenced = msg.referencedByMergeLog
 	}
 
 	function handleUpdateRelationship(
 		msg: Sockets.NarrativeGraph.UpdateRelationship.Response
 	) {
+		if (msg.relationship.lorebookId !== lorebookId) return
 		relationships = relationships.map((r) =>
 			r.id === msg.relationship.id ? msg.relationship : r
 		)
 		if (selectedRel?.id === msg.relationship.id)
 			selectedRel = msg.relationship
-		editingRel = null
-		isSaving = false
 	}
 
-	function handleDeleteRelationship() {
-		selectedRel = null
-		editingRel = null
-		load()
+	/**
+	 * Drop the one edge in place. A reload here threw the canvas away with
+	 * its layout for the sake of one line (#123).
+	 */
+	function handleDeleteRelationship(
+		msg: Sockets.NarrativeGraph.DeleteRelationship.Response
+	) {
+		if (msg.lorebookId !== lorebookId) return
+		const gone = relationships.find((r) => r.id === msg.id)
+		if (!gone) return
+		relationships = relationships.filter((r) => r.id !== msg.id)
+		newEdgeIds.delete(msg.id)
+		relationshipCounts = bumpLinkCounts(relationshipCounts, gone, -1)
+		if (selectedRel?.id === msg.id) selectedRel = null
+		if (editingRel?.id === msg.id) resetRelForm()
 	}
 
 	function handleCreateRelationship(
 		msg: Sockets.NarrativeGraph.CreateRelationship.Response
 	) {
+		if (msg.relationship.lorebookId !== lorebookId) return
+		if (relationships.some((r) => r.id === msg.relationship.id)) return
 		relationships = [...relationships, msg.relationship]
 		newEdgeIds.add(msg.relationship.id)
-		linkDraft = null
-		isConnecting = false
+		relationshipCounts = bumpLinkCounts(
+			relationshipCounts,
+			msg.relationship,
+			1
+		)
 	}
 
-	function handleMergeWrite() {
+	function handleMergeWrite(bookId: number) {
+		if (bookId !== lorebookId) return
 		showMergeModal = false
 		mergeTarget = null
 		void loreRoute.navigate({ type: "openCastMember", castId: null })
@@ -661,9 +984,9 @@
 	)
 
 	/**
-	 * The writes answer with the node or the edge alone and name no book, so
-	 * every one of them is BARE — none has an entry in `SCOPED_EVENTS`, and a
-	 * scoped key for an unscoped event matches nothing at all.
+	 * The writes are BARE — none has an entry in `SCOPED_EVENTS`, and a scoped
+	 * key for an unscoped event matches nothing at all — so each handler
+	 * filters on the book its reply names.
 	 */
 	useInterest<"narrativeGraph:updateNode">(
 		"narrativeGraph:updateNode",
@@ -672,10 +995,6 @@
 	useInterest<"narrativeGraph:deleteNode">(
 		"narrativeGraph:deleteNode",
 		handleDeleteNode
-	)
-	useInterest<"narrativeGraph:checkNodeMergeReferences">(
-		"narrativeGraph:checkNodeMergeReferences",
-		handleCheckMergeReferences
 	)
 	useInterest<"narrativeGraph:updateRelationship">(
 		"narrativeGraph:updateRelationship",
@@ -689,13 +1008,11 @@
 		"narrativeGraph:createRelationship",
 		handleCreateRelationship
 	)
-	useInterest<"narrativeGraph:mergeNode">(
-		"narrativeGraph:mergeNode",
-		handleMergeWrite
+	useInterest<"narrativeGraph:mergeNode">("narrativeGraph:mergeNode", (msg) =>
+		handleMergeWrite(msg.survivorNode.lorebookId)
 	)
-	useInterest<"narrativeGraph:undoMerge">(
-		"narrativeGraph:undoMerge",
-		handleMergeWrite
+	useInterest<"narrativeGraph:undoMerge">("narrativeGraph:undoMerge", (msg) =>
+		handleMergeWrite(msg.restoredNode.lorebookId)
 	)
 
 	onMount(() => {
@@ -754,19 +1071,23 @@
 			data-graph-extend
 			title={buildReason ??
 				(extendReadyCount === 0
-					? ungraphedUnsummarizedCount > 0
-						? `${ungraphedUnsummarizedCount} scene${ungraphedUnsummarizedCount === 1 ? "" : "s"} need summaries before they can be graphed`
-						: "The graph is up to date"
-					: `Read the ${extendReadyCount} scene${extendReadyCount === 1 ? "" : "s"} and history entries this book has not graphed yet, and propose what they add`)}
+					? extendUnsummarizedCount > 0
+						? `${extendUnsummarizedCount} scene${extendUnsummarizedCount === 1 ? "" : "s"} need summaries before they can be graphed`
+						: extendSessionId !== null
+							? "Every summarized scene in this session is already graphed"
+							: "The graph is up to date"
+					: extendSessionId !== null
+						? `Read the ${extendReadyCount} scene${extendReadyCount === 1 ? "" : "s"} from the open session that the graph has not read yet, and propose what they add`
+						: `Read the ${extendReadyCount} scene${extendReadyCount === 1 ? "" : "s"} and history entries this book has not graphed yet, and propose what they add`)}
 			onclick={() => {
 				buildMode = "extend"
 				showBuildModal = true
 			}}
 		>
 			<Icons.Layers size={14} aria-hidden="true" />
-			Extend from this session
+			{extendSessionId !== null ? "Extend from this session" : "Extend graph"}
 			{#if extendReadyCount > 0}
-				<span class="badge-icon preset-filled-primary-500 text-[10px]">
+				<span class="badge-icon preset-tonal-primary text-[11px]">
 					{extendReadyCount}
 				</span>
 			{/if}
@@ -805,24 +1126,29 @@
 			bind:value={rel.relationshipType}
 		/>
 		<div class="grid grid-cols-2 gap-2">
-			<select
-				class="select text-xs"
-				aria-label="Status"
-				bind:value={rel.status}
-			>
-				{#each RELATIONSHIP_STATUSES as s (s)}
-					<option value={s}>{s}</option>
-				{/each}
-			</select>
-			<select
-				class="select text-xs"
-				aria-label="Visibility"
-				bind:value={rel.visibility}
-			>
-				{#each RELATIONSHIP_VISIBILITIES as v (v)}
-					<option value={v}>{v}</option>
-				{/each}
-			</select>
+			<Select
+				label="Status"
+				labelHidden
+				class="min-w-0 text-xs"
+				options={RELATIONSHIP_STATUSES.map((s) => ({ value: s, label: s }))}
+				value={rel.status}
+				onValueChange={(v) => {
+					if (v) rel.status = v as typeof rel.status
+				}}
+			/>
+			<Select
+				label="Visibility"
+				labelHidden
+				class="min-w-0 text-xs"
+				options={RELATIONSHIP_VISIBILITIES.map((v) => ({
+					value: v,
+					label: v
+				}))}
+				value={rel.visibility}
+				onValueChange={(v) => {
+					if (v) rel.visibility = v as typeof rel.visibility
+				}}
+			/>
 		</div>
 		<textarea
 			class="textarea min-h-10 text-xs"
@@ -837,23 +1163,25 @@
 			placeholder="Reason for this state…"
 			bind:value={rel.reason}
 		/>
-		{#if historyEntries.length > 0}
-			<select
-				class="select text-xs"
-				aria-label="When"
-				bind:value={rel.historyEntryId}
-			>
-				<option value={null}>No date</option>
-				{#each historyEntries as he (he.id)}
-					<option value={he.id}>{dateLabel(he)}</option>
-				{/each}
-			</select>
+		{#if linkWhenOptions.length > 1}
+			<Select
+				label="When"
+				labelHidden
+				class="text-xs"
+				options={linkWhenOptions}
+				value={rel.historyEntryId == null ? "" : String(rel.historyEntryId)}
+				onValueChange={(v) =>
+					(rel.historyEntryId = v === "" ? null : Number(v))}
+			/>
+		{/if}
+		{#if relError}
+			<p class="text-error-500 text-xs" role="alert">{relError}</p>
 		{/if}
 		<div class="flex justify-end gap-2">
 			<button
 				class="btn btn-sm preset-filled-surface-400-600"
 				type="button"
-				onclick={() => (editingRel = null)}
+				onclick={resetRelForm}
 			>
 				Cancel
 			</button>
@@ -895,7 +1223,7 @@
 			<button
 				class="btn btn-sm preset-tonal-error p-1.5"
 				type="button"
-				onclick={() => requestDeleteNode(node.id)}
+				onclick={() => void requestDeleteNode(node)}
 				title="Delete"
 				aria-label="Delete"
 			>
@@ -906,55 +1234,6 @@
 	{#if node.summary}
 		<p class="text-surface-700-300 text-xs">{node.summary}</p>
 	{/if}
-	{#if pendingDeleteNodeId === node.id}
-		{@const relCount = relationships.filter(
-			(r) =>
-				(r.from.kind === "cast" && r.from.bindingId === node.id) ||
-				(r.to.kind === "cast" && r.to.bindingId === node.id)
-		).length}
-		<div
-			class="border-error-500/40 flex flex-col gap-2 rounded-lg border p-3"
-		>
-			<p class="text-error-500 font-semibold">
-				Delete "{displayName(node)}"?
-			</p>
-			{#if relCount > 0}
-				<p class="text-surface-700-300 text-xs">
-					This also permanently deletes {relCount} relationship{relCount ===
-					1
-						? ""
-						: "s"}.
-				</p>
-			{/if}
-			{#if pendingDeleteReferenced}
-				<p class="text-warning-500 text-xs">
-					A past merge record names this member, so deleting it
-					permanently disables that merge's undo.
-				</p>
-			{/if}
-			<div class="flex justify-end gap-2">
-				<button
-					class="btn btn-sm preset-filled-surface-400-600"
-					type="button"
-					onclick={() => (pendingDeleteNodeId = null)}
-				>
-					Cancel
-				</button>
-				<button
-					class="btn btn-sm preset-filled-error-500"
-					type="button"
-					onclick={() => {
-						socket.emit("narrativeGraph:deleteNode", {
-							id: node.id
-						} satisfies Sockets.NarrativeGraph.DeleteNode.Params)
-						pendingDeleteNodeId = null
-					}}
-				>
-					<Icons.Trash2 size={13} aria-hidden="true" /> Delete
-				</button>
-			</div>
-		</div>
-	{/if}
 {/snippet}
 
 {#snippet nodeList()}
@@ -964,8 +1243,10 @@
 	>
 		{#if graph.length === 0}
 			<EmptyState
-				icon={Icons.Network}
-				message="No graph yet. Build one from your scenes and history to pull out who is connected to whom."
+				icon={drawing === "places" ? Icons.Map : Icons.Network}
+				message={drawing === "places"
+					? "Pick a place on the map to see what joins it."
+					: "No graph yet. Build one from your scenes and history to pull out who is connected to whom."}
 			/>
 		{:else}
 			{#each graph as node (node.key)}
@@ -996,9 +1277,9 @@
 						</span>
 					{:else}
 						<span
-							class="badge preset-tonal-surface shrink-0 text-[10px] uppercase"
+							class="badge preset-tonal-surface shrink-0 text-[11px]"
 						>
-							entry
+							Entry
 						</span>
 					{/if}
 				</button>
@@ -1012,8 +1293,15 @@
 		<PlacesBoard
 			map={placesMap}
 			selectedEntryId={route.entryId ?? null}
-			onOpenEntry={(entryId) =>
-				loreRoute.navigate({ type: "openEntry", entryId })}
+			onOpenEntry={(entryId) => {
+				// A place is not the selected member's lore (#118).
+				void loreRoute.navigate({
+					type: "openEntry",
+					entryId,
+					castId: null
+				})
+				if (mode === "compact") canvasOpen = false
+			}}
 			onOpenCast={onEditMember}
 		/>
 	{:else}
@@ -1038,9 +1326,11 @@
 				draft={linkDraft}
 				nodes={graph}
 				saving={isConnecting}
+				whenOptions={linkWhenOptions}
+				error={linkError}
 				onChange={(next) => (linkDraft = next)}
 				onSubmit={submitLink}
-				onCancel={() => (linkDraft = null)}
+				onCancel={resetLinkForm}
 			/>
 		{:else if selectedNode}
 			<NodePanel
@@ -1053,11 +1343,15 @@
 				onOpen={() => openNode(selectedNode!)}
 				onAdd={() => {
 					const other = graph.find((n) => n.key !== selectedNode!.key)
-					if (other) linkDraft = newLinkDraft(selectedNode!, other)
+					if (!other) return
+					resetLinkForm()
+					linkDraft = draftBetween(selectedNode!, other)
 				}}
 				onKeep={(edge) => newEdgeIds.delete(edge.id)}
 				onEdgeClick={selectEdge}
 				onDeleteEdge={(edge) => deleteRel(edge.id)}
+				lockedReason={(edge) =>
+					relLockedReason(relationships.find((r) => r.id === edge.id))}
 				onOpenScene={openScene}
 				onRaiseCeiling={() => (showPipelinePanel = true)}
 				onClose={() => selectNode(null)}
@@ -1089,10 +1383,13 @@
 					<button
 						class="btn btn-sm preset-filled-surface-400-600 p-1.5"
 						type="button"
-						title="Edit relationship"
+						title={relLockedReason(selectedRel) ?? "Edit relationship"}
 						aria-label="Edit relationship"
-						onclick={() =>
-							(editingRel = $state.snapshot(selectedRel!))}
+						disabled={!!relLockedReason(selectedRel)}
+						onclick={() => {
+							resetRelForm()
+							editingRel = $state.snapshot(selectedRel!)
+						}}
 					>
 						<Icons.Pencil size={13} aria-hidden="true" />
 					</button>
@@ -1103,12 +1400,17 @@
 						aria-label="Close"
 						onclick={() => {
 							selectedRel = null
-							editingRel = null
+							resetRelForm()
 						}}
 					>
 						<Icons.X size={13} aria-hidden="true" />
 					</button>
 				</div>
+				{#if relLockedReason(selectedRel)}
+					<p class="text-surface-600-400 text-xs" data-link-locked>
+						{relLockedReason(selectedRel)}
+					</p>
+				{/if}
 				{#if editingRel}
 					{@render relationshipForm(editingRel)}
 				{:else}
@@ -1306,31 +1608,42 @@
 		</div>
 	{:else if isLoading}
 		<div class="flex items-center justify-center py-10">
-			<Icons.Loader2 size={20} class="text-surface-400 animate-spin" />
+			<Icons.Loader2 size={20} class="text-surface-600-400 animate-spin" />
 		</div>
 	{:else if mode === "desk"}
 		<div class="flex min-h-0 flex-1 gap-4">
 			<div class="flex min-h-0 min-w-0 flex-1 flex-col">
 				{@render canvas()}
 			</div>
-			<div
-				class="border-border flex min-h-0 w-[360px] shrink-0 flex-col border-l pl-4"
-				data-graph-side
-			>
-				{@render sideColumn()}
+			{#if hasSideColumn}
+				<div
+					class="border-border flex min-h-0 w-[360px] shrink-0 flex-col border-l pl-4"
+					data-graph-side
+				>
+					{@render sideColumn()}
+				</div>
+			{/if}
+		</div>
+	{:else if canvasOpen || !hasSideColumn}
+		{#if hasSideColumn}
+			<div class="flex min-h-0 flex-1 flex-col gap-2">
+				<button
+					class="btn btn-sm preset-filled-surface-400-600 self-start"
+					type="button"
+					onclick={() => (canvasOpen = false)}
+				>
+					<Icons.ChevronLeft size={16} aria-hidden="true" /> Back to the
+					list
+				</button>
+				{@render canvas()}
 			</div>
-		</div>
-	{:else if canvasOpen}
-		<div class="flex min-h-0 flex-1 flex-col gap-2">
-			<button
-				class="btn btn-sm preset-filled-surface-400-600 self-start"
-				type="button"
-				onclick={() => (canvasOpen = false)}
-			>
-				<Icons.ChevronLeft size={16} aria-hidden="true" /> Back to the list
-			</button>
-			{@render canvas()}
-		</div>
+		{:else}
+			<!-- The map is the Places lens: with nothing picked there is no
+			     list to go back to, so it is the whole screen (#122). -->
+			<div class="flex min-h-0 flex-1 flex-col gap-2">
+				{@render canvas()}
+			</div>
+		{/if}
 	{:else}
 		<button
 			class="btn btn-sm preset-tonal-surface self-start"
@@ -1349,22 +1662,44 @@
 	onOpenChange={(e) => (showBuildModal = e.open)}
 	{lorebookId}
 	mode={buildMode}
+	sessionId={buildMode === "extend" ? extendSessionId : null}
 	readySceneCount={buildMode === "extend"
-		? ungraphedSceneCount
+		? extendSessionId !== null
+			? sessionUngraphed.ready
+			: ungraphedSceneCount
 		: totalSummarizedCount}
-	skippedSceneCount={buildMode === "extend" ? ungraphedUnsummarizedCount : 0}
+	skippedSceneCount={buildMode === "extend" ? extendUnsummarizedCount : 0}
 	ungraphedHistoryEntryCount={buildMode === "extend"
-		? ungraphedHistoryEntryCount
+		? extendSessionId !== null
+			? 0
+			: ungraphedHistoryEntryCount
 		: totalDirectHistoryEntryCount}
 	existingUnboundNodeCount={nodes.filter(
 		(n) => n.characterId == null && !n.parentNodeId
 	).length}
-	existingRelationshipCount={relationships.length}
+	existingRelationshipCount={relationshipCounts.total}
+	existingEntryLinkCount={relationshipCounts.entryToEntry}
+	existingCastEntryLinkCount={relationshipCounts.castToEntry}
 	{unresolvedCastSceneCount}
 	onApplied={() => {
 		appliedBaseline = new Set(relationships.map((r) => r.id))
 		load()
+		// The scenes it read are graphed now; the session's Extend count is
+		// read off them.
+		socket.emit("scenes:listByLorebook", { lorebookId })
 	}}
+/>
+
+<DeleteCastMemberModal
+	open={deleteTarget !== null}
+	name={deleteTarget ? displayName(deleteTarget) : ""}
+	linked={deleteTarget?.characterId != null}
+	relationshipCount={deleteTarget ? linkCountOf(deleteTarget.id) : 0}
+	check={deleteCheck}
+	checkError={deleteCheckError}
+	busy={deleting}
+	onConfirm={confirmDeleteNode}
+	onCancel={cancelDeleteNode}
 />
 
 {#if mergeTarget}

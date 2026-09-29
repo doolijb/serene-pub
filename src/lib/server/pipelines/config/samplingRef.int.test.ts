@@ -7,7 +7,7 @@
  * That number is assigned by an identity sequence and therefore differs per
  * install, so a shipped document cannot write one: `p.sampling('planWrite', {
  * ... })` had nothing it could put there that would mean the same thing on two
- * machines. Every stage of every pipeline consequently shipped with its
+ * machines. Every step of every pipeline consequently shipped with its
  * Sampling slot unset, and an Adventure turn ran its planner and its state
  * keeper on whatever the session was narrating with: a reasoning-heavy,
  * long-response config paid for twice per turn, for two documents nobody reads.
@@ -131,7 +131,7 @@ describe("a preset names a sampling config by seed identity", () => {
 
 		expect(await samplingOf(db, config.id, "planWrite")).toBe(background)
 		expect(await samplingOf(db, config.id, "keeperWrite")).toBe(background)
-		// The two stages a person reads keep whatever the session is set to.
+		// The two steps a person reads keep whatever the session is set to.
 		// A resolution that filled in every sampling slot would pass the two
 		// assertions above and still be wrong.
 		expect(await samplingOf(db, config.id, "scene")).toBeUndefined()

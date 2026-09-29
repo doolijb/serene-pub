@@ -12,7 +12,12 @@
  * the ranking; an unknown slug also exercises the subtitle's fallback.
  */
 import { describe, expect, test } from "vitest"
-import { matchDocSections } from "./docsJump"
+import {
+	highlightParts,
+	matchDocSections,
+	searchDocSections,
+	snippetOf
+} from "./docsJump"
 import type { DocSection } from "$lib/shared/utils/docsIndex"
 
 function section(
@@ -142,5 +147,83 @@ describe("matchDocSections", () => {
 	// A checkout that has not compiled the docs has no sections at all.
 	test("an empty index is an empty answer, not a throw", () => {
 		expect(matchDocSections([], "sessions", 8)).toEqual([])
+	})
+
+	test("every word must match, in any order", () => {
+		const hits = matchDocSections(
+			[
+				section({ title: "Binding a lorebook", preview: "to a character" }),
+				section({ title: "Lorebooks" })
+			],
+			"character lorebook",
+			8
+		)
+		expect(hits.map((h) => h.title)).toEqual(["Binding a lorebook"])
+	})
+
+	test("the section's text is searched past its preview", () => {
+		const hits = matchDocSections(
+			[section({ title: "Backups", preview: "Daily.", text: "Daily. Restoring a backup replaces the database." })],
+			"restoring",
+			8
+		)
+		expect(hits).toHaveLength(1)
+	})
+
+	test("the whole query in a heading beats its words scattered", () => {
+		const hits = matchDocSections(
+			[
+				section({ title: "Model for a session" }),
+				section({ title: "Session model" })
+			],
+			"session model",
+			8
+		)
+		expect(hits.map((h) => h.title)).toEqual(["Session model", "Model for a session"])
+	})
+
+	// The reference is two thirds of the index; a guide always comes first.
+	test("guides outrank the reference, whatever the match", () => {
+		const matches = searchDocSections(
+			[
+				section({ slug: "sdk/x", title: "Lorebook", depth: 1 }),
+				section({ slug: "guide", title: "Other", preview: "a lorebook" })
+			],
+			"lorebook",
+			8,
+			(slug) => (slug.startsWith("sdk/") ? "sdk" : "app")
+		)
+		expect(matches.map((m) => [m.section.slug, m.reference])).toEqual([
+			["guide", false],
+			["sdk/x", true]
+		])
+	})
+})
+
+describe("snippetOf", () => {
+	test("a short text is itself", () => {
+		expect(snippetOf(section({ title: "t", preview: "Short." }), ["short"])).toBe("Short.")
+	})
+
+	test("a late match is shown with what is around it", () => {
+		const text = "word ".repeat(60) + "needle and more"
+		const snippet = snippetOf(section({ title: "t", preview: "", text }), ["needle"])
+		expect(snippet.startsWith("…")).toBe(true)
+		expect(snippet).toContain("needle")
+	})
+})
+
+describe("highlightParts", () => {
+	test("marks every occurrence of every word, case-blind", () => {
+		expect(highlightParts("Lore and lorebooks", ["lore"])).toEqual([
+			{ text: "Lore", match: true },
+			{ text: " and ", match: false },
+			{ text: "lore", match: true },
+			{ text: "books", match: false }
+		])
+	})
+
+	test("no words is one plain run", () => {
+		expect(highlightParts("Tags", [])).toEqual([{ text: "Tags", match: false }])
 	})
 })

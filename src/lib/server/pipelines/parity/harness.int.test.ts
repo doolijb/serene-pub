@@ -8,8 +8,8 @@
  *
  * Ten fixtures, all green: the shipped template itself, one-to-one and group
  * sessions, macros inside character cards, the six-way post-history split, dated
- * history entries, the two visibility filters, a session with every assistant
- * character hidden, narrator mode, and twelve near-identical lore entries
+ * history entries, the cards-versus-names filters, a session at
+ * `characterDetail: speaker-only`, narrator mode, and twelve near-identical lore entries
  * competing for one budget.
  *
  * Since 0.6 the two sides render *different templates on purpose* — the
@@ -200,6 +200,16 @@ const LEGACY_TEMPLATE = corpusTemplate("template")
 beforeAll(async () => {
 	db = await createTestDb()
 
+	// Publish core's specs the way the app boots (2026-09-27, characterDetail
+	// genre field): a genre is declared on its create spec's version row, so
+	// without `create-chat` published the Chat genre and its declared fields
+	// do not exist, and `genreFieldsFor` drops a session's stored
+	// `characterDetail` (`session/all-hidden` rendered at `full`).
+	const { bootstrapPipelines } = await import(
+		"$lib/server/pipelines/boot/bootstrap"
+	)
+	await bootstrapPipelines(db)
+
 	const [contextConfig] = await db
 		.insert(schema.contextConfigs)
 		.values({ name: "Parity Context", template: LEGACY_TEMPLATE })
@@ -314,7 +324,6 @@ async function seedWorld(
 			sessionId: session.id,
 			characterId: c.id,
 			isActive: true,
-			visibility: "visible"
 		})
 	for (const p of personas)
 		await db
@@ -455,8 +464,8 @@ const macroHeavy: ParityFixture = {
  *
  * The corpus had **no** `@@` decorator and **no** `{{char:#}}` binding anywhere
  * in it, which is why it stayed green while the pipeline path did neither:
- * `populateLorebookEntryBindings` was reachable only from the two infill
- * engines, so decorator lines reached models as literal text and binding
+ * `populateLorebookEntryBindings` was reachable only from the two 0.5 retrieval
+ * paths, so decorator lines reached models as literal text and binding
  * placeholders arrived unsubstituted. The legacy side of this very harness
  * strips and substitutes both, so this fixture diverges the moment the pipeline
  * stops — which is the whole job of a fixture here.
@@ -596,12 +605,22 @@ const datedHistory: ParityFixture = {
 }
 
 /**
- * A hidden character and an inactive one.
+ * A switched-off character beside the speaker.
  *
- * The two visibility filters are not the same filter — the cards include an
- * inactive character and exclude a hidden one unless they are the speaker,
- * while the joined names exclude both. This is the fixture that holds that
- * apart; collapsing them is the obvious cleanup and it changes prompts.
+ * The two filters are not the same filter — the cards include a switched-off
+ * character while the joined names exclude them. This is the fixture that
+ * holds that apart; collapsing them is the obvious cleanup and it changes
+ * prompts.
+ *
+ * ⚠ **Dala is gone from the seed (2026-09-27), and the golden did not move.**
+ * She was the per-character *hidden* half of this fixture, and that setting
+ * is retired: the session-wide `characterDetail` genre field replaced it, and
+ * no level of it hides one non-speaker while showing another. A hidden
+ * non-speaker contributed **no byte** to 0.5's prompt — no card, no name — so
+ * the frozen capture is exactly what this world renders without her, and it
+ * stays a capture rather than becoming a derivation. The hidden rule itself
+ * is held by `session/all-hidden`, now through `characterDetail:
+ * speaker-only`.
  */
 const mixedVisibility: ParityFixture = {
 	name: "session/visibility",
@@ -609,8 +628,7 @@ const mixedVisibility: ParityFixture = {
 		const w = await seedWorld(db, {
 			characters: [
 				{ name: "Alice", description: "A knight." },
-				{ name: "Cara", description: "A scout." },
-				{ name: "Dala", description: "A spy." }
+				{ name: "Cara", description: "A scout." }
 			],
 			messages: [{ role: "user", content: "Who is here?" }]
 		})
@@ -624,18 +642,6 @@ const mixedVisibility: ParityFixture = {
 					eq(
 						schema.sessionCharacters.characterId,
 						w.characters[1]!.id
-					)
-				)
-			)
-		await db
-			.update(schema.sessionCharacters)
-			.set({ visibility: "hidden" })
-			.where(
-				and(
-					eq(schema.sessionCharacters.sessionId, w.session.id),
-					eq(
-						schema.sessionCharacters.characterId,
-						w.characters[2]!.id
 					)
 				)
 			)
@@ -896,17 +902,18 @@ const shippedTemplate: ParityFixture = {
 }
 
 /**
- * Every assistant character hidden, so the *names* list is empty.
+ * Every assistant character hidden, so the *names* list is empty — at
+ * `characterDetail: speaker-only` since 2026-09-27, which is the old
+ * per-character *hidden* applied to the whole cast.
  *
  * Added while looking for the empty-cast case and kept for what it actually
- * found. `characterNames` and `characters` are filtered differently — hiding a
- * character removes it from the names list and leaves its card in place — so
- * this renders `NAMES:|Bob`, an empty passthrough variable, beside a cast that
- * is not empty. `session/visibility` hides one of three; this hides the only one,
- * which is the case where the *whole* variable goes empty.
+ * found. `characterNames` and `characters` are filtered differently — the
+ * level removes everyone from the names list and leaves the speaker's card in
+ * place — so this renders `NAMES:|Bob`, an empty passthrough variable, beside
+ * a cast that is not empty.
  *
  * It is deliberately **not** named for an empty cast, which is what was wanted
- * and is not reachable here: the cards are not visibility-filtered, so a session
+ * and is not reachable here: the speaker's card is never trimmed, so a session
  * that can take a turn always has at least one. `JSON.stringify([])` being a
  * truthy `"[]"` — the case where "empty" means something different for the cast
  * than it does for world lore — is asserted directly in
@@ -919,19 +926,15 @@ const allHidden: ParityFixture = {
 			characters: [{ name: "Alice", description: "A knight." }],
 			messages: [{ role: "user", content: "Anyone there?" }]
 		})
-		const { eq, and } = await import("drizzle-orm")
+		// The session-wide level that replaced the per-character *hidden*
+		// (2026-09-27): at `speaker-only` the names list is empty with no
+		// exception for the speaker, and the speaker's own card stays — the
+		// two facts the 0.5 capture holds for one hidden speaker.
+		const { eq } = await import("drizzle-orm")
 		await db
-			.update(schema.sessionCharacters)
-			.set({ visibility: "hidden" })
-			.where(
-				and(
-					eq(schema.sessionCharacters.sessionId, w.session.id),
-					eq(
-						schema.sessionCharacters.characterId,
-						w.characters[0]!.id
-					)
-				)
-			)
+			.update(schema.sessions)
+			.set({ genreFields: { characterDetail: "speaker-only" } })
+			.where(eq(schema.sessions.id, w.session.id))
 		return {
 			sessionId: w.session.id,
 			userId: w.user.id,

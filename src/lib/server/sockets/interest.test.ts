@@ -22,7 +22,6 @@ import {
 	type InterestSocket
 } from "./interest"
 import { isBlockedDuringSetup } from "$lib/server/auth/setupGate"
-import { archivedWrite } from "./legacyArchive"
 import {
 	INTEREST_SYNC_EVENT,
 	interestKey,
@@ -369,15 +368,11 @@ describe("anyInterestAnywhere", () => {
 	})
 })
 
-describe("interest:sync is exempt from the other two gates in register", () => {
+describe("interest:sync is exempt from the setup gate in register", () => {
 	test("is allowed while a session still owes setup", () => {
 		// A setup screen is still a view: gate its sync and it declares nothing,
 		// so the replies to the handful of events it MAY use never arrive.
 		expect(isBlockedDuringSetup(INTEREST_SYNC_EVENT)).toBe(false)
-	})
-
-	test("is not read as a write to an archived 0.5 config table", () => {
-		expect(archivedWrite(INTEREST_SYNC_EVENT)).toBeNull()
 	})
 })
 

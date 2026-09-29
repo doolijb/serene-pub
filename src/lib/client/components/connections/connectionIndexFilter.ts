@@ -8,8 +8,7 @@
  *
  * ## The unit is the CONNECTION
  *
- * It used to be the model: the index was Connection → Models and a filter
- * narrowed the rows underneath each group. Models left the index with the
+ * Not the model. Models left the index with the
  * 2026-09-17 concept ruling (readiness card + connections list), so there is
  * nothing left to narrow inside a connection — a filter either keeps a
  * connection or drops it. A capability filter therefore asks whether ANY of a
@@ -26,7 +25,7 @@
  *   connection somebody has not finished setting up, and hiding it is how it
  *   stays unfinished.
  * - `attention` — only what needs a person: the host's last listing failed,
- *   a model it used to list is gone, or a local file failed to download.
+ *   a model it listed before is gone, or a local file failed to download.
  * - `defaults` — narrows nothing. The view swaps the list for the ledger (see
  *   `DefaultsLedger`'s header), so this value is a MODE, not a predicate, and
  *   `filterConnections` is never asked about it.
@@ -211,29 +210,6 @@ export function countConnections(
 ): number {
 	if (filter === "defaults") return 0
 	return rows.filter((c) => keptByFilter(c, filter)).length
-}
-
-/**
- * One managed KoboldCPP is ONE row, not two.
- *
- * The manager owns two connection rows — text and image — because a
- * connection names exactly one model and a text GGUF is not an image one
- * (`CONNECTION_TYPE.KOBOLDCPP_MANAGED_IMAGE`). That is a fact about the data,
- * not about the pub: there is one process, one binary and one install, so the
- * index shows one row and the image models live in that row's view.
- *
- * Dropped only when the text row is actually there. An install that somehow
- * has the image row alone still shows it, because a connection nothing can
- * reach is worse than an odd-looking row.
- */
-export function foldManagedImage<C extends IndexConnection>(
-	rows: readonly C[],
-	isManagedText: (type: string | null | undefined) => boolean,
-	isManagedImage: (type: string | null | undefined) => boolean
-): C[] {
-	const hasText = rows.some((c) => isManagedText(c.type))
-	if (!hasText) return [...rows]
-	return rows.filter((c) => !isManagedImage(c.type))
 }
 
 /** What the index says about the whole list, for its summary line. */

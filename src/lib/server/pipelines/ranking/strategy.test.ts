@@ -84,8 +84,8 @@ describe("rank fusion", () => {
 		// worth 1/61 in one and 1/60 in the other. Same algorithm, two answers,
 		// and nothing anywhere said which was meant.
 		//
-		// The 0-based form is the one kept, because it is what 0.5's
-		// `RagInfillEngine` computed and therefore what the frozen RAG parity
+		// The 0-based form is the one kept, because it is what
+		// the 0.5 RAG path computed and therefore what the frozen RAG parity
 		// goldens record — the convention is settled by the gate rather than by
 		// preference. This asserts the number, not just that the two agree, so
 		// moving either one is a deliberate act.

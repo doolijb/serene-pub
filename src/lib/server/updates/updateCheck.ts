@@ -92,6 +92,19 @@ async function checkForUpdates(currentVersion: string) {
 				`[VersionCheck] Current: ${currentVersion} — no newer release on this channel.`
 			)
 		}
+
+		// Every admin hears about a tag once (a row in Activity); a check that
+		// finds nothing newer clears what is still open. Imported lazily so
+		// this module stays importable without a database — see the header.
+		// Only a SUCCESSFUL check gets here: a failed one proves nothing.
+		try {
+			const { syncUpdateNotifications } = await import(
+				"$lib/server/notifications/updateAvailable"
+			)
+			await syncUpdateNotifications(notifiable)
+		} catch (err) {
+			console.error("[VersionCheck] Could not notify admins:", err)
+		}
 	} catch (err) {
 		// Most likely cause is no internet connection (DNS failure, timeout,
 		// offline); this is expected in offline/air-gapped deployments, so

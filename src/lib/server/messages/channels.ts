@@ -56,10 +56,9 @@
  * ## The mirror
  *
  * `session_messages.channel` is authoritative and `messages.channel` mirrors
- * it (`projectLegacy` carries the value; `upsertProjection` writes it). They
- * were the other way round for exactly as long as the legacy row could not
- * express a channel — see `writeSessionGreetings`, which used to reach past
- * the store and patch `messages` after the fact.
+ * it (`projectLegacy` carries the value; `upsertProjection` writes it). No
+ * writer patches `messages.channel` directly, past the store — including
+ * `writeSessionGreetings`.
  */
 
 import { and, desc, eq, like, or, sql, type SQL } from "drizzle-orm"
@@ -395,6 +394,10 @@ export interface ChannelDecl {
 	role: ChannelRole
 	voice?: ChannelVoice
 	messageVerbs?: Record<string, boolean>
+	/** The channel's display name, as declared (R6) — the Lair's _Sanctum_. Absent: show the slug. */
+	label?: string | Record<string, string>
+	/** The genre's `turnControls` with the channel's declared keys over the top (R6). */
+	turnControls?: Record<string, unknown>
 }
 
 const CHANNEL_ROLES: readonly string[] = ["conversation", "folio"]
@@ -422,12 +425,18 @@ export function channelDeclsOf(
 		channels?: unknown
 		voice?: unknown
 		messageVerbs?: Record<string, boolean>
+		turnControls?: unknown
 	}
 	const genreVoice =
 		typeof s.voice === "string" && CHANNEL_VOICES.includes(s.voice)
 			? (s.voice as ChannelVoice)
 			: undefined
 	const genreVerbs = s.messageVerbs
+	const plain = (v: unknown): Record<string, unknown> | undefined =>
+		v && typeof v === "object" && !Array.isArray(v)
+			? (v as Record<string, unknown>)
+			: undefined
+	const genreControls = plain(s.turnControls)
 	const resolve = (raw: unknown): ChannelDecl | undefined => {
 		const decl = (
 			typeof raw === "string"
@@ -453,6 +462,16 @@ export function channelDeclsOf(
 			decl.messageVerbs || genreVerbs
 				? { ...genreVerbs, ...decl.messageVerbs }
 				: undefined
+		const ownControls = plain(decl.turnControls)
+		const controls =
+			ownControls || genreControls
+				? { ...genreControls, ...ownControls }
+				: undefined
+		const label =
+			(typeof decl.label === "string" && decl.label.trim()) ||
+			(plain(decl.label) && typeof plain(decl.label)!.en === "string")
+				? decl.label
+				: undefined
 		return {
 			slug,
 			// `main` is the channel every session talks in; a declaration
@@ -461,7 +480,9 @@ export function channelDeclsOf(
 			// JSON that may predate or sidestep that refusal.
 			role: slug === DEFAULT_CHANNEL ? "conversation" : role,
 			...(voice ? { voice } : {}),
-			...(verbs ? { messageVerbs: verbs } : {})
+			...(verbs ? { messageVerbs: verbs } : {}),
+			...(label ? { label } : {}),
+			...(controls ? { turnControls: controls } : {})
 		}
 	}
 	const declared = (Array.isArray(s.channels) ? s.channels : [])
@@ -545,7 +566,7 @@ export function channelShapingOf(
  * with the long form's answers kept (R-C).
  *
  * `[main]` for every session whose genre declares none, and for a session
- * whose genre this build no longer knows: an unknown genre is one whose
+ * whose genre this build does not know: an unknown genre is one whose
  * vocabulary cannot be stated, and inventing a folio channel for it would
  * reshape a prompt nobody asked to reshape.
  */

@@ -6,6 +6,7 @@
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 	import { declareInterest } from "$lib/client/sockets/interest.svelte"
 	import { interestKey } from "$lib/shared/sockets/interest"
+	import { rowsOnLine } from "$lib/shared/lorebooks/amendments"
 	import { toaster } from "$lib/client/utils/toaster"
 	import CompileHistoryEntryModal from "$lib/client/components/modals/CompileHistoryEntryModal.svelte"
 	import DeleteLorebookEntryConfirmModal from "$lib/client/components/modals/DeleteLorebookEntryConfirmModal.svelte"
@@ -17,11 +18,23 @@
 	import { HISTORY_TYPE_ID } from "$lib/shared/entries/types"
 	import EntryPool from "./EntryPool.svelte"
 	import ReadInLine from "./editor/ReadInLine.svelte"
-	import { canFileUnder, containedBy, deleteWarning } from "./editor/partOf"
+	import {
+		canFileUnder,
+		deleteWarning,
+		descendantCount
+	} from "./editor/partOf"
+	import {
+		fileEntryAmendments,
+		lineName,
+		maskedBaseWarning,
+		maskedFields,
+		maskingAmendment
+	} from "./editor/entrySave"
+	import { awaitReply, isReplyTimeout } from "$lib/client/utils/awaitReply"
 	import type { RefLink } from "./editor/refs"
 	import { retrievalReadout } from "./editor/retrievalReadout.svelte"
 	import { loreRoute } from "./loreRoute.svelte"
-	import { compactStep, type LoreLens } from "./loreRoute"
+	import { compactStep, type LoreLens } from "$lib/shared/lorebooks/loreRoute"
 	import {
 		comparePoolBy,
 		filterPool,
@@ -219,6 +232,13 @@
 	let orderBy = $derived(chosenOrder ?? DEFAULT_POOL_SORT)
 
 	let route = $derived(loreRoute.route)
+	/**
+	 * The scenes on the line being read — shared ones plus this branch's own,
+	 * the rule `entries:counts` counts by. `scenes:listByLorebook` answers with
+	 * every line (its reply reaches every view of the book), so the pool and
+	 * the count agree only if the pool keeps to its line.
+	 */
+	let scenesOnLine = $derived(rowsOnLine(sceneList, route.branch ?? null))
 	/** An empty set is "read nothing"; no set at all is "nobody is reading". */
 	let readIn = $derived(readInKeys ?? new Set<string>())
 
@@ -258,7 +278,7 @@
 		for (const door of poolDoors) {
 			const rows =
 				door.store === "scenes"
-					? sceneList
+					? scenesOnLine
 					: (resolvedByKind[door.kind!] ?? [])
 			for (const row of rows) out.push(door.toPoolItem(row))
 		}
@@ -278,7 +298,7 @@
 		for (const door of poolDoors) {
 			const rows =
 				door.store === "scenes"
-					? sceneList
+					? scenesOnLine
 					: (resolvedByKind[door.kind!] ?? [])
 			for (const row of rows) map.set(door.toPoolItem(row).key, row)
 		}
@@ -291,15 +311,36 @@
 	 * Only dated rows can be later than a date, so the question is asked of
 	 * History alone; every other kind orders by position and would answer it
 	 * with a number that means something else entirely.
+	 *
+	 * ⚠ The cursor's KEY and each row's own date, by `compareDates` — never
+	 * the packed `position`, which is placement only and collides.
 	 */
-	let dimmedKeys = $derived(
-		new Set(
+	let dimmedKeys = $derived.by(() => {
+		const at = parseMoment(
+			timelineCursor.position != null ? timelineCursor.key : null
+		)
+		return new Set(
 			keysAfter(
-				poolItems.filter((i) => i.kind === HISTORY_TYPE_ID),
-				timelineCursor.position
+				poolItems
+					.filter((i) => i.kind === HISTORY_TYPE_ID)
+					.map((i) => {
+						const row = sourceByKey.get(i.key) as any
+						return {
+							key: i.key,
+							date:
+								typeof row?.year === "number"
+									? {
+											year: row.year,
+											month: row.month ?? null,
+											day: row.day ?? null
+										}
+									: null
+						}
+					}),
+				at
 			)
 		)
-	)
+	})
 
 	// The moment's rows come first and the later ones fall to the end; the
 	// toolbar's ordering is the reader's choice and holds inside each half.
@@ -336,10 +377,18 @@
 	let activeDoor = $derived(
 		creatingDoor ?? doorForKey(selectedKey, poolItems, descriptor)
 	)
+	/**
+	 * The rows an edit is checked against — a history entry's date bounds,
+	 * a name's uniqueness.
+	 *
+	 * ⚠ The rows ON THE LINE being read, as they read, never the raw list: a
+	 * sibling line's entry is not a neighbour of this one, and a date bound
+	 * taken from it refuses a date this line has free.
+	 */
 	let siblings = $derived(
 		activeDoor.store === "scenes"
-			? sceneList
-			: (rowsByKind[activeDoor.kind ?? ""] ?? [])
+			? scenesOnLine
+			: (resolvedByKind[activeDoor.kind ?? ""] ?? [])
 	)
 	let isNew = $derived(creatingDoor !== null)
 	/**
@@ -409,7 +458,8 @@
 	})
 
 	let latestHistoryId = $derived.by(() => {
-		const rows = rowsByKind[HISTORY_TYPE_ID] ?? []
+		// The current date is the newest on the line being read.
+		const rows = resolvedByKind[HISTORY_TYPE_ID] ?? []
 		let best: PoolSource | null = null
 		for (const row of rows)
 			if (!best || compareDates(row as any, best as any) > 0) best = row
@@ -418,7 +468,7 @@
 
 	let scenesByEntryId = $derived.by(() => {
 		const map = new Map<number, Sockets.Scenes.SceneWithMeta[]>()
-		for (const scene of sceneList) {
+		for (const scene of scenesOnLine) {
 			const list = map.get(scene.historyEntryId) ?? []
 			list.push(scene)
 			map.set(scene.historyEntryId, list)
@@ -463,7 +513,8 @@
 	function reparent(childKey: string, parentKey: string | null) {
 		const child = bookPool.find((item) => item.key === childKey)
 		if (!child || child.kind === SCENE_KIND) return
-		if (!canFileUnder(childKey, parentKey, bookPool)) return
+		if (!canFileUnder(childKey, parentKey, bookPool, route.branch ?? null))
+			return
 		const door = descriptorForKind(child.kind)
 		if (!door?.kind || door.store !== "entries") return
 		channels.get(door.kind)?.update({
@@ -480,6 +531,9 @@
 		},
 		get links() {
 			return bookLinks
+		},
+		get newRowBranchId() {
+			return route.branch ?? null
 		},
 		get reading() {
 			return {
@@ -596,10 +650,12 @@
 	/**
 	 * The date being read, when one is being read. `null` is now.
 	 *
-	 * Now is not a moment the author can amend AT: at now every dated
-	 * amendment already applies, so "from now on" and "change the entry" are
-	 * the same sentence, and offering two buttons for one outcome would be a
-	 * choice about nothing.
+	 * Now is not a moment the author can amend AT, so at now there is one
+	 * button and it writes the base. ⚠ That is NOT the same as "from now on":
+	 * every dated amendment still applies at now, so a base write to a field
+	 * an amendment also sets does not show. The save still happens (warn
+	 * only, ruled 2026-09-28) and its toast names the amendment that wins —
+	 * see `baseSaveWarning`.
 	 */
 	let momentDate = $derived(parseMoment(route.moment))
 
@@ -633,28 +689,79 @@
 	}
 
 	/**
-	 * File the change as a dated overlay. The base is left alone.
-	 *
-	 * The draft is discarded rather than kept: the server answers with the
-	 * book's whole amendment list, the resolved rows change under the editor,
-	 * and a draft built before that would be a copy of the old reading.
+	 * A write of ours is on its way and has not been answered. The save
+	 * controls stand down meanwhile, so one draft is never sent twice.
 	 */
-	function saveAsAmendment() {
-		if (!momentDate || !selectedSource) return
+	let saving = $state(false)
+
+	/** Every overlay id this editor has seen for an entry, for `isOurAmendment`. */
+	function knownAmendmentIds(entryId: number): number[] {
+		return (amendmentsFor?.(entryId) ?? []).map((a) => a.id)
+	}
+
+	/**
+	 * A refusal Layout's `:error` catch-all has already toasted is not toasted
+	 * again; a reply that never came is said here, because nothing else will.
+	 */
+	function reportUnanswered(err: unknown, title: string) {
+		if (isReplyTimeout(err))
+			toaster.error({
+				title,
+				description:
+					"The server did not answer in time. Your changes are still here."
+			})
+	}
+
+	/**
+	 * After our own write lands: the draft that was sent is dropped so the
+	 * editor re-reads the row, but typing done while waiting is kept — the
+	 * sent text becomes the new "as built", so only the later typing is dirty.
+	 */
+	function settleDraft(key: string, sent: Record<string, unknown>) {
+		if (draftKey !== key || !draft) return
+		if (JSON.stringify($state.snapshot(draft)) === JSON.stringify(sent))
+			discardDraft()
+		else pristineDraft = { ...sent }
+	}
+
+	/**
+	 * File the change as a dated overlay, on the line being read. The base is
+	 * left alone.
+	 *
+	 * ⚠ The draft is kept until the server has the row: a refusal or a lost
+	 * reply must not throw the author's text away. Once it lands the draft is
+	 * dropped and rebuilt, because the resolved row changed under the editor
+	 * and a draft built before that is a copy of the old reading.
+	 */
+	async function saveAsAmendment() {
+		if (!momentDate || !selectedSource || saving) return
 		const fields = pendingFields()
 		if (!fields) return
-		socket.emit("amendments:create", {
-			lorebookId,
-			entryId: selectedSource.id,
-			year: momentDate.year,
-			month: momentDate.month ?? null,
-			day: momentDate.day ?? null,
-			fields
-		} satisfies Sockets.Amendments.Create.Params)
+		const entryId = selectedSource.id
+		const branchId = route.branch ?? null
+		const date = momentDate
+		const key = `entry#${entryId}`
+		const sent = $state.snapshot(draft) as Record<string, unknown>
+		saving = true
+		let reply: Sockets.Amendments.List.Response | null
+		try {
+			reply = await fileEntryAmendments(
+				socket,
+				{ lorebookId, entryId, branchId },
+				[{ ...date, fields }],
+				knownAmendmentIds(entryId)
+			)
+		} catch (err) {
+			saving = false
+			reportUnanswered(err, "The amendment was not saved")
+			return
+		}
+		saving = false
+		const line = lineName(reply, branchId)
 		toaster.success({
-			title: `Amended as of ${formatDate(momentDate)}`
+			title: `Amended as of ${formatDate(date)}${line ? ` on ${line}` : ""}`
 		})
-		discardDraft()
+		settleDraft(key, sent)
 	}
 
 	/**
@@ -693,29 +800,85 @@
 		offUntil = { year: "", month: "", day: "" }
 	}
 
-	function fileOffWindow() {
+	async function fileOffWindow() {
 		const from = partsToDate(offFrom)
-		if (!from || offProblem || !selectedSource) return
-		for (const planned of offWindowAmendments(from, partsToDate(offUntil)))
-			socket.emit("amendments:create", {
-				lorebookId,
-				entryId: selectedSource.id,
-				...planned
-			} satisfies Sockets.Amendments.Create.Params)
+		if (!from || offProblem || !selectedSource || saving) return
+		const until = partsToDate(offUntil)
+		const entryId = selectedSource.id
+		// ⚠ On the line being read: "off for a while" on a fork is the
+		// line-only way out that the delete confirmation points to.
+		const branchId = route.branch ?? null
+		saving = true
+		let reply: Sockets.Amendments.List.Response | null
+		try {
+			reply = await fileEntryAmendments(
+				socket,
+				{ lorebookId, entryId, branchId },
+				offWindowAmendments(from, until),
+				knownAmendmentIds(entryId)
+			)
+		} catch (err) {
+			saving = false
+			reportUnanswered(err, "The entry was not switched off")
+			return
+		}
+		saving = false
+		const line = lineName(reply, branchId)
 		toaster.success({
-			title: partsToDate(offUntil)
-				? "Switched off for that period"
-				: "Switched off from then on"
+			title:
+				(until
+					? "Switched off for that period"
+					: "Switched off from then on") + (line ? ` on ${line}` : "")
 		})
 		resetOffWindow()
 		editorMenuOpen = false
 	}
 
-	function save() {
-		if (!draft) return
+	/**
+	 * The warning a base save earns when an amendment still overrides part
+	 * of it, or null. Asked of the SAME resolver the list reads through: the
+	 * base as it will be after this write, resolved at the moment being read —
+	 * any field that still comes out different is one the author will not
+	 * see change.
+	 */
+	function baseSaveWarning(
+		kind: string,
+		entryId: number,
+		fields: Record<string, unknown>
+	) {
+		if (!resolve) return null
+		const base = (rowsByKind[kind] ?? []).find((r) => r.id === entryId)
+		if (!base) return null
+		const [resolved] = resolve([{ ...base, ...fields } as PoolSource])
+		if (!resolved) return null
+		const masked = maskedFields(fields, resolved as Record<string, unknown>)
+		if (!masked.length) return null
+		const overlays = amendmentsFor?.(entryId) ?? []
+		return maskedBaseWarning(
+			masked.map((field) => ({
+				field,
+				amendment: maskingAmendment(
+					field,
+					(resolved as Record<string, unknown>)[field],
+					overlays,
+					route.branch ?? null,
+					// The moment being read: an overlay dated after it is not
+					// the one masking the save here.
+					parseMoment(route.moment)
+				)
+			}))
+		)
+	}
+
+	/** A create's reply is ours when it is this row, as the server stores it. */
+	const trimmed = (v: unknown) => (typeof v === "string" ? v.trim() : "")
+
+	async function save() {
+		if (!draft || saving) return
 		if (!activeDoor.validate(draft, siblings, true)) return
 		const payload = $state.snapshot(draft) as Record<string, any>
 		if (activeDoor.store === "scenes") {
+			// The toast waits for the reply: see `handleSceneUpdate`.
 			awaitingSave = `scene#${payload.id}`
 			socket.emit("scenes:update", {
 				scene: {
@@ -726,30 +889,89 @@
 					mentionedCharacters: payload.mentionedCharacters
 				}
 			} satisfies Sockets.Scenes.Update.Params)
-			toaster.success({ title: "Scene updated" })
 			return
 		}
-		const channel = channels.get(activeDoor.kind!)
-		if (!channel) return
+		const door = activeDoor
+		const kind = door.kind!
+		if (!channels.has(kind)) return
 		if (isNew) {
 			// ⚠ An entry created while reading a line belongs to that line.
 			// Anything else would put a fork's new entry on main, where it
 			// would read as something that was always true of both stories.
 			if (route.branch != null) payload.branchId = route.branch
-			awaitingSave = `new:${activeDoor.kind}`
-			channel.create(payload)
+			const pendingKey = `new:${kind}`
+			awaitingSave = pendingKey
+			saving = true
+			// ⚠ The draft stays until the row exists. `entries:create` is
+			// broadcast to every tab of this user, so the reply is claimed
+			// only when it is this row.
+			let created: Sockets.Entries.Create.Response
+			try {
+				created = await awaitReply({
+					socket,
+					event: "entries:create",
+					params: {
+						entry: { ...payload, typeId: kind, lorebookId } as any
+					},
+					replyKey: interestKey("entries:create", lorebookId),
+					errorEvent: "entries:create:error",
+					fallbackError: "The entry could not be created.",
+					match: (data) =>
+						data.entry?.lorebookId === lorebookId &&
+						data.entry.typeId === kind &&
+						trimmed(data.entry.name) === trimmed(payload.name) &&
+						trimmed(data.entry.content) === trimmed(payload.content)
+				})
+			} catch (err) {
+				saving = false
+				if (awaitingSave === pendingKey) awaitingSave = null
+				reportUnanswered(err, `${door.label} was not created`)
+				return
+			}
+			saving = false
+			toaster.success({ title: `${door.label} created` })
+			// Still the create the author sent? Then open what it became. An
+			// author who has since closed it or started another is left be.
+			if (awaitingSave !== pendingKey) return
+			awaitingSave = null
+			if (creatingDoor !== door || draftKey !== "new") return
 			discardDraft()
+			void loreRoute.navigate({
+				type: "openEntry",
+				entryId: created.entry.id
+			})
 		} else {
 			// ⚠ The DIFF, never the whole draft. The editor draws the entry as
 			// it reads at the moment, so the draft holds other amendments'
 			// values too — writing it whole would bake them into the base.
 			const fields = pendingFields()
 			if (!fields) return
-			awaitingSave = `entry#${payload.id}`
-			channel.update({ ...fields, id: payload.id } as Record<
-				string,
-				unknown
-			> & { id: number })
+			const id = payload.id as number
+			const key = `entry#${id}`
+			const warning = baseSaveWarning(kind, id, fields)
+			awaitingSave = key
+			saving = true
+			try {
+				await awaitReply({
+					socket,
+					event: "entries:update",
+					params: { entry: { ...fields, id, typeId: kind } as any },
+					replyKey: interestKey("entries:update", lorebookId),
+					errorEvent: "entries:update:error",
+					fallbackError: "The entry could not be saved.",
+					match: (data) => data.entry?.id === id
+				})
+			} catch (err) {
+				saving = false
+				if (awaitingSave === key) awaitingSave = null
+				reportUnanswered(err, `${door.label} was not saved`)
+				return
+			}
+			saving = false
+			// The draft itself is settled by the channel's `onUpdated`, which
+			// hears the same reply; this only says how it went.
+			if (warning) toaster.warning(warning)
+			else toaster.success({ title: `${door.label} saved` })
 		}
 	}
 
@@ -763,11 +985,31 @@
 	function setArchived(next: boolean) {
 		editorMenuOpen = false
 		if (!selectedSource || activeDoor.store !== "entries") return
+		// Mirrored onto BOTH halves of the dirty check: the draft, so a Save
+		// in flight does not write the old value back, and the "as built"
+		// copy, so a clean editor stays clean — archiving is not an edit.
 		if (draft) draft.archived = next
+		if (pristineDraft) pristineDraft.archived = next
 		channels
 			.get(activeDoor.kind!)
 			?.update({ id: selectedSource.id, archived: next })
 	}
+
+	/**
+	 * Whether the delete being asked about reaches past the line being read.
+	 *
+	 * A delete is global. Reading a fork, an entry with no branch of its own
+	 * is shared by every line, so the confirmation says it goes from all of
+	 * them and points at the line-only way out (ruled default 2026-09-28).
+	 */
+	let deleteIsEveryLine = $derived.by(() => {
+		if (!deleteTarget || route.branch == null) return false
+		if (deleteTarget.kind === SCENE_KIND) return false
+		const source = sourceByKey.get(deleteTarget.key) as
+			| { branchId?: number | null }
+			| undefined
+		return (source?.branchId ?? null) === null
+	})
 
 	function confirmDelete() {
 		const target = deleteTarget
@@ -846,9 +1088,11 @@
 	$effect(() => {
 		const id = compileEntriesCtx?.reviewHistoryEntryId
 		if (!id) return
-		const entry = (rowsByKind[HISTORY_TYPE_ID] ?? []).find(
-			(e) => e.id === id
-		)
+		// As it READS on this line, so the compile's diff is against what the
+		// author sees; the raw row only when the line does not show it.
+		const entry =
+			(resolvedByKind[HISTORY_TYPE_ID] ?? []).find((e) => e.id === id) ??
+			(rowsByKind[HISTORY_TYPE_ID] ?? []).find((e) => e.id === id)
 		compileEntriesCtx.setReviewHistoryEntryId(null)
 		if (entry) openCompile(entry)
 	})
@@ -888,6 +1132,8 @@
 	}
 
 	function handleScenesList(msg: Sockets.Scenes.ListByLorebook.Response) {
+		if (msg.lorebookId !== lorebookId) return
+		// Every line's scenes, kept whole — `scenesOnLine` is what is shown.
 		sceneList = msg.sceneList
 		scenesLoaded = true
 		loading = false
@@ -901,13 +1147,21 @@
 		const key = `scene#${msg.scene.id}`
 		if (awaitingSave !== key) return
 		awaitingSave = null
+		// Said once the scene is saved, never before.
+		toaster.success({ title: "Scene updated" })
 		if (draftKey === key)
 			draft = (descriptorForKind(SCENE_KIND) ?? descriptor).toDraft(
 				sceneList.find((s) => s.id === msg.scene.id) ?? msg.scene
 			)
 	}
 
-	function handleSceneWritten() {
+	function handleSceneWritten(
+		msg: Sockets.Scenes.Create.Response | Sockets.Scenes.Delete.Response
+	) {
+		// Both are bare, so another book's writes arrive here too.
+		const bookId =
+			"scene" in msg ? msg.scene?.lorebookId : msg?.lorebookId
+		if (bookId !== undefined && bookId !== lorebookId) return
 		fetchScenes()
 	}
 
@@ -957,17 +1211,13 @@
 								)
 							}
 						},
-						onCreated(entry) {
-							toaster.success({ title: `${door.label} created` })
-							if (awaitingSave !== `new:${kind}`) return
-							awaitingSave = null
-							void loreRoute.navigate({
-								type: "openEntry",
-								entryId: entry.id
-							})
-						},
+						// A create of ours is answered in `save`, which waits
+						// for it; one from anywhere else only moves the list,
+						// so it is not toasted here.
 						onUpdated(entry) {
-							toaster.success({ title: `${door.label} updated` })
+							// No toast: `save` says how its own write went, and
+							// a mark set from a session, another tab or an
+							// archive is not this editor's news.
 							const key = `entry#${entry.id}`
 							if (awaitingSave === key) {
 								awaitingSave = null
@@ -992,8 +1242,11 @@
 								pristineDraft = { ...$state.snapshot(draft) }
 							}
 						},
-						onDeleted: () =>
-							toaster.success({ title: `${door.label} deleted` }),
+						// Only the delete this workspace asked for is news here.
+						onDeleted: (_id, askedHere) => {
+							if (askedHere)
+								toaster.success({ title: `${door.label} deleted` })
+						},
 						onReordered: () =>
 							toaster.success({ title: "Entries reordered" })
 					}
@@ -1026,8 +1279,8 @@
 			// scene alone and `scenes:process:error` names one this workspace
 			// has never heard of, so all four are BARE — none has an entry in
 			// `SCOPED_EVENTS`, and a scoped key for an unscoped event matches
-			// nothing at all. `scenes:delete` has no emitter anywhere; the
-			// listener stays so that gaining one is not also gaining a bug.
+			// nothing at all. `scenes:delete` names its book, and
+			// `handleSceneWritten` drops another book's.
 			releases.push(
 				declareInterest<"scenes:listByLorebook">(
 					interestKey("scenes:listByLorebook", lorebookId),
@@ -1066,12 +1319,12 @@
 {#snippet newButton()}
 	{#if creatableDoors.length === 1}
 		<button
-			class="btn btn-sm preset-filled-success-500 shrink-0"
+			class="btn btn-sm preset-filled-primary-500 shrink-0"
 			type="button"
 			onclick={() => startCreate(creatableDoors[0])}
 		>
 			<Icons.Plus size={14} />
-			<span class="hidden sm:inline">New</span>
+			<span class="hidden @lg/view:inline">New</span>
 		</button>
 	{:else if creatableDoors.length > 1}
 		<Popover
@@ -1080,11 +1333,11 @@
 			positioning={{ placement: "bottom-end" }}
 		>
 			<Popover.Trigger
-				class="btn btn-sm preset-filled-success-500 shrink-0 gap-1"
+				class="btn btn-sm preset-filled-primary-500 shrink-0 gap-1"
 				title="New"
 			>
 				<Icons.Plus size={14} aria-hidden="true" />
-				<span class="hidden sm:inline">New</span>
+				<span class="hidden @lg/view:inline">New</span>
 				<Icons.ChevronDown size={14} aria-hidden="true" />
 			</Popover.Trigger>
 			<Portal>
@@ -1223,7 +1476,7 @@
 			class="btn btn-sm preset-filled-primary-500 flex-1"
 			type="button"
 			onclick={fileOffWindow}
-			disabled={!!offProblem}
+			disabled={!!offProblem || saving}
 			title={offProblem ?? "File it as dated changes"}
 		>
 			Switch it off
@@ -1304,10 +1557,10 @@
 	{@const dated = formatDate(momentDate!)}
 	<div class="flex shrink-0 items-center">
 		<button
-			class="btn btn-sm preset-filled-success-500 rounded-r-none"
+			class="btn btn-sm preset-filled-primary-500 rounded-r-none"
 			type="button"
 			onclick={saveAsAmendment}
-			disabled={!activeDoor.validate(draft!, siblings)}
+			disabled={saving || !activeDoor.validate(draft!, siblings)}
 			title="File this change as an amendment dated {dated}"
 		>
 			<Icons.Save size={16} aria-hidden="true" />
@@ -1319,7 +1572,7 @@
 			positioning={{ placement: "bottom-end" }}
 		>
 			<Popover.Trigger
-				class="btn btn-sm preset-filled-success-500 rounded-l-none border-l border-white/25 p-2"
+				class="btn btn-sm preset-filled-primary-500 rounded-l-none border-l border-white/25 p-2"
 				title="Other ways to save this change"
 				aria-label="Other ways to save this change"
 			>
@@ -1358,10 +1611,8 @@
 									saveMenuOpen = false
 									save()
 								}}
-								disabled={!activeDoor.validate(
-									draft!,
-									siblings
-								)}
+								disabled={saving ||
+									!activeDoor.validate(draft!, siblings)}
 							>
 								<Icons.PenLine size={14} aria-hidden="true" />
 								Change the base
@@ -1381,7 +1632,7 @@
 			<div class="flex flex-wrap items-center gap-2">
 				{@render editorBack()}
 				<span
-					class="text-surface-600-400 shrink-0 text-[0.68rem] tracking-wider uppercase"
+					class="text-surface-600-400 shrink-0 text-xs"
 				>
 					{kindLabel(selectedItem?.kind ?? activeDoor.kind ?? "")}
 				</span>
@@ -1408,10 +1659,10 @@
 					{@render amendSave()}
 				{:else}
 					<button
-						class="btn btn-sm preset-filled-success-500 shrink-0"
+						class="btn btn-sm preset-filled-primary-500 shrink-0"
 						type="button"
 						onclick={save}
-						disabled={!activeDoor.validate(draft, siblings)}
+						disabled={saving || !activeDoor.validate(draft, siblings)}
 					>
 						<Icons.Save size={16} aria-hidden="true" />
 						<span>{isNew ? "Create" : "Save"}</span>
@@ -1480,7 +1731,7 @@
 				{#if selectedKey && !poolReady}
 					<Icons.Loader2
 						size={20}
-						class="text-surface-400 animate-spin"
+						class="text-surface-600-400 animate-spin"
 					/>
 				{:else if selectionMissing}
 					That entry is not in this list any more.
@@ -1530,7 +1781,7 @@
 			<div class="flex items-center justify-center py-8">
 				<Icons.Loader2
 					size={20}
-					class="text-surface-400 animate-spin"
+					class="text-surface-600-400 animate-spin"
 				/>
 			</div>
 		{:else}
@@ -1574,13 +1825,15 @@
 <!-- The cascade, stated before the question: what is filed under a row goes
      with it, and a reader must not discover that afterwards.
 
-     ⚠ Counted over the whole book, never over the open scope: a child of
-     another kind is deleted with its parent whether or not this list can see
-     it, and a warning that leaves it out promises the wrong thing. -->
+     ⚠ Counted over the whole book, never over the open scope, and at every
+     depth: the anchor cascade walks the whole subtree, and a child of another
+     kind is deleted with its parent whether or not this list can see it. A
+     warning that leaves either out promises the wrong thing. -->
 <DeleteLorebookEntryConfirmModal
 	open={deleteTarget !== null}
 	message={deleteWarning(
-		deleteTarget ? containedBy(deleteTarget.key, bookPool).length : 0
+		deleteTarget ? descendantCount(deleteTarget.key, bookPool) : 0,
+		{ everyLine: deleteIsEveryLine }
 	)}
 	onOpenChange={(e) => {
 		if (!e.open) deleteTarget = null
@@ -1600,14 +1853,9 @@
 		activityId={compileActivityId}
 		pendingResult={compilePendingResult}
 		initialStep={compileInitialStep}
-		onSaved={(updated) => {
-			rowsByKind = {
-				...rowsByKind,
-				[HISTORY_TYPE_ID]: (rowsByKind[HISTORY_TYPE_ID] ?? []).map(
-					(e) => (e.id === updated.id ? updated : e)
-				)
-			}
-		}}
+		moment={momentDate}
+		branchId={route.branch ?? null}
+		knownAmendmentIds={knownAmendmentIds(compileTarget.id)}
 		onDiscarded={(activityId) => compileEntriesCtx?.dismiss(activityId)}
 	/>
 {/if}

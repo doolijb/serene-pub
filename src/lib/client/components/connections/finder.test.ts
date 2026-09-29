@@ -27,6 +27,7 @@ import {
 	quantsFromOllama,
 	rankHub,
 	scopeForCapability,
+	displayTags,
 	secondLine,
 	type Destination,
 	type FinderRow,
@@ -116,7 +117,19 @@ describe("destinationsFor — only somewhere a file could actually land", () => 
 		])
 		expect(out.map((d) => d.label)).toEqual([
 			"Embeddings · ONNX",
+			// The Ollama CHAT row, now an embeddings destination in its own
+			// right — one host, every modality (owner ruling 2026-09-25).
+			"Ollama",
 			"Ollama embed · Ollama"
+		])
+	})
+
+	test("an Ollama chat connection takes embedding downloads, no second row needed", () => {
+		const out = destinationsFor("embeddings", [
+			{ id: 3, name: "Ollama", type: CONNECTION_TYPE.OLLAMA }
+		])
+		expect(out.map((d) => [d.kind, d.connectionId])).toEqual([
+			["ollama", 3]
 		])
 	})
 
@@ -145,6 +158,13 @@ describe("destinationsFor — only somewhere a file could actually land", () => 
 		expect(pickDestination(out, 4)?.connectionId).toBe(1)
 		expect(pickDestination(out)?.connectionId).toBe(1)
 		expect(pickDestination([], 3)).toBeNull()
+		// Plan 2026-09-24 C6: a destination that cannot take a file yet
+		// (KoboldCPP not installed) is passed over for one that can.
+		expect(
+			pickDestination(out, null, (d) => d.connectionId !== 1)
+				?.connectionId
+		).not.toBe(1)
+		expect(pickDestination(out, null, () => false)?.connectionId).toBe(1)
 	})
 })
 
@@ -289,9 +309,10 @@ describe("kcppRecommendedRows", () => {
 	test("the row is a name, a size, its params and one line", () => {
 		const [row] = kcppRecommendedRows(models, ctx())
 		expect(row.name).toBe("TheBloke/Mistral-7B-GGUF")
-		expect(secondLine(row)).toBe(
-			"TheBloke · 4.0 GB · 7B · A small instruct model"
-		)
+		// The facts line stops at the shape. The description is its own line
+		// on the card, so joining it here only got it truncated away.
+		expect(secondLine(row)).toBe("TheBloke · 4.0 GB · 7B")
+		expect(row.description).toBe("A small instruct model")
 		expect(row.tier).toEqual({ label: "Budget", matches: true })
 		expect(row.fit).toBe("fits")
 		expect(row.presence).toBeNull()
@@ -343,7 +364,8 @@ describe("ollamaRecommendedRows", () => {
 	test("the YAML's GB become decimal bytes", () => {
 		const [row] = ollamaRecommendedRows(models, ctx())
 		expect(row.bytes).toBeCloseTo(4.7 * GB)
-		expect(secondLine(row)).toBe("4.7 GB · 8B · Meta's 8B")
+		expect(secondLine(row)).toBe("4.7 GB · 8B")
+		expect(row.description).toBe("Meta's 8B")
 		expect(row.tier).toEqual({ label: "Mainstream", matches: true })
 	})
 	test("a pulled model is marked pulled", () => {
@@ -393,9 +415,8 @@ describe("onnxRecommendedRows", () => {
 
 	test("an embeddings row quotes its dimensions", () => {
 		const [row] = onnxRecommendedRows([models[0]], ctx(), "embeddings")
-		expect(secondLine(row)).toBe(
-			"33 MB · 384 dims · Small English embeddings"
-		)
+		expect(secondLine(row)).toBe("33 MB · 384 dims")
+		expect(row.description).toBe("Small English embeddings")
 		expect(row.tier).toEqual({ label: "Fast", matches: true })
 	})
 
@@ -406,8 +427,10 @@ describe("onnxRecommendedRows", () => {
 		expect(row.percent).toBe(42)
 	})
 
-	test("on disk reads as on disk", () => {
-		const [row] = onnxRecommendedRows(
+	// Plan 2026-09-24 C2: the finder lists downloads; a model already on disk
+	// is counted beside the list, not mixed into it.
+	test("on disk is left out of the download list", () => {
+		const rows = onnxRecommendedRows(
 			[
 				{
 					...models[0],
@@ -421,8 +444,7 @@ describe("onnxRecommendedRows", () => {
 			ctx(),
 			"embeddings"
 		)
-		expect(row.presence).toBe("on_disk")
-		expect(row.sizeLabel).toBe("34 MB")
+		expect(rows).toEqual([])
 	})
 })
 
@@ -433,6 +455,7 @@ describe("primaryRowIndex — one gold button, on the first row that fits", () =
 		sizeLabel: null,
 		facts: null,
 		description: null,
+		tags: [],
 		tier: null,
 		bytes: null,
 		fit: "unknown",
@@ -694,5 +717,116 @@ describe("repoTitle / repoOwner — the owner is information, not a prefix", () 
 				facts: "12B"
 			} as any)
 		).toBe("bartowski · 7.1 GB · 12B")
+	})
+
+	test("secondLine never carries the description", () => {
+		// Regression: four clauses in one truncate line meant the sentence
+		// was quoted and never seen. It has its own line now.
+		expect(
+			secondLine({
+				name: "x/y",
+				sizeLabel: "1 GB",
+				facts: "7B",
+				description: "A sentence long enough to be cut off"
+			} as any)
+		).toBe("x · 1 GB · 7B")
+	})
+})
+
+describe("tags a person should actually see", () => {
+	test("machine metadata is dropped, human tags are kept in order", () => {
+		expect(
+			displayTags([
+				"license:apache-2.0",
+				"text-generation",
+				"region:us",
+				"conversational",
+				"arxiv:2401.04088",
+				"base_model:mistralai/Mistral-7B",
+				"en"
+			])
+		).toEqual(["text-generation", "conversational", "en"])
+	})
+
+	test("duplicates collapse, case-insensitively", () => {
+		expect(displayTags(["English", "english", "EN", "en"])).toEqual([
+			"English",
+			"EN"
+		])
+	})
+
+	test("nothing, empty and blanks are all no tags", () => {
+		expect(displayTags(undefined)).toEqual([])
+		expect(displayTags(null)).toEqual([])
+		expect(displayTags(["", "   "])).toEqual([])
+	})
+
+	test("an ollama hub row carries its description and its human tags", () => {
+		const [row] = ollamaHubRows([
+			{
+				name: "org/model",
+				description: "A small instruct model",
+				tags: ["license:mit", "text-generation", "en"],
+				downloads: 1_200_000,
+				pullOptions: [{ label: "Q4_K_M", pull: "x:q4" }]
+			}
+		])
+		expect(row.description).toBe("A small instruct model")
+		expect(row.tags).toEqual(["text-generation", "en"])
+		// The licence is not lost — it belongs in the facts line.
+		expect(row.detail).toContain("mit")
+	})
+
+	test("a kcpp hub row carries its description and no tags at all", () => {
+		const [row] = kcppHubRows([
+			{
+				name: "TheBloke/Mistral-7B-GGUF",
+				description: "A small instruct model",
+				downloads: 431,
+				pullOptions: [{ label: "Q4_K_M", filename: "a.gguf" }]
+			} as any
+		])
+		expect(row.description).toBe("A small instruct model")
+		expect(row.tags).toEqual([])
+	})
+})
+
+describe("tags from the recommended list reach the card", () => {
+	test("an Ollama row carries the list's human tags", () => {
+		const [row] = ollamaRecommendedRows(
+			[
+				{
+					name: "unsloth/Qwen3.5-4B-GGUF",
+					pull: "hf.co/unsloth/Qwen3.5-4B-GGUF:Q4_K_M",
+					size: 2.74,
+					tags: ["roleplay", "vision", "long-context"]
+				}
+			],
+			{ query: "", tier: "mid", present: new Set(), pulled: new Set() } as any
+		)
+		expect(row.tags).toEqual(["roleplay", "vision", "long-context"])
+	})
+
+	test("the `embedding` tag is dropped from the chips — the scope already says it", () => {
+		const [row] = ollamaRecommendedRows(
+			[{ name: "nomic-embed-text", pull: "nomic-embed-text", tags: ["embedding", "english"] }],
+			{ query: "", tier: "mid", present: new Set(), pulled: new Set() } as any
+		)
+		expect(row.tags).toEqual(["english"])
+	})
+
+	test("a KoboldCPP row carries its tags too", () => {
+		const [row] = kcppRecommendedRows(
+			[
+				{
+					name: "bartowski/L3-8B-Stheno-v3.2-GGUF",
+					ollamaName: "x",
+					pullOptions: [],
+					tags: ["roleplay", "uncensored"]
+				} as any
+			],
+			{ query: "", tier: "mid", present: new Set(), pulled: new Set() } as any
+		)
+		expect(row.tags).toEqual(["roleplay", "uncensored"])
 	})
 })

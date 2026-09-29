@@ -1,6 +1,7 @@
 /**
  * Round-13 audit fix (MEDIUM): toggleSessionCharacterActiveHandler and
- * updateSessionCharacterVisibilityHandler each re-implemented session access
+ * updateSessionCharacterVisibilityHandler (retired 2026-09-27; see the last
+ * describe) each re-implemented session access
  * ad-hoc as an owner-only check (eq(sessions.userId, userId)) instead of using
  * the shared checkSessionAccess() helper — the same ad-hoc-reimplementation bug
  * class round 10 fixed in summarize.ts. Net effect: a guest who brought
@@ -187,86 +188,28 @@ describe("sessions:toggleSessionCharacterActive — ownership scoping (Round-13 
 	})
 })
 
-describe("sessions:updateSessionCharacterVisibility — ownership scoping (Round-13 audit fix, PGlite integration)", () => {
-	test("a guest can change the visibility of a character they own", async () => {
-		const { updateSessionCharacterVisibilityHandler } = await import(
-			"./sessions"
+/**
+ * The per-character visibility switch is retired (2026-09-27): the session's
+ * `characterDetail` genre field replaced it. There is no handler to scope any
+ * more, and a client still emitting the old event is answered by nothing —
+ * no handler is registered under its name, so the write is ignored.
+ */
+describe("sessions:updateSessionCharacterVisibility — retired", () => {
+	test("no handler is exported or registered for the old event", async () => {
+		const mod: Record<string, unknown> = await import("./sessions")
+		expect(mod.updateSessionCharacterVisibilityHandler).toBeUndefined()
+
+		const events: string[] = []
+		expect(typeof mod.registerSessionHandlers).toBe("function")
+		;(mod.registerSessionHandlers as any)(
+			{ user: { id: 1 }, on: () => {} },
+			noopEmit,
+			(_socket: unknown, handler: { event: string }) => {
+				events.push(handler.event)
+			}
 		)
-		const { guest, session, guestCharacter } =
-			await makeSharedSessionWithGuestCharacter()
-
-		const res = await updateSessionCharacterVisibilityHandler.handler(
-			fakeSocket(guest.id),
-			{
-				sessionId: session.id,
-				characterId: guestCharacter.id,
-				visibility: "hidden"
-			} as any,
-			noopEmit
-		)
-
-		expect(res.error).toBeUndefined()
-
-		const row = await testDb.query.sessionCharacters.findFirst({
-			where: (cc, { eq, and }) =>
-				and(
-					eq(cc.sessionId, session.id),
-					eq(cc.characterId, guestCharacter.id)
-				)
-		})
-		expect(row?.visibility).toBe("hidden")
-	})
-
-	test("a guest cannot change the visibility of a character they don't own", async () => {
-		const { updateSessionCharacterVisibilityHandler } = await import(
-			"./sessions"
-		)
-		const { owner, guest, session } =
-			await makeSharedSessionWithGuestCharacter()
-		const [ownerCharacter] = await testDb
-			.insert(schema.characters)
-			.values({
-				name: "Owner's Character 2",
-				description: "x",
-				userId: owner.id
-			})
-			.returning()
-		await testDb.insert(schema.sessionCharacters).values({
-			sessionId: session.id,
-			characterId: ownerCharacter.id,
-			position: 1
-		})
-
-		const res = await updateSessionCharacterVisibilityHandler.handler(
-			fakeSocket(guest.id),
-			{
-				sessionId: session.id,
-				characterId: ownerCharacter.id,
-				visibility: "hidden"
-			} as any,
-			noopEmit
-		)
-
-		expect(res.error).toMatch(/access denied/i)
-	})
-
-	test("the session owner retains full control over a guest's character", async () => {
-		const { updateSessionCharacterVisibilityHandler } = await import(
-			"./sessions"
-		)
-		const { owner, session, guestCharacter } =
-			await makeSharedSessionWithGuestCharacter()
-
-		const res = await updateSessionCharacterVisibilityHandler.handler(
-			fakeSocket(owner.id),
-			{
-				sessionId: session.id,
-				characterId: guestCharacter.id,
-				visibility: "hidden"
-			} as any,
-			noopEmit
-		)
-
-		expect(res.error).toBeUndefined()
+		// The toggle next to it is still there — this is the one that went.
+		expect(events).toContain("sessions:toggleSessionCharacterActive")
+		expect(events).not.toContain("sessions:updateSessionCharacterVisibility")
 	})
 })

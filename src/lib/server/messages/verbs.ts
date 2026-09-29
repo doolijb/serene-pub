@@ -1,7 +1,7 @@
 /**
  * Message verbs (20 §4; R-15, ruled 2026-09-15): core owns the mechanics;
  * the genre declares availability; the check happens server-side at the
- * verb — the `triggerFunction` doctrine, applied to messages: hiding a
+ * verb — the `sessions:fireAction` doctrine, applied to messages: hiding a
  * button is presentation, refusing the fire is what makes "removed" mean
  * removed.
  *
@@ -10,7 +10,7 @@
  * express forbidding them (the SDK refuses a declaration that tries, at
  * registration), and no code path consults anything before honouring them
  * beyond ownership. What this module resolves is the forbiddable set — the
- * genre-declared content actions (`retry`, `continue`, `stepBack`) and the
+ * genre-declared content actions (`retry`, `extend`, `stepBack`) and the
  * opt-in built-ins (`delete`, `hide`, `swipe`), which a genre may switch off
  * and never re-implement.
  */
@@ -18,7 +18,15 @@
 import { CORE_ACTION_SPEC } from "$lib/shared/actions/identity"
 import { eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
-import { coreAction, MESSAGE_VERBS, type MessageVerb } from "@serene-pub/sdk"
+import {
+	coreAction,
+	formBlocksOf,
+	MESSAGE_VERBS,
+	resolveTurnControls,
+	turnControlPresent,
+	type MessageVerb,
+	type TurnControl
+} from "@serene-pub/sdk"
 import { parseChannel } from "$lib/server/messages/channels"
 
 /** Availability of every forbiddable verb. The floors are not here. */
@@ -145,11 +153,261 @@ export async function verbRefusal(
 				`This session's genre ('${mode.name}') does not offer ${verb} on ` +
 				`messages — what happened stands. Stopping, branching and editing are always yours.`
 			)
+		// A row of a several-row turn is retaken whole (R2), before any
+		// newest-row verdict: the sentence that helps is where to go instead.
+		if (verb === "retry" && door) {
+			const whole = await retakeRowRefusal(db, mode.shape, door.messageId)
+			if (whole) return whole
+		}
 	} catch {
 		return null
 	}
 	if (!door || !genreId) return null
 	return verbEnablementRefusal(db, sessionId, verb, door, genreId)
+}
+
+/**
+ * The row regenerate in a **retake** genre (lair pass R2, owner 2026-09-28):
+ * refused on a row that is not a delver's — no `characterId` — when the reply
+ * run that created it wrote more than one row (its **turn yield**,
+ * `turnYieldOf`). Regenerating that row alone would leave the rest of the
+ * turn standing on a line it does not follow; Regenerate in the composer
+ * takes the whole turn again. In the Lair: the Castellan's beats row in the Sanctum (R8).
+ *
+ * A **one-row** reply keeps the row regenerate with its swipes — a
+ * narration, a pick, a Castellan's Sanctum reply — and a delver's row
+ * always does (it re-voices that delver, B15). **Except a question its
+ * turn stopped on** (R9, 2026-09-28): a one-row yield whose row carries a
+ * form — the Lair's knock — is refused too, because re-driving it re-plans
+ * the turn and a play would land in the question's row. Read off the run's yield,
+ * never off the speaker or the channel: the Lair's Sanctum beats row is
+ * refused though its channel offers no retake (R8). Null in a genre that
+ * does not offer retake, and for a row no reply run created.
+ */
+export async function retakeRowRefusal(
+	db: Db,
+	shape: unknown,
+	messageId: number
+): Promise<string | null> {
+	if (!resolveTurnControls(shape).retake.offered) return null
+	const [row] = await db
+		.select({
+			role: schema.sessionMessages.role,
+			characterId: schema.sessionMessages.characterId,
+			channel: schema.sessionMessages.channel
+		})
+		.from(schema.sessionMessages)
+		.where(eq(schema.sessionMessages.id, messageId))
+		.limit(1)
+	if (!row || row.role === "user" || row.characterId != null) return null
+	const { creatingRunOf, turnYieldOf } = await import(
+		"$lib/server/sessions/turnYield"
+	)
+	const run = await creatingRunOf(db, messageId)
+	if (!run) return null
+	const yieldRows = await turnYieldOf(db, run.id)
+	if (yieldRows.length <= 1) {
+		/**
+		 * **A question its turn stopped on** (R9): a one-row turn whose row
+		 * carries a form — the Lair's knock. Re-driving that row re-plans the
+		 * turn, and a turn that now plays would write another voice's line
+		 * into the question's row (the lead delver's, under the Castellan's
+		 * name). The row IS its turn's whole yield, so the composer's
+		 * Regenerate — the retake — takes that turn again, into rows of its
+		 * own. Keyed on recorded facts: the yield, and a form on the row.
+		 */
+		if (
+			yieldRows.length === 1 &&
+			yieldRows[0]!.messageId === messageId &&
+			(await rowAsks(db, messageId))
+		)
+			return (
+				"This message is the question its turn stopped on. Use Regenerate in the " +
+				"composer to take the whole turn again."
+			)
+		return null
+	}
+	/**
+	 * Read off the yield, never the row's channel (R8): the Lair's Sanctum
+	 * offers no retake, and its Castellan talk keeps the row regenerate —
+	 * a one-row yield, answered above — but the turn's BEATS row sits there
+	 * too, one part of a turn whose other rows are the story's. Regenerating
+	 * it alone would re-drive the row as Sanctum talk. It is retaken with its
+	 * turn, from the story's composer (the page routes its ⋮ there).
+	 */
+	const here = resolveTurnControls(shape, row.channel ?? undefined).retake.offered
+	return (
+		"This message is one part of a turn that wrote several. Use Regenerate in the " +
+		(here ? "composer" : "story's composer") +
+		" to take the whole turn again."
+	)
+}
+
+/** Whether a row carries a form block — a question put to somebody. */
+async function rowAsks(db: Db, messageId: number): Promise<boolean> {
+	const { blockTreesOf } = await import("$lib/server/messages/blocks")
+	return (await blockTreesOf(db, messageId)).some((tree) => formBlocksOf(tree).length > 0)
+}
+
+/** What each turn control is called in a refusal — the core action's label. */
+const turnControlName = (control: TurnControl): string =>
+	(coreAction(control)?.label as { en?: string } | undefined)?.en ?? control
+
+/**
+ * Refusal sentence for a press of a turn control (`SessionShape.turnControls`,
+ * lair pass B7 + B8), else null. Three verdicts, in the order a person needs
+ * them:
+ *
+ * 1. **Offered** — the genre switches the control off (or never opts in,
+ *    for `narrate`): refused by name.
+ * 2. **Present** — its present-when fails over the published values:
+ *    refused with the declaration's reason.
+ *    The listing hides the chip on the same verdict (`listSessionActions`).
+ * 3. **Enabled** — the core action's enabled-when (busy, nobody seated to
+ *    pick): refused with that reason, the one the grey chip shows.
+ *
+ * The `verbRefusal` posture: an unreadable genre refuses nothing. `advance`
+ * is the composer's Continue — never the prefill `extend`, which
+ * `verbRefusal` answers.
+ */
+export async function turnControlRefusal(
+	db: Db,
+	sessionId: number,
+	control: TurnControl,
+	actor: { userId: number },
+	/**
+	 * The pressing composer's channel (R6): a channel's declared
+	 * `turnControls` win over the genre's. Absent is `main`.
+	 */
+	channel?: string
+): Promise<string | null> {
+	let genreId: string
+	let presence: ReturnType<typeof resolveTurnControls>
+	let modeName: string
+	let modeShape: unknown
+	try {
+		const [session] = await db
+			.select({ genreId: schema.sessions.genreId })
+			.from(schema.sessions)
+			.where(eq(schema.sessions.id, sessionId))
+			.limit(1)
+		if (!session?.genreId) return null
+		const { getSessionGenre } = await import(
+			"$lib/server/pipelines/entities/sessionGenres"
+		)
+		const mode = await getSessionGenre(db, session.genreId)
+		if (!mode) return null
+		genreId = session.genreId
+		modeName = mode.name
+		modeShape = mode.shape
+		presence = resolveTurnControls(mode.shape, channel)
+	} catch {
+		return null
+	}
+	const name = turnControlName(control)
+	if (!presence[control].offered) {
+		// Offered by the genre and taken away on this channel (R6): say
+		// where, so the person knows the story's composer still has it.
+		if (
+			channel &&
+			parseChannel(channel).slug !== "main" &&
+			resolveTurnControls(modeShape)[control].offered
+		)
+			return `${name} is not offered on this channel — use it in the story.`
+		return control === "advance"
+			? `This session's genre ('${modeName}') does not offer Continue — send a line to move the story on.`
+			: `This session's genre ('${modeName}') does not offer ${name}.`
+	}
+	try {
+		const { publishedValues } = await import(
+			"$lib/server/pipelines/entities/publishedValues"
+		)
+		const { enablementVerdict, reasonSentence } = await import(
+			"$lib/server/pipelines/entities/sessionActions"
+		)
+		if (presence[control].presentWhen.length) {
+			const values = await publishedValues(db, sessionId)
+			const present = turnControlPresent(presence, control, values)
+			if (!present.present)
+				return await reasonSentence(
+					{ i18n: present.reason ?? { en: `${name} is not offered here.` } },
+					actor
+				)
+		}
+		const gate = await enablementVerdict(db, sessionId, genreId, actor, {
+			specSlug: CORE_ACTION_SPEC,
+			key: control,
+			enabledWhen: coreAction(control)?.enabledWhen
+		})
+		if (gate.enabled) return null
+		return await reasonSentence(gate.reason!, actor)
+	} catch (e) {
+		console.warn(`[verbs] the turn control '${control}' could not be judged:`, e)
+		return null
+	}
+}
+
+/**
+ * Which turn control a fire with an explicit entry the order does NOT hold
+ * is a press of (B8), or null for one that is no turn control — the owner's
+ * latitude to fire an unprepared entry (§4.7), an envoy's reference, the
+ * pipeline's own voice on a channel with no narrator.
+ *
+ * - a `character:` reference is **Pick who speaks** (`pick`);
+ * - the null reference in a `voice: 'narrator'` genre is **the narrator's
+ *   turn** (`narrate`) — elsewhere the null reference is the pipeline's own
+ *   voice (the Writing Room's manuscript), not a narrator.
+ */
+export function pressedTurnControl(
+	shape: unknown,
+	entry: { ref: string | null; channel?: string }
+): TurnControl | null {
+	if (typeof entry.ref === "string")
+		return entry.ref.startsWith("character:") ? "pick" : null
+	const voice = (shape as { voice?: unknown } | undefined)?.voice
+	return entry.ref === null && voice === "narrator" ? "narrate" : null
+}
+
+/**
+ * The door for a fire naming an entry the order does not hold (B8): the
+ * turn control it presses (`pressedTurnControl`), judged by
+ * `turnControlRefusal`; null when it presses none, or the genre is
+ * unreadable.
+ */
+export async function unpreparedEntryRefusal(
+	db: Db,
+	sessionId: number,
+	entry: { ref: string | null; channel?: string },
+	actor: { userId: number },
+	/** The pressing composer's channel (R6); else the entry's. */
+	pressedOn?: string
+): Promise<string | null> {
+	let control: TurnControl | null
+	try {
+		const [session] = await db
+			.select({ genreId: schema.sessions.genreId })
+			.from(schema.sessions)
+			.where(eq(schema.sessions.id, sessionId))
+			.limit(1)
+		if (!session?.genreId) return null
+		const { getSessionGenre } = await import(
+			"$lib/server/pipelines/entities/sessionGenres"
+		)
+		const mode = await getSessionGenre(db, session.genreId)
+		if (!mode) return null
+		control = pressedTurnControl(mode.shape, entry)
+	} catch {
+		return null
+	}
+	return control
+		? turnControlRefusal(
+				db,
+				sessionId,
+				control,
+				actor,
+				pressedOn ?? entry.channel
+			)
+		: null
 }
 
 /**
@@ -201,7 +459,7 @@ export async function verbEnablementRefusal(
 }
 
 /**
- * Why `continue` is unavailable in this session, or `null` when it is available.
+ * Why `extend` is unavailable in this session, or `null` when it is available.
  *
  * ## Two refusals, one answer, because a person only wants one sentence
  *
@@ -214,7 +472,7 @@ export async function verbEnablementRefusal(
  * reporting it.
  *
  * So the two are composed here rather than at each call site, and in this order:
- * the genre's refusal wins, because "this mode does not offer continue" is true
+ * the genre's refusal wins, because "this mode does not offer extend" is true
  * whatever connection is behind it, and telling somebody to change their wire
  * mode when the mode would refuse anyway sends them to a screen that cannot help.
  *
@@ -234,10 +492,10 @@ export async function verbEnablementRefusal(
  * ⚠ A resolution FAILURE is not this function's refusal. "No connection is set"
  * is a different problem with a different sentence, and the reply road writes
  * that one onto the message row where a person can see it; answering it here
- * would grey out Continue on an instance whose real fault is that nothing is
+ * would grey out Extend on an instance whose real fault is that nothing is
  * configured at all. Null — let the turn refuse, in its own words.
  */
-export async function continueVerbRefusal(
+export async function extendVerbRefusal(
 	db: Db,
 	sessionId: number,
 	userId: number,
@@ -246,7 +504,7 @@ export async function continueVerbRefusal(
 	const genre = await verbRefusal(
 		db,
 		sessionId,
-		"continue",
+		"extend",
 		messageId != null ? { messageId, userId } : undefined
 	)
 	if (genre) return genre

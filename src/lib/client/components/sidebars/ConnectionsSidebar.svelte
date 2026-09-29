@@ -25,19 +25,11 @@
 		declareInterest,
 		useInterest
 	} from "$lib/client/sockets/interest.svelte"
-	import { getContext, onDestroy, onMount } from "svelte"
-	import { SvelteSet } from "svelte/reactivity"
+	import { getContext, onDestroy, onMount, untrack } from "svelte"
+	import { SvelteMap, SvelteSet } from "svelte/reactivity"
 	import * as Icons from "@lucide/svelte"
 	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
-	import OllamaForm from "$lib/client/connectionForms/OllamaForm.svelte"
-	import OpenAIForm from "$lib/client/connectionForms/OpenAIForm.svelte"
-	import LmStudioForm from "$lib/client/connectionForms/LMStudioForm.svelte"
 	import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
-	import LlamaCppForm from "$lib/client/connectionForms/LlamaCppForm.svelte"
-	import KoboldCppForm from "$lib/client/connectionForms/KoboldCppForm.svelte"
-	import KoboldCppManagedForm from "$lib/client/connectionForms/KoboldCppManagedForm.svelte"
-	import AnthropicForm from "$lib/client/connectionForms/AnthropicForm.svelte"
-	import ImageConnectionForm from "$lib/client/connectionForms/ImageConnectionForm.svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 	import {
 		CONNECTION_DEFAULTS,
@@ -45,14 +37,24 @@
 		stableStringify
 	} from "$lib/shared/utils/connectionDefaults"
 	import ConnectionCapabilities from "$lib/client/components/connections/ConnectionCapabilities.svelte"
-	import EmbeddingConnectionForm from "$lib/client/connectionForms/EmbeddingConnectionForm.svelte"
 	import EmbeddingQueuePanel from "$lib/client/components/connections/EmbeddingQueuePanel.svelte"
-	import NerConnectionForm from "$lib/client/connectionForms/NerConnectionForm.svelte"
 	import NerLanePanel from "$lib/client/components/connections/NerLanePanel.svelte"
 	import ConnectionServicePicker from "./ConnectionServicePicker.svelte"
+	import {
+		createNavStack,
+		INDEX_ENTRY,
+		type NavEntry,
+		type NavView
+	} from "$lib/client/components/connections/navStack"
+	import { serviceLabel } from "$lib/client/components/connections/connectionIndexFilter"
+	import ModelRow from "$lib/client/components/connections/ModelRow.svelte"
 	import ConnectionIndexView from "$lib/client/components/connections/ConnectionIndexView.svelte"
 	import { ViewModeTracker } from "$lib/client/shell/viewMode.svelte"
 	import PanelSplit from "$lib/client/components/panels/PanelSplit.svelte"
+	import PanelNavHeader from "$lib/client/components/panels/PanelNavHeader.svelte"
+	import DetailHero from "$lib/client/components/panels/DetailHero.svelte"
+	import ConnectionTypeForm from "$lib/client/components/connections/ConnectionTypeForm.svelte"
+	import ConnectionStopScripts from "$lib/client/components/connections/ConnectionStopScripts.svelte"
 	import ModelDetailView from "$lib/client/components/connections/ModelDetailView.svelte"
 	import OnnxModelView from "$lib/client/components/connections/OnnxModelView.svelte"
 	import OnnxEndpointView from "$lib/client/components/connections/OnnxEndpointView.svelte"
@@ -66,13 +68,17 @@
 		enableManager,
 		type ManagerKind
 	} from "$lib/client/components/connections/managers"
+	import PanelTabStrip from "$lib/client/components/panels/PanelTabStrip.svelte"
 	import ManagedConnectionView from "$lib/client/components/connections/ManagedConnectionView.svelte"
 	import { managedConnectionIds } from "$lib/client/components/connections/managedConnectionView"
 	import CapabilityView from "$lib/client/components/connections/CapabilityView.svelte"
 	import ModelFinderView from "$lib/client/components/connections/ModelFinderView.svelte"
 	import SetupChatFlow from "$lib/client/components/connections/SetupChatFlow.svelte"
 	import {
+		activeApiTab,
+		apiConnectionTabs,
 		modelsHeadline,
+		showsTabStrip,
 		statusLine,
 		type LastTest
 	} from "$lib/client/components/connections/connectionViewChrome"
@@ -94,7 +100,10 @@
 	} from "$lib/shared/constants/connectionSections"
 	import { EMBEDDING_CAPABILITY } from "$lib/shared/constants/embeddings"
 	import { NER_CAPABILITY } from "$lib/shared/constants/ner"
-	import type { ConnectionServiceItem } from "$lib/shared/utils/connectionServiceItems"
+	import type {
+		ConnectionServiceCategory,
+		ConnectionServiceItem
+	} from "$lib/shared/utils/connectionServiceItems"
 	import {
 		NOTE_MAX_LENGTH,
 		normalizeNote
@@ -118,12 +127,20 @@
 		 * in the Ollama manager, a Jump hit).
 		 */
 		initialConnectionId?: number
+		/**
+		 * A page that embeds this panel for ONE connection (the admin edit
+		 * page): leaving for the index calls this instead, so the page goes
+		 * back to its own list rather than drawing a second index under its
+		 * "Edit connection" heading (plan 2026-09-24 B10).
+		 */
+		onExit?: () => void
 	}
 
 	let {
 		onclose = $bindable(),
 		startNew = false,
-		initialConnectionId
+		initialConnectionId,
+		onExit
 	}: Props = $props()
 	let systemSettingsCtx: SystemSettingsCtx = $state(
 		getContext("systemSettingsCtx")
@@ -161,14 +178,7 @@
 	 * opens the one finder (ruling R3), and the tray opens the one downloads
 	 * list (R4).
 	 */
-	type View =
-		| "index"
-		| "connection"
-		| "model"
-		| "capability"
-		| "finder"
-		| "downloads"
-		| "setup-chat"
+	type View = NavView
 	let view = $state<View>("index")
 	/** The transform the capability view is open on. Set with the view. */
 	let selectedCapability = $state<string | null>(null)
@@ -176,8 +186,6 @@
 	let finderScope = $state<{ capability?: string; connectionId?: number }>({})
 	/** The model whose detail view is open. Set with the view. */
 	let selectedModelId = $state<number | null>(null)
-	/** Where the model view returns to. Not $state: read only on navigate. */
-	let modelReturnView: "index" | "connection" = "index"
 	/** Seeds the index filter (a `cap:<transform>` value, or null). */
 	let initialIndexFilter = $state<string | null>(null)
 	/** The group the index scrolls to on return from a connection or model. */
@@ -265,8 +273,14 @@
 	const paneTitle = $derived(
 		connection?.name ?? selectedRow?.name ?? "Connection"
 	)
+	// The index row's chip word, so the header and the row it was opened from
+	// say the same thing ("ONNX", not the type's long label that repeats the
+	// title and so hid the chip).
 	const paneService = $derived(
-		serviceLabelOf(connection?.type ?? selectedRow?.type)
+		serviceLabel({
+			type: connection?.type ?? selectedRow?.type,
+			preset: selectedRow?.preset ?? null
+		})
 	)
 	/**
 	 * The chip only where it says something the title has not.
@@ -280,13 +294,6 @@
 			paneService.trim().toLowerCase() !== paneTitle.trim().toLowerCase()
 	)
 
-	function serviceLabelOf(type: string | null | undefined): string {
-		return (
-			CONNECTION_TYPE.options.find((t) => t.value === type)?.label ??
-			(type || "")
-		)
-	}
-
 	// Screen reader announcements
 	let announcements = $state("")
 	function announce(message: string) {
@@ -297,6 +304,17 @@
 	// ── Model sync ──────────────────────────────────────────────────────────
 	/** Endpoints with a sync in flight (reactive Set — see the memory note). */
 	const syncingIds = new SvelteSet<number>()
+	/**
+	 * Each managed view's open tab, by connection. Held here because the view
+	 * remounts on the dock ↔ full-page swap (plan 2026-09-24 B6).
+	 */
+	const managedTabById = new SvelteMap<number, string>()
+	/**
+	 * The open tab of each API connection's view, by connection id — the same
+	 * per-connection memory the managed runtimes get, so switching between two
+	 * endpoints does not drag one's tab onto the other.
+	 */
+	const apiTabById = new SvelteMap<number, string>()
 	let syncingAll = $state(false)
 	/** Forced syncs — the ones whose failure earns a toast. Not $state. */
 	const forcedIds = new Set<number>()
@@ -371,27 +389,113 @@
 		view = "index"
 	}
 
-	async function openConnection(row: { id?: number }) {
-		if (row.id == null) return
+	// ── The trail Back walks (plan 2026-09-24 B1) ───────────────────────────
+	/**
+	 * Where Back goes. Every door below pushes where it was opened FROM, and
+	 * Back restores that entry whole — connection included, re-fetched when
+	 * the draft is gone. See `navStack.ts` for why one stack replaced the
+	 * per-view "return view" variables.
+	 */
+	const navStack = createNavStack()
+	function currentEntry(): NavEntry {
+		return {
+			view,
+			connectionId: selectedConnectionId,
+			modelId: selectedModelId,
+			capability: selectedCapability,
+			finderScope
+		}
+	}
+	/**
+	 * Land on an entry.
+	 *
+	 * The ONE place view state is written, so a door cannot forget half of it:
+	 * the selection follows the entry (a capability view does not leave the
+	 * last connection highlighted in the list — B8), and a connection whose
+	 * draft is not the one in hand is cleared and fetched, never shown under
+	 * another connection's name (B2/B3).
+	 */
+	function applyEntry(entry: NavEntry) {
+		if (
+			entry.connectionId == null ||
+			connection?.id !== entry.connectionId
+		) {
+			connection = undefined
+			originalConnection = undefined
+		}
+		selectedConnectionId = entry.connectionId
+		selectedModelId = entry.modelId
+		selectedCapability = entry.capability
+		finderScope = entry.finderScope
+		view = entry.view
+		if (entry.view === "connection" && entry.connectionId != null) {
+			if (!connection)
+				socket.emit("connections:get", { id: entry.connectionId })
+			requestSync(entry.connectionId)
+		}
+	}
+	/** A discarded draft is dropped, not left to reappear on the way back. */
+	function dropDiscardedDraft() {
+		if (view === "connection" && unsavedChanges) {
+			connection = undefined
+			originalConnection = undefined
+		}
+	}
+	/**
+	 * Go somewhere new. `fromList` is a door in the index list: the list is
+	 * always one tap away, so a trail that ran through it starts again.
+	 *
+	 * Guarded — every door asks about an unsaved draft first (B7), so no new
+	 * door can skip the question.
+	 */
+	async function navigate(
+		entry: NavEntry,
+		fromList = false
+	): Promise<boolean> {
+		if (!(await handleOnClose())) return false
+		const leaving = currentEntry()
+		dropDiscardedDraft()
+		if (fromList) navStack.clear()
+		else navStack.push(leaving)
+		applyEntry(entry)
+		return true
+	}
+	/** Back: the entry this view was opened from, or the index. */
+	async function goBack() {
 		if (!(await handleOnClose())) return
-		view = "connection"
-		selectedConnectionId = row.id
-		socket.emit("connections:get", { id: row.id })
-		requestSync(row.id)
+		const leavingId = selectedConnectionId
+		dropDiscardedDraft()
+		const target = navStack.pop()
+		if (target.view === "index" && onExit) {
+			onExit()
+			return
+		}
+		applyEntry(target)
+		if (target.view === "index") landOnIndex(leavingId)
+	}
+
+	function entryFor(to: NavView, over: Partial<NavEntry> = {}): NavEntry {
+		return { ...INDEX_ENTRY, view: to, ...over }
+	}
+
+	async function openConnection(row: { id?: number }, fromList = false) {
+		if (row.id == null) return
+		await navigate(
+			entryFor("connection", { connectionId: row.id }),
+			fromList
+		)
 	}
 
 	async function openModel(
 		connectionId: number,
 		modelId: number,
-		from: "index" | "connection"
+		fromList = false
 	) {
-		if (!(await handleOnClose())) return
-		selectedConnectionId = connectionId
-		modelReturnView = from
-		selectedModelId = modelId
-		view = "model"
-		requestSync(connectionId)
-		announce("Model details opened")
+		const entry = entryFor("model", { connectionId, modelId })
+		if (await navigate(entry, fromList)) {
+			requestSync(connectionId)
+			announce("Model details opened")
+		}
 	}
 
 	/**
@@ -401,37 +505,25 @@
 	 * from this panel — which is what keeps the costed confirmation in front
 	 * of an embeddings or entities switch.
 	 */
-	async function openCapability(capability: string) {
-		if (!(await handleOnClose())) return
-		selectedCapability = capability
-		view = "capability"
+	async function openCapability(capability: string, fromList = false) {
+		await navigate(entryFor("capability", { capability }), fromList)
 	}
-	function openFinder(
-		opts: { capability?: string; connectionId?: number } = {}
+	async function openFinder(
+		opts: { capability?: string; connectionId?: number } = {},
+		fromList = false
 	) {
-		finderScope = opts
-		view = "finder"
+		await navigate(
+			entryFor("finder", { finderScope: { ...opts } }),
+			fromList
+		)
 	}
 	/** The Set up chat flow (U5). Its step is derived from the facts, so
 	 * there is nothing to seed here. */
 	async function openSetupChat() {
-		if (!(await handleOnClose())) return
-		view = "setup-chat"
+		await navigate(entryFor("setup-chat"), true)
 	}
-	/** Where Back from the downloads view lands: the index, or the connection
-	 * view it was opened from (a managed view's Downloads tab). */
-	let downloadsReturnView: "index" | "connection" = "index"
-	function openDownloads(from: "index" | "connection" = "index") {
-		downloadsReturnView = from
-		view = "downloads"
-	}
-	function navigateBackFromDownloads() {
-		if (
-			downloadsReturnView === "connection" &&
-			selectedConnectionId != null
-		)
-			view = "connection"
-		else backToIndex(null)
+	async function openDownloads(fromList = false) {
+		await navigate(entryFor("downloads"), fromList)
 	}
 	/**
 	 * Switch a manager on, and land on the connection it is about.
@@ -449,35 +541,27 @@
 			if (row) void openConnection(row)
 		}
 	}
-
-	function backToIndex(focusId: number | null) {
+	/**
+	 * Land on the index with a one-time highlight on the row just left. The
+	 * trail is spent: the index is where every trail starts.
+	 */
+	function landOnIndex(focusId: number | null) {
+		navStack.clear()
 		indexFocusId = focusId
-		selectedCapability = null
-		finderScope = {}
-		view = "index"
 		// The highlight is a one-time landing cue, not a selection.
 		setTimeout(() => (indexFocusId = null), 1500)
 	}
-	async function navigateBack() {
-		if (!(await handleOnClose())) return
-		const id = selectedConnectionId
-		connection = undefined
-		originalConnection = undefined
-		selectedConnectionId = null
-		backToIndex(id)
-	}
-	function navigateBackFromModel() {
-		const id = selectedConnectionId
-		selectedModelId = null
-		if (modelReturnView === "connection") view = "connection"
-		else {
-			selectedConnectionId = null
-			backToIndex(id)
+	function backToIndex(focusId: number | null) {
+		if (onExit) {
+			onExit()
+			return
 		}
+		applyEntry(INDEX_ENTRY)
+		landOnIndex(focusId)
 	}
 	function handleModelRemoved() {
 		toaster.success({ title: "Model removed" })
-		navigateBackFromModel()
+		void goBack()
 	}
 	/**
 	 * Which runtime's VIEW a connection is, or null for an ordinary endpoint.
@@ -522,14 +606,30 @@
 	 * Files on disk are deliberately left alone; they are the expensive half
 	 * and nothing here re-downloads them.
 	 */
+	/** What Remove takes away: the whole KoboldCPP install, or one Ollama. */
+	function removalIds(kind: ManagerKind): number[] {
+		if (kind === "ollama")
+			return selectedConnectionId != null ? [selectedConnectionId] : []
+		return managedConnectionIds(kind, connectionsList)
+	}
 	function removeManager(kind: ManagerKind) {
-		socket.emit(
-			kind === "koboldcpp"
-				? "systemSettings:updateKoboldCppManagerEnabled"
-				: "systemSettings:updateOllamaManagerEnabled",
-			{ enabled: false }
-		)
-		const ids = managedConnectionIds(kind, connectionsList)
+		// Ollama: THIS connection. Every Ollama connection is managed on its
+		// own host (plan 2026-09-24 B4), so removing one must not delete the
+		// others — which the kind-wide delete here did. The flag goes off only
+		// with the last one.
+		const ids = removalIds(kind)
+		const lastOllama =
+			kind === "ollama" &&
+			managedConnectionIds("ollama", connectionsList).every((id) =>
+				ids.includes(id)
+			)
+		if (kind === "koboldcpp" || lastOllama)
+			socket.emit(
+				kind === "koboldcpp"
+					? "systemSettings:updateKoboldCppManagerEnabled"
+					: "systemSettings:updateOllamaManagerEnabled",
+				{ enabled: false }
+			)
 		for (const id of ids) socket.emit("connections:delete", { id })
 		// `handleConnectionsDelete` only lands the view when the row it
 		// answers for is the open one; the image row is not, so navigate here
@@ -754,6 +854,44 @@
 		return out
 	}
 
+	/**
+	 * Use, from a connection's model list (the desk table and the dock list):
+	 * chat where the pair can serve it, otherwise the first thing it can.
+	 *
+	 * ⚠ Named rather than taken from [0]. `satisfiableTransforms` happens to
+	 * return TRANSFORMS' declaration order, which puts chat first — but that is
+	 * an accident of a table in the SDK, and a Use button that quietly
+	 * registered an embedding model as what sessions reply with is not a
+	 * thing to leave to one.
+	 */
+	function useModelOn(
+		row: {
+			id?: number
+			models: readonly {
+				id: number
+				name: string
+				satisfiableCapabilities?: readonly string[] | null
+			}[]
+		},
+		modelId: number
+	) {
+		if (row.id == null) return
+		const m = row.models.find((x) => x.id === modelId)
+		if (!m) return
+		const serves = m.satisfiableCapabilities ?? []
+		const capability = serves.includes("text->text")
+			? "text->text"
+			: serves[0]
+		if (!capability) return
+		handlePairDefault(
+			row.id,
+			{ id: m.id, name: m.name },
+			{ kind: "one", capability }
+		)
+	}
+	/** The dock's inline model list on an API connection's view. */
+	let dockModelsOpen = $state(false)
+
 	function handlePairDefault(
 		connectionId: number,
 		model: { id: number; name: string },
@@ -836,7 +974,12 @@
 	}
 
 	// ── Create / update / delete ────────────────────────────────────────────
-	function handleNew() {
+	/** The category the Add picker opens narrowed to, if a door chose one. */
+	let newConnectionCategory = $state<ConnectionServiceCategory | undefined>(
+		undefined
+	)
+	function handleNew(opts: { category?: ConnectionServiceCategory } = {}) {
+		newConnectionCategory = opts.category
 		newConnectionName = ""
 		newConnectionService = undefined
 		nameTouched = false
@@ -882,7 +1025,7 @@
 				(p) => p.value === presetValue
 			)
 			if (!preset) {
-				toaster.error({ title: "Invalid OpenAI Session preset" })
+				toaster.error({ title: "Invalid OpenAI preset" })
 				return
 			}
 		}
@@ -1013,9 +1156,7 @@
 		announce(`Connection ${deletedName} has been permanently deleted`)
 		connection = undefined
 		originalConnection = undefined
-		selectedConnectionId = null
-		selectedModelId = null
-		view = "index"
+		backToIndex(null)
 	}
 	function handleConnectionsCreate(msg: Sockets.Connections.Create.Response) {
 		if (!msg.connection?.id) return
@@ -1063,22 +1204,15 @@
 		if (msg.id) toaster.success({ title: "Default updated" })
 	}
 
-	// ── Stop guards on this connection (18 §4b) ─────────────────────────────
-	let connScripts = $state<Sockets.Connections.Scripts.Response | null>(null)
-	const handleConnScripts = (res: Sockets.Connections.Scripts.Response) => {
-		connScripts = res
-	}
-	const handleConnScriptsError = (res: { error?: string }) => {
-		if (res.error) toaster.error({ title: res.error })
-	}
 	/**
 	 * Every key this panel holds, declared ABOVE the two effects that emit.
 	 * Effects run in creation order and a request flushes the pending interest
 	 * sync, so a declaration made below either of them would miss the flush its
 	 * own first reply rides on.
 	 *
-	 * All of them are BARE and STANDING. `connections:list` and
-	 * `connections:scripts` are re-sent after every write, the star's cost
+	 * All of them are BARE and STANDING. `connections:list` is re-sent after
+	 * every write (the stop scripts hold their own keys, in
+	 * `ConnectionStopScripts`), the star's cost
 	 * estimates are re-asked whenever a picker moves, and `connections:get` is
 	 * scoped in the shared table but not declared that way here: this panel
 	 * follows whichever connection is selected, and its
@@ -1129,27 +1263,6 @@
 	useInterest<"connections:list:error">(
 		"connections:list:error",
 		handleConnectionsListError
-	)
-	useInterest<"connections:scripts">("connections:scripts", handleConnScripts)
-	useInterest<"connections:attachScript">(
-		"connections:attachScript",
-		handleConnScripts
-	)
-	useInterest<"connections:detachScript">(
-		"connections:detachScript",
-		handleConnScripts
-	)
-	useInterest<"connections:scripts:error">(
-		"connections:scripts:error",
-		handleConnScriptsError
-	)
-	useInterest<"connections:attachScript:error">(
-		"connections:attachScript:error",
-		handleConnScriptsError
-	)
-	useInterest<"connections:detachScript:error">(
-		"connections:detachScript:error",
-		handleConnScriptsError
 	)
 	useInterest<"connections:get">("connections:get", handleConnectionsGet)
 	useInterest<"connections:update">(
@@ -1222,13 +1335,6 @@
 		return declareInterest<"ner:status">("ner:status", handleNerStatus)
 	})
 
-	$effect(() => {
-		if (view === "connection" && selectedConnectionId != null) {
-			connScripts = null
-			socket.emit("connections:scripts", { id: selectedConnectionId })
-		}
-	})
-
 	onMount(() => {
 		socket.emit("connections:list", {})
 		// The open-time sweep: every endpoint whose listing is stale is
@@ -1238,7 +1344,7 @@
 
 		// Seed the view: `initialConnectionId` (a page that embeds this
 		// sidebar, addressed to this copy) or digest.connectionId (from
-		// external nav, e.g. the Ollama Manager's "open connection") mean "go
+		// external nav, e.g. managed Ollama's "open connection") mean "go
 		// straight to that connection"; digest.connectionsModality (the
 		// onboarding wizard's retrieval step) seeds the index filter.
 		// Otherwise, the index.
@@ -1265,6 +1371,23 @@
 
 		// Admin create page deep-link: open the new-connection flow at once.
 		if (startNew) handleNew()
+	})
+
+	/**
+	 * A first-run door named from outside (`digest.connectionsDoor`) — the
+	 * home wizard's Choose an LLM step. An effect rather than part of the
+	 * mount seed, so a press lands whether this view was already open or
+	 * not. Consumed on read: the digest is one shared slot.
+	 */
+	$effect(() => {
+		const door = panelsCtx.digest.connectionsDoor
+		if (!door) return
+		untrack(() => {
+			panelsCtx.digest.connectionsDoor = undefined
+			if (door === "setup-chat") openSetupChat()
+			else if (door === "chat") openCapability("text->text")
+			else handleNew({ category: door === "service" ? "cloud" : "local" })
+		})
 	})
 
 	onDestroy(() => {
@@ -1308,22 +1431,22 @@
 		{connectionsList}
 		capabilityDefaults={systemSettingsCtx.capabilityDefaults ?? {}}
 		{isLoading}
-		koboldCppManagerEnabled={koboldCppSettingsCtx?.settings
-			?.koboldCppManagerEnabled ?? false}
 		{syncingIds}
 		{syncingAll}
 		initialFilter={initialIndexFilter}
 		focusConnectionId={indexFocusId}
 		{selectedConnectionId}
 		mode={viewMode.mode}
+		detailOpen={view !== "index"}
+		onShowAllJobs={() => void navigate(INDEX_ENTRY, true)}
 		onAddNew={handleNew}
 		onEnableManager={handleEnableManager}
-		onOpenConnection={openConnection}
-		onOpenModel={(row, model) => openModel(row.id, model.id, "index")}
-		onOpenCapability={openCapability}
+		onOpenConnection={(row) => openConnection(row, true)}
+		onOpenModel={(row, model) => openModel(row.id, model.id, true)}
+		onOpenCapability={(capability) => openCapability(capability, true)}
 		onSetUpChat={openSetupChat}
-		onGetModel={openFinder}
-		onOpenDownloads={() => openDownloads("index")}
+		onGetModel={(opts) => openFinder(opts ?? {}, true)}
+		onOpenDownloads={() => openDownloads(true)}
 		onRefresh={(row) => requestSync(row.id, true)}
 		onAddModel={handleAddModel}
 		onFacts={(facts) => (overviewFacts = facts)}
@@ -1339,8 +1462,8 @@
 		<ConnectionsOverview
 			tiles={overviewFacts.tiles}
 			connectionCount={overviewFacts.connectionCount}
-			onOpenCapability={openCapability}
-			onGetModel={() => openFinder()}
+			onOpenCapability={(capability) => openCapability(capability, true)}
+			onGetModel={() => openFinder({}, true)}
 		/>
 	{/if}
 {/snippet}
@@ -1351,9 +1474,9 @@
 	{:else if view === "capability" && selectedCapability}
 		<CapabilityView
 			capability={selectedCapability}
-			onBack={() => backToIndex(null)}
+			onBack={goBack}
 			onOpenModel={(connectionId, modelId) =>
-				openModel(connectionId, modelId, "index")}
+				openModel(connectionId, modelId)}
 			onGetModel={(capability) => openFinder({ capability })}
 			onSelectDefault={handlePairDefault}
 		/>
@@ -1361,10 +1484,11 @@
 		<ModelFinderView
 			capability={finderScope.capability}
 			connectionId={finderScope.connectionId}
-			onBack={() => backToIndex(null)}
+			onBack={goBack}
+			onOpenConnection={(id) => openConnection({ id })}
 		/>
 	{:else if view === "downloads"}
-		<DownloadsView onBack={navigateBackFromDownloads} />
+		<DownloadsView onBack={goBack} />
 	{:else if view === "setup-chat"}
 		<SetupChatFlow
 			connections={connectionsList}
@@ -1376,7 +1500,7 @@
 				const row = connectionsList.find((c) => c.id === id)
 				if (row) void openConnection(row)
 			}}
-			onBack={() => backToIndex(null)}
+			onBack={goBack}
 			onOpenSessions={() =>
 				panelsCtx.openPanel({ key: "sessions", toggle: false })}
 		/>
@@ -1396,40 +1520,49 @@
 	the one draft this panel holds.
 -->
 {#snippet managedPane(kind: ManagerKind)}
-	<ManagedConnectionView
-		{kind}
-		connectionId={selectedConnectionId ?? 0}
-		title={connection?.name ??
-			selectedRow?.name ??
-			(kind === "koboldcpp" ? "KoboldCPP" : "Ollama")}
-		isAdmin={userCtx.user?.isAdmin ?? false}
-		capabilityDefaults={systemSettingsCtx.capabilityDefaults ?? {}}
-		managedConnectionIds={managedConnectionIds(kind, connectionsList)}
-		connections={connectionsList.filter(
-			(c): c is (typeof connectionsList)[number] & { id: number } =>
-				c.id != null
-		)}
-		onOpenModel={(id, modelId) => openModel(id, modelId, "connection")}
-		onBack={navigateBack}
-		onGetModels={(id) => openFinder({ connectionId: id })}
-		onOpenDownloads={() => openDownloads("connection")}
-		onRefreshModels={() => {
-			if (selectedConnectionId != null)
-				requestSync(selectedConnectionId, true)
-		}}
-		onRemove={() => removeManager(kind)}
-		onOpenConnection={(id) => {
-			const row = connectionsList.find((c) => c.id === id)
-			if (row) void openConnection(row)
-		}}
-		connectionSettings={managedConnectionSettings}
-	/>
+	<!-- Keyed: two managed connections must not share one view's tab, status
+	     and reachability (plan 2026-09-24 B5), and the Ollama check runs on
+	     mount. -->
+	{#key selectedConnectionId}
+		<ManagedConnectionView
+			bind:tab={
+				() => managedTabById.get(selectedConnectionId ?? 0) ?? "models",
+				(value) => managedTabById.set(selectedConnectionId ?? 0, value)
+			}
+			{kind}
+			connectionId={selectedConnectionId ?? 0}
+			title={connection?.name ??
+				selectedRow?.name ??
+				(kind === "koboldcpp" ? "KoboldCPP" : "Ollama")}
+			isAdmin={userCtx.user?.isAdmin ?? false}
+			capabilityDefaults={systemSettingsCtx.capabilityDefaults ?? {}}
+			managedConnectionIds={removalIds(kind)}
+			connections={connectionsList.filter(
+				(c): c is (typeof connectionsList)[number] & { id: number } =>
+					c.id != null
+			)}
+			onOpenModel={(id, modelId) => openModel(id, modelId)}
+			onSetDefault={(capability, id, model) =>
+				handlePairDefault(id, model, { kind: "one", capability })}
+			onBack={goBack}
+			onRefreshModels={() => {
+				if (selectedConnectionId != null)
+					requestSync(selectedConnectionId, true)
+			}}
+			onRemove={() => removeManager(kind)}
+			onOpenConnection={(id) => {
+				const row = connectionsList.find((c) => c.id === id)
+				if (row) void openConnection(row)
+			}}
+			connectionSettings={managedConnectionSettings}
+		/>
+	{/key}
 {/snippet}
 
 {#snippet managedConnectionSettings()}
 	{#if !connection}
 		<div class="flex items-center justify-center py-8">
-			<Icons.Loader2 size={20} class="text-surface-400 animate-spin" />
+			<Icons.Loader2 size={20} class="text-surface-600-400 animate-spin" />
 		</div>
 	{:else}
 		{#key connection.id}
@@ -1442,6 +1575,59 @@
 			</section>
 		{/key}
 	{/if}
+{/snippet}
+
+{#snippet endpointSettings()}
+	<!-- Settings, Advanced and Delete for an endpoint the app does not run.
+	     A snippet rather than inline markup because a LOCAL ONNX endpoint
+	     renders it inside its own Settings tab (2026-09-25) and every other
+	     type renders it straight down the pane. One copy either way. -->
+			<section
+				class="flex flex-col"
+				aria-labelledby="connection-details"
+			>
+				<h3
+					id="connection-details"
+					class="mb-2 text-sm font-semibold"
+				>
+					Settings
+				</h3>
+				{@render connectionFormFields()}
+			</section>
+
+			<!-- Notes, capabilities, lane panels, stop scripts: one
+			     disclosure, open by default only when a note exists —
+			     a person who wrote one wants to see it. -->
+			<details
+				class="group border-surface-300-700 rounded-lg border"
+				open={!!connection.notes}
+			>
+				<summary
+					class="flex min-h-11 cursor-pointer list-none items-center gap-2 px-3 text-sm font-semibold"
+				>
+					<Icons.ChevronRight
+						size={14}
+						class="transition-transform group-open:rotate-90"
+						aria-hidden="true"
+					/>
+					Advanced and notes
+				</summary>
+				<div class="px-3 pb-3">
+					{@render connectionFormExtras()}
+				</div>
+			</details>
+
+			<div class="flex justify-start pt-1">
+				<button
+					type="button"
+					class="btn btn-sm hover:preset-tonal-error text-error-500"
+					onclick={handleDelete}
+					aria-label={`Delete connection ${connection.name}`}
+				>
+					<Icons.Trash2 size={14} aria-hidden="true" />
+					Delete connection
+				</button>
+			</div>
 {/snippet}
 
 {#snippet modelPane(connectionId: number, modelId: number)}
@@ -1459,7 +1645,7 @@
 			capabilityDefaults={systemSettingsCtx.capabilityDefaults ?? {}}
 			mode={viewMode.mode}
 			isAdmin={userCtx.user?.isAdmin ?? false}
-			onBack={navigateBackFromModel}
+			onBack={goBack}
 			onSelectDefault={(model, selection) =>
 				handlePairDefault(connectionId, model, selection)}
 		/>
@@ -1472,7 +1658,7 @@
 			{modelId}
 			capabilityDefaults={systemSettingsCtx.capabilityDefaults ?? {}}
 			syncing={syncingAll || syncingIds.has(connectionId)}
-			onBack={navigateBackFromModel}
+			onBack={goBack}
 			onSelectDefault={(model, selection) =>
 				handlePairDefault(connectionId, model, selection)}
 			onRefresh={() => requestSync(connectionId, true)}
@@ -1494,7 +1680,7 @@
 	<div class="mb-3 flex gap-2" role="toolbar" aria-label="Connection actions">
 		<button
 			type="button"
-			class="btn btn-sm preset-filled-success-500 flex-1"
+			class="btn btn-sm preset-filled-primary-500 flex-1"
 			onclick={handleUpdate}
 			disabled={!unsavedChanges}
 			aria-label={unsavedChanges
@@ -1559,29 +1745,7 @@
 			aria-required="true"
 		/>
 	</div>
-	{#if connection.type === CONNECTION_TYPE.OLLAMA}
-		<OllamaForm bind:connection />
-	{:else if connection.type === CONNECTION_TYPE.OPENAI}
-		<OpenAIForm bind:connection />
-	{:else if connection.type === CONNECTION_TYPE.LM_STUDIO}
-		<LmStudioForm bind:connection />
-	{:else if connection.type === CONNECTION_TYPE.LLAMACPP}
-		<LlamaCppForm bind:connection />
-	{:else if connection.type === CONNECTION_TYPE.KOBOLDCPP}
-		<KoboldCppForm bind:connection />
-	{:else if connection.type === CONNECTION_TYPE.KOBOLDCPP_MANAGED}
-		<KoboldCppManagedForm bind:connection />
-	{:else if connection.type === CONNECTION_TYPE.ANTHROPIC}
-		<AnthropicForm bind:connection />
-	{:else if CONNECTION_TYPE.isImage(connection.type)}
-		<!-- One branch for every image backend: the form is
-		     generated from what the adapter declares. -->
-		<ImageConnectionForm bind:connection />
-	{:else if connection.modality === "embeddings"}
-		<EmbeddingConnectionForm bind:connection />
-	{:else if connection.modality === "ner"}
-		<NerConnectionForm bind:connection />
-	{/if}
+	<ConnectionTypeForm bind:connection />
 {/snippet}
 
 <!-- Below the settings: notes, capabilities, the lane panels, stop scripts.
@@ -1590,7 +1754,7 @@
 	<!-- A note is a margin note. -->
 	<div class="mt-4 flex flex-col gap-1">
 		<label class="font-semibold" for="connection-notes">Notes</label>
-		<p id="notes-help" class="text-muted text-xs">
+		<p id="notes-help" class="text-surface-600-400 text-xs">
 			For you, not for the app — "use this one for prose, the other for
 			extraction". Shown beside this connection wherever you pick one.
 		</p>
@@ -1631,88 +1795,24 @@
 			/>
 		{/if}
 		<!-- Stop guards ride the connection (18 §4b). -->
-		<div class="mt-4 flex flex-col gap-1">
-			<span class="flex items-center gap-2 font-semibold">
-				<Icons.OctagonX size={14} aria-hidden="true" />
-				Stop scripts
-			</span>
-			<p class="text-muted text-xs">
-				Guards that end a streamed reply early — a leaked template
-				token, an echoed name. Every pipeline using this connection
-				inherits them, and the run's receipt names which one fired.
-			</p>
-			{#if !connScripts}
-				<p class="text-muted text-xs">Loading…</p>
-			{:else}
-				{#each connScripts.attached ?? [] as s (s.id)}
-					<div
-						class="border-surface-200-700 flex items-center gap-2 rounded-lg border px-2 py-1"
-					>
-						<span
-							class="min-w-0 flex-1 truncate text-sm {s.enabled
-								? ''
-								: 'opacity-50'}"
-						>
-							{s.name}
-						</span>
-						{#if !s.enabled}
-							<span
-								class="text-muted text-[10px]"
-								title="Disabled on the scripts page — attached, does nothing."
-							>
-								off
-							</span>
-						{/if}
-						<button
-							type="button"
-							class="btn-icon btn-icon-sm preset-tonal-surface shrink-0"
-							title="Detach from this connection (the script itself is kept)"
-							onclick={() =>
-								socket.emit("connections:detachScript", {
-									id: connection.id,
-									scriptId: s.id
-								})}
-						>
-							<Icons.X size={12} />
-						</button>
-					</div>
-				{/each}
-				{#if !(connScripts.attached ?? []).length}
-					<p class="text-muted text-xs italic">None attached.</p>
-				{/if}
-				{#if (connScripts.available ?? []).length}
-					<select
-						class="select"
-						value=""
-						onchange={(e) => {
-							const v = parseInt(e.currentTarget.value, 10)
-							if (!Number.isNaN(v))
-								socket.emit("connections:attachScript", {
-									id: connection.id,
-									scriptId: v
-								})
-							e.currentTarget.value = ""
-						}}
-					>
-						<option value="" disabled>Attach a stop script…</option>
-						{#each connScripts.available ?? [] as s (s.id)}
-							<option value={String(s.id)}>
-								{s.name}
-							</option>
-						{/each}
-					</select>
-				{:else}
-					<p class="text-muted text-xs">
-						Write stop scripts on the
-						<a class="underline" href="/admin/scripts">
-							scripts page
-						</a>
-						.
-					</p>
-				{/if}
-			{/if}
+		<div class="mt-4">
+			<ConnectionStopScripts connectionId={connection.id} />
 		</div>
 	{/if}
+{/snippet}
+
+{#snippet paneServiceChip()}
+	{@const managed =
+		endpointKind(connection?.type ?? selectedRow?.type) ===
+			"koboldcpp-managed" ||
+		endpointKind(connection?.type ?? selectedRow?.type) === "ollama"}
+	<span
+		class="shrink-0 rounded-full px-1.5 py-0.5 text-[11px] font-normal {managed
+			? 'preset-tonal-tertiary'
+			: 'border-surface-300-700 text-surface-600-400 border'}"
+	>
+		{paneService}
+	</span>
 {/snippet}
 
 {#snippet connectionPane()}
@@ -1723,42 +1823,26 @@
 		the rest under one disclosure, Delete at the foot, and Save / Discard
 		only while there is something to save. Forms keep their internals.
 	-->
-	{@const managed =
-		endpointKind(connection?.type ?? selectedRow?.type) ===
-			"koboldcpp-managed" ||
-		endpointKind(connection?.type ?? selectedRow?.type) === "ollama"}
 	<div class="flex h-full min-h-0 flex-col">
-		<div class="flex items-center gap-2 pb-2">
-			<button
-				type="button"
-				class="btn btn-sm preset-filled-surface-400-600 shrink-0 p-2"
-				onclick={navigateBack}
-				title="Back to all connections"
-				aria-label="Back to all connections"
-			>
-				<Icons.ChevronLeft size={16} />
-			</button>
-			<h2 class="flex min-w-0 flex-1 items-center gap-2">
-				<span class="min-w-0 truncate text-sm font-semibold">
-					{paneTitle}
-				</span>
-				{#if showPaneChip}
-					<span
-						class="shrink-0 rounded-full px-1.5 py-0.5 text-[11px] font-normal {managed
-							? 'preset-tonal-tertiary'
-							: 'border-surface-300-700 text-surface-600-400 border'}"
-					>
-						{paneService}
-					</span>
-				{/if}
-			</h2>
+		<div class="shrink-0 pb-2">
+			<PanelNavHeader
+				title="Connection"
+				onBack={goBack}
+				backLabel="Back to all connections"
+				titleClass="text-sm"
+			/>
 		</div>
 		<div class="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto pb-2">
+			<DetailHero
+				title={paneTitle}
+				icon={Icons.Plug}
+				chips={showPaneChip ? paneServiceChip : undefined}
+			/>
 			{#if !connection}
 				<div class="flex items-center justify-center py-8">
 					<Icons.Loader2
 						size={20}
-						class="text-surface-400 animate-spin"
+						class="text-surface-600-400 animate-spin"
 					/>
 				</div>
 			{:else}
@@ -1785,6 +1869,12 @@
 							type: connection.type,
 							preset: selectedRow.preset
 						})}
+						{@const apiTabs = apiConnectionTabs(connection.type)}
+						{@const apiTab = activeApiTab(
+							apiTabs,
+							apiTabById.get(connection.id),
+							unfinished
+						)}
 						<!--
 							The status card.
 
@@ -1847,9 +1937,9 @@
 									finished. Put a key in <strong
 										class="text-surface-950-50 font-medium"
 									>
-										API Key
+										API key
 									</strong>
-									below, then press Test.
+									in Settings, then press Test.
 									{#if keyUrl}
 										<!-- Underlined: a link inside a text block
 										     may not rely on colour alone
@@ -1867,6 +1957,28 @@
 							{/if}
 						</section>
 
+						<!-- Owner ruling 2026-09-25: every connection has a Settings tab,
+						     Models appears where the API lists a choice, and the strip
+						     is drawn only when there is more than one tab. The status
+						     card stays ABOVE it, as the managed runtimes' does: whether
+						     it answers is true of the whole connection, not one tab. -->
+						{#if showsTabStrip(apiTabs)}
+							<PanelTabStrip
+								tabs={apiTabs.map((t) => ({
+									value: t.value,
+									label: t.label,
+									icon: (Icons as any)[t.icon] ?? Icons.Package
+								}))}
+								bind:value={
+									() => apiTab,
+									(value) => apiTabById.set(connection.id, value)
+								}
+								ariaLabel="{connection.name} sections"
+								panelIdPrefix="api-connection"
+							/>
+						{/if}
+
+						{#if apiTab === "models"}
 						<!-- The models card: how many, whether the host still
 						     lists them all, and the two presses the index
 						     used to hold for this connection. -->
@@ -1890,7 +2002,7 @@
 								</p>
 								<button
 									type="button"
-									class="btn-icon btn-icon-sm hover:preset-tonal-primary shrink-0"
+									class="btn btn-icon btn-icon-sm hover:preset-tonal-primary shrink-0"
 									disabled={syncing}
 									onclick={() =>
 										requestSync(connection.id, true)}
@@ -1907,8 +2019,8 @@
 							<!--
 								At desk width the models are a TABLE, with the
 								context and price columns 400px cannot hold. In
-								the dock the same rows are `ModelRow`s, reached
-								through Browse — one list, two shapes.
+								the dock the same rows are `ModelRow`s, shown
+								in place under "Show N models" — one list, two shapes.
 							-->
 							{#if viewMode.mode === "desk" && selectedRow.models.length}
 								<ModelTable
@@ -1919,41 +2031,9 @@
 									local={endpointKind(connection.type) !==
 										"api"}
 									onOpen={(modelId) =>
-										openModel(
-											connection.id,
-											modelId,
-											"connection"
-										)}
-									onUse={(modelId) => {
-										const m = selectedRow.models.find(
-											(x) => x.id === modelId
-										)
-										if (!m) return
-										// Chat where the pair can serve it,
-										// otherwise the first thing it can.
-										//
-										// ⚠ Named rather than taken from [0].
-										// `satisfiableTransforms` happens to
-										// return TRANSFORMS' declaration order,
-										// which puts chat first — but that is an
-										// accident of a table in the SDK, and a
-										// Use button that quietly registered an
-										// embedding model as what sessions reply
-										// with is not a thing to leave to one.
-										const serves =
-											m.satisfiableCapabilities ?? []
-										const capability = serves.includes(
-											"text->text"
-										)
-											? "text->text"
-											: serves[0]
-										if (!capability) return
-										handlePairDefault(
-											connection.id,
-											{ id: m.id, name: m.name },
-											{ kind: "one", capability }
-										)
-									}}
+										openModel(connection.id, modelId)}
+									onUse={(modelId) =>
+										useModelOn(selectedRow, modelId)}
 									onToggleEnabled={(modelId, enabled) =>
 										socket.emit("connections:updateModel", {
 											id: connection.id,
@@ -1964,17 +2044,31 @@
 							{/if}
 							<div class="flex flex-wrap gap-2">
 								{#if selectedRow.models.length && viewMode.mode !== "desk"}
+									<!-- The dock's list, in place. "Browse
+									     models" went back to the index, which
+									     has listed no models since R1 (plan
+									     2026-09-24 C3). -->
 									<button
 										type="button"
 										class="btn btn-sm preset-tonal"
-										onclick={navigateBack}
-										title="Browse this connection's models"
+										aria-expanded={dockModelsOpen}
+										onclick={() =>
+											(dockModelsOpen = !dockModelsOpen)}
 									>
-										Browse models
-										<Icons.ChevronRight
-											size={14}
-											aria-hidden="true"
-										/>
+										{dockModelsOpen
+											? "Hide models"
+											: `Show ${selectedRow.models.length} models`}
+										{#if dockModelsOpen}
+											<Icons.ChevronUp
+												size={14}
+												aria-hidden="true"
+											/>
+										{:else}
+											<Icons.ChevronDown
+												size={14}
+												aria-hidden="true"
+											/>
+										{/if}
 									</button>
 								{/if}
 								{#if manualAddAllowed(connection.type)}
@@ -1993,6 +2087,25 @@
 									</button>
 								{/if}
 							</div>
+							{#if dockModelsOpen && viewMode.mode !== "desk"}
+								{@const byModel = defaultsByModel(selectedRow)}
+								<div class="flex flex-col gap-3">
+									{#each selectedRow.models as m (m.id)}
+										<ModelRow
+											model={m}
+											defaultFor={byModel[m.id] ?? []}
+											canUse={!!(
+												m.satisfiableCapabilities ?? []
+											).length &&
+												!(byModel[m.id] ?? []).length}
+											onOpen={() =>
+												openModel(connection.id, m.id)}
+											onUse={() =>
+												useModelOn(selectedRow, m.id)}
+										/>
+									{/each}
+								</div>
+							{/if}
 							{#if addByNameOpen}
 								<!-- For a host that serves no model list: a
 								     compatible endpoint with no /models, a
@@ -2051,6 +2164,11 @@
 								</form>
 							{/if}
 						</section>
+						{/if}
+
+						{#if apiTab === "settings"}
+							{@render endpointSettings()}
+						{/if}
 					{/if}
 
 					<!-- A local ONNX endpoint has no host to reach and no key
@@ -2064,11 +2182,7 @@
 							mode={viewMode.mode}
 							isAdmin={userCtx.user?.isAdmin ?? false}
 							onOpenModel={(model) =>
-								openModel(
-									connection.id,
-									model.id,
-									"connection"
-								)}
+								openModel(connection.id, model.id)}
 							onMakeActive={(model) => {
 								const capability = starCapabilityOf(selectedRow)
 								if (capability)
@@ -2083,55 +2197,15 @@
 								downloadOnnxModel(connection.id, model.id)}
 							onCancel={(model) =>
 								cancelOnnxDownload(connection.id, model.id)}
+							connectionSettings={endpointSettings}
 						/>
 					{/if}
 
-					<section
-						class="flex flex-col"
-						aria-labelledby="connection-details"
-					>
-						<h3
-							id="connection-details"
-							class="mb-2 text-sm font-semibold"
-						>
-							Settings
-						</h3>
-						{@render connectionFormFields()}
-					</section>
-
-					<!-- Notes, capabilities, lane panels, stop scripts: one
-					     disclosure, open by default only when a note exists —
-					     a person who wrote one wants to see it. -->
-					<details
-						class="group border-surface-300-700 rounded-lg border"
-						open={!!connection.notes}
-					>
-						<summary
-							class="flex min-h-11 cursor-pointer list-none items-center gap-2 px-3 text-sm font-semibold"
-						>
-							<Icons.ChevronRight
-								size={14}
-								class="transition-transform group-open:rotate-90"
-								aria-hidden="true"
-							/>
-							Advanced and notes
-						</summary>
-						<div class="px-3 pb-3">
-							{@render connectionFormExtras()}
-						</div>
-					</details>
-
-					<div class="flex justify-start pt-1">
-						<button
-							type="button"
-							class="btn btn-sm hover:preset-tonal-error text-error-500"
-							onclick={handleDelete}
-							aria-label={`Delete connection ${connection.name}`}
-						>
-							<Icons.Trash2 size={14} aria-hidden="true" />
-							Delete connection
-						</button>
-					</div>
+					<!-- No list row yet (it is still loading): the form alone, as
+					     before. With a row, the tabs above own it. -->
+					{#if !selectedRow && !isLocalOnnxType(connection.type)}
+						{@render endpointSettings()}
+					{/if}
 				{/key}
 			{/if}
 		</div>
@@ -2256,7 +2330,7 @@
 								type="text"
 								class="input w-full"
 								bind:value={newConnectionName}
-								placeholder="Enter a descriptive name..."
+								placeholder="Enter a descriptive name…"
 								aria-required="true"
 								oninput={() => (nameTouched = true)}
 								onkeydown={(e) => {
@@ -2272,6 +2346,7 @@
 							<ConnectionServicePicker
 								label="Service"
 								initialModality={newConnectionModality}
+								initialCategory={newConnectionCategory}
 								bind:selectedItem={newConnectionService}
 							/>
 						</div>
@@ -2342,7 +2417,7 @@
 								? `Switch embeddings to ${embeddingNext}?`
 								: "Switch the embedding model?"}
 						</h2>
-						<p class="text-muted mt-1 text-sm">
+						<p class="text-surface-600-400 mt-1 text-sm">
 							{#if embeddingCurrent}
 								Replaces {embeddingCurrent.model.name} as the one
 								embedding model for this install.
@@ -2369,7 +2444,7 @@
 							/>
 							<span>
 								{#if reindexRows === null}
-									<span class="text-muted">
+									<span class="text-surface-600-400">
 										Counting what is stored…
 									</span>
 								{:else}
@@ -2406,12 +2481,12 @@
 								{/if}
 							</span>
 						</p>
-						<p class="text-muted">
+						<p class="text-surface-600-400">
 							Until it finishes, retrieval answers from keywords
 							only.
 						</p>
 						{#if embeddingCurrentIsLocal}
-							<p class="text-muted">
+							<p class="text-surface-600-400">
 								{embeddingCurrent?.model.name} stays on disk. Switching
 								back later re-embeds again.
 							</p>
@@ -2432,7 +2507,7 @@
 						</button>
 						<button
 							type="button"
-							class="btn preset-filled-warning-500"
+							class="btn preset-filled-primary-500"
 							onclick={confirmReindexModal}
 						>
 							<Icons.RefreshCw size={16} aria-hidden="true" />
@@ -2469,7 +2544,7 @@
 								? `Switch entity extraction to ${entityNext}?`
 								: "Switch the entity model?"}
 						</h2>
-						<p class="text-muted mt-1 text-sm">
+						<p class="text-surface-600-400 mt-1 text-sm">
 							{#if entityCurrent}
 								Replaces {entityCurrent.model.name} as the one entity
 								model for this install.
@@ -2491,7 +2566,7 @@
 							/>
 							<span>
 								{#if reannotateRows === null}
-									<span class="text-muted">
+									<span class="text-surface-600-400">
 										Counting what is annotated…
 									</span>
 								{:else}
@@ -2509,12 +2584,12 @@
 								{/if}
 							</span>
 						</p>
-						<p class="text-muted">
+						<p class="text-surface-600-400">
 							Names your lorebook declares keep matching
 							throughout.
 						</p>
 						{#if entityCurrentIsLocal}
-							<p class="text-muted">
+							<p class="text-surface-600-400">
 								{entityCurrent?.model.name} stays on disk. Switching
 								back later re-scans again.
 							</p>
@@ -2535,7 +2610,7 @@
 						</button>
 						<button
 							type="button"
-							class="btn preset-filled-warning-500"
+							class="btn preset-filled-primary-500"
 							onclick={() => {
 								showReannotateModal = false
 								commitSetDefault()

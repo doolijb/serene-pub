@@ -1,7 +1,7 @@
 /**
  * The scoring signals, as pure functions over explicit arguments.
  *
- * Lifted from `KeywordInfillEngine` unchanged in behaviour and changed in
+ * Lifted from the 0.5 keyword path unchanged in behaviour and changed in
  * shape: each one took `ScoringContext` and `this`, and now takes what it
  * actually reads. That is the entire refactor — these were always pure, they
  * were never parameterised, and a Task is handed no services (F11) so they
@@ -18,8 +18,19 @@
 
 import type { MatchMode } from "$lib/server/pipelines/ranking/weights"
 
+/**
+ * A key list as a matcher is handed one.
+ *
+ * `string[]` is the stored shape (a `text[]` column) and what the host's
+ * lore read hands on: one element, one key, so a regex quantifier `{1,3}` or a
+ * literal "Smith, John" arrives whole (finding #146). The comma string is the
+ * legacy wire shape — the editor's text field, an amendment saved from it, a
+ * test fixture — and is split at this boundary alone (`splitKeys`).
+ */
+export type KeyList = string | readonly string[] | null | undefined
+
 export interface KeyedEntry {
-	keys?: string | null
+	keys?: KeyList
 	caseSensitive?: boolean | null
 	/** Legacy boolean. `matchMode` wins when both are present. */
 	useRegex?: boolean | null
@@ -33,10 +44,10 @@ export interface KeyedEntry {
 	/**
 	 * The condition keys — what has to *also* be true, or has to be false.
 	 *
-	 * Comma-delimited like `keys`, and split by the same `splitKeys`, because a
-	 * second rule for what counts as a key is a second thing to drift.
+	 * A list like `keys`, and read by the same `splitKeys`, because a second
+	 * rule for what counts as a key is a second thing to drift.
 	 */
-	secondaryKeys?: string | null
+	secondaryKeys?: KeyList
 	/**
 	 * How the condition keys are read. NULL is the only default there can be:
 	 * an entry that has never been given one has no condition at all, which is
@@ -95,12 +106,21 @@ export function buildScanWindow(
 	}
 }
 
-/** Comma-split, trimmed, empties dropped. `:1569`. */
-export const splitKeys = (keys?: string | null): string[] =>
-	(keys ?? "")
-		.split(",")
-		.map((k) => k.trim())
+/**
+ * A key list as keys: trimmed, empties dropped. `:1569`.
+ *
+ * ⚠ Only a comma STRING is split. An array is already one element per key and
+ * is never re-split — splitting it again is what tore `(a|b){1,2}` into
+ * `(a|b){1` and `2}` (finding #146).
+ */
+export const splitKeys = (keys?: KeyList): string[] =>
+	(Array.isArray(keys) ? (keys as readonly unknown[]) : String(keys ?? "").split(","))
+		.map((k) => (typeof k === "string" ? k.trim() : ""))
 		.filter((k) => k.length > 0)
+
+/** A key list as the one line of text a person (or a tf-idf document) reads. */
+export const keysText = (keys?: KeyList): string =>
+	typeof keys === "string" || keys == null ? (keys ?? "") : splitKeys(keys).join(", ")
 
 const MODES: readonly MatchMode[] = ["substring", "word", "regex"]
 
@@ -461,11 +481,30 @@ export function selectiveLogicHolds(
 	}
 }
 
-/** 1 when the entry's name appears in the window, lowercased. */
+/**
+ * 1 when the entry's name appears in the window as a whole word, ignoring case.
+ *
+ * ⚠ **Whole-word, and independent of the entry's own key settings** (finding
+ * #147). A title match ADMITS an entry (`keywordQuery`), so a raw substring let
+ * "Ash" in on "the crash" and "Al" on "Alchemy" — past the author's own
+ * word-mode and case choices, which govern KEYS, not the title. The boundary
+ * is the `word` key mode's, so "the Ashguard" still matches as two words.
+ */
 export const nameMatchSignal = (
 	name: string | null | undefined,
 	window: ScanWindow
-): number => (name && window.lower.includes(name.toLowerCase()) ? 1 : 0)
+): number => {
+	const wanted = (name ?? "").trim().toLowerCase()
+	if (!wanted) return 0
+	// Cheap reject first: no substring, no word.
+	if (!window.lower.includes(wanted)) return 0
+	const escaped = wanted.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+	return new RegExp(`(?<![\\p{L}\\p{N}_])${escaped}(?![\\p{L}\\p{N}_])`, "u").test(
+		window.lower
+	)
+		? 1
+		: 0
+}
 
 /**
  * ⚠ **`entityCooccurrenceSignal` was here and is gone** — plan phase 3.

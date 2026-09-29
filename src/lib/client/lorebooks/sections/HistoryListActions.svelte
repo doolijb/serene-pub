@@ -7,13 +7,15 @@
 	import { HISTORY_TYPE_ID } from "$lib/shared/entries/types"
 	import type { PoolSource } from "./types"
 	import { compareDates, dateValue } from "./historyDates"
+	import { loreRoute } from "../loreRoute.svelte"
 
 	/**
 	 * Move the story's clock forward.
 	 *
-	 * The server clones the latest entry's date forward by one day, rolling
-	 * month and year over, so the client only has to say which entry is the
-	 * latest — the calendar arithmetic belongs where the calendar is declared.
+	 * The server dates a new entry one step after the latest — the next day,
+	 * rolled over by the book's calendar when it declares one and not at all
+	 * when it is free-form — so the client only has to say which entry is the
+	 * latest.
 	 */
 	interface Props {
 		sources: PoolSource[]
@@ -31,7 +33,7 @@
 		if (sources.length === 0) {
 			toaster.error({
 				title: "No entries found",
-				description: "Create at least one entry before using Next Date."
+				description: "Create at least one entry before adding the next date."
 			})
 			return
 		}
@@ -40,7 +42,10 @@
 		)
 		socket.emit("entries:iterateNext", {
 			id: latest.id,
-			typeId: HISTORY_TYPE_ID
+			typeId: HISTORY_TYPE_ID,
+			// The line being read: "next" lands where the reader is, as a
+			// new entry does, never on main from a fork.
+			branchId: loreRoute.route.branch ?? null
 		} satisfies Sockets.Entries.IterateNext.Params)
 	}
 

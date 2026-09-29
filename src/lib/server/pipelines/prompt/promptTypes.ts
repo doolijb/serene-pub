@@ -68,7 +68,9 @@ export type PostHistoryTemplateContext = {
 }
 
 /**
- * What `core:query/session-state@1` publishes, as a template sees it.
+ * What `core:query/session-state@1` publishes, as a template sees it — the
+ * projection `templateState` makes (typed templates P6): tracked slots only,
+ * members and places by slug, no id indexes.
  *
  * Declared here rather than imported from `$lib/server/state` so this type file
  * stays free of the resolution module's imports; the two are kept honest by
@@ -77,10 +79,8 @@ export type PostHistoryTemplateContext = {
 export type ResolvedSessionState = {
 	world: Record<string, unknown>
 	cast: Record<string, Record<string, unknown>>
-	possessions: Record<
-		string,
-		{ entryId: number; name: string; quantity: number }[]
-	>
+	/** A place's tracked values, by the place's slug — absent when none is tracked. */
+	locations?: Record<string, Record<string, unknown>>
 }
 
 export type TemplateContext = {
@@ -115,7 +115,7 @@ export type TemplateContext = {
 	 * template block.
 	 *
 	 * Distinct from `narrativeGraph` above, which NarrativeGraphContext.ts
-	 * populates from the infill engines. This one used to be spliced into
+	 * populates from the 0.5 retrieval paths. This one used to be spliced into
 	 * `instructions` and both post-history fields as prose
 	 * ("Additional focus for this response: {...}"), which put a fenced JSON
 	 * blob at the most recency-weighted point of the prompt and had models
@@ -125,7 +125,7 @@ export type TemplateContext = {
 	relationshipsPerspectives?: string
 	relationshipsKnown?: string
 	/**
-	 * The session's resolved stats, states and possessions — `state.world.weather`,
+	 * The session's resolved stats and states (an inventory is one) — `state.world.weather`,
 	 * `state.cast.verity.hp`.
 	 *
 	 * ⚠ **Structure, not a rendered string**, unlike every value above it. A

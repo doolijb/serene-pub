@@ -33,7 +33,7 @@
  *
  * | change | what happens | why |
  * |---|---|---|
- * | an option is **removed** | the user's value is **culled**, with a notice | a row addressing a field that no longer exists resolves to nothing; keeping it looks like corruption, dropping it silently looks like the pipeline changed for no reason |
+ * | an option is **removed** | the user's value is **culled**, with a notice | a row addressing a field that does not exist resolves to nothing; keeping it looks like corruption, dropping it silently looks like the pipeline changed for no reason |
  * | an option is **added** | back-filled from the pipeline's default | the author default is the correct value for a parameter nobody has had the chance to set |
  *
  * Only the cull warns. A new parameter arriving at its declared default is the
@@ -46,13 +46,12 @@
  * chain: an admin changing a default reaches everyone who has not opted out, and
  * stops at everyone who has (12 §2).
  *
- * ⚠ **"A value the user set" now means a row that is a DEVIATION** (ruled
+ * ⚠ **"A value the user set" means a row that is a DEVIATION** (ruled
  * 2026-09-10). A row holding exactly what the current declaration declares is
- * not a decision anybody made — it is what materializing every declared value
- * at seed time used to leave behind — so the reconcile sweeps it, and the
- * config inherits the declaration from then on. The asymmetry above is
- * unchanged for every row that differs; what changed is that a config no longer
- * carries a copy of the answer it was going to inherit anyway. See
+ * not a decision anybody made, so the reconcile sweeps it, and the config
+ * inherits the declaration from then on. The asymmetry above holds for every
+ * row that differs; a config never carries a copy of the answer it would
+ * inherit anyway. See
  * `config/deviations.ts` for the rule and what follows from it, and
  * `drizzle/0115` for the migration that first applies it.
  */
@@ -120,7 +119,7 @@ export interface EnsureDefaultResult {
  * `presetValues` is read by every `*-ref` branch, and it is what the author
  * ADDRESSED rather than inherited. Sampling is the case that forced it: there is
  * no per-node-type sampling pool for core to resolve a default out of, so the
- * row a stage runs on is whichever one the author named (`{ seedKey }`).
+ * row a step runs on is whichever one the author named (`{ seedKey }`).
  *
  * The three template branches gained the same door with R19: a document may now
  * name the row it wants by **template id** (`{ templateId: 'core:template/…@1' }`)
@@ -139,14 +138,11 @@ async function refDefaults(
 	presetValues: Map<string, unknown>
 ): Promise<Map<string, unknown>> {
 	const out = new Map<string, unknown>()
-	// Per *pool*, not per spec — the correction pooling forced. This used to
-	// resolve ONE prompt id for the whole pipeline and assign it to every
-	// prompts-ref, which was defensible only while a spec's prompts were a
-	// single per-pipeline bundle: the summarize specs' four steps all pointed
-	// at the one row carrying `batch`, `synth`, `name` and
-	// `characterExtraction`. Split along the declarations those are four rows
-	// in four pools, and one id for all of them would hand three of the four
-	// steps a prompt with none of the fields they read.
+	// Per *pool*, not per spec: a spec's prompt steps can live in different
+	// pools (the summarize specs' `batch`, `synth`, `name` and
+	// `characterExtraction` are four rows in four pools), and one id for all
+	// of them would hand three of the four steps a prompt with none of the
+	// fields they read.
 	const prompts = new Map<string, number | null>()
 	// Per *variable*, not per spec: a layout row is keyed by what it renders,
 	// so the shipped characters layout is the same row in every pipeline.
@@ -154,8 +150,8 @@ async function refDefaults(
 	// Per *node type*, for the same reason: session reply and the narrator run the
 	// same assemble node, so core's story string is one row serving both.
 	const templates = new Map<string, number | null>()
-	// Per *seed key*: the same shipped row answers every stage that named it,
-	// and the adventure preset names one row from two stages.
+	// Per *seed key*: the same shipped row answers every step that named it,
+	// and the adventure preset names one row from two steps.
 	const samplings = new Map<string, number | null>()
 
 	for (const d of decls) {
@@ -246,7 +242,7 @@ async function refDefaults(
 				// throw here takes every OTHER pipeline's configuration with
 				// it, because `reconcilePublishedConfigs` walks specs this
 				// instance does not control; an unset Sampling slot is the
-				// state every stage was in before a document could name one.
+				// state every step was in before a document could name one.
 				console.warn(
 					`[pipelines] ${specSlug}: no sampling config is seeded as ` +
 						`"${seedKey}", so ${d.nodeKey}'s Sampling slot ships unset`
@@ -288,7 +284,7 @@ async function samplingIdFor(db: Db, seedKey: string): Promise<number | null> {
 /**
  * The three tables a `templateId` may name a row in — one per template-like
  * slot kind, which is what makes the lookup one function rather than three.
- * `sampling_configs` is deliberately NOT among them: it is referenced by seed
+ * `sampling_configs` is intentionally NOT among them: it is referenced by seed
  * key from a document too, but a sampling config is not a template and giving
  * it a `template_id` would make the word mean two things.
  */
@@ -343,7 +339,7 @@ function templateRefOf(value: unknown): TemplateRef | null {
  * `reconcilePublishedConfigs` walks specs this instance does not control.
  *
  * Where it does NOT match sampling is what happens next. An unresolved sampling
- * reference leaves the slot unset, because unset is the state every stage was in
+ * reference leaves the slot unset, because unset is the state every step was in
  * before a document could name one. Unset is not that state here: a template
  * slot with no row halts assemble with "has no template", and a prompts slot
  * with no row renders blanks the model reads as instructions it should ignore.
@@ -450,6 +446,25 @@ async function presetValuesFor(
 }
 
 /**
+ * The names the shipped default may take, in order of preference.
+ *
+ * The preset's label first (or "Default" where the document ships none), then
+ * the same qualified as the default, then numbered. Unbounded on purpose:
+ * `(spec_id, name)` is unique, so some finite prefix of these is always free.
+ */
+export function* defaultConfigNameCandidates(
+	label: string | null
+): Generator<string, never> {
+	if (label === null) {
+		yield "Default"
+		for (let i = 2; ; i++) yield `Default ${i}`
+	}
+	yield label
+	yield `${label} (default)`
+	for (let i = 2; ; i++) yield `${label} (default ${i})`
+}
+
+/**
  * Guarantee the invariant for one spec: a default, immutable config exists.
  *
  * Seeded from the document's default author preset where it ships one, and from
@@ -480,12 +495,30 @@ export async function ensureDefaultConfig(
 	const preset = await presetValuesFor(db, specVersionId)
 	const presetValues = preset.values
 
+	// The name is picked from those this spec's configs leave free, because the
+	// preset's label is not ours to hold: a plugin package ships a config
+	// labelled like its own default preset (Twenty Questions calls both
+	// "Twenty Questions"), and a person may have named a copy anything. The
+	// row is found by `seedKey`, never by name, so which free name it lands
+	// on changes nothing that reads it — and nobody else's row is renamed.
+	const taken = new Set(
+		(
+			await db
+				.select({ name: schema.pipelineConfigs.name })
+				.from(schema.pipelineConfigs)
+				.where(eq(schema.pipelineConfigs.specId, specId))
+		).map((r) => r.name)
+	)
+	let name = ""
+	for (name of defaultConfigNameCandidates(preset.label))
+		if (!taken.has(name)) break
+
 	const [config] = await db
 		.insert(schema.pipelineConfigs)
 		.values({
 			specId,
 			seedKey,
-			name: preset.label ?? "Default",
+			name,
 			isImmutable: true,
 			isDefault: true
 		})
@@ -685,7 +718,7 @@ export async function reconcileConfigs(
 			backfilled: []
 		}
 
-		// ── cull: values whose address the new version no longer declares ──
+		// ── cull: values whose address the new version does not declare ──
 		const orphaned = (rows as any[]).filter(
 			(r) => !declByAddr.has(addrOf(r))
 		)
@@ -720,7 +753,7 @@ export async function reconcileConfigs(
 
 		// ── sweep: rows that hold exactly what the declaration declares ──
 		//
-		// Not a cull and deliberately not reported as one. A cull loses an
+		// Not a cull and intentionally not reported as one. A cull loses an
 		// answer — the address is gone and the value with it — which is why it
 		// leaves a notice naming what it took. This loses nothing: the address
 		// still exists, the declaration still supplies the same number, and
@@ -914,13 +947,81 @@ export interface SelectedConfig {
 }
 
 /**
+ * The config a plugin's package ships for its OWN spec, or undefined.
+ *
+ * With several for the spec, the manifest's first declared wins: the SDK's
+ * `ConfigDecl` has no default flag, and declaration order is the one thing the
+ * author controls that the install preserves verbatim (the manifest is stored
+ * as shipped). A declared config the install refused has no row and is passed
+ * over for the next. A config ANOTHER package ships over this spec never
+ * becomes its default — only the owner speaks for its pipeline.
+ */
+async function packageDefault(db: Db, specId: number, specSlug: string) {
+	const [owner] = await db
+		.select({
+			pluginId: schema.plugins.pluginId,
+			manifest: schema.plugins.manifest
+		})
+		.from(schema.pipelineSpecs)
+		.innerJoin(
+			schema.plugins,
+			eq(schema.plugins.id, schema.pipelineSpecs.sourcePluginId)
+		)
+		.where(eq(schema.pipelineSpecs.id, specId))
+		.limit(1)
+	if (!owner) return undefined
+
+	const decls = (owner.manifest as { configs?: unknown } | null)?.configs
+	if (!Array.isArray(decls)) return undefined
+	const slugs = decls
+		.filter((d: any) => d?.spec === specSlug && typeof d?.slug === "string")
+		.map((d: any) => d.slug as string)
+	if (!slugs.length) return undefined
+
+	// Dynamic: registrySync → sessionGenres → this module is already a cycle.
+	const { pluginConfigSeedKey } = await import(
+		"$lib/server/pipelines/boot/registrySync"
+	)
+	for (const slug of slugs) {
+		const [row] = await db
+			.select()
+			.from(schema.pipelineConfigs)
+			.where(
+				and(
+					eq(
+						schema.pipelineConfigs.seedKey,
+						pluginConfigSeedKey(owner.pluginId, specSlug, slug)
+					),
+					eq(schema.pipelineConfigs.specId, specId)
+				)
+			)
+			.limit(1)
+		if (row) return row
+	}
+	return undefined
+}
+
+/**
  * The shipped, immutable default for a spec.
  *
- * Found by `seedKey` rather than by `isDefault`, because a user may well mark
- * one of their own copies as their default and the fallback must still land on
- * core's.
+ * A plugin's spec: the config its own package ships for it
+ * ({@link packageDefault}), when it ships one. Boot seeds a
+ * `pipeline-default:<slug>` row for every published spec — it is the base
+ * `reconcileConfigs` back-fills and culls from, and a plugin spec needs one as
+ * much as core's does — but that row is only the spec's bare declarations. It
+ * won here once, so Twenty Questions' Submit guess judge ran generic
+ * instructions beside the judging config its package shipped: an action spec
+ * has no preset binding to carry a config, so this is the only way that prose
+ * reaches a run.
+ *
+ * Otherwise, and for every core spec: found by `seedKey` rather than by
+ * `isDefault`, because a user may well mark one of their own copies as their
+ * default and the fallback must still land on core's.
  */
 async function shippedDefault(db: Db, specId: number, specSlug: string) {
+	const fromPackage = await packageDefault(db, specId, specSlug)
+	if (fromPackage) return fromPackage
+
 	const [byKey] = await db
 		.select()
 		.from(schema.pipelineConfigs)

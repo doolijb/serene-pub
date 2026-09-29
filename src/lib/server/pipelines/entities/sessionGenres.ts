@@ -41,6 +41,11 @@ import {
 	type PresetFallback
 } from "$lib/server/pipelines/entities/presetBindings"
 import { i18nText, type EnvoyDecl, type I18n, type SessionShape } from "@serene-pub/sdk"
+import { listedCollects, type ListedCollects } from "$lib/shared/actions/collects"
+import {
+	resolvePlayerLabel,
+	storedPlayerLabel
+} from "$lib/shared/sessions/playerLabel"
 
 /** The F29 floor: always present, the default and the backfill (24 §3). */
 export const STANDARD_GENRE_ID = "core:genre/chat"
@@ -88,11 +93,25 @@ export interface SessionGenre {
 	 */
 	envoys?: EnvoyDecl[]
 	/**
+	 * What a person's persona-less line is called (lair re-plan R4) — the
+	 * genre's `playerLabel`, off the same row, as `en` display text like
+	 * `name`. Absent for a genre that declares none. A session's override is
+	 * layered on by `resolvePlayerLabel`, never here.
+	 */
+	playerLabel?: string
+	/**
 	 * The genre's pinned setting values (PLAN-turn-order §4.13, R14) — the
 	 * genre layer of the settings cascade, off the same row. Absent for a
 	 * genre that pins nothing, which is every core genre today.
 	 */
 	settings?: Record<string, unknown>
+	/**
+	 * The plugin row that provides this genre — its create spec's
+	 * `source_plugin_id`, or a transitional input's `owner_plugin_id` — or
+	 * absent for core's. Whose the genre is: never read off its id, which a
+	 * package may spell `core:…`.
+	 */
+	sourcePluginId?: number
 }
 
 /** Display text in `en` through the SDK's one resolver (R-20); blank for a value publish never let in. */
@@ -105,6 +124,7 @@ export async function listSessionGenres(db: Db): Promise<SessionGenre[]> {
 	const specRows = await db
 		.select({
 			slug: schema.pipelineSpecs.slug,
+			sourcePluginId: schema.pipelineSpecs.sourcePluginId,
 			activeVersionId: schema.pipelineSpecs.activeVersionId,
 			versionId: schema.pipelineSpecVersions.id,
 			genre: schema.pipelineSpecVersions.genre,
@@ -138,11 +158,15 @@ export async function listSessionGenres(db: Db): Promise<SessionGenre[]> {
 			...(Array.isArray(r.genre?.envoys) && r.genre.envoys.length
 				? { envoys: r.genre.envoys as EnvoyDecl[] }
 				: {}),
+			...(en(r.genre?.playerLabel).trim()
+				? { playerLabel: en(r.genre.playerLabel).trim() }
+				: {}),
 			...(r.genre?.settings &&
 			typeof r.genre.settings === "object" &&
 			!Array.isArray(r.genre.settings)
 				? { settings: r.genre.settings as Record<string, unknown> }
-				: {})
+				: {}),
+			...(typeof r.sourcePluginId === "number" ? { sourcePluginId: r.sourcePluginId } : {})
 		}))
 
 	// Transitional: plugin genres still declared on input types, minus the
@@ -163,7 +187,8 @@ export async function listSessionGenres(db: Db): Promise<SessionGenre[]> {
 			genreId: `${r.definitionId}@${r.version}`,
 			name: en(r.i18n?.name) || r.definitionId,
 			description: en(r.i18n?.description),
-			shape: r.sessionShape as SessionShape
+			shape: r.sessionShape as SessionShape,
+			...(typeof r.ownerPluginId === "number" ? { sourcePluginId: r.ownerPluginId } : {})
 		}))
 
 	return [...fromSpecs, ...fromInputs]
@@ -292,11 +317,17 @@ export async function sessionShapeFacts(
 }
 
 /**
- * The mode's declared field values for a session, filtered to the declared
- * schema (19 §1) — the supply side of the fields round-trip. Session settings
- * wrote values to the row; this is where they enter a run, and keys the mode
- * does not declare are dropped here so a mode switch cannot smuggle stale
- * facts under names the new mode never asked for.
+ * The genre's field values for a session — the supply side of the fields
+ * round-trip, and the same cascade the settings document resolves
+ * (`resolveSessionSettings`), so a run and the settings form never disagree.
+ * Stored value, then the genre's pin, then the field's declared `default`
+ * (§4.13); keys the genre does not declare or pin are dropped here so a mode
+ * switch cannot smuggle stale facts under names the new mode never asked for.
+ *
+ * Defaults apply here, at read, and are never written at create (B16x): one
+ * place serves every way a session is born — a create with or without a
+ * preset, an import, the API — and rows older than a field's declaration,
+ * with no data migration; a stored copy would also outrank a later pin.
  *
  * Best-effort like the other run-shaping reads: a failed lookup supplies
  * `{}`, never a failed turn — and a session on the F29 floor with no registry
@@ -316,19 +347,88 @@ export async function genreFieldsFor(
 			.where(eq(schema.sessions.id, sessionId))
 			.limit(1)
 		if (!session) return {}
-		const mode = await getSessionGenre(
+		const genre = await getSessionGenre(
 			db,
 			session.genreId ?? STANDARD_GENRE_ID
 		)
-		const declared = Object.keys((mode?.shape as any)?.fields ?? {})
-		if (!declared.length) return {}
-		const stored = (session.genreFields ?? {}) as Record<string, unknown>
-		return Object.fromEntries(
-			declared.filter((k) => k in stored).map((k) => [k, stored[k]])
-		)
+		return cascadeFields({
+			declared: ((genre?.shape as any)?.fields ?? {}) as Record<
+				string,
+				{ default?: unknown }
+			>,
+			pinned: genre?.settings ?? {},
+			stored: (session.genreFields ?? {}) as Record<string, unknown>
+		})
 	} catch {
 		return {}
 	}
+}
+
+/**
+ * What a session's persona-less person lines are called (lair re-plan R4):
+ * its own override (`metadata.playerLabel`), else its genre's `playerLabel`,
+ * else undefined — `resolvePlayerLabel`, the one cascade the page and the
+ * settings document also use. Best-effort like `genreFieldsFor`: a failed
+ * read is no label, never a failed turn.
+ */
+export async function playerLabelFor(
+	db: Db,
+	sessionId: number
+): Promise<string | undefined> {
+	try {
+		const [session] = await db
+			.select({
+				genreId: schema.sessions.genreId,
+				metadata: schema.sessions.metadata
+			})
+			.from(schema.sessions)
+			.where(eq(schema.sessions.id, sessionId))
+			.limit(1)
+		if (!session) return undefined
+		const genre = await getSessionGenre(
+			db,
+			session.genreId ?? STANDARD_GENRE_ID
+		)
+		return resolvePlayerLabel({
+			declared: genre?.playerLabel,
+			stored: storedPlayerLabel(session.metadata)
+		})
+	} catch {
+		return undefined
+	}
+}
+
+/**
+ * The cascade (§4.13) over declared ∪ pinned keys, in that order — declared
+ * first so the form's order is the document's, pinned-only keys after.
+ */
+export function cascadeFields(layers: {
+	declared: Record<string, { default?: unknown }>
+	pinned: Readonly<Record<string, unknown>>
+	stored: Record<string, unknown>
+}): Record<string, unknown> {
+	const { declared, pinned, stored } = layers
+	const out: Record<string, unknown> = {}
+	const keys = [
+		...Object.keys(declared),
+		...Object.keys(pinned).filter((k) => !(k in declared))
+	]
+	for (const key of keys) {
+		const isDeclared = key in declared
+		// The session layer exists only for a declared field: a stored value
+		// under an undeclared key is not a field and cannot be smuggled in.
+		if (isDeclared && key in stored && stored[key] !== undefined) {
+			out[key] = stored[key]
+			continue
+		}
+		if (key in pinned && pinned[key] !== undefined) {
+			out[key] = pinned[key]
+			continue
+		}
+		const fallback = isDeclared ? declared[key]?.default : undefined
+		if (fallback !== undefined) out[key] = fallback
+	}
+	return out
 }
 
 /** `ns:kind/name@N` → the bare type and its integer version. */
@@ -491,6 +591,12 @@ export interface GenreAction {
 	/** The one prominence flag: primary set, or the overflow. */
 	quick: boolean
 	/**
+	 * What a press collects before it fires (lair pass R3) — the
+	 * declaration's `collects`, display text resolved. Absent: the action
+	 * collects nothing and its run's `input.text` is empty.
+	 */
+	collects?: ListedCollects
+	/**
 	 * The action's own **enabled-when** (plans/29 R-15; U5e), in list form
 	 * — the declaration's, before the genre default beneath it and the
 	 * session override above it are applied (`effectiveEnabledWhen`).
@@ -498,11 +604,20 @@ export interface GenreAction {
 	 * the declaration opting out of the genre's default.
 	 */
 	enabledWhen?: EnabledWhen[]
+	/**
+	 * The declaration's **present-when** (W-GATE D3), in list form: when it
+	 * fails the action is left out of the listing and refused at the door,
+	 * rather than greyed. Absent: always present.
+	 */
+	presentWhen?: EnabledWhen[]
 	/** The slash name — declared, or derived by the namespace rule. */
 	slash: string
 	/** Lucide icon name, as the contributor declared it. */
 	icon?: string
+	/** What the icon says standing alone — the declaration's `iconAlt`; absent: `name`. */
+	iconAlt?: string
 	name: string
+	/** What the action does, one sentence — required of every declaration (the legend, 2026-09-28). */
 	description?: string
 	/** Who contributed it — the spec whose active version declares it. */
 	specSlug: string
@@ -587,13 +702,18 @@ export async function listGenreActions(
 					},
 					effects: effectsOf(a),
 					quick: a.quick === true,
+					...(listedCollects(a.collects) ? { collects: listedCollects(a.collects) } : {}),
 					// Kept as declared, an explicit `[]` included: that is how an
 					// action opts out of its genre's default (`effectiveEnabledWhen`).
 					...(a.enabledWhen !== undefined && a.enabledWhen !== null
 						? { enabledWhen: normalizeEnabledWhen(a.enabledWhen) }
 						: {}),
+					...(a.presentWhen != null && normalizeEnabledWhen(a.presentWhen).length
+						? { presentWhen: normalizeEnabledWhen(a.presentWhen) }
+						: {}),
 					slash: slashNameOf(a, s.slug),
 					icon: typeof a.icon === "string" ? a.icon : undefined,
+					...(a.iconAlt ? { iconAlt: en(a.iconAlt) } : {}),
 					name: en(a.label) || a.key,
 					...(a.description ? { description: en(a.description) } : {}),
 					specSlug: s.slug,
@@ -607,9 +727,6 @@ export async function listGenreActions(
 		return []
 	}
 }
-
-/** @deprecated the pre-U5c name of `listGenreActions`; one release. */
-export const listGenreTriggers = listGenreActions
 
 /**
  * Which spec serves a **subject** for sessions of a genre (19 §3; plans/31
@@ -645,8 +762,8 @@ export const listGenreTriggers = listGenreActions
  * must degrade to the built-in behaviour, never block the turn).
  *
  * `fallback` is the one thing that must not travel as silence: the session's
- * preset named a pipeline for this event and that pipeline no longer
- * answers, so the layers below chose instead (ruled 2026-09-10). It is only
+ * preset named a pipeline for this event and that pipeline does not
+ * answer, so the layers below chose instead (ruled 2026-09-10). It is only
  * ever computed when the preset was consulted — a session whose own binding
  * won never asked its preset, so there was no substitution to say.
  */
@@ -1005,13 +1122,10 @@ export async function presetActionsFor(
 		 * The serving pipeline's configuration — resolved for EVERY session,
 		 * whether or not it names a preset.
 		 *
-		 * ⚠ It used to be skipped entirely the moment a session had a preset,
-		 * and the preset branch returned `configId: null`. That said a
-		 * preset-born session had no configuration at all, where a preset-less
-		 * one got the shipped default — the two halves of one fact
-		 * disagreeing, and it stayed invisible only because this field had no
-		 * reader (found 2026-09-10). `resolveSelectedConfig` is itself
-		 * preset-aware now, so this one call answers for both kinds of session.
+		 * ⚠ Never skipped for a session with a preset: a preset-born session
+		 * has a configuration just as a preset-less one does.
+		 * `resolveSelectedConfig` is itself preset-aware, so this one call
+		 * answers for both kinds of session.
 		 */
 		const pipeline = await sessionPipeline(db, sessionId, genreId, userId)
 		const configId = pipeline?.configId ?? null
@@ -1115,6 +1229,24 @@ export const presetIncludes = (
 }
 
 /**
+ * Does a preset include this action — its included set where it states one,
+ * the **companion rule** (`enabledByDefault`) where it is `null`?
+ *
+ * The one statement of the preset layer, shared by the session
+ * (`listSessionFunctions`) and the Pipelines view's Edit level (the
+ * `effectiveIncludedActions` `sessionPresets:list` carries). A view listing a
+ * preset's actions by any other rule would be two halves of one fact
+ * disagreeing: every shipped preset states `null`, so the default rule is
+ * what most sessions actually run on.
+ */
+export const includedByPreset = (
+	included: ReadonlyArray<string> | null,
+	t: GenreAction,
+	offered: ReadonlyArray<GenreAction>
+): boolean =>
+	included === null ? t.enabledByDefault : presetIncludes(included, t, offered)
+
+/**
  * The mode's functions, with each one's state on this session.
  *
  * The *available* set is the mode's contributed triggers and nothing else, so
@@ -1156,17 +1288,48 @@ export async function listSessionFunctions(
 
 	const preset = await presetActionsFor(db, sessionId, genreId, userId)
 
-	return available
+	/**
+	 * Annex fields (2026-09-26): each settable declared field is one action,
+	 * `<owner>:annex#<key>` at the `widget` venue, seen and pressed by its
+	 * `act` audience. A declared capability of its package rather than a
+	 * pipeline a preset picks, so it is on unless this session's own row
+	 * turned it off — a preset's included set does not reach it.
+	 */
+	const { settableAnnexFields } = await import("$lib/server/sessions/annexFields")
+	// Only a field that names who may set it (`act`) is an action; one
+	// without is pipeline-written only (ruling 2026-09-26) and never listed.
+	const fields: SessionFunction[] = (await settableAnnexFields(db, genreId)).map((f) => {
+		const specSlug = f.identity.slice(0, f.identity.lastIndexOf("#"))
+		const own = stated.get(f.identity)
+		const act = [...(f.decl.act ?? [])]
+		return {
+			key: f.decl.key,
+			venues: [{ kind: "widget" }],
+			audience: { see: act, act } as Audience,
+			effects: "fiction",
+			quick: false,
+			slash: slashNameOf({ key: f.decl.key }, specSlug),
+			name: (f.decl.label !== undefined ? en(f.decl.label) : "") || f.decl.key,
+			...(f.decl.description !== undefined ? { description: en(f.decl.description) } : {}),
+			specSlug,
+			origin: namespaceOf(genreId) === f.owner ? "companion" : "attachment",
+			enabledByDefault: true,
+			included: true,
+			source: own !== undefined ? "session" : "default",
+			explicit: own !== undefined,
+			enabled: own !== undefined ? own : true
+		}
+	})
+
+	return [
+		...available
 		.map((t) => {
 			// Three layers, first answer wins: the session's own row, then the
 			// preset's included set, then the companion rule. Each is only
 			// consulted where the one above it said nothing, which is what
 			// lets a preset change reach sessions that never had a view while
 			// leaving alone the ones that did.
-			const included =
-				preset.included === null
-					? t.enabledByDefault
-					: presetIncludes(preset.included, t, available)
+			const included = includedByPreset(preset.included, t, available)
 			const own = statedFor(t)
 			const source: SessionFunction["source"] =
 				own !== undefined
@@ -1181,7 +1344,9 @@ export async function listSessionFunctions(
 				explicit: own !== undefined,
 				enabled: own !== undefined ? own : included
 			}
-		})
+		}),
+		...fields
+	]
 		.sort(
 			(a, b) =>
 				Number(b.origin === "companion") -
@@ -1192,10 +1357,10 @@ export async function listSessionFunctions(
 
 /**
  * The functions actually in force — what the session view renders and what
- * `triggerFunction` will fire.
+ * `sessions:fireAction` will fire.
  *
- * Both callers go through this rather than filtering `listGenreTriggers`
- * themselves, for the reason `listGenreTriggers` and `resolveSubjectSpec`
+ * Both callers go through this rather than filtering `listGenreActions`
+ * themselves, for the reason `listGenreActions` and `resolveSubjectSpec`
  * already share their criteria: a button whose press is refused, or a
  * fireable function with no button, are two halves of one fact disagreeing.
  */
@@ -1590,7 +1755,7 @@ export interface PresetOption {
  * The presets a session may run on, and the one it is on.
  *
  * A *preset* is a pipeline configuration a person is allowed to see and use —
- * the two used to be separate ideas and are one now. What is on offer is
+ * the two are one idea. What is on offer is
  * therefore the configurations of the pipeline serving this session's mode, minus
  * the ones an administrator has switched off.
  *

@@ -36,6 +36,7 @@ vi.mock("ollama", () => ({
 }))
 
 const exportsDefault = (await import("./OllamaAdapter")).default
+const { ollamaModelModality } = await import("./OllamaAdapter")
 
 function makeConnection(overrides: Record<string, any> = {}): any {
 	return {
@@ -46,7 +47,7 @@ function makeConnection(overrides: Record<string, any> = {}): any {
 		promptFormat: "vicuna",
 		// Chat wire mode, stated the way an adapter receives it — `withWireMode`
 		// attaches this where a connection is loaded. It used to be
-		// `extraJson.useSession`, an adapter-local flag.
+		// `extraJson.useChat`, an adapter-local flag.
 		wireMode: "chat",
 		extraJson: { stream: false },
 		...overrides
@@ -807,5 +808,24 @@ describe("OllamaAdapter — reasoning on the wire", () => {
 		})
 		expect(req.options).not.toHaveProperty("think")
 		expect(req.options.temperature).toBe(0.4)
+	})
+})
+
+describe("what a listed Ollama model is for", () => {
+	test("embedding without completion is an embedding model", () => {
+		expect(ollamaModelModality({ capabilities: ["embedding"] })).toBe("embeddings")
+	})
+
+	test("completion without embedding is a text model, vision and tools included", () => {
+		expect(
+			ollamaModelModality({ capabilities: ["completion", "tools", "vision"] })
+		).toBe("text-gen")
+	})
+
+	test("both, neither, or an older Ollama that sends no array says nothing", () => {
+		expect(ollamaModelModality({ capabilities: ["completion", "embedding"] })).toBeUndefined()
+		expect(ollamaModelModality({ capabilities: [] })).toBeUndefined()
+		expect(ollamaModelModality({ name: "llama3" })).toBeUndefined()
+		expect(ollamaModelModality(null)).toBeUndefined()
 	})
 })

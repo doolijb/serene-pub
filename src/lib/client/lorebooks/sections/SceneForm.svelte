@@ -1,4 +1,5 @@
 <script lang="ts">
+	import Select from "$lib/client/components/inputs/Select.svelte"
 	import * as Icons from "@lucide/svelte"
 	import type { BindingWithRelations } from "$lib/client/components/lorebookForms/entryManager"
 	import { getLorePoolCtx } from "./poolContext"
@@ -63,14 +64,14 @@
 
 <div class="space-y-1">
 	<p
-		class="text-surface-700-300 text-[10px] font-semibold tracking-wide uppercase"
+		class="text-surface-600-400 text-xs font-semibold"
 	>
 		Present
 	</p>
 	<div class="flex flex-wrap gap-1">
 		{#each draft.participantCharacters as id, i (id)}
 			<span
-				class="chip preset-tonal-primary flex items-center gap-0.5 py-0 text-[10px]"
+				class="chip preset-tonal-primary flex items-center gap-0.5 py-0 text-[11px]"
 			>
 				{pool.bindingName(id)}
 				<button
@@ -89,16 +90,17 @@
 		{/each}
 	</div>
 	<div class="flex gap-1">
-		<select
-			class="select select-sm flex-1 text-xs"
-			aria-label="Add someone present"
-			bind:value={newParticipantId}
-		>
-			<option value="">Add cast member…</option>
-			{#each bindings.filter((b) => !draft.participantCharacters.includes(b.id)) as b (b.id)}
-				<option value={b.id}>{b.name || b.binding}</option>
-			{/each}
-		</select>
+		<Select
+			label="Add someone present"
+			labelHidden
+			placeholder="Add cast member…"
+			class="min-w-0 flex-1 text-xs"
+			options={bindings
+				.filter((b) => !draft.participantCharacters.includes(b.id))
+				.map((b) => ({ value: String(b.id), label: b.name || b.binding }))}
+			value={newParticipantId === "" ? "" : String(newParticipantId)}
+			onValueChange={(v) => (newParticipantId = v === "" ? "" : Number(v))}
+		/>
 		<button
 			class="btn btn-sm preset-filled-surface-400-600 p-1"
 			type="button"
@@ -113,14 +115,14 @@
 
 <div class="space-y-1">
 	<p
-		class="text-surface-700-300 text-[10px] font-semibold tracking-wide uppercase"
+		class="text-surface-600-400 text-xs font-semibold"
 	>
 		Mentioned
 	</p>
 	<div class="flex flex-wrap gap-1">
 		{#each draft.mentionedCharacters as id, i (id)}
 			<span
-				class="chip preset-tonal-surface flex items-center gap-0.5 py-0 text-[10px]"
+				class="chip preset-tonal-surface flex items-center gap-0.5 py-0 text-[11px]"
 			>
 				{pool.bindingName(id)}
 				<button
@@ -139,16 +141,17 @@
 		{/each}
 	</div>
 	<div class="flex gap-1">
-		<select
-			class="select select-sm flex-1 text-xs"
-			aria-label="Add someone mentioned"
-			bind:value={newMentionedId}
-		>
-			<option value="">Add cast member…</option>
-			{#each bindings.filter((b) => !draft.mentionedCharacters.includes(b.id)) as b (b.id)}
-				<option value={b.id}>{b.name || b.binding}</option>
-			{/each}
-		</select>
+		<Select
+			label="Add someone mentioned"
+			labelHidden
+			placeholder="Add cast member…"
+			class="min-w-0 flex-1 text-xs"
+			options={bindings
+				.filter((b) => !draft.mentionedCharacters.includes(b.id))
+				.map((b) => ({ value: String(b.id), label: b.name || b.binding }))}
+			value={newMentionedId === "" ? "" : String(newMentionedId)}
+			onValueChange={(v) => (newMentionedId = v === "" ? "" : Number(v))}
+		/>
 		<button
 			class="btn btn-sm preset-filled-surface-400-600 p-1"
 			type="button"

@@ -29,8 +29,15 @@
 
 	interface Props {
 		connection: SelectConnection
+		/**
+		 * Rendered under another form, for an endpoint that also draws — the
+		 * managed KoboldCPP, one process for chat and images. Only this
+		 * backend's own image settings and the test box: the address and key
+		 * belong to the form above.
+		 */
+		embedded?: boolean
 	}
-	let { connection = $bindable() }: Props = $props()
+	let { connection = $bindable(), embedded = false }: Props = $props()
 
 	const socket = useTypedSocket()
 
@@ -42,14 +49,14 @@
 	}
 	let testResult = $state<TestResult | null>(null)
 	/**
-	 * A Manager-owned connection, which changes what several fields MEAN.
+	 * A managed connection, which changes what several fields MEAN.
 	 *
-	 * Its address comes from the Manager's settings rather than this row, and its
+	 * Its address comes from the managed KoboldCPP's settings rather than this row, and its
 	 * model is required rather than optional — the file named here is the whole
 	 * content of the load request.
 	 */
 	let isManaged = $derived(
-		connection?.type === CONNECTION_TYPE.KOBOLDCPP_MANAGED_IMAGE
+		CONNECTION_TYPE.isManagedKoboldCpp(connection?.type)
 	)
 	/** Style names and the like, learned from the test rather than guessed. */
 	let discovered = $derived(testResult?.extra ?? {})
@@ -168,7 +175,7 @@
 	// order and an emit flushes the pending interest sync: a key declared after
 	// this request would miss the flush the reply needs.
 	$effect(() => {
-		if (CONNECTION_TYPE.isImage(connection.type))
+		if (embedded || CONNECTION_TYPE.isImage(connection.type))
 			socket.emit("images:profileSchema", { type: connection.type })
 	})
 
@@ -179,8 +186,8 @@
 	)
 </script>
 
-{#if connection}
-	<!-- A managed connection's address is the Manager's, not this row's: the
+{#if connection && !embedded}
+	<!-- A managed connection's address is the managed KoboldCPP's, not this row's: the
 	     loader resolves it from koboldcpp_settings on every request and ignores
 	     whatever is stored here. Editing it would look like it worked and change
 	     nothing, so it is shown read-only with the reason. -->
@@ -195,8 +202,8 @@
 			bind:value={connection.baseUrl}
 		/>
 		{#if isManaged}
-			<p class="text-muted-foreground text-xs">
-				Set by the KoboldCPP Manager, in its Settings tab.
+			<p class="text-surface-600-400 text-xs">
+				Set in the Settings tab of KoboldCPP, run by Serene Pub.
 			</p>
 		{/if}
 	</div>
@@ -223,23 +230,26 @@
 		<p class="text-error-500 mt-2 text-sm">{testResult.error}</p>
 	{/if}
 
+{/if}
+
+{#if connection}
 	<!-- No model/checkpoint picker here: connections have no default model.
 	     Models live in the Models section below. -->
 	<!-- Everything below is this backend's own, rendered from what its adapter
 	     declares. Core has no idea what any of these fields mean. -->
 	{#if profileSchema && Object.keys(profileSchema).length && connection.extraJson}
-		<div class="border-surface-500/20 mt-5 border-t pt-4">
+		<div class={embedded ? "mt-6" : "border-surface-500/20 mt-5 border-t pt-4"}>
 			<h4 class="mb-1 flex items-center gap-1.5 font-semibold">
 				<Icons.SlidersHorizontal size={14} />
-				Backend Settings
+				{embedded ? "Image generation" : "Backend Settings"}
 			</h4>
-			<p class="text-muted-foreground mb-3 text-xs">
+			<p class="text-surface-600-400 mb-3 text-xs">
 				Specific to this server. Generation parameters shared by every
 				image backend — steps, size, seed — live in the Sampling
 				sidebar.
 			</p>
 			{#if Array.isArray(discovered.styles) && discovered.styles.length}
-				<p class="text-muted-foreground mb-2 text-xs">
+				<p class="text-surface-600-400 mb-2 text-xs">
 					<b>{discovered.styles.length}</b>
 					styles available on this install. Copy the ones you want into
 					the Styles field.
@@ -254,7 +264,7 @@
 
 	{#if capabilities && capabilities.freeSize === false}
 		<p
-			class="text-muted-foreground border-surface-500/20 mt-3 rounded border p-2 text-xs"
+			class="text-surface-600-400 border-surface-500/20 mt-3 rounded border p-2 text-xs"
 		>
 			<Icons.Info size={12} class="mr-1 inline" />
 			This backend renders at a fixed set of sizes. A width and height that
@@ -311,7 +321,7 @@
 				{#if generating}
 					<div class="border-surface-500/20 rounded-lg border p-2">
 						<div
-							class="text-muted-foreground mb-1 flex items-center justify-between text-xs"
+							class="text-surface-600-400 mb-1 flex items-center justify-between text-xs"
 						>
 							<span class="capitalize">
 								{progress?.stage ?? "starting"}…
@@ -339,7 +349,7 @@
 					</div>
 				{/if}
 
-				<p class="text-muted-foreground text-xs">
+				<p class="text-surface-600-400 text-xs">
 					Generates against the last <b>saved</b>
 					settings and the default image sampling config, and stores the
 					result to your media.

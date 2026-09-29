@@ -19,7 +19,7 @@
  * parity corpus is byte-identical (08 §5b, docs-dev/INTEGRATING.md).
  */
 
-import { pluginRuleRef } from "@serene-pub/sdk"
+import { pluginRuleRef, templateLawFindings } from "@serene-pub/sdk"
 import { and, asc, eq, inArray, ne } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import {
@@ -95,6 +95,7 @@ export async function saveDocument(
 	const hash = canonicalHash(doc)
 	assertValidates(doc)
 	assertRecordingsInScope(doc)
+	await assertTemplatesFit(db, doc, hash)
 
 	const saved = await db.transaction(async (tx: Db) => {
 		await assertEnvoysSound(tx, doc, opts.batch)
@@ -189,6 +190,9 @@ export async function saveDocument(
 					clauseId: b.id,
 					kind: b.kind,
 					parentClauseId: b.clauseId ?? null,
+					// Which of the parent's chains — without it a nested
+					// clause runs nowhere (lair pass F2).
+					parentClauseChain: b.clauseChain ?? null,
 					mode: b.mode ?? null,
 					max: b.max ?? null,
 					overRef: (b.over as Record<string, any>) ?? null,
@@ -511,6 +515,58 @@ function assertValidates(doc: SpecDocument): void {
 }
 
 /**
+ * Law T1's name check at the publish (typed templates P5): every template the
+ * document carries — a preset's, a node's configured value — names only what
+ * the step rendering it supplies, judged by the SDK with core's checker and
+ * vocabulary. `validate()` above already ran T1's checker-free half (a root
+ * two declarers claim, a forbidden kind, a band with no variable).
+ *
+ * NEW saves only (owner Q6). A document this instance already stores under
+ * the same hash is not re-judged: the boot republishes every shipped and
+ * installed spec through this door, and refusing one it has run for months
+ * because the checker learned a name would be a retroactive refusal — the
+ * boot scan reports such a template instead. An edit is a new hash, so it is
+ * judged.
+ */
+async function assertTemplatesFit(
+	db: Db,
+	doc: SpecDocument,
+	hash: string
+): Promise<void> {
+	const [stored] = await db
+		.select({ id: schema.pipelineSpecVersions.id })
+		.from(schema.pipelineSpecVersions)
+		.innerJoin(
+			schema.pipelineSpecs,
+			eq(schema.pipelineSpecs.id, schema.pipelineSpecVersions.specId)
+		)
+		.where(
+			and(
+				eq(schema.pipelineSpecs.slug, doc.id),
+				eq(schema.pipelineSpecVersions.canonicalHash, hash)
+			)
+		)
+		.limit(1)
+	if (stored) return
+	const { CONTEXT_TEMPLATE_CHECKING } = await import(
+		"$lib/server/pipelines/entities/contextTemplateFit"
+	)
+	const refused = templateLawFindings(doc, CONTEXT_TEMPLATE_CHECKING).filter(
+		(f) => f.severity === "error"
+	)
+	if (!refused.length) return
+	throw new Error(
+		`'${doc.id}' cannot be saved: a template does not fit the step that renders it — ` +
+			refused
+				.map(
+					(e) =>
+						`[${e.law}] ${e.nodeKey ? `${e.nodeKey}: ` : ""}${e.message} (${e.fix})`
+				)
+				.join("; ")
+	)
+}
+
+/**
  * Every event this document records literally is one its subjects may record
  * (R52, E1b) — judged in the genre its lock names, or in any genre when it
  * names none. The host judges again at the write, in the session's genre;
@@ -638,10 +694,8 @@ async function assertEnvoysSound(
 	// The RAW entries, not `actionsOf`'s: normalisation stamps `speaks:
 	// 'on-action'` on every action envoy, so a declaration saying `in-turn`
 	// would be judged on what it became rather than on what it said.
-	const contributes = doc.contributes as
-		| { actions?: unknown[]; triggers?: unknown[] }
-		| undefined
-	for (const raw of [...(contributes?.actions ?? []), ...(contributes?.triggers ?? [])]) {
+	const contributes = doc.contributes as { actions?: unknown[] } | undefined
+	for (const raw of contributes?.actions ?? []) {
 		const a = raw as { key?: unknown; envoy?: unknown } | null
 		if (a?.envoy !== undefined)
 			findings.push(
@@ -951,8 +1005,9 @@ export async function loadDocument(
 			...(b.repeatWhile ? { repeatWhile: b.repeatWhile } : {}),
 			...(b.onRef ? { on: b.onRef } : {}),
 			...(b.branches ? { branches: b.branches } : {}),
-			chains: chainsOf(nodeRows, b.clauseId),
+			chains: chainsOf(nodeRows, clauseRows, b.clauseId),
 			...(b.parentClauseId ? { clauseId: b.parentClauseId } : {}),
+			...(b.parentClauseChain ? { clauseChain: b.parentClauseChain } : {}),
 			position: b.position
 		})) as SpecDocument["clauses"]
 	}
@@ -964,18 +1019,30 @@ export async function loadDocument(
 }
 
 /**
- * A clause's chains are derivable from its member nodes, so they are not stored.
+ * A clause's chains are derivable from its members, so they are not stored.
  * Storing them would create a second place for the same fact to be wrong.
+ *
+ * Its members are its nodes AND its nested clauses (lair re-plan R6): a
+ * branch that holds only a junction — the Lair's `channel.story`, whose one
+ * member is the `pick` junction — has no node of its own, and read off the
+ * nodes alone it vanished on load, so the branch never ran. In declaration
+ * (position) order, which is the order the builder listed them.
  */
-function chainsOf(nodeRows: any[], clauseId: string): string[] {
+function chainsOf(
+	nodeRows: any[],
+	clauseRows: any[],
+	clauseId: string
+): string[] {
+	const members = [
+		...nodeRows
+			.filter((n) => n.clauseId === clauseId && n.clauseChain)
+			.map((n) => ({ position: n.position ?? 0, chain: n.clauseChain as string })),
+		...clauseRows
+			.filter((c) => c.parentClauseId === clauseId && c.parentClauseChain)
+			.map((c) => ({ position: c.position ?? 0, chain: c.parentClauseChain as string }))
+	].sort((a, b) => a.position - b.position)
 	const seen: string[] = []
-	for (const n of nodeRows)
-		if (
-			n.clauseId === clauseId &&
-			n.clauseChain &&
-			!seen.includes(n.clauseChain)
-		)
-			seen.push(n.clauseChain)
+	for (const m of members) if (!seen.includes(m.chain)) seen.push(m.chain)
 	return seen
 }
 

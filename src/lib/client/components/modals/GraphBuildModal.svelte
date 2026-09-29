@@ -8,17 +8,30 @@
 	import { getContext, onDestroy } from "svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 	import AiTaskModal, { type AiTaskStep } from "./AiTaskModal.svelte"
+	import Select from "$lib/client/components/inputs/Select.svelte"
 
 	interface Props {
 		open: boolean
 		onOpenChange: (e: { open: boolean }) => void
 		lorebookId: number
 		mode?: "replace" | "extend"
+		/**
+		 * Extend only: read just this session's scenes (#51). Null or absent
+		 * reads the whole book.
+		 */
+		sessionId?: number | null
 		readySceneCount?: number
 		skippedSceneCount?: number
 		ungraphedHistoryEntryCount?: number
 		existingUnboundNodeCount?: number
 		existingRelationshipCount?: number
+		/**
+		 * Links with an entry at both ends / at one end. A rebuild deletes
+		 * them with the rest and never re-derives them (owner ruling 6), so
+		 * the warning names them.
+		 */
+		existingEntryLinkCount?: number
+		existingCastEntryLinkCount?: number
 		/** Scenes needing character extraction — cost disclosure, not a gate. */
 		unresolvedCastSceneCount?: number
 		onApplied?: () => void
@@ -29,15 +42,21 @@
 		onOpenChange,
 		lorebookId,
 		mode = "replace",
+		sessionId = null,
 		readySceneCount,
 		skippedSceneCount,
 		ungraphedHistoryEntryCount,
 		existingUnboundNodeCount = 0,
 		existingRelationshipCount = 0,
+		existingEntryLinkCount = 0,
+		existingCastEntryLinkCount = 0,
 		unresolvedCastSceneCount = 0,
 		onApplied
 	}: Props = $props()
 
+	let entryLinkCount = $derived(
+		existingEntryLinkCount + existingCastEntryLinkCount
+	)
 	let hasExistingContent = $derived(
 		mode === "replace" &&
 			(existingUnboundNodeCount > 0 || existingRelationshipCount > 0)
@@ -233,14 +252,14 @@
 	)
 
 	let modalTitle = $derived(
-		mode === "extend" ? "Extend Narrative Graph" : "Build Narrative Graph"
+		mode === "extend" ? "Extend narrative graph" : "Build narrative graph"
 	)
 	let runningTitle = $derived(
 		mode === "extend"
-			? "Extending Narrative Graph…"
-			: "Building Narrative Graph…"
+			? "Extending narrative graph…"
+			: "Building narrative graph…"
 	)
-	let startLabel = $derived(hasExistingContent ? "Replace Graph" : "Proceed")
+	let startLabel = $derived(hasExistingContent ? "Replace graph" : "Proceed")
 
 	// Restore or reset step when modal opens
 	$effect(() => {
@@ -312,7 +331,8 @@
 		graphBuildsCtx?.startBuild({ lorebookId, mode })
 		socket.emit("narrativeGraph:build", {
 			lorebookId,
-			mode
+			mode,
+			...(mode === "extend" && sessionId != null ? { sessionId } : {})
 		} satisfies Sockets.NarrativeGraph.Build.Params)
 	}
 
@@ -383,7 +403,7 @@
 			title: "Graph applied",
 			description: `${activeNodes.length} nodes, ${activeNodeUpdates.length} updates and ${activeRels.length} relationships saved.`
 		})
-		graphBuildsCtx?.clearBuild()
+		graphBuildsCtx?.clearBuild("acted")
 		isApplying = false
 		onApplied?.()
 		onOpenChange({ open: false })
@@ -435,7 +455,10 @@
 		socket.emit("narrativeGraph:applyProposal", {
 			lorebookId,
 			proposal: filteredProposal,
-			mode
+			mode,
+			// The server marks as graphed exactly what THIS build read, which
+			// it keeps on the activity.
+			...(build?.activityId ? { activityId: build.activityId } : {})
 		} satisfies Sockets.NarrativeGraph.ApplyProposal.Params)
 	}
 
@@ -473,7 +496,7 @@
 
 	const REL_STATUS_COLOR: Record<string, string> = {
 		active: "text-success-500",
-		resolved: "text-surface-400",
+		resolved: "text-surface-600-400",
 		broken: "text-error-500",
 		evolved: "text-warning-500"
 	}
@@ -496,7 +519,9 @@
 {#snippet confirmBlock()}
 	<p class="text-surface-700-300 mt-1 text-sm">
 		{mode === "extend"
-			? "The LLM will process new scenes and add to your existing graph."
+			? sessionId != null
+				? "The LLM will process this session's new scenes and add to your existing graph."
+				: "The LLM will process new scenes and add to your existing graph."
 			: "The LLM will process all summarised scenes and build a fresh graph."}
 	</p>
 	<div class="mt-4 space-y-2">
@@ -579,7 +604,7 @@
 			>
 				<Icons.SkipForward
 					size={16}
-					class="text-surface-400 shrink-0"
+					class="text-surface-600-400 shrink-0"
 				/>
 				<span class="text-surface-700-300">
 					<strong>{skippedSceneCount}</strong>
@@ -605,13 +630,29 @@
 					damage is its own bug: it talks users out of a safe action,
 					and a warning known to exaggerate stops being read at all.
 				-->
+				<!--
+					Owner ruling 6 (2026-09-28): a rebuild keeps its behaviour —
+					it deletes EVERY link in the book — so this must say how
+					many, and how many of them the builder will not put back.
+					It re-derives cast-to-cast links from scenes only; a link
+					with an entry at either end never comes back, and nothing
+					records which links were drawn by hand.
+				-->
 				<span>
 					{#if existingRelationshipCount > 0}
-						This will replace the existing graph.{" "}
+						This will replace the existing graph. All
 						<strong>{existingRelationshipCount}</strong>
-						relationship{existingRelationshipCount === 1 ? "" : "s"}
-						{existingRelationshipCount === 1 ? " is" : " are"} cleared
-						and re-derived.
+						link{existingRelationshipCount === 1 ? "" : "s"} in this
+						book will be deleted. A rebuild only re-creates links
+						between cast members from your scenes, so links drawn by
+						hand do not come back.
+						{#if entryLinkCount > 0}
+							<strong>{entryLinkCount}</strong>
+							{entryLinkCount === 1 ? "link has" : "links have"} an
+							entry at one or both ends ({existingEntryLinkCount}
+							between entries, {existingCastEntryLinkCount} between a
+							cast member and an entry) and will not be rebuilt.
+						{/if}
 					{:else}
 						This will replace the existing graph.
 					{/if}
@@ -643,7 +684,7 @@
 	{#if progressCurrentPair}
 		<div class="mt-3 space-y-1">
 			<p
-				class="text-surface-700-300 text-xs font-semibold tracking-wide uppercase"
+				class="text-surface-600-400 text-xs font-semibold"
 			>
 				Extracting perspective
 			</p>
@@ -688,7 +729,7 @@
 	{#if proposalNodeUpdates.length > 0}
 		<section class="mb-4 space-y-2">
 			<h3
-				class="text-surface-700-300 text-xs font-semibold tracking-wide uppercase"
+				class="text-surface-600-400 text-xs font-semibold"
 			>
 				Updates to existing characters
 			</h3>
@@ -718,7 +759,7 @@
 						{/if}
 						<button
 							type="button"
-							class="btn-icon btn-icon-sm preset-tonal-surface shrink-0"
+							class="btn btn-icon btn-icon-sm preset-tonal-surface shrink-0"
 							aria-label={update._deleted
 								? `Restore update for ${update.name}`
 								: `Discard update for ${update.name}`}
@@ -755,7 +796,7 @@
 	<!-- Nodes -->
 	<section class="mb-4 space-y-2">
 		<h3
-			class="text-surface-700-300 text-xs font-semibold tracking-wide uppercase"
+			class="text-surface-600-400 text-xs font-semibold"
 		>
 			Nodes
 		</h3>
@@ -773,7 +814,7 @@
 		-->
 		{#if (build?.filteredWorldLoreNames?.length ?? 0) > 0}
 			<p class="text-surface-700-300 text-xs">
-				Not created — these match World Lore entries, so they were read
+				Not created — these match world lore entries, so they were read
 				as places or things rather than characters:
 				<span class="font-semibold">
 					{build?.filteredWorldLoreNames?.join(", ")}
@@ -801,16 +842,17 @@
 					<span class="flex-1 truncate text-sm font-medium">
 						{node.name}
 					</span>
-					<span class="text-surface-400 text-xs">
+					<span class="text-surface-600-400 text-xs">
 						{node.nodeState}
 					</span>
 					{#if node.sceneIndex != null}
-						<span class="text-surface-400 text-xs">
+						<span class="text-surface-600-400 text-xs">
 							{sceneLabel(node.sceneIndex)}
 						</span>
 					{/if}
 					<button
-						class="text-surface-400 hover:text-error-500 ml-1 shrink-0"
+						aria-label={node._deleted ? "Restore node" : "Remove node"}
+						class="text-surface-600-400 hover:text-error-500 ml-1 shrink-0"
 						onclick={(e) => {
 							e.stopPropagation()
 							proposalNodes[i]._deleted =
@@ -826,7 +868,7 @@
 					</button>
 					<Icons.ChevronDown
 						size={14}
-						class="text-surface-400 transition-transform {expandedNodeIdx ===
+						class="text-surface-600-400 transition-transform {expandedNodeIdx ===
 						i
 							? 'rotate-180'
 							: ''}"
@@ -838,11 +880,12 @@
 					>
 						<div class="space-y-1">
 							<p
-								class="text-surface-700-300 text-xs font-semibold uppercase"
+								class="text-surface-600-400 text-xs font-semibold"
 							>
 								Name
 							</p>
 							<input
+								aria-label="Name"
 								class="input text-sm"
 								type="text"
 								bind:value={proposalNodes[i].name}
@@ -850,31 +893,31 @@
 						</div>
 						<div class="space-y-1">
 							<p
-								class="text-surface-700-300 text-xs font-semibold uppercase"
+								class="text-surface-600-400 text-xs font-semibold"
 							>
 								State
 							</p>
-							<select
-								class="select text-sm"
+							<Select
+								label="State"
+								labelHidden
+								class="text-sm"
+								options={NODE_STATES.map((s) => ({ value: s, label: s }))}
 								bind:value={proposalNodes[i].nodeState}
-							>
-								{#each NODE_STATES as s}<option value={s}>
-										{s}
-									</option>{/each}
-							</select>
+							/>
 						</div>
 						<div class="space-y-1">
 							<p
-								class="text-surface-700-300 text-xs font-semibold uppercase"
+								class="text-surface-600-400 text-xs font-semibold"
 							>
 								Summary
 							</p>
 							<textarea
+								aria-label="Summary"
 								class="textarea min-h-12 text-sm"
 								maxlength="200"
 								bind:value={proposalNodes[i].summary}
 							></textarea>
-							<p class="text-surface-400 text-right text-xs">
+							<p class="text-surface-600-400 text-right text-xs">
 								{(proposalNodes[i].summary ?? "").length} / 200
 							</p>
 						</div>
@@ -887,7 +930,7 @@
 	<!-- Relationships -->
 	<section class="mb-4 space-y-2">
 		<h3
-			class="text-surface-700-300 text-xs font-semibold tracking-wide uppercase"
+			class="text-surface-600-400 text-xs font-semibold"
 		>
 			Relationships
 		</h3>
@@ -931,11 +974,11 @@
 						<span class="font-medium">
 							{nodeLabel(rel.fromTempId)}
 						</span>
-						<span class="text-surface-400 mx-1">→</span>
+						<span class="text-surface-600-400 mx-1">→</span>
 						<span class="text-primary-500 text-xs">
 							{rel.relationshipType.replace(/_/g, " ")}
 						</span>
-						<span class="text-surface-400 mx-1">→</span>
+						<span class="text-surface-600-400 mx-1">→</span>
 						<span class="font-medium">
 							{nodeLabel(rel.toTempId)}
 						</span>
@@ -963,12 +1006,13 @@
 						{rel.status}
 					</span>
 					{#if rel.sceneIndex != null}
-						<span class="text-surface-400 text-xs">
+						<span class="text-surface-600-400 text-xs">
 							{sceneLabel(rel.sceneIndex)}
 						</span>
 					{/if}
 					<button
-						class="text-surface-400 hover:text-error-500 ml-1 shrink-0"
+						aria-label={rel._deleted ? "Restore relationship" : "Remove relationship"}
+						class="text-surface-600-400 hover:text-error-500 ml-1 shrink-0"
 						onclick={(e) => {
 							e.stopPropagation()
 							proposalRels[i]._deleted = !proposalRels[i]._deleted
@@ -983,7 +1027,7 @@
 					</button>
 					<Icons.ChevronDown
 						size={14}
-						class="text-surface-400 transition-transform {expandedRelIdx ===
+						class="text-surface-600-400 transition-transform {expandedRelIdx ===
 						i
 							? 'rotate-180'
 							: ''}"
@@ -996,11 +1040,12 @@
 						<div class="grid grid-cols-3 gap-2">
 							<div class="space-y-1">
 								<p
-									class="text-surface-700-300 text-xs font-semibold uppercase"
+									class="text-surface-600-400 text-xs font-semibold"
 								>
 									Type
 								</p>
 								<input
+									aria-label="Relationship type"
 									class="input text-sm"
 									type="text"
 									bind:value={
@@ -1010,57 +1055,53 @@
 							</div>
 							<div class="space-y-1">
 								<p
-									class="text-surface-700-300 text-xs font-semibold uppercase"
+									class="text-surface-600-400 text-xs font-semibold"
 								>
 									Status
 								</p>
-								<select
-									class="select text-sm"
+								<Select
+									label="Status"
+									labelHidden
+									class="text-sm"
+									options={RELATIONSHIP_STATUSES.map((s) => ({ value: s, label: s }))}
 									bind:value={proposalRels[i].status}
-								>
-									{#each RELATIONSHIP_STATUSES as s}<option
-											value={s}
-										>
-											{s}
-										</option>{/each}
-								</select>
+								/>
 							</div>
 							<div class="space-y-1">
 								<p
-									class="text-surface-700-300 text-xs font-semibold uppercase"
+									class="text-surface-600-400 text-xs font-semibold"
 								>
 									Visibility
 								</p>
-								<select
-									class="select text-sm"
+								<Select
+									label="Visibility"
+									labelHidden
+									class="text-sm"
+									options={RELATIONSHIP_VISIBILITIES.map((v) => ({ value: v, label: v }))}
 									bind:value={proposalRels[i].visibility}
-								>
-									{#each RELATIONSHIP_VISIBILITIES as v}<option
-											value={v}
-										>
-											{v}
-										</option>{/each}
-								</select>
+								/>
 							</div>
 						</div>
 						<div class="space-y-1">
 							<p
-								class="text-surface-700-300 text-xs font-semibold uppercase"
+								class="text-surface-600-400 text-xs font-semibold"
 							>
 								Description
 							</p>
 							<textarea
+								aria-label="Description"
 								class="textarea min-h-12 text-sm"
 								bind:value={proposalRels[i].description}
 							></textarea>
 						</div>
 						<div class="space-y-1">
 							<p
-								class="text-surface-700-300 text-xs font-semibold uppercase"
+								class="text-surface-600-400 text-xs font-semibold"
 							>
 								Reason for change
 							</p>
 							<input
+								aria-label="Reason for change"
 								class="input text-sm"
 								type="text"
 								placeholder="Optional"
@@ -1131,7 +1172,7 @@
 						>
 							<Icons.ChevronRight
 								size={12}
-								class="text-surface-400 shrink-0 transition-transform {expandedTraceIdx ===
+								class="text-surface-600-400 shrink-0 transition-transform {expandedTraceIdx ===
 								i
 									? 'rotate-90'
 									: ''}"
@@ -1151,7 +1192,7 @@
 							>
 								<div class="space-y-1 p-3">
 									<p
-										class="text-primary-500 text-[10px] font-bold tracking-widest uppercase"
+										class="text-surface-600-400 text-xs font-medium"
 									>
 										System
 									</p>
@@ -1160,7 +1201,7 @@
 								</div>
 								<div class="space-y-1 p-3">
 									<p
-										class="text-warning-500 text-[10px] font-bold tracking-widest uppercase"
+										class="text-surface-600-400 text-xs font-medium"
 									>
 										User
 									</p>
@@ -1169,7 +1210,7 @@
 								</div>
 								<div class="space-y-1 p-3">
 									<p
-										class="text-success-500 text-[10px] font-bold tracking-widest uppercase"
+										class="text-surface-600-400 text-xs font-medium"
 									>
 										Response
 									</p>
@@ -1190,7 +1231,7 @@
 	{onOpenChange}
 	title={modalTitle}
 	{runningTitle}
-	reviewTitle="Review Graph Proposal"
+	reviewTitle="Review graph proposal"
 	step={aiStep}
 	{progressPercent}
 	{progressLabel}
@@ -1199,10 +1240,10 @@
 	canSave={activeNodes.length > 0 ||
 		activeNodeUpdates.length > 0 ||
 		activeRels.length > 0}
-	saveLabel="Apply Graph"
+	saveLabel="Apply graph"
 	isSaving={isApplying}
 	{errorMessage}
-	retryLabel="Retry Step"
+	retryLabel="Retry step"
 	onStart={triggerBuild}
 	onSave={apply}
 	onCancel={handleCancel}
@@ -1215,7 +1256,8 @@
 		socket.emit("narrativeGraph:build", {
 			lorebookId,
 			mode,
-			resume: true
+			resume: true,
+			...(mode === "extend" && sessionId != null ? { sessionId } : {})
 		} satisfies Sockets.NarrativeGraph.Build.Params)
 	}}
 	onStartOver={startOver}

@@ -7,9 +7,13 @@ import type { GraphNode } from "./graphModel"
 import {
 	createLinkParams,
 	flipLink,
+	isReplyFor,
 	linkFormTitle,
 	newLinkDraft,
-	suggestionsFor
+	suggestionsFor,
+	whenAtMoment,
+	whenLabel,
+	whenOptions
 } from "./linkDraft"
 
 const node = (over: Partial<GraphNode> & { key: string }): GraphNode => ({
@@ -84,8 +88,22 @@ describe("createLinkParams — what the socket is handed", () => {
 			relationshipType: "keeper of",
 			status: "active",
 			visibility: "acknowledged",
+			branchId: null,
 			description: "She holds the keys."
 		})
+	})
+
+	it("draws the link on the line being read (#124)", () => {
+		expect(createLinkParams(12, newLinkDraft(verity, marrow), 7).branchId).toBe(7)
+	})
+
+	it("sends the date the form chose, and none when it chose none (#120)", () => {
+		expect(
+			createLinkParams(12, newLinkDraft(verity, marrow, 88)).historyEntryId
+		).toBe(88)
+		expect(
+			"historyEntryId" in createLinkParams(12, newLinkDraft(verity, marrow))
+		).toBe(false)
 	})
 
 	it("swaps the ends when the direction is turned round", () => {
@@ -110,5 +128,71 @@ describe("createLinkParams — what the socket is handed", () => {
 				relationshipType: "  the old way  "
 			}).relationshipType
 		).toBe("the old way")
+	})
+})
+
+const spell = (d: { year: number; month: number | null; day: number | null }) =>
+	`Y${d.year}${d.month ? `-${d.month}` : ""}${d.day ? `-${d.day}` : ""}`
+
+describe("the When picker (#120)", () => {
+	const entries = [
+		{ id: 5, name: "The flood", year: 3, month: 2, day: 12 },
+		{ id: 6, name: "", year: 4, month: null, day: null }
+	]
+
+	it("names the entry and spells its date through the calendar", () => {
+		expect(whenLabel(entries[0], spell)).toBe("The flood · Y3-2-12")
+	})
+
+	it("falls back to the date alone for an unnamed entry", () => {
+		expect(whenLabel(entries[1], spell)).toBe("Y4")
+	})
+
+	it("offers No date first", () => {
+		expect(whenOptions(entries, spell).map((o) => o.value)).toEqual([
+			"",
+			"5",
+			"6"
+		])
+	})
+
+	it("starts on the entry dated exactly the moment being read", () => {
+		expect(whenAtMoment(entries, { year: 3, month: 2, day: 12 })).toBe(5)
+	})
+
+	it("starts undated at now and on a date no entry holds", () => {
+		expect(whenAtMoment(entries, null)).toBeNull()
+		expect(whenAtMoment(entries, { year: 3, month: 2, day: 13 })).toBeNull()
+	})
+})
+
+describe("isReplyFor — the create reply that answers this form (#53, #55)", () => {
+	const params = createLinkParams(12, newLinkDraft(verity, archive))
+	const reply = {
+		lorebookId: 12,
+		from: { kind: "cast", bindingId: 1 } as const,
+		to: {
+			kind: "entry",
+			entryId: 40,
+			name: "The Archive",
+			typeId: "core:entry/location"
+		} as any
+	}
+
+	it("matches the book and both ends", () => {
+		expect(isReplyFor(params, reply)).toBe(true)
+	})
+
+	it("ignores another book's link", () => {
+		expect(isReplyFor(params, { ...reply, lorebookId: 13 })).toBe(false)
+	})
+
+	it("ignores a link between other ends", () => {
+		expect(
+			isReplyFor(params, {
+				...reply,
+				from: { kind: "cast", bindingId: 2 }
+			})
+		).toBe(false)
 	})
 })

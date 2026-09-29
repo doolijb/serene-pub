@@ -178,7 +178,9 @@ async function recompute(sessionId: number) {
 	return {
 		turnOrder: readTurnOrder(row!.metadata),
 		ran: (receipt?.nodes ?? []).map((n: any) => n.nodeKey) as string[],
-		notes: (receipt?.nodes ?? []).flatMap((n: any) => n.notes ?? []) as string[]
+		notes: (receipt?.nodes ?? []).flatMap((n: any) => n.notes ?? []) as string[],
+		/** The stored receipt's row for one node — its `swap` and `configLayers` (F2). */
+		row: (key: string) => (receipt?.nodes ?? []).find((n: any) => n.nodeKey === key)
 	}
 }
 
@@ -191,6 +193,8 @@ describe("M4 · the optional model path", () => {
 		expect(out.turnOrder.order.map((e) => e.ref)).toEqual([`character:${alice}`, `character:${bram}`])
 		expect(out.turnOrder.order.every((e) => e.via === "strategy")).toBe(true)
 		expect(out.turnOrder.strategy).toBe("core:task/turn-round-robin@1")
+		// The stored receipt says the pin ran — `null`, not merely absent.
+		expect(out.row("decide.rules.strategy").swap).toBeNull()
 	})
 
 	it("the order names the strategy that ran — an instance-scope swap included (A7r)", async () => {
@@ -207,6 +211,10 @@ describe("M4 · the optional model path", () => {
 			answer = '{"order": []}'
 			const out = await recompute(await makeSession())
 			expect(out.turnOrder.strategy).toBe("core:task/turn-random@1")
+			// …and its receipt row names the pin it replaced and whose swap it was.
+			const row = out.row("decide.rules.strategy")
+			expect(row.definitionId).toBe("core:task/turn-random@1")
+			expect(row.swap).toEqual({ pin: "core:task/turn-round-robin@1", by: "instance" })
 		} finally {
 			await setNodeRebind(db as any, {
 				scope: { kind: "instance", id: 0 },
@@ -228,6 +236,12 @@ describe("M4 · the optional model path", () => {
 			{ ref: `character:${alice}`, via: "model" }
 		])
 		expect(out.turnOrder.strategy, JSON.stringify(out.notes)).toBe("core:oracle/turn-advise@1")
+		// Its stored receipt row says which layer answered each value (F2):
+		// the prompt from the selected config, the review switch from the
+		// node definition's own default.
+		const layers = out.row("decide.model.advise").configLayers
+		expect(layers?.prompts?.turnAdvice).toBe("config")
+		expect(layers?.settings?.review).toBe("author")
 	})
 
 	it("a reference the pool did not admit is dropped, with a note", async () => {

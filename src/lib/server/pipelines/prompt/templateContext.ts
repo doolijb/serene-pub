@@ -32,12 +32,15 @@ import { InterpolationEngine } from "$lib/server/utils/interpolation/Interpolati
 import { attachCharacterLoreToCharacters } from "$lib/server/pipelines/prompt/characterLore"
 import { joinWithAnd } from "$lib/shared/utils/joinWithAnd"
 import type { TemplateContext } from "$lib/server/pipelines/prompt/promptTypes"
+import type { VarValue } from "@serene-pub/sdk"
+import type { TEMPLATE_CONTEXT_SCHEMA } from "@serene-pub/contracts"
 import {
 	renderVariable,
 	type ResolvedLayouts
 } from "$lib/server/pipelines/entities/variableLayouts"
 import type { RenderRun } from "$lib/server/pipelines/prompt/renderers"
 import { relationshipSections } from "$lib/server/pipelines/prompt/rankedRelationships"
+import { qualifiedSlotKey, slotKey } from "$lib/server/state/keys"
 
 export interface CharacterRow {
 	id?: number
@@ -87,16 +90,16 @@ export interface PromptTexts {
  * cancelled while they are in flight. Absent for a caller with no run.
  */
 export interface BuildContextInput extends RenderRun {
-	/** Characters the assistant speaks as, compiled and carrying visibility. */
+	/** Characters the assistant speaks as, compiled at the session's `characterDetail`. */
 	characters: readonly CharacterRow[]
 	personas: readonly PersonaRow[]
 	/**
-	 * Display names for `{{characterNames}}` — **the visible, active subset**,
-	 * resolved upstream.
+	 * Display names for `{{characterNames}}` — **the enabled subset**, resolved
+	 * upstream (`promptFields.resolveContextInput`).
 	 *
 	 * Deliberately not derived from `characters`: the blob above includes
-	 * hidden characters (carrying their visibility), while the joined list must
-	 * not name them. Deriving one from the other would silently leak a hidden
+	 * switched-off characters, while the joined list must not name them.
+	 * Deriving one from the other would silently put a switched-off
 	 * character's name into every prompt.
 	 */
 	characterNames: readonly string[]
@@ -142,9 +145,12 @@ export interface BuildContextInput extends RenderRun {
 	variables?: ResolvedLayouts
 	/**
 	 * The session's resolved state, when a spec wired
-	 * `core:query/session-state@1` into the builder's `state` port. Passed
-	 * through untouched: it is structure a template reads keys out of, not a
-	 * value anything here renders.
+	 * `core:query/session-state@1` into the builder's `state` port. Structure a
+	 * template reads keys out of, not a value anything here renders — and
+	 * projected to its TYPE (`templateState`, typed templates P6) rather than
+	 * passed through: what `session-state` publishes also carries the id
+	 * indexes, the vocabulary, the roles and the version, none of which the
+	 * typed scope declares.
 	 */
 	state?: unknown
 	/**
@@ -189,7 +195,7 @@ const EMPTY_CHAT = { sessionCharacters: [], sessionPersonas: [] }
  * Build the context a context template renders against.
  *
  * Returns the legacy `TemplateContext` shape exactly, minus
- * `__promptBuilderInstance` — that field is a back-reference the infill engines
+ * `__promptBuilderInstance` — that field is a back-reference the 0.5 retrieval paths
  * used to reach back into the builder, and its absence here is the coupling
  * being removed rather than an omission. A pipeline node cannot reach back into
  * anything; everything it needs arrived on a port.
@@ -287,6 +293,9 @@ export async function buildTemplateContext(
 	const layout = (key: string, value: unknown) =>
 		renderVariable(input.variables, key, value, input)
 
+	// Held to the builder's declared out-port schema (typed templates P3):
+	// `satisfies` refuses a key the declaration lacks and a declared key this
+	// leaves out, so the template editor's scope and what renders cannot part.
 	return {
 		instructions: await layout(
 			"instructions",
@@ -340,7 +349,7 @@ export async function buildTemplateContext(
 		// measured against is not assembled yet. `gatedBy` names the node that
 		// decides, so a reader of this node's output knows which copy this is.
 		postHistory: {
-			gatedBy: "assemble",
+			gatedBy: "assemble" as const,
 			targetIndex: 0,
 			instructions: promptPostHistoryInstructions || undefined,
 			charInstructions: charPostHistory || undefined,
@@ -354,12 +363,84 @@ export async function buildTemplateContext(
 		sessionMessages: [],
 		// Structure, unrendered, and absent when nothing supplied it — so a
 		// template that tests `{{#if state}}` gets the honest answer.
-		...(input.state
-			? { state: input.state as TemplateContext["state"] }
-			: {}),
+		...(input.state ? templateStateEntry(input.state) : {}),
 		char: input.charName,
 		character: input.charName,
 		user: input.personaName,
 		persona: input.personaName
+	} satisfies VarValue<typeof TEMPLATE_CONTEXT_SCHEMA>
+}
+
+/** `{ state }` when the resolved state projects to one, else nothing. */
+function templateStateEntry(
+	state: unknown
+): { state: TemplateContext["state"] } | Record<string, never> {
+	const projected = templateState(state)
+	return projected ? { state: projected } : {}
+}
+
+/**
+ * The session's resolved state as a template's `state` is TYPED (typed
+ * templates P6; SDK `templateScopeAt`'s `stateVarField`):
+ *
+ * - `world` — `<slot>` and `<owner_slot>` for every slot the session TRACKS
+ *   on the world;
+ * - `cast.<member>` — `id`, `key`, `name` and the tracked cast slots, by the
+ *   member's slug;
+ * - `locations.<place>` — the same for a place and its tracked location
+ *   slots; absent when the session tracks none.
+ *
+ * "Tracked" is the vocabulary `session-state` resolved (`state.slots`): a
+ * value under any other key — an untracked slot, a stray key — stays out, so
+ * what renders is what the type says. The id indexes (`cast.byId`,
+ * `locations.byId`), the vocabulary itself, `who` and `version` are the
+ * session-state node's for pipelines and conditions, not a template's.
+ * Undefined for anything that is not a resolved state.
+ */
+export function templateState(state: unknown): TemplateContext["state"] | undefined {
+	if (!state || typeof state !== "object" || Array.isArray(state)) return undefined
+	const s = state as {
+		world?: unknown
+		cast?: unknown
+		locations?: unknown
+		slots?: unknown
+	}
+	const tracked = Array.isArray(s.slots)
+		? (s.slots as Array<{ id?: unknown; appliesTo?: unknown }>).filter(
+				(t): t is { id: string; appliesTo: string[] } =>
+					typeof t?.id === "string" && Array.isArray(t.appliesTo)
+			)
+		: []
+	const keysFor = (applies: string): Set<string> =>
+		new Set(
+			tracked
+				.filter((t) => t.appliesTo.includes(applies))
+				.flatMap((t) => [slotKey(t.id), qualifiedSlotKey(t.id)])
+		)
+	const isBag = (v: unknown): v is Record<string, unknown> =>
+		!!v && typeof v === "object" && !Array.isArray(v)
+	const pick = (bag: unknown, keys: Set<string>, identity: boolean) => {
+		const out: Record<string, unknown> = {}
+		if (!isBag(bag)) return out
+		if (identity)
+			for (const k of ["id", "key", "name"] as const)
+				if (bag[k] !== undefined) out[k] = bag[k]
+		for (const k of keys) if (bag[k] !== undefined) out[k] = bag[k]
+		return out
+	}
+	// Slug-keyed holders only: `byId` is the index beside them.
+	const holders = (index: unknown, applies: string) => {
+		const keys = keysFor(applies)
+		const out: Record<string, Record<string, unknown>> = {}
+		if (!isBag(index)) return out
+		for (const [slug, holder] of Object.entries(index))
+			if (slug !== "byId" && isBag(holder)) out[slug] = pick(holder, keys, true)
+		return out
+	}
+	const locations = holders(s.locations, "location")
+	return {
+		world: pick(s.world, keysFor("world"), false),
+		cast: holders(s.cast, "cast"),
+		...(Object.keys(locations).length ? { locations } : {})
 	}
 }

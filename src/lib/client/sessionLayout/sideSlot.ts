@@ -33,22 +33,40 @@
  * and the slot was retired 2026-09-17. The no-reload law is unchanged: still
  * one mount, still this function choosing the container around it.
  *
+ *   stage   — this side holds the conversation the phone and Stage only draw
+ *             as the stage (QE, ./placementRules `stageOf`; brief 7a free
+ *             placement): the mount fills the body, showing that one widget,
+ *             and its other widgets are `display: none` around their mounts.
+ *             On the phone they are still reached from the panels menu, which
+ *             opens the same mount as the `overlay` sheet (the stage widget
+ *             hidden inside it).
+ *
  * There is deliberately no "not rendered" value left: every state a side can be
  * in is a container, which is what makes the no-reload law hold by construction
  * rather than by remembering.
  */
 
-export type SideSlot = "inline" | "stowed" | "overlay"
+import { RAIL_PX } from "./sideRail"
+import { STAGE_MEASURE_PX } from "./tuckedSides"
+import type { SideMode, StripMode } from "./schema"
+
+export type SideSlot = "inline" | "stowed" | "overlay" | "stage"
 
 export interface SideSlotInput {
 	/** Below the app's 1024px breakpoint (P6): sides take no layout space. */
 	narrow: boolean
 	/** The mobile overlay is currently showing THIS side. */
 	overlayOwns: boolean
+	/**
+	 * This side holds the stage — the conversation the phone or Stage only
+	 * draws full width, wherever the desktop placed it (QE). Absent = no.
+	 */
+	stage?: boolean
 }
 
 export function sideSlot(o: SideSlotInput): SideSlot {
 	if (o.overlayOwns) return "overlay"
+	if (o.stage) return "stage"
 	if (o.narrow) return "stowed"
 	return "inline"
 }
@@ -92,6 +110,12 @@ export interface SideFlowInput {
 	arrangedPx: number
 	/** The ladder footprints of the RAILS this side actually draws. */
 	railPx: number[]
+	/**
+	 * The sides are TUCKED (./tuckedSides): an arranged side draws only its
+	 * icon rail, and an un-arranged side's rails are drawn as icon strips,
+	 * which — like every icon strip — are not counted.
+	 */
+	tucked?: boolean
 }
 
 /**
@@ -99,6 +123,11 @@ export interface SideFlowInput {
  * Only the `inline` slot is in that row at all: a stowed side has no box in the
  * flow and an overlay one is a fixed sheet — neither may reserve width the
  * centre would then not get.
+ *
+ * An EMPTY side draws nothing, so it is 0 here. Its column (ruled 2026-09-29)
+ * is not a footprint but a softer ask made separately — `emptyColumnPx` /
+ * `emptyColumnsPx`, below — so it never raises the tuck threshold, which is
+ * read off this function.
  *
  * Two deliberate omissions. An icon strip is not counted: it is a fixed
  * 2.25rem that the ladder does not size and the clamp does not touch. And a
@@ -109,6 +138,7 @@ export interface SideFlowInput {
  */
 export function sideFlowPx(o: SideFlowInput): number {
 	if (o.slot !== "inline") return 0
+	if (o.tucked) return o.arranged ? RAIL_PX : 0
 	if (o.arranged) return o.arrangedPx
 	return o.railPx.length ? Math.max(...o.railPx) : 0
 }
@@ -149,4 +179,177 @@ export function inlineSideWidths(o: InlineSideWidthsInput): InlineSideWidths {
 		left: Math.floor(o.left * scale),
 		right: Math.floor(o.right * scale)
 	}
+}
+
+/* ── the middle grows, the sides keep their width (ruled 2026-09-28) ─────
+ *
+ * A docked side is its ladder width (`DEFAULT_SIDE_RULES`, `width × columns`)
+ * and nothing more; the MIDDLE takes every pixel the window adds. This
+ * reverses the 2026-09-27 fill rule (`sideFillPx`, retired), under which the
+ * sides took half of what the stage's measure left and the middle stayed the
+ * conversation's measure: widening the window widened the panels and left the
+ * middle fixed, which the owner ruled wrong ("the side panels grow, which is
+ * wrong").
+ *
+ * The conversation fills that wider middle (Line width: Full, the default,
+ * ruled 2026-09-29); under Line width: Comfortable its column keeps its
+ * measure inside it, centred on the session by the middle's balance
+ * (./tuckedSides rule (1)), and the rest of the middle is the conversation's
+ * scroll region, so the wheel works across it. The only time a side is narrower than its ladder is the tight case
+ * `inlineSideWidths` already handles.
+ *
+ * An EMPTY side is one of the docked sides here whenever its column was
+ * granted (`emptyColumnsPx`, below, ruled 2026-09-29): the caller passes that
+ * width in the side's place, so the middle takes what is left after the empty
+ * columns too, and never grows into one.
+ */
+export interface DockedZoneWidths extends InlineSideWidths {
+	/** What the middle gets: the body less the docked sides and their gaps. */
+	middle: number
+}
+
+export function dockedZoneWidths(o: InlineSideWidthsInput): DockedZoneWidths {
+	const sides = inlineSideWidths(o)
+	const gaps = (sides.left > 0 ? o.gapPx : 0) + (sides.right > 0 ? o.gapPx : 0)
+	return {
+		...sides,
+		middle: Math.max(0, o.bodyPx - sides.left - sides.right - gaps)
+	}
+}
+
+/* ── an empty side keeps its column (ruled 2026-09-29) ───────────────────
+ *
+ * "The columns shouldn't disappear if the pane is empty." The editor always
+ * draws a side's track, so the session a person gets on Done keeps that
+ * side too, even with nothing in it: the middle never takes an empty side's
+ * room while there is room to spare.
+ *
+ * Every declared side that DOCKS at this width — a pinned rail, or a
+ * shipped-unpinned icon strip like the default Left — keeps an EMPTY COLUMN
+ * while it holds nothing: a quiet box at the width its first widget will have
+ * (the ladder's `width × columns`, the arranged footprint), so adding that
+ * widget moves nothing. A HIDDEN zone, a side on its drawer rung, and a side
+ * with no zone at all ask for nothing: there is nothing docked to keep.
+ *
+ * The column is SOFT. It is not a footprint (`sideFlowPx` above stays 0 for
+ * it), so it never raises the tuck threshold: it takes only room the
+ * populated sides and the stage's measure do not need, and gives way to 0
+ * BEFORE any populated side would tuck. Two empty sides are kept together or
+ * not at all, so the stage stays centred. Tucked, an empty side is nothing —
+ * no column and no icon rail, because a rail with no icon has no panel to
+ * open.
+ */
+
+/** One of a side's zones, as far as whether the side holds anything. */
+export interface SideZoneFill {
+	/** The zone's resolved mode (./schema `resolveZone`). */
+	mode: SideMode | StripMode
+	/**
+	 * What it holds that a person can open: its panel instances AND its
+	 * conversation copies (`messages#…`) — `zoneEntriesOf`'s count, the one
+	 * the phone's panels menu lists. Not `widgetsOf`, which skips the copies.
+	 */
+	entries: number
+}
+
+/** A zone that shows something: not hidden, and holding at least one entry. */
+export function zonePopulated(z: SideZoneFill): boolean {
+	return z.mode !== "hidden" && z.entries > 0
+}
+
+export interface SidePopulatedInput {
+	/** The side's saved arrangement places at least one widget. */
+	arranged: boolean
+	/** Every zone on this side. */
+	zones: ReadonlyArray<SideZoneFill>
+}
+
+/**
+ * Does this side hold anything? The one question the desktop (an empty column
+ * or not) and the phone (listed in the panels menu or not) both ask, so the
+ * two cannot disagree about a side holding only a conversation copy.
+ */
+export function sidePopulated(o: SidePopulatedInput): boolean {
+	return o.arranged || o.zones.some(zonePopulated)
+}
+
+export interface EmptyColumnInput {
+	/** Where this side's one mount currently lives; only `inline` has a row. */
+	slot: SideSlot
+	/** The sides are tucked (./tuckedSides): an empty side is then nothing. */
+	tucked?: boolean
+	/** `sidePopulated`: a populated side takes its own footprint instead. */
+	populated: boolean
+	/** The side's zones as the ladder resolves them DOCKED (before tucking). */
+	zones: ReadonlyArray<{ mode: SideMode | StripMode; width: number; columns: number }>
+}
+
+/**
+ * What an empty side ASKS for: the widest docked zone's `width × columns`, or
+ * 0 when it is not empty, not in the row, tucked, or has nothing that docks
+ * (hidden, drawer, no zone). Whether it gets it is `emptyColumnsPx`.
+ */
+export function emptyColumnPx(o: EmptyColumnInput): number {
+	if (o.slot !== "inline" || o.tucked || o.populated) return 0
+	let px = 0
+	for (const z of o.zones)
+		if (z.mode === "rail" || z.mode === "icons")
+			px = Math.max(px, z.width * z.columns)
+	return px
+}
+
+export interface EmptyColumnsInput {
+	/** What each side DRAWS (`sideFlowPx`) — 0 for an empty side. */
+	hardLeftPx: number
+	hardRightPx: number
+	/** What each empty side asks for (`emptyColumnPx`). */
+	emptyLeftPx: number
+	emptyRightPx: number
+	/** Measured width of `.layout-body`. 0 = not measured yet. */
+	bodyPx: number
+	/** The body's flex gap — one per side in the flow. */
+	gapPx: number
+	/** The stage's measure; defaults to `STAGE_MEASURE_PX`, as the tuck does. */
+	stagePx?: number
+}
+
+/**
+ * The empty columns the session can afford: every one asked for when the
+ * populated sides, their gaps, the stage's measure AND the empty columns with
+ * a gap each fit in the body; none otherwise. An unmeasured body keeps them,
+ * like every first-frame decision in this layout (`sidesTucked`).
+ */
+export function emptyColumnsPx(o: EmptyColumnsInput): InlineSideWidths {
+	const hardL = Math.max(0, o.hardLeftPx)
+	const hardR = Math.max(0, o.hardRightPx)
+	// A side that draws something takes its own footprint, never a column.
+	const left = hardL > 0 ? 0 : Math.max(0, o.emptyLeftPx)
+	const right = hardR > 0 ? 0 : Math.max(0, o.emptyRightPx)
+	if (left + right <= 0) return { left: 0, right: 0 }
+	if (!(o.bodyPx > 0)) return { left, right }
+	const hardGaps = (hardL > 0 ? o.gapPx : 0) + (hardR > 0 ? o.gapPx : 0)
+	const spare =
+		o.bodyPx - hardL - hardR - hardGaps - (o.stagePx ?? STAGE_MEASURE_PX)
+	const cost = (left > 0 ? left + o.gapPx : 0) + (right > 0 ? right + o.gapPx : 0)
+	return spare >= cost ? { left, right } : { left: 0, right: 0 }
+}
+
+/**
+ * Is the middle one column — every widget in it stacked, none beside another?
+ * Only a one-column middle has one column to centre on the session, so only it
+ * carries the balance (./tuckedSides rule (1)); a middle arranged across takes
+ * its whole width unbalanced.
+ */
+export function middleIsOneColumn(
+	items: ReadonlyArray<{ x: number; y: number; w: number; h: number }>
+): boolean {
+	for (let i = 0; i < items.length; i++)
+		for (let j = i + 1; j < items.length; j++) {
+			const a = items[i]
+			const b = items[j]
+			const rows = a.y < b.y + b.h && b.y < a.y + a.h
+			const cols = a.x < b.x + b.w && b.x < a.x + a.w
+			if (rows && !cols) return false
+		}
+	return true
 }

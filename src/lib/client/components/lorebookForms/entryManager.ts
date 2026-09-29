@@ -22,6 +22,7 @@ import type { TypedSocket } from "$lib/client/sockets/typedSocket"
 import { declareInterest } from "$lib/client/sockets/interest.svelte"
 import { interestKey } from "$lib/shared/sockets/interest"
 import type { EntryTypeId, LorebookEntry } from "$lib/shared/entries/types"
+import { keyList } from "$lib/shared/entries/keyList"
 
 /** A binding with the character it names, as the lists send it. A persona is
  *  a character, so `character` is the only bound arc. */
@@ -93,7 +94,11 @@ export function compareEntriesBy(
  * the difference between a search box and a wall.
  */
 export function filterEntriesBySearch<
-	T extends { name?: string | null; content?: string | null; keys?: string }
+	T extends {
+		name?: string | null
+		content?: string | null
+		keys?: readonly string[] | string | null
+	}
 >(entries: readonly T[], search: string): T[] {
 	const needle = search.trim().toLowerCase()
 	if (!needle) return [...entries]
@@ -101,7 +106,7 @@ export function filterEntriesBySearch<
 		(e) =>
 			(e.name || "").toLowerCase().includes(needle) ||
 			(e.content || "").toLowerCase().includes(needle) ||
-			(e.keys || "").toLowerCase().includes(needle)
+			keyList(e.keys).some((k) => k.toLowerCase().includes(needle))
 	)
 }
 
@@ -141,7 +146,11 @@ export interface EntrySocketHandlers<T extends EntryTypeId> {
 	/** A create/update/delete acknowledgement, for the toast. */
 	onCreated?: (entry: LorebookEntry<T>) => void
 	onUpdated?: (entry: LorebookEntry<T>) => void
-	onDeleted?: () => void
+	/**
+	 * A delete landed. `askedHere` is whether THIS channel sent it — a delete
+	 * from another tab or a session is a list change, not something to toast.
+	 */
+	onDeleted?: (entryId: number, askedHere: boolean) => void
 	onReordered?: () => void
 }
 
@@ -170,8 +179,29 @@ export function entryChannel<T extends EntryTypeId>(
 ) {
 	const { lorebookId, typeId, vectorSource, handlers } = opts
 
+	/**
+	 * The ids of THIS type's rows the channel has seen, plus the ones it asked
+	 * to delete.
+	 *
+	 * ⚠ `entries:delete` answers with `{ lorebookId, entryId }` and no type, so
+	 * the book is the only filter the payload offers — and every door open on
+	 * the book heard every delete, so "All entries" toasted "World lore
+	 * deleted", "History deleted"… for one row. A delete is this channel's
+	 * when the row is one it listed, one it created, or one it removed.
+	 */
+	const known = new Set<number>()
+	const removing = new Set<number>()
+	/**
+	 * Reorders this channel sent that have not been answered. The reply is a
+	 * bare `{ success }` naming neither book nor type, so the only way to know
+	 * it is ours is to have asked.
+	 */
+	let reordersInFlight = 0
+
 	const onList = async (msg: Sockets.Entries.List.Response) => {
 		if (msg.lorebookId !== lorebookId || msg.typeId !== typeId) return
+		known.clear()
+		for (const e of msg.entryList ?? []) known.add(e.id)
 		await handlers.onList(msg.entryList as LorebookEntry<T>[])
 	}
 	const onCreated = (msg: Sockets.Entries.Create.Response) => {
@@ -180,6 +210,7 @@ export function entryChannel<T extends EntryTypeId>(
 			msg.entry?.typeId !== typeId
 		)
 			return
+		known.add(msg.entry.id)
 		handlers.onCreated?.(msg.entry as LorebookEntry<T>)
 	}
 	const onUpdated = (msg: Sockets.Entries.Update.Response) => {
@@ -191,9 +222,16 @@ export function entryChannel<T extends EntryTypeId>(
 		handlers.onUpdated?.(msg.entry as LorebookEntry<T>)
 	}
 	const onDeleted = (msg: Sockets.Entries.Delete.Response) => {
-		if (msg.success) handlers.onDeleted?.()
+		if (msg.lorebookId !== lorebookId) return
+		const asked = removing.has(msg.entryId)
+		const mine = known.has(msg.entryId) || asked
+		known.delete(msg.entryId)
+		removing.delete(msg.entryId)
+		if (mine && msg.success) handlers.onDeleted?.(msg.entryId, asked)
 	}
 	const onReordered = (msg: Sockets.Entries.UpdatePositions.Response) => {
+		if (reordersInFlight <= 0) return
+		reordersInFlight -= 1
 		if (msg.success) handlers.onReordered?.()
 	}
 	const onBindings = async (msg: Sockets.Lorebooks.BindingList.Response) => {
@@ -291,10 +329,12 @@ export function entryChannel<T extends EntryTypeId>(
 			})
 		},
 		remove(id: number) {
+			removing.add(id)
 			socket.emit("entries:delete", { id, typeId })
 		},
 		/** A whole permutation, renumbered 1..n by the caller. */
 		reorder(positions: Array<{ id: number; position: number }>) {
+			reordersInFlight += 1
 			socket.emit("entries:updatePositions", {
 				lorebookId,
 				typeId,

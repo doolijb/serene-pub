@@ -37,9 +37,9 @@
 		badge?: Snippet
 		/** Escape hatch for per-tab styling, eg. the Ollama and KoboldCpp
 		    managers ring their Available tab during the setup tutorial. A tab that
-		    should not be REACHABLE is not rendered at all — see ContextSidebar,
-		    whose Cards trigger is wrapped in `{#if}` rather than hidden with a
-		    class, so it never sits in zag's arrow-key ring. */
+		    should not be REACHABLE is not rendered at all — wrap its trigger in
+		    `{#if}` rather than hiding it with a class, so it never sits in zag's
+		    arrow-key ring. */
 		class?: string
 	}
 

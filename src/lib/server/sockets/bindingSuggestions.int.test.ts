@@ -523,6 +523,66 @@ describe("adding creates the binding and records that it did", () => {
 		).rejects.toThrow(/already been added/i)
 	}, 60_000)
 
+	it("a double accept makes ONE cast member (finding #19)", async () => {
+		const { user, lorebook } = await makeBook()
+		await annotate(lorebook.id)
+		const first = await list(user.id, lorebook.id)
+		const target = first.suggestions.find((s) => s.name === "emberfall")!
+
+		const { bindingSuggestionsAddHandler } = await import(
+			"./bindingSuggestions"
+		)
+		const accept = () =>
+			bindingSuggestionsAddHandler.handler(
+				fakeSocket(user.id),
+				{ id: target.id, name: "Emberfall" },
+				noEmit
+			)
+		const results = await Promise.allSettled([accept(), accept()])
+		expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1)
+		const refused = results.find((r) => r.status === "rejected") as
+			| PromiseRejectedResult
+			| undefined
+		expect(String(refused?.reason?.message)).toMatch(/already/i)
+
+		const minted = (
+			await db
+				.select()
+				.from(schema.lorebookBindings)
+				.where(eq(schema.lorebookBindings.lorebookId, lorebook.id))
+		).filter((b) => b.name === "Emberfall")
+		expect(minted).toHaveLength(1)
+	}, 60_000)
+
+	it("a refused accept leaves the suggestion pending", async () => {
+		const { user, lorebook } = await makeBook()
+		await annotate(lorebook.id)
+		const first = await list(user.id, lorebook.id)
+		const target = first.suggestions.find((s) => s.name === "emberfall")!
+		// The book already answers to the name, so the accept is refused — and
+		// the claim it made first must roll back with it.
+		await db.insert(schema.lorebookBindings).values({
+			lorebookId: lorebook.id,
+			binding: "{{char:90}}",
+			name: "Emberfall"
+		})
+		const { bindingSuggestionsAddHandler } = await import(
+			"./bindingSuggestions"
+		)
+		await expect(
+			bindingSuggestionsAddHandler.handler(
+				fakeSocket(user.id),
+				{ id: target.id, name: "Emberfall" },
+				noEmit
+			)
+		).rejects.toThrow(/already has a binding/i)
+		const [row] = await db
+			.select({ status: schema.bindingSuggestions.status })
+			.from(schema.bindingSuggestions)
+			.where(eq(schema.bindingSuggestions.id, target.id))
+		expect(row.status).not.toBe("added")
+	}, 60_000)
+
 	it("refuses to un-ignore something that was added", async () => {
 		const { user, lorebook } = await makeBook()
 		await annotate(lorebook.id)

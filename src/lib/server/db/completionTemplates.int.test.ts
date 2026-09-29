@@ -188,12 +188,12 @@ const SEED = [
 		promptFormat: "claude"
 	},
 	{
-		name: "Session split",
+		name: "Chat split",
 		type: "openai_chat",
 		baseUrl: "https://api.example.test/v1",
 		model: "gpt-4o",
 		tokenCounter: "estimate",
-		promptFormat: "split_session"
+		promptFormat: "split_chat"
 	},
 	{
 		name: "Never picked one",
@@ -356,7 +356,7 @@ describe("0097 adds the template table and keys connections to it", () => {
 		expect(byName.get("KoboldCPP")).toBe("chatml")
 		expect(byName.get("Anthropic")).toBe("claude")
 		// Not selectable, but seeded — so a connection already on it keeps it.
-		expect(byName.get("Session split")).toBe("split_session")
+		expect(byName.get("Chat split")).toBe("split_chat")
 
 		// Cleared, because they name nothing. NULL, not a substituted default:
 		// the resolver answers absent and unresolved identically, so writing a
@@ -367,7 +367,7 @@ describe("0097 adds the template table and keys connections to it", () => {
 		expect(byName.get("From some other build")).toBeNull()
 	}, 60_000)
 
-	it("seeds every built-in immutable, with split_session unselectable", async () => {
+	it("seeds every built-in immutable, with split_chat unselectable", async () => {
 		const { db } = await upgrading()
 
 		await applyMigration(db)
@@ -401,8 +401,8 @@ describe("0097 adds the template table and keys connections to it", () => {
 			expect(row.stop_strings).toEqual(t.stopStrings)
 		}
 
-		expect(byKey.get("split_session").is_selectable).toBe(false)
-		expect(byKey.get("split_session").render_mode).toBe("role_array")
+		expect(byKey.get("split_chat").is_selectable).toBe(false)
+		expect(byKey.get("split_chat").render_mode).toBe("role_array")
 	}, 60_000)
 
 	it("clears the connection rather than deleting it when a template goes", async () => {

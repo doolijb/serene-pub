@@ -7,7 +7,7 @@
  * Reasoning that is not lifted out here is not merely displayed wrong — it is
  * *stored*. A `<think>` block left in a completion goes into the message row,
  * and from there into the next turn's prompt, the embedding, the annotations
- * and the summaries built from that message. There is no later stage that can
+ * and the summaries built from that message. There is no later step that can
  * take it back out, because by then it is indistinguishable from what the
  * character said. So the strip has to happen at every seam that produces a
  * durable string, and those seams have to agree — hence one module, not a

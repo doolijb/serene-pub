@@ -16,7 +16,7 @@
  * correction round specifically called out as needing their own,
  * independent isNull(removedAt) filter (sessionsGetResponseOrderHandler via
  * getPromptSessionFromDb, toggleSessionCharacterActiveHandler,
- * updateSessionCharacterVisibilityHandler), plus sessionsBranchHandler's new
+ * the since-retired updateSessionCharacterVisibilityHandler), plus sessionsBranchHandler's new
  * owner-only gate (a separate, lower-severity finding from the same round)
  * and its exclusion of removed participants from a branched session's copy.
  */
@@ -571,33 +571,6 @@ describe("toggle/visibility handlers — removed row excluded (PGlite integratio
 		const res = await toggleSessionCharacterActiveHandler.handler(
 			fakeSocket(owner.id),
 			{ sessionId: session.id, characterId: char.id } as any,
-			noopEmit
-		)
-		expect(res.error).toBeTruthy()
-	})
-
-	test("updateSessionCharacterVisibility 404s on a removed character", async () => {
-		const {
-			sessionsUpdateHandler,
-			updateSessionCharacterVisibilityHandler
-		} = await import("./sessions")
-		const owner = await makeUser("visibility-owner")
-		const session = await makeSession(owner.id)
-		const char = await makeCharacter(owner.id, "Visibility Away")
-		await addCharacterToSession(session.id, char.id)
-		await sessionsUpdateHandler.handler(
-			fakeSocket(owner.id),
-			{ session: { id: session.id }, characterIds: [] } as any,
-			noopEmit
-		)
-
-		const res = await updateSessionCharacterVisibilityHandler.handler(
-			fakeSocket(owner.id),
-			{
-				sessionId: session.id,
-				characterId: char.id,
-				visibility: "hidden"
-			} as any,
 			noopEmit
 		)
 		expect(res.error).toBeTruthy()

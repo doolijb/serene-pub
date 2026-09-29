@@ -53,7 +53,7 @@
 	)
 </script>
 
-<section class="card preset-filled-surface-100-900 flex flex-col gap-3 p-4" aria-label="Used by presets">
+<section class="panel-card flex flex-col gap-3" aria-label="Used by presets">
 	<div>
 		<h3 class="text-sm font-semibold">Used by presets</h3>
 		<p class="text-surface-600-400 text-xs">
@@ -86,20 +86,20 @@
 					</a>
 					{#if u.preset.isDefault}
 						<span
-							class="preset-tonal-primary rounded-full px-1.5 py-0.5 text-[0.65rem]"
+							class="preset-tonal-primary rounded-full px-1.5 py-0.5 text-[11px]"
 							>default</span
 						>
 					{/if}
 					{#if !u.preset.enabled}
 						<span
-							class="preset-tonal-surface rounded-full px-1.5 py-0.5 text-[0.65rem]"
+							class="preset-tonal-surface rounded-full px-1.5 py-0.5 text-[11px]"
 							>hidden</span
 						>
 					{/if}
 					<span class="flex-1"></span>
 					{#each u.events as e (e.event)}
 						<span
-							class="preset-tonal-surface rounded px-1.5 py-0.5 font-mono text-[10px]"
+							class="preset-tonal-surface rounded px-1.5 py-0.5 font-mono text-[11px]"
 							title={e.config != null
 								? `${e.event} @ config #${e.config}`
 								: `${e.event} @ shipped default`}

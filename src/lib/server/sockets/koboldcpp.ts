@@ -1,14 +1,15 @@
+import {
+	chatEntries,
+	fetchRecommendedGguf,
+	type RecommendedEntry
+} from "$lib/server/connections/recommendedGguf"
 import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
-// InsertConnection is declared globally in $lib/server/db/types.d.ts (ambient
-// `export global {}` block, same pattern as the Sockets namespace) — no
-// import needed/available for it.
 import { eq, and, inArray } from "drizzle-orm"
 import type { Handler } from "$lib/shared/events"
 import { buildConnectionsList, connectionsSetDefault } from "./connections"
 import { buildSystemSettingsGet } from "./systemSettings"
 import { getAppDataDir } from "$lib/server/db/drizzle.config"
-import koboldCppManagedAdapter from "$lib/server/connectionAdapters/KoboldCppManagedAdapter"
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 import { flagsFrom, NO_FLAGS } from "$lib/server/koboldcpp/probeCapabilities"
 import * as fs from "fs"
@@ -56,15 +57,20 @@ import {
 	formatForFilename,
 	modalityForKind
 } from "$lib/server/localModels/registry"
-import { resolveConnectionCapabilities } from "$lib/server/connections/resolve"
 import { setCapabilityDefault } from "$lib/server/connections/capabilityDefaults"
 import {
-	endpointIdsServingModel,
 	ensureConnectionModel,
 	forgetModelEverywhere
 } from "$lib/server/connections/models"
 import { syncManyConnectionModels } from "$lib/server/connections/modelSync"
-import { CONNECTION_DEFAULTS } from "$lib/shared/utils/connectionDefaults"
+import {
+	ensureManagedKoboldCppEndpoint,
+	managedKoboldCppEndpoint
+} from "$lib/server/koboldcpp/managedEndpoint"
+import {
+	downloadHref,
+	notifyDownloadSettled
+} from "$lib/server/notifications/downloads"
 import { isAndroidWrapper } from "$lib/server/utils"
 
 // --- KOBOLDCPP MANAGER HANDLERS ---
@@ -330,7 +336,7 @@ export async function buildKoboldCppListModels(): Promise<Sockets.KoboldCPP.List
 	// only prevents localModels from accumulating rows for files that no
 	// longer exist. Which is also why skipping it is cheap and running it on
 	// an incomplete scan is not: a row nobody sees, against every model the
-	// user owns disappearing from the Manager.
+	// user owns disappearing from the managed KoboldCPP.
 	if (scannedEverything) {
 		const staleFilenames = dbModels
 			.filter(
@@ -563,99 +569,25 @@ export const koboldCppConnectModelHandler: Handler<
 		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
 		const settings = (await db.query.koboldCppSettings.findFirst())!
 		if (!settings.koboldCppManagerEnabled) {
-			throw new Error("KoboldCPP Manager is disabled")
+			throw new Error("KoboldCPP, run by Serene Pub, is turned off")
 		}
 		const { koboldCppManagerBaseUrl: baseUrl } = settings
 
-		// Activating a model always targets a Managed-type connection — a
-		// dumb/unmanaged connection never has model-swap behavior applied to it.
-		// Which managed endpoint already SERVES this gguf — asked of
-		// `connection_models` and not of the endpoint's mirror column (0114).
-		// One managed instance can hold several models now, so the old
-		// `WHERE connections.model = $1` would report "no connection for this
-		// one" while the endpoint listing it sat right there, and make a
-		// duplicate every time somebody pressed Use for chat.
-		const servingText = await endpointIdsServingModel(
-			db,
-			params.modelName,
-			[CONNECTION_TYPE.KOBOLDCPP_MANAGED]
-		)
-		let existingConnection = servingText.length
-			? await db.query.connections.findFirst({
-					where: (c, { eq }) => eq(c.id, servingText[0])
-				})
-			: undefined
-		let modelRow: { id: number } | undefined = undefined
-
-		if (!existingConnection) {
-			const connectionName = params.modelName
-				.replace(/\.gguf$/i, "")
-				.replace(/\.kcpps$/i, "")
-				.split(/[\\/]/)
-				.pop()!
-
-			const data: InsertConnection = {
-				...koboldCppManagedAdapter.connectionDefaults,
-				// connectionDefaults is typed as Record<string, any> on the
-				// AdapterExports interface (adapters have differently-shaped
-				// defaults), so the spread above doesn't statically guarantee
-				// `type` even though it's present at runtime — set it
-				// explicitly so this satisfies InsertConnection.
-				type: CONNECTION_TYPE.KOBOLDCPP_MANAGED,
-				name: connectionName,
-				baseUrl,
-				extraJson: {
-					...koboldCppManagedAdapter.connectionDefaults.extraJson
-				}
-			}
-
-			// A raw insert bypasses everything `connections:create` does to a new
-			// row, including this — and the omission fails INVISIBLY. An empty
-			// `capabilities` reads as "not determined yet", so capabilityGuard
-			// falls through to its modality test and the connection keeps
-			// working by accident, right up until some unrelated edit resolves
-			// the row properly and the picker changes under the user.
-			data.capabilities = {
-				resolved: resolveConnectionCapabilities(data)
-			}
-
-			const [newConnection] = await db
-				.insert(schema.connections)
-				.values(data)
-				.returning()
-			// The other half of the row this raw insert bypasses: without
-			// a model row the new endpoint resolves to no model at all, and the
-			// next send fails against a connection that looks configured.
-			// `ensureConnectionModel` ensures the ROW, never a default:
-			// connections have none.
-			modelRow =
-				(await ensureConnectionModel(
-					db,
-					newConnection.id,
-					params.modelName
-				)) ?? undefined
-			existingConnection = newConnection
-		}
-
-		// The row this flow is for, found never guessed: ensured above on a
-		// fresh endpoint, or named by an earlier run through the same flow.
-		const modelId =
-			modelRow?.id ??
-			(
-				await db
-					.select({ id: schema.connectionModels.id })
-					.from(schema.connectionModels)
-					.where(
-						and(
-							eq(
-								schema.connectionModels.connectionId,
-								existingConnection.id
-							),
-							eq(schema.connectionModels.model, params.modelName)
-						)
-					)
-					.limit(1)
-			)[0]?.id
+		// Activating a model always targets THE managed endpoint — a dumb or
+		// unmanaged connection never has model-swap behaviour applied to it,
+		// and a second managed row would be a second name for one process.
+		// The model row is ensured with its modality, so the default
+		// registered next is judged as a text model before any sync has run.
+		const endpoint = await ensureManagedKoboldCppEndpoint(db, baseUrl)
+		const modelId = (
+			await ensureConnectionModel(
+				db,
+				endpoint.id,
+				params.modelName,
+				null,
+				"text-gen"
+			)
+		)?.id
 		if (modelId == null) {
 			const error = "That model is not on this connection."
 			emitToUser("koboldcpp:connectModel:error", { error })
@@ -667,13 +599,13 @@ export const koboldCppConnectModelHandler: Handler<
 		// "Use for chat" IS somebody choosing, which is exactly what the
 		// ruling requires and what the deleted auto-star in
 		// `connections:create` was not. The capability is named because the
-		// handler cannot derive it — this same managed KoboldCPP also serves
-		// `text->image` through its own connection row.
+		// handler cannot derive it — this same managed endpoint also serves
+		// `text->image`.
 		await connectionsSetDefault.handler(
 			socket,
 			{
 				capability: "text->text",
-				id: existingConnection.id,
+				id: endpoint.id,
 				modelId
 			},
 			emitToUser
@@ -692,11 +624,12 @@ export const koboldCppConnectModelHandler: Handler<
 }
 
 /**
- * The image counterpart of connectModel: one image model, one connection.
+ * The image counterpart of connectModel: the same managed endpoint, an image
+ * model on it.
  *
  * A separate handler rather than a `kind` param on that one, because the two
- * agree on almost nothing: different type, different validation, different
- * model kind.
+ * agree on little beyond the endpoint: different validation, different model
+ * kind, a different default.
  *
  * The one thing they DO now share is how the default is written. Both register a
  * `connection_defaults` row — this one for `text->image`, `connectModel` for
@@ -726,7 +659,7 @@ export const koboldCppConnectImageModelHandler: Handler<
 		}
 
 		if (!settings.koboldCppManagerEnabled) {
-			return fail("KoboldCPP Manager is disabled")
+			return fail("KoboldCPP, run by Serene Pub, is turned off")
 		}
 
 		const rec = await db.query.localModels.findFirst({
@@ -756,74 +689,21 @@ export const koboldCppConnectImageModelHandler: Handler<
 			return fail("That model file is no longer on disk")
 		}
 
-		// The image sibling of connectModel's lookup, and the same 0114 reason:
-		// the question "which endpoint serves this checkpoint" belongs to
-		// `connection_models` now.
-		const servingImage = await endpointIdsServingModel(
+		// THE managed endpoint — the same row "Use for chat" lands on, because
+		// it is the same process. The model row is ensured with its modality,
+		// so the default registered next is judged as an image model now
+		// rather than after the next sync.
+		const connection = await ensureManagedKoboldCppEndpoint(
 			db,
-			params.filename,
-			[CONNECTION_TYPE.KOBOLDCPP_MANAGED_IMAGE]
+			settings.koboldCppManagerBaseUrl
 		)
-		let connection = servingImage.length
-			? await db.query.connections.findFirst({
-					where: (c, { eq }) => eq(c.id, servingImage[0])
-				})
-			: undefined
-
-		if (!connection) {
-			const connectionName = params.filename.replace(
-				MODEL_EXTENSION_RE,
-				""
-			)
-
-			const data: InsertConnection = {
-				...CONNECTION_DEFAULTS[CONNECTION_TYPE.KOBOLDCPP_MANAGED_IMAGE],
-				type: CONNECTION_TYPE.KOBOLDCPP_MANAGED_IMAGE,
-				// Explicit rather than inherited from the defaults spread: the
-				// picker filters on this column, and a row that landed as
-				// "text-gen" would be invisible everywhere it matters while
-				// looking perfectly fine in the Connections list.
-				modality: "image-gen",
-				name: connectionName,
-				// Display only. The Manager's own settings are what
-				// dispatchImage and the thin adapter resolve a managed row's
-				// base URL from — this column is not authoritative for it.
-				baseUrl: settings.koboldCppManagerBaseUrl,
-				extraJson: {
-					...CONNECTION_DEFAULTS[
-						CONNECTION_TYPE.KOBOLDCPP_MANAGED_IMAGE
-					].extraJson
-				}
-			}
-			// Same reason as connectModel's: a raw insert skips what
-			// `connections:create` would have done, and a row with an empty
-			// `capabilities` reads as undetermined rather than as broken.
-			data.capabilities = {
-				resolved: resolveConnectionCapabilities(data)
-			}
-
-			const [newConnection] = await db
-				.insert(schema.connections)
-				.values(data)
-				.returning()
-			// Same as connectModel's: the raw insert skips the model row, and an
-			// image endpoint with none renders nothing.
-			await ensureConnectionModel(db, newConnection.id, params.filename)
-			connection = newConnection
-		}
-
-		// The row this flow is for, named outright: connections have no
-		// default model to mean.
-		const [imageModel] = await db
-			.select({ id: schema.connectionModels.id })
-			.from(schema.connectionModels)
-			.where(
-				and(
-					eq(schema.connectionModels.connectionId, connection.id),
-					eq(schema.connectionModels.model, params.filename)
-				)
-			)
-			.limit(1)
+		const imageModel = await ensureConnectionModel(
+			db,
+			connection.id,
+			params.filename,
+			null,
+			"image-gen"
+		)
 		if (!imageModel) return fail("That model is not on this connection.")
 
 		// The capability-keyed table only — `system_settings` has one default
@@ -974,61 +854,16 @@ const IMGMODEL_API_URL = `https://huggingface.co/api/models/${IMGMODEL_REPO_ID}?
 const IMGMODEL_CAVEAT =
 	"From koboldcpp/imgmodel, the maintainer's curated single-file image models. SD1.5 and SDXL need only the model itself; SD3 and Flux additionally need separate Clip and T5-XXL files, which this list does not cover."
 
-async function fetchRecommendedYaml(): Promise<
-	Array<{
-		name: string
-		pull: string
-		/** GB, as the list quotes it; 0 when it quotes none. */
-		size: number
-		recommended_vram: number
-		details: { parameter_size: string; description: string }
-	}>
-> {
-	const resp = await fetch(
-		"https://raw.githubusercontent.com/SerenePub/serene-pub-gguf-list/main/recommended.yaml"
-	)
-	if (!resp.ok) throw new Error(`YAML fetch failed: ${resp.status}`)
-	const text = await resp.text()
-
-	const models: any[] = []
-	let cur: any = null
-	let inDetails = false
-	for (const line of text.split("\n")) {
-		const t = line.trim()
-		if (t.startsWith("- name:")) {
-			if (cur) models.push(cur)
-			cur = {
-				name: t.replace("- name:", "").trim(),
-				pull: "",
-				size: 0,
-				recommended_vram: 0,
-				details: { parameter_size: "", description: "" }
-			}
-			inDetails = false
-		} else if (cur) {
-			if (t.startsWith("pull:")) cur.pull = t.replace("pull:", "").trim()
-			else if (t.startsWith("size:"))
-				cur.size = parseFloat(t.replace("size:", "").trim()) || 0
-			else if (t.startsWith("recommended_vram:"))
-				cur.recommended_vram =
-					parseInt(t.replace("recommended_vram:", "").trim()) || 0
-			else if (t === "details:") inDetails = true
-			else if (inDetails) {
-				if (t.startsWith("parameter_size:"))
-					cur.details.parameter_size = t
-						.replace("parameter_size:", "")
-						.trim()
-						.replace(/"/g, "")
-				else if (t.startsWith("description:"))
-					cur.details.description = t
-						.replace("description:", "")
-						.trim()
-						.replace(/"/g, "")
-			}
-		}
-	}
-	if (cur) models.push(cur)
-	return models
+/**
+ * The text list, from the shared reader of `recommended.yaml`.
+ *
+ * ⚠ `chatEntries`: the same file now carries Ollama EMBEDDING models, tagged
+ * `embedding`, whose `pull` is an Ollama library name KoboldCPP cannot fetch.
+ * They are never a KoboldCPP recommendation. The YAML has one reader,
+ * `recommendedGguf.ts`.
+ */
+async function fetchRecommendedYaml(): Promise<RecommendedEntry[]> {
+	return chatEntries(await fetchRecommendedGguf())
 }
 
 async function resolveHfModel(
@@ -1223,13 +1058,18 @@ export const koboldCppRecommendedModelsHandler: Handler<
 						ollamaName: ym.name,
 						// The Hub's sibling list carries no byte counts, so the
 						// list's own GB figure is the only size a row can quote.
-						sizeBytes: ym.size ? ym.size * 1_000_000_000 : undefined,
+						sizeBytes: ym.size
+							? ym.size * 1_000_000_000
+							: undefined,
 						recommendedVram: ym.recommended_vram || undefined,
 						parameterSize: ym.details.parameter_size || undefined,
 						description:
 							hf.description ||
 							ym.details.description ||
-							undefined
+							undefined,
+						// The list's curated vocabulary. Both old parsers dropped
+						// it, so it was written and fetched and never shown.
+						tags: ym.tags
 					}
 				}
 			)
@@ -1819,6 +1659,26 @@ export const koboldCppDownloadModelHandler: Handler<
 		}
 		emitDownloadProgress()
 
+		// The admin who pressed Download, carried into the detached task below:
+		// only they are told how it settled.
+		const initiatorId = socket.user!.id
+		const notifySettled = async (error?: unknown) => {
+			let connectionId: number | null = null
+			try {
+				connectionId = (await managedKoboldCppEndpoint(db))?.id ?? null
+			} catch {
+				// The index is a fine landing when the endpoint cannot be read.
+			}
+			await notifyDownloadSettled({
+				userId: initiatorId,
+				source: "koboldcpp",
+				key: filename,
+				model: modelName || filename,
+				href: downloadHref(connectionId),
+				...(error !== undefined ? { error } : {})
+			})
+		}
+
 		// Run download asynchronously so we can return immediately
 		;(async () => {
 			// Declared outside the inner try so the catch block below can
@@ -1947,6 +1807,7 @@ export const koboldCppDownloadModelHandler: Handler<
 						syncErr
 					)
 				}
+				await notifySettled()
 			} catch (err: any) {
 				// Whatever ended the download — cancel or a genuine chunk
 				// error — any request still marked in-flight at this point
@@ -1971,6 +1832,7 @@ export const koboldCppDownloadModelHandler: Handler<
 							errorMessage: err.message ?? "Unknown error"
 						})
 						.where(eq(schema.localModels.filename, filename))
+					await notifySettled(err ?? new Error("Unknown error"))
 				}
 				emitDownloadProgress()
 			}
@@ -2380,6 +2242,25 @@ export const koboldCppStartSubprocess: Handler<
 	event: "koboldcpp:startSubprocess",
 	handler: async (socket, params, emitToUser) => {
 		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
+		if (params?.enable) {
+			// The same write (and the same settings broadcast) as the manager
+			// switch, so every screen that reads the flag hears it.
+			await koboldCppUpdateManagerEnabled.handler(
+				socket,
+				{ enabled: true },
+				emitToUser
+			)
+			const settings = await db.query.koboldCppSettings.findFirst()
+			// External mode has no process of ours to start: switching the
+			// manager on is the whole of "Start" there.
+			if (settings?.koboldCppManagedMode !== "managed") {
+				const res: Sockets.KoboldCPP.StartSubprocess.Response = {
+					success: true
+				}
+				emitToUser("koboldcpp:startSubprocess", res)
+				return res
+			}
+		}
 		subprocessManager.start().catch((err) => {
 			console.error("[KoboldCPP startSubprocess]", err.message)
 		})
@@ -2459,7 +2340,7 @@ export const koboldCppUpdateManagerEnabled: Handler<
 		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
 		if (params.enabled && isAndroidWrapper()) {
 			throw new Error(
-				"KoboldCPP Manager is not available in the Android app"
+				"KoboldCPP, run by Serene Pub, is not available in the Android app"
 			)
 		}
 		await db
@@ -2500,24 +2381,15 @@ export const koboldCppDeleteModelHandler: Handler<
 
 		await fsPromises.unlink(filePath)
 
-		// Remove DB record and any connections pointing to this model — of
-		// EITHER managed kind, since a connection names exactly one model and
-		// both types name one by bare filename. Missing the image type would
-		// leave a connection whose model file is gone, which fails at render
-		// time with nothing on the Connections screen to explain it.
-		//
-		// connection_defaults.connection_id is ON DELETE SET NULL, so a deleted
-		// image connection that held `text->image` releases the slot rather than
-		// stranding it.
+		// Remove the registry record and every connection model naming this
+		// file. ⏳ Both managed types until the boot fold has run: a model row
+		// whose file is gone fails at render time with nothing on the
+		// Connections screen to explain it.
 		await db
 			.delete(schema.localModels)
 			.where(eq(schema.localModels.filename, params.modelName))
-		// The MODEL, and the endpoint only if that empties it (0114). The
-		// comment above still holds for every row these flows create — one
-		// connection, one model — so the outcome for them is unchanged,
-		// `connection_defaults`' ON DELETE SET NULL release included. What is no
-		// longer possible is deleting a managed endpoint that serves four other
-		// ggufs because one of them left the directory.
+		// The MODEL rows, never the endpoint: the managed endpoint is the
+		// process, and it outlives any one file (see forgetModelEverywhere).
 		await forgetModelEverywhere(db, params.modelName, [
 			CONNECTION_TYPE.KOBOLDCPP_MANAGED,
 			CONNECTION_TYPE.KOBOLDCPP_MANAGED_IMAGE

@@ -43,6 +43,8 @@ import {
 import { buildCharacterCardV3 } from "$lib/server/utils/characterCardParser"
 import { buildPersonaExportCard } from "$lib/server/utils/personaCard"
 
+import { clockOf } from "$lib/server/state/storyTime"
+
 export async function buildLorebookExportData(
 	lorebookId: number,
 	userId: number,
@@ -290,6 +292,29 @@ export async function buildLorebookExportData(
 			narrativeNodes,
 			narrativeRelationships
 		)
+	}
+
+	// The book's calendar and main's clock (DESIGN-story-time P5: "it is
+	// data, so it exports with the book"). Only when there is something to
+	// carry, so a free-form book with no clock exports the bytes it always
+	// did — import compares them to detect "unchanged vs conflict".
+	// Branches do not export, so neither do their clocks.
+	const storyClock = clockOf(lorebook)
+	if (lorebook.storyCalendar != null || storyClock) {
+		const ext = (specBookWithGraph as any).extensions ?? {}
+		specBookWithGraph = {
+			...specBookWithGraph,
+			extensions: {
+				...ext,
+				serenepub: {
+					...ext.serenepub,
+					storyTime: {
+						calendar: lorebook.storyCalendar ?? null,
+						clock: storyClock
+					}
+				}
+			}
+		} as typeof specBookWithGraph
 	}
 
 	return { name: lorebook.name, specBookWithGraph }

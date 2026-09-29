@@ -297,7 +297,7 @@ export async function reserveInstalledOwners(db: Db): Promise<string[]> {
  * to say what the declaration was after the code that declared it is gone.
  * `origin` is `code` for core's and `plugin` for anybody else's, which is the
  * distinction the SDK's two-value origin cannot make and the one a stale row
- * has to answer ("the extension that is no longer installed").
+ * has to answer ("the uninstalled extension").
  */
 export async function recordLastSeen(
 	db: Db
@@ -514,7 +514,7 @@ export async function reviveSlot(
 export interface SlotFootprint {
 	/** Cast members (cards, bindings and seats) holding a value for it. */
 	characters: number
-	/** Worlds and sessions holding one. */
+	/** Worlds and sessions — and their places — holding one. */
 	worlds: number
 	/** Rows: every value ever written, which is what the ledger and the charts read. */
 	values: number
@@ -541,7 +541,11 @@ export async function slotFootprint(
 	const characters = new Set<string>()
 	const worlds = new Set<string>()
 	for (const row of rows)
-		(row.ownerKind === "lorebook" || row.ownerKind === "session"
+		// A place (phase 4) is part of its world, never a character.
+		(row.ownerKind === "lorebook" ||
+		row.ownerKind === "session" ||
+		row.ownerKind === "location" ||
+		row.ownerKind === "session_location"
 			? worlds
 			: characters
 		).add(`${row.ownerKind}:${row.ownerId}`)

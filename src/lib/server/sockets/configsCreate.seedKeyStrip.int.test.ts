@@ -8,9 +8,6 @@
  *   duplicate key value violates unique constraint "sampling_configs_seed_key_unique"
  *   Key (seed_key)=(sampling-default) already exists.
  *
- *   duplicate key value violates unique constraint "prompt_configs_seed_key_unique"
- *   Key (seed_key)=(prompt-roleplay-immersive) already exists.
- *
  * Fixed server-side rather than in the sidebar, because a handler must not
  * trust its payload — the sidebar was already stripping `id` and still missed
  * this. These tests drive the handlers with a hostile payload (a seedKey AND an
@@ -93,29 +90,6 @@ describe("config create handlers strip client-supplied seedKey", () => {
 		})
 		expect(holders).toHaveLength(1)
 		expect(holders[0].id).toBe(seeded!.id)
-	}, 60_000)
-
-	test("prompt configs: same fix, the other reported constraint", async () => {
-		const { promptConfigsCreate } = await import("./promptConfigs")
-		const admin = await makeAdmin("seedkey-prompt-admin")
-
-		const [seeded] = await testDb
-			.insert(schema.promptConfigs)
-			.values({
-				name: "Immersive",
-				systemPrompt: "You are a helpful narrator.",
-				seedKey: "prompt-roleplay-immersive"
-			})
-			.returning()
-
-		const { id, isImmutable, ...clone } = seeded as any
-		const res = await promptConfigsCreate.handler(
-			fakeSocket(admin.id),
-			{ promptConfig: { ...clone, name: "Prompt Clone" } } as any,
-			noopEmit as any
-		)
-		expect(res.promptConfig.id).not.toBe(seeded!.id)
-		expect(res.promptConfig.seedKey).toBeNull()
 	}, 60_000)
 
 	test("cloning the SAME seeded config twice both succeed — the stripped key must be NULL, not \"\"", async () => {

@@ -2,12 +2,12 @@
  * Round-7 audit fix: regular session messages had no length cap, unlike
  * assistant-mode sessions (assistantV2.ts already caps at 50,000 chars — dead
  * code today, but the precedent is reused here). An oversized message lands
- * in the "always-included recent messages" window every infill engine
+ * in the "always-included recent messages" window every 0.5 retrieval path
  * re-renders/re-tokenizes from scratch on every candidate it evaluates —
  * synchronously, on Node's single event loop — so it's a single-message DoS
  * reachable by any session participant, not just the sender's own session.
  * sessions:promptTokenCount (the live draft-preview handler) and
- * sessions:triggerNarratorResponse's optional instructions field (which the
+ * sessions:fireNarratorResponse's optional instructions field (which the
  * round-6 fix threads into the compiled prompt as extraInstructions, the
  * same token-budget recompute hot path) get the same treatment.
  */
@@ -191,12 +191,12 @@ describe("sessions:promptTokenCount — length cap (PGlite integration)", () => 
 	})
 })
 
-describe("sessions:triggerNarratorResponse — instructions length cap (PGlite integration)", () => {
+describe("sessions:fireNarratorResponse — instructions length cap (PGlite integration)", () => {
 	test("rejects oversized narrator instructions before any session lookup", async () => {
-		const { triggerNarratorResponseHandler } = await import("./sessions")
+		const { fireNarratorResponseHandler } = await import("./sessions")
 		const user = await makeUser("narrator-instructions-cap-user")
 
-		const res = await triggerNarratorResponseHandler.handler(
+		const res = await fireNarratorResponseHandler.handler(
 			fakeSocket(user.id),
 			{
 				sessionId: 999_999_999,
@@ -209,10 +209,10 @@ describe("sessions:triggerNarratorResponse — instructions length cap (PGlite i
 	})
 
 	test("accepts instructions at exactly the limit (fails later only on the nonexistent session)", async () => {
-		const { triggerNarratorResponseHandler } = await import("./sessions")
+		const { fireNarratorResponseHandler } = await import("./sessions")
 		const user = await makeUser("narrator-instructions-ok-user")
 
-		const res = await triggerNarratorResponseHandler.handler(
+		const res = await fireNarratorResponseHandler.handler(
 			fakeSocket(user.id),
 			{
 				sessionId: 999_999_999,

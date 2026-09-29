@@ -1,7 +1,7 @@
 /**
  * The semantic mechanism's ranking stages, as functions over their inputs.
  *
- * `RagInfillEngine` runs nine of these between "here are candidates" and "here
+ * The 0.5 RAG path ran nine of these between "here are candidates" and "here
  * is what goes in the prompt", all inline in one 200-line block and all keyed to
  * module-level constants. The pipeline's vector mechanism did one of them — cosine
  * similarity — which is why a RAG parity fixture could not have passed: the two

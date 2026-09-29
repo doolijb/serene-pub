@@ -7,6 +7,8 @@
 	} from "$lib/client/sockets/interest.svelte"
 	import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 	import { sectionForModality } from "$lib/shared/constants/connectionSections"
+	import { serviceLabel } from "$lib/client/components/connections/connectionIndexFilter"
+	import { isLocalOnnxType } from "$lib/client/components/connections/modelManagement"
 
 	const socket = useTypedSocket()
 	let userCtx: UserCtx = getContext("userCtx")
@@ -27,12 +29,47 @@
 	 */
 	const starredId = (capability: string) =>
 		systemSettingsCtx.capabilityDefaults?.[capability]?.connectionId ?? null
+	const starredModelId = (capability: string) =>
+		systemSettingsCtx.capabilityDefaults?.[capability]?.connectionModelId ??
+		null
+
+	type Row = Sockets.Connections.List.Response["connectionsList"][number]
+	/**
+	 * The models on this connection that can be registered for `capability`:
+	 * switched on, still listed, able to do it — and, for a local ONNX model,
+	 * on disk, which the server now requires (plan 2026-09-24 A1).
+	 */
+	function usableModels(conn: Row, capability: string) {
+		const local = isLocalOnnxType(conn.type)
+		return (conn.models ?? []).filter(
+			(m) =>
+				m.enabled &&
+				m.missingSince == null &&
+				(m.satisfiableCapabilities ?? []).includes(capability) &&
+				(!local || m.local?.state === "on_disk")
+		)
+	}
+	/** "3 models", or "2 on disk" for a local ONNX connection. */
+	function countLine(conn: Row): string {
+		if (isLocalOnnxType(conn.type)) {
+			const onDisk = (conn.models ?? []).filter(
+				(m) => m.local?.state === "on_disk"
+			).length
+			return `${onDisk} downloaded`
+		}
+		const n = conn.models?.length ?? 0
+		return n === 1 ? "1 model" : `${n} models`
+	}
 
 	// `capability` is required and cannot be derived from the connection — one
 	// KoboldCPP row does chat AND image generation, and the derivation anyone
-	// would write is "the first one it can do".
-	function setDefault(capability: string, id: number) {
-		socket.emit("connections:setDefault", { capability, id })
+	// would write is "the first one it can do". `modelId` is required too:
+	// connections have no default model, and the server refuses a
+	// registration without one.
+	let setDefaultError = $state<string | null>(null)
+	function setDefault(capability: string, id: number, modelId: number) {
+		setDefaultError = null
+		socket.emit("connections:setDefault", { capability, id, modelId })
 	}
 
 	function deleteConnection(id: number, name: string) {
@@ -65,6 +102,9 @@
 		"connections:setDefault",
 		handleConnectionsSetDefault
 	)
+	useInterest<"error">("error", (msg: { error?: string }) => {
+		if (msg?.error) setDefaultError = msg.error
+	})
 	$effect(() =>
 		requestWithInterest("connections:list", {}, handleConnectionsList)
 	)
@@ -93,6 +133,10 @@
 		</a>
 	</p>
 
+	{#if setDefaultError}
+		<p role="alert"><strong>{setDefaultError}</strong></p>
+	{/if}
+
 	{#if !loaded}
 		<p>Loading…</p>
 	{:else if connections.length === 0}
@@ -106,17 +150,52 @@
 				{@const starred = section
 					? starredId(section.starCapability)
 					: null}
-				{@const modelCount = conn.models?.length ?? 0}
+				{@const usable = section
+					? usableModels(conn, section.starCapability)
+					: []}
+				{@const starredModel = section
+					? starredModelId(section.starCapability)
+					: null}
 				<li class="a11y-list-item">
 					<h2>{conn.name}</h2>
 					<p>
-						Type: {conn.type}
-						{modelCount === 1
-							? "· 1 model"
-							: `· ${modelCount} models`}
+						Service: {serviceLabel(conn)} · {countLine(conn)}
 					</p>
 					{#if section && conn.id === starred}
-						<p><strong>Used for {section.starVerb}.</strong></p>
+						{@const name = conn.models?.find(
+							(m) => m.id === starredModel
+						)?.name}
+						<p>
+							<strong>
+								Used for {section.starVerb}{name
+									? ` (${name})`
+									: ""}.
+							</strong>
+						</p>
+					{/if}
+					{#if section && usable.length}
+						<!-- One button per MODEL: a registration names the
+						     pair, never the bare endpoint. -->
+						<ul>
+							{#each usable as model (model.id)}
+								{#if !(conn.id === starred && model.id === starredModel)}
+									<li>
+										<button
+											type="button"
+											class="a11y-btn a11y-btn-small"
+											onclick={() =>
+												setDefault(
+													section.starCapability,
+													conn.id!,
+													model.id
+												)}
+										>
+											Use {model.name} for {section.starVerb}
+										</button>
+									</li>
+								{/if}
+							{/each}
+						</ul>
 					{/if}
 					<!-- ONE button, naming the capability this row's own
 					     modality can serve. Offering every capability on every
@@ -126,19 +205,6 @@
 					     refuse and the run would fail on. The sidebar draws the
 					     same line, from the same table. -->
 					<div class="a11y-list-item-actions">
-						{#if section && conn.id !== starred}
-							<button
-								type="button"
-								class="a11y-btn a11y-btn-small"
-								onclick={() =>
-									setDefault(
-										section.starCapability,
-										conn.id!
-									)}
-							>
-								Use for {section.starVerb}
-							</button>
-						{/if}
 						<a
 							href="/document-view/connections/{conn.id}/edit"
 							class="a11y-btn a11y-btn-small"

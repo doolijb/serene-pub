@@ -787,3 +787,206 @@ describe("branches", () => {
 		).rejects.toThrow(/not a line of this book/)
 	})
 })
+
+describe("re-dating, validation, placements and nested forks (2026-09-28)", () => {
+	async function seed(tag: string) {
+		const m = await handlers()
+		const user = await makeUser(`amend-${tag}`)
+		const book = await makeLorebook(user.id, "Ashfall")
+		const entry = await makeEntry(book.id, { content: "base" })
+		const created = await m.amendmentsCreateHandler.handler(
+			fakeSocket(user.id),
+			{ lorebookId: book.id, entryId: entry.id, year: 3, month: 4, day: 5, fields: { content: "then" } },
+			noopEmit
+		)
+		return { m, user, book, entry, amendment: created.entries[0] }
+	}
+
+	test("a year-only re-date keeps the month and day; a month-only one keeps the year", async () => {
+		const { m, user, book, amendment } = await seed("redate")
+		const after = await m.amendmentsUpdateHandler.handler(
+			fakeSocket(user.id),
+			{ lorebookId: book.id, id: amendment.id, subject: "entry", year: 7 },
+			noopEmit
+		)
+		expect(after.entries[0]).toMatchObject({ year: 7, month: 4, day: 5 })
+		const again = await m.amendmentsUpdateHandler.handler(
+			fakeSocket(user.id),
+			{ lorebookId: book.id, id: amendment.id, subject: "entry", month: 9 },
+			noopEmit
+		)
+		expect(again.entries[0]).toMatchObject({ year: 7, month: 9, day: 5 })
+		// Clearing the month clears the day: a day cannot outlive its month.
+		const cleared = await m.amendmentsUpdateHandler.handler(
+			fakeSocket(user.id),
+			{ lorebookId: book.id, id: amendment.id, subject: "entry", month: null },
+			noopEmit
+		)
+		expect(cleared.entries[0]).toMatchObject({ year: 7, month: null, day: null })
+	}, 60_000)
+
+	test("a day with no month is refused on a re-date", async () => {
+		const { m, user, book, amendment } = await seed("redate-bad")
+		await m.amendmentsUpdateHandler.handler(
+			fakeSocket(user.id),
+			{ lorebookId: book.id, id: amendment.id, subject: "entry", month: null },
+			noopEmit
+		)
+		await expect(
+			m.amendmentsUpdateHandler.handler(
+				fakeSocket(user.id),
+				{ lorebookId: book.id, id: amendment.id, subject: "entry", day: 3 },
+				noopEmit
+			)
+		).rejects.toThrow(/A day needs a month/)
+	}, 60_000)
+
+	test("an id not in this book is refused on update and delete, never a silent no-op", async () => {
+		const { m, user, book, amendment } = await seed("missing")
+		const other = await makeLorebook(user.id, "Elsewhere")
+		await expect(
+			m.amendmentsUpdateHandler.handler(
+				fakeSocket(user.id),
+				{ lorebookId: other.id, id: amendment.id, subject: "entry", year: 2 },
+				noopEmit
+			)
+		).rejects.toThrow("That amendment is not in this lorebook.")
+		await expect(
+			m.amendmentsDeleteHandler.handler(
+				fakeSocket(user.id),
+				{ lorebookId: book.id, id: amendment.id + 99999, subject: "entry" },
+				noopEmit
+			)
+		).rejects.toThrow("That amendment is not in this lorebook.")
+	}, 60_000)
+
+	test("fields never overlay identity columns; a declared field keeps its type", async () => {
+		const { m, user, book, entry } = await seed("fields")
+		const after = await m.amendmentsCreateHandler.handler(
+			fakeSocket(user.id),
+			{
+				lorebookId: book.id,
+				entryId: entry.id,
+				year: 4,
+				fields: { content: "x", branchId: 12, lorebookId: 99, id: 1, typeId: "evil" }
+			},
+			noopEmit
+		)
+		const row = after.entries.find((a) => a.year === 4)!
+		expect(row.fields).toEqual({ content: "x" })
+		await expect(
+			m.amendmentsCreateHandler.handler(
+				fakeSocket(user.id),
+				{ lorebookId: book.id, entryId: entry.id, year: 4, fields: { priority: "high" } },
+				noopEmit
+			)
+		).rejects.toThrow(/'priority' must be/)
+	}, 60_000)
+
+	test("a cast overlay may only name a card the owner could bind", async () => {
+		const m = await handlers()
+		const owner = await makeUser("amend-card-owner")
+		const stranger = await makeUser("amend-card-stranger")
+		const book = await makeLorebook(owner.id, "Ashfall")
+		const theirs = await makeCharacter(stranger.id, "Not yours")
+		const mine = await makeCharacter(owner.id, "Yours")
+		const member = await makeCastMember(book.id, "Verity", mine.id)
+		await expect(
+			m.amendmentsCreateHandler.handler(
+				fakeSocket(owner.id),
+				{ lorebookId: book.id, castId: member.id, year: 20, fields: { characterId: theirs.id } },
+				noopEmit
+			)
+		).rejects.toThrow(/not one this cast member can be drawn with/)
+		const ok = await m.amendmentsCreateHandler.handler(
+			fakeSocket(owner.id),
+			{ lorebookId: book.id, castId: member.id, year: 20, personalPosition: 40, fields: { characterId: mine.id } },
+			noopEmit
+		)
+		// The personal axis rides on the list, so the workspace can narrow by it.
+		expect(ok.cast[0]).toMatchObject({ personalPosition: 40, fields: { characterId: mine.id } })
+	}, 60_000)
+
+	test("the event must be a history entry of this book; the position a whole number", async () => {
+		const { m, user, book, entry } = await seed("event")
+		await expect(
+			m.amendmentsCreateHandler.handler(
+				fakeSocket(user.id),
+				{ lorebookId: book.id, entryId: entry.id, year: 4, fields: {}, historyEntryId: entry.id },
+				noopEmit
+			)
+		).rejects.toThrow("That event is not in this lorebook.")
+		const member = await makeCastMember(book.id, "Verity")
+		await expect(
+			m.amendmentsCreateHandler.handler(
+				fakeSocket(user.id),
+				{ lorebookId: book.id, castId: member.id, year: 4, fields: {}, personalPosition: 3.5 },
+				noopEmit
+			)
+		).rejects.toThrow(/whole number/)
+	}, 60_000)
+
+	test("a placement must end after it begins; unplace clears it", async () => {
+		const m = await handlers()
+		const user = await makeUser("amend-place")
+		const book = await makeLorebook(user.id, "Ashfall")
+		const member = await makeCastMember(book.id, "Verity")
+		await expect(
+			m.amendmentsPlaceHandler.handler(
+				fakeSocket(user.id),
+				{ lorebookId: book.id, castId: member.id, personalPosition: 30, fromYear: 5, untilYear: 5 },
+				noopEmit
+			)
+		).rejects.toThrow(/leave before they arrived/)
+		const placed = await m.amendmentsPlaceHandler.handler(
+			fakeSocket(user.id),
+			{ lorebookId: book.id, castId: member.id, personalPosition: 30, fromYear: 5, untilYear: 9 },
+			noopEmit
+		)
+		expect(placed.presences).toHaveLength(1)
+		const cleared = await m.amendmentsUnplaceHandler.handler(
+			fakeSocket(user.id),
+			{ lorebookId: book.id, id: placed.presences[0].id },
+			noopEmit
+		)
+		expect(cleared.presences).toHaveLength(0)
+	}, 60_000)
+
+	test("a fork of a branch reads its parent's amendments before its own fork date", async () => {
+		const { amendmentsOnLine, lineOf } = await import("$lib/shared/lorebooks/lineReading")
+		const { m, user, book, entry } = await seed("nested")
+		const a = await m.amendmentsForkHandler.handler(
+			fakeSocket(user.id),
+			{ lorebookId: book.id, name: "a", forkYear: 10 },
+			noopEmit
+		)
+		const aId = a.branches[0].id
+		const c = await m.amendmentsForkHandler.handler(
+			fakeSocket(user.id),
+			{ lorebookId: book.id, name: "c", forkedFromBranchId: aId, forkYear: 6 },
+			noopEmit
+		)
+		const cId = c.branches.find((b) => b.name === "c")!.id
+		for (const [year, content] of [
+			[5, "a-early"],
+			[8, "a-late"]
+		] as const)
+			await m.amendmentsCreateHandler.handler(
+				fakeSocket(user.id),
+				{ lorebookId: book.id, entryId: entry.id, branchId: aId, year, fields: { content } },
+				noopEmit
+			)
+		const list = await m.amendmentsListHandler.handler(
+			fakeSocket(user.id),
+			{ lorebookId: book.id },
+			noopEmit
+		)
+		const line = lineOf(cId, list.branches)
+		const on = amendmentsOnLine(list.entries, line).map((x) => x.fields.content)
+		// main's Y3 "then", A's Y5 — A's Y8 is past C's fork, never C's.
+		expect(on).toEqual(["then", "a-early"])
+		expect(
+			entryAsOf({ content: "base" }, list.entries as unknown as Amendment[], { line }).content
+		).toBe("a-early")
+	}, 60_000)
+})

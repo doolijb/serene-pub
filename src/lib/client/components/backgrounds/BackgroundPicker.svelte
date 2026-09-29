@@ -61,7 +61,7 @@
 		if (!file) return
 
 		if (!file.type.startsWith("image/")) {
-			toaster.error({ title: "Please select an image file" })
+			toaster.error({ title: "Select an image file" })
 			return
 		}
 
@@ -179,7 +179,7 @@
 
 	{#if isLoading}
 		<div class="flex items-center justify-center py-8">
-			<Icons.Loader2 class="text-muted-foreground h-6 w-6 animate-spin" />
+			<Icons.Loader2 class="text-surface-600-400 h-6 w-6 animate-spin" />
 		</div>
 	{:else}
 		<!-- None + opacity row -->
@@ -193,17 +193,18 @@
 					: 'border-surface-300-600 hover:border-surface-400-500'}"
 				onclick={() => select(null)}
 				title="No background"
+				aria-label="No background"
 			>
 				<div
 					class="bg-surface-200-800 flex h-full w-full items-center justify-center"
 				>
-					<Icons.Ban class="text-muted-foreground h-6 w-6" />
+					<Icons.Ban class="text-surface-600-400 h-6 w-6" />
 				</div>
 				{#if selectedPath === null}
 					<div
-						class="bg-primary-500 absolute right-1 bottom-1 rounded-full p-0.5"
+						class="preset-filled-primary-500 absolute right-1 bottom-1 rounded-full p-0.5"
 					>
-						<Icons.Check class="h-3 w-3 text-white" />
+						<Icons.Check class="h-3 w-3" />
 					</div>
 				{/if}
 			</button>
@@ -212,7 +213,7 @@
 			{#if selectedPath !== null}
 				<div class="flex flex-1 flex-col gap-1">
 					<div class="flex items-center justify-between text-sm">
-						<span class="text-muted-foreground">Opacity</span>
+						<span class="text-surface-600-400">Opacity</span>
 						<span class="font-mono font-medium">{opacity}%</span>
 					</div>
 					<input
@@ -232,7 +233,7 @@
 		{#if visibleDefaults.length > 0}
 			<div>
 				<h4
-					class="text-muted-foreground mb-2 text-xs font-semibold tracking-wide uppercase"
+					class="text-surface-600-400 mb-2 text-xs"
 				>
 					Defaults
 				</h4>
@@ -264,9 +265,9 @@
 							</div>
 							{#if selectedPath === path}
 								<div
-									class="bg-primary-500 absolute right-1 bottom-1 rounded-full p-0.5"
+									class="preset-filled-primary-500 absolute right-1 bottom-1 rounded-full p-0.5"
 								>
-									<Icons.Check class="h-3 w-3 text-white" />
+									<Icons.Check class="h-3 w-3" />
 								</div>
 							{/if}
 						</button>
@@ -279,9 +280,9 @@
 		<div>
 			<div class="mb-2 flex items-center justify-between">
 				<h4
-					class="text-muted-foreground text-xs font-semibold tracking-wide uppercase"
+					class="text-surface-600-400 text-xs"
 				>
-					My Uploads
+					My uploads
 				</h4>
 				<button
 					type="button"
@@ -303,8 +304,8 @@
 				<div
 					class="border-surface-300-600 flex flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed py-6"
 				>
-					<Icons.ImagePlus class="text-muted-foreground h-8 w-8" />
-					<p class="text-muted-foreground text-sm">No uploads yet</p>
+					<Icons.ImagePlus class="text-surface-600-400 h-8 w-8" />
+					<p class="text-surface-600-400 text-sm">No uploads yet</p>
 					<button
 						type="button"
 						class="btn btn-sm preset-tonal-primary"
@@ -341,20 +342,21 @@
 							<!-- Delete button -->
 							<button
 								type="button"
-								class="bg-error-500 absolute top-1 right-1 rounded-full p-0.5 transition-opacity focus-visible:opacity-100 pointer-fine:opacity-0 pointer-fine:group-hover:opacity-100"
+								class="preset-filled-error-500 absolute top-1 right-1 rounded-full p-0.5 transition-opacity focus-visible:opacity-100 pointer-fine:opacity-0 pointer-fine:group-hover:opacity-100"
 								onclick={(e) => {
 									e.stopPropagation()
 									deleteUpload(path)
 								}}
 								title="Delete this background"
+								aria-label="Delete this background"
 							>
-								<Icons.X class="h-3 w-3 text-white" />
+								<Icons.X class="h-3 w-3" />
 							</button>
 							{#if selectedPath === path}
 								<div
-									class="bg-primary-500 pointer-events-none absolute right-1 bottom-1 rounded-full p-0.5"
+									class="preset-filled-primary-500 pointer-events-none absolute right-1 bottom-1 rounded-full p-0.5"
 								>
-									<Icons.Check class="h-3 w-3 text-white" />
+									<Icons.Check class="h-3 w-3" />
 								</div>
 							{/if}
 						</div>
@@ -394,7 +396,7 @@
 						/>
 					</div>
 				{/if}
-				<p class="text-muted-foreground text-sm">
+				<p class="text-surface-600-400 text-sm">
 					Are you sure you want to delete this background? This cannot
 					be undone.
 				</p>

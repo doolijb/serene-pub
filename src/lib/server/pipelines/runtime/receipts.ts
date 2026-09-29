@@ -23,6 +23,7 @@
  */
 
 import type { Receipt } from "@serene-pub/sdk"
+import type { SessionIo } from "$lib/server/pipelines/runtime/liveRow"
 import * as schema from "$lib/server/db/schema"
 import { eq, and, asc, desc, inArray, sql } from "drizzle-orm"
 import { WIRE_RAW_LIMIT } from "$lib/server/connectionAdapters/BaseConnectionAdapter"
@@ -106,6 +107,12 @@ export interface SaveReceiptScope {
 	specVersionId?: number
 	/** The document's canonical hash, likewise. See `resolveSpecVersion`. */
 	specHash?: string
+	/**
+	 * Where the session is told its lore was ranked (R81,
+	 * `sessions:loreRanked`) once the ranking store committed. Absent,
+	 * nobody is told — a test, a CLI, a run with no socket server.
+	 */
+	io?: SessionIo
 }
 
 /**
@@ -363,10 +370,23 @@ export async function saveReceipt(
 			const { recordRankings } = await import(
 				"$lib/server/pipelines/runtime/rankingStore"
 			)
+			const io = scope.io
 			await recordRankings(db, receipt, {
 				runRowId: row.id,
 				sessionId: scope.sessionId ?? null,
-				userId: scope.userId ?? null
+				userId: scope.userId ?? null,
+				// Told once the store committed, so the Lore entries widget
+				// re-reads exactly then (R81).
+				...(io
+					? {
+							onLoreRanked: async (sessionId: number) => {
+								const { pushLoreRanked } = await import(
+									"$lib/server/sessions/loreRankedPush"
+								)
+								await pushLoreRanked(io, sessionId)
+							}
+						}
+					: {})
 			})
 		}
 

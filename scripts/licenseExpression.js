@@ -20,7 +20,9 @@ export const LICENSE_WHITELIST = [
 	{ name: "@img/sharp-win32-x64", version: "0.34.5" },
 	{ name: "@img/sharp-win32-arm64", version: "0.34.5" },
 	{ name: "json-schema", version: "0.4.0" },
-	{ name: "type-fest", version: "0.13.1" }
+	{ name: "type-fest", version: "0.13.1" },
+	// No `license` field; LICENSE.md is MIT. Reached through @jimp/core.
+	{ name: "exif-parser", version: "0.1.12" }
 ]
 
 export function isWhitelisted(name, version) {

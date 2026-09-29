@@ -8,7 +8,7 @@
  * throws.
  */
 
-import type { LoreLens } from "./loreRoute"
+import type { LoreLens } from "$lib/shared/lorebooks/loreRoute"
 
 /** Which canvas one of the drawing lenses asks for. */
 export type LoreDrawing = "relationships" | "places"
@@ -26,10 +26,10 @@ const DRAWINGS: Partial<Record<LoreLens, LoreDrawing>> = {
 /**
  * The canvas a lens draws, or null for the three that draw the pool itself.
  *
- * ⚠ `places` draws the `anchorEntryId` parent tree, the travel links between
- * its boxes and the members standing in them: no entry kind declares a place
- * role, so what the map has to nest is what is filed under what. The day a
- * kind declares one, the drawing narrows to it.
+ * ⚠ `places` draws the book's places — its `core:entry/location` entries on
+ * the line being read, archived ones left out (the one definition the rail's
+ * Places count uses too) — nested by the `anchorEntryId` parent tree, with
+ * the travel links between them and the members standing in them.
  */
 export function drawingForLens(lens: LoreLens): LoreDrawing | null {
 	return DRAWINGS[lens] ?? null

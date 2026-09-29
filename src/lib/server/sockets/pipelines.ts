@@ -36,7 +36,6 @@ import {
 	OptionNotWritableError,
 	type Viewer
 } from "$lib/server/pipelines/config/panel"
-import { redactConnections } from "$lib/server/connections/visibility"
 import {
 	isParticipantRef,
 	parseParticipantRef,
@@ -46,8 +45,7 @@ import { participantRowId } from "$lib/server/pipelines/runtime/portrayals"
 // The review gate's push transport is the one `pipelines:` emitter with no
 // handler in scope, so it consults the interest gate itself — see
 // `registerPipelineHandlers` at the foot of this file.
-import { isGatedEvent } from "$lib/shared/sockets/interest"
-import { interestedSockets } from "./interest"
+import { pushToUser } from "./utils/userPush"
 // Owner-OR-guest, in the one place that decides it. A local
 // `eq(sessions.userId, userId)` here would be a fourth copy of a rule whose
 // previous copies locked guests out of features they were entitled to — see
@@ -195,25 +193,33 @@ function refusal(err: unknown): string {
 	return "That change could not be saved. The server log has the details."
 }
 
+/**
+ * `refusal`, for an option write: a selection is also refused by the row it
+ * selects — a prompt outside the slot's pool, a context template that does
+ * not fit the step (typed templates P5) — and that sentence is the person's
+ * to read, not the server log's.
+ */
+async function optionRefusal(err: unknown): Promise<string> {
+	const ctx = await import("$lib/server/pipelines/entities/contextTemplates")
+	const prompts = await import("$lib/server/pipelines/entities/prompts")
+	if (
+		err instanceof ctx.ContextTemplateNotFoundError ||
+		err instanceof ctx.ContextTemplateNotUsableError ||
+		err instanceof prompts.PromptNotFoundError ||
+		err instanceof prompts.PromptNotUsableError
+	)
+		return (err as Error).message
+	return refusal(err)
+}
+
 export const pipelinesList: Handler<
 	Sockets.Pipelines.List.Params,
 	Sockets.Pipelines.List.Response
 > = {
 	event: "pipelines:list",
 	handler: async (socket, _params, emitToUser) => {
-		const [settings] = await db
-			.select()
-			.from(schema.systemSettings)
-			.limit(1)
 		const res: Sockets.Pipelines.List.Response = {
-			pipelinesList: (await listNamespaces(db)) as any,
-			// Whether the old Prompt Configs sidebar is offered at all — the one
-			// toggle that survives the changeover. Configuration moves here, but
-			// a year of somebody's tuning has to stay *readable* until the
-			// legacy tables go in 0.8.0. Defaults on when the row is missing,
-			// because hiding their work is by far the worse mistake.
-			legacyPromptConfigsVisible:
-				settings?.legacyPromptConfigsVisible ?? true
+			pipelinesList: (await listNamespaces(db)) as any
 		}
 		emitToUser("pipelines:list", res)
 		return res
@@ -252,7 +258,7 @@ export const pipelinesSetOption: Handler<
 				params.configId
 			)
 		} catch (err) {
-			const res = { error: refusal(err) }
+			const res = { error: await optionRefusal(err) }
 			emitToUser("pipelines:setOption:error", res)
 			return res
 		}
@@ -378,7 +384,7 @@ export const pipelinesSetOptions: Handler<
 				applied++
 			}
 		} catch (err) {
-			const res = { error: refusal(err), applied }
+			const res = { error: await optionRefusal(err), applied }
 			emitToUser("pipelines:setOptions:error", res)
 			// The view refreshes even on a partial apply — what landed is
 			// real, and a stale panel over fresh rows is the worse outcome.
@@ -586,6 +592,9 @@ export const pipelinesSetPresetActions: Handler<
 			emitToUser("pipelines:setPresetActions:error", res)
 			return res
 		}
+		// The preset's included set and switch are what the list carries.
+		const { pushSessionPresetsAfter } = await import("./sessionAdmin")
+		await pushSessionPresetsAfter(socket)
 		await emitView(
 			socket,
 			emitToUser,
@@ -768,7 +777,9 @@ async function noticesFor(
 				? "A setting this version removed"
 				: n.kind === "unbound"
 					? "A node this build does not run"
-					: "A setting this version added"),
+					: n.kind === "misfit"
+						? "A template this step can't render"
+						: "A setting this version added"),
 		// The address is not sent. `nodeKey` is topology (05 §0a) and the label
 		// is the part a person needs; the id is what a dismissal names.
 		...(n.previousValue != null ? { previousValue: n.previousValue } : {}),
@@ -1483,7 +1494,7 @@ async function contextTemplateForOption(
 		"$lib/server/pipelines/entities/contextTemplates"
 	)
 	const viewer = await viewerFor(socket, params.sessionId)
-	const { nodeDefinitionId, engine, engines, specId } =
+	const { nodeDefinitionId, engine, acceptedEngines, specId } =
 		await contextTemplateOptionGate(
 			db,
 			await instanceSecret(),
@@ -1497,9 +1508,9 @@ async function contextTemplateForOption(
 		db,
 		nodeDefinitionId,
 		params.templateId,
-		engines
+		acceptedEngines
 	)
-	return { viewer, nodeDefinitionId, engine, engines, specId, row }
+	return { viewer, nodeDefinitionId, engine, acceptedEngines, specId, row }
 }
 
 /** "Default (copy)", then "(copy 2)" — names are unique per node definition. */
@@ -1560,7 +1571,7 @@ export const pipelinesCreateContextTemplate: Handler<
 				"$lib/server/pipelines/config/panel"
 			)
 			const viewer = await viewerFor(socket, params.sessionId)
-			const { nodeDefinitionId, engines, specId } =
+			const { nodeDefinitionId, acceptedEngines, specId } =
 				await contextTemplateOptionGate(
 					db,
 					await instanceSecret(),
@@ -1583,7 +1594,7 @@ export const pipelinesCreateContextTemplate: Handler<
 				// entity's default is CORE's engine, not this slot's, so
 				// omitting it writes the row into a pool this panel never
 				// reads.
-				engine: assertEngineAccepted(engines, params.engine),
+				engine: assertEngineAccepted(acceptedEngines, params.engine),
 				// Written here, so it sorts to the top of *this* pipeline's
 				// picker next time. Grouping only — it stays selectable
 				// everywhere the node definition matches.
@@ -1768,11 +1779,9 @@ export const pipelinesPreviewTemplate: Handler<
 
 		const { previewContextTemplate, previewVariableTemplate } =
 			await import("$lib/server/pipelines/prompt/preview")
-		const {
-			lintContextTemplate,
-			lintVariableTemplate,
-			parseContextTemplate
-		} = await import("$lib/shared/utils/contextConfigCards")
+		const { lintContextTemplate, lintVariableTemplate } = await import(
+			"$lib/shared/utils/contextConfigCards"
+		)
 		const { getVariable } = await import("@serene-pub/sdk")
 
 		/**
@@ -1819,9 +1828,7 @@ export const pipelinesPreviewTemplate: Handler<
 				engine: params.engine
 			})
 			res.issues = handlebars
-				? lintContextTemplate(
-						parseContextTemplate(params.source).cards
-					).map((i) => i.message)
+				? lintContextTemplate(params.source).map((i) => i.message)
 				: await crossEngineIssues()
 		}
 
@@ -2086,6 +2093,23 @@ async function validateTemplateDraft(draft: {
 		draft.source,
 		contractKeys
 	)
+	// A context template is judged where it renders (typed templates P5):
+	// against the typed scope of every published step of its node definition,
+	// each finding naming the pipeline. WARNINGS only, never a refusal — the
+	// row is shared, so it may fit one pipeline and not the next (design
+	// §4.4); selecting it where it does not fit is what refuses. The untyped
+	// contract above stays the answer for a pool no published step renders,
+	// and for the syntax error, which is the row's own.
+	if (draft.kind === "context" && result.checked && !result.error) {
+		const { sharedContextTemplateWarnings } = await import(
+			"$lib/server/pipelines/entities/contextTemplateFit"
+		)
+		const typed = await sharedContextTemplateWarnings(db, draft.poolId, {
+			engine: draft.engine,
+			source: draft.source
+		})
+		if (typed) return { warnings: typed, checked: true }
+	}
 	return {
 		...(result.error ? { syntax: result.error } : {}),
 		warnings: result.warnings,
@@ -2812,6 +2836,7 @@ export const pipelinesDetail: Handler<
 					// side (05 §0a discipline, kept even where this surface
 					// may name topology).
 					parentClauseId: b.parentClauseId ?? null,
+					parentClauseChain: b.parentClauseChain ?? null,
 					repeatWhile:
 						b.repeatWhile && typeof b.repeatWhile === "object"
 							? ((b.repeatWhile as any).port ?? null)
@@ -2938,10 +2963,7 @@ async function portrayalLinesOf(
 	viewerUserId: number,
 	sessionId?: number | null
 ): Promise<Sockets.Pipelines.Run.PortrayalLine[] | undefined> {
-	// ⏳ `voices` is the key a receipt stored before the rename (2026-09-16)
-	// carries; the blob is never rewritten, so the reader takes either.
-	// Drop the fallback once no stored receipt predates 0.6.0.
-	const portrayals = receipt?.portrayals ?? receipt?.voices
+	const portrayals = receipt?.portrayals
 	if (
 		!portrayals ||
 		typeof portrayals !== "object" ||
@@ -3207,7 +3229,10 @@ export const pipelinesRuns: Handler<
 		// Filtered here, not by the client: the list covers every user, and
 		// the newest `limit` of the whole instance can miss a pipeline's runs.
 		if (typeof params.specSlug === "string")
-			where = and(where, eq(schema.pipelineRuns.specSlug, params.specSlug))
+			where = and(
+				where,
+				eq(schema.pipelineRuns.specSlug, params.specSlug)
+			)
 
 		const rows = await db
 			.select()
@@ -3224,13 +3249,20 @@ export const pipelinesRuns: Handler<
 		)
 		const renamed = await renamedAtByHash(rows.map((r: any) => r.specHash))
 		const userIds = [
-			...new Set(rows.map((r: any) => r.userId).filter((id: unknown) => typeof id === "number"))
+			...new Set(
+				rows
+					.map((r: any) => r.userId)
+					.filter((id: unknown) => typeof id === "number")
+			)
 		] as number[]
 		const names = new Map(
 			userIds.length
 				? (
 						await db
-							.select({ id: schema.users.id, username: schema.users.username })
+							.select({
+								id: schema.users.id,
+								username: schema.users.username
+							})
 							.from(schema.users)
 							.where(inArray(schema.users.id, userIds))
 					).map((u) => [u.id, u.username] as const)
@@ -3243,7 +3275,8 @@ export const pipelinesRuns: Handler<
 				runId: r.runId,
 				specSlug: r.specSlug,
 				userId: r.userId ?? null,
-				username: r.userId != null ? (names.get(r.userId) ?? null) : null,
+				username:
+					r.userId != null ? (names.get(r.userId) ?? null) : null,
 				...specPinOf(r, current, renamed),
 				outcome: r.outcome,
 				haltNodeKey: r.haltNodeKey,
@@ -4898,7 +4931,11 @@ export const pipelinesRunExplain: Handler<
 > = {
 	event: "pipelines:runExplain",
 	handler: async (socket, params, emitToUser) => {
-		const denied = receiptsAdminOnly(socket, emitToUser, "pipelines:runExplain")
+		const denied = receiptsAdminOnly(
+			socket,
+			emitToUser,
+			"pipelines:runExplain"
+		)
 		if (denied) return denied
 		const userId = socket.user!.id
 		const [r] = await db
@@ -4988,7 +5025,7 @@ async function previewCastFor(sessionId: number) {
  * substrate with the payload the next send would actually use, and
  * `skipReceipt` keeps a question somebody asks repeatedly from burying the run
  * history — the same two flags, for the same two reasons, as
- * `sessions:promptTokenCount` and `entries:testRetrieval`.
+ * `sessions:promptTokenCount` (and the retired `entries:testRetrieval`).
  *
  * ⚠ **The draft is spliced in.** Without it the preview answers about the
  * conversation *without* the message being asked about, and — worse — nobody
@@ -5036,9 +5073,8 @@ export const pipelinesPreviewRetrieval: Handler<
 
 		const session = await previewCastFor(sessionId)
 		if (!session) return refuse("No such conversation.")
-		// Answered here rather than by running the turn, for
-		// `entries:testRetrieval`'s reason: retrieval reads the session's own
-		// book, so this is not a "nothing fires" but a question that cannot be
+		// Answered here rather than by running the turn: retrieval reads the
+		// session's own book, so this is not a "nothing fires" but a question that cannot be
 		// asked — and spending a whole turn to report an absence with no
 		// reason attached is the failure this surface exists to remove.
 		if (!session.lorebookId)
@@ -5090,7 +5126,7 @@ export const pipelinesPreviewRetrieval: Handler<
 		 * when nobody is due or only a run could say, whoever the app would
 		 * pick for a plain reply.
 		 *
-		 * The fallback is `entries:testRetrieval`'s and is stated there: a
+		 * The fallback, stated here since `entries:testRetrieval` retired: a
 		 * test has to pick somebody, and refusing because the rotation says
 		 * "your turn to type" would withhold the answer from precisely the
 		 * person standing in the composer asking for it. Only character lore
@@ -5456,7 +5492,9 @@ export const pipelinesSessionEntryUsage: Handler<
 						.limit(1)
 				: []
 			if (!book || book.userId !== userId)
-				return refuse("What this session's lorebook has fired is its owner's to read.")
+				return refuse(
+					"What this session's lorebook has fired is its owner's to read."
+				)
 		}
 
 		const limit = Math.min(Math.max(params.limit ?? 100, 1), 500)
@@ -5496,7 +5534,10 @@ export const pipelinesSessionEntryUsage: Handler<
 				groupTotal: sql<number>`count(*) OVER ()`.mapWith(Number)
 			})
 			.from(st)
-			.leftJoin(schema.pipelineRuns, eq(schema.pipelineRuns.id, st.lastIncludedRunId))
+			.leftJoin(
+				schema.pipelineRuns,
+				eq(schema.pipelineRuns.id, st.lastIncludedRunId)
+			)
 			.where(
 				and(
 					eq(st.sessionId, sessionId),
@@ -5504,23 +5545,35 @@ export const pipelinesSessionEntryUsage: Handler<
 					sql`${st.timesIncluded} > 0`
 				)
 			)
-			.orderBy(desc(st.timesIncluded), sql`${st.lastIncludedAt} DESC NULLS LAST`, asc(st.subjectId))
+			.orderBy(
+				desc(st.timesIncluded),
+				sql`${st.lastIncludedAt} DESC NULLS LAST`,
+				asc(st.subjectId)
+			)
 			.limit(limit)
 
 		// The live rows, for names, the band and the two levers.
-		const { entries } = await retrievalEntriesFor(sessionId, userId, { asAdmin: true })
+		const { entries } = await retrievalEntriesFor(sessionId, userId, {
+			asAdmin: true
+		})
 		const byId = new Map<string, { key: string; entry: any }>()
-		for (const [key, entry] of entries) byId.set(String(key.split(":").pop()), { key, entry })
+		for (const [key, entry] of entries)
+			byId.set(String(key.split(":").pop()), { key, entry })
 
 		const rows: Sockets.Pipelines.SessionEntryUsageRow[] = raw.map((r) => {
 			const rawId = String(r.entryId)
 			const asNumber = Number(rawId)
 			const live = byId.get(rawId)
 			const entry = live?.entry
-			const source = live ? live.key.slice(0, live.key.lastIndexOf(":")) : "worldLore"
+			const source = live
+				? live.key.slice(0, live.key.lastIndexOf(":"))
+				: "worldLore"
 			return {
 				key: live?.key ?? `lore-entry:${rawId}`,
-				id: Number.isInteger(asNumber) && String(asNumber) === rawId ? asNumber : rawId,
+				id:
+					Number.isInteger(asNumber) && String(asNumber) === rawId
+						? asNumber
+						: rawId,
 				source,
 				sourceLabel: retrievalSourceLabel(source),
 				// An entry the book no longer has keeps only its id: the store
@@ -5528,7 +5581,9 @@ export const pipelinesSessionEntryUsage: Handler<
 				title: entry?.title?.trim() || `#${rawId}`,
 				usedInRuns: Number(r.usedRuns) || 0,
 				judgedInRuns: Number(r.judgedRuns) || 0,
-				lastUsedAt: r.lastUsedAt ? new Date(r.lastUsedAt).toISOString() : "",
+				lastUsedAt: r.lastUsedAt
+					? new Date(r.lastUsedAt).toISOString()
+					: "",
 				lastRunId: String(r.lastRunId ?? ""),
 				...(r.tokens != null ? { tokens: Number(r.tokens) } : {}),
 				...(entry
@@ -5682,8 +5737,12 @@ export const pipelinesEventMap: Handler<
 			...(typeof params?.genreId === "string" && params.genreId
 				? { genreId: params.genreId }
 				: {}),
-			...(Number.isInteger(params?.presetId) ? { presetId: params.presetId } : {}),
-			...(Number.isInteger(params?.sessionId) ? { sessionId: params.sessionId } : {})
+			...(Number.isInteger(params?.presetId)
+				? { presetId: params.presetId }
+				: {}),
+			...(Number.isInteger(params?.sessionId)
+				? { sessionId: params.sessionId }
+				: {})
 		}
 		// A session that does not exist has no genre to draw; drawing every
 		// genre under its chip would claim a scope the map does not have.
@@ -5694,7 +5753,10 @@ export const pipelinesEventMap: Handler<
 				.where(eq(schema.sessions.id, scope.sessionId))
 				.limit(1)
 			if (!row) {
-				const res = { error: `There is no session ${scope.sessionId}.`, scope }
+				const res = {
+					error: `There is no session ${scope.sessionId}.`,
+					scope
+				}
 				emitToUser("pipelines:eventMap:error", res)
 				return res
 			}
@@ -5817,30 +5879,34 @@ export const pipelinesConfigsIndex: Handler<
 				)
 
 		// A disabled plugin's pipelines' configurations are not listed (R67).
-		const { disabledPlugins } = await import("$lib/server/plugins/disabledPlugins")
+		const { disabledPlugins } = await import(
+			"$lib/server/plugins/disabledPlugins"
+		)
 		const off = await disabledPlugins(db)
 		const hiddenSpecs = new Set(
-			(specs as any[]).filter((s) => off.owns(s.sourcePluginId)).map((s) => s.id)
+			(specs as any[])
+				.filter((s) => off.owns(s.sourcePluginId))
+				.map((s) => s.id)
 		)
 		const res: Sockets.Pipelines.ConfigsIndex.Response = {
 			configs: (configs as any[])
 				.filter((c) => !hiddenSpecs.has(c.specId))
 				.map((c) => ({
-				id: c.id,
-				name: c.name,
-				specSlug: specById.get(c.specId)?.slug ?? String(c.specId),
-				specName:
-					specById.get(c.specId)?.name ??
-					specById.get(c.specId)?.slug ??
-					String(c.specId),
-				isDefault: !!c.isDefault,
-				isImmutable: !!c.isImmutable,
-				usedByPresets: presetCount.get(c.id) ?? 0,
-				usedBySessions: sessionCount.get(c.id) ?? 0,
-				updatedAt: c.updatedAt
-					? new Date(c.updatedAt).toISOString()
-					: null
-			}))
+					id: c.id,
+					name: c.name,
+					specSlug: specById.get(c.specId)?.slug ?? String(c.specId),
+					specName:
+						specById.get(c.specId)?.name ??
+						specById.get(c.specId)?.slug ??
+						String(c.specId),
+					isDefault: !!c.isDefault,
+					isImmutable: !!c.isImmutable,
+					usedByPresets: presetCount.get(c.id) ?? 0,
+					usedBySessions: sessionCount.get(c.id) ?? 0,
+					updatedAt: c.updatedAt
+						? new Date(c.updatedAt).toISOString()
+						: null
+				}))
 		}
 		emitToUser("pipelines:configsIndex", res)
 		return res
@@ -5885,13 +5951,6 @@ export const pipelinesCancelRun: Handler<
 	}
 }
 
-/**
- * Serializes review pushes across every socket, so the order the gate asked for
- * is the order the browser sees. Module scope rather than per-connection: the
- * transport is a process-wide seam and is reinstalled on each connect.
- */
-let reviewPushes: Promise<unknown> = Promise.resolve()
-
 export function registerPipelineHandlers(
 	socket: any,
 	emitToUser: (event: string, data: any) => void,
@@ -5901,86 +5960,19 @@ export function registerPipelineHandlers(
 		emitToUser: (event: string, data: any) => void
 	) => void
 ) {
-	// The gate's push transport, bound once per process to socket.io's rooms.
-	// A review can park from any trigger, so it pushes by user rather than
-	// through whichever handler happened to start the run.
-	//
-	// ## Why this lives outside `emitToUser`
-	//
-	// The review gate parks a run from wherever the run was triggered — a
-	// socket handler, an event, a schedule — so at the moment it needs to reach
-	// a person there is no handler in scope and therefore no `emitToUser`
-	// closure to reach them through. That is also why the redaction is repeated
-	// here, against the RECIPIENT rather than against whoever's socket last
-	// installed the transport. The row read is affordable because a review is
-	// human-paced: one push per gated node, per person, per run.
-	//
-	// It honours the **interest gate** all the same, the way
-	// `utils/broadcastHelpers.ts` does for the fan-outs that cannot use
-	// `emitToUser` either: a gated event is delivered per SOCKET (plan ruling
-	// 5) to the ones that declared it, and an ungated event keeps the room emit
-	// it has always had — so this is not a second door the gate cannot see.
-	// The cap pause (E1c) pushes through the same transport: it too is
-	// addressed to a person from wherever a run parked.
-	{
-		const push = (userId: number, event: string, data: unknown) => {
-			// Queued, not awaited by the caller: the gate pushes
-			// `reviewRequested` and — if the run is cancelled — a
-			// `reviewClosed` for the same card, and a client that received
-			// them out of order would keep a card nothing can decide. The
-			// chain makes delivery order the CALL order rather than
-			// whichever row read finished first.
-			reviewPushes = reviewPushes
-				.then(async () => {
-					// Bare interest, no scope: neither push carries a
-					// session or a run to key off — a card names itself
-					// (`id`, `specId`, `nodeKey`) — so a client declares
-					// the event and hears every card meant for it.
-					const gated = isGatedEvent(event)
-					// Asked BEFORE the row read (plan ruling 4): with no
-					// review surface open anywhere for this person, the
-					// `users.isAdmin` read is not paid either.
-					if (
-						gated &&
-						interestedSockets(socket.io, userId, event).length === 0
-					)
-						return
-					const [row] = await db
-						.select({ isAdmin: schema.users.isAdmin })
-						.from(schema.users)
-						.where(eq(schema.users.id, userId))
-						.limit(1)
-					// One redaction decision per recipient USER, which is
-					// what the row above answers for; every socket of that
-					// user is then handed the same payload.
-					const payload = redactConnections(data, row)
-					if (!gated) {
-						socket.io.to(`user_${userId}`).emit(event, payload)
-						return
-					}
-					// Walked again rather than snapshotted, like
-					// `emitToUser`'s thunk path: a socket that arrived or
-					// left while the row was read is treated as it is now.
-					for (const target of interestedSockets(
-						socket.io,
-						userId,
-						event
-					))
-						socket.io.to(target.id).emit(event, payload)
-				})
-				.catch((err) => {
-					console.warn(`[pipelines] could not deliver ${event}:`, err)
-				})
-		}
-		// Each installed on its own: one module failing to load must never
-		// leave the other with no way to reach a person.
-		void import("$lib/server/pipelines/runtime/reviewGate").then(({ setReviewTransport }) =>
-			setReviewTransport(push)
-		)
-		void import("$lib/server/pipelines/runtime/capPause").then(({ setCapPauseTransport }) =>
-			setCapPauseTransport(push)
-		)
-	}
+	// The gate's and the cap pause's push transport: `utils/userPush.ts`
+	// (ordered, redacted for the recipient, interest-gated, on globalThis),
+	// installed once by `connectSockets`. A review can park from any trigger
+	// — a socket handler, an event, a schedule — so it pushes by user rather
+	// than through whichever handler happened to start the run. Each module is
+	// pointed at it on its own: one failing to load must never leave the other
+	// with no way to reach a person.
+	void import("$lib/server/pipelines/runtime/reviewGate").then(
+		({ setReviewTransport }) => setReviewTransport(pushToUser)
+	)
+	void import("$lib/server/pipelines/runtime/capPause").then(
+		({ setCapPauseTransport }) => setCapPauseTransport(pushToUser)
+	)
 
 	register(socket, pipelinesList, emitToUser)
 	register(socket, pipelinesConfigsIndex, emitToUser)

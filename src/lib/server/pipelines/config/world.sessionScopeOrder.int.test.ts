@@ -15,7 +15,7 @@
  * this file was written: it sat above `applyPipelineLayer` and silently
  * outranked the connection chosen in the pipeline panel. The column is gone —
  * overrides are by model now, never by connection — and the one connection
- * override left is the pipeline configuration's provider slot, which IS a
+ * override left is the pipeline configuration's connection slot, which IS a
  * `pipeline_node_overrides` row and so has nothing at its own scope to race.
  *
  * The hazard did not go with it. `sampling_config_id` stays on `sessions`, it is
@@ -89,8 +89,8 @@ beforeAll(async () => {
 	sessionColumnId = await make("sessions.sampling_config_id")
 	panelPickId = await make("The panel's pick")
 
-	// A connection beside it, because the provider slot's capability is what
-	// decides whether the session block projects at all (`providerIsText`), and
+	// A connection beside it, because the connection slot's capability is what
+	// decides whether the session block projects at all (`oracleIsText`), and
 	// that is read from the registered default for the slot's transform.
 	const [connection] = await db
 		.insert(schema.connections)

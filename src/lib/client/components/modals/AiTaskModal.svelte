@@ -216,7 +216,7 @@
 								onclick={onSave}
 							>
 								{#if isSaving}
-									<Icons.Loader
+									<Icons.Loader2
 										size={16}
 										class="animate-spin"
 									/>
@@ -230,7 +230,7 @@
 				{:else if step === "error"}
 					<header class="mb-4">
 						<h2 class="h3 text-error-500">
-							{badge ? badge + " — " : ""}Generation Failed
+							{badge ? badge + " — " : ""}Generation failed
 						</h2>
 					</header>
 
@@ -266,7 +266,7 @@
 								class="btn preset-filled-surface-400-600"
 								onclick={onViewLastResult}
 							>
-								<Icons.Eye size={16} /> View Last Result
+								<Icons.Eye size={16} /> View last result
 							</button>
 						{/if}
 						{#if onStartOver}
@@ -274,7 +274,7 @@
 								class="btn preset-filled-surface-400-600 ml-auto"
 								onclick={onStartOver}
 							>
-								<Icons.RotateCcw size={16} /> Start Over
+								<Icons.RotateCcw size={16} /> Start over
 							</button>
 						{/if}
 						<button

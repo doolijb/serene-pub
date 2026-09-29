@@ -1,10 +1,9 @@
 <!--
 	Media management (28) — every blob this user owns, in one place.
 
-	This replaced the Settings sidebar's System tab. System settings are
-	instance-wide and belong on /admin/settings, which already rendered the same
-	`SystemSettingsTab` component; media is per-user and had nowhere to live at
-	all, so the swap gives each one the surface it actually wants.
+	Media is per-user, so it lives in the Settings sidebar; instance-wide
+	settings live in Admin › Instance (General, Network, Data and backups,
+	Diagnostics).
 
 	Responsive by construction rather than by breakpoint: the grid is
 	`auto-fill / minmax`, so the same component fills a 320px sidebar, an
@@ -18,7 +17,7 @@
 	import { getContext } from "svelte"
 	import { SvelteMap } from "svelte/reactivity"
 	import * as Icons from "@lucide/svelte"
-	import { Dialog, Popover, Portal } from "@skeletonlabs/skeleton-svelte"
+	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
 	import { fade } from "svelte/transition"
 	import { flip } from "svelte/animate"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
@@ -26,6 +25,7 @@
 	import { toaster } from "$lib/client/utils/toaster"
 	import PanelToolbar from "$lib/client/components/panels/PanelToolbar.svelte"
 	import Select from "$lib/client/components/inputs/Select.svelte"
+	import RowMenu from "$lib/client/components/menus/RowMenu.svelte"
 	import EntityGalleryViewModal from "$lib/client/components/gallery/EntityGalleryViewModal.svelte"
 	import AvatarCropEditor from "./AvatarCropEditor.svelte"
 	import type { MediaFrame } from "$lib/shared/media/frame"
@@ -489,137 +489,117 @@
 </script>
 
 {#snippet itemMenu(item: Item)}
-	<Popover
-		open={menuOpenFor === item.id}
-		onOpenChange={(e) => {
-			menuOpenFor = e.open ? item.id : null
-			if (e.open) loadRuns(item)
+	<!-- Portalled (RowMenu does it), which is what clears the tile: the tile
+	     sets `overflow-hidden` so the thumbnail can have rounded corners, and
+	     that clips anything rendered inside it. -->
+	<RowMenu
+		label="Image"
+		triggerLabel="Image options for {displayName(item)}"
+		triggerClass="bg-surface-950/60 hover:bg-surface-950/80 rounded-full p-1 text-white"
+		bind:open={
+			() => menuOpenFor === item.id,
+			(v) => (menuOpenFor = v ? item.id : null)
+		}
+		onOpenChange={(o) => {
+			if (o) loadRuns(item)
 		}}
-		positioning={{ placement: "bottom-end" }}
+		items={[
+			{
+				label: "Download original",
+				icon: Icons.Download,
+				onSelect: () => download(item)
+			},
+			item.kind === "image" && {
+				label: "Crop",
+				icon: Icons.Crop,
+				onSelect: () => crop(item)
+			},
+			item.kind === "image" && {
+				label: "Regenerate thumbnail",
+				icon: Icons.RefreshCw,
+				disabled: busyId === item.id,
+				onSelect: () => regenerate(item)
+			},
+			{
+				label:
+					item.visibility === MediaVisibility.PRIVATE
+						? "Make scoped"
+						: "Make private",
+				icon:
+					item.visibility === MediaVisibility.PRIVATE
+						? Icons.Users
+						: Icons.Lock,
+				onSelect: () => toggleVisibility(item)
+			},
+			{ separator: true },
+			{
+				label: "Delete",
+				icon: Icons.Trash2,
+				destructive: true,
+				onSelect: () => requestDelete(item)
+			}
+		]}
 	>
-		<Popover.Trigger
-			class="bg-surface-950/60 hover:bg-primary-600-400 rounded-full p-1 text-white"
-			aria-label="Image options for {displayName(item)}"
-		>
+		{#snippet trigger()}
 			<Icons.EllipsisVertical size={14} aria-hidden="true" />
-		</Popover.Trigger>
-		<!-- Portalled, and z-[1000] to clear the panel: the tile that owns this
-		     trigger sets `overflow-hidden` so the thumbnail can have rounded
-		     corners, which clips any popover rendered inside it. Same pattern
-		     as EntityGalleryTab and PanelNavHeader. -->
-		<Portal>
-			<Popover.Positioner class="z-[1000]!">
-				<Popover.Content
-					class="card bg-surface-100-900 border-surface-300-700 w-[min(90vw,240px)] space-y-2 border p-3 shadow-xl"
-				>
-					<header class="space-y-1">
-						<div class="flex items-center gap-2">
-							<Icons.Image size={16} aria-hidden="true" />
-							<p class="truncate text-sm font-semibold">
-								{displayName(item)}
-							</p>
-						</div>
-						<p class="text-surface-600-400 text-xs">
-							{fullDate(item.createdAt)}
-							{#if item.width && item.height}
-								· {item.width}×{item.height}
-							{/if}
-						</p>
-						<!-- What is held right now, not what is missing. Under
-						     lazy derivation a fresh upload has exactly one
-						     entry here and that is the healthy state. -->
-						<p class="text-surface-600-400 text-xs">
-							{formatBytes(item.storedBytes)} on disk ·
-							{item.variants.map((v) => v.variant).join(", ") ||
-								"nothing stored"}
-						</p>
-						<!-- Where it came from. `pipeline_run_artifacts` has
-						     recorded this since the relation replaced the
-						     nullable column, and nothing ever read it back
-						     here — a generated picture and an uploaded one
-						     looked identical. Absent for an upload, because
-						     "no run" is the ordinary case and a line saying
-						     so every time is what teaches people to stop
-						     reading this block. -->
-						{#if runsFor(item).length}
-							<p class="text-surface-600-400 text-xs">
-								{runsFor(item).length === 1
-									? "Made by a run"
-									: `Made by ${runsFor(item).length} runs`}
-								{#each runsFor(item).slice(0, 3) as r (r.runId)}
-									<br />
-									{#if isAdmin}
-										<a
-											class="anchor"
-											href={runHref(r)}
-											title="Open this run's receipt ({r.runId})"
-										>
-											{r.specSlug}{r.isPreview
-												? " (preview)"
-												: ""}
-										</a>
-									{:else}
-										{r.specSlug}{r.isPreview ? " (preview)" : ""}
-									{/if}
-									· {shortDate(String(r.startedAt))}
-								{/each}
-							</p>
-						{/if}
-					</header>
-					<article class="flex flex-col gap-1">
-						<button
-							type="button"
-							class="btn btn-sm popover-menu-btn hover:preset-filled-primary-500"
-							onclick={() => download(item)}
-						>
-							<Icons.Download size={16} aria-hidden="true" />
-							<span>Download original</span>
-						</button>
-						{#if item.kind === "image"}
-							<button
-								type="button"
-								class="btn btn-sm popover-menu-btn hover:preset-filled-primary-500"
-								onclick={() => crop(item)}
+		{/snippet}
+		{#snippet header()}
+			<div class="space-y-1">
+			<div class="flex items-center gap-2">
+				<Icons.Image size={16} aria-hidden="true" />
+				<p class="truncate text-sm font-semibold">
+					{displayName(item)}
+				</p>
+			</div>
+			<p class="text-surface-600-400 text-xs">
+				{fullDate(item.createdAt)}
+				{#if item.width && item.height}
+					· {item.width}×{item.height}
+				{/if}
+			</p>
+			<!-- What is held right now, not what is missing. Under
+			     lazy derivation a fresh upload has exactly one
+			     entry here and that is the healthy state. -->
+			<p class="text-surface-600-400 text-xs">
+				{formatBytes(item.storedBytes)} on disk ·
+				{item.variants.map((v) => v.variant).join(", ") ||
+					"nothing stored"}
+			</p>
+			<!-- Where it came from. `pipeline_run_artifacts` has
+			     recorded this since the relation replaced the
+			     nullable column, and nothing ever read it back
+			     here — a generated picture and an uploaded one
+			     looked identical. Absent for an upload, because
+			     "no run" is the ordinary case and a line saying
+			     so every time is what teaches people to stop
+			     reading this block. -->
+			{#if runsFor(item).length}
+				<p class="text-surface-600-400 text-xs">
+					{runsFor(item).length === 1
+						? "Made by a run"
+						: `Made by ${runsFor(item).length} runs`}
+					{#each runsFor(item).slice(0, 3) as r (r.runId)}
+						<br />
+						{#if isAdmin}
+							<a
+								class="anchor"
+								href={runHref(r)}
+								title="Open this run's receipt ({r.runId})"
 							>
-								<Icons.Crop size={16} aria-hidden="true" />
-								<span>Crop</span>
-							</button>
-							<button
-								type="button"
-								class="btn btn-sm popover-menu-btn hover:preset-filled-primary-500"
-								onclick={() => regenerate(item)}
-								disabled={busyId === item.id}
-							>
-								<Icons.RefreshCw size={16} aria-hidden="true" />
-								<span>Regenerate thumbnail</span>
-							</button>
+								{r.specSlug}{r.isPreview
+									? " (preview)"
+									: ""}
+							</a>
+						{:else}
+							{r.specSlug}{r.isPreview ? " (preview)" : ""}
 						{/if}
-						<button
-							type="button"
-							class="btn btn-sm popover-menu-btn hover:preset-filled-primary-500"
-							onclick={() => toggleVisibility(item)}
-						>
-							{#if item.visibility === MediaVisibility.PRIVATE}
-								<Icons.Users size={16} aria-hidden="true" />
-								<span>Make scoped</span>
-							{:else}
-								<Icons.Lock size={16} aria-hidden="true" />
-								<span>Make private</span>
-							{/if}
-						</button>
-						<button
-							type="button"
-							class="btn btn-sm popover-menu-btn hover:preset-filled-error-500"
-							onclick={() => requestDelete(item)}
-						>
-							<Icons.Trash2 size={16} aria-hidden="true" />
-							<span>Delete</span>
-						</button>
-					</article>
-				</Popover.Content>
-			</Popover.Positioner>
-		</Portal>
-	</Popover>
+						· {shortDate(String(r.startedAt))}
+					{/each}
+				</p>
+			{/if}
+			</div>
+		{/snippet}
+	</RowMenu>
 {/snippet}
 
 <div class="flex flex-col gap-3">
@@ -637,7 +617,7 @@
 			<button
 				type="button"
 				class="btn btn-sm p-2 {viewMode === 'grid'
-					? 'preset-filled-primary-500'
+					? 'preset-tonal-primary'
 					: 'preset-tonal-surface'}"
 				onclick={() => (viewMode = "grid")}
 				title="Grid view"
@@ -649,7 +629,7 @@
 			<button
 				type="button"
 				class="btn btn-sm p-2 {viewMode === 'list'
-					? 'preset-filled-primary-500'
+					? 'preset-tonal-primary'
 					: 'preset-tonal-surface'}"
 				onclick={() => (viewMode = "list")}
 				title="List view"
@@ -676,7 +656,7 @@
 		<Select
 			label="Sort media"
 			labelHidden
-			class="min-w-0 flex-1 basis-36 @sm/view:max-w-[220px]"
+			class="min-w-0 flex-1 basis-36 @lg/view:max-w-[220px]"
 			value={sort}
 			onValueChange={(v) => (sort = v as typeof sort)}
 			options={[
@@ -690,7 +670,7 @@
 		<Select
 			label="Filter by type"
 			labelHidden
-			class="min-w-0 flex-1 basis-32 @sm/view:max-w-[200px]"
+			class="min-w-0 flex-1 basis-32 @lg/view:max-w-[200px]"
 			value={kind}
 			onValueChange={(v) => (kind = v as typeof kind)}
 			options={[
@@ -707,7 +687,7 @@
 		<button
 			type="button"
 			class="btn shrink-0 {orphanedOnly
-				? 'preset-filled-warning-500'
+				? 'preset-tonal-primary'
 				: 'preset-tonal-surface'}"
 			onclick={() => (orphanedOnly = !orphanedOnly)}
 			disabled={orphanCount === 0 && !orphanedOnly}
@@ -816,14 +796,14 @@
 						<p class="truncate text-[11px] font-medium">
 							{displayName(item)}
 						</p>
-						<p class="text-surface-600-400 truncate text-[10px]">
+						<p class="text-surface-600-400 truncate text-[11px]">
 							{formatBytes(item.bytes)} · {shortDate(
 								item.createdAt
 							)}
 						</p>
 						{#if item.attachedTo}
 							<p
-								class="text-surface-600-400 truncate text-[10px]"
+								class="text-surface-600-400 truncate text-[11px]"
 							>
 								{item.orphaned
 									? "orphaned"

@@ -37,6 +37,9 @@ import {
 	// D-4a: the pick hash, shared with plugin authors so that two readers of
 	// one session can never reach different suspects. Never re-implemented here.
 	rendezvousPick,
+	// Lair pass B5: the Plan section's reading and the write's own checks.
+	sectionItemsOf,
+	checkFoldedSections,
 	type BandIntent,
 	type FormBlock,
 	type MessageBlock,
@@ -84,6 +87,7 @@ import { pickSpriteBySimilarity } from "$lib/shared/sprites/pick"
  * and not this file's.
  */
 import type * as C from "@serene-pub/contracts"
+import { entitySearch as entitySearchContract } from "@serene-pub/contracts"
 import type {
 	OutletCtx,
 	CoreQueryCtx,
@@ -119,6 +123,8 @@ import { relationshipSearchBindings } from "./bindings.relationships"
 // Stats and states, in their own module for the same reason — see its header
 // for why the write does not go through a host seam.
 import { stateBindings } from "./bindings.state"
+// Is a room name already described (lair pass R7) — its own module, same reason.
+import { undescribedNameBindings } from "./undescribedName"
 import { buildScanWindow } from "$lib/server/pipelines/ranking/signals"
 import { bindingNames } from "$lib/server/pipelines/ranking/entities"
 import {
@@ -152,14 +158,22 @@ import {
 } from "$lib/server/pipelines/prompt/renderers"
 import { resolveContextInput } from "$lib/server/pipelines/prompt/promptFields"
 import { processMessages } from "$lib/server/pipelines/prompt/messages"
-import type { ChannelVoice } from "$lib/server/messages/channels"
+import {
+	DEFAULT_CHANNEL,
+	isAllChannels,
+	parseChannel,
+	resolveChannel,
+	type ChannelVoice
+} from "$lib/server/messages/channels"
 import { resolvePostHistoryContext } from "$lib/server/pipelines/prompt/postHistory"
 import type { PostHistoryDiag } from "$lib/server/pipelines/prompt/promptTypes"
 import { buildTemplateContext } from "$lib/server/pipelines/prompt/templateContext"
 import {
+	locationVariables,
 	sceneAnchor,
 	slotGuide,
-	stateSummary
+	stateSummary,
+	withinEarshot
 } from "$lib/server/pipelines/prompt/adventureContext"
 import {
 	buildBatchPrompt,
@@ -176,8 +190,15 @@ import { explicitStopsFrom } from "$lib/server/connections/stops"
 import { streamingModeFrom } from "$lib/server/connections/streaming"
 import { contextBudgetFrom } from "$lib/server/pipelines/runtime/contextWindow"
 import {
+	docsExcerptContent,
+	docsQueryTerms,
+	searchDocs,
+	type DocsQueryMessage
+} from "$lib/server/pipelines/runtime/docsRetrieval"
+import {
 	inTurnEnvoys,
 	mentionedFirst,
+	narratorEntries,
 	rotationTurns,
 	roundRobinEntries,
 	spokenRefsSince,
@@ -514,6 +535,8 @@ interface SessionCastRead {
 		absorbedAliases?: unknown
 		/** A departed seat, when the read carries the seat's row. */
 		removedAt?: Date | string | null
+		/** False for a seat switched off in the cast list; the read carries every seat. */
+		enabled?: boolean | null
 	} | null> | null
 	/** The characters this session's users voice — character rows. */
 	sessionPersonas?: Array<{
@@ -872,8 +895,9 @@ async function loreFor(
 		entityRefs: castEntityRefs(cast),
 		retrieval: params.retrieval,
 		// ⚠ Nothing about retrieval *routing* is handed to the scan any more.
-		// The node's `retrievalMode` went in migration 0203 and the per-entry
-		// `retrieval_strategy` column in 0204, and `availability` went with the
+		// The node's `retrievalMode` went in pre-squash migration 0203 and the
+		// per-entry `retrieval_strategy` column in 0204 (both now folded into
+		// `0094_baseline_0_6`), and `availability` went with the
 		// second because reading it was the gate's only purpose here. Every
 		// mechanism runs; one this install cannot run subtracts its signal and
 		// says so in `diagnostics` below, which is why `embedding` is still read.
@@ -1111,21 +1135,38 @@ type TurnStrategyName =
 	| "manual"
 	| "narrator"
 
-/** Lower-cased word terms of three letters or more — what `docs-search` matches on. */
-function docsTerms(text: string): string[] {
-	return (text.toLowerCase().match(/[a-z0-9][a-z0-9'-]{2,}/g) ?? []).filter(
-		(t) => !DOCS_STOP_WORDS.has(t)
-	)
+/**
+ * The band `core:query/docs-search@1` declares (`bands: { docsExcerpts }` on
+ * its contract) — the intent's `band` and every candidate's `source`, which
+ * must be the declared key for Assemble to render it as `{{{docsExcerpts}}}`.
+ */
+const DOCS_BAND = "docsExcerpts"
+
+/**
+ * The band `core:query/entity-search@1` declares for its recalled lines
+ * (`bands: { recalledLines }`, carried on `messages` — `bandPorts`), and the
+ * share its `recalledLinesShare` ships at, read from the declaration rather
+ * than restated.
+ */
+const RECALLED_LINES_BAND = "recalledLines"
+const RECALLED_LINES_SHARE = Number(
+	(
+		entitySearchContract.descriptor.slots?.params?.schema as
+			| Record<string, { default?: unknown }>
+			| undefined
+	)?.recalledLinesShare?.default ?? 0
+)
+
+/**
+ * What the person's own lines are called (lair re-plan R4), off the cast read
+ * — already the session's override or the genre's `playerLabel`, resolved by
+ * the host. Undefined for a genre that declares none.
+ */
+function playerLabelOf(cast: unknown): string | undefined {
+	const label = (cast as { playerLabel?: unknown } | null | undefined)
+		?.playerLabel
+	return typeof label === "string" && label.trim() ? label.trim() : undefined
 }
-const DOCS_STOP_WORDS: ReadonlySet<string> = new Set([
-	"the", "and", "for", "are", "but", "not", "you", "all", "any", "can", "had",
-	"her", "was", "one", "our", "out", "has", "have", "with", "this", "that",
-	"from", "they", "will", "what", "when", "your", "how", "does", "into", "there",
-	"about", "which", "their", "would", "could", "should", "than", "then", "them",
-	"these", "those", "been", "being", "were", "also", "just", "like", "some",
-	"more", "very", "here", "where", "who", "why", "its", "it's", "i'm", "don't",
-	"doesn't", "can't", "did", "get", "got", "let", "use", "using", "used", "want"
-])
 
 /**
  * An envoy's card, from the cast read's `envoys` (U5g): the name the seed
@@ -1134,6 +1175,67 @@ const DOCS_STOP_WORDS: ReadonlySet<string> = new Set([
  * seat the cast carries. English, deliberately: the prompt is what the model
  * reads, and the declaration's `en` is the one entry every locale map has.
  */
+/**
+ * `{{recentStory}}` (lair re-plan R6): transcript rows as prose — one
+ * `Name: line` per row, named by the same processor the transcript uses
+ * (the player label on a persona-less line included), JSON blocks cut, no
+ * seed. What a speaker on another channel reads ABOUT the story; empty rows
+ * give nothing, so a template's `{{#if recentStory}}` is false.
+ */
+function recentStoryOf(
+	rows: unknown,
+	cast: unknown
+): { recentStory?: string } {
+	const text = transcriptProseOf(rows, cast)
+	return text ? { recentStory: text } : {}
+}
+
+/**
+ * `{{sideTalk}}` (lair re-plan R13): the unplayed talk on another channel —
+ * the Lair's Sanctum talk since the story's last line — as prose, exactly as
+ * `{{recentStory}}` is, so a prompt renders it as its own labelled block and
+ * never as turns. Absent when unwired or empty.
+ */
+function sideTalkOf(rows: unknown, cast: unknown): { sideTalk?: string } {
+	const text = transcriptProseOf(rows, cast)
+	return text ? { sideTalk: text } : {}
+}
+
+/**
+ * `{{scratchpad}}` (lair re-plan R13): the speaker's own running notes — the
+ * Castellan's annex field, already read for it alone. Absent when blank.
+ */
+function scratchpadOf(text: unknown): { scratchpad?: string } {
+	return typeof text === "string" && text.trim() ? { scratchpad: text.trim() } : {}
+}
+
+/** `session-history@1`'s refusal of `unplayedOnly` on the story's own channel (R13). */
+export const UNPLAYED_ON_MAIN_REFUSAL =
+	"unplayedOnly reads a side channel's talk since the story's last line — it cannot read the 'main' channel, whose rows are that bound"
+
+/** Transcript rows as prose — one `Name: line` per row, named as the transcript names them; "" when none. */
+function transcriptProseOf(rows: unknown, cast: unknown): string {
+	if (!Array.isArray(rows) || !rows.length) return ""
+	const result = processMessages({
+		messages: rows as never,
+		cast: (cast ?? {}) as never,
+		charName: "",
+		personaName: "",
+		narratorName: (cast as { sessionNarratorName?: string } | undefined)
+			?.sessionNarratorName,
+		seed: false,
+		plainProse: true
+	})
+	const text = result.messages
+		.map((m) => {
+			const line = typeof m.message === "string" ? m.message.trim() : ""
+			return line ? `${m.name ? `${m.name}: ` : ""}${line}` : ""
+		})
+		.filter(Boolean)
+		.join("\n")
+	return text
+}
+
 function envoySpeakerCard(
 	speaker: unknown,
 	envoys: unknown
@@ -1286,23 +1388,13 @@ function turnEntries(strategy: TurnStrategyName) {
 
 			/**
 			 * The narrator strategy (§4.4): one entry in the pipeline's own
-			 * voice after a person's line, none after a reply. This is how a
-			 * planner genre gets exactly one reply per send — its pool admits
-			 * nobody, so there is no seat for the entry to name.
+			 * voice after a person's line, none after a reply — per channel
+			 * the history holds, newest line first (lair re-plan R5;
+			 * `narratorEntries`). This is how a planner genre gets exactly
+			 * one reply per send — its pool admits nobody, so there is no
+			 * seat for the entry to name.
 			 */
-			if (strategy === "narrator") {
-				// "The LAST ROW" (§4.4), not the last row in the rotation:
-				// a narrator's reply is exactly what this strategy produced,
-				// so it has to count as the turn being taken. `rotationTurns`
-				// filters narration out — it is not a seat's turn — and
-				// reading through it here would prepare a second narrator
-				// entry after every narrator reply, forever.
-				const visible = messages.filter((m) => !m.isHidden)
-				const newest = visible[visible.length - 1]
-				return done(
-					newest?.role === "user" ? [{ ref: null, via: "voice" }] : []
-				)
-			}
+			if (strategy === "narrator") return done(narratorEntries(messages))
 
 			if (strategy === "round-robin")
 				return done(roundRobinEntries(candidates, messages))
@@ -1578,10 +1670,10 @@ const generateBinding = async (
 	if (result?.isAborted)
 		return halt("generation was aborted before the model finished")
 	if (!result?.text)
-		// The provider type used to be named here. `haltReason` is a
+		// Never name the provider type in this string. `haltReason` is a
 		// plain string on the SDK receipt, so nothing downstream can
 		// take it back out again — and a non-admin reads their own
-		// receipt through `pipelines:run`. The fact moves to the field
+		// receipt through `pipelines:run`. That fact goes on the field
 		// below, which the projection can remove.
 		return halt("the model returned nothing — there is no message to write")
 
@@ -1650,9 +1742,10 @@ const generateBinding = async (
  *
  * Several comma-separated paths join in order. That is what makes an answer
  * split into ARMS wireable: a schema can only be strict about a list whose items
- * are all one shape, so a keeper that reports values and possessions reports two
+ * are all one shape, so a keeper that reports values and item moves reports two
  * lists, and the node that resolves them takes one.
  */
+
 export function selectJsonPaths(
 	json: unknown,
 	path: unknown
@@ -1881,6 +1974,24 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 			{ ports: ["scope"] }
 		),
 
+		/**
+		 * The create pipeline's envoy greeting (lair re-plan R6): the
+		 * seated envoy's declared line, interpolated. `text` is empty when
+		 * the envoy is not seated or declares none, so the spec's junction
+		 * on it skips the write. See sessions/greetings.ts.
+		 */
+		"core:query/envoy-greeting@1": reads<typeof C.envoyGreeting>(
+			async (input: NodeInput<typeof C.envoyGreeting>, ctx: CoreQueryCtx) => {
+				const greeting = (await ctx.read("envoy_greeting", {
+					sessionId: input?.scope?.sessionId,
+					envoy: input?.params?.envoy
+				})) as { text: string } | undefined
+				const text = greeting?.text ?? ""
+				return ok({ main: text, text })
+			},
+			{ ports: ["scope"], params: ["envoy"] }
+		),
+
 		"core:query/session-history@1": reads<typeof C.sessionHistory>(
 			async (
 				input: NodeInput<typeof C.sessionHistory>,
@@ -1890,6 +2001,21 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 				// reading. Every read in the gather says the same thing, and
 				// the executor folds them into one status.
 				ctx.status?.(STATUS.thinking)
+				/**
+				 * Only the unplayed talk (lair re-plan R13): a side
+				 * channel's rows since the story's last line. Refused on
+				 * `main` (or every channel, which holds it): the story's own
+				 * rows are the bound, never the talk.
+				 */
+				const unplayedOnly = input?.params?.unplayedOnly === true
+				if (unplayedOnly) {
+					const selector = resolveChannel(input?.params?.channel ?? "main")
+					if (
+						isAllChannels(selector) ||
+						parseChannel(selector).slug === DEFAULT_CHANNEL
+					)
+						return halt(UNPLAYED_ON_MAIN_REFUSAL)
+				}
 				const messages = await ctx.read("session_messages", {
 					sessionId: input?.scope?.sessionId,
 					/**
@@ -1918,7 +2044,24 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 					// log and today's exact behaviour; another value is a mode's
 					// declared channel, read on purpose by the pipeline that
 					// wants it. No flat `input.channel` either, on the same terms.
-					channel: input?.params?.channel ?? "main"
+					channel: input?.params?.channel ?? "main",
+					...(unplayedOnly ? { unplayedOnly: true } : {}),
+					/**
+					 * Side channels as talk (lair re-plan R10's fold-in of the
+					 * R9 follow-up): off `main`, only people's lines and the
+					 * replies fired there — never a greeting or a turn's beats
+					 * row. The host applies the rule (`sideTalkOnly`).
+					 */
+					...(input?.params?.talkOnly === true ? { talkOnly: true } : {}),
+					/**
+					 * One row, by id (lair re-plan R11): the message a press
+					 * on a message's ⋮ was made on, when the spec wires the
+					 * inlet's `messageId` here. The host reads exactly that
+					 * row; the window above does not apply.
+					 */
+					...(typeof input?.messageId === "number"
+						? { messageId: input.messageId }
+						: {})
 				})
 				// `main` and `messages` carry the same value on purpose: `main`
 				// is what an unrefined `$.history` resolves to, and having it be
@@ -1941,10 +2084,12 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 				})
 			},
 			{
-				ports: ["scope"],
+				ports: ["scope", "messageId"],
 				params: [
 					"limit",
 					"channel",
+					"unplayedOnly",
+					"talkOnly",
 					// The band intent — `priority` read at last (R-7 P5).
 					"share",
 					"maxEntries",
@@ -2310,7 +2455,7 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 				// applied to what came back rather than pushed into the query,
 				// because the host does retrieval and not policy.
 				//
-				// A set rather than a map since migration 0204: the entry rows were
+				// A set rather than a map since pre-squash 0204: the entry rows were
 				// looked up to read `retrieval_strategy` off them, and membership is
 				// the only question left.
 				const visible = new Set(
@@ -2345,7 +2490,7 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 					// ⚠ **Visibility is the only exclusion this mechanism may make.**
 					// There was a second one here: the entry's own
 					// `retrieval_strategy`, which kept a `keyword` entry out of
-					// this mechanism with a model loaded and a cosine of 1. Migration
+					// this mechanism with a model loaded and a cosine of 1. Pre-squash
 					// 0204 dropped the column and the check with it — a mechanism
 					// switched off for a candidate is the exclusion the plan's
 					// second governing rule forbids, whoever set the switch.
@@ -2571,6 +2716,10 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 				 * as a side effect of running, and an install that has not asked
 				 * for it should pay nothing at all, not even the write.
 				 */
+				const recalledLinesShare =
+					typeof params.recalledLinesShare === "number"
+						? params.recalledLinesShare
+						: RECALLED_LINES_SHARE
 				if (maxEntries === 0 && maxMessages === 0)
 					return ok({
 						main: [],
@@ -2608,7 +2757,19 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 					})
 				])
 
-				const rows: any[] = entries ?? []
+				/**
+				 * ⚠ Only entries retrieval may use (finding #148). The host's
+				 * read returns switched-off and shelved rows on purpose — the
+				 * keyword scan reports them on `skipped` — but this mechanism
+				 * reports nothing about them, so one that reached the pool
+				 * reached the prompt. Filtered here, before the ids, the
+				 * rarity pool and the annotation promotion are built from it.
+				 * The rows are already resolved at the session's reading, so
+				 * an Off set by a dated amendment counts too.
+				 */
+				const rows: any[] = (entries ?? []).filter(
+					(e: any) => e?.enabled !== false && e?.archived !== true
+				)
 				const history: any[] = messages ?? []
 				/**
 				 * The oldest message the prompt already carries verbatim.
@@ -2713,30 +2874,90 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 					entityWeight
 				}).slice(0, maxMessages)
 
-				const messageById = new Map<number, any>(
-					(index?.messages ?? []).map((m: any) => [m.id, m])
+				/**
+				 * **Recalled lines** — the declared `recalledLines` band
+				 * (2026-09-27, owner ruling option b). They sat in the
+				 * transcript's `messages` band before, where the ranker spent
+				 * budget on them and no variable rendered them; as their own
+				 * band a template places them with `{{{recalledLines}}}`.
+				 *
+				 * Scored above as transcript (the `messages` weight row), named
+				 * here by the transcript's own chain — `processMessages` over
+				 * the rows as the history read carries them, with the session's
+				 * cast — so a line from a participant who has since left is
+				 * named as the transcript names it, and `{{char}}` in a line is
+				 * that line's speaker. `turn` is the line's position in its
+				 * channel (`recalled_lines`).
+				 */
+				const lineRows: any[] = messageHits.length
+					? ((await ctx.read("recalled_lines", {
+							sessionId: input?.scope?.sessionId,
+							ids: messageHits.map((h) => h.id)
+						})) ?? [])
+					: []
+				const cast: any = lineRows.length
+					? await ctx.read("session_cast", {
+							sessionId: input?.scope?.sessionId
+						})
+					: undefined
+				const named = new Map<number, { name: string; message?: string }>(
+					lineRows.length
+						? processMessages({
+								messages: lineRows,
+								cast: cast ?? {},
+								charName: "",
+								personaName: "",
+								narratorName: cast?.sessionNarratorName,
+								seed: false
+							}).messages.map((m) => [m.id, m])
+						: []
 				)
-				const messageCandidates = messageHits.map((hit) => {
-					const row = messageById.get(hit.id)
-					return {
-						id: hit.id,
-						source: "messages",
-						tokens: ctx.countTokens(row?.content ?? ""),
-						signals: { entityCooccurrence: hit.evidence },
-						presetScore: hit.score,
-						payload: {
+				const rowById = new Map<number, any>(
+					lineRows.map((r: any) => [Number(r.id), r])
+				)
+				const messageCandidates = messageHits.flatMap((hit) => {
+					const row = rowById.get(hit.id)
+					// Hidden, generating or gone since it was annotated.
+					if (!row) return []
+					const line = named.get(hit.id)
+					const text =
+						typeof line?.message === "string"
+							? line.message
+							: String(row.content ?? "").trim()
+					return [
+						{
 							id: hit.id,
-							content: row?.content ?? "",
-							foundBy: "entity-search",
-							sharedEntities: hit.shared
+							source: RECALLED_LINES_BAND,
+							tokens: ctx.countTokens(text),
+							signals: { entityCooccurrence: hit.evidence },
+							presetScore: hit.score,
+							payload: {
+								id: hit.id,
+								name: line?.name ?? "",
+								content: text,
+								turn: row.turn,
+								foundBy: "entity-search",
+								sharedEntities: hit.shared
+							}
 						}
-					}
+					]
 				})
 
 				return ok({
 					main: candidates,
 					hits: candidates,
-					messages: messageCandidates,
+					// The band's intent first, whenever the half is on — a
+					// source that found nothing this turn still has a share.
+					messages:
+						maxMessages > 0
+							? [
+									bandIntent(RECALLED_LINES_BAND, {
+										share: recalledLinesShare,
+										maxEntries: maxMessages
+									}),
+									...messageCandidates
+								]
+							: [],
 					skipped: [],
 					diagnostics: {
 						maxEntries,
@@ -2766,6 +2987,7 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 				params: [
 					"maxEntries",
 					"maxMessages",
+					"recalledLinesShare",
 					"scanDepth",
 					"entityWeight"
 				]
@@ -3081,11 +3303,12 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 		 *
 		 * A Query because it reads rows, and one Query rather than three because
 		 * the cast is only useful assembled: a character row without its
-		 * `sessionCharacters` join carries no visibility, and visibility is what
-		 * decides whether that character appears in the prompt at all.
+		 * `sessionCharacters` join carries no `enabled`, and `enabled` is what
+		 * decides whether that character is named and given a turn.
 		 *
-		 * It decides nothing. Which of these rows are shown, named or minimal is
-		 * the context Task's business.
+		 * It decides nothing. Every seat goes out, switched off or not, each
+		 * with `enabled`; which rows are shown, named or trimmed is the
+		 * context Task's business, and who may speak the turn pool's.
 		 */
 		/**
 		 * The speaker's relationships, from the narrative graph.
@@ -3145,22 +3368,27 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 		// The same graph, ranked and budgeted rather than dumped.
 		...relationshipSearchBindings(),
 
-		// The session's stats, states and possessions: one node reads them,
+		// The session's stats and states: one node reads them,
 		// one changes them.
 		...stateBindings(run),
 
+		// Is a room name already described, by an entry or by recent prose.
+		...undescribedNameBindings(),
+
 		/**
 		 * Documentation search — the guide genre's one retrieval mechanism
-		 * (plans/29 R-18; U5g). The compiled docs' section index (title,
-		 * anchor, preview per heading; `$lib/shared/utils/docsIndex`) is
-		 * scored by the words it shares with the newest messages, and the
-		 * best sections go out as candidates in the **`worldLore` band** —
-		 * so `rank-hybrid` budgets them and `assemble` lays them out under
-		 * the section's title exactly as it would a lorebook's entries.
+		 * (plans/29 R-18; U5g). The compiled docs' section index — the app's
+		 * guides and the SDK's, one body of text per heading
+		 * (`$lib/shared/utils/docsIndex`) — is ranked against the person's
+		 * newest messages (`docsRetrieval.ts`: stemmed BM25 with a relevance
+		 * floor, their own rows only), and the relevant sections go out in
+		 * the node's declared **`docsExcerpts`** band (2026-09-27; it borrowed
+		 * `worldLore` before), each excerpt headed by its page's real path —
+		 * so `rank-hybrid` budgets them and the guide's template places them.
 		 *
-		 * Degrades to an empty band with its intent: a docs-dist that was
-		 * never compiled (a fresh checkout, `npm test`) is an index with no
-		 * sections, and the turn loses excerpts rather than failing.
+		 * Publishes the intent alone when nothing matched — the empty band is
+		 * how the template knows to say so. Degrades the same way when the
+		 * docs-dist was never compiled (a fresh checkout, `npm test`).
 		 */
 		"core:query/docs-search@1": reads<typeof C.docsSearch>(
 			async (
@@ -3171,7 +3399,7 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 					typeof input?.params?.maxEntries === "number"
 						? input.params.maxEntries
 						: 6
-				const intent = bandIntent("worldLore", {
+				const intent = bandIntent(DOCS_BAND, {
 					share:
 						typeof input?.params?.share === "number"
 							? input.params.share
@@ -3197,54 +3425,32 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 				if (!sections.length)
 					return ok({ main: [intent], candidates: [intent] })
 
-				const messages: Array<{ content?: string }> =
+				const messages: DocsQueryMessage[] =
 					(await ctx.read("session_messages", {
 						sessionId: input?.scope?.sessionId,
 						limit: scanDepth
 					})) ?? []
-				// The newest message counts most: a question just asked is
-				// what the answer should be grounded in, and the turn before
-				// it is context for that question, not a second question.
-				const weights = new Map<string, number>()
-				const recent = messages.slice(-scanDepth)
-				recent.forEach((m, i) => {
-					const w = (i + 1) / recent.length
-					for (const t of docsTerms(String(m.content ?? "")))
-						weights.set(t, (weights.get(t) ?? 0) + w)
-				})
-				if (!weights.size)
-					return ok({ main: [intent], candidates: [intent] })
-
-				const scored = sections
-					.map((sec) => {
-						const terms = new Set(docsTerms(`${sec.title} ${sec.preview}`))
-						let score = 0
-						for (const t of terms) score += weights.get(t) ?? 0
-						// Normalised by the section's own length so a long
-						// preview does not win by mentioning everything.
-						return { sec, score: terms.size ? score / Math.sqrt(terms.size) : 0 }
-					})
-					.filter((s) => s.score > 0)
-					.sort((a, b) => b.score - a.score)
-					.slice(0, maxEntries)
-				const top = scored[0]?.score || 1
-				const candidates = scored.map(({ sec, score }, position) => {
-					const page = docsManifest.pages[sec.slug]?.title
-					const name = page && page !== sec.title ? `${page} › ${sec.title}` : sec.title
-					const link = `${docsManifest.linkBase || "/docs"}/${sec.slug}#${sec.anchor}`
-					const content = `${sec.preview}\n(${link})`
+				const hits = searchDocs(
+					sections,
+					docsManifest,
+					docsQueryTerms(messages.slice(-scanDepth)),
+					maxEntries
+				)
+				const top = hits[0]?.score || 1
+				const candidates = hits.map((hit, position) => {
+					const content = docsExcerptContent(hit)
 					return {
-						id: `${sec.slug}#${sec.anchor}`,
-						source: "worldLore",
+						id: hit.id,
+						source: DOCS_BAND,
 						tokens: ctx.countTokens(content),
 						signals: {},
-						presetScore: score / top,
+						presetScore: hit.score / top,
 						position,
 						payload: {
-							id: `${sec.slug}#${sec.anchor}`,
-							name,
+							id: hit.id,
+							name: hit.name,
 							content,
-							link,
+							link: hit.link,
 							foundBy: "docs"
 						}
 					}
@@ -3321,15 +3527,28 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 		 */
 		"core:query/session-annex@1": reads<typeof C.sessionAnnex>(
 			async (input: NodeInput<typeof C.sessionAnnex>, ctx: CoreQueryCtx) => {
-				// `view: 'ai'` is the prompt-safe view (R57); absent is everything.
+				// `view: 'ai'` is the prompt-safe view (R57); `'template'` is
+				// every declared key of every owner in scope, for a template's
+				// `annex` port (typed templates P6, law T2); absent is
+				// everything of one owner, as a pipeline reads it.
 				const view = (input as { view?: unknown })?.view
-				if (view !== undefined && view !== null && view !== "" && view !== "ai")
-					return halt(`view is 'ai' or left out — '${String(view)}' is neither`)
+				if (
+					view !== undefined &&
+					view !== null &&
+					view !== "" &&
+					view !== "ai" &&
+					view !== "template"
+				)
+					return halt(
+						`view is 'ai', 'template' or left out — '${String(view)}' is none of them`
+					)
 				const doc = await ctx.read("session_annex", {
 					sessionId: input?.scope?.sessionId,
 					...(view === "ai"
 						? { view: "ai", speaker: (input as { speaker?: unknown })?.speaker ?? null }
-						: {})
+						: view === "template"
+							? { view: "template" }
+							: {})
 				})
 				if (doc === null)
 					return halt(
@@ -3393,7 +3612,9 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 							({ cc }) =>
 								cc.character &&
 								!cc.removedAt &&
-								(characters === "all" || cc.isActive)
+								// Filtered here, on `enabled`: the cast read
+								// carries switched-off seats too (2026-09-27).
+								(characters === "all" || cc.enabled === true)
 						)
 						.sort((a, b) => a.position - b.position))
 						out.push({
@@ -4087,7 +4308,32 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 				// dereferenced from row ids into template sources by `world.ts` —
 				// the same treatment `prompts` gets, and for the same reason: this
 				// node needs the template, not the number.
-				const templateContext = await buildTemplateContext({
+				const playerLabel = playerLabelOf(cast)
+				// ⚠ Within earshot (R1) — computed once, read by the rooms'
+				// location lookup and by the builder below.
+				const heard = withinEarshot(input?.state, input?.speaker)
+				const coreVariables: Record<string, unknown> = {
+					...(playerLabel ? { playerLabel } : {}),
+					...(typeof input?.turnDirection === "string" &&
+					input.turnDirection.trim()
+						? { turnDirection: input.turnDirection.trim() }
+						: {}),
+					// The rooms (lair re-plan R6): `{{knownLocations}}` and
+					// `{{locationEntry}}`, exactly as the planner's surface
+					// renders them — for the Castellan in the Sanctum.
+					// Unwired everywhere else, where this adds nothing.
+					...(input?.locationEntries !== undefined
+						? locationVariables(input.locationEntries, heard as never)
+						: {}),
+					// The story's newest rows as prose (R6), `{{recentStory}}`
+					// — background for a speaker on another channel, never
+					// turns it continues. Absent when unwired or empty.
+					...recentStoryOf(input?.recentStory, cast),
+					// The speaker's own running notes (R13), `{{scratchpad}}`
+					// — the Castellan's, read for it alone. Absent when blank.
+					...scratchpadOf(input?.scratchpad)
+				}
+				const built = await buildTemplateContext({
 					...resolved,
 					variables: input?.variables,
 					// The variables an authored prompt row interpolates beside
@@ -4095,17 +4341,56 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 					// that called this computed for them. They have to arrive here
 					// rather than be merged onto the answer, because `instructions`
 					// is interpolated inside the builder — see `fields` there.
-					fields: input?.fields as
-						| Record<string, unknown>
-						| undefined,
+					//
+					// `turnDirection` (lair pass B17): what the person typed
+					// with a press that reads it as direction — Trigger trap,
+					// Reveal. Joined here for the same reason: the prompt row
+					// renders `{{#if turnDirection}}`. Absent when blank.
+					//
+					// `playerLabel` (lair re-plan R4): what the person's own
+					// lines are called, off the cast read — `{{playerLabel}}`
+					// in every context builder, since every one of them is
+					// this handler. Absent for a genre that declares none.
+					fields: Object.keys(coreVariables).length
+						? {
+								...((input?.fields as
+									| Record<string, unknown>
+									| undefined) ?? {}),
+								...coreVariables
+							}
+						: (input?.fields as Record<string, unknown> | undefined),
 					// Unwired on every shipped spec, which is why it is read
 					// defensively rather than required: a chat has no state block
 					// and must not grow one by declaring a port.
-					state: input?.state,
+					//
+					// ⚠ **Within earshot** (lair pass R1): a slot only its holder
+					// may hear (the Lair's whisper) is taken off every member but
+					// the one `speaker` names — nobody, on a trap, a reveal or a
+					// room build. One of the two places state reaches a template;
+					// `mergeContext` below is the other. See `withinEarshot`.
+					state: heard,
 					// Every layout here may be a plugin's engine, so the run rides
 					// along — without it a cancelled run cannot stop them.
 					...run
 				})
+				/**
+				 * The book's story time (DESIGN-story-time P5 + the lorebook
+				 * clock), off the cast read, for `assemble`'s `currentDate`:
+				 * the line's stored clock wins over the newest allocated
+				 * history entry, and a declared calendar spells it. Absent — no
+				 * key — without a book, so a chat's context is unchanged.
+				 */
+				const storyTime = (cast as { storyTime?: unknown }).storyTime
+				// And `{{playerLabel}}` for the assembly template too (R4) —
+				// a template variable, not a port, so no type pin moves.
+				const templateContext =
+					storyTime || playerLabel
+						? {
+								...built,
+								...(storyTime ? { storyTime } : {}),
+								...(playerLabel ? { playerLabel } : {})
+							}
+						: built
 				return ok({
 					main: templateContext,
 					templateContext,
@@ -4128,6 +4413,13 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 					"speakerCharacter",
 					"speaker",
 					"state",
+					"turnDirection",
+					"locationEntries",
+					"recentStory",
+					// The genre fields (R13): declared on this type now, read
+					// by the handler below as every surface's are.
+					"fields",
+					"scratchpad",
 					"prompts",
 					"variables"
 				]
@@ -4150,6 +4442,11 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 					cast: input?.cast ?? {},
 					charName: ctxValue.char ?? "",
 					personaName: ctxValue.user ?? "",
+					// A line nobody claims, when the genre declares no
+					// fallback envoy (ruled 2026-09-26) — off the cast read.
+					narratorName: (
+						input?.cast as { sessionNarratorName?: string } | undefined
+					)?.sessionNarratorName,
 					seedName: input?.seedName ?? ctxValue.seedName,
 					// The other half of the seed decision, off the same cast
 					// read the context builder resolved the name from (R-C) —
@@ -4197,6 +4494,9 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 					cast: input?.cast ?? {},
 					charName: ctxValue.char ?? "",
 					personaName: ctxValue.user ?? "",
+					narratorName: (
+						input?.cast as { sessionNarratorName?: string } | undefined
+					)?.sessionNarratorName,
 					// The two that make this node what it is. No name is needed
 					// for a line that is not written.
 					seed: false,
@@ -4436,6 +4736,11 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 					engine,
 					prompts: input?.prompts,
 					templateContext: input?.templateContext,
+					// The template view of the annex, when a spec wired it
+					// (typed templates P6; law T2 says only session-annex with
+					// `view: 'template'` may). Absent otherwise, and then the
+					// template's scope has no `annex` either.
+					annex: input?.annex,
 					// This node's own `variables` slot: how the lore and history
 					// *it* produced are laid out. Separate from the context
 					// builder's slot, because these are post-budget — what fits is
@@ -4468,7 +4773,7 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 					 * ⚠ It rides on `rendered`, and the trailing `promptFormat` that
 					 * used to be spread after it is GONE rather than tidied away. The
 					 * render is what picks the template — in chat wire mode it renders
-					 * `split_session` and ignores the connection's delimiters entirely
+					 * `split_chat` and ignores the connection's delimiters entirely
 					 * — so re-appending the value computed up here would have put the
 					 * connection's format on a receipt for a prompt rendered in
 					 * something else. The same lie, one layer along.
@@ -4513,7 +4818,8 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 					"templateContext",
 					"decisions",
 					"messages",
-					"groups"
+					"groups",
+					"annex"
 				],
 				// `truncation` left this schema (R-12): assemble drops nothing —
 				// what fits is the ranker's `select`, per band.
@@ -5027,6 +5333,57 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 			{ ports: ["items"], params: ["path", "separator"] }
 		),
 
+		/**
+		 * A document's lists as one folded section (lair pass B5, D5): the
+		 * Lair's planner beats and speakers under "Plan", as readable lines,
+		 * never JSON. The reading is the SDK's `sectionItemsOf`; the checks
+		 * are the ones the write makes, so a bad `kind` halts HERE, on the
+		 * node that chose it, rather than at the save.
+		 */
+		"core:task/list-section@1": reads<typeof C.listSection>(
+			async (input: NodeInput<typeof C.listSection>) => {
+				const items = sectionItemsOf(input?.json, input?.params?.path ?? "")
+				const checked = checkFoldedSections(
+					items.length
+						? [
+								{
+									kind: input?.params?.kind ?? "notes",
+									label: input?.params?.label ?? "Notes",
+									items
+								}
+							]
+						: []
+				)
+				if (checked.refusal) return halt(checked.refusal)
+				const sections = checked.sections ?? []
+				// The same lines as a markdown list (lair pass R8): the body
+				// of a row whose text IS the list — the Lair's beats row.
+				const text = items.map((line) => `- ${line}`).join("\n")
+				return ok({ main: sections, sections, text })
+			},
+			{ ports: ["json"], params: ["path", "kind", "label"] }
+		),
+
+		/**
+		 * A list's first item and the rest (lair pass R8): the Lair's lead
+		 * delver, whose line streams, and the party after them. Pure — the
+		 * contract's rules: anything that is not a list is a list of one,
+		 * `first` absent on an empty list, `rest` always a list.
+		 */
+		"core:task/split-first@1": reads<typeof C.splitFirst>(
+			async (input: NodeInput<typeof C.splitFirst>) => {
+				const raw = input?.items
+				const items = Array.isArray(raw) ? raw : raw == null ? [] : [raw]
+				const [first, ...rest] = items
+				return ok({
+					main: { first, rest },
+					...(first !== undefined ? { first } : {}),
+					rest
+				})
+			},
+			{ ports: ["items"] }
+		),
+
 		// ── D-4a: the pure pick, and the room as options ───────────────────
 		//
 		// Two Tasks that compute rather than fetch. Neither touches `ctx` at
@@ -5174,13 +5531,11 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 				if (exclude !== "characters")
 					for (const cc of cast?.sessionCharacters ?? []) {
 						// The turn strategies' own eligibility: a soft-removed
-						// seat is nobody, and an inactive one is not taking
-						// part. `isActive` is not on `SessionCastRead` — the
-						// host selects it and `pickSpeaker` reads it the same
-						// way.
-						const seat = cc as (typeof cc & { isActive?: boolean }) | null
+						// seat is nobody, and a switched-off one is not taking
+						// part — the cast read carries it with `enabled: false`.
+						const seat = cc
 						if (!seat?.character || seat.removedAt != null) continue
-						if (seat.isActive === false) continue
+						if (seat.enabled === false) continue
 						add(seat.character.id, seat.character.name, seat.character.nickname)
 					}
 				if (exclude !== "personas")
@@ -5333,15 +5688,20 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 						label: o.label,
 						choice: o.key
 					}))
+				// What the question is about, by name (lair pass B12) — the
+				// knock's room, read back by `read-answer` on the press's run.
+				const referent =
+					typeof input?.referent === "string" ? input.referent.trim() : ""
 				const block: MessageBlock = {
 					kind: "choices",
 					question,
 					...(addressee ? { addressee } : {}),
+					...(referent ? { referent } : {}),
 					actions
 				}
 				return ok({ main: [block], blocks: [block], text: question, addressee })
 			},
-			{ ports: ["json", "fn", "action", "addressee", "cast"] }
+			{ ports: ["json", "fn", "action", "addressee", "cast", "referent"] }
 		),
 
 		/**
@@ -5349,13 +5709,14 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 		 * key and label, who answered and their row, the question, the values.
 		 * Halts when the press carried no form — a fire naming no block, which
 		 * no listing offers since the `form` venue (U5d review, S1) but a
-		 * hand-made `sessions:triggerFunction` can still send.
+		 * hand-made `sessions:fireAction` can still send.
 		 */
 		"core:task/read-answer@1": reads<typeof C.readAnswer>(
 			async (input: NodeInput<typeof C.readAnswer>) => {
 				const form = (input?.form ?? null) as {
 					blockId?: string
 					question?: string | null
+					referent?: string | null
 					addressee?: string | null
 					characterId?: number | null
 					choice?: string
@@ -5376,6 +5737,7 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 					addressee: form.addressee ?? null,
 					characterId: form.characterId ?? null,
 					question: form.question ?? null,
+					referent: typeof form.referent === "string" ? form.referent : "",
 					values
 				})
 			},
@@ -6058,7 +6420,17 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 		"core:outlet/set-session-annex@1": reads<typeof C.setSessionAnnex>(
 			async (input: NodeInput<typeof C.setSessionAnnex>, ctx: OutletCtx) =>
 				ok(await ctx.commit(input)),
-			{ ports: ["value", "see"], params: ["owner", "merge", "sharedAnnex"] }
+			{ ports: ["value"], params: ["owner", "merge", "sharedAnnex"] }
+		),
+		/**
+		 * An annex field's write (2026-09-26): the host reads the field's
+		 * declaration off the payload's identity, checks the value against
+		 * its shape and writes it through the annex write above.
+		 */
+		"core:outlet/set-annex-field@1": reads<typeof C.setAnnexField>(
+			async (input: NodeInput<typeof C.setAnnexField>, ctx: OutletCtx) =>
+				ok(await ctx.commit(input)),
+			{ ports: ["payload"] }
 		),
 		/** A declared event, recorded (E1b): the host checks scope, writes the ledger row, dispatches. */
 		"core:outlet/record-event@1": reads<typeof C.recordEvent>(
@@ -6083,7 +6455,8 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 					"instructions",
 					"row",
 					"channel",
-					"blocks"
+					"blocks",
+					"sections"
 				]
 			}
 		),
@@ -6099,7 +6472,7 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 				input: NodeInput<typeof C.updateMessage>,
 				ctx: OutletCtx
 			) => ok(await ctx.commit(input)),
-			{ ports: ["target", "text", "thinking", "blocks"] }
+			{ ports: ["target", "text", "thinking", "blocks", "sections"] }
 		),
 		/**
 		 * Bound 2026-09-17 (plans/29 R-2): the host's commit for both — bytes
@@ -6231,6 +6604,23 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 				ports: ["choices", "lineVector", "labelVectors"],
 				params: ["enabled", "margin", "floor"]
 			}
+		),
+		/**
+		 * Advance story clock (DESIGN-story-time P3): the host moves
+		 * the session's story clock through its book's calendar and refuses what
+		 * does not land.
+		 */
+		"core:outlet/advance-story-clock@1": reads<typeof C.advanceStoryClock>(
+			async (input: NodeInput<typeof C.advanceStoryClock>, ctx: OutletCtx) => {
+				const { clock, label, ...ids } = (await ctx.commit(input)) as {
+					id: unknown
+					sessionId?: unknown
+					clock?: unknown
+					label?: unknown
+				}
+				return ok({ status: "committed", ids, clock: clock ?? null, label: label ?? "" })
+			},
+			{ ports: ["by", "unit"], params: ["by", "unit"] }
 		),
 		"core:outlet/show-sprite@1": reads<typeof C.showSprite>(
 			async (input: NodeInput<typeof C.showSprite>, ctx: OutletCtx) => {
@@ -6433,10 +6823,31 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 	 * @param variables The facts this surface computed for its template.
 	 */
 	const mergeContext = async (
-		prepared: object,
-		variables: Record<string, unknown>,
+		prepared: { state?: unknown },
+		/**
+		 * Whose voice this prompt is (earshot, lair pass R1): a
+		 * `character:<id>` reference for a cast member's own voice, `null`
+		 * for every agent that is nobody's voice — the planner, the scene,
+		 * the keeper. Decides which holder-only slots the state keeps.
+		 */
+		voice: string | null,
+		/** The facts this surface computes for its template, from the state as it may hear it. */
+		variablesFrom: (state: any) => Record<string, unknown>,
 		ctx: TaskCtx
 	) => {
+		/**
+		 * ⚠ **Within earshot, once, before anything reads the state** — the
+		 * second of the two places state reaches a template (the shared
+		 * builder is the first). The surface variables (`{{stateSummary}}`,
+		 * `{{slots}}`, `{{location}}`) and the `{{state}}` the builder
+		 * projects are both computed from what this voice may hear, so no
+		 * prompt shows a whisper through one door that the other withheld.
+		 * The builder filters again by the `speaker` it is handed, which
+		 * takes nothing more away: a state already heard by this voice is
+		 * what that voice hears.
+		 */
+		const state = withinEarshot(prepared.state, voice)
+		const variables = variablesFrom(state)
 		/**
 		 * ⚠ **Handed to the builder, not merged onto its answer.**
 		 *
@@ -6448,7 +6859,13 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 		 * first.
 		 */
 		const base = await templateContext(
-			{ ...prepared, fields: variables },
+			{
+				...prepared,
+				state,
+				// The builder's own filter reads `speaker`: the same voice.
+				speaker: voice,
+				fields: variables
+			},
 			ctx
 		)
 		if (base.kind !== "ok") return base
@@ -6514,26 +6931,58 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 		}
 	}
 
+	/**
+	 * This turn's direction (lair pass B11): what the person sent, for a genre
+	 * that reads its composer as instructions — `{{turnDirection}}`. Absent
+	 * when blank, so `{{#if turnDirection}}` is false on a turn nobody
+	 * directed. Never bare `direction`: that is the Lair's standing-note slot.
+	 */
+	const turnDirectionOf = (turnDirection: unknown): Record<string, unknown> =>
+		typeof turnDirection === "string" && turnDirection.trim()
+			? { turnDirection: turnDirection.trim() }
+			: {}
+
 	bindings["core:task/build-planner-context@1"] = reads<
 		typeof C.buildPlannerContext
 	>(
 		async (input: NodeInput<typeof C.buildPlannerContext>, ctx: TaskCtx) =>
 			mergeContext(
 				input,
-				{
+				// Nobody's voice: the planner hears no holder's slot.
+				null,
+				(state) => ({
 					...genreFields(input?.fields),
 					...adventureVariables({
-						state: input?.state,
+						state,
 						cast: input?.cast
-					})
-				},
+					}),
+					...turnDirectionOf(input?.turnDirection),
+					...locationVariables(input?.locationEntries, state as never),
+					// The unplayed side talk and the planner's own notes
+					// (R13): `{{sideTalk}}`, `{{scratchpad}}` — each absent
+					// when unwired, so a switched-off session renders neither.
+					...sideTalkOf(input?.sideTalk, input?.cast),
+					...scratchpadOf(input?.scratchpad)
+				}),
 				ctx
 			),
-		{ ports: ["cast", "state", "fields", "prompts", "variables"] }
+		{
+			ports: [
+				"cast",
+				"state",
+				"fields",
+				"turnDirection",
+				"locationEntries",
+				"sideTalk",
+				"scratchpad",
+				"prompts",
+				"variables"
+			]
+		}
 	)
 
 	/**
-	 * Nobody is speaking, and that is the whole of the narrator stage.
+	 * Nobody is speaking, and that is the whole of the narrator step.
 	 *
 	 * `resolveContextInput` keys everything off `currentCharacterId`: the card
 	 * shown at full visibility, what `{{char}}` renders, and — the one that
@@ -6567,10 +7016,12 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 		async (input: NodeInput<typeof C.buildSceneContext>, ctx: TaskCtx) =>
 			mergeContext(
 				asNarrator(input),
-				{
+				// Nobody's voice: the scene hears no holder's slot.
+				null,
+				(state) => ({
 					...genreFields(input?.fields),
 					...adventureVariables({
-						state: input?.state,
+						state,
 						plan: input?.plan,
 						cast: input?.cast
 					}),
@@ -6578,11 +7029,29 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 					// structure, for a template that wants to walk it. The
 					// narrator reads its beats through `{{beats}}` instead, which
 					// is text.
-					plan: input?.plan
-				},
+					plan: input?.plan,
+					...turnDirectionOf(input?.turnDirection),
+					...locationVariables(input?.locationEntries, state as never),
+					// The unplayed side talk (R13), `{{sideTalk}}`: the
+					// Castellan's narration, when the talk steers or Narrate
+					// was pressed in the Sanctum. Absent when unwired.
+					...sideTalkOf(input?.sideTalk, input?.cast)
+				}),
 				ctx
 			),
-		{ ports: ["cast", "state", "plan", "fields", "prompts", "variables"] }
+		{
+			ports: [
+				"cast",
+				"state",
+				"plan",
+				"fields",
+				"turnDirection",
+				"locationEntries",
+				"sideTalk",
+				"prompts",
+				"variables"
+			]
+		}
 	)
 
 	bindings["core:task/build-keeper-context@1"] = reads<
@@ -6591,10 +7060,12 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 		async (input: NodeInput<typeof C.buildKeeperContext>, ctx: TaskCtx) =>
 			mergeContext(
 				input,
-				{
+				// Nobody's voice: the keeper hears no holder's slot.
+				null,
+				(state) => ({
 					...genreFields(input?.fields),
 					...adventureVariables({
-						state: input?.state,
+						state,
 						cast: input?.cast
 					}),
 					// The reply this keeper is reporting on. The transcript does
@@ -6611,7 +7082,7 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 					// prompt is a row id the model reads as prose. Allow-listed
 					// in `boot/declaredReads.ts` as the one port a definition
 					// declares for sequencing alone.
-				},
+				}),
 				ctx
 			),
 		{ ports: ["cast", "state", "reply", "fields", "prompts", "variables"] }
@@ -6654,25 +7125,47 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 		// 2026-09-16, when that word became the participant reference).
 		const speaker = (input?.sideCharacter ?? {}) as {
 			name?: unknown
+			characterId?: unknown
 			character?: unknown
 		}
-		const name = typeof speaker.name === "string" ? speaker.name.trim() : ""
 		const cast = input?.cast as any
-		// Matched on name and nickname alike: either can open a line in a
-		// transcript, and a planner names whichever the conversation uses.
 		const seated = Array.isArray(cast?.sessionCharacters)
 			? cast.sessionCharacters
 			: []
+		/**
+		 * By id first — the fact's `characterId`, which a pick carries (lair
+		 * pass B15: Pick who speaks names the delver, not a name) — and then
+		 * by the seated card's own name, so `{{char}}` and the seed line are
+		 * the card's. An id the cast does not seat names nobody.
+		 */
+		const byId =
+			typeof speaker.characterId === "number" ||
+			(typeof speaker.characterId === "string" &&
+				/^\d+$/.test(speaker.characterId))
+				? (seated.find(
+						(cc: any) => cc?.character?.id === Number(speaker.characterId)
+					)?.character ?? null)
+				: null
+		const name =
+			typeof speaker.name === "string" && speaker.name.trim()
+				? speaker.name.trim()
+				: typeof byId?.name === "string"
+					? byId.name.trim()
+					: ""
+		// Matched on name and nickname alike: either can open a line in a
+		// transcript, and a planner names whichever the conversation uses.
 		const matches = (character: any) => {
 			const known = [character?.name, character?.nickname]
 				.filter((n: unknown): n is string => typeof n === "string")
 				.map((n) => n.trim().toLowerCase())
 			return known.includes(name.toLowerCase())
 		}
-		const speaking = name
-			? (seated.find((cc: any) => matches(cc?.character))?.character
-					?.id ?? null)
-			: null
+		const speaking = byId
+			? (byId.id as number)
+			: name
+				? (seated.find((cc: any) => matches(cc?.character))?.character
+						?.id ?? null)
+				: null
 		return {
 			...input,
 			speakerName: name || undefined,
@@ -6716,12 +7209,31 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 			ctx: TaskCtx
 		) => {
 			const prepared = asSideCharacter(input)
+			const speaking = (prepared as { currentCharacterId?: number | null })
+				.currentCharacterId
 			const built = await mergeContext(
 				prepared,
-				adventureVariables({
-					state: input?.state,
-					plan: input?.plan,
-					cast: input?.cast
+				// The one voice that is somebody's: the member this node
+				// derived keeps the slots only they may hear (their whisper),
+				// and nobody else's. A name the cast does not hold is nobody.
+				speaking != null ? `character:${speaking}` : null,
+				(state) => ({
+					...adventureVariables({
+						state,
+						plan: input?.plan,
+						cast: input?.cast
+					}),
+					// The rooms, when wired (lair pass R8): a voice names
+					// the room it stands in now that nothing narrates it.
+					...(input?.locationEntries !== undefined
+						? locationVariables(input.locationEntries, state as never)
+						: {}),
+					// A room described only in prose (lair pass R9):
+					// `{{locationPassage}}`, absent when blank.
+					...(typeof input?.locationPassage === "string" &&
+					input.locationPassage.trim()
+						? { locationPassage: input.locationPassage.trim() }
+						: {})
 				}),
 				ctx
 			)
@@ -6743,15 +7255,22 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 			 * character is nobody, and the host reads that as nobody's private
 			 * lore rather than as the narrator's omniscience.
 			 */
-			const speaking = (prepared as { currentCharacterId?: number | null })
-				.currentCharacterId
 			return ok({
 				...(built.value as Record<string, unknown>),
 				speaker: speaking != null ? `character:${speaking}` : null
 			})
 		},
 		{
-			ports: ["cast", "sideCharacter", "state", "plan", "prompts", "variables"]
+			ports: [
+				"cast",
+				"sideCharacter",
+				"state",
+				"plan",
+				"locationEntries",
+				"locationPassage",
+				"prompts",
+				"variables"
+			]
 		}
 	)
 

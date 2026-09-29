@@ -24,7 +24,7 @@
  *
  *   - the **pair** — the `(endpoint, model)` a run is sent to — is walked over
  *     `PAIR_TIERS`: the capability default, then the pipeline configuration's
- *     provider slot. There is no third. The one connection override left in the
+ *     connection slot. There is no third. The one connection override left in the
  *     product is that slot, and it stores both halves.
  *   - **sampling** is still walked over all three of `RESOLUTION_TIERS`, because
  *     `sessions.sampling_config_id` stays. A sampling profile is not a
@@ -180,13 +180,13 @@ export const PAIR_TIERS = RESOLUTION_TIERS.filter(
  * a pair.
  *
  * `user` is deliberately unmapped: a user cannot write a connection slot (F20),
- * and `preset` rather than `instance` for the pipeline config because that is
+ * and `config` rather than `instance` for the pipeline config because that is
  * what a named config IS in 12 §2 — a bundle you select, sitting under the
  * individual overrides.
  */
 export const SCOPE_FOR_TIER: Record<ResolutionTier, ScopeKind> = {
 	capabilityDefault: "defaults",
-	pipelineConfig: "preset",
+	pipelineConfig: "config",
 	sessionOverride: "session"
 }
 

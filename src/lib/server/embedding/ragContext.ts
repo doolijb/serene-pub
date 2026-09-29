@@ -24,12 +24,18 @@ import {
 import type { PgTable } from "drizzle-orm/pg-core"
 import * as schema from "$lib/server/db/schema"
 import { castEdgeOnly, isCastEdge } from "$lib/server/utils/narrativeEdges"
+import { DEFAULT_VECTOR_NAME } from "$lib/server/utils/lorebookEntries"
+import { ENTRY_INDEX_SOURCES, entryTypesOfSource } from "./entrySources"
+import { sessionReadingOf, lineOfReading, type LineReading } from "$lib/server/state/reading"
 import {
-	CHARACTER_LORE_TYPE_ID,
-	DEFAULT_VECTOR_NAME,
-	HISTORY_TYPE_ID,
-	WORLD_LORE_TYPE_ID
-} from "$lib/server/utils/lorebookEntries"
+	MAIN_HEAD,
+	amendedFieldNames,
+	entryAt,
+	entryOnReadingSql,
+	entryOverlaysFor,
+	type EntryReading
+} from "$lib/server/state/entriesOnReading"
+import { onLineSql } from "$lib/server/state/lineSql"
 import { cosineSimilarity } from "./index"
 import { channelWhere } from "$lib/server/messages/channels"
 
@@ -53,6 +59,12 @@ export type SessionRagContext = {
 	 * lorebooks a cast member happens to also be attached to elsewhere.
 	 */
 	allLorebookIds: number[]
+	/**
+	 * Where the session reads its book (owner ruling 3): its line and its
+	 * story clock, or the head of the line. Absent (a context built by hand)
+	 * reads main at its head. See `entriesOnReading.ts`.
+	 */
+	reading?: LineReading | null
 }
 
 /**
@@ -92,7 +104,8 @@ export async function getSessionRagContext(
 		characterIds,
 		personaIds,
 		lorebookId,
-		allLorebookIds
+		allLorebookIds,
+		reading: lorebookId ? await sessionReadingOf(db, sessionId) : null
 	}
 }
 
@@ -361,7 +374,7 @@ export type ScopedRagOptions = {
  * Fetches every candidate item in scope for a session context — the DB-bound
  * half of a similarity search, with no query embedding involved and
  * nothing scored yet. Callers doing multiple similarity passes against the
- * same session context within one turn (eg. RagInfillEngine.ts scoring
+ * same session context within one turn (eg. the 0.5 RAG path scoring
  * several query-message embeddings) should fetch once via this and call
  * rankScopedCandidates() per query embedding, rather than re-running the
  * whole fetch for each one.
@@ -468,52 +481,51 @@ export async function fetchScopedCandidates(
 	// Lorebook content (world lore, character lore, history entries)
 	if (context.allLorebookIds.length > 0) {
 		/**
-		 * The three entry sources, as one query shape.
+		 * The entry sources, as one query shape.
 		 *
 		 * They read the same rows of the same table and differ only in the
-		 * declared type and the label the candidate carries, so the scan lives
-		 * here once. `enabled` and the model match are the same predicates the
-		 * three near-identical blocks applied; `IS NOT NULL` on the embedding is
-		 * now the inner join.
+		 * declared types and the label the candidate carries, so the scan lives
+		 * here once — for EVERY declared type (`entrySources.ts`, finding
+		 * #150): a place and an item index as `worldLore`, their band.
 		 *
 		 * ⚠ **`historyEntry` here, `history` in the budget.** The two
 		 * vocabularies are deliberately different and documented at
 		 * `bindings.ts:264-274` — the ranker matches `sourceBudget` keys
 		 * literally, so collapsing them silently drops every history candidate.
+		 *
+		 * **As the session reads its book** (findings #38, #143): rows on its
+		 * line at its moment, each resolved through the line's entry
+		 * amendments before its text or its Off mark is trusted. `enabled` and
+		 * `archived` stay in SQL unless one of the line's amendments sets
+		 * them — then they are asked of the resolved row.
 		 */
-		const entrySources: Array<{
-			source: "worldLore" | "characterLore" | "historyEntry"
-			typeId: string
-			include: boolean
-		}> = [
-			{
-				source: "worldLore",
-				typeId: WORLD_LORE_TYPE_ID,
-				include: include("worldLore")
-			},
-			{
-				source: "characterLore",
-				typeId: CHARACTER_LORE_TYPE_ID,
-				include: include("characterLore")
-			},
-			{
-				source: "historyEntry",
-				typeId: HISTORY_TYPE_ID,
-				include: include("historyEntry")
-			}
-		]
+		const reading: EntryReading = context.reading ?? MAIN_HEAD
+		const overlays = new Map<number, Map<number, any[]>>()
+		for (const lorebookId of context.allLorebookIds)
+			overlays.set(lorebookId, await entryOverlaysFor(db, lorebookId, reading))
+		const amended = new Set<string>()
+		for (const o of overlays.values())
+			for (const f of amendedFieldNames(o)) amended.add(f)
 
-		for (const { source, typeId, include: wanted } of entrySources) {
-			if (!wanted) continue
+		for (const source of ENTRY_INDEX_SOURCES) {
+			if (!include(source)) continue
+			const typeIds = entryTypesOfSource(source)
 			const where = and(
 				inArray(
 					schema.lorebookEntries.lorebookId,
 					context.allLorebookIds
 				),
-				eq(schema.lorebookEntries.enabled, true),
+				entryOnReadingSql(reading),
+				amended.has("enabled")
+					? undefined
+					: eq(schema.lorebookEntries.enabled, true),
 				// Archived is out of retrieval, like disabled (L1).
-				eq(schema.lorebookEntries.archived, false),
-				eq(schema.lorebookEntries.typeId, typeId),
+				amended.has("archived")
+					? undefined
+					: eq(schema.lorebookEntries.archived, false),
+				typeIds.length === 1
+					? eq(schema.lorebookEntries.typeId, typeIds[0]!)
+					: inArray(schema.lorebookEntries.typeId, typeIds),
 				eq(schema.lorebookEntryVectors.vectorName, DEFAULT_VECTOR_NAME),
 				eq(schema.lorebookEntryVectors.chunkIndex, 0),
 				eq(schema.lorebookEntryVectors.model, modelId)
@@ -526,6 +538,8 @@ export async function fetchScopedCandidates(
 						title: schema.lorebookEntries.title,
 						content: schema.lorebookEntries.content,
 						fields: schema.lorebookEntries.fields,
+						enabled: schema.lorebookEntries.enabled,
+						archived: schema.lorebookEntries.archived,
 						embedding: schema.lorebookEntryVectors.vector,
 						embeddingModel: schema.lorebookEntryVectors.model
 					})
@@ -562,26 +576,44 @@ export async function fetchScopedCandidates(
 				})
 			}
 
-			for (const row of rows) {
-				if (!row.embedding) continue
+			for (const stored of rows) {
+				if (!stored.embedding) continue
+				// The wire names an amendment overlays: `name`, and the
+				// declared fields flat.
+				const fields = (stored.fields ?? {}) as Record<string, any>
+				const row = entryAt(
+					{
+						id: stored.id,
+						name: stored.title ?? null,
+						content: stored.content,
+						enabled: stored.enabled,
+						archived: stored.archived,
+						year: fields.year ?? null,
+						month: fields.month ?? null,
+						day: fields.day ?? null
+					} as Record<string, any> & { id: number },
+					overlays.get(stored.lorebookId) ?? new Map(),
+					reading
+				)
+				if (row.enabled === false || row.archived === true) continue
 				candidates.push({
 					source,
-					lorebookId: row.lorebookId,
-					id: row.id,
+					lorebookId: stored.lorebookId,
+					id: stored.id,
 					// History has no title — it is dated, and the block's
 					// heading is the date. The empty string is what the old
 					// history query hardcoded.
-					name: source === "historyEntry" ? "" : (row.title ?? null),
+					name: source === "historyEntry" ? "" : (row.name ?? null),
 					content: row.content,
 					...(source === "historyEntry"
 						? {
-								year: row.fields?.year ?? null,
-								month: row.fields?.month ?? null,
-								day: row.fields?.day ?? null
+								year: row.year ?? null,
+								month: row.month ?? null,
+								day: row.day ?? null
 							}
 						: {}),
-					embedding: row.embedding,
-					embeddingModel: row.embeddingModel
+					embedding: stored.embedding,
+					embeddingModel: stored.embeddingModel
 				} as ScopedRagCandidate)
 			}
 		}
@@ -636,6 +668,12 @@ export async function fetchScopedCandidates(
 				inArray(
 					schema.narrativeRelationships.lorebookId,
 					context.allLorebookIds
+				),
+				// An edge drawn on another line is that line's story
+				// (finding #143): shared edges and the chain's own only.
+				onLineSql(
+					schema.narrativeRelationships.branchId,
+					lineOfReading(reading)
 				),
 				castEdgeOnly,
 				isNotNull(schema.narrativeRelationships.embedding),

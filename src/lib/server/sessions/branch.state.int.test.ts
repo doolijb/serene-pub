@@ -102,8 +102,10 @@ async function world() {
 		.insert(schema.sessionCharacters)
 		.values({ sessionId: session.id, characterId: verity.id })
 	await db
-		.insert(schema.sessionLorebooks)
-		.values({ sessionId: session.id, lorebookId: lorebook.id })
+		// The real shape: the lorebook is the session row's own binding.
+		.update(schema.sessions)
+		.set({ lorebookId: lorebook.id })
+		.where(eq(schema.sessions.id, session.id))
 	const [key] = await db
 		.insert(schema.lorebookEntries)
 		.values({
@@ -169,15 +171,8 @@ describe("branching carries the state", () => {
 		await put(w.session.id, "session_cast", w.verity.id, HP, 3, after.id)
 		// "From the beginning" always comes across.
 		await put(w.session.id, "session", w.session.id, WEATHER, "storm", null)
-		await db.insert(schema.sessionPossessions).values({
-			sessionId: w.session.id,
-			ownerKind: "session_cast",
-			ownerId: w.verity.id,
-			entryId: w.key.id,
-			quantity: 1,
-			validFromMessageId: fork.id,
-			updatedBy: "user"
-		})
+		// What she carries is an inventory value (phase 3b), copied like any.
+		await put(w.session.id, "session_cast", w.verity.id, "core:slot/inventory@1", [{ entryId: w.key.id }], fork.id)
 
 		const { branchSession } = await import("$lib/server/sessions/branch")
 		const branch = await branchSession(db, {
@@ -229,11 +224,8 @@ describe("branching carries the state", () => {
 			})
 		).toBe(3)
 
-		const carried = await db
-			.select()
-			.from(schema.sessionPossessions)
-			.where(eq(schema.sessionPossessions.sessionId, branch.id))
-		expect(carried).toHaveLength(1)
+		const carried = copied.filter((r) => r.slotId === "core:slot/inventory@1")
+		expect(carried.map((r) => (r.value as any).v)).toEqual([[{ entryId: w.key.id }]])
 		expect(branchIds.has(carried[0].validFromMessageId!)).toBe(true)
 	})
 

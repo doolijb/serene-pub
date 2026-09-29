@@ -32,7 +32,7 @@
  * is still offered in the narrator, one group down, because the entire reason
  * this is not spec-scoped is that it works there.
  *
- * ## What a template is no longer responsible for
+ * ## What a template is not responsible for
  *
  * Structure only — message blocks, placement, `{{#if}}`, `{{#each}}`. Headings,
  * fences and the shape of the JSON inside a variable belong to
@@ -176,11 +176,19 @@ export async function listContextTemplates(
  * Check that a template may be selected for this node, and say why if not.
  *
  * Two hard rules, and they are the two halves of the pool key: the node definition
- * must match, and the **engine** must be one the slot accepts. Everything else
- * about "does this fit" — whether the variables it names are supplied by this
- * version — is a warning, because a template referencing a variable a pipeline
- * does not supply renders it as empty, which is a legible outcome and sometimes
- * the intended one.
+ * must match, and the **engine** must be one the slot accepts.
+ *
+ * And a third when the caller names the step (`at`) — a *selection* into a
+ * spec's slot (typed templates P5, owner Q6): the template is checked against
+ * the typed scope of that step (`contextTemplateFitAt`), and a name or path
+ * nothing there supplies is REFUSED, in one sentence naming the name, the
+ * nearest one that exists and what does. It is a refusal, not a warning,
+ * because an unsupplied name renders as empty — exactly the silent failure
+ * the typed scope exists to stop. Warnings never refuse,
+ * and nothing refuses while a producer upstream declares no types: the name
+ * may still arrive. A mutation of the row (edit, clone, delete) passes no
+ * `at` and is not a selection, so it is not checked here — a stored
+ * selection is never refused retroactively; the boot scan reports it.
  *
  * `engine` is one language or the set of them. A set does not weaken the rule
  * it enforces: every member is a language this slot genuinely renders, so a row
@@ -198,7 +206,9 @@ export async function assertSelectable(
 	db: Db,
 	nodeDefinitionId: string,
 	templateId: number,
-	engine: string | readonly string[]
+	engine: string | readonly string[],
+	/** The step it is being selected for — checked against that step's typed scope. */
+	at?: { specVersionId: number; nodeKey: string; slot: string }
 ): Promise<ContextTemplateRecord> {
 	const accepted = asEngineSet(engine)
 	const [row] = await db
@@ -229,6 +239,18 @@ export async function assertSelectable(
 				`ordinary text. Duplicate it and rewrite the copy in ` +
 				`${languagesOf(accepted)}.`
 		)
+
+	if (at) {
+		const { contextTemplateMisfit } = await import(
+			"$lib/server/pipelines/entities/contextTemplateFit"
+		)
+		const misfit = await contextTemplateMisfit(db, at, {
+			name: row.name,
+			engine: rowEngine,
+			source: row.source ?? ""
+		})
+		if (misfit) throw new ContextTemplateNotUsableError(misfit)
+	}
 
 	return toRecord(row)
 }
@@ -307,11 +329,9 @@ function refuseUnparsable(engine: string, source: string, name: string): void {
 /**
  * What the slot resolves to once dereferenced: the template itself.
  *
- * Returns the engine **and** the source, and the caller must carry both. This
- * used to be read for its `source` alone (`world.ts`'s `derefTemplate`), which
- * is how every template on every install rendered as Handlebars whatever it
- * declared: the engine was resolved here, correctly, and then dropped one line
- * later. See `pushTemplate` in `world.ts` for the rule that replaced it.
+ * Returns the engine **and** the source, and the caller must carry both:
+ * reading the `source` alone renders every template as Handlebars whatever it
+ * declares. See `pushTemplate` in `world.ts` for the rule.
  */
 export async function resolveContextTemplate(
 	db: Db,
@@ -398,7 +418,7 @@ export async function duplicateContextTemplate(
 
 	// The copy keeps the original's language. A duplicate is "the same template,
 	// mine to edit" — changing what it is written in would hand someone a copy
-	// that no longer fits the slot they duplicated it from.
+	// that does not fit the slot they duplicated it from.
 	return await createContextTemplate(db, {
 		nodeDefinitionId: row.nodeDefinitionId,
 		name,

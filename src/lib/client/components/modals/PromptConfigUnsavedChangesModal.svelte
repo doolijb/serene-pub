@@ -28,7 +28,7 @@
 				class="card bg-surface-100-900 max-w-md space-y-6 p-6 shadow-xl"
 			>
 				<header class="flex justify-between">
-					<h2 class="h2">Confirm</h2>
+					<h2 class="h2">Discard unsaved changes?</h2>
 				</header>
 				<article>
 					<p class="opacity-60">

@@ -4,7 +4,7 @@
  *
  * One road, two doors. Which declaration was pressed, may THIS person press
  * it, which spec serves it, run it — every press walks this, whether it
- * arrives from `sessions:triggerFunction` (a person) or from the
+ * arrives from `sessions:fireAction` (a person) or from the
  * `answer-form` outlet (U5d, 2026-09-17), which commits an oracle's answer
  * "exactly as a click would" — a promise that holds only because it IS the
  * click's path. The socket handler keeps what only a socket has: the
@@ -81,7 +81,7 @@
  */
 
 import { randomUUID } from "node:crypto"
-import { eq } from "drizzle-orm"
+import { and, eq, isNull } from "drizzle-orm"
 import type {
 	EnabledWhen,
 	FormAnswered,
@@ -116,10 +116,13 @@ import {
 import {
 	loadFormBlock,
 	markFormAnswered,
+	clearFormAnswered,
+	openFormOf,
 	recordFormSuperseded,
 	type FormFacts
 } from "$lib/server/messages/blocks"
 import { stalenessHead } from "$lib/server/messages/channels"
+import { answerStanding } from "$lib/server/pipelines/runtime/reviewGate"
 import { NARRATE_ACTION, NARRATE_CHARACTER_ACTION } from "$lib/shared/actions/identity"
 
 export interface FireActionRequest {
@@ -144,6 +147,22 @@ export interface FireActionRequest {
 	blockId?: string
 	/** What the press sent: a form's answer, a widget's args. */
 	payload?: Record<string, unknown>
+	/**
+	 * The text the press collected (lair pass R3) — the collect modal's, or
+	 * (S2) a slash argument; whoever calls says where it came from, and this
+	 * door never reads a composer. Reaches the run's `input.text`, trimmed,
+	 * for an action declaring `collects.text`, whatever the venue — a chip,
+	 * the palette, a message's ⋮, a form's option. A `required` one pressed
+	 * with none is refused. Anything else is not handed to the run.
+	 */
+	text?: string
+	/**
+	 * The cast members the press collected (lair pass R3), as
+	 * `character:<id>` references — for an action declaring
+	 * `collects.recipients`, validated here (`recipientsRefusal`) and handed
+	 * to the run as `input.recipients`. Ignored for any other action.
+	 */
+	recipients?: unknown[]
 	actor: { userId: number; as?: ParticipantRef }
 	runId?: string
 	io?: SessionIo
@@ -219,11 +238,62 @@ export type FireActionSettled =
  */
 const BESPOKE = new Set([NARRATE_ACTION, NARRATE_CHARACTER_ACTION])
 
+/**
+ * The session's **enabled seats** (lair pass R3): the cast members a press
+ * may collect as recipients — seated, not removed, and enabled — as
+ * `character:<id>` references.
+ */
+export async function enabledSeats(db: Db, sessionId: number): Promise<Set<string>> {
+	const rows = await db
+		.select({ characterId: schema.sessionCharacters.characterId })
+		.from(schema.sessionCharacters)
+		.where(
+			and(
+				eq(schema.sessionCharacters.sessionId, sessionId),
+				eq(schema.sessionCharacters.isActive, true),
+				isNull(schema.sessionCharacters.removedAt)
+			)
+		)
+	return new Set(rows.map((r) => `character:${r.characterId}`))
+}
+
+/**
+ * Why a press's recipients cannot ride (lair pass R3), as the rest of a
+ * sentence after the action's name, or null when they can: a list of
+ * enabled seats, none twice, within the declaration's `min` and `max`.
+ */
+export function recipientsRefusal(
+	sent: unknown,
+	decl: { min: number; max?: number },
+	seated: ReadonlySet<string>
+): string | null {
+	const list = sent === undefined ? [] : sent
+	if (!Array.isArray(list) || list.some((r) => typeof r !== "string"))
+		return "takes its recipients as a list of cast members."
+	const seen = new Set<string>()
+	for (const ref of list as string[]) {
+		if (seen.has(ref)) return `names ${ref} twice.`
+		seen.add(ref)
+		if (!seated.has(ref)) return `can only go to an enabled member of this session's cast — ${ref} is not one.`
+	}
+	const plural = (n: number) => `${n} ${n === 1 ? "recipient" : "recipients"}`
+	if (list.length < decl.min) return `needs at least ${plural(decl.min)}.`
+	if (decl.max !== undefined && list.length > decl.max) return `takes at most ${plural(decl.max)}.`
+	return null
+}
+
 export async function fireAction(
 	db: Db,
-	req: FireActionRequest
+	pressed: FireActionRequest
 ): Promise<FireActionOutcome> {
 	const refused = (error: string): FireActionOutcome => ({ kind: "refused", error })
+	/**
+	 * A composer press — no message, no form — decided on the request as it
+	 * ARRIVED, before any routing below: only such a press is addressed to
+	 * the session's open form.
+	 */
+	const composerPress = pressed.messageId == null && !pressed.blockId
+	let req = pressed
 
 	const { checkSessionAccess } = await import("$lib/server/utils/sessionAccess")
 	const access = await checkSessionAccess(req.sessionId, req.actor.userId)
@@ -238,10 +308,10 @@ export async function fireAction(
 		return refused("A press names the action it fires — '<spec slug>#<key>'.")
 	if (req.action !== undefined && BESPOKE.has(req.action))
 		return refused(
-			`'${req.action}' has its own trigger event — this route serves contributed actions.`
+			`'${req.action}' has its own event — this route serves contributed actions.`
 		)
 	if (req.action !== undefined && isCoreActionIdentity(req.action))
-		return refused(`'${req.action}' is a message verb with its own handler — this route serves contributed actions.`)
+		return refused(`'${req.action}' is one of core's verbs, with its own handler — this route serves contributed actions.`)
 
 	const {
 		resolveSubjectVerdict,
@@ -259,6 +329,27 @@ export async function fireAction(
 		.where(eq(schema.sessions.id, req.sessionId))
 		.limit(1)
 	const genreId = session?.genreId ?? STANDARD_GENRE_ID
+
+	/**
+	 * The open form answers a composer press (W-GATE D3 follow-up, ruled
+	 * 2026-09-27). A press from the composer or the command list names no
+	 * form; when the action it names is the one the session's open form
+	 * (`openFormOf` — the main channel's newest unanswered, not-overtaken
+	 * form, the same fact `presentWhen` reads) is answered by, the press is
+	 * addressed to THAT form and walks on exactly as a press on the form's
+	 * own button: every check below — answered, overtaken, the option, the
+	 * addressee — is the form's. An open form for any other action is not
+	 * this press's to answer, and the press goes on as it came.
+	 */
+	/** Set when the press was routed to the open form: it may name no option (below). */
+	let routedToOpenForm = false
+	if (composerPress && req.action !== undefined && !req.actor.as) {
+		const open = await openFormOf(db, req.sessionId)
+		if (open && open.action === req.action) {
+			req = { ...req, messageId: open.messageId, blockId: open.blockId }
+			routedToOpenForm = true
+		}
+	}
 
 	// A menu trigger's subject (19 §4): verified against the session before
 	// it rides the input — a forged id reaching a spec as data would make
@@ -352,27 +443,37 @@ export async function fireAction(
 				req.payload?.choice !== undefined ? formFireOf(block, req.payload) : null
 			if (req.payload?.choice !== undefined && !picked)
 				return refused("That is not one of the choices offered.")
+			/**
+			 * Routed from the composer with no option named: every option
+			 * fires the pressed action (`openFormOf` says so), so the press
+			 * answers with none — the spec's own reading of an answer with
+			 * no choice decides (the Lair's is *build*).
+			 */
+			const unpicked = routedToOpenForm && !picked
 			const match = picked
 				? block.actions.find((o) => o.choice === picked.payload.choice)!
-				: block.actions.find(
-						(o) =>
-							o.choice === undefined &&
-							(req.action !== undefined && o.action !== undefined
-								? o.action === req.action
-								: o.fn === pressedKey)
-					)
-			if (!match) return refused("That is not one of the choices offered.")
-			fn = match.fn
-			stamped = match.action
+				: unpicked
+					? undefined
+					: block.actions.find(
+							(o) =>
+								o.choice === undefined &&
+								(req.action !== undefined && o.action !== undefined
+									? o.action === req.action
+									: o.fn === pressedKey)
+						)
+			if (!match && !unpicked) return refused("That is not one of the choices offered.")
+			fn = match ? match.fn : pressedKey
+			stamped = match ? match.action : req.action
 			if (picked) payload = picked.payload
 			form = {
 				blockId: req.blockId,
 				messageId: req.messageId,
 				kind: block.kind,
 				question: block.question ?? null,
+				...(typeof block.referent === "string" ? { referent: block.referent } : {}),
 				addressee: block.addressee ?? null,
 				characterId: null,
-				...(match.choice !== undefined ? { choice: match.choice, label: match.label } : {})
+				...(match?.choice !== undefined ? { choice: match.choice, label: match.label } : {})
 			}
 		} else {
 			const filled = formFireOf(block, req.payload ?? {})
@@ -392,6 +493,7 @@ export async function fireAction(
 				messageId: req.messageId,
 				kind: block.kind,
 				question: block.question ?? null,
+				...(typeof block.referent === "string" ? { referent: block.referent } : {}),
 				addressee: block.addressee ?? null,
 				characterId: null
 			}
@@ -489,7 +591,7 @@ export async function fireAction(
 	 * the same `enablementOf` the listing uses, so a grey chip and this
 	 * refusal can never disagree. A form's answer walks it too (an oracle
 	 * answering a question whose predicate fails is refused like a click
-	 * would be), and a hand-made `sessions:triggerFunction` cannot step
+	 * would be), and a hand-made `sessions:fireAction` cannot step
 	 * around it. The sentence is the failing predicate's reason, in the
 	 * actor's language.
 	 */
@@ -562,6 +664,24 @@ export async function fireAction(
 	}
 	const parsed = parseActionIdentity(actionId)!
 	const chosen = offered.find((f) => f.specSlug === parsed.specSlug && f.key === parsed.key)
+	/** An annex field's press (`<owner>:annex#<key>`, 2026-09-26) — judged by its declaration below. */
+	const { parseAnnexFieldAction } = await import("@serene-pub/sdk")
+	const annexTarget = parseAnnexFieldAction(actionId)
+	if (!chosen && annexTarget) {
+		// Declared but pipeline-written only (no `act`, ruling 2026-09-26):
+		// never offered, and a press says why rather than "not declared".
+		const { annexFieldFor } = await import("$lib/server/sessions/annexFields")
+		const declared = await annexFieldFor(db, genreId, actionId)
+		if (declared && !declared.decl.act?.length)
+			return refused(
+				`'${annexTarget.key}' is set by '${annexTarget.owner}''s pipelines only — its declaration names nobody who may set it.`
+			)
+	}
+	if (!chosen && annexTarget)
+		return refused(
+			`'${annexTarget.key}' is not an annex field '${annexTarget.owner}' declares for this session — ` +
+				`a package sets only the keys it declared, in its own annex.`
+		)
 	if (!chosen) return refused(`No action '${actionId}' is offered to this session.`)
 	if (!chosen.enabled) return turnedOff(chosen.name)
 	// A disabled plugin's action is not offered, so it is not fired either
@@ -595,13 +715,77 @@ export async function fireAction(
 	}
 	const grey = await notNow(chosen)
 	if (grey) return grey
+	/**
+	 * Present-when (W-GATE D3): an action with nothing to act on is hidden
+	 * from every listing, and a press that reaches it anyway — a slash name,
+	 * a hand-made fire — is refused with the same verdict. A press on a form
+	 * is judged by that form above (answered, overtaken), which is its own
+	 * evidence there is something to act on.
+	 */
+	if (!req.blockId) {
+		const { absentRefusal } = await import("$lib/server/pipelines/entities/sessionActions")
+		const absent = await absentRefusal(
+			db,
+			req.sessionId,
+			chosen,
+			{ userId: req.actor.userId },
+			{ lineage: req.lineage }
+		)
+		if (absent) return refused(absent)
+	}
+
+	/**
+	 * What the press collected (lair pass R3; was B10's composer text): the
+	 * instruction of an action that declares it collects it — Nudge's
+	 * direction, Whisper's line, Build room's name — from any venue, a
+	 * form's option included. An action collecting nothing gets "" and no
+	 * recipients, whatever the press sent.
+	 */
+	const collects = chosen.collects
+	const typed = collects?.text && typeof req.text === "string" ? req.text.trim() : ""
+	if (collects?.text?.need === "required" && !typed)
+		return refused(`'${chosen.name}' needs text.`)
+	let recipients: string[] | undefined
+	if (collects?.recipients) {
+		const seated = await enabledSeats(db, req.sessionId)
+		const fault = recipientsRefusal(req.recipients, collects.recipients, seated)
+		if (fault) return refused(`'${chosen.name}' ${fault}`)
+		recipients = req.recipients as string[]
+	}
+
+	/**
+	 * An annex field (2026-09-26) is served by core's one pipeline, never by a
+	 * binding: the declaration is judged here, at the door — the value
+	 * against its shape (the validator's own sentence), the audience it will
+	 * be stored under — and the run is handed `{ field, value }`. The outlet
+	 * reads the declaration again rather than trusting this payload.
+	 */
+	let annexFieldRun: { field: string; value: unknown } | undefined
+	if (annexTarget) {
+		const { annexFieldFor } = await import("$lib/server/sessions/annexFields")
+		const { annexFieldValueRefusal, dataAudienceFindings } = await import("@serene-pub/sdk")
+		const field = await annexFieldFor(db, genreId, actionId)
+		if (!field)
+			return refused(
+				`'${annexTarget.key}' is not an annex field '${annexTarget.owner}' declares for this session.`
+			)
+		const audienceFault = dataAudienceFindings(field.decl.see)
+		if (audienceFault) return refused(`'${annexTarget.key}' cannot be stored: ${audienceFault}.`)
+		const valueFault = annexFieldValueRefusal(field.decl, payload)
+		if (valueFault) return refused(valueFault)
+		annexFieldRun = { field: actionId, value: (payload as { value: unknown }).value }
+	}
 
 	// Routing by identity (plans/31 V2): the declarer, if it still serves —
 	// the verdict is the eligibility check, and nothing else selects.
-	const routed = await resolveSubjectVerdict(db, genreId, actionId, {
-		sessionId: req.sessionId,
-		spec: chosen.specSlug
-	})
+	const routed: { spec: string | null; fallback?: Awaited<ReturnType<typeof resolveSubjectVerdict>>["fallback"] } =
+		annexFieldRun
+			? { spec: (await import("@serene-pub/sdk")).ANNEX_FIELD_SPEC_ID }
+			: await resolveSubjectVerdict(db, genreId, actionId, {
+					sessionId: req.sessionId,
+					spec: chosen.specSlug
+				})
+	if (annexFieldRun) payload = annexFieldRun
 	const specId = routed.spec
 	if (!specId) return refused(`Nothing serves '${actionId}' for this session's genre.`)
 
@@ -650,7 +834,7 @@ export async function fireAction(
 	 * behalf: that run is answering as that participant, so the presser is
 	 * them and not the machinery that spoke for them. Otherwise the acting
 	 * person, through their own presence in this session where they have one
-	 * (`character:<id>` — a persona IS a character since 0132), else
+	 * (`character:<id>` — a persona IS a character), else
 	 * themselves. The same resolution a form addressed to nobody in
 	 * particular already performs, so the two cannot disagree about who a
 	 * person is here.
@@ -700,7 +884,15 @@ export async function fireAction(
 				// answer's row so the row is an answer, not the conversation
 				// moving on from the form's row.
 				...(form
-					? { answersForm: { messageId: form.messageId, blockId: form.blockId } }
+					? {
+							answersForm: {
+								messageId: form.messageId,
+								blockId: form.blockId,
+								// Put to the session's owner (the Lair's knock): the
+								// owner's answer lands as a send (lair pass B12).
+								...(form.addressee === "owner" ? { toOwner: true } : {})
+							}
+						}
 					: {}),
 				...(routed.fallback
 					? { meta: { preset: { via: "fallback", ...routed.fallback } } }
@@ -710,11 +902,15 @@ export async function fireAction(
 				},
 				onStatus: (nodeKey, status) => req.onStatus?.(nodeKey, status, { runId, specId }),
 				onParked,
-				// The same input shape a turn supplies: no text, no pick — the
-				// function was the whole instruction. `payload` and `form` are
-				// what the inlet declares for a press (U5d).
+				// The same input shape a turn supplies, and no pick. `text` and
+				// `recipients` are what the press collected, for an action
+				// declaring it collects them (R3) — else empty: the function
+				// was the whole instruction.
+				// `payload` and `form` are what the inlet declares for a press
+				// (U5d).
 				input: {
-					text: "",
+					text: typed,
+					...(recipients ? { recipients } : {}),
 					sessionId: req.sessionId,
 					characterId: null,
 					// Who pressed — see `presser` above.
@@ -739,13 +935,21 @@ export async function fireAction(
 		if (failure !== undefined || !receipt) throw failure ?? new Error("the run returned no receipt")
 
 		/**
+		 * How the answer stands (lair pass R9, `answerStanding` in
+		 * `reviewGate.ts`): landed — or rejected at review after it had
+		 * already written something — is answered; rejected at review having
+		 * written nothing is **no answer**, and the form is open again.
+		 */
+		const standing = form ? await answerStanding(db, receipt) : "unsettled"
+
+		/**
 		 * A form was answered (R-15): recorded for the next reply's inlet, once,
 		 * here — by a click or by the answer pipeline, the same row with
 		 * `answeredBy` saying which. Only when the action's run went to the
-		 * end: an answer whose action did not land is not an answer the story
-		 * has.
+		 * end, or its effects happened before a reviewer stopped it: an answer
+		 * whose action did not land is not an answer the story has.
 		 */
-		if (form && receipt.outcome === "ok") {
+		if (form && standing === "answered") {
 			const { emitSessionEvent } = await import(
 				"$lib/server/pipelines/runtime/sessionEvents"
 			)
@@ -786,6 +990,34 @@ export async function fireAction(
 			}
 			await markFormAnswered(db, form.messageId, form.blockId, answered)
 			if (req.io) await announceAnswered(db, req.io, form.messageId)
+			// Its `open-form` notification, for whoever holds one, is done
+			// with (PLAN-notifications §5) — after the answer is recorded,
+			// and never able to fail it.
+			try {
+				const { clearAnsweredForm } = await import(
+					"$lib/server/notifications/openForm"
+				)
+				await clearAnsweredForm(db, req.sessionId, form.messageId, form.blockId)
+			} catch (err) {
+				console.warn(`[fireAction] clearing the open-form notification failed:`, err)
+			}
+		} else if (form && standing === "no-answer") {
+			/**
+			 * **No answer: the form is open again** (R9). Any `answered` mark
+			 * comes off, the row goes out again so every client shows the
+			 * block live, and its open-form notification is raised again for
+			 * the person who pressed — the question still waits on them. An
+			 * AI's answer (`as`) raises nothing: a form put to the AI is never
+			 * a person's notification.
+			 */
+			await clearFormAnswered(db, form.messageId, form.blockId)
+			if (req.io) await announceAnswered(db, req.io, form.messageId)
+			if (!req.actor.as) {
+				const { raiseOpenForms } = await import("$lib/server/notifications/openForm")
+				await raiseOpenForms(db, req.sessionId, [
+					{ messageId: form.messageId, blockId: form.blockId, userId: req.actor.userId }
+				])
+			}
 		}
 
 		return parkedBelow.length

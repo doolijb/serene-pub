@@ -22,6 +22,7 @@ import {
 	ENTRY_TYPE_IDS,
 	HISTORY_TYPE_ID,
 	LOCATION_TYPE_ID,
+	ITEM_TYPE_ID,
 	WORLD_LORE_TYPE_ID,
 	entriesOfType,
 	entryTypeIdOfExportKey,
@@ -86,7 +87,7 @@ describe("export keys translate in both directions", () => {
 		}
 		expect(
 			ENTRY_TYPE_IDS.filter((t) => !ENTRY_EXPORT_KEY[t])
-		).toEqual([LOCATION_TYPE_ID])
+		).toEqual([LOCATION_TYPE_ID, ITEM_TYPE_ID])
 	})
 
 	it("falls back to world lore for a foreign or future marker", () => {

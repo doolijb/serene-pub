@@ -131,6 +131,21 @@ class RetrievalReadout {
 				this.#onExplainError
 			)
 		]
+		// ⚠ The pair may have been named BEFORE the first editor opened: a
+		// workspace's `$effect` calling `ask` runs ahead of its `onMount`, and
+		// `ask` with no socket and no users asks nothing. Whichever order the
+		// two calls come in, the first open asks the named pair — declared
+		// above first, so the reply's key exists before the request.
+		this.#requestDecisions()
+	}
+
+	/** Ask for the named pair's decisions, when both halves are named. */
+	#requestDecisions(): void {
+		if (this.#lorebookId === null || this.#sessionId === null) return
+		this.#socket?.emit("entries:recentDecisions", {
+			lorebookId: this.#lorebookId,
+			sessionId: this.#sessionId
+		} satisfies Sockets.Entries.RecentDecisions.Params)
 	}
 
 	/** Call from `onDestroy`. */
@@ -161,11 +176,9 @@ class RetrievalReadout {
 		// Before the emit, never after: the request flushes the interest sync
 		// that declares the key its own reply needs.
 		this.#declareDecisions()
-		if (lorebookId === null || sessionId === null) return
-		this.#socket?.emit("entries:recentDecisions", {
-			lorebookId,
-			sessionId
-		} satisfies Sockets.Entries.RecentDecisions.Params)
+		// No editor mounted yet: the first `open` asks instead.
+		if (this.#users === 0) return
+		this.#requestDecisions()
 	}
 
 	/**

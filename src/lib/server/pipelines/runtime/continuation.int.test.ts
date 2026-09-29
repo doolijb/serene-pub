@@ -1,15 +1,15 @@
 /**
- * Continue: the partial reaches the model as a PREFILL, and reaches retrieval
+ * Extend: the partial reaches the model as a PREFILL, and reaches retrieval
  * as nothing at all.
  *
  * ## The defect
  *
- * `sessionMessages:continue` keeps the row's text and calls `generateResponse`,
+ * `sessionMessages:extend` keeps the row's text and calls `generateResponse`,
  * which wrote `(session as any)._continuationPrefill` — a key **nothing read**.
  * The runtime has had the seam the whole time (`prompt/messages.ts` puts
  * `continuationPrefill` on the seed line, id -2) and no port carried a value to
  * it, because `core:task/process-messages@1` declared none and no spec wired
- * one. So a continue sent an EMPTY seed line, got a fresh reply, and glued it
+ * one. So an extend sent an EMPTY seed line, got a fresh reply, and glued it
  * onto the partial afterwards — the model never saw what it was continuing.
  *
  * ## The other half, which is the same defect read from the other side
@@ -17,7 +17,7 @@
  * The row holding the partial is `isGenerating: true` and still in the table,
  * and the host's `session_messages` read filtered on `isHidden` alone — so the
  * partial arrived at every retrieval mechanism and every history window as a
- * **stored message**. Per the ruling of 2026-09-08 (D-2) it must not: a continue
+ * **stored message**. Per the ruling of 2026-09-08 (D-2) it must not: an extend
  * re-retrieves as a full run, the partial counts toward the token budget because
  * it is in the prompt, and it is excluded from knowledge and message querying.
  *
@@ -53,7 +53,7 @@ let userId: number
 let characterId: number
 let generatingId: number
 
-/** The text already on the row — what a continue is continuing. */
+/** The text already on the row — what an extend is continuing. */
 const PARTIAL = "I saw them near the moonwell at"
 
 /** In the stored user line, so the control entry is reachable either way. */
@@ -123,7 +123,6 @@ beforeAll(async () => {
 		sessionId,
 		characterId,
 		isActive: true,
-		visibility: "visible"
 	})
 	await db
 		.insert(schema.sessionPersonas)
@@ -136,8 +135,8 @@ beforeAll(async () => {
 	})
 
 	/**
-	 * The row a continue is about, in the exact state
-	 * `sessionMessagesContinueHandler` leaves it: text kept, `isGenerating`
+	 * The row an extend is about, in the exact state
+	 * `sessionMessagesExtendHandler` leaves it: text kept, `isGenerating`
 	 * flipped. This is the row that must not be a stored message to anything
 	 * that queries.
 	 */
@@ -231,15 +230,15 @@ beforeAll(async () => {
 		})
 }, 60_000)
 
-/** The turn a continue runs: a full run, carrying the partial as a prefill. */
-async function continueTurn(): Promise<any> {
+/** The turn an extend runs: a full run, carrying the partial as a prefill. */
+async function extendTurn(): Promise<any> {
 	const { runTurn } = await import("$lib/server/pipelines/runtime/runTurn")
 	return await runTurn({
 		db: db,
 		sessionId,
 		userId,
 		currentCharacterId: characterId,
-		// ⚠ NOT the partial. A continue re-retrieves as a full run, and the
+		// ⚠ NOT the partial. An extend re-retrieves as a full run, and the
 		// partial is not the message that triggered it — see the ruling.
 		text: "",
 		continuationPrefill: PARTIAL,
@@ -265,7 +264,7 @@ const countOf = (haystack: string, needle: string) =>
 
 describe("the seed line carries the prefill", () => {
 	it("ends the prompt with the speaker's name and the text so far", async () => {
-		const rendered = renderedOf(await continueTurn())
+		const rendered = renderedOf(await extendTurn())
 
 		/**
 		 * ⚠ The whole defect, as one assertion. The seed line (id -2) is the
@@ -288,7 +287,7 @@ describe("the seed line carries the prefill", () => {
 
 describe("the partial is not a stored message", () => {
 	it("is absent from the retrieval-visible history while present in the prompt", async () => {
-		const receipt = await continueTurn()
+		const receipt = await extendTurn()
 		const rendered = renderedOf(receipt)
 
 		// 1. The history query — the window every downstream mechanism reads.

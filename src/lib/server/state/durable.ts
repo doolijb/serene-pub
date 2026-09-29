@@ -5,8 +5,8 @@
  *
  * A session-layer row is per change, anchored to a message, and cascades with
  * its session — that is play, and play is meant to be retractable. A **durable**
- * row is the same shape filed against the *world*: owner `cast_member` or
- * `lorebook`, anchored to a history entry and a scene rather than to a message,
+ * row is the same shape filed against the *world*: owner `cast_member`,
+ * `lorebook` or (phase 4) `location`, anchored to a history entry and a scene rather than to a message,
  * with `source_session_id` / `source_message_id` as **plain ints with no keys**
  * so the row outlives the session that produced it. That is what makes "she was
  * at 4 health when the bell drowned" a fact about the story rather than about a
@@ -56,7 +56,7 @@ export interface RecordReport {
 	recorded: boolean
 	values: number
 	configs: number
-	/** Which owners got rows: `lorebook:3`, `cast_member:12`. */
+	/** Which owners got rows: `lorebook:3`, `cast_member:12`, `location:40`. */
 	owners: string[]
 	historyEntryId: number | null
 	sceneId: number | null
@@ -122,18 +122,22 @@ export async function recordToTimeline(
 
 	/** One owner's whole state, read from the session and filed against the world. */
 	const record = async (
-		read: { kind: "session" | "session_cast"; id: number },
-		write: { kind: "lorebook" | "cast_member"; id: number },
-		facet: "world" | "cast"
+		read: { kind: "session" | "session_cast" | "session_location"; id: number },
+		write: { kind: "lorebook" | "cast_member" | "location"; id: number },
+		facet: "world" | "cast" | "location"
 	) => {
 		let wrote = false
 		for (const decl of storable) {
 			if (!decl.appliesTo.includes(facet)) continue
-			const value = await valueOf(db, {
-				sessionId,
-				owner: read,
-				slotId: decl.id
-			})
+			const value = await valueOf(
+				db,
+				{
+					sessionId,
+					owner: read,
+					slotId: decl.id
+				},
+				{ links, vocabulary }
+			)
 			if (value === undefined) continue
 			await db.insert(schema.attributeValues).values({
 				ownerKind: write.kind,
@@ -181,21 +185,37 @@ export async function recordToTimeline(
 			"cast"
 		)
 	}
+	// 🚧 Each place (phase 4), filed against its location entry — the
+	// world's own record of what lay where. A location IS a lore entry of
+	// this world, so unlike a character there is always somewhere to file it.
+	for (const place of links.locations)
+		await record(
+			{ kind: "session_location", id: place.entryId },
+			{ kind: "location", id: place.entryId },
+			"location"
+		)
 
 	report.recorded = report.values > 0 || report.configs > 0
 	return report
 }
 
 /**
- * Which branch of the world's history this session is on.
+ * Which line of the world's history this session plays on: its
+ * `sessions.lorebook_branch_id`, NULL for main.
  *
- * Null today, always: `lorebook_branches` does not exist yet (R8), and the
- * column is here so the writers fill it the day it does rather than needing a
- * back-fill over rows nobody can date. Written as a function rather than a
- * literal so there is one place to change.
+ * ⚠ A durable row filed as NULL is SHARED — it reads on main and on every
+ * branch — so a session on a branch that filed NULL would leak its branch-only
+ * facts onto every line. The row carries the session's line, and the FK on
+ * `attribute_values` / `attribute_configs.branch_id` cascades it away with the
+ * branch, exactly as the line's amendments and entries go.
  */
-async function branchOf(_db: Db, _sessionId: number): Promise<number | null> {
-	return null
+async function branchOf(db: Db, sessionId: number): Promise<number | null> {
+	const [row] = await db
+		.select({ branchId: schema.sessions.lorebookBranchId })
+		.from(schema.sessions)
+		.where(eq(schema.sessions.id, sessionId))
+		.limit(1)
+	return row?.branchId ?? null
 }
 
 /**

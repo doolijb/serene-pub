@@ -2,9 +2,10 @@
 	/**
 	 * Start a session: the first screen, a few answers down one column.
 	 *
-	 * Genre, then an admin-enabled preset of that genre, then who is in it,
-	 * then — for a genre whose shape has the capability — a lorebook, then a
-	 * name (ruled 2026-09-10). A step with one option answers itself and
+	 * A name, then the genre, then an admin-enabled preset of that genre, then
+	 * who is in it, then — for a genre whose shape has the capability — a
+	 * lorebook (ruled 2026-09-10; the name moved to the top 2026-09-27, where
+	 * it is always on screen instead of waiting behind the cast). A step with one option answers itself and
 	 * shows as its summary line; an answered step collapses to the same line
 	 * with a Change action. Everything else a session has is edited afterwards
 	 * in the edit form.
@@ -15,6 +16,7 @@
 	 * where navigation lives.
 	 */
 	import { onDestroy } from "svelte"
+	import { UnsavedEdits } from "$lib/client/forms/unsavedEdits.svelte"
 	import * as Icons from "@lucide/svelte"
 	import {
 		declareInterest,
@@ -27,8 +29,11 @@
 	import PanelNavHeader from "../panels/PanelNavHeader.svelte"
 	import {
 		autoSessionName,
+		castCountHint,
 		defaultGenreId,
+		finalSessionName,
 		genreFacts,
+		playAsOptions,
 		StartSessionFlow
 	} from "./createSession.svelte"
 
@@ -71,7 +76,6 @@
 	let lorebookList: Sockets.Lorebooks.List.Response["lorebookList"] = $state(
 		[]
 	)
-	let name = $state("")
 	let creating = $state(false)
 	/**
 	 * Which step the person has asked to open, over the first unsettled one.
@@ -80,6 +84,7 @@
 	 */
 	let openStep = $state<Step | null>(null)
 	let characterFilter = $state("")
+	let personaFilter = $state("")
 	let touched = $state(false)
 	/** The person has answered this step themselves, so it may collapse. */
 	let genreConfirmed = $state(false)
@@ -195,8 +200,34 @@
 		if (wanted != null) flow.personaIds = [wanted]
 	})
 
+	/**
+	 * Unsaved edits are the person's own: the saved snapshot is the form as
+	 * it stood just before their first touch (`touch()`), after the effects
+	 * above filled in the genre, preset and prefilled cast for them. So
+	 * nothing the form chose by itself is an edit, and a name typed and
+	 * deleted, or a character picked and un-picked, is none either. The cast
+	 * is compared as sets — un-picking and re-picking only reorders it.
+	 */
+	const edits = new UnsavedEdits(
+		() => ({
+			genreId: flow.genreId,
+			presetId: flow.presetId,
+			characterIds: flow.characterIds,
+			personaIds: flow.personaIds,
+			lorebookId: flow.fields.lorebookId,
+			name: flow.fields.name.trim(),
+			scenario: flow.fields.scenario
+		}),
+		{ unordered: ["characterIds", "personaIds"] }
+	)
+	/** Call BEFORE the person's change lands (hence `onbeforeinput` below). */
+	function touch() {
+		if (touched) return
+		edits.markSaved()
+		touched = true
+	}
 	$effect(() => {
-		hasChanges = touched
+		hasChanges = edits.dirty
 	})
 
 	const genreOptions = $derived(flow.genres)
@@ -253,7 +284,9 @@
 	const showCast = $derived(
 		genreAnswered && presetAnswered && castStepApplies
 	)
-	const showName = $derived(genreAnswered && presetAnswered && castAnswered)
+	/** The Scenario offer sits at the foot once the genre and preset are
+	 *  answered; the Name card is always on screen, at the top. */
+	const showScenarioCard = $derived(genreAnswered && presetAnswered)
 
 	const expandedGenre = $derived(genreIsAChoice && activeStep === "genre")
 	const expandedPreset = $derived(presetIsAChoice && activeStep === "preset")
@@ -267,19 +300,22 @@
 		characters.filter((c): c is CharacterOption => c.id != null)
 	)
 	/**
-	 * Who the person can play as: their flagged personas, default persona
-	 * first and then by name. Same list as the cast above — the flag is the
-	 * only difference.
+	 * Who the person can play as: every character they have, personas first
+	 * (the default leading), then everyone else — see `playAsOptions`. A
+	 * library with no personas yet can still start: the server flags the
+	 * character it seats (`markCharacterAsPersona`).
 	 */
 	const personaOptions = $derived(
-		characterOptions
-			.filter((p) => !!p.isPersona)
-			.sort((a, b) => {
-				if (!!a.isDefaultPersona !== !!b.isDefaultPersona)
-					return a.isDefaultPersona ? -1 : 1
-				return (a.name || "").localeCompare(b.name || "")
-			})
+		playAsOptions(characterOptions, flow.characterIds)
 	)
+	const filteredPersonas = $derived.by(() => {
+		const q = personaFilter.trim().toLowerCase()
+		if (!q) return personaOptions
+		return personaOptions.filter((p) =>
+			characterName(p).toLowerCase().includes(q) ||
+			(p.name || "").toLowerCase().includes(q)
+		)
+	})
 
 	/**
 	 * The lorebook step, asked only of a genre whose shape has the
@@ -367,7 +403,7 @@
 	}
 
 	function chooseGenre(id: string) {
-		touched = true
+		touch()
 		genreConfirmed = true
 		// A preset belongs to one genre, so the answer below reopens with it.
 		presetConfirmed = false
@@ -376,32 +412,34 @@
 	}
 
 	function choosePreset(id: number) {
-		touched = true
+		touch()
 		presetConfirmed = true
 		openStep = null
 		flow.choosePreset(id)
 	}
 
+	/** "exactly 1", "1–3", "at least 1" — the floor the form holds and the cap the genre sets. */
+	const characterCountHint = $derived(
+		castCountHint(
+			flow.floors.characters,
+			flow.shape?.characters?.max ?? undefined
+		)
+	)
+
 	function toggleCharacter(id: number) {
-		touched = true
+		touch()
 		castTouched = true
-		const max = flow.shape?.characters?.max ?? Infinity
-		if (flow.characterIds.includes(id)) {
-			flow.characterIds = flow.characterIds.filter((c) => c !== id)
-			return
-		}
-		if (flow.characterIds.length >= max) return
-		flow.characterIds = [...flow.characterIds, id]
+		flow.toggleCharacter(id)
 	}
 
 	function choosePersona(id: number) {
-		touched = true
+		touch()
 		castTouched = true
-		flow.personaIds = [id]
+		flow.playAs(id)
 	}
 
 	function chooseLorebook(id: number | null) {
-		touched = true
+		touch()
 		flow.fields.lorebookId = id
 	}
 
@@ -416,6 +454,8 @@
 		})
 		const refused = refusedSwapsSentence(res)
 		if (refused) toaster.warning({ title: "Some settings were not applied", description: refused })
+		edits.forget()
+		hasChanges = false
 		onCreated(res.session.id)
 	}
 
@@ -432,7 +472,7 @@
 	function start() {
 		if (!canStart) return
 		creating = true
-		const finalName = name.trim() || placeholderName
+		const finalName = finalSessionName(flow.fields.name, placeholderName)
 		// The error key is declared first so the one interest sync the request
 		// flushes carries both halves of the reply this form is waiting for.
 		const releaseError = declareInterest<"sessions:create:error">(
@@ -483,7 +523,7 @@
 				onclick={start}
 			>
 				{#if creating}
-					<Icons.LoaderCircle
+					<Icons.Loader2
 						size={16}
 						class="animate-spin"
 						aria-hidden="true"
@@ -497,6 +537,27 @@
 	</PanelNavHeader>
 
 	<div class="flex flex-col gap-3">
+		<!-- ── 0. Name ──────────────────────────────────────────────────── -->
+		<section class="{CARD_CLASS} flex flex-col">
+			<label
+				class="text-sm font-medium"
+				for="start-session-name"
+			>
+				Name
+			</label>
+			<input
+				id="start-session-name"
+				type="text"
+				class="input mt-2 rounded-[10px]"
+				placeholder={placeholderName}
+				bind:value={flow.fields.name}
+				onbeforeinput={touch}
+			/>
+			<p class="text-surface-600-400 mt-1 text-xs">
+				Optional. Leave it empty and the session is called “{placeholderName}”.
+			</p>
+		</section>
+
 		<!-- ── 1. Genre ─────────────────────────────────────────────────── -->
 		<section class={CARD_CLASS} aria-labelledby="start-genre-heading">
 			<div class="flex min-w-0 items-baseline gap-2">
@@ -546,7 +607,7 @@
 								</span>
 							{/if}
 							{#if genreFacts(g.shape)}
-								<span class="text-surface-500 text-[11px]">
+								<span class="text-surface-600-400 text-[11px]">
 									{genreFacts(g.shape)}
 								</span>
 							{/if}
@@ -622,7 +683,7 @@
 									</span>
 								{/if}
 								{#if p.isDefault}
-									<span class="text-surface-500 text-[11px]">
+									<span class="text-surface-600-400 text-[11px]">
 										Default for this genre
 									</span>
 								{/if}
@@ -660,9 +721,9 @@
 				{#if expandedCast}
 					{#if flow.floors.characters > 0 || (flow.shape?.characters?.max ?? 1) !== 0}
 						<div class="mt-3 flex flex-col gap-2">
-							<p class="text-surface-500 text-xs">
-								Characters{flow.floors.characters > 0
-									? ` — at least ${flow.floors.characters}`
+							<p class="text-surface-600-400 text-xs">
+								Characters{characterCountHint
+									? ` — ${characterCountHint}`
 									: ""}
 							</p>
 							{#if characterOptions.length > 8}
@@ -673,7 +734,7 @@
 								/>
 							{/if}
 							{#if characterOptions.length === 0}
-								<p class="text-surface-500 text-[13px]">
+								<p class="text-surface-600-400 text-[13px]">
 									You have no characters yet. Write one in the
 									Characters view, then come back.
 								</p>
@@ -714,16 +775,28 @@
 
 					{#if (flow.shape?.personas?.max ?? 1) !== 0}
 						<div class="mt-4 flex flex-col gap-2">
-							<p class="text-surface-500 text-xs">
+							<p class="text-surface-600-400 text-xs">
 								Who you play as{flow.floors.personas > 0
 									? " — pick one"
 									: ""}
 							</p>
-							{#if personaOptions.length === 0}
-								<p class="text-surface-500 text-[13px]">
-									You have no personas yet. Flag a character
-									as a persona in the Characters view, then
-									come back.
+							{#if personaOptions.length > 8}
+								<PanelFilterInput
+									bind:value={personaFilter}
+									placeholder="characters to play as"
+									count={personaOptions.length}
+								/>
+							{/if}
+							{#if characterOptions.length === 0}
+								<p class="text-surface-600-400 text-[13px]">
+									You have no characters yet. Write one in the
+									Characters view, then come back.
+								</p>
+							{:else if personaOptions.length === 0}
+								<p class="text-surface-600-400 text-[13px]">
+									Everyone you have is in the cast. Take one
+									out to play as them, or write another
+									character.
 								</p>
 							{:else}
 								<ul
@@ -731,7 +804,7 @@
 									role="radiogroup"
 									aria-label="Who you play as"
 								>
-									{#each personaOptions as p (p.id)}
+									{#each filteredPersonas as p (p.id)}
 										{@const selected =
 											flow.personaIds.includes(p.id)}
 										<li>
@@ -754,6 +827,15 @@
 												>
 													{p.name}
 												</span>
+												{#if p.isPersona}
+													<span
+														class="text-surface-600-400 shrink-0 text-[11px]"
+													>
+														{p.isDefaultPersona
+															? "Default persona"
+															: "Persona"}
+													</span>
+												{/if}
 												{#if selected}
 													<Icons.Check
 														size={16}
@@ -791,7 +873,7 @@
 					<p
 						class="mt-3 text-[13px] {lorebookRequired
 							? 'preset-tonal-warning rounded-[10px] p-3'
-							: 'text-surface-500'}"
+							: 'text-surface-600-400'}"
 						role="status"
 					>
 						{#if lorebookRequired}
@@ -877,61 +959,37 @@
 			</section>
 		{/if}
 
-		<!-- ── 5. Name ──────────────────────────────────────────────────── -->
-		{#if showName}
-			<section class={CARD_CLASS} aria-labelledby="start-name-heading">
-				<h3 id="start-name-heading" class="text-sm font-medium">
-					Name
-				</h3>
-				<div class="mt-3 flex flex-col">
+		<!-- ── 5. Scenario ─────────────────────────────────────────────── -->
+		{#if showScenarioCard}
+			{#if showScenario}
+				<section class="{CARD_CLASS} flex flex-col">
 					<label
-						class="text-surface-500 mb-1.5 text-xs"
-						for="start-session-name"
+						class="text-sm font-medium"
+						for="start-session-scenario"
 					>
-						Session name
+						Scenario
 					</label>
-					<input
-						id="start-session-name"
-						type="text"
-						class="input rounded-[10px]"
-						placeholder={placeholderName}
-						bind:value={name}
-						oninput={() => (touched = true)}
-					/>
-					<p class="text-surface-500 mt-1 text-xs">
-						Leave it empty and the session is called “{placeholderName}”.
+					<textarea
+						id="start-session-scenario"
+						rows="4"
+						class="input mt-3 rounded-[10px]"
+						bind:value={flow.fields.scenario}
+						onbeforeinput={touch}
+					></textarea>
+					<p class="text-surface-600-400 mt-1 text-xs">
+						Scene-setting text every prompt will see
 					</p>
-				</div>
-				{#if showScenario}
-					<div class="mt-4 flex flex-col">
-						<label
-							class="text-surface-500 mb-1.5 text-xs"
-							for="start-session-scenario"
-						>
-							Scenario
-						</label>
-						<textarea
-							id="start-session-scenario"
-							rows="4"
-							class="input rounded-[10px]"
-							bind:value={flow.fields.scenario}
-							oninput={() => (touched = true)}
-						></textarea>
-						<p class="text-surface-500 mt-1 text-xs">
-							Scene-setting text every prompt will see
-						</p>
-					</div>
-				{:else}
-					<button
-						type="button"
-						class="text-surface-500 hover:text-surface-700-300 mt-4 flex items-center gap-1.5 self-start text-sm"
-						onclick={() => (scenarioOpen = true)}
-					>
-						<Icons.Plus size={14} aria-hidden="true" />
-						Add a scenario
-					</button>
-				{/if}
-			</section>
+				</section>
+			{:else}
+				<button
+					type="button"
+					class="text-surface-600-400 hover:text-surface-700-300 flex items-center gap-1.5 self-start px-1 text-sm"
+					onclick={() => (scenarioOpen = true)}
+				>
+					<Icons.Plus size={14} aria-hidden="true" />
+					Add a scenario
+				</button>
+			{/if}
 		{/if}
 	</div>
 </div>

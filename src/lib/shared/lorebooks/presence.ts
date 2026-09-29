@@ -20,6 +20,7 @@
  * workspace resolves for reading, and they must agree.
  */
 import { compareDates, type StoryDate } from "./storyDate"
+import { lineFromFork, rowReadsOnLine, type Line } from "./lineReading"
 
 export interface Presence {
 	id: number
@@ -75,11 +76,18 @@ export interface PresenceAt {
 	moment?: StoryDate | null
 	/** `null` = main. */
 	branchId?: number | null
+	/**
+	 * The ancestor chain (`lineOf`). Authoritative when given: a presence on
+	 * an ancestor line is seen only when it begins at or before that line's
+	 * fork cut — a presence main records after the fork is main's story, not
+	 * this line's (the same cut every dated row takes).
+	 */
+	line?: Line
 }
 
 /** Whether this presence is one the line being read can see. */
-function onLine(p: Presence, branchId: number | null): boolean {
-	return p.branchId == null || p.branchId === branchId
+function onLine(p: Presence, line: Line): boolean {
+	return rowReadsOnLine(p, line, from(p))
 }
 
 /**
@@ -108,10 +116,10 @@ export function appearancesOf(
 	presences: readonly Presence[],
 	at: PresenceAt = {}
 ): Appearance[] {
-	const branchId = at.branchId ?? null
+	const line = at.line ?? lineFromFork(at.branchId ?? null, null)
 	const moment = at.moment ?? null
 	const mine = presences.filter(
-		(p) => p.castId === castId && onLine(p, branchId)
+		(p) => p.castId === castId && onLine(p, line)
 	)
 	if (!mine.length)
 		return [{ castId, personalPosition: null, presenceId: null }]

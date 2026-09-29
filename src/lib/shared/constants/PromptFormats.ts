@@ -22,7 +22,7 @@ export class PromptFormats {
 	 * comment there reads as "one uncomment away from working" and it is not.
 	 */
 	static readonly TEKKEN = "tekken"
-	static readonly SPLIT_CHAT = "split_session" // This is a hidden format for splitting session completions
+	static readonly SPLIT_CHAT = "split_chat" // This is a hidden format for splitting chat completions
 
 	/**
 	 * The one spelling of "and if there isn't one", for every layer.

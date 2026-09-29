@@ -114,7 +114,7 @@ function standIn(end: RefEndpoint): PoolItem {
 		kind: end.kind,
 		name: end.name,
 		content: "",
-		keys: "",
+		keys: [],
 		pinned: false,
 		off: false,
 		archived: false,

@@ -21,14 +21,14 @@
 	 *
 	 * A panel that declares `channels` is a *view onto those lanes*: it receives
 	 * only their messages (per-channel `channel` posts), never the whole log —
-	 * the same scoping the native panels get, enforced host-side. `suspend`
+	 * the same scoping a remote widget gets, enforced host-side. `suspend`
 	 * pauses an off-screen frame without unmounting it (the grid never
 	 * reparents, so the document — and this port — survive; suspend just tells
 	 * it to idle), and `resume` wakes it. This is what caps many-frame cost
 	 * without ever paying a reload (21 §7).
 	 *
 	 * `style` is the widget-skin half of PLAN 25 (ruled 2026-08-30): a frame
-	 * widget is treated identically to a native one, host-resolved skin and all
+	 * widget is treated identically to a remote one, host-resolved skin and all
 	 * — the only difference being that its CSS is injected into the frame's OWN
 	 * document rather than a scoped `<style>` out here. The frame is expected to
 	 * keep one `<style id="sp-widget-style">`, replaced in place, and to set
@@ -67,7 +67,7 @@
 	 */
 	import { onDestroy } from "svelte"
 	import * as Icons from "@lucide/svelte"
-	import type { SessionV1 } from "@serene-pub/sdk"
+	import type { SessionV1, WidgetBaseSection } from "@serene-pub/sdk"
 	import type {
 		PlacementInput,
 		ActionsV1,
@@ -75,6 +75,7 @@
 	} from "$lib/shared/widgets/context"
 	import type { ActionDispatch } from "$lib/shared/widgets/invokeAction"
 	import { frameInvokeVerdict, hasRecentActivation } from "./frameActivation"
+	import { frameOwnerOf } from "./frameOwner"
 	import { frameStateKey, initMessage } from "./framePort"
 	import { createWidgetWire, type WireInputs } from "./widgetWire.svelte"
 
@@ -96,8 +97,8 @@
 		props?: Record<string, unknown>
 		/**
 		 * Panel surfaces (25): this instance's effective settings, posted as
-		 * `{ t: "settings" }` — the same `settings.v1` a native widget reads off
-		 * its ctx, defaults filled in and the user's deviations over them.
+		 * `{ t: "settings" }` — the same `settings.v1` a remote widget is posted,
+		 * defaults filled in and the user's deviations over them.
 		 * Undefined on the surfaces that are not widgets, and nothing is posted
 		 * for those.
 		 */
@@ -112,22 +113,22 @@
 		skin?: { css: string; vars: Record<string, string> }
 		/**
 		 * Panel surfaces (25): this widget's measured cell geometry, pushed as
-		 * `{ t: "layout" }` — the same `layout.v1` a native widget reads off its
-		 * ctx. Undefined on the surfaces that are not widgets, and no `layout`
+		 * `{ t: "layout" }` — the same `layout.v1` a remote widget is posted.
+		 * Undefined on the surfaces that are not widgets, and no `layout`
 		 * is posted at all for those.
 		 */
 		placement?: PlacementInput
 		/**
 		 * Panel surfaces (25): the session-level event source (the
 		 * `SurfaceManager`). Its events are filtered to `channels` here, exactly
-		 * as `WidgetHost` filters them for a native widget, and forwarded as
+		 * as the wire filters them for a remote widget, and forwarded as
 		 * `{ t: "event" }`.
 		 */
 		source?: WidgetEventSource
 		/**
 		 * Panel surfaces (U5c): the session's action venues, posted as
-		 * `{ t: "actions" }` — the same `actions.v1` a native widget reads off
-		 * its ctx. A frame invokes one by identity (or a key only one action
+		 * `{ t: "actions" }` — the same `actions.v1` a remote widget is posted.
+		 * A frame invokes one by identity (or a key only one action
 		 * carries) with `{ t: "invoke" }`, which the host resolves to the
 		 * declaration exactly as the native `invoke` verb does (`makeInvoke`):
 		 * one of core's verbs to `actionDispatch.core`, a contributed one to
@@ -138,7 +139,7 @@
 		actions?: ActionsV1
 		/**
 		 * The host's own routing for a press (U5c review, W4): its handlers
-		 * for core's verbs — what `invoke('continue')` lands on; a frame on a
+		 * for core's verbs — what `invoke('extend')` lands on; a frame on a
 		 * host that wires none is refused by name (a warning), never fired as
 		 * a function — and its fire for a contributed one, which names the run
 		 * and takes the bespoke client flows. A host that threads no dispatch
@@ -147,6 +148,11 @@
 		actionDispatch?: ActionDispatch
 		/** Nested in a component (`sp-frame`): raise the document's invoke unresolved (`WireInputs.onInvoke`). */
 		onInvoke?: WireInputs["onInvoke"]
+		/**
+		 * Panel surfaces (R75): the base sections this widget reads — only
+		 * those are posted. Absent posts all, as every non-widget surface does.
+		 */
+		reads?: readonly WidgetBaseSection[]
 		/** Panel surfaces (21): idle the frame off-screen without unmounting. */
 		suspended?: boolean
 		/**
@@ -185,6 +191,7 @@
 		actions,
 		actionDispatch,
 		onInvoke,
+		reads,
 		source,
 		suspended = false,
 		surfaceId,
@@ -193,11 +200,8 @@
 	}: Props = $props()
 
 	let frame = $state<HTMLIFrameElement | null>(null)
-	/** Whose document this is — the plugin id its `/plugin-ui/<id>/…` address names. */
-	const frameOwner = $derived.by(() => {
-		const m = /^\/plugin-ui\/([^/]+)\//.exec(src)
-		return m ? decodeURIComponent(m[1]) : "unknown"
-	})
+	/** Whose document this is — the plugin id its `/plugin-ui/<id>/…` address names, never `core`. */
+	const frameOwner = $derived(frameOwnerOf(src))
 
 	/**
 	 * What a `fatal` error said, once one has been reported — the flag the
@@ -270,6 +274,7 @@
 			stateKey,
 			widgetId: surfaceId ?? src,
 			owner: frameOwner,
+			reads,
 			actionDispatch,
 			onInvoke,
 			onAction

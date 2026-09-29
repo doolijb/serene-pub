@@ -253,7 +253,7 @@ describe("classifying a GGUF by its header", () => {
 describe("headers that are not headers", () => {
 	// Every one of these is reachable in the models directory: a download that
 	// died halfway, a README somebody renamed, a zero-byte placeholder. None of
-	// them may throw — a listing that fails takes the whole Manager down with
+	// them may throw — a listing that fails takes the whole managed KoboldCPP down with
 	// it, which is a much worse outcome than one row reading "Unverified".
 
 	test("a truncated file is unknown rather than a decode error", () => {

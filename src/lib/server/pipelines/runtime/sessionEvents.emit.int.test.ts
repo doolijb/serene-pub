@@ -147,7 +147,6 @@ async function makeSession(tag: string) {
 		sessionId: session.id,
 		characterId,
 		isActive: true,
-		visibility: "visible"
 	})
 	const [reply] = await db
 		.insert(schema.sessionMessages)
@@ -187,6 +186,40 @@ beforeAll(async () => {
 		})
 		.returning()
 	characterId = character.id
+
+	// The annex declarations the annex writes below are held to (one
+	// declaration per owner, ruling 2026-09-26): installed as a plugin's
+	// stored manifest, where the host reads them.
+	const { annexField } = await import("@serene-pub/sdk")
+	const declare = async (pluginId: string, annexFields: unknown[]) =>
+		db.insert(schema.plugins).values({
+			pluginId,
+			name: pluginId,
+			version: "1.0.0",
+			bundleSource: "// none",
+			bundleHash: `hash-${pluginId}`,
+			enabled: true,
+			manifest: { annexFields }
+		} as any)
+	await declare("acme.rp", [
+		annexField({ key: "clock", shape: { type: "integer" } }),
+		annexField({ key: "culprit", shape: { type: "string" } }),
+		annexField({ key: "clue", shape: { type: "string" }, see: ["participant"] }),
+		annexField({ key: "note", shape: { type: "string" }, see: [`user:${userId}`] }),
+		annexField({ key: "hunch", shape: { type: "string" }, see: ["ai"] })
+	])
+	// The loop spec keeps `annex-changed`'s payload under `last`; the
+	// listener, a recorded event's envelope under `heard`.
+	await declare("test", [
+		annexField({ key: "tick", shape: { type: "integer" } }),
+		annexField({
+			key: "last",
+			shape: { type: "object", fields: { sessionId: { type: "integer" }, owner: { type: "string" } } }
+		})
+	])
+	await declare("acme.dice", [
+		annexField({ key: "heard", shape: { type: "object", fields: { event: { type: "string" } } } })
+	])
 
 	const [textConn] = await db
 		.insert(schema.connections)
@@ -380,7 +413,6 @@ describe("cause at every emitter", () => {
 			sessionId: session.id,
 			characterId,
 			isActive: true,
-			visibility: "visible"
 		})
 		const { dispatchSessionEvent } = await import(
 			"$lib/server/pipelines/runtime/sessionEvents"
@@ -496,7 +528,7 @@ describe("cause at every emitter", () => {
 		expect(rows.length).toBe(1)
 	})
 
-	it("toggling a character's active flag yields cast-changed { ref, change: 'active', value }, cause settings", async () => {
+	it("toggling a character's active flag yields cast-changed { ref, change: 'enabled', value }, cause settings", async () => {
 		const s = await makeSession("toggle-active")
 		const { toggleSessionCharacterActiveHandler } = await import(
 			"$lib/server/sockets/sessions"
@@ -512,29 +544,8 @@ describe("cause at every emitter", () => {
 		expect(rows.length).toBe(1)
 		expect(rows[0]!.payload).toMatchObject({
 			ref: `character:${characterId}`,
-			change: "active",
+			change: "enabled",
 			value: false,
-			cause: { kind: "settings", userId }
-		})
-	})
-
-	it("changing a character's visibility yields cast-changed { change: 'visibility' }", async () => {
-		const s = await makeSession("visibility")
-		const { updateSessionCharacterVisibilityHandler } = await import(
-			"$lib/server/sockets/sessions"
-		)
-		const res: any = await updateSessionCharacterVisibilityHandler.handler(
-			fakeSocket(userId),
-			{ sessionId: s.sessionId, characterId, visibility: "hidden" },
-			emit
-		)
-		expect(res.error).toBeUndefined()
-		const rows = await ofEvent(s.sessionId, sessionEvents.castChanged)
-		expect(rows.length).toBe(1)
-		expect(rows[0]!.payload).toMatchObject({
-			ref: `character:${characterId}`,
-			change: "visibility",
-			value: "hidden",
 			cause: { kind: "settings", userId }
 		})
 	})
@@ -549,7 +560,6 @@ describe("cause at every emitter", () => {
 			sessionId: s.sessionId,
 			characterId: bob.id,
 			isActive: true,
-			visibility: "visible",
 			position: 1
 		})
 		const { sessionsUpdateHandler } = await import(
@@ -684,7 +694,7 @@ describe("M3 review · annex-changed is bounded, and the envoy seat emits only o
 					genre: use("core:genre/chat"),
 					events: [ev.annexChanged]
 				})
-				.outlet("write", ($) => C.setSessionAnnex.v1({ value: $.event.payload }))
+				.outlet("write", ($) => C.setSessionAnnex.v1({ value: { last: $.event.payload } as never }))
 				.build()
 		)
 		await saveDocument(db as any, loop, { publish: true })
@@ -1006,7 +1016,7 @@ describe("E1b · a package's declared event, recorded", () => {
 					genre: use("core:genre/chat"),
 					events: ["acme.dice:event/rolled@1"]
 				})
-				.outlet("note", ($) => C.setSessionAnnex.v1({ value: $.event.payload as never }))
+				.outlet("note", ($) => C.setSessionAnnex.v1({ value: { heard: $.event.payload } as never }))
 				.build()
 		)
 		await saveDocument(db as any, listener, { publish: true })
@@ -1186,11 +1196,12 @@ describe("V1c · annex audiences (R57, R59)", () => {
 			runId: "run-v1c"
 		} as any)
 		const node = { key: "keep", definitionId: "core:outlet/set-session-annex", definitionVersion: 1 } as any
-		// Three audiences in one owner's document.
+		// Three audiences in one owner's document — each key's own, from the
+		// declaration.
 		await host.commit!({ value: { culprit: "the butler" } }, node) // R59: pipelines only
-		await host.commit!({ value: { clue: "a glove" }, see: ["participant"] }, node)
-		await host.commit!({ value: { note: "for the owner" }, see: [`user:${userId}`] }, node)
-		await host.commit!({ value: { hunch: "the garden" }, see: ["ai"] }, node)
+		await host.commit!({ value: { clue: "a glove" } }, node)
+		await host.commit!({ value: { note: "for the owner" } }, node)
+		await host.commit!({ value: { hunch: "the garden" } }, node)
 
 		// A pipeline still reads everything, exactly as before.
 		const read = (q: Record<string, unknown>) =>
@@ -1220,17 +1231,10 @@ describe("V1c · annex audiences (R57, R59)", () => {
 		const stranger = await make(db, "v1c-stranger")
 		expect(await annexViewFor(db as any, s.sessionId, stranger.id)).toBeNull()
 
-		// A key has one audience: re-writing the secret for everyone is refused…
-		await expect(
-			host.commit!({ value: { culprit: "the maid" }, see: ["participant"] }, node)
-		).rejects.toThrow(/'culprit' is stored for pipelines only.*a key has one audience/)
-		// …and so is an audience that is not one.
-		await expect(host.commit!({ value: { x: 1 }, see: ["item"] }, node)).rejects.toThrow(HostScopeError)
+		// A key nobody declared is refused.
+		await expect(host.commit!({ value: { x: 1 } }, node)).rejects.toThrow(HostScopeError)
 		// Replacing the document drops what it leaves out, audiences included.
-		await host.commit!(
-			{ value: { clue: "a glove" }, see: ["participant"], params: { merge: false } },
-			node
-		)
+		await host.commit!({ value: { clue: "a glove" }, params: { merge: false } }, node)
 		const [row] = await db
 			.select({ annex: schema.sessions.annex, audiences: schema.sessions.annexAudiences })
 			.from(schema.sessions)

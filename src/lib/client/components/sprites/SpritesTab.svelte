@@ -9,7 +9,8 @@
 	 * keys are re-declared when the panel is pointed at another character.
 	 */
 	import * as Icons from "@lucide/svelte"
-	import { Dialog, Popover, Portal } from "@skeletonlabs/skeleton-svelte"
+	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
+	import RowMenu from "$lib/client/components/menus/RowMenu.svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 	import { declareInterest } from "$lib/client/sockets/interest.svelte"
 	import { interestKey } from "$lib/shared/sockets/interest"
@@ -400,7 +401,7 @@
 			onCta={isOwner ? () => bulkInput?.click() : undefined}
 		/>
 		{#if isOwner}
-			<p class="text-surface-500 text-center text-xs">
+			<p class="text-surface-600-400 text-center text-xs">
 				Or
 				<button type="button" class="anchor" onclick={addStandardSet}>
 					start from the standard set
@@ -417,80 +418,38 @@
 				class="min-w-40 flex-1"
 			/>
 			{#if isOwner}
-				<Popover
-					open={setMenuOpen}
-					onOpenChange={(e) => (setMenuOpen = e.open)}
-					positioning={{ placement: "bottom-end" }}
-				>
-					<Popover.Trigger
-						class="btn btn-sm preset-tonal-surface"
-						aria-label="Sprite set options"
-					>
-						<Icons.EllipsisVertical size={16} aria-hidden="true" />
-					</Popover.Trigger>
-					<Portal>
-						<Popover.Positioner class="z-[1000]!">
-							<Popover.Content
-								class="card bg-primary-200-800 w-[min(90vw,220px)] space-y-3 p-3 shadow-xl"
-							>
-								<header class="popover-menu-title">
-									<Icons.Layers size={16} aria-hidden="true" />
-									<p>Sprite set</p>
-								</header>
-								<article class="flex flex-col gap-2">
-									<button
-										type="button"
-										class="btn btn-sm popover-menu-btn hover:preset-filled-primary-500"
-										onclick={openNewSet}
-									>
-										<Icons.Plus size={16} aria-hidden="true" />
-										<span>New set</span>
-									</button>
-									<button
-										type="button"
-										class="btn btn-sm popover-menu-btn hover:preset-filled-primary-500"
-										onclick={openRenameSet}
-									>
-										<Icons.Pencil size={16} aria-hidden="true" />
-										<span>Rename set</span>
-									</button>
-									{#if activeSet && !activeSet.isDefault}
-										<button
-											type="button"
-											class="btn btn-sm popover-menu-btn hover:preset-filled-primary-500"
-											onclick={makeDefault}
-										>
-											<Icons.Star size={16} aria-hidden="true" />
-											<span>Make default</span>
-										</button>
-									{/if}
-									<button
-										type="button"
-										class="btn btn-sm popover-menu-btn hover:preset-filled-primary-500"
-										onclick={() => {
-											setMenuOpen = false
-											addStandardSet()
-										}}
-									>
-										<Icons.ListPlus size={16} aria-hidden="true" />
-										<span>Add the standard set</span>
-									</button>
-									<button
-										type="button"
-										class="btn btn-sm popover-menu-btn hover:preset-filled-error-500"
-										onclick={() => {
-											setMenuOpen = false
-											deleteSetOpen = true
-										}}
-									>
-										<Icons.Trash2 size={16} aria-hidden="true" />
-										<span>Delete set</span>
-									</button>
-								</article>
-							</Popover.Content>
-						</Popover.Positioner>
-					</Portal>
-				</Popover>
+				<RowMenu
+					label="Sprite set"
+					width={220}
+					triggerClass="btn btn-sm preset-tonal-surface"
+					bind:open={setMenuOpen}
+					items={[
+						{ label: "New set", icon: Icons.Plus, onSelect: openNewSet },
+						{
+							label: "Rename set",
+							icon: Icons.Pencil,
+							onSelect: openRenameSet
+						},
+						activeSet &&
+							!activeSet.isDefault && {
+								label: "Make default",
+								icon: Icons.Star,
+								onSelect: makeDefault
+							},
+						{
+							label: "Add the standard set",
+							icon: Icons.ListPlus,
+							onSelect: addStandardSet
+						},
+						{ separator: true },
+						{
+							label: "Delete set",
+							icon: Icons.Trash2,
+							destructive: true,
+							onSelect: () => (deleteSetOpen = true)
+						}
+					]}
+				/>
 				<button
 					type="button"
 					class="btn btn-sm preset-filled-primary-500"
@@ -507,7 +466,7 @@
 			{/if}
 		</div>
 
-		<p class="text-surface-500 text-xs">
+		<p class="text-surface-600-400 text-xs">
 			{groups.length} labels, {imageCount} images. Uploaded images are labelled
 			by file name: <code>joy.png</code> and <code>joy-2.png</code> are both
 			"joy".
@@ -560,80 +519,54 @@
 
 									{#if isOwner}
 										<div class="absolute top-0.5 right-0.5">
-											<Popover
-												open={menuOpenFor === sprite.id}
-												onOpenChange={(e) =>
-													(menuOpenFor = e.open ? sprite.id : null)}
-												positioning={{ placement: "bottom-end" }}
+											<RowMenu
+												label={group.label}
+												width={220}
+												triggerLabel="Options for this {group.label} sprite"
+												triggerClass="bg-surface-950/60 hover:bg-surface-950/80 rounded-full p-0.5 text-white"
+												bind:open={
+													() => menuOpenFor === sprite.id,
+													(v) => (menuOpenFor = v ? sprite.id : null)
+												}
+												items={[
+													(sprite.position > 0 ||
+														group.sprites[0].id !== sprite.id) && {
+														label: "Make first",
+														icon: Icons.ArrowUpToLine,
+														onSelect: () => makePrimary(group.label, sprite)
+													},
+													{
+														label: sprite.media
+															? "Add a variant"
+															: "Upload an image",
+														icon: Icons.ImagePlus,
+														onSelect: () => uploadInto(group.label)
+													},
+													{
+														label: "Change label",
+														icon: Icons.Tag,
+														onSelect: () => openRelabel(sprite)
+													},
+													...sets
+														.filter((o) => o.id !== activeSet?.id)
+														.map((other) => ({
+															label: `Move to ${other.name}`,
+															icon: Icons.FolderInput,
+															onSelect: () => moveTo(sprite, other.id)
+														})),
+													{ separator: true },
+													{
+														label: "Delete",
+														icon: Icons.Trash2,
+														destructive: true,
+														onSelect: () => openDelete(sprite)
+													}
+												]}
 											>
-												<Popover.Trigger
-													class="bg-surface-950/60 hover:bg-primary-600-400 rounded-full p-0.5 text-white"
-													aria-label="Options for this {group.label} sprite"
-												>
-													<Icons.EllipsisVertical class="h-3 w-3" />
-												</Popover.Trigger>
-												<Portal>
-													<Popover.Positioner class="z-[1000]!">
-														<Popover.Content
-															class="card bg-primary-200-800 w-[min(90vw,220px)] space-y-3 p-3 shadow-xl"
-														>
-															<header class="popover-menu-title">
-																<Icons.Drama size={16} aria-hidden="true" />
-																<p>{group.label}</p>
-															</header>
-															<article class="flex flex-col gap-2">
-																{#if sprite.position > 0 || group.sprites[0].id !== sprite.id}
-																	<button
-																		type="button"
-																		class="btn btn-sm popover-menu-btn hover:preset-filled-primary-500"
-																		onclick={() => makePrimary(group.label, sprite)}
-																	>
-																		<Icons.ArrowUpToLine size={16} aria-hidden="true" />
-																		<span>Make first</span>
-																	</button>
-																{/if}
-																<button
-																	type="button"
-																	class="btn btn-sm popover-menu-btn hover:preset-filled-primary-500"
-																	onclick={() => {
-																		menuOpenFor = null
-																		uploadInto(group.label)
-																	}}
-																>
-																	<Icons.ImagePlus size={16} aria-hidden="true" />
-																	<span>{sprite.media ? "Add a variant" : "Upload an image"}</span>
-																</button>
-																<button
-																	type="button"
-																	class="btn btn-sm popover-menu-btn hover:preset-filled-primary-500"
-																	onclick={() => openRelabel(sprite)}
-																>
-																	<Icons.Tag size={16} aria-hidden="true" />
-																	<span>Change label</span>
-																</button>
-																{#each sets.filter((s) => s.id !== activeSet?.id) as other (other.id)}
-																	<button
-																		type="button"
-																		class="btn btn-sm popover-menu-btn hover:preset-filled-primary-500"
-																		onclick={() => moveTo(sprite, other.id)}
-																	>
-																		<Icons.FolderInput size={16} aria-hidden="true" />
-																		<span>Move to {other.name}</span>
-																	</button>
-																{/each}
-																<button
-																	type="button"
-																	class="btn btn-sm popover-menu-btn hover:preset-filled-error-500"
-																	onclick={() => openDelete(sprite)}
-																>
-																	<Icons.Trash2 size={16} aria-hidden="true" />
-																	<span>Delete</span>
-																</button>
-															</article>
-														</Popover.Content>
-													</Popover.Positioner>
-												</Portal>
-											</Popover>
+												{#snippet trigger()}
+													<Icons.EllipsisVertical class="h-3 w-3" aria-hidden="true" />
+												{/snippet}
+											</RowMenu>
 										</div>
 									{/if}
 								</div>
@@ -646,9 +579,11 @@
 
 		<section class="panel-card space-y-2 p-3" aria-labelledby="sprite-test-title">
 			<h3 id="sprite-test-title" class="text-sm font-medium">Try a line</h3>
-			<p class="text-surface-500 text-xs">
+			<p class="text-surface-600-400 text-xs">
 				See which sprite a reply like this would show. Replies choose a sprite
-				automatically when an embedding model is loaded.
+				automatically when an embedding model is set up under Connections —
+				it is brought up on demand, so the first test after a quiet spell
+				takes a moment.
 			</p>
 			<form
 				class="flex gap-2"
@@ -724,7 +659,7 @@
 						/>
 					</label>
 					{#if nameDialog === "rename"}
-						<p class="text-surface-500 text-xs">
+						<p class="text-surface-600-400 text-xs">
 							Cast members in a lorebook choose a set by name. Any that chose
 							"{activeSet?.name}" will show the default set until they are
 							pointed at the new name.

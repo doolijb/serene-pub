@@ -174,6 +174,56 @@ describe("OpenAI-compatible embeddings", () => {
 	})
 })
 
+describe("KoboldCPP embeddings — only from the model the pair names", () => {
+	// koboldcpp embeds with whatever it was started with and names it in every
+	// response. A mismatch means the operator swapped models between syncs, and
+	// filing those vectors beside the old model's would corrupt retrieval.
+	function answering(model: string | undefined) {
+		const f = vi.fn(async (_url: string, _init?: unknown) => ({
+			ok: true,
+			status: 200,
+			json: async () => ({
+				object: "list",
+				data: [{ index: 0, embedding: [0.1, 0.2, 0.3] }],
+				model
+			})
+		}))
+		vi.stubGlobal("fetch", f)
+		return f
+	}
+	const kcpp = () =>
+		conn({
+			type: CONNECTION_TYPE.KOBOLDCPP,
+			baseUrl: "http://localhost:5001/",
+			model: "nomic-embed-text-v1.5.Q4_K_M"
+		})
+
+	it("embeds when koboldcpp names the pair's model, at /v1/embeddings", async () => {
+		const f = answering("nomic-embed-text-v1.5.Q4_K_M")
+		const mod = (await import("./KoboldCppEmbeddingAdapter")).default
+		const res = await new mod.Adapter(kcpp()).embedText({ input: ["a"] })
+		expect(res.vectors).toEqual([[0.1, 0.2, 0.3]])
+		expect(res.model).toBe("nomic-embed-text-v1.5.Q4_K_M")
+		expect(f.mock.calls[0][0]).toBe("http://localhost:5001/v1/embeddings")
+	})
+
+	it("REFUSES vectors from a different model, naming both", async () => {
+		answering("bge-m3-Q8_0")
+		const mod = (await import("./KoboldCppEmbeddingAdapter")).default
+		await expect(
+			new mod.Adapter(kcpp()).embedText({ input: ["a"] })
+		).rejects.toThrow(/"bge-m3-Q8_0".*"nomic-embed-text-v1\.5\.Q4_K_M"/)
+	})
+
+	it("refuses a response that names no model at all", async () => {
+		answering(undefined)
+		const mod = (await import("./KoboldCppEmbeddingAdapter")).default
+		await expect(
+			new mod.Adapter(kcpp()).embedText({ input: ["a"] })
+		).rejects.toThrow(/did not say which embedding model/)
+	})
+})
+
 describe("local ONNX embeddings", () => {
 	/**
 	 * ⚠ Offline, deliberately.
@@ -321,6 +371,32 @@ describe("the family is registered", () => {
 			expect(ADAPTER_REGISTRY[type]?.text).toBeUndefined()
 			expect(ADAPTER_REGISTRY[type]?.image).toBeUndefined()
 		}
+	})
+
+	it("serves Ollama's embeddings from the chat connection's own host", async () => {
+		// One Ollama host, every modality it serves (owner ruling 2026-09-25).
+		// The OPPOSITE of the rule above, deliberately: that one keeps an
+		// embedding-ONLY type from growing a text family it cannot serve. Ollama
+		// serves both from one host, so both families are real — and the lane
+		// must reach the embedding one through the same map, by type, with no
+		// `ollama-embeddings` row required.
+		const { ADAPTER_REGISTRY } = await import(
+			"$lib/server/adapters/registry"
+		)
+		expect(ADAPTER_REGISTRY[CONNECTION_TYPE.OLLAMA]?.text).toBeTypeOf("function")
+		expect(ADAPTER_REGISTRY[CONNECTION_TYPE.OLLAMA]?.embedding).toBeTypeOf(
+			"function"
+		)
+		const { getEmbeddingAdapter } = await import(
+			"$lib/server/utils/getEmbeddingAdapter"
+		)
+		const viaChatType = await getEmbeddingAdapter(CONNECTION_TYPE.OLLAMA)
+		const viaOldType = await getEmbeddingAdapter(
+			CONNECTION_TYPE.OLLAMA_EMBEDDINGS
+		)
+		// The SAME module either way, so a merged row embeds exactly as the
+		// row it replaced did.
+		expect(viaChatType).toBe(viaOldType)
 	})
 
 	it("routes getEmbeddingAdapter through that same map", async () => {

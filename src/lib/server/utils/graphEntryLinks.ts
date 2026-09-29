@@ -12,10 +12,33 @@
  * an edge touching an entry the lore mechanisms chose this turn into a
  * candidate for the other end. One hop and no more — the hop expands chosen
  * entries, never the entries it just produced.
+ *
+ * ## Which edges (finding #151)
+ *
+ * An edge is a fact of ONE story, so it is read the way the session reads its
+ * book (`sessionReadingOf`): on the session's line — shared, or the chain's
+ * own, a dated edge (its `history_entry_id`) cut at the session's moment and
+ * at its step's fork (`rowsOnReading`, the same rule durable stats take) — and
+ * only while it stands (`status` active; a resolved, broken or evolved edge is
+ * the story's past). A `secret` edge is one side's private stance and the hop
+ * has no side to speak from, so it never carries one. Both ends must be of
+ * this book and, when an end is an entry, a live one on the line: a hop to an
+ * archived room, or to a sibling fork's, is a hop to nowhere this session is.
+ *
+ * Whether the FAR end may be shown to the speaker (character lore that is not
+ * theirs) is the caller's to ask of its own `lorebook_entries` read — the one
+ * privacy gate — never re-derived here.
  */
 
-import { and, eq, inArray, isNotNull, or } from "drizzle-orm"
+import { and, eq, inArray, isNotNull, ne, or } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
+import { rowsOnReading, sessionReadingOf } from "$lib/server/state/reading"
+import {
+	MAIN_HEAD,
+	entryAt,
+	entryOnLineSql,
+	entryOverlaysFor
+} from "$lib/server/state/entriesOnReading"
 
 /** One end of an edge, named. */
 export interface GraphEntryLinkEnd {
@@ -55,29 +78,35 @@ export async function readGraphEntryLinks(
 		.where(eq(schema.sessions.id, sessionId))
 		.limit(1)
 	if (!session?.lorebookId) return null
+	const lorebookId = session.lorebookId
+	const reading = (await sessionReadingOf(db, sessionId)) ?? {
+		lorebookId,
+		...MAIN_HEAD
+	}
 
-	const rows = await db
+	const r = schema.narrativeRelationships
+	const standing = await db
 		.select()
-		.from(schema.narrativeRelationships)
+		.from(r)
 		.where(
 			and(
-				eq(
-					schema.narrativeRelationships.lorebookId,
-					session.lorebookId
-				),
-				or(
-					isNotNull(schema.narrativeRelationships.fromEntryId),
-					isNotNull(schema.narrativeRelationships.toEntryId)
-				)
+				eq(r.lorebookId, lorebookId),
+				or(isNotNull(r.fromEntryId), isNotNull(r.toEntryId)),
+				eq(r.status, "active"),
+				ne(r.visibility, "secret")
 			)
 		)
-	if (rows.length === 0) return []
+	// The line, with the moment and the fork cuts: the same rule durable
+	// rows take, by the edge's history entry. A session row (`sessionId`)
+	// does not exist on edges, so every one is judged.
+	const onLine = await rowsOnReading(db, standing, reading)
+	if (onLine.length === 0) return []
 
 	// Both ends, named, in two queries rather than one per end: a book with a
 	// hundred roads would otherwise be two hundred reads for a list this long.
 	const entryIds = [
 		...new Set(
-			rows.flatMap((r) =>
+			onLine.flatMap((r) =>
 				[r.fromEntryId, r.toEntryId].filter(
 					(id): id is number => id != null
 				)
@@ -86,22 +115,32 @@ export async function readGraphEntryLinks(
 	]
 	const nodeIds = [
 		...new Set(
-			rows.flatMap((r) =>
+			onLine.flatMap((r) =>
 				[r.fromNodeId, r.toNodeId].filter(
 					(id): id is number => id != null
 				)
 			)
 		)
 	]
-	const [entries, nodes] = await Promise.all([
+	const [entries, nodes, overlays] = await Promise.all([
 		entryIds.length
 			? db
 					.select({
 						id: schema.lorebookEntries.id,
-						title: schema.lorebookEntries.title
+						title: schema.lorebookEntries.title,
+						enabled: schema.lorebookEntries.enabled,
+						archived: schema.lorebookEntries.archived
 					})
 					.from(schema.lorebookEntries)
-					.where(inArray(schema.lorebookEntries.id, entryIds))
+					.where(
+						and(
+							inArray(schema.lorebookEntries.id, entryIds),
+							// Same book, on the line: an end anywhere else is
+							// not a place this session's story has.
+							eq(schema.lorebookEntries.lorebookId, lorebookId),
+							entryOnLineSql(reading)
+						)
+					)
 			: [],
 		nodeIds.length
 			? db
@@ -110,11 +149,30 @@ export async function readGraphEntryLinks(
 						name: schema.lorebookBindings.name
 					})
 					.from(schema.lorebookBindings)
-					.where(inArray(schema.lorebookBindings.id, nodeIds))
-			: []
+					.where(
+						and(
+							inArray(schema.lorebookBindings.id, nodeIds),
+							eq(schema.lorebookBindings.lorebookId, lorebookId)
+						)
+					)
+			: [],
+		entryOverlaysFor(db, lorebookId, reading, entryIds)
 	])
-	const entryNames = new Map(entries.map((e) => [e.id, e.title ?? ""]))
+	// Each end as the reading sees it: its amended title, and Off/archived
+	// as amended by then. A switched-off or shelved end drops the edge.
+	const entryNames = new Map<number, string>()
+	for (const e of entries) {
+		const seen = entryAt(
+			{ id: e.id, name: e.title ?? "", enabled: e.enabled, archived: e.archived },
+			overlays,
+			reading
+		)
+		if (seen.enabled === false || seen.archived === true) continue
+		entryNames.set(e.id, typeof seen.name === "string" ? seen.name : "")
+	}
 	const nodeNames = new Map(nodes.map((n) => [n.id, n.name]))
+	const live = (nodeId: number | null, entryId: number | null) =>
+		entryId != null ? entryNames.has(entryId) : nodeId != null && nodeNames.has(nodeId)
 
 	const end = (
 		nodeId: number | null,
@@ -132,7 +190,9 @@ export async function readGraphEntryLinks(
 					name: nodeNames.get(nodeId!) ?? ""
 				}
 
-	return rows.map((r) => ({
+	return onLine
+		.filter((r) => live(r.fromNodeId, r.fromEntryId) && live(r.toNodeId, r.toEntryId))
+		.map((r) => ({
 		id: r.id,
 		relationshipType: r.relationshipType,
 		description: r.description,

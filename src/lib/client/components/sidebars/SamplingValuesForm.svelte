@@ -32,6 +32,8 @@
 	import { i18nTextIn } from "$lib/shared/i18n/i18nText"
 	import { getSupportedSamplers } from "$lib/shared/utils/samplerMappings"
 	import { groupSamplingFields } from "./samplingFields"
+	import Select from "$lib/client/components/inputs/Select.svelte"
+	import { enumOptions } from "$lib/shared/i18n/enumOptions"
 
 	interface Props {
 		schema: SettingsSchema
@@ -51,6 +53,12 @@
 		 * parameter is worth saying and never worth blocking.
 		 */
 		connectionType?: string | null
+		/**
+		 * Draw each group's small heading. Off where the caller already
+		 * frames every group itself (Admin → Sampling's one fieldset per
+		 * group), so the group is not named twice.
+		 */
+		groupHeadings?: boolean
 	}
 
 	let {
@@ -58,7 +66,8 @@
 		values = $bindable(),
 		enabled,
 		disabled = false,
-		connectionType = null
+		connectionType = null,
+		groupHeadings = true
 	}: Props = $props()
 
 	/**
@@ -79,8 +88,7 @@
 	)
 
 	const label = (decl: FieldDecl, key: string): string => {
-		const l = decl.label ?? decl.i18n
-		return i18nTextIn(l) ?? key
+		return i18nTextIn(decl.label) ?? key
 	}
 	const describe = (decl: FieldDecl): string => {
 		return i18nTextIn(decl.description) ?? ""
@@ -132,7 +140,7 @@
 		<!-- Not an error state. "Disabled" is a shipped config whose whole point
 		     is that it sends nothing, so every request goes out with the
 		     backend's own defaults. -->
-		<p class="text-muted-foreground py-6 text-center text-sm">
+		<p class="text-surface-600-400 py-6 text-center text-sm">
 			No parameters enabled — requests go out with whatever the backend
 			itself defaults to.
 		</p>
@@ -140,11 +148,13 @@
 
 	{#each groups as g (g.group)}
 		<section class="flex flex-col gap-2">
-			<p
-				class="text-muted-foreground border-surface-500/20 border-b pb-1 text-xs font-semibold tracking-wide uppercase"
-			>
-				{g.group}
-			</p>
+			{#if groupHeadings}
+				<p
+					class="text-surface-600-400 border-surface-500/20 border-b pb-1 text-xs"
+				>
+					{g.group}
+				</p>
+			{/if}
 
 			{#each g.fields as { key, decl } (key)}
 				{@const ignored = supported && !supported.has(key)}
@@ -153,7 +163,11 @@
 					     statement about the value being sent, not about the
 					     control: the field is on and edited normally, the chosen
 					     backend simply has no mapping for it. -->
-					<label class="min-w-0 text-sm font-semibold" for="sv-{key}">
+					<!-- No `for` on an enum: the Select labels its own input. -->
+					<label
+						class="min-w-0 text-sm font-semibold"
+						for={decl.type === "enum" ? undefined : `sv-${key}`}
+					>
 						{label(decl, key)}
 						{#if ignored}
 							<span
@@ -186,7 +200,7 @@
 									class="accent-primary w-full"
 								/>
 								<div
-									class="text-muted-foreground flex w-full items-center justify-between gap-1 text-xs"
+									class="text-surface-600-400 flex w-full items-center justify-between gap-1 text-xs"
 								>
 									<span class="select-none">{min}</span>
 									{#if editingField === key}
@@ -227,7 +241,7 @@
 
 								{#if unlockable(key)}
 									<label
-										class="text-muted-foreground mt-1 flex items-center gap-2 text-xs"
+										class="text-surface-600-400 mt-1 flex items-center gap-2 text-xs"
 									>
 										<input
 											type="checkbox"
@@ -253,7 +267,7 @@
 									onchange={(e) =>
 										(values[key] = e.currentTarget.checked)}
 								/>
-								<span class="text-muted-foreground">
+								<span class="text-surface-600-400">
 									{values[key] ? "On" : "Off"}
 								</span>
 							</label>
@@ -282,18 +296,17 @@
 									(values[key] = e.currentTarget.value)}
 							></textarea>
 						{:else if decl.type === "enum"}
-							<select
-								id="sv-{key}"
-								class="select w-full"
+							<!-- The visible label above names this field; the
+							     combobox carries its own, visually hidden. -->
+							<Select
+								label={label(decl, key)}
+								labelHidden
+								class="w-full"
 								{disabled}
+								options={enumOptions(decl)}
 								value={String(values[key] ?? "")}
-								onchange={(e) =>
-									(values[key] = e.currentTarget.value)}
-							>
-								{#each decl.of ?? [] as choice}
-									<option value={choice}>{choice}</option>
-								{/each}
-							</select>
+								onValueChange={(v) => (values[key] = v)}
+							/>
 						{:else}
 							<input
 								id="sv-{key}"
@@ -310,7 +323,7 @@
 						{/if}
 
 						{#if describe(decl)}
-							<p class="text-muted-foreground mt-1 text-xs">
+							<p class="text-surface-600-400 mt-1 text-xs">
 								{describe(decl)}
 							</p>
 						{/if}

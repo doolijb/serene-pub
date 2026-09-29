@@ -53,8 +53,8 @@
  *
  * ## The state version (plans/29 R-15 *Staleness and order*; 30 §U5f)
  *
- * `sessions.state_version` moves by one for every row `setValue` and
- * `movePossession` write — inside the write's transaction, under
+ * `sessions.state_version` moves by one for every row `setValue` writes —
+ * inside the write's transaction, under
  * `pg_advisory_xact_lock(hashtext('stateVersion'), sessionId)`, the idiom
  * `nextLane` uses — and the new number is stamped on the row. So the version
  * IS turn order: two writers landing together get two numbers, never one.
@@ -71,12 +71,12 @@
  * channel head (`messages/channels.ts` · `fireAction`).
  *
  * ⚠ **The base check, the read of the current value, and the write are one
- * locked transaction.** `setValue` and `movePossession` take the lock first
- * (`lockStateVersion`), then judge the base (`movedSinceBase`), then read
- * what is there now (`nextValue` · `heldQuantity`), then bump and insert —
+ * locked transaction.** `setValue` takes the lock first
+ * (`lockStateVersion`), then judges the base (`movedSinceBase`), then reads
+ * what is there now (`nextValue` — an inventory `remove` of the last key
+ * reads what is held under it), then bumps and inserts —
  * `decideProposal` judges, applies and marks under the same lock, with the
- * proposal's status read again under it, and `transferPossession` reads what
- * is held and makes its take and its give under it. A check or a read made ahead
+ * proposal's status read again under it. A check or a read made ahead
  * of the lock is made by two writers before either lands: two applies with
  * one base both pass, two deltas both read the same "current" and one is
  * lost. The reads that stay outside — the owner, the config, the anchor —
@@ -101,14 +101,19 @@ import {
 	applyListOp,
 	checkSlotValue,
 	getAttributeSlot,
+	i18nText,
 	isAnchorOpen,
+	isSlotLoreRef,
 	openAnchorFor,
+	resolveSlotConfig,
 	slotAppliesTo,
 	type SlotChangeOp,
 	type SlotConfig,
 	type SlotRule,
-	type SlotScalar,
+	type SlotListItem,
 	type SlotValue,
+	slotField,
+	slotValueForStorage,
 	type TurnMessage,
 	type TurnOwner
 } from "@serene-pub/sdk"
@@ -120,6 +125,8 @@ import {
 	stateVersionOf,
 	valueOf,
 	vocabularyFor,
+	sessionLorebookIds,
+	nameLoreRefs,
 	type CastEntry
 } from "$lib/server/state/resolve"
 import {
@@ -135,6 +142,16 @@ import {
 	type OwnerKind,
 	type StateOwner
 } from "$lib/server/state/owners"
+import { LOCATION_TYPE_ID } from "$lib/shared/entries/types"
+import { locationOwnerKey } from "$lib/server/state/keys"
+import { sessionReadingOf } from "$lib/server/state/reading"
+import {
+	MAIN_HEAD,
+	entryAt,
+	entryOnLineSql,
+	entryOnReadingSql,
+	entryOverlaysFor
+} from "$lib/server/state/entriesOnReading"
 
 /** `user` · `run:<id>` · `script:<id>` · `session:<id>` — free text, and the ledger reads it. */
 export type StateWriter = string
@@ -155,8 +172,8 @@ export interface ValueChange {
 	/** `set`: the new value. `add` on an integer: the signed delta. */
 	value?: SlotValue
 	op?: SlotChangeOp
-	/** `add`/`remove` on a list: the items going in or coming out. */
-	items?: readonly SlotScalar[]
+	/** `add`/`remove` on a list: the items going in or coming out — words or lore references. */
+	items?: readonly SlotListItem[]
 	/** Ledger narration / provenance, in a person's words. */
 	note?: string
 	/**
@@ -167,24 +184,21 @@ export interface ValueChange {
 	base?: number | null
 }
 
-/** A possession moving: `delta` is signed, so taking is giving a negative. */
-export interface PossessionChange {
-	owner: StateOwner
-	entryId: number
-	delta: number
-	/** The state version this change is a delta against (U5f) — see `ValueChange.base`. */
-	base?: number | null
-}
-
 /**
  * The shape `core:task/set-state@1` takes on `changes`, that a `state_proposals`
  * payload holds, and that `applyChange` writes. One shape either side of the
  * gate — accepting a proposal must not be a second, differently-validated path.
+ *
+ * Phase 3b (2026-09-26): one arm. An item moving is an `add` / `remove` on the
+ * owner's `inventory` list stat (`inventoryChange`); the possession arm
+ * (`{ owner, entryId, delta }`) is retired and its edge table dropped
+ * (2026-09-27).
  */
-export type StateChange = ValueChange | PossessionChange
+export type StateChange = ValueChange
 
-export const isValueChange = (c: StateChange): c is ValueChange =>
-	typeof (c as ValueChange).slotId === "string"
+/** Whether a payload is a change this gate writes — the retired possession arm is not. */
+export const isValueChange = (c: unknown): c is ValueChange =>
+	!!c && typeof (c as ValueChange).slotId === "string"
 
 /** Refused for a reason a person can read. Callers turn it into their own refusal. */
 export class StateRefusal extends Error {}
@@ -196,7 +210,7 @@ export class StateRefusal extends Error {}
  * the session.
  *
  * ⚠ **Kept for the callers that genuinely mean "the newest message"** — a
- * retraction, a durable row's provenance — and no longer what a write anchors
+ * retraction, a durable row's provenance — and not what a write anchors
  * to. A session-layer write anchors to the OWNER's open anchor, which is a
  * different message the moment two characters are talking; `anchorFor` is the
  * one that answers that.
@@ -219,6 +233,13 @@ export async function newestMessageId(
  *
  * ⚠ Ascending, and the SDK says why: `openAnchorFor` reads positions rather
  * than comparing ids, so a reversed list answers confidently and wrongly.
+ *
+ * Each row carries its **turn** — the run that created it
+ * (`pipeline_run_artifacts`, `message` · `created`, never a preview) — so the
+ * world's newest turn is open whole (lair pass R8: the Lair's world changes
+ * file at its Sanctum beats row, and the party's rows follow it in the same
+ * turn). A person's own line, and a row whose run is still in flight (its
+ * artifacts are recorded when it ends), carries none.
  */
 export async function turnMessages(
 	db: Db,
@@ -233,17 +254,43 @@ export async function turnMessages(
 		.from(schema.messages)
 		.where(eq(schema.messages.sessionId, sessionId))
 		.orderBy(asc(schema.messages.id))
+	const created = rows.length
+		? await db
+				.select({
+					entityId: schema.pipelineRunArtifacts.entityId,
+					runId: schema.pipelineRunArtifacts.runId
+				})
+				.from(schema.pipelineRunArtifacts)
+				.innerJoin(
+					schema.pipelineRuns,
+					eq(schema.pipelineRuns.id, schema.pipelineRunArtifacts.runId)
+				)
+				.where(
+					and(
+						eq(schema.pipelineRuns.sessionId, sessionId),
+						eq(schema.pipelineRuns.isPreview, false),
+						eq(schema.pipelineRunArtifacts.kind, "message"),
+						eq(schema.pipelineRunArtifacts.action, "created")
+					)
+				)
+		: []
+	const turnOf = new Map(created.map((a) => [a.entityId, a.runId]))
 	// A persona is a character, so the player's own turns lock on exactly the
 	// terms everybody else's do (R9).
 	return rows.map((r) => ({
 		id: r.id,
-		speakerId: r.characterId ?? r.personaId ?? null
+		speakerId: r.characterId ?? r.personaId ?? null,
+		turn: turnOf.get(r.id) ?? null
 	}))
 }
 
 const sessionScoped = (kind: OwnerKind) =>
-	kind === "session" || kind === "session_cast"
+	kind === "session" || kind === "session_cast" || kind === "session_location"
 
+/**
+ * Whose turn a write's anchor follows. A place (phase 4) moves on every turn
+ * as the world does — nobody speaks for it — so it anchors like the world.
+ */
 const turnOwnerOf = (owner: StateOwner, sessionId: number): TurnOwner =>
 	owner.kind === "session_cast"
 		? { kind: "session_cast", id: owner.id }
@@ -278,6 +325,8 @@ export async function anchorFor(
 	const tail = messages ?? (await turnMessages(db, ctx.sessionId))
 	const turnOwner = turnOwnerOf(owner, ctx.sessionId)
 	if (ctx.messageId === undefined) return openAnchorFor(tail, turnOwner)
+	if (ctx.ownAnchor && turnOwner.kind === "session" && ctx.messageId !== null)
+		return ctx.messageId
 	if (isAnchorOpen(tail, turnOwner, ctx.messageId ?? null))
 		return ctx.messageId ?? null
 	throw new StateRefusal(
@@ -333,9 +382,6 @@ export async function retractStateAnchoredTo(
 		.delete(schema.attributeConfigs)
 		.where(eq(schema.attributeConfigs.validFromMessageId, messageId))
 	await db
-		.delete(schema.sessionPossessions)
-		.where(eq(schema.sessionPossessions.validFromMessageId, messageId))
-	await db
 		.delete(schema.stateProposals)
 		.where(eq(schema.stateProposals.messageId, messageId))
 }
@@ -379,6 +425,21 @@ export async function validateValue(
 			`'${input.slotId}' does not apply to ${input.owner.kind}. It attaches to ` +
 				`${decl.appliesTo.join(" and ")}.`
 		)
+	// 🚧 A slot that fits more than one owner is carried where the session's
+	// sheet put it (2026-09-26): `location` on the world in Adventure is not
+	// a character's to hold there. Asked only when there is a choice to have
+	// been made, and only of a slot the session tracks — core's own
+	// mechanisms still write slots no genre names.
+	if (input.sessionId !== undefined && decl.appliesTo.length > 1) {
+		const facet = ownerFacet(input.owner.kind)
+		const tracked = (await vocabularyFor(db, input.sessionId)).entryFor(input.slotId)
+		if (tracked && !slotAppliesTo(tracked.decl, facet))
+			throw new StateRefusal(
+				`${i18nText(decl.label) ?? input.slotId} is kept on ` +
+					`${tracked.decl.appliesTo.map(facetWords).join(" and ")} in this session, ` +
+					`not on ${facetWords(facet)}.`
+			)
+	}
 	const config =
 		input.config ??
 		(await configFor(db, {
@@ -389,6 +450,168 @@ export async function validateValue(
 	const complaint = checkSlotValue(decl, input.value, config)
 	if (complaint) throw new StateRefusal(complaint)
 	return config
+}
+
+/** An owner facet as a refusal says it. */
+const facetWords = (facet: string): string =>
+	facet === "world" ? "the world" : facet === "cast" ? "a character" : "a place"
+
+/**
+ * An attribute a person or a pipeline writes must be one the session tracks —
+ * its vocabulary, which its genre enables (ruled 2026-09-25): a value written
+ * to a slot outside it would be stored and never read back. Asked at the
+ * doors (`state:set`, `applyChange`, `proposeChange`), not in `setValue`:
+ * core's own mechanisms keep slots no genre enables — the session's sprite
+ * set — and write them directly. A retired slot is let through to be refused
+ * in its own sentence, which says more.
+ */
+export async function assertTracked(db: Db, sessionId: number, slotId: string): Promise<void> {
+	const decl = getAttributeSlot(slotId)
+	if (!decl || decl.retired) return
+	const vocabulary = await vocabularyFor(db, sessionId)
+	if (!vocabulary.entries.some((e) => e.decl.id === slotId))
+		throw new StateRefusal(
+			`${i18nText(decl.label) ?? slotId} is not tracked in this session: its genre ` +
+				`does not enable it, and no sheet the session reads adds it.`
+		)
+}
+
+/**
+ * 🚧 Every lore reference a change brings IN must name an entry in the
+ * session's own lorebook (attributes phase 3a). A reference to another book's
+ * entry would resolve — titles are read by id — and put a thing from a world
+ * this session is not in into somebody's pack; a missing one names nothing.
+ *
+ * Asked at the doors, beside `assertTracked` (`state:set`, `applyChange`,
+ * `proposeChange`), for what `set` and `add` bring in. `remove` is never
+ * refused: an entry since deleted or moved must still be removable from a
+ * list that holds it.
+ */
+export async function assertLoreRefsInSession(
+	db: Db,
+	sessionId: number,
+	change: Pick<ValueChange, "op" | "value" | "items"> & { slotId?: string }
+): Promise<void> {
+	if (change.op === "remove") return
+	const incoming: readonly unknown[] =
+		change.items ??
+		(Array.isArray(change.value)
+			? change.value
+			: // 🚧 One reference on its own: a location that is a place entry.
+				isSlotLoreRef(change.value)
+				? [change.value]
+				: [])
+	const ids = [...new Set(incoming.filter(isSlotLoreRef).map((ref) => ref.entryId))]
+	if (!ids.length) return
+	// The entry types a text slot's single reference may point at (a
+	// location names `core:entry/location`); a list's items are any entry.
+	const decl = change.slotId ? getAttributeSlot(change.slotId) : undefined
+	const entryTypes =
+		decl && decl.type !== "list" ? (resolveSlotConfig(decl).entryTypes ?? null) : null
+	// `sessions.lorebook_id` — see `sessionLorebookIds`.
+	const books = new Set(await sessionLorebookIds(db, sessionId))
+	// The session's line: a sibling fork's own entry is not a thing this
+	// session's story has, and a shelved one is not one it may hand out.
+	const reading = (await sessionReadingOf(db, sessionId)) ?? MAIN_HEAD
+	const rows = await db
+		.select({
+			id: schema.lorebookEntries.id,
+			lorebookId: schema.lorebookEntries.lorebookId,
+			title: schema.lorebookEntries.title,
+			typeId: schema.lorebookEntries.typeId,
+			archived: schema.lorebookEntries.archived,
+			onLine: sql<boolean>`(${entryOnLineSql(reading)})`
+		})
+		.from(schema.lorebookEntries)
+		.where(inArray(schema.lorebookEntries.id, ids))
+	const byId = new Map(rows.map((r) => [r.id, r]))
+	for (const id of ids) {
+		const row = byId.get(id)
+		if (!row)
+			throw new StateRefusal(`lore entry ${id} does not exist, so a list cannot hold it.`)
+		if (!books.has(row.lorebookId))
+			throw new StateRefusal(
+				`${row.title ? `'${row.title}'` : `lore entry ${id}`} is not in this session's ` +
+					`lorebook, so nothing in this session can hold it.`
+			)
+		if (!row.onLine)
+			throw new StateRefusal(
+				`${row.title ? `'${row.title}'` : `lore entry ${id}`} was written on another line of ` +
+					`this lorebook, so this session's story does not have it.`
+			)
+		if (row.archived)
+			throw new StateRefusal(
+				`${row.title ? `'${row.title}'` : `lore entry ${id}`} is archived, so nothing in this ` +
+					`session can take it up. Restore it in the lorebook first.`
+			)
+		// Stored types are unversioned (`core:entry/location`); a config may
+		// name either spelling.
+		if (entryTypes && !entryTypes.some((t) => t.replace(/@\d+$/, "") === row.typeId))
+			throw new StateRefusal(
+				`${row.title ? `'${row.title}'` : `lore entry ${id}`} is a ${row.typeId} entry, and ` +
+					`${decl!.id} points only at ${entryTypes.join(", ")} entries.`
+			)
+	}
+}
+
+/**
+ * 🚧 A name a model wrote for a slot that may hold a reference
+ * (`config.entryTypes`, 2026-09-26): the entry of one of those types in the
+ * session's lorebook whose title it is, as `{ entryId }` — "the crypt" is The
+ * Crypt, the place — or the words unchanged when no entry is called that. A
+ * slot that holds only words, or a value that is not words, is returned as it
+ * came. The match is the title, whole and case-insensitive; nothing fuzzier,
+ * because a near-miss put somebody in the wrong room.
+ */
+export async function loreRefNamed(
+	db: Db,
+	sessionId: number,
+	slotId: string,
+	written: SlotValue
+): Promise<SlotValue> {
+	if (typeof written !== "string" || !written.trim()) return written
+	const decl = getAttributeSlot(slotId)
+	if (!decl || decl.type !== "text") return written
+	const types = (resolveSlotConfig(decl).entryTypes ?? []).map((t) => t.replace(/@\d+$/, ""))
+	if (!types.length) return written
+	const books = await sessionLorebookIds(db, sessionId)
+	if (!books.length) return written
+	// The names the session's story uses: entries on its line at its clock,
+	// titled as amended by then — "the crypt" is whatever is CALLED the crypt
+	// now, and a room a sibling fork built is no room here.
+	const reading = (await sessionReadingOf(db, sessionId)) ?? MAIN_HEAD
+	const rows = await db
+		.select({
+			id: schema.lorebookEntries.id,
+			lorebookId: schema.lorebookEntries.lorebookId,
+			title: schema.lorebookEntries.title,
+			archived: schema.lorebookEntries.archived
+		})
+		.from(schema.lorebookEntries)
+		.where(
+			and(
+				inArray(schema.lorebookEntries.lorebookId, books),
+				inArray(schema.lorebookEntries.typeId, types),
+				entryOnReadingSql(reading)
+			)
+		)
+		.orderBy(asc(schema.lorebookEntries.id))
+	const overlays = new Map<number, Awaited<ReturnType<typeof entryOverlaysFor>>>()
+	for (const book of new Set(rows.map((r) => r.lorebookId)))
+		overlays.set(book, await entryOverlaysFor(db, book, reading, rows.map((r) => r.id)))
+	const wanted = written.trim().toLowerCase()
+	const hit = rows.find((r) => {
+		const e = entryAt(
+			{ id: r.id, name: r.title ?? "", archived: r.archived },
+			overlays.get(r.lorebookId) ?? new Map(),
+			reading
+		)
+		return (
+			e.archived !== true &&
+			(typeof e.name === "string" ? e.name : "").trim().toLowerCase() === wanted
+		)
+	})
+	return hit ? { entryId: hit.id } : written
 }
 
 /** The owner a session-layer write may name, checked against the session. */
@@ -432,6 +655,27 @@ export async function assertSessionOwner(
 				"that character is not in this session's cast."
 			)
 	}
+	if (owner.kind === "session_location") {
+		// 🚧 Phase 4: a place of THIS session's world — a live location entry
+		// of its lorebook, exactly the set `sessionLinks` lists.
+		const reading = (await sessionReadingOf(db, sessionId)) ?? MAIN_HEAD
+		const [row] = await db
+			.select({
+				lorebookId: schema.lorebookEntries.lorebookId,
+				typeId: schema.lorebookEntries.typeId,
+				archived: schema.lorebookEntries.archived,
+				// On the session's line — the set `sessionLinks` lists.
+				onLine: sql<boolean>`(${entryOnLineSql(reading)})`
+			})
+			.from(schema.lorebookEntries)
+			.where(eq(schema.lorebookEntries.id, owner.id))
+			.limit(1)
+		const books = await sessionLorebookIds(db, sessionId)
+		if (!row || row.typeId !== LOCATION_TYPE_ID || row.archived || !row.onLine || !books.includes(row.lorebookId))
+			throw new StateRefusal(
+				"that place is not a location in this session's lorebook."
+			)
+	}
 }
 
 // ── Writes ──────────────────────────────────────────────────────────────────
@@ -444,6 +688,15 @@ export interface WriteContext {
 	 * checked against the turn lock when present (`anchorFor`).
 	 */
 	messageId?: number | null
+	/**
+	 * `messageId` is a row the WRITING run created itself, earlier in the same
+	 * run (lair pass R8, 2026-09-28: `set-state`'s declared `worldRow`, whose
+	 * port takes only this run's own write results). Open to that run for the
+	 * rest of its turn, whatever it wrote after it — the rows after it are
+	 * the same turn's. Honoured for world owners only; a cast member's anchor
+	 * is theirs.
+	 */
+	ownAnchor?: boolean
 	/** The branch of the world's history. Null is the trunk, which is all there is today. */
 	branchId?: number | null
 	/** The story-clock anchor a durable row is filed at (R8). */
@@ -502,16 +755,13 @@ async function nextStateVersion(
 	return row?.state_version == null ? null : Number(row.state_version)
 }
 
-/** What a change targets, for a sentence: the slot's bare key, or the item. */
+/** What a change targets, for a sentence: the slot's bare key. */
 export const changeTargetName = (change: StateChange): string =>
-	isValueChange(change)
-		? slotKey(change.slotId)
-		: `possession of entry ${change.entryId}`
+	slotKey(change.slotId)
 
 /**
  * The state version the change's target last **landed** at: the version
- * stamped on the row in force for that owner and slot (or that owner and
- * entry), by the same "latest anchor, later row on a tie" rule the resolver
+ * stamped on the row in force for that owner and slot, by the same "latest anchor, later row on a tie" rule the resolver
  * reads with. Zero when nothing has been written there, or when the row in
  * force predates the counter (null) — both read as "never moved since".
  */
@@ -525,39 +775,23 @@ export async function landedVersionOf(
 		validFromMessageId: number | null
 		stateVersion: number | null
 	}
-	const rows: Row[] = isValueChange(change)
-		? await db
-				.select({
-					id: schema.attributeValues.id,
-					validFromMessageId: schema.attributeValues.validFromMessageId,
-					stateVersion: schema.attributeValues.stateVersion
-				})
-				.from(schema.attributeValues)
-				.where(
-					and(
-						eq(schema.attributeValues.ownerKind, change.owner.kind),
-						eq(schema.attributeValues.ownerId, change.owner.id),
-						eq(schema.attributeValues.slotId, change.slotId),
-						...(sessionScoped(change.owner.kind)
-							? [eq(schema.attributeValues.sessionId, sessionId)]
-							: [])
-					)
-				)
-		: await db
-				.select({
-					id: schema.sessionPossessions.id,
-					validFromMessageId: schema.sessionPossessions.validFromMessageId,
-					stateVersion: schema.sessionPossessions.stateVersion
-				})
-				.from(schema.sessionPossessions)
-				.where(
-					and(
-						eq(schema.sessionPossessions.sessionId, sessionId),
-						eq(schema.sessionPossessions.ownerKind, change.owner.kind),
-						eq(schema.sessionPossessions.ownerId, change.owner.id),
-						eq(schema.sessionPossessions.entryId, change.entryId)
-					)
-				)
+	const rows: Row[] = await db
+		.select({
+			id: schema.attributeValues.id,
+			validFromMessageId: schema.attributeValues.validFromMessageId,
+			stateVersion: schema.attributeValues.stateVersion
+		})
+		.from(schema.attributeValues)
+		.where(
+			and(
+				eq(schema.attributeValues.ownerKind, change.owner.kind),
+				eq(schema.attributeValues.ownerId, change.owner.id),
+				eq(schema.attributeValues.slotId, change.slotId),
+				...(sessionScoped(change.owner.kind)
+					? [eq(schema.attributeValues.sessionId, sessionId)]
+					: [])
+			)
+		)
 	let best: Row | undefined
 	for (const row of rows) {
 		if (!best) {
@@ -634,15 +868,15 @@ async function nextValue(
 		const items =
 			change.items ??
 			(Array.isArray(change.value)
-				? (change.value as readonly SlotScalar[])
+				? (change.value as readonly SlotListItem[])
 				: change.value === undefined || change.value === null
 					? []
-					: [change.value as SlotScalar])
+					: [change.value as SlotListItem])
 		const held = Array.isArray(current)
-			? (current as readonly SlotScalar[])
+			? (current as readonly SlotListItem[])
 			: current === undefined || current === null
 				? []
-				: [current as SlotScalar]
+				: [current as SlotListItem]
 		const result = applyListOp(held, op, items, config)
 		if (result.refusal)
 			throw new StateRefusal(`${change.slotId}: ${result.refusal}`)
@@ -656,7 +890,9 @@ async function nextValue(
 					`'${String(change.value)}' is not one.`
 			)
 		const base = typeof current === "number" ? current : 0
-		return Math.trunc(base + delta)
+		// A number stat shaped `number` keeps its fraction; every other
+		// integer slot is a whole number, as it always was.
+		return slotField(decl)?.type === "number" ? base + delta : Math.trunc(base + delta)
 	}
 	throw new StateRefusal(
 		`${change.slotId} is a '${decl.type}' slot, so '${op}' means nothing to it. ` +
@@ -694,7 +930,8 @@ export async function setValue(
 		await lockStateVersion(tx, ctx.sessionId)
 		const moved = await movedSinceBase(tx, ctx.sessionId, change, change.base)
 		if (moved) throw new StateRefusal(moved)
-		const value = await nextValue(tx, ctx, change, config)
+		// Stored as its ids: a lore reference's `name` is what a READ fills in.
+		const value = slotValueForStorage(await nextValue(tx, ctx, change, config))
 		await validateValue(tx, {
 			sessionId: ctx.sessionId,
 			owner: change.owner,
@@ -782,162 +1019,10 @@ export async function configure(
 	return row!.id
 }
 
-/**
- * Move possession of an entry by `delta`, from whatever the owner holds now.
- *
- * A signed delta rather than a set: two writers changing an inventory in one
- * turn are both right about what they did, and only a delta can say so. The
- * result is clamped at zero — "Verity has no arrows left" is a real row, which
- * is what lets a swipe take the removal back.
- */
-export async function movePossession(
-	db: Db,
-	ctx: WriteContext,
-	change: PossessionChange,
-	messages?: TurnMessage[]
-): Promise<number> {
-	if (change.owner.kind !== "session" && change.owner.kind !== "session_cast")
-		throw new StateRefusal(
-			"an inventory is session state: its owner is a cast member or the session."
-		)
-	await assertSessionOwner(db, ctx.sessionId, change.owner)
-	const anchor = await anchorFor(db, ctx, change.owner, messages)
-	// The base check, the read of what is held, and the write are ONE locked
-	// transaction (U5f review) — exactly as `setValue`: two deltas in flight
-	// cannot both read the same "held" and lose one, and two writers with one
-	// base cannot both pass the check and both land.
-	return await db.transaction(async (tx) => {
-		await lockStateVersion(tx, ctx.sessionId)
-		const moved = await movedSinceBase(tx, ctx.sessionId, change, change.base)
-		if (moved) throw new StateRefusal(moved)
-		const stateVersion = await nextStateVersion(tx, ctx.sessionId)
-		const held = await heldQuantity(
-			tx,
-			ctx.sessionId,
-			change.owner,
-			change.entryId
-		)
-		const [row] = await tx
-			.insert(schema.sessionPossessions)
-			.values({
-				sessionId: ctx.sessionId,
-				ownerKind: change.owner.kind,
-				ownerId: change.owner.id,
-				entryId: change.entryId,
-				quantity: Math.max(0, held + Math.trunc(change.delta)),
-				validFromMessageId: anchor,
-				updatedBy: ctx.updatedBy,
-				stateVersion,
-				...provenance(ctx)
-			})
-			.returning({ id: schema.sessionPossessions.id })
-		return row!.id
-	})
-}
-
-/**
- * Hand an item from one owner to another, as two edges and one anchor.
- *
- * Not a third kind of row: a transfer *is* a take and a give, and giving it its
- * own storage would mean an inventory could be read two ways.
- *
- * ⚠ Each side keeps its **own** anchor, which is what the turn lock means for
- * two owners at once: Verity's give is filed against Verity's latest reply and
- * Marrow's take against Marrow's, and a single shared anchor would seal one of
- * them against a reply that was never theirs.
- *
- * ⚠ **The check of what is held, the take and the give are ONE locked
- * transaction** (U5f review ruling). Checked ahead of the lock, two transfers
- * of the last item both pass, the second take clamps at zero and its give
- * still lands — the item duplicated. Under it, the second reads what the
- * first left and is refused by the same sentence. The two edges keep their
- * two version numbers (each `movePossession` is one row, one bump — the
- * version is turn order, one number per row, and nothing here needs a
- * shared stamp) and land together at the commit, so no reader sees the take
- * without the give.
- */
-export async function transferPossession(
-	db: Db,
-	ctx: WriteContext,
-	input: {
-		from: StateOwner
-		to: StateOwner
-		entryId: number
-		quantity?: number
-	}
-): Promise<{ from: number; to: number }> {
-	const quantity = Math.max(1, Math.trunc(input.quantity ?? 1))
-	const messages = await turnMessages(db, ctx.sessionId)
-	return await db.transaction(async (tx) => {
-		await lockStateVersion(tx, ctx.sessionId)
-		const held = await heldQuantity(
-			tx,
-			ctx.sessionId,
-			input.from,
-			input.entryId
-		)
-		if (held < quantity)
-			throw new StateRefusal(
-				held
-					? `that owner is only carrying ${held} of those.`
-					: "that owner is not carrying that."
-			)
-		return {
-			from: await movePossession(
-				tx,
-				ctx,
-				{ owner: input.from, entryId: input.entryId, delta: -quantity },
-				messages
-			),
-			to: await movePossession(
-				tx,
-				ctx,
-				{ owner: input.to, entryId: input.entryId, delta: quantity },
-				messages
-			)
-		}
-	})
-}
-
-/** How many of an entry an owner is carrying, by the edge in force. */
-export async function heldQuantity(
-	db: Db,
-	sessionId: number,
-	owner: StateOwner,
-	entryId: number
-): Promise<number> {
-	const rows = await db
-		.select({
-			quantity: schema.sessionPossessions.quantity,
-			validFromMessageId: schema.sessionPossessions.validFromMessageId,
-			id: schema.sessionPossessions.id
-		})
-		.from(schema.sessionPossessions)
-		.where(
-			and(
-				eq(schema.sessionPossessions.sessionId, sessionId),
-				eq(schema.sessionPossessions.ownerKind, owner.kind),
-				eq(schema.sessionPossessions.ownerId, owner.id),
-				eq(schema.sessionPossessions.entryId, entryId)
-			)
-		)
-	let best: (typeof rows)[number] | undefined
-	for (const row of rows) {
-		if (!best) {
-			best = row
-			continue
-		}
-		const a = row.validFromMessageId ?? -1
-		const b = best.validFromMessageId ?? -1
-		if (a > b || (a === b && row.id > best.id)) best = row
-	}
-	return best?.quantity ?? 0
-}
-
 // ── One change, applied ─────────────────────────────────────────────────────
 
 /**
- * Apply one change, whichever arm it is.
+ * Apply one change.
  *
  * The single function every applying path goes through: the node in `apply`
  * mode, a socket edit, and an accepted proposal. Three implementations of "and
@@ -955,9 +1040,13 @@ export async function applyChange(
 	// The check lives INSIDE each writer's locked transaction, never here
 	// ahead of it — judged before the lock, two writers with one base both
 	// pass and both land (U5f review).
-	return isValueChange(change)
-		? await setValue(db, ctx, change, messages)
-		: await movePossession(db, ctx, change, messages)
+	if (!isValueChange(change))
+		throw new StateRefusal(
+			"that change names no slot. An item moving is an add or remove on the inventory stat."
+		)
+	await assertTracked(db, ctx.sessionId, change.slotId)
+	await assertLoreRefsInSession(db, ctx.sessionId, change)
+	return await setValue(db, ctx, change, messages)
 }
 
 // ── The gate ────────────────────────────────────────────────────────────────
@@ -983,21 +1072,25 @@ export async function proposeChange(
 	change: StateChange,
 	messages?: TurnMessage[]
 ): Promise<number> {
-	if (isValueChange(change)) {
-		await assertSessionOwner(db, ctx.sessionId, change.owner)
-		const config = await configFor(db, {
-			sessionId: ctx.sessionId,
-			owner: change.owner,
-			slotId: change.slotId
-		})
-		await validateValue(db, {
-			sessionId: ctx.sessionId,
-			owner: change.owner,
-			slotId: change.slotId,
-			value: await nextValue(db, ctx, change, config),
-			config
-		})
-	}
+	if (!isValueChange(change))
+		throw new StateRefusal(
+			"that change names no slot. An item moving is an add or remove on the inventory stat."
+		)
+	await assertSessionOwner(db, ctx.sessionId, change.owner)
+	await assertTracked(db, ctx.sessionId, change.slotId)
+	await assertLoreRefsInSession(db, ctx.sessionId, change)
+	const config = await configFor(db, {
+		sessionId: ctx.sessionId,
+		owner: change.owner,
+		slotId: change.slotId
+	})
+	await validateValue(db, {
+		sessionId: ctx.sessionId,
+		owner: change.owner,
+		slotId: change.slotId,
+		value: await nextValue(db, ctx, change, config),
+		config
+	})
 	const anchor = await anchorFor(db, ctx, change.owner, messages)
 	// The base rides the row, not the payload (U5f): the caller's when it
 	// named one, else the version as it stands now — either way, what the
@@ -1009,7 +1102,7 @@ export async function proposeChange(
 		.values({
 			sessionId: ctx.sessionId,
 			messageId: anchor,
-			kind: isValueChange(change) ? "value" : "possession",
+			kind: "value",
 			payload: payload as unknown as Record<string, unknown>,
 			status: "pending",
 			proposedBy: ctx.updatedBy,
@@ -1147,6 +1240,27 @@ export async function supersededProposals(db: Db, sessionId: number) {
 			)
 		)
 		.orderBy(schema.stateProposals.id)
+}
+
+/**
+ * The lines a surface lists — pending and superseded, oldest first — with
+ * every lore reference in a payload given its entry's title (Lair W-GATE D4),
+ * as `stateFor` and the ledger name theirs. A proposal stores `{ entryId }`
+ * alone, and a line saying "Location → entry 2" names nothing a person wrote.
+ * Read-time only: each payload is a copy, and the row keeps the bare id.
+ */
+export async function listedProposals(db: Db, sessionId: number) {
+	const rows = [
+		...(await pendingProposals(db, sessionId)),
+		...(await supersededProposals(db, sessionId))
+	]
+		.sort((a, b) => a.id - b.id)
+		.map((row) => ({ ...row, payload: { ...((row.payload ?? {}) as Record<string, unknown>) } }))
+	await nameLoreRefs(
+		db,
+		rows.map((r) => r.payload)
+	)
+	return rows
 }
 
 // ── The one gate, with its phases ───────────────────────────────────────────
@@ -1290,9 +1404,15 @@ async function fireRules(
 		const entry =
 			owner.kind === "session"
 				? undefined
-				: (state.cast.byId[String(owner.id)] as CastEntry | undefined)
+				: owner.kind === "session_location"
+					? (state.locations.byId[String(owner.id)] as CastEntry | undefined)
+					: (state.cast.byId[String(owner.id)] as CastEntry | undefined)
 		const ownerKey =
-			owner.kind === "session" ? "world" : (entry?.key ?? String(owner.id))
+			owner.kind === "session"
+				? "world"
+				: owner.kind === "session_location"
+					? (entry ? locationOwnerKey(entry.name) : `location:${owner.id}`)
+					: (entry?.key ?? String(owner.id))
 		const base: Record<string, SlotValue> =
 			owner.kind === "session"
 				? { ...state.world }
@@ -1323,7 +1443,6 @@ async function fireRules(
 				state: state as unknown as Record<string, unknown>,
 				owner: base,
 				who: state.who as unknown as Record<string, unknown>,
-				possessions: state.possessions[ownerKey] ?? [],
 				...(incoming.has(vocab.decl.id)
 					? {
 							change: {
@@ -1391,8 +1510,8 @@ async function fireRules(
 								slotId: vocab.decl.id,
 								op,
 								items: Array.isArray(value)
-									? (value as readonly SlotScalar[])
-									: [value as SlotScalar]
+									? (value as readonly SlotListItem[])
+									: [value as SlotListItem]
 							}
 				)
 			}

@@ -18,7 +18,7 @@
  * ## `meta.rag` is gone
  *
  * It carried `RagDiagnostics | NonRagDiagnostics`, the last thread tying this
- * type to the deleted infill engines. Those fields counted the engines' internal
+ * type to the deleted 0.5 retrieval paths. Those fields counted the engines' internal
  * phases — a guaranteed window, a RAG pass, a fill pass — which the pipeline does
  * not have. `meta.retrieval` replaces it with what the pipeline does record: a
  * decision per candidate block. See `pipelines/dispatch.ts`.

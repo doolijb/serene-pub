@@ -1,35 +1,32 @@
 <script lang="ts">
 	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
 	import * as Icons from "@lucide/svelte"
-	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 	import { untrack } from "svelte"
 
-	const socket = useTypedSocket()
-
 	type OrphanedBinding = Sockets.BindingCheck.Result.OrphanedBinding
-	type UnboundEntity = Sockets.BindingCheck.Result.UnboundEntity
 
+	/**
+	 * A review of the book's cast members with no card behind them, one at a
+	 * time. There is nothing here to link them TO: the binding check mints a
+	 * member for every session character before it reports, so no session
+	 * character is ever left without one (finding #140 — the old picker read a
+	 * list that was always empty). Linking a card is the Cast board's job.
+	 */
 	interface Props {
 		open: boolean
-		lorebookId: number
-		sessionId: number
 		orphanedBindings: OrphanedBinding[]
-		unboundEntities: UnboundEntity[]
 		onOpenChange: (e: { open: boolean }) => void
 		onDone?: () => void
 	}
 
 	let {
 		open = $bindable(),
-		lorebookId,
-		sessionId,
 		orphanedBindings = [],
-		unboundEntities = [],
 		onOpenChange,
 		onDone
 	}: Props = $props()
 
-	type Status = "pending" | "picking" | "done" | "skipped"
+	type Status = "pending" | "skipped"
 	let statuses = $state<Record<number, Status>>(
 		untrack(() =>
 			Object.fromEntries(
@@ -40,7 +37,6 @@
 
 	let currentIndex = $state(0)
 	let currentBinding = $derived(orphanedBindings[currentIndex] ?? null)
-	let isBusy = $state(false)
 
 	function advance() {
 		const nextIdx = orphanedBindings.findIndex(
@@ -54,27 +50,10 @@
 		}
 	}
 
-	async function linkEntity(bindingId: number, entity: UnboundEntity) {
-		isBusy = true
-		// One bound arc: a persona IS a character, so `entity.type` only
-		// labels the row in the list — it never picks a column.
-		socket.emit("lorebooks:updateBinding", {
-			lorebookBinding: {
-				id: bindingId,
-				characterId: entity.id
-			}
-		})
-		statuses[bindingId] = "done"
-		isBusy = false
-		advance()
-	}
-
 	function skip(bindingId: number) {
 		statuses[bindingId] = "skipped"
 		advance()
 	}
-
-	let showPicker = $state(false)
 </script>
 
 <Dialog {open} {onOpenChange}>
@@ -90,9 +69,10 @@
 			>
 				<header class="flex items-center justify-between">
 					<h2 class="text-lg font-semibold">
-						Unlinked Lorebook Binding
+						Cast member with no card
 					</h2>
 					<button
+						aria-label="Close"
 						class="btn btn-sm preset-tonal"
 						onclick={() => onOpenChange({ open: false })}
 					>
@@ -102,89 +82,25 @@
 
 				{#if currentBinding}
 					<p class="text-surface-600-400 text-sm">
-						The binding token <code class="code">
+						The cast member tagged <code class="code">
 							{currentBinding.binding}
 						</code>
-						exists in your lorebook but isn't linked to any character
-						or persona. How would you like to handle it?
+						has no character card linked. You can link one from the
+						lorebook's Cast.
 					</p>
 
-					{#if !showPicker}
-						<div class="flex flex-col gap-2">
-							{#if unboundEntities.length > 0}
-								<button
-									class="preset-outlined-primary-500 btn w-full justify-start gap-3"
-									disabled={isBusy}
-									onclick={() => (showPicker = true)}
-								>
-									<Icons.Link2 size={18} />
-									<span>
-										Link to a character or persona from this
-										session
-									</span>
-								</button>
-							{/if}
-
-							<button
-								class="preset-outlined-surface-400-600 btn w-full justify-start gap-3 opacity-60"
-								disabled={isBusy}
-								onclick={() => skip(currentBinding.id)}
-							>
-								<Icons.SkipForward size={18} />
-								<span>
-									Skip — leave this binding unlinked for now
-								</span>
-							</button>
-						</div>
-					{:else}
-						<div class="space-y-2">
-							<p class="text-surface-700-300 text-xs">
-								Select who <code class="code">
-									{currentBinding.binding}
-								</code>
-								refers to:
-							</p>
-							<div
-								class="max-h-48 space-y-1 overflow-y-auto pr-1"
-							>
-								{#each unboundEntities as entity}
-									<button
-										class="preset-outlined-surface-300-700 hover:preset-filled-surface-500 btn w-full justify-start gap-2 text-sm"
-										disabled={isBusy}
-										onclick={() =>
-											linkEntity(
-												currentBinding.id,
-												entity
-											)}
-									>
-										{#if entity.type === "persona"}
-											<Icons.UserRound size={16} />
-										{:else}
-											<Icons.User size={16} />
-										{/if}
-										<span>{entity.name}</span>
-										<span
-											class="text-surface-400 ml-auto text-xs"
-										>
-											{entity.type}
-										</span>
-									</button>
-								{/each}
-							</div>
-							<button
-								class="btn btn-sm text-surface-700-300"
-								onclick={() => (showPicker = false)}
-							>
-								<Icons.ArrowLeft size={14} />
-								Back
-							</button>
-						</div>
-					{/if}
+					<button
+						class="preset-outlined-surface-400-600 btn w-full justify-start gap-3"
+						onclick={() => skip(currentBinding.id)}
+					>
+						<Icons.SkipForward size={18} />
+						<span>Skip — leave this member unlinked for now</span>
+					</button>
 
 					<div
 						class="text-surface-700-300 border-t pt-2 text-right text-xs"
 					>
-						Binding {currentIndex + 1} of {orphanedBindings.length}
+						Member {currentIndex + 1} of {orphanedBindings.length}
 					</div>
 				{/if}
 			</Dialog.Content>

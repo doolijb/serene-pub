@@ -8,14 +8,17 @@ import {
 	applyPresetFill,
 	autoSessionName,
 	buildCreatePayload,
+	castCountHint,
 	defaultGenreId,
 	enabledPresetsFor,
+	finalSessionName,
 	genreFacts,
 	genreVersion,
 	latestGenres,
 	lorebookSatisfied,
 	oneClickStart,
 	participantFloors,
+	playAsOptions,
 	reconcileToShape,
 	STANDARD_GENRE_ID,
 	StartSessionFlow,
@@ -486,5 +489,133 @@ describe("genreFacts", () => {
 
 	it("says nothing for an unknown shape", () => {
 		expect(genreFacts(null)).toBe("")
+	})
+})
+
+describe("castCountHint", () => {
+	it("says exactly when the floor and the cap agree", () => {
+		expect(castCountHint(1, 1)).toBe("exactly 1")
+	})
+	it("gives the range when both bounds hold", () => {
+		expect(castCountHint(1, 3)).toBe("1–3")
+	})
+	it("says at least when there is no cap", () => {
+		expect(castCountHint(1, undefined)).toBe("at least 1")
+	})
+	it("says up to when there is no floor", () => {
+		expect(castCountHint(0, 4)).toBe("up to 4")
+	})
+	it("says nothing when neither bound holds", () => {
+		expect(castCountHint(0, undefined)).toBe("")
+	})
+})
+
+describe("genreFacts, equal bounds", () => {
+	it("says exactly rather than a 1–1 range", () => {
+		expect(genreFacts({ characters: { min: 1, max: 1 } })).toBe(
+			"characters exactly 1 · no personas"
+		)
+	})
+})
+
+describe("playAsOptions — who you play as", () => {
+	const row = (
+		id: number,
+		name: string,
+		over: { isPersona?: boolean; isDefaultPersona?: boolean } = {}
+	) => ({ id, name, isPersona: false, isDefaultPersona: false, ...over })
+
+	it("offers every character when nobody is flagged as a persona", () => {
+		const options = playAsOptions([row(1, "Mara"), row(2, "Aldo")], [])
+		expect(options.map((o) => o.id)).toEqual([2, 1])
+		expect(options.every((o) => !o.isPersona)).toBe(true)
+	})
+
+	it("lists personas first, the default leading, then everyone else", () => {
+		const options = playAsOptions(
+			[
+				row(1, "Zed"),
+				row(2, "Bea", { isPersona: true }),
+				row(3, "Cy", { isPersona: true, isDefaultPersona: true }),
+				row(4, "Abe")
+			],
+			[]
+		)
+		expect(options.map((o) => o.id)).toEqual([3, 2, 4, 1])
+	})
+
+	it("leaves out a character already in the cast", () => {
+		const options = playAsOptions([row(1, "Mara"), row(2, "Aldo")], [1])
+		expect(options.map((o) => o.id)).toEqual([2])
+	})
+})
+
+describe("StartSessionFlow — playing a cast character", () => {
+	function flowWith() {
+		const flow = new StartSessionFlow()
+		flow.rawGenres = [genre(STANDARD_GENRE_ID)]
+		flow.rawPresets = [preset({ id: 1 })]
+		flow.presetsLoaded = true
+		flow.chooseGenre(STANDARD_GENRE_ID)
+		flow.choosePreset(1)
+		return flow
+	}
+
+	it("starts with a non-persona character as the player", () => {
+		const flow = flowWith()
+		flow.toggleCharacter(1)
+		flow.playAs(2)
+		expect(flow.canStart).toBe(true)
+		const body = flow.payload("Night walk")
+		expect(body.characterIds).toEqual([1])
+		expect(body.personaIds).toEqual([2])
+	})
+
+	it("adding the player to the cast takes them out of the player seat", () => {
+		const flow = flowWith()
+		flow.playAs(2)
+		flow.toggleCharacter(2)
+		expect(flow.characterIds).toEqual([2])
+		expect(flow.personaIds).toEqual([])
+	})
+
+	it("holds the cast to the genre's cap", () => {
+		const flow = new StartSessionFlow()
+		flow.rawGenres = [
+			genre("core:genre/duet", {
+				shape: { characters: { min: 1, max: 1 } }
+			})
+		]
+		flow.chooseGenre("core:genre/duet")
+		flow.toggleCharacter(1)
+		flow.toggleCharacter(2)
+		expect(flow.characterIds).toEqual([1])
+	})
+})
+
+describe("finalSessionName", () => {
+	it("keeps what the person typed, trimmed", () => {
+		expect(finalSessionName("  Night walk ", "Session with Mara")).toBe(
+			"Night walk"
+		)
+	})
+	it("falls back to the automatic name when left blank", () => {
+		expect(finalSessionName("   ", "Session with Mara")).toBe(
+			"Session with Mara"
+		)
+	})
+})
+
+describe("StartSessionFlow — the preset's name", () => {
+	it("fills the name from the preset's creation defaults", () => {
+		const flow = new StartSessionFlow()
+		flow.rawGenres = [genre(STANDARD_GENRE_ID)]
+		flow.rawPresets = [
+			preset({ id: 1, defaults: { name: "Tavern night" } as any })
+		]
+		flow.presetsLoaded = true
+		flow.chooseGenre(STANDARD_GENRE_ID)
+		flow.choosePreset(1)
+		expect(flow.fields.name).toBe("Tavern night")
 	})
 })

@@ -21,12 +21,12 @@
 
 **Play more, tweak less.**
 
-Serene Pub is an open source chat app for AI roleplay and creative writing, built for stories that hold together over the long run. It remembers what happened, keeps every character honest about what they know, and lets you share the story with friends. Run it on your own hardware or point it at any AI provider.
+Serene Pub is an open source app for AI roleplay and creative writing, built for stories that hold together over the long run. It remembers what happened, keeps every character honest about what they know, and lets you share the story with friends. Run it on your own hardware or point it at any AI provider.
 
 **Never run an LLM before? You don't need to know how.** The Setup Wizard downloads, installs and runs a local model for you in a few clicks. No terminal, nothing to configure by hand. Prefer a hosted provider? Plug in an API key.
 
 <p align="center">
-  <img src="docs-assets/screenshots/chat-group.png" alt="A group chat mid-scene, with sampling settings and the character list open either side" width="900"/>
+  <img src="docs-assets/screenshots/chat-group.png" alt="A group session mid-scene, with sampling settings and the character list open either side" width="900"/>
 </p>
 
 Long stories drift. Characters forget what happened chapters ago, secrets slip to people who were never in the room, and playing with friends means passing a browser tab around. Serene Pub fixes those three things: structured memory that grows with the story, characters who only act on what they've seen, and a server you can share.
@@ -54,9 +54,9 @@ Long stories drift. Characters forget what happened chapters ago, secrets slip t
 
 Most AI roleplay tools are built for one person in one browser tab. Serene Pub isn't.
 
-Turn on multi-user accounts and one server becomes a shared instance. Invite a friend into a chat as a guest and they arrive as themselves, with their own persona and their own characters pulled from their own library.
+Turn on multi-user accounts and one server becomes a shared instance. Invite a friend into a session as a guest and they arrive as themselves, with their own persona and their own characters pulled from their own library.
 
-- **Multi-tenant accounts** — each account's characters, personas, chats and lorebooks stay private to it
+- **Multi-tenant accounts** — each account's characters (personas included), sessions and lorebooks stay private to it
 - **Guests bring their own cast** — friends join with their own persona and characters
 - **Live, not turn-passing** — every message, edit and generation syncs to everyone over WebSockets
 
@@ -69,15 +69,15 @@ Turn on multi-user accounts and one server becomes a shared instance. Invite a f
 
 ## 🖼️ Screenshots
 
-<sub>Click any image for full size. Shots use the community-library cast aboard *Seraphis Station*, generated locally via the KoboldCPP Manager.</sub>
+<sub>Click any image for full size. Shots use the community-library cast aboard *Seraphis Station*, generated locally with KoboldCPP run by Serene Pub.</sub>
 
-### 💬 Chatting
+### 💬 Sessions
 
 <table>
 <tr>
 <td width="50%" align="center" valign="top">
-  <a href="docs-assets/screenshots/home.png"><img src="docs-assets/screenshots/home.png" width="100%" alt="The home screen listing characters and recent chats"/></a>
-  <br/><sub><b>Home</b><br/>Your cast and recent chats, one click from picking up where you left off.</sub>
+  <a href="docs-assets/screenshots/home.png"><img src="docs-assets/screenshots/home.png" width="100%" alt="The home screen listing characters and recent sessions"/></a>
+  <br/><sub><b>Home</b><br/>Your cast and recent sessions, one click from picking up where you left off.</sub>
 </td>
 <td width="50%" align="center" valign="top">
   <a href="docs-assets/screenshots/characters-sidebar-cards.png"><img src="docs-assets/screenshots/characters-sidebar-cards.png" width="100%" alt="The characters sidebar in card view, showing full character art"/></a>
@@ -87,17 +87,17 @@ Turn on multi-user accounts and one server becomes a shared instance. Invite a f
 <tr>
 <td width="50%" align="center" valign="top">
   <a href="docs-assets/screenshots/chat-group.png"><img src="docs-assets/screenshots/chat-group.png" width="100%" alt="Four characters trading turns during a hull breach"/></a>
-  <br/><sub><b>Group Chat</b><br/>As many characters as you like, replying in drag-to-reorder turn order.</sub>
+  <br/><sub><b>Group Session</b><br/>As many characters as you like, replying in drag-to-reorder turn order.</sub>
 </td>
 <td width="50%" align="center" valign="top">
-  <a href="docs-assets/screenshots/chat-participants-editor.png"><img src="docs-assets/screenshots/chat-participants-editor.png" width="100%" alt="The participants editor, with per-character visibility settings"/></a>
-  <br/><sub><b>Participants & Visibility</b><br/>Add cast mid-scene, reorder turns, set Full / Minimal / Hidden per character.</sub>
+  <a href="docs-assets/screenshots/chat-participants-editor.png"><img src="docs-assets/screenshots/chat-participants-editor.png" width="100%" alt="The participants editor"/></a>
+  <br/><sub><b>Participants</b><br/>Add cast mid-scene and reorder turns.</sub>
 </td>
 </tr>
 <tr>
 <td width="50%" align="center" valign="top">
-  <a href="docs-assets/screenshots/chat-one-on-one.png"><img src="docs-assets/screenshots/chat-one-on-one.png" width="100%" alt="A two-character conversation, sampling panel left, chat list right"/></a>
-  <br/><sub><b>One-on-One</b><br/>Just you and one character, with your chat library alongside.</sub>
+  <a href="docs-assets/screenshots/chat-one-on-one.png"><img src="docs-assets/screenshots/chat-one-on-one.png" width="100%" alt="A two-character conversation, sampling panel left, session list right"/></a>
+  <br/><sub><b>One-on-One</b><br/>Just you and one character, with your sessions alongside.</sub>
 </td>
 <td width="50%" align="center" valign="top">
   <a href="docs-assets/screenshots/chat-message-actions.png"><img src="docs-assets/screenshots/chat-message-actions.png" width="100%" alt="The Message Options menu: edit, branch, summarize, hide, delete"/></a>
@@ -166,8 +166,8 @@ Turn on multi-user accounts and one server becomes a shared instance. Invite a f
   <br/><sub><b>KoboldCPP — Managed Mode</b><br/>Version, port, unload timers and capabilities at a glance.</sub>
 </td>
 <td width="25%" align="center" valign="top">
-  <a href="docs-assets/screenshots/connections-ollama-manager.png"><img src="docs-assets/screenshots/connections-ollama-manager.png" width="100%" alt="The Ollama Manager listing installed models"/></a>
-  <br/><sub><b>Ollama Manager</b><br/>Search, download and activate Ollama models in-app.</sub>
+  <a href="docs-assets/screenshots/connections-ollama-manager.png"><img src="docs-assets/screenshots/connections-ollama-manager.png" width="100%" alt="Ollama, managed, listing installed models"/></a>
+  <br/><sub><b>Ollama, Managed</b><br/>Search, download and activate Ollama models in-app.</sub>
 </td>
 </tr>
 </table>
@@ -176,32 +176,13 @@ Turn on multi-user accounts and one server becomes a shared instance. Invite a f
 
 <table>
 <tr>
-<td width="33%" align="center" valign="top">
+<td width="50%" align="center" valign="top">
   <a href="docs-assets/screenshots/library-characters.png"><img src="docs-assets/screenshots/library-characters.png" width="100%" alt="The character library browser with community cards"/></a>
   <br/><sub><b>Character Library</b><br/>Browse and import community cards, including CharaVault.</sub>
 </td>
-<td width="33%" align="center" valign="top">
-  <a href="docs-assets/screenshots/library-personas.png"><img src="docs-assets/screenshots/library-personas.png" width="100%" alt="The persona library browser"/></a>
-  <br/><sub><b>Persona Library</b><br/>Ready-made personas for however you want to show up.</sub>
-</td>
-<td width="33%" align="center" valign="top">
+<td width="50%" align="center" valign="top">
   <a href="docs-assets/screenshots/connections-configured.png"><img src="docs-assets/screenshots/connections-configured.png" width="100%" alt="The connections panel, set to a local KoboldCPP model"/></a>
-  <br/><sub><b>Connections</b><br/>Any provider, per-task overrides, sampling and context configs.</sub>
-</td>
-</tr>
-</table>
-
-### ⚙️ Prompts & Context Control
-
-<table>
-<tr>
-<td width="50%" align="center" valign="top">
-  <a href="docs-assets/screenshots/config-context-template.png"><img src="docs-assets/screenshots/config-context-template.png" width="100%" alt="The context config builder, showing the prompt as reorderable cards"/></a>
-  <br/><sub><b>Context Config Builder</b><br/>Build the prompt from reorderable cards, or edit the raw template.</sub>
-</td>
-<td width="50%" align="center" valign="top">
-  <a href="docs-assets/screenshots/config-prompt-configs.png"><img src="docs-assets/screenshots/config-prompt-configs.png" width="100%" alt="The prompt configs panel, one config per task"/></a>
-  <br/><sub><b>Per-Task Prompt Configs</b><br/>Chat, narrator, summarizers and graph builder each get their own model.</sub>
+  <br/><sub><b>Connections</b><br/>Any provider, a default model per job, and sampling configs.</sub>
 </td>
 </tr>
 </table>
@@ -212,11 +193,11 @@ Turn on multi-user accounts and one server becomes a shared instance. Invite a f
 <tr>
 <td width="33%" align="center" valign="top">
   <a href="docs-assets/screenshots/setup-wizard-welcome.png"><img src="docs-assets/screenshots/setup-wizard-welcome.png" width="100%" alt="The setup wizard welcome step"/></a>
-  <br/><sub><b>Setup Wizard</b><br/>Seven guided steps from empty install to first chat.</sub>
+  <br/><sub><b>Setup Wizard</b><br/>A few guided screens from empty install to your first session.</sub>
 </td>
 <td width="33%" align="center" valign="top">
   <a href="docs-assets/screenshots/setup-wizard-connect.png"><img src="docs-assets/screenshots/setup-wizard-connect.png" width="100%" alt="Choosing between KoboldCPP, Ollama, or manual setup"/></a>
-  <br/><sub><b>Connect an AI</b><br/>Never run a model before? Pick “Easy” and it’s handled.</sub>
+  <br/><sub><b>Connect an AI</b><br/>Never run a model before? Pick the recommended option and it’s handled.</sub>
 </td>
 <td width="33%" align="center" valign="top">
   <a href="docs-assets/screenshots/document-view.png"><img src="docs-assets/screenshots/document-view.png" width="100%" alt="Document View, the high-contrast interface"/></a>
@@ -248,11 +229,11 @@ Turn on multi-user accounts and one server becomes a shared instance. Invite a f
 </tr>
 <tr>
 <td width="50%" colspan="2" align="center" valign="top">
-  <a href="docs-assets/screenshots/chat-background-photo.png"><img src="docs-assets/screenshots/chat-background-photo.png" width="100%" alt="A chat with a photo background, the picker open alongside it"/></a>
+  <a href="docs-assets/screenshots/chat-background-photo.png"><img src="docs-assets/screenshots/chat-background-photo.png" width="100%" alt="A session with a photo background, the picker open alongside it"/></a>
   <br/><sub><b>Custom Backgrounds</b><br/>Pick a built-in image or upload your own, then set the opacity.</sub>
 </td>
 <td width="50%" colspan="2" align="center" valign="top">
-  <a href="docs-assets/screenshots/chat-background-gradient.png"><img src="docs-assets/screenshots/chat-background-gradient.png" width="100%" alt="The same chat with a gradient background instead"/></a>
+  <a href="docs-assets/screenshots/chat-background-gradient.png"><img src="docs-assets/screenshots/chat-background-gradient.png" width="100%" alt="The same session with a gradient background instead"/></a>
   <br/><sub><b>Gradients</b><br/>If a photo is more than you want behind the text.</sub>
 </td>
 </tr>
@@ -269,20 +250,20 @@ Turn on multi-user accounts and one server becomes a shared instance. Invite a f
 A story that remembers itself, so you don't have to keep notes.
 
 - **Lorebooks+:** World lore, character lore and a dated history timeline, all bindable to your cast via `{{char:N}}` tokens
-- **Scenes:** Capture a run of chat messages as a standalone summary, pinned to a point in your story's history
-- **Summarization:** Compress chat messages, scenes and history entries into permanent, editable lorebook content on demand
+- **Scenes:** Capture a run of session messages as a standalone summary, pinned to a point in your story's history
+- **Summarization:** Compress session messages, scenes and history entries into permanent, editable lorebook content on demand
 - **Narrative Graph:** Tracks who is connected to whom, and how. Build it from your scenes and history, then extend it as the story grows
 - **Relationship Visibility:** Every relationship is secret, acknowledged or public, and replies come from each character's own vantage point. A one-sided crush stays one-sided
 - **Long-Term Memory (RAG):** Finds lore, history and past messages by meaning rather than keywords, scoped to what each character knows. Runs on-device or against any OpenAI-compatible embeddings API
 
 ### Characters & Perspective
 
-- **Character & Persona Management:** Import, create and edit with rich metadata, avatars and image galleries
+- **Character Management:** Import, create and edit with rich metadata, avatars and image galleries. A persona is simply a character you play
 - **Library Browsers:** Search and import thousands of community-made cards without leaving the app, including direct **CharaVault** integration
-- **Per-Character Visibility:** Full / Minimal / Hidden per character, per chat. A context-budget control, separate from relationship secrecy
-- **On-Demand Narrator:** Trigger a response from the environment (weather, scenery, an NPC shopkeeper) with no permanent "Narrator" in your cast
-- **Group Chats:** As many characters at once as you like, with drag-to-reorder round-robin turn order
-- **Branch Chat:** Fork the story at any message into a full copy, carrying the cast, lorebook, settings and history up to that point. Any participant can branch
+- **Character Detail:** How much the model hears about everyone who isn't speaking: everything, name and description, or only the speaker. A context-budget control, separate from relationship secrecy
+- **On-Demand Narrator:** Call for a response from the environment (weather, scenery, an NPC shopkeeper) with no permanent "Narrator" in your cast
+- **Group Sessions:** As many characters at once as you like, with a drag-to-reorder turn order and a choice of who speaks next (round robin, random, manual and more)
+- **Branch a Session:** Fork the story at any message into a full copy, carrying the cast, lorebook, settings and history up to that point. The session's owner can branch
 - **Built for Coherence:** Character and lore data reaches the model structured, not as freeform prose. A deliberate choice after side-by-side testing
 
 ### AI Connections & Local Models
@@ -290,31 +271,31 @@ A story that remembers itself, so you don't have to keep notes.
 Bring your own model, or download and run one from inside the app.
 
 - **AI Model Agnostic:** OpenAI, Anthropic, Ollama, KoboldCPP, LM Studio, Llama.cpp and more
-- **KoboldCPP Manager:** Download the binary, browse and download GGUF models, load or switch between them, all in-app
-- **Ollama Manager:** Search, download and activate Ollama models from a built-in UI. No command line
-- **Per-Task AI Override:** Point chat, narrator and summarizer at different connections. Run dialogue on a fast local model, summarization on a heavyweight cloud one
-- **Context Config Builder:** Decide what the model sees and in what order, with drag-and-drop cards and a live preview. The raw Handlebars template is still there
-- **Prompt Statistics & Context Debugging:** Inspect the compiled prompt and retrieval diagnostics behind any reply, so "why did it forget that" has an answer
+- **KoboldCPP, Run by Serene Pub:** Download the binary, browse and download GGUF models, load or switch between them, all in-app
+- **Ollama, Managed by Serene Pub:** Search, download and activate Ollama models from a built-in UI. No command line
+- **A Model per Job:** Chat, image generation, embeddings and named entities each get their own default connection and model
+- **Pipelines & Context Templates:** Every reply, summary and graph build is a pipeline you can inspect and configure. Context templates (Handlebars or Liquid, with completion and lint in the editor) decide what the model sees and in what order
+- **Run Inspector & Context Debugging:** Administrators can open every step of the run behind any reply, with its prompt and retrieval, so "why did it forget that" has an answer
 
 ### Getting Started & Polish
 
 - **Mobile-First Design:** Fully responsive on phones and tablets. See [Platforms](#-platforms) for desktop, Docker and Android builds
-- **Setup Wizard:** A guided first run that can install and start a model for you, then walks you through your first character, persona and chat
+- **Setup Wizard:** A guided first run that finds or installs a model for you, then starts your first session, with a character or with the Guide
 - **Built-In Docs Browser:** The full documentation, searchable, inside the app
 - **Document View:** A high-contrast, keyboard- and screen-reader-friendly interface with one plain page per feature. `Ctrl+Shift+Y`
 - **Themes & Dark Mode:** 20+ built-in themes, instant switching, accessibility options, and an editor for building and sharing your own
 - **Custom Backgrounds:** Put an image behind the interface, built-in or your own, with an opacity slider. Per-account, so everyone on a server gets their own
-- **Tags:** Organize and filter chats, characters, personas and lorebooks
-- **Chat & Context Tools:** Auto response, message editing, streaming and regenerate, hidden responses, swipe between alternatives, live token stats
+- **Tags:** Organize and filter sessions, characters and lorebooks
+- **Session Tools:** Auto response, message editing, streaming and regenerate, hidden responses, swipe between alternatives, live token stats
 - **Portable & Secure:** Embedded database, no cloud required, runs anywhere
-- **SillyTavern Import/Export:** Import cards and avatars, or a whole SillyTavern data directory with chat history. Exports in the same format
+- **SillyTavern Import/Export:** Import cards and avatars, or a whole SillyTavern data directory with its chats. Characters export as standard cards (PNG, JSON or CHARX)
 
 ---
 
 ## 🤔 Is Serene Pub Right For You?
 
-- **Already have a character library?** SillyTavern cards import directly, or point Serene Pub at a whole data directory for characters and chat history at once.
-- **Want to play with friends?** Multi-user accounts and guest-invited chats, self-hosted end to end. Everyone plays their own persona and brings their own characters onto a server you control.
+- **Already have a character library?** SillyTavern cards import directly, or point Serene Pub at a whole data directory for characters and their chats at once.
+- **Want to play with friends?** Multi-user accounts and guest-invited sessions, self-hosted end to end. Everyone plays their own persona and brings their own characters onto a server you control.
 - **Writing long-form solo?** Lorebooks+, Summarization and the Narrative Graph keep characters and world facts straight well past where flat lorebooks break down.
 
 ---
@@ -323,7 +304,7 @@ Bring your own model, or download and run one from inside the app.
 
 The core app is the same everywhere. Two features depend on native binaries that don't exist for every platform, and the app says so up front rather than failing at runtime.
 
-| Platform | Distribution | Local embedding models | KoboldCPP / Ollama Manager |
+| Platform | Distribution | Local embedding models | KoboldCPP / Ollama run by Serene Pub |
 | --- | --- | --- | --- |
 | 🪟 Windows (x64) | [GitHub Release](https://github.com/doolijb/serene-pub/releases) `.zip` | ✅ | ✅ |
 | 🍎 macOS — Apple Silicon (arm64) | [GitHub Release](https://github.com/doolijb/serene-pub/releases) `.zip` | ✅ | ✅ |
@@ -338,7 +319,7 @@ The core app is the same everywhere. Two features depend on native binaries that
 1. **macOS Intel — no local embedding models**: `onnxruntime-node`, which powers in-app embeddings, stopped shipping Intel Mac binaries at v1.24.3. Use any OpenAI-compatible `/embeddings` endpoint instead, which behaves identically. The Docker image keeps full local support, since the container runs Linux binaries.
 2. **Linux arm64 — Docker only**: GitHub-hosted CI runners can't cross-compile the native dependencies, so there's no standalone desktop build. The multi-arch Docker image covers this architecture with the full feature set.
 3. **Android — no local embedding models**: Android's Bionic userspace isn't glibc-compatible and `onnxruntime-node` requires glibc. Not fixable by packaging. Use an external embeddings API, as on Intel Mac.
-4. **Android — no KoboldCPP/Ollama Manager**: the *managed* auto-download-and-run modes are hidden, since KoboldCPP publishes no Linux arm64 binary. **Connecting to a remote KoboldCPP or Ollama server still works**, via the Connections panel.
+4. **Android — no KoboldCPP/Ollama run by Serene Pub**: the *managed* auto-download-and-run modes are hidden, since KoboldCPP publishes no Linux arm64 binary. **Connecting to a remote KoboldCPP or Ollama server still works**, via the Connections panel.
 
 See [`android/README.md`](android/README.md) for all Android-specific constraints.
 
@@ -358,7 +339,7 @@ No config files, no build step, no separate services to wire up.
 
 Every desktop archive extracts to a single `serene-pub/` folder. Everything that *is* the application sits in `app/` inside it, with the launcher beside it — so **to upgrade, extract the new archive over your existing folder**. Your characters, sessions and settings are never in there; they live in your [data directory](docs/environment-variables.md#where-env-lives). Running headless, or from a service unit? Use `app/run.sh` (`app\run.cmd` on Windows), which starts the server alone.
 
-Desktop opens at [http://localhost:3000](http://localhost:3000); Android opens straight into the app. The **Setup Wizard** connects an AI provider (or installs KoboldCPP/Ollama for you), then walks you through your first character, persona and chat.
+Desktop opens at [http://localhost:3000](http://localhost:3000); Android opens straight into the app. The **Setup Wizard** connects an AI provider (or installs KoboldCPP for you), then starts your first session.
 
 ### From Source
 
@@ -396,7 +377,7 @@ The web UI will be at **http://localhost:3000**.
 **Data directory** — database, model cache and uploads live under `SERENE_PUB_DATA_DIR`, defaulting to `/data` and mounted as a named volume. For a host path instead:
 
 ```bash
-docker run -p 3000:3000 -p 3001:3001 \
+docker run -p 3000:3000 \
   -e SERENE_PUB_DATA_DIR=/data \
   -v "$(pwd)/serene-pub-data":/data \
   ghcr.io/doolijb/serene-pub:latest
@@ -417,11 +398,12 @@ The same documentation ships inside the app on a built-in **Docs** page.
 **Popular pages:**
 
 - **[Getting Started](docs/getting-started.md)** - The setup wizard, step by step
+- **[Install Serene Pub](docs/install.md)** and **[Connect a model](docs/connect-a-model.md)** - Getting a pub running and talking
 - **[Connections](docs/connections.md)** - Connecting to AI models and managing local ones
-- **[Characters](docs/characters.md)** and **[Personas](docs/personas.md)** - Your cast, and your own identity in a chat
+- **[Characters](docs/characters.md)** and **[Personas](docs/personas.md)** - Your cast, and who you play in a session
 - **[Lorebooks](docs/lorebooks.md)** - World-building, history, scenes and the narrative graph
 - **[Embeddings & RAG](docs/embeddings-and-rag.md)** - How semantic retrieval keeps long stories coherent
-- **[Prompt Configs](docs/prompt-configs.md)** and **[Context Configs](docs/connections.md#context-configs)** - Customizing prompts and the context builder
+- **[Pipelines](docs/pipelines.md)** and **[Context Templates](docs/context-templates.md)** - How replies are made, and what the model sees
 - **[Document View](docs/document-view.md)** - The accessible alternative interface
 - **[Troubleshooting](docs/troubleshooting.md)** - Common issues and solutions
 

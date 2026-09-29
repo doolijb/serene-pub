@@ -22,9 +22,11 @@ import * as schema from "$lib/server/db/schema"
 import {
 	actionsOf,
 	envoySlugOf,
+	i18nText,
 	type EnvoyDecl,
 	type EnvoySpeaks
 } from "@serene-pub/sdk"
+import { DEFAULT_CHANNEL, parseChannel } from "$lib/server/messages/channels"
 import {
 	getSessionGenre,
 	STANDARD_GENRE_ID
@@ -44,7 +46,18 @@ export interface DeclaredEnvoy {
 	image?: string
 	prompts?: EnvoyDecl["prompts"]
 	default: boolean
+	/**
+	 * The genre's fallback envoy (`EnvoyDecl.fallback`, ruled 2026-09-26) —
+	 * the speaker a line nobody claims posts as. A genre's envoy only.
+	 */
+	fallback: boolean
 	speaks: EnvoySpeaks
+	/**
+	 * The line this envoy opens a new session with (`EnvoyDecl.greeting`,
+	 * lair re-plan R6) — a genre's envoy only. Read by
+	 * `core:query/envoy-greeting@1` (`collectEnvoyGreeting`).
+	 */
+	greeting?: EnvoyDecl["greeting"]
 }
 
 const fromDecl = (
@@ -62,7 +75,9 @@ const fromDecl = (
 	...(e.image ? { image: e.image } : {}),
 	...(e.prompts ? { prompts: e.prompts } : {}),
 	default: e.default === true,
-	speaks: e.speaks ?? (origin === "action" ? "on-action" : "in-turn")
+	fallback: origin === "genre" && e.fallback === true,
+	speaks: e.speaks ?? (origin === "action" ? "on-action" : "in-turn"),
+	...(origin === "genre" && e.greeting ? { greeting: e.greeting } : {})
 })
 
 /**
@@ -107,6 +122,7 @@ export async function declaredEnvoys(
 	// mode instead of corrupting every other reader's cache.
 	for (const d of read) {
 		if (d.prompts) Object.freeze(d.prompts)
+		if (d.greeting) Object.freeze(d.greeting)
 		Object.freeze(d)
 	}
 	perGenre.set(genreId, read)
@@ -306,6 +322,43 @@ export async function noSpeakerRefusal(
 }
 
 /**
+ * Why the pipeline's own voice cannot answer on this channel, else null
+ * (lair re-plan R6).
+ *
+ * In a narrator genre the own voice (the null turn entry) is its fallback
+ * envoy — the Lair's Castellan. On `main` that voice runs the turn whoever is
+ * seated, and fallback **naming** never depends on the seat (`ownVoiceName`,
+ * `unclaimedLineSpeaker` read declarations): story turns keep running under
+ * its name. On any OTHER channel the own voice is that envoy **talking** — the
+ * Castellan in the Sanctum — and an envoy with no live seat has no seat to
+ * talk from, so only that talk stops, refused by name.
+ */
+export async function ownVoiceSeatRefusal(
+	db: Db,
+	sessionId: number,
+	channel: string | undefined
+): Promise<string | null> {
+	if (!channel || parseChannel(channel).slug === DEFAULT_CHANNEL) return null
+	const session = await db.query.sessions.findFirst({
+		where: eq(schema.sessions.id, sessionId),
+		columns: { genreId: true }
+	})
+	if (!session) return null
+	const genre = await getSessionGenre(db, session.genreId ?? STANDARD_GENRE_ID)
+	if (genre?.shape?.voice !== "narrator") return null
+	const fallback = (await sessionDeclaredEnvoys(db, sessionId)).find(
+		(d) => d.fallback
+	)
+	if (!fallback) return null
+	const live = (await seatedEnvoys(db, sessionId)).some(
+		(e) => e.slug === fallback.slug && !e.removedAt
+	)
+	if (live) return null
+	const name = i18nText(fallback.name) || fallback.slug
+	return `${name} is not seated in this session, so nobody answers here — seat ${name} in Session settings.`
+}
+
+/**
  * Seat every `default: true` envoy the genre declares — what creating a
  * session of the genre does with no choice offered (R-18), and what a genre
  * upgrade does for the defaults the new version brings (U5g review, W3).
@@ -331,4 +384,56 @@ export async function seatDefaultEnvoys(
 			.onConflictDoNothing()
 	}
 	return [...wanted]
+}
+
+/**
+ * Who speaks a line nobody claimed (ruled 2026-09-26: "everyone should have
+ * names, even just placeholders") — a message write with no character, no
+ * persona, no `speaker` and no narration. In order:
+ *
+ * 1. the running document's own action envoy, when its contributed actions
+ *    declare exactly one — a dice spec's result is its Dice Master's;
+ * 2. the genre's fallback envoy (`EnvoyDecl.fallback`).
+ *
+ * Null when neither exists: the row stays speakerless and every reader names
+ * it with the session's narrator name, then `UNCLAIMED_LINE_NAME` — never
+ * "Unknown". Only slugs this session actually declares are answered.
+ */
+export async function unclaimedLineSpeaker(
+	db: Db,
+	sessionId: number,
+	running?: { specId?: string; contributes?: unknown }
+): Promise<`envoy:${string}` | null> {
+	const declared = await sessionDeclaredEnvoys(db, sessionId)
+	if (running?.specId && running.contributes) {
+		const own = new Set(
+			declared
+				.filter((d) => d.origin === "action" && d.specSlug === running.specId)
+				.map((d) => d.slug)
+		)
+		if (own.size === 1) return `envoy:${[...own][0]}`
+	}
+	const fallback = declared.find((d) => d.fallback)
+	return fallback ? `envoy:${fallback.slug}` : null
+}
+
+/**
+ * The sentence for a message write naming an envoy this session does not
+ * declare — null when it does (or the reference is not an envoy's). Refused
+ * by name at the write: a line under a name nothing declares is a line
+ * nobody can render.
+ */
+export async function undeclaredSpeakerRefusal(
+	db: Db,
+	sessionId: number,
+	slug: string
+): Promise<string | null> {
+	const declared = await sessionDeclaredEnvoys(db, sessionId)
+	if (declared.some((d) => d.slug === slug)) return null
+	return (
+		`speaks as envoy '${slug}', which this session's genre and its installed actions do not declare` +
+		(declared.length
+			? ` — declared: ${declared.map((d) => `'${d.slug}'`).join(", ")}`
+			: " — none are declared")
+	)
 }

@@ -8,7 +8,16 @@
 	 * carry live in `createSession.svelte.ts`. A session keeps its genre for
 	 * life, so the one genre control here is the upgrade along the same type.
 	 */
+	import { sameFormValue } from "$lib/client/forms/sameFormValue"
 	import PipelineCards from "./PipelineCards.svelte"
+	import Select from "$lib/client/components/inputs/Select.svelte"
+	import SessionAttributes from "./SessionAttributes.svelte"
+	import SessionAnnexPanel from "./SessionAnnexPanel.svelte"
+	import RetakeAskSetting from "./RetakeAskSetting.svelte"
+	import SessionLorebookReading from "./SessionLorebookReading.svelte"
+	import type { StoryClock } from "$lib/shared/lorebooks/storyDate"
+	import { stripUnmovedReading } from "./sessionReadingPatch"
+	import { storedPlayerLabel } from "$lib/shared/sessions/playerLabel"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import {
 		declareInterest,
@@ -29,7 +38,6 @@
 	import { onMount, getContext } from "svelte"
 	import { Switch } from "@skeletonlabs/skeleton-svelte"
 	import { toaster } from "$lib/client/utils/toaster"
-	import { SessionCharacterVisibility } from "$lib/shared/constants/SessionCharacterVisibility"
 	import { resolveUserHandle } from "$lib/shared/utils/resolveCharacterName"
 	import { z } from "zod"
 	import SchemaForm from "../pipelines/SchemaForm.svelte"
@@ -124,6 +132,8 @@
 				personaIds: number[]
 				guestIds: number[]
 				characterPositions: Record<number, number>
+				/** The `playerLabel` override (R4); blank = the genre's. */
+				playerLabel: string
 		  }
 		| undefined = $state()
 
@@ -145,6 +155,8 @@
 				personaIds: number[]
 				guestIds: number[]
 				characterPositions: Record<number, number>
+				/** The `playerLabel` override (R4); blank = the genre's. */
+				playerLabel: string
 		  }
 		| undefined = $state()
 
@@ -152,6 +164,16 @@
 	let name = $state("")
 	let scenario = $state("")
 	let lorebookId: number | null = $state(null)
+	/**
+	 * 🚧 Where the session reads its book (ruling 15): the line (null = main)
+	 * and the session's story clock (DESIGN-story-time P3; null follows the
+	 * line's present). Only for the SAVED book — a book picked but not yet
+	 * saved starts at its most recently used line with no clock of its own
+	 * (it follows that line's present), and is pointed after the save.
+	 */
+	let savedLorebookId: number | null = $state(null)
+	let lorebookBranchId: number | null = $state(null)
+	let storyClock: StoryClock | null = $state(null)
 	let sessionSamplingConfigId: number | null = $state(null)
 	let sessionPromptConfigId: number | null = $state(null)
 	let narratorPromptConfigId: number | null = $state(null)
@@ -160,12 +182,22 @@
 	let modesList: Sockets.Sessions.Genres.Response["genres"] = $state([])
 	let genreId: string = $state(STANDARD_GENRE_ID)
 	let genreFields: Record<string, unknown> = $state({})
+	/**
+	 * What this session calls a person's own lines (lair re-plan R4): its
+	 * override, blank for the genre's `playerLabel`. Offered only when the
+	 * genre declares one; stored on the row's `metadata`, never a column.
+	 */
+	let playerLabelOverride = $state("")
 
 	// The selected mode's shape, or null when the mode is unknown to this
 	// build — in which case the form falls back to today's behaviour (every
 	// capability shown), the F29 posture.
 	let modeShape = $derived(
 		modesList.find((m) => m.genreId === genreId)?.shape ?? null
+	)
+	/** The genre's `playerLabel` (R4) — absent when it declares none. */
+	let genrePlayerLabel = $derived(
+		modesList.find((m) => m.genreId === genreId)?.playerLabel
 	)
 	// A capability the shape omits (or caps at zero) does not exist for the
 	// session: its section disappears rather than rendering an un-fillable
@@ -238,8 +270,19 @@
 	} | null = $state(null)
 
 	// FORM SUBMIT STATE
+	/**
+	 * Not `JSON.stringify` (`sameFormValue`): a genre field's number input
+	 * hands back `"5"` for `5`, a cleared field is `""` where the row held
+	 * `null`, `genreFields` keys come back in the server's order, and tags,
+	 * personas and guests are sets. The cast is ordered — its order is the
+	 * turn order (`characterPositions`).
+	 */
 	let isDirty: boolean = $derived(
-		JSON.stringify(data) !== JSON.stringify(originalData)
+		!!data &&
+			!!originalData &&
+			!sameFormValue($state.snapshot(data), $state.snapshot(originalData), {
+				unordered: ["session.tags", "personaIds", "guestIds"]
+			})
 	)
 	let canSave: boolean = $derived(
 		// Name plus the mode's participant floors — for the standard mode
@@ -357,18 +400,33 @@
 		const _selectedPersonas = selectedPersonas
 		const _selectedGuests = selectedGuests
 		const _lorebookId = lorebookId || null
+		// Where it reads the book travels only with the book it was chosen
+		// for: switching books lets the server start the new one.
+		const _reading =
+			_lorebookId !== null && _lorebookId === savedLorebookId
+				? {
+						lorebookBranchId,
+						storyClockYear: storyClock?.year ?? null,
+						storyClockMonth: storyClock?.month ?? null,
+						storyClockDay: storyClock?.month != null ? (storyClock?.day ?? null) : null,
+						storyClockHour: storyClock?.hour ?? null,
+						storyClockMinute: storyClock?.hour != null ? (storyClock?.minute ?? 0) : null
+					}
+				: {}
 		const _tags = selectedTags
 		const _samplingConfigId = sessionSamplingConfigId
 		const _promptConfigId = sessionPromptConfigId
 		const _narratorPromptConfigId = narratorPromptConfigId
 		const _genreId = genreId
 		const _genreFields = JSON.parse(JSON.stringify(genreFields))
+		const _playerLabel = playerLabelOverride.trim()
 		data = {
 			session: {
 				id: session?.id,
 				name: _name,
 				scenario: _scenario,
 				lorebookId: _lorebookId,
+				..._reading,
 				tags: _tags,
 				samplingConfigId: _samplingConfigId,
 				promptConfigId: _promptConfigId,
@@ -381,7 +439,8 @@
 			guestIds: _selectedGuests.map((g) => g.userId),
 			characterPositions: Object.fromEntries(
 				_selectedCharacters.map((cc, i) => [cc.id, i])
-			)
+			),
+			playerLabel: _playerLabel
 		}
 
 		if (!originalData) {
@@ -588,12 +647,20 @@
 		// genreId rides in `data` but the server ignores it on update —
 		// switching an existing session's mode is an open policy question
 		// (19 §10). genreFields does land, filtered to declared keys.
+		const sent: Record<string, unknown> = { ...data!.session, id: session.id }
+		// The story clock and the line go only when the person moved them
+		// here: a pipeline may have advanced the clock since the form loaded
+		// (DESIGN-story-time P3), and deleting a branch moves its sessions to
+		// main — posting that dead id back was refused, failing every later
+		// save of the tab (#136).
+		const was = (originalData?.session ?? {}) as Record<string, unknown>
+		stripUnmovedReading(sent, was)
+		const { playerLabel, ...rest } = data!
 		const updateSession: Sockets.Sessions.Update.Params = {
-			...data!,
-			session: {
-				...data!.session,
-				id: session.id
-			}
+			...rest,
+			session: sent as Sockets.Sessions.Update.Params["session"],
+			// R4: only where the genre names the person's lines; blank clears.
+			...(genrePlayerLabel ? { playerLabel } : {})
 		}
 		socket.emit("sessions:update", updateSession)
 	}
@@ -735,6 +802,18 @@
 					.map((cp) => cp.persona) || []
 			selectedGuests = session.sessionGuests || []
 			lorebookId = session.lorebookId || null
+			savedLorebookId = lorebookId
+			lorebookBranchId = session.lorebookBranchId ?? null
+			storyClock =
+				session.storyClockYear != null
+					? {
+							year: session.storyClockYear,
+							month: session.storyClockMonth ?? null,
+							day: session.storyClockDay ?? null,
+							hour: session.storyClockHour ?? null,
+							minute: session.storyClockMinute ?? null
+						}
+					: null
 			selectedTags = session.tags || []
 			sessionSamplingConfigId = session.samplingConfigId ?? null
 			sessionPromptConfigId = session.promptConfigId ?? null
@@ -744,6 +823,7 @@
 				string,
 				unknown
 			>
+			playerLabelOverride = storedPlayerLabel(session.metadata) ?? ""
 			// Reset originalData to null so it gets re-initialized with the loaded data
 			originalData = undefined
 		}
@@ -983,53 +1063,17 @@
 		}
 		if (session && session.id === msg.sessionId) {
 			toaster.success({
-				title: `Character ${msg.isActive ? "activated" : "deactivated"}`
+				title: `Character ${msg.isActive ? "enabled" : "disabled"}`
 			})
 			// Refresh session data to get updated state
 			socket.emit("sessions:get", { id: session.id })
 		}
 	}
 
-	const handleUpdateSessionCharacterVisibility = (
-		msg: Sockets.Sessions.UpdateSessionCharacterVisibility.Response
-	) => {
-		if (msg.error) {
-			toaster.error({
-				title: "Error updating visibility",
-				description: msg.error
-			})
-			return
-		}
-		if (session && session.id === msg.sessionId) {
-			const visibilityLabel =
-				SessionCharacterVisibility.options.find(
-					(opt) => opt.value === msg.visibility
-				)?.label || msg.visibility
-			toaster.success({
-				title: `Set to "${visibilityLabel}" when not speaking`
-			})
-			// Optimistically update local state immediately
-			if (session.sessionCharacters) {
-				const updatedSessionCharacters = session.sessionCharacters.map(
-					(cc) =>
-						cc.characterId === msg.characterId
-							? { ...cc, visibility: msg.visibility }
-							: cc
-				)
-				session = {
-					...session,
-					sessionCharacters: updatedSessionCharacters
-				}
-			}
-			// Also refresh from server to ensure consistency
-			socket.emit("sessions:get", { id: session.id })
-		}
-	}
-
 	const handleSessionsUpdate = (res: any) => {
 		toaster.success({
-			title: "Session Updated",
-			description: `Session "${res.session.name || "Unnamed Session"}" updated successfully.`
+			title: "Session updated",
+			description: `Session "${res.session.name || "Unnamed session"}" updated successfully.`
 		})
 		showEditSessionForm = false
 		onClose?.()
@@ -1097,10 +1141,6 @@
 	useInterest<"sessions:toggleSessionCharacterActive">(
 		"sessions:toggleSessionCharacterActive",
 		handleToggleSessionCharacterActive
-	)
-	useInterest<"sessions:updateSessionCharacterVisibility">(
-		"sessions:updateSessionCharacterVisibility",
-		handleUpdateSessionCharacterVisibility
 	)
 	useInterest<"sessions:update">("sessions:update", handleSessionsUpdate)
 	useInterest<"sessions:addGuest">(
@@ -1236,61 +1276,6 @@
 		}
 		socket.emit("sessions:toggleSessionCharacterActive", req)
 	}
-
-	function updateCharacterVisibility(
-		c: Partial<SelectCharacter> & { id: number },
-		visibility: string
-	): void {
-		if (!session?.id) {
-			console.error("No session ID available")
-			return
-		}
-		const req: Sockets.Sessions.UpdateSessionCharacterVisibility.Params = {
-			sessionId: session.id,
-			characterId: c.id,
-			visibility
-		}
-		socket.emit("sessions:updateSessionCharacterVisibility", req)
-	}
-
-	function getVisibilityIcon(visibility: string) {
-		switch (visibility) {
-			case SessionCharacterVisibility.VISIBLE:
-				return Icons.Eye
-			case SessionCharacterVisibility.MINIMAL:
-				return Icons.EyeClosed
-			case SessionCharacterVisibility.HIDDEN:
-				return Icons.EyeOff
-			default:
-				return Icons.Eye
-		}
-	}
-
-	function getVisibilityColor(visibility: string) {
-		switch (visibility) {
-			case SessionCharacterVisibility.VISIBLE:
-				return "text-success-500"
-			case SessionCharacterVisibility.MINIMAL:
-				return "text-warning-500"
-			case SessionCharacterVisibility.HIDDEN:
-				return "text-error-500"
-			default:
-				return "text-success-500"
-		}
-	}
-
-	function getNextVisibility(current: string): string {
-		switch (current) {
-			case SessionCharacterVisibility.VISIBLE:
-				return SessionCharacterVisibility.MINIMAL
-			case SessionCharacterVisibility.MINIMAL:
-				return SessionCharacterVisibility.HIDDEN
-			case SessionCharacterVisibility.HIDDEN:
-				return SessionCharacterVisibility.VISIBLE
-			default:
-				return SessionCharacterVisibility.VISIBLE
-		}
-	}
 </script>
 
 {#if data}
@@ -1315,14 +1300,14 @@
 			{/snippet}
 			{#snippet subtitle()}
 				{#if isDirty}
-					<p class="text-surface-500 text-xs">Unsaved changes</p>
+					<p class="text-surface-600-400 text-xs">Unsaved changes</p>
 				{/if}
 			{/snippet}
 		</PanelNavHeader>
 
 		{#if !session}
-			<div class="text-surface-500 flex items-center gap-2 p-4 text-sm">
-				<Icons.LoaderCircle
+			<div class="text-surface-600-400 flex items-center gap-2 p-4 text-sm">
+				<Icons.Loader2
 					size={16}
 					class="animate-spin"
 					aria-hidden="true"
@@ -1343,7 +1328,7 @@
 				<h3 class="mb-3 text-sm font-medium">Name</h3>
 				<div class="flex flex-col">
 					<label
-						class="text-surface-500 mb-1.5 text-xs"
+						class="text-surface-600-400 mb-1.5 text-xs"
 						for="sessionName"
 					>
 						Session name
@@ -1396,7 +1381,7 @@
 							Upgrade
 						</button>
 					</div>
-					<p class="text-surface-500 mt-2 text-xs">
+					<p class="text-surface-600-400 mt-2 text-xs">
 						A newer version of this genre is available ({modeUpgradeTarget.genreId}).
 						Upgrading keeps the session and its settings.
 					</p>
@@ -1448,15 +1433,6 @@
 														cc.characterId === c.id
 												)?.isActive
 											: true}
-										{@const visibility = session
-											? session?.sessionCharacters?.find(
-													(cc) =>
-														cc.characterId === c.id
-												)?.visibility ||
-												SessionCharacterVisibility.VISIBLE
-											: SessionCharacterVisibility.VISIBLE}
-										{@const VisibilityIcon =
-											getVisibilityIcon(visibility)}
 										{@const isSaved =
 											!session ||
 											!!session.sessionCharacters?.some(
@@ -1528,8 +1504,8 @@
 												{#if session}
 													<span
 														title={isSaved
-															? "Toggle Character Active"
-															: "Save the session to set this character's active status"}
+															? "Toggle character enabled"
+															: "Save the session to enable or disable this character"}
 														class="flex items-center"
 													>
 														<Switch
@@ -1543,10 +1519,10 @@
 																	e,
 																	c
 																)}
-															aria-label="Toggle character {c.name} active status"
+															aria-label="Toggle character {c.name} enabled"
 														>
 															<Switch.Control
-																class="preset-filled-surface-500 data-[state=checked]:preset-filled-success-500 w-9"
+																class="preset-filled-surface-500 data-[state=checked]:preset-filled-primary-500 w-9"
 															>
 																<Switch.Thumb>
 																	{#if isActive}
@@ -1564,37 +1540,9 @@
 															/>
 														</Switch>
 													</span>
-													<button
-														class="btn-ghost rounded p-1 {getVisibilityColor(
-															visibility
-														)}"
-														onclick={() =>
-															updateCharacterVisibility(
-																c,
-																getNextVisibility(
-																	visibility
-																)
-															)}
-														title="When not speaking: {SessionCharacterVisibility.options.find(
-															(opt) =>
-																opt.value ===
-																visibility
-														)?.description ||
-															'Full character info is included even when they’re not speaking'}"
-														aria-label="Visibility for {label}: {SessionCharacterVisibility.options.find(
-															(opt) =>
-																opt.value ===
-																visibility
-														)?.label ||
-															'Full Info'}"
-													>
-														<VisibilityIcon
-															size={16}
-														/>
-													</button>
 												{:else}
 													<span
-														class="text-surface-500 text-xs"
+														class="text-surface-600-400 text-xs"
 													>
 														Ready to add
 													</span>
@@ -1663,7 +1611,7 @@
 											</div>
 										</div>
 										<span
-											class="text-surface-500 shrink-0 text-xs"
+											class="text-surface-600-400 shrink-0 text-xs"
 											title={envoy.speaks === "in-turn"
 												? "Takes turns replying like a character"
 												: "Speaks only through its action"}
@@ -1681,7 +1629,7 @@
 											aria-label="Seat {envoy.name} in this session"
 										>
 											<Switch.Control
-												class="preset-filled-surface-500 data-[state=checked]:preset-filled-success-500 w-9"
+												class="preset-filled-surface-500 data-[state=checked]:preset-filled-primary-500 w-9"
 											>
 												<Switch.Thumb>
 													{#if envoy.seated}
@@ -1805,7 +1753,7 @@
 					{#if session && (removedCharacters.length > 0 || removedPersonas.length > 0)}
 						<section class={CARD_CLASS}>
 							<h3 class="mb-1 text-sm font-medium">Removed</h3>
-							<p class="text-surface-500 mb-2 text-xs">
+							<p class="text-surface-600-400 mb-2 text-xs">
 								These were removed from the session, but their
 								past messages are kept. Reassign a removed
 								participant's history to a character or persona
@@ -1928,7 +1876,7 @@
 						<div class="flex flex-col gap-4">
 							<div class="flex flex-col">
 								<label
-									class="text-surface-500 mb-1.5 flex items-center gap-1 text-xs"
+									class="text-surface-600-400 mb-1.5 flex items-center gap-1 text-xs"
 									for="scenario"
 								>
 									Scenario
@@ -1953,9 +1901,11 @@
 							</div>
 							{#if showLorebookField}
 								<div class="flex flex-col">
-									<label
-										class="text-surface-500 mb-1.5 flex items-center gap-1 text-xs"
-										for="lorebook"
+									<!-- Visual only (the help icon rides here); the
+									     Select names itself. -->
+									<p
+										class="text-surface-600-400 mb-1.5 flex items-center gap-1 text-xs"
+										aria-hidden="true"
 									>
 										Lorebook{modeShape?.lorebook ===
 										"required"
@@ -1970,24 +1920,56 @@
 												aria-hidden="true"
 											/>
 										</span>
-									</label>
-									<select
-										id="lorebook"
-										class="select rounded-[10px]"
-										bind:value={lorebookId}
+									</p>
+									<Select
+										label="Lorebook"
+										labelHidden
+										required={modeShape?.lorebook === "required"}
+										describedBy="lorebook-help"
 										disabled={isGuest}
-									>
-										<option value={null}>None</option>
-										{#each lorebookList as lorebook (lorebook.id)}
-											<option value={lorebook.id}>
-												{lorebook.name}
-											</option>
-										{/each}
-									</select>
+										options={[
+											{ value: "", label: "None" },
+											...lorebookList.map((lorebook) => ({
+												value: String(lorebook.id),
+												label: lorebook.name ?? ""
+											}))
+										]}
+										bind:value={
+											() => (lorebookId == null ? "" : String(lorebookId)),
+											(v) => (lorebookId = v ? Number(v) : null)
+										}
+									/>
+									<span id="lorebook-help" class="sr-only">
+										The session will use world lore, character lore and
+										history entries from this lorebook
+									</span>
 								</div>
+								{#if lorebookId != null && lorebookId === savedLorebookId}
+									<!-- Guests see where the session reads, read-only: the
+									     book's lines and presents are the owner's to read
+									     (#139), so nothing is asked for on their behalf. -->
+									<SessionLorebookReading
+										lorebookId={lorebookId}
+										bind:branchId={lorebookBranchId}
+										bind:clock={storyClock}
+										readOnly={isGuest}
+									/>
+								{:else if lorebookId != null}
+									<p class="text-surface-600-400 text-xs">
+										Save to choose which line of this lorebook the session reads
+										and set its story clock. It starts on the line used most
+										recently, following that line's present.
+									</p>
+								{/if}
 							{/if}
 						</div>
 					</section>
+					<!-- What the session tracks (ruled 2026-09-25): applied at once,
+					     not with Save — a pick changes what this session tracks
+					     from now on. -->
+					{#if editSessionId != null}
+						<SessionAttributes sessionId={editSessionId} cardClass={CARD_CLASS} />
+					{/if}
 
 					<!-- The preset (19 §7). One pipeline configuration, chosen
 						     per session, deciding the settings this session runs on and
@@ -1996,31 +1978,24 @@
 						     off vanishing entirely would read as deleted. -->
 					{#if session && !isGuest && presetOptions.length > 0}
 						<section class={CARD_CLASS}>
-							<label
-								class="text-surface-500 mb-1.5 block text-xs"
-								for="sessionPreset"
+							<p
+								class="text-surface-600-400 mb-1.5 block text-xs"
+								aria-hidden="true"
 							>
 								Preset
-							</label>
-							<select
-								id="sessionPreset"
-								class="select rounded-[10px]"
+							</p>
+							<Select
+								label="Preset"
+								labelHidden
+								options={presetOptions.map((p) => ({
+									value: String(p.configId),
+									label: `${p.isDefault ? "★ " : ""}${p.name}${!p.enabled ? " (unavailable)" : ""}`
+								}))}
 								value={selectedPreset == null
 									? ""
 									: String(selectedPreset)}
-								onchange={(e) =>
-									choosePreset(e.currentTarget.value)}
-							>
-								{#each presetOptions as p (p.configId)}
-									<option value={String(p.configId)}>
-										{p.isDefault
-											? "★ "
-											: ""}{p.name}{!p.enabled
-											? " (unavailable)"
-											: ""}
-									</option>
-								{/each}
-							</select>
+								onValueChange={choosePreset}
+							/>
 						</section>
 					{/if}
 
@@ -2034,7 +2009,7 @@
 					{#if session && !isGuest && sessionFunctions.length > 0}
 						<section class={CARD_CLASS}>
 							<h3 class="mb-1 text-sm font-medium">Actions</h3>
-							<p class="text-surface-500 mb-2 text-xs">
+							<p class="text-surface-600-400 mb-2 text-xs">
 								What this session can do besides reply. Replying
 								is intrinsic and always available.
 							</p>
@@ -2062,13 +2037,13 @@
 											{f.name}
 											{#if f.source === "session"}
 												<span
-													class="text-surface-500 text-[10px]"
+													class="text-surface-600-400 text-[11px]"
 												>
 													· set for this session
 												</span>
 											{/if}
 										</span>
-										<span class="text-surface-500 text-xs">
+										<span class="text-surface-600-400 text-xs">
 											{f.specSlug}
 										</span>
 									</span>
@@ -2076,7 +2051,7 @@
 							{/each}
 
 							{#if presetActions.length === 0}
-								<p class="text-surface-500 text-xs italic">
+								<p class="text-surface-600-400 text-xs italic">
 									This session's preset includes no actions.
 								</p>
 							{/if}
@@ -2086,7 +2061,7 @@
 									<p class="text-xs font-medium">
 										Not in this preset
 									</p>
-									<p class="text-surface-500 text-xs">
+									<p class="text-surface-600-400 text-xs">
 										{#if canAddOutsidePreset}
 											Contributed to this mode but left
 											out of the preset. Adding one
@@ -2121,7 +2096,7 @@
 											<span class="flex flex-col">
 												<span>{f.name}</span>
 												<span
-													class="text-surface-500 text-xs"
+													class="text-surface-600-400 text-xs"
 												>
 													{f.specSlug}
 												</span>
@@ -2142,6 +2117,39 @@
 							canEdit={!isGuest}
 							cardClass={CARD_CLASS}
 						/>
+					{/if}
+
+					<!-- What the person's own lines are called (lair re-plan R4): only
+					     for a genre that declares a `playerLabel`. Blank keeps the
+					     genre's; a rename relabels every line already written. -->
+					{#if genrePlayerLabel}
+						<section class={CARD_CLASS}>
+							<div class="flex flex-col">
+								<label
+									class="text-surface-600-400 mb-1.5 text-xs"
+									for="playerLabel"
+								>
+									What your lines are called
+								</label>
+								<input
+									id="playerLabel"
+									class={FIELD_CLASS}
+									type="text"
+									maxlength="60"
+									placeholder={genrePlayerLabel}
+									aria-describedby="playerLabel-help"
+									bind:value={playerLabelOverride}
+									disabled={isGuest}
+								/>
+								<p
+									id="playerLabel-help"
+									class="text-surface-600-400 mt-1.5 text-xs"
+								>
+									The name your messages show and the AI reads. Leave it
+									empty to use "{genrePlayerLabel}".
+								</p>
+							</div>
+						</section>
 					{/if}
 
 					<!-- Mode-declared per-session fields (19 §2): rendered through the one
@@ -2169,7 +2177,7 @@
 					{#if session?.id && sessionPipelines.length}
 						<section class={CARD_CLASS}>
 							<h3 class="mb-1 text-sm font-medium">Pipelines</h3>
-							<p class="text-surface-500 mb-3 text-xs">
+							<p class="text-surface-600-400 mb-3 text-xs">
 								Changes here apply to this session only. Leave a
 								control on its default to inherit the global
 								setting.
@@ -2198,7 +2206,7 @@
 					<!-- Tags -->
 					<section class="{CARD_CLASS} mb-10">
 						<label
-							class="text-surface-500 mb-1.5 block text-xs"
+							class="text-surface-600-400 mb-1.5 block text-xs"
 							for="tagInput"
 						>
 							Tags
@@ -2238,7 +2246,7 @@
 											</span>
 											{#if tag.description}
 												<span
-													class="text-surface-500 text-xs"
+													class="text-surface-600-400 text-xs"
 												>
 													- {tag.description}
 												</span>
@@ -2278,6 +2286,21 @@
 							</div>
 						{/if}
 					</section>
+					<!-- Session data (2026-09-26): the annex, read-only, for the
+					     owner and administrators (the server refuses anyone else).
+					     Mounted with the tab, so it reads when the tab opens. -->
+					<!-- The undo for Regenerate's "Don't ask again" (R2): the
+					     owner's, and only where the genre offers retake. -->
+					{#if editSessionId != null && activeSessionTab === "settings" && !isGuest}
+						<RetakeAskSetting
+							sessionId={editSessionId}
+							shape={modeShape}
+							cardClass={CARD_CLASS}
+						/>
+					{/if}
+					{#if editSessionId != null && activeSessionTab === "settings" && (!isGuest || userCtx.user?.isAdmin)}
+						<SessionAnnexPanel sessionId={editSessionId} cardClass={CARD_CLASS} />
+					{/if}
 				</div>
 			</div>
 
@@ -2297,7 +2320,7 @@
 								<p class="font-semibold">
 									What this session sees of your data
 								</p>
-								<p class="text-surface-500">
+								<p class="text-surface-600-400">
 									Anything you own and add here becomes
 									visible to this session's other
 									participants, and is read by the pipelines
@@ -2310,7 +2333,7 @@
 					</div>
 
 					{#if !accountVisibility}
-						<p class="text-surface-500 text-sm">Loading…</p>
+						<p class="text-surface-600-400 text-sm">Loading…</p>
 					{:else}
 						<p class="text-sm">
 							{#if accountVisibility.isOwner}
@@ -2407,7 +2430,7 @@
 								Who can see the above
 							</p>
 							{#if accountVisibility.viewers.length === 0}
-								<p class="text-surface-500 text-sm">
+								<p class="text-surface-600-400 text-sm">
 									No one else yet — you are the only
 									participant.
 								</p>
@@ -2523,7 +2546,7 @@
 		onSelect={() => {}}
 		multiSelect={true}
 		onMultiSelect={handleAddGuests}
-		title="Add Guests to Session"
+		title="Add guests to session"
 		description="Select users to add as guests. Guests can view and participate in the session."
 	/>
 {/if}

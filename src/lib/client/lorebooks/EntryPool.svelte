@@ -1,4 +1,5 @@
 <script lang="ts">
+	import Select from "$lib/client/components/inputs/Select.svelte"
 	import * as Icons from "@lucide/svelte"
 	import type { Snippet } from "svelte"
 	import { SvelteSet } from "svelte/reactivity"
@@ -6,10 +7,11 @@
 	import { dndzone } from "svelte-dnd-action"
 	import EmptyState from "$lib/client/components/EmptyState.svelte"
 	import type { BindingWithRelations } from "$lib/client/components/lorebookForms/entryManager"
-	import type { LoreLens } from "./loreRoute"
+	import type { LoreLens } from "$lib/shared/lorebooks/loreRoute"
 	import {
 		activeFilterCount,
 		buildTree,
+		emptyFilters,
 		flattenTree,
 		hasNesting,
 		SCENE_KIND,
@@ -20,7 +22,7 @@
 	import { rowDrag } from "./editor/rowDrag"
 	import { markerFor, type EntryDecisions } from "./markers"
 	import type { FacetCounts } from "./scopes"
-	import { POOL_SORTS } from "./scopes"
+	import { nothingMatchesLine, POOL_SORTS } from "./scopes"
 	import { kindLabel } from "./sections/kinds"
 	import { getLorePoolCtx } from "./sections/poolContext"
 	import type { PoolSource, SectionDescriptor } from "./sections/types"
@@ -125,7 +127,8 @@
 	const dragOptions = (item: PoolItem) => ({
 		key: item.key,
 		draggable: item.kind !== SCENE_KIND,
-		canDrop: (from: string) => canFileUnder(from, item.key, poolCtx.pool),
+		canDrop: (from: string) =>
+			canFileUnder(from, item.key, poolCtx.pool, poolCtx.newRowBranchId),
 		onDrop: (from: string) => poolCtx.reparent(from, item.key)
 	})
 
@@ -211,7 +214,7 @@
 	<button
 		type="button"
 		class="chip gap-1 {active
-			? 'preset-filled-primary-500'
+			? 'preset-tonal-primary'
 			: 'preset-tonal-surface'}"
 		class:opacity-60={count === 0 && !active}
 		aria-pressed={active}
@@ -259,19 +262,39 @@
 				})
 		)}
 	</div>
+	<!-- The rail's saved scopes, as chips: the compact layout has no rail, so
+	     without these a saved scope set on the desk kept narrowing the list
+	     with nothing on screen to say so or to switch it off. Pinned is the
+	     third, and is the chip above. -->
+	<div class="flex flex-wrap gap-1" role="group" aria-label="Saved scopes">
+		{@render chip(
+			"Needs keywords",
+			facets.needsKeywords,
+			filters.keywords === "none",
+			() =>
+				onFilters({
+					...filters,
+					keywords: filters.keywords === "none" ? "any" : "none"
+				})
+		)}
+		{@render chip("Loose ends", facets.looseEnds, filters.looseEnds, () =>
+			onFilters({ ...filters, looseEnds: !filters.looseEnds })
+		)}
+	</div>
 {/snippet}
 
 {#snippet sortControl()}
-	<select
-		class="select compact text-sm"
-		aria-label="Sort"
+	<Select
+		label="Sort"
+		labelHidden
+		class="w-44 text-sm"
+		options={POOL_SORTS}
 		value={orderBy}
-		onchange={(e) => onOrderBy(e.currentTarget.value)}
-	>
-		{#each POOL_SORTS as opt (opt.value)}
-			<option value={opt.value}>{opt.label}</option>
-		{/each}
-	</select>
+		onValueChange={(v) => {
+			// A clear is not an ordering; the pool always has one.
+			if (v) onOrderBy(v)
+		}}
+	/>
 {/snippet}
 
 {#snippet retrievalMark(item: PoolItem)}
@@ -443,7 +466,7 @@
 			>
 				{item.content.trim().split("\n")[0] || "No content yet."}
 			</p>
-			<span class="badge preset-tonal-surface self-start text-[10px]">
+			<span class="badge preset-tonal-surface self-start text-[11px]">
 				{kindLabel(item.kind)}
 			</span>
 		</div>
@@ -498,7 +521,7 @@
 						<Icons.Filter size={14} aria-hidden="true" />
 						<span>Filter</span>
 						{#if filterCount > 0}
-							<span class="badge preset-filled-primary-500">
+							<span class="badge preset-tonal-primary">
 								{filterCount}
 							</span>
 						{/if}
@@ -538,12 +561,12 @@
 			<div class="flex items-center justify-center py-8">
 				<Icons.Loader2
 					size={20}
-					class="text-surface-400 animate-spin"
+					class="text-surface-600-400 animate-spin"
 				/>
 			</div>
 		{:else if isReordering}
 			<div
-				class="text-surface-700-300 text-xs font-semibold tracking-wide uppercase"
+				class="text-surface-600-400 text-xs font-semibold"
 			>
 				Drag to reorder
 			</div>
@@ -567,7 +590,7 @@
 					>
 						<Icons.GripVertical
 							size={16}
-							class="text-surface-400 shrink-0"
+							class="text-surface-600-400 shrink-0"
 						/>
 						<span class="flex-1 truncate font-medium">
 							{item.name}
@@ -576,12 +599,31 @@
 				{/each}
 			</div>
 			<button
-				class="btn btn-sm preset-filled-success-500 w-full"
+				class="btn btn-sm preset-filled-primary-500 w-full"
 				type="button"
 				onclick={() => (isReordering = false)}
 			>
 				<Icons.Check size={14} /> Done
 			</button>
+		{:else if items.length === 0 && filtering && facets.total > 0}
+			<!-- The scope has rows; the search and filters hid all of them.
+			     The first-run copy and its New button would be wrong here. -->
+			<div
+				class="flex flex-col items-center gap-3 py-8 text-center"
+				data-lore-pool-filtered-empty
+			>
+				<p class="text-surface-700-300 text-sm">
+					{nothingMatchesLine(filters.search)}
+				</p>
+				<button
+					type="button"
+					class="btn btn-sm preset-tonal-surface"
+					onclick={() => onFilters(emptyFilters())}
+				>
+					<Icons.FilterX size={14} aria-hidden="true" />
+					Clear search and filters
+				</button>
+			</div>
 		{:else if items.length === 0}
 			<EmptyState
 				icon={descriptor.icon}

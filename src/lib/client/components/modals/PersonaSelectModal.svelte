@@ -52,7 +52,7 @@
 		onclose,
 		onOpenChange,
 		onSelect,
-		title = "Select Persona",
+		title = "Select persona",
 		description,
 		returnFullPersona = false,
 		onCreateNew
@@ -158,8 +158,8 @@
 			>
 				<header class="flex items-center justify-between">
 					<h2 class="h2">{title}</h2>
-					<button class="btn btn-sm" onclick={close}>
-						<Icons.X size={20} />
+					<button class="btn btn-sm" aria-label="Close" onclick={close}>
+						<Icons.X size={20} aria-hidden="true" />
 					</button>
 				</header>
 				{#if description}
@@ -170,8 +170,9 @@
 						class="input min-w-48 flex-1"
 						type="text"
 						placeholder={showAll
-							? "Search characters..."
-							: "Search personas..."}
+							? "Search characters…"
+							: "Search personas…"}
+						aria-label={showAll ? "Search characters" : "Search personas"}
 						bind:value={search}
 					/>
 					<Switch
@@ -197,7 +198,7 @@
 						message={emptyMessage}
 						ctaLabel={search.trim() || !onCreateNew
 							? undefined
-							: "New Persona"}
+							: "New persona"}
 						onCta={search.trim() ? undefined : onCreateNew}
 					/>
 				{:else}
@@ -208,7 +209,7 @@
 							{#each filtered as p (p.id)}
 								<div class="flex p-1 lg:basis-1/2">
 									<button
-										class="group preset-outlined-surface-400-600 hover:preset-filled-surface-500 relative flex w-full gap-3 overflow-hidden rounded p-2"
+										class="group preset-outlined-surface-400-600 hover:bg-surface-200-800 relative flex w-full gap-3 overflow-hidden rounded p-2"
 										onclick={() => choose(p)}
 									>
 										<div class="w-fit shrink-0">
@@ -262,7 +263,7 @@
 								class="btn btn-sm preset-tonal-primary flex items-center gap-1"
 								onclick={onCreateNew}
 							>
-								<Icons.Plus size={16} /> New Persona
+								<Icons.Plus size={16} /> New persona
 							</button>
 						</div>
 					{/if}

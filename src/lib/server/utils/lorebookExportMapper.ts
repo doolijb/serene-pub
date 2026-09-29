@@ -63,7 +63,8 @@ export interface ExportableEntry {
 	id: number
 	typeId: string
 	content: string
-	keys: string
+	/** The stored list (finding #146); a legacy comma string still reads. */
+	keys: readonly string[] | string
 	enabled: boolean
 	constant: boolean
 	useRegex: boolean | null
@@ -76,7 +77,7 @@ export interface ExportableEntry {
 	 * either column, and an absent condition is what every row that has never
 	 * been given one holds. See `exportedCondition`.
 	 */
-	secondaryKeys?: string | null
+	secondaryKeys?: readonly string[] | string | null
 	selectiveLogic?: string | null
 	/**
 	 * The declared half, read by name.
@@ -160,11 +161,16 @@ export function toDelimitedRegexKey(
 	return `/${escaped}/${flags}`
 }
 
-/** A stored comma-joined key list, back to the array the wire carries. */
-const splitStoredKeys = (keys: string | null | undefined): string[] =>
-	(keys ?? "")
-		.split(",")
-		.map((k) => k.trim())
+/**
+ * An entry's keys as the array the file carries. The list the wire now holds
+ * is kept element for element (finding #146); only a legacy comma string is
+ * split.
+ */
+const splitStoredKeys = (
+	keys: readonly string[] | string | null | undefined
+): string[] =>
+	(Array.isArray(keys) ? keys : String(keys ?? "").split(","))
+		.map((k) => String(k).trim())
 		.filter(Boolean)
 
 /**
@@ -225,9 +231,8 @@ function baseEntryFields(
 	return {
 		// A regex entry's keys go out delimited so both scanners read them as
 		// patterns; a literal entry's keys are its keys. Note the pre-existing
-		// comma split above: a pattern containing `,` (`a{1,3}`) was already
-		// torn in two by Serene Pub's comma-joined key storage, and still is —
-		// each fragment simply goes out delimited now.
+		// keys are the stored list, so a pattern containing `,` (`a{1,3}`)
+		// goes out whole (finding #146).
 		keys: useRegex
 			? keys.map((k) => toDelimitedRegexKey(k, entry.caseSensitive))
 			: keys,

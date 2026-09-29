@@ -73,6 +73,10 @@ import {
 	type OnnxModality
 } from "$lib/server/localModels/onnxCache"
 import { buildConnectionsList, connectionModelsView } from "./connections"
+import {
+	downloadHref,
+	notifyDownloadSettled
+} from "$lib/server/notifications/downloads"
 
 type EmitToUser = (event: string, data: any) => any
 
@@ -328,7 +332,9 @@ function pushProgress(
 async function runWarm(
 	download: OnnxDownload,
 	endpoint: SelectConnection,
-	row: SelectConnectionModel
+	row: SelectConnectionModel,
+	/** The admin who pressed Download — the one told how it settled. */
+	initiatorId: number
 ) {
 	const { modality, modelId } = download
 	let failure: string | null = null
@@ -409,6 +415,17 @@ async function runWarm(
 	} catch (err) {
 		console.error(`[onnx-download] settling ${modelId}:`, err)
 	}
+	if (!download.cancelled)
+		await notifyDownloadSettled({
+			userId: initiatorId,
+			source: "onnx",
+			// `${modality}:${modelId}` — one model id can be downloaded
+			// for both lanes, each its own download.
+			key: download.key,
+			model: row.name || modelId,
+			href: downloadHref(endpoint.id),
+			...(failure !== null ? { error: failure } : {})
+		})
 
 	// Released BEFORE the pushes, so the state they carry is the settled one
 	// rather than one more `downloading` frame.
@@ -501,7 +518,7 @@ export const connectionsDownloadModel: Handler<
 		watch(download, socket.user!.id, emitToUser)
 		if (claimed) {
 			lastPushAt.set(download.key, 0)
-			download.settled = runWarm(download, endpoint, row)
+			download.settled = runWarm(download, endpoint, row, socket.user!.id)
 		} else if (!activeDownload(modality, row.model)) {
 			// It settled between `claimDownload` handing back the running entry
 			// and this line, so the watcher just registered is on a key nothing
@@ -873,6 +890,9 @@ export async function reconcileOnnxDownloadsOnBoot() {
 			)
 		)
 		.returning({ filename: schema.localModels.filename })
+	// No download-failed notification here: who started a download is held
+	// only in memory (the watcher map), never on the row, so an interrupted
+	// one has nobody known to tell. The row's `error` state is the record.
 	if (stale.length)
 		console.log(
 			`[onnx-download] settled ${stale.length} interrupted download(s): ${stale

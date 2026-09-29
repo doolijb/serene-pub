@@ -123,6 +123,7 @@
 						{entity?.name ?? (image ? "Image" : "Avatar")}
 					</h2>
 					<button
+						aria-label="Close"
 						class="btn btn-sm"
 						onclick={() => onOpenChange({ open: false })}
 					>
@@ -151,7 +152,7 @@
 						<div
 							class="text-surface-700-300 flex shrink-0 items-center gap-2 text-sm"
 						>
-							<Icons.Loader size={16} class="animate-spin" />
+							<Icons.Loader2 size={16} class="animate-spin" />
 							Loading gallery…
 						</div>
 					{:else if entity && images.length > 0}

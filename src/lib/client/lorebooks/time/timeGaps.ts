@@ -7,8 +7,9 @@
  * dated entry uses: one entry dated to the year alone makes the whole book's
  * unit the year, since nothing finer can be said about the stretch it sits in.
  *
- * ⚠ **The calendar is inferred from the book.** No calendar is declared, so
- * how many months a year holds is unknowable; the largest month and day the
+ * ⚠ **The calendar is inferred from the book** — even when one is declared
+ * (a declared calendar's month lengths are not read here yet). In a free-form
+ * book how many months a year holds is unknowable; the largest month and day the
  * book records stand in for it, which is what makes the turn of a year read as
  * one month rather than as a gap.
  */

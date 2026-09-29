@@ -166,7 +166,6 @@ beforeAll(async () => {
 		sessionId,
 		characterId: aliceId,
 		isActive: true,
-		visibility: "visible"
 	})
 	await db
 		.insert(schema.sessionPersonas)

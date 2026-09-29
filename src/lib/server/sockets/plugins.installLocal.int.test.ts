@@ -268,9 +268,11 @@ describe("plugins:installLocal — the projection", () => {
 			.select()
 			.from(schema.pipelineConfigs)
 			.where(like(schema.pipelineConfigs.seedKey, `plugin:${SLUG}:%`))
+		// Keyed per spec (`plugin:<id>:<spec>#<slug>`): a config slug is scoped
+		// to its spec, so two specs may ship the same slug without colliding.
 		expect(configs.map((c) => c.seedKey).sort()).toEqual([
-			`plugin:${SLUG}:tally-default`,
-			`plugin:${SLUG}:tally-flavoured`
+			`plugin:${SLUG}:core:spec/respond#tally-flavoured`,
+			`plugin:${SLUG}:${RESPOND}#tally-default`
 		])
 		const own = configs.find((c) => c.seedKey!.endsWith("tally-default"))!
 		expect(own.specId).toBe((await specRow(RESPOND)).id)

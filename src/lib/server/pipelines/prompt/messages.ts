@@ -43,7 +43,35 @@ export interface ProcessMessagesInput {
 		sessionPersonas?: readonly any[]
 		removedSessionCharacters?: readonly any[]
 		removedSessionPersonas?: readonly any[]
+		/**
+		 * The seated envoys (U5g) — an envoy's row names it by reference and
+		 * holds no `characterId`, so its name comes from here. `fallback`
+		 * marks the genre's fallback envoy: the unclaimed line's name.
+		 */
+		envoys?: readonly { slug: string; name?: unknown; fallback?: boolean }[]
+		/** Envoys declared but not seated — an action's envoy speaks unseated. */
+		declaredEnvoys?: readonly {
+			slug: string
+			name?: unknown
+			fallback?: boolean
+		}[]
+		/**
+		 * The session's members by user id (lair pass B11) — the name a
+		 * person's own line takes when no persona names it.
+		 */
+		memberNames?: Readonly<Record<number, string>>
+		/**
+		 * What the genre calls a person's persona-less line (lair re-plan
+		 * R4) — the session's override, else the genre's; absent when the
+		 * genre declares none. Wins over `memberNames` on such a line.
+		 */
+		playerLabel?: string
 	}
+	/**
+	 * The session's narrator name — what a line nobody claims renders under
+	 * when the genre declares no fallback envoy.
+	 */
+	narratorName?: string | null
 	/** This turn's speaker and listener, as the template context resolved them. */
 	charName: string
 	personaName: string
@@ -94,7 +122,7 @@ export interface ProcessedMessages {
 	includedIds: number[]
 }
 
-/** The id the seed carries, matching the legacy engines (KeywordInfillEngine:290). */
+/** The id the seed carries, matching the 0.5 keyword path. */
 export const SEED_MESSAGE_ID = -2
 
 /**
@@ -113,7 +141,8 @@ export function processMessages(
 	const interpolation = new InterpolationEngine()
 	const processor = new SessionMessageProcessor(
 		input.cast as any,
-		interpolation
+		interpolation,
+		{ narratorName: input.narratorName }
 	)
 
 	const context = {
@@ -222,9 +251,9 @@ export function processMessages(
 	 * manuscript. Both are absent unless the genre shapes channels, so this
 	 * reads `undefined` and changes nothing for every genre that declares none.
 	 */
-	const triggerVoice =
+	const turnVoice =
 		input.turnChannelVoice ?? input.messages.at(-1)?.channelVoice
-	if (input.seed !== false && resolveSeedLine({ voice: triggerVoice }).seed)
+	if (input.seed !== false && resolveSeedLine({ voice: turnVoice }).seed)
 		processed.push({
 			id: SEED_MESSAGE_ID,
 			role: "assistant",

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import type { Snippet } from "svelte"
 	/**
 	 * A LOCAL ONNX endpoint's own header — what the lane is doing, and (at desk
 	 * width) every model it can reach in one table.
@@ -12,13 +13,30 @@
 	 * a person cannot make it by opening seven models one at a time. So the
 	 * facts are columns, sorted cheapest-first inside each tier.
 	 *
-	 * At compact width there is no table: the sidebar index already lists these
-	 * rows with the same facts stacked, and a second copy of them here would be
-	 * the same list twice on one phone screen.
+	 * At compact width the same rows are a stacked list (`ModelRow`). The dock
+	 * once showed none, pointing at "the sidebar index" — which stopped listing
+	 * models with R1, so the dock had no way to download or switch (plan
+	 * 2026-09-24 C3).
 	 *
-	 * ⚠ It sits ABOVE the connection's own form, never instead of it. The name,
-	 * the notes and the lane's TTL are ordinary connection settings and stay
-	 * exactly where every other endpoint keeps them.
+	 * ## Tabs, like every managed runtime (2026-09-25)
+	 *
+	 * **Models · Get · Arriving.** What could be downloaded never sits INLINE
+	 * under what is already here: every endpoint answers "where do I get a
+	 * model?" the same way KoboldCPP and Ollama do, with a **Get** tab
+	 * (plan 2026-09-24 C3). The tab holds the same `ModelFinderView`
+	 * they open, scoped to this connection, and **Arriving** the same
+	 * `DownloadsView`: one idiom, three destinations.
+	 *
+	 * ⚠ The table therefore lists only what is **on this machine**
+	 * (`splitByPresence().here`). Comparing a model you have against one you
+	 * could fetch now means opening Get — which is the trade the tabs make, and
+	 * the same one the managed runtimes already made.
+	 *
+	 * ⚠ **The connection's own form is the Settings tab** (2026-09-25), handed
+	 * down as `connectionSettings` — the same snippet pattern the managed view
+	 * uses. Other endpoints keep it BELOW their view; a fourth tab labelled Settings with the settings underneath instead
+	 * would be the worst of both. The sidebar still owns the form and its
+	 * unsaved-changes bar, so an edit survives switching tabs.
 	 *
 	 * ⚠ **Make active is not emitted here.** It is the capability-default
 	 * registration (§10), raised so the sidebar's costed confirmation appears.
@@ -28,7 +46,6 @@
 	 */
 	import * as Icons from "@lucide/svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
-	import { useInterest } from "$lib/client/sockets/interest.svelte"
 	import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 	import { sectionForModality } from "$lib/shared/constants/connectionSections"
 	import { idleMinutes } from "./endpointStatus"
@@ -40,15 +57,29 @@
 	import {
 		onnxModelHeadline,
 		onnxSizeLabel,
-		tierOrder,
+		splitByPresence,
 		type OnnxModality
 	} from "./onnxModelFacts"
 	import { useLaneStatus } from "./useLaneStatus.svelte"
+	import ModelRowItem from "./ModelRow.svelte"
+	import ModelFinderView from "./ModelFinderView.svelte"
+	import DownloadsView from "./DownloadsView.svelte"
+	import PanelTabStrip from "$lib/client/components/panels/PanelTabStrip.svelte"
 	import type { CapabilityDefaultRef } from "./modelSystemDefaults"
 
 	type ModelRow = Sockets.Connections.Models.ModelRow
 
 	interface Props {
+		/**
+		 * This connection's own form — name, notes, the lane's TTL, Delete —
+		 * handed down by the sidebar and rendered in the Settings TAB.
+		 *
+		 * ⚠ Other endpoints keep it BELOW their view. A local ONNX endpoint
+		 * wears the managed runtimes' four tabs, and
+		 * a fourth tab labelled Settings with the settings underneath it
+		 * instead would be the worst of both.
+		 */
+		connectionSettings?: Snippet
 		/** The endpoint, with its models, out of the sidebar's own list. */
 		connection: Sockets.Connections.List.Row
 		capabilityDefaults?: Record<string, CapabilityDefaultRef | undefined>
@@ -64,6 +95,7 @@
 		onRetry: (model: ModelRow) => void
 	}
 	let {
+		connectionSettings,
 		connection,
 		capabilityDefaults = {},
 		mode,
@@ -104,7 +136,37 @@
 		activeModelId?.connectionModelId === model.id
 	const activeModel = $derived(models.find((m) => isActiveRow(m)) ?? null)
 
-	const groups = $derived(tierOrder(models))
+	const split = $derived(splitByPresence(models, isActiveRow))
+
+	/**
+	 * Which half of the endpoint is on show.
+	 *
+	 * ⚠ **A tab, not a fold** (2026-09-25). A disclosure under what is already
+	 * here would answer "where do I get a model?" differently from every
+	 * managed runtime, which has a **Get** tab (plan 2026-09-24 C3). One idiom, three
+	 * destinations: the tab holds the same `ModelFinderView` KoboldCPP and
+	 * Ollama open, scoped to this connection.
+	 */
+	let tab = $state("models")
+
+	/** This endpoint's files still arriving, for the Arriving tab's dot. */
+	const arriving = $derived(
+		models.filter((m) => m.local?.state === "downloading").length
+	)
+
+	const onnxTabs = $derived([
+		{ value: "models", label: "Models", icon: Icons.Package },
+		{ value: "get", label: "Get", icon: Icons.Search },
+		{
+			value: "downloads",
+			label: "Arriving",
+			icon: Icons.Download,
+			hasActivity: arriving > 0
+		},
+		{ value: "settings", label: "Settings", icon: Icons.Settings }
+	])
+	/** The chip on the active row: "Active", the word these lanes use. */
+	const activeWord = "Active"
 
 	/** How much of this endpoint's list is actually on this machine. */
 	const onDisk = $derived(models.filter((m) => m.local?.state === "on_disk"))
@@ -129,38 +191,6 @@
 		if (isEmbeddings) socket.emit("vectorization:unloadModel", {})
 		else socket.emit("ner:unloadModel", {})
 	}
-
-	// ── Add from Hugging Face ───────────────────────────────────────────────
-	let addingHub = $state(false)
-	let hubId = $state("")
-	let hubError = $state<string | null>(null)
-	/** This view started an add — the index declares the same two keys. */
-	let hubPending = $state(false)
-
-	function submitHub() {
-		const id = hubId.trim()
-		if (!id || connection.id == null) return
-		hubError = null
-		hubPending = true
-		socket.emit("connections:addHubModel", { id: connection.id, hubId: id })
-	}
-	useInterest<"connections:addHubModel">("connections:addHubModel", () => {
-		if (!hubPending) return
-		// The refreshed list arrives on `connections:list`; all this does is
-		// close the form it was typed into.
-		hubPending = false
-		hubError = null
-		hubId = ""
-		addingHub = false
-	})
-	useInterest<"connections:addHubModel:error">(
-		"connections:addHubModel:error",
-		(msg: { error?: string }) => {
-			if (!hubPending) return
-			hubPending = false
-			hubError = msg.error ?? "The Hub would not confirm that id."
-		}
-	)
 
 	// ── The table's cells ───────────────────────────────────────────────────
 	const sizeCell = (model: ModelRow) =>
@@ -194,12 +224,12 @@
 		const headline = onnxModelHeadline(state, active)
 		if (model.local?.state === "downloading") return null
 		const preset = active
-			? "preset-filled-primary-500"
+			? "preset-tonal-primary"
 			: model.local?.state === "on_disk"
 				? "preset-tonal-success"
 				: model.local?.state === "error"
 					? "preset-tonal-warning"
-					: "border-surface-300-700 text-muted border"
+					: "border-surface-300-700 text-surface-600-400 border"
 		return { label: headline.text, preset }
 	}
 
@@ -247,30 +277,13 @@
 </script>
 
 <div class="mb-4 flex flex-col gap-3">
-	<!-- The endpoint, as a thing that runs here rather than a thing you dial. -->
-	<div class="flex items-start gap-3">
-		<div
-			class="preset-tonal-primary flex size-16 shrink-0 items-center justify-center rounded-lg"
-			aria-hidden="true"
-		>
-			<SectionIcon size={28} />
-		</div>
-		<div class="min-w-0 flex-1">
-			<div class="flex flex-wrap items-center gap-2">
-				<h3 class="min-w-0 truncate text-sm font-semibold">
-					{connection.name}
-				</h3>
-				<span
-					class="border-surface-300-700 text-muted shrink-0 rounded border px-1.5 py-0.5 text-[10px] font-medium"
-				>
-					ONNX
-				</span>
-			</div>
-			<p class="text-muted text-xs">
-				Runs inside Serene Pub · no server to run · loads on use
-			</p>
-		</div>
-	</div>
+	<!-- The endpoint, as a thing that runs here rather than a thing you dial.
+	     The name and the ONNX chip are the pane header's; repeating them here
+	     put the title on screen twice (plan 2026-09-24 C8). -->
+	<p class="text-surface-600-400 flex items-center gap-2 text-xs">
+		<SectionIcon size={14} aria-hidden="true" />
+		Runs inside Serene Pub · no server to run · loads on use
+	</p>
 
 	<!-- The lane, as pills. Each one is a fact the server answered; a lane that
 	     has not answered shows none of them rather than a placeholder. -->
@@ -323,213 +336,264 @@
 				Unload now
 			</button>
 		{/if}
-		{#if !addingHub}
-			<button
-				type="button"
-				class="btn btn-sm preset-filled-surface-400-600 min-h-11"
-				onclick={() => (addingHub = true)}
-			>
-				<Icons.Plus size={14} aria-hidden="true" />
-				Add from Hugging Face…
-			</button>
+	</div>
+
+	<p class="text-surface-600-400 text-xs">{infoLine}</p>
+
+	{#snippet listRow(model: ModelRow)}
+		{@const verb = rowVerb(model)}
+		{@const chip = stateChip(model)}
+		<ModelRowItem
+			{model}
+			defaultFor={isActiveRow(model) ? [activeWord] : []}
+			note={[
+				sizeCell(model) !== "—" ? sizeCell(model) : null,
+				isEmbeddings && model.local?.catalog?.dimensions
+					? `${model.local.catalog.dimensions} dimensions`
+					: null,
+				chip ? chip.label : `Downloading ${percentOf(model)}%`
+			]
+				.filter(Boolean)
+				.join(" · ")}
+			canUse={!!verb}
+			useLabel={verb?.label ?? ""}
+			useShortLabel={verb?.label ?? ""}
+			onOpen={() => onOpenModel(model)}
+			onUse={() => verb?.press()}
+		/>
+	{/snippet}
+
+	<PanelTabStrip
+		tabs={onnxTabs}
+		bind:value={tab}
+		ariaLabel="Local models sections"
+		panelIdPrefix="onnx-endpoint"
+	/>
+
+	<div
+		id="onnx-endpoint-models"
+		role="tabpanel"
+		aria-labelledby="onnx-endpoint-models-tab"
+		hidden={tab !== "models"}
+	>
+		{#if tab === "models"}
+			<!-- What is on this machine, and nothing else. What could be
+			     downloaded is the Get tab, the same door every managed
+			     runtime has. -->
+			{#if mode === "compact"}
+				<section class="flex flex-col gap-3 pt-3" aria-label="On this machine">
+					{#if split.here.length}
+						{#each split.here as model (model.id)}
+							{@render listRow(model)}
+						{/each}
+					{:else}
+						{@render nothingHere()}
+					{/if}
+				</section>
+			{:else}
+				<div class="overflow-x-auto pt-3">
+					<table class="w-full text-left text-xs">
+						<thead class="text-surface-600-400">
+							<tr>
+								{#each columns as column, i (i)}
+									<th class="px-2 py-1 font-medium">
+										{#if column}
+											{column}
+										{:else}
+											<!-- The action column. Named for a
+											     screen reader, blank for an eye. -->
+											<span class="sr-only">Action</span>
+										{/if}
+									</th>
+								{/each}
+							</tr>
+						</thead>
+						<tbody>
+							{#each split.here as model (model.id)}
+								{@render tableRow(model)}
+							{:else}
+								<tr>
+									<td
+										colspan={columns.length}
+										class="px-2 py-1.5"
+									>
+										{@render nothingHere()}
+									</td>
+								</tr>
+							{/each}
+						</tbody>
+					</table>
+				</div>
+			{/if}
 		{/if}
 	</div>
 
-	{#if addingHub}
-		<form
-			class="border-surface-300-700 flex flex-col gap-1.5 rounded-lg border p-2"
-			onsubmit={(e) => {
-				e.preventDefault()
-				submitHub()
-			}}
+	<div
+		id="onnx-endpoint-get"
+		role="tabpanel"
+		aria-labelledby="onnx-endpoint-get-tab"
+		hidden={tab !== "get"}
+	>
+		{#if tab === "get"}
+			<!-- The ONE finder (R3), scoped to this connection — the same
+			     component, cards and all, that KoboldCPP and Ollama open. -->
+			<div class="flex flex-col py-3">
+				<!-- ⚠ `capability` is NOT optional here. ONNX is a finder
+				     destination only under the `embeddings` and `entities`
+				     scopes (`SCOPE_KINDS`) — never `chat` — so a Get tab that
+				     opened on the default scope would list no ONNX
+				     destination at all and offer this endpoint nothing. The
+				     lane's own star capability picks the scope, and the two
+				     vocabularies already line up: `text->embedding` and
+				     `text->entities` are exactly what `FINDER_SCOPES` keys
+				     on. -->
+				<ModelFinderView
+					connectionId={connection.id}
+					capability={section?.starCapability}
+					inTab
+					onBack={() => (tab = "models")}
+				/>
+			</div>
+		{/if}
+	</div>
+
+	<div
+		id="onnx-endpoint-downloads"
+		role="tabpanel"
+		aria-labelledby="onnx-endpoint-downloads-tab"
+		hidden={tab !== "downloads"}
+	>
+		{#if tab === "downloads"}
+			<!-- The ONE downloads list (R4): every destination, never a
+			     per-endpoint copy. -->
+			<div class="flex flex-col py-3">
+				<DownloadsView embedded onBack={() => (tab = "models")} />
+			</div>
+		{/if}
+	</div>
+
+	<div
+		id="onnx-endpoint-settings"
+		role="tabpanel"
+		aria-labelledby="onnx-endpoint-settings-tab"
+		hidden={tab !== "settings"}
+	>
+		{#if tab === "settings"}
+			<div class="flex flex-col gap-3 py-3">
+				{@render connectionSettings?.()}
+			</div>
+		{/if}
+	</div>
+
+	{#snippet nothingHere()}
+		<!-- The managed runtimes' empty state, word for word in shape: one
+		     card, one button, and the button is the Get tab. Adding a model
+		     by Hugging Face id lives there too, in the finder — never a
+		     second copy of that form here: one way in per endpoint. -->
+		<div class="panel-card flex flex-col items-start gap-2">
+			<p class="text-sm font-medium">No models yet</p>
+			<p class="text-surface-600-400 text-xs">
+				Nothing is downloaded to this machine. Get one and it appears
+				here — it downloads once.
+			</p>
+			<button
+				type="button"
+				class="btn btn-sm preset-filled-primary-500"
+				onclick={() => (tab = "get")}
+			>
+				<Icons.Download size={15} aria-hidden="true" />
+				Get a model
+			</button>
+		</div>
+	{/snippet}
+
+	{#snippet tableRow(model: ModelRow)}
+		{@const active = isActiveRow(model)}
+		{@const chip = stateChip(model)}
+		{@const verb = rowVerb(model)}
+		<!-- The row is a click target for the pointer; the
+	     name cell is a real button, which is the
+	     keyboard and screen-reader path. -->
+		<!-- The lamp is a LEFT BAR here, not the ring the
+	     cards wear: Tailwind's preflight collapses
+	     table borders, and a collapsed table paints
+	     no box-shadow on a `tr` in any browser. -->
+		<!-- svelte-ignore a11y_click_events_have_key_events -->
+		<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+		<tr
+			class="hover:preset-tonal-primary cursor-pointer align-middle {active
+				? 'preset-filled-surface-100-900 border-primary-500 border-l-2'
+				: ''}"
+			onclick={() => onOpenModel(model)}
 		>
-			<label class="text-xs font-medium" for="onnx-hub-id">
-				Add from Hugging Face
-			</label>
-			<input
-				id="onnx-hub-id"
-				class="input text-xs"
-				placeholder="org/name"
-				bind:value={hubId}
-			/>
-			{#if hubError}
-				<p class="text-warning-500 text-[11px]" role="alert">
-					{hubError}
-				</p>
-			{/if}
-			<div class="flex justify-end gap-2">
+			<td class="px-2 py-1.5">
 				<button
 					type="button"
-					class="btn btn-sm preset-tonal-surface"
-					onclick={() => {
-						addingHub = false
-						hubError = null
-						hubId = ""
+					class="max-w-[16rem] truncate text-left font-medium hover:underline"
+					onclick={(e) => {
+						e.stopPropagation()
+						onOpenModel(model)
 					}}
+					title={model.model}
 				>
-					Cancel
+					{model.name}
 				</button>
-				<button
-					type="submit"
-					class="btn btn-sm preset-filled-primary-500"
-					disabled={!hubId.trim() || hubPending}
-				>
-					Add
-				</button>
-			</div>
-		</form>
-	{/if}
+			</td>
+			<td class="text-surface-600-400 px-2 py-1.5 whitespace-nowrap">
+				{sizeCell(model)}
+			</td>
+			<td class="text-surface-600-400 px-2 py-1.5">
+				{measureCell(model)}
+			</td>
+			<td class="text-surface-600-400 px-2 py-1.5 whitespace-nowrap">
+				{inputCell(model)}
+			</td>
+			<td class="text-surface-600-400 px-2 py-1.5">
+				{languagesCell(model)}
+			</td>
+			<td class="px-2 py-1.5">
+				{#if chip}
+					<span
+						class="{chip.preset} inline-block rounded px-1.5 py-0.5 text-[11px] font-medium whitespace-nowrap"
+					>
+						{chip.label}
+					</span>
+				{:else}
+					<span class="flex min-w-24 items-center gap-1.5">
+						<span
+							class="bg-surface-50-950 block h-1.5 flex-1 overflow-hidden rounded-full"
+							role="progressbar"
+							aria-label={`Downloading ${model.name}`}
+							aria-valuenow={percentOf(model)}
+							aria-valuemin={0}
+							aria-valuemax={100}
+						>
+							<span
+								class="bg-warning-500 block h-full rounded-full transition-[width]"
+								style={`width:${percentOf(model)}%`}
+							></span>
+						</span>
+						<span class="text-surface-600-400 text-[11px]">
+							{percentOf(model)}%
+						</span>
+					</span>
+				{/if}
+			</td>
+			<td class="px-2 py-1.5 text-right">
+				{#if verb}
+					<button
+						type="button"
+						class="btn btn-sm preset-filled-surface-400-600 whitespace-nowrap"
+						onclick={(e) => {
+							e.stopPropagation()
+							verb.press()
+						}}
+					>
+						{verb.label}
+					</button>
+				{/if}
+			</td>
+		</tr>
+	{/snippet}
 
-	<p class="text-muted text-xs">{infoLine}</p>
-
-	{#if mode === "compact"}
-		<p class="text-muted text-xs">
-			Models are listed in the sidebar index.
-		</p>
-	{:else}
-		<div class="overflow-x-auto">
-			<table class="w-full text-left text-xs">
-				<thead class="text-muted">
-					<tr>
-						{#each columns as column, i (i)}
-							<th class="px-2 py-1 font-medium">
-								{#if column}
-									{column}
-								{:else}
-									<!-- The action column. Named for a screen
-									     reader, blank for an eye. -->
-									<span class="sr-only">Action</span>
-								{/if}
-							</th>
-						{/each}
-					</tr>
-				</thead>
-				<!-- One `tbody` per tier, so the heading row is a real row-group
-				     label rather than a cell pretending to be one. -->
-				{#each groups as group (group.tier ?? "untiered")}
-					<tbody>
-						{#if group.label}
-							<tr>
-								<th
-									colspan={columns.length}
-									class="text-muted px-2 pt-3 pb-1 text-[11px] font-semibold tracking-wide uppercase"
-									scope="rowgroup"
-								>
-									{group.label}
-								</th>
-							</tr>
-						{/if}
-						{#each group.rows as model (model.id)}
-							{@const active = isActiveRow(model)}
-							{@const chip = stateChip(model)}
-							{@const verb = rowVerb(model)}
-							<!-- The row is a click target for the pointer; the
-							     name cell is a real button, which is the
-							     keyboard and screen-reader path. -->
-							<!-- The lamp is a LEFT BAR here, not the ring the
-							     cards wear: Tailwind's preflight collapses
-							     table borders, and a collapsed table paints
-							     no box-shadow on a `tr` in any browser. -->
-							<!-- svelte-ignore a11y_click_events_have_key_events -->
-							<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-							<tr
-								class="hover:preset-tonal-primary cursor-pointer align-middle {active
-									? 'preset-filled-surface-100-900 border-primary-500 border-l-2'
-									: ''}"
-								onclick={() => onOpenModel(model)}
-							>
-								<td class="px-2 py-1.5">
-									<button
-										type="button"
-										class="max-w-[16rem] truncate text-left font-medium hover:underline"
-										onclick={(e) => {
-											e.stopPropagation()
-											onOpenModel(model)
-										}}
-										title={model.model}
-									>
-										{model.name}
-									</button>
-								</td>
-								<td
-									class="text-muted px-2 py-1.5 whitespace-nowrap"
-								>
-									{sizeCell(model)}
-								</td>
-								<td class="text-muted px-2 py-1.5">
-									{measureCell(model)}
-								</td>
-								<td
-									class="text-muted px-2 py-1.5 whitespace-nowrap"
-								>
-									{inputCell(model)}
-								</td>
-								<td class="text-muted px-2 py-1.5">
-									{languagesCell(model)}
-								</td>
-								<td class="px-2 py-1.5">
-									{#if chip}
-										<span
-											class="{chip.preset} inline-block rounded px-1.5 py-0.5 text-[10px] font-medium whitespace-nowrap"
-										>
-											{chip.label}
-										</span>
-									{:else}
-										<span
-											class="flex min-w-24 items-center gap-1.5"
-										>
-											<span
-												class="bg-surface-50-950 block h-1.5 flex-1 overflow-hidden rounded-full"
-												role="progressbar"
-												aria-label={`Downloading ${model.name}`}
-												aria-valuenow={percentOf(model)}
-												aria-valuemin={0}
-												aria-valuemax={100}
-											>
-												<span
-													class="bg-warning-500 block h-full rounded-full transition-[width]"
-													style={`width:${percentOf(model)}%`}
-												></span>
-											</span>
-											<span
-												class="text-muted text-[10px]"
-											>
-												{percentOf(model)}%
-											</span>
-										</span>
-									{/if}
-								</td>
-								<td class="px-2 py-1.5 text-right">
-									{#if verb}
-										<button
-											type="button"
-											class="btn btn-sm preset-filled-surface-400-600 whitespace-nowrap"
-											onclick={(e) => {
-												e.stopPropagation()
-												verb.press()
-											}}
-										>
-											{verb.label}
-										</button>
-									{/if}
-								</td>
-							</tr>
-						{/each}
-					</tbody>
-				{/each}
-			</table>
-		</div>
-	{/if}
-
-	<p class="text-muted text-xs">
-		Recommended list:
-		<a
-			class="anchor"
-			href="https://github.com/SerenePub/serene-pub-onnx-list"
-			target="_blank"
-			rel="noopener noreferrer"
-		>
-			github.com/SerenePub/serene-pub-onnx-list ↗
-		</a>
-	</p>
 </div>

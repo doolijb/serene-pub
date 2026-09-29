@@ -71,6 +71,51 @@ describe("search_entries", () => {
 		expect(r.entries[0].content).toBeUndefined()
 	})
 
+	it("asks the host for live entries only — Off and archived are never offered (finding #149)", async () => {
+		// A stand-in host that honours the listing posture the way the real
+		// read does (`lorebookListing.int.test.ts` pins that half).
+		const book = [
+			...ENTRIES,
+			{ id: 4, source: "worldLore", name: "The Old Mill", keys: ["mill"], content: "Burned.", enabled: false },
+			{ id: 5, source: "worldLore", name: "The Drowned Quarter", keys: [], content: "Cut.", archived: true }
+		]
+		const asked: any[] = []
+		const ctx = {
+			sessionId: 1,
+			currentCharacterId: null,
+			async read(table: string, query: any) {
+				asked.push({ table, query })
+				if (table !== "lorebook_entries") return []
+				return book.filter(
+					(e: any) =>
+						(query.enabled !== true || e.enabled !== false) &&
+						(query.archived !== false || e.archived !== true)
+				)
+			}
+		}
+		expect(asked).toEqual([])
+		const found: any = await searchEntries.run({ query: "the" }, ctx as any)
+		expect(found.entries.map((e: any) => e.id)).not.toContain(4)
+		expect(found.entries.map((e: any) => e.id)).not.toContain(5)
+		expect(asked[0].query).toMatchObject({ enabled: true, archived: false })
+		await expect(getEntry.run({ id: 4 }, ctx as any)).rejects.toBeInstanceOf(ToolError)
+		await expect(getEntry.run({ id: 5 }, ctx as any)).rejects.toBeInstanceOf(ToolError)
+	})
+
+	it("reads a key list as one line of keys", async () => {
+		const ctx = {
+			sessionId: 1,
+			currentCharacterId: null,
+			async read(table: string) {
+				return table === "lorebook_entries"
+					? [{ id: 9, source: "worldLore", name: "Echo", keys: ["(ab){1,2}c", "Smith, John"], content: "x" }]
+					: []
+			}
+		}
+		const r: any = await searchEntries.run({ query: "smith, john" }, ctx as any)
+		expect(r.found).toBe(1)
+	})
+
 	it("no query is a refusal the model can act on", async () => {
 		await expect(
 			searchEntries.run({}, ctxWith() as any)

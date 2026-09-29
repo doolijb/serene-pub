@@ -5,6 +5,8 @@
 	import EntryAdvancedFields from "./EntryAdvancedFields.svelte"
 	import EntryCoreFields from "./EntryCoreFields.svelte"
 	import { editBounds, formatDate } from "./historyDates"
+	import { dateProblem } from "$lib/shared/lorebooks/storyDate"
+	import { openBookTime } from "../time/bookTime.svelte"
 
 	/**
 	 * A dated entry: the date, and what happened.
@@ -27,6 +29,24 @@
 		siblings
 	}: EntryEditorProps = $props()
 
+	/**
+	 * The date as the book's calendar reads it, and why it does not fit —
+	 * only when the book declares one. Free-form spells the parts as typed,
+	 * so a hint there would say nothing the inputs do not.
+	 */
+	let calendarHint = $derived.by(() => {
+		const cal = openBookTime.calendar
+		const year = draft?.year
+		if (!cal || typeof year !== "number" || !Number.isFinite(year)) return null
+		const date = {
+			year,
+			month: typeof draft.month === "number" ? draft.month : null,
+			day: typeof draft.day === "number" ? draft.day : null
+		}
+		const problem = dateProblem(date, cal)
+		return problem ? { problem } : { reads: formatDate(date, cal) }
+	})
+
 	let bounds = $derived(
 		isNew
 			? { min: null, max: null }
@@ -45,7 +65,7 @@
 				Year <span class="text-error-500">*</span>
 				<Icons.ScanEye
 					size={13}
-					class="text-surface-400 relative top-[1px]"
+					class="text-surface-600-400 relative top-[1px]"
 				/>
 			</label>
 			<input
@@ -65,7 +85,7 @@
 				Month
 				<Icons.ScanEye
 					size={13}
-					class="text-surface-400 relative top-[1px]"
+					class="text-surface-600-400 relative top-[1px]"
 				/>
 			</label>
 			<input
@@ -84,7 +104,7 @@
 				Day
 				<Icons.ScanEye
 					size={13}
-					class="text-surface-400 relative top-[1px]"
+					class="text-surface-600-400 relative top-[1px]"
 				/>
 			</label>
 			<input
@@ -96,6 +116,16 @@
 			/>
 		</div>
 	</div>
+	{#if calendarHint}
+		<p class="text-xs" aria-live="polite" data-lore-date-reads>
+			{#if calendarHint.problem}
+				<span class="text-error-700-300">{calendarHint.problem}</span>
+			{:else}
+				<span class="text-surface-700-300">Reads as</span>
+				<span class="font-semibold">{calendarHint.reads}</span>
+			{/if}
+		</p>
+	{/if}
 	{#if bounds.min || bounds.max}
 		<p class="text-surface-700-300 text-xs">
 			{#if bounds.min && bounds.max}

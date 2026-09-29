@@ -79,7 +79,7 @@ describe("the either/or default", () => {
 
 describe("the four layers decide it", () => {
 	it("KoboldCPP offers both and lands on chat", () => {
-		// The status quo preserved: `extraJson.useSession ?? true` was chat.
+		// The status quo preserved: `extraJson.useChat ?? true` was chat.
 		expect(
 			wireModeFor(
 				CONNECTION_TYPE.KOBOLDCPP,

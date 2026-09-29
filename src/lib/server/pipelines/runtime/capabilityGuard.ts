@@ -16,6 +16,7 @@
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 import {
 	MODALITY_FOR_STAR_CAPABILITY,
+	modalityOfTransform,
 	SECTION_STAR_CAPABILITIES
 } from "$lib/shared/constants/connectionSections"
 import { adapterCapabilities } from "$lib/shared/connectionAdapters/manifest"
@@ -144,6 +145,29 @@ const modalityAllows = (type: string, capability: CapabilityId): boolean => {
 }
 
 /**
+ * Whether the MODEL half of a pair is the kind of model this transform needs.
+ *
+ * One endpoint can serve several modalities — an Ollama host chats and embeds,
+ * a managed KoboldCPP chats and draws — so the endpoint's capability layers say
+ * yes to every transform the host can express, for every model behind it. The
+ * model's own modality (`connection_models.modality`, written by the sync from
+ * what the host says about each model) is what keeps `nomic-embed-text` out of
+ * the chat picker and a chat checkpoint out of the embeddings one.
+ *
+ * Null modality is ungated: the host said nothing, and refusing on silence
+ * would break every endpoint whose listing carries no such fact. A feature
+ * (`tools`, `streaming`) is never gated here — it rides on a transform, and
+ * that transform is judged on its own.
+ */
+export function modelModalityAllows(
+	modality: string | null | undefined,
+	capability: CapabilityId
+): boolean {
+	if (!modality || !isTransformId(capability)) return true
+	return modalityOfTransform(capability) === modality
+}
+
+/**
  * The refusal sentence, or null when the connection can do it.
  *
  * A sentence rather than a throw because each dispatcher's failures carry its
@@ -173,9 +197,24 @@ const modalityAllows = (type: string, capability: CapabilityId): boolean => {
  * available — safe by construction is the only form that survives the journey.
  */
 export function capabilityRefusal(
-	connection: { name?: string | null; type: string; capabilities?: unknown },
+	connection: {
+		name?: string | null
+		type: string
+		capabilities?: unknown
+		/** The merged pair's model modality — see `modelModalityAllows`. */
+		connectionModelModality?: string | null
+	},
 	capability: CapabilityId
 ): string | null {
+	// Before the endpoint's layers, and not overridable by them: a switch on
+	// the endpoint says what the HOST can do, never that an embedding model
+	// can chat.
+	if (!modelModalityAllows(connection.connectionModelModality, capability))
+		return (
+			`This model cannot do ${capabilityLabel(capability)}. ` +
+			`Choose a model that can.`
+		)
+
 	const have = storedCapabilities(connection)
 
 	// Transitional, and keyed on "capabilities not yet determined" rather than on

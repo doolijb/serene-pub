@@ -59,7 +59,7 @@ describe("resolveScope", () => {
 		})
 	})
 
-	test("the documentation read as a full page scopes to it", () => {
+	test("a Help address with the view closed scopes to the documentation", () => {
 		expect(
 			resolveScope({
 				manual: null,
@@ -70,9 +70,9 @@ describe("resolveScope", () => {
 		).toEqual({ key: "doc", label: "Documentation", source: "route" })
 	})
 
-	// The Help view registers "Documentation" for itself, so an open Help over
-	// /docs is the same chip either way — but it is the VIEW's, and its hits
-	// are the view's own.
+	// The Help view registers "Documentation" for itself, so an open Help on
+	// its own address is the same chip either way — but it is the VIEW's, and
+	// its hits are the view's own.
 	test("an open view still outranks the docs route", () => {
 		expect(
 			resolveScope({
@@ -92,7 +92,7 @@ describe("resolveScope", () => {
 				manual: null,
 				activeView: "characters",
 				viewLabel: "Characters",
-				pathname: "/admin/settings"
+				pathname: "/admin/general"
 			}).source
 		).toBe("view")
 	})
@@ -334,5 +334,51 @@ describe("createJumpCtx", () => {
 			label: EVERYWHERE_LABEL,
 			source: "route"
 		})
+	})
+
+	test("widen steps view → route → Everywhere, then stays", () => {
+		const { shell, ctx } = harness()
+		shell.pathname = "/admin/users"
+		shell.activeView = "characters"
+		ctx.open()
+		expect(ctx.scope.key).toBe("characters")
+		ctx.widen()
+		expect(ctx.scope).toEqual({
+			key: ADMIN_SCOPE_KEY,
+			label: ADMIN_SCOPE_LABEL,
+			source: "manual"
+		})
+		ctx.widen()
+		expect(ctx.scope).toEqual(manual(null, EVERYWHERE_LABEL))
+		ctx.widen()
+		expect(ctx.scope).toEqual(manual(null, EVERYWHERE_LABEL))
+	})
+
+	test("widen goes straight to Everywhere where the route has no scope", () => {
+		const { shell, ctx } = harness()
+		shell.activeView = "characters"
+		ctx.open()
+		ctx.widen()
+		expect(ctx.scope).toEqual(manual(null, EVERYWHERE_LABEL))
+	})
+
+	test("widen from the route's own scope is Everywhere", () => {
+		const { shell, ctx } = harness()
+		shell.pathname = "/admin"
+		ctx.open()
+		expect(ctx.scope.source).toBe("route")
+		ctx.widen()
+		expect(ctx.scope).toEqual(manual(null, EVERYWHERE_LABEL))
+	})
+
+	test("widen from a `kind:` scope steps to the route first", () => {
+		const { shell, ctx } = harness()
+		shell.pathname = "/docs/sessions"
+		ctx.open()
+		ctx.setScope("tag")
+		ctx.widen()
+		expect(ctx.scope.key).toBe("doc")
+		ctx.widen()
+		expect(ctx.scope.key).toBe(null)
 	})
 })

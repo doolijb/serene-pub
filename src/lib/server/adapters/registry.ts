@@ -54,7 +54,17 @@ export const ADAPTER_REGISTRY: Record<string, AdapterModules> = {
 
 	[CONNECTION_TYPE.OLLAMA]: {
 		text: async () =>
-			(await import("../connectionAdapters/OllamaAdapter")).default
+			(await import("../connectionAdapters/OllamaAdapter")).default,
+		// One Ollama host, every modality it serves (owner ruling 2026-09-25).
+		// `ollama-embeddings` was a second connection to the SAME host that
+		// existed only because a connection had one modality, and since plan
+		// 2026-09-24 B4 made every Ollama connection its own host, the two rows
+		// could not be folded into one view without risking two hosts in it.
+		// Declaring the family the host really has — `POST /api/embed` — makes
+		// the second row unnecessary instead. Not the "load-bearing absence"
+		// the entity block warns about: that is a family a type CANNOT serve.
+		embedding: async () =>
+			(await import("../embeddingAdapters/OllamaEmbeddingAdapter")).default
 	},
 
 	[CONNECTION_TYPE.OPENAI]: {
@@ -90,21 +100,25 @@ export const ADAPTER_REGISTRY: Record<string, AdapterModules> = {
 		// through the same `/sdapi/v1` adapter every other A1111-compatible
 		// backend uses.
 		image: async () =>
-			(await import("../imageAdapters/A1111Adapter")).default
+			(await import("../imageAdapters/A1111Adapter")).default,
+		// `POST /v1/embeddings` with whatever model the instance was started
+		// with — offered only because KoboldCPP names that model in every
+		// response, and the adapter refuses one that is not the pair's.
+		embedding: async () =>
+			(await import("../embeddingAdapters/KoboldCppEmbeddingAdapter"))
+				.default
 	},
 
 	[CONNECTION_TYPE.KOBOLDCPP_MANAGED]: {
 		text: async () =>
 			(await import("../connectionAdapters/KoboldCppManagedAdapter"))
+				.default,
+		// The same managed KoboldCPP draws too — one process, whose model manager swaps
+		// the text or image model it holds. Which one a request may use is the
+		// MODEL's modality (`capabilityRefusal`), not the type's.
+		image: async () =>
+			(await import("../imageAdapters/KoboldCppManagedImageAdapter"))
 				.default
-		// ⚠ No `image`, deliberately, and this absence is now CI-enforced rather
-		// than remembered. A managed text connection NAMES A TEXT MODEL and cannot
-		// draw, whatever the process happens to be holding at the time. The
-		// manifest entry has the matching note ("the key is absent from `supports`
-		// on purpose … Do not 'restore' it"); with the derivation in place, adding
-		// an image thunk here without also adding the key — or the key without the
-		// thunk — fails the conformance test. Image generation through the Manager
-		// is KOBOLDCPP_MANAGED_IMAGE, below.
 	},
 
 	[CONNECTION_TYPE.ANTHROPIC]: {
@@ -122,8 +136,8 @@ export const ADAPTER_REGISTRY: Record<string, AdapterModules> = {
 	// The MANAGED image type renders through that same A1111 wire — its module
 	// re-exports the adapter class unchanged — but it is not the same module,
 	// because two things around the render differ: its base URL lives in the
-	// Manager's settings rather than on the row, and its model is a file on disk
-	// the Manager loads on demand rather than a checkpoint the server already
+	// the managed KoboldCPP's settings rather than on the row, and its model is a file on disk
+	// the managed KoboldCPP loads on demand rather than a checkpoint the server already
 	// holds. Testing and listing have to ask those questions instead of
 	// `/sdapi/v1/sd-models`, which 404s whenever the process is holding a text
 	// model — i.e. most of the time.

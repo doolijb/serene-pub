@@ -10,7 +10,8 @@ import { PNG } from "pngjs"
 import {
 	extractCharacterFromPNG,
 	readCharacterFile,
-	parseSessionFile,
+	parseSillyTavernChatFile,
+	listSillyTavernPersonas,
 	normalizeTimestamp,
 	mapGroupReplyStrategy
 } from "./sillyTavernParsers"
@@ -112,7 +113,7 @@ describe("readCharacterFile", () => {
 	})
 })
 
-describe("parseSessionFile", () => {
+describe("parseSillyTavernChatFile", () => {
 	let dir: string
 
 	beforeEach(() => {
@@ -124,7 +125,7 @@ describe("parseSessionFile", () => {
 	})
 
 	test("parses a header line followed by message lines (SillyTavern JSONL format)", async () => {
-		const filePath = path.join(dir, "session.jsonl")
+		const filePath = path.join(dir, "chat.jsonl")
 		const header = {
 			user_name: "User",
 			character_name: "Aria",
@@ -137,7 +138,7 @@ describe("parseSessionFile", () => {
 		const lines = [header, ...messages].map((l) => JSON.stringify(l))
 		await fsPromises.writeFile(filePath, lines.join("\n"))
 
-		const result = await parseSessionFile(filePath)
+		const result = await parseSillyTavernChatFile(filePath)
 
 		expect(result?.header.character_name).toBe("Aria")
 		expect(result?.messages).toHaveLength(2)
@@ -146,7 +147,7 @@ describe("parseSessionFile", () => {
 
 	test("returns null for a missing file instead of throwing", async () => {
 		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {})
-		const result = await parseSessionFile(path.join(dir, "missing.jsonl"))
+		const result = await parseSillyTavernChatFile(path.join(dir, "missing.jsonl"))
 		expect(result).toBeNull()
 		errorSpy.mockRestore()
 	})
@@ -156,9 +157,63 @@ describe("parseSessionFile", () => {
 		await fsPromises.writeFile(filePath, "{not json")
 
 		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {})
-		const result = await parseSessionFile(filePath)
+		const result = await parseSillyTavernChatFile(filePath)
 		expect(result).toBeNull()
 		errorSpy.mockRestore()
+	})
+
+	test("keeps every line of a headerless group chat as a message", async () => {
+		const filePath = path.join(dir, "group.jsonl")
+		const messages = [
+			{ name: "User", is_user: true, send_date: 1, mes: "hi all" },
+			{ name: "Aria", is_user: false, send_date: 2, mes: "hello!" }
+		]
+		await fsPromises.writeFile(
+			filePath,
+			messages.map((l) => JSON.stringify(l)).join("\n") + "\n"
+		)
+
+		const result = await parseSillyTavernChatFile(filePath)
+
+		expect(result?.messages.map((m) => m.mes)).toEqual(["hi all", "hello!"])
+		expect(result?.header.user_name).toBe("")
+	})
+})
+
+describe("listSillyTavernPersonas", () => {
+	test("names each persona from power_user.personas, keyed by avatar file", () => {
+		const personas = listSillyTavernPersonas({
+			power_user: {
+				personas: {
+					"user-default.png": "Jody",
+					"1718000000000-Knight.png": "Sir Knight"
+				},
+				persona_descriptions: {
+					"user-default.png": { description: "Me.", position: 0 },
+					"1718000000000-Knight.png": { description: "A knight." },
+					"orphan.png": { description: "No name entry." }
+				}
+			}
+		})
+		expect(personas).toEqual([
+			{
+				name: "Jody",
+				avatar: "user-default.png",
+				description: "Me.",
+				position: 0
+			},
+			{
+				name: "Sir Knight",
+				avatar: "1718000000000-Knight.png",
+				description: "A knight."
+			},
+			{ name: "orphan", avatar: "orphan.png", description: "No name entry." }
+		])
+	})
+
+	test("is empty for a settings.json with no personas", () => {
+		expect(listSillyTavernPersonas({})).toEqual([])
+		expect(listSillyTavernPersonas(null)).toEqual([])
 	})
 })
 
@@ -190,6 +245,12 @@ describe("mapGroupReplyStrategy", () => {
 	// Only `manual` becomes a rebind; every other activation strategy
 	// inherits the respond spec's round robin (2026-09-21).
 	test.each([
+		// ST's own files carry the numeric enum: 0 natural, 1 list,
+		// 2 manual, 3 pooled.
+		[2, "core:task/turn-manual@1"],
+		[0, null],
+		[1, null],
+		[3, null],
 		["manual", "core:task/turn-manual@1"],
 		["natural_order", null],
 		["list_order", null],

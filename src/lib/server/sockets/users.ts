@@ -9,8 +9,19 @@ import { cookies } from "$lib/server/auth"
 import * as userTokens from "$lib/server/providers/users/tokens"
 import { loginRateLimit } from "$lib/server/services/loginRateLimit"
 
-// Passphrase validation schema. Max length bounds the PBKDF2 cost an
-// attacker-supplied passphrase can force the server to pay.
+/**
+ * Enforce the one passphrase rule (`passphraseSchema`) on the server. The
+ * forms check it too, but a socket client can send anything — and the max
+ * length bounds the PBKDF2 cost an attacker-supplied passphrase can force the
+ * server to pay. Throws the rule's own first message.
+ */
+function assertPassphraseRule(raw: string): string {
+	const parsed = passphraseSchema.safeParse(raw)
+	if (!parsed.success) {
+		throw new Error(parsed.error.issues[0]?.message ?? "Invalid passphrase")
+	}
+	return parsed.data
+}
 
 /**
  * The account-management handlers (list/create/update/delete) exist only when
@@ -600,6 +611,9 @@ export const usersCreate: Handler<
 		if (!params.passphrase) {
 			throw new Error("Passphrase is required")
 		}
+		// Before the insert: a refused passphrase must not leave behind an
+		// account with no passphrase at all.
+		assertPassphraseRule(params.passphrase)
 
 		// Check if username already exists
 		const existingUser = await db.query.users.findFirst({
@@ -677,6 +691,11 @@ export const usersUpdate: Handler<
 			throw new Error("User not found")
 		}
 
+		// Empty means "leave it unchanged" (the edit form sends nothing when
+		// the field is blank). Checked before any write so a refused
+		// passphrase does not half-apply the rest of the edit.
+		if (params.passphrase) assertPassphraseRule(params.passphrase)
+
 		// If username is being changed, check if it already exists
 		if (params.username && params.username !== targetUser.username) {
 			// Narrowed to a local so the type stays `string` (not `string |
@@ -718,11 +737,16 @@ export const usersUpdate: Handler<
 			updateData.isAdmin = params.isAdmin
 		}
 
-		const [updatedUser] = await db
-			.update(schema.users)
-			.set(updateData)
-			.where(eq(schema.users.id, params.id))
-			.returning()
+		// A passphrase-only edit has no row fields to write; drizzle refuses an
+		// empty `.set()`.
+		const [updatedUser] =
+			Object.keys(updateData).length > 0
+				? await db
+						.update(schema.users)
+						.set(updateData)
+						.where(eq(schema.users.id, params.id))
+						.returning()
+				: [targetUser]
 
 		// Update passphrase if provided
 		if (params.passphrase) {

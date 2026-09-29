@@ -26,7 +26,7 @@
  *
  * **What this process registered.** The boot sync projects *everything the
  * running build declares* (`allDefinitions()`) as core's, and marks a core row
- * it no longer declares as removed. A plugin's declaration sitting in that same
+ * it does not declare as removed. A plugin's declaration sitting in that same
  * map would be synced as core's own — owner NULL, `transport: 'node'` — and its
  * node would then be dispatched as a core binding that does not exist. So the
  * pins registered from a plugin are remembered, and the boot sync excludes
@@ -71,11 +71,9 @@ export function pluginDefinitionPins(): ReadonlySet<string> {
 
 /**
  * The declarations a stored manifest carries, tolerant of its json being
- * anything and scoped to the package's own namespace.
- *
- * ⏳ A manifest built before the packager carried declarations has summaries
- * without one; those packages install exactly as they did, with no registry row
- * of their own, until they are rebuilt.
+ * anything and scoped to the package's own namespace. A summary without its
+ * declaration is refused: the package was built by an SDK that did not carry
+ * one, and is rebuilt rather than read around.
  */
 export function pluginDeclarationsOf(
 	manifest: unknown,
@@ -89,7 +87,12 @@ export function pluginDeclarationsOf(
 	if (!Array.isArray(raw)) return { declarations, refused }
 	for (const summary of raw) {
 		const d = (summary as { declaration?: unknown })?.declaration
-		if (!d || typeof d !== "object") continue
+		if (!d || typeof d !== "object") {
+			refused.push(
+				`a node definition summary carries no declaration — rebuild the package with the current SDK`
+			)
+			continue
+		}
 		const decl = d as Descriptor
 		if (typeof decl.id !== "string" || !decl.id) {
 			refused.push(`a node definition declares no id`)

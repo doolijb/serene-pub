@@ -1,9 +1,10 @@
 /**
- * The three state widgets, as declarations rather than as components.
+ * The two state widgets, as declarations rather than as components (R79
+ * removed the third, Inventory — `retiredInventory.test.ts` holds that).
  *
  * A widget is only real when three things agree: core announces it, the
- * announcement carries the settings its panel offers, and the native registry
- * has a component under the key the announcement names. Any two of the three
+ * announcement carries the settings its panel offers, and it runs remote
+ * (`/core-ui/<slug>`, R79). Any two of the three
  * ship a panel that renders the unknown-surface placeholder, or a settings card
  * with nothing on it.
  */
@@ -12,9 +13,8 @@ import { resolveWidgetSurface } from "@serene-pub/sdk"
 import { ADVENTURE_LAYOUT } from "@serene-pub/core-catalog"
 import { CORE_WIDGETS } from "$lib/shared/widgets/types"
 import { widgetSettingsSchema } from "$lib/shared/widgets/settings"
-import { NATIVE_SURFACES } from "./registry"
 
-const STATE_WIDGETS = ["stats", "inventory", "world-state"] as const
+const STATE_WIDGETS = ["stats", "world-state"] as const
 
 const declOf = (id: string) => CORE_WIDGETS.find((w) => w.id === id)
 
@@ -23,13 +23,8 @@ describe.each(STATE_WIDGETS)("%s", (id) => {
 		expect(declOf(id)).toBeDefined()
 	})
 
-	test("its native component is in the registry", () => {
-		// Core's `component` resolves to a native component (R25).
-		const surface = resolveWidgetSurface(declOf(id)!, "core")
-		expect(surface?.kind).toBe("native")
-		expect(
-			NATIVE_SURFACES[(surface as { component: string }).component]
-		).toBeDefined()
+	test("it runs remote, as core's own component (R79)", () => {
+		expect(resolveWidgetSurface(declOf(id)!, "core")).toEqual({ kind: "remote", owner: "core", component: id })
 	})
 
 	test("it declares settings, and every declared field has a default", () => {

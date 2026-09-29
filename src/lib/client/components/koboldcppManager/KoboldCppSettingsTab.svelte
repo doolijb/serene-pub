@@ -133,7 +133,8 @@
 	// generation) talks to koboldCppManagerBaseUrl — but the subprocess Serene
 	// Pub actually spawns/owns always listens on koboldCppManagedPort. These
 	// are normally kept in sync automatically, but koboldCppManagerBaseUrl can
-	// also be edited independently from Settings > System, silently pointing
+	// also be edited independently (the Server URL field in this card, or
+	// Document View's system settings), silently pointing
 	// the whole app at a different instance than the one it's managing.
 	let portMismatch = $derived.by(() => {
 		if (!isManaged) return false
@@ -264,7 +265,7 @@
 	function handleSetBaseUrl(message: Sockets.KoboldCPP.SetBaseUrl.Response) {
 		isSavingBaseUrl = false
 		if (message.success)
-			toaster.success({ title: "KoboldCPP URL updated successfully" })
+			toaster.success({ title: "KoboldCPP URL updated" })
 		else toaster.error({ title: "Failed to update KoboldCPP URL" })
 	}
 
@@ -419,13 +420,13 @@
 		keyof Sockets.KoboldCPP.Version.Capabilities,
 		string
 	> = {
-		txt2img: "Image Gen",
+		txt2img: "Image gen",
 		vision: "Vision",
 		tts: "TTS",
-		transcribe: "Speech-to-Text",
+		transcribe: "Speech-to-text",
 		embeddings: "Embeddings",
 		multiplayer: "Multiplayer",
-		websearch: "Web Search",
+		websearch: "Web search",
 		adminEnabled: "Admin API"
 	}
 </script>
@@ -443,17 +444,17 @@
 				href="https://github.com/LostRuins/koboldcpp/wiki"
 				target="_blank"
 				rel="noopener noreferrer"
-				class="text-muted-foreground hover:text-primary-500 flex items-center gap-1 text-xs transition-colors"
+				class="text-surface-600-400 hover:text-primary-500 flex items-center gap-1 text-xs transition-colors"
 			>
 				<Icons.BookOpen class="h-3 w-3" />
 				Documentation
 			</a>
-			<div class="text-muted-foreground">•</div>
+			<div class="text-surface-600-400">•</div>
 			<a
 				href="https://github.com/LostRuins/koboldcpp"
 				target="_blank"
 				rel="noopener noreferrer"
-				class="text-muted-foreground hover:text-primary-500 flex items-center gap-1 text-xs transition-colors"
+				class="text-surface-600-400 hover:text-primary-500 flex items-center gap-1 text-xs transition-colors"
 			>
 				<Icons.Github class="h-3 w-3" />
 				GitHub
@@ -485,7 +486,7 @@
 	{#if isManaged && koboldCppSettingsCtx.settings?.koboldCppManagedBinaryVariant}
 		<div class="card bg-surface-100-800 flex flex-col gap-4 p-4">
 			<div class="flex items-center justify-between">
-				<h3 class="text-sm font-semibold">Binary</h3>
+				<h3 class="text-sm font-medium">Binary</h3>
 				{#if managedUpdateAvailable}
 					<span
 						class="badge preset-filled-warning-500 rounded-full px-2 py-0.5 text-xs font-medium"
@@ -553,11 +554,11 @@
 						Version {managedLatestTag} is available.
 					</p>
 					<button
-						class="btn btn-sm preset-filled-warning-500"
+						class="btn btn-sm preset-filled-primary-500"
 						onclick={onUpdateBinary}
 					>
 						<Icons.Download size={14} />
-						Update Binary
+						Update binary
 					</button>
 				</div>
 			{/if}
@@ -586,14 +587,14 @@
 		</div>
 	{/if}
 
-	<!-- Managed: TTL, startup timeout, port -->
+	<!-- Managed: TTL, startup timeout, server URL, port -->
 	{#if isManaged}
 		<div class="card bg-surface-100-800 flex flex-col gap-4 p-4">
-			<h3 class="text-sm font-semibold">Managed Settings</h3>
+			<h3 class="text-sm font-medium">Managed settings</h3>
 
 			<div>
 				<label
-					class="text-surface-700-300 mb-2 text-xs font-semibold tracking-wide uppercase"
+					class="text-surface-600-400 mb-2 text-xs"
 					for="ttlInput"
 				>
 					Model unload timer
@@ -629,7 +630,7 @@
 
 			<div>
 				<label
-					class="text-surface-700-300 mb-2 text-xs font-semibold tracking-wide uppercase"
+					class="text-surface-600-400 mb-2 text-xs"
 					for="subprocessTimeoutInput"
 				>
 					Subprocess idle timeout
@@ -666,7 +667,45 @@
 
 			<div>
 				<label
-					class="text-surface-700-300 mb-2 text-xs font-semibold tracking-wide uppercase"
+					class="text-surface-600-400 mb-2 text-xs"
+					for="managedServerUrl"
+				>
+					Server URL
+				</label>
+				<div class="panel-actions">
+					<input
+						id="managedServerUrl"
+						name="managedServerUrl"
+						type="url"
+						class="input min-w-0 flex-1 text-sm"
+						placeholder="http://127.0.0.1:{portDraft || 5001}"
+						aria-describedby="managedServerUrlHint"
+						bind:value={baseUrlField}
+					/>
+					<button
+						class="btn btn-sm preset-filled-surface-400-600 text-xs"
+						onclick={saveBaseUrl}
+						disabled={isSavingBaseUrl}
+					>
+						{#if isSavingBaseUrl}<Icons.Loader2
+								size={12}
+								class="animate-spin"
+							/>{:else}Save{/if}
+					</button>
+				</div>
+				<p
+					id="managedServerUrlHint"
+					class="text-surface-700-300 mt-1 text-xs"
+				>
+					Where Serene Pub reaches KoboldCPP. Usually
+					http://127.0.0.1:{koboldCppSettingsCtx.settings
+						?.koboldCppManagedPort ?? 5001}.
+				</p>
+			</div>
+
+			<div>
+				<label
+					class="text-surface-600-400 mb-2 text-xs"
 					for="portInput"
 				>
 					Port
@@ -704,12 +743,13 @@
 							class="text-warning-700-300 mt-0.5 shrink-0"
 						/>
 						<p class="text-warning-700-300 text-sm">
-							This port doesn't match the KoboldCPP Server URL in
-							Settings &gt; System ({koboldCppSettingsCtx.settings
-								?.koboldCppManagerBaseUrl}). Everything (health
-							checks, model list, generation) talks to that URL,
-							not this port — the subprocess running here may be
-							orphaned. Update one to match the other.
+							This port doesn't match the server URL above
+							({koboldCppSettingsCtx.settings
+								?.koboldCppManagerBaseUrl}). Health checks, the
+							model list and generation all use that URL, not this
+							port, so the subprocess running here may be
+							orphaned. Change the port or the server URL so they
+							match.
 						</p>
 					</div>
 				{/if}
@@ -722,7 +762,7 @@
 		<div class="card bg-surface-100-800 flex flex-col gap-4 p-4">
 			<div>
 				<label class="block text-sm font-medium" for="koboldBaseUrl">
-					KoboldCPP Base URL
+					KoboldCPP base URL
 				</label>
 				<div class="panel-actions">
 					<input
@@ -758,7 +798,7 @@
 								class="text-surface-700-300 flex items-center gap-1 font-mono text-xs"
 							>
 								<Icons.Loader2 size={12} class="animate-spin" />
-								Checking...
+								Checking…
 							</span>
 						{:else if versionCheckFailed}
 							<span
@@ -799,7 +839,7 @@
 							<span
 								class="text-warning-800 dark:text-warning-200 font-medium"
 							>
-								Update Available
+								Update available
 							</span>
 						</div>
 						<p
@@ -812,10 +852,10 @@
 								"https://github.com/LostRuins/koboldcpp/releases"}
 							target="_blank"
 							rel="noopener noreferrer"
-							class="btn btn-sm preset-filled-warning-500"
+							class="btn btn-sm preset-tonal-surface"
 						>
 							<Icons.Download size={14} />
-							Download Update
+							Download update
 						</a>
 					</div>
 				{:else if currentVersion}
@@ -844,7 +884,7 @@
 						{:else}
 							<Icons.RefreshCw size={14} />
 						{/if}
-						Check Version
+						Check version
 					</button>
 					<button
 						class="btn btn-sm preset-filled-surface-500"
@@ -853,10 +893,10 @@
 					>
 						{#if isCheckingUpdates}
 							<Icons.Loader2 size={14} class="animate-spin" />
-							Checking...
+							Checking…
 						{:else}
 							<Icons.Search size={14} />
-							Check for Updates
+							Check for updates
 						{/if}
 					</button>
 				</div>
@@ -864,7 +904,7 @@
 		</div>
 	{/if}
 
-	<!-- Admin credentials (external mode only): let the Manager drive model
+	<!-- Admin credentials (external mode only): let the managed KoboldCPP drive model
 	     switching and other admin-API actions against an instance the user
 	     started themselves, by telling it what --adminpassword/--admindir
 	     that instance was launched with. Without these, every admin call is
@@ -873,7 +913,7 @@
 	{#if !isManaged}
 		<div class="card bg-surface-100-800 flex flex-col gap-4 p-4">
 			<div>
-				<h3 class="text-sm font-semibold">Admin API Credentials</h3>
+				<h3 class="text-sm font-medium">Admin API credentials</h3>
 				<p class="text-surface-700-300 mt-1 text-xs">
 					Needed for model switching and other admin actions. Must
 					match the <code>--adminpassword</code>
@@ -887,7 +927,7 @@
 					class="block text-sm font-medium"
 					for="koboldAdminPassword"
 				>
-					Admin Password
+					Admin password
 				</label>
 				<div class="panel-actions">
 					<input
@@ -903,7 +943,7 @@
 						bind:value={adminPasswordField}
 					/>
 					<button
-						class="btn preset-filled-primary-500"
+						class="btn preset-tonal-surface"
 						onclick={saveAdminPassword}
 						disabled={savingAdminPassword}
 					>
@@ -925,7 +965,7 @@
 			</div>
 			<div>
 				<label class="block text-sm font-medium" for="koboldAdminDir">
-					Admin Directory
+					Admin directory
 				</label>
 				<div class="panel-actions">
 					<input
@@ -937,7 +977,7 @@
 						bind:value={adminDirField}
 					/>
 					<button
-						class="btn preset-filled-primary-500"
+						class="btn preset-tonal-surface"
 						onclick={saveAdminDir}
 						disabled={savingAdminDir}
 					>
@@ -958,7 +998,7 @@
 	<div class="card bg-surface-100-800 flex flex-col gap-4 p-4">
 		<div>
 			<label class="block text-sm font-medium" for="koboldModelsDir">
-				Models Directory
+				Models directory
 			</label>
 			<div class="flex gap-2">
 				<input
@@ -970,7 +1010,7 @@
 					bind:value={modelsDirField}
 				/>
 				<button
-					class="btn preset-filled-primary-500"
+					class="btn preset-tonal-surface"
 					onclick={() => saveModelsDir("text")}
 					disabled={savingDirKind !== null}
 				>
@@ -986,7 +1026,7 @@
 
 		<div>
 			<label class="block text-sm font-medium" for="koboldImageModelsDir">
-				Image Models Directory
+				Image models directory
 			</label>
 			<div class="flex gap-2">
 				<input
@@ -994,11 +1034,11 @@
 					name="koboldImageModelsDir"
 					type="text"
 					class="input flex-1 font-mono text-sm"
-					placeholder="Same as Models Directory"
+					placeholder="Same as models directory"
 					bind:value={imageModelsDirField}
 				/>
 				<button
-					class="btn preset-filled-primary-500"
+					class="btn preset-tonal-surface"
 					onclick={() => saveModelsDir("image")}
 					disabled={savingDirKind !== null}
 				>
@@ -1024,7 +1064,7 @@
 	     idle timer, which is exactly when someone comes here asking why a badge
 	     says what it says. -->
 	<div class="card bg-surface-100-800 p-4">
-		<h3 class="mb-3 text-sm font-semibold">Active Capabilities</h3>
+		<h3 class="mb-3 text-sm font-medium">Active capabilities</h3>
 		{#if capabilities}
 			<div class="flex flex-wrap gap-2">
 				{#each Object.entries(capabilityLabels) as [key, label]}
@@ -1035,7 +1075,7 @@
 					<span
 						class="inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium {enabled
 							? 'bg-success-100 dark:bg-success-900 text-success-800 dark:text-success-200'
-							: 'bg-surface-200 dark:bg-surface-700 text-muted-foreground'}"
+							: 'bg-surface-200 dark:bg-surface-700 text-surface-600-400'}"
 					>
 						{#if enabled}
 							<Icons.Check size={10} />
@@ -1063,7 +1103,7 @@
 	</div>
 
 	<!-- Attribution -->
-	<p class="text-muted-foreground text-center text-xs">
+	<p class="text-surface-600-400 text-center text-xs">
 		KoboldCPP is developed and owned by <a
 			href="https://github.com/LostRuins/koboldcpp"
 			target="_blank"
@@ -1072,7 +1112,7 @@
 		>
 			LostRuins
 		</a>
-		. Serene Pub's KoboldCPP Manager is an independent integration and is not
+		. KoboldCPP, run by Serene Pub, is an independent integration and is not
 		affiliated with or endorsed by the KoboldCPP project.
 	</p>
 </div>

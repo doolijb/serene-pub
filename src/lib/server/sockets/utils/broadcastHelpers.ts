@@ -2,13 +2,14 @@ import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
 import { and, eq, inArray } from "drizzle-orm"
 import type { AuthenticatedSocket } from "../auth"
-import { withoutConnectionIdentity } from "$lib/server/connections/visibility"
+import { redactConnections, withoutConnectionIdentity } from "$lib/server/connections/visibility"
 import { isGatedEvent, scopeOfPayload } from "$lib/shared/sockets/interest"
 import {
 	anyInterestAnywhere,
 	hasInterest,
 	interestedSockets,
 	socketsInUserRoom,
+	socketWants,
 	socketWantsAnyScope
 } from "../interest"
 
@@ -326,4 +327,44 @@ export function createSessionBroadcaster(
 	return async (event: string, data: any) => {
 		await broadcastToSessionUsers(io, sessionId, event, data)
 	}
+}
+
+/**
+ * Emit to EVERY connected socket that declared interest in `event` (at the
+ * payload's scope, when the event is scoped) — whoever's it is, in no
+ * particular room.
+ *
+ * For the instance-wide pushes that are about something every viewer may
+ * have on screen rather than about one user or one session: an authored
+ * component changed (`components:changed`), and any session page drawing it
+ * has to hear so. The interest registry is what keeps that from being a
+ * broadcast to every tab: a socket that declared nothing gets nothing.
+ *
+ * ⚠ Only for a GATED event (`GATED_EVENTS`): an ungated event has no
+ * interest to consult, so it is refused here rather than silently sent to
+ * nobody. Redacted per recipient, as every exit is.
+ *
+ * `only` narrows the recipients further, for a payload that is cut per
+ * recipient (`sessionPresets:list`: the admin table and the picker's cut) —
+ * one call per cut, each to the sockets it is for, through this one exit.
+ */
+export function emitToInterested(
+	io: Pick<AuthenticatedSocket["io"], "to"> & { sockets: { sockets: { values(): Iterable<any> } } },
+	event: string,
+	payload: any,
+	only?: (socket: any) => boolean
+): number {
+	if (!isGatedEvent(event))
+		throw new Error(`emitToInterested('${event}'): the event is not gated, so no socket can have declared interest in it`)
+	const scope = scopeOfPayload(event, payload)
+	let sent = 0
+	const all = io?.sockets?.sockets
+	if (!all || typeof all.values !== "function") return 0
+	for (const socket of all.values()) {
+		if (!socket || !socketWants(socket, event, scope)) continue
+		if (only && !only(socket)) continue
+		io.to(socket.id).emit(event, redactConnections(payload, socket.user))
+		sent++
+	}
+	return sent
 }

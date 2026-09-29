@@ -88,6 +88,16 @@ export type GraphBuildActivity = {
 	relationshipDiagnostics?: Sockets.NarrativeGraph.RelationshipDiagnostics
 	/** Proposed names screened out as World Lore subjects — reported, not dropped. */
 	filteredWorldLoreNames?: string[]
+	/**
+	 * What this build actually READ: the summarized scenes and the direct
+	 * history entries it fed the builder. Apply marks exactly these as
+	 * graphed — never "everything ungraphed at apply time", which would also
+	 * stamp a scene summarized while the build ran, and Extend would then
+	 * never read it. Held here, server-side, because the client must not be
+	 * the one to say what was read.
+	 */
+	processedSceneIds?: number[]
+	processedHistoryEntryIds?: number[]
 	errorMessage?: string
 	/**
 	 * Who the failure was about — a field, so the projection strips it for
@@ -215,6 +225,62 @@ export type Activity =
 
 type Emitter = (event: string, data: unknown) => void
 
+/**
+ * Why an activity stopped waiting on its owner — the notification store's
+ * `clearedHow`, minus `viewed` (a card is never cleared by being seen).
+ *
+ * - `acted` — the owner applied / saved the result.
+ * - `dismissed` — the card was dismissed, discarded or cancelled.
+ * - `superseded` — a newer run of the same job replaced it.
+ * - `lapsed` — what it was about is gone.
+ */
+export type ActivityClearedHow = "acted" | "dismissed" | "superseded" | "lapsed"
+
+/**
+ * The seam through which a finished activity becomes a notification
+ * (`server/notifications/activity.ts` fills it at boot). A seam rather than an
+ * import so this store never pulls in the database — the same reason as
+ * `setEphemeralSceneCleanup` below.
+ *
+ * Kept on `globalThis` so a Vite SSR reload that re-evaluates this module
+ * does not drop the wiring made once at boot.
+ */
+export interface ActivityNotifier {
+	/** The activity has just reached `review` or `error`. */
+	settled(activity: Activity): void | Promise<void>
+	/** The activity has stopped waiting on its owner. */
+	cleared(activity: Activity, how: ActivityClearedHow): void | Promise<void>
+}
+const NOTIFIER_KEY = Symbol.for("serene-pub.activityNotifier")
+
+function notifier(): ActivityNotifier | undefined {
+	return (globalThis as Record<symbol, unknown>)[NOTIFIER_KEY] as
+		| ActivityNotifier
+		| undefined
+}
+
+/** Report through the notifier. Never throws: a report must not fail the job. */
+function report(call: (n: ActivityNotifier) => void | Promise<void>) {
+	const n = notifier()
+	if (!n) return
+	try {
+		void Promise.resolve(call(n)).catch(() => {})
+	} catch {}
+}
+
+/**
+ * The ONE place a status change is reported. Every `update*` below goes
+ * through it, so the four job kinds cannot drift apart.
+ */
+function reportTransition(prev: Activity, next: Activity) {
+	if (prev.status === next.status) return
+	if (next.status === "review" || next.status === "error")
+		report((n) => n.settled(next))
+	else if (prev.status === "review" || prev.status === "error")
+		// Back to running: nothing is waiting on the owner now.
+		report((n) => n.cleared(next, "superseded"))
+}
+
 class ActivityStore {
 	private activities = new Map<string, Activity>()
 	private emitters = new Map<Emitter, { userId: number; isAdmin: boolean }>()
@@ -236,6 +302,11 @@ class ActivityStore {
 
 	getById(id: string): Activity | undefined {
 		return this.activities.get(id)
+	}
+
+	/** Wire the notifier once, at boot. See `ActivityNotifier`. */
+	setNotifier(fn: ActivityNotifier | undefined) {
+		;(globalThis as Record<symbol, unknown>)[NOTIFIER_KEY] = fn
 	}
 
 	private broadcast(changed: Activity) {
@@ -273,7 +344,7 @@ class ActivityStore {
 				activity.lorebookId === params.lorebookId &&
 				activity.userId === params.userId
 			) {
-				this.remove(existingId)
+				this.remove(existingId, "superseded")
 			}
 		}
 
@@ -317,6 +388,9 @@ class ActivityStore {
 				this.abortControllers.get(existingId)?.abort()
 				this.abortControllers.delete(existingId)
 				this.activities.delete(existingId)
+				// Not remove(): that would run the ephemeral-scene cleanup on
+				// the very scene being re-run. Its notification still goes.
+				report((n) => n.cleared(activity, "superseded"))
 			}
 		}
 		const id = uuidv4()
@@ -341,6 +415,7 @@ class ActivityStore {
 		if (!existing) return
 		const updated = { ...existing, ...patch } as GraphBuildActivity
 		this.activities.set(id, updated)
+		reportTransition(existing, updated)
 		this.broadcast(updated)
 	}
 
@@ -352,6 +427,7 @@ class ActivityStore {
 		if (!existing) return
 		const updated = { ...existing, ...patch } as SceneSummarizeActivity
 		this.activities.set(id, updated)
+		reportTransition(existing, updated)
 		if (updated.status !== "running") {
 			// Generation has finished (successfully or with an error) —
 			// nothing left to ever abort. Without this, a controller
@@ -396,7 +472,7 @@ class ActivityStore {
 				}
 				// review/error activities have already finished running —
 				// no in-flight work to orphan, safe to supersede.
-				this.remove(existingId)
+				this.remove(existingId, "superseded")
 			}
 		}
 		const id = uuidv4()
@@ -423,6 +499,7 @@ class ActivityStore {
 		if (!existing) return
 		const updated = { ...existing, ...patch } as CompileHistoryEntryActivity
 		this.activities.set(id, updated)
+		reportTransition(existing, updated)
 		if (updated.status !== "running") {
 			// See the identical note in updateScene() above.
 			this.abortControllers.delete(id)
@@ -477,7 +554,7 @@ class ActivityStore {
 				)
 			}
 			// error: already finished, nothing in flight, nothing unsaved.
-			this.remove(existingId)
+			this.remove(existingId, "superseded")
 		}
 		const id = uuidv4()
 		const activity: SessionSummarizeActivity = {
@@ -501,6 +578,7 @@ class ActivityStore {
 		if (!existing) return
 		const updated = { ...existing, ...patch } as SessionSummarizeActivity
 		this.activities.set(id, updated)
+		reportTransition(existing, updated)
 		if (updated.status !== "running") {
 			// See the identical note in updateScene() above.
 			this.abortControllers.delete(id)
@@ -517,7 +595,7 @@ class ActivityStore {
 		if (!existing) return
 		this.abortControllers.get(id)?.abort()
 		this.abortControllers.delete(id)
-		this.remove(id)
+		this.remove(id, "dismissed")
 	}
 
 	/**
@@ -537,12 +615,18 @@ class ActivityStore {
 		this.ephemeralSceneCleanup = fn
 	}
 
-	remove(id: string) {
+	/**
+	 * Take an activity away, and clear the notification it raised with `how`.
+	 * Defaults to `dismissed` — the card going away unapplied, which is what
+	 * every caller but a save, a supersede or a lapse means.
+	 */
+	remove(id: string, how: ActivityClearedHow = "dismissed") {
 		const existing = this.activities.get(id)
 		if (!existing) return
 		this.abortControllers.get(id)?.abort()
 		this.abortControllers.delete(id)
 		this.activities.delete(id)
+		report((n) => n.cleared(existing, how))
 		// cancel() delegates here, so this one call site covers cancel-mid-run,
 		// discard-at-review, the modal's save-time dismiss and the Layout
 		// context's dismiss.

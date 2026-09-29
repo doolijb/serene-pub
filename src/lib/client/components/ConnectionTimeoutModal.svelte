@@ -29,16 +29,16 @@
 			() => {
 				showModal = true
 				toaster.warning({
-					title: "Connection Timed Out",
+					title: "Connection timed out",
 					description:
-						"Your session has expired due to inactivity. You can reconnect in 30 seconds."
+						"The connection closed after a period of inactivity. You can reconnect in 30 seconds."
 				})
 			},
 			// On reconnect available callback
 			() => {
 				canReconnect = true
 				toaster.info({
-					title: "Reconnection Available",
+					title: "Reconnection available",
 					description: "You can now reconnect to the application."
 				})
 			}
@@ -146,7 +146,7 @@
 <!-- Connection Timeout Modal -->
 {#if showModal || isVisible}
 	<div
-		class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm"
+		class="fixed inset-0 z-50 flex items-center justify-center bg-surface-950/60 backdrop-blur-sm"
 	>
 		<div class="card bg-surface-100-900 mx-4 w-full max-w-md p-6 shadow-xl">
 			<div class="text-center">
@@ -158,12 +158,12 @@
 				</div>
 
 				<!-- Title -->
-				<h3 class="h3 mt-4">Connection Timed Out</h3>
+				<h3 class="h3 mt-4">Connection timed out</h3>
 
 				<!-- Description -->
 				<p class="text-surface-600-400 mt-2 text-sm">
-					Your session has expired due to inactivity. You can
-					reconnect to continue using the application.
+					The connection closed after a period of inactivity. You
+					can reconnect to continue using the application.
 				</p>
 
 				<!-- Countdown or Ready State -->
@@ -202,13 +202,13 @@
 						onclick={handleRefreshPage}
 					>
 						<Icons.RefreshCw size={16} />
-						Refresh Page
+						Refresh page
 					</button>
 				</div>
 
 				<!-- Additional Info -->
 				<p class="text-surface-700-300 mt-3 text-xs">
-					Sessions expire after 1 hour of inactivity
+					Connections close after 1 hour of inactivity
 				</p>
 			</div>
 		</div>

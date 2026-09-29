@@ -12,6 +12,14 @@
 		 * list renders flat — which is what every caller so far wants.
 		 */
 		group?: string
+		/**
+		 * Listed but not pickable — the old `<option disabled>`. Keys skip it
+		 * and a click does nothing; pair it with `hint` so the reason is on
+		 * the row, which is the whole point of listing it at all.
+		 */
+		disabled?: boolean
+		/** One short line under the label: why it is disabled, or a detail. */
+		hint?: string
 	}
 </script>
 
@@ -19,6 +27,7 @@
 	import { collection } from "@zag-js/combobox"
 	import { Combobox, Portal } from "@skeletonlabs/skeleton-svelte"
 	import * as Icons from "@lucide/svelte"
+	import { humanizeValue } from "$lib/shared/i18n/enumOptions"
 
 	/**
 	 * A drop-in replacement for the `<select>` shape this codebase uses over and
@@ -105,7 +114,16 @@
 	// sit there showing the previous connection's model.
 	let query = $state<string | null>(null)
 
-	let selected = $derived(options.find((o) => o.value === value))
+	// An option with no label reads as its value humanised ("oldest-first" →
+	// "Oldest first"), never as a blank row. A caller that passes the value
+	// itself as the label keeps it: a model id is a name, not a stored token.
+	let choices = $derived(
+		options.map((o) =>
+			o.label?.trim() ? o : { ...o, label: humanizeValue(o.value) }
+		)
+	)
+
+	let selected = $derived(choices.find((o) => o.value === value))
 
 	// Falls back to the stored value when no option matches it, so a model the
 	// endpoint has stopped listing still reads as what is saved rather than
@@ -125,8 +143,8 @@
 	let renderGroups: RenderGroup[] = $derived.by(() => {
 		const needle = query?.trim().toLowerCase()
 		let matches = needle
-			? options.filter((o) => o.label.toLowerCase().includes(needle))
-			: options
+			? choices.filter((o) => o.label.toLowerCase().includes(needle))
+			: choices
 		// The current value always gets a row. zag highlights the selected row
 		// when the popup opens and never checks that the row exists, so naming
 		// a value the list does not contain leaves `aria-activedescendant`
@@ -140,7 +158,7 @@
 		// Appended, never prepended, so `autohighlight` still lands on the
 		// first *typed* match and Enter picks that rather than the old value.
 		if (value && !matches.some((o) => o.value === value)) {
-			const known = options.find((o) => o.value === value)
+			const known = choices.find((o) => o.value === value)
 			matches = [...matches, known ?? { value, label: value }]
 		}
 		if (!matches.some((o) => o.group)) {
@@ -169,7 +187,8 @@
 		collection({
 			items: visibleOptions,
 			itemToValue: (o: SelectOption) => o.value,
-			itemToString: (o: SelectOption) => o.label
+			itemToString: (o: SelectOption) => o.label,
+			isItemDisabled: (o: SelectOption) => !!o.disabled
 		})
 	)
 </script>
@@ -188,13 +207,18 @@
 	     you picked" from "the one under the cursor". -->
 	<Combobox.Item
 		item={option}
-		class="data-[highlighted]:preset-tonal-primary data-[state=checked]:preset-tonal-primary flex cursor-pointer items-center justify-between gap-2 rounded px-2 py-1.5 text-sm"
+		class="data-[highlighted]:preset-tonal-primary data-[state=checked]:preset-tonal-primary flex cursor-pointer items-center justify-between gap-2 rounded px-2 py-1.5 text-sm data-[disabled]:cursor-not-allowed data-[disabled]:opacity-60"
 	>
 		<!-- Wraps rather than truncates: model ids run long, and the popup is
 		     the one place the whole name is worth reading. -->
-		<Combobox.ItemText class="min-w-0 break-words">
-			{option.label}
-		</Combobox.ItemText>
+		<span class="flex min-w-0 flex-col">
+			<Combobox.ItemText class="min-w-0 break-words">
+				{option.label}
+			</Combobox.ItemText>
+			{#if option.hint}
+				<span class="text-surface-600-400 text-xs">{option.hint}</span>
+			{/if}
+		</span>
 		<Combobox.ItemIndicator>
 			<Icons.Check size={14} />
 		</Combobox.ItemIndicator>
@@ -315,7 +339,7 @@
 					{#if group.label}
 						<Combobox.ItemGroup>
 							<Combobox.ItemGroupLabel
-								class="text-surface-700-300 px-2 pt-2 pb-1 text-xs font-semibold tracking-wide uppercase"
+								class="text-surface-600-400 px-2 pt-2 pb-1 text-xs"
 							>
 								{group.label}
 							</Combobox.ItemGroupLabel>

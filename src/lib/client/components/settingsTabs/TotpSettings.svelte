@@ -118,7 +118,7 @@
 
 <div class="card preset-filled-surface-100-900 space-y-4 p-4">
 	<div>
-		<h3 class="flex items-center gap-2 text-lg font-semibold">
+		<h3 class="flex items-center gap-2 text-sm font-medium">
 			<Icons.ShieldCheck size={18} /> Two-factor authentication
 		</h3>
 		<p class="text-surface-600-400 text-sm">

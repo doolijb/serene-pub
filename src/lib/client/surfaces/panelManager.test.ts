@@ -12,7 +12,7 @@ const PANELS: ModePanel[] = [
 		id: "tasks",
 		title: "Tasks",
 		role: "secondary",
-		surface: { kind: "native", component: "sample-notes" },
+		surface: { kind: "remote", owner: "core", component: "sample-notes" },
 		channels: ["tasks"],
 		defaultActive: false
 	},
@@ -20,7 +20,7 @@ const PANELS: ModePanel[] = [
 		id: "portraits",
 		title: "Portraits",
 		role: "secondary",
-		surface: { kind: "native", component: "scene-portraits" },
+		surface: { kind: "remote", owner: "core", component: "scene-portraits" },
 		defaultActive: true
 	}
 ]
@@ -147,11 +147,30 @@ describe("SurfaceManager — explicit intents + persistence", () => {
 		expect(m.instances.find((p) => p.id === "tasks")!.active).toBe(false)
 	})
 
-	it("never closes the primary", () => {
+	it("whether a widget can close is its declaration's, not its role's (brief 7a)", () => {
+		// The layout keeps the LAST placed primary by never offering to remove
+		// it (the primary floor, sessionLayout/primaryFloor); the role no
+		// longer decides, because a primary may sit in any zone.
 		const m = make()
-		const primaryId = m.instances.find((p) => p.role === "primary")!.id
-		m.close(primaryId)
-		expect(m.instances.find((p) => p.id === primaryId)!.active).toBe(true)
+		const primary = m.instances.find((p) => p.role === "primary")!
+		expect(primary.layout.closable).toBe(true)
+		m.close(primary.id)
+		expect(m.instances.find((p) => p.id === primary.id)!.active).toBe(false)
+	})
+
+	it("a declaration that says it cannot close is never closed, whatever its role", () => {
+		const m = new SurfaceManager()
+		m.init(1, [
+			{
+				id: "acme.game:board",
+				title: "Board",
+				role: "primary",
+				surface: { kind: "remote", owner: "acme.game", component: "board" },
+				layout: { closable: false }
+			} as ModePanel
+		], undefined, () => {})
+		m.close("acme.game:board")
+		expect(m.instances.find((p) => p.id === "acme.game:board")!.active).toBe(true)
 	})
 })
 

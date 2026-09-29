@@ -4,7 +4,7 @@
  * ## The defect this exists to close
  *
  * Wire mode used to be derived inside each adapter from its own local flags:
- * `extraJson.useSession` on KoboldCPP, Ollama and LM Studio,
+ * `extraJson.useChat` on KoboldCPP, Ollama and LM Studio,
  * `extraJson.prerenderPrompt` on OpenAI, and an unconditional `true` on
  * Anthropic. Those were read inside `compilePrompt(args)` — and the pipeline
  * hands its payload over through `withCompiledPrompt`, which bypasses

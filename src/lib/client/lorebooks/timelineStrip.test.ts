@@ -9,7 +9,8 @@ import {
 	orderByMoment,
 	ratioOf,
 	tickAtRatio,
-	momentAxisRows
+	momentAxisRows,
+	stepTick
 } from "./timelineStrip"
 
 const dates = [
@@ -94,21 +95,33 @@ describe("ratioOf — where the cursor is drawn", () => {
 
 describe("keysAfter — what is not true yet at this moment", () => {
 	const items = [
-		{ key: "entry#1", order: 10000 },
-		{ key: "entry#2", order: 10402 },
-		{ key: "entry#3", order: 20600 }
+		{ key: "entry#1", date: { year: 1 } },
+		{ key: "entry#2", date: { year: 1, month: 4, day: 2 } },
+		{ key: "entry#3", date: { year: 2, month: 6 } },
+		{ key: "entry#4", date: null }
 	]
 
 	it("names the rows dated after the cursor", () => {
-		expect(keysAfter(items, 10402)).toEqual(["entry#3"])
+		expect(keysAfter(items, { year: 1, month: 4, day: 2 })).toEqual([
+			"entry#3"
+		])
 	})
 
 	it("counts the cursor's own moment as true, not as later", () => {
-		expect(keysAfter(items, 20600)).toEqual([])
+		expect(keysAfter(items, { year: 2, month: 6 })).toEqual([])
 	})
 
 	it("dims nothing while the cursor is at now", () => {
 		expect(keysAfter(items, null)).toEqual([])
+	})
+
+	it("orders by the calendar, not the packed value (radix-100 collision)", () => {
+		// Y1-M150 packs past Y2 (1·10000 + 150·100 > 2·10000); it is not later.
+		const day100 = [
+			{ key: "entry#5", date: { year: 1, month: 150 } },
+			{ key: "entry#6", date: { year: 2, month: 1 } }
+		]
+		expect(keysAfter(day100, { year: 1, month: 200 })).toEqual(["entry#6"])
 	})
 })
 
@@ -186,7 +199,7 @@ describe("momentAxisRows — every date the story knows", () => {
 describe("the axis's identity is the date, not the row id", () => {
 	it("keeps both rows when two tables hand over the same id", () => {
 		// An entry amendment and a cast amendment, each id 1, on two dates.
-		// `MomentBar` keys on `value`; keying on `id` raised each_key_duplicate.
+		// `MomentBar` keys on `key`; keying on `id` raised each_key_duplicate.
 		const rows = momentAxisRows(
 			[],
 			[
@@ -196,6 +209,50 @@ describe("the axis's identity is the date, not the row id", () => {
 		)
 		expect(rows).toHaveLength(2)
 		const ticks = buildTicks(rows)
-		expect(new Set(ticks.map((t) => t.value)).size).toBe(2)
+		expect(new Set(ticks.map((t) => t.key)).size).toBe(2)
+	})
+
+	it("keeps two dates whose packed values collide as two ticks", () => {
+		// Y3 Mo.1 Day 150 and Y3 Mo.2 Day 50 both pack to 30250.
+		const rows = momentAxisRows(
+			[{ id: 1, year: 3, month: 1, day: 150 }],
+			[{ id: 2, year: 3, month: 2, day: 50 }]
+		)
+		expect(rows.map((r) => r.id)).toEqual([1, 2])
+		const ticks = buildTicks(rows)
+		expect(ticks.map((t) => t.key)).toEqual(["Y3-1-150", "Y3-2-50"])
+		expect(ticks[0].date).toEqual({ year: 3, month: 1, day: 150 })
+	})
+})
+
+describe("stepTick — arrow keys move by date", () => {
+	const ticks = buildTicks([
+		{ id: 1, year: 1, month: null, day: null },
+		{ id: 2, year: 3, month: 1, day: 250 },
+		{ id: 3, year: 5, month: null, day: null }
+	])
+
+	it("from now, back lands on the NEWEST date (not the one before it)", () => {
+		expect(stepTick(ticks, null, "back")?.key).toBe("Y5")
+	})
+
+	it("from now, forward stays at now", () => {
+		expect(stepTick(ticks, null, "forward")).toBeNull()
+	})
+
+	it("from a moment between ticks, steps to its neighbours", () => {
+		expect(stepTick(ticks, { year: 4 }, "back")?.key).toBe("Y3-1-250")
+		expect(stepTick(ticks, { year: 4 }, "forward")?.key).toBe("Y5")
+		expect(stepTick(ticks, { year: 2 }, "back")?.key).toBe("Y1")
+	})
+
+	it("from a tick, steps one tick either way; past the newest is now", () => {
+		expect(stepTick(ticks, { year: 3, month: 1, day: 250 }, "back")?.key).toBe("Y1")
+		expect(stepTick(ticks, { year: 5 }, "forward")).toBeNull()
+		expect(stepTick(ticks, { year: 1 }, "back")?.key).toBe("Y1")
+	})
+
+	it("has nothing to step on an empty axis", () => {
+		expect(stepTick([], null, "back")).toBeUndefined()
 	})
 })

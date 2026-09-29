@@ -246,8 +246,8 @@ describe("connections:setCapability — the gate", () => {
 		// type does. Junk stored here would resurrect as a setting nobody made.
 		const { connectionsSetCapability } = await import("./connections")
 		const conn = await makeConnection({
-			name: "managed-text",
-			type: CONNECTION_TYPE.KOBOLDCPP_MANAGED
+			name: "anthropic",
+			type: CONNECTION_TYPE.ANTHROPIC
 		})
 		const rec = recorder()
 

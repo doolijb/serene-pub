@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { avatarSrc } from "$lib/client/utils/media"
 	import { Switch, Popover, Portal } from "@skeletonlabs/skeleton-svelte"
+	import RowMenu from "$lib/client/components/menus/RowMenu.svelte"
 	import * as Icons from "@lucide/svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import {
@@ -644,7 +645,7 @@
 			if (mine) commitPendingFrame(res.character.avatarMediaId)
 			validationErrors = {} // Clear any validation errors on success
 			toaster.success({
-				title: "Character Created",
+				title: "Character created",
 				description: `Character "${res.character.name}" created successfully.`
 			})
 			// Reset original data to match current state before closing
@@ -666,7 +667,7 @@
 			commitPendingFrame(res.character.avatarMediaId)
 			validationErrors = {} // Clear any validation errors on success
 			toaster.success({
-				title: "Character Updated",
+				title: "Character updated",
 				description: `Character "${res.character.name}" updated successfully.`
 			})
 			// Reset original data to match current state before closing
@@ -925,7 +926,7 @@
 {#snippet removeRowButton(label: string, onRemove: () => void)}
 	<button
 		type="button"
-		class="text-surface-400 hover:bg-surface-800 hover:text-error-500 grid size-8 shrink-0 place-items-center rounded-lg"
+		class="text-surface-600-400 hover:bg-surface-200-800 hover:text-error-500 grid size-8 shrink-0 place-items-center rounded-lg"
 		onclick={onRemove}
 		aria-label={label}
 		title={label}
@@ -937,7 +938,7 @@
 {#snippet addRowButton(label: string, onAdd: () => void)}
 	<button
 		type="button"
-		class="text-surface-400 hover:text-foreground self-start text-xs"
+		class="text-surface-600-400 hover:text-foreground self-start text-xs"
 		onclick={onAdd}
 	>
 		+ {label}
@@ -980,7 +981,7 @@
 			{/if}
 			{#if !hideActionButtons}
 				{#if hasChanges}
-					<span class="text-surface-500 shrink-0 text-xs">
+					<span class="text-surface-600-400 shrink-0 text-xs">
 						Unsaved changes
 					</span>
 				{/if}
@@ -1021,12 +1022,12 @@
 				aria-labelledby="avatar-section"
 			>
 				<legend id="avatar-section" class="sr-only">
-					Avatar Settings
+					Avatar settings
 				</legend>
 				<div class="flex flex-col items-center gap-1.5">
 					<button
 						type="button"
-						class="border-surface-800 relative h-[88px] w-[88px] shrink-0 overflow-hidden rounded-[14px] border {isAvatarDragOver
+						class="border-surface-200-800 relative h-[88px] w-[88px] shrink-0 overflow-hidden rounded-[14px] border {isAvatarDragOver
 							? 'ring-primary-500 ring-2'
 							: ''}"
 						onclick={openAvatarPicker}
@@ -1046,17 +1047,17 @@
 							/>
 						{:else}
 							<span
-								class="bg-surface-800 absolute inset-0 grid place-items-center"
+								class="bg-surface-200-800 absolute inset-0 grid place-items-center"
 							>
 								<Icons.UsersRound
 									size={36}
-									class="text-surface-400"
+									class="text-surface-600-400"
 									aria-hidden="true"
 								/>
 							</span>
 						{/if}
 						<span
-							class="bg-surface-900/90 text-surface-200 absolute right-1 bottom-1 grid size-6 place-items-center rounded-full backdrop-blur-sm"
+							class="bg-surface-900/90 text-surface-800-200 absolute right-1 bottom-1 grid size-6 place-items-center rounded-full backdrop-blur-sm"
 						>
 							<Icons.Camera size={14} aria-hidden="true" />
 						</span>
@@ -1070,76 +1071,28 @@
 						onchange={handleAvatarInputChange}
 						aria-hidden="true"
 					/>
-					<Popover
-						open={avatarMenuOpen}
-						onOpenChange={(e) => (avatarMenuOpen = e.open)}
-						positioning={{ placement: "bottom-end" }}
-					>
-						<Popover.Trigger
-							class="btn-icon hover:bg-primary-600-400 h-7 min-h-0 w-7 p-0 {avatarMenuOpen
-								? 'bg-primary-600-400'
-								: ''}"
-							aria-label="Avatar options"
-						>
-							<Icons.EllipsisVertical
-								size={16}
-								aria-hidden="true"
-							/>
-						</Popover.Trigger>
-						<Portal>
-							<Popover.Positioner class="z-[1000]!">
-								<Popover.Content
-									class="card bg-surface-200-800 w-[min(90vw,240px)] space-y-4 p-4 shadow-xl"
-								>
-									<header class="popover-menu-title">
-										<Icons.Image
-											size={18}
-											aria-hidden="true"
-										/>
-										<p>Avatar</p>
-									</header>
-									<article class="flex flex-col gap-2">
-										<button
-											type="button"
-											class="btn btn-sm popover-menu-btn hover:preset-filled-primary-500"
-											onclick={() => {
-												avatarMenuOpen = false
-												openCropEditor()
-											}}
-											disabled={!editCharacterData._avatarFile &&
-												!character?.avatarMedia}
-										>
-											<Icons.Crop
-												size={16}
-												aria-hidden="true"
-											/>
-											<span>Adjust crop</span>
-										</button>
-										<button
-											type="button"
-											class="btn btn-sm popover-menu-btn hover:preset-filled-error-500"
-											onclick={() => {
-												avatarMenuOpen = false
-												clearAvatarSelection()
-											}}
-											disabled={!editCharacterData._avatarFile}
-										>
-											<Icons.Trash2
-												size={16}
-												aria-hidden="true"
-											/>
-											<span>Remove image</span>
-										</button>
-									</article>
-									<Popover.Arrow>
-										<Popover.ArrowTip
-											class="!bg-surface-200 dark:!bg-surface-800"
-										/>
-									</Popover.Arrow>
-								</Popover.Content>
-							</Popover.Positioner>
-						</Portal>
-					</Popover>
+					<RowMenu
+						label="Avatar"
+						triggerClass="btn btn-icon hover:bg-surface-200-800 data-[state=open]:bg-surface-200-800 h-7 min-h-0 w-7 p-0"
+						bind:open={avatarMenuOpen}
+						items={[
+							{
+								label: "Adjust crop",
+								icon: Icons.Crop,
+								disabled:
+									!editCharacterData._avatarFile &&
+									!character?.avatarMedia,
+								onSelect: openCropEditor
+							},
+							{
+								label: "Remove image",
+								icon: Icons.Trash2,
+								destructive: true,
+								disabled: !editCharacterData._avatarFile,
+								onSelect: clearAvatarSelection
+							}
+						]}
+					/>
 				</div>
 				<div
 					class="grid min-w-0 flex-1 grid-cols-1 gap-3 @lg/view:grid-cols-2"
@@ -1181,7 +1134,7 @@
 				<div class="flex flex-col gap-4">
 					<div class="flex flex-col">
 						<label
-							class="text-surface-500 mb-1.5 text-xs"
+							class="text-surface-600-400 mb-1.5 text-xs"
 							for="charSummary"
 						>
 							Summary
@@ -1194,17 +1147,17 @@
 							placeholder="One or two sentences describing who this character is…"
 							maxlength="200"
 						></textarea>
-						<p class="text-surface-500 mt-1 text-right text-xs">
+						<p class="text-surface-600-400 mt-1 text-right text-xs">
 							{editCharacterData.summary.length} / 200
 						</p>
-						<p class="text-surface-500 text-xs">
+						<p class="text-surface-600-400 text-xs">
 							Used as a concise graph node description. Not
 							injected into session context.
 						</p>
 					</div>
 					<div class="flex flex-col">
 						<label
-							class="text-surface-500 mb-1.5 flex items-center gap-1 text-xs"
+							class="text-surface-600-400 mb-1.5 flex items-center gap-1 text-xs"
 							for="charDescription"
 						>
 							Description*
@@ -1248,7 +1201,7 @@
 					</div>
 					<div class="flex flex-col">
 						<span
-							class="text-surface-500 mb-1.5 flex items-center gap-1 text-xs"
+							class="text-surface-600-400 mb-1.5 flex items-center gap-1 text-xs"
 						>
 							Aliases
 							{@render promptBadge(
@@ -1291,7 +1244,7 @@
 						{#if !hideTags}
 							<div class="flex flex-col">
 								<label
-									class="text-surface-500 mb-1.5 text-xs"
+									class="text-surface-600-400 mb-1.5 text-xs"
 									for="charTags"
 								>
 									Tags
@@ -1474,7 +1427,7 @@
 								<span id="persona-description" class="sr-only">
 									A character you play
 								</span>
-								<span class="text-surface-500 text-xs">
+								<span class="text-surface-600-400 text-xs">
 									A character you play
 								</span>
 							</div>
@@ -1507,7 +1460,7 @@
 								>
 									The persona a new session starts with
 								</span>
-								<span class="text-surface-500 text-xs">
+								<span class="text-surface-600-400 text-xs">
 									New sessions start with this one
 								</span>
 							</div>
@@ -1521,7 +1474,7 @@
 					<div class="grid grid-cols-1 gap-3 @lg/view:grid-cols-3">
 						<div class="flex flex-col">
 							<label
-								class="text-surface-500 mb-1.5 text-xs"
+								class="text-surface-600-400 mb-1.5 text-xs"
 								for="charVersion"
 							>
 								Version
@@ -1536,7 +1489,7 @@
 						</div>
 						<div class="flex flex-col">
 							<label
-								class="text-surface-500 mb-1.5 text-xs"
+								class="text-surface-600-400 mb-1.5 text-xs"
 								for="charCreator"
 							>
 								Creator
@@ -1551,7 +1504,7 @@
 						</div>
 						<div class="flex flex-col">
 							<label
-								class="text-surface-500 mb-1.5 text-xs"
+								class="text-surface-600-400 mb-1.5 text-xs"
 								for="charCategory"
 							>
 								Category
@@ -1581,7 +1534,7 @@
 				<div class="flex flex-col gap-4">
 					<div class="flex flex-col">
 						<label
-							class="text-surface-500 mb-1.5 flex items-center gap-1 text-xs"
+							class="text-surface-600-400 mb-1.5 flex items-center gap-1 text-xs"
 							for="charPersonality"
 						>
 							Personality
@@ -1600,7 +1553,7 @@
 					{#if userSettingsCtx.settings?.showAllCharacterFields}
 						<div class="flex flex-col">
 							<label
-								class="text-surface-500 mb-1.5 flex items-center gap-1 text-xs"
+								class="text-surface-600-400 mb-1.5 flex items-center gap-1 text-xs"
 								for="charScenario"
 							>
 								Scenario
@@ -1624,7 +1577,7 @@
 				<div class="flex flex-col gap-4">
 					<div class="flex flex-col">
 						<label
-							class="text-surface-500 mb-1.5 text-xs"
+							class="text-surface-600-400 mb-1.5 text-xs"
 							for="charFirstMessage"
 						>
 							First message
@@ -1639,7 +1592,7 @@
 					</div>
 					{#if userSettingsCtx.settings?.showAllCharacterFields}
 						<div class="flex flex-col">
-							<span class="text-surface-500 mb-1.5 text-xs">
+							<span class="text-surface-600-400 mb-1.5 text-xs">
 								Alternate greetings
 							</span>
 							<div class="flex flex-col gap-2">
@@ -1673,7 +1626,7 @@
 							</div>
 						</div>
 						<div class="flex flex-col">
-							<span class="text-surface-500 mb-1.5 text-xs">
+							<span class="text-surface-600-400 mb-1.5 text-xs">
 								Group-only greetings
 							</span>
 							<div class="flex flex-col gap-2">
@@ -1716,7 +1669,7 @@
 					<h2 class="mb-3 text-sm font-medium">Examples</h2>
 					<div class="flex flex-col">
 						<span
-							class="text-surface-500 mb-1.5 flex items-center gap-1 text-xs"
+							class="text-surface-600-400 mb-1.5 flex items-center gap-1 text-xs"
 						>
 							Example dialogues
 							{@render promptBadge(
@@ -1764,7 +1717,7 @@
 					<h2 class="mb-3 text-sm font-medium">Instructions</h2>
 					<div class="flex flex-col">
 						<label
-							class="text-surface-500 mb-1.5 flex items-center gap-1 text-xs"
+							class="text-surface-600-400 mb-1.5 flex items-center gap-1 text-xs"
 							for="charPostHistory"
 						>
 							Post-history instructions
@@ -1798,7 +1751,7 @@
 				<div class="flex flex-col gap-4">
 					<div class="flex flex-col">
 						<label
-							class="text-surface-500 mb-1.5 text-xs"
+							class="text-surface-600-400 mb-1.5 text-xs"
 							for="charCreatorNotes"
 						>
 							Creator notes
@@ -1813,7 +1766,7 @@
 					</div>
 					{#if userSettingsCtx.settings?.showAllCharacterFields}
 						<div class="flex flex-col">
-							<span class="text-surface-500 mb-1.5 text-xs">
+							<span class="text-surface-600-400 mb-1.5 text-xs">
 								Creator notes (multilingual)
 							</span>
 							<div class="flex flex-col gap-2">
@@ -1865,7 +1818,7 @@
 									/>
 									<button
 										type="button"
-										class="text-surface-400 hover:bg-surface-800 hover:text-foreground grid size-8 shrink-0 place-items-center rounded-lg"
+										class="text-surface-600-400 hover:bg-surface-200-800 hover:text-foreground grid size-8 shrink-0 place-items-center rounded-lg"
 										onclick={() => {
 											if (newLangKey) {
 												setObjectKey(
@@ -1913,7 +1866,7 @@
 			</Switch>
 			<p
 				id="show-all-fields-description"
-				class="text-surface-500 text-xs"
+				class="text-surface-600-400 text-xs"
 			>
 				Adds every field a character card can carry — scenario, extra
 				greetings, example dialogues and the creator's own metadata.
@@ -1925,7 +1878,7 @@
 {#snippet nameField()}
 	<div class="flex flex-col">
 		<label
-			class="text-surface-500 mb-1.5 flex items-center gap-1 text-xs"
+			class="text-surface-600-400 mb-1.5 flex items-center gap-1 text-xs"
 			for="charName"
 		>
 			Name*
@@ -1960,7 +1913,7 @@
 {#snippet nicknameField()}
 	<div class="flex flex-col">
 		<label
-			class="text-surface-500 mb-1.5 flex items-center gap-1 text-xs"
+			class="text-surface-600-400 mb-1.5 flex items-center gap-1 text-xs"
 			for="charNickname"
 		>
 			Nickname

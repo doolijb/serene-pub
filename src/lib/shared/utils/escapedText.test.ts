@@ -45,7 +45,7 @@ describe("escapedText", () => {
 	it("round-trips every shipped marker", () => {
 		const markers = everyShippedMarker()
 		// A guard on the harvest itself: an empty list would make this vacuous,
-		// and `split_session`'s framing is deliberately empty.
+		// and `split_chat`'s framing is deliberately empty.
 		expect(markers.length).toBeGreaterThan(90)
 		for (const { where, text } of markers)
 			expect(fromEscaped(toEscaped(text)), where).toBe(text)

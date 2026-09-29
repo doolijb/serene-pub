@@ -25,7 +25,7 @@ import { DEFAULT_COMPLETION_TEMPLATE_KEY } from "./completionTemplates"
 describe("promptFormatOf", () => {
 	it("passes a real format through untouched", () => {
 		expect(promptFormatOf("chatml")).toBe(PromptFormats.CHATML)
-		expect(promptFormatOf(PromptFormats.SPLIT_CHAT)).toBe("split_session")
+		expect(promptFormatOf(PromptFormats.SPLIT_CHAT)).toBe("split_chat")
 	})
 
 	it("falls back to Vicuna for an absent value", () => {

@@ -313,4 +313,77 @@ describe("createLorebookBindingHandler — token derivation (PGlite integration)
 		// entity — the client-supplied override must never win.
 		expect(attached.lorebookBinding.name).toBe("Now Bound Character")
 	})
+
+	test("a carded member's aliases are the member's: editable, and a card sync keeps them (#114)", async () => {
+		const { createLorebookBindingHandler, updateLorebookBindingHandler } =
+			await import("./lorebooks")
+		const { createCharacterFromParsedData } = await import("./characters")
+		const { syncLorebookBindingsForCharacter } = await import(
+			"$lib/server/utils/characterBindingSync"
+		)
+		const user = await makeUser("carded-alias-user")
+		const [lorebook] = await testDb
+			.insert(schema.lorebooks)
+			.values({ name: "Carded Alias Book", userId: user.id })
+			.returning()
+		const character = await createCharacterFromParsedData(
+			{
+				name: "Maren Thorne",
+				description: "",
+				personality: "",
+				scenario: "",
+				first_mes: "",
+				mes_example: "",
+				creator_notes: "",
+				system_prompt: "",
+				post_history_instructions: "",
+				alternate_greetings: [],
+				tags: [],
+				creator: "",
+				character_version: "",
+				extensions: {}
+			} as any,
+			undefined,
+			user.id
+		)
+		const created = await createLorebookBindingHandler.handler(
+			fakeSocket(user.id),
+			{
+				lorebookBinding: {
+					lorebookId: lorebook.id,
+					characterId: character.id,
+					personaId: null
+				} as any
+			},
+			noopEmit
+		)
+
+		const edited = await updateLorebookBindingHandler.handler(
+			fakeSocket(user.id),
+			{
+				lorebookBinding: {
+					id: created.lorebookBinding.id,
+					name: "Not The Card's Name",
+					aliases: ["the innkeeper"]
+				} as any
+			},
+			noopEmit
+		)
+		// The name stays the card's; the alias the author wrote is kept.
+		expect(edited.lorebookBinding.name).toBe("Maren Thorne")
+		expect(edited.lorebookBinding.aliases).toContain("the innkeeper")
+
+		// A later card edit syncs every bound row — and merges, never
+		// replaces, so the member still answers to "the innkeeper".
+		await testDb
+			.update(schema.characters)
+			.set({ aliases: ["Captain"] })
+			.where(eq(schema.characters.id, character.id))
+		await syncLorebookBindingsForCharacter(character.id, testDb)
+		const [after] = await testDb
+			.select()
+			.from(schema.lorebookBindings)
+			.where(eq(schema.lorebookBindings.id, created.lorebookBinding.id))
+		expect(after.aliases).toEqual(["the innkeeper", "Captain"])
+	}, 60_000)
 })

@@ -48,7 +48,7 @@ export interface CompletionTemplate {
 	name: string
 	/**
 	 * `flat` renders one completion string. `role_array` is the legacy
-	 * split-session bridge and is NOT admin-authorable — see `isSelectable`
+	 * split-chat bridge and is NOT admin-authorable — see `isSelectable`
 	 * and the emitter in `PromptBlockFormatter`.
 	 *
 	 * ⚠ This column exists because the decision used to be
@@ -265,7 +265,7 @@ export const BUILTIN_COMPLETION_TEMPLATES: readonly CompletionTemplate[] = [
 	},
 	{
 		key: PromptFormats.SPLIT_CHAT,
-		name: "Split Session (internal)",
+		name: "Split Chat (internal)",
 		renderMode: "role_array",
 		/**
 		 * ⚠ DELIBERATELY EMPTY, and this is the security property of the table.

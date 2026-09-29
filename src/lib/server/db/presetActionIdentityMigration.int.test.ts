@@ -76,7 +76,8 @@ async function publishActionSpec(
 				actions: actions.map((a) => ({
 					...a,
 					venue: { kind: "composer" },
-					label: { en: a.key }
+					label: { en: a.key },
+					description: { en: `Fires ${a.key}.` }
 				}))
 			}
 		})

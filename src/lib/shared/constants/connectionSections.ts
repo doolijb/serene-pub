@@ -18,9 +18,8 @@
  * capability this section's star registers in `connection_defaults` — the
  * question that has no answer at the connection level, because one KoboldCPP row
  * does chat, vision and image generation from one process, so the category the
- * person is standing in is what says which they meant. `servicePicker` is the
- * New Connection modal's label. `starVerb` is the sentence on the button and in
- * the screen-reader announcement.
+ * person is standing in is what says which they meant. `starVerb` is the
+ * sentence on the button and in the screen-reader announcement.
  *
  * ⚠ **Ordering is display order.** Text generation first because it is the one
  * every install needs.
@@ -58,8 +57,6 @@ export interface ConnectionSection {
 	starCapability: string
 	/** The verb on the star button: "Use for chat", "Already used for chat". */
 	starVerb: string
-	/** The New Connection modal's label for the service picker. */
-	servicePicker: string
 	/** What the list says when this modality has no connections yet. */
 	emptyMessage: string
 }
@@ -73,7 +70,6 @@ export const CONNECTION_SECTIONS: readonly ConnectionSection[] = [
 		icon: "Type",
 		starCapability: "text->text",
 		starVerb: "chat",
-		servicePicker: "AI Service",
 		emptyMessage:
 			"No AI connections yet. Create one to get started with AI conversations."
 	},
@@ -85,7 +81,6 @@ export const CONNECTION_SECTIONS: readonly ConnectionSection[] = [
 		icon: "Image",
 		starCapability: "text->image",
 		starVerb: "image generation",
-		servicePicker: "Image Service",
 		emptyMessage: "No image connections yet. Add one to generate images."
 	},
 	{
@@ -99,7 +94,6 @@ export const CONNECTION_SECTIONS: readonly ConnectionSection[] = [
 		icon: "Zap",
 		starCapability: "text->embedding",
 		starVerb: "embeddings",
-		servicePicker: "Embedding Service",
 		emptyMessage:
 			"No embedding connections yet. Add one to turn on retrieval."
 	},
@@ -111,7 +105,6 @@ export const CONNECTION_SECTIONS: readonly ConnectionSection[] = [
 		icon: "ScanText",
 		starCapability: "text->entities",
 		starVerb: "entity extraction",
-		servicePicker: "Entity Service",
 		emptyMessage:
 			"No entity connections yet. One finds the people, places and things a message names, so lore can be matched by name even when no keyword is set."
 	}
@@ -153,3 +146,30 @@ export const MODALITY_FOR_STAR_CAPABILITY: Readonly<Record<string, string>> =
 	Object.fromEntries(
 		CONNECTION_SECTIONS.map((s) => [s.starCapability, s.modality])
 	)
+
+/** What comes OUT of a transform id — `"text+image->text"` → `"text"`. */
+const outputSide = (id: string): string | null => {
+	const at = id.indexOf("->")
+	return at < 0 ? null : id.slice(at + 2)
+}
+
+/** Each section's modality, keyed by what its star transform produces. */
+const MODALITY_FOR_OUTPUT: Readonly<Record<string, string>> =
+	Object.fromEntries(
+		CONNECTION_SECTIONS.map((s) => [outputSide(s.starCapability), s.modality])
+	)
+
+/**
+ * Which modality a transform belongs to, read off what it PRODUCES: every
+ * `…->text` is text generation (vision and documents included), every
+ * `…->image` is image generation. Null for a feature (`tools`, `streaming`),
+ * which has no side and qualifies whatever transform it rides on, and for an
+ * output no section owns (`text->audio`).
+ *
+ * The rule a connection model's own modality is judged by — see
+ * `capabilityGuard.modelModalityAllows`.
+ */
+export function modalityOfTransform(id: string): string | null {
+	const out = outputSide(id)
+	return out == null ? null : (MODALITY_FOR_OUTPUT[out] ?? null)
+}

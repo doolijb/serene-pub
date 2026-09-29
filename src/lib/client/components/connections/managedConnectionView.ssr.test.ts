@@ -42,8 +42,6 @@ const base = {
 	capabilityDefaults: {},
 	managedConnectionIds: [7],
 	onBack: () => {},
-	onGetModels: () => {},
-	onOpenDownloads: () => {},
 	onRefreshModels: () => {},
 	onRemove: () => {},
 	onOpenConnection: () => {}

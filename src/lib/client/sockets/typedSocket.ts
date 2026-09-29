@@ -46,6 +46,13 @@ import type {
 	JumpSearchParams,
 	JumpSearchResponse
 } from "$lib/shared/sockets/jump"
+import type {
+	NotificationsChanged,
+	NotificationsIdsParams,
+	NotificationsListParams,
+	NotificationsListResponse,
+	NotificationsViewingParams
+} from "$lib/shared/sockets/notifications"
 
 // Type mapping for socket events - this maps event names to their param/response types
 export type SocketEventMap = {
@@ -458,9 +465,150 @@ export type SocketEventMap = {
 		params: Sockets.Plugins.SetSettings.Params
 		response: Sockets.Plugins.SetSettings.Response
 	}
+	"pluginUserSettings:list": {
+		params: Sockets.PluginUserSettings.List.Params
+		response: Sockets.PluginUserSettings.List.Response
+	}
+	"pluginUserSettings:list:error": {
+		params: Sockets.PluginUserSettings.List.Params
+		response: Sockets.PluginUserSettings.List.Response
+	}
+	"pluginUserSettings:set": {
+		params: Sockets.PluginUserSettings.Set.Params
+		response: Sockets.PluginUserSettings.Set.Response
+	}
+	"pluginUserSettings:set:error": {
+		params: Sockets.PluginUserSettings.Set.Params
+		response: Sockets.PluginUserSettings.Set.Response
+	}
 	"plugins:setStorageQuota": {
 		params: Sockets.Plugins.SetStorageQuota.Params
 		response: Sockets.Plugins.SetStorageQuota.Response
+	}
+	// Authored components (C6, P4) — admin-only verbs; `components:changed` is the push.
+	"components:coreList": {
+		params: Sockets.Components.CoreList.Params
+		response: Sockets.Components.CoreList.Response
+	}
+	"components:coreList:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"components:coreSource": {
+		params: Sockets.Components.CoreSource.Params
+		response: Sockets.Components.CoreSource.Response
+	}
+	"components:coreSource:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"components:list": {
+		params: Sockets.Components.List.Params
+		response: Sockets.Components.List.Response
+	}
+	"components:list:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"components:get": {
+		params: Sockets.Components.Get.Params
+		response: Sockets.Components.Get.Response
+	}
+	"components:get:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"components:clone": {
+		params: Sockets.Components.Clone.Params
+		response: Sockets.Components.Clone.Response
+	}
+	"components:clone:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"components:create": {
+		params: Sockets.Components.Create.Params
+		response: Sockets.Components.Create.Response
+	}
+	"components:create:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"components:save": {
+		params: Sockets.Components.Save.Params
+		response: Sockets.Components.Save.Response
+	}
+	"components:save:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"components:revertDraft": {
+		params: Sockets.Components.RevertDraft.Params
+		response: Sockets.Components.RevertDraft.Response
+	}
+	"components:revertDraft:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"components:preview": {
+		params: Sockets.Components.Preview.Params
+		response: Sockets.Components.Preview.Response
+	}
+	"components:preview:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"components:setEnabled": {
+		params: Sockets.Components.SetEnabled.Params
+		response: Sockets.Components.SetEnabled.Response
+	}
+	"components:setEnabled:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"components:reviewScopes": {
+		params: Sockets.Components.ReviewScopes.Params
+		response: Sockets.Components.ReviewScopes.Response
+	}
+	"components:reviewScopes:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"components:delete": {
+		params: Sockets.Components.Delete.Params
+		response: Sockets.Components.Delete.Response
+	}
+	"components:delete:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"components:export": {
+		params: Sockets.Components.Export.Params
+		response: Sockets.Components.Export.Response
+	}
+	"components:export:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"components:importPreview": {
+		params: Sockets.Components.ImportPreview.Params
+		response: Sockets.Components.ImportPreview.Response
+	}
+	"components:importPreview:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"components:import": {
+		params: Sockets.Components.Import.Params
+		response: Sockets.Components.Import.Response
+	}
+	"components:import:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"components:changed": {
+		params: Sockets.Components.Changed.Params
+		response: Sockets.Components.Changed.Response
 	}
 	"connections:list": {
 		params: Sockets.Connections.List.Params
@@ -511,6 +659,30 @@ export type SocketEventMap = {
 	"connectionDefaults:set": {
 		params: Sockets.ConnectionDefaults.Set.Params
 		response: Sockets.ConnectionDefaults.Set.Response
+	}
+	// The admin Overview: every section's status plus the Needs you list.
+	"admin:overview": {
+		params: Sockets.Admin.Overview.Params
+		response: Sockets.Admin.Overview.Response
+	}
+	// Server push: the Overview is out of date; ask `admin:overview` again.
+	"admin:overviewStale": {
+		params: Sockets.Admin.OverviewStale.Params
+		response: Sockets.Admin.OverviewStale.Response
+	}
+	// Admin → History: the admin logbook, filtered and paged.
+	"admin:logbook": {
+		params: Sockets.Admin.Logbook.Params
+		response: Sockets.Admin.Logbook.Response
+	}
+	// Admin → Diagnostics: the redacted support report, built on request.
+	"admin:supportReport": {
+		params: Sockets.Admin.SupportReport.Params
+		response: Sockets.Admin.SupportReport.Response
+	}
+	"admin:supportReport:error": {
+		params: never
+		response: { error?: string }
 	}
 	"connections:test": {
 		params: Sockets.Connections.Test.Params
@@ -661,6 +833,15 @@ export type SocketEventMap = {
 		params: Sockets.ErrorResponse
 		response: Sockets.ErrorResponse
 	}
+	// The setup wizard's detected-provider cards: what runs on this machine.
+	"connections:discoverLocal": {
+		params: Sockets.Connections.DiscoverLocal.Params
+		response: Sockets.Connections.DiscoverLocal.Response
+	}
+	"connections:discoverLocal:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
 	"connections:importModels:error": {
 		params: Sockets.ErrorResponse
 		response: Sockets.ErrorResponse
@@ -801,10 +982,26 @@ export type SocketEventMap = {
 		params: Sockets.Sessions.Annex.Params
 		response: Sockets.Sessions.Annex.Response
 	}
+	// The session data panel: the whole annex against its declarations,
+	// for the session's owner and administrators. Request-only.
+	"sessions:annexInspect": {
+		params: Sockets.Sessions.AnnexInspect.Params
+		response: Sockets.Sessions.AnnexInspect.Response
+	}
+	// The refusal (anyone else) — never gated, carries the asked session.
+	"sessions:annexInspect:error": {
+		params: Sockets.Sessions.AnnexInspect.Error
+		response: Sockets.Sessions.AnnexInspect.Error
+	}
 	// Server → client only (R56): a package's event, recorded in the session.
 	"sessions:recordedEvent": {
 		params: never
 		response: Sockets.Sessions.RecordedEvent.Push
+	}
+	// Server → client only (R81): a turn ranked the session's lore.
+	"sessions:loreRanked": {
+		params: never
+		response: Sockets.Sessions.LoreRanked.Push
 	}
 	"sessionGenres:list": {
 		params: Sockets.SessionAdmin.Genres.Params
@@ -917,10 +1114,6 @@ export type SocketEventMap = {
 		params: Sockets.ErrorResponse
 		response: Sockets.ErrorResponse
 	}
-	"sessions:triggers": {
-		params: Sockets.Sessions.Triggers.Params
-		response: Sockets.Sessions.Triggers.Response
-	}
 	"sessions:actions": {
 		params: Sockets.Sessions.Actions.Params
 		response: Sockets.Sessions.Actions.Response
@@ -929,9 +1122,9 @@ export type SocketEventMap = {
 		params: Sockets.Sessions.ActionsSeen.Params
 		response: Sockets.Sessions.ActionsSeen.Response
 	}
-	"sessions:triggerFunction": {
-		params: Sockets.Sessions.TriggerFunction.Params
-		response: Sockets.Sessions.TriggerFunction.Response
+	"sessions:fireAction": {
+		params: Sockets.Sessions.FireAction.Params
+		response: Sockets.Sessions.FireAction.Response
 	}
 	"sessions:presets": {
 		params: Sockets.Sessions.PresetOptions.Params
@@ -1027,13 +1220,13 @@ export type SocketEventMap = {
 		params: Sockets.Sessions.SetEnvoySeat.Params
 		response: Sockets.Sessions.SetEnvoySeat.Response
 	}
-	"sessions:updateSessionCharacterVisibility": {
-		params: Sockets.Sessions.UpdateSessionCharacterVisibility.Params
-		response: Sockets.Sessions.UpdateSessionCharacterVisibility.Response
+	"sessions:fireNarratorResponse": {
+		params: Sockets.Sessions.FireNarratorResponse.Params
+		response: Sockets.Sessions.FireNarratorResponse.Response
 	}
-	"sessions:triggerNarratorResponse": {
-		params: Sockets.Sessions.TriggerNarratorResponse.Params
-		response: Sockets.Sessions.TriggerNarratorResponse.Response
+	"sessions:setFavorite": {
+		params: Sockets.Sessions.SetFavorite.Params
+		response: Sockets.Sessions.SetFavorite.Response
 	}
 	"sessions:getNarratorName": {
 		params: Sockets.Sessions.GetNarratorName.Params
@@ -1053,6 +1246,10 @@ export type SocketEventMap = {
 	}
 	"sessions:create:error": {
 		params: never
+		response: Sockets.ErrorResponse
+	}
+	"sessions:setFavorite:error": {
+		params: Sockets.ErrorResponse
 		response: Sockets.ErrorResponse
 	}
 	"sessions:update:error": {
@@ -1096,13 +1293,18 @@ export type SocketEventMap = {
 		params: never
 		response: Sockets.Sessions.FireTurn.Response
 	}
+	// Regenerate the last turn, as a whole (`core#retake`, lair pass R2).
+	"sessions:retakeTurn": {
+		params: Sockets.Sessions.RetakeTurn.Params
+		response: Sockets.Sessions.RetakeTurn.Response
+	}
+	"sessions:retakeTurn:error": {
+		params: never
+		response: Sockets.Sessions.RetakeTurn.Response
+	}
 	"sessions:promptTokenCount": {
 		params: Sockets.Sessions.PromptTokenCount.Params
 		response: Sockets.Sessions.PromptTokenCount.Response
-	}
-	"sessions:triggerGenerateMessage": {
-		params: Sockets.Sessions.TriggerGenerateMessage.Params
-		response: Sockets.Sessions.TriggerGenerateMessage.Response
 	}
 	"sessions:branch": {
 		params: Sockets.Sessions.Branch.Params
@@ -1142,9 +1344,9 @@ export type SocketEventMap = {
 		params: Sockets.SessionMessages.Regenerate.Params
 		response: Sockets.SessionMessages.Regenerate.Response
 	}
-	"sessionMessages:continue": {
-		params: Sockets.SessionMessages.Continue.Params
-		response: Sockets.SessionMessages.Continue.Response
+	"sessionMessages:extend": {
+		params: Sockets.SessionMessages.Extend.Params
+		response: Sockets.SessionMessages.Extend.Response
 	}
 	"sessions:setSpriteSet": {
 		params: Sockets.Sessions.SetSpriteSet.Params
@@ -1419,36 +1621,6 @@ export type SocketEventMap = {
 	"samplingConfigs:setUserActive": {
 		params: Sockets.SamplingConfigs.SetUserActive.Params
 		response: Sockets.SamplingConfigs.SetUserActive.Response
-	}
-
-	// Context Config events
-	"contextConfigs:list": {
-		params: Sockets.ContextConfigs.List.Params
-		response: Sockets.ContextConfigs.List.Response
-	}
-	"contextConfigs:get": {
-		params: Sockets.ContextConfigs.Get.Params
-		response: Sockets.ContextConfigs.Get.Response
-	}
-	"contextConfigs:create": {
-		params: Sockets.ContextConfigs.Create.Params
-		response: Sockets.ContextConfigs.Create.Response
-	}
-	"contextConfigs:update": {
-		params: Sockets.ContextConfigs.Update.Params
-		response: Sockets.ContextConfigs.Update.Response
-	}
-	"contextConfigs:delete": {
-		params: Sockets.ContextConfigs.Delete.Params
-		response: Sockets.ContextConfigs.Delete.Response
-	}
-	"contextConfigs:setUserActive": {
-		params: Sockets.ContextConfigs.SetUserActive.Params
-		response: Sockets.ContextConfigs.SetUserActive.Response
-	}
-	"contextConfigs:preview": {
-		params: Sockets.ContextConfigs.Preview.Params
-		response: Sockets.ContextConfigs.Preview.Response
 	}
 
 	// Pipeline events — the pipeline view (05 §0a) and the management page.
@@ -1909,36 +2081,6 @@ export type SocketEventMap = {
 		response: Sockets.Pipelines.Runs.Response
 	}
 
-	// Prompt Config events
-	"promptConfigs:list": {
-		params: Sockets.PromptConfigs.List.Params
-		response: Sockets.PromptConfigs.List.Response
-	}
-	"promptConfigs:get": {
-		params: Sockets.PromptConfigs.Get.Params
-		response: Sockets.PromptConfigs.Get.Response
-	}
-	"promptConfigs:create": {
-		params: Sockets.PromptConfigs.Create.Params
-		response: Sockets.PromptConfigs.Create.Response
-	}
-	"promptConfigs:update": {
-		params: Sockets.PromptConfigs.Update.Params
-		response: Sockets.PromptConfigs.Update.Response
-	}
-	"promptConfigs:delete": {
-		params: Sockets.PromptConfigs.Delete.Params
-		response: Sockets.PromptConfigs.Delete.Response
-	}
-	"promptConfigs:setUserActive": {
-		params: Sockets.PromptConfigs.SetUserActive.Params
-		response: Sockets.PromptConfigs.SetUserActive.Response
-	}
-	"promptConfigs:setUserActive:error": {
-		params: never
-		response: { error?: string }
-	}
-
 	// Completion template events (the delimiters a prompt is wrapped in)
 	"completionTemplates:list": {
 		params: Sockets.CompletionTemplates.List.Params
@@ -1987,138 +2129,6 @@ export type SocketEventMap = {
 	"completionTemplates:options": {
 		params: Sockets.CompletionTemplates.Options.Params
 		response: Sockets.CompletionTemplates.Options.Response
-	}
-
-	// Narrator Prompt Config events ("Session Prompts: Narrator")
-	"graphBuildConfigs:list": {
-		params: Sockets.GraphBuildConfigs.List.Params
-		response: Sockets.GraphBuildConfigs.List.Response
-	}
-	"graphBuildConfigs:get": {
-		params: Sockets.GraphBuildConfigs.Get.Params
-		response: Sockets.GraphBuildConfigs.Get.Response
-	}
-	"graphBuildConfigs:create": {
-		params: Sockets.GraphBuildConfigs.Create.Params
-		response: Sockets.GraphBuildConfigs.Create.Response
-	}
-	"graphBuildConfigs:update": {
-		params: Sockets.GraphBuildConfigs.Update.Params
-		response: Sockets.GraphBuildConfigs.Update.Response
-	}
-	"graphBuildConfigs:delete": {
-		params: Sockets.GraphBuildConfigs.Delete.Params
-		response: Sockets.GraphBuildConfigs.Delete.Response
-	}
-	"graphBuildConfigs:setDefault": {
-		params: Sockets.GraphBuildConfigs.SetDefault.Params
-		response: Sockets.GraphBuildConfigs.SetDefault.Response
-	}
-	"narratorPromptConfigs:list": {
-		params: Sockets.NarratorPromptConfigs.List.Params
-		response: Sockets.NarratorPromptConfigs.List.Response
-	}
-	"narratorPromptConfigs:get": {
-		params: Sockets.NarratorPromptConfigs.Get.Params
-		response: Sockets.NarratorPromptConfigs.Get.Response
-	}
-	"narratorPromptConfigs:create": {
-		params: Sockets.NarratorPromptConfigs.Create.Params
-		response: Sockets.NarratorPromptConfigs.Create.Response
-	}
-	"narratorPromptConfigs:update": {
-		params: Sockets.NarratorPromptConfigs.Update.Params
-		response: Sockets.NarratorPromptConfigs.Update.Response
-	}
-	"narratorPromptConfigs:delete": {
-		params: Sockets.NarratorPromptConfigs.Delete.Params
-		response: Sockets.NarratorPromptConfigs.Delete.Response
-	}
-	"narratorPromptConfigs:setUserActive": {
-		params: Sockets.NarratorPromptConfigs.SetUserActive.Params
-		response: Sockets.NarratorPromptConfigs.SetUserActive.Response
-	}
-	"narratorPromptConfigs:setUserActive:error": {
-		params: never
-		response: { error?: string }
-	}
-
-	// World Summarize Config events
-	"worldSummarizeConfigs:list": {
-		params: Sockets.WorldSummarizeConfigs.List.Params
-		response: Sockets.WorldSummarizeConfigs.List.Response
-	}
-	"worldSummarizeConfigs:get": {
-		params: Sockets.WorldSummarizeConfigs.Get.Params
-		response: Sockets.WorldSummarizeConfigs.Get.Response
-	}
-	"worldSummarizeConfigs:create": {
-		params: Sockets.WorldSummarizeConfigs.Create.Params
-		response: Sockets.WorldSummarizeConfigs.Create.Response
-	}
-	"worldSummarizeConfigs:update": {
-		params: Sockets.WorldSummarizeConfigs.Update.Params
-		response: Sockets.WorldSummarizeConfigs.Update.Response
-	}
-	"worldSummarizeConfigs:delete": {
-		params: Sockets.WorldSummarizeConfigs.Delete.Params
-		response: Sockets.WorldSummarizeConfigs.Delete.Response
-	}
-	"worldSummarizeConfigs:setUserActive": {
-		params: Sockets.WorldSummarizeConfigs.SetUserActive.Params
-		response: Sockets.WorldSummarizeConfigs.SetUserActive.Response
-	}
-
-	// Character Summarize Config events
-	"characterSummarizeConfigs:list": {
-		params: Sockets.CharacterSummarizeConfigs.List.Params
-		response: Sockets.CharacterSummarizeConfigs.List.Response
-	}
-	"characterSummarizeConfigs:get": {
-		params: Sockets.CharacterSummarizeConfigs.Get.Params
-		response: Sockets.CharacterSummarizeConfigs.Get.Response
-	}
-	"characterSummarizeConfigs:create": {
-		params: Sockets.CharacterSummarizeConfigs.Create.Params
-		response: Sockets.CharacterSummarizeConfigs.Create.Response
-	}
-	"characterSummarizeConfigs:update": {
-		params: Sockets.CharacterSummarizeConfigs.Update.Params
-		response: Sockets.CharacterSummarizeConfigs.Update.Response
-	}
-	"characterSummarizeConfigs:delete": {
-		params: Sockets.CharacterSummarizeConfigs.Delete.Params
-		response: Sockets.CharacterSummarizeConfigs.Delete.Response
-	}
-	"characterSummarizeConfigs:setUserActive": {
-		params: Sockets.CharacterSummarizeConfigs.SetUserActive.Params
-		response: Sockets.CharacterSummarizeConfigs.SetUserActive.Response
-	}
-
-	// Scene Summarize Config events
-	"sceneSummarizeConfigs:list": {
-		params: Sockets.SceneSummarizeConfigs.List.Params
-		response: Sockets.SceneSummarizeConfigs.List.Response
-	}
-	"sceneSummarizeConfigs:get": {
-		params: Sockets.SceneSummarizeConfigs.Get.Params
-		response: Sockets.SceneSummarizeConfigs.Get.Response
-	}
-	"sceneSummarizeConfigs:create": {
-		params: Sockets.SceneSummarizeConfigs.Create.Params
-		response: Sockets.SceneSummarizeConfigs.Create.Response
-	}
-	"sceneSummarizeConfigs:update": {
-		params: Sockets.SceneSummarizeConfigs.Update.Params
-		response: Sockets.SceneSummarizeConfigs.Update.Response
-	}
-	"sceneSummarizeConfigs:delete": {
-		params: Sockets.SceneSummarizeConfigs.Delete.Params
-		response: Sockets.SceneSummarizeConfigs.Delete.Response
-	}
-	"sceneSummarizeConfigs:setUserActive": {
-		params: Sockets.SceneSummarizeConfigs.SetUserActive.Params
-		response: Sockets.SceneSummarizeConfigs.SetUserActive.Response
 	}
 
 	// KoboldCPP events
@@ -2170,12 +2180,10 @@ export type SocketEventMap = {
 		params: Sockets.KoboldCPP.ConnectModel.Params
 		response: Sockets.KoboldCPP.ConnectModel.Response
 	}
-	// Its image counterpart: creates a koboldcpp_managed_image connection naming
-	// this file and registers it as the text->image default. Separate from
-	// connectModel because the two branches share a type predicate with nothing
-	// else — not because the "make it default" writers differ. They no longer
-	// do: both register a row in `connection_defaults`, text under `text->text`
-	// and image under `text->image`. There is no starred column left to claim.
+	// Its image counterpart: ensures this file as an `image-gen` model on the
+	// managed endpoint and registers it as the text->image default. Both write
+	// one `connection_defaults` row — text under `text->text`, image under
+	// `text->image`.
 	"koboldcpp:connectImageModel": {
 		params: Sockets.KoboldCPP.ConnectImageModel.Params
 		response: Sockets.KoboldCPP.ConnectImageModel.Response
@@ -2466,14 +2474,6 @@ export type SocketEventMap = {
 		params: Sockets.ErrorResponse
 		response: Sockets.ErrorResponse
 	}
-	"systemSettings:updateLegacyConfigsVisible": {
-		params: Sockets.SystemSettings.UpdateLegacyConfigsVisible.Params
-		response: Sockets.SystemSettings.UpdateLegacyConfigsVisible.Response
-	}
-	"systemSettings:updateLegacyConfigsVisible:error": {
-		params: Sockets.ErrorResponse
-		response: Sockets.ErrorResponse
-	}
 	"systemSettings:updateContextDebuggingEnabled": {
 		params: Sockets.SystemSettings.UpdateContextDebuggingEnabled.Params
 		response: Sockets.SystemSettings.UpdateContextDebuggingEnabled.Response
@@ -2671,9 +2671,45 @@ export type SocketEventMap = {
 		params: Sockets.Lorebooks.Delete.Params
 		response: Sockets.Lorebooks.Delete.Response
 	}
+	"lorebooks:delete:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.Lorebooks.Delete.Response
+	}
 	"lorebooks:duplicate": {
 		params: Sockets.Lorebooks.Duplicate.Params
 		response: Sockets.Lorebooks.Duplicate.Response
+	}
+	"lorebooks:storyTime": {
+		params: Sockets.Lorebooks.StoryTime.Params
+		response: Sockets.Lorebooks.StoryTime.Response
+	}
+	"lorebooks:storyTime:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"lorebooks:checkCalendar": {
+		params: Sockets.Lorebooks.CheckCalendar.Params
+		response: Sockets.Lorebooks.CheckCalendar.Response
+	}
+	"lorebooks:checkCalendar:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"lorebooks:setCalendar": {
+		params: Sockets.Lorebooks.SetCalendar.Params
+		response: Sockets.Lorebooks.SetCalendar.Response
+	}
+	"lorebooks:setCalendar:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"lorebooks:setClock": {
+		params: Sockets.Lorebooks.SetClock.Params
+		response: Sockets.Lorebooks.SetClock.Response
+	}
+	"lorebooks:setClock:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
 	}
 	"lorebooks:duplicate:error": {
 		params: Sockets.ErrorResponse
@@ -2710,6 +2746,11 @@ export type SocketEventMap = {
 	"lorebooks:updateBinding": {
 		params: Sockets.Lorebooks.UpdateBinding.Params
 		response: Sockets.Lorebooks.UpdateBinding.Response
+	}
+	// Synthesised by `register()` on a throw; the cast board awaits it.
+	"lorebooks:updateBinding:error": {
+		params: never
+		response: { error?: string }
 	}
 	"lorebooks:resolveOrCreateBindingByName": {
 		params: Sockets.Lorebooks.ResolveOrCreateBindingByName.Params
@@ -2900,18 +2941,6 @@ export type SocketEventMap = {
 		params: Sockets.Entries.RecentDecisions.Params
 		response: Sockets.Entries.RecentDecisions.Response
 	}
-	"entries:testRetrieval": {
-		params: Sockets.Entries.TestRetrieval.Params
-		response: Sockets.Entries.TestRetrieval.Response
-	}
-	// The handler answers its own refusals on the channel above, with the
-	// sentence that says which one it was. This is `register()`'s synthesised
-	// fallback for a throw it did not expect — listened to so the editor stops
-	// waiting rather than spinning forever on a generic failure.
-	"entries:testRetrieval:error": {
-		params: never
-		response: { error?: string }
-	}
 
 	// Scenes events
 	"scenes:list": {
@@ -2947,6 +2976,11 @@ export type SocketEventMap = {
 		params: Sockets.Scenes.Update.Params
 		response: Sockets.Scenes.Update.Response
 	}
+	// Synthesised by `register()` on a throw — see `entries:update:error`.
+	"scenes:update:error": {
+		params: never
+		response: { error?: string }
+	}
 	"scenes:delete": {
 		params: Sockets.Scenes.Delete.Params
 		response: Sockets.Scenes.Delete.Response
@@ -2966,10 +3000,6 @@ export type SocketEventMap = {
 	"scenes:process:error": {
 		params: never
 		response: Sockets.Scenes.Process.ErrorResponse
-	}
-	"scenes:process:trace": {
-		params: never
-		response: Sockets.Scenes.Process.TraceEntry
 	}
 	"scenes:compile": {
 		params: Sockets.Scenes.Compile.Params
@@ -3117,16 +3147,20 @@ export type SocketEventMap = {
 		params: Sockets.ErrorResponse
 		response: Sockets.ErrorResponse
 	}
+	"narrativeGraph:createRelationship:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"narrativeGraph:updateRelationship:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"narrativeGraph:deleteRelationship:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
 	"narrativeGraph:build": {
 		params: Sockets.NarrativeGraph.Build.Params
-		response: Sockets.NarrativeGraph.Build.Response
-	}
-	"narrativeGraph:build:progress": {
-		params: Sockets.NarrativeGraph.Build.Progress
-		response: Sockets.NarrativeGraph.Build.Progress
-	}
-	"narrativeGraph:build:complete": {
-		params: Sockets.NarrativeGraph.Build.Response
 		response: Sockets.NarrativeGraph.Build.Response
 	}
 	"narrativeGraph:build:error": {
@@ -3155,12 +3189,21 @@ export type SocketEventMap = {
 		response: { node: Sockets.NarrativeGraph.NarrativeNode }
 	}
 	"narrativeGraph:deleteNode": {
-		params: { id: number }
-		response: { success: string }
+		params: Sockets.NarrativeGraph.DeleteNode.Params
+		response: Sockets.NarrativeGraph.DeleteNode.Response
+	}
+	// Synthesised by `register()` on a throw; the cast board awaits it.
+	"narrativeGraph:deleteNode:error": {
+		params: never
+		response: { error?: string }
 	}
 	"narrativeGraph:checkNodeMergeReferences": {
 		params: Sockets.NarrativeGraph.CheckNodeMergeReferences.Params
 		response: Sockets.NarrativeGraph.CheckNodeMergeReferences.Response
+	}
+	"narrativeGraph:checkNodeMergeReferences:error": {
+		params: never
+		response: { error?: string }
 	}
 	"narrativeGraph:updateRelationship": {
 		params: {
@@ -3171,24 +3214,12 @@ export type SocketEventMap = {
 		response: { relationship: Sockets.NarrativeGraph.NarrativeRelationship }
 	}
 	"narrativeGraph:deleteRelationship": {
-		params: { id: number }
-		response: { success: string }
+		params: Sockets.NarrativeGraph.DeleteRelationship.Params
+		response: Sockets.NarrativeGraph.DeleteRelationship.Response
 	}
 	"narrativeGraph:createRelationship": {
 		params: Sockets.NarrativeGraph.CreateRelationship.Params
 		response: Sockets.NarrativeGraph.CreateRelationship.Response
-	}
-	"narrativeGraph:createNode": {
-		params: Sockets.NarrativeGraph.CreateNode.Params
-		response: Sockets.NarrativeGraph.CreateNode.Response
-	}
-	"narrativeGraph:queryContext": {
-		params: Sockets.NarrativeGraph.QueryContext.Params
-		response: Sockets.NarrativeGraph.QueryContext.Response
-	}
-	"narrativeGraph:linkOrphanBinding": {
-		params: Sockets.NarrativeGraph.LinkOrphanBinding.Params
-		response: Sockets.NarrativeGraph.LinkOrphanBinding.Response
 	}
 	"narrativeGraph:mergeNode": {
 		params: Sockets.NarrativeGraph.MergeNode.Params
@@ -3375,8 +3406,8 @@ export type SocketEventMap = {
 		response: Sockets.ErrorResponse
 	}
 
-	// Stats and states — the resolved session state, the three possession
-	// verbs, and the review gate the model's proposals wait at. Every mutation
+	// Stats and states — the resolved session state, its writes (an item
+	// moving is a list change on the inventory stat), and the review gate the model's proposals wait at. Every mutation
 	// answers with the whole resolved state and broadcasts `state:changed` to
 	// the session, because one edit can move several reads and a client
 	// patching a row would be a second resolver.
@@ -3385,46 +3416,38 @@ export type SocketEventMap = {
 		response: Sockets.State.Get.Response
 	}
 	"state:get:error": {
-		params: Sockets.ErrorResponse
-		response: Sockets.ErrorResponse
+		params: Sockets.State.Get.ErrorResponse
+		response: Sockets.State.Get.ErrorResponse
 	}
 	"state:set": {
 		params: Sockets.State.Set.Params
 		response: Sockets.State.Set.Response
 	}
 	"state:set:error": {
-		params: Sockets.ErrorResponse
-		response: Sockets.ErrorResponse
-	}
-	"state:give": {
-		params: Sockets.State.Give.Params
-		response: Sockets.State.Give.Response
-	}
-	"state:give:error": {
-		params: Sockets.ErrorResponse
-		response: Sockets.ErrorResponse
-	}
-	"state:take": {
-		params: Sockets.State.Take.Params
-		response: Sockets.State.Take.Response
-	}
-	"state:take:error": {
-		params: Sockets.ErrorResponse
-		response: Sockets.ErrorResponse
-	}
-	"state:transfer": {
-		params: Sockets.State.Transfer.Params
-		response: Sockets.State.Transfer.Response
-	}
-	"state:transfer:error": {
-		params: Sockets.ErrorResponse
-		response: Sockets.ErrorResponse
+		params: Sockets.State.Set.ErrorResponse
+		response: Sockets.State.Set.ErrorResponse
 	}
 	"state:configure": {
 		params: Sockets.State.Configure.Params
 		response: Sockets.State.Configure.Response
 	}
 	"state:configure:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"state:attributes": {
+		params: Sockets.State.Attributes.Params
+		response: Sockets.State.Attributes.Response
+	}
+	"state:attributes:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"state:setAttributePicks": {
+		params: Sockets.State.SetAttributePicks.Params
+		response: Sockets.State.SetAttributePicks.Response
+	}
+	"state:setAttributePicks:error": {
 		params: Sockets.ErrorResponse
 		response: Sockets.ErrorResponse
 	}
@@ -3470,6 +3493,32 @@ export type SocketEventMap = {
 	"jump:search:error": {
 		params: Sockets.ErrorResponse
 		response: Sockets.ErrorResponse
+	}
+
+	// Notifications — the per-user list the Activity view shows. `read` and
+	// `dismiss` answer through `notifications:changed`, which the server also
+	// pushes after any raise or clear. Types in shared/sockets/notifications.
+	"notifications:list": {
+		params: NotificationsListParams
+		response: NotificationsListResponse
+	}
+	"notifications:read": {
+		params: NotificationsIdsParams
+		response: never
+	}
+	"notifications:dismiss": {
+		params: NotificationsIdsParams
+		response: never
+	}
+	"notifications:changed": {
+		params: never
+		response: NotificationsChanged
+	}
+	// Client → server only: what this tab has on screen (null = hidden or
+	// unfocused), read when a notification is raised. Nothing answers it.
+	"notifications:viewing": {
+		params: NotificationsViewingParams
+		response: never
 	}
 
 	/**

@@ -2,7 +2,7 @@
  * The keyword mechanism, as a Query.
  *
  * This is what `core:query/lorebook-triggers@1` binds to. It does the part of
- * `KeywordInfillEngine` that decides **which entries are candidates** — and
+ * the 0.5 keyword path that decides **which entries are candidates** — and
  * stops there. Scoring weights, budgets and what actually fits are the ranker's
  * and Assemble's business, downstream, where a user can swap them.
  *
@@ -28,6 +28,8 @@ import {
 	speakersIn,
 	selectiveLogicHolds,
 	splitKeys,
+	keysText,
+	type KeyList,
 	tfidfSignal,
 	lexicalDocument,
 	lexicalSignal,
@@ -63,7 +65,12 @@ export interface LoreRow {
 	source: RetrievalBand
 	name: string | null
 	content: string
-	keys: string
+	/**
+	 * One element per key — the stored `text[]` — or, from a legacy caller, a
+	 * comma string (`KeyList`). Never joined and re-split on the way here: a
+	 * regex `{1,3}` must arrive as one key (finding #146).
+	 */
+	keys: KeyList
 	caseSensitive?: boolean | null
 	useRegex?: boolean | null
 	matchMode?: string | null
@@ -71,11 +78,11 @@ export interface LoreRow {
 	 * The condition keys, and how to read them — see `selectiveLogicHolds`.
 	 *
 	 * On the row rather than on the node, like the rest of the matcher set and
-	 * for the reason 0195 gives about `caseSensitive` and `useRegex`: they
+	 * for the reason pre-squash 0195 gave about `caseSensitive` and `useRegex`: they
 	 * describe how *this entry* matches, and the entry is what somebody is
 	 * looking at when they want to change that.
 	 */
-	secondaryKeys?: string | null
+	secondaryKeys?: KeyList
 	selectiveLogic?: string | null
 	/**
 	 * The deepest recursion level at which this entry may still be reached.
@@ -144,9 +151,10 @@ export interface KeywordQueryInput {
 	 *
 	 * `defaultStrategy` was the query node's `retrievalMode` — what an entry
 	 * that had declared nothing was treated as — culled with its declaration by
-	 * migration 0203. `availability` was `{ vectorSearchAvailable }`, and this
+	 * pre-squash migration 0203 (now in `0094_baseline_0_6`). `availability`
+	 * was `{ vectorSearchAvailable }`, and this
 	 * mechanism consulted it only to ask whether an entry's own
-	 * `retrieval_strategy` sent it elsewhere; migration 0204 dropped that
+	 * `retrieval_strategy` sent it elsewhere; pre-squash 0204 dropped that
 	 * column, so the question has no asker and the answer no reader.
 	 *
 	 * Neither comes back. A mode a node can set, or a column an entry can set,
@@ -243,7 +251,7 @@ export interface KeywordQueryResult {
  * keyed book to fix the admission of keyless ones.
  */
 const entryText = (entry: LoreRow) =>
-	`${entry.name ?? ""} ${entry.keys ?? ""} ${entry.content ?? ""}`
+	`${entry.name ?? ""} ${keysText(entry.keys)} ${entry.content ?? ""}`
 
 /** What each mode promised, in the author's own words rather than a code. */
 const SELECTIVE_NOTE: Record<string, string> = {
@@ -362,7 +370,7 @@ export function keywordQuery(input: KeywordQueryInput): KeywordQueryResult {
 		for (const entry of entries) {
 			const fields = {
 				title: entry.name ?? "",
-				keys: entry.keys ?? ""
+				keys: keysText(entry.keys)
 			}
 			const doc = lexicalDocument(fields, lexical.titleWeight)
 			documents.set(`${entry.source}:${entry.id}`, doc)
@@ -527,7 +535,7 @@ export function keywordQuery(input: KeywordQueryInput): KeywordQueryResult {
 		// ⚠ **A deliberate no-op, kept as a guard rail.** The `continue` used to
 		// jump over the strategy gate that followed, and the ordering was
 		// load-bearing: a gate placed first settled every unconfigured constant
-		// entry the moment an embedding model was loaded. Migration 0204 removed
+		// entry the moment an embedding model was loaded. Pre-squash 0204 removed
 		// the gate, so there is nothing left below to jump over — and the line
 		// stays so that whatever this loop next learns to decline is written
 		// *after* it. `constant` outranks every reason a mechanism can have.
@@ -545,7 +553,21 @@ export function keywordQuery(input: KeywordQueryInput): KeywordQueryResult {
 	const scan = (
 		window: ScanWindow,
 		level: number,
-		folding: TrigramFolding | null
+		folding: TrigramFolding | null,
+		/**
+		 * What an entry's CONDITION keys are read against (finding #152).
+		 *
+		 * The conversation plus this level's window, never the window alone:
+		 * on a recursion pass the window is only the triggering entries' text,
+		 * so "fire on dragon, but not when statue is present" would admit the
+		 * entry while *statue* stood in the conversation — the author's "not
+		 * here" ignored because the text that says "here" was not scanned.
+		 * SillyTavern reads selective logic against its whole scan buffer
+		 * (chat plus what recursion added) for the same reason. 0.5.x had
+		 * neither recursion nor selective logic, so there is no parity to
+		 * keep; at level 0 this is the conversation window itself.
+		 */
+		conditionWindow: ScanWindow = window
 	): LoreRow[] => {
 		const hits: LoreRow[] = []
 		for (const entry of entries) {
@@ -655,7 +677,7 @@ export function keywordQuery(input: KeywordQueryInput): KeywordQueryResult {
 			 * entirely (design §11), and a condition evaluated against a
 			 * window is retrieval.
 			 */
-			if (!pinned && !selectiveLogicHolds(entry, window)) {
+			if (!pinned && !selectiveLogicHolds(entry, conditionWindow)) {
 				settled.add(keyOf(entry))
 				skipped.push({
 					id: entry.id,
@@ -717,7 +739,14 @@ export function keywordQuery(input: KeywordQueryInput): KeywordQueryResult {
 		// rather than being a second rule nobody wrote down.
 		const raw = found.map((e) => e.content ?? "").join(" ")
 		const next: ScanWindow = { raw, lower: raw.toLowerCase() }
-		found = scan(next, level, foldingFor(next))
+		// Joined by the same single space, so a condition key spanning the
+		// conversation's end and an entry's start reads as it would in one
+		// window. No offsets: nothing reports a position from this one.
+		const conditions: ScanWindow = {
+			raw: `${sessionWindow.raw} ${raw}`,
+			lower: `${sessionWindow.lower} ${next.lower}`
+		}
+		found = scan(next, level, foldingFor(next), conditions)
 		if (found.length > 0) depth = level
 	}
 
@@ -922,7 +951,9 @@ function scoreSignals(
 						lexical
 					)
 				: tfidfSignal(
-						`${entry.keys} ${entry.name ?? ""}`,
+						// `keysText` for a list; a string (or nothing) exactly as
+						// it always read, so parity's pinned text is unchanged.
+						`${Array.isArray(entry.keys) ? keysText(entry.keys) : entry.keys} ${entry.name ?? ""}`,
 						idf,
 						guaranteedFreq,
 						guaranteedCount

@@ -4,15 +4,23 @@
 	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
 	import * as Icons from "@lucide/svelte"
 	import { z } from "zod"
+	import {
+		passphraseSchema,
+		PASSPHRASE_RULE_HINT
+	} from "$lib/shared/validation/passphrase"
 	import { untrack } from "svelte"
+	import { useInterest } from "$lib/client/sockets/interest.svelte"
+	import { UnsavedEdits } from "$lib/client/forms/unsavedEdits.svelte"
 
 	interface Props {
 		user?: SelectUser
 		onSave?: (user: SelectUser) => void
 		onCancel?: () => void
+		/** Out: the form holds edits nobody saved (a host's close gate reads it). */
+		dirty?: boolean
 	}
 
-	let { user, onSave, onCancel }: Props = $props()
+	let { user, onSave, onCancel, dirty = $bindable(false) }: Props = $props()
 
 	const socket = useTypedSocket()
 
@@ -31,6 +39,65 @@
 	// Track if we're creating or editing
 	let isCreating = $derived(!user)
 
+	/* ── unsaved edits ─────────────────────────────────────────────── */
+	type UserDraft = {
+		username: string
+		displayName: string
+		isAdmin: boolean
+		passphrase: string
+		confirmPassphrase: string
+	}
+	const draftOf = (u: SelectUser | undefined): UserDraft => ({
+		username: u?.username ?? "",
+		displayName: u?.displayName ?? "",
+		isAdmin: u?.isAdmin ?? false,
+		passphrase: "",
+		confirmPassphrase: ""
+	})
+	const edits = new UnsavedEdits(
+		(): UserDraft => ({
+			username: formUsername.trim(),
+			displayName: formDisplayName.trim(),
+			isAdmin: formIsAdmin,
+			passphrase: formPassphrase,
+			confirmPassphrase: formConfirmPassphrase
+		})
+	)
+	// The row as pushed: a clean form follows it, an edited one keeps the
+	// edits. Create mode's snapshot is the empty form.
+	$effect(() => {
+		const next = draftOf(user)
+		untrack(() =>
+			edits.adoptSaved(next, (d) => {
+				formUsername = d.username
+				formDisplayName = d.displayName
+				formIsAdmin = d.isAdmin
+			})
+		)
+	})
+	$effect(() => {
+		dirty = edits.dirty
+	})
+	$effect(() => () => (dirty = false))
+
+	/**
+	 * This form's own writes landing: nothing is unsaved any more, and the
+	 * host hears `onSave`. Update replies are matched by id; a create reply
+	 * is this form's while it is the create form.
+	 */
+	useInterest<"users:create">("users:create", (res) => {
+		if (!isCreating) return
+		edits.forget()
+		onSave?.(res.user)
+	})
+	useInterest<"users:update">("users:update", (res) => {
+		if (!user || res.user.id !== user.id) return
+		formPassphrase = ""
+		formConfirmPassphrase = ""
+		edits.markSaved(draftOf(res.user))
+		onSave?.(res.user)
+	})
+
 	/**
 	 * An account can only be promoted once someone has actually signed into it
 	 * (27 §5). Until then it is an unproven claim about who holds it — a
@@ -40,14 +107,6 @@
 	 * rather than letting an admin discover it by being rejected.
 	 */
 	let canPromote = $derived(!isCreating && !!user?.lastLoginAt)
-
-	// Passphrase validation schema
-	const passphraseSchema = z
-		.string()
-		.min(6, "Passphrase must be at least 6 characters long")
-		.regex(/[a-z]/, "Passphrase must contain at least one lowercase letter")
-		.regex(/[A-Z]/, "Passphrase must contain at least one uppercase letter")
-		.regex(/[0-9]/, "Passphrase must contain at least one number")
 
 	// Validation state
 	let isPassphraseValid = $derived.by(() => {
@@ -190,7 +249,7 @@
 	async function saveUser() {
 		if (!formUsername.trim()) {
 			toaster.error({
-				title: "Validation Error",
+				title: "Validation error",
 				description: "Username is required"
 			})
 			return
@@ -199,7 +258,7 @@
 		// Validate passphrase
 		if (isCreating && !formPassphrase) {
 			toaster.error({
-				title: "Validation Error",
+				title: "Validation error",
 				description: "Passphrase is required when creating a user"
 			})
 			validatePassphrase()
@@ -230,6 +289,8 @@
 	}
 
 	function handleCancel() {
+		// Cancel is the explicit discard; it is not asked about again.
+		edits.forget()
 		onCancel?.()
 	}
 </script>
@@ -237,6 +298,7 @@
 <div class="flex h-full flex-col p-4">
 	<div class="mb-4 flex items-center gap-2">
 		<button
+			aria-label="Cancel"
 			class="btn btn-sm preset-filled-surface-400-600 shrink-0 p-2"
 			onclick={handleCancel}
 			title="Cancel"
@@ -245,8 +307,8 @@
 		</button>
 		<h1 class="flex-1 truncate font-semibold">
 			{isCreating
-				? "New User"
-				: user?.displayName || user?.username || "Edit User"}
+				? "New user"
+				: user?.displayName || user?.username || "Edit user"}
 		</h1>
 		<button
 			class="btn btn-sm preset-filled-primary-500 shrink-0"
@@ -267,6 +329,7 @@
 					id="username"
 					type="text"
 					bind:value={formUsername}
+					autocomplete="off"
 					placeholder="Username"
 					class="input w-full"
 				/>
@@ -274,13 +337,13 @@
 
 			<div>
 				<label for="displayName" class="mb-1 block font-semibold">
-					Display Name
+					Display name
 				</label>
 				<input
 					id="displayName"
 					type="text"
 					bind:value={formDisplayName}
-					placeholder="Display Name (optional)"
+					placeholder="Display name (optional)"
 					class="input w-full"
 				/>
 			</div>
@@ -311,7 +374,7 @@
 
 			<div class="space-y-2">
 				<label for="passphrase" class="mb-1 block font-semibold">
-					{isCreating ? "Passphrase*" : "New Passphrase"}
+					{isCreating ? "Passphrase*" : "New passphrase"}
 					{#if !isCreating}
 						<span class="text-surface-600-400 text-sm font-normal">
 							(leave blank to keep current)
@@ -323,6 +386,7 @@
 						id="passphrase"
 						type={showPassphrase ? "text" : "password"}
 						bind:value={formPassphrase}
+						autocomplete="new-password"
 						onblur={validatePassphrase}
 						placeholder="Enter passphrase"
 						class="input w-full pr-10 {passphraseError
@@ -330,6 +394,7 @@
 							: ''}"
 					/>
 					<button
+						aria-label={showPassphrase ? "Hide passphrase" : "Show passphrase"}
 						type="button"
 						class="text-surface-600-400 hover:text-surface-900-100 absolute top-1/2 right-2 -translate-y-1/2"
 						onclick={() => (showPassphrase = !showPassphrase)}
@@ -347,12 +412,13 @@
 						for="confirmPassphrase"
 						class="mb-1 block font-semibold"
 					>
-						Confirm Passphrase
+						Confirm passphrase
 					</label>
 					<input
 						id="confirmPassphrase"
 						type={showPassphrase ? "text" : "password"}
 						bind:value={formConfirmPassphrase}
+						autocomplete="new-password"
 						onblur={validatePassphrase}
 						placeholder="Confirm passphrase"
 						class="input w-full {passphraseError
@@ -372,7 +438,7 @@
 						onclick={generateRandomPassphrase}
 					>
 						<Icons.Dices size={16} />
-						Generate Random
+						Generate random
 					</button>
 					<button
 						type="button"
@@ -391,8 +457,7 @@
 				</div>
 
 				<p class="text-surface-600-400 text-xs">
-					Passphrase must be at least 6 characters with uppercase,
-					lowercase, and numbers.
+					{PASSPHRASE_RULE_HINT}
 				</p>
 			</div>
 		</div>
@@ -420,7 +485,7 @@
 			>
 				<header class="flex items-center justify-between">
 					<h2 class="text-xl font-bold">
-						Grant Administrator Privileges?
+						Grant administrator privileges?
 					</h2>
 					<button
 						class="btn-ghost"
@@ -434,7 +499,7 @@
 					<div class="text-warning-500 flex items-center gap-2">
 						<Icons.ShieldAlert class="h-5 w-5" />
 						<span class="font-semibold">
-							Warning: Powerful Access
+							Warning: powerful access
 						</span>
 					</div>
 					<p>
@@ -462,10 +527,10 @@
 						Cancel
 					</button>
 					<button
-						class="btn btn-sm preset-filled-warning-500"
+						class="btn btn-sm preset-filled-primary-500"
 						onclick={confirmAdminChange}
 					>
-						Grant Admin Access
+						Grant admin access
 					</button>
 				</footer>
 			</Dialog.Content>

@@ -28,7 +28,7 @@
  *
  * The **unknown id** case is the failure mode a plugin document reaches first.
  * It differs from sampling's on purpose: an unresolved sampling reference
- * leaves the slot unset, because unset is the state every stage was in before a
+ * leaves the slot unset, because unset is the state every step was in before a
  * document could name one. Unset is not that state here — assemble halts with
  * "has no template" and a prompts slot renders blanks the model reads as
  * instructions — so the pool default runs and the log names what it could not

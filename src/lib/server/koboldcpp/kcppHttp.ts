@@ -125,7 +125,7 @@ export interface ImageModelStatus {
  * filename will ever match. Polling it for an image load is a guaranteed hang
  * for the caller's whole timeout budget, once per render.
  *
- * Reuses the same flag set the Manager's own capability badges are built from,
+ * Reuses the same flag set the managed KoboldCPP's own capability badges are built from,
  * so the two cannot disagree about the same server.
  */
 export async function fetchImageModelStatus(
@@ -151,5 +151,83 @@ export async function fetchImageModelStatus(
 		const cause = (err as { cause?: { code?: string } })?.cause
 		const refused = cause?.code === "ECONNREFUSED"
 		return { present: false, refused, determined: refused }
+	}
+}
+
+/** What `/api/v1/model` answers when no TEXT model is loaded. */
+export const KCPP_NO_TEXT_MODEL = "inactive"
+
+export interface LoadedModel {
+	/** The model's name as koboldcpp reports it, or null for none loaded. */
+	name: string | null
+	/** False when the answer says nothing either way (mid-swap, timeout). */
+	determined: boolean
+}
+
+/**
+ * Which IMAGE model koboldcpp has loaded — no admin API needed.
+ *
+ * `GET /sdapi/v1/sd-models` answers with exactly the loaded checkpoint
+ * (`[{title, model_name, filename, …}]`, verified live on 1.119 alongside a
+ * text and an embedding model), and nothing else: it is not a list of what
+ * could be loaded. An empty list or a 404 is "no image model"; any other
+ * non-OK answer or a timeout is undetermined, for `fetchModelStatus`' reason.
+ */
+export async function fetchLoadedImageModel(
+	baseUrl: string,
+	timeoutMs = 5000
+): Promise<LoadedModel> {
+	try {
+		const resp = await fetch(`${baseUrl}/sdapi/v1/sd-models`, {
+			signal: AbortSignal.timeout(timeoutMs)
+		})
+		if (resp.status === 404) return { name: null, determined: true }
+		if (!resp.ok) return { name: null, determined: false }
+		const data = await resp.json()
+		const first = Array.isArray(data) ? data[0] : undefined
+		const name = [first?.title, first?.model_name].find(
+			(v) => typeof v === "string" && v.trim()
+		) as string | undefined
+		return { name: name?.trim() ?? null, determined: true }
+	} catch {
+		return { name: null, determined: false }
+	}
+}
+
+/**
+ * Which EMBEDDING model koboldcpp has loaded — no admin API needed, but not a
+ * GET: no read-only endpoint names it (`/api/extra/version` has only the
+ * `embeddings` boolean). A one-word `POST /v1/embeddings` does — the response's
+ * `model` is the loaded model (verified live on 1.119: 3 tokens, no state
+ * change). So the flag is asked first, and the probe is sent only when an
+ * embedding model is actually loaded.
+ */
+export async function fetchLoadedEmbeddingModel(
+	baseUrl: string,
+	timeoutMs = 5000
+): Promise<LoadedModel> {
+	try {
+		const version = await fetch(`${baseUrl}/api/extra/version`, {
+			signal: AbortSignal.timeout(timeoutMs)
+		})
+		if (!version.ok) return { name: null, determined: false }
+		if (!flagsFrom(await version.json()).embeddings)
+			return { name: null, determined: true }
+		const resp = await fetch(`${baseUrl}/v1/embeddings`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ input: "probe" }),
+			signal: AbortSignal.timeout(timeoutMs)
+		})
+		if (!resp.ok) return { name: null, determined: false }
+		const model = (await resp.json())?.model
+		const name =
+			typeof model === "string" && model.trim() && model !== KCPP_NO_TEXT_MODEL
+				? model.trim()
+				: null
+		// The flag said one is loaded; a response that names none says nothing.
+		return name ? { name, determined: true } : { name: null, determined: false }
+	} catch {
+		return { name: null, determined: false }
 	}
 }

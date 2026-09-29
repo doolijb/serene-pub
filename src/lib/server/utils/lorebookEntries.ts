@@ -18,7 +18,7 @@
 
 import * as schema from "$lib/server/db/schema"
 import { and, eq, inArray, sql, type SQL } from "drizzle-orm"
-import { splitKeys } from "$lib/server/pipelines/ranking/signals"
+import { splitKeys, type KeyList } from "$lib/server/pipelines/ranking/signals"
 import {
 	declaredFields,
 	entryDeclaration,
@@ -46,6 +46,7 @@ export {
 	ENTRY_TYPE_IDS,
 	ENTRY_TYPE_VERSION,
 	HISTORY_TYPE_ID,
+	ITEM_TYPE_ID,
 	LOCATION_TYPE_ID,
 	WORLD_LORE_TYPE_ID,
 	entriesOfType,
@@ -87,24 +88,26 @@ export const inBookOfType = (lorebookId: number, typeId: string): SQL =>
 	and(eq(schema.lorebookEntries.lorebookId, lorebookId), ofType(typeId))!
 
 /**
- * `text[]` back to the delimited string the wire and the ranker still use.
- *
- * `, ` and not `,`: the string this reproduces was authored by a person in a
- * text field, and every key list in the app reads back the way it was typed.
+ * `text[]` as one line of text, for a human to read (a log, a test's
+ * expectation). ⚠ Never a wire or storage shape: the wire carries the list
+ * (finding #146), and a joined list cannot be split back without tearing a
+ * key that contains a comma.
  */
 export const joinKeys = (keys: readonly string[] | null | undefined): string =>
 	(keys ?? []).join(", ")
 
 /**
- * The delimited string back to `text[]`.
+ * A key list, as the `text[]` column stores it.
  *
- * `splitKeys` and not a second copy of it — comma, trimmed, empties dropped is
- * the rule the matcher applies, the rule the backfill reproduced in SQL, and
- * the rule that decides what a key even is. A second implementation here is a
- * second place for it to drift.
+ * `splitKeys` and not a second copy of it — trimmed, empties dropped is the
+ * rule the matcher applies and the rule that decides what a key even is.
+ *
+ * ⚠ An ARRAY is stored one element per key and never re-split; only the legacy
+ * comma string is split (finding #146). A writer holding keys as a list — the
+ * importer (`importedKeyColumns`), a pipeline outlet — passes the list, so a
+ * regex `{1,3}` or a literal "Smith, John" stays one key.
  */
-export const keysToArray = (keys: string | null | undefined): string[] =>
-	splitKeys(keys)
+export const keysToArray = (keys: KeyList): string[] => splitKeys(keys)
 
 /**
  * A boolean member of `fields`, as a predicate.
@@ -260,8 +263,10 @@ export function toEntryRow(
 		lorebookId: row.lorebookId,
 		typeId: row.typeId,
 		name: titleColumn ? ((row as any)[titleColumn] ?? "") : null,
-		keys: joinKeys(row.keys),
-		secondaryKeys: joinKeys(row.secondaryKeys),
+		// The stored list, one element per key (finding #146) — never joined,
+		// or a regex `{2,4}` is torn when the editor splits it back.
+		keys: [...(row.keys ?? [])],
+		secondaryKeys: [...(row.secondaryKeys ?? [])],
 		selectiveLogic: row.selectiveLogic,
 		// The `parent` role, for every type: one traversal edge, so the
 		// workspace's tree nests a district under its city and a scene under
@@ -314,13 +319,25 @@ export const historyDateOf = (row: {
 }
 
 /**
+ * A new entry whose keys may already be a list (finding #146) — the stored
+ * shape, one element per key — or the legacy comma string. Distributive, so
+ * the `typeId` discriminant survives.
+ */
+export type EntryInsertInput<T = NewLorebookEntry> = T extends unknown
+	? Omit<T, "keys" | "secondaryKeys"> & {
+			keys?: KeyList
+			secondaryKeys?: KeyList
+		}
+	: never
+
+/**
  * A wire payload, as a row to insert.
  *
  * `position` is the caller's because it is allocated under a lock — see
  * `nextPosition` — and never the client's.
  */
 export function entryInsert(
-	data: NewLorebookEntry & { position: number }
+	data: EntryInsertInput & { position: number }
 ): InsertLorebookEntry {
 	const typeId = data.typeId
 	const decl = entryDeclaration(typeId)
@@ -363,6 +380,46 @@ export function entryInsert(
 		enabled: data.enabled ?? true,
 		archived: data.archived ?? false,
 		extraJson: data.extraJson ?? {}
+	}
+}
+
+/**
+ * Refuse a payload whose declared fields are the wrong type.
+ *
+ * The same four-scalar check `coerceDeclaredField` makes for an import — but a
+ * live write THROWS instead of swapping in the default: an author who typed a
+ * value is told it was refused, never shown a different one afterwards. A key
+ * the payload does not carry is not checked; `null` clears a field and is
+ * allowed; an undeclared kind passes (the app has no opinion about it yet).
+ *
+ * Called by `entries:create`, `entries:update`, and the entry-amendment write
+ * path (an amendment's `fields` overlay the same declared fields).
+ */
+export function assertDeclaredFields(
+	typeId: string,
+	data: Record<string, unknown>
+): void {
+	const decl = entryDeclaration(typeId)
+	if (!decl) return
+	for (const [field, spec] of Object.entries(decl.fields)) {
+		if (!Object.prototype.hasOwnProperty.call(data, field)) continue
+		const value = data[field]
+		if (value === null || value === undefined) continue
+		const kind = (spec as { type?: string }).type
+		const ok =
+			kind === "string"
+				? typeof value === "string"
+				: kind === "boolean"
+					? typeof value === "boolean"
+					: kind === "integer"
+						? typeof value === "number" && Number.isInteger(value)
+						: kind === "number"
+							? typeof value === "number" && Number.isFinite(value)
+							: true
+		if (!ok)
+			throw new Error(
+				`'${field}' must be ${kind === "integer" ? "a whole number" : `a ${kind}`}.`
+			)
 	}
 }
 

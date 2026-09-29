@@ -25,7 +25,7 @@ import {
 	enabledSessionFunctions,
 	setSessionFunction,
 	setPresetActions,
-	listGenreTriggers,
+	listGenreActions,
 	genreFieldsFor,
 	sessionGenreAvailable,
 	resolveSubjectSpec,
@@ -259,7 +259,7 @@ describe("the fields round-trip (19 §1, U-C2)", () => {
 		expect(crawl!.description).toBe("Torchlit. One persona, no cast.")
 	})
 
-	it("a standard-mode session supplies {} — the shape declares no fields", async () => {
+	it("a standard-mode session supplies only its own fields' defaults — never a stored stray", async () => {
 		const [user] = await db
 			.insert(schema.users)
 			.values({ username: "fields-std", isAdmin: false })
@@ -272,7 +272,11 @@ describe("the fields round-trip (19 §1, U-C2)", () => {
 				genreFields: { anything: "at all" }
 			} as any)
 			.returning()
-		expect(await genreFieldsFor(db, session.id)).toEqual({})
+		expect(await genreFieldsFor(db, session.id)).toEqual({
+			autoAdvance: "round",
+			characterDetail: "full",
+			turnMode: "rules"
+		})
 	})
 })
 
@@ -282,7 +286,7 @@ describe("the fields round-trip (19 §1, U-C2)", () => {
 
 describe("the trigger set (19 §4, U-C5)", () => {
 	it("the narrate button is a row: contributed by the narrate spec, for the standard mode", async () => {
-		const triggers = await listGenreTriggers(db, STANDARD_GENRE_ID)
+		const triggers = await listGenreActions(db, STANDARD_GENRE_ID)
 		// The narrate row specifically, not the whole set: any core spec that
 		// contributes a button lands here too, and this test is about narrate's
 		// row being a ROW — whole-list equality would make every new spec a
@@ -299,6 +303,8 @@ describe("the trigger set (19 §4, U-C5)", () => {
 			slash: "narrate",
 			icon: "book-open-text",
 			name: "Narrate",
+			// Required since 2026-09-28: the action legend lists it.
+			description: "Ask the narrator to describe what happens next.",
 			specSlug: NARRATE_SPEC_ID,
 			// Classified where it is read, not where it is used (19 §3):
 			// `core:spec/narrate` contributing to `core:inlet/user-message@1`
@@ -311,13 +317,13 @@ describe("the trigger set (19 §4, U-C5)", () => {
 
 	it("a spec contributing a button gets one, with no client code at all", async () => {
 		// The whole claim behind contributed triggers, checked on the newest one
-		// rather than on narrate: a spec declares `contributes.triggers`, the boot
+		// rather than on narrate: a spec declares `contributes.actions`, the boot
 		// sync writes a row, and the composer renders it through the generic
-		// `fireTrigger` path. Nothing in the client knows what image generation is.
+		// `fireOfferedAction` path. Nothing in the client knows what image generation is.
 		//
 		// This is also the image feature's entry point — if this row is missing
 		// there is no way for a person to reach any of it.
-		const triggers = await listGenreTriggers(db, STANDARD_GENRE_ID)
+		const triggers = await listGenreActions(db, STANDARD_GENRE_ID)
 		expect(triggers.find((t) => t.key === "generate-image")).toEqual({
 			key: "generate-image",
 			venues: [{ kind: "composer" }],
@@ -325,9 +331,12 @@ describe("the trigger set (19 §4, U-C5)", () => {
 			// The effects line (U5d): a message-writing action stays in the fiction.
 			effects: "fiction",
 			quick: true,
+			// The prompt is collected in the collect modal (lair pass R3).
+			collects: { text: { need: "required", label: "What should the image show?" } },
 			slash: "generate-image",
 			icon: "image",
 			name: "Image",
+			description: "Describe an image, make it and post it in the session.",
 			specSlug: "core:spec/generate-image",
 			origin: "companion",
 			enabledByDefault: true
@@ -345,7 +354,7 @@ describe("the trigger set (19 §4, U-C5)", () => {
 			.set({ activeVersionId: null })
 			.where(eq(schema.pipelineSpecs.id, spec.id))
 		try {
-			const gone = await listGenreTriggers(db, STANDARD_GENRE_ID)
+			const gone = await listGenreActions(db, STANDARD_GENRE_ID)
 			expect(gone.find((t) => t.key === "narrate")).toBeUndefined()
 			// And routing agrees in the same breath: the same rows feed both.
 			expect(

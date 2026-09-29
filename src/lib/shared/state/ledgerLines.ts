@@ -3,7 +3,7 @@
  *
  * ## Why this is a reading and not a store
  *
- * Every value and every possession is a row anchored to the message that wrote
+ * Every value — an inventory too, since phase 3b — is a row anchored to the message that wrote
  * it, and the row in force is a question of ordering. So "hp 20 → 14" is not
  * stored anywhere: it is this row and the one before it, put side by side. That
  * is also what makes the ledger revertible with the message — delete the
@@ -17,7 +17,8 @@
  * starting health is never read as another's.
  */
 import type { SlotValue } from "@serene-pub/sdk"
-import { formatSlotValue } from "./barMath"
+// Moved to core (R21): the state widgets and this ledger read one formatter.
+import { formatSlotValue } from "@serene-pub/core-catalog/session-state"
 
 /**
  * What a value row carries, which is the SDK's `SlotValue` and not a copy of
@@ -29,20 +30,14 @@ export type LedgerValue = SlotValue
 /** One anchored row. The wire shape (`Sockets.State.LedgerRow`), structurally. */
 export interface LedgerRow {
 	id: number
-	kind: "value" | "possession"
+	kind: "value"
 	messageId: number | null
 	ownerKey: string
 	ownerLabel: string
 	updatedBy: string
-	/** Value rows. */
 	slotId?: string
 	slotLabel?: string
 	value?: LedgerValue
-	/** Possession rows. */
-	entryId?: number
-	itemName?: string
-	/** How many this row leaves the owner holding. */
-	quantity?: number
 }
 
 /** What one slot read for one owner before the session touched it. */
@@ -58,8 +53,8 @@ export interface LedgerLine {
 	messageId: number | null
 	ownerKey: string
 	ownerLabel: string
-	kind: "value" | "possession"
-	/** The change without the owner's name: `hp 20 → 14`, `+rusty key`. */
+	kind: "value"
+	/** The change without the owner's name: `hp 20 → 14`, `Inventory → Rusty key ×2`. */
 	text: string
 	before?: LedgerValue
 	after?: LedgerValue
@@ -82,17 +77,6 @@ const valueText = (
 		: `${label} ${formatSlotValue(before)} → ${formatSlotValue(after)}`
 
 /**
- * A possession is a quantity, so the line says which of three things happened:
- * it arrived, it left, or there is a different number of it.
- */
-function possessionText(name: string, before: number, after: number): string {
-	if (before <= 0 && after > 0)
-		return after > 1 ? `+${name} ×${after}` : `+${name}`
-	if (after <= 0) return `-${name}`
-	return `${name} ×${before} → ×${after}`
-}
-
-/**
  * The lines these rows describe, oldest first.
  *
  * Each row is one line, including two rows for the same slot on one message:
@@ -102,39 +86,21 @@ export function ledgerLines(
 	rows: LedgerRow[],
 	baselines: LedgerBaseline[] = []
 ): LedgerLine[] {
-	const seen = new Map<string, LedgerValue | number>()
+	const seen = new Map<string, LedgerValue>()
 	for (const b of baselines) seen.set(`v:${b.ownerKey}:${b.slotId}`, b.value)
 
 	const out: LedgerLine[] = []
 	for (const row of inOrder(rows)) {
-		if (row.kind === "value") {
-			const trail = `v:${row.ownerKey}:${row.slotId ?? ""}`
-			const before = seen.get(trail) as LedgerValue | undefined
-			const after = (row.value ?? null) as LedgerValue
-			out.push({
-				key: `v${row.id}`,
-				messageId: row.messageId,
-				ownerKey: row.ownerKey,
-				ownerLabel: row.ownerLabel,
-				kind: "value",
-				text: valueText(row.slotLabel ?? "", before, after),
-				before,
-				after,
-				updatedBy: row.updatedBy
-			})
-			seen.set(trail, after)
-			continue
-		}
-		const trail = `p:${row.ownerKey}:${row.entryId ?? 0}`
-		const before = (seen.get(trail) as number | undefined) ?? 0
-		const after = row.quantity ?? 0
+		const trail = `v:${row.ownerKey}:${row.slotId ?? ""}`
+		const before = seen.get(trail)
+		const after = (row.value ?? null) as LedgerValue
 		out.push({
-			key: `p${row.id}`,
+			key: `v${row.id}`,
 			messageId: row.messageId,
 			ownerKey: row.ownerKey,
 			ownerLabel: row.ownerLabel,
-			kind: "possession",
-			text: possessionText(row.itemName ?? "", before, after),
+			kind: "value",
+			text: valueText(row.slotLabel ?? "", before, after),
 			before,
 			after,
 			updatedBy: row.updatedBy
@@ -184,7 +150,7 @@ export function groupLinesByOwner(lines: LedgerLine[]): LedgerOwnerGroup[] {
 
 /** A held change, as `state:proposals` publishes it. */
 export interface ProposalLike {
-	kind: "value" | "possession"
+	kind: "value"
 	payload: Record<string, unknown>
 }
 
@@ -212,18 +178,40 @@ export function describeProposal(
 	const who = owner ? names.ownerLabel?.(owner) : undefined
 	const prefix = who ? `${who} ` : ""
 
-	if (proposal.kind === "value") {
-		const slotId = typeof payload.slotId === "string" ? payload.slotId : ""
-		if (!slotId) return "a change this session cannot describe"
-		const label = names.slotLabel?.(slotId) ?? slotId
-		return `${prefix}${label} → ${formatSlotValue(payload.value as LedgerValue)}`
+	const slotId = typeof payload.slotId === "string" ? payload.slotId : ""
+	if (!slotId) return "a change this session cannot describe"
+	const label = names.slotLabel?.(slotId) ?? slotId
+	// A list change (an item moving, since phase 3b) says what goes in or
+	// comes out, never the whole list it would leave.
+	const op = payload.op
+	if ((op === "add" || op === "remove") && Array.isArray(payload.items)) {
+		const sign = op === "add" ? "+" : "-"
+		const items = (payload.items as unknown[]).map((item) => {
+			if (item && typeof item === "object" && typeof (item as { entryId?: unknown }).entryId === "number") {
+				const ref = item as { entryId: number; count?: number; name?: string }
+				const name = names.itemName?.(ref.entryId) ?? ref.name ?? "an item"
+				return `${sign}${name}${(ref.count ?? 1) > 1 ? ` ×${ref.count}` : ""}`
+			}
+			return `${sign}${String(item)}`
+		})
+		return `${prefix}${label} ${items.join(", ")}`
 	}
+	return `${prefix}${label} → ${formatSlotValue(namedValue(payload.value as LedgerValue, names))}`
+}
 
-	const entryId = typeof payload.entryId === "number" ? payload.entryId : 0
-	if (!entryId) return "a change this session cannot describe"
-	const name = names.itemName?.(entryId) ?? "an item"
-	const delta = typeof payload.delta === "number" ? payload.delta : 0
-	if (delta < 0)
-		return `${prefix}-${name}${delta < -1 ? ` ×${Math.abs(delta)}` : ""}`
-	return `${prefix}+${name}${delta > 1 ? ` ×${delta}` : ""}`
+/**
+ * A value with every lore reference given its title — the surface's name when
+ * it has one, else the one the host filled in on the way out — so a place or an
+ * item reads as the widget reads it, never `entry N`. A copy; the payload is
+ * the row's.
+ */
+function namedValue(value: LedgerValue, names: ProposalNames): LedgerValue {
+	const named = (item: unknown): unknown => {
+		if (!item || typeof item !== "object" || Array.isArray(item)) return item
+		const ref = item as { entryId?: unknown; name?: string }
+		if (typeof ref.entryId !== "number") return item
+		const name = names.itemName?.(ref.entryId) ?? ref.name
+		return name ? { ...ref, name } : item
+	}
+	return (Array.isArray(value) ? value.map(named) : named(value)) as LedgerValue
 }

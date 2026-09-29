@@ -22,7 +22,7 @@ import { describe, expect, it, vi } from "vitest"
 import { getImageAdapter } from "./getImageAdapter"
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 
-// The managed image module reads the Manager's settings and the models table;
+// The managed image module reads the managed KoboldCPP's settings and the models table;
 // resolving the adapter must not need either.
 vi.mock("$lib/server/db", () => ({ db: { query: {} } }))
 
@@ -40,12 +40,16 @@ describe("getImageAdapter", () => {
 		expect(managed.listModels).not.toBe(a1111.listModels)
 	})
 
-	it("refuses the managed TEXT type", async () => {
-		// It names a text model and cannot draw, whatever the process it points
-		// at happens to be holding.
-		await expect(
-			getImageAdapter(CONNECTION_TYPE.KOBOLDCPP_MANAGED)
-		).rejects.toThrow(/No image adapter/)
+	it("routes the managed endpoint to the managed image module — it draws too", async () => {
+		// One process, one endpoint: its image models render through the same
+		// module the retired image type used. Which MODEL may draw is judged per
+		// model (`capabilityRefusal` reads its modality), never by the type.
+		const managed = (
+			await import("../imageAdapters/KoboldCppManagedImageAdapter")
+		).default
+		expect(await getImageAdapter(CONNECTION_TYPE.KOBOLDCPP_MANAGED)).toBe(
+			managed
+		)
 	})
 
 	it("still routes plain KoboldCPP to A1111", async () => {

@@ -1,6 +1,6 @@
 <script lang="ts">
 	import * as Icons from "@lucide/svelte"
-	import { LENS_LABELS, LORE_LENSES, type LoreLens } from "./loreRoute"
+	import { LENS_LABELS, LORE_LENSES, type LoreLens } from "$lib/shared/lorebooks/loreRoute"
 	import { lensReason } from "./graphs"
 
 	/**
@@ -47,7 +47,7 @@
 		<button
 			type="button"
 			class="btn btn-sm min-w-0 {lens === id
-				? 'preset-filled-primary-500'
+				? 'preset-tonal-primary'
 				: 'preset-tonal-surface'} {compact
 				? 'gap-1'
 				: 'h-auto flex-col gap-0.5 px-1 py-1.5'}"

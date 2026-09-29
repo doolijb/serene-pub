@@ -2,7 +2,7 @@
  * `sessions:promptTokenCount`, the live draft preview.
  *
  * It used to construct an adapter and call `compilePrompt`, which ran the legacy
- * infill engines — so the number on screen came from a code path that no longer
+ * 0.5 retrieval paths — so the number on screen came from a code path that no longer
  * generated any replies. It was the last live consumer of that path and the
  * reason it could not be deleted. It now compiles through
  * `runTurn({ preview: true })` — the same document the next turn runs, halted
@@ -147,7 +147,6 @@ beforeAll(async () => {
 		sessionId,
 		characterId: character.id,
 		isActive: true,
-		visibility: "visible"
 	})
 	await db
 		.insert(schema.sessionPersonas)

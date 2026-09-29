@@ -25,7 +25,7 @@
 
 import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
-import { eq } from "drizzle-orm"
+import { and, eq, ne, sql } from "drizzle-orm"
 import type { Handler } from "$lib/shared/events"
 import {
 	findOwnedSuggestion,
@@ -36,7 +36,8 @@ import {
 	OPEN_TIER_PREFIX
 } from "$lib/server/bindingSuggestions"
 import { enqueueLorebookAnnotation } from "$lib/server/annotations/queue"
-import { createLorebookBindingHandler } from "./lorebooks"
+import { insertBackgroundBinding, relistBindings } from "./lorebooks"
+import { refusable as refusableHandler } from "./refusable"
 
 /** The lorebook, if this user owns it. `entries.ts`' `findOwnedBook`, verbatim. */
 async function findOwnedBook(lorebookId: number, userId: number) {
@@ -47,39 +48,15 @@ async function findOwnedBook(lorebookId: number, userId: number) {
 	})
 }
 
-/**
- * Answer a refusal with the sentence that says which one it was.
- *
- * `register()`'s own catch emits *"An error occurred while processing your
- * request"* — true and useless. Every refusal here is a specific thing a person
- * can act on ("already added", "already has a binding for that name"), and this
- * is the channel it reaches them on: emit `<event>:error` with the real message,
- * then re-throw so `register()` still logs it and skips its generic fallback.
- * The shape is `characters:create`'s, which is where this codebase already puts
- * it.
- */
-function refusable<P, R>(
+/** Every refusal here reaches the person as its own sentence (see `refusable`). */
+const refusable = <P, R>(
 	event: string,
 	body: (
 		socket: any,
 		params: P,
 		emitToUser: (event: string, data: any) => void
 	) => Promise<R>
-): Handler<P, R> {
-	return {
-		event,
-		handler: async (socket, params, emitToUser) => {
-			try {
-				return await body(socket, params, emitToUser)
-			} catch (e: any) {
-				emitToUser(`${event}:error`, {
-					error: e?.message || "Failed to update binding suggestions."
-				})
-				throw e
-			}
-		}
-	}
-}
+) => refusableHandler(event, body, "Failed to update binding suggestions.")
 
 /**
  * The list, freshly derived.
@@ -226,13 +203,12 @@ export const bindingSuggestionsUnignoreHandler = refusable<
  * open tier says a name was used, not that a full character sheet exists behind
  * it. Anything richer would be inventing what the user has not said.
  *
- * The insert is delegated to `lorebooks:createBinding`'s handler rather than
- * spelled again here, because that handler owns three things this one must not
- * re-derive: the server-side `binding` token (never client-supplied, never
- * reused after a delete), the mass-assignment strip, and the binding-list
- * refresh the open Bindings tab is listening for. It re-checks ownership on its
- * own too, which is defence in depth rather than duplication — the check above
- * is this handler's, and it runs first.
+ * The insert goes through `insertBackgroundBinding`, the same helper
+ * `lorebooks:createBinding`'s background path uses, so the server-side
+ * `binding` token (never client-supplied, never reused after a delete) has one
+ * spelling. It runs inside this handler's own transaction rather than through
+ * that handler, because the claim, the taken-name check and the insert have to
+ * commit together under the book's lock — see the body.
  *
  * ## Why `added` has to be its own suppressor
  *
@@ -271,39 +247,55 @@ export const bindingSuggestionsAddHandler = refusable<
 		.slice(0, 200)
 	if (!name) throw new Error("A binding needs a name.")
 
-	// A name the book already answers to would make a second row for one
-	// identity — the duplicate the Bindings tab has a whole review surface
-	// for. Refuse rather than create it.
-	const taken = await takenNames(db, row.lorebookId)
-	if (taken.has(name.toLowerCase().replace(/\s+/g, " ").trim()))
-		throw new Error(`This lorebook already has a binding for "${name}".`)
+	// One transaction under the book's lock (the same key every cast writer
+	// takes), so neither a double accept of this suggestion nor two different
+	// suggestions accepted under the same name can make two rows for one
+	// identity:
+	//  1. CLAIM the suggestion — only a row not yet `added` flips, so the
+	//     second of two concurrent accepts finds nothing to claim and refuses;
+	//  2. refuse a name the book already answers to (the duplicate the
+	//     Bindings tab has a whole review surface for);
+	//  3. mint the background binding and record that this suggestion is why.
+	// A refusal at 2 throws, which rolls the claim back to what it was.
+	const lorebookBinding = await db.transaction(async (tx) => {
+		await tx.execute(sql`select pg_advisory_xact_lock(${row.lorebookId})`)
+		const [claimed] = await tx
+			.update(schema.bindingSuggestions)
+			.set({ status: "added", decidedAt: new Date() })
+			.where(
+				and(
+					eq(schema.bindingSuggestions.id, row.id),
+					ne(schema.bindingSuggestions.status, "added")
+				)
+			)
+			.returning({ id: schema.bindingSuggestions.id })
+		if (!claimed)
+			throw new Error(
+				"That suggestion has already been added as a binding."
+			)
 
-	const created = await createLorebookBindingHandler.handler(
-		socket,
-		{
-			lorebookBinding: {
-				lorebookId: row.lorebookId,
-				characterId: null,
-				binding: "",
-				name
-			}
-		} as Sockets.Lorebooks.CreateBinding.Params,
-		emitToUser
-	)
+		const taken = await takenNames(tx, row.lorebookId)
+		if (taken.has(name.toLowerCase().replace(/\s+/g, " ").trim()))
+			throw new Error(`This lorebook already has a binding for "${name}".`)
 
-	await db
-		.update(schema.bindingSuggestions)
-		.set({
-			status: "added",
-			decidedAt: new Date(),
-			resolvedBindingId: created.lorebookBinding.id,
-			surface: name
+		const inserted = await insertBackgroundBinding(tx, row.lorebookId, {
+			name
 		})
-		.where(eq(schema.bindingSuggestions.id, row.id))
+		await tx
+			.update(schema.bindingSuggestions)
+			.set({ resolvedBindingId: inserted.id, surface: name })
+			.where(eq(schema.bindingSuggestions.id, row.id))
+		return inserted
+	})
+
+	// What `lorebooks:createBinding` would have pushed: the open Bindings tab
+	// listens for both.
+	await relistBindings(socket, row.lorebookId, emitToUser)
+	emitToUser("lorebooks:createBinding", { lorebookBinding, existing: false })
 
 	return relist(emitToUser, row.lorebookId, {
 		addedId: row.id,
-		lorebookBinding: created.lorebookBinding
+		lorebookBinding
 	})
 })
 

@@ -16,7 +16,7 @@ docker compose -f docker-compose.dist.yml up -d
 
 That's it. The web UI will be available at **http://localhost:3000**.
 
-The first startup runs database migrations automatically and creates an admin account on first login.
+The first startup runs database migrations automatically and creates the built-in admin account. Accounts are off until you turn them on (see [Users & Accounts](./docs/users-and-accounts.md)).
 
 ---
 
@@ -59,11 +59,14 @@ Everything that needs to survive container restarts lives under `SERENE_PUB_DATA
 
 The data directory contains:
 
-| Path                  | Contents                                                  |
-| --------------------- | --------------------------------------------------------- |
-| `data/serene-pub.db`  | PGLite database (characters, chats, lorebooks, settings…) |
-| `transformers-cache/` | Downloaded AI embedding models                            |
-| `koboldcpp/models/`   | Default KoboldCPP model directory (managed mode)          |
+| Path                  | Contents                                                     |
+| --------------------- | ------------------------------------------------------------ |
+| `data/serene-pub.db`  | PGlite database (characters, sessions, lorebooks, settings…) |
+| `models/embeddings/`  | Downloaded local embedding models                            |
+| `models/ner/`         | Downloaded local named-entity models                         |
+| `models/llm/`         | Default KoboldCPP text model directory (managed mode)        |
+| `models/image/`       | Default KoboldCPP image model directory (managed mode)       |
+| `koboldcpp/`          | KoboldCPP binary downloaded in-app (managed mode)            |
 
 ### Bind-mount instead of a named volume
 
@@ -87,11 +90,12 @@ for the full reference, including reverse-proxy trust settings
 | ------------------------------------------------ | ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
 | `SERENE_PUB_DATA_DIR`                            | `/data`                                   | Directory for all persistent data                                                                                  |
 | `PORT`                                           | `3000`                                    | HTTP port the web server listens on (serves the realtime socket too)                                                                                |
-| `SERENE_AUTO_OPEN`                               | `1` (disabled)                            | Baked into the image (there's no browser to open in a container) and set again in both compose files — no need to touch this yourself |
 | `NODE_ENV`                                       | `production`                              | Node.js environment                                                                                                |
 | `USER_TOKEN_EXPIRATION_HOURS`                    | `168`                                     | Session lifetime in hours (168 = 7 days)                                                                           |
-| `TRANSFORMERS_CACHE`                             | `$SERENE_PUB_DATA_DIR/transformers-cache` | Override embedding model cache directory                                                                           |
+| `TRANSFORMERS_CACHE`                             | `$SERENE_PUB_DATA_DIR/models/<embeddings or ner>` | Override the local embedding and named-entity model cache (one directory for both)                         |
 | `KOBOLDCPP_BINARY_DIR` / `KOBOLDCPP_BINARY_NAME` | unset                                     | Point managed KoboldCPP mode at a binary you mounted yourself — see [Managed mode](#koboldcpp--managed-mode) below |
+
+A container never opens a browser or window, so `AUTO_OPEN_CLIENT` and `DEFAULT_CLIENT` are ignored here.
 
 ---
 
@@ -160,7 +164,7 @@ Managed mode lets Serene Pub spawn and control the KoboldCPP process directly. I
 
 1. Mounting the KoboldCPP binary into the container.
 2. Mounting your model files.
-3. Setting the binary directory in Serene Pub's KoboldCPP settings (or via environment at startup).
+3. Telling Serene Pub where the binary is: set `KOBOLDCPP_BINARY_DIR` (and `KOBOLDCPP_BINARY_NAME`) before the first start.
 
 ```yaml
 services:
@@ -169,10 +173,13 @@ services:
         volumes:
             - serene-pub-data:/data
             - /path/to/koboldcpp:/koboldcpp:ro # binary directory
-            - /path/to/models:/data/koboldcpp/models # model files
+            - /path/to/models:/data/models/llm # text model files
+        environment:
+            KOBOLDCPP_BINARY_DIR: /koboldcpp
+            KOBOLDCPP_BINARY_NAME: koboldcpp-linux-x64 # the file you mounted
 ```
 
-After mounting, configure the binary path in **Settings → KoboldCPP Manager**.
+The variables are read on first boot only, while managed mode is not yet configured. After that, the binary and the **Models Directory** are managed on the KoboldCPP connection's **Settings** tab in **Connections** (see [Connections](./docs/connections.md)).
 
 > **Note:** Managed KoboldCPP mode requires the Linux binary to be executable and compatible with the container's architecture (amd64 or arm64).
 
@@ -190,7 +197,7 @@ Or by hand:
 
 ```bash
 docker build -t serene-pub:local .
-docker run -p 3000:3000 -p 3001:3001 -v serene-pub-data:/data serene-pub:local
+docker run -p 3000:3000 -v serene-pub-data:/data serene-pub:local
 ```
 
 Multi-platform build (requires `docker buildx`):

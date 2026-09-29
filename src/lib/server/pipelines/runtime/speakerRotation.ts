@@ -34,6 +34,15 @@
  */
 
 import type { ParticipantRef } from "@serene-pub/sdk"
+import {
+	countedTurns,
+	DEFAULT_CHANNEL,
+	formatChannel,
+	parseChannel,
+	roundRobinOrder,
+	spokenRefsSince as sdkSpokenRefsSince,
+	type TurnHistoryMessage
+} from "@serene-pub/sdk"
 
 /** A seat the rotation may pick: an active, present character. */
 export interface RotationSeat {
@@ -57,21 +66,13 @@ export interface RotationPersona {
 	ownerUserId: number | null
 }
 
-/** The fields of a history row the rules read. */
-export interface RotationMessage {
-	role: string
-	characterId?: number | null
-	personaId?: number | null
-	isHidden?: boolean | null
-	isNarratorResponse?: boolean | null
-	metadata?: unknown
-	/**
-	 * The row's participant reference (`envoy:<slug>`), as `session-history`
-	 * publishes it — the host projects rows without `metadata`, so a rule
-	 * reading only `metadata.speaker` never saw an envoy's reply (M3 fix).
-	 */
-	speaker?: string | null
-}
+/**
+ * The fields of a history row the rules read — the SDK's
+ * `TurnHistoryMessage`, the shape the public round-robin rule reads — plus
+ * the row's `channel` (lair re-plan R5), which only the narrator rule reads:
+ * its entry spans channels. Absent is `main`.
+ */
+export type RotationMessage = TurnHistoryMessage & { channel?: string | null }
 
 /** Who voiced a row, by reference: the projected `speaker`, else the raw `metadata.speaker`. */
 const speakerRefOf = (m: RotationMessage): unknown =>
@@ -99,7 +100,8 @@ export interface TurnSelection {
 /** The cast read's rows, as the strategies consume them. */
 export interface CastRead {
 	sessionCharacters?: Array<{
-		isActive?: boolean | null
+		/** False for a seat switched off in the cast list — the read carries it. */
+		enabled?: boolean | null
 		position?: number | null
 		removedAt?: unknown
 		character?: { id: number; name?: string; userId?: number | null } | null
@@ -126,7 +128,7 @@ export interface CastRead {
 export function rotationSeats(cast: CastRead): RotationSeat[] {
 	return (cast.sessionCharacters ?? [])
 		.map((cc, index) => ({ cc, position: cc.position ?? index }))
-		.filter(({ cc }) => cc.character && cc.isActive && !cc.removedAt)
+		.filter(({ cc }) => cc.character && cc.enabled === true && !cc.removedAt)
 		.sort((a, b) => a.position - b.position)
 		.map(({ cc, position }) => ({
 			characterId: cc.character!.id,
@@ -159,9 +161,9 @@ export function inTurnEnvoys(cast: CastRead): RotationEnvoy[] {
 		.sort((a, b) => a.position - b.position)
 }
 
-/** The rows the rotation reads: not hidden, not narration. */
+/** The rows the rotation reads: not hidden, not narration (the SDK's `countedTurns`). */
 export function rotationTurns<M extends RotationMessage>(messages: readonly M[]): M[] {
-	return messages.filter((m) => !m.isHidden && !m.isNarratorResponse)
+	return countedTurns(messages)
 }
 
 const lastUserIndex = (turns: readonly RotationMessage[]): number => {
@@ -352,47 +354,65 @@ export interface TurnCandidate {
 }
 
 /**
- * Which candidates have already spoken since the person last did.
- *
- * Three readings, one per kind, and each is the fact that kind leaves in the
- * history: a character's id on a reply row, an envoy's reference in
- * `metadata.speaker`, a persona's id on a user row. The window is the same
- * one round robin has always used — everything after the last user row —
- * except for personas, whose own send IS the boundary, so they are read
- * against the row that opened it.
+ * Which candidates have already spoken since the person last did — the
+ * SDK's public rule (`spokenRefsSince` in `@serene-pub/sdk`), which a
+ * plugin's strategy reads too, so core and plugins cannot drift.
  */
 export function spokenRefsSince(
 	messages: readonly RotationMessage[]
 ): Set<string> {
-	const turns = rotationTurns(messages)
-	const at = lastUserIndex(turns)
-	const out = new Set<string>()
-	for (let i = at + 1; i < turns.length; i++) {
-		const m = turns[i]!
-		if (m.role !== "assistant") continue
-		if (m.characterId != null) out.add(`character:${m.characterId}`)
-		const ref = speakerRefOf(m)
-		if (typeof ref === "string" && ref.startsWith("envoy:")) out.add(ref)
-	}
-	// The person's own line is their turn, consumed: with one persona and
-	// `next` or `round`, a fresh send is that persona's turn spent, so the
-	// order opens with the characters (§4.4).
-	if (at >= 0) {
-		const sender = turns[at]!.personaId
-		if (sender != null) out.add(`character:${sender}`)
-	}
-	return out
+	return sdkSpokenRefsSince(messages)
 }
 
-/** Round robin (§4.4): every candidate not yet spoken, in candidate order. */
+/**
+ * The narrator strategy's entries (§4.4; lair re-plan R5): the pipeline's
+ * own voice (`ref: null`) is due on every channel whose **newest visible
+ * row** is a person's — one entry per such channel, **newest line first**,
+ * so a line on a side channel (the Lair's Sanctum) puts its entry at the
+ * head and auto-advance answers it.
+ *
+ * "The newest row", not the newest turn in the rotation: the voice's own
+ * reply is exactly what this strategy produced, so it has to count as the
+ * turn being taken (`countedTurns` drops narration, and reading through it
+ * would prepare a second entry after every reply, forever). A hidden row
+ * counts for nobody.
+ *
+ * `main`'s entry carries **no** `channel` (a row with none, or `main:1`, is
+ * `main`'s): a genre whose turn-order history reads only `main` — Adventure,
+ * Whodunit — gets the order it always got, byte for byte. Any other entry
+ * names its channel canonically (`formatChannel`), which is what a fire
+ * hands the reply road.
+ */
+export function narratorEntries(
+	messages: readonly RotationMessage[]
+): TurnEntry[] {
+	const newest = new Map<string, { index: number; row: RotationMessage }>()
+	messages.forEach((row, index) => {
+		if (!row || row.isHidden) return
+		newest.set(formatChannel(parseChannel(row.channel ?? DEFAULT_CHANNEL)), {
+			index,
+			row
+		})
+	})
+	return [...newest]
+		.filter(([, { row }]) => row.role === "user")
+		.sort(([, a], [, b]) => b.index - a.index)
+		.map(([channel]) =>
+			channel === DEFAULT_CHANNEL
+				? { ref: null, via: "voice" }
+				: { ref: null, via: "voice", channel }
+		)
+}
+
+/**
+ * Round robin (§4.4): every candidate not yet spoken, in candidate order —
+ * the SDK's `roundRobinOrder`, the one public implementation.
+ */
 export function roundRobinEntries(
 	candidates: readonly TurnCandidate[],
 	messages: readonly RotationMessage[]
 ): TurnEntry[] {
-	const spoken = spokenRefsSince(messages)
-	return candidates
-		.filter((c) => !spoken.has(c.ref))
-		.map((c) => ({ ref: c.ref, via: "strategy" }))
+	return roundRobinOrder(candidates, messages)
 }
 
 /**

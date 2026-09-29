@@ -3,9 +3,9 @@ import { CONNECTION_TYPE } from "../constants/ConnectionTypes"
 /**
  * The four levels `core:shape/text-gen@1` declares for `reasoning`.
  *
- * Reasoning effort is a SAMPLING parameter, chosen per stage through the
+ * Reasoning effort is a SAMPLING parameter, chosen per step through the
  * sampling slot (ruling 2026-09-12) — not a connection setting. It was three
- * different connection flags before, which meant one answer for every stage
+ * different connection flags before, which meant one answer for every step
  * that shared a connection.
  */
 export type ReasoningLevel = "off" | "low" | "medium" | "high"

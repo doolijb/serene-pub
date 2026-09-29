@@ -182,21 +182,43 @@ describe("a cloud connection with no key yet", () => {
 describe("a managed KoboldCPP", () => {
 	const managed = { ...base, type: "koboldcpp_managed", baseUrl: null }
 
-	test("with the manager off is unfinished, and offers Set up", () => {
+	test("not installed is unfinished, and offers Set up", () => {
 		const status = connectionRowStatus(managed, {
 			kind: "koboldcpp-managed",
-			managerEnabled: false
+			kcppInstall: "not-installed"
 		})
 		expect(status.state).toBe("unfinished")
 		expect(status.label).toBe("Not installed")
 		expect(status.action?.verb).toBe("setup")
 	})
 
+	// Ruled 2026-09-24: the flag off with the install kept is Offline, and
+	// Start turns it back on — the same word the view says.
+	test("switched off with the install kept is Offline, and offers Start", () => {
+		const status = connectionRowStatus(
+			{ ...managed, models: [model(), model()] },
+			{ kind: "koboldcpp-managed", kcppInstall: "offline" }
+		)
+		expect(status.state).toBe("idle")
+		expect(status.label).toBe("Offline")
+		expect(status.metric).toBe("2 on disk")
+		expect(status.action?.verb).toBe("start-offline")
+		expect(status.action?.label).toBe("Start")
+	})
+
+	test("settings not arrived claims nothing about the install", () => {
+		const status = connectionRowStatus(managed, {
+			kind: "koboldcpp-managed",
+			kcppInstall: "loading"
+		})
+		expect(status.label).toBe("Checking")
+		expect(status.action).toBeNull()
+	})
+
 	test("with no binary chosen says so rather than offering Start", () => {
 		const status = connectionRowStatus(managed, {
 			kind: "koboldcpp-managed",
-			managerEnabled: true,
-			kcppSetUp: false
+			kcppInstall: "no-binary"
 		})
 		expect(status.label).toBe("Not set up")
 		expect(status.action?.verb).toBe("setup")
@@ -207,7 +229,7 @@ describe("a managed KoboldCPP", () => {
 			{ ...managed, models: [model(), model()] },
 			{
 				kind: "koboldcpp-managed",
-				managerEnabled: true,
+				kcppInstall: "ready",
 				kcpp: { run: "running", loadedFiles: ["Nemo 12B"] } as any
 			}
 		)
@@ -220,7 +242,7 @@ describe("a managed KoboldCPP", () => {
 	test("stopped is idle — the manager starts it on first use", () => {
 		const status = connectionRowStatus(managed, {
 			kind: "koboldcpp-managed",
-			managerEnabled: true,
+			kcppInstall: "ready",
 			kcpp: { run: "stopped" } as any
 		})
 		expect(status.state).toBe("idle")
@@ -231,7 +253,7 @@ describe("a managed KoboldCPP", () => {
 	test("crashed is the one that is red", () => {
 		const status = connectionRowStatus(managed, {
 			kind: "koboldcpp-managed",
-			managerEnabled: true,
+			kcppInstall: "ready",
 			kcpp: { run: "crashed" } as any
 		})
 		expect(status.state).toBe("broken")
@@ -241,7 +263,7 @@ describe("a managed KoboldCPP", () => {
 	test("nothing answered claims nothing", () => {
 		const status = connectionRowStatus(managed, {
 			kind: "koboldcpp-managed",
-			managerEnabled: true
+			kcppInstall: "ready"
 		})
 		expect(status.state).toBe("idle")
 		expect(status.label).toBe("Installed")

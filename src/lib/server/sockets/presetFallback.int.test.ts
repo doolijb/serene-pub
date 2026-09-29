@@ -150,7 +150,6 @@ async function sessionOn(presetId: number, name: string): Promise<number> {
 		sessionId: session.id,
 		characterId,
 		isActive: true,
-		visibility: "visible",
 		position: 0
 	})
 	await db

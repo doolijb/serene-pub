@@ -21,7 +21,10 @@
 	import PanelSplit from "../panels/PanelSplit.svelte"
 	import { ViewModeTracker } from "$lib/client/shell/viewMode.svelte"
 	import { JUMP_CONTEXT, type JumpCtx } from "$lib/client/shell/jump.svelte"
-	import { lastActivityAt } from "$lib/client/utils/timeAgo"
+	import {
+		groupSessions,
+		isAwaitingUser
+	} from "$lib/client/sessions/sessionGroups"
 	import { SvelteMap } from "svelte/reactivity"
 	import {
 		applyRowChanged,
@@ -86,13 +89,20 @@
 	const vm = new ViewModeTracker()
 
 	/**
-	 * The filter popout's one pick, on top of whatever the filter box says.
+	 * The one pick in force, on top of whatever the filter box says — made
+	 * either from the chip row (`All`, `Your turn`) or from the filter popout
+	 * (a genre or a tag).
 	 *
 	 * One at a time rather than a set: `All` is the resting state, and two
 	 * picks lit at once would have to mean either "and" or "or" without the
-	 * popout being able to say which.
+	 * controls being able to say which.
 	 */
-	type SessionChip = "all" | "waiting" | `genre:${string}` | `tag:${string}`
+	type SessionChip =
+		| "all"
+		| "waiting"
+		| "favorites"
+		| `genre:${string}`
+		| `tag:${string}`
 	let chipFilter: SessionChip = $state("all")
 
 	/** Whether the toolbar's filter popout is showing. */
@@ -136,14 +146,17 @@
 		return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name))
 	})
 
-	/** The popout as rendered: the two standing picks, then genres, then tags. */
+	/**
+	 * The popout as rendered: `All`, then genres, then tags. `Your turn` is
+	 * not here — it is on the chip row under the toolbar, where its count is
+	 * visible without opening anything.
+	 */
 	let filterOptions: Array<{
 		value: SessionChip
 		label: string
 		colorPreset?: string
 	}> = $derived([
 		{ value: "all", label: "All" },
-		{ value: "waiting", label: "Waiting on you" },
 		...(hasSeveralGenres
 			? genreNames.map((name) => ({
 					value: `genre:${name}` as SessionChip,
@@ -162,17 +175,27 @@
 	 * popout only ever shows a pick that is still on the list.
 	 */
 	let activeChip: SessionChip = $derived.by(() =>
-		filterOptions.some((o) => o.value === chipFilter) ? chipFilter : "all"
+		chipFilter === "waiting" ||
+		chipFilter === "favorites" ||
+		filterOptions.some((o) => o.value === chipFilter)
+			? chipFilter
+			: "all"
+	)
+
+	/** A popout pick (a genre or a tag) is in force — lights its trigger. */
+	let popoutPickActive = $derived(
+		activeChip !== "all" && activeChip !== "waiting"
 	)
 
 	/**
-	 * What the dismissible chip under the toolbar says. Undefined at `All`,
-	 * which is the same condition as "there is no chip".
+	 * What the dismissible chip under the toolbar says, for a popout pick.
+	 * Undefined at `All` and at `Your turn`: the chip row already shows those
+	 * selected, and saying it twice is a second control for one fact.
 	 */
 	let activeFilterLabel = $derived(
-		activeChip === "all"
-			? undefined
-			: filterOptions.find((o) => o.value === activeChip)?.label
+		popoutPickActive
+			? filterOptions.find((o) => o.value === activeChip)?.label
+			: undefined
 	)
 
 	/** The dot's colour for a tag, or the neutral one an uncoloured tag gets. */
@@ -246,6 +269,8 @@
 		session.id != null && runStatuses.has(session.id)
 			? runStatuses.get(session.id)
 			: session.runStatus
+	/** A reply is being written in this session right now. */
+	const isRunning = (session: SessionRow) => runStatusOf(session) != null
 	// The generic **:error listener in Layout.svelte already toasts this —
 	// this just stops the spinner from spinning forever if the initial
 	// fetch fails, so it settles into the (accurate enough) empty state.
@@ -278,6 +303,21 @@
 		"sessions:rowChanged",
 		handleRowChanged
 	)
+	// A star set from any of this user's open lists flips the row here too.
+	interest.useInterest<"sessions:setFavorite">(
+		"sessions:setFavorite",
+		handleSetFavorite
+	)
+
+	function handleSetFavorite(msg: Sockets.Sessions.SetFavorite.Response) {
+		sessions = sessions.map((s) =>
+			s.id === msg.sessionId ? { ...s, isFavorite: msg.isFavorite } : s
+		)
+	}
+
+	function toggleFavorite(id: number, isFavorite: boolean) {
+		socket.emit("sessions:setFavorite", { sessionId: id, isFavorite })
+	}
 
 	async function handleOnClose() {
 		if (sessionFormHasChanges) {
@@ -514,7 +554,7 @@
 
 	/**
 	 * The list with every `sessions:rowChanged` push since it applied.
-	 * Everything downstream — the filters, the buckets, the view panel — reads
+	 * Everything downstream — the filters, the groups, the view panel — reads
 	 * this rather than `sessions`, so one derivation keeps the quoted line, the
 	 * message count and the activity sort current together.
 	 */
@@ -549,10 +589,13 @@
 		}
 
 		if (activeChip === "waiting") {
-			// The model spoke last, so the next line is the reader's.
-			filtered = filtered.filter(
-				(session) => session.lastMessage && !session.lastMessage.isUser
+			// The same test as the "Your turn" group and the home page's
+			// "waiting on you" count.
+			filtered = filtered.filter((session) =>
+				isAwaitingUser(session, isRunning(session))
 			)
+		} else if (activeChip === "favorites") {
+			filtered = filtered.filter((session) => session.isFavorite)
 		} else if (activeChip.startsWith("genre:")) {
 			const genreName = activeChip.slice(6)
 			filtered = filtered.filter(
@@ -618,58 +661,27 @@
 			: orderedSessions.find((s) => s.id === sessionId)
 	)
 
-	const DAY_MS = 86_400_000
-	type BucketKey = "today" | "yesterday" | "week" | "earlier"
-	const BUCKET_ORDER: Array<{ key: BucketKey; label: string }> = [
-		{ key: "today", label: "Today" },
-		{ key: "yesterday", label: "Yesterday" },
-		{ key: "week", label: "This week" },
-		{ key: "earlier", label: "Earlier" }
-	]
+	/**
+	 * How many sessions are waiting on the reader, across the whole list —
+	 * the `Your turn` chip's count. Unnarrowed by the filter box on purpose:
+	 * the chip says what is waiting, not what the current search happens to
+	 * show.
+	 */
+	const yourTurnCount = $derived(
+		patchedSessions.filter((s) => isAwaitingUser(s, isRunning(s))).length
+	)
 
 	/**
-	 * The list under the pinned row, cut into buckets by when each session
-	 * last moved.
-	 *
-	 * Calendar days from local midnight rather than rolling 24-hour windows: a
-	 * reader asking "did I play this today" means the date, and a session
-	 * played at 23:00 last night is "yesterday" at 09:00 whatever the clock
-	 * arithmetic says. "This week" is the six days before that, and everything
-	 * older is "Earlier" — including a session with no readable timestamp,
-	 * whose activity resolves to 0.
-	 *
-	 * Server order is kept inside a bucket: the list arrives sorted, and
-	 * re-sorting here would fight it.
+	 * The list under the pinned row, cut into **Your turn**, **Recent** (the
+	 * last seven days) and **Older** — see `sessionGroups.ts` for the rule.
+	 * Server order is kept inside a group.
 	 */
-	const sessionBuckets = $derived.by(() => {
-		const rows = orderedSessions.filter((s) => s.id !== pinnedSession?.id)
-		const midnight = new Date()
-		midnight.setHours(0, 0, 0, 0)
-		const today = midnight.getTime()
-
-		const byKey: Record<BucketKey, SessionRow[]> = {
-			today: [],
-			yesterday: [],
-			week: [],
-			earlier: []
-		}
-		for (const session of rows) {
-			const at = lastActivityAt(session)
-			const key: BucketKey =
-				at >= today
-					? "today"
-					: at >= today - DAY_MS
-						? "yesterday"
-						: at >= today - 7 * DAY_MS
-							? "week"
-							: "earlier"
-			byKey[key].push(session)
-		}
-		return BUCKET_ORDER.map((bucket) => ({
-			...bucket,
-			rows: byKey[bucket.key]
-		})).filter((bucket) => bucket.rows.length > 0)
-	})
+	const sessionGroups = $derived(
+		groupSessions(
+			orderedSessions.filter((s) => s.id !== pinnedSession?.id),
+			{ isRunning }
+		)
+	)
 
 	$effect(() => {
 		if (panelsCtx.digest.sessionId) {
@@ -835,6 +847,8 @@
 						onOpen={() => handleOpenSession(viewingId!)}
 						onViewLorebook={handleViewLorebook}
 						onDelete={handleDeleteClick}
+						onToggleFavorite={toggleFavorite}
+						isFavorite={!!viewingSession?.isFavorite}
 						canEdit={!!viewingSession?.canEdit}
 						isOwner={!!viewingSession?.isOwner}
 						genreName={viewingSession?.genreName}
@@ -875,6 +889,7 @@
 					<PanelFilterInput
 						bind:value={search}
 						placeholder="sessions"
+					singular="session"
 						count={sessions.length}
 						aria-label="Filter sessions by name, persona, character or tag"
 					/>
@@ -888,8 +903,7 @@
 					positioning={{ placement: "bottom-end" }}
 				>
 					<Popover.Trigger
-						class="btn grid size-10 shrink-0 place-items-center p-0 {activeChip !==
-						'all'
+						class="btn grid size-10 shrink-0 place-items-center p-0 {popoutPickActive
 							? 'preset-tonal-primary'
 							: ''}"
 						title="Filter sessions"
@@ -939,6 +953,50 @@
 						</Popover.Positioner>
 					</Portal>
 				</Popover>
+			</div>
+			<!-- The standing picks, always in view: a fixed two, so the row
+			     never needs to scroll sideways (§6.3). Pressed = tonal
+			     primary, the app's active-chip treatment (§2.4). -->
+			<div
+				class="mb-2 flex min-w-0 shrink-0 items-center gap-1.5"
+				role="group"
+				aria-label="Show sessions"
+			>
+				<button
+					type="button"
+					class="rounded-full px-3 py-1 text-[13px] {activeChip ===
+					'all'
+						? 'preset-tonal-primary'
+						: 'preset-tonal-surface'}"
+					aria-pressed={activeChip === "all"}
+					onclick={() => pickFilter("all")}
+				>
+					All
+				</button>
+				<button
+					type="button"
+					class="flex items-center gap-1.5 rounded-full px-3 py-1 text-[13px] {activeChip ===
+					'waiting'
+						? 'preset-tonal-primary'
+						: 'preset-tonal-surface'}"
+					aria-pressed={activeChip === "waiting"}
+					onclick={() => pickFilter("waiting")}
+				>
+					Your turn
+					<span class="tabular-nums opacity-80">{yourTurnCount}</span>
+				</button>
+				<button
+					type="button"
+					class="flex items-center gap-1.5 rounded-full px-3 py-1 text-[13px] {activeChip ===
+					'favorites'
+						? 'preset-tonal-primary'
+						: 'preset-tonal-surface'}"
+					aria-pressed={activeChip === "favorites"}
+					onclick={() => pickFilter("favorites")}
+				>
+					<Icons.Star size={13} aria-hidden="true" />
+					Favorites
+				</button>
 			</div>
 			<!-- Every narrowing in force, said once and in one strip. At `All`
 			     with no deep link there is nothing to say and the strip is
@@ -1010,7 +1068,7 @@
 					<div class="flex items-center justify-center py-8">
 						<Icons.Loader2
 							size={20}
-							class="text-surface-400 animate-spin"
+							class="text-surface-600-400 animate-spin"
 						/>
 					</div>
 				{:else if filteredSessions.length === 0}
@@ -1026,8 +1084,8 @@
 					<div class="flex min-w-0 flex-col">
 						<!-- The open session, under no header: it is pinned
 						     because it is open, which is a different fact from
-						     when it last moved, and filing it under "Today"
-						     would put it back in the scroll. -->
+						     whose turn it is or when it last moved, and filing
+						     it under a group would put it back in the scroll. -->
 						{#if pinnedSession}
 							<div
 								class="flex min-w-0 flex-col gap-2"
@@ -1039,29 +1097,33 @@
 									runStatus={runStatusOf(pinnedSession)}
 									active={true}
 									showGenre={hasSeveralGenres}
+									layout="stack"
 									onclick={handleSessionClick}
 									onEdit={handleEditClick}
 									onDelete={handleDeleteClick}
+									onToggleFavorite={toggleFavorite}
 								/>
 							</div>
 						{/if}
-						{#each sessionBuckets as bucket (bucket.key)}
+						{#each sessionGroups as group (group.key)}
 							<!-- A <p> and not an <h3>: this pane carries no
 							     heading of its own, so a level-3 heading would
 							     open the outline at the wrong depth. The list
 							     it labels points back at it instead. -->
+							<!-- 12px muted, not quiet: a label is text the
+							     reader uses (§6.4). -->
 							<p
-								id="sessions-bucket-{bucket.key}"
-								class="text-surface-500 px-3 pt-4 pb-1 text-[11px]"
+								id="sessions-group-{group.key}"
+								class="text-surface-600-400 px-3 pt-4 pb-1 text-xs"
 							>
-								{bucket.label}
+								{group.label}
 							</p>
 							<div
 								class="flex min-w-0 flex-col gap-2"
 								role="list"
-								aria-labelledby="sessions-bucket-{bucket.key}"
+								aria-labelledby="sessions-group-{group.key}"
 							>
-								{#each bucket.rows as session (session.id)}
+								{#each group.rows as session (session.id)}
 									<!-- `active` covers two facts that never
 									     disagree in practice: the session open
 									     in the main view (pinned above), and —
@@ -1077,9 +1139,11 @@
 											(vm.mode === "desk" &&
 												session.id === viewingId)}
 										showGenre={hasSeveralGenres}
+										layout="stack"
 										onclick={handleSessionClick}
 										onEdit={handleEditClick}
 										onDelete={handleDeleteClick}
+										onToggleFavorite={toggleFavorite}
 									/>
 								{/each}
 							</div>

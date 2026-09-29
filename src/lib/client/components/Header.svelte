@@ -65,7 +65,7 @@
 	}
 </script>
 
-<header class="w-full">
+<header class="sp-head-host w-full">
 	<!-- 56px at every width, which seats both the identity row and the 44px
 	     panels button (STYLE-GUIDE §4.2).
 	     `lg:rounded-b-lg` mirrors the composer's `lg:rounded-t-lg`: this bar and
@@ -219,7 +219,7 @@
 	}
 
 	/* The measure the conversation column takes (see MessagesWidget's
-	   `.sp-column`), centred in the bar so the two line up. `min-inline-size:
+	   `messages.stage` part), centred in the bar so the two line up. `min-inline-size:
 	   0` is what makes a tight window ellipsize the name instead of pushing
 	   into the buttons. */
 	.sp-head-row {
@@ -324,6 +324,29 @@
 		border-radius: 9999px;
 		background: var(--color-primary-500);
 		box-shadow: 0 0 0 2px var(--sp-head-ground);
+	}
+
+	/* Measured against the BAR, not the window: a docked view takes 400px
+	   off it on a wide screen, where a viewport rule would never fire.
+	   Below 1040px of bar there is no room to centre the name over the
+	   story — the mirror spacer takes as much as the buttons do and squeezes
+	   the name to nothing — so the row starts at the edge. Below 640px the
+	   genre steps out too; the name and faces identify the session. */
+	.sp-head-host {
+		container: sp-head / inline-size;
+	}
+	@container sp-head (width < 1040px) {
+		.sp-head-lead {
+			display: none;
+		}
+		.sp-head-row {
+			margin-inline: 0;
+		}
+	}
+	@container sp-head (width < 640px) {
+		.sp-head-genre {
+			display: none;
+		}
 	}
 
 	.sp-head-genre {

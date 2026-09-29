@@ -15,7 +15,7 @@
 		onOpenChange,
 		onConfirm,
 		onCancel,
-		title = "Confirm",
+		title = "Delete entry?",
 		message = "Are you sure you want to delete this lorebook entry? This action cannot be undone."
 	}: Props = $props()
 </script>

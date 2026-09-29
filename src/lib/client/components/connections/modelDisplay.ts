@@ -45,7 +45,7 @@ const PARAMS = /\b(\d+(?:\.\d+)?)\s*([BbMm])\b/
  * Words that are packaging, not naming. Dropped from a display name wherever
  * they appear.
  *
- * ⚠ `instruct`, `chat` and `it` are deliberately NOT here. Two checkpoints of
+ * ⚠ `instruct`, `chat` and `it` are NOT here, on purpose. Two checkpoints of
  * one model that differ only by being instruction-tuned are two different things
  * to pick between, and collapsing their names to one would make the list
  * ambiguous exactly where it matters.

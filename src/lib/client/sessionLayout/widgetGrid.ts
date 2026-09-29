@@ -17,6 +17,7 @@
  * (`placementOf` / `stackPlacements`) — the same cells the grid solves,
  * packaged for the data contract rather than re-derived by each renderer.
  */
+import { RETIRED_WIDGET_IDS } from "@serene-pub/sdk"
 import type { LayoutV1, PlacementInput } from "$lib/shared/widgets/context"
 import type { WidgetTier } from "$lib/shared/widgets/types"
 import { tierFor } from "$lib/client/surfaces/types"
@@ -52,8 +53,6 @@ export interface WidgetConfig {
 	background?: boolean
 	/** Tab-group membership (§5/§6). */
 	group?: string
-	/** Repositionable but not removable — the chat's anchor guarantee (§2). */
-	required?: boolean
 }
 
 export interface GridLayout {
@@ -85,12 +84,13 @@ export function cellsFromPx(px: number, cell: number): number {
  * rewrites them — and every reader drops it, so a layout arranged under an
  * older build opens on the widgets this build has.
  *
- * `composer` is one because the conversation is ONE widget: the log and the
- * field are one thing to arrange, and the field's shape is a setting on
- * `messages` (`CORE_WIDGETS`) rather than a widget beside it. Admitting the id
- * would put an empty card under every restored chat.
+ * ONE list, the SDK's: `fromLegacy` (the legacy-to-document reader) drops by
+ * it too, and two lists would let the two readers disagree about what a
+ * stored layout holds. It says why each id is there — `composer` (the conversation is one
+ * widget) and `inventory` (R79 removed that widget for now). Admitting either
+ * would put an empty card where it used to be.
  */
-export const RETIRED_WIDGET_IDS: ReadonlySet<string> = new Set(["composer"])
+export { RETIRED_WIDGET_IDS }
 
 /** Is this a widget id no reader should place? */
 export function isRetiredWidget(id: string): boolean {
@@ -99,9 +99,14 @@ export function isRetiredWidget(id: string): boolean {
 
 /**
  * The normal chat, expressed purely as widgets: Messages GROW-anchored to all
- * four edges, filling the middle, and required. This is the config a Chat genre
- * ships — nothing here is special-cased in the renderer. A genre that withholds
- * the conversation (R71) names the widget that stands there instead.
+ * four edges, filling the middle. This is the config a Chat genre ships —
+ * nothing here is special-cased in the renderer. A genre that withholds the
+ * conversation (R71) names the widget that stands there instead.
+ *
+ * It is also the **primary floor's** shape (./primaryFloor): a layout that
+ * places no instance of the genre's primary widget anywhere gets this one
+ * appended to its middle. Nothing else injects it — a saved grid is read as
+ * saved (`loadChatLayout`), the conversation included, wherever it was put.
  */
 export function defaultChatLayout(primaryId = "messages"): GridLayout {
 	return {
@@ -118,11 +123,15 @@ export function defaultChatLayout(primaryId = "messages"): GridLayout {
 					bottom: true,
 					left: true,
 					right: true
-				},
-				required: true
+				}
 			}
 		]
 	}
+}
+
+/** A grid that places nothing — what an absent or unreadable blob reads as. */
+export function emptyChatLayout(): GridLayout {
+	return { version: 1, cell: DEFAULT_CELL, widgets: [] }
 }
 
 /** Immutably patch one widget by id (identity fields aside). Returns a new layout. */
@@ -158,8 +167,7 @@ export function updateWidget(
  *
  * The declaration is the one a layout's own strip uses — full width, content
  * height, anchored to the top and both sides (see `ADVENTURE_LAYOUT`'s
- * world-state above its messages). `required` is never claimed: that is the
- * default layout's guarantee, not a newcomer's.
+ * world-state above its messages).
  */
 export function withGridWidget(
 	layout: GridLayout,
@@ -187,13 +195,13 @@ export function withGridWidget(
 }
 
 /**
- * The grid without `id`. A REQUIRED widget is kept: the conversation is
- * repositionable and never removable (§2), and `loadChatLayout` would put it
- * back on the next read anyway — refusing here says so where the removal is
- * asked for instead of silently undoing it one repaint later.
+ * The grid without `id` — the conversation included. Whether a removal may
+ * happen at all is the primary floor's question (./primaryFloor), asked over
+ * the whole layout by the editor before it gets here; this model only sees the
+ * middle, and a conversation leaving it may be going to a side.
  */
 export function withoutGridWidget(layout: GridLayout, id: string): GridLayout {
-	const widgets = layout.widgets.filter((w) => w.id !== id || w.required)
+	const widgets = layout.widgets.filter((w) => w.id !== id)
 	return widgets.length === layout.widgets.length
 		? layout
 		: { ...layout, widgets }
@@ -222,9 +230,10 @@ export function withoutGridWidget(layout: GridLayout, id: string): GridLayout {
  * card that reported itself in two belongs to has already been applied and this
  * reads the answer rather than re-deciding it.
  *
- * `required` survives whatever a frame says — `withoutGridWidget`'s guarantee,
- * relied on rather than restated. Returns the layout BY REFERENCE when the
- * membership it describes is the one already there.
+ * Every widget obeys the frame, the conversation included: placement is free
+ * (the floor is a rule about the whole layout, never about a zone). Returns
+ * the layout BY REFERENCE when the membership it describes is the one already
+ * there.
  */
 export function withGridMembership(
 	layout: GridLayout,
@@ -245,32 +254,6 @@ export function withGridMembership(
 	return next
 }
 
-/**
- * Split a ZONE TEMPLATE's widget list on the ids this grid holds as `required`.
- *
- * A required widget belongs to the zone the grid puts it in and to no other —
- * the conversation moves around the middle and never leaves it. The editor now
- * refuses the drag that would take it out (`GridStackZone`'s `acceptsRequired`),
- * but an arrangement blob written before that refusal existed can still name it
- * in a side zone's frame, and the commit reads a frame as authoritative. So the
- * rule is kept a second time, here, where the side lists are assembled.
- *
- * Pure: it returns the list and what it refused, and says nothing. The caller
- * logs — the same division `dedupeArranged` makes.
- */
-export function withoutGridRequired(
-	grid: GridLayout,
-	ids: readonly string[]
-): { ids: string[]; refused: string[] } {
-	const required = new Set(
-		grid.widgets.filter((w) => w.required).map((w) => w.id)
-	)
-	const kept: string[] = []
-	const refused: string[] = []
-	for (const id of ids) (required.has(id) ? refused : kept).push(id)
-	return { ids: kept, refused }
-}
-
 function isPlainObject(x: unknown): x is Record<string, unknown> {
 	return !!x && typeof x === "object" && !Array.isArray(x)
 }
@@ -289,78 +272,85 @@ function isSizeSpec(x: unknown): x is SizeSpec {
 }
 
 /**
- * Rehydrate a persisted chat grid, defensively. The genre's default is the
- * floor: required widgets always survive, so a truncated or hand-corrupted blob
- * can never strand a session without its conversation. A saved widget only
- * overrides the fields the editor writes (size/anchor/order/colSpan) and only
- * when they pass a shape check — anything malformed falls back to the default
- * for that field.
+ * Rehydrate a persisted chat grid, defensively, AS SAVED: every widget keeps
+ * the zone it was saved in — the conversation included — and nothing is put
+ * back that the blob does not name. Whether the layout still places its
+ * primary widget somewhere is a question about the whole layout (the side
+ * lists and the arrangement too), which this model cannot see; the floor asks
+ * it one level up (./primaryFloor `withPrimaryFloor`).
  *
- * An id the default does not carry is ADMITTED rather than dropped: a preset's
- * own widget (the Adventure strip above the messages) and a plugin's panel both
- * arrive that way, and the renderer resolves a widget id to its own content, so
- * an id this function declines to place is a placement that silently disappears.
- * A newcomer must name a real zone and a usable size to be admitted; it never
- * inherits `required`, which is the default's guarantee and not a blob's to
- * claim. The one exception is a RETIRED id, which names nothing this build can
- * render. `saved` is `unknown` because the blob is stored verbatim server-side.
+ * An absent, junk or wrong-version blob reads as a grid that places nothing,
+ * and the floor then seats the conversation exactly where it always was.
+ *
+ * A saved widget is admitted when it names a real zone and a usable size. The
+ * one exception is the genre's primary widget (`primaryId`): a malformed field
+ * of its entry falls back to the floor's shape (`defaultChatLayout`) for that
+ * field, zone included, so a hand-damaged entry still draws the conversation
+ * rather than dropping it.
+ *
+ * An id the genre default does not carry is ADMITTED rather than dropped: a
+ * preset's own widget (the Adventure strip above the messages) and a plugin's
+ * panel both arrive that way, and the renderer resolves a widget id to its own
+ * content, so an id this function declines to place is a placement that
+ * silently disappears. The one exception is a RETIRED id, which names nothing
+ * this build can render. `saved` is `unknown` because the blob is stored
+ * verbatim server-side.
  */
 export function loadChatLayout(
 	saved: unknown,
 	primaryId = "messages",
 	omit: ReadonlySet<string> = new Set()
 ): GridLayout {
-	const base = defaultChatLayout(primaryId)
 	if (
 		!isPlainObject(saved) ||
 		saved.version !== 1 ||
 		!Array.isArray(saved.widgets)
 	) {
-		return base
+		return emptyChatLayout()
 	}
-	const savedById = new Map<string, Record<string, unknown>>()
-	for (const w of saved.widgets) {
+	const floor = defaultChatLayout(primaryId).widgets[0]
+	const seen = new Set<string>()
+	const widgets: WidgetConfig[] = []
+	for (const s of saved.widgets) {
+		if (!isPlainObject(s) || typeof s.id !== "string") continue
+		const id = s.id
 		// A widget the genre withholds (R71) is not placed, whatever was saved.
-		if (isPlainObject(w) && typeof w.id === "string" && !isRetiredWidget(w.id) && !omit.has(w.id))
-			savedById.set(w.id, w)
-	}
-	const widgets = base.widgets.map((b): WidgetConfig => {
-		const s = savedById.get(b.id)
-		if (!s) return b
-		const size =
-			isPlainObject(s.size) &&
-			isSizeSpec(s.size.w) &&
-			isSizeSpec(s.size.h)
-				? { w: s.size.w as SizeSpec, h: s.size.h as SizeSpec }
-				: b.size
-		return {
-			...b,
-			size,
-			anchor: isPlainObject(s.anchor) ? { ...(s.anchor as Anchor) } : b.anchor,
-			order: typeof s.order === "number" ? s.order : b.order,
-			colSpan: typeof s.colSpan === "number" ? s.colSpan : b.colSpan
-		}
-	})
-	for (const [id, s] of savedById) {
-		if (base.widgets.some((b) => b.id === id)) continue
-		if (!isZone(s.zone)) continue
-		if (
-			!isPlainObject(s.size) ||
-			!isSizeSpec(s.size.w) ||
-			!isSizeSpec(s.size.h)
-		)
+		if (isRetiredWidget(id) || omit.has(id) || seen.has(id)) continue
+		const sizeOk =
+			isPlainObject(s.size) && isSizeSpec(s.size.w) && isSizeSpec(s.size.h)
+		const size = sizeOk
+			? {
+					w: (s.size as Record<string, unknown>).w as SizeSpec,
+					h: (s.size as Record<string, unknown>).h as SizeSpec
+				}
+			: null
+		if (id === primaryId) {
+			seen.add(id)
+			widgets.push({
+				id,
+				zone: isZone(s.zone) ? s.zone : floor.zone,
+				order: typeof s.order === "number" ? s.order : floor.order,
+				size: size ?? floor.size,
+				anchor: isPlainObject(s.anchor)
+					? { ...(s.anchor as Anchor) }
+					: floor.anchor,
+				...(typeof s.colSpan === "number" ? { colSpan: s.colSpan } : {})
+			})
 			continue
+		}
+		if (!isZone(s.zone) || !size) continue
+		seen.add(id)
 		widgets.push({
 			id,
 			zone: s.zone,
 			order: typeof s.order === "number" ? s.order : widgets.length,
-			size: { w: s.size.w as SizeSpec, h: s.size.h as SizeSpec },
+			size,
 			anchor: isPlainObject(s.anchor) ? { ...(s.anchor as Anchor) } : {},
 			...(typeof s.colSpan === "number" ? { colSpan: s.colSpan } : {})
 		})
 	}
 	const cell =
-		typeof saved.cell === "number" && saved.cell > 0 ? saved.cell : base.cell
+		typeof saved.cell === "number" && saved.cell > 0 ? saved.cell : DEFAULT_CELL
 	return { version: 1, cell, widgets }
 }
 

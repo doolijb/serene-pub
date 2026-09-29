@@ -1,7 +1,7 @@
 <script lang="ts">
 	import type { Snippet } from "svelte"
 	import * as Icons from "@lucide/svelte"
-	import { Popover, Portal } from "@skeletonlabs/skeleton-svelte"
+	import RowMenu, { type RowMenuEntries } from "../menus/RowMenu.svelte"
 
 	/**
 	 * The in-panel back/title header. ALWAYS ONE ROW.
@@ -37,11 +37,9 @@
 		    title/aria-label. For the one action that must not cost a second
 		    click — the lore edit screens put Save here. */
 		primaryAction?: Snippet
-		/** Rendered inside the `⋯` menu, with full text labels. Use
-		    `.popover-menu-btn` for each entry, matching CharacterListItem and the
-		    message-options menu. */
-		actions?: Snippet
-		/** Menu heading + the trigger's accessible name, eg. "Lorebook". */
+		/** The `⋯` menu's items, with full text labels (a `RowMenu`). */
+		menuItems?: RowMenuEntries
+		/** The menu's and the trigger's accessible name, eg. "Lorebook". */
 		actionsLabel?: string
 		/** Anything that belongs directly beneath the title row. */
 		subtitle?: Snippet
@@ -54,13 +52,12 @@
 		headingLevel = 2,
 		titleClass = "",
 		primaryAction,
-		actions,
+		menuItems,
 		actionsLabel,
 		subtitle
 	}: Props = $props()
 
 	const tag = $derived(`h${headingLevel}` as "h2" | "h3")
-	let menuOpen = $state(false)
 </script>
 
 <div class="flex min-w-0 flex-col gap-2">
@@ -92,39 +89,8 @@
 			{title}
 		</svelte:element>
 		{@render primaryAction?.()}
-		{#if actions}
-			<Popover
-				open={menuOpen}
-				onOpenChange={(e) => (menuOpen = e.open)}
-				positioning={{ placement: "bottom-end" }}
-			>
-				<Popover.Trigger
-					class="btn btn-sm hover:bg-primary-600-400 shrink-0 p-2 {menuOpen
-						? 'bg-primary-600-400'
-						: ''}"
-					aria-label="{actionsLabel ?? title} options"
-				>
-					<Icons.EllipsisVertical size={16} aria-hidden="true" />
-				</Popover.Trigger>
-				<Portal>
-					<Popover.Positioner class="z-[1000]!">
-						<Popover.Content
-							class="card bg-primary-200-800 w-[min(90vw,240px)] space-y-4 p-4 shadow-xl"
-						>
-							<header class="popover-menu-title">
-								<p>{actionsLabel ?? title}</p>
-							</header>
-							<article
-								class="flex flex-col gap-2"
-								role="none"
-								onclick={() => (menuOpen = false)}
-							>
-								{@render actions()}
-							</article>
-						</Popover.Content>
-					</Popover.Positioner>
-				</Portal>
-			</Popover>
+		{#if menuItems?.some(Boolean)}
+			<RowMenu items={menuItems} label={actionsLabel ?? title} />
 		{/if}
 	</div>
 	{@render subtitle?.()}

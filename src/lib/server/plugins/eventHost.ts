@@ -4,7 +4,7 @@
  *
  * Every other plugin seam in this subsystem resolves exactly one implementation
  * for one address: `hookKinds` binds a script kind to a hook, `nodeDefinitions` binds
- * a node pin, `engines` binds a template engine, and in each the second claimant
+ * a node pin, `templateEngines` binds a template engine, and in each the second claimant
  * is a conflict to refuse. An event is the opposite shape by nature — "a message
  * was written" is not owned by anybody, and three extensions watching it are
  * three correct answers rather than a collision. So this is a *registry*: one
@@ -28,7 +28,7 @@
  * (F6, 13 §10c).
  *
  * **Two spellings, reconciled here** (R5, D-6). `eventHooks` above is the
- * app-runtime key, the family `hookKinds`/`nodeDefinitions`/`engines` already
+ * app-runtime key, the family `hookKinds`/`nodeDefinitions`/`templateEngines` already
  * belongs to. The SDK packager writes the same declarations at
  * `hooks.eventListeners`, and this module is their one reader, so this is where
  * the two are translated rather than merged — the app key wins where a manifest
@@ -41,7 +41,7 @@
  * why, per entry, instead of the subscription disappearing between two
  * vocabularies.
  *
- * ## One kind: notification
+ * ## One kind: fire-and-forget
  *
  * Returns are ignored and subscribers are independent. That is what 11 §3 rules
  * for core's events ("fire-and-forget") and what 01 §9c promises ("a throwing
@@ -97,15 +97,15 @@
  *
  * ## What this module does not do
  *
- * It does not emit. Only core emits (01 §8), from its own call sites, and there
- * is no core emit site yet — the registry is the half that had to exist first,
- * and it is inert until something calls `notify`. It also does not implement the
+ * It does not emit. Only core emits (01 §8), from its own call sites — today
+ * `pipelines/runtime/sessionEvents.ts`, which calls `pluginEvents().notify(…)`
+ * for each session event it fans out. It also does not implement the
  * *per-user* consent layer of 11 §4: the admin-effective permission gate below
  * is enforced, the per-user opt-in is not, and that is the next thing this needs
  * rather than something it quietly covers — plans/29 R-5 ⏳ owns it.
  */
 
-import { eq } from "drizzle-orm"
+import { and, eq } from "drizzle-orm"
 import { plugins } from "$lib/server/db/schema"
 import {
 	declaredPermissions,
@@ -113,6 +113,7 @@ import {
 	type PluginManifest
 } from "./permissions"
 import type { SandboxManager } from "./SandboxManager"
+import { notCoreRow } from "./frameHost"
 
 /**
  * The wall-clock ceiling on **one whole fan-out**, however many subscribers it
@@ -192,7 +193,7 @@ export interface EventSubscription {
  * What became of one subscriber.
  *
  *  - `ok`      it returned, or returned nothing — either way its return is
- *              dropped, which is what "notification" means
+ *              dropped, which is what "fire-and-forget" means
  *  - `halt`    it declined — `halt`/`cancelled`, which 11 §3 calls normal and
  *              success rather than failure
  *  - `error`   it threw, overran, was killed, could not be loaded, or returned
@@ -721,7 +722,7 @@ export async function syncPluginEventHooks(db: Db): Promise<void> {
 			adminDenied: plugins.adminDenied
 		})
 		.from(plugins)
-		.where(eq(plugins.enabled, true))
+		.where(and(eq(plugins.enabled, true), notCoreRow()))
 
 	const all: EventSubscription[] = []
 	for (const row of rows) {

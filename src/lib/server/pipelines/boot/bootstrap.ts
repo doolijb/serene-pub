@@ -71,6 +71,7 @@ import {
 } from "$lib/server/pipelines/boot/entryProjection"
 import type { PresetReconcileReport } from "$lib/server/pipelines/boot/presetReconcile"
 import type { PlacedNodeReconcileReport } from "$lib/server/pipelines/boot/placedNodeReconcile"
+import type { TemplateFitScanReport } from "$lib/server/pipelines/entities/contextTemplateFit"
 import type { BindingSubjectReport } from "$lib/server/pipelines/boot/bindingSubjects"
 import type { DeclarationLoadReport } from "$lib/server/state/declarations"
 import { seedVariableTemplates } from "$lib/server/pipelines/boot/seedVariableTemplates"
@@ -145,6 +146,11 @@ export interface BootstrapReport {
 	 * mirrored back as last-seen (R1, R4).
 	 */
 	declarations?: DeclarationLoadReport
+	/**
+	 * Which stored context-template selections do not fit the step they
+	 * render at (typed templates P5) — reported, never refused or changed.
+	 */
+	templateFits?: TemplateFitScanReport
 }
 
 /**
@@ -256,7 +262,7 @@ export async function bootstrapPipelines(db: Db): Promise<BootstrapReport> {
 		// are registered in the same in-process map so its specs resolve
 		// (`plugins/pluginDefinitions.ts`); this sync publishes what it is
 		// handed as **core's** — owner NULL, `transport: 'node'` — and marks
-		// anything core no longer declares as removed. A plugin's declaration
+		// anything core does not declare as removed. A plugin's declaration
 		// left in this list would take its own row away from it and route its
 		// node to a core binding that does not exist.
 		const fromPlugins = pluginDefinitionPins()
@@ -389,7 +395,7 @@ export async function bootstrapPipelines(db: Db): Promise<BootstrapReport> {
 	)
 	report.presetBindings = await reconcilePresetBindings(db)
 
-	// ⏳ After the specs, and that is the whole reason it is here rather than
+	// Runs after the specs, which is why it lives here rather than
 	// in a migration (PLAN-turn-order R20): the Turn order control's row
 	// points at `core:spec/<genre>-turn-order` by id, and that spec's row is what the
 	// seed above just inserted. Idempotent and re-runnable; a no-op on every
@@ -436,6 +442,28 @@ export async function bootstrapPipelines(db: Db): Promise<BootstrapReport> {
 	// declines to write over an override that is already there, so it has to
 	// run once every override anybody else was going to write exists.
 	report.contextTemplateMigration = await migrateContextTemplates(db)
+
+	// Last of all, once every selection anybody was going to write exists: a
+	// pass over every stored context-template selection × the step it renders
+	// at (typed templates P5, owner Q6). A selection a new one would be refused
+	// for is REPORTED — here, and as a `misfit` notice on each configuration
+	// selecting it — and the template, the selection and the run are left
+	// exactly as they were. It cannot fail the boot: a report that could not be
+	// written is a log that says less.
+	try {
+		const { scanContextTemplateFits } = await import(
+			"$lib/server/pipelines/entities/contextTemplateFit"
+		)
+		report.templateFits = await scanContextTemplateFits(db)
+		for (const m of report.templateFits.misfits)
+			console.warn(
+				`[pipelines] '${m.specSlug}' selects a context template that no longer fits: ${m.message}`
+			)
+	} catch (e) {
+		console.warn(
+			`[pipelines] the context-template fit scan did not finish: ${(e as Error).message}`
+		)
+	}
 
 	return report
 }

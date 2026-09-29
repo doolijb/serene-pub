@@ -4,7 +4,10 @@
 	import Layout from "$lib/client/components/Layout.svelte"
 	import { loadSocketsClient } from "$lib/client/sockets/loadSockets.client"
 	import { requestWithInterest } from "$lib/client/sockets/interest.svelte"
-	import type { Snippet } from "svelte"
+	import { untrack, type Snippet } from "svelte"
+	import HelpSidebar from "$lib/client/components/sidebars/HelpSidebar.svelte"
+	import { helpRouter } from "$lib/client/shell/helpRouter.svelte"
+	import { isDocsPath } from "$lib/client/shell/jump.svelte"
 	import { page } from "$app/state"
 	import * as Icons from "@lucide/svelte"
 	import { Toast } from "@skeletonlabs/skeleton-svelte"
@@ -85,9 +88,13 @@
 	 * shell around its docs, and a logged-out visitor must still get the login
 	 * form.
 	 */
-	const isDocsRoute = $derived(
-		page.url.pathname === "/docs" || page.url.pathname.startsWith("/docs/")
-	)
+	const isDocsRoute = $derived(isDocsPath(page.url.pathname))
+	// With no shell to adopt the address, the fallback reads it itself.
+	$effect(() => {
+		if (!startupError || !isDocsRoute) return
+		const href = page.url.pathname + page.url.hash
+		untrack(() => helpRouter.adopt(href))
+	})
 	// Startup failure of the realtime connection. Without this the template's
 	// `{#if socketsInitialized}{:else if showLogin}` chain had no third branch,
 	// so any failure here rendered a completely blank page — see the catch in
@@ -288,8 +295,9 @@
 			startupError =
 				reason?.trim() ||
 				"The realtime connection failed to start and reported no reason. " +
-					"This is usually the socket server (SOCKETS_PORT) not being reachable " +
-					"through your reverse proxy or tunnel."
+					"Behind a reverse proxy or tunnel, this usually means WebSocket " +
+					"upgrades (the Upgrade and Connection headers) are not being " +
+					"forwarded to the app."
 		} finally {
 			clearTimeout(spinnerTimer)
 			showStartupSpinner = false
@@ -370,7 +378,11 @@
 		<p class="text-sm opacity-70">Connecting to Serene Pub…</p>
 	</div>
 {:else if startupError && isDocsRoute}
-	{@render children?.()}
+	<!-- The Help view on its own, with no shell around it: `/docs/...` are
+	     its addresses, and there is no shell to focus it in. -->
+	<div class="bg-surface-50-950 flex h-screen flex-col p-4">
+		<HelpSidebar />
+	</div>
 {:else if startupError}
 	<!-- Deliberately plain markup with inline colors: this renders before the
 	     app shell exists, and on a theme-load failure it still has to be
@@ -381,7 +393,7 @@
 		role="alert"
 	>
 		<div class="w-full max-w-lg space-y-4 text-center">
-			<h1 class="text-2xl font-bold">Can't reach Serene Pub</h1>
+			<h1 class="[font-family:var(--typo-heading--font-family,inherit)] text-2xl font-semibold">Can't reach Serene Pub</h1>
 			<p class="text-sm opacity-90">
 				The page loaded, but the realtime connection Serene Pub needs
 				for sessions and live updates could not be established.

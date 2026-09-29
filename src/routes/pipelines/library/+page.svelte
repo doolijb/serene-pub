@@ -50,6 +50,7 @@
 		requestWithInterest
 	} from "$lib/client/sockets/interest.svelte"
 	import EmptyState from "$lib/client/components/EmptyState.svelte"
+	import Select from "$lib/client/components/inputs/Select.svelte"
 	import TemplateEditor from "$lib/client/components/templates/TemplateEditor.svelte"
 	import { getVariable } from "@serene-pub/sdk"
 	import { contextTemplateScope } from "$lib/shared/utils/contextConfigCards"
@@ -263,8 +264,20 @@
 	 * so `getVariable` comes back empty and the editor simply offers no
 	 * assistance rather than the wrong assistance.
 	 */
-	function scopeFor(t: Tab, poolKey: string) {
-		if (t === "templates") return contextTemplateScope()
+	function scopeFor(
+		t: Tab,
+		poolKey: string,
+		pools: Sockets.Pipelines.Library.LibraryPool[] = []
+	) {
+		// Typed templates P7: no step is in view here, so a context pool is
+		// typed by its node definition's OWN declared names (its static
+		// scope), over the old name list — the names a step adds (its context
+		// builder, bands, annex, state) are checked when a step picks the row.
+		if (t === "templates")
+			return {
+				...contextTemplateScope(),
+				...(pools.find((p) => p.id === poolKey)?.scope ?? {})
+			}
 		// The bare variable id — the registry knows nothing about pools.
 		return getVariable(splitPool(poolKey).poolId)?.scope
 	}
@@ -558,7 +571,7 @@
 		<Icons.Library size={24} />
 		<div class="min-w-0 flex-1">
 			<h1 class="text-2xl font-semibold">Pipeline library</h1>
-			<p class="text-muted text-sm">
+			<p class="text-surface-600-400 text-sm">
 				Everything the pipelines are built from, and what is using it.
 			</p>
 		</div>
@@ -573,7 +586,7 @@
 			<button
 				type="button"
 				class="btn btn-sm {tab === t.key
-					? 'preset-filled-primary-500'
+					? 'preset-tonal-primary'
 					: 'preset-tonal-surface'}"
 				onclick={() => (tab = t.key)}
 			>
@@ -584,7 +597,7 @@
 	</nav>
 
 	{#if loading}
-		<p class="text-muted text-sm">Loading…</p>
+		<p class="text-surface-600-400 text-sm">Loading…</p>
 	{:else if tab === "pipelines"}
 		<section class="flex flex-col gap-2">
 			{#if !view.pipelines?.length}
@@ -601,18 +614,18 @@
 						<Icons.Workflow size={18} class="shrink-0" />
 						<div class="min-w-0 flex-1">
 							<p class="truncate font-medium">{p.name}</p>
-							<p class="text-muted truncate font-mono text-xs">
+							<p class="text-surface-600-400 truncate font-mono text-xs">
 								{p.slug}
 							</p>
 						</div>
-						<div class="text-muted shrink-0 text-right text-xs">
+						<div class="text-surface-600-400 shrink-0 text-right text-xs">
 							<p>{p.version ?? "unpublished"}</p>
 							<p>{p.nodeCount} steps</p>
 						</div>
 						<Icons.ChevronRight size={16} class="shrink-0" />
 					</a>
 				{/each}
-				<p class="text-muted mt-2 text-xs">
+				<p class="text-surface-600-400 mt-2 text-xs">
 					<Icons.Info size={12} class="inline" />
 					Adding, cloning and rewiring a pipeline is structural editing
 					— the lens view, which is not built yet. Each pipeline's page
@@ -637,7 +650,7 @@
 						     a plugin node that ships no prose of its own always
 						     does, and grouping the rows alone would leave it
 						     off the page entirely. -->
-						<p class="text-muted text-xs">
+						<p class="text-surface-600-400 text-xs">
 							Nothing written for this step yet. It runs on
 							whatever the pipeline's configuration selects.
 						</p>
@@ -673,14 +686,14 @@
 										     its step into every pipeline that
 										     reuses it. -->
 										<span
-											class="text-muted shrink-0 text-xs"
+											class="text-surface-600-400 shrink-0 text-xs"
 										>
 											from {row.origin}
 										</span>
 									{/if}
 									{#if Object.keys(row.archived ?? {}).length}
 										<span
-											class="preset-tonal-warning shrink-0 rounded-full px-2 py-0.5 text-[0.68rem]"
+											class="preset-tonal-warning shrink-0 rounded-full px-2 py-0.5 text-[11px]"
 											title={`Archived: ${Object.keys(row.archived).join(", ")}`}
 										>
 											{Object.keys(row.archived).length} archived
@@ -691,6 +704,7 @@
 									type="button"
 									class="btn btn-sm preset-tonal-surface shrink-0"
 									title="Duplicate"
+									aria-label="Duplicate"
 									onclick={() =>
 										socket.emit(
 											"pipelines:libraryClonePrompt",
@@ -704,6 +718,7 @@
 										type="button"
 										class="btn btn-sm preset-tonal-surface shrink-0"
 										title="Delete"
+										aria-label="Delete"
 										onclick={() => deletePrompt(row)}
 									>
 										<Icons.Trash2 size={14} />
@@ -716,7 +731,7 @@
 								{@const d = promptDrafts[row.id]}
 								<div class="mt-3 space-y-3">
 									{#if row.isImmutable}
-										<p class="text-muted text-xs">
+										<p class="text-surface-600-400 text-xs">
 											<Icons.Lock
 												size={11}
 												class="inline"
@@ -785,7 +800,7 @@
 										<div
 											class="border-surface-500/30 space-y-2 border-t pt-3"
 										>
-											<p class="text-muted text-xs">
+											<p class="text-surface-600-400 text-xs">
 												<Icons.Archive
 													size={11}
 													class="inline"
@@ -879,7 +894,7 @@
 						</button>
 					</div>
 					{#if !group.rows.length}
-						<p class="text-muted text-xs">
+						<p class="text-surface-600-400 text-xs">
 							Nothing written for this step yet. It renders its
 							built-in default until something is.
 						</p>
@@ -912,7 +927,7 @@
 									{/if}
 									{#if row.origin}
 										<span
-											class="text-muted shrink-0 text-xs"
+											class="text-surface-600-400 shrink-0 text-xs"
 										>
 											from {row.origin}
 										</span>
@@ -922,6 +937,7 @@
 									type="button"
 									class="btn btn-sm preset-tonal-surface shrink-0"
 									title="Duplicate"
+									aria-label="Duplicate"
 									onclick={() => cloneTemplate(tab, row)}
 								>
 									<Icons.Copy size={14} />
@@ -931,6 +947,7 @@
 										type="button"
 										class="btn btn-sm preset-tonal-surface shrink-0"
 										title="Delete"
+										aria-label="Delete"
 										onclick={() => deleteTemplate(tab, row)}
 									>
 										<Icons.Trash2 size={14} />
@@ -942,7 +959,7 @@
 							{#if openRow === key}
 								<div class="mt-3 space-y-3">
 									{#if row.isImmutable}
-										<p class="text-muted text-xs">
+										<p class="text-surface-600-400 text-xs">
 											<Icons.Lock
 												size={11}
 												class="inline"
@@ -981,7 +998,11 @@
 													: 8}
 											readonly={row.isImmutable}
 											value={d.source}
-											scope={scopeFor(tab, poolId)}
+											scope={scopeFor(tab, poolId, pools)}
+											lenient={tab === "templates"}
+											scopeNote={tab === "templates"
+												? "This step type's own names. Checked against every step that uses it when you pick it."
+												: undefined}
 											engine={d.engine}
 											oninput={(source) =>
 												edit(kind, row.id, { source })}
@@ -1018,19 +1039,21 @@
 										     heading and appears under that
 										     language's, which is why the note
 										     below says so. -->
-										<label
+										<div
 											class="flex flex-col gap-1 text-xs font-medium"
 										>
-											Engine
 											{#if (row.source ?? "").trim()}
-												<input
-													class="input w-full"
-													value={languageOf(
-														row.engine ?? CORE_ENGINE
-													)}
-													readonly
-												/>
-												<span class="text-muted text-xs">
+												<label class="flex flex-col gap-1">
+													Engine
+													<input
+														class="input w-full"
+														value={languageOf(
+															row.engine ?? CORE_ENGINE
+														)}
+														readonly
+													/>
+												</label>
+												<span class="text-surface-600-400 text-xs">
 													<Icons.Info
 														size={11}
 														class="inline"
@@ -1043,28 +1066,26 @@
 													copy.
 												</span>
 											{:else}
-												<select
-													class="select w-full"
-													value={d.engine}
-													onchange={(e) =>
-														edit(kind, row.id, {
-															engine: e
-																.currentTarget
-																.value
-														})}
-												>
-													{#each engines as eng (eng.id)}
-														<option value={eng.id}>
-															{languageOf(eng.id)}
-															{eng.owner === "core"
+												<Select
+													class="w-full"
+													label="Engine"
+													options={engines.map((eng) => ({
+														value: eng.id,
+														label: `${languageOf(eng.id)} ${
+															eng.owner === "core"
 																? "(built in)"
-																: `(${eng.owner})`}
-														</option>
-													{/each}
-												</select>
+																: `(${eng.owner})`
+														}`
+													}))}
+													value={d.engine}
+													onValueChange={(v) =>
+														edit(kind, row.id, {
+															engine: v
+														})}
+												/>
 												{#if d.engine !== (row.engine ?? CORE_ENGINE)}
 													<span
-														class="text-muted text-xs"
+														class="text-surface-600-400 text-xs"
 													>
 														<Icons.Info
 															size={11}
@@ -1081,7 +1102,7 @@
 													</span>
 												{/if}
 											{/if}
-										</label>
+										</div>
 									{/if}
 									<div class="flex items-center gap-2">
 										<button
@@ -1103,7 +1124,7 @@
 												Hide
 											</button>
 										{/if}
-										<p class="text-muted text-xs">
+										<p class="text-surface-600-400 text-xs">
 											Rendered against sample data, not
 											your sessions.
 										</p>
@@ -1143,7 +1164,7 @@
 														class="bg-surface-200-700 rounded p-2"
 													>
 														<p
-															class="text-muted mb-1 text-xs font-semibold uppercase"
+															class="text-surface-600-400 mb-1 text-xs font-semibold"
 														>
 															{m.role}
 														</p>
@@ -1177,7 +1198,7 @@
 	<!-- The answer to the question a delete button raises, before it is asked.
 	     "Nothing" is worth saying out loud: it is the only state in which a
 	     delete is certain to succeed, and silence would read as unknown. -->
-	<p class="text-muted mt-1 pl-6 text-xs">
+	<p class="text-surface-600-400 mt-1 pl-6 text-xs">
 		{#if usedBy.length}
 			<Icons.Link2 size={11} class="inline" />
 			Used by {usedBy.join(", ")}
@@ -1190,7 +1211,7 @@
 
 {#snippet saveBar(cancel: () => void, save: () => void)}
 	<div class="flex items-center justify-end gap-2">
-		<span class="text-muted mr-auto text-xs">Unsaved changes</span>
+		<span class="text-surface-600-400 mr-auto text-xs">Unsaved changes</span>
 		<button
 			type="button"
 			class="btn btn-sm preset-tonal-surface"

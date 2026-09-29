@@ -1,11 +1,10 @@
 <script lang="ts">
 	import * as Icons from "@lucide/svelte"
-	import type { Snippet } from "svelte"
 	import LensRow from "./LensRow.svelte"
 	import ReadingInto from "./ReadingInto.svelte"
 	import { readingLine, type ScopeFacet, type SavedScopeId } from "./scopes"
 	import { SAVED_SCOPES } from "./scopes"
-	import type { LoreLens, LoreScope } from "./loreRoute"
+	import type { LoreLens, LoreScope } from "$lib/shared/lorebooks/loreRoute"
 	import type { PoolItem } from "./poolFilter"
 	import { kindLabel } from "./sections/kinds"
 
@@ -35,8 +34,10 @@
 			id: number
 			name: string
 			branchId: number | null
+			/** Its story clock; null follows the line's present (now). */
+			clock: { year: number; month?: number | null; day?: number | null } | null
 		} | null
-		/** Put the reader on the session's line, at now. */
+		/** Put the reader on the session's line, at its clock. */
 		onMatchSession: () => void
 		scopes: ScopeFacet[]
 		scope: LoreScope
@@ -49,8 +50,6 @@
 		readingInto: string | null
 		/** How many entries the newest run read in; null when none reads it. */
 		reached: number | null
-		/** The book chip's menu, positioned by the caller. */
-		bookMenu: Snippet
 		onScope: (scope: LoreScope) => void
 		onLens: (lens: LoreLens) => void
 		onSaved: (saved: SavedScopeId | null) => void
@@ -73,7 +72,6 @@
 		pinned,
 		readingInto,
 		reached,
-		bookMenu,
 		onScope,
 		onLens,
 		onSaved,
@@ -88,10 +86,8 @@
 	data-lore-rail
 >
 	<!-- The line moved to the World bar above the workspace (2026-09-24):
-	     line and moment are one question and were answered in two corners. -->
-	<div class="flex min-w-0 items-center gap-1">
-		{@render bookMenu()}
-	</div>
+	     line and moment are one question and were answered in two corners.
+	     The book's name and menu moved to its header (2026-09-27). -->
 
 	<!-- The session first, because the book is only half the picture and the
 	     other half can now disagree with what is on screen. -->
@@ -101,6 +97,7 @@
 			sessionName={session.name}
 			{reached}
 			sessionBranchId={session.branchId}
+			sessionStoryClock={session.clock}
 			{branchId}
 			{moment}
 			{branches}
@@ -121,7 +118,7 @@
 	<LensRow {lens} onLens={(next) => onLens(next)} />
 
 	<div class="flex flex-col gap-1">
-		<span class="text-surface-700-300 text-xs tracking-wide uppercase">
+		<span class="text-surface-600-400 text-xs">
 			Views
 		</span>
 		<ul class="flex flex-col gap-1">
@@ -131,7 +128,7 @@
 						type="button"
 						class="btn btn-sm w-full justify-start gap-2 {scope ===
 						facet.id
-							? 'preset-filled-primary-500'
+							? 'sidebar-row-active'
 							: 'hover:preset-tonal-surface'}"
 						class:opacity-60={facet.empty && scope !== facet.id}
 						aria-current={scope === facet.id ? "page" : undefined}
@@ -153,7 +150,7 @@
 	</div>
 
 	<div class="flex flex-col gap-1">
-		<span class="text-surface-700-300 text-xs tracking-wide uppercase">
+		<span class="text-surface-600-400 text-xs">
 			Saved
 		</span>
 		<ul class="flex flex-col gap-1">
@@ -164,7 +161,7 @@
 						type="button"
 						class="btn btn-sm w-full justify-start gap-2 {saved ===
 						s.id
-							? 'preset-filled-primary-500'
+							? 'sidebar-row-active'
 							: 'hover:preset-tonal-surface'}"
 						class:opacity-60={count === 0 && saved !== s.id}
 						title={s.title}
@@ -197,7 +194,7 @@
 							aria-hidden="true"
 						/>
 						<span
-							class="text-surface-700-300 shrink-0 text-[10px] tracking-wide uppercase"
+							class="text-surface-600-400 shrink-0 text-xs"
 						>
 							{kindLabel(item.kind)}
 						</span>

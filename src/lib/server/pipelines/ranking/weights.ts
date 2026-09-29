@@ -1,8 +1,8 @@
 /**
  * Every constant in the retrieval path, as a parameter.
  *
- * These are the literals scattered through `KeywordInfillEngine` and
- * `BaseInfillEngine` today, lifted into one declaration so they can be config
+ * These are the literals scattered through the 0.5 keyword path and
+ * its base, lifted into one declaration so they can be config
  * on a node instead of numbers in a file. **Every default here reproduces
  * current behaviour**, with the line it came from named — so the parity corpus
  * passes unchanged and any deviation is somebody's deliberate choice rather
@@ -234,7 +234,7 @@ export interface SignalWeights {
  * How much one step of an entry's `priority` field is worth.
  *
  * Canonical **here**, in the surviving half, rather than in
- * `KeywordInfillEngine` where it started. It was defined there and *also*
+ * the 0.5 keyword path where it started. It was defined there and *also*
  * hardcoded as a literal `0.15` in `LORE_SIGNALS` below — one number with two
  * definitions, so the keyword mechanism and the semantic mechanism could drift apart while
  * both looked deliberate. The legacy engines now import it from here, which is
@@ -259,7 +259,7 @@ const NO_SIGNALS: SignalWeights = {
 }
 
 /**
- * `KeywordInfillEngine:1120` (world lore) and `:1184` (character lore).
+ * From the 0.5 keyword path (world lore and character lore).
  *
  * ⚠ **No longer one set for both**, and the reason is `entityCooccurrence`:
  * that weight is now sized for the measure its source runs, and the two sources
@@ -349,14 +349,14 @@ export interface RetrievalParams {
 	 * How many recent messages the keyword scan reads.
 	 *
 	 * Hardcoded at 10 today and **sharing one constant with
-	 * `guaranteedMessages`** (`BaseInfillEngine.ts:10`), which is two different
+	 * `guaranteedMessages`** (the 0.5 retrieval base), which is two different
 	 * questions answered by one number: how far back do we look for triggers,
 	 * versus how much recent conversation survives budgeting. A session of long
 	 * posts wants a deep scan and a short guarantee; a terse one wants the
 	 * reverse. Splitting them is behaviour-preserving while both default to 10.
 	 */
 	scanDepth: number
-	/** Messages never dropped by budgeting. `BaseInfillEngine.ts:10`. */
+	/** Messages never dropped by budgeting. From the 0.5 retrieval base. */
 	guaranteedMessages: number
 	/** Fraction of `tokenLimit` the whole context may occupy. */
 	contextThresholdPercent: number
@@ -509,7 +509,7 @@ export const DEFAULT_RETRIEVAL: RetrievalParams = {
 /**
  * The nine numbers the RAG mechanism runs on, every one of them a constant today.
  *
- * `RagInfillEngine` carries these as module-level `const`s, and one of them
+ * The 0.5 RAG path carried these as module-level `const`s, and one of them
  * already has a `TODO: make configurable in a future pass` next to it. They are
  * exposed here for the same reason every other constant was: a user whose session
  * has long posts and a user whose session is terse want different windows, and
@@ -519,11 +519,11 @@ export const DEFAULT_RETRIEVAL: RetrievalParams = {
  * turning them into parameters changes nothing until somebody moves one.
  */
 export interface SemanticParams {
-	/** Most recent messages used as the primary query. `RagInfillEngine:93`. */
+	/** Most recent messages used as the primary query. From the 0.5 RAG path. */
 	currentWindow: number
 	/**
 	 * Next-most-recent messages used as a second query, filling what the first
-	 * left. `RagInfillEngine:100`.
+	 * left. From the 0.5 RAG path.
 	 */
 	recentWindow: number
 	/**
@@ -532,13 +532,13 @@ export interface SemanticParams {
 	 * fusions with different k silently rank differently.
 	 */
 	rrfK: number
-	/** How much a recent message's score is lifted. `RagInfillEngine:112`. */
+	/** How much a recent message's score is lifted. From the 0.5 RAG path. */
 	recencyBoost: number
-	/** How fast that lift decays with age. `RagInfillEngine:114`. */
+	/** How fast that lift decays with age. From the 0.5 RAG path. */
 	recencyDecay: number
 	/**
 	 * Threshold for the adaptive score cutoff, and the fraction of the top score
-	 * it must also clear. `RagInfillEngine:117-119`.
+	 * it must also clear. From the 0.5 RAG path.
 	 *
 	 * Two numbers rather than one because they answer different questions: the
 	 * threshold rejects a session where *nothing* is relevant, the relative one
@@ -548,12 +548,12 @@ export interface SemanticParams {
 	relativeThreshold: number
 	/**
 	 * Relevance-versus-diversity trade-off for MMR. 1 is pure relevance.
-	 * `RagInfillEngine:122`.
+	 * From the 0.5 RAG path.
 	 */
 	mmrLambda: number
-	/** How many of each source survive fusion. `RagInfillEngine:103-109`. */
+	/** How many of each source survive fusion. From the 0.5 RAG path. */
 	sourceBudget: Record<string, number>
-	/** Anything not named above. `RagInfillEngine:507`. */
+	/** Anything not named above. From the 0.5 RAG path. */
 	defaultSourceBudget: number
 }
 
@@ -673,7 +673,7 @@ export interface GroupWeights {
 	/** Relative importance. Normalised, so only the ratios matter. */
 	share: Record<BandKey, number>
 	/**
-	 * Most entries a source may contribute. `KeywordInfillEngine:56`. Absent
+	 * Most entries a source may contribute. From the 0.5 keyword path. Absent
 	 * means **no ceiling** — `relationship-search` declares none by default,
 	 * and its own cap is the band's.
 	 */

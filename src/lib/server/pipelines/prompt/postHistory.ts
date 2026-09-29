@@ -1,6 +1,6 @@
 /**
  * Shared Post-History block positioning/gating logic, used by both
- * RagInfillEngine and KeywordInfillEngine so the math can't drift between
+ * the 0.5 RAG and keyword paths so the math can't drift between
  * them — mirrors NarrativeGraphContext.ts's role as a single shared module
  * for behavior both engines need to agree on.
  *

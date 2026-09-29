@@ -19,6 +19,7 @@
  * a test rather than described in a comment.
  */
 import type { DownloadSource } from "./downloads.svelte"
+import { sameHost } from "$lib/shared/connections/hostKey"
 
 export type ManagedKind = "koboldcpp" | "ollama"
 
@@ -44,6 +45,50 @@ export type ManagedStage =
 	| "kcpp-binary"
 	| "kcpp-external-setup"
 	| "tabs"
+
+/**
+ * Where the managed KoboldCPP install stands, from its settings alone.
+ *
+ * ONE reading, shared by the index row (`connectionRowStatus`) and this view,
+ * so the row and the view it opens always agree. Two readings — the flag on
+ * one side, mode and binary on the other — disagree exactly when the flag is
+ * off and a binary is still on disk.
+ *
+ * - `loading` — settings have not arrived; say nothing about the install.
+ * - `not-installed` — flag off and nothing set up: the setup flow's job.
+ * - `offline` — flag off with a mode (and, when managed, a binary) still
+ *   recorded: switched off, files kept. Start turns it back on (ruled
+ *   2026-09-24).
+ * - `no-mode` / `no-binary` — flag on, setup unfinished.
+ * - `ready` — flag on and set up; the process status decides the rest.
+ */
+export type KcppInstallState =
+	| "loading"
+	| "not-installed"
+	| "offline"
+	| "no-mode"
+	| "no-binary"
+	| "ready"
+
+export interface KcppInstallSettings {
+	koboldCppManagerEnabled?: boolean | null
+	koboldCppManagedMode?: string | null
+	koboldCppManagedBinaryVariant?: string | null
+}
+
+export function kcppInstallState(
+	settings: KcppInstallSettings | null | undefined
+): KcppInstallState {
+	if (!settings) return "loading"
+	const mode = settings.koboldCppManagedMode ?? null
+	const setUp =
+		mode === "external" ||
+		(mode === "managed" && !!settings.koboldCppManagedBinaryVariant)
+	if (!settings.koboldCppManagerEnabled)
+		return setUp ? "offline" : "not-installed"
+	if (mode === null) return "no-mode"
+	return setUp ? "ready" : "no-binary"
+}
 
 export interface KcppStageFacts {
 	/** `null` until somebody has chosen managed or external. */
@@ -80,8 +125,9 @@ export interface ManagedTab {
  * The four tabs, the same four for both runtimes.
  *
  * "Get models" is NOT the managers' old Available tabs: those are retired in
- * favour of the one model finder (ruling R3), so this tab is a door to it
- * scoped to this connection and nothing else.
+ * favour of the one model finder (ruling R3), so this tab IS that finder,
+ * mounted in place and scoped to this connection — it was a single button
+ * leading to the same finder until plan 2026-09-24 C3.
  */
 export function managedTabs(stage: ManagedStage): ManagedTab[] {
 	if (stage !== "tabs") return []
@@ -327,7 +373,10 @@ export function ollamaUnreachableSentence(
 
 // ── Removing a manager ──────────────────────────────────────────────────────
 
-/** The rows one manager owns. KoboldCPP has two: the text one and the image one. */
+/**
+ * The rows one manager owns. KoboldCPP's is one endpoint (⏳ the image id is
+ * listed until the boot fold has retired it); Ollama's, every host's row.
+ */
 export function managedConnectionIds(
 	kind: ManagedKind,
 	rows: readonly { id?: number | null; type?: string | null }[]
@@ -383,15 +432,52 @@ export function removeConfirmation(
 			: names.length === 1
 				? names[0]
 				: `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`
+	// Ollama removes ONE connection: each is managed on its own host, and
+	// the others stay (plan 2026-09-24 B4).
+	if (kind === "ollama")
+		return {
+			title: "Remove this Ollama connection?",
+			body: "The connection goes. Ollama itself keeps running, and its models stay where they are.",
+			cost: listed
+				? `This connection currently answers for ${listed}. Those stop until you pick another model.`
+				: null,
+			confirmLabel: "Remove connection"
+		}
 	return {
 		title: `Remove ${label} from this pub?`,
-		body:
-			kind === "koboldcpp"
-				? "The connection goes, and Serene Pub stops running KoboldCPP. Downloaded models stay on disk."
-				: "The connection goes, and Serene Pub stops managing Ollama. Ollama itself keeps running, and its models stay where they are.",
+		body: "The connection goes, and Serene Pub stops running KoboldCPP. Downloaded models stay on disk.",
 		cost: listed
 			? `${label} currently answers for ${listed}. Those stop until you pick another model.`
 			: null,
 		confirmLabel: `Remove ${label}`
 	}
+}
+
+// ── Duplicate Ollama hosts ───────────────────────────────────────────────────
+
+
+/**
+ * Other Ollama connections pointing at the same host as this one.
+ *
+ * One Ollama connection per host serves every modality it has (owner ruling
+ * 2026-09-25), and the server now refuses a second — but installs that had
+ * both an Ollama and an Ollama-embeddings connection to one host were left
+ * with two Ollama rows to it by the rename that merged the types. That rename
+ * was deliberately in place rather than a fold, because a fold deletes a row
+ * other rows may reference by id. So the duplicate exists, and the view says
+ * so instead of silently showing one host twice.
+ *
+ * `sameHost` is the SAME rule the server's refusal reads.
+ */
+export function duplicateOllamaHosts<
+	T extends { id?: number | null; type?: string | null; baseUrl?: string | null; name?: string | null }
+>(self: T | undefined, connections: readonly T[]): T[] {
+	if (!self || self.id == null) return []
+	return connections.filter(
+		(c) =>
+			c.id != null &&
+			c.id !== self.id &&
+			c.type === self.type &&
+			sameHost(c.baseUrl, self.baseUrl)
+	)
 }

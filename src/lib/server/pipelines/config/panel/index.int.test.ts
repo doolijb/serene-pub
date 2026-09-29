@@ -390,7 +390,7 @@ describe("resolution and provenance", () => {
 		// The session viewer is a non-admin, who is offered prompts and
 		// nothing else — so the walk rides the prompts-ref option, as it
 		// always did. Its base value now comes from the shipped config
-		// (source "preset"), and the author layer is exposed by clearing a
+		// (source "config"), and the author layer is exposed by clearing a
 		// mutable copy below.
 		const target = allOptions(inSession).find((o) => o.writable)!
 		expect(target).toBeTruthy()
@@ -444,7 +444,7 @@ describe("resolution and provenance", () => {
 			await view({ userId: adminId, isAdmin: true })
 		).find((o) => o.id === target.id)!
 		expect(now.value).toBe("the config says so")
-		expect(now.source).toBe("preset")
+		expect(now.source).toBe("config")
 		expect(now.overriddenHere).toBe(true)
 
 		// Opened from inside the session, the same edit lands at session scope and wins.
@@ -466,7 +466,7 @@ describe("resolution and provenance", () => {
 			(o) => o.id === target.id
 		)!
 		expect(now.value).toBe("the config says so")
-		expect(now.source).toBe("preset")
+		expect(now.source).toBe("config")
 
 		// Leave the instance as found for the tests below.
 		await clearOption(
@@ -533,7 +533,7 @@ describe("resolution and provenance", () => {
 			(o) => o.id === param.id
 		)!
 		expect(after.value).toBe(777)
-		expect(after.source).toBe("preset")
+		expect(after.source).toBe("config")
 		const rows = await db
 			.select()
 			.from(schema.pipelineConfigValues)
@@ -550,7 +550,7 @@ describe("resolution and provenance", () => {
 		)
 		const back = allOptions(await asAdmin()).find((o) => o.id === param.id)!
 		expect(back.value).not.toBe(777)
-		expect(back.source).not.toBe("preset")
+		expect(back.source).not.toBe("config")
 
 		await selectConfig(db, spec.id, "instance", 0, null, adminId)
 	})
@@ -1201,7 +1201,10 @@ describe("each source carries its own intent", () => {
 		// unknown number of tokens, and inventing one would be the same defect
 		// as the `budget: 4096` this replaced.
 		const before = await shareOptions()
-		expect(before.length).toBe(5)
+		// The five bands' sources, and entity-search's recalled lines
+		// (`recalledLinesShare`, 2026-09-27) — declared on the node, and
+		// inert here as its `maxMessages` is: no shipped spec ranks them.
+		expect(before.length).toBe(6)
 		for (const o of before)
 			expect(o.windowTokens, `${o.label} showed a window before one was selected`).toBeUndefined()
 

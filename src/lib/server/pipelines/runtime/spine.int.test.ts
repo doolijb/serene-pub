@@ -11,7 +11,7 @@
  * registry, the host, the adapters' own `generateText()` — is the real code.
  *
  * What this does **not** prove is parity. It proves the spine runs end to end
- * and that each stage's output reaches the next one; whether the bytes match
+ * and that each step's output reaches the next one; whether the bytes match
  * `PromptBuilder.compilePrompt` is the corpus's job, and the corpus does not
  * exist yet.
  */
@@ -243,7 +243,6 @@ beforeAll(async () => {
 		sessionId,
 		characterId,
 		isActive: true,
-		visibility: "visible"
 	})
 	await db
 		.insert(schema.sessionPersonas)
@@ -355,9 +354,9 @@ describe("the prompt path, end to end", () => {
 		)
 	})
 
-	it("every stage's output reaches the next one", async () => {
+	it("every step's output reaches the next one", async () => {
 		// Named individually rather than asserted as "no halts", because a
-		// pipeline that skipped a stage and still finished is the failure worth
+		// pipeline that skipped a step and still finished is the failure worth
 		// catching — and it looks like success from the outcome alone.
 		const receipt = await execute()
 		const at = (key: string) =>

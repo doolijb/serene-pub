@@ -71,7 +71,6 @@ async function makeSession(name: string) {
 		sessionId: session.id,
 		characterId,
 		isActive: true,
-		visibility: "visible",
 		position: 0
 	})
 	await db

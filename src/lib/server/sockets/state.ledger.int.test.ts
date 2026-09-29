@@ -13,8 +13,10 @@ import { afterAll, beforeAll, describe, expect, test, vi } from "vitest"
 import fs from "fs/promises"
 import os from "os"
 import path from "path"
+import { eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
-import { defineAttributeSlot, _clearAttributeSlots } from "@serene-pub/sdk"
+import { attributeSlots, defineAttributeSlot, genre, _clearAttributeSlots } from "@serene-pub/sdk"
+import "@serene-pub/core-catalog"
 import type { TestDb } from "$lib/server/utils/testDb"
 
 // A file that builds a real database before it asserts anything outruns the
@@ -46,6 +48,7 @@ afterAll(async () => {
 const HP = "core:slot/hp@1"
 const MOOD = "core:slot/mood@1"
 const WEATHER = "core:slot/weather@1"
+const INVENTORY = "core:slot/inventory@1"
 
 function declareSlots() {
 	_clearAttributeSlots()
@@ -68,6 +71,13 @@ function declareSlots() {
 		descriptor: "What the sky is doing.",
 		appliesTo: ["world"],
 		config: { of: ["clear", "fog", "storm"] }
+	})
+	// Phase 3b: what somebody carries is this list stat.
+	defineAttributeSlot(INVENTORY, {
+		shape: "core:stat-shape/list@1",
+		label: "Inventory",
+		descriptor: "What they carry.",
+		appliesTo: ["cast", "world"]
 	})
 }
 
@@ -97,16 +107,22 @@ async function world() {
 		.insert(schema.lorebooks)
 		.values({ userId: user.id, name: `World ${suffix}` })
 		.returning()
+	// A session tracks, and `state:get` describes, what its genre enables:
+	// so the world's genre brings every slot this test declared.
+	const WORLD_GENRE = `test:genre/ledger-${suffix}`
+	genre(WORLD_GENRE, { name: { en: "Ledger" }, family: "test", slots: attributeSlots(), events: {} })
 	const [session] = await testDb
 		.insert(schema.sessions)
-		.values({ userId: user.id, isGroup: true, name: `Run ${suffix}` })
+		.values({ userId: user.id, isGroup: true, name: `Run ${suffix}`, genreId: WORLD_GENRE })
 		.returning()
 	await testDb
 		.insert(schema.sessionCharacters)
 		.values({ sessionId: session.id, characterId: verity.id })
 	await testDb
-		.insert(schema.sessionLorebooks)
-		.values({ sessionId: session.id, lorebookId: lorebook.id })
+		// The real shape: the lorebook is the session row's own binding.
+		.update(schema.sessions)
+		.set({ lorebookId: lorebook.id })
+		.where(eq(schema.sessions.id, session.id))
 	const [key] = await testDb
 		.insert(schema.lorebookEntries)
 		.values({
@@ -170,7 +186,7 @@ describe("state:ledger", () => {
 		declareSlots()
 		const w = await world()
 		const first = await w.message(w.verity.id)
-		const { stateSet, stateGive, stateLedger } = await import("./state")
+		const { stateSet, stateLedger } = await import("./state")
 		const socket = fakeSocket(w.user.id)
 		await stateSet.handler(
 			socket,
@@ -182,12 +198,14 @@ describe("state:ledger", () => {
 			},
 			() => {}
 		)
-		await stateGive.handler(
+		// An item arriving is an inventory value like any other (phase 3b).
+		await stateSet.handler(
 			socket,
 			{
 				sessionId: w.session.id,
 				owner: { kind: "session_cast", id: w.verity.id },
-				entryId: w.key.id
+				slotId: INVENTORY,
+				value: [{ entryId: w.key.id }]
 			},
 			() => {}
 		)
@@ -213,37 +231,33 @@ describe("state:ledger", () => {
 				kind: r.kind,
 				messageId: r.messageId,
 				slotId: r.slotId ?? null,
-				value: r.value ?? null,
-				entryId: r.entryId ?? null
+				value: r.value ?? null
 			}))
 		).toEqual([
 			{
 				kind: "value",
 				messageId: first.id,
 				slotId: HP,
-				value: 14,
-				entryId: null
+				value: 14
 			},
 			{
-				kind: "possession",
+				kind: "value",
 				messageId: first.id,
-				slotId: null,
-				value: null,
-				entryId: w.key.id
+				slotId: INVENTORY,
+				// Named at read time, as a ledger line says it.
+				value: [{ entryId: w.key.id, name: "A rusty key" }]
 			},
 			{
 				kind: "value",
 				messageId: second.id,
 				slotId: WEATHER,
-				value: "storm",
-				entryId: null
+				value: "storm"
 			}
 		])
 		// Names come from the row's owner and the entry, so a ledger line can be
 		// read without a second lookup per row.
 		expect(res.rows[0].ownerLabel).toBe(w.verity.name)
-		expect(res.rows[1].itemName).toBe("A rusty key")
-		expect(res.rows[1].quantity).toBe(1)
+		expect(res.rows[1].slotLabel).toBe("Inventory")
 	})
 
 	test("says what a slot read before the session touched it", async () => {
@@ -387,3 +401,60 @@ describe("what state:get carries beside the values", () => {
 		expect(Object.keys(verity.configs)).not.toContain(WEATHER)
 	})
 })
+
+describe("a session tracks what its genre enables (ruled 2026-09-25)", () => {
+	/** The world, moved onto a genre that enables no attribute at all — as Chat is. */
+	async function statFree() {
+		declareSlots()
+		const w = await world()
+		const NONE = `test:genre/none-${w.session.id}`
+		genre(NONE, { name: { en: "None" }, family: "test", slots: [], events: {} })
+		const { eq } = await import("drizzle-orm")
+		await testDb.update(schema.sessions).set({ genreId: NONE }).where(eq(schema.sessions.id, w.session.id))
+		return w
+	}
+
+	test("state:get offers no slot the install declares but the session does not track", async () => {
+		const w = await statFree()
+		const { stateGet } = await import("./state")
+		const res = await stateGet.handler(fakeSocket(w.user.id), { sessionId: w.session.id }, () => {})
+		expect(res.slots).toEqual([])
+		for (const o of res.owners) expect(o.configs).toEqual({})
+	})
+
+	test("state:set refuses a slot the session does not track, in words — nothing is stored", async () => {
+		const w = await statFree()
+		const { stateSet } = await import("./state")
+		const said: Array<[string, unknown]> = []
+		await stateSet
+			.handler(
+				fakeSocket(w.user.id),
+				{ sessionId: w.session.id, owner: { kind: "session_cast", id: w.verity.id }, slotId: HP, value: 14 },
+				(event: string, data: unknown) => said.push([event, data])
+			)
+			.catch(() => {})
+		const refusal = said.find(([event]) => event === "state:set:error")?.[1] as { error?: string } | undefined
+		expect(refusal?.error).toMatch(/Health is not tracked in this session: its genre does not enable it/)
+		const { eq } = await import("drizzle-orm")
+		const rows = await testDb
+			.select()
+			.from(schema.attributeValues)
+			.where(eq(schema.attributeValues.sessionId, w.session.id))
+		expect(rows).toEqual([])
+	})
+
+	test("a pipeline's change and proposal are refused the same way; core's own writes (the sprite set) are not", async () => {
+		const w = await statFree()
+		const { applyChange, proposeChange, setValue } = await import("$lib/server/state/write")
+		const change = { owner: { kind: "session_cast" as const, id: w.verity.id }, slotId: HP, value: 3 }
+		const ctx = { sessionId: w.session.id, updatedBy: "run:1" }
+		await expect(applyChange(testDb as never, ctx, change)).rejects.toThrow(/not tracked in this session/)
+		await expect(proposeChange(testDb as never, ctx, change)).rejects.toThrow(/not tracked in this session/)
+		// A slot no genre enables on purpose, written by core's own code.
+		defineAttributeSlot("core:slot/sprite-set@1", { type: "text", descriptor: "The sprite set shown.", appliesTo: ["cast"] })
+		await expect(
+			setValue(testDb as never, ctx, { owner: change.owner, slotId: "core:slot/sprite-set@1", value: "armour" })
+		).resolves.toBeTypeOf("number")
+	})
+})
+

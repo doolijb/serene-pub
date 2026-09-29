@@ -21,8 +21,8 @@
 
 	/**
 	 * ⚠ `think` is gone from this form (ruling 2026-09-12): reasoning is a
-	 * SAMPLING parameter now, chosen per stage on the sampling config rather
-	 * than once for every stage this connection serves. Stale keys in an
+	 * SAMPLING parameter now, chosen per step on the sampling config rather
+	 * than once for every step this connection serves. Stale keys in an
 	 * existing row's `extraJson` are read by nothing: the column is jsonb, so
 	 * an unread key costs nothing and no migration clears them. Do not re-add
 	 * the toggle here.
@@ -200,6 +200,21 @@
 	<!-- The Test button lives on the connection view's status card, not
 	     here. Two Test buttons on one screen, styled differently and
 	     reporting into different places, was the shipped state. -->
+	<!-- Out of "Request settings": the address is what an Ollama connection
+	     cannot work without, and every Ollama connection is managed against
+	     its own host — "Change address" on the status card lands here (plan
+	     2026-09-24 B4/C4). -->
+	<div class="mt-2 flex flex-col gap-1">
+		<label class="font-semibold" for="baseUrl">Base URL</label>
+		<input
+			id="baseUrl"
+			type="text"
+			bind:value={connection.baseUrl}
+			placeholder="http://localhost:11434/"
+			required
+			class="input"
+		/>
+	</div>
 	{#if showFormat}
 		<Select
 			class="mt-2"
@@ -220,17 +235,6 @@
 		>
 			Request settings
 		</summary>
-		<div class="mt-2 flex flex-col gap-1">
-			<label class="font-semibold" for="baseUrl">Base URL</label>
-			<input
-				id="baseUrl"
-				type="text"
-				bind:value={connection.baseUrl}
-				placeholder="http://localhost:11434/"
-				required
-				class="input"
-			/>
-		</div>
 		{#if ollamaFields}
 			<div class="mt-2 flex flex-col gap-1">
 				<!-- Points at the number, which is what "Keep Alive" actually
@@ -258,7 +262,7 @@
 				</div>
 			</div>
 			<section class="w-full space-y-4 pt-4">
-				<!-- "Use Session Mode" lived here. It is a CAPABILITY now —
+				<!-- "Use Chat Mode" lived here. It is a CAPABILITY now —
 				     Chat messages / Text completion, in the Capabilities panel
 				     below, graded through the same four layers as everything
 				     else and with a hand-set value outranking every later test.

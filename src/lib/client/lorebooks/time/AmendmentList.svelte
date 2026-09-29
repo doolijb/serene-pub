@@ -1,8 +1,14 @@
 <script lang="ts">
 	import * as Icons from "@lucide/svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
-	import { toaster } from "$lib/client/utils/toaster"
+	import {
+		amendmentsAheadOnLine,
+		amendmentsOnLine,
+		isOnLine
+	} from "$lib/shared/lorebooks/lineReading"
 	import { compareDates, formatDate } from "../sections/historyDates"
+	import { loreRoute } from "../loreRoute.svelte"
+	import { openBookTime } from "./bookTime.svelte"
 	import { amendmentsAheadSentence, parseMoment } from "./moment"
 
 	/**
@@ -17,6 +23,12 @@
 	 * ⚠ Drawn only when there is at least one. An entry with no amendments has
 	 * nothing to say about them, and a heading over an empty list would teach
 	 * every reader of every ordinary entry a word they do not need.
+	 *
+	 * ⚠ Every line's amendments are listed — this is the only place another
+	 * line's can be removed — but each says which line it is on, the ones
+	 * this line reads come first, and "not yet" is counted only over those
+	 * (the line rule, `lineReading.ts`: the line's own, and its ancestors'
+	 * up to each fork cut).
 	 */
 	interface Props {
 		lorebookId: number
@@ -44,22 +56,50 @@
 	/** The moment being read, or null at now — where nothing is still ahead. */
 	let cut = $derived(parseMoment(moment))
 
-	/** Soonest first, so the entry reads as a history of itself. */
-	let rows = $derived(
-		[...(amendments as Sockets.Amendments.EntryRow[])].sort(
-			(a, b) => compareDates(a, b) || a.id - b.id
-		)
+	/** The line being read, with its ancestor chain. */
+	let branchId = $derived(loreRoute.route.branch ?? null)
+	let line = $derived(openBookTime.lineOf(branchId))
+
+	const byDate = (
+		a: Sockets.Amendments.EntryRow,
+		b: Sockets.Amendments.EntryRow
+	) => compareDates(a, b) || a.id - b.id
+
+	/** Every overlay, soonest first, as a history of itself. */
+	let all = $derived(
+		[...(amendments as Sockets.Amendments.EntryRow[])].sort(byDate)
 	)
+	/** The ones this line can ever read (at the head), by id. */
+	let readsHere = $derived(
+		new Set(amendmentsOnLine(all, line).map((a) => a.id))
+	)
+	/** This line's first, then the rest — the list's two groups. */
+	let rows = $derived(all.filter((r) => readsHere.has(r.id)))
+	let elsewhere = $derived(all.filter((r) => !readsHere.has(r.id)))
 
 	/**
-	 * How many are still ahead of the moment.
+	 * The ones still ahead of the moment ON THIS LINE.
 	 *
-	 * ⚠ At now this is always zero — everything dated has happened — which is
-	 * why the sentence below is drawn only while a moment is set.
+	 * ⚠ At now this is always empty — everything dated has happened — which
+	 * is why the sentence below is drawn only while a moment is set. Another
+	 * line's amendment is never "not yet" here: it never happens here.
 	 */
-	let notYet = $derived(
-		rows.filter((r) => cut != null && compareDates(r, cut) > 0).length
+	let aheadIds = $derived(
+		new Set(amendmentsAheadOnLine(all, line, cut).map((a) => a.id))
 	)
+	let notYet = $derived(aheadIds.size)
+
+	/** Where a row is, said beside it when it is not simply this line's. */
+	function whereItIs(row: Sockets.Amendments.EntryRow): string | null {
+		if (readsHere.has(row.id))
+			return row.branchId === branchId
+				? null
+				: `from ${openBookTime.lineName(row.branchId)}`
+		if (isOnLine(row, line))
+			// On an ancestor, dated past the fork: that line's story, not this one's.
+			return `on ${openBookTime.lineName(row.branchId)}, after the fork`
+		return `on ${openBookTime.lineName(row.branchId)}`
+	}
 
 	/** The columns an overlay names, in the reader's words. */
 	const FIELD_LABELS: Record<string, string> = {
@@ -131,24 +171,149 @@
 		editing = null
 	}
 
+	/** The row whose Delete is waiting on a yes. */
+	let confirming = $state<number | null>(null)
+
+	/**
+	 * Delete, after the inline yes.
+	 *
+	 * ⚠ No success toast: the reply is the book's re-sent list, and the row
+	 * leaving it IS the confirmation; a refusal is toasted by the shell's
+	 * `:error` listener. A toast before the reply would announce a delete
+	 * the server may yet refuse.
+	 */
 	function remove(id: number) {
+		confirming = null
 		socket.emit("amendments:delete", {
 			lorebookId,
 			id,
 			subject
 		} satisfies Sockets.Amendments.Delete.Params)
-		toaster.success({ title: "Amendment removed" })
 	}
 </script>
 
-{#if rows.length}
+{#snippet amendmentRow(row: Sockets.Amendments.EntryRow)}
+	{@const ahead = aheadIds.has(row.id)}
+	{@const where = whereItIs(row)}
+	<li
+		class="bg-surface-100-900 flex flex-wrap items-center gap-2 rounded-[10px] px-3 py-2"
+		class:opacity-60={(ahead || !readsHere.has(row.id)) && editing !== row.id}
+	>
+		{#if editing === row.id}
+			<Icons.CalendarClock
+				size={14}
+				aria-hidden="true"
+				class="text-surface-600-400 shrink-0"
+			/>
+			<input
+				class="input input-sm w-16 shrink-0"
+				bind:value={editYear}
+				aria-label="Year"
+				placeholder="Year"
+				onkeydown={(e) => e.key === "Enter" && commitEdit(row.id)}
+			/>
+			<input
+				class="input input-sm w-14 shrink-0"
+				bind:value={editMonth}
+				aria-label="Month, optional"
+				placeholder="Mo."
+				onkeydown={(e) => e.key === "Enter" && commitEdit(row.id)}
+			/>
+			<input
+				class="input input-sm w-14 shrink-0"
+				bind:value={editDay}
+				aria-label="Day, optional"
+				placeholder="Day"
+				disabled={editMonth.trim() === ""}
+				title={editMonth.trim() === ""
+					? "A day needs a month: the calendar narrows left to right"
+					: "Day"}
+				onkeydown={(e) => e.key === "Enter" && commitEdit(row.id)}
+			/>
+			<span class="flex-1"></span>
+			<button
+				class="btn btn-sm preset-filled-primary-500 shrink-0 p-1.5"
+				type="button"
+				onclick={() => commitEdit(row.id)}
+				disabled={!editValid}
+				aria-label="Save the new date"
+			>
+				<Icons.Check size={14} aria-hidden="true" />
+			</button>
+			<button
+				class="btn btn-sm preset-filled-surface-400-600 shrink-0 p-1.5"
+				type="button"
+				onclick={() => (editing = null)}
+				aria-label="Keep the date it has"
+			>
+				<Icons.X size={14} aria-hidden="true" />
+			</button>
+		{:else if confirming === row.id}
+			<span class="text-surface-700-300 min-w-0 flex-1 text-xs">
+				Delete the amendment dated {formatDate(row)}? The entry reads as
+				it did without it{where ? ` (${where})` : ""}.
+			</span>
+			<button
+				class="btn btn-sm preset-tonal-error shrink-0"
+				type="button"
+				onclick={() => remove(row.id)}
+			>
+				Delete
+			</button>
+			<button
+				class="btn btn-sm preset-filled-surface-400-600 shrink-0"
+				type="button"
+				onclick={() => (confirming = null)}
+			>
+				Cancel
+			</button>
+		{:else}
+			<Icons.CalendarClock
+				size={14}
+				aria-hidden="true"
+				class="text-surface-600-400 shrink-0"
+			/>
+			<button
+				class="hover:preset-tonal-surface shrink-0 rounded-[6px] px-1 text-xs font-semibold"
+				type="button"
+				onclick={() => startEdit(row)}
+				title="Change the date this begins at"
+			>
+				{formatDate(row)}
+			</button>
+			<span class="text-surface-700-300 min-w-0 flex-1 truncate text-xs">
+				changes {saysWhat(row.fields)}
+			</span>
+			{#if where}
+				<span
+					class="chip preset-tonal-surface shrink-0 text-[11px]"
+					data-lore-amendment-line
+				>
+					{where}
+				</span>
+			{/if}
+			{#if ahead}
+				<span class="chip preset-tonal-surface shrink-0 text-[11px]">
+					not yet
+				</span>
+			{/if}
+			<button
+				class="btn btn-sm preset-filled-surface-400-600 shrink-0 p-1.5"
+				type="button"
+				onclick={() => (confirming = row.id)}
+				title="Delete this amendment"
+				aria-label="Delete the amendment dated {formatDate(row)}"
+			>
+				<Icons.Trash2 size={14} aria-hidden="true" />
+			</button>
+		{/if}
+	</li>
+{/snippet}
+
+{#if all.length}
 	<section class="flex flex-col gap-2" data-lore-amendments>
 		<div class="flex items-baseline gap-2">
-			<h4
-				class="text-surface-600-400 text-[0.68rem] tracking-wider uppercase"
-			>
-				Amendments
-			</h4>
+			<h4 class="text-surface-600-400 text-xs">Amendments</h4>
 			{#if notYet}
 				<!-- The sentence the design names: the base carries a change
 				     that has not arrived at the moment being read. -->
@@ -157,105 +322,24 @@
 				</span>
 			{/if}
 		</div>
-		<ul class="flex flex-col gap-1">
-			{#each rows as row (row.id)}
-				{@const ahead = cut != null && compareDates(row, cut) > 0}
-				<li
-					class="bg-surface-100-900 flex items-center gap-2 rounded-[10px] px-3 py-2"
-					class:opacity-60={ahead && editing !== row.id}
-				>
-					{#if editing === row.id}
-						<Icons.CalendarClock
-							size={14}
-							aria-hidden="true"
-							class="text-surface-600-400 shrink-0"
-						/>
-						<input
-							class="input input-sm w-16 shrink-0"
-							bind:value={editYear}
-							aria-label="Year"
-							placeholder="Year"
-							onkeydown={(e) =>
-								e.key === "Enter" && commitEdit(row.id)}
-						/>
-						<input
-							class="input input-sm w-14 shrink-0"
-							bind:value={editMonth}
-							aria-label="Month, optional"
-							placeholder="Mo."
-							onkeydown={(e) =>
-								e.key === "Enter" && commitEdit(row.id)}
-						/>
-						<input
-							class="input input-sm w-14 shrink-0"
-							bind:value={editDay}
-							aria-label="Day, optional"
-							placeholder="Day"
-							disabled={editMonth.trim() === ""}
-							title={editMonth.trim() === ""
-								? "A day needs a month: the calendar narrows left to right"
-								: "Day"}
-							onkeydown={(e) =>
-								e.key === "Enter" && commitEdit(row.id)}
-						/>
-						<span class="flex-1"></span>
-						<button
-							class="btn btn-sm preset-filled-primary-500 shrink-0 p-1.5"
-							type="button"
-							onclick={() => commitEdit(row.id)}
-							disabled={!editValid}
-							aria-label="Save the new date"
-						>
-							<Icons.Check size={14} aria-hidden="true" />
-						</button>
-						<button
-							class="btn btn-sm preset-filled-surface-400-600 shrink-0 p-1.5"
-							type="button"
-							onclick={() => (editing = null)}
-							aria-label="Keep the date it has"
-						>
-							<Icons.X size={14} aria-hidden="true" />
-						</button>
-					{:else}
-						<Icons.CalendarClock
-							size={14}
-							aria-hidden="true"
-							class="text-surface-600-400 shrink-0"
-						/>
-						<button
-							class="hover:preset-tonal-surface shrink-0 rounded-[6px] px-1 text-xs font-semibold"
-							type="button"
-							onclick={() => startEdit(row)}
-							title="Change the date this begins at"
-						>
-							{formatDate(row)}
-						</button>
-						<span
-							class="text-surface-700-300 min-w-0 flex-1 truncate text-xs"
-						>
-							changes {saysWhat(row.fields)}
-						</span>
-						{#if ahead}
-							<span
-								class="chip preset-tonal-surface shrink-0 text-[0.68rem]"
-							>
-								not yet
-							</span>
-						{/if}
-						<button
-							class="btn btn-sm preset-filled-surface-400-600 shrink-0 p-1.5"
-							type="button"
-							onclick={() => remove(row.id)}
-							title="Remove this amendment"
-							aria-label="Remove the amendment dated {formatDate(
-								row
-							)}"
-						>
-							<Icons.Trash2 size={14} aria-hidden="true" />
-						</button>
-					{/if}
-				</li>
-			{/each}
-		</ul>
+		{#if rows.length}
+			<ul class="flex flex-col gap-1">
+				{#each rows as row (row.id)}
+					{@render amendmentRow(row)}
+				{/each}
+			</ul>
+		{/if}
+		{#if elsewhere.length}
+			<!-- Listed, not filtered: this is the only place another line's
+			     amendment can be re-dated or deleted. -->
+			<h5 class="text-surface-600-400 text-[11px]">
+				Not read on {openBookTime.lineName(branchId)}
+			</h5>
+			<ul class="flex flex-col gap-1" data-lore-amendments-elsewhere>
+				{#each elsewhere as row (row.id)}
+					{@render amendmentRow(row)}
+				{/each}
+			</ul>
+		{/if}
 	</section>
 {/if}

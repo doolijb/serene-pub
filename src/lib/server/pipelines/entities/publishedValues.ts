@@ -8,12 +8,19 @@
  *
  * ```
  * {
- *   session: { generating: boolean, fields: <sessions.genre_fields, declared keys> },
- *   state:   <ResolvedState — world · cast · possessions · slots · version, from stateFor>,
+ *   session: { generating: boolean, fields: <genreFieldsFor — stored, pinned, default>,
+ *              openForm: { action: string | null } | null },
+ *   state:   <ResolvedState — world · cast · slots · version, from stateFor>,
  *   sprites: { byId: { <characterId>: { set, label } }, <castKey>: { set, label } },
  *   item?:   { id, isNewest, hidden, generating, role, mine, hasSwipes, greeting }
  * }
  * ```
+ *
+ * `session.openForm` is the main channel's open form (`openFormOf`: the
+ * newest unanswered, un-overtaken question) with the action that answers it,
+ * or null — what an action's `presentWhen` reads (W-GATE D3, 2026-09-27:
+ * *Answer the door* is present only while the knock is open). Only the
+ * action is published: which row and block is the press's business.
  *
  * `sprites` is each cast member's **current sprite** (DESIGN-sprites §6):
  * the label on their newest visible line, in the set the session overrides
@@ -25,8 +32,9 @@
  * reads it — `state.world.location`, `state.cast.verity.hp`, and
  * `state.version`, the session's state version (U5f) — never a second
  * resolver. `session.fields` is what the inlet hands a run (`genreFieldsFor`:
- * the stored values of the keys the genre declares; a declared field never
- * set reads `undefined`, as it does in a run). `session.generating` is true
+ * per declared or pinned key, the stored value, else the pin, else the
+ * field's declared default — B16x; a key with none of the three reads
+ * `undefined`, as it does in a run). `session.generating` is true
  * while a message row of the session is generating or a run of kind
  * `reply`/`action` is registered for it.
  *
@@ -41,6 +49,7 @@
 import { and, desc, eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import { channelHead } from "$lib/server/messages/channels"
+import { openFormOf } from "$lib/server/messages/blocks"
 import { stateFor, type ResolvedState } from "$lib/server/state/resolve"
 import { genreFieldsFor } from "$lib/server/pipelines/entities/sessionGenres"
 import * as runRegistry from "$lib/server/pipelines/runtime/runRegistry"
@@ -58,6 +67,8 @@ export interface PublishedValues {
 	session: {
 		generating: boolean
 		fields: Record<string, unknown>
+		/** The open form on the main channel and the action it is answered by — see the module note. */
+		openForm: { action: string | null } | null
 	}
 	state: ResolvedState
 	/** Each cast member's current sprite — see the module comment. */
@@ -189,13 +200,15 @@ export async function publishedValues(
 	sessionId: number,
 	opts: { lineage?: RunLineage } = {}
 ): Promise<PublishedValues> {
-	const [generating, fields, state] = await Promise.all([
+	const [generating, fields, state, open] = await Promise.all([
 		sessionGenerating(db, sessionId, opts),
 		genreFieldsFor(db, sessionId),
-		stateFor(db, sessionId)
+		stateFor(db, sessionId),
+		openFormOf(db, sessionId)
 	])
 	const sprites = await publishedSprites(db, sessionId, state)
-	return { session: { generating, fields }, state, sprites }
+	const openForm = open ? { action: open.action } : null
+	return { session: { generating, fields, openForm }, state, sprites }
 }
 
 /**
@@ -216,6 +229,10 @@ export async function itemValuesFor(
 			isHidden: schema.sessionMessages.isHidden,
 			isGenerating: schema.sessionMessages.isGenerating,
 			role: schema.sessionMessages.role,
+			// Who spoke it (`item.speaker`, lair re-plan R11) — the same
+			// columns the widget's row carries, never the user id.
+			characterId: schema.sessionMessages.characterId,
+			personaId: schema.sessionMessages.personaId,
 			metadata: schema.sessionMessages.metadata
 		})
 		.from(schema.sessionMessages)

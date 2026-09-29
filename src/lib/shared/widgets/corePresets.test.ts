@@ -30,13 +30,13 @@ describe("withCorePresets", () => {
 		{
 			id: "messages",
 			title: "Messages",
-			surface: { kind: "native", component: "messages" },
+			component: "messages",
 			presets: [{ slug: "default", title: "Default", css: "" }]
 		},
 		{
 			id: "scene-portraits",
 			title: "Scene Portraits",
-			surface: { kind: "native", component: "scene-portraits" },
+			component: "scene-portraits",
 			presets: [{ slug: "default", title: "Default", css: "" }]
 		}
 	]
@@ -99,11 +99,23 @@ describe("withCorePresets", () => {
 		}
 	})
 
+	test("every pack selects the message's widget parts, never a class", () => {
+		// The markup carries parts, never looks (P3h): a pack names the root
+		// (`messages.root`, where its palette lives) and the four cells and the
+		// row by their `data-widget-part` tokens; the classes they replaced are
+		// gone from the markup, so a rule on one would draw nothing.
+		for (const p of MESSAGE_STYLE_PRESETS) {
+			expect(p.css).toContain('[data-widget-part~="messages.root"] {')
+			expect(p.css).toContain('[data-widget-part~="messages.message"]')
+			expect(p.css).not.toMatch(/\.sp-(conversation|msg|column|log)\b/)
+		}
+	})
+
 	test("no pack styles the composer — how the field is drawn is a setting", () => {
 		for (const p of MESSAGE_STYLE_PRESETS) {
-			expect(p.css).not.toContain(".sp-compose")
-			expect(p.css).not.toContain(".sp-field")
-			expect(p.css).not.toContain("composer-card")
+			// The compose block, its area and every composer part (P3g):
+			// `messages.compose`, `messages.compose-area`, `messages.composer-*`.
+			expect(p.css).not.toContain("messages.compose")
 		}
 	})
 
@@ -247,4 +259,18 @@ describe("legacyLayoutAttr — the transitional data-*-layout value", () => {
 			legacyLayoutAttr("messages", systemStyleSlug("stats", "default"))
 		).toBeUndefined()
 	})
+})
+
+describe("folded sections in every pack (B4)", () => {
+	// A reply's Plan and Thinking fold in the one SessionMessage every pack
+	// skins; a pack owns the LOOK, never whether a fold is there. So no pack
+	// may reach the fold chrome — its button, its track or its list.
+	test.each(MESSAGE_STYLE_PRESETS.map((p) => [p.slug, p.css] as const))(
+		"%s leaves the folds to the base sheet",
+		(_slug, css) => {
+			expect(css).not.toMatch(
+				/messages\.(message-disclosure|part-disclosure|fold-list)/
+			)
+		}
+	)
 })

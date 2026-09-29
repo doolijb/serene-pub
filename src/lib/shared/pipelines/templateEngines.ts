@@ -40,7 +40,7 @@ export const isCoreTemplateEngine = (engineId: string): boolean =>
 	(CORE_TEMPLATE_ENGINES as readonly string[]).includes(engineId)
 
 /**
- * What a slot says about the languages it accepts, in either spelling.
+ * What a slot says about the languages it accepts: one (`engine`) or a set.
  *
  * Structural rather than an import of `SlotDecl`: this module is a leaf, and
  * the same two fields arrive here from the SDK descriptor, from a projected
@@ -48,7 +48,7 @@ export const isCoreTemplateEngine = (engineId: string): boolean =>
  */
 export interface EngineDecl {
 	engine?: string
-	engines?: readonly string[]
+	acceptedEngines?: readonly string[]
 }
 
 /**
@@ -60,8 +60,8 @@ export interface EngineDecl {
  * nothing, because a slot no template can ever satisfy is a picker that is
  * permanently empty with no way to be given anything.
  */
-export function acceptedEngines(decl: EngineDecl): string[] {
-	if (decl.engines?.length) return [...decl.engines]
+export function acceptedEnginesOf(decl: EngineDecl): string[] {
+	if (decl.acceptedEngines?.length) return [...decl.acceptedEngines]
 	return [decl.engine ?? CORE_TEMPLATE_ENGINE]
 }
 
@@ -73,7 +73,7 @@ export function acceptedEngines(decl: EngineDecl): string[] {
  * changes what an untouched install produces.
  */
 export const defaultEngineOf = (decl: EngineDecl): string =>
-	acceptedEngines(decl)[0]!
+	acceptedEnginesOf(decl)[0]!
 
 /**
  * An engine id as the name of a language.

@@ -9,6 +9,7 @@ import {
 	TUNNEL_CREDENTIAL_KEY_INFO
 } from "$lib/server/utils/tokenCrypto"
 import { ensureBinary } from "./binaryManager"
+import { markAdminOverviewStale } from "$lib/server/admin/overviewStale"
 
 /**
  * Cloudflare tunnel supervisor (plan 26 §7, phases B and C).
@@ -317,7 +318,10 @@ function onUnexpectedExit(reason: string) {
 			status: TunnelStatuses.ERROR,
 			lastError: `${reason}. Gave up after ${RESTART_DELAYS_MS.length} restart attempts.`,
 			stoppedAt: new Date()
-		}).catch(() => {})
+		})
+			// The Overview's `network:tunnelFailed` reads this row.
+			.then(markAdminOverviewStale)
+			.catch(() => {})
 		return
 	}
 
@@ -457,6 +461,8 @@ export async function start(tunnelId: number): Promise<SelectTunnel> {
 			.returning()
 		armTtlTimer(tunnelId, expiresAt)
 		console.log(`[tunnel] running at https://${hostname}`)
+		// Clears a `network:tunnelFailed` an admin may still be shown.
+		markAdminOverviewStale()
 		return row
 	} catch (err: any) {
 		// Torn down before the row is marked, so a failed start never leaves a
@@ -475,6 +481,7 @@ export async function start(tunnelId: number): Promise<SelectTunnel> {
 			.where(eq(schema.tunnels.id, tunnelId))
 			.returning()
 		void row
+		markAdminOverviewStale()
 		throw err
 	}
 }

@@ -222,7 +222,7 @@ vi.mock("$lib/server/koboldcpp/managedPreflight", () => ({
 	ensureManagedReady: async () => {
 		preflightLog.push("preflight:start")
 		await new Promise((r) => setTimeout(r, 20))
-		if (preflightFails) throw new Error("KoboldCPP Manager is disabled.")
+		if (preflightFails) throw new Error("KoboldCPP, run by Serene Pub, is turned off.")
 		preflightLog.push("preflight:done")
 		return { baseUrl: SECRET_URL }
 	}
@@ -242,7 +242,7 @@ vi.mock("$lib/server/db", () => ({ db: { query: {} } }))
  * a better test than the two-table version was.
  */
 let capabilityDefaults: Record<string, any> = {}
-/** The KoboldCPP Manager's settings — where a MANAGED instance's address lives. */
+/** The settings of KoboldCPP, run by Serene Pub — where a MANAGED instance's address lives. */
 let koboldCppSettings: any = { koboldCppManagerBaseUrl: SECRET_URL }
 let connectionsById: Record<number, any> = {}
 /** The `connection_models` rows, by id — the MODEL half of every pair (0128). */
@@ -277,7 +277,7 @@ function withModel(connectionId: number, model: string = CHECKPOINT) {
  */
 const fakeDb = {
 	// A managed connection's own `baseUrl` column is not authoritative — the
-	// Manager's settings are — so the image path reads them to find the process.
+	// the managed KoboldCPP's settings are — so the image path reads them to find the process.
 	query: {
 		koboldCppSettings: {
 			findFirst: async () => koboldCppSettings
@@ -719,7 +719,7 @@ describe("dispatchImage — one render at a time per connection", () => {
 
 	it("does not preflight a backend nobody asked this app to start", async () => {
 		// An external KoboldCPP, an A1111, a Forge — starting those would be a
-		// surprise, and the Manager does not own them.
+		// surprise, and the managed KoboldCPP does not own them.
 		await dispatch(withModel(1))
 		expect(preflightLog).toEqual(["render"])
 	})
@@ -738,7 +738,7 @@ describe("dispatchImage — one render at a time per connection", () => {
 		}
 		preflightFails = true
 		await expect(dispatch(withModel(5))).rejects.toThrow(
-			/Manager is disabled/
+			/run by Serene Pub, is turned off/
 		)
 		// And the render never ran — the queue slot is released, not consumed by
 		// a request that was always going to fail at the socket.

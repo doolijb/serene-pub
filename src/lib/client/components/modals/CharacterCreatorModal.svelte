@@ -107,7 +107,7 @@
 		{ title: "Avatar", canSkip: true },
 		{ title: "Description", canSkip: false },
 		{ title: "Personality", canSkip: true },
-		{ title: "First Message", canSkip: true }
+		{ title: "First message", canSkip: true }
 	]
 
 	// Validation functions
@@ -335,7 +335,7 @@
 				{#if showCancelConfirmation}
 					<!-- Cancel Confirmation View -->
 					<header class="flex items-center justify-between">
-						<h2 class="h2">Confirm Action</h2>
+						<h2 class="h2">Discard unsaved changes?</h2>
 						<button
 							class="btn btn-sm preset-filled-surface-400-600"
 							onclick={handleCancelCancel}
@@ -355,7 +355,7 @@
 									class="mx-auto"
 								/>
 							</div>
-							<h3 class="h3">Discard Character?</h3>
+							<h3 class="h3">Discard character?</h3>
 							<p class="max-w-md text-sm opacity-75">
 								You have unsaved changes to your character. Are
 								you sure you want to discard them and close the
@@ -370,14 +370,14 @@
 							onclick={handleCancelCancel}
 						>
 							<Icons.ArrowLeft size={16} />
-							Keep Editing
+							Keep editing
 						</button>
 						<button
 							class="btn preset-filled-error-500"
 							onclick={handleCancelConfirm}
 						>
 							<Icons.Trash2 size={16} />
-							Discard Changes
+							Discard changes
 						</button>
 					</footer>
 				{:else}
@@ -589,7 +589,7 @@
 												}}
 											>
 												<Icons.Trash2 size={16} />
-												Remove Image
+												Remove image
 											</button>
 										{/if}
 										<p class="text-xs opacity-60">
@@ -844,7 +844,7 @@
 										class="font-semibold"
 										for={ids.firstMessage}
 									>
-										First Message (Optional but Recommended)
+										First message (optional but recommended)
 									</label>
 									<textarea
 										id={ids.firstMessage}
@@ -872,7 +872,7 @@
 											size={16}
 											class="text-primary-500"
 										/>
-										Example with Key Elements
+										Example with key elements
 									</h4>
 									<div class="space-y-3">
 										<p class="text-sm italic opacity-75">
@@ -949,7 +949,7 @@
 
 							{#if isLastStep}
 								<button
-									class="btn preset-filled-success-500"
+									class="btn preset-filled-primary-500"
 									onclick={handleSave}
 								>
 									<Icons.Save size={16} />

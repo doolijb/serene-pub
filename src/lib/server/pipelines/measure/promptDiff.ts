@@ -127,7 +127,7 @@ export interface EntryStanding {
 	state: EntryState
 	/** `select`'s reason code, or the mechanism's skip class. */
 	reason: string
-	/** The sentence the producing stage wrote. */
+	/** The sentence the producing step wrote. */
 	why: string
 	score: number | null
 	tokens: number | null

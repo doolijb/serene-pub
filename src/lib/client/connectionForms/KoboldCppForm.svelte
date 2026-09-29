@@ -1,5 +1,6 @@
 <script lang="ts">
 	import * as Icons from "@lucide/svelte"
+	import Select from "$lib/client/components/inputs/Select.svelte"
 	import { completionTemplateOptions } from "$lib/client/stores/completionTemplateOptions.svelte"
 	import { connectionWireMode } from "$lib/client/stores/connectionWireMode.svelte"
 	import { usesCompletionTemplate } from "$lib/shared/connectionAdapters/wireMode"
@@ -14,8 +15,8 @@
 
 	/**
 	 * ⚠ `enableThinking` is gone from this form (ruling 2026-09-12): reasoning
-	 * is a SAMPLING parameter now, chosen per stage on the sampling config
-	 * rather than once for every stage this connection serves. A stale key in
+	 * is a SAMPLING parameter now, chosen per step on the sampling config
+	 * rather than once for every step this connection serves. A stale key in
 	 * an existing row's `extraJson` is read by nothing — the column is jsonb,
 	 * so an unread key costs nothing and no migration clears it. Do not re-add
 	 * the Auto/On/Off control here.
@@ -222,8 +223,8 @@
 				class="text-warning-700-300 mt-0.5 shrink-0"
 			/>
 			<p class="text-warning-700-300 text-sm">
-				KoboldCPP Manager is enabled — consider using a
-				<b>KCPP Manager</b>
+				Serene Pub is running KoboldCPP for you — consider using the
+				<b>KoboldCPP, run by Serene Pub</b>
 				connection instead, unless this connects to a different/external
 				KoboldCPP instance.
 			</p>
@@ -237,31 +238,27 @@
 	{/if}
 	{#if showFormat}
 		<div class="mt-2 flex flex-col gap-1">
-			<label class="font-semibold" for="promptFormat">
-				Prompt Format
-			</label>
-			<select
-				id="promptFormat"
-				class="select bg-background border-muted w-full rounded border"
+			<Select
+				label="Prompt format"
+				class="w-full"
+				options={formatOptions.value.map((o) => ({
+					value: String(o.value),
+					label: o.label
+				}))}
 				bind:value={connection.promptFormat}
-			>
-				{#each formatOptions.value as option}
-					<option value={option.value}>{option.label}</option>
-				{/each}
-			</select>
+			/>
 		</div>
 	{/if}
 	<div class="mt-2 flex flex-col gap-1">
-		<label class="font-semibold" for="tokenCounter">Token Counter</label>
-		<select
-			id="tokenCounter"
+		<Select
+			label="Token counter"
+			class="w-full"
+			options={TokenCounterOptions.options.map((t) => ({
+				value: String(t.value),
+				label: t.label
+			}))}
 			bind:value={connection.tokenCounter}
-			class="select bg-background border-muted w-full rounded border"
-		>
-			{#each TokenCounterOptions.options as t}
-				<option value={t.value}>{t.label}</option>
-			{/each}
-		</select>
+		/>
 	</div>
 	<details class="mt-4">
 		<summary
@@ -287,7 +284,7 @@
 		</div>
 		{#if koboldCppFields}
 			<section class="w-full space-y-4 pt-4">
-				<!-- "Use Session Mode" lived here. It is a CAPABILITY now —
+				<!-- "Use Chat Mode" lived here. It is a CAPABILITY now —
 				     Chat messages / Text completion, in the Capabilities panel
 				     below, graded through the same four layers as everything
 				     else and with a hand-set value outranking every later test.
@@ -337,7 +334,7 @@
 							placeholder="Text to forcefully append to the beginning of prompts"
 							class="textarea h-20"
 						></textarea>
-						<p class="text-muted-foreground text-xs">
+						<p class="text-surface-600-400 text-xs">
 							This text is forcefully appended to the beginning of
 							any prompt
 						</p>

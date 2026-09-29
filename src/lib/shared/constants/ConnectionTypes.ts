@@ -28,14 +28,14 @@ const ollamaDesc = `
 
 const ollamaDiff = "Beginner (No GUI) - Minimal setup required"
 
-const openaiSessionDesc = `
+const openaiChatDesc = `
 <p>Serene Pub supports OpenAI's chat completion API.</p>
 <p>It provides a powerful API for generating chat completions and supports various models.</p>
 <p>To use OpenAI's API, you need to create an account and obtain an API key from <a class="text-primary-500 hover:underline" href="https://platform.openai.com/signup" target="_blank">OpenAI's website</a> or another service.</p>
 <p>OpenAI's API is well-documented and widely used, making it a good choice for many applications.</p>
 `
 
-const openaiSessionDiff = "Beginner - Nothing to install"
+const openaiChatDiff = "Beginner - Nothing to install"
 
 const koboldCppDesc = `
 <p>Serene Pub supports KoboldCPP through its <a class="text-primary-500 hover:underline" href="https://github.com/LostRuins/koboldcpp/wiki" target="_blank">native API</a>.</p>
@@ -48,9 +48,9 @@ const koboldCppDesc = `
 const koboldCppDiff = "Beginner (GUI) - Simple setup"
 
 const koboldCppManagedDesc = `
-<p>A KoboldCPP connection managed by Serene Pub's built-in <b>KoboldCPP Manager</b>.</p>
-<p>The manager handles model loading and swapping for you — pick a model here and it's loaded via KoboldCPP's admin API (spawning a managed subprocess, or using your own already-running KoboldCPP instance with the admin API enabled).</p>
-<p>Requires the KoboldCPP Manager to be enabled in Settings.</p>
+<p><b>KoboldCPP, run by Serene Pub</b>: a KoboldCPP that Serene Pub installs, starts and stops.</p>
+<p>Serene Pub handles model loading and swapping for you — pick a model here and it's loaded via KoboldCPP's admin API (spawning a managed subprocess, or using your own already-running KoboldCPP instance with the admin API enabled).</p>
+<p>Turned on from Connections → Add → KoboldCPP, run by Serene Pub.</p>
 `
 
 const koboldCppManagedDiff = "Beginner (GUI) - Managed by Serene Pub"
@@ -101,12 +101,11 @@ export class CONNECTION_TYPE {
 	static KOBOLDCPP = "koboldcpp"
 	static KOBOLDCPP_MANAGED = "koboldcpp_managed"
 	/**
-	 * Image generation through the KoboldCPP Manager.
-	 *
-	 * A second type rather than a flag on KOBOLDCPP_MANAGED, because a
-	 * connection names exactly ONE model and a text GGUF is not an image one.
-	 * Which model is RESIDENT in the process at any moment is the model
-	 * manager's business, not this row's — see `planResidency`.
+	 * ⏳ Retired: image generation through KoboldCPP, run by Serene Pub is the managed
+	 * endpoint's own image models (`KOBOLDCPP_MANAGED`, each model carrying its
+	 * `modality`). Rows of this type are folded into that endpoint at boot
+	 * (`koboldCppManagedFold.ts`); the id stays declared so a row the fold has
+	 * not reached still resolves. Nothing creates one.
 	 */
 	static readonly KOBOLDCPP_MANAGED_IMAGE = "koboldcpp_managed_image"
 	static ANTHROPIC = "anthropic"
@@ -138,9 +137,8 @@ export class CONNECTION_TYPE {
 	 * Any OpenAI-compatible `/embeddings` endpoint — OpenAI itself, LM Studio,
 	 * llama.cpp server, vLLM.
 	 *
-	 * Its own type rather than a capability on {@link OPENAI}, because a
-	 * connection names exactly ONE model and an embedding model is not a chat one
-	 * — the same argument {@link KOBOLDCPP_MANAGED_IMAGE} makes. `OpenAIChatAdapter`
+	 * Its own type rather than a capability on {@link OPENAI}, because
+	 * `OpenAIChatAdapter`
 	 * speaks `/v1/chat/completions` and nothing else; `/embeddings` is a different
 	 * route, hence a different adapter.
 	 *
@@ -167,8 +165,8 @@ export class CONNECTION_TYPE {
 	 * than from a host.
 	 *
 	 * Its own type rather than a second capability on the embeddings type: a
-	 * connection names exactly ONE model, and a token-classification checkpoint
-	 * is not a sentence-embedding one. The API variant (a hosted entity endpoint)
+	 * token-classification checkpoint loads and runs through a different
+	 * pipeline from a sentence-embedding one, so it is a different adapter. The API variant (a hosted entity endpoint)
 	 * is a further type when one exists, not a flag here.
 	 */
 	static LOCAL_ONNX_NER = "local-onnx-ner"
@@ -215,8 +213,8 @@ export class CONNECTION_TYPE {
 		{
 			value: CONNECTION_TYPE.OPENAI,
 			label: "OpenAI Chat",
-			description: openaiSessionDesc,
-			difficulty: openaiSessionDiff,
+			description: openaiChatDesc,
+			difficulty: openaiChatDiff,
 			category: "cloud"
 		},
 		{
@@ -235,16 +233,16 @@ export class CONNECTION_TYPE {
 		},
 		{
 			value: CONNECTION_TYPE.KOBOLDCPP_MANAGED,
-			label: "KoboldCPP Manager",
+			label: "KoboldCPP, run by Serene Pub",
 			description: koboldCppManagedDesc,
 			difficulty: koboldCppManagedDiff,
 			category: "local"
 		},
 		{
 			value: CONNECTION_TYPE.KOBOLDCPP_MANAGED_IMAGE,
-			label: "KoboldCPP Manager (Image)",
+			label: "KoboldCPP, run by Serene Pub (Image)",
 			description:
-				"Image generation through the KoboldCPP Manager. One connection per " +
+				"Image generation through KoboldCPP, run by Serene Pub. One connection per " +
 				"image model, loaded on demand exactly as an LLM is — KoboldCPP holds " +
 				"one model at a time today, so drawing a picture swaps the chat model out.",
 			difficulty: "Beginner - Managed for you",
@@ -346,6 +344,21 @@ export class CONNECTION_TYPE {
 	/** True for image-generation connection types (route to getImageAdapter). */
 	static isImage(type: string): boolean {
 		return CONNECTION_TYPE.modalityOf(type) === "image-gen"
+	}
+
+	/**
+	 * True for the KoboldCPP this pub runs: its base URL comes from its settings, not the row, and
+	 * its image model loads on demand through the model manager.
+	 *
+	 * ⏳ Both ids, because `KOBOLDCPP_MANAGED_IMAGE` rows are folded into the
+	 * managed row at boot (`koboldCppManagedFold.ts`) and a render can still
+	 * arrive for one between an upgrade and that fold.
+	 */
+	static isManagedKoboldCpp(type: string | null | undefined): boolean {
+		return (
+			type === CONNECTION_TYPE.KOBOLDCPP_MANAGED ||
+			type === CONNECTION_TYPE.KOBOLDCPP_MANAGED_IMAGE
+		)
 	}
 }
 

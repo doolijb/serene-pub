@@ -340,3 +340,41 @@ describe("⚠ the panel's live fill stops at the display", () => {
 		expect(capabilityRefusal(predates, "tools")).toMatch(/cannot do/i)
 	})
 })
+
+describe("⚠ a pair is judged by its MODEL's modality, not just the host's", () => {
+	// An Ollama host both chats and embeds, so the endpoint resolves both
+	// transforms for every model behind it. The model's modality is what tells
+	// `nomic-embed-text` apart from a chat checkpoint.
+	const ollama = (connectionModelModality: string | null) => ({
+		...row(CONNECTION_TYPE.OLLAMA, { "text->text": 2, "text->embedding": 2, tools: 2 }),
+		connectionModelModality
+	})
+
+	test("an embedding model is refused for chat, and allowed to embed", () => {
+		expect(capabilityRefusal(ollama("embeddings"), "text->text")).toMatch(
+			/This model cannot do/
+		)
+		expect(capabilityRefusal(ollama("embeddings"), "text->embedding")).toBeNull()
+	})
+
+	test("a chat model is refused for embeddings, and allowed to chat", () => {
+		expect(capabilityRefusal(ollama("text-gen"), "text->embedding")).toMatch(
+			/This model cannot do/
+		)
+		expect(capabilityRefusal(ollama("text-gen"), "text->text")).toBeNull()
+	})
+
+	test("a feature is never gated by modality — it rides on a transform", () => {
+		expect(capabilityRefusal(ollama("text-gen"), "tools")).toBeNull()
+	})
+
+	test("an unknown modality is ungated: silence from the host refuses nothing", () => {
+		expect(capabilityRefusal(ollama(null), "text->text")).toBeNull()
+		expect(capabilityRefusal(ollama(null), "text->embedding")).toBeNull()
+	})
+
+	test("the refusal names neither the connection nor the model", () => {
+		const refusal = capabilityRefusal(ollama("embeddings"), "text->text")!
+		expect(refusal).not.toContain("Test connection")
+	})
+})

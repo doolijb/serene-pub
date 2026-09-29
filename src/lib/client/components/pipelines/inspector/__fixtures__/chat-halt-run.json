@@ -1913,7 +1913,7 @@
 								"content": "Brix:"
 							}
 						],
-						"promptFormat": "split_session",
+						"promptFormat": "split_chat",
 						"usedVariables": [
 							"systemBlock",
 							"currentDate",
@@ -1997,7 +1997,7 @@
 								"content": "Brix:"
 							}
 						],
-						"promptFormat": "split_session",
+						"promptFormat": "split_chat",
 						"usedVariables": [
 							"systemBlock",
 							"currentDate",
@@ -2103,7 +2103,7 @@
 								"content": "Brix:"
 							}
 						],
-						"promptFormat": "split_session",
+						"promptFormat": "split_chat",
 						"usedVariables": [
 							"systemBlock",
 							"currentDate",
@@ -2320,7 +2320,7 @@
 							"content": "Brix:"
 						}
 					],
-					"promptFormat": "split_session",
+					"promptFormat": "split_chat",
 					"usedVariables": [
 						"systemBlock",
 						"currentDate",

@@ -4,11 +4,15 @@
 	import "../../../app.css"
 	import * as Icons from "@lucide/svelte"
 	import { fly, fade } from "svelte/transition"
+	import { MOTION, motionDuration } from "$lib/client/utils/motion"
 	import { onMount, setContext, onDestroy, untrack, tick } from "svelte"
-	import AdminSidebar from "./sidebars/AdminSidebar.svelte"
+	import AdminView from "$lib/client/admin/AdminView.svelte"
+	import { adminRouter } from "$lib/client/admin/adminRouter.svelte"
+	import { helpRouter } from "$lib/client/shell/helpRouter.svelte"
+	import { isPlainClick, viewLinkFor } from "$lib/client/shell/viewLinks"
+	import { getDocMeta } from "$lib/shared/utils/docsIndex"
 	import SamplingSidebar from "./sidebars/SamplingSidebar.svelte"
 	import ConnectionsSidebar from "./sidebars/ConnectionsSidebar.svelte"
-	import LegacySidebar from "./sidebars/LegacySidebar.svelte"
 	import LorebooksSidebar from "./sidebars/LorebooksSidebar.svelte"
 	import CharactersSidebar from "./sidebars/CharactersSidebar.svelte"
 	import SessionsSidebar from "./sidebars/SessionsSidebar.svelte"
@@ -16,6 +20,7 @@
 	import TagsSidebar from "./sidebars/TagsSidebar.svelte"
 	import UsersSidebar from "./sidebars/UsersSidebar.svelte"
 	import HelpSidebar from "./sidebars/HelpSidebar.svelte"
+	import LibraryView from "./library/LibraryView.svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { getSocket } from "$lib/client/sockets/socketInstance"
 	import {
@@ -37,16 +42,21 @@
 	import PipelineReviewModal from "$lib/client/components/pipelines/PipelineReviewModal.svelte"
 	import CapPauseDialog from "$lib/client/components/pipelines/CapPauseDialog.svelte"
 	import RunInspectorModal from "$lib/client/components/pipelines/inspector/RunInspectorModal.svelte"
-	import UpdateNoticeBar from "$lib/client/components/UpdateNoticeBar.svelte"
 	import type { Snippet } from "svelte"
 	import { Theme } from "$lib/client/consts/Theme"
 	import { page } from "$app/state"
-	import { goto } from "$app/navigation"
+	import { goto, pushState, replaceState } from "$app/navigation"
 	import {
-		createJumpCtx,
-		isAdminPath,
-		JUMP_CONTEXT
-	} from "$lib/client/shell/jump.svelte"
+		nextWidth,
+		snapWidth,
+		viewForPath,
+		viewAddress,
+		registerViewAddress,
+		type ViewWidth
+	} from "$lib/client/shell/viewRoutes"
+	import { shellPrefs } from "$lib/client/shell/shellPrefs.svelte"
+	import { adminHealth } from "$lib/client/admin/adminHealth.svelte"
+	import { createJumpCtx, JUMP_CONTEXT } from "$lib/client/shell/jump.svelte"
 	// While a session's DESKTOP layout editor is open its toolbar owns the top
 	// band, so the session header and the Jump pill step out of it.
 	import { layoutEditor } from "$lib/client/sessionLayout/layoutEditor.svelte"
@@ -56,6 +66,8 @@
 	// asks this instead of computing it locally, so the state and the
 	// stylesheet cannot disagree about where mobile ends.
 	import { desktop } from "$lib/client/utils/breakpoint.svelte"
+	import { notifications } from "$lib/client/notifications/notifications.svelte"
+	import { startAutoRead } from "$lib/client/notifications/autoRead.svelte"
 
 	interface Props {
 		children?: Snippet
@@ -88,6 +100,12 @@
 		"sessions:list:error",
 		"sessions:summarize:error",
 		"connections:list:error",
+		// Toasted once already, as the bare `error` event with the server's
+		// own sentence; this sibling only stops the wrapper's generic
+		// "An error occurred…" going out as a second toast.
+		"connections:setDefault:error",
+		// The wizard's local scan: nothing found is shown in place.
+		"connections:discoverLocal:error",
 		"connections:refreshModels:error",
 		"connections:syncModels:error",
 		"customThemes:delete:error",
@@ -108,7 +126,11 @@
 		"koboldcpp:startSubprocess:error",
 		"koboldcpp:version:error",
 		"lorebooks:list:error",
-		"narratorPromptConfigs:setUserActive:error",
+		// Toasted by whichever surface asked (the Lorebooks workspace or the
+		// characters panel), and only there — a second toast here was the
+		// same refusal twice, and in every other tab too.
+		"lorebooks:import:error",
+		"lorebooks:importResolve:error",
 		"ollama:pullModel:error",
 		// The pipeline panel shows every one of these itself, and the server
 		// writes them for a person — "'Prose' is still in use, point that
@@ -130,7 +152,6 @@
 		"pipelines:cloneVariableTemplate:error",
 		"pipelines:updateVariableTemplate:error",
 		"pipelines:deleteVariableTemplate:error",
-		"promptConfigs:setUserActive:error",
 		// The sampling sidebar puts both of these under the field that has to
 		// change — the clone modal's name input, or the config's Name — because
 		// a name is unique per modality now and "that one is taken" is answered
@@ -146,7 +167,25 @@
 		"users:current:logout:error",
 		"users:current:updateDisplayName:error",
 		"userSettings:uploadBackground:error",
-		"vectorization:loadModel:error"
+		"vectorization:loadModel:error",
+		// The admin components pages (C6, P6) show each of these themselves —
+		// a stale save as a banner with Reload, the rest as the server's own
+		// sentence — and only in the tab that asked.
+		"components:coreList:error",
+		"components:coreSource:error",
+		"components:list:error",
+		"components:get:error",
+		"components:clone:error",
+		"components:create:error",
+		"components:save:error",
+		"components:revertDraft:error",
+		"components:preview:error",
+		"components:setEnabled:error",
+		"components:reviewScopes:error",
+		"components:delete:error",
+		"components:export:error",
+		"components:importPreview:error",
+		"components:import:error"
 	])
 
 	// Turns "characters:update:error" into "Characters update failed", etc.
@@ -225,6 +264,58 @@
 	let openViews = $state<string[]>([])
 	let activeView = $state<string | null>(null)
 	let fullPageView = $state<string | null>(null)
+	/** Stage only (Ctrl+.): the rail and the sidebar step aside. See PanelsCtx. */
+	let stageOnly = $state(false)
+	/** Stage only's rail, shown over the stage while the pointer is at the left edge. */
+	let railPeek = $state(false)
+	/** The dock's width while its edge is being dragged; null otherwise. */
+	let dragWidth = $state<number | null>(null)
+	/** Half is a remembered dock width, not a mode of its own. */
+	let halfWidth = $derived(shellPrefs.dockWidth === "half")
+
+	// The Admin view's address is the section on screen, and it writes that
+	// address itself while it is the view in Focus.
+	registerViewAddress("admin", () => adminRouter.href)
+	adminRouter.setFocusProbe(() => fullPageView === "admin" && desktop.matches)
+	registerViewAddress("help", () => helpRouter.href)
+
+	/**
+	 * A link to a view's address opens the view where the reader is
+	 * (`shell/viewLinks.ts`): an Admin section or a documentation page from a
+	 * session, a sidebar or a dialog, without leaving the page underneath.
+	 * Capture phase, on the document, so it also covers portalled dialogs;
+	 * the views' own in-place handlers see `defaultPrevented` and step aside.
+	 */
+	$effect(() => {
+		if (!shouldShowApp) return
+		const onClick = (event: MouseEvent) => {
+			if (!isPlainClick(event)) return
+			const a = (event.target as Element | null)?.closest?.(
+				"a[href]"
+			) as HTMLAnchorElement | null
+			if (!a || a.hasAttribute("download")) return
+			// Inside Admin or Help, the view's own handler moves it in place
+			// (and asks about unsaved work once, not twice).
+			if (a.closest("[data-view-links]")) return
+			if (a.target && a.target !== "_self") return
+			const link = viewLinkFor(a.getAttribute("href") ?? "")
+			if (!link || !isKnownView(link.view)) return
+			if (
+				link.view === "help" &&
+				link.slug !== null &&
+				!getDocMeta(link.slug)
+			)
+				return
+			event.preventDefault()
+			const keepFocus = fullPageView !== null
+			if (link.view === "admin") adminRouter.go(link.href)
+			else helpRouter.go(link.slug, link.anchor)
+			void openView(link.view, { toggle: false, fullPage: keepFocus })
+		}
+		document.addEventListener("click", onClick, true)
+		return () => document.removeEventListener("click", onClick, true)
+	})
+	helpRouter.setFocusProbe(() => fullPageView === "help" && desktop.matches)
 	/**
 	 * Per-view close gates — the old `onLeftPanelClose`/`onRightPanelClose`
 	 * pair generalised. A sidebar with unsaved work binds a function here and
@@ -280,6 +371,16 @@
 				return
 			}
 			void openView(next, { toggle: false, fullPage: true })
+		},
+		get viewWidth() {
+			return currentWidth()
+		},
+		setViewWidth: (width) => setViewWidth(width),
+		get stageOnly() {
+			return stageOnly
+		},
+		set stageOnly(next: boolean) {
+			setStageOnly(next)
 		},
 		openView: (key, opts) => void openView(key, opts),
 		closeView: (key) => closeView(key),
@@ -365,7 +466,12 @@
 			activity: { icon: Icons.Bell, title: "Activity" },
 			tags: { icon: Icons.Tag, title: "Tags" },
 			characters: { icon: Icons.UsersRound, title: "Characters" },
-			lorebooks: { icon: Icons.BookMarked, title: "Lorebooks+" },
+			// The community character library: browsed beside whatever is
+			// open, imported into Characters. Registered so it can be opened
+			// and focused, but NOT on the rail (owner ruling 2026-09-27): it is
+			// reached from Characters, where what it imports lands.
+			library: { icon: Icons.Library, title: "Library" },
+			lorebooks: { icon: Icons.BookMarked, title: "Lorebooks" },
 			sessions: { icon: Icons.MessageSquare, title: "Sessions" }
 		},
 		digest: {},
@@ -377,8 +483,7 @@
 			"sampling",
 			"pipelines",
 			"settings",
-			"users",
-			"legacy"
+			"users"
 		],
 		rightNavOrder: [
 			"sessions",
@@ -439,7 +544,9 @@
 		genreName: null,
 		lorebookId: null,
 		lorebookBranchId: null,
-		isOwner: false
+		storyClock: null,
+		isOwner: false,
+		isGenerating: false
 	})
 	let graphBuildsCtx: GraphBuildsCtx = $state({
 		activeBuild: null,
@@ -458,9 +565,9 @@
 				startedAt: new Date().toISOString()
 			}
 		},
-		clearBuild: () => {
+		clearBuild: (how?: "acted") => {
 			const id = graphBuildsCtx.activeBuild?.activityId
-			if (id) socket.emit("activity:dismiss", { id })
+			if (id) socket.emit("activity:dismiss", how ? { id, how } : { id })
 			graphBuildsCtx.activeBuild = null
 			graphBuildsCtx.reopenLorebookId = null
 		}
@@ -566,8 +673,8 @@
 			delete panelsCtx.leftNav.admin
 		}
 
-		// ⚠ No rail items for the managers. The Ollama Manager and the
-		// KoboldCPP Manager were entries here until the 2026-09-17 concept
+		// ⚠ No rail items for the managers. Ollama, managed and
+		// KoboldCPP, run by Serene Pub were entries here until the 2026-09-17 concept
 		// ruling (R2); each is now the connection VIEW of its connection, so
 		// the one door is the Connections list and there is nothing to
 		// register or delete as the flags move. The flags themselves stay —
@@ -582,27 +689,6 @@
 			panelsCtx.leftNav.connections = {
 				icon: Icons.Cable,
 				title: "Connections"
-			}
-			// One entry, not two. Context Configs and Prompt Configs are both
-			// superseded — by `pipeline_context_templates` and
-			// `pipeline_prompts` — and nothing in 0.6 builds a prompt from
-			// either. Two live-looking entries in the navigation said the
-			// opposite; one called Legacy says what they are, and holds both
-			// as tabs.
-			//
-			// The one toggle that survives the changeover still hides it, for
-			// when somebody is done referring back. It keeps its old column
-			// name because the setting is the same setting: show me the old
-			// configs.
-			if (
-				systemSettingsCtx.settings?.legacyPromptConfigsVisible !== false
-			) {
-				panelsCtx.leftNav.legacy = {
-					icon: Icons.Archive,
-					title: "Legacy configs"
-				}
-			} else {
-				delete panelsCtx.leftNav.legacy
 			}
 			delete panelsCtx.leftNav.contexts
 			delete panelsCtx.leftNav.prompts
@@ -682,6 +768,10 @@
 		// Everything below is read AND written here; only `open` may retrigger.
 		untrack(() => {
 			if (open) {
+				// The editor takes the header band and lays out every zone;
+				// Stage only would hide what it edits and put its pill over
+				// Cancel and Done.
+				if (stageOnly) setStageOnly(false)
 				if (stowedForEditor) return
 				stowedForEditor = { view: activeView, fullPage: fullPageView }
 				if (activeView !== null) collapseSidebar()
@@ -811,49 +901,363 @@
 		return closeView(key)
 	}
 
-	/**
-	 * ⤵ Entering the administration area opens the Admin view.
+	/* ── widths: dock, half, focus ──────────────────────────────────────
 	 *
-	 * An EDGE, not a level: the flag flips on the first `/admin*` pathname
-	 * after a non-admin one (a direct load counts, since the flag starts
-	 * false) and resets on the way out. Written as a level — "while inside
-	 * admin, keep it open" — it would reopen on every section click and
-	 * argue with anyone who closed it, which is the one thing a person
-	 * inside a section list is most likely to do.
-	 *
-	 * Not `$state`, deliberately: nothing renders from it, and making it
-	 * reactive would feed the effect its own write.
+	 * A view shows at one of three widths. Dock (400px) and Half (half the
+	 * room right of the rail) sit BESIDE the page; which of the two a view
+	 * comes back at is a per-browser preference (`shellPrefs.dockWidth`).
+	 * Focus puts the view OVER the page — `fullPageView` is the view in
+	 * focus, and `<main>` is hidden, never unmounted, so a session underneath
+	 * keeps streaming and keeps its draft.
 	 */
-	let enteredAdminArea = false
+	function currentWidth(): ViewWidth {
+		if (!desktop.matches) return "dock"
+		if (fullPageView !== null) return "focus"
+		return shellPrefs.dockWidth
+	}
+
+	function setViewWidth(width: ViewWidth) {
+		if (!activeView || !desktop.matches) return
+		if (width === "focus") {
+			fullPageView = activeView
+			return
+		}
+		shellPrefs.setDockWidth(width)
+		fullPageView = null
+	}
+
+	/* ── Focus has an address ─────────────────────────────────────────────
+	 *
+	 * Focusing a view over a page SHALLOW-routes to the view's own address
+	 * (`viewRoutes.ts`) with `page.state.focus` naming it: `page.url` keeps
+	 * the page's address, so nothing underneath re-renders, and Back pops
+	 * the entry, stepping down to the width the view was focused from.
+	 * Loading one of those addresses cold renders an empty route page
+	 * (`src/routes/<view>/+page.svelte`) and the view is focused over it;
+	 * stepping down from there goes Home, since there is no page to return
+	 * to. Two effects, one per direction, each reacting only to its own
+	 * source so neither can feed the other.
+	 */
+
+	/** The last focused view the address was synced for. Not reactive. */
+	let syncedFocus: string | null = null
+	/** This visit's view was opened by landing on its address. Not reactive. */
+	let openedFromRoute = false
+
+	// Focus → the address.
 	$effect(() => {
-		const inAdmin = isAdminPath(page.url.pathname)
-		// Read reactively, so a direct load that lands before the user (and
-		// therefore before the registry entry) arrives opens the view as soon
-		// as both do, rather than having missed its one edge.
-		//
-		// ⚠ Desktop only. Below `lg` the sidebar is not a companion column
-		// beside the page — it is a full-screen sheet ON TOP of it, so this
-		// edge turned a deep link to /admin/settings into a section list
-		// covering the settings the link was for. On a phone the deep link
-		// lands on the page and the rail is one tap away.
-		const canOpen =
-			shouldShowApp && !!panelsCtx.leftNav.admin && desktop.matches
+		const key = fullPageView
 		untrack(() => {
-			if (!inAdmin) {
-				enteredAdminArea = false
+			if (key === syncedFocus) return
+			const was = syncedFocus
+			syncedFocus = key
+			const state = page.state as App.PageState
+			const routeView = viewForPath(page.url.pathname)
+			if (key !== null) {
+				const path = viewAddress(key)
+				if (routeView !== null) {
+					// On a view's own address: the address follows the view.
+					if (path && routeView !== key) {
+						void goto(path, {
+							replaceState: true,
+							keepFocus: true,
+							noScroll: true
+						})
+					}
+					return
+				}
+				if (state.focus === undefined) {
+					if (path)
+						pushState(path, {
+							focus: key,
+							from: shellPrefs.dockWidth,
+							depth: 1
+						})
+				} else if (state.focus !== key) {
+					replaceState(path ?? page.url.pathname + page.url.search, {
+						focus: key,
+						from: state.from,
+						depth: state.depth
+					})
+				}
 				return
 			}
-			if (enteredAdminArea || !canOpen) return
-			enteredAdminArea = true
-			// Not full page: the section list is a companion to the page it
-			// opens, and covering that page with it would be the opposite of
-			// the point. `toggle: false` because this is a deep link — it must
-			// land on the view, never toggle it shut.
-			if (!openViews.includes("admin")) {
-				void openView("admin", { toggle: false })
+			if (was === null) return
+			if (state.focus !== undefined) {
+				// Stepping down pops every entry Focus pushed (its own and the
+				// pages a focused view added), so it leaves Focus in one step
+				// and Forward can bring it back.
+				history.go(-(state.depth ?? 1))
+				return
+			}
+			if (routeView !== null) {
+				openedFromRoute = false
+				void goto("/")
 			}
 		})
 	})
+
+	// The address → focus: a cold load, Back, Forward, or navigating away.
+	let seenPath: string | null = null
+	let seenStateFocus: string | undefined = undefined
+	$effect(() => {
+		const path = page.url.pathname
+		const stateFocus = (page.state as App.PageState).focus
+		const isDesktop = desktop.matches
+		// A view registered late (Admin arrives with the user) must exist
+		// before its address can open it, or the one edge is spent on
+		// nothing.
+		const addressed = viewForPath(path)
+		const ready =
+			shouldShowApp &&
+			isSettingsLoaded &&
+			(addressed === null || isKnownView(addressed))
+		untrack(() => {
+			if (!ready) return
+			const pathChanged = path !== seenPath
+			const focusChanged = stateFocus !== seenStateFocus
+			seenPath = path
+			seenStateFocus = stateFocus
+			const routeView = viewForPath(path)
+			if (pathChanged && routeView !== null) {
+				// Admin's address names a section too, and Help's a page.
+				if (routeView === "admin")
+					adminRouter.adopt(location.pathname + location.search)
+				if (routeView === "help")
+					helpRouter.adopt(location.pathname + location.hash)
+				openedFromRoute = true
+				syncedFocus = isDesktop ? routeView : null
+				void openView(routeView, { toggle: false, fullPage: isDesktop })
+				return
+			}
+			if (pathChanged) openedFromRoute = false
+			if (focusChanged) {
+				if (stateFocus !== undefined) {
+					if (fullPageView !== stateFocus) {
+						syncedFocus = stateFocus
+						void openView(stateFocus, {
+							toggle: false,
+							fullPage: true
+						})
+					}
+				} else if (fullPageView !== null) {
+					// Back leaves the view's address. If the address bar still
+					// shows it, something replaced the entry's shallow state
+					// without carrying it (a `replaceState(url, {})` that only
+					// meant to write a hash or a query): put the marker back
+					// rather than read it as a step down.
+					const focused = fullPageView
+					if (viewForPath(location.pathname) === focused) {
+						seenStateFocus = focused
+						replaceState(location.href, {
+							...(page.state as App.PageState),
+							focus: focused
+						})
+						return
+					}
+					syncedFocus = null
+					fullPageView = null
+				}
+				return
+			}
+			// A real navigation somewhere else ends Focus: the page it
+			// covered is gone, and the new one asked to be seen.
+			if (pathChanged && fullPageView !== null) {
+				syncedFocus = null
+				fullPageView = null
+			}
+		})
+	})
+
+	// Closing the view that was opened from its own address leaves an empty
+	// route behind it (a phone's sheet, or a closed view): go Home instead.
+	$effect(() => {
+		const hidden = activeView === null
+		untrack(() => {
+			if (!hidden || !openedFromRoute) return
+			if (viewForPath(page.url.pathname) === null) return
+			openedFromRoute = false
+			void goto("/")
+		})
+	})
+
+	// The Admin rail item carries the worst "Needs you" level, so a missing
+	// default or a failed run shows from anywhere in the app. Admins only;
+	// the store does nothing for anyone else.
+	$effect(() => {
+		const isAdmin = !!userCtx.user?.isAdmin
+		if (!shouldShowApp || !isAdmin) return
+		return untrack(() => adminHealth.connect(true))
+	})
+
+	/* ── the edge between the dock and the page ───────────────────────────
+	 *
+	 * Dragging follows the pointer; releasing snaps to Dock, Half or Focus
+	 * (`snapWidth`). Arrow keys step between the same three, and a double
+	 * click puts the dock back at 400px.
+	 */
+	let dragLeft = 0
+	let dragRoom = 0
+
+	function startEdgeDrag(event: PointerEvent) {
+		if (event.button !== 0 || !sidebarRef) return
+		const rect = sidebarRef.getBoundingClientRect()
+		dragLeft = rect.left
+		dragRoom = window.innerWidth - rect.left
+		dragWidth = rect.width
+		;(event.currentTarget as HTMLElement).setPointerCapture(event.pointerId)
+		event.preventDefault()
+	}
+
+	function moveEdgeDrag(event: PointerEvent) {
+		if (dragWidth === null) return
+		dragWidth = Math.max(320, Math.min(event.clientX - dragLeft, dragRoom))
+	}
+
+	function endEdgeDrag() {
+		if (dragWidth === null) return
+		const width = snapWidth(dragWidth, dragRoom)
+		dragWidth = null
+		setViewWidth(width)
+	}
+
+	/**
+	 * The edge overlaps 6px of the page and 6px of the view so it is easy to
+	 * grab; a wheel over that strip belongs to whatever scrolls underneath
+	 * (the conversation, the view's list), not to a handle that cannot scroll.
+	 */
+	function forwardEdgeWheel(event: WheelEvent) {
+		const handle = event.currentTarget as HTMLElement
+		handle.style.pointerEvents = "none"
+		let el = document.elementFromPoint(
+			event.clientX,
+			event.clientY
+		) as HTMLElement | null
+		handle.style.pointerEvents = ""
+		const unit =
+			event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? innerHeight : 1
+		while (el && el !== document.body) {
+			const { overflowY, overflowX } = getComputedStyle(el)
+			const canY =
+				/(auto|scroll)/.test(overflowY) &&
+				el.scrollHeight > el.clientHeight
+			const canX =
+				/(auto|scroll)/.test(overflowX) &&
+				el.scrollWidth > el.clientWidth
+			if (canY || canX) {
+				el.scrollBy({
+					top: canY ? event.deltaY * unit : 0,
+					left: canX ? event.deltaX * unit : 0
+				})
+				return
+			}
+			el = el.parentElement
+		}
+	}
+
+	function handleEdgeKeydown(event: KeyboardEvent) {
+		const width = currentWidth()
+		if (event.key === "ArrowRight") {
+			event.preventDefault()
+			setViewWidth(width === "dock" ? "half" : "focus")
+		} else if (event.key === "ArrowLeft") {
+			event.preventDefault()
+			if (width === "half") setViewWidth("dock")
+		} else if (event.key === "Enter" || event.key === " ") {
+			event.preventDefault()
+			setViewWidth(nextWidth(width))
+		}
+	}
+
+	/**
+	 * Stage only hides the sidebar, so it cannot be entered from Focus: the
+	 * focused view is the only thing on screen while `<main>` is hidden, and
+	 * hiding it too left a blank window. Focus steps down to its dock width
+	 * first (popping its address), then the stage takes the window. Never
+	 * while the layout editor is open, which owns the header band the "Leave
+	 * stage only" pill would sit on.
+	 */
+	function setStageOnly(next: boolean) {
+		railPeek = false
+		if (!next) {
+			stageOnly = false
+			return
+		}
+		if (layoutEditor.open) return
+		if (fullPageView !== null) setViewWidth(shellPrefs.dockWidth)
+		stageOnly = true
+	}
+
+	/* ── shell keys ─────────────────────────────────────────────────────── */
+
+	function isEditableTarget(target: EventTarget | null): boolean {
+		const el = target as HTMLElement | null
+		if (!el || !el.tagName) return false
+		return (
+			el.isContentEditable ||
+			el.tagName === "INPUT" ||
+			el.tagName === "TEXTAREA" ||
+			el.tagName === "SELECT"
+		)
+	}
+
+	/**
+	 * Something drawn over the shell owns Escape: a modal (the phone's view
+	 * sheet is the shell, so it is excluded by identity, and closed Skeleton
+	 * dialogs linger in the DOM, hence the rect check) or an open popover or
+	 * menu.
+	 */
+	function somethingOnTop(): boolean {
+		const visible = (el: Element) => el.getClientRects().length > 0
+		const modal = Array.from(
+			document.querySelectorAll('[role="dialog"][aria-modal="true"]')
+		).some((el) => el !== sidebarRef && visible(el))
+		if (modal) return true
+		return Array.from(
+			document.querySelectorAll(
+				'[data-part="content"][data-state="open"]'
+			)
+		).some(visible)
+	}
+
+	/**
+	 * Ctrl+\ cycles the active view's width, Ctrl+Shift+\ closes it, Ctrl+.
+	 * toggles Stage only, and Escape steps down ONE layer: Stage only, then
+	 * Focus to the width it came from, then the dock collapses. Escape never
+	 * leaves a page, never cancels a generation, and stays out of the way
+	 * while a field, a dialog or a popover has it.
+	 */
+	function handleShellKeys(event: KeyboardEvent) {
+		if (!shouldShowApp || event.defaultPrevented) return
+		const mod = (event.ctrlKey || event.metaKey) && !event.altKey
+		if (mod && (event.key === "\\" || event.code === "Backslash")) {
+			if (!activeView || !desktop.matches) return
+			event.preventDefault()
+			if (event.shiftKey) void closeView(activeView)
+			else setViewWidth(nextWidth(currentWidth()))
+			return
+		}
+		if (mod && !event.shiftKey && event.key === ".") {
+			if (!desktop.matches) return
+			event.preventDefault()
+			setStageOnly(!stageOnly)
+			return
+		}
+		if (event.key !== "Escape" || !desktop.matches) return
+		if (jumpCtx.isOpen || layoutEditor.open) return
+		if (isEditableTarget(event.target) || somethingOnTop()) return
+		if (stageOnly) {
+			event.preventDefault()
+			stageOnly = false
+			railPeek = false
+		} else if (fullPageView !== null) {
+			event.preventDefault()
+			setViewWidth(shellPrefs.dockWidth)
+		} else if (activeView !== null) {
+			event.preventDefault()
+			collapseSidebar()
+		}
+	}
 
 	/* ── the rail ──────────────────────────────────────────────────────── */
 
@@ -881,6 +1285,33 @@
 		 */
 		tone?: "tertiary"
 	}
+
+	/** The view header's width switch, in the order Ctrl+\\ steps through. */
+	const WIDTH_CHOICES: {
+		width: ViewWidth
+		label: string
+		hint: string
+		icon: any
+	}[] = [
+		{
+			width: "dock",
+			label: "Dock",
+			hint: "400px beside the page",
+			icon: Icons.PanelLeft
+		},
+		{
+			width: "half",
+			label: "Half",
+			hint: "half the window, beside the page",
+			icon: Icons.Columns2
+		},
+		{
+			width: "focus",
+			label: "Focus",
+			hint: "over the page, with its own address",
+			icon: Icons.Maximize2
+		}
+	]
 
 	/** Activity lives at the foot of the rail, not among the content views. */
 	const CONTENT_ORDER = ["sessions", "characters", "lorebooks", "tags"]
@@ -956,8 +1387,10 @@
 				group: "home"
 			}
 		]
+		// Library is a view without a rail item: Characters opens it.
 		for (const item of navOrdered(panelsCtx.rightNav, CONTENT_ORDER, [
-			"activity"
+			"activity",
+			"library"
 		])) {
 			entries.push({ ...item, kind: "view", group: "content" })
 		}
@@ -1031,8 +1464,8 @@
 		{
 			kind: "more",
 			key: "more",
-			title: "More",
-			icon: Icons.Menu,
+			title: "Views",
+			icon: Icons.Layers,
 			group: "foot"
 		}
 	])
@@ -1155,7 +1588,7 @@
 		if (!desktop.matches && fullPageView !== null) fullPageView = null
 	})
 
-	// Body scroll lock for the More sheet (moved here from Header.svelte along
+	// Body scroll lock for the Views sheet (moved here from Header.svelte along
 	// with the sheet itself).
 	$effect(() => {
 		if (panelsCtx.isMobileMenuOpen) {
@@ -1165,7 +1598,7 @@
 		}
 	})
 
-	// Escape closes the More sheet, from wherever focus happens to be — a sheet
+	// Escape closes the Views sheet, from wherever focus happens to be — a sheet
 	// covering the screen should not need you to have tabbed into it first.
 	// (Window-level, as it was in Header.svelte, which owned this sheet before
 	// the bottom bar did.)
@@ -1199,22 +1632,60 @@
 		handleRailActivate(entry)
 	}
 
-	/* ── what the activity badge counts ────────────────────────────────── */
-	// Lifted verbatim from Header.svelte, whose icon groups the rail replaces.
-	let reviewCount = $derived(
-		(graphBuildsCtx?.activeBuild?.status === "review" ||
-		graphBuildsCtx?.activeBuild?.status === "error"
-			? 1
-			: 0) +
-			(sceneSummarizesCtx?.activities?.filter(
-				(a) => a.status === "review"
-			).length ?? 0) +
-			(compileEntriesCtx?.activities?.filter((a) => a.status === "review")
-				.length ?? 0)
+	/* ── what the Activity dot says ─────────────────────────────────────── */
+	/**
+	 * The Activity dot is the worst level among UNREAD notifications — red
+	 * for error, gold for attention, the Admin dot's colours (STYLE-GUIDE
+	 * §6.11). An unread `info` row lights no dot: surface-500 on this item
+	 * already means "open but not showing", and news that asks nothing of
+	 * you is in the aria-label's count and the list, not the rail.
+	 *
+	 * Queued LLM tasks never light it — ember is "the model is working"
+	 * (§2.3), and for an admin every reply anyone asked for would.
+	 *
+	 * A finished activity (a review waiting, a failure) is counted through
+	 * the notification it raises for its owner (`notifications/activity.ts`),
+	 * never again from its card — so each job counts once.
+	 */
+	type DotLevel = "error" | "attention"
+	const worseDot = (
+		a: DotLevel | null,
+		b: DotLevel | "info" | null
+	): DotLevel | null =>
+		a === "error" || b === "error"
+			? "error"
+			: a === "attention" || b === "attention"
+				? "attention"
+				: null
+	/** Unread notifications. */
+	let activityWaitingCount = $derived(notifications.unread.length)
+	let activityDot = $derived(worseDot(null, notifications.worst))
+	/** The phone Views button's one dot: Activity's, or Admin's if worse. */
+	let viewsDot = $derived(
+		worseDot(activityDot, isAdmin ? adminHealth.worst : null)
 	)
-	let activityBadgeCount = $derived(
-		reviewCount + (taskQueueCtx?.tasks?.length ?? 0)
-	)
+	const ADMIN_DOT_WORDS: Record<DotLevel, string> = {
+		error: "something is broken",
+		attention: "something needs you"
+	}
+	/** The phone Views button's name: what is open, then what its dot says. */
+	function viewsLabel(entry: RailEntry): string {
+		const parts = [entry.title]
+		if (openViews.length > 0) parts.push(`${openViews.length} open`)
+		if (activityWaitingCount > 0)
+			parts.push(`${activityWaitingCount} waiting on you`)
+		if (isAdmin && adminHealth.worst)
+			parts.push(`Admin: ${ADMIN_DOT_WORDS[adminHealth.worst]}`)
+		return parts.join(", ")
+	}
+	/** An item's accessible name with what its dot says, in words. */
+	function railLabel(entry: RailEntry): string {
+		if (entry.key === "activity" && activityWaitingCount > 0)
+			return `${entry.title}, ${activityWaitingCount} waiting on you`
+		if (entry.key === "admin" && adminHealth.worst)
+			return `${entry.title}, ${ADMIN_DOT_WORDS[adminHealth.worst]}`
+		return entry.title
+	}
 
 	/* ── persistence ───────────────────────────────────────────────────── */
 
@@ -1236,17 +1707,7 @@
 				? saved.openViews
 						.filter(
 							(key): key is string =>
-								typeof key === "string" &&
-								isKnownView(key) &&
-								// ⚠ Never RESTORED, only ever opened by hand.
-								// The legacy view subscribes to 34 socket
-								// families the moment it mounts, and it is
-								// deprecated — so one visit to it would
-								// otherwise cost every later session that
-								// traffic forever, for a screen nobody asked
-								// to see again. Opening it still works; it
-								// just does not come back on its own.
-								key !== "legacy"
+								typeof key === "string" && isKnownView(key)
 						)
 						.slice(0, MAX_OPEN_VIEWS)
 				: []
@@ -1392,6 +1853,31 @@
 		socket.emit("customThemes:list", {})
 	})
 
+	/**
+	 * Notifications: this shell holds the list for as long as it exists, and
+	 * marks read whatever it is showing (`notifications/autoRead.svelte.ts`).
+	 * A reconnect missed whatever was pushed while the socket was down, so
+	 * the list is asked for again — a named handler on the manager, removed
+	 * by reference.
+	 */
+	onMount(() => {
+		const disconnect = notifications.connect()
+		const stopAutoRead = startAutoRead(() => ({
+			activeView,
+			pageVisible: desktop.matches
+				? fullPageView === null
+				: activeView === null
+		}))
+		const io = getSocket()?.io
+		const onReconnect = () => notifications.refresh()
+		io?.on("reconnect", onReconnect)
+		return () => {
+			io?.off("reconnect", onReconnect)
+			stopAutoRead()
+			disconnect()
+		}
+	})
+
 	$effect(() => {
 		if (isSettingsLoaded) {
 			socket.emit("users:current", {})
@@ -1434,7 +1920,7 @@
 	 * NOT in `routes/+layout.svelte`'s `handleGlobalKeydown`, which is where
 	 * the app's other global chord lives: that file is this one's PARENT, and
 	 * context flows down — it cannot read `jumpCtx` any more than it can read
-	 * `userCtx` (which is why UpdateNoticeBar is mounted here too).
+	 * `userCtx`.
 	 */
 	function handleJumpHotkey(event: KeyboardEvent) {
 		if (!(event.ctrlKey || event.metaKey) || event.altKey) return
@@ -1778,6 +2264,7 @@
 		rawSocket?.on("success", handleSuccess)
 
 		socket.emit("activity:get", {})
+		notifications.refresh()
 		socket.emit("systemSettings:get", {})
 
 		// No `if (!isSettingsLoaded) return` here any more. There was one, and
@@ -1850,6 +2337,7 @@
 	onkeydown={(event) => {
 		handleMoreMenuKeydown(event)
 		handleJumpHotkey(event)
+		handleShellKeys(event)
 	}}
 />
 
@@ -1857,6 +2345,8 @@
 	<!-- Show normal app when accounts are disabled OR when accounts are enabled and user is authenticated -->
 	<div
 		class="bg-surface-100-900 relative h-full max-h-[100dvh] w-full"
+		data-stage-only={stageOnly && desktop.matches ? "" : undefined}
+		data-animate-views={shellPrefs.animateViews ? "" : undefined}
 		role="application"
 		aria-label="Serene Pub Session Application"
 	>
@@ -1874,7 +2364,8 @@
 		<!-- Character scene portraits belong to the session surface grid, as a
 		     panel (plan 21), rather than painting as fixed viewport overlays
 		     here. The `sceneImages` store is the set path (the avatar gallery
-		     writes it) and `ScenePortraitsPanel` is their display. -->
+		     writes it) and core's remote Scene Portraits widget is their
+		     display. -->
 		<!--
 			overflow-CLIP, not overflow-hidden. Both clip identically, but
 			`hidden` still establishes a scroll container: the browser can
@@ -1901,11 +2392,16 @@
 			     you get instead. -->
 			<nav
 				bind:this={railRef}
-				class="border-surface-900 hidden shrink-0 flex-col overflow-y-auto border-r py-3 transition-[width] duration-150 lg:flex {railWide
+				class="border-surface-200-800 hidden shrink-0 flex-col overflow-y-auto border-r py-3 transition-[width] duration-150 {!stageOnly
+					? 'lg:flex'
+					: railPeek
+						? 'lg:fixed lg:inset-y-0 lg:left-0 lg:z-30 lg:flex lg:shadow-2xl'
+						: ''} {railWide
 					? 'w-52 items-stretch gap-0.5 px-2.5'
 					: 'w-16 items-center gap-1'}"
 				style="background: {RAIL_BG};"
 				aria-label="Primary navigation"
+				onpointerleave={() => (railPeek = false)}
 			>
 				<!-- Not a link: Home is a rail item of its own two rows down,
 				     and a second route to the same place inside a roving-
@@ -1920,13 +2416,14 @@
 						: 'mb-2 justify-center'}"
 				>
 					<img
-						src="/logo.png"
+						src="/icon-x48.png"
+						srcset="/icon-x48.png 1x, /icon-x256.png 2x"
 						alt={railWide ? "" : "Serene Pub"}
 						class="block h-10 w-auto shrink-0"
 					/>
 					{#if railWide}
 						<span
-							class="text-foreground truncate [font-family:var(--typo-heading--font-family)] text-[17px] font-semibold"
+							class="text-foreground truncate [font-family:var(--typo-heading--font-family)] text-lg font-semibold"
 						>
 							Serene Pub
 						</span>
@@ -2019,16 +2516,8 @@
 							type="button"
 							data-rail-item
 							tabindex={i === railFocusIndex ? 0 : -1}
-							title={railWide
-								? undefined
-								: entry.key === "activity" &&
-									  activityBadgeCount > 0
-									? `${entry.title} (${activityBadgeCount})`
-									: entry.title}
-							aria-label={entry.key === "activity" &&
-							activityBadgeCount > 0
-								? `${entry.title}, ${activityBadgeCount} waiting`
-								: entry.title}
+							title={railWide ? undefined : railLabel(entry)}
+							aria-label={railLabel(entry)}
 							aria-current={isActive ? "true" : undefined}
 							class="focus-visible:outline-primary-500 relative flex shrink-0 items-center rounded-[10px] transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 {railWide
 								? 'h-10 w-full gap-3 px-3'
@@ -2077,15 +2566,43 @@
 								<!-- This view has a tab but is not the one on
 								     screen. -->
 								<span
-									class="bg-primary-500 size-1.5 rounded-full {railWide
+									class="bg-surface-500 size-1.5 rounded-full {railWide
 										? 'shrink-0'
 										: 'absolute right-[7px] bottom-[7px]'}"
 									aria-hidden="true"
 								></span>
 							{/if}
-							{#if entry.key === "activity" && activityBadgeCount > 0}
+							{#if entry.key === "admin" && adminHealth.worst}
+								<!-- Something in the admin area needs you: red for
+								     broken or needed-and-missing, gold for act on it. -->
 								<span
-									class="bg-warning-500 absolute size-2 rounded-full {railWide
+									class="{adminHealth.worst === 'error'
+										? 'bg-error-500'
+										: 'bg-primary-500'} absolute size-2 rounded-full {railWide
+										? 'top-[7px] left-[27px]'
+										: 'top-[9px] right-[9px]'}"
+									style="box-shadow: 0 0 0 2px {RAIL_BG};"
+									aria-hidden="true"
+								></span>
+							{/if}
+							{#if entry.key === "sessions" && openSessionCtx.isGenerating && fullPageView !== null}
+								<!-- The session under a focused view is writing. -->
+								<span
+									class="bg-warning-500 absolute size-2 animate-pulse rounded-full motion-reduce:animate-none {railWide
+										? 'top-[7px] left-[27px]'
+										: 'top-[9px] right-[9px]'}"
+									style="box-shadow: 0 0 0 2px {RAIL_BG};"
+									aria-hidden="true"
+								></span>
+							{/if}
+							{#if entry.key === "activity" && activityDot}
+								<!-- Something is waiting on you: red for an error,
+								     gold for act on it — never ember, which is "the
+								     model is working". -->
+								<span
+									class="{activityDot === 'error'
+										? 'bg-error-500'
+										: 'bg-primary-500'} absolute size-2 rounded-full {railWide
 										? 'top-[7px] left-[27px]'
 										: 'top-[9px] right-[9px]'}"
 									style="box-shadow: 0 0 0 2px {RAIL_BG};"
@@ -2154,14 +2671,21 @@
 			     any modal opened from inside a mobile panel (the "Create New AI
 			     Connection" dialog, for instance) mounted correctly on <body>
 			     and then rendered completely behind the panel it was launched
-			     from. It has to stay above the More sheet and its backdrop
+			     from. It has to stay above the Views sheet and its backdrop
 			     (z-40), hence 45 rather than something lower. -->
 			<div
 				bind:this={sidebarRef}
-				class="bg-surface-50-950 border-surface-200-800 fixed inset-0 z-[45] flex flex-col overflow-hidden lg:static lg:border-r {fullPageView
-					? 'lg:min-w-0 lg:flex-1'
-					: 'lg:w-100 lg:flex-none'}"
-				hidden={activeView === null}
+				data-shell-sidebar
+				class="bg-surface-50-950 border-surface-200-800 fixed inset-0 z-[45] flex flex-col overflow-hidden lg:static lg:z-auto lg:border-r {dragWidth !==
+				null
+					? 'lg:flex-none'
+					: fullPageView || halfWidth
+						? 'lg:min-w-0 lg:flex-1'
+						: 'lg:w-100 lg:flex-none'}"
+				style={dragWidth !== null && desktop.matches
+					? `width: ${dragWidth}px;`
+					: undefined}
+				hidden={activeView === null || (stageOnly && desktop.matches)}
 				role={desktop.matches ? "region" : "dialog"}
 				aria-modal={desktop.matches ? undefined : "true"}
 				aria-label={activeView
@@ -2173,7 +2697,38 @@
 				<!-- Mobile chrome: the panel header this shell has always used
 				     for a full-screen view. No expand button — the sheet is
 				     already the whole screen. -->
-				<div class="border-surface-900 shrink-0 border-b lg:hidden">
+				<div class="border-surface-200-800 shrink-0 border-b lg:hidden">
+					{#if openSessionCtx.sessionId !== null && page.url.pathname.startsWith("/sessions/")}
+						<!-- The way back to the story under this sheet: the spine,
+						     laid sideways for a phone. -->
+						<button
+							type="button"
+							class="bg-surface-100-900 hover:bg-surface-200-800 focus-visible:outline-primary-500 mx-3 mt-2.5 flex min-h-11 w-[calc(100%-1.5rem)] items-center gap-2.5 rounded-xl px-3 text-left focus-visible:outline-2"
+							onclick={collapseSidebar}
+						>
+							<Icons.CornerUpLeft
+								class="text-surface-600-400 size-4 shrink-0"
+								aria-hidden="true"
+							/>
+							<span
+								class="text-surface-950-50 min-w-0 flex-1 truncate [font-family:var(--typo-heading--font-family)] text-sm font-semibold"
+							>
+								{openSessionCtx.sessionName ??
+									"Back to the session"}
+							</span>
+							{#if openSessionCtx.isGenerating}
+								<span
+									class="bg-warning-500 size-2 shrink-0 animate-pulse rounded-full motion-reduce:animate-none"
+									aria-hidden="true"
+								></span>
+								<span
+									class="text-warning-600-400 shrink-0 text-xs"
+								>
+									writing
+								</span>
+							{/if}
+						</button>
+					{/if}
 					<PanelHeader
 						title={activeView ? titleOf(activeView) : ""}
 						closeLabel="Close {activeView
@@ -2193,43 +2748,55 @@
 				     the way in while one covers its corner), so the row keeps
 				     its own padding and reserves nothing. -->
 				<div
-					class="border-surface-900 hidden h-14 shrink-0 items-center gap-1.5 border-b pr-2.5 pl-4 lg:flex"
+					class="border-surface-200-800 hidden h-14 shrink-0 items-center gap-1.5 border-b pr-2.5 pl-4 lg:flex"
 				>
+					{#if fullPageView !== null && viewForPath(page.url.pathname) !== null}
+						<!-- Focused from its own address: the trail starts at
+						     Home, the page stepping down will go to. -->
+						<a
+							href="/"
+							class="text-surface-600-400 hover:text-surface-950-50 focus-visible:outline-primary-500 -ml-1 flex size-8 shrink-0 items-center justify-center rounded-lg focus-visible:outline-2"
+							aria-label="Home"
+							title="Home"
+						>
+							<Icons.House class="size-4" aria-hidden="true" />
+						</a>
+						<span
+							class="text-surface-500 text-[13px]"
+							aria-hidden="true"
+						>
+							›
+						</span>
+					{/if}
 					<h2
 						class="text-foreground min-w-0 flex-1 truncate [font-family:var(--typo-heading--font-family)] text-base font-semibold"
 					>
 						{activeView ? titleOf(activeView) : ""}
 					</h2>
-					<button
-						type="button"
-						class="text-surface-600-400 hover:bg-surface-200-800 hover:text-surface-950-50 focus-visible:outline-primary-500 flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-lg transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 {fullPageView
-							? 'px-2.5'
-							: 'w-8'}"
-						title={fullPageView
-							? "Back to sidebar"
-							: "Open full page"}
-						aria-label={fullPageView
-							? "Back to sidebar"
-							: "Open full page"}
-						onclick={() => {
-							if (!activeView) return
-							if (fullPageView) fullPageView = null
-							else fullPageView = activeView
-						}}
+					<div
+						class="bg-surface-100-900 flex shrink-0 gap-0.5 rounded-[10px] p-0.5"
+						role="group"
+						aria-label="View width"
 					>
-						{#if fullPageView}
-							<Icons.Minimize2
-								class="size-[18px]"
-								aria-hidden="true"
-							/>
-							<span class="text-[13px]">Back to sidebar</span>
-						{:else}
-							<Icons.Maximize2
-								class="size-[18px]"
-								aria-hidden="true"
-							/>
-						{/if}
-					</button>
+						{#each WIDTH_CHOICES as choice (choice.width)}
+							{@const selected = currentWidth() === choice.width}
+							<button
+								type="button"
+								class="focus-visible:outline-primary-500 flex h-7 w-[30px] items-center justify-center rounded-lg transition-colors focus-visible:outline-2 {selected
+									? 'bg-surface-200-800 text-surface-950-50'
+									: 'text-surface-600-400 hover:text-surface-950-50'}"
+								title="{choice.label} ({choice.hint})"
+								aria-label={choice.label}
+								aria-pressed={selected}
+								onclick={() => setViewWidth(choice.width)}
+							>
+								<choice.icon
+									class="size-4"
+									aria-hidden="true"
+								/>
+							</button>
+						{/each}
+					</div>
 					<button
 						type="button"
 						class="text-surface-600-400 hover:bg-surface-200-800 hover:text-surface-950-50 focus-visible:outline-primary-500 flex size-8 shrink-0 items-center justify-center rounded-lg transition-colors focus-visible:outline-2 focus-visible:outline-offset-2"
@@ -2291,6 +2858,124 @@
 				{/each}
 			</div>
 
+			<!-- ══ the edge ══════════════════════════════════════════════
+			     Between a docked view and the page. Drag to resize (it snaps to
+			     Dock, Half or Focus on release), arrow keys step through the
+			     same three, double click returns to the 400px dock. Zero-width
+			     so it takes nothing from either side. -->
+			{#if activeView !== null && fullPageView === null && desktop.matches && !stageOnly && !layoutEditor.open}
+				<div class="relative z-20 hidden w-0 shrink-0 lg:block">
+					<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+					<div
+						role="separator"
+						aria-orientation="vertical"
+						aria-label="Resize {titleOf(activeView)}"
+						aria-valuetext={currentWidth() === "half"
+							? "Half"
+							: "Dock"}
+						aria-valuenow={dragWidth ?? (halfWidth ? 50 : 0)}
+						aria-valuemin={0}
+						aria-valuemax={100}
+						tabindex="0"
+						title="Drag to resize · double click for 400px"
+						class="group absolute inset-y-0 -left-1.5 flex w-3 cursor-col-resize touch-none items-center justify-center focus-visible:outline-none"
+						onpointerdown={startEdgeDrag}
+						onpointermove={moveEdgeDrag}
+						onpointerup={endEdgeDrag}
+						onpointercancel={() => (dragWidth = null)}
+						ondblclick={() => setViewWidth("dock")}
+						onkeydown={handleEdgeKeydown}
+						onwheel={forwardEdgeWheel}
+					>
+						<span
+							class="bg-primary-500 absolute inset-y-0 left-1/2 w-0.5 -translate-x-1/2 transition-opacity group-hover:opacity-60 group-focus-visible:opacity-100 {dragWidth !==
+							null
+								? 'opacity-60'
+								: 'opacity-0'}"
+							aria-hidden="true"
+						></span>
+						<span
+							class="bg-surface-200-800 text-surface-700-300 relative flex h-10 w-[18px] items-center justify-center rounded-lg transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100 {dragWidth !==
+							null
+								? 'opacity-100'
+								: 'opacity-0'}"
+							aria-hidden="true"
+						>
+							<Icons.GripVertical class="size-3.5" />
+						</span>
+					</div>
+				</div>
+			{/if}
+
+			<!-- ══ the spine ═════════════════════════════════════════════
+			     A view focused over a session keeps the session in sight: who
+			     is in it, whether a reply is being written, and one click
+			     back. Only over a page that is still there to return to — a
+			     view focused from its own address has nothing underneath. -->
+			{#if fullPageView !== null && desktop.matches && !stageOnly && (page.state as App.PageState).focus !== undefined && openSessionCtx.sessionId !== null}
+				<aside
+					class="bg-surface-100-900 border-surface-200-800 order-last hidden w-14 shrink-0 flex-col items-center gap-3 border-l py-3 lg:flex"
+					aria-label="Underneath: {openSessionCtx.sessionName ??
+						'the session'}"
+				>
+					<button
+						type="button"
+						class="bg-surface-200-800 text-surface-950-50 focus-visible:outline-primary-500 flex size-10 items-center justify-center rounded-[10px] hover:brightness-110 focus-visible:outline-2 focus-visible:outline-offset-2"
+						title="Back to {openSessionCtx.sessionName ??
+							'the session'}"
+						aria-label="Back to {openSessionCtx.sessionName ??
+							'the session'}"
+						onclick={() => setViewWidth(shellPrefs.dockWidth)}
+					>
+						<Icons.CornerUpLeft
+							class="size-[18px]"
+							aria-hidden="true"
+						/>
+					</button>
+					<div class="flex flex-col items-center" aria-hidden="true">
+						{#each openSessionCtx.cast
+							.filter((m) => !m.isPersona)
+							.slice(0, 4) as member, i (member.key)}
+							<span
+								class="bg-surface-300-700 text-surface-950-50 ring-surface-100-900 flex size-[30px] items-center justify-center overflow-hidden rounded-full text-xs font-semibold ring-2 {i >
+								0
+									? '-mt-1.5'
+									: ''}"
+								title={member.name}
+							>
+								{#if member.avatarSrc}
+									<img
+										src={member.avatarSrc}
+										alt=""
+										class="size-full object-cover"
+									/>
+								{:else}
+									{member.name.charAt(0).toUpperCase()}
+								{/if}
+							</span>
+						{/each}
+					</div>
+					{#if openSessionCtx.isGenerating}
+						<span
+							class="bg-warning-500 size-2 animate-pulse rounded-full motion-reduce:animate-none"
+							aria-hidden="true"
+						></span>
+					{/if}
+					<span
+						class="text-surface-700-300 max-h-60 truncate [font-family:var(--typo-heading--font-family)] text-[13px] font-semibold [writing-mode:vertical-rl]"
+					>
+						{openSessionCtx.sessionName ?? ""}
+					</span>
+					{#if openSessionCtx.isGenerating}
+						<span
+							class="text-warning-600-400 text-xs [writing-mode:vertical-rl]"
+						>
+							writing
+						</span>
+					{/if}
+				</aside>
+			{/if}
+
 			<!-- ══ the page ══════════════════════════════════════════════
 			     Hidden, never unmounted, while a view is in full page: the
 			     session underneath keeps its scroll, its stream and its
@@ -2334,7 +3019,7 @@
 				     reconcile this with. -->
 				<div
 					class="flex-1 overflow-auto {constrainContentWidth
-						? 'mx-auto w-full max-w-[1120px]'
+						? 'mx-auto w-full max-w-[1120px] min-[2560px]:max-w-[1440px]'
 						: ''}"
 				>
 					{@render children?.()}
@@ -2342,7 +3027,8 @@
 			</main>
 
 			<!-- ══ the mobile bottom bar ═════════════════════════════════
-			     Four destinations and More, replacing the hamburger. -->
+			     Four destinations and Views (the open views, then everything
+			     else), replacing the hamburger. -->
 			<nav
 				class="bg-surface-50-950 border-surface-200-800 flex shrink-0 items-center justify-around border-t px-1 pt-2 pb-3 lg:hidden"
 				aria-label="Primary navigation"
@@ -2357,7 +3043,9 @@
 						class="flex h-12 w-16 flex-col items-center justify-center gap-[3px] rounded-lg transition-colors {isActive
 							? 'text-primary-500'
 							: 'text-surface-600-400'}"
-						aria-label={entry.title}
+						aria-label={entry.key === "more"
+							? viewsLabel(entry)
+							: entry.title}
 						aria-current={isActive && entry.key !== "more"
 							? "true"
 							: undefined}
@@ -2373,7 +3061,20 @@
 								aria-hidden="true"
 							></span>
 						{:else if entry.icon}
-							<entry.icon class="size-5" aria-hidden="true" />
+							<span class="relative flex">
+								<entry.icon class="size-5" aria-hidden="true" />
+								{#if entry.key === "more" && viewsDot}
+									<!-- The rail's Activity and Admin dots, folded
+									     into one: the worst of them. Counts live in
+									     the aria-label, never a badge (§10). -->
+									<span
+										class="{viewsDot === 'error'
+											? 'bg-error-500'
+											: 'bg-primary-500'} ring-surface-50-950 absolute -top-0.5 -right-1 size-2 rounded-full ring-2"
+										aria-hidden="true"
+									></span>
+								{/if}
+							</span>
 						{/if}
 						<span class="text-[11px] leading-none">
 							{entry.title}
@@ -2403,42 +3104,68 @@
 		     unrendered there too, exactly as for full page, rather than
 		     merely stacked under. Ctrl-K opens the overlay in every one of
 		     those states. -->
-		{#if !layoutEditor.open && fullPageView === null && (desktop.matches || activeView === null)}
+		{#if stageOnly && desktop.matches && !layoutEditor.open}
+			<!-- The way out of Stage only, where the Jump pill would be. The
+			     8px strip on the left edge brings the rail back over the stage. -->
+			<button
+				type="button"
+				class="bg-surface-50-950/90 border-surface-200-800 text-surface-700-300 hover:text-surface-950-50 focus-visible:outline-primary-500 fixed top-2 right-4 z-[44] flex h-[34px] items-center gap-2 rounded-full border px-3 text-[13px] backdrop-blur focus-visible:outline-2"
+				onclick={() => {
+					stageOnly = false
+					railPeek = false
+				}}
+			>
+				Leave stage only
+				<kbd
+					class="bg-surface-200-800 text-surface-800-200 rounded-md px-1.5 py-0.5 font-mono text-[11px]"
+				>
+					Esc
+				</kbd>
+			</button>
+			<div
+				class="fixed inset-y-0 left-0 z-[29] w-2"
+				role="presentation"
+				onpointerenter={() => (railPeek = true)}
+			></div>
+		{:else if !layoutEditor.open && fullPageView === null && !panelsCtx.isMobileMenuOpen && (desktop.matches || activeView === null)}
 			<JumpPill {jumpCtx} />
 		{/if}
 		{#if jumpCtx.isOpen}
 			<JumpOverlay {jumpCtx} />
 		{/if}
 
-		<!-- ══ the More sheet ════════════════════════════════════════════
+		<!-- ══ the Views sheet ═══════════════════════════════════════════
 		     Everything the bottom bar has no room for. Same markup the
 		     hamburger's menu used, same 44px rows. -->
 		{#if panelsCtx.isMobileMenuOpen}
 			<!-- Backdrop -->
 			<div
-				class="fixed inset-0 z-[40] bg-black/40"
+				class="bg-surface-950/60 fixed inset-0 z-[40]"
 				onclick={() => (panelsCtx.isMobileMenuOpen = false)}
 				role="presentation"
-				transition:fade={{ duration: 150 }}
+				transition:fade={{ duration: motionDuration(MOTION.fast) }}
 			></div>
 			<div
 				class="bg-surface-100-900/95 fixed inset-0 z-[40] flex flex-col overflow-y-auto px-2 lg:hidden"
-				transition:fly={{ x: -40, duration: 200 }}
+				transition:fly={{
+					y: 24,
+					duration: motionDuration(MOTION.slow)
+				}}
 			>
 				<div
 					class="border-border flex items-center justify-between border-b p-4"
 				>
 					<span
-						class="text-foreground funnel-display text-xl font-bold tracking-tight whitespace-nowrap"
+						class="text-foreground [font-family:var(--typo-heading--font-family)] text-xl font-semibold whitespace-nowrap"
 					>
-						Serene Pub
+						Views
 					</span>
 					<!-- Matches the bar button that opened it: square 44px
 					     target, and it had no accessible name at all before. -->
 					<button
 						type="button"
 						class="btn hover:preset-tonal-surface text-foreground flex size-11 items-center justify-center p-0 [&>svg]:size-6"
-						aria-label="Close navigation menu"
+						aria-label="Close views"
 						onclick={(e) => {
 							e.stopPropagation()
 							panelsCtx.isMobileMenuOpen = false
@@ -2459,6 +3186,43 @@
 				     `[&>svg]:size-5` rather than `h-5 w-5` on the icon itself:
 				     `btn` sizes child svg from --btn-size, and that rule would
 				     otherwise win and shrink them. -->
+				{#if openViews.length > 0}
+					<!-- The views with a tab, first: a phone has no rail to
+					     carry their dots, so this list is where they live. -->
+					<div class="text-surface-600-400 px-5 pt-4 pb-1 text-xs">
+						Open
+					</div>
+					<div class="flex flex-col px-2">
+						{#each openViews as key (key)}
+							{@const reg =
+								panelsCtx.rightNav[key] ??
+								panelsCtx.leftNav[key]}
+							<button
+								class="btn hover:preset-filled-surface-200-800 text-foreground flex min-h-12 w-full items-center justify-start gap-3 rounded-lg px-3 text-base [&>svg]:size-5"
+								onclick={() => {
+									panelsCtx.isMobileMenuOpen = false
+									void openView(key, { toggle: false })
+								}}
+							>
+								{#if reg?.icon}
+									<reg.icon aria-hidden="true" />
+								{/if}
+								<span class="flex-1 text-left">
+									{titleOf(key)}
+								</span>
+								{#if key === "sessions" && openSessionCtx.isGenerating}
+									<span
+										class="bg-warning-500 size-2 animate-pulse rounded-full motion-reduce:animate-none"
+										aria-hidden="true"
+									></span>
+								{/if}
+							</button>
+						{/each}
+					</div>
+					<div class="text-surface-600-400 px-5 pt-4 pb-1 text-xs">
+						Everything else
+					</div>
+				{/if}
 				<div class="flex flex-col overflow-y-auto p-2">
 					{#each moreMenuEntries as entry (entry.key)}
 						<button
@@ -2487,17 +3251,15 @@
 	     each sidebar keeps the props it has always taken. -->
 	{#snippet sidebarView(key: string)}
 		{#if key === "admin"}
-			<!-- No `bind:onclose`: the section list holds no unsaved work, so
-			     there is no gate for it to register. -->
-			<AdminSidebar />
+			<!-- The gate asks when the section on screen holds unsaved edits
+			     (`adminUnsavedEdits`). -->
+			<AdminView bind:onclose={viewCloseGates[key]} />
 		{:else if key === "sampling"}
 			<SamplingSidebar bind:onclose={viewCloseGates[key]} />
 		{:else if key === "connections"}
 			<ConnectionsSidebar bind:onclose={viewCloseGates[key]} />
 		{:else if key === "users"}
 			<UsersSidebar bind:onclose={viewCloseGates[key]} />
-		{:else if key === "legacy"}
-			<LegacySidebar bind:onclose={viewCloseGates[key]} />
 		{:else if key === "pipelines"}
 			<PipelinesSidebar
 				bind:onclose={viewCloseGates[key]}
@@ -2513,6 +3275,9 @@
 			<ActivitySidebar bind:onclose={viewCloseGates[key]} />
 		{:else if key === "characters"}
 			<CharactersSidebar bind:onclose={viewCloseGates[key]} />
+		{:else if key === "library"}
+			<!-- No `bind:onclose`: browsing holds no unsaved work. -->
+			<LibraryView />
 		{:else if key === "sessions"}
 			<SessionsSidebar
 				bind:onclose={viewCloseGates[key]}
@@ -2542,16 +3307,36 @@
      screen should own a copy. -->
 <RunInspectorModal />
 
-<!-- Update notice. Rendered here rather than in +layout.svelte because that
-     file is the parent of this one and so cannot read userCtx (context flows
-     down), and because a notice only an admin can act on has no business
-     appearing over the login screen. -->
-<UpdateNoticeBar isAdmin={!!userCtx.user?.isAdmin} />
-
 <style lang="postcss">
 	@reference "tailwindcss";
 
 	main {
 		@apply relative m-0;
+	}
+
+	/* Motion (STYLE-GUIDE §8): a view slides 16px out of the rail as it
+	   opens; on a phone the sheet rises. Switching between open views stays
+	   instant — the attribute only changes when the sidebar goes from hidden
+	   to shown. Off with the Animate views setting, and never under reduced
+	   motion. */
+	@media (prefers-reduced-motion: no-preference) {
+		:global([data-animate-views] [data-shell-sidebar]) {
+			transition:
+				opacity 160ms ease-out,
+				translate 160ms ease-out;
+		}
+		@starting-style {
+			:global([data-animate-views] [data-shell-sidebar]) {
+				opacity: 0;
+				translate: 0 24px;
+			}
+		}
+		@media (width >= 64rem) {
+			@starting-style {
+				:global([data-animate-views] [data-shell-sidebar]) {
+					translate: -16px 0;
+				}
+			}
+		}
 	}
 </style>
