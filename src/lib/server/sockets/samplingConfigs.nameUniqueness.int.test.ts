@@ -27,6 +27,7 @@ import { eq } from "drizzle-orm"
 import { S } from "@serene-pub/sdk"
 import * as schema from "$lib/server/db/schema"
 import type { TestDb } from "$lib/server/utils/testDb"
+import { driverErrorOf } from "$lib/server/db/errors"
 
 let testDb: TestDb
 let dataDir: string
@@ -62,13 +63,17 @@ afterAll(async () => {
 
 const INDEX = "sampling_configs_modality_name_unique"
 
-/** The insert's error message, or null if it was accepted. */
+/**
+ * The insert's error message as the driver raised it, or null if it was
+ * accepted. The driver's, not drizzle's wrapper's: the wrapper's message is the
+ * SQL, and the index name is in Postgres' own words under `.cause`.
+ */
 async function insertError(values: any): Promise<string | null> {
 	try {
 		await testDb.insert(schema.samplingConfigs).values(values)
 		return null
 	} catch (e) {
-		return String((e as Error).message)
+		return String((driverErrorOf(e) as Error).message)
 	}
 }
 
@@ -182,6 +187,48 @@ describe("the handlers answer a collision in words", () => {
 
 		const rows = await testDb.query.samplingConfigs.findMany({
 			where: eq(schema.samplingConfigs.name, "Studio Light")
+		})
+		expect(rows).toHaveLength(1)
+	}, 60_000)
+
+	test("create answers the race past its check in the same words, not the index's", async () => {
+		// Two admins saving at once both pass the check-then-write; the index
+		// holds the line, and its violation is recognised on the driver error
+		// under drizzle's wrapper — by its constraint name, not the wrapper's
+		// message, which is the SQL.
+		const { samplingConfigsCreate } = await import("./samplingConfigs")
+		const admin = await makeAdmin("name-unique-race-admin")
+		const c = collector()
+
+		await testDb
+			.insert(schema.samplingConfigs)
+			.values({ name: "Key Light", shape: S.imageGen })
+
+		// The check reads the table and sees nothing, as it would for a
+		// create racing another.
+		const findMany = vi
+			.spyOn(testDb.query.samplingConfigs, "findMany")
+			.mockResolvedValueOnce([] as any)
+		try {
+			await expect(
+				samplingConfigsCreate.handler(
+					fakeSocket(admin.id),
+					{ sampling: { name: "Key Light", shape: S.imageGen } } as any,
+					c.emit as any
+				)
+			).rejects.toThrow(/Key Light/)
+		} finally {
+			findMany.mockRestore()
+		}
+
+		const message = c.errorOn("samplingConfigs:create:error")
+		expect(message).toContain('A sampling config named "Key Light" already exists')
+		expect(message).toContain("image generation")
+		expect(message).not.toContain(INDEX)
+		expect(message).not.toMatch(/Failed query/)
+
+		const rows = await testDb.query.samplingConfigs.findMany({
+			where: eq(schema.samplingConfigs.name, "Key Light")
 		})
 		expect(rows).toHaveLength(1)
 	}, 60_000)
@@ -335,8 +382,11 @@ describe("seeding under the constraint", () => {
 		})
 
 		// And the rest of sync() ran — this is the half that proves no cascade.
-		const contexts = await testDb.select().from(schema.contextConfigs)
-		expect(contexts.length).toBeGreaterThan(0)
+		const admins = await testDb
+			.select()
+			.from(schema.users)
+			.where(eq(schema.users.seedKey, "user-admin"))
+		expect(admins).toHaveLength(1)
 	}, 60_000)
 
 	test("the yield is stable across boots", async () => {

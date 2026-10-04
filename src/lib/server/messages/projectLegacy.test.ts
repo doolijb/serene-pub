@@ -4,7 +4,7 @@ import { textOf } from "./textOf"
 
 /**
  * The one algorithm (20 §5), pinned at the unit: every legacy shape the wild
- * holds — plain, swiped, thinking, narrator, generating, greeting — projects
+ * holds — plain, swiped, reasoning, narrator, generating, greeting — projects
  * to a model whose `textOf` is byte-identical to the legacy `content`. That
  * equality is the migration's whole warrant.
  */
@@ -61,15 +61,15 @@ describe("projectLegacy", () => {
 				swipes: {
 					currentIdx: 1,
 					history: ["first", "second"],
-					thinkingHistory: ["hmm one", null]
+					reasoningHistory: ["hmm one", null]
 				},
-				thinking: null
+				reasoning: null
 			}
 		})
 		expect(p.message.activeRevisions).toEqual({ "0": 1 })
-		// revision 0 carries its thinking; revision 1 has none
+		// revision 0 carries its reasoning; revision 1 has none
 		expect(
-			p.parts.filter((x) => x.type === "core:thinking")
+			p.parts.filter((x) => x.type === "core:reasoning")
 		).toMatchObject([{ revision: 0, content: "hmm one" }])
 		expect(
 			p.parts.filter((x) => x.type === "core:markdown")
@@ -94,13 +94,13 @@ describe("projectLegacy", () => {
 		expect(wild.message.activeRevisions).toEqual({ "0": 1 })
 	})
 
-	it("a single-revision message keeps its denormalized thinking", () => {
-		const p = project({ metadata: { thinking: "let me consider" } })
+	it("a single-revision message keeps its denormalized reasoning", () => {
+		const p = project({ metadata: { reasoning: "let me consider" } })
 		expect(p.parts).toMatchObject([
-			{ ordinal: 1, type: "core:thinking", content: "let me consider" },
+			{ ordinal: 1, type: "core:reasoning", content: "let me consider" },
 			{ ordinal: 2, type: "core:markdown" }
 		])
-		// thinking never enters the default projection
+		// reasoning never enters the default projection
 		expect(textOf(asMessage(p))).toBe("Ash tilts her head.")
 	})
 
@@ -175,9 +175,9 @@ describe("projectLegacy", () => {
 	}
 	const note = { kind: "notes", label: "Step notes", content: "Low light." }
 
-	it("a row's folded sections become core:section parts above thinking and body", () => {
+	it("a row's folded sections become core:section parts above reasoning and body", () => {
 		const p = project({
-			metadata: { thinking: "weigh it", sections: [plan, note] }
+			metadata: { reasoning: "weigh it", sections: [plan, note] }
 		})
 		expect(p.parts).toEqual([
 			{
@@ -204,7 +204,7 @@ describe("projectLegacy", () => {
 				step: 0,
 				revision: 0,
 				ordinal: 3,
-				type: "core:thinking",
+				type: "core:reasoning",
 				content: "weigh it",
 				data: null
 			},
@@ -280,9 +280,9 @@ describe("projectLegacy", () => {
 	})
 
 	it("a row with no sections projects exactly as before (existing rows unchanged)", () => {
-		const p = project({ metadata: { thinking: "t", sections: [] } })
+		const p = project({ metadata: { reasoning: "t", sections: [] } })
 		expect(p.parts.map((x) => [x.ordinal, x.type])).toEqual([
-			[1, "core:thinking"],
+			[1, "core:reasoning"],
 			[2, "core:markdown"]
 		])
 	})

@@ -15,8 +15,8 @@ Regenerate with:
     node ../serene-pub-sdk/cli/dist/bin.js build \
       ../serene-pub-sdk/sdk-tests/fixtures/unified-plugin --out <tmp>
 
-then copy `manifest.json`, `bundle.js` and `pipelines/` into `dist/plugin/`
-here. (Run it with `npx tsx ../serene-pub-sdk/cli/src/bin.ts` instead when the
+then copy `manifest.json`, `bundle.js`, `pipelines/` and `components/` into
+`dist/plugin/` here. (Run it with `npx tsx ../serene-pub-sdk/cli/src/bin.ts` instead when the
 SDK's `dist` is older than the packager change you are regenerating for.) `ui/`
 is this fixture's own: the SDK fixture declares `ui/tally.html` and ships no
 file, because nothing on that side mounts one.
@@ -50,6 +50,10 @@ What it exercises, deliberately:
   (`core:spec/respond`), which is also the package's one `requires` entry;
 - a prompt in D-1's `prompts` vocabulary rather than `templates`;
 - a preset binding both of the genre's events;
-- a `surfaces.panels` frame;
+- a component widget (`widgets[0].component: 'tally'`) whose component places
+  `ui/tally.html` as an `sp-frame` — hand-edited into `manifest.json` (the frame
+  widget retired 2026-10-02), with `dist/plugin/components/tally.js` a hand-written
+  stand-in for the built module (`// @ts-nocheck`, as `bundle.js`); the `bundle.js`
+  still inlines an older SDK's checks, which nothing calls;
 - a node definition with `hooks.nodeHandlers` naming the exported function that
   implements it, and the bundle that exports it — the three seams D-6b closed.

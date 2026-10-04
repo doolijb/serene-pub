@@ -20,6 +20,11 @@
 		disabled?: boolean
 		/** One short line under the label: why it is disabled, or a detail. */
 		hint?: string
+		/**
+		 * Listed whatever is typed — an action row such as **New place…**,
+		 * which is the answer exactly when nothing typed matches.
+		 */
+		unfiltered?: boolean
 	}
 </script>
 
@@ -83,8 +88,10 @@
 		/** Extra classes for the outer wrapper — width, margins. */
 		class?: string
 		/** Fires only on an actual selection (including a clear), never while
-		 *  typing, so it stands in for the old `<select>`'s `oninput`. */
-		onValueChange?: (value: string) => void
+		 *  typing, so it stands in for the old `<select>`'s `oninput`. `typed`
+		 *  is what had been typed when it was picked ("" when nothing was) —
+		 *  what an `unfiltered` action row such as New place… starts from. */
+		onValueChange?: (value: string, typed: string) => void
 	}
 
 	let {
@@ -113,6 +120,12 @@
 	// whole object into the same component instance. An uncontrolled input would
 	// sit there showing the previous connection's model.
 	let query = $state<string | null>(null)
+	/**
+	 * What was last typed since the popup opened, kept past zag putting the
+	 * selection's text back — `onValueChange`'s `typed`, whichever of the two
+	 * callbacks zag fires first.
+	 */
+	let lastTyped = ""
 
 	// An option with no label reads as its value humanised ("oldest-first" →
 	// "Oldest first"), never as a blank row. A caller that passes the value
@@ -143,7 +156,10 @@
 	let renderGroups: RenderGroup[] = $derived.by(() => {
 		const needle = query?.trim().toLowerCase()
 		let matches = needle
-			? choices.filter((o) => o.label.toLowerCase().includes(needle))
+			? choices.filter(
+					(o) =>
+						o.unfiltered || o.label.toLowerCase().includes(needle)
+				)
 			: choices
 		// The current value always gets a row. zag highlights the selected row
 		// when the popup opens and never checks that the row exists, so naming
@@ -241,20 +257,27 @@
 		// Empty on a clear, which is exactly what picking the old
 		// `<option value="">` wrote.
 		const next = details.value[0] ?? ""
+		const typed = lastTyped.trim()
+		lastTyped = ""
 		query = null
 		value = next
-		onValueChange?.(next)
+		onValueChange?.(next, typed)
 	}}
 	onInputValueChange={(details) => {
 		// Only typing is the user's own text. Every other reason — selecting,
 		// clearing, Escape, clicking away — is zag putting the selection's text
 		// back, and letting the derived value do that keeps one source of truth.
 		query = details.reason === "input-change" ? details.inputValue : null
+		if (details.reason === "input-change") lastTyped = details.inputValue
 	}}
 	onOpenChange={(details) => {
 		// Reset on close only. Typing opens the popup, so resetting on open
 		// would wipe the very keystroke that opened it.
 		if (!details.open) query = null
+		// Text typed and then abandoned (Escape, a click away) is not what a
+		// later pick was typed for: forget it. A close that IS the pick keeps
+		// it — `onValueChange` hands it over and clears it itself.
+		if (!details.open && details.reason !== "item-select") lastTyped = ""
 	}}
 >
 	<Combobox.Label class={labelHidden ? "sr-only" : "font-semibold"}>

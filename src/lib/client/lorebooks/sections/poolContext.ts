@@ -2,6 +2,7 @@ import { getContext, setContext } from "svelte"
 import type { PoolItem } from "../poolFilter"
 import type { RefLink } from "../editor/refs"
 import type { PoolSource } from "./types"
+import type { WhenEntryLike } from "../graphs/linkDraft"
 
 /**
  * What a curated row or editor may ask the workspace to do.
@@ -63,14 +64,40 @@ export interface LorePoolCtx {
 	 * are the same number only by coincidence.
 	 */
 	bindingForTag(tag: string): string | null
-	/** Opens the compile flow for a history entry, resuming a pending run. */
+	/**
+	 * Opens the compile flow for a history entry at the reading being read,
+	 * resuming that reading's pending run.
+	 */
 	openCompile(entry: PoolSource): void
+	/**
+	 * The compile of a history entry at the reading being read — its line
+	 * and moment — when there is one. Another line's compile of the same
+	 * entry is another run (`compileActivityAt`).
+	 */
+	compileActivityOf(historyEntryId: number): CompileEntryState | undefined
 	/** Opens the scene processing flow, resuming a pending run. */
 	openProcess(sceneId: number, activityId?: string | null): void
 	/** Re-reads the book's scenes after a write the socket does not echo. */
 	refreshScenes(): void
 	/** Opens the Graphs section. Absent when the book has graphs off. */
 	onNavigateToGraph?: () => void
+	/**
+	 * Every history entry the book holds, on every line — what dates a
+	 * relationship, so a place's Links list reads the line as the canvas
+	 * does (`edgesOnLine`). Unlike the canvas, which draws only what stands
+	 * at the moment, the list also keeps a link made true later
+	 * (`splitByMoment`) and one whose far end is archived at the moment,
+	 * each listed after the rest with a badge and left out of its count.
+	 */
+	readonly historyEntries: readonly (WhenEntryLike & {
+		branchId?: number | null
+	})[]
+	/**
+	 * Writes a new place with this name on the line being read and resolves
+	 * with it — a place's Links list offers **New place…** at the far end of a
+	 * link. Rejects with the server's sentence.
+	 */
+	createPlace(name: string): Promise<{ id: number; name: string }>
 }
 
 const KEY = Symbol("lorePool")
@@ -95,8 +122,12 @@ const INERT: LorePoolCtx = {
 	bindingName: (id) => `#${id}`,
 	bindingForTag: () => null,
 	openCompile: () => {},
+	compileActivityOf: () => undefined,
 	openProcess: () => {},
-	refreshScenes: () => {}
+	refreshScenes: () => {},
+	historyEntries: [],
+	createPlace: () =>
+		Promise.reject(new Error("This place is not in a lorebook workspace."))
 }
 
 export function getLorePoolCtx(): LorePoolCtx {

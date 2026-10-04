@@ -3,20 +3,25 @@
  * pass B15/B16, owner D1a/D2a, 2026-09-27; R8, owner F2/F4/F6 2026-09-28).
  *
  *  - **R8 — a turn is the Castellan's.** The planner, then the play: the
- *    Castellan's **beats row in the Sanctum first** (a markdown list, whole),
- *    then the **lead delver's line, streamed** — the run's live row, opened
- *    only now, so nothing streams before it — then the rest of the party,
- *    complete, in the planner's order. **No speakerless row on `main`**:
- *    nothing narrates a turn. The keeper runs once; the world's changes are
- *    filed at the beats row, a delver's at their own line.
+ *    Castellan's **beats row in the Sanctum** (a markdown list, whole) —
+ *    the **plan row**, carrying the turns it plans. **No speakerless row on
+ *    `main`**: nothing narrates a turn. The Castellan's keeper keeps the
+ *    world's books, filed at the beats row.
+ *  - **Character turns** (owner ruling 2026-09-30: "they are character
+ *    turns, not first delver, later delver"): each delver the plan names
+ *    then takes a turn of their own — a run each, fired by auto-advance off
+ *    the turn order, in the planner's order — streaming their line into
+ *    their own row and keeping their own books, filed at that line. Their
+ *    rows belong to the planning turn (`metadata.planRowId`): the turn is
+ *    open whole, and retaken whole.
  *  - **R8 — Narrate is the Castellan fired.** From `main` or from the
  *    Sanctum composer: one streamed Castellan row on `main`, and nothing
  *    else — no planner, no voices, no Sanctum row.
  *  - **R8 — the knock** is one Castellan question on `main`, and nothing
  *    else.
- *  - **R8 × R2 — retake** of a turn takes exactly the beats row and the cast
- *    rows; of a narration, narrates again.
- *  - **B15** — Pick who speaks is a delver-only turn.
+ *  - **R8 × R2 — retake** of a turn takes exactly the beats row and the
+ *    character turns' rows; of a narration, narrates again.
+ *  - **B15** — Pick who speaks is that delver's character turn alone.
  *  - **R12** — a stored `turnStyle: 'narrator'` is inert.
  *
  * The faked model answers every JSON request (planner, keeper) with one
@@ -159,13 +164,6 @@ vi.mock("$lib/server/connections/capabilityTarget", async (importOriginal) => {
 		}
 	}
 })
-vi.mock("$lib/server/utils/getUserConfigurations", () => ({
-	getUserConfigurations: async () => ({
-		sampling: { id: 1 },
-		contextConfig: { id: 1 },
-		promptConfig: { id: 1, systemPrompt: "Stay in character." }
-	})
-}))
 vi.mock("$lib/server/embedding", () => ({
 	isModelReady: () => false,
 	getLoadedModelId: () => null,
@@ -377,8 +375,6 @@ async function runsOf(sessionId: number) {
 		.where(eq(schema.pipelineRuns.sessionId, sessionId))
 }
 
-
-
 /** Every row the turn wrote, oldest first — the master's own line left out. */
 async function turnRows(sessionId: number) {
 	const schema = await import("$lib/server/db/schema")
@@ -413,14 +409,33 @@ const plannerCalls = () =>
 const byChannel = <T extends { channel: string }>(rows: T[], channel: string) =>
 	rows.filter((r) => r.channel === channel)
 
-describe("R8 · a turn is the Castellan's run", () => {
-	test("the Sanctum's beats row first, then the lead delver streamed, then the rest — no speakerless row on main", async () => {
+/** Every reply run's inlet `via`, oldest first. */
+async function viasOf(sessionId: number) {
+	const schema = await import("$lib/server/db/schema")
+	const runs = await testDb
+		.select({ receipt: schema.pipelineRuns.receipt, specSlug: schema.pipelineRuns.specSlug })
+		.from(schema.pipelineRuns)
+		.where(eq(schema.pipelineRuns.sessionId, sessionId))
+		.orderBy(asc(schema.pipelineRuns.id))
+	return runs
+		.filter((r) => r.specSlug === "core:spec/lair-respond")
+		.map((r) => ((r.receipt as any).nodes as any[]).find((n) => n.kind === "inlet")!.output.via)
+}
+
+describe("R8 · a turn is the Castellan's run, and the party's lines are character turns", () => {
+	test("the Sanctum's beats row first, then each delver's own character turn, streamed, in order — no speakerless row on main", async () => {
 		reset()
 		const w = await session({ trustNarrator: true })
 		const { res, emitted } = await reply(w, "the Castellan's turn road")
 		expect((res as any)?.error).toBeUndefined()
-		// One turn — the turn order recomputes as rows land, and fires nothing.
-		expect(await respondRuns(w.session.id)).toEqual(["core:spec/lair-respond:ok"])
+		// The Castellan's turn, then one character turn per named delver —
+		// fired by auto-advance off the turn order, never pressed.
+		expect(await respondRuns(w.session.id)).toEqual([
+			"core:spec/lair-respond:ok",
+			"core:spec/lair-respond:ok",
+			"core:spec/lair-respond:ok"
+		])
+		expect((await viasOf(w.session.id)).slice(1)).toEqual(["plan", "plan"])
 
 		const rows = await turnRows(w.session.id)
 		// The Sanctum: the Castellan's beats row, whole, as a markdown list.
@@ -436,42 +451,47 @@ describe("R8 · a turn is the Castellan's run", () => {
 		])
 		for (const r of main) expect(r.characterId).not.toBeNull()
 		for (const r of rows) expect(r.isGenerating).toBe(false)
-		// Beats before the lead: the master reads the plan while the party speak.
+		// Beats first: the master reads the plan while the party speak.
 		const [beats] = sanctum
-		const [lead, rest] = main
-		expect(beats!.id).toBeLessThan(lead!.id)
-		expect(lead!.id).toBeLessThan(rest!.id)
-		expect((lead!.metadata as any)?.speaker).toBe(`character:${w.brannoc}`)
-		expect((rest!.metadata as any)?.speaker).toBe(`character:${w.vell}`)
+		const [first, second] = main
+		expect(beats!.id).toBeLessThan(first!.id)
+		expect(first!.id).toBeLessThan(second!.id)
+		expect((first!.metadata as any)?.speaker).toBe(`character:${w.brannoc}`)
+		expect((second!.metadata as any)?.speaker).toBe(`character:${w.vell}`)
+		// Each line belongs to the turn that planned it.
+		expect(main.map((r) => (r.metadata as any)?.planRowId)).toEqual([beats!.id, beats!.id])
+		expect((beats!.metadata as any)?.turnPlan?.turns).toEqual([
+			`character:${w.brannoc}`,
+			`character:${w.vell}`
+		])
 		// The prose calls are the party's alone — nothing narrated the turn.
 		expect(proseCalls).toEqual(["Brannoc", "Vell"])
 		expect(plannerCalls()).toBe(1)
 
-		// Nothing streamed before the lead's line: every frame of a row still
-		// being written is the lead's, and one of them carried text.
+		// Every character turn streamed its own line: every frame of a row
+		// still being written is a delver's, and text reached each of them.
 		const frames = generatingFrames(emitted)
-		expect(frames.length).toBeGreaterThan(0)
-		expect(new Set(frames.map((f) => f.id))).toEqual(new Set([lead!.id]))
-		expect(frames.some((f) => f.content.length > 0)).toBe(true)
-		// …and the beats row was announced before the lead's row was.
+		expect(new Set(frames.map((f) => f.id))).toEqual(new Set([first!.id, second!.id]))
+		for (const row of [first!, second!])
+			expect(frames.some((f) => f.id === row.id && f.content.length > 0)).toBe(true)
+		// …and the beats row was announced before any delver's row was.
 		const order = announcedOrder(emitted)
 		expect(order.indexOf(beats!.id)).toBeGreaterThanOrEqual(0)
-		expect(order.indexOf(beats!.id)).toBeLessThan(order.indexOf(lead!.id))
+		expect(order.indexOf(beats!.id)).toBeLessThan(order.indexOf(first!.id))
 		// A turn is not a narration: fired as the carry-on, never `narrate`.
-		expect((await inletOf(w.session.id)).via).not.toBe("narrate")
+		expect((await viasOf(w.session.id))[0]).not.toBe("narrate")
 	})
 
-	test("the keeper runs once, over the beats and every line; the world's changes are filed at the beats row, Brannoc's at his", async () => {
+	test("the Castellan's keeper keeps the world's books at the beats row; each character turn keeps its own delver's, at their line", async () => {
 		reset()
 		const w = await session({ trustNarrator: true })
 		await reply(w, "the keeper road")
-		expect(keeperCalls()).toBe(1)
-		const keeperPrompt = jsonPrompts.find((p) =>
-			p.includes("You keep the record of a delve")
-		)!
-		expect(keeperPrompt).toContain("The torch gutters.")
-		expect(keeperPrompt).toContain("Brannoc speaks.")
-		expect(keeperPrompt).toContain("Vell speaks.")
+		// The Castellan's keeper, then one per character turn.
+		const keepers = jsonPrompts.filter((p) => p.includes("You keep the record of a delve"))
+		expect(keepers).toHaveLength(3)
+		expect(keepers[0]).toContain("The torch gutters.")
+		expect(keepers[1]).toContain("Brannoc speaks.")
+		expect(keepers[2]).toContain("Vell speaks.")
 
 		const rows = await turnRows(w.session.id)
 		const beats = byChannel(rows, "sanctum")[0]!
@@ -507,8 +527,9 @@ describe("R8 · a turn is the Castellan's run", () => {
 		const hp = proposals.find((p) => (p.payload as any)?.slotId === "core:slot/hp@1")!
 		expect(gold.messageId).toBe(beats.id)
 		expect(hp.messageId).toBe(brannocRow.id)
-		// Vell spoke after the beats row, in the same turn: the world's anchor
-		// is still open (the SDK turn lock's newest-turn rule).
+		// Vell spoke after the beats row, in a character turn the beats row
+		// planned: the same turn, so the world's anchor is still open (the
+		// SDK turn lock's newest-turn rule, over `metadata.planRowId`).
 		const { decideProposal } = await import("$lib/server/state/write")
 		const decided = await decideProposal(testDb as any, gold.id, true)
 		expect(decided.status).toBe("accepted")
@@ -598,7 +619,7 @@ async function retakeNow(w: Awaited<ReturnType<typeof session>>, label: string) 
 }
 
 describe("R8 × R2 · retake of the Castellan's turn", () => {
-	test("the yield is exactly the beats row and the cast rows; the beats row's own Regenerate is routed to the turn", async () => {
+	test("the yield is exactly the beats row and the character turns' rows; the beats row's own Regenerate is routed to the turn", async () => {
 		reset()
 		const w = await session({ trustNarrator: true })
 		await reply(w, "the turn to retake")
@@ -727,7 +748,7 @@ describe("R12 · the retired turn style", () => {
 })
 
 describe("B15 · Pick who speaks", () => {
-	test("Pick Brannoc: exactly one row, Brannoc's, and no planner and no Castellan", async () => {
+	test("Pick Brannoc: his character turn — exactly one row, his, and no planner and no Castellan", async () => {
 		reset()
 		const w = await session({})
 		const { res } = await reply(w, "the pick road", {
@@ -741,8 +762,12 @@ describe("B15 · Pick who speaks", () => {
 			[w.brannoc, "Brannoc speaks."]
 		])
 		expect(rows[0]!.isNarratorResponse).toBe(false)
-		// No planner, no keeper, and one prose call — Brannoc's own voice.
-		expect(jsonPrompts).toHaveLength(0)
+		// A pick is a turn of its own, never part of a plan's.
+		expect((rows[0]!.metadata as any)?.planRowId).toBeUndefined()
+		// No planner and no Castellan keeper — one prose call, Brannoc's own
+		// voice, and his own books.
+		expect(plannerCalls()).toBe(0)
+		expect(keeperCalls()).toBe(1)
 		expect(proseCalls).toEqual(["Brannoc"])
 	})
 })

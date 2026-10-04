@@ -268,9 +268,9 @@ describe("widgetStyles:create", () => {
 				bundleHash: "deadbeef",
 				enabled,
 				manifest: {
-					surfaces: {
-						panels: [{ id: "tray", entry: "ui/tray.html" }]
-					}
+					widgets: [
+						{ id: "tray", title: "Tray", component: "tray" }
+					]
 				}
 			})
 			return pluginId

@@ -49,7 +49,7 @@ export async function swapContributionProblems(
 			.where(eq(schema.pipelineSpecs.slug, spec))
 			.limit(1)
 		if (!row?.activeVersionId) {
-			out.push(`${at}: '${spec}' is not a pipeline this instance publishes`)
+			out.push(`${at}: '${spec}' is not a pipeline this pub publishes`)
 			continue
 		}
 		const [target] = await db

@@ -14,6 +14,7 @@
 	 * Read-only today — the structural editor (the lens view, 05 §1–§5) is
 	 * exactly what this canvas is groundwork for.
 	 */
+	import type { BuilderStep } from "$lib/client/components/pipelines/settingsGroups"
 	import { onMount, setContext } from "svelte"
 	import * as Icons from "@lucide/svelte"
 	import {
@@ -48,7 +49,7 @@
 
 	interface Props {
 		graph: Graph | null
-		steps: Sockets.Pipelines.Step[]
+		steps: BuilderStep[]
 		activeKey: string | null
 		/** Unsaved-draft count for a step — the amber dot. */
 		pendingFor: (stepKey: string) => number
@@ -115,7 +116,7 @@
 			nodes: steps.map((s, i) => ({
 				key: s.key,
 				label: s.label,
-				kind: s.kind || "task",
+				kind: "task",
 				definitionId: "",
 				clauseId: null,
 				clauseKind: null,

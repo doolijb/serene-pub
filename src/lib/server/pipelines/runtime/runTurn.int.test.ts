@@ -102,13 +102,6 @@ vi.mock("$lib/server/connections/capabilityTarget", async (importOriginal) => {
 		}
 	}
 })
-vi.mock("$lib/server/utils/getUserConfigurations", () => ({
-	getUserConfigurations: async () => ({
-		sampling: { id: 1 },
-		contextConfig: { id: 1 },
-		promptConfig: { id: 1, systemPrompt: "Stay in character." }
-	})
-}))
 vi.mock("$lib/server/embedding", () => ({
 	isModelReady: () => false,
 	getLoadedModelId: () => null,
@@ -193,33 +186,18 @@ beforeAll(async () => {
 		personaId: persona.id
 	})
 
-	const [contextConfig] = await db
-		.insert(schema.contextConfigs)
-		.values({
-			name: "Turn Context",
-			// `{{{instructions}}}`, not `{{instructions}}`. Since 0.6 a value
-			// arrives carrying its own heading and fence, and a double stash
-			// HTML-escapes the fence — this fixture rendered
-			// `Instructions:\n&quot;&quot;&quot;` until it was a triple.
-			//
-			// The `injectionsByIndex` lookup is the template opting in to
-			// script injections (18 §4a): position belongs to the template, so
-			// a template without the block renders none — which is the ruling,
-			// not a gap. Renders zero bytes when the map is empty, which every
-			// other test in this file depends on.
-			template:
-				"{{{instructions}}}\nLORE:{{{worldLore}}}\n{{#each sessionMessages}}{{#each (lookup ../injectionsByIndex @index)}}{{this.content}}\n{{/each}}{{this.name}}: {{this.message}}\n{{/each}}"
-		})
-		.returning()
-	const [promptConfig] = await db
-		.insert(schema.promptConfigs)
-		.values({ name: "Turn Prompt", systemPrompt: "You are {{char}}." })
-		.returning()
-	await db.insert(schema.systemSettings).values({
-		id: 1,
-		defaultContextConfigId: contextConfig.id,
-		defaultPromptConfigId: promptConfig.id
-	})
+	await db.insert(schema.systemSettings).values({ id: 1 })
+	// `{{{instructions}}}`, not `{{instructions}}`. Since 0.6 a value
+	// arrives carrying its own heading and fence, and a double stash
+	// HTML-escapes the fence.
+	//
+	// The `injectionsByIndex` lookup is the template opting in to
+	// script injections (18 §4a): position belongs to the template, so
+	// a template without the block renders none — which is the ruling,
+	// not a gap. Renders zero bytes when the map is empty, which every
+	// other test in this file depends on.
+	const turnTemplate =
+		"{{{instructions}}}\nLORE:{{{worldLore}}}\n{{#each sessionMessages}}{{#each (lookup ../injectionsByIndex @index)}}{{this.content}}\n{{/each}}{{this.name}}: {{this.message}}\n{{/each}}"
 
 	// The story string reaches the pipeline from `pipeline_context_templates`
 	// now, selected through the config layer — `context_configs` above is the
@@ -236,7 +214,7 @@ beforeAll(async () => {
 	const template = await createContextTemplate(db, {
 		nodeDefinitionId: CONTEXT_TEMPLATE_NODE_TYPE,
 		name: "Turn Template",
-		source: contextConfig.template!
+		source: turnTemplate
 	})
 	const [respondSpec] = await db
 		.select()
@@ -263,7 +241,7 @@ beforeAll(async () => {
 			{}
 		)
 		const copy = await duplicateConfig(db, shipped!.configId, "Turn host")
-		await selectConfig(db, respondSpec.id, "instance", 0, copy.id)
+		await selectConfig(db, respondSpec.id, "pub", 0, copy.id)
 		await db
 			.insert(schema.pipelineConfigValues)
 			.values({
@@ -768,7 +746,7 @@ describe("script chains on a turn", () => {
 		if ((cfg as any).isImmutable) {
 			const copy = await duplicateConfig(db, configId, "Chain host")
 			configId = copy.id
-			await selectConfig(db, specId, "instance", 0, configId)
+			await selectConfig(db, specId, "pub", 0, configId)
 		}
 		await db
 			.delete(schema.pipelineConfigValues)

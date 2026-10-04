@@ -11,6 +11,7 @@
 	} from "$lib/client/sockets/interest.svelte"
 	import { interestKey } from "$lib/shared/sockets/interest"
 	import { announce } from "$lib/client/accessibility/state.svelte"
+	import { changedGenreFields } from "$lib/client/components/sessionForms/genreFieldsPatch"
 
 	const socket = useTypedSocket()
 	const sessionId = $derived(Number(page.params.id))
@@ -50,6 +51,8 @@
 			: (d.of ?? []).map((o) => ({ value: o, label: o }))
 	let genres: Sockets.Sessions.Genres.Response["genres"] = $state([])
 	let genreFields: Record<string, unknown> = $state({})
+	/** The genre fields as loaded: Save sends only those changed since (2026-10-03). */
+	let loadedGenreFields: Record<string, unknown> = {}
 	const fieldDecls = $derived(
 		((genres.find((g: any) => g.genreId === (session as any)?.genreId) as any)?.shape
 			?.fields ?? {}) as Record<string, FieldDecl>
@@ -211,10 +214,13 @@
 				id: sessionId,
 				name: name.trim(),
 				scenario: scenario.trim(),
-				genreFields: Object.fromEntries(
+				// Only the fields changed here: the server merges them over
+				// what is stored, so a note saved from the widget meanwhile
+				// is not put back (2026-10-03).
+				genreFields: changedGenreFields(
+					$state.snapshot(genreFields),
+					loadedGenreFields,
 					Object.keys(fieldDecls)
-						.filter((k) => genreFields[k] !== undefined)
-						.map((k) => [k, genreFields[k]])
 				)
 			} as any,
 			characterIds: selectedCharacters.map((c) => c.id),
@@ -244,6 +250,7 @@
 		)
 		selectedPersonas = (c.sessionPersonas || []).map((cp) => cp.persona)
 		genreFields = { ...(((c as any).genreFields ?? {}) as Record<string, unknown>) }
+		loadedGenreFields = JSON.parse(JSON.stringify(genreFields))
 	}
 	$effect(() =>
 		requestWithInterest("sessions:genres", {}, (res: Sockets.Sessions.Genres.Response) => {

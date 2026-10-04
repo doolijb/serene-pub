@@ -105,6 +105,10 @@ export function isPrereleaseVersion(version: string): boolean {
 	// Build metadata (`+...`) is dropped first, so a `-` inside it can never be
 	// mistaken for a pre-release suffix.
 	const core = version.trim().replace(/^v/i, "").split("+")[0]
+	// Not a version at all: treated as a pre-release, the side that never
+	// updates and never phones home. The desktop launcher answers the same
+	// (its shared test vectors include "garbage" → pre-release).
+	if (!/^\d+\.\d+\.\d+(-.+)?$/.test(core)) return true
 	const dash = core.indexOf("-")
 	if (dash === -1) return false // no suffix at all — a formal release
 	return core.slice(dash + 1).toLowerCase() !== "beta"

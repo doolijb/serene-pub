@@ -41,6 +41,7 @@ import * as png from "@jimp/js-png"
 import * as jpeg from "@jimp/js-jpeg"
 import * as gif from "@jimp/js-gif"
 import * as resize from "@jimp/plugin-resize"
+import { assertDecodableSize } from "./imageSize"
 
 const require = createRequire(import.meta.url)
 
@@ -100,11 +101,16 @@ export interface RasterImage {
 }
 
 /** Decode to raw RGBA. webp goes through jsquash because jimp's webp reader is
- *  the same wasm with the same fetch problem; everything else is pure JS. */
+ *  the same wasm with the same fetch problem; everything else is pure JS.
+ *
+ *  Every decode in this build comes through here, so this is where the pixel
+ *  ceiling sits (lorebooks plan S4): the size the header claims is read first
+ *  and refused past `MAX_DECODE_PIXELS` before a decoder allocates for it. */
 export async function decodeImage(
 	buffer: Buffer | Uint8Array,
 	mime: string
 ): Promise<RasterImage> {
+	assertDecodableSize(buffer)
 	if (mime === "image/webp") {
 		const dec = await webpDecoder()
 		const out = await dec.default(

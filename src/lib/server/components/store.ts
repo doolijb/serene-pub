@@ -200,13 +200,6 @@ export function authoredComponentFindings(content: Partial<AuthoredComponentCont
 		if (widget.channels !== undefined && !(Array.isArray(widget.channels) && widget.channels.every((c) => typeof c === "string")))
 			out.push("widget.channels must be a list of channel slugs")
 		if (widget.settings !== undefined && !isPlainObject(widget.settings)) out.push("widget.settings must be a settings schema object")
-		if (widget.cells !== undefined) {
-			if (!isPlainObject(widget.cells)) out.push("widget.cells must be an object")
-			else
-				for (const [k, n] of Object.entries(widget.cells))
-					if (!["minW", "maxW", "minH", "maxH"].includes(k) || !(Number.isInteger(n) && (n as number) > 0))
-						out.push(`widget.cells.${k} must be one of minW/maxW/minH/maxH, a positive whole number`)
-		}
 		if (widget.defaultActive !== undefined && typeof widget.defaultActive !== "boolean")
 			out.push("widget.defaultActive must be true or false")
 	}
@@ -229,7 +222,6 @@ function widgetOf(w: AuthoredWidgetShape): AuthoredWidgetShape {
 	if (w.scopes !== undefined) out.scopes = [...new Set(w.scopes)]
 	if (w.reads !== undefined) out.reads = [...new Set(w.reads)]
 	if (w.channels !== undefined) out.channels = [...w.channels]
-	if (w.cells !== undefined) out.cells = { ...w.cells }
 	if (w.settings !== undefined) out.settings = w.settings
 	if (w.defaultActive !== undefined) out.defaultActive = w.defaultActive
 	return out

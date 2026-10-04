@@ -1,13 +1,12 @@
 /**
- * Completion templates have TWO seed sources, and they must agree.
+ * The built-in completion templates are seeded from one constant.
  *
- * `0097` INSERTs the built-ins — it has to, because the foreign key it adds in
- * the same file needs parent rows and `sync()` does not run until boot.
- * `db/defaults.ts` then writes the same rows on every boot from
- * `BUILTIN_COMPLETION_TEMPLATES`. Nothing at runtime compares the two, and the
- * symptom of disagreement is a prompt wrapped in delimiters whose stop strings
- * belong to a different format: the model never stops, and it reads as a bad
- * model rather than a bad row.
+ * `seedCompletionTemplates` (called by `db/defaults.ts` on every boot, and by
+ * `createTestDb`) writes the rows from `BUILTIN_COMPLETION_TEMPLATES`. Nothing
+ * at runtime compares the rows with the constant, and the symptom of
+ * disagreement is a prompt wrapped in delimiters whose stop strings belong to
+ * a different format: the model never stops, and it reads as a bad model
+ * rather than a bad row.
  *
  * ## Its own file, with its own database, deliberately
  *
@@ -16,7 +15,7 @@
  * show it: that file's accumulated state can make `sync()` throw partway through
  * the sampling seeds, and everything after — context configs, prompts, these
  * templates — is skipped by the surrounding `catch`. The assertions still passed,
- * because the rows the MIGRATION wrote already match the constant, so a `sync()`
+ * because the rows `createTestDb` wrote already match the constant, so a `sync()`
  * that never ran the block it was testing looked exactly like one that did.
  *
  * So `syncReachedTheTemplates` below runs FIRST and proves the block executes,
@@ -73,9 +72,8 @@ describe("completion templates seed identically from both sources", () => {
 	}, 60_000)
 
 	test("sync() writes exactly the framing the renderer uses", async () => {
-		// Pinned to `BUILTIN_COMPLETION_TEMPLATES`, the same constant
-		// `completionTemplates.int.test.ts` pins the migration's INSERT to. A
-		// change reaching only one of the two seed sources fails on the other.
+		// Pinned to `BUILTIN_COMPLETION_TEMPLATES`, the constant the renderer
+		// reads too.
 		await sync()
 
 		const rows = await templates()

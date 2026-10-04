@@ -126,7 +126,7 @@
 	</div>
 
 	<div
-		class="border-surface-300-700 overflow-hidden rounded-[12px] border"
+		class="panel-edge overflow-hidden rounded-[12px] border"
 		role="table"
 		aria-label="Models"
 	>
@@ -158,7 +158,7 @@
 			{@const hidden = model.enabled === false}
 			{@const missing = !!model.missingSince}
 			<div
-				class="border-surface-300-700 grid items-center gap-3 border-t px-4 py-2.5 {defaults.length
+				class="panel-edge grid items-center gap-3 border-t px-4 py-2.5 {defaults.length
 					? 'bg-surface-200-800'
 					: ''} {hidden || missing ? 'opacity-55' : ''}"
 				style="grid-template-columns: minmax(0,1fr) 92px {local
@@ -292,7 +292,7 @@
 
 		{#if !rows.length}
 			<p
-				class="border-surface-300-700 text-surface-600-400 border-t px-4 py-6 text-center text-sm"
+				class="panel-edge text-surface-600-400 border-t px-4 py-6 text-center text-sm"
 			>
 				{query ? "Nothing matches." : "No models listed yet."}
 			</p>

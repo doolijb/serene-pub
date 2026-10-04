@@ -59,7 +59,7 @@ const anthropicDesc = `
 <p>Serene Pub supports Anthropic's Claude API directly.</p>
 <p>Claude models support native extended thinking, streaming, and long context windows.</p>
 <p>To use Anthropic's API, obtain an API key from <a class="text-primary-500 hover:underline" href="https://console.anthropic.com/" target="_blank">Anthropic's console</a>.</p>
-<p>Extended thinking is supported on Claude 3.7+ models and requires setting a thinking budget in the connection settings.</p>
+<p>Extended thinking is supported on Claude 3.7+ models. Turn it on with <strong>Reasoning</strong> (and, if you like, <strong>Reasoning budget</strong>) on the sampling config, not on the connection.</p>
 `
 
 const anthropicDiff = "Beginner - Nothing to install"
@@ -84,7 +84,8 @@ export class CONNECTION_TYPE {
 	 * `listModels` are `/health` and `/show`, not `/v1/models`. A preset would
 	 * drop all of it silently.
 	 *
-	 * ⚠ Renaming the id needed a data migration — `drizzle/0105_llamacpp_service_type.sql`.
+	 * ⚠ Renaming an id needs a data upgrade: a 0.5.3 `llamacpp_completion` row
+	 * becomes this one in the 0.5.3 upgrade (`attic/etl/connections.ts`).
 	 */
 	static LLAMACPP = "llamacpp"
 	static LM_STUDIO = "lmstudio"

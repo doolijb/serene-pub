@@ -306,7 +306,7 @@
 		</div>
 
 		<p class="a11y-hint">
-			Advanced service-specific options (streaming, thinking, keep-alive,
+			Advanced service-specific options (streaming, keep-alive,
 			etc.) aren't available in Document View yet — use the standard site
 			for those.
 		</p>

@@ -139,6 +139,65 @@ describe("ordering", () => {
 	})
 })
 
+describe("before", () => {
+	test("runs inside the anchor's transaction, before the anchor's SQL", async () => {
+		await seedOldInstall()
+		const seen: string[] = []
+		const before = async (tx: MigrationTx) => {
+			const cols = rawRows<{ column_name: string }>(
+				await tx.execute(`SELECT column_name FROM information_schema.columns
+					WHERE table_name='widget' ORDER BY column_name`)
+			)
+			seen.push(...cols.map((c) => c.column_name))
+			await tx.execute(`CREATE TABLE widget_aside AS TABLE widget`)
+		}
+
+		await runMigrationsWithUpgrades(db, {
+			migrationsFolder: folder,
+			upgrades: [
+				{
+					afterMigration: "0001_add_col",
+					load: async () => ({ before, run: fillComputed })
+				}
+			]
+		})
+
+		// 0001 adds `computed`; `before` saw the table without it.
+		expect(seen).toEqual(["id", "legacy"])
+		const aside = await client.query(`SELECT count(*)::int AS n FROM widget_aside`)
+		expect((aside.rows[0] as any).n).toBe(2)
+	})
+
+	test("a failing before rolls back with its anchor", async () => {
+		await seedOldInstall()
+		const before = async (tx: MigrationTx) => {
+			await tx.execute(`CREATE TABLE widget_aside AS TABLE widget`)
+			throw new Error("simulated crash in before")
+		}
+
+		await expect(
+			runMigrationsWithUpgrades(db, {
+				migrationsFolder: folder,
+				upgrades: [
+					{
+						afterMigration: "0001_add_col",
+						load: async () => ({ before, run: fillComputed })
+					}
+				]
+			})
+		).rejects.toThrow(/simulated crash in before/)
+
+		const aside = await client.query(
+			`SELECT 1 FROM information_schema.tables WHERE table_name = 'widget_aside'`
+		)
+		expect(aside.rows).toHaveLength(0)
+		const cols =
+			await client.query(`SELECT column_name FROM information_schema.columns
+			WHERE table_name='widget' AND column_name='computed'`)
+		expect(cols.rows).toHaveLength(0)
+	})
+})
+
 describe("fresh installs", () => {
 	test("skipUpgrades applies every migration and runs no upgrade", async () => {
 		const run = vi.fn(fillComputed)

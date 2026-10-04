@@ -4,7 +4,8 @@
  * Seeds each widget's shipped presets as `source: "system"` rows and prunes any
  * system row for those widgets whose preset is no longer shipped — the "seed the
  * defaults, remove defaults no longer in the list" pass. Runs on boot for core
- * widgets (from `CORE_WIDGETS`) and on install/update for a plugin's widgets.
+ * widgets (from `CORE_WIDGETS`), and for every installed plugin's widgets on
+ * boot, install, enable, disable and uninstall (`plugins/pluginWidgetStyles`).
  *
  * ## The upgrade-safety landmine (why this looks the way it does)
  *
@@ -27,13 +28,16 @@
  *
  * A caller syncing the COMPLETE set — core boot is the one that can say that —
  * passes `pruneUndeclared`, and then a widget id absent from the decls has its
- * system rows removed too. It is opt-in because the claim is the caller's: a
+ * system rows removed too — except a plugin's (`<pluginId>:<widgetId>`, read
+ * with `parsePluginWidgetId`): those are the plugin sync's to keep or remove,
+ * and core's boot runs before the plugins are read at all. It is opt-in because the claim is the caller's: a
  * plugin syncing its own three widgets would otherwise sweep away every other
  * widget's rows, which is the same footgun the scoping above exists to prevent.
  * A user row is out of scope either way.
  */
 import { and, eq, inArray, notInArray } from "drizzle-orm"
-import { db } from "."
+import { parsePluginWidgetId } from "@serene-pub/sdk"
+import { db as defaultDb } from "."
 import * as schema from "./schema"
 import { systemStyleSlug, type WidgetDecl } from "$lib/shared/widgets/types"
 
@@ -81,7 +85,8 @@ export interface SyncWidgetStylesOptions {
 export async function syncWidgetStyles(
 	decls: WidgetDecl[],
 	version: string,
-	options: SyncWidgetStylesOptions = {}
+	options: SyncWidgetStylesOptions = {},
+	db: Db = defaultDb
 ): Promise<void> {
 	const shipped = shippedStylesFrom(decls)
 	const widgetIds = decls.map((d) => d.id)
@@ -166,13 +171,22 @@ export async function syncWidgetStyles(
 	// system row in the table with it, which is a truncate wearing a sync's
 	// name. A caller with nothing to declare has nothing to reconcile.
 	if (options.pruneUndeclared && widgetIds.length) {
-		await db
-			.delete(schema.widgetStyles)
-			.where(
-				and(
-					eq(schema.widgetStyles.source, "system"),
-					notInArray(schema.widgetStyles.widgetSlug, widgetIds)
+		const seeded = await db
+			.selectDistinct({ widgetSlug: schema.widgetStyles.widgetSlug })
+			.from(schema.widgetStyles)
+			.where(eq(schema.widgetStyles.source, "system"))
+		const declared = new Set(widgetIds)
+		const orphans = seeded
+			.map((r) => r.widgetSlug)
+			.filter((id) => !declared.has(id) && !parsePluginWidgetId(id))
+		if (orphans.length)
+			await db
+				.delete(schema.widgetStyles)
+				.where(
+					and(
+						eq(schema.widgetStyles.source, "system"),
+						inArray(schema.widgetStyles.widgetSlug, orphans)
+					)
 				)
-			)
 	}
 }

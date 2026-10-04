@@ -5,10 +5,11 @@
  * `session_cast` carries `storyTime: { now, calendar }` and the template
  * context hands it to `assemble`:
  *
- *  - a stored clock wins over the newest allocated history entry;
+ *  - the story's present wins over the newest allocated history entry: a
+ *    stored clock, or with none the line's newest history entry (plan A20 c);
  *  - a declared calendar spells the date (`label`);
- *  - with neither — a free-form book with no clock, or no book at all — the
- *    output is byte-identical to what it always was.
+ *  - with no story time — no book at all — the newest allocated entry, as it
+ *    always was.
  */
 import { describe, expect, it } from "vitest"
 import { allocate, render } from "$lib/server/pipelines/prompt/assemble"
@@ -50,14 +51,16 @@ describe("currentDate — the story's present", () => {
 		expect(r.rendered).toBe("[The current date in the story is 3-02-07.]")
 	})
 
-	it("a free-form book whose present is only its newest entry changes nothing", async () => {
+	it("with no clock, is the line's present — its newest entry, retrieved or not (plan A20 c)", async () => {
+		// The allocated entry is year 3; the line's newest is year 9, which
+		// retrieval did not pick this turn. The session stands at 9.
 		const r = await render({
 			...base,
 			templateContext: {
 				storyTime: { now: { year: 9, from: "history" }, calendar: null }
 			}
 		})
-		expect(r.rendered).toBe("[The current date in the story is 3-02-07.]")
+		expect(r.rendered).toBe("[The current date in the story is 9.]")
 	})
 
 	it("a stored clock wins, with its time of day", async () => {

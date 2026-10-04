@@ -40,7 +40,7 @@ import {
 import { untrack } from "svelte"
 import { typedSocketOrNull } from "$lib/client/sockets/typedSocket"
 import { resolveStyle } from "$lib/shared/widgets/resolve"
-import { widgetOfInstance } from "$lib/shared/widgets/instanceId"
+import { widgetOfInstance } from "@serene-pub/sdk"
 import {
 	legacyPackPin,
 	type LegacyStylePacks
@@ -775,8 +775,8 @@ export function sanitizeWidgetCss(css: string): string {
 }
 
 /**
- * Sanitise AND confine a skin to one widget instance: every selector is
- * re-written to sit under `[data-widget-instance="<key>"]` and every animation
+ * Sanitise AND confine a skin to one MOUNT's **skin scope**: every selector
+ * is re-written to sit under `[data-skin-scope="<key>"]` and every animation
  * name is namespaced with the same key. This is the only function the host is
  * allowed to render CSS through.
  */
@@ -785,7 +785,7 @@ export function scopeWidgetCss(css: string, key: string): string {
 	const cleaned = preClean(css)
 	const nodes = splitTopLevel(cleaned)
 	return emitNodes(nodes, {
-		scope: `[data-widget-instance="${k}"]`,
+		scope: `[data-skin-scope="${k}"]`,
 		names: keyframeNames(nodes),
 		prefix: `${k}-`
 	})
@@ -1061,6 +1061,14 @@ export function setWidgetStylePinWriter(
 }
 
 /**
+ * The layout's style pins as held, by widget instance id — what the layout
+ * editor's mint skips and what a Duplicate copies (brief 7b).
+ */
+export function widgetStylePins(): Readonly<Record<string, WidgetStyleRef>> {
+	return pins
+}
+
+/**
  * Pin one widget to a style (or `null` to clear it and fall back to the
  * widget's default). The pins held here are NOT updated optimistically: the
  * writer persists, the page re-reads its `layoutSettings`, and `setWidgetStylePins`
@@ -1075,6 +1083,23 @@ export function setWidgetStylePin(
 	if (ref) next[widgetId] = ref
 	else delete next[widgetId]
 	pinWriter?.(next)
+}
+
+/**
+ * Clear several widgets' style pins in ONE write — the layout editor's Cancel
+ * taking back the pins its Duplicates wrote (brief 7b review). One write for
+ * the reason `setWidgetStylePin` is not optimistic: a second call made before
+ * the first came round would start from the pins as they were.
+ */
+export function dropWidgetStylePins(ids: Iterable<string>): void {
+	const next = { ...pins }
+	let changed = false
+	for (const id of ids)
+		if (next[id]) {
+			delete next[id]
+			changed = true
+		}
+	if (changed) pinWriter?.(next)
 }
 
 /**

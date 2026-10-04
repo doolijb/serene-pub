@@ -154,23 +154,9 @@ beforeAll(async () => {
 	generatingId = generating.id
 
 	// The story string, layered the way `runTurn.int.test.ts` does it.
-	const [contextConfig] = await db
-		.insert(schema.contextConfigs)
-		.values({
-			name: "Continue Context",
-			template:
-				"{{{instructions}}}\nLORE:{{{worldLore}}}\n{{#each sessionMessages}}{{this.name}}: {{this.message}}\n{{/each}}"
-		})
-		.returning()
-	const [promptConfig] = await db
-		.insert(schema.promptConfigs)
-		.values({ name: "Continue Prompt", systemPrompt: "You are {{char}}." })
-		.returning()
-	await db.insert(schema.systemSettings).values({
-		id: 1,
-		defaultContextConfigId: contextConfig.id,
-		defaultPromptConfigId: promptConfig.id
-	})
+	await db.insert(schema.systemSettings).values({ id: 1 })
+	const continueTemplate =
+		"{{{instructions}}}\nLORE:{{{worldLore}}}\n{{#each sessionMessages}}{{this.name}}: {{this.message}}\n{{/each}}"
 
 	const { createContextTemplate } = await import(
 		"$lib/server/pipelines/entities/contextTemplates"
@@ -182,7 +168,7 @@ beforeAll(async () => {
 	const template = await createContextTemplate(db, {
 		nodeDefinitionId: CONTEXT_TEMPLATE_NODE_TYPE,
 		name: "Continue Template",
-		source: contextConfig.template!
+		source: continueTemplate
 	})
 	const [respondSpec] = await db
 		.select()
@@ -209,7 +195,7 @@ beforeAll(async () => {
 		shipped!.configId,
 		"Continue host"
 	)
-	await selectConfig(db, respondSpec.id, "instance", 0, copy.id)
+	await selectConfig(db, respondSpec.id, "pub", 0, copy.id)
 	await db
 		.insert(schema.pipelineConfigValues)
 		.values({

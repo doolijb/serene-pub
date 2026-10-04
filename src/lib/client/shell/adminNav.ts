@@ -30,6 +30,9 @@ export interface AdminNavGroup {
 /** The path the Users section lives at; see `adminNavFor`. */
 export const ADMIN_USERS_HREF = "/admin/users"
 
+/** The path the Updates section lives at; see `adminNavFor`. */
+export const ADMIN_UPDATES_HREF = "/admin/updates"
+
 /**
  * Grouped by the job a person came to do (ruled 2026-09-27, the admin
  * overhaul), not by the table behind it. An empty `group` draws no label:
@@ -124,7 +127,7 @@ export const ADMIN_NAV: AdminNavGroup[] = [
 		]
 	},
 	{
-		group: "Instance",
+		group: "Pub",
 		items: [
 			{ href: "/admin/general", label: "General", icon: "Settings" },
 			{ href: "/admin/network", label: "Network", icon: "Globe" },
@@ -141,7 +144,9 @@ export const ADMIN_NAV: AdminNavGroup[] = [
 			// Who changed what, and when — every section's changes in one
 			// list (the admin logbook). A change form links here with
 			// `?type=…&id=…` for one object's history.
-			{ href: "/admin/history", label: "History", icon: "History" }
+			{ href: "/admin/history", label: "History", icon: "History" },
+			// Hidden on a pre-release build, which never updates itself.
+			{ href: ADMIN_UPDATES_HREF, label: "Updates", icon: "CircleArrowUp" }
 		]
 	}
 ]
@@ -152,15 +157,26 @@ export const ADMIN_NAV: AdminNavGroup[] = [
  * keeps empty groups from rendering a bare label — and keeps the Jump overlay
  * from offering a page that is not there.
  */
-export function adminNavFor(accountsEnabled: boolean): AdminNavGroup[] {
-	if (accountsEnabled) return ADMIN_NAV
+export function adminNavFor(
+	accountsEnabled: boolean,
+	isPrerelease = false
+): AdminNavGroup[] {
+	if (accountsEnabled && !isPrerelease) return ADMIN_NAV
+	// A pre-release never updates itself, so it has no Updates section.
+	const hidden = new Set<string>([
+		...(accountsEnabled ? [] : [ADMIN_USERS_HREF]),
+		...(isPrerelease ? [ADMIN_UPDATES_HREF] : [])
+	])
 	return ADMIN_NAV.map((s) => ({
 		...s,
-		items: s.items.filter((i) => i.href !== ADMIN_USERS_HREF)
+		items: s.items.filter((i) => !hidden.has(i.href))
 	})).filter((s) => s.items.length > 0)
 }
 
 /** Every section as one flat list, which is what a search wants. */
-export function adminNavItems(accountsEnabled: boolean): AdminNavItem[] {
-	return adminNavFor(accountsEnabled).flatMap((s) => s.items)
+export function adminNavItems(
+	accountsEnabled: boolean,
+	isPrerelease = false
+): AdminNavItem[] {
+	return adminNavFor(accountsEnabled, isPrerelease).flatMap((s) => s.items)
 }

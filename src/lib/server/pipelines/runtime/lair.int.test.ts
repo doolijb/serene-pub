@@ -1,13 +1,17 @@
 /**
  * A Lair turn, run from the document the STORE hands back (lair pass F2 / B2).
  *
- * The Lair is the one core spec with clauses inside clauses: since R8 the
- * lead delver (`…planned.door.play.lead`, a junction inside the `door`
- * junction's `play` branch, inside `pick`, inside `channel`, inside `via`)
- * and the keeper's propose-or-apply (`keep.played.commit`). The store once dropped a nested
- * clause's chain, so the loaded document ran planner → scene → keeper and
- * nothing else — no voice spoke and no change was proposed or applied, with
- * no error anywhere. This runs the loaded document and asserts both happen.
+ * The Lair is the one core spec with clauses inside clauses: a character
+ * turn (`…door.play.speech.each.character.turn`, a junction inside the
+ * `speech` junction's `each` branch, inside the `door` junction's `play`
+ * branch, inside `channel`, inside `via`, with its own propose-or-apply
+ * inside it), the Castellan's lines for the party
+ * (`…speech.castellan.party`, its row's own junction inside it) and the
+ * Castellan keeper's propose-or-apply (`keep.played.commit`). The store once
+ * dropped a nested clause's chain, so the loaded document ran planner →
+ * scene → keeper and nothing else — no voice spoke and no change was
+ * proposed or applied, with no error anywhere. This runs the loaded document
+ * and asserts both happen.
  *
  * The model is stubbed at the binding and answers one document for every
  * step, as `adventure.int.test.ts` does and for the same reason.
@@ -60,13 +64,21 @@ afterAll(async () => {
 	await fs.rm(dataDir, { recursive: true, force: true })
 })
 
-/** One answer for every step: the planner's speakers and the keeper's lists. */
+/**
+ * One answer for every step: the planner's speakers and the keeper's lists —
+ * one change of Brannoc's and one of the world's, so each keeper's refusal
+ * of the other's shows (owner ruling 2026-09-30: the Castellan keeps the
+ * world's books, a character turn its own delver's).
+ */
 const ANSWER = JSON.stringify({
 	beats: ["The torch gutters.", "Something scrapes behind the door."],
 	speakers: [{ name: "Brannoc", intent: "check the door" }],
 	worldHints: {},
 	needsLookup: false,
-	values: [{ owner: "Brannoc", slot: "hp", value: "8" }],
+	values: [
+		{ owner: "Brannoc", slot: "hp", value: "8" },
+		{ owner: "world", slot: "gold", value: "12" }
+	],
 	inventory: []
 })
 
@@ -100,6 +112,10 @@ const stubbed = () => {
 	}
 }
 
+/** Where the play's party speech sits. */
+const TURN = "via.turn.channel.story.door.play.speech.each.character.turn"
+const PARTY = "via.turn.channel.story.door.play.speech.castellan.party.speaks"
+
 const template = {
 	template: { source: SHIPPED_CONTEXT_TEMPLATE, engine: CORE_TEMPLATE_ENGINE }
 }
@@ -113,14 +129,17 @@ const WORLD: any = {
 	activeConnection: {},
 	authorDefaults: {
 		"via.turn.channel.story.pick.planned.planPrompt": { ...template },
-		"via.turn.channel.story.pick.planned.door.play.lead.speaks.prompt": { ...template },
-		"via.turn.channel.story.pick.planned.door.play.voices.item.prompt": { ...template },
+		[`${TURN}.prompt`]: { ...template },
+		[`${TURN}.keeperPrompt`]: { ...template },
+		[`${PARTY}.prompt`]: { ...template },
 		"keep.played.keeperPrompt": { ...template },
-		"via.turn.channel.story.pick.planned.door.play.speaking": { params: { path: "speakers" } },
-		"via.turn.channel.story.pick.planned.door.play.beats": { params: { path: "beats" } },
+		"via.turn.channel.story.pick.planned.speaking": { params: { path: "speakers" } },
+		"via.turn.channel.story.door.play.beats": { params: { path: "beats" } },
 		"keep.played.keeperWrite": { params: { path: "values,inventory" } },
 		"keep.played.commit.trusted.apply": { params: { mode: "apply" } },
-		"via.turn.channel.story.pick.planned.door.play.lead.speaks.say": { ...window }
+		[`${TURN}.keeperWrite`]: { params: { path: "values,inventory" } },
+		[`${TURN}.commit.trusted.apply`]: { params: { mode: "apply" } },
+		[`${TURN}.say`]: { ...window }
 	}
 }
 
@@ -170,13 +189,15 @@ async function loaded() {
 	return loadDocument(db, saved.specVersionId)
 }
 
-async function turn(fields: Record<string, unknown>) {
+/** A run of the turn: the Castellan's, or — `delver` — Brannoc's character turn. */
+async function turn(fields: Record<string, unknown>, opts: { delver?: boolean } = {}) {
 	const w = await lair(fields)
 	const receipt = await run(await loaded(), {
 		input: {
 			text: "Open the door.",
 			sessionScope: { sessionId: w.session.id },
-			fields
+			fields,
+			...(opts.delver ? { characterId: w.brannoc.id } : {})
 		},
 		seed: "seed:lair",
 		triggerSource: "event",
@@ -195,10 +216,10 @@ const ran = (receipt: any, key: string) =>
 	receipt.nodes.filter((node: any) => node.nodeKey === key)
 
 describe("a Lair turn loaded from the store", () => {
-	it("a turn voices the delver the planner named (the lead, R8), and the keeper's changes are proposed", async () => {
+	it("a planned turn (each delver speaks, the default) voices nobody, and the Castellan's keeper proposes the world's changes", async () => {
 		const { w, receipt } = await turn({ trustNarrator: false })
 
-		expect(ran(receipt, "via.turn.channel.story.pick.planned.door.play.lead.speaks.say")).toHaveLength(1)
+		expect(ran(receipt, `${TURN}.say`)).toHaveLength(0)
 
 		const proposed = ran(receipt, "keep.played.commit.reviewed.propose")
 		expect(proposed).toHaveLength(1)
@@ -210,10 +231,26 @@ describe("a Lair turn loaded from the store", () => {
 		expect(proposals.length).toBeGreaterThan(0)
 	}, 60_000)
 
-	it("with Trust the narrator on, the keeper's changes are applied", async () => {
+	it("with Trust the narrator on, the Castellan's keeper applies the world's change and never Brannoc's", async () => {
 		const { w, receipt } = await turn({ trustNarrator: true })
 
 		const applied = ran(receipt, "keep.played.commit.trusted.apply")
+		expect(applied).toHaveLength(1)
+		expect((applied[0]!.output as any).applied.length).toBeGreaterThan(0)
+		const state = await stateFor(db, w.session.id)
+		expect((state.world as any)?.gold).toBe(12)
+		const brannoc = Object.values(state.cast).find(
+			(c: any) => c && typeof c === "object" && c.hp !== undefined
+		) as any
+		expect(brannoc?.hp).not.toBe(8)
+	}, 60_000)
+
+	it("Brannoc's character turn, loaded from the store: his line streams, and his own keeper applies his change and never the world's", async () => {
+		const { w, receipt } = await turn({ trustNarrator: true }, { delver: true })
+
+		expect(ran(receipt, `${TURN}.say`)).toHaveLength(1)
+		expect(ran(receipt, "keep.played.commit.trusted.apply")).toHaveLength(0)
+		const applied = ran(receipt, `${TURN}.commit.trusted.apply`)
 		expect(applied).toHaveLength(1)
 		expect((applied[0]!.output as any).applied.length).toBeGreaterThan(0)
 		const state = await stateFor(db, w.session.id)
@@ -221,12 +258,25 @@ describe("a Lair turn loaded from the store", () => {
 			(c: any) => c && typeof c === "object" && c.hp !== undefined
 		) as any
 		expect(brannoc?.hp).toBe(8)
+		expect((state.world as any)?.gold).not.toBe(12)
 	}, 60_000)
 
 	// R12 (2026-09-28): the Lair is cast only; a stored turn style is inert.
-	it("a stored turnStyle 'narrator' still voices the delver, and keeps state", async () => {
+	it("a stored turnStyle 'narrator' still plans the party's turns, and keeps the world's books", async () => {
 		const { receipt } = await turn({ turnStyle: "narrator", trustNarrator: false })
-		expect(ran(receipt, "via.turn.channel.story.pick.planned.door.play.lead.speaks.say")).toHaveLength(1)
+		expect(ran(receipt, `${PARTY}.say`)).toHaveLength(0)
+		expect(ran(receipt, "via.turn.channel.story.door.play.plan.posted.write")).toHaveLength(1)
+		expect(ran(receipt, "keep.played.commit.reviewed.propose")).toHaveLength(1)
+	}, 60_000)
+
+	// The party speech (owner ruling 2026-09-30): the Castellan speaking for
+	// the party runs from the loaded document too — its nested row junction
+	// included — as one call, and the books are still kept.
+	it("with the Castellan speaking for the party, one party call writes the turn, and the keeper's changes are proposed", async () => {
+		const { receipt } = await turn({ partySpeech: "castellan", trustNarrator: false })
+		expect(ran(receipt, `${PARTY}.say`)).toHaveLength(1)
+		expect(ran(receipt, `${PARTY}.row.turn.placeholder`)).toHaveLength(1)
+		expect(ran(receipt, `${TURN}.say`)).toHaveLength(0)
 		expect(ran(receipt, "keep.played.commit.reviewed.propose")).toHaveLength(1)
 	}, 60_000)
 })

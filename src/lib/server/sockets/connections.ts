@@ -36,13 +36,13 @@ import {
 	resolveConnectionCapabilities
 } from "$lib/server/connections/resolve"
 import { setCapabilityDefault } from "$lib/server/connections/capabilityDefaults"
-import { EMBEDDING_CAPABILITY } from "$lib/server/embedding/target"
 import {
-	applyEmbeddingStarChange,
-	currentEmbeddingModelId
-} from "$lib/server/embedding/reindex"
-import { NER_CAPABILITY } from "$lib/shared/constants/ner"
-import { applyNerStarChange, currentNerModelId } from "$lib/server/ner/reindex"
+	parseVisionProjector,
+	takesVisionProjector,
+	withVisionProjector
+} from "$lib/server/koboldcpp/visionProjector"
+import { visionProjectorOf } from "$lib/shared/connections/hostCapabilities"
+import { withStarConsequences } from "$lib/server/connections/starConsequences"
 import {
 	localModelState,
 	localModelStates,
@@ -595,23 +595,32 @@ export const connectionsUpdate: Handler<
 		const payloadModel =
 			"model" in editable ? (editable.model as string | null) : undefined
 		delete (updateData as any).model
-		const [updated] = await db
-			.update(schema.connections)
-			.set(updateData)
-			.where(eq(schema.connections.id, id))
-			.returning()
-		if (updated && payloadModel !== undefined) {
-			await ensureConnectionModel(db, id, payloadModel)
-		}
-		// Re-resolved because an edit can change the type or the preset, and
-		// from the row that came back rather than from the payload: a partial
-		// update need not have carried either field, and resolving without them
-		// would cache an empty set over a good one. The durable halves survive —
-		// persistCapabilities keeps the probe and overrides it isn't handed.
-		if (updated)
-			await persistCapabilities(db, id, {
-				resolved: resolveConnectionCapabilities(updated)
-			})
+		// The address and the type are half of the embedding identity
+		// (`api::<baseUrl>::<model>`), so an edit to the starred connection can
+		// move the star as surely as pressing it: the consequence runs around
+		// the write. A respelling of the same address re-stamps the vectors;
+		// a different address re-indexes, with the queue stopped first.
+		const updated = await withStarConsequences(db, async () => {
+			const [row] = await db
+				.update(schema.connections)
+				.set(updateData)
+				.where(eq(schema.connections.id, id))
+				.returning()
+			if (row && payloadModel !== undefined) {
+				await ensureConnectionModel(db, id, payloadModel)
+			}
+			// Re-resolved because an edit can change the type or the preset,
+			// and from the row that came back rather than from the payload: a
+			// partial update need not have carried either field, and resolving
+			// without them would cache an empty set over a good one. The
+			// durable halves survive — persistCapabilities keeps the probe and
+			// overrides it isn't handed.
+			if (row)
+				await persistCapabilities(db, id, {
+					resolved: resolveConnectionCapabilities(row)
+				})
+			return row
+		})
 		// connectionsGet.handler already builds the fully-processed record
 		// (CONNECTION_DEFAULTS backfill + decrypted apiKey) and broadcasts its
 		// own "connections:get" — reuse its return value here instead of the
@@ -830,9 +839,13 @@ export const connectionsDelete: Handler<
 		// sentence from "unset" — a surviving row with a null connection is the
 		// only evidence that something WAS set up and is now gone
 		// (capabilityTarget.ts).
-		await db
-			.delete(schema.connections)
-			.where(eq(schema.connections.id, params.id))
+		//
+		// The cascade releases a star silently, though, and a released star
+		// has a consequence: the queue must stop and the model unload, rather
+		// than stay resident until its TTL (plan A10).
+		await withStarConsequences(db, () =>
+			db.delete(schema.connections).where(eq(schema.connections.id, params.id))
+		)
 		await emitToUser("connections:list", () => buildConnectionsList())
 		const res: Sockets.Connections.Delete.Response = { id: params.id }
 		emitToUser("connections:delete", res)
@@ -963,59 +976,37 @@ export const connectionsSetDefault: Handler<
 			if (refusal) refuse(refusal)
 		}
 
-		// What the embedding star resolved to BEFORE the write — the comparison
-		// that decides whether the index has to be rebuilt. Read here rather
-		// than inside the helper, because after `setCapabilityDefault` the old
-		// answer is gone.
-		const embeddingBefore =
-			params.capability === EMBEDDING_CAPABILITY
-				? await currentEmbeddingModelId(db)
-				: null
-		// The same read for the entity star, for the same reason: after
-		// `setCapabilityDefault` the old answer is gone, and the comparison
-		// against it is the whole of the decision to re-annotate.
-		const nerBefore =
-			params.capability === NER_CAPABILITY
-				? await currentNerModelId(db)
-				: null
-
-		await setCapabilityDefault(db, params.capability, {
-			connectionId: params.id ?? null,
-			// Both halves, always: an endpoint-level registration (null model)
-			// is refused above, so reaching here with one would be a writer
-			// that skipped validation.
-			connectionModelId:
-				params.id == null ? null : (params.modelId ?? null)
-		})
-
 		/**
-		 * The embedding star's consequence.
+		 * The write, and the consequence of the star it moves.
 		 *
-		 * ⚠ A modality-specific branch in a generic handler, and it belongs
-		 * here rather than in the screens that press the button. Every stored
-		 * vector came from the model this star named a moment ago, so "the
-		 * embedding target changed" has to trigger the rebuild whatever moved
-		 * it — the sidebar, Admin → Defaults, or a future one-click path. In a
-		 * client it would be a rule three screens each have to remember; in
+		 * ⚠ A modality-specific consequence in a generic handler, and it
+		 * belongs with the write rather than in the screens that press the
+		 * button. Every stored vector came from the model the embedding star
+		 * named a moment ago (and every annotation from the entity star's
+		 * extractor), so "the target changed" has to follow whatever moved it —
+		 * this handler, Admin → Defaults, a connection edit, a delete. In a
+		 * client it would be a rule several screens each have to remember; in
 		 * `setCapabilityDefault` it would be a consequence inside the storage
-		 * boundary, which that file's header rules out.
+		 * boundary, which that file's header rules out. `withStarConsequences`
+		 * is the one place every door calls.
 		 *
 		 * Nothing happens unless the model IDENTITY moved, so pressing the star
 		 * twice, or starring a second row naming the same endpoint and model,
 		 * costs nothing.
 		 */
-		if (params.capability === EMBEDDING_CAPABILITY)
-			await applyEmbeddingStarChange(db, embeddingBefore)
-
-		/**
-		 * The entity star's consequence, and it belongs here for the reason the
-		 * embedding one above does: every stored annotation was written by
-		 * whichever extractor was in force when the lane reached that row, so
-		 * "the entity model changed" has to clear them whatever moved the star.
-		 * Nothing happens unless the model IDENTITY moved.
-		 */
-		if (params.capability === NER_CAPABILITY)
-			await applyNerStarChange(db, nerBefore)
+		await withStarConsequences(
+			db,
+			() =>
+				setCapabilityDefault(db, params.capability, {
+					connectionId: params.id ?? null,
+					// Both halves, always: an endpoint-level registration (null
+					// model) is refused above, so reaching here with one would
+					// be a writer that skipped validation.
+					connectionModelId:
+						params.id == null ? null : (params.modelId ?? null)
+				}),
+			[params.capability]
+		)
 
 		const res: Sockets.Connections.SetDefault.Response = {
 			ok: true,
@@ -1466,7 +1457,11 @@ function modelRowView(
 		// Omitted entirely when the host said nothing, so a consumer branches on
 		// presence rather than on an empty object that reads like an answer.
 		...(facts ? { facts } : {}),
-		...(local ? { local } : {})
+		...(local ? { local } : {}),
+		// Only where the runtime launches the model; absent everywhere else.
+		...(takesVisionProjector(endpoint.type)
+			? { visionProjector: visionProjectorOf(m.extraJson) }
+			: {})
 	}
 }
 
@@ -1704,6 +1699,25 @@ export const connectionsUpdateModel: Handler<
 
 		const { values, error } = modelPayload(params.model)
 		if (error) return fail(error)
+		// The one `extra_json` key a client may set, as its own validated
+		// field — see `koboldcpp/visionProjector.ts` for why the bag itself
+		// stays refused.
+		if (params.model && "visionProjector" in params.model) {
+			const endpoint = await db.query.connections.findFirst({
+				where: (c, { eq }) => eq(c.id, params.id),
+				columns: { type: true }
+			})
+			if (!endpoint || !takesVisionProjector(endpoint.type))
+				return fail(
+					"Only a model run by Serene Pub's KoboldCPP takes a vision projector."
+				)
+			const parsed = parseVisionProjector(params.model.visionProjector)
+			if ("error" in parsed) return fail(parsed.error)
+			values!.extraJson = withVisionProjector(
+				row.extraJson as Record<string, unknown> | null,
+				parsed.value
+			)
+		}
 		if (values!.model !== undefined && !values!.model)
 			return fail(
 				"A model needs the identifier the service knows it by — the text this connection will send."
@@ -1712,8 +1726,15 @@ export const connectionsUpdateModel: Handler<
 			// The column's own check constraint refuses an empty name, and a
 			// person who cleared the box meant "call it what it sends".
 			values!.name = (values!.model as string) ?? row.model
-		if (!Object.keys(values!).length)
-			return await connectionModelsView(params.id)
+		if (!Object.keys(values!).length) {
+			// Nothing to write is still an answer. Returned silently, a form
+			// that sent this and waits for the reply (Admin → Connections'
+			// Save, `awaitReply`) sat until its timeout and then said the
+			// server never answered (STYLE-GUIDE §6.11: every write answers).
+			const res = await connectionModelsView(params.id)
+			emitToUser("connections:updateModel", res)
+			return res
+		}
 
 		if (values!.model && values!.model !== row.model) {
 			const clash = (await listConnectionModels(db, params.id)).find(
@@ -1725,10 +1746,14 @@ export const connectionsUpdateModel: Handler<
 				)
 		}
 
-		await db
-			.update(schema.connectionModels)
-			.set(values as any)
-			.where(eq(schema.connectionModels.id, params.modelId))
+		// The identifier is half of the embedding identity: renaming the
+		// starred model's is a switch to another model, and runs as one.
+		await withStarConsequences(db, () =>
+			db
+				.update(schema.connectionModels)
+				.set(values as any)
+				.where(eq(schema.connectionModels.id, params.modelId))
+		)
 
 		const res = await connectionModelsView(params.id)
 		emitToUser("connections:updateModel", res)
@@ -1760,9 +1785,14 @@ export const connectionsDeleteModel: Handler<
 		if (!row || row.connectionId !== params.id)
 			return fail("That model is not on this connection.")
 
-		await db
-			.delete(schema.connectionModels)
-			.where(eq(schema.connectionModels.id, params.modelId))
+		// Deleting a starred model releases the star by cascade (below), so it
+		// stops the queue and unloads the model the way deleting its
+		// connection does (plan A10).
+		await withStarConsequences(db, () =>
+			db
+				.delete(schema.connectionModels)
+				.where(eq(schema.connectionModels.id, params.modelId))
+		)
 
 		// ⚠ The ENDPOINT survives with no models, deliberately. Removing the last
 		// model is clearing a field, not throwing away a base URL and a key. Only

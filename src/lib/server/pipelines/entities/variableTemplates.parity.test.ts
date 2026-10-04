@@ -261,22 +261,10 @@ const shapedCases = (key: string): Array<[string, unknown]> => {
 		],
 		["undefined", undefined]
 	]
+	if (key === "characterLore") return characterLoreCases
 	if (key !== "characters") return shared
 	return [
 		...shared,
-		// A key with a space in it, which is the one `attachCharacterLoreToCharacters`
-		// really writes — and the one an author cannot reach without brackets.
-		[
-			"a spaced key holding a nested record",
-			[
-				{
-					name: "Ash",
-					"extra lore": {
-						"The Ashguard brand": 'Carries a brand & said "no".'
-					}
-				}
-			]
-		],
 		[
 			"every declared key at once",
 			[
@@ -284,13 +272,44 @@ const shapedCases = (key: string): Array<[string, unknown]> => {
 					name: "Ash",
 					nickname: "Ash",
 					description: "A rider.",
-					personality: "Terse.",
-					"extra lore": { "A\tkey": "line\nbreak" }
+					personality: "Terse."
 				}
 			]
 		]
 	]
 }
+
+/** `core:var/character-lore@1`'s shape: `{ title, castMember?, content }`. */
+const characterLoreCases: Array<[string, unknown]> = [
+	["an empty list", []],
+	["one entry", [{ title: "Oath", castMember: "Ash", content: "Sworn at the gate." }]],
+	[
+		"quotes, angle brackets and braces",
+		[
+			{
+				title: `She said "no" & <left>`,
+				castMember: "{{char}}",
+				content: "'quickly' & </br> {{user}}"
+			}
+		]
+	],
+	["newlines and tabs", [{ title: "A\tkey", content: "one\ntwo\tthree\r\nfour" }]],
+	["a non-BMP emoji", [{ title: "🜁", castMember: "👩‍🚒", content: "🜁 ash" }]],
+	["an empty title and content", [{ title: "", content: "" }]],
+	["no cast member", [{ title: "A note", content: "Forged." }]],
+	[
+		"an explicitly-undefined cast member",
+		[{ title: "A note", castMember: undefined, content: "Forged." }]
+	],
+	[
+		"several entries",
+		[
+			{ title: "A", castMember: "Ash", content: "one" },
+			{ title: "B", content: "two" }
+		]
+	],
+	["undefined", undefined]
+]
 
 describe("shipped variable layouts reproduce the code they replaced", () => {
 	for (const t of SHIPPED_VARIABLE_TEMPLATES) {
@@ -492,6 +511,7 @@ describe("a heading never appears above nothing", () => {
 		// So this block cannot silently stop testing anything if the shipped
 		// set is rearranged.
 		expect(wrapped.map((t) => t.key).sort()).toEqual([
+			"characterLore",
 			"characters",
 			"currentDate",
 			"history",
@@ -638,6 +658,7 @@ describe("an explicit layout renders the declared shape and nothing else", () =>
 	it("covers the layouts that were made explicit", async () => {
 		// So this block cannot quietly stop testing anything.
 		expect(explicit.map((t) => t.key).sort()).toEqual([
+			"characterLore",
 			"characters",
 			"currentDate",
 			"history",
@@ -703,14 +724,9 @@ describe("jsonValue reproduces a nested position", () => {
 		// its own stringify with two spaces added to lines 2..n. The offset
 		// argument is that addition, so a record nested two levels deep uses 4.
 		const inner = { "The Ashguard brand": "Carries a brand." }
-		const value = [{ name: "Ash", "extra lore": inner }]
 		expect(
-			await render(shippedByKey.get("characters")!.source, value)
-		).toBe(
-			"Assistant Characters (AI-controlled):\n```json\n" +
-				JSON.stringify(value, null, 2) +
-				"\n```"
-		)
+			await render('{\n  "ash": {{{jsonValue characters 2}}}\n}', inner)
+		).toBe(JSON.stringify({ ash: inner }, null, 2))
 	})
 
 	it("renders nothing for undefined rather than the text 'undefined'", async () => {

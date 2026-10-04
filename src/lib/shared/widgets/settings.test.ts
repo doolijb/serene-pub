@@ -76,7 +76,8 @@ describe("settingsSections — progressive exposure", () => {
 
 	it("splits declared fields from the behaviour group", () => {
 		const s = settingsSections(phone)
-		expect(s.basic.map((f) => f.key)).toEqual([...CORE_SETTING_KEYS])
+		expect(s.basic.map((f) => f.key)).toEqual(["title", "lane", "hostCard"])
+		expect(CORE_SETTING_KEYS).toContain("backingMode")
 		expect(s.declared.map((f) => f.key)).toEqual(["density"])
 		expect(s.behaviour.map((f) => f.key)).toEqual(["autoscroll"])
 	})

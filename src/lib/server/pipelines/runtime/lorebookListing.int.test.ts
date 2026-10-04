@@ -266,7 +266,8 @@ describe("the listing read", () => {
 			})
 			expect(typeof row.id).toBe("number")
 			expect(typeof row.fingerprint).toBe("string")
-			expect(row).toHaveProperty("hasEmbedding")
+			// Plan C4: no vector lookup on the read — nothing read the flag.
+			expect(row).not.toHaveProperty("hasEmbedding")
 			expect(row).toHaveProperty("bindingCharacterId")
 			expect(row).toHaveProperty("priority")
 			expect(row).toHaveProperty("position")
@@ -524,6 +525,80 @@ describe("core:query/lorebook-entries@1's binding", () => {
 				name: ""
 			})
 			expect((await listFor()).value.main).toHaveLength(4)
+		},
+		60_000
+	)
+})
+
+/**
+ * Plan C4: the book is read once per run. One host serves one run, and a
+ * respond turn asks this case up to six times (three keyword lanes, the vector
+ * and entity arms, the hop) — the overlays, cast, seats and scan are read on
+ * the first ask and kept. What must still differ per ask: the narrowings and
+ * the speaker's gate.
+ */
+describe("one book read per run (C4)", () => {
+	const bare = { sessionId: 0, currentCharacterId: null }
+	const read = (host: ReturnType<typeof createHost>, q: Record<string, unknown>) =>
+		host.read!("lorebook_entries", q, node as any) as Promise<any[]>
+
+	it(
+		"a second ask in the same run reads the run's snapshot; a new run reads the table",
+		async () => {
+			const q = { ...bare, sessionId }
+			const host = createHost(db as any, { sessionId })
+			const guildhall = (rows: any[]) =>
+				rows.find((r) => r.name === "The Guildhall")?.content
+			expect(guildhall(await read(host, q))).toBe("Four storeys of pewterers.")
+
+			const [row] = await db
+				.select()
+				.from(schema.lorebookEntries)
+				.where(eq(schema.lorebookEntries.title, "The Guildhall"))
+			await db
+				.update(schema.lorebookEntries)
+				.set({ content: "Rebuilt in stone." })
+				.where(eq(schema.lorebookEntries.id, row.id))
+			try {
+				// Same run: the snapshot. Proves the second ask did not scan.
+				expect(guildhall(await read(host, q))).toBe(
+					"Four storeys of pewterers."
+				)
+				// The next run reads the table again.
+				expect(
+					guildhall(await read(createHost(db as any, { sessionId }), q))
+				).toBe("Rebuilt in stone.")
+			} finally {
+				await db
+					.update(schema.lorebookEntries)
+					.set({ content: row.content })
+					.where(eq(schema.lorebookEntries.id, row.id))
+			}
+		},
+		60_000
+	)
+
+	it(
+		"narrowings and the speaker's gate still answer per ask on one host",
+		async () => {
+			const host = createHost(db as any, { sessionId })
+			const q = { ...bare, sessionId }
+			// The bare book: disabled and archived rows included, for the scan.
+			expect(await read(host, q)).toHaveLength(6)
+			// A narrowing on the same host is its own scan, not the bare one.
+			expect(
+				namesOf(await read(host, { ...q, name: "the guildhall" }))
+			).toEqual(["The Guildhall"])
+			expect(
+				await read(host, { ...q, enabled: true, archived: false })
+			).toHaveLength(4)
+			// A wired speaker who is nobody reads no private lore…
+			expect(
+				namesOf(await read(host, { ...q, speaker: "nobody-at-all" }))
+			).not.toContain("Verity")
+			// …and the narrator-shaped ask after it still does: the memo
+			// keeps the book, never one asker's view of it.
+			expect(namesOf(await read(host, q))).toContain("Verity")
 		},
 		60_000
 	)

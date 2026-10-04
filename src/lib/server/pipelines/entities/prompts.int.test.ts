@@ -27,7 +27,7 @@
  */
 
 import { describe, it, expect, beforeAll } from "vitest"
-import { eq } from "drizzle-orm"
+import { eq, ne } from "drizzle-orm"
 import { createTestDb, type TestDb } from "$lib/server/utils/testDb"
 import * as schema from "$lib/server/db/schema"
 import {
@@ -46,6 +46,7 @@ import {
 	PromptNotFoundError,
 	PromptNotUsableError
 } from "$lib/server/pipelines/entities/prompts"
+import { groupOptions } from "$lib/server/pipelines/config/panel/groups"
 
 let db: TestDb
 let specId: number
@@ -540,8 +541,7 @@ describe("what the picker is sent", () => {
 			RESPOND_SPEC_ID,
 			{ userId: 1, isAdmin: true }
 		)
-		const refs = view!.steps
-			.flatMap((s) => [...s.options, ...s.advanced])
+		const refs = groupOptions(view!.groups)
 			.filter((o) => o.control === "prompts-ref")
 		expect(refs.length).toBeGreaterThan(0)
 
@@ -553,6 +553,42 @@ describe("what the picker is sent", () => {
 			expect(labels).not.toContain("From another kind of step")
 		}
 	})
+
+	/**
+	 * Owner note 37 (2026-10-02): prompts filtered by pipeline. A row written
+	 * for another pipeline sits in the same pool (and `listPrompts` still
+	 * lists it, for the library) but the picker does not offer it.
+	 */
+	it("does not offer a row written for another pipeline", async () => {
+		const [other] = await db
+			.select({ id: schema.pipelineSpecs.id })
+			.from(schema.pipelineSpecs)
+			.where(ne(schema.pipelineSpecs.id, specId))
+			.limit(1)
+		expect(other).toBeTruthy()
+		await createPrompt(db, {
+			...pool,
+			createdForSpecId: other.id,
+			name: "Written for another pipeline",
+			fields: { systemPrompt: "s", postHistoryInstructions: "p" }
+		})
+		const { namespaceView } = await import(
+			"$lib/server/pipelines/config/panel"
+		)
+		const view = await namespaceView(
+			db,
+			"prompt-picker-test-secret",
+			RESPOND_SPEC_ID,
+			{ userId: 1, isAdmin: true }
+		)
+		const refs = groupOptions(view!.groups).filter(
+			(o) => o.control === "prompts-ref"
+		)
+		for (const ref of refs)
+			expect(ref.choices!.map((c) => c.label)).not.toContain(
+				"Written for another pipeline"
+			)
+	}, 60_000)
 
 	it("still leaks no node key through the choice list", async () => {
 		// The choice labels are user-supplied text, so this is the one place a
@@ -574,10 +610,7 @@ describe("what the picker is sent", () => {
 			RESPOND_SPEC_ID,
 			{ userId: 1, isAdmin: true }
 		)
-		for (const option of view!.steps.flatMap((s) => [
-			...s.options,
-			...s.advanced
-		]))
+		for (const option of groupOptions(view!.groups))
 			for (const choice of option.choices ?? [])
 				for (const k of Object.keys(choice))
 					for (const nodeKey of keys)

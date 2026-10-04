@@ -21,6 +21,8 @@ function baseParams(
 		historyEntryDate: "Year 1",
 		lorebookId: 1,
 		lorebookLabel: "Test Lorebook",
+		branchId: null,
+		moment: null,
 		...overrides
 	}
 }
@@ -92,5 +94,32 @@ describe("activityStore.startCompile — dedup", () => {
 		expect(activityStore.getById(idA)).toBeDefined()
 		expect(activityStore.getById(idB)).toBeDefined()
 		expect(activityStore.getById(idC)).toBeDefined()
+	})
+
+	test("one entry compiled at two readings is two compiles: neither refuses nor replaces the other", () => {
+		const onMain = activityStore.startCompile(baseParams())
+		const onBranch = activityStore.startCompile(baseParams({ branchId: 7 }))
+		const atMoment = activityStore.startCompile(
+			baseParams({ branchId: 7, moment: { year: 3 } })
+		)
+		createdIds.push(onMain, onBranch, atMoment)
+		activityStore.updateCompile(onBranch, {
+			status: "review",
+			pendingResult: { content: "draft" }
+		})
+		const atMomentAgainId = () =>
+			activityStore.startCompile(
+				baseParams({
+					branchId: 7,
+					moment: { year: 3, month: null, day: null }
+				})
+			)
+
+		// The same line and moment, spelled with its empty parts, is the
+		// same reading: still running, so refused.
+		expect(atMomentAgainId).toThrow(/already in progress/i)
+		expect(activityStore.getById(onMain)?.status).toBe("running")
+		expect(activityStore.getById(onBranch)?.status).toBe("review")
+		expect(activityStore.getById(atMoment)?.status).toBe("running")
 	})
 })

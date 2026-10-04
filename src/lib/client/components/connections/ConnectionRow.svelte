@@ -38,6 +38,7 @@
 	import * as Icons from "@lucide/svelte"
 	import { stateTone, type RowStatus } from "./connectionRowStatus"
 	import type { EndpointKind } from "./modelManagement"
+	import { connectionTypeIcon, kindIconComponent } from "./connectionTypeIcon"
 
 	interface Props {
 		/** What somebody called this connection. */
@@ -45,6 +46,12 @@
 		/** What it is: "KoboldCPP", "Ollama", "OpenRouter", "ONNX". */
 		serviceLabel: string
 		kind: EndpointKind
+		/**
+		 * The connection's type, for its brand mark (`connectionTypeIcon`):
+		 * Ollama and KoboldCPP rows wear their own logo, the rest the kind's
+		 * glyph.
+		 */
+		type?: string | null
 		/** A runtime this pub runs, rather than a host it talks to. */
 		managed: boolean
 		status: RowStatus
@@ -63,6 +70,7 @@
 		title,
 		serviceLabel,
 		kind,
+		type = null,
 		managed,
 		status,
 		defaultFor = [],
@@ -72,22 +80,14 @@
 	}: Props = $props()
 
 	/**
-	 * The mark for where the compute is.
-	 *
-	 * The two local ONNX kinds keep the glyph their MODALITY already owns
-	 * (NOMENCLATURE §22: embeddings `Zap`, entities `ScanText`) rather than a
-	 * generic "on this machine" one — those two rows are the only ones in the
-	 * list whose whole identity is the modality.
+	 * The mark for where the compute is — Ollama's and KoboldCPP's own logos
+	 * for their connections (2026-10-03), the kind's glyph for the rest. The
+	 * two local ONNX kinds keep the glyph their MODALITY already owns
+	 * (NOMENCLATURE §22: embeddings `Zap`, entities `ScanText`) — those two
+	 * rows are the only ones in the list whose whole identity is the modality.
 	 */
-	const KIND_ICON: Record<EndpointKind, string> = {
-		"koboldcpp-managed": "Cpu",
-		ollama: "Server",
-		"onnx-embeddings": "Zap",
-		"onnx-entities": "ScanText",
-		api: "Cloud"
-	}
 	const KindIcon = $derived(
-		((Icons as any)[KIND_ICON[kind]] as any) ?? Icons.Cable
+		connectionTypeIcon(type, kindIconComponent(kind))
 	)
 	const ActionIcon = $derived(
 		status.action

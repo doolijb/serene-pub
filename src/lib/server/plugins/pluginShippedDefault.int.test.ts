@@ -136,12 +136,12 @@ describe("a plugin spec's shipped default", () => {
 	it("still loses to an instance selection", async () => {
 		const id = await specRow(JUDGE)
 		const base = await configId(`pipeline-default:${JUDGE}`)
-		await selectConfig(db, id, "instance", 0, base!)
+		await selectConfig(db, id, "pub", 0, base!)
 		try {
 			const r = await resolveSelectedConfig(db, id, JUDGE)
-			expect(r).toMatchObject({ configId: base, source: "instance" })
+			expect(r).toMatchObject({ configId: base, source: "pub" })
 		} finally {
-			await selectConfig(db, id, "instance", 0, null)
+			await selectConfig(db, id, "pub", 0, null)
 		}
 	})
 

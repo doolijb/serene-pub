@@ -12,12 +12,14 @@ import {
 	graphEdges,
 	graphHeaderLine,
 	graphNodes,
+	linkCountsOf,
 	nodeNames,
 	panelEdges,
 	ceilingFactsFrom,
 	ceilingLine,
 	parseGraphKey,
 	provenanceOf,
+	sideColumnView,
 	toGraphEdge,
 	type RelationshipLike
 } from "./graphModel"
@@ -339,14 +341,14 @@ describe("graphHeaderLine — the drawing, said out loud", () => {
 	it("says the scope, the reach, the links and the silent scenes", () => {
 		expect(
 			graphHeaderLine({
-				scopeLabel: "All entries",
+				scopeLabel: "Everything",
 				entriesWithLinks: 6,
 				entriesTotal: 30,
 				linkCount: 9,
 				scenesNamingNone: 1
 			})
 		).toBe(
-			"All entries, as a graph · 6 of 30 entries have relationships · 9 links · 1 scene names none"
+			"Everything, as a graph · 6 of 30 entries have relationships · 9 links · 1 scene names none"
 		)
 	})
 
@@ -367,14 +369,14 @@ describe("graphHeaderLine — the drawing, said out loud", () => {
 	it("counts more than one silent scene in the plural", () => {
 		expect(
 			graphHeaderLine({
-				scopeLabel: "All entries",
+				scopeLabel: "Everything",
 				entriesWithLinks: 0,
 				entriesTotal: 0,
 				linkCount: 0,
 				scenesNamingNone: 3
 			})
 		).toBe(
-			"All entries, as a graph · 0 of 0 entries have relationships · 0 links · 3 scenes name none"
+			"Everything, as a graph · 0 of 0 entries have relationships · 0 links · 3 scenes name none"
 		)
 	})
 })
@@ -457,40 +459,247 @@ describe("ceilingFactsFrom — the run's relationship figures", () => {
 	})
 })
 
-describe("bumpLinkCounts — the Rebuild warning's counts stay true", () => {
-	const zero = { total: 0, entryToEntry: 0, castToEntry: 0 }
-	it("counts a road between two entries", () => {
-		expect(
-			bumpLinkCounts(
-				zero,
-				{ from: { kind: "entry", entryId: 1 }, to: { kind: "entry", entryId: 2 } },
-				1
-			)
-		).toEqual({ total: 1, entryToEntry: 1, castToEntry: 0 })
+describe("bumpLinkCounts — the Rebuild warning counts only what it deletes", () => {
+	const zero = { castToCast: 0 }
+	const cast = (bindingId: number) => ({ kind: "cast" as const, bindingId })
+	const entry = (entryId: number) => ({ kind: "entry" as const, entryId })
+	it("counts a tie between two cast members", () => {
+		expect(bumpLinkCounts(zero, { from: cast(1), to: cast(2) }, 1)).toEqual({
+			castToCast: 1
+		})
 	})
-	it("counts a member-to-entry link", () => {
-		expect(
-			bumpLinkCounts(
-				zero,
-				{ from: { kind: "cast", bindingId: 1 }, to: { kind: "entry", entryId: 2 } },
-				1
-			)
-		).toEqual({ total: 1, entryToEntry: 0, castToEntry: 1 })
+	it("never counts a link with an entry at either end: a rebuild keeps it", () => {
+		expect(bumpLinkCounts(zero, { from: entry(1), to: entry(2) }, 1)).toEqual(
+			zero
+		)
+		expect(bumpLinkCounts(zero, { from: cast(1), to: entry(2) }, 1)).toEqual(
+			zero
+		)
+		expect(bumpLinkCounts(zero, { from: entry(1), to: cast(2) }, 1)).toEqual(
+			zero
+		)
 	})
 	it("takes one away and never goes below zero", () => {
 		expect(
-			bumpLinkCounts(
-				{ total: 1, entryToEntry: 0, castToEntry: 0 },
-				{ from: { kind: "cast", bindingId: 1 }, to: { kind: "cast", bindingId: 2 } },
-				-1
-			)
+			bumpLinkCounts({ castToCast: 1 }, { from: cast(1), to: cast(2) }, -1)
 		).toEqual(zero)
+		expect(bumpLinkCounts(zero, { from: cast(1), to: cast(2) }, -1)).toEqual(
+			zero
+		)
+	})
+	it("linkCountsOf counts a whole list the same way", () => {
 		expect(
-			bumpLinkCounts(
-				zero,
-				{ from: { kind: "entry", entryId: 1 }, to: { kind: "entry", entryId: 2 } },
-				-1
-			)
-		).toEqual(zero)
+			linkCountsOf([
+				{ from: cast(1), to: cast(2) },
+				{ from: cast(2), to: cast(1) },
+				{ from: entry(1), to: entry(2) },
+				{ from: cast(1), to: entry(2) }
+			])
+		).toEqual({ castToCast: 2 })
+	})
+})
+
+/**
+ * Plan places-graph B4: the Places lens draws every place, joined or not, and
+ * an edge says what the relationship is called and whether it reads both ways.
+ */
+describe("graphNodes — alwaysEntries (B4)", () => {
+	it("draws an entry nothing joins yet, so two unlinked places can be joined", () => {
+		const nodes = graphNodes({
+			cast: [],
+			relationships: [],
+			scopeEntries: [],
+			alwaysEntries: [
+				{ id: 40, name: "The Guardroom", typeId: "core:entry/location" },
+				{ id: 41, name: "The Drowned Hall", category: "cellar" }
+			]
+		})
+		expect(nodes.map((n) => n.key)).toEqual(["entry#40", "entry#41"])
+		expect(nodes[0].typeId).toBe("core:entry/location")
+		expect(nodes[1].category).toBe("cellar")
+	})
+
+	it("names it by the row handed in, not the edge's copy of the base name", () => {
+		const nodes = graphNodes({
+			cast: [],
+			relationships: [
+				rel({
+					id: 10,
+					from: { kind: "entry", entryId: 40, name: "Old Guardroom" },
+					to: { kind: "entry", entryId: 41, name: "The Hall" }
+				})
+			],
+			scopeEntries: [],
+			alwaysEntries: [{ id: 40, name: "The Guardroom" }]
+		})
+		expect(nodes.map((n) => [n.key, n.name])).toEqual([
+			["entry#40", "The Guardroom"],
+			["entry#41", "The Hall"]
+		])
+	})
+
+	it("carries an edge end's entry type onto its node", () => {
+		const nodes = graphNodes({
+			cast: [],
+			relationships: [
+				rel({
+					id: 10,
+					from: {
+						kind: "entry",
+						entryId: 40,
+						name: "The Crypt",
+						typeId: "core:entry/world-lore"
+					},
+					to: { kind: "entry", entryId: 41, name: "The Hall" }
+				})
+			],
+			scopeEntries: []
+		})
+		expect(nodes[0].typeId).toBe("core:entry/world-lore")
+	})
+})
+
+describe("toGraphEdge — the name, the label and both ways (B4)", () => {
+	it("labels the line with the relationship's name when it has one", () => {
+		const edge = toGraphEdge(
+			rel({
+				id: 1,
+				relationshipType: "leads north to",
+				name: "the rusted iron door"
+			})
+		)
+		expect(edge.label).toBe("the rusted iron door")
+		expect(edge.name).toBe("the rusted iron door")
+	})
+
+	it("labels an unnamed line with its relationship type", () => {
+		expect(
+			toGraphEdge(rel({ id: 1, relationshipType: "leads to", name: "  " }))
+				.label
+		).toBe("leads to")
+	})
+
+	it("reads both ways when a reverse relationship type is set", () => {
+		expect(
+			toGraphEdge(
+				rel({
+					id: 1,
+					relationshipType: "leads north to",
+					reverseRelationshipType: "leads south to"
+				})
+			).bothWays
+		).toBe(true)
+		expect(
+			toGraphEdge(rel({ id: 1, reverseRelationshipType: "  " })).bothWays
+		).toBe(false)
+		expect(toGraphEdge(rel({ id: 1 })).bothWays).toBe(false)
+	})
+})
+
+describe("panelEdges — said from the open node, with an entry at an end (B4)", () => {
+	const nodes = [
+		{ id: 40, name: "the Guardroom" },
+		{ id: 41, name: "the Drowned Hall" }
+	].map((e) => ({
+		key: entryKey(e.id),
+		kind: "entry" as const,
+		id: e.id,
+		name: e.name,
+		state: "active",
+		visibility: "normal"
+	}))
+	const names = nodeNames([
+		...nodes,
+		{
+			key: "cast#1",
+			kind: "cast",
+			id: 1,
+			name: "Verity",
+			state: "active",
+			visibility: "normal"
+		},
+		{
+			key: "cast#2",
+			kind: "cast",
+			id: 2,
+			name: "Marrow",
+			state: "active",
+			visibility: "normal"
+		}
+	])
+	const edges = graphEdges(
+		[
+			rel({
+				id: 10,
+				relationshipType: "leads north to",
+				reverseRelationshipType: "leads south to",
+				name: "the rusted iron door",
+				from: { kind: "entry", entryId: 40 },
+				to: { kind: "entry", entryId: 41 }
+			}),
+			rel({
+				id: 11,
+				relationshipType: "ally",
+				from: { kind: "cast", bindingId: 2 },
+				to: { kind: "cast", bindingId: 1 }
+			})
+		],
+		new Set(["entry#40", "entry#41", "cast#1", "cast#2"])
+	)
+
+	it("says a place's way out from either end", () => {
+		expect(panelEdges(entryKey(40), edges, names)[0].sentence).toBe(
+			"The rusted iron door leads north to the Drowned Hall."
+		)
+		expect(panelEdges(entryKey(41), edges, names)[0].sentence).toBe(
+			"The rusted iron door leads south to the Guardroom."
+		)
+	})
+
+	it("leaves a tie between two cast members to its arrow", () => {
+		expect(panelEdges(castKey(1), edges, names)[0].sentence).toBeNull()
+	})
+})
+
+describe("sideColumnView — what the column beside the canvas shows", () => {
+	const base = {
+		drawing: "places" as const,
+		linking: false,
+		relationshipOpen: false,
+		nodeOpen: false
+	}
+
+	it("opens a link picked while a place stays selected (the panel row, the line)", () => {
+		expect(
+			sideColumnView({ ...base, nodeOpen: true, relationshipOpen: true })
+		).toBe("relationship")
+		expect(
+			sideColumnView({
+				...base,
+				drawing: "relationships",
+				nodeOpen: true,
+				relationshipOpen: true
+			})
+		).toBe("relationship")
+	})
+
+	it("falls back to the node's panel once the link closes", () => {
+		expect(sideColumnView({ ...base, nodeOpen: true })).toBe("node")
+	})
+
+	it("puts a link being drawn over everything", () => {
+		expect(
+			sideColumnView({
+				...base,
+				linking: true,
+				nodeOpen: true,
+				relationshipOpen: true
+			})
+		).toBe("link")
+	})
+
+	it("lists the nodes beside the Graph lens, and gives the Places map the width", () => {
+		expect(sideColumnView({ ...base, drawing: "relationships" })).toBe("list")
+		expect(sideColumnView(base)).toBeNull()
 	})
 })

@@ -14,6 +14,7 @@
 	import { openHref } from "$lib/client/shell/openHref"
 	import { isPlainClick } from "$lib/client/shell/viewLinks"
 	import { timeAgo } from "$lib/client/utils/timeAgo"
+	import { momentKey } from "$lib/shared/lorebooks/loreRoute"
 
 	interface Props {
 		onclose?: () => Promise<boolean> | undefined
@@ -38,20 +39,25 @@
 	let panelsCtx: PanelsCtx = $state(getContext("panelsCtx"))
 	let userCtx: UserCtx = $state(getContext("userCtx"))
 
-	let build = $derived(graphBuildsCtx?.activeBuild)
+	/**
+	 * Every graph build, one card each (plan B8) — the newest alone hid a
+	 * second book's parked review or running build until the first was
+	 * dismissed.
+	 */
+	let builds = $derived(graphBuildsCtx?.builds ?? [])
 	let sceneActivities = $derived(sceneSummarizesCtx?.activities ?? [])
 	let compileActivities = $derived(compileEntriesCtx?.activities ?? [])
 	let sessionSummarizeActivities = $derived(
 		sessionSummarizesCtx?.activities ?? []
 	)
 	let hasActivity = $derived(
-		!!build ||
+		builds.length > 0 ||
 			sceneActivities.length > 0 ||
 			compileActivities.length > 0 ||
 			sessionSummarizeActivities.length > 0
 	)
 	let activityCount = $derived(
-		(build ? 1 : 0) +
+		builds.length +
 			sceneActivities.length +
 			compileActivities.length +
 			sessionSummarizeActivities.length
@@ -117,10 +123,10 @@
 	}
 
 	let isAdmin = $derived(!!userCtx?.user?.isAdmin)
-	let isOwnActivity = $derived(!!build && build.userId === userCtx?.user?.id)
-	let canStop = $derived(
-		!!build && build.status === "building" && (isOwnActivity || isAdmin)
-	)
+	const isOwnBuild = (build: GraphBuildState) =>
+		build.userId === userCtx?.user?.id
+	const canStopBuild = (build: GraphBuildState) =>
+		build.status === "building" && (isOwnBuild(build) || isAdmin)
 	let activeTab = $state<"activity" | "queue">("activity")
 
 	/**
@@ -197,8 +203,8 @@
 		return `${Math.floor(m / 60)}h ${m % 60}m`
 	}
 
-	function navigateToGraphTab() {
-		if (!build || !isOwnActivity) return
+	function navigateToGraphTab(build: GraphBuildState) {
+		if (!isOwnBuild(build)) return
 		panelsCtx.digest.lore = {
 			lorebookId: build.lorebookId,
 			scope: "all",
@@ -207,8 +213,8 @@
 		panelsCtx.openPanel({ key: "lorebooks", toggle: false })
 	}
 
-	function openModal() {
-		if (!build || !isOwnActivity) return
+	function openModal(build: GraphBuildState) {
+		if (!isOwnBuild(build)) return
 		panelsCtx.digest.lore = {
 			lorebookId: build.lorebookId,
 			scope: "all",
@@ -244,10 +250,14 @@
 	}
 
 	function navigateToCompileEntry(activity: CompileEntryState) {
+		// At the reading the compile was asked from: its review saves there,
+		// so it is read against the entry as that line and moment show it.
 		panelsCtx.digest.lore = {
 			lorebookId: activity.lorebookId,
 			scope: "history",
-			entryId: activity.historyEntryId
+			entryId: activity.historyEntryId,
+			...(activity.branchId != null ? { branch: activity.branchId } : {}),
+			...(activity.moment ? { moment: momentKey(activity.moment) } : {})
 		}
 		panelsCtx.openPanel({ key: "lorebooks", toggle: false })
 	}
@@ -326,7 +336,7 @@
 {/snippet}
 
 <!-- Tabs -->
-<div class="border-surface-200-800 flex shrink-0 border-b">
+<div class="panel-edge flex shrink-0 border-b">
 	<button
 		class="flex-1 px-4 py-2 text-sm font-medium transition-colors {activeTab ===
 		'activity'
@@ -355,8 +365,11 @@
 	{/if}
 </div>
 
-<!-- Content -->
-<div class="flex-1 overflow-y-auto">
+<!-- Content. A reading measure, centred (notes 14): in Focus the rows ran
+     1400px from a name on the left to its time on the right. -->
+<div
+	class="flex-1 overflow-y-auto [&>*]:mx-auto [&>*]:w-full [&>*]:max-w-[880px]"
+>
 	{#if activeTab === "activity"}
 		{#if waiting.length > 0}
 			<section aria-labelledby="{uid}-waiting">
@@ -376,10 +389,11 @@
 		{#if hasActivity}
 			<h3 class="text-surface-600-400 px-4 pt-4 text-xs">In progress</h3>
 		{/if}
-		{#if build}
+		{#each builds as build (build.lorebookId)}
+			{@const isOwnActivity = isOwnBuild(build)}
 			<div class="m-4 mb-0">
 				<div
-					class="bg-surface-200-800 border-surface-300-700 space-y-3 rounded-lg border p-3"
+					class="bg-surface-100-900 panel-edge space-y-3 rounded-lg border p-3"
 				>
 					<!-- Card header: title + dismiss -->
 					<div class="flex items-start justify-between gap-2">
@@ -387,7 +401,7 @@
 							{#if isOwnActivity}
 								<button
 									class="hover:text-primary-500 block w-full truncate text-left text-sm font-medium transition-colors"
-									onclick={navigateToGraphTab}
+									onclick={() => navigateToGraphTab(build)}
 									title="Go to graph tab"
 								>
 									{build.lorebookLabel ??
@@ -410,7 +424,7 @@
 						{#if build.status !== "building"}
 							<button
 								class="text-surface-600-400 hover:text-surface-950-50 shrink-0 transition-colors"
-								onclick={() => graphBuildsCtx?.clearBuild()}
+								onclick={() => graphBuildsCtx?.clearBuild(build.lorebookId)}
 								title="Dismiss"
 								aria-label="Dismiss"
 							>
@@ -455,11 +469,11 @@
 
 					<!-- Card footer: stop + action buttons -->
 					<div class="flex items-center gap-2">
-						{#if canStop}
+						{#if canStopBuild(build)}
 							<button
 								class="btn btn-sm preset-tonal-error"
 								onclick={() =>
-									build?.activityId &&
+									build.activityId &&
 									socket.emit("activity:cancel", {
 										id: build.activityId
 									})}
@@ -471,21 +485,21 @@
 							{#if build.status === "building"}
 								<button
 									class="btn btn-sm preset-filled-surface-400-600"
-									onclick={openModal}
+									onclick={() => openModal(build)}
 								>
 									<Icons.Eye size={14} /> View progress
 								</button>
 							{:else if build.status === "review"}
 								<button
 									class="btn btn-sm preset-filled-primary-500"
-									onclick={openModal}
+									onclick={() => openModal(build)}
 								>
 									<Icons.Check size={14} /> Review and apply
 								</button>
 							{:else if build.status === "error"}
 								<button
 									class="btn btn-sm preset-tonal-error"
-									onclick={openModal}
+									onclick={() => openModal(build)}
 								>
 									<Icons.AlertCircle size={14} /> View error
 								</button>
@@ -494,12 +508,12 @@
 					</div>
 				</div>
 			</div>
-		{/if}
+		{/each}
 		{#each sceneActivities as activity (activity.activityId)}
 			{@const isOwn = activity.userId === userCtx?.user?.id}
 			<div class="m-4 mb-0">
 				<div
-					class="bg-surface-200-800 border-surface-300-700 space-y-3 rounded-lg border p-3"
+					class="bg-surface-100-900 panel-edge space-y-3 rounded-lg border p-3"
 				>
 					<div class="flex items-start justify-between gap-2">
 						<div class="min-w-0 flex-1">
@@ -550,17 +564,19 @@
 								it is what deletes a scene created solely to
 								carry the run.
 							-->
-							<button
-								class="text-surface-600-400 hover:text-error-500 shrink-0 transition-colors"
-								onclick={() =>
-									socket.emit("activity:cancel", {
-										id: activity.activityId
-									})}
-								title="Stop processing"
-								aria-label="Stop processing"
-							>
-								<Icons.Square size={14} />
-							</button>
+							{#if isOwn || isAdmin}
+								<button
+									class="text-surface-600-400 hover:text-error-500 shrink-0 transition-colors"
+									onclick={() =>
+										socket.emit("activity:cancel", {
+											id: activity.activityId
+										})}
+									title="Stop processing"
+									aria-label="Stop processing"
+								>
+									<Icons.Square size={14} />
+								</button>
+							{/if}
 						{:else}
 							<button
 								class="text-surface-600-400 hover:text-surface-950-50 shrink-0 transition-colors"
@@ -649,7 +665,7 @@
 			{@const isOwn = activity.userId === userCtx?.user?.id}
 			<div class="m-4 mb-0">
 				<div
-					class="bg-surface-200-800 border-surface-300-700 space-y-3 rounded-lg border p-3"
+					class="bg-surface-100-900 panel-edge space-y-3 rounded-lg border p-3"
 				>
 					<div class="flex items-start justify-between gap-2">
 						<div class="min-w-0 flex-1">
@@ -697,17 +713,19 @@
 								have one retrofitted. A background run the user
 								cannot stop is worse than no background run.
 							-->
-							<button
-								class="text-surface-600-400 hover:text-error-500 shrink-0 transition-colors"
-								onclick={() =>
-									socket.emit("activity:cancel", {
-										id: activity.activityId
-									})}
-								title="Stop summarizing"
-								aria-label="Stop summarizing"
-							>
-								<Icons.Square size={14} />
-							</button>
+							{#if isOwn || isAdmin}
+								<button
+									class="text-surface-600-400 hover:text-error-500 shrink-0 transition-colors"
+									onclick={() =>
+										socket.emit("activity:cancel", {
+											id: activity.activityId
+										})}
+									title="Stop summarizing"
+									aria-label="Stop summarizing"
+								>
+									<Icons.Square size={14} />
+								</button>
+							{/if}
 						{:else}
 							<button
 								class="text-surface-600-400 hover:text-surface-950-50 shrink-0 transition-colors"
@@ -743,7 +761,7 @@
 			{@const isOwn = activity.userId === userCtx?.user?.id}
 			<div class="m-4 mb-0">
 				<div
-					class="bg-surface-200-800 border-surface-300-700 space-y-3 rounded-lg border p-3"
+					class="bg-surface-100-900 panel-edge space-y-3 rounded-lg border p-3"
 				>
 					<div class="flex items-start justify-between gap-2">
 						<div class="min-w-0 flex-1">
@@ -832,8 +850,8 @@
 							<button
 								class="btn btn-sm preset-filled-primary-500"
 								onclick={() => {
-									compileEntriesCtx.setReviewHistoryEntryId(
-										activity.historyEntryId
+									compileEntriesCtx.setReviewActivityId(
+										activity.activityId
 									)
 									navigateToCompileEntry(activity)
 								}}

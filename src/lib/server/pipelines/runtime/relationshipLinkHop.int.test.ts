@@ -17,9 +17,14 @@
  * node for the graph traversal to walk from, so the cast read answers `null` —
  * and a hop that could not survive that answer would be unreachable in exactly
  * the book it exists for.
+ *
+ * The hop runs only when the band has a share (plan A2): the session that
+ * hops gives `gather.relationships.read` a share of its own, and a second
+ * session on the same book runs the shipped share of 0 and must not hop.
  */
 
 import { describe, it, expect, beforeAll, vi } from "vitest"
+import { eq } from "drizzle-orm"
 import fs from "fs/promises"
 import os from "os"
 import path from "path"
@@ -48,6 +53,8 @@ vi.mock("$lib/server/db", async () => {
 
 let db: TestDb
 let sessionId: number
+/** A session on the same book with the shipped share of 0. */
+let shippedSessionId: number
 let userId: number
 
 const NEAR = "The Umber Room"
@@ -83,6 +90,27 @@ beforeAll(async () => {
 		.values({ userId, isGroup: true, lorebookId: lorebook.id })
 		.returning()
 	sessionId = session.id
+	const [shipped] = await db
+		.insert(schema.sessions)
+		.values({ userId, isGroup: true, lorebookId: lorebook.id })
+		.returning()
+	shippedSessionId = shipped.id
+
+	// The band's share, as this session's own override of the ranked step —
+	// the control a person raises (docs: embeddings-and-rag.md).
+	const [spec] = await db
+		.select({ id: schema.pipelineSpecs.id })
+		.from(schema.pipelineSpecs)
+		.where(eq(schema.pipelineSpecs.slug, RESPOND_SPEC_ID))
+	await db.insert(schema.pipelineNodeOverrides).values({
+		specId: spec!.id,
+		scopeKind: "session",
+		scopeId: sessionId,
+		nodeKey: GRAPH,
+		slot: "params",
+		path: "share",
+		value: 0.1
+	} as any)
 
 	let position = 0
 	const place = async (name: string, keys: string[]) =>
@@ -123,37 +151,45 @@ beforeAll(async () => {
 	await link(room.id, tunnel.id, "connects to")
 	await link(tunnel.id, hall.id, "leads to")
 
-	await db.insert(schema.sessionMessages).values({
-		sessionId,
-		role: "user",
-		content: MESSAGE
-	} as any)
+	for (const id of [sessionId, shippedSessionId])
+		await db.insert(schema.sessionMessages).values({
+			sessionId: id,
+			role: "user",
+			content: MESSAGE
+		} as any)
 }, 120_000)
 
-let receipt: any
-beforeAll(async () => {
-	receipt = await run(respondSpec(), {
+const turn = async (id: number) =>
+	await run(respondSpec(), {
 		input: {
 			text: MESSAGE,
-			sessionId,
-			sessionScope: { sessionId, currentCharacterId: null }
+			sessionId: id,
+			sessionScope: { sessionId: id, currentCharacterId: null }
 		},
 		seed: "seed:link-hop",
 		bindings: coreBindings(),
-		world: await buildWorld(db, { sessionId, specId: RESPOND_SPEC_ID }),
-		host: createHost(db, { sessionId, userId }),
+		world: await buildWorld(db, { sessionId: id, specId: RESPOND_SPEC_ID }),
+		host: createHost(db, { sessionId: id, userId }),
 		preview: true
 	} as any)
+
+let receipt: any
+let shippedReceipt: any
+beforeAll(async () => {
+	receipt = await turn(sessionId)
+	shippedReceipt = await turn(shippedSessionId)
 }, 120_000)
 
-const nodeOut = (key: string) => {
-	const node = (receipt.nodes as any[]).find((n) => n.nodeKey === key)
+const nodeOut = (key: string, of: any = receipt) => {
+	const node = (of.nodes as any[]).find((n) => n.nodeKey === key)
 	expect(node, `${key} is not in the receipt`).toBeTruthy()
 	return node.output
 }
 
-const hops = (): any[] =>
-	(nodeOut(GRAPH)?.main ?? []).filter((c: any) => c?.payload?.via === "link")
+const hops = (of: any = receipt): any[] =>
+	(nodeOut(GRAPH, of)?.main ?? []).filter(
+		(c: any) => c?.payload?.via === "link"
+	)
 
 describe("the link hop", () => {
 	it("brings in the place one edge from the one the turn named", () => {
@@ -174,5 +210,10 @@ describe("the link hop", () => {
 		const diagnostics = nodeOut(GRAPH)?.diagnostics
 		expect(diagnostics?.linked).toBe(1)
 		expect(diagnostics?.linkedEntries).toEqual([ONE_HOP])
+	}, 60_000)
+
+	it("is not walked at the shipped share of 0: every relationship would be left out", () => {
+		expect(hops(shippedReceipt)).toEqual([])
+		expect(nodeOut(GRAPH, shippedReceipt)?.diagnostics?.linked).toBe(0)
 	}, 60_000)
 })

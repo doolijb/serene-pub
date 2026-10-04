@@ -52,9 +52,10 @@ describe("readPluginPackage", () => {
 			"demo.unified:spec/create-session",
 			"demo.unified:spec/respond"
 		])
-		// The declared panel's entry, and the script and stylesheet it loads —
-		// a surface stored without them renders blank.
+		// The built component module, and the whole ui tree its `sp-frame`
+		// document loads — stored without them, it renders blank.
 		expect(pkg.files.map((f) => f.path).sort()).toEqual([
+			"dist/plugin/components/tally.js",
 			"ui/tally.css",
 			"ui/tally.html",
 			"ui/tally.js"
@@ -183,13 +184,13 @@ describe("readPluginPackage", () => {
 		}
 	})
 
-	it("refuses a surface entry that escapes the package or does not exist", async () => {
-		for (const entry of ["../../../etc/passwd", "ui/missing.html"]) {
+	it("refuses a component entry that escapes the package, is not a built module, or does not exist", async () => {
+		for (const entry of ["../../../etc/passwd", "ui/missing.html", "dist/plugin/components/missing.js"]) {
 			const { dir, cleanup } = await broken(async (d) => {
 				const fs = await import("node:fs/promises")
 				const p = join(d, "dist/plugin/manifest.json")
 				const m = JSON.parse(await fs.readFile(p, "utf8"))
-				m.surfaces.panels[0].entry = entry
+				m.components[0].entry = entry
 				await writeFile(p, JSON.stringify(m))
 			})
 			try {
@@ -281,11 +282,12 @@ describe("package helpers", () => {
 			declaredSurfaceEntries({
 				surfaces: {
 					"session-view": { entry: "ui/view.html" },
-					page: { entry: "ui/page.html" },
-					panels: [{ id: "a", entry: "ui/a.html" }, null, { id: "b" }]
-				}
+					page: { entry: "ui/page.html" }
+				},
+				// A widget is never a frame, whatever a stale manifest spells.
+				widgets: [{ id: "a", surface: { kind: "frame", entry: "ui/a.html" } }, null, { id: "c", component: "c" }]
 			})
-		).toEqual(["ui/view.html", "ui/page.html", "ui/a.html"])
+		).toEqual(["ui/view.html", "ui/page.html"])
 		expect(declaredSurfaceEntries(null)).toEqual([])
 		expect(declaredSurfaceEntries({ surfaces: "nope" })).toEqual([])
 	})

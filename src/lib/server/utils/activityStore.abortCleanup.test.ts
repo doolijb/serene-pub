@@ -30,6 +30,8 @@ function compileParams(
 		historyEntryDate: "Year 1",
 		lorebookId: 1,
 		lorebookLabel: "Test Lorebook",
+		branchId: null,
+		moment: null,
 		...overrides
 	}
 }

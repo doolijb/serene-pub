@@ -8,8 +8,9 @@
  */
 import { describe, expect, test, vi } from "vitest"
 import { PGlite } from "@electric-sql/pglite"
-import { sql } from "drizzle-orm"
+import { DrizzleQueryError, sql } from "drizzle-orm"
 import { drizzle } from "drizzle-orm/pglite"
+import { driverErrorOf } from "$lib/server/db/errors"
 import {
 	guardTransactions,
 	TransactionDeadlockError
@@ -55,11 +56,17 @@ describe("with the guard, in throw mode", () => {
 			await tx.execute(sql`insert into things (name) values ('inside')`)
 			await db.select().from(sql`things`)
 		})
-		await expect(within(5_000, road)).rejects.toBeInstanceOf(
-			TransactionDeadlockError
+		// The guard throws from inside `client.query`, so drizzle (0.44+)
+		// wraps the refusal like any failed query: the guard's own error, and
+		// its message, are the wrapper's `.cause`.
+		const err = await within(5_000, road).catch((e) => e)
+		expect(err).toBeInstanceOf(DrizzleQueryError)
+		const refusal = driverErrorOf(err)
+		expect(refusal).toBeInstanceOf(TransactionDeadlockError)
+		expect((refusal as Error).message).toMatch(/OUTER database handle/)
+		expect((refusal as Error).message).toMatch(
+			/The transaction was opened at:/
 		)
-		await expect(road).rejects.toThrow(/OUTER database handle/)
-		await expect(road).rejects.toThrow(/The transaction was opened at:/)
 		// The transaction rolled back and the mutex is free: the handle works.
 		const rows = await db.execute(sql`select count(*)::int as n from things`)
 		expect((rows.rows[0] as { n: number }).n).toBe(0)

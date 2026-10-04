@@ -39,6 +39,7 @@
 	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
 	import * as Icons from "@lucide/svelte"
 	import { goto } from "$app/navigation"
+	import { page } from "$app/state"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { useInterest } from "$lib/client/sockets/interest.svelte"
 	import { KeyboardNavigationManager } from "$lib/client/utils/keyboardNavigation"
@@ -247,7 +248,7 @@
 		if (!ready || !isAdmin) return []
 		if (!isAdminScope && scope.key !== null) return []
 		const needle = trimmed.toLowerCase()
-		return adminNavItems(accountsEnabled)
+		return adminNavItems(accountsEnabled, page.data?.isPrerelease === true)
 			.filter((item) => item.label.toLowerCase().includes(needle))
 			.slice(0, GROUP_CAP)
 			.map((item, i) => ({

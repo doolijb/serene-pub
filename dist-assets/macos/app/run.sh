@@ -6,12 +6,13 @@
 # This starts the Node server and nothing else: no launcher, no tray, no
 # window. It is the supported way to run Serene Pub on a headless box, from a
 # launchd job, over ssh/tmux, or when debugging a start-up problem. The
-# "Serene Pub.app" bundle around it and the run.sh forwarder at the top of the
-# extracted folder both end up exec'ing this file.
+# launcher (the bundle's Contents/MacOS/serene-pub) is the double-click start;
+# it does not run this file but starts the same node + build/index.js itself.
+# The run.sh at the top of a portable folder just exec's this file.
 #
-# Everything the application is made of lives in this directory
-# ("Serene Pub.app/Contents/Resources/app") so that an update can replace the
-# whole directory in one rename. Nothing the user owns is kept in here - the
+# Everything the application is made of lives in the bundle around this
+# directory ("Serene Pub.app") so that an update can replace the whole bundle
+# in one rename. Nothing the user owns is kept in here - the
 # database and .env live in the OS data directory (see .env.example).
 
 DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -19,13 +20,16 @@ export NODE_ENV=production
 NODE_BIN="$DIR/node"
 APP_MAIN="$DIR/build/index.js"
 
-# The top of the install: the folder the user extracted, one level above this
-# one. State it rather than leaving the server to guess, because the two
-# directories mean different things and only this script knows the layout.
-# Everything the user owns is anchored here - a legacy .env, and a relative
-# SERENE_PUB_DATA_DIR - so that none of it lands inside the folder an update
-# replaces. src/lib/server/config/preloadEnv.js is what reads this.
-SERENE_PUB_INSTALL_ROOT=$(CDPATH= cd -- "$DIR/.." && pwd)
+# The top of the install: the directory that CONTAINS "Serene Pub.app" - the
+# extracted serene-pub/ folder, or /Applications - four levels up from
+# Contents/Resources/app. State it rather than leaving the server to guess,
+# because only this script knows the layout. Everything the user owns is
+# anchored here - a legacy .env, and a relative SERENE_PUB_DATA_DIR - so that
+# none of it lands inside the bundle, which an update replaces wholesale.
+# The launcher passes the same directory (plan contract C1); the two must
+# agree or a relative data directory splits in two.
+# src/lib/server/config/preloadEnv.js is what reads this.
+SERENE_PUB_INSTALL_ROOT=$(CDPATH= cd -- "$DIR/../../../.." && pwd)
 export SERENE_PUB_INSTALL_ROOT
 
 # The server resolves ./drizzle (migrations) and ./build/client (static assets)

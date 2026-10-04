@@ -29,15 +29,17 @@ describe("registerVectorizationHandlers — progress emitter admin gate", () => 
 		const { registerVectorizationHandlers } = await import(
 			"./vectorization"
 		)
-		const { pauseVectorization } = await import(
+		const { embeddingLane } = await import(
 			"$lib/server/embedding/vectorizationQueue"
 		)
+		/** A progress broadcast, the lane's own — nothing public sends one without a run. */
+		const broadcastProgress = () => (embeddingLane as any).broadcast("idle")
 
 		const spyEmit = vi.fn()
 		const socket = fakeSocket(false)
 		registerVectorizationHandlers(socket, spyEmit, noopRegister)
 
-		pauseVectorization()
+		broadcastProgress()
 		expect(spyEmit).not.toHaveBeenCalled()
 	})
 
@@ -45,23 +47,25 @@ describe("registerVectorizationHandlers — progress emitter admin gate", () => 
 		const { registerVectorizationHandlers } = await import(
 			"./vectorization"
 		)
-		const { pauseVectorization } = await import(
+		const { embeddingLane } = await import(
 			"$lib/server/embedding/vectorizationQueue"
 		)
+		/** A progress broadcast, the lane's own — nothing public sends one without a run. */
+		const broadcastProgress = () => (embeddingLane as any).broadcast("idle")
 
 		const spyEmit = vi.fn()
 		const socket = fakeSocket(true)
 		registerVectorizationHandlers(socket, spyEmit, noopRegister)
 
-		pauseVectorization()
+		broadcastProgress()
 		expect(spyEmit).toHaveBeenCalledWith(
 			"vectorization:progress",
-			expect.objectContaining({ status: "paused" })
+			expect.objectContaining({ status: "idle" })
 		)
 
 		spyEmit.mockClear()
 		socket.triggerDisconnect()
-		pauseVectorization()
+		broadcastProgress()
 		expect(spyEmit).not.toHaveBeenCalled()
 	})
 })

@@ -56,6 +56,35 @@ export function tokenedEntriesRead(
 export const sessionEntriesReplyKey = (reply: Sockets.Entries.SessionEntries.Response): string | null =>
 	reply.request ?? null
 
+/**
+ * The page's `listen` for its reads: the reply and the refusal
+ * (`entries:sessionEntries:error`, which echoes the ask's token) both settle
+ * the ask they name. A refusal arrives as a reply with no rows and the
+ * server's sentence, so the asking widget is told why — not that the server
+ * did not answer.
+ */
+export function hearSessionEntries(hear: {
+	reply(onReply: (reply: Sockets.Entries.SessionEntries.Response) => void): () => void
+	refusal(onRefusal: (refusal: Sockets.Entries.SessionEntries.ErrorResponse) => void): () => void
+}): (onReply: (reply: Sockets.Entries.SessionEntries.Response) => void) => () => void {
+	return (onReply) => {
+		const replies = hear.reply(onReply)
+		const refusals = hear.refusal((r) =>
+			onReply({
+				sessionId: r.sessionId ?? 0,
+				rows: [],
+				total: 0,
+				...(r.request !== undefined ? { request: r.request } : {}),
+				error: r.error
+			})
+		)
+		return () => {
+			replies()
+			refusals()
+		}
+	}
+}
+
 const isCount = (v: unknown, min: number): v is number =>
 	typeof v === "number" && Number.isInteger(v) && v >= min
 

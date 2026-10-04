@@ -35,6 +35,7 @@ import {
 import type { PluginRowPort } from "./rowStore"
 import type { HookRunResult, PluginSandbox, SandboxKind } from "./types"
 import { hookCtxGrants, type HookCtxKind } from "./hookCtx"
+import { messageWithoutQueryText } from "$lib/server/db/errors"
 
 /** What the manager needs to know about an installed, enabled plugin. Persisted
  * elsewhere; the manager holds the projection it dispatches against. */
@@ -1014,11 +1015,18 @@ export class SandboxManager {
 				// The hook believes its rows landed and they did not. That is a
 				// failed call, not a success with a footnote — the same ruling
 				// the file half makes when its own commit cannot be applied.
+				// The reason is stored and shown, so a failed query in it is
+				// the plain sentence — its message is the SQL and the rows'
+				// values (`db/errors.ts`) — and the whole error is logged here.
+				console.error(
+					`[plugins] ${desc.id}.${hookName}: its rows could not be committed:`,
+					e
+				)
 				result = {
 					ok: false,
 					reason:
 						`the hook returned but its rows could not be committed — ` +
-						String((e as Error)?.message || e),
+						(messageWithoutQueryText(e) || String(e)),
 					logs: result.logs,
 					durationMs: result.durationMs,
 					backend: result.backend,

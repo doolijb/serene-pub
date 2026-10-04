@@ -14,12 +14,11 @@ import {
 	dateValue,
 	type StoryDate
 } from "$lib/shared/lorebooks/storyDate"
-import type { Presence } from "$lib/shared/lorebooks/presence"
 import {
-	lineFromFork,
-	rowReadsOnLine,
-	type Line
-} from "$lib/shared/lorebooks/lineReading"
+	presencesOnLine,
+	type Presence
+} from "$lib/shared/lorebooks/presence"
+import { MAIN_LINE, type Line } from "$lib/shared/lorebooks/lineReading"
 
 export interface LaneRun {
 	presenceId: number
@@ -126,20 +125,17 @@ export function buildAxis(
 	pins: readonly StoryDate[],
 	at: {
 		moment?: StoryDate | null
-		branchId?: number | null
 		/**
 		 * The line being read, with its ancestor chain and fork cuts
-		 * (`lineOf`, ruling 5). Authoritative when given; a bare `branchId`
-		 * reads as a one-level fork of main with no cut.
+		 * (`lineOf`, ruling 5). Absent is main.
 		 */
 		line?: Line
 	} = {}
 ): Axis {
-	const line = at.line ?? lineFromFork(at.branchId ?? null, null)
-	// ⚠ The presence rule `appearancesOf` reads by: the line's own and its
-	// ancestors' presences, an ancestor's only when it began by that line's
-	// fork cut — so the weave and the World bar name the same people.
-	const mine = presences.filter((p) => rowReadsOnLine(p, line, dateOf(p)))
+	// ⚠ `presencesOnLine`, the filter `appearancesOf` reads by: the line's own
+	// and its ancestors' presences, an ancestor's only when it began by that
+	// line's fork cut — so the weave and the World bar name the same people.
+	const mine = presencesOnLine(presences, at.line ?? MAIN_LINE)
 
 	const values: number[] = pins.map(dateValue)
 	for (const p of mine) {
@@ -180,13 +176,7 @@ export function buildAxis(
 		// the reader returned to now.
 		const spans = mine
 			.filter((p) => p.castId === member.id)
-			.map((p) => {
-				const end = endOf(p)
-				return {
-					from: dateValue(dateOf(p)),
-					to: end ? dateValue(end) : Infinity
-				}
-			})
+			.map((p) => ({ from: dateOf(p), to: endOf(p) }))
 		lanes.push({
 			castId: member.id,
 			name: member.name,
@@ -206,17 +196,23 @@ export function buildAxis(
 /**
  * Whether any two spans are in the world at the same time.
  *
- * ⚠ Takes DATE values, not the drawing's ratios: an open-ended span is
- * `Infinity`, which a ratio cannot be. See the note at the call site.
+ * ⚠ Takes DATES, ordered by `compareDates` — never the packed `dateValue`,
+ * which is a placement scalar: parts past 99 crowd together and, large
+ * enough, meet inside a float's precision (a day-of-year book). Not the
+ * drawing's ratios either — see the note at the call site. A `to` of null is
+ * open-ended: still here.
  *
  * ⚠ Touching ends do NOT overlap: `until` is exclusive, so a version that
  * leaves exactly as the next arrives is a handover, not a meeting.
  */
 export function overlaps(
-	spans: readonly { from: number; to: number }[]
+	spans: readonly { from: StoryDate; to: StoryDate | null }[]
 ): boolean {
-	const sorted = [...spans].sort((a, b) => a.from - b.from)
-	for (let i = 1; i < sorted.length; i++)
-		if (sorted[i].from < sorted[i - 1].to) return true
+	const sorted = [...spans].sort((a, b) => compareDates(a.from, b.from))
+	for (let i = 1; i < sorted.length; i++) {
+		const before = sorted[i - 1].to
+		if (before == null || compareDates(sorted[i].from, before) < 0)
+			return true
+	}
 	return false
 }

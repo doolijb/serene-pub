@@ -856,7 +856,7 @@ const disclosureGroup: ExhibitGroup = {
 				r.parts = []
 				r.metadata = {
 					...meta,
-					thinking: "The gate thinks *before* it speaks.",
+					reasoning: "The gate thinks *before* it speaks.",
 					narratorInstructions: "Focus on the weather turning.",
 					sections: [
 						{ kind: "plan", label: "Plan", items: ["Open the door", "Say hello"] },
@@ -877,7 +877,7 @@ const disclosureGroup: ExhibitGroup = {
 				})
 				p.activeRevisions = { "0": 0 }
 				p.parts = [
-					part(900001, 0, "core:thinking", "Parts think too."),
+					part(900001, 0, "core:reasoning", "Parts think too."),
 					part(900002, 1, "core:section", null, { title: "Plan", kind: "plan", items: ["First", "Second"] }),
 					part(900003, 2, "core:tool-call", "{\"q\": \"weather\"}", { tool: "lookup" }),
 					part(900004, 3, "core:markdown", p.content)

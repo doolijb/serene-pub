@@ -1,6 +1,6 @@
 <script lang="ts">
 	import * as Icons from "@lucide/svelte"
-	import { onMount, untrack } from "svelte"
+	import { getContext, onMount, untrack } from "svelte"
 	import { diffWords } from "diff"
 	import { toaster } from "$lib/client/utils/toaster"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
@@ -12,11 +12,16 @@
 	import { changedFields } from "$lib/shared/lorebooks/amendments"
 	import { awaitReply, isReplyTimeout } from "$lib/client/utils/awaitReply"
 	import { fileEntryAmendments } from "$lib/client/lorebooks/editor/entrySave"
+	import { compileSaveOf } from "$lib/client/lorebooks/editor/compileSave"
+	import { sameLineAndMoment } from "$lib/shared/lorebooks/loreRoute"
 	import {
 		formatDate,
 		type StoryDate
 	} from "$lib/client/lorebooks/sections/historyDates"
 	import AiTaskModal, { type AiTaskStep } from "./AiTaskModal.svelte"
+	import LoreWritesOffNotice from "$lib/client/lorebooks/LoreWritesOffNotice.svelte"
+	import { useLoreWritesOff } from "$lib/client/lorebooks/loreWritesOff.svelte"
+	import { LORE_WRITES_OFF_NOTICE } from "$lib/shared/lorebooks/loreWriteMode"
 	import {
 		HISTORY_TYPE_ID,
 		type LorebookEntry
@@ -32,12 +37,17 @@
 		pendingResult?: { content: string } | null
 		initialStep?: "review" | "running"
 		/**
-		 * The date being read, when one is. A compile saved at a moment is an
-		 * AMENDMENT dated then, exactly as the entry editor's Save as of is;
-		 * at now it is a write of the changed fields to the entry.
+		 * The date being read, when one is. A resumed compile is handed the
+		 * moment its activity was asked at. Read ONCE, when the modal opens:
+		 * the compile, its retry and its save all stay at that reading, even
+		 * if the workspace's route moves while the dialog is open.
 		 */
 		moment?: StoryDate | null
-		/** The line being read. `null` is main. */
+		/**
+		 * The line being read, `null` for main: the compile reads its scenes
+		 * and the save lands on it (`compileSaveOf`). A resumed compile is
+		 * handed its activity's. Read once, like `moment`.
+		 */
 		branchId?: number | null
 		/** The overlay ids already known for this entry, to spot the new one. */
 		knownAmendmentIds?: number[]
@@ -60,6 +70,11 @@
 	}: Props = $props()
 
 	const socket = useTypedSocket()
+
+	/** The reading this modal compiles and saves at, fixed when it opens. */
+	const reading = untrack(() => ({ branchId, moment }))
+	/** Where Save writes: the entry, or an amendment on the line (and when). */
+	let saveAt = $derived(compileSaveOf(historyEntry, reading))
 
 	let internalActivityId = $state(untrack(() => activityId))
 
@@ -112,26 +127,103 @@
 	let saving = $state(false)
 	let saveError = $state("")
 
-	let canSave = $derived(editableContent.trim().length > 0 && !saving)
+	// Lorebook writes from sessions Off (plan A22): a compile folds what
+	// sessions played into the book, so it says so before any work and
+	// neither compiles nor saves.
+	const loreWrites = useLoreWritesOff()
+	let canSave = $derived(
+		!loreWrites.off && editableContent.trim().length > 0 && !saving
+	)
 
 	$effect(() => {
 		if (!pendingResult) return
 		editableContent = pendingResult.content
 	})
 
+	/**
+	 * The run, as the Activity panel knows it — so a reconnect that drops the
+	 * `:complete` (or `:error`) frame cannot leave this window spinning
+	 * forever (plan B8). While the window runs it follows the run in the
+	 * activity store (refreshed on every `activity:update` and on reconnect):
+	 * the one named, else this entry's compile on this reading that is
+	 * running, or that was not there (finished) when the run started.
+	 */
+	const compileEntriesCtx: CompileEntriesCtx | undefined =
+		getContext("compileEntriesCtx")
+	const finishedRunsOf = () =>
+		new Set(
+			(compileEntriesCtx?.activities ?? [])
+				.filter(
+					(a) =>
+						a.historyEntryId === historyEntry.id &&
+						a.status !== "running"
+				)
+				.map((a) => a.activityId)
+		)
+	let runActivityId = $state<string | null>(
+		untrack(() => (step === "running" ? activityId : null))
+	)
+	let finishedBeforeRun = untrack(() =>
+		runActivityId ? new Set<string>() : finishedRunsOf()
+	)
+
+	$effect(() => {
+		if (step !== "running") return
+		const list = compileEntriesCtx?.activities ?? []
+		const named = runActivityId
+		const entryId = historyEntry.id
+		const run = named
+			? list.find((a) => a.activityId === named)
+			: list.find(
+					(a) =>
+						a.historyEntryId === entryId &&
+						sameLineAndMoment(a, reading) &&
+						(a.status === "running" ||
+							!finishedBeforeRun.has(a.activityId))
+				)
+		if (!run) return
+		const status = run.status
+		const result = run.pendingResult
+		const failure = run.errorMessage
+		untrack(() => {
+			runActivityId = run.activityId
+			if (status === "review" && result) {
+				internalActivityId = run.activityId
+				editableContent = result.content
+				step = "review"
+			} else if (status === "error") {
+				errorMessage = failure || "The entry was not compiled."
+				step = "error"
+			}
+		})
+	})
+
 	function startCompile() {
+		finishedBeforeRun = finishedRunsOf()
+		runActivityId = null
+		if (loreWrites.off) {
+			errorMessage = LORE_WRITES_OFF_NOTICE
+			step = "error"
+			return
+		}
 		step = "running"
 		genPhase = "drafting"
 		genBatch = 0
 		genTotalBatches = 1
 		genPartial = {}
 		errorMessage = ""
+		// The reading it is asked from: its line decides the scenes, and the
+		// activity keeps both so a review reopened later saves right here.
 		socket.emit("scenes:compile", {
-			historyEntryId: historyEntry.id
+			historyEntryId: historyEntry.id,
+			branchId: reading.branchId,
+			moment: reading.moment
 		} satisfies Sockets.Scenes.Compile.Params)
 	}
 
 	function handleProgress(data: Sockets.Scenes.Compile.Progress) {
+		// One entry compiled on two lines is two runs; only ours is shown.
+		if (!sameLineAndMoment(data, reading)) return
 		genPhase = data.phase
 		genBatch = data.batch
 		genTotalBatches = data.totalBatches
@@ -140,12 +232,26 @@
 
 	function handleComplete(data: Sockets.Scenes.Compile.Response) {
 		if (data.historyEntryId !== historyEntry.id) return
+		if (!sameLineAndMoment(data, reading)) return
 		internalActivityId = data.activityId
 		editableContent = data.content
 		step = "review"
 	}
 
+	/**
+	 * A refusal is this window's only while it is running, and only when it
+	 * is about this entry: the refusal goes to the asking tab alone, but a
+	 * lorebook docked beside a session page can hold two Compile windows, and
+	 * one's failure must not flip the other (or a review) to the error step
+	 * (plan B8). A refusal naming no entry is the run's own early refusal.
+	 */
 	function handleError(data: Sockets.Scenes.Compile.ErrorResponse) {
+		if (step !== "running") return
+		if (
+			typeof data.historyEntryId === "number" &&
+			data.historyEntryId !== historyEntry.id
+		)
+			return
 		errorMessage = data.error
 		step = "error"
 	}
@@ -181,10 +287,9 @@
 	})
 
 	/**
-	 * BARE: the refusal carries no id to scope on, so `scenes:compile:error`
-	 * has no entry in `SCOPED_EVENTS` and a `#<id>` key would match no payload
-	 * at all. Errors are never gated either (plan ruling 2) — the registry is
-	 * simply the only listener path now.
+	 * BARE: an `:error` is never gated or scoped (plan ruling 2) — the
+	 * registry is simply the only listener path. The refusal names its entry
+	 * (`historyEntryId`), which `handleError` filters on.
 	 */
 	useInterest<"scenes:compile:error">("scenes:compile:error", handleError)
 
@@ -199,16 +304,17 @@
 	 *
 	 * ⚠ Only what the compile CHANGED is written — never the row spread whole.
 	 * `historyEntry` is the row as it READS (amendments resolved in), so
-	 * spreading it into an update baked every amendment into the base. At a
-	 * moment the change is filed as an amendment dated then, on the line being
-	 * read; at now it patches the entry.
+	 * spreading it into an update baked every amendment into the base. Where
+	 * it goes is `compileSaveOf`: an amendment on the line — dated at the
+	 * moment, or at the entry's own date when the line reads the entry from
+	 * another line — else a patch of the entry itself.
 	 *
 	 * ⚠ Nothing is claimed until the server answers: the toast, the activity's
 	 * dismissal and the close all wait, so a refusal leaves the compiled text
 	 * here to retry.
 	 */
 	async function save() {
-		if (saving) return
+		if (saving || loreWrites.off) return
 		const content = editableContent.trim()
 		const fields = changedFields(
 			{ content, isCompleted: true },
@@ -222,15 +328,15 @@
 		try {
 			if (!Object.keys(fields).length) {
 				// Already says this: nothing to write, the review is done.
-			} else if (moment) {
+			} else if (saveAt.kind === "amendment") {
 				await fileEntryAmendments(
 					socket,
 					{
 						lorebookId: historyEntry.lorebookId,
 						entryId: historyEntry.id,
-						branchId
+						branchId: saveAt.branchId
 					},
-					[{ ...moment, fields }],
+					[{ ...saveAt.date, fields }],
 					knownAmendmentIds
 				)
 			} else {
@@ -270,9 +376,10 @@
 				how: "acted"
 			})
 		toaster.success({
-			title: moment
-				? `History amended as of ${formatDate(moment)}`
-				: "History entry updated"
+			title:
+				saveAt.kind === "amendment"
+					? `History amended as of ${formatDate(saveAt.date)}`
+					: "History entry updated"
 		})
 		onSaved?.({ ...historyEntry, content, isCompleted: true })
 		onOpenChange({ open: false })
@@ -340,6 +447,10 @@
 
 {#snippet reviewBlock()}
 	<div class="space-y-4">
+		{#if loreWrites.off}
+			<!-- A review reopened after the setting moved: it cannot save. -->
+			<LoreWritesOffNotice />
+		{/if}
 		{#if hasExistingContent && hasDiff}
 			<div class="space-y-1">
 				<p
@@ -376,9 +487,16 @@
 				bind:value={editableContent}
 			></textarea>
 		</div>
-		{#if moment}
+		{#if saveAt.kind === "amendment" && saveAt.atEntryDate}
 			<p class="text-surface-700-300 text-xs">
-				Saved as an amendment dated {formatDate(moment)}: the entry
+				Saved as an amendment on this line only, dated {formatDate(
+					saveAt.date
+				)}, the entry's own date. The entry comes from the line this one
+				branched from, and that line keeps it as it was.
+			</p>
+		{:else if saveAt.kind === "amendment"}
+			<p class="text-surface-700-300 text-xs">
+				Saved as an amendment dated {formatDate(saveAt.date)}: the entry
 				reads this way from then on, and as it was before.
 			</p>
 		{/if}

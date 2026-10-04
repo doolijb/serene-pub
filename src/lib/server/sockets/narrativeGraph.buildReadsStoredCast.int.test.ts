@@ -44,6 +44,7 @@ import os from "os"
 import path from "path"
 import { eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
+import { applyAtReview } from "./fixtures/graphReview"
 import { historyValues } from "$lib/server/pipelines/testing/fixtures"
 import type { TestDb } from "$lib/server/utils/testDb"
 import type { GraphBuilderScene } from "$lib/server/utils/graphBuilder"
@@ -67,13 +68,6 @@ vi.mock("$lib/server/db", async () => {
 // from the resolution chain — which under the no-implicit-pickup ruling means a
 // registered `connection_defaults` row and nothing else. A capable connection
 // merely existing in the table would not do, so `beforeAll` registers one.
-vi.mock("$lib/server/utils/getUserConfigurations", () => ({
-	getUserConfigurations: async () => ({
-		contextConfig: { id: 1 },
-		promptConfig: { id: 1 },
-		narratorPromptConfig: null
-	})
-}))
 
 /**
  * Every GraphBuilderScene[] handed to the builder, in call order. This array is
@@ -81,14 +75,20 @@ vi.mock("$lib/server/utils/getUserConfigurations", () => ({
  * in how the array gets populated.
  */
 const capturedScenes: GraphBuilderScene[][] = []
+/** The seed members handed beside them, in call order. */
+const capturedSeeds: Array<Array<{ id: number; name: string; summary: string | null }>> = []
 
 vi.mock("$lib/server/utils/graphBuilder", async (importOriginal) => {
 	const actual =
 		await importOriginal<typeof import("$lib/server/utils/graphBuilder")>()
 	return {
 		...actual,
-		buildGraphFromScenes: async (opts: { scenes: GraphBuilderScene[] }) => {
+		buildGraphFromScenes: async (opts: {
+			scenes: GraphBuilderScene[]
+			seedNodes?: Array<{ id: number; name: string; summary: string | null }>
+		}) => {
 			capturedScenes.push(opts.scenes)
+			capturedSeeds.push(opts.seedNodes ?? [])
 			return {
 				proposal: { nodes: [], relationships: [] },
 				resolvedSceneCast: [],
@@ -146,6 +146,7 @@ afterAll(async () => {
 
 beforeEach(() => {
 	capturedScenes.length = 0
+	capturedSeeds.length = 0
 })
 
 function fakeSocket(userId: number) {
@@ -298,7 +299,7 @@ describe("the graph build reads cast from scene_characters", () => {
 		]
 		await narrativeGraphApplyProposalHandler.handler(
 			fakeSocket(user.id),
-			{
+			applyAtReview(user.id, {
 				lorebookId: lorebook.id,
 				mode: "replace",
 				proposal: {
@@ -314,7 +315,7 @@ describe("the graph build reads cast from scene_characters", () => {
 						}
 					]
 				}
-			} as any,
+			} as any),
 			noopEmit as any
 		)
 
@@ -340,5 +341,51 @@ describe("the graph build reads cast from scene_characters", () => {
 			bindings[0].id,
 			bindings[1].id
 		])
+	})
+})
+
+describe("a cast tag reads as its member in what the build reads (plan A19)", () => {
+	test("a member with no card is named by their own name", async () => {
+		const { user, lorebook, bindings, scene } = await seedLorebook("cardless-tag")
+		await testDb
+			.update(schema.scenes)
+			.set({ summary: `${bindings[1].binding} met ${bindings[2].binding}.` })
+			.where(eq(schema.scenes.id, scene.id))
+
+		await runBuild(user.id, lorebook.id)
+
+		const built = capturedScenes[0].find((s) => s.id === scene.id)
+		expect(built!.summary).toBe("Bram met Cole.")
+	})
+})
+
+describe("a deleted card seeds nothing (plan A25)", () => {
+	test("its member is seeded by their own name and summary, never the card's words", async () => {
+		const { user, lorebook, bindings, scene } = await seedLorebook("deleted-card")
+		const [gone] = await testDb
+			.insert(schema.characters)
+			.values({
+				userId: user.id,
+				name: "Carded Aria",
+				description: "Words from a deleted card.",
+				isDeleted: true
+			} as any)
+			.returning()
+		await testDb
+			.update(schema.lorebookBindings)
+			.set({ characterId: gone.id })
+			.where(eq(schema.lorebookBindings.id, bindings[0].id))
+		await testDb
+			.update(schema.scenes)
+			.set({ summary: `${bindings[0].binding} and Bram met.` })
+			.where(eq(schema.scenes.id, scene.id))
+
+		await runBuild(user.id, lorebook.id)
+
+		const seed = capturedSeeds[0].find((n) => n.id === bindings[0].id)
+		expect(seed?.name).toBe("Aria")
+		expect(seed?.summary ?? null).toBeNull()
+		const built = capturedScenes[0].find((s) => s.id === scene.id)
+		expect(built!.summary).toBe("Aria and Bram met.")
 	})
 })

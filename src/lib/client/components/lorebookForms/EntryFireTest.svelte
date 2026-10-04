@@ -35,37 +35,49 @@
 	 * database, so this is offered from the view of a stored row and never from
 	 * the editor, where the verdict would be about text the run never read.
 	 *
-	 * Teach it writes the two levers that exist — `constant` is "always" and
-	 * `enabled: false` is "never", both real columns with real editors — and
-	 * says so about the third rather than pretending to record it.
+	 * Teach it writes the two levers that exist — Pin is "always" and Off is
+	 * "never", the entry's two marks — through `entries:setMarks`
+	 * (`teachMarks.ts`), says when a dated amendment still decides one there,
+	 * and says so about the third rather than pretending to record it. It
+	 * answers for the session the verdict above was run against (`asked`),
+	 * or the picked one before any run, and its buttons follow the marks as
+	 * THAT session reads the entry (`marksAsRead`), never the base row's.
 	 */
 	import * as Icons from "@lucide/svelte"
 	import Select from "$lib/client/components/inputs/Select.svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
+	import { v4 as uuid } from "uuid"
 	import { getInterestContext } from "$lib/client/sockets/interest.svelte"
-	import type { EntryTypeId } from "$lib/shared/entries/types"
 	import {
 		signalFactsFrom,
 		signalRow,
 		signalsResult
 	} from "$lib/client/lorebooks/editor/signals"
 	import type { RunExplanation } from "$lib/client/lorebooks/editor/readIn"
+	import {
+		marksAsRead,
+		teachButtons,
+		teachMark,
+		type MarksHere
+	} from "$lib/client/lorebooks/editor/teachMarks"
 
 	interface Props {
 		/** The stored entry being asked about. */
 		entryId: number
-		typeId: EntryTypeId
 		/** Only sessions reading this lorebook can answer. */
 		lorebookId: number
-		/** Whether the entry is switched on — an "off" entry explains itself. */
+		/**
+		 * Whether the entry itself is switched on — an "off" entry explains
+		 * itself. The base row's: where the session's reading is known, that
+		 * is what the verdict and Teach it go by.
+		 */
 		enabled?: boolean
-		/** Whether it is already pinned, so "always" says what it would do. */
+		/** Whether the entry itself is pinned; a change re-reads the session's marks. */
 		constant?: boolean
 	}
 
 	let {
 		entryId,
-		typeId,
 		lorebookId,
 		enabled = true,
 		constant = false
@@ -93,6 +105,8 @@
 	 * the selected session mid-run must not make the answer unmatchable.
 	 */
 	let asked = $state<number | null>(null)
+	/** The press's own id; only its answer is this panel's (plan B8). */
+	let askedId: string | null = null
 
 	const onSessions = (res: Sockets.Sessions.List.Response) => {
 		// Newest first is the server's order (`updatedAt` descending), kept.
@@ -116,7 +130,7 @@
 	 * an answer arriving while this panel is not waiting is somebody else's.
 	 */
 	const onAnswer = (res: Sockets.Pipelines.PreviewRetrieval.Response) => {
-		if (!running) return
+		if (!running || res.requestId !== askedId) return
 		if (res.error) {
 			running = false
 			refusal = res.error
@@ -130,8 +144,8 @@
 	}
 
 	/** The run threw somewhere we did not anticipate. Stop waiting, say so. */
-	const onRefusal = (res: { error?: string }) => {
-		if (!running) return
+	const onRefusal = (res: { error?: string; requestId?: string }) => {
+		if (!running || res?.requestId !== askedId) return
 		running = false
 		explanation = null
 		refusal = res?.error || "The test could not be run."
@@ -148,8 +162,9 @@
 	/**
 	 * The answer, held for as long as the panel is: the request is a button
 	 * press (`run` below), not a mount, so the interest stays and the emit
-	 * stays where the press is. BARE — neither event is in `SCOPED_EVENTS`,
-	 * and `onAnswer`'s own `running`/`asked` checks stay the filter.
+	 * stays where the press is. BARE — neither event is in `SCOPED_EVENTS`;
+	 * the filter is the press's own `requestId`, which the server echoes on
+	 * the answer and the refusal (plan B8).
 	 *
 	 * The refusal is never gated (plan ruling 2 — an error is not an output to
 	 * skip), but the registry is the only listener path, so it is declared too.
@@ -168,34 +183,95 @@
 		explanation = null
 		refusal = null
 		asked = sessionId
+		askedId = uuid()
 		running = true
 		// No draft: the question is what this session would read in as
 		// it stands, which is the turn the author is about to provoke rather
 		// than one they are halfway through typing.
 		socket.emit("pipelines:previewRetrieval", {
 			sessionId,
-			content: ""
+			content: "",
+			requestId: askedId
 		} satisfies Sockets.Pipelines.PreviewRetrieval.Params)
 	}
 
+	/** A Teach it in flight, and what the last one said: its refusal, or the amendment that still decides the mark. */
+	let teaching = $state(false)
+	let taught = $state<{ held: string | null; error: string | null } | null>(null)
+
 	/**
-	 * Teach it — the same `entries:update` the editor writes.
-	 *
-	 * A patch of one column: the handler writes what the payload names and
-	 * nothing else, so this never sends a whole row back over what is being
-	 * typed in the editor beside it.
+	 * The session Teach it answers for: the one the verdict on screen was run
+	 * against, else the picked one.
 	 */
-	function teach(patch: { constant?: boolean; enabled?: boolean }) {
-		socket.emit("entries:update", {
-			entry: { id: entryId, typeId, ...patch } as any
-		})
+	const teachFor = $derived(asked ?? sessionId)
+	const teachForName = $derived(
+		sessions.find((s) => s.id === teachFor)?.name || "Untitled session"
+	)
+	/**
+	 * The entry's marks as `teachFor` reads it, and whose they are — null
+	 * when that session does not read the entry at all. Read again when the
+	 * session changes and when the entry's own marks move.
+	 */
+	let readHere = $state<{ sessionId: number; marks: MarksHere | null } | null>(null)
+	$effect(() => {
+		const s = teachFor
+		void enabled
+		void constant
+		if (s == null) return
+		let live = true
+		marksAsRead(socket, { entryId, sessionId: s }).then(
+			(marks) => {
+				if (live) readHere = { sessionId: s, marks }
+			},
+			// Unread is unknown: the buttons are not held back.
+			() => {}
+		)
+		return () => {
+			live = false
+		}
+	})
+	/** The marks as the Teach it session reads the entry; undefined while unknown. */
+	const marksHere = $derived(
+		readHere && readHere.sessionId === teachFor ? readHere.marks : undefined
+	)
+	const buttons = $derived(teachButtons(marksHere))
+
+	/**
+	 * Teach it — one mark through `entries:setMarks`, answered as `teachFor`
+	 * reads the entry. Never a whole-entry save, so nothing being typed in
+	 * the editor beside it is written; the editor's row follows from the
+	 * `entries:update` the mark sends.
+	 */
+	async function teach(mark: "off" | "pinned") {
+		if (teaching) return
+		const s = teachFor
+		teaching = true
+		taught = null
+		try {
+			const { held, marks } = await teachMark(socket, { entryId, sessionId: s, mark })
+			taught = { held, error: null }
+			if (s != null) readHere = { sessionId: s, marks }
+		} catch (e) {
+			taught = {
+				held: null,
+				error: e instanceof Error && e.message ? e.message : "The entry's marks could not be saved."
+			}
+		} finally {
+			teaching = false
+		}
 	}
 
 	const row = $derived(
 		explanation ? signalRow(explanation, entryId) : undefined
 	)
+	// Switched off as the verdict's session reads it, where that is known.
 	const facts = $derived(
-		explanation ? signalFactsFrom(explanation, { entryId, enabled }) : null
+		explanation
+			? signalFactsFrom(explanation, {
+					entryId,
+					enabled: marksHere ? !marksHere.off : enabled
+				})
+			: null
 	)
 	const result = $derived(facts ? signalsResult(facts) : null)
 </script>
@@ -326,27 +402,28 @@
 	{/if}
 
 	<div class="border-surface-300-700 flex flex-col gap-1 border-t pt-2">
-		<span class="text-xs font-semibold">Teach it</span>
+		<span class="text-xs">
+			<span class="font-semibold">Teach it</span>
+			{#if teachFor != null}
+				<span class="text-surface-600-400">· for {teachForName}</span>
+			{/if}
+		</span>
 		<div class="flex flex-wrap gap-1">
 			<button
 				class="btn btn-sm preset-tonal-surface"
 				type="button"
-				disabled={constant}
-				title={constant
-					? "This entry is already pinned"
-					: "Pin it, so every turn reads it in"}
-				onclick={() => teach({ constant: true })}
+				disabled={buttons.pin.disabled || teaching}
+				title={buttons.pin.title}
+				onclick={() => teach("pinned")}
 			>
 				Always read this in
 			</button>
 			<button
 				class="btn btn-sm preset-tonal-surface"
 				type="button"
-				disabled={!enabled}
-				title={enabled
-					? "Switch it off, so no turn reads it in"
-					: "This entry is already off"}
-				onclick={() => teach({ enabled: false })}
+				disabled={buttons.off.disabled || teaching}
+				title={buttons.off.title}
+				onclick={() => teach("off")}
 			>
 				Never read this in
 			</button>
@@ -359,6 +436,14 @@
 				This ranking is wrong
 			</button>
 		</div>
+		{#if taught?.error}
+			<p class="preset-tonal-warning flex items-start gap-2 rounded p-2 text-xs" role="alert">
+				<Icons.TriangleAlert size={14} class="mt-0.5 shrink-0" />
+				<span>{taught.error}</span>
+			</p>
+		{:else if taught?.held}
+			<p class="text-surface-600-400 text-xs" role="status">{taught.held}</p>
+		{/if}
 		<p class="text-surface-600-400 text-[11px]">
 			Feedback is not collected yet.
 		</p>

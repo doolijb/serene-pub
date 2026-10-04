@@ -169,4 +169,22 @@ describe("the shipped prompt catalog is seedable", () => {
 				expect(text.trim(), `${p.seedKey} .${field} is blank`).not.toBe("")
 		}
 	})
+
+	/**
+	 * Chat's reply starts on "Roleplay - Living Scene" (owner note 44,
+	 * 2026-10-03), in place of 0.5.3's "Roleplay - Simple", which stays in the
+	 * pool as an alternative. An install that already wrote the shipped respond
+	 * config is moved by the pre-squash `0111` re-projection, which the ledger
+	 * splice replays (`livingSceneLookReprojection.int.test.ts`).
+	 */
+	it("starts Chat's reply on Roleplay - Living Scene", () => {
+		const claimants = CORE_PROMPTS.filter(
+			(p) =>
+				p.nodeType === "core:task/build-template-context" &&
+				p.defaultForSpecs.includes("core:spec/respond")
+		)
+		expect(claimants.map((p) => p.name)).toEqual(["Roleplay - Living Scene"])
+		const simple = CORE_PROMPTS.find((p) => p.name === "Roleplay - Simple")
+		expect(simple?.defaultForSpecs).toEqual([])
+	})
 })

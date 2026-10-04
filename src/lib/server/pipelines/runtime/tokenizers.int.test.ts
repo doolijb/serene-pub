@@ -153,13 +153,11 @@ beforeAll(async () => {
 }, 60_000)
 
 describe("tokenizerFor — which connection's setting a run budgets with", () => {
-	// The two session-endpoint cases that stood here are gone with the column
-	// (0130): a session named an endpoint and no model, which either cleared the
-	// registered model half or re-stated it, and `tokenizerFor` no longer takes
-	// a session at all. What it reads now is the RUN's world (R-8): the
-	// registered default where nothing picked otherwise, and the pipeline
-	// panel's per-node pick where one did — the second walk of the database
-	// this used to make is gone.
+	// `tokenizerFor` reads the RUN's world (R-8): the registered default where
+	// nothing picked otherwise, and the pipeline panel's per-node pick where
+	// one did. A session never names a connection (F20, ruled 2026-09-30): the
+	// pick is the pipeline configuration's, so the case below writes it on the
+	// configuration this session resolves through.
 	const doc = () => respondSpec()
 	const worldFor = async () => {
 		const { buildWorld } = await import(
@@ -175,16 +173,53 @@ describe("tokenizerFor — which connection's setting a run budgets with", () =>
 	})
 
 	it("follows the pipeline panel's pick on the node the budget sizes for", async () => {
-		// A pick the old walk could not see: the generate node's own
-		// connection slot, as the session's override — the one scope the
-		// overrides table takes (ruled 2026-08-24).
+		// The generate node's own connection slot, written on a configuration
+		// the session selects — the one scope a connection pick lives at
+		// (`WRITE_MATRIX.connection = ['config']`).
+		const { selectConfig } = await import(
+			"$lib/server/pipelines/config/named"
+		)
+		const [spec] = await db
+			.select({ id: schema.pipelineSpecs.id })
+			.from(schema.pipelineSpecs)
+			.where(eq(schema.pipelineSpecs.slug, RESPOND_SPEC_ID))
+		const [config] = await db
+			.insert(schema.pipelineConfigs)
+			.values({
+				specId: spec!.id,
+				name: "Tokenizer pick",
+				isImmutable: false
+			})
+			.returning()
+		await db.insert(schema.pipelineConfigValues).values({
+			configId: config.id,
+			nodeKey: "generate",
+			slot: "connection",
+			path: "",
+			value: { id: llamaConnectionId }
+		})
+		await selectConfig(db, spec!.id, "session", sessionId, config.id)
+		try {
+			expect(tokenizerFor(await worldFor(), doc())).toBe(
+				TokenCounterOptions.LLAMA
+			)
+		} finally {
+			await selectConfig(db, spec!.id, "session", sessionId, null)
+			await db
+				.delete(schema.pipelineConfigs)
+				.where(eq(schema.pipelineConfigs.id, config.id))
+		}
+	})
+
+	it("ignores a connection pick written at session scope", async () => {
+		// A session-scope row at a connection address is not a pick: the world
+		// skips it and the registered default answers.
+		const [spec] = await db
+			.select({ id: schema.pipelineSpecs.id })
+			.from(schema.pipelineSpecs)
+			.where(eq(schema.pipelineSpecs.slug, RESPOND_SPEC_ID))
 		await db.insert(schema.pipelineNodeOverrides).values({
-			specId: (
-				await db
-					.select({ id: schema.pipelineSpecs.id })
-					.from(schema.pipelineSpecs)
-					.where(eq(schema.pipelineSpecs.slug, RESPOND_SPEC_ID))
-			)[0]!.id,
+			specId: spec!.id,
 			scopeKind: "session",
 			scopeId: sessionId,
 			nodeKey: "generate",
@@ -194,7 +229,7 @@ describe("tokenizerFor — which connection's setting a run budgets with", () =>
 		})
 		try {
 			expect(tokenizerFor(await worldFor(), doc())).toBe(
-				TokenCounterOptions.LLAMA
+				TokenCounterOptions.OPENAI_GPT4O
 			)
 		} finally {
 			await db

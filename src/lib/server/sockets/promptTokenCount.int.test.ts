@@ -250,3 +250,51 @@ describe("sessions:promptTokenCount compiles through the pipeline", () => {
 		expect(after.length).toBe(before.length)
 	})
 })
+
+/**
+ * Owner note 16 (2026-10-02): review switched on for respond's create-message
+ * node (`placeholder`, step 2) gave several review prompts per turn. The
+ * placeholder sits BEFORE the preview halt, and this handler previews on every
+ * keystroke's debounce — so each count parked a card the person never asked
+ * for. A preview is dry: it must pass the gate without parking.
+ */
+describe("a preview never parks on a review gate", () => {
+	test(
+		"review on for the placeholder: the count returns and nothing waits",
+		async () => {
+			const { pendingReviewsFor } = await import(
+				"$lib/server/pipelines/runtime/reviewGate"
+			)
+			const [respond] = await db
+				.select()
+				.from(schema.pipelineSpecs)
+				.where(eq(schema.pipelineSpecs.slug, "core:spec/respond"))
+			const configs = await db
+				.select()
+				.from(schema.pipelineConfigs)
+				.where(eq(schema.pipelineConfigs.specId, respond.id))
+			expect(configs.length).toBeGreaterThan(0)
+			for (const c of configs)
+				await db
+					.insert(schema.pipelineConfigValues)
+					.values({
+						configId: c.id,
+						nodeKey: "placeholder",
+						slot: "settings",
+						path: "review",
+						value: "on"
+					})
+					.onConflictDoNothing()
+
+			// Raced: before the fix the preview parked forever on the gate.
+			const res = await Promise.race([
+				count(),
+				new Promise((r) => setTimeout(() => r("parked"), 30_000))
+			])
+			expect(res).not.toBe("parked")
+			expect((res as any).error).toBeUndefined()
+			expect(pendingReviewsFor(userId)).toEqual([])
+		},
+		60_000
+	)
+})

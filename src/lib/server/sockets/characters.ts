@@ -18,7 +18,8 @@ import { fileTypeFromBuffer } from "file-type"
 import type { CardSprite } from "$lib/server/utils/cardSprites"
 import type { Handler } from "$lib/shared/events"
 import {
-	parseCharacterCardFromBase64,
+	decodeCardFileBase64,
+	parseCharacterCard,
 	describeUnimportedAssets,
 	buildCharacterCardV3,
 	embedCharacterCardInPng,
@@ -42,6 +43,13 @@ import { syncLorebookBindingsForCharacter } from "$lib/server/utils/characterBin
 import { hashCanonicalJson } from "$lib/server/utils/contentHash"
 import { isValidUuid } from "$lib/server/utils/uuid"
 import { findOrCreateTagId } from "$lib/server/utils/tags"
+import { refusable } from "./refusable"
+import {
+	importFailureSentence,
+	serverFailureAs
+} from "$lib/server/imports/importFailure"
+import { holdImport, takeHeldImport } from "$lib/server/imports/heldImports"
+import { withImportLimit } from "$lib/server/imports/importLimit"
 
 // Helper function to process tags for character creation/update. Tags are
 // per-user (schema.tags.userId): lookups/creates must stay scoped to the
@@ -205,6 +213,8 @@ async function buildCharacterGet(
 		columns: {
 			embedding: false,
 			embeddingModel: false,
+			embeddingSourceHash: false,
+			embedTextHash: false,
 			vectorizedAt: false
 		},
 		with: {
@@ -405,6 +415,9 @@ export const charactersUpdate: Handler<
 			delete (data as any).vectorizedAt
 			delete (data as any).embedding
 			delete (data as any).embeddingModel
+			delete (data as any).embeddingSourceHash
+			// GENERATED from the name and description; Postgres refuses a write.
+			delete (data as any).embedTextHash
 			// lorebookId: no ownership check exists for it here (unlike sessions,
 			// nothing currently reads a character's own lorebookId for prompt
 			// content), so blocking it outright is the correct minimal fix —
@@ -444,6 +457,26 @@ export const charactersUpdate: Handler<
 			const clearDefault = data.isDefaultPersona === false
 			delete (data as any).isDefaultPersona
 
+			// The vector is dropped only when this save CHANGES what it was
+			// computed over — the name and the description
+			// (`characterEmbedText`) — so retrieval never matches words the card
+			// does not hold. Compared, not merely named: the editor re-sends
+			// the whole card, and a folder move, an avatar or a persona flag
+			// changes nothing a vector reads. The queue re-embeds on the text
+			// hash either way.
+			const stored = await db.query.characters.findFirst({
+				where: and(
+					eq(schema.characters.id, id),
+					eq(schema.characters.userId, userId)
+				),
+				columns: { name: true, description: true }
+			})
+			const movesEmbeddedText =
+				!!stored &&
+				((typeof data.name === "string" && data.name !== stored.name) ||
+					(typeof data.description === "string" &&
+						data.description !== stored.description))
+
 			const [updated] = await db
 				.update(schema.characters)
 				.set({
@@ -451,9 +484,14 @@ export const charactersUpdate: Handler<
 					// Setting the default also makes it a persona — a default
 					// you cannot play is not a state worth having.
 					...(makeDefault ? { isPersona: true } : {}),
-					embedding: null,
-					embeddingModel: null,
-					vectorizedAt: null
+					...(movesEmbeddedText
+						? {
+								embedding: null,
+								embeddingModel: null,
+								embeddingSourceHash: null,
+								vectorizedAt: null
+							}
+						: {})
 				})
 				.where(
 					and(
@@ -490,10 +528,10 @@ export const charactersUpdate: Handler<
 				})
 			}
 
-			// Keep every bound lorebookBindings row's name/aliases in sync with
+			// Keep the bound lorebookBindings rows' name/aliases in sync with
 			// this character's current name/nickname/aliases (decision 2, merge
-			// plan) — a character can be bound in multiple lorebooks, so this
-			// isn't scoped to one. Cheap no-op if nothing is bound.
+			// plan) — in every book of the card's owner, never in another
+			// person's (plan A25). Cheap no-op if nothing is bound.
 			await syncLorebookBindingsForCharacter(id)
 
 			autoEnqueueCharacter(id, updated.name).catch(console.error)
@@ -691,7 +729,10 @@ async function applyAvatarAndTags(
 			})
 			if (updatedCharacter) Object.assign(character, updatedCharacter)
 		} catch (e: any) {
-			const reason = e?.message || String(e)
+			const reason = importFailureSentence(
+				e,
+				`character ${character.id}'s avatar`
+			)
 			console.warn(
 				`Character ${character.id} imported without its avatar: ${reason}`
 			)
@@ -702,7 +743,10 @@ async function applyAvatarAndTags(
 		try {
 			await processCharacterTags(character.id, tags, userId, dbOrTx)
 		} catch (e: any) {
-			const reason = e?.message || String(e)
+			const reason = importFailureSentence(
+				e,
+				`character ${character.id}'s tags`
+			)
 			console.warn(
 				`Character ${character.id} imported without its tags: ${reason}`
 			)
@@ -878,137 +922,195 @@ async function importCardSprites(
 			)
 		}
 	} catch (e: any) {
-		warnings.push(`The card's sprites could not be imported: ${e?.message || e}`)
+		warnings.push(
+			`The card's sprites could not be imported: ${importFailureSentence(e, `character ${characterId}'s sprites`)}`
+		)
 	}
 }
 
-export const charactersImportCard: Handler<
+/**
+ * A card import's refusal when the server failed rather than refused, and the
+ * wrapper's fallback: the database's and the machine's words go to the log
+ * (`serverFailureAs`), never to the person.
+ */
+const CARD_IMPORT_FAILED =
+	"The card could not be imported. The server log has the details."
+const cardImportFailureOf = serverFailureAs(CARD_IMPORT_FAILED)
+
+/**
+ * Import a card file (sent as base64).
+ *
+ * Hardened (lorebooks plan S4): the file is measured before it is decoded, a
+ * person runs at most `IMPORTS_RUNNING_PER_USER` imports at once however many
+ * sockets they hold (and the server `IMPORTS_RUNNING_ON_SERVER` for everyone),
+ * and a conflict HOLDS the decoded file on the server — the reply carries a
+ * `heldImportId`, never the file. Refusals reach the person as the sentence
+ * that says which (`refusable`).
+ */
+export const charactersImportCard = refusable<
 	Sockets.Characters.ImportCard.Params,
 	Sockets.Characters.ImportCard.Response
-> = {
-	event: "characters:importCard",
-	handler: async (socket, params, emitToUser) => {
-		try {
-			const userId = socket.user!.id
+>(
+	"characters:importCard",
+	async (socket, params, emitToUser) => {
+		const userId = socket.user!.id
+		if (typeof params?.file !== "string") {
+			throw new Error("No card file was sent.")
+		}
+		return withImportLimit(userId, () =>
+			importCardFile(
+				socket,
+				decodeCardFileBase64(params.file),
+				emitToUser
+			)
+		)
+	},
+	CARD_IMPORT_FAILED,
+	cardImportFailureOf
+)
 
-			// Parse character card using shared utility
-			const { card, avatarBuffer, lorebook, unimportedAssets, sprites } =
-				await parseCharacterCardFromBase64(params.file)
+/**
+ * The card's embedded lorebook, HELD for the "Import the lorebook?" dialog
+ * (NOMENCLATURE §16) rather than sent: the book can be 16 MB, and a reply
+ * reaches every tab only for the dialog to send it straight back (S4 review).
+ * `lorebooks:import` takes the id; only this person, once.
+ */
+function holdCardBook(
+	userId: number,
+	lorebook: SpecV3.Lorebook | undefined
+): Sockets.Characters.HeldCardBook | null {
+	if (!lorebook) return null
+	return {
+		heldImportId: holdImport(userId, "lorebook", {
+			lorebookJson: JSON.stringify(lorebook)
+		}),
+		name: typeof lorebook.name === "string" ? lorebook.name : ""
+	}
+}
 
-			// getRobustSpecV3Data (not a bare card.toSpecV3()) so older/V1
-			// cards import with full fidelity — see its own doc comment.
-			const data = getRobustSpecV3Data(card)
+/**
+ * A card file's bytes, imported for the socket's person — the body of
+ * `characters:importCard`, and of a Library import, which hands over the
+ * bytes it fetched as they are (never base64 and back). The caller holds the
+ * import limit.
+ */
+async function importCardFile(
+	socket: any,
+	bytes: Buffer,
+	emitToUser: (event: string, data: any) => void
+): Promise<Sockets.Characters.ImportCard.Response> {
+	const userId = socket.user!.id
+	const { card, avatarBuffer, lorebook, unimportedAssets, sprites } =
+		await parseCharacterCard(bytes)
 
-			const incomingUuid = extractCharacterUuid(data)
+	// getRobustSpecV3Data (not a bare card.toSpecV3()) so older/V1
+	// cards import with full fidelity — see its own doc comment.
+	const data = getRobustSpecV3Data(card)
 
-			if (incomingUuid) {
-				const existing = await db.query.characters.findFirst({
-					where: and(
-						eq(schema.characters.uuid, incomingUuid),
-						eq(schema.characters.userId, userId)
-					),
-					columns: { id: true }
-				})
+	const incomingUuid = extractCharacterUuid(data)
 
-				if (existing) {
-					const existingComparison =
-						await buildExistingCharacterComparisonData(existing.id)
-					if (existingComparison) {
-						const { character_book, ...incomingForHash } =
-							data as any
-						const existingHash = hashCanonicalJson(
-							existingComparison.comparisonData
-						)
-						const incomingHash = hashCanonicalJson(incomingForHash)
+	if (incomingUuid) {
+		const existing = await db.query.characters.findFirst({
+			where: and(
+				eq(schema.characters.uuid, incomingUuid),
+				eq(schema.characters.userId, userId)
+			),
+			columns: { id: true }
+		})
 
-						if (existingHash === incomingHash) {
-							const res: Sockets.Characters.ImportCard.Response =
-								{
-									status: "unchanged",
-									character: existingComparison.character,
-									book: lorebook ?? null
-								}
-							emitToUser("characters:importCard", res)
-							return res
-						}
+		if (existing) {
+			const existingComparison =
+				await buildExistingCharacterComparisonData(existing.id)
+			if (existingComparison) {
+				const { character_book, ...incomingForHash } =
+					data as any
+				const existingHash = hashCanonicalJson(
+					existingComparison.comparisonData
+				)
+				const incomingHash = hashCanonicalJson(incomingForHash)
 
-						const res: Sockets.Characters.ImportCard.Response = {
-							status: "conflict",
-							character: null,
-							book: null,
-							conflict: {
-								existingCharacter: existingComparison.character,
-								file: params.file
-							}
-						}
-						emitToUser("characters:importCard", res)
-						return res
+				if (existingHash === incomingHash) {
+					const res: Sockets.Characters.ImportCard.Response = {
+						status: "unchanged",
+						character: existingComparison.character,
+						// Nothing new to offer: the dialog asks only after a
+						// card is created.
+						book: null
+					}
+					emitToUser("characters:importCard", res)
+					return res
+				}
+
+				const res: Sockets.Characters.ImportCard.Response = {
+					status: "conflict",
+					character: null,
+					book: null,
+					conflict: {
+						existingCharacter: existingComparison.character,
+						heldImportId: holdImport(userId, "card", bytes)
 					}
 				}
+				emitToUser("characters:importCard", res)
+				return res
 			}
-
-			const warnings: ImportWarning[] = []
-			// The V3 spec requires telling the user when a card's assets are
-			// not kept, since a re-export will leave them out.
-			const assetNote = describeUnimportedAssets(unimportedAssets)
-			if (assetNote) warnings.push(assetNote)
-			const character = await createCharacterFromParsedData(
-				data,
-				avatarBuffer,
-				userId,
-				db,
-				warnings
-			)
-			await importCardSprites(
-				userId,
-				character.id,
-				sprites,
-				warnings,
-				(data.extensions as any)?.serenepub?.defaultSpriteSet
-			)
-
-			// Refreshed inside its own try/catch: the character is already
-			// committed at this point, so a failure to rebuild the list is not
-			// a failed import and must not be reported as one. Previously this
-			// (and the avatar write above) could throw straight into the outer
-			// catch, telling the user the import failed while leaving the
-			// character in the database and the sidebar stale.
-			await refreshCharacterList(socket, emitToUser, warnings)
-
-			const res: Sockets.Characters.ImportCard.Response = {
-				status: "created",
-				character,
-				book: lorebook ?? null,
-				...(warnings.length > 0 ? { warnings } : {})
-			}
-			emitToUser("characters:importCard", res)
-			return res
-		} catch (e: any) {
-			console.error("Error importing character card:", e)
-			emitToUser("characters:importCard:error", {
-				error: e.message || "Failed to import character card."
-			})
-			throw e
 		}
 	}
+
+	const warnings: ImportWarning[] = []
+	// The V3 spec requires telling the user when a card's assets are
+	// not kept, since a re-export will leave them out.
+	const assetNote = describeUnimportedAssets(unimportedAssets)
+	if (assetNote) warnings.push(assetNote)
+	const character = await createCharacterFromParsedData(
+		data,
+		avatarBuffer,
+		userId,
+		db,
+		warnings
+	)
+	await importCardSprites(
+		userId,
+		character.id,
+		sprites,
+		warnings,
+		(data.extensions as any)?.serenepub?.defaultSpriteSet
+	)
+
+	// Refreshed inside its own try/catch: the character is already
+	// committed at this point, so a failure to rebuild the list is not
+	// a failed import and must not be reported as one — an error thrown
+	// into the outer catch would say the import failed while the
+	// character sits in the database and the sidebar goes stale.
+	await refreshCharacterList(socket, emitToUser, warnings)
+
+	const res: Sockets.Characters.ImportCard.Response = {
+		status: "created",
+		character,
+		book: holdCardBook(userId, lorebook),
+		...(warnings.length > 0 ? { warnings } : {})
+	}
+	emitToUser("characters:importCard", res)
+	return res
 }
 
 /**
  * Carries out the user's choice after characters:importCard returned a
  * "conflict" status — either overwrite the existing (uuid-matched)
  * character in place, or import the file as a brand-new character with a
- * fresh uuid.
+ * fresh uuid. The file is the HELD import the conflict named, taken out of
+ * the store before anything else: only its owner can take it, and only once.
  */
-export const charactersImportResolve: Handler<
+export const charactersImportResolve = refusable<
 	Sockets.Characters.ImportResolve.Params,
 	Sockets.Characters.ImportResolve.Response
-> = {
-	event: "characters:importResolve",
-	handler: async (socket, params, emitToUser) => {
-		try {
-			const userId = socket.user!.id
+>(
+	"characters:importResolve",
+	async (socket, params, emitToUser) => {
+		const userId = socket.user!.id
+		return withImportLimit(userId, async () => {
+			const bytes = takeHeldImport(userId, "card", params?.heldImportId)
 			const { card, avatarBuffer, lorebook, unimportedAssets, sprites } =
-				await parseCharacterCardFromBase64(params.file)
+				await parseCharacterCard(bytes)
 			const data = getRobustSpecV3Data(card)
 
 			const warnings: ImportWarning[] = []
@@ -1053,20 +1155,16 @@ export const charactersImportResolve: Handler<
 
 			const res: Sockets.Characters.ImportResolve.Response = {
 				character,
-				book: lorebook ?? null,
+				book: holdCardBook(userId, lorebook),
 				...(warnings.length > 0 ? { warnings } : {})
 			}
 			emitToUser("characters:importResolve", res)
 			return res
-		} catch (error: any) {
-			console.error("Error resolving character import conflict:", error)
-			emitToUser("characters:importResolve:error", {
-				error: error.message || "Failed to resolve character import."
-			})
-			throw error
-		}
-	}
-}
+		})
+	},
+	CARD_IMPORT_FAILED,
+	cardImportFailureOf
+)
 
 export const charactersSearchLibrary: Handler<
 	Sockets.Characters.SearchLibrary.Params,
@@ -1157,73 +1255,73 @@ export const charactersSearchLibrary: Handler<
 	}
 }
 
-export const charactersImportFromLibrary: Handler<
+/**
+ * Import a card from a Library source. The fetch, the source's own checks and
+ * the import all run as ONE import under the import limit (S4 review: the
+ * fetch and a full parse ran before any limit), the fetched bytes are
+ * imported as they are, and a refusal reaches the person as its own sentence
+ * (`refusable`) — a source's "not available" included.
+ *
+ * ⚠ The card is still parsed twice: once by the source's content check
+ * (CharaVault's, without the avatar or sprites), once to import it. Sharing
+ * one parse would take the `CardSource` interface handing its parse back.
+ */
+export const charactersImportFromLibrary = refusable<
 	Sockets.Characters.ImportFromLibrary.Params,
 	Sockets.Characters.ImportFromLibrary.Response
-> = {
-	event: "characters:importFromLibrary",
-	handler: async (socket, params, emitToUser) => {
+>(
+	"characters:importFromLibrary",
+	async (socket, params, emitToUser) => {
+		const userId = socket.user!.id
 		const fromPersonaCatalog = params.catalog === "personas"
-		try {
-			const source = resolveCardSource(params.source)
-			const kind = fromPersonaCatalog ? "persona" : "character"
-			if (!source.supports(kind)) {
-				throw new CardSourceUnavailableError(
-					`${source.label} does not support browsing ${fromPersonaCatalog ? "personas" : "characters"}`
-				)
-			}
-			const buffer = await source.getCardBytes(params.ref, {
-				userId: socket.user!.id
-			})
-			const base64 = buffer.toString("base64")
-
-			// Use the existing import handler
-			const importResult = await charactersImportCard.handler(
+		const source = resolveCardSource(params.source)
+		const kind = fromPersonaCatalog ? "persona" : "character"
+		if (!source.supports(kind)) {
+			throw new CardSourceUnavailableError(
+				`${source.label} does not support browsing ${fromPersonaCatalog ? "personas" : "characters"}`
+			)
+		}
+		const importResult = await withImportLimit(userId, async () =>
+			importCardFile(
 				socket,
-				{ file: base64 },
+				await source.getCardBytes(params.ref, { userId }),
 				emitToUser
 			)
+		)
 
-			// Only reachable if this exact card (by its embedded uuid) somehow
-			// already conflicts with one this user has — there's no
-			// conflict-resolution UI wired up for the library-import path, so
-			// surface it as a plain error rather than return a null character.
-			if (!importResult.character) {
-				throw new Error(
-					"This card conflicts with one you already have — resolve it from the Characters panel instead."
-				)
-			}
-
-			// A card off the PERSONA shelf lands as one of your personas: the
-			// user browsed a persona catalogue, which is the same statement
-			// that attaching one to a session makes.
-			if (fromPersonaCatalog) {
-				await markCharacterAsPersona(importResult.character.id)
-				importResult.character.isPersona = true
-				await emitToUser("characters:list", () =>
-					buildCharactersList(socket.user!.id)
-				)
-			}
-
-			const res: Sockets.Characters.ImportFromLibrary.Response = {
-				character: importResult.character,
-				book: importResult.book
-			}
-			emitToUser("characters:importFromLibrary", res)
-			return res
-		} catch (error: any) {
-			console.error("Character import from library error:", error)
-			emitToUser("characters:importFromLibrary:error", {
-				error:
-					error instanceof CardSourceUnavailableError ||
-					error instanceof CardSourceRateLimitedError
-						? error.message
-						: `Failed to import ${fromPersonaCatalog ? "persona" : "character"} from library`
-			})
-			throw error
+		// Only reachable if this exact card (by its embedded uuid) somehow
+		// already conflicts with one this user has — there's no
+		// conflict-resolution UI wired up for the library-import path, so
+		// surface it as a plain error rather than return a null character.
+		if (!importResult.character) {
+			throw new Error(
+				"This card conflicts with one you already have — resolve it from the Characters view instead."
+			)
 		}
-	}
-}
+
+		// A card off the PERSONA shelf lands as one of your personas: the
+		// user browsed a persona catalogue, which is the same statement
+		// that attaching one to a session makes.
+		if (fromPersonaCatalog) {
+			await markCharacterAsPersona(importResult.character.id)
+			importResult.character.isPersona = true
+			await emitToUser("characters:list", () =>
+				buildCharactersList(userId)
+			)
+		}
+
+		const res: Sockets.Characters.ImportFromLibrary.Response = {
+			character: importResult.character,
+			book: importResult.book
+		}
+		emitToUser("characters:importFromLibrary", res)
+		return res
+	},
+	"The card could not be imported from the library. The server log has the details.",
+	serverFailureAs(
+		"The card could not be imported from the library. The server log has the details."
+	)
+)
 
 export const charactersExportCard: Handler<
 	Sockets.Characters.ExportCard.Params,

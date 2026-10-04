@@ -20,6 +20,12 @@
  *    card frame a reply or a triggered function emits, handed the FILLED
  *    text so no caller fills a variable a second way.
  *
+ * The reply's reasoning phase is a host status too (`reasoning()`): while the
+ * streaming oracle's trace is arriving the row reads *{speaker} is reasoning*,
+ * and the node's own status (*is typing*) stands again at the first body
+ * token — the phase comes off the live row's split (`replyView`), so the
+ * status and the text cannot disagree about which one is streaming.
+ *
  * The queue's `queued` / `loading` are host statuses too (`queue()`): a call
  * waiting its turn or a managed backend loading a model is a fact the pipeline
  * cannot know, said in the same voice; `generating` restores the node's own
@@ -58,6 +64,19 @@ import { i18nTextIn } from "$lib/shared/i18n/i18nText"
 export const QUEUE_STATUS: Partial<Record<LLMQueueStatus, StatusText>> = {
 	queued: { i18n: { en: "waiting for the model" } },
 	loading: { i18n: { en: "loading the model" } }
+}
+
+/**
+ * The reply's reasoning phase, as a status — the model's trace is streaming
+ * into the reasoning fold and no body token has arrived yet. Named, like every
+ * status, through `{speaker}`; {@link REASONING_STATUS_UNNAMED} where the run
+ * has nobody to name (a summary, a scene).
+ */
+export const REASONING_STATUS: StatusText = {
+	i18n: { en: "{speaker} is reasoning" }
+}
+export const REASONING_STATUS_UNNAMED: StatusText = {
+	i18n: { en: "reasoning" }
 }
 
 /**
@@ -117,6 +136,12 @@ export interface StatusRelay {
 	started(nodeKey: string): void
 	/** The LLM queue's status for this run's oracle call. */
 	queue(status: LLMQueueStatus): void
+	/**
+	 * The streaming reply entered (`true`) or left (`false`) its reasoning
+	 * phase. Entering shows {@link REASONING_STATUS}; leaving restores the
+	 * node's own status — the queue's restore, for the same reason.
+	 */
+	reasoning(on: boolean): void
 	/** The current filled status, if the run has set one. */
 	readonly current: StatusText | undefined
 	/** Fill a status's host variables — for the receipt's `lastStatus`. */
@@ -220,6 +245,8 @@ export function createStatusRelay(opts: StatusRelayOptions): StatusRelay {
 	/** A queue wait not yet long enough to show, and whether one is showing. */
 	let queueTimer: ReturnType<typeof setTimeout> | undefined
 	let queueShown = false
+	/** Whether the reasoning phase's status is the one showing. */
+	let reasoningShown = false
 
 	/**
 	 * Memoized: resolved once for the whole run, on the first status that
@@ -365,6 +392,29 @@ export function createStatusRelay(opts: StatusRelayOptions): StatusRelay {
 				// only the fallback for one that does not.
 				else clearShown()
 			}
+		},
+		reasoning(on) {
+			if (on === reasoningShown) return
+			reasoningShown = on
+			if (on) {
+				enqueue(async () =>
+					show(
+						"reasoning",
+						hasNobody()
+							? REASONING_STATUS_UNNAMED
+							: await fill(REASONING_STATUS)
+					)
+				)
+				return
+			}
+			// The first body token: the node's own word stands again — read
+			// in the chain, after any status still being filled ahead of it.
+			// With none to restore, "reasoning" is not left standing over a
+			// body that is streaming: the status clears instead.
+			enqueue(async () => {
+				if (current) await show("reasoning", current)
+				else clearShown()
+			})
 		},
 		fill,
 		async end() {

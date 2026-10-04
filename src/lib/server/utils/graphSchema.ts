@@ -7,19 +7,12 @@
  */
 
 import type { JsonSchemaNode } from "$lib/server/connectionAdapters/jsonSchemaToGbnf"
-
-export const RELATIONSHIP_STATUSES = [
-	"active",
-	"resolved",
-	"broken",
-	"evolved"
-] as const
-
-export const RELATIONSHIP_VISIBILITIES = [
-	"secret",
-	"acknowledged",
-	"public"
-] as const
+// The one list each, which the relationship forms offer too (plan
+// places-graph B3). A plain constant module: it pulls in nothing.
+import {
+	RELATIONSHIP_STATUSES,
+	RELATIONSHIP_VISIBILITIES
+} from "$lib/shared/lorebooks/linkVocabulary"
 
 /**
  * The perspective-extraction contract, pinned to one subject.

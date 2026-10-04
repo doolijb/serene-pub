@@ -101,8 +101,7 @@ function makeAdapter(
 		connection: makeConnection(connectionOverrides),
 		// Empty is what "the context budget is switched off" resolves to now:
 		sampling,
-		contextConfig: {} as any,
-		promptConfig: { systemPrompt: "Test system prompt." } as any,
+		systemPrompt: "Test system prompt.",
 		session: makeSession(),
 		currentCharacterId: null,
 		tokenCounter: { countTokens: async () => 1 } as any,
@@ -512,8 +511,8 @@ describe("AnthropicAdapter — redacted_thinking", () => {
 
 		const result = await adapter.generateText()
 		expect(result.completionResult).toBe("Hello there.")
-		expect(result.thinkingContent).toBe(REDACTED_THINKING_NOTICE)
-		expect(result.thinkingContent).not.toContain(BLOB)
+		expect(result.reasoningContent).toBe(REDACTED_THINKING_NOTICE)
+		expect(result.reasoningContent).not.toContain(BLOB)
 	})
 
 	test("non-streaming: a redacted block alongside a readable one keeps both, on their own lines", async () => {
@@ -528,12 +527,12 @@ describe("AnthropicAdapter — redacted_thinking", () => {
 		mockCompilePrompt(adapter)
 
 		const result = await adapter.generateText()
-		expect(result.thinkingContent).toBe(
+		expect(result.reasoningContent).toBe(
 			`Pondering deeply.\n${REDACTED_THINKING_NOTICE}`
 		)
 	})
 
-	test("non-streaming: thinkingContent stays undefined when nothing was thought", async () => {
+	test("non-streaming: reasoningContent stays undefined when nothing was thought", async () => {
 		messagesCreateMock.mockResolvedValueOnce({
 			content: [{ type: "text", text: "Hello there." }]
 		})
@@ -541,10 +540,10 @@ describe("AnthropicAdapter — redacted_thinking", () => {
 		mockCompilePrompt(adapter)
 
 		const result = await adapter.generateText()
-		expect(result.thinkingContent).toBeUndefined()
+		expect(result.reasoningContent).toBeUndefined()
 	})
 
-	test("streaming: a redacted block arrives on content_block_start and reaches thinkingCb", async () => {
+	test("streaming: a redacted block arrives on content_block_start and reaches reasoningCb", async () => {
 		messagesStreamMock.mockReturnValueOnce(
 			eventStream([
 				{
@@ -566,17 +565,17 @@ describe("AnthropicAdapter — redacted_thinking", () => {
 
 		const result = await adapter.generateText()
 		let content = ""
-		let thinking = ""
+		let reasoning = ""
 		await (result.completionResult as any)(
 			(chunk: string) => {
 				content += chunk
 			},
 			(chunk: string) => {
-				thinking += chunk
+				reasoning += chunk
 			}
 		)
-		expect(thinking).toBe(REDACTED_THINKING_NOTICE)
-		expect(thinking).not.toContain(BLOB)
+		expect(reasoning).toBe(REDACTED_THINKING_NOTICE)
+		expect(reasoning).not.toContain(BLOB)
 		expect(content).toBe("Hello there.")
 	})
 
@@ -611,14 +610,14 @@ describe("AnthropicAdapter — redacted_thinking", () => {
 		mockCompilePrompt(adapter)
 
 		const result = await adapter.generateText()
-		let thinking = ""
+		let reasoning = ""
 		await (result.completionResult as any)(
 			() => {},
 			(chunk: string) => {
-				thinking += chunk
+				reasoning += chunk
 			}
 		)
-		expect(thinking).toBe(`Pondering.\n${REDACTED_THINKING_NOTICE}`)
+		expect(reasoning).toBe(`Pondering.\n${REDACTED_THINKING_NOTICE}`)
 	})
 
 	test("streaming: an ordinary content_block_start does not emit a notice", async () => {
@@ -643,16 +642,16 @@ describe("AnthropicAdapter — redacted_thinking", () => {
 
 		const result = await adapter.generateText()
 		let content = ""
-		let thinking = ""
+		let reasoning = ""
 		await (result.completionResult as any)(
 			(chunk: string) => {
 				content += chunk
 			},
 			(chunk: string) => {
-				thinking += chunk
+				reasoning += chunk
 			}
 		)
-		expect(thinking).toBe("")
+		expect(reasoning).toBe("")
 		expect(content).toBe("Hello there.")
 	})
 })
@@ -1261,5 +1260,56 @@ describe("AnthropicAdapter — reasoning on the wire", () => {
 		expect(req).not.toHaveProperty("top_p")
 		expect(req).not.toHaveProperty("top_k")
 		expect(adapter.ignoredSamplers).toEqual(["temperature", "topP", "topK"])
+	})
+})
+
+// ── Attachments per message (PLAN-composer-attachments §3.6) ────────────────
+describe("AnthropicAdapter — attachments per message", () => {
+	const run = async (messages: any[], perMessage: any[][], attachments: any[] = []) => {
+		messagesCreateMock.mockClear()
+		messagesCreateMock.mockResolvedValue({ content: [{ type: "text", text: "ok" }] })
+		const adapter = makeAdapter()
+		adapter.withCompiledPrompt({ prompt: undefined, messages, meta: {} as any } as any)
+		adapter.withMessageAttachments(perMessage)
+		if (attachments.length) adapter.withAttachments(attachments)
+		await adapter.generateText()
+		return sentBody().messages
+	}
+
+	test("each history turn carries its own files; request-level ones go on the last user turn", async () => {
+		const sent = await run(
+			[
+				{ role: "system", content: "Be brief." },
+				{ role: "user", content: "Ash: look" },
+				{ role: "assistant", content: "Mara: nice" },
+				{ role: "user", content: "Ash: and now?" },
+				{ role: "assistant", content: "Mara:" }
+			],
+			[[], [{ bytes: fileBytes("cat"), mime: "image/png", filename: "cat.png" }], [], [], []],
+			[{ bytes: fileBytes("frame"), mime: "image/png" }]
+		)
+		expect(sent[0].content.map((b: any) => b.type)).toEqual(["image", "text"])
+		expect(sent[0].content[0].source.data).toBe(fileBytes("cat").toString("base64"))
+		expect(sent[0].content[1]).toEqual({ type: "text", text: "Ash: look" })
+		// The assistant turn is untouched text; the second user turn gets the frame.
+		expect(sent[1]).toEqual({ role: "assistant", content: "Mara: nice" })
+		expect(sent[2].content.map((b: any) => b.type)).toEqual(["image", "text"])
+		expect(sent[2].content[0].source.data).toBe(fileBytes("frame").toString("base64"))
+		// The prefill stays a plain string.
+		expect(sent[3]).toEqual({ role: "assistant", content: "Mara:" })
+	})
+
+	test("a file on an assistant line travels with the next user turn", async () => {
+		const sent = await run(
+			[
+				{ role: "user", content: "Ash: draw it" },
+				{ role: "assistant", content: "Mara: here" },
+				{ role: "user", content: "Ash: thanks" }
+			],
+			[[], [{ bytes: fileBytes("art"), mime: "image/png" }], []]
+		)
+		expect(sent[0]).toEqual({ role: "user", content: "Ash: draw it" })
+		expect(sent[1]).toEqual({ role: "assistant", content: "Mara: here" })
+		expect(sent[2].content.map((b: any) => b.type)).toEqual(["image", "text"])
 	})
 })

@@ -74,8 +74,7 @@ function makeAdapter(
 		connection: makeConnection(connectionOverrides),
 		// Empty is what "the context budget is switched off" resolves to now:
 		sampling,
-		contextConfig: {} as any,
-		promptConfig: { systemPrompt: "Test system prompt." } as any,
+		systemPrompt: "Test system prompt.",
 		session: makeSession(),
 		currentCharacterId: null,
 		tokenCounter: { countTokens: async () => 1 } as any,
@@ -193,20 +192,20 @@ describe("OpenAIChatAdapter — native reasoning readback", () => {
 
 	async function drain(result: any) {
 		let content = ""
-		let thinking = ""
+		let reasoning = ""
 		expect(typeof result.completionResult).toBe("function")
 		await result.completionResult(
 			(chunk: string) => {
 				content += chunk
 			},
 			(chunk: string) => {
-				thinking += chunk
+				reasoning += chunk
 			}
 		)
-		return { content, thinking }
+		return { content, reasoning }
 	}
 
-	test("streaming: forwards delta.reasoning_content via thinkingCb, separately from content", async () => {
+	test("streaming: forwards delta.reasoning_content via reasoningCb, separately from content", async () => {
 		createMock.mockReturnValueOnce(
 			streamOf([
 				{ choices: [{ delta: { reasoning_content: "Pondering" } }] },
@@ -220,9 +219,9 @@ describe("OpenAIChatAdapter — native reasoning readback", () => {
 		})
 		mockCompilePrompt(adapter)
 
-		const { content, thinking } = await drain(await adapter.generateText())
+		const { content, reasoning } = await drain(await adapter.generateText())
 		expect(content).toBe("Hello there.")
-		expect(thinking).toBe("Pondering deeply.")
+		expect(reasoning).toBe("Pondering deeply.")
 	})
 
 	test("streaming: forwards delta.reasoning too — vLLM's current field, and OpenRouter's", async () => {
@@ -238,9 +237,9 @@ describe("OpenAIChatAdapter — native reasoning readback", () => {
 		})
 		mockCompilePrompt(adapter)
 
-		const { content, thinking } = await drain(await adapter.generateText())
+		const { content, reasoning } = await drain(await adapter.generateText())
 		expect(content).toBe("Hello there.")
-		expect(thinking).toBe("Pondering deeply.")
+		expect(reasoning).toBe("Pondering deeply.")
 	})
 
 	test("streaming: a delta carrying BOTH names yields the thought once, not twice", async () => {
@@ -264,9 +263,9 @@ describe("OpenAIChatAdapter — native reasoning readback", () => {
 		})
 		mockCompilePrompt(adapter)
 
-		const { content, thinking } = await drain(await adapter.generateText())
+		const { content, reasoning } = await drain(await adapter.generateText())
 		expect(content).toBe("Hello.")
-		expect(thinking).toBe("Pondering.")
+		expect(reasoning).toBe("Pondering.")
 	})
 
 	// Both wire modes, asserted rather than assumed — and here they genuinely
@@ -289,12 +288,12 @@ describe("OpenAIChatAdapter — native reasoning readback", () => {
 		})
 		mockCompilePrompt(adapter)
 
-		const { content, thinking } = await drain(await adapter.generateText())
-		expect(thinking).toBe("Pondering.")
+		const { content, reasoning } = await drain(await adapter.generateText())
+		expect(reasoning).toBe("Pondering.")
 		expect(content).toBe("Hello there.")
 	})
 
-	test("non-streaming: completion wire populates thinkingContent too", async () => {
+	test("non-streaming: completion wire populates reasoningContent too", async () => {
 		createMock.mockResolvedValueOnce({
 			choices: [
 				{
@@ -312,10 +311,10 @@ describe("OpenAIChatAdapter — native reasoning readback", () => {
 		mockCompilePrompt(adapter)
 
 		const result = await adapter.generateText()
-		expect(result.thinkingContent).toBe("Pondering.")
+		expect(result.reasoningContent).toBe("Pondering.")
 	})
 
-	test("non-streaming: populates thinkingContent from message.reasoning_content", async () => {
+	test("non-streaming: populates reasoningContent from message.reasoning_content", async () => {
 		createMock.mockResolvedValueOnce({
 			choices: [
 				{
@@ -333,10 +332,10 @@ describe("OpenAIChatAdapter — native reasoning readback", () => {
 
 		const result = await adapter.generateText()
 		expect(result.completionResult).toBe("Hello there.")
-		expect(result.thinkingContent).toBe("Pondering deeply.")
+		expect(result.reasoningContent).toBe("Pondering deeply.")
 	})
 
-	test("non-streaming: populates thinkingContent from message.reasoning", async () => {
+	test("non-streaming: populates reasoningContent from message.reasoning", async () => {
 		createMock.mockResolvedValueOnce({
 			choices: [
 				{
@@ -353,10 +352,10 @@ describe("OpenAIChatAdapter — native reasoning readback", () => {
 		mockCompilePrompt(adapter)
 
 		const result = await adapter.generateText()
-		expect(result.thinkingContent).toBe("Pondering deeply.")
+		expect(result.reasoningContent).toBe("Pondering deeply.")
 	})
 
-	test("non-streaming: thinkingContent is undefined when the response carries neither field", async () => {
+	test("non-streaming: reasoningContent is undefined when the response carries neither field", async () => {
 		createMock.mockResolvedValueOnce({
 			choices: [{ message: { content: "Hello there." } }]
 		})
@@ -367,7 +366,7 @@ describe("OpenAIChatAdapter — native reasoning readback", () => {
 
 		const result = await adapter.generateText()
 		expect(result.completionResult).toBe("Hello there.")
-		expect(result.thinkingContent).toBeUndefined()
+		expect(result.reasoningContent).toBeUndefined()
 	})
 })
 
@@ -981,5 +980,70 @@ describe("OpenAIChatAdapter — reasoning tokens", () => {
 		const result = await adapter.generateText()
 		expect(result.tokensCompletion).toBe(480)
 		expect(result.tokensReasoning).toBeUndefined()
+	})
+})
+
+// ── Attachments per message (PLAN-composer-attachments §3.6) ────────────────
+describe("OpenAIChatAdapter — images on the wire", () => {
+	const png = (label: string) => Buffer.from(`png bytes of ${label}`)
+	const run = async (messages: any[], perMessage: any[][], overrides: Record<string, any> = {}) => {
+		createMock.mockClear()
+		createMock.mockResolvedValue({ choices: [{ message: { content: "ok" } }] })
+		const adapter = makeAdapter({ wireMode: "chat", ...overrides })
+		adapter.withCompiledPrompt({ prompt: undefined, messages, meta: {} as any } as any)
+		adapter.withMessageAttachments(perMessage)
+		await adapter.generateText()
+		return createMock.mock.calls.at(-1)![0]
+	}
+
+	test("declares that it sends them", () => {
+		expect(makeAdapter().consumesAttachments).toBe(true)
+	})
+
+	test("a turn with files becomes image_url parts then its text; other turns are untouched", async () => {
+		const params = await run(
+			[
+				{ role: "system", content: "Be brief." },
+				{ role: "user", content: "Ash: look" },
+				{ role: "assistant", content: "Mara:" }
+			],
+			[[], [{ bytes: png("cat"), mime: "image/png", filename: "cat.png" }], []]
+		)
+		expect(params.messages[0]).toEqual({ role: "system", content: "Be brief." })
+		expect(params.messages[1]).toEqual({
+			role: "user",
+			content: [
+				{
+					type: "image_url",
+					image_url: { url: `data:image/png;base64,${png("cat").toString("base64")}` }
+				},
+				{ type: "text", text: "Ash: look" }
+			]
+		})
+		expect(params.messages[2]).toEqual({ role: "assistant", content: "Mara:" })
+		// No `attachments` key reaches the wire.
+		expect(JSON.stringify(params)).not.toContain('"attachments"')
+	})
+
+	test("a file on an assistant turn moves to the next user turn; an empty text part is omitted", async () => {
+		const params = await run(
+			[
+				{ role: "assistant", content: "Mara: here it is" },
+				{ role: "user", content: "" }
+			],
+			[[{ bytes: png("art"), mime: "image/png" }], []]
+		)
+		expect(params.messages[0]).toEqual({ role: "assistant", content: "Mara: here it is" })
+		expect(params.messages[1].content).toEqual([
+			{
+				type: "image_url",
+				image_url: { url: `data:image/png;base64,${png("art").toString("base64")}` }
+			}
+		])
+	})
+
+	test("a request with no files is the request it always was", async () => {
+		const params = await run([{ role: "user", content: "hi" }], [])
+		expect(params.messages).toEqual([{ role: "user", content: "hi" }])
 	})
 })

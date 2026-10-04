@@ -335,8 +335,8 @@ export function parseContextTemplate(template: string): ParsedContextTemplate {
  *
  * The remainder genuinely belong here. The message loop and the macro scalars
  * are structure rather than presentation — a layout for them would have nothing
- * to lay out — and `characterLore`, `narrativeGraph` and
- * `speakerRelationships` are values no live path renders, kept recognised so a
+ * to lay out — and `narrativeGraph` and `speakerRelationships` are values no
+ * live path renders, kept recognised so a
  * cloned template using one does not start reporting errors just because the
  * default stopped.
  */
@@ -345,16 +345,18 @@ const STRUCTURAL_FIELDS = [
 	// Depth-resolved injections (18 §4a, ruling 2026-08-23): data the
 	// template loop renders, computed beside postHistory.targetIndex.
 	"injectionsByIndex",
+	// The author's note (Chat's genre field): data the message loop places at
+	// its own targetIndex, resolved beside postHistory.
+	"authorsNote",
 	"sessionMessages",
 	"budget",
 	"char",
 	"character",
 	"user",
 	"persona",
-	"characterLore",
 	"narrativeGraph",
 	// Retired in 0.6 when the graph split into `relationshipsPerspectives` and
-	// `relationshipsKnown`. Kept recognised on the same rule as the two above:
+	// `relationshipsKnown`. Kept recognised on the same rule as the one above:
 	// somebody who cloned the shipped template before the split should not have
 	// their editor light up red. It renders empty now, which they will see —
 	// a lint error would tell them their template is malformed, which it is

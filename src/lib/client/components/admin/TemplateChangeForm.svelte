@@ -1,9 +1,11 @@
 <script lang="ts">
 	/**
 	 * The change-form half of the template admin: one dedicated page per
-	 * template (Django's change form), shared by context templates and
-	 * variable templates. `id` absent means create mode, which additionally
-	 * asks for the pool (the step or variable this template renders for).
+	 * template (Django's change form, built on `AdminChangeForm`), shared by
+	 * context templates and variable templates. `id` absent means add mode,
+	 * which additionally asks for the pool (the step or variable this
+	 * template renders for). Fieldsets: Template (name, pool), Source,
+	 * Preview, and the pipelines using it inline; the save row is Django's.
 	 *
 	 * Editing reuses the library's exact write events — every mutation answers
 	 * with the whole refreshed view, so this page stays honest about what the
@@ -12,10 +14,14 @@
 	 */
 	import * as Icons from "@lucide/svelte"
 	import Select from "$lib/client/components/inputs/Select.svelte"
-	import { getContext, untrack } from "svelte"
+	import { untrack } from "svelte"
 	import { adminGoto as goto, adminUnsavedEdits } from "$lib/client/admin/adminRouter.svelte"
 	import { UnsavedEdits } from "$lib/client/forms/unsavedEdits.svelte"
-	import { ADMIN_SPLIT } from "$lib/client/components/admin/AdminSplit.svelte"
+	import AdminChangeForm, { type AdminSaveIntent } from "./AdminChangeForm.svelte"
+	import AdminFieldset from "./AdminFieldset.svelte"
+	import AdminField, { describedBy } from "./AdminField.svelte"
+	import AdminInline from "./AdminInline.svelte"
+	import { deletionFor } from "./changelist"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import {
 		requestWithInterest,
@@ -42,15 +48,13 @@
 	}
 	let { kind, basePath, id }: Props = $props()
 
-	/** The compact back link's words: "Back to context templates". */
-	const backLabel = $derived(
-		kind === "context" ? "context templates" : "variable templates"
+	/** The changelist's name: the breadcrumb and the save row's words. */
+	const sectionLabel = $derived(
+		kind === "context" ? "Context templates" : "Variable templates"
 	)
+	const noun = { singular: "template", plural: "templates" }
 
 	const socket = useTypedSocket()
-	const split = getContext<{ mode: "desk" | "compact" } | undefined>(
-		ADMIN_SPLIT
-	)
 
 	let view = $state<Sockets.Pipelines.Library.Response>({})
 	let loading = $state(true)
@@ -114,8 +118,6 @@
 	})
 	adminUnsavedEdits(() => edits.dirty)
 
-	/** Save is offered on any edit, and always in create mode. */
-	let dirty = $derived(seeded && (id == null || edits.dirty))
 
 	/**
 	 * The language this row is written in.
@@ -162,6 +164,7 @@
 	function handleWrite(res: {
 		library?: Sockets.Pipelines.Library.Response
 		warnings?: Sockets.Pipelines.TemplateWarning[]
+		createdId?: number
 	}) {
 		if (res.library) view = res.library
 		for (const w of res.warnings ?? [])
@@ -169,7 +172,41 @@
 				title: w.line ? `Line ${w.line}: ${w.message}` : w.message
 			})
 	}
+	/** This page's own save or delete landing, by the event it answers on. */
+	function handleMine(
+		ev: (typeof WRITE_EVENTS)[number],
+		res: { library?: Sockets.Pipelines.Library.Response; createdId?: number }
+	) {
+		if (ev === "pipelines:libraryDeleteTemplate" && deleting) {
+			deleting = false
+			edits.forget()
+			toaster.success({ title: "Template deleted" })
+			void goto(basePath, { replaceState: true })
+			return
+		}
+		const intent = pendingIntent
+		const mine =
+			(ev === "pipelines:libraryUpdateTemplate" && id != null) ||
+			(ev === "pipelines:libraryCreateTemplate" && id == null)
+		if (!intent || !mine) return
+		pendingIntent = null
+		saving = false
+		edits.forget()
+		toaster.success({ title: id != null ? "Template saved" : "Template added" })
+		if (id != null) edits.markSaved()
+		if (intent === "save") void goto(basePath)
+		else if (intent === "another") void goto(`${basePath}/new`)
+		else if (id == null && res.createdId)
+			void goto(`${basePath}/${res.createdId}`, { replaceState: true })
+	}
 	function handleError(res: { error?: string }) {
+		if (pendingIntent || deleting) {
+			pendingIntent = null
+			saving = false
+			deleting = false
+			formErrors = [res.error ?? "The library refused the edit."]
+			return
+		}
 		toaster.error({ title: res.error ?? "The library refused the edit." })
 	}
 
@@ -212,7 +249,10 @@
 		handlePreview
 	)
 	for (const ev of WRITE_EVENTS) {
-		useInterest<"pipelines:libraryUpdateTemplate">(ev, handleWrite)
+		useInterest<"pipelines:libraryUpdateTemplate">(ev, (res) => {
+			handleWrite(res)
+			handleMine(ev, res)
+		})
 		useInterest<"pipelines:libraryUpdateTemplate:error">(
 			`${ev}:error`,
 			handleError
@@ -222,23 +262,30 @@
 	/** The library view, asked for and listened for in one. BARE, same reason. */
 	$effect(() => requestWithInterest("pipelines:library", {}, handleLibrary))
 
-	function save() {
-		// The pool control names the TARGET; `engine` above says where the
-		// language comes from in each mode.
-		const split = poolId
-			? splitPoolKey(poolId, CORE_TEMPLATE_ENGINE)
-			: { poolId: "", engine: CORE_TEMPLATE_ENGINE }
+	let saving = $state(false)
+	let pendingIntent: AdminSaveIntent | null = null
+	let deleting = false
+	let formErrors = $state<string[]>([])
+
+	function save(intent: AdminSaveIntent) {
+		formErrors = []
 		if (id != null) {
-			socket.emit("pipelines:libraryUpdateTemplate", {
-				kind,
-				id,
-				name,
-				source,
-				engine
-			})
-			toaster.success({ title: "Template saved" })
+			if (!edits.dirty) {
+				if (intent === "save") void goto(basePath)
+				else if (intent === "another") void goto(`${basePath}/new`)
+				return
+			}
+			saving = true
+			pendingIntent = intent
+			socket.emit("pipelines:libraryUpdateTemplate", { kind, id, name, source, engine })
 		} else {
-			if (!poolId) return
+			if (!poolId) {
+				formErrors = [kind === "context" ? "Pick the step it renders for." : "Pick the variable it lays out."]
+				return
+			}
+			const split = splitPoolKey(poolId, CORE_TEMPLATE_ENGINE)
+			saving = true
+			pendingIntent = intent
 			socket.emit("pipelines:libraryCreateTemplate", {
 				kind,
 				poolId: split.poolId,
@@ -246,176 +293,153 @@
 				source: source || undefined,
 				engine
 			})
-			toaster.success({ title: "Template created" })
-			edits.forget()
-			goto(basePath)
 		}
 	}
 
 	function clone() {
 		if (id == null) return
 		socket.emit("pipelines:libraryCloneTemplate", { kind, id })
-		toaster.success({ title: "Template cloned" })
-		goto(basePath)
+		toaster.success({ title: "Template duplicated" })
+		void goto(basePath)
 	}
 
 	function remove() {
 		if (id == null || !row) return
-		if (
-			!confirm(
-				row.usedBy.length
-					? `'${row.name}' is still used by ${row.usedBy.join(", ")}. ` +
-							`The server will refuse until those point somewhere else. Try anyway?`
-					: `Delete '${row.name}'? Nothing is using it.`
-			)
-		)
-			return
+		deleting = true
 		socket.emit("pipelines:libraryDeleteTemplate", { kind, id })
-		edits.forget()
-		goto(basePath)
 	}
+
+	const deletion = () =>
+		deletionFor([row!], {
+			noun,
+			label: (r) => r.name,
+			protect: (r) =>
+				r.usedBy.length
+					? `still used by ${r.usedBy.join(", ")} — point ${r.usedBy.length === 1 ? "it" : "them"} at another template first`
+					: null
+		})
 </script>
 
-{#if split?.mode !== "desk"}
-	<a
-		href={basePath}
-		class="text-surface-600-400 hover:text-surface-950-50 mb-3 inline-flex items-center gap-1 self-start text-[13px]"
-	>
-		<Icons.ChevronLeft size={14} /> Back to {backLabel}
-	</a>
-{/if}
-
-<h2
-	class="text-surface-950-50 mb-4 flex flex-wrap items-center gap-2 [font-family:var(--typo-heading--font-family)] text-base font-semibold"
->
-	{id != null ? (row?.name ?? "Template") : "New template"}
-	{#if readonly}
-		<span
-			class="preset-tonal-surface rounded-full px-2 py-0.5 font-sans text-xs font-normal"
-		>
-			built-in · read-only
-		</span>
-	{/if}
-</h2>
-
 {#if loading}
-	<p class="text-surface-600-400 text-sm">Loading…</p>
+	<div class="text-surface-600-400 flex items-center justify-center gap-2 py-16 text-sm" role="status">
+		<Icons.LoaderCircle size={16} class="animate-spin" aria-hidden="true" />
+		Loading template…
+	</div>
 {:else if id != null && !row}
-	<div class="panel-card text-surface-600-400 py-8 text-center text-sm">
-		This template no longer exists.
-		<a class="underline" href={basePath}>Back to the list</a>
-		.
+	<div class="m-auto flex flex-col items-center gap-3 py-16 text-center">
+		<p class="text-surface-600-400 text-sm">There is no template {id}.</p>
+		<a href={basePath} class="btn btn-sm preset-tonal-surface">All {sectionLabel.toLowerCase()}</a>
 	</div>
 {:else}
-	<div class="flex flex-col gap-4">
-		<div class="panel-card flex flex-col gap-3">
-			<div class="field-row">
-				<label class="flex flex-col gap-1 text-sm">
-					<span class="font-medium">Name</span>
-					<input
-						class="input"
-						bind:value={name}
-						{readonly}
-						placeholder="Template name"
-					/>
-				</label>
-				{#if id == null}
-					<Select
-						class="text-sm"
-						label={kind === "context" ? "Step (pool)" : "Variable"}
-						options={pools.map((p) => ({
-							value: p.id,
-							label: p.label
-						}))}
-						bind:value={poolId}
-					/>
-				{:else}
-					<label class="flex flex-col gap-1 text-sm">
-						<span class="font-medium">
-							{kind === "context" ? "Step (pool)" : "Variable"}
-						</span>
-						<input
-							class="input"
-							value={row?.poolLabel ?? poolId}
-							readonly
-						/>
-					</label>
-				{/if}
-				<!-- No Engine select: the engine is half of the pool key, so the
-				     Pool control above already chooses it — its labels read
-				     "Assemble · Handlebars". A second control for the same fact
-				     could disagree with the pool, and its "default" option was
-				     literally `value={null}`, the null this sprint removed.
-
-				     That the pool control is read-only in edit mode is the
-				     right behaviour rather than a limitation: a language is
-				     chosen when a template is created, because storing the text
-				     under a different engine does not translate it. -->
-			</div>
-
-			<label class="flex flex-col gap-1 text-sm">
-				<span class="font-medium">Template</span>
-				<TemplateEditor
-					value={source}
-					{scope}
-					{engine}
-					{readonly}
-					rows={16}
-					oninput={(v) => (source = v)}
-				/>
-			</label>
-
-			{#if row?.usedBy.length}
-				<p class="text-surface-600-400 text-xs">
-					Used by: {row.usedBy.join(", ")}
-				</p>
-			{/if}
-
-			<div class="flex flex-wrap items-center gap-2">
-				{#if !readonly}
-					<button
-						class="btn btn-sm preset-filled-primary-500"
-						disabled={!dirty || (id == null && !poolId)}
-						onclick={save}
-					>
-						<Icons.Save size={14} />
-						{id != null ? "Save" : "Create"}
-					</button>
-				{/if}
-				<button
-					class="btn btn-sm preset-tonal-surface"
-					onclick={runPreview}
-				>
-					<Icons.Eye size={14} /> Preview
+	<AdminChangeForm
+		mode={id != null ? "change" : "add"}
+		title={id != null ? (name.trim() || row?.name || "Template") : "Add template"}
+		purpose={readonly
+			? "A built-in template: read-only. Duplicate it to make one you can change."
+			: undefined}
+		noun="template"
+		changelistHref={basePath}
+		changelistLabel={sectionLabel}
+		dirty={id != null ? edits.dirty : !!(name.trim() || source.trim())}
+		{saving}
+		canSave={readonly ? false : id == null ? !saving && !!poolId : undefined}
+		errors={formErrors}
+		deletion={id != null && !readonly ? deletion : undefined}
+		onDelete={id != null && !readonly ? remove : undefined}
+		onSave={save}
+	>
+		{#snippet headerActions()}
+			{#if id != null}
+				<button type="button" class="btn btn-sm preset-tonal-surface" onclick={clone}>
+					<Icons.Copy size={16} aria-hidden="true" /> Duplicate
 				</button>
-				<div class="flex-1"></div>
-				{#if id != null}
-					<button
-						class="btn btn-sm preset-tonal-surface"
-						onclick={clone}
-					>
-						<Icons.Copy size={14} /> Clone
-					</button>
-					{#if !readonly}
-						<button
-							class="btn btn-sm preset-tonal-error"
-							onclick={remove}
-						>
-							<Icons.Trash2 size={14} /> Delete
-						</button>
+			{/if}
+		{/snippet}
+		{#snippet headerExtra()}
+			{#if row}
+				<div class="flex flex-wrap items-center gap-1.5 text-xs">
+					<span class="border-surface-300-700 text-surface-600-400 rounded-full border px-2 py-0.5">
+						{row.poolLabel}
+					</span>
+					{#if readonly}
+						<span class="border-surface-300-700 text-surface-600-400 rounded-full border px-2 py-0.5">
+							Built-in
+						</span>
 					{/if}
+				</div>
+			{/if}
+		{/snippet}
+
+		<AdminFieldset title="Template">
+			<div class="grid gap-4 @min-[36rem]/content:grid-cols-2">
+				{#if readonly}
+					<AdminField id="template-admin-name" label="Name" value={name} />
+				{:else}
+					<AdminField
+						id="template-admin-name"
+						label="Name"
+						help={id == null ? "Optional — a default is assigned." : undefined}
+					>
+						<input
+							id="template-admin-name"
+							class="input"
+							type="text"
+							bind:value={name}
+							aria-describedby={describedBy("template-admin-name", false)}
+						/>
+					</AdminField>
+				{/if}
+				{#if id == null}
+					<!-- The engine is half of the pool key, so choosing the pool
+					     chooses the language ("Assemble · Handlebars"); a second
+					     control for the same fact could disagree with it. -->
+					<AdminField
+						id="template-admin-pool"
+						label={kind === "context" ? "Step (pool)" : "Variable"}
+						required
+						help="Fixed once made: storing text under another language does not translate it."
+					>
+						<Select
+							label={kind === "context" ? "Step (pool)" : "Variable"}
+							labelHidden
+							options={pools.map((p) => ({ value: p.id, label: p.label }))}
+							bind:value={poolId}
+							describedBy={describedBy("template-admin-pool", false)}
+						/>
+					</AdminField>
+				{:else}
+					<AdminField
+						id="template-admin-pool"
+						label={kind === "context" ? "Step (pool)" : "Variable"}
+						value={row?.poolLabel ?? poolId}
+					/>
 				{/if}
 			</div>
-		</div>
+		</AdminFieldset>
+
+		<AdminFieldset title="Source">
+			{#snippet aside()}
+				<button type="button" class="btn btn-sm preset-tonal-surface shrink-0" onclick={runPreview}>
+					<Icons.Eye size={14} aria-hidden="true" /> Preview
+				</button>
+			{/snippet}
+			<TemplateEditor
+				value={source}
+				{scope}
+				{engine}
+				{readonly}
+				rows={16}
+				oninput={(v) => (source = v)}
+			/>
+		</AdminFieldset>
 
 		{#if preview}
-			<div class="panel-card flex flex-col gap-2 text-sm">
-				<h3 class="text-sm font-semibold">Preview</h3>
+			<AdminFieldset title="Preview">
 				{#if preview.error}
-					<p class="text-error-500 text-xs">{preview.error}</p>
+					<p class="text-error-600-400 text-xs">{preview.error}</p>
 				{/if}
 				{#if preview.issues?.length}
-					<ul class="text-warning-500 list-inside list-disc text-xs">
+					<ul class="text-warning-600-400 list-inside list-disc text-xs">
 						{#each preview.issues as issue, i (i)}
 							<li>{issue}</li>
 						{/each}
@@ -434,20 +458,18 @@
 						</div>
 					{/each}
 				{/if}
-			</div>
+			</AdminFieldset>
 		{/if}
-	</div>
-{/if}
 
-<style>
-	.field-row {
-		display: grid;
-		gap: 1rem;
-		grid-template-columns: 1fr;
-	}
-	@container content (min-width: 700px) {
-		.field-row {
-			grid-template-columns: 2fr 2fr 1fr;
-		}
-	}
-</style>
+		{#if row}
+			<AdminInline
+				title="Used by"
+				description="The pipelines that pick this template."
+				rows={row.usedBy}
+				rowKey={(n) => n}
+				columns={[{ key: "name", label: "Pipeline", primary: true, text: (n) => n }]}
+				emptyMessage="No pipeline picks this template yet."
+			/>
+		{/if}
+	</AdminChangeForm>
+{/if}

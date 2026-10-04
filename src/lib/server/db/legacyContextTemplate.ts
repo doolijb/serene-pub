@@ -11,9 +11,9 @@
  * `defaults.ts` importing `db`, `db/index.ts` calling `sync()` back into it
  * before its body had finished.
  *
- * This is **archived data**, not a live template: `context_configs` is frozen at
- * 0.5 and nothing in 0.6 renders from it. What 0.6 renders is
- * `SHIPPED_CONTEXT_TEMPLATE`.
+ * This is **archived data**, not a live template: the story string 0.5 shipped
+ * in `context_configs` (dropped by `0095_schema_0_6_0`), kept for the parity and Liquid tests
+ * that compare against it. What 0.6 renders is `SHIPPED_CONTEXT_TEMPLATE`.
  */
 /**
  * The context template every install starts with.

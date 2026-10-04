@@ -13,6 +13,7 @@ import {
 	getRegisteredServices,
 	reconcileServices,
 	registerService,
+	requestShutdown,
 	shutdownServices
 } from "./index"
 
@@ -174,5 +175,77 @@ describe("shutdownServices", () => {
 		expect(warn).toHaveBeenCalled()
 		log.mockRestore()
 		warn.mockRestore()
+	})
+})
+
+describe("requestShutdown", () => {
+	test("stops every service, then exits with the code asked for", async () => {
+		const log = vi.spyOn(console, "log").mockImplementation(() => {})
+		const order: string[] = []
+		registerService({
+			id: "database",
+			label: "Database",
+			shutdown: async () => {
+				order.push("database")
+			}
+		})
+		const exit = vi.fn((code: number) => {
+			order.push(`exit ${code}`)
+		})
+
+		await requestShutdown({ reason: "update", exitCode: 75, exit })
+		expect(order).toEqual(["database", "exit 75"])
+		log.mockRestore()
+	})
+
+	test("exits at once when nothing is registered (the services task never ran)", async () => {
+		const log = vi.spyOn(console, "log").mockImplementation(() => {})
+		const exit = vi.fn()
+		await requestShutdown({ reason: "launcher", exitCode: 0, exit })
+		expect(exit).toHaveBeenCalledWith(0)
+		log.mockRestore()
+	})
+
+	test("joins a teardown already running instead of cutting it short", async () => {
+		const log = vi.spyOn(console, "log").mockImplementation(() => {})
+		let finish!: () => void
+		const stopped: string[] = []
+		registerService({
+			id: "slow",
+			label: "Slow",
+			shutdown: () =>
+				new Promise<void>((resolve) => {
+					finish = () => {
+						stopped.push("slow")
+						resolve()
+					}
+				})
+		})
+		const exit = vi.fn()
+		const signal = shutdownServices("SIGTERM")
+		const asked = requestShutdown({ reason: "launcher", exitCode: 0, exit })
+		await Promise.resolve()
+		expect(exit).not.toHaveBeenCalled()
+		finish()
+		await signal
+		await asked
+		expect(stopped).toEqual(["slow"])
+		expect(exit).toHaveBeenCalledTimes(1)
+		log.mockRestore()
+	})
+
+	test("a second request does not exit twice or run the teardown again", async () => {
+		const log = vi.spyOn(console, "log").mockImplementation(() => {})
+		const shutdown = vi.fn(async () => {})
+		registerService({ id: "once", label: "Once", shutdown })
+		const exit = vi.fn()
+		await Promise.all([
+			requestShutdown({ reason: "launcher", exitCode: 0, exit }),
+			requestShutdown({ reason: "update", exitCode: 75, exit })
+		])
+		expect(shutdown).toHaveBeenCalledTimes(1)
+		expect(exit).toHaveBeenCalledTimes(1)
+		expect(exit).toHaveBeenCalledWith(0)
+		log.mockRestore()
 	})
 })

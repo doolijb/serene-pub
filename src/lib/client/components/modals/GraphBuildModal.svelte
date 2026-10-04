@@ -5,10 +5,25 @@
 		declareInterest,
 		useInterest
 	} from "$lib/client/sockets/interest.svelte"
-	import { getContext, onDestroy } from "svelte"
+	import { getContext, onDestroy, untrack } from "svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 	import AiTaskModal, { type AiTaskStep } from "./AiTaskModal.svelte"
+	import LoreWritesOffNotice from "$lib/client/lorebooks/LoreWritesOffNotice.svelte"
+	import { useLoreWritesOff } from "$lib/client/lorebooks/loreWritesOff.svelte"
 	import Select from "$lib/client/components/inputs/Select.svelte"
+	import {
+		RELATIONSHIP_STATUSES,
+		RELATIONSHIP_VISIBILITIES
+	} from "$lib/shared/lorebooks/linkVocabulary"
+	import {
+		applyProposalParams,
+		keptRelationships,
+		nextApplyRequestId,
+		removedWith,
+		type EditableNode,
+		type EditableNodeUpdate,
+		type EditableRel
+	} from "./graphProposalApply"
 
 	interface Props {
 		open: boolean
@@ -16,22 +31,25 @@
 		lorebookId: number
 		mode?: "replace" | "extend"
 		/**
-		 * Extend only: read just this session's scenes (#51). Null or absent
-		 * reads the whole book.
+		 * Extend only: read just this session's scenes on its line (#51).
+		 * Null or absent reads the whole line.
 		 */
 		sessionId?: number | null
+		/**
+		 * Extend without a session: the line the Graph lens is reading, whose
+		 * own scenes and history entries the build reads and whose ties it
+		 * writes. Null or absent is main. A Rebuild is always main's.
+		 */
+		branchId?: number | null
 		readySceneCount?: number
 		skippedSceneCount?: number
 		ungraphedHistoryEntryCount?: number
 		existingUnboundNodeCount?: number
-		existingRelationshipCount?: number
 		/**
-		 * Links with an entry at both ends / at one end. A rebuild deletes
-		 * them with the rest and never re-derives them (owner ruling 6), so
-		 * the warning names them.
+		 * Links between two cast members — what a rebuild deletes, and all it
+		 * deletes (places plan L1), so the warning names the count.
 		 */
-		existingEntryLinkCount?: number
-		existingCastEntryLinkCount?: number
+		existingCastToCastCount?: number
 		/** Scenes needing character extraction — cost disclosure, not a gate. */
 		unresolvedCastSceneCount?: number
 		onApplied?: () => void
@@ -43,23 +61,19 @@
 		lorebookId,
 		mode = "replace",
 		sessionId = null,
+		branchId = null,
 		readySceneCount,
 		skippedSceneCount,
 		ungraphedHistoryEntryCount,
 		existingUnboundNodeCount = 0,
-		existingRelationshipCount = 0,
-		existingEntryLinkCount = 0,
-		existingCastEntryLinkCount = 0,
+		existingCastToCastCount = 0,
 		unresolvedCastSceneCount = 0,
 		onApplied
 	}: Props = $props()
 
-	let entryLinkCount = $derived(
-		existingEntryLinkCount + existingCastEntryLinkCount
-	)
 	let hasExistingContent = $derived(
 		mode === "replace" &&
-			(existingUnboundNodeCount > 0 || existingRelationshipCount > 0)
+			(existingUnboundNodeCount > 0 || existingCastToCastCount > 0)
 	)
 	let totalReadyCount = $derived(
 		(readySceneCount ?? 0) + (ungraphedHistoryEntryCount ?? 0)
@@ -86,16 +100,6 @@
 	let errorRaw = $state<string | undefined>(undefined)
 	let showRaw = $state(false)
 
-	type EditableNode = Sockets.NarrativeGraph.NodeProposal & {
-		_deleted?: boolean
-	}
-	type EditableRel = Sockets.NarrativeGraph.RelationshipProposal & {
-		_deleted?: boolean
-	}
-	type EditableNodeUpdate = Sockets.NarrativeGraph.NodeUpdateProposal & {
-		_deleted?: boolean
-	}
-
 	let proposalNodes = $state<EditableNode[]>([])
 	let proposalRels = $state<EditableRel[]>([])
 	let proposalNodeUpdates = $state<EditableNodeUpdate[]>([])
@@ -110,15 +114,32 @@
 	let expandedTraceIdx = $state<number | null>(null)
 
 	let activeNodes = $derived(proposalNodes.filter((n) => !n._deleted))
-	let activeRels = $derived(proposalRels.filter((r) => !r._deleted))
+	/** Not removed, and not removed with a character (they go together). */
+	let activeRels = $derived(
+		keptRelationships({
+			nodes: proposalNodes,
+			relationships: proposalRels,
+			updatedNodes: proposalNodeUpdates
+		})
+	)
+	/** A kept new character with no name — Apply waits until it has one. */
+	let unnamedNode = $derived(activeNodes.some((n) => !n.name.trim()))
 	let activeNodeUpdates = $derived(
 		proposalNodeUpdates.filter((u) => !u._deleted)
 	)
 
-	let build = $derived(
-		graphBuildsCtx?.activeBuild?.lorebookId === lorebookId
-			? graphBuildsCtx.activeBuild
-			: null
+	/**
+	 * This book's build — never the shell's newest, which may be another
+	 * book's: a build starting there took this review away (plan B8).
+	 */
+	let build = $derived(graphBuildsCtx?.buildFor(lorebookId) ?? null)
+	/**
+	 * The scenes whose cast the build read — Apply saves who was in each, so
+	 * later builds skip reading them again. A build can have nothing else: an
+	 * Extend over scenes with one character each.
+	 */
+	let sceneCastCount = $derived(
+		build?.proposal?.resolvedSceneCast?.length ?? 0
 	)
 
 	/**
@@ -221,10 +242,30 @@
 		if (calls === 0) return null
 		const unusable = (d.noJson ?? 0) + (d.badJson ?? 0)
 		if (activeRels.length === 0 && unusable >= calls) {
-			return `All ${calls} character-perspective call${calls === 1 ? "" : "s"} came back unusable, so this is a failed build rather than an empty one. Applying it would clear the existing graph and put nothing back. Check the connection, then the KoboldCPP log — repeated "Reloading new model/config" lines mean the model is being reloaded between calls.`
+			return `All ${calls} character-perspective call${calls === 1 ? "" : "s"} came back unusable, so this is a failed build rather than an empty one. Applying it would delete the links between cast members and put nothing back. Check the connection, then the KoboldCPP log — repeated "Reloading new model/config" lines mean the model is being reloaded between calls.`
 		}
 		return null
 	})
+
+	/**
+	 * Apply is offered when there is something to save — a character, a
+	 * change, a relationship, or only who was in each scene — and every new
+	 * character has a name. A failed build is not saved on its casts alone:
+	 * its relationships came back unusable, and applying it would stamp its
+	 * scenes as read.
+	 */
+	// Lorebook writes from sessions Off (plan A22): a graph build turns what
+	// sessions played into the book, so it says so before any work and
+	// neither builds nor applies.
+	const loreWrites = useLoreWritesOff()
+	let canApply = $derived(
+		!loreWrites.off &&
+		!unnamedNode &&
+			(activeNodes.length > 0 ||
+				activeNodeUpdates.length > 0 ||
+				activeRels.length > 0 ||
+				(sceneCastCount > 0 && !systemicFailure))
+	)
 
 	let progressPhase = $derived(build?.phase ?? "loading")
 	let progressSceneIndex = $derived(build?.sceneIndex ?? 0)
@@ -251,40 +292,59 @@
 					.replace(/^\w/, (c) => c.toUpperCase()) + "…"
 	)
 
+	/**
+	 * What the shown build is: its own mode once there is one. A parked
+	 * Rebuild reopened from a session's Extend button is still a Rebuild —
+	 * and the server applies it as one, whatever this modal was opened as.
+	 */
+	let shownMode = $derived(build?.mode ?? mode)
 	let modalTitle = $derived(
-		mode === "extend" ? "Extend narrative graph" : "Build narrative graph"
+		shownMode === "extend" ? "Extend narrative graph" : "Build narrative graph"
 	)
 	let runningTitle = $derived(
-		mode === "extend"
+		shownMode === "extend"
 			? "Extending narrative graph…"
 			: "Building narrative graph…"
 	)
 	let startLabel = $derived(hasExistingContent ? "Replace graph" : "Proceed")
 
-	// Restore or reset step when modal opens
-	$effect(() => {
-		if (!open) return
-		const b = graphBuildsCtx?.activeBuild
-		if (b && b.lorebookId === lorebookId) {
-			if (b.status === "building") {
-				step = "building"
-			} else if (b.status === "review") {
-				step = "review"
-				proposalNodes = (b.proposal?.nodes ?? []).map((n) => ({ ...n }))
-				proposalRels = (b.proposal?.relationships ?? []).map((r) => ({
-					...r
-				}))
-				proposalNodeUpdates = (b.proposal?.updatedNodes ?? []).map(
-					(u) => ({ ...u })
-				)
-				sceneLabels = b.sceneLabels ?? []
-				seedTempIdMap = b.seedTempIdMap ?? {}
-				seedNodeNames = b.seedNodeNames ?? {}
-			} else if (b.status === "error") {
-				step = "error"
-				errorMessage = b.errorMessage ?? "Unknown error"
-				errorRaw = b.errorRaw
-			}
+	/**
+	 * Which build the modal shows, and in which state — the one thing the
+	 * restore below follows.
+	 *
+	 * ⚠ Never the `activeBuild` object itself. Layout hands a NEW object over
+	 * on every `activity:update` — any summarize tick, any reconnect — so an
+	 * effect that read it re-copied the proposal on each one and silently
+	 * threw away the person's removals and edits mid-review (plan B8).
+	 */
+	let buildKey = $derived(
+		build ? `${build.activityId ?? ""}:${build.status}` : null
+	)
+	/** The key last restored from; `undefined` until the first restore. */
+	let restoredKey: string | null | undefined = undefined
+
+	/** Show `b` — copy its proposal into the review — or a fresh preflight. */
+	function restore(b: GraphBuildState | null) {
+		if (b?.status === "building") {
+			step = "building"
+		} else if (b?.status === "review") {
+			step = "review"
+			proposalNodes = (b.proposal?.nodes ?? []).map((n) => ({ ...n }))
+			proposalRels = (b.proposal?.relationships ?? []).map((r) => ({
+				...r
+			}))
+			proposalNodeUpdates = (b.proposal?.updatedNodes ?? []).map((u) => ({
+				...u
+			}))
+			sceneLabels = b.sceneLabels ?? []
+			seedTempIdMap = b.seedTempIdMap ?? {}
+			seedNodeNames = b.seedNodeNames ?? {}
+			expandedNodeIdx = null
+			expandedRelIdx = null
+		} else if (b?.status === "error") {
+			step = "error"
+			errorMessage = b.errorMessage ?? "Unknown error"
+			errorRaw = b.errorRaw
 		} else {
 			step = "preflight"
 			errorMessage = ""
@@ -300,30 +360,23 @@
 			expandedNodeIdx = null
 			expandedRelIdx = null
 		}
-	})
+	}
 
-	// Transition when ctx build status changes while modal is open
+	// Restore when the modal opens and whenever the shown build or its state
+	// changes — and only then, so a review keeps what the person did across
+	// streamed updates and a close and reopen.
 	$effect(() => {
-		if (!open || !build) return
-		if (build.status === "review" && step === "building") {
-			step = "review"
-			proposalNodes = (build.proposal?.nodes ?? []).map((n) => ({ ...n }))
-			proposalRels = (build.proposal?.relationships ?? []).map((r) => ({
-				...r
-			}))
-			proposalNodeUpdates = (build.proposal?.updatedNodes ?? []).map(
-				(u) => ({ ...u })
-			)
-			sceneLabels = build.sceneLabels ?? []
-			seedTempIdMap = build.seedTempIdMap ?? {}
-			seedNodeNames = build.seedNodeNames ?? {}
-			expandedNodeIdx = null
-			expandedRelIdx = null
-		} else if (build.status === "error" && step === "building") {
-			step = "error"
-			errorMessage = build.errorMessage ?? "Unknown error"
-			errorRaw = build.errorRaw
-		}
+		if (!open) return
+		const key = buildKey
+		untrack(() => {
+			if (key === restoredKey) return
+			// An apply in flight consumes its build: the activity goes before
+			// the reply comes. Wait for the reply rather than flash back to a
+			// preflight with the review emptied.
+			if (isApplying && key === null) return
+			restoredKey = key
+			restore(build)
+		})
 	})
 
 	function triggerBuild() {
@@ -332,7 +385,10 @@
 		socket.emit("narrativeGraph:build", {
 			lorebookId,
 			mode,
-			...(mode === "extend" && sessionId != null ? { sessionId } : {})
+			...(mode === "extend" && sessionId != null ? { sessionId } : {}),
+			...(mode === "extend" && sessionId == null && branchId != null
+				? { branchId }
+				: {})
 		} satisfies Sockets.NarrativeGraph.Build.Params)
 	}
 
@@ -344,12 +400,12 @@
 	// modal spins forever. Failures *after* the activity exists arrive as a
 	// status: "error" update and are handled by the $effect above instead.
 	function handleBuildError(msg: Sockets.NarrativeGraph.Build.ErrorResponse) {
-		// emitToUser is user-scoped: a build failing for another lorebook in a
-		// second tab must not un-stick this modal.
+		// A refusal names its book: one for another lorebook must not
+		// un-stick this modal.
 		if (msg.lorebookId !== undefined && msg.lorebookId !== lorebookId)
 			return
 		if (step !== "building") return
-		graphBuildsCtx?.clearBuild()
+		graphBuildsCtx?.clearBuild(lorebookId)
 		step = "preflight"
 		errorMessage = ""
 		errorRaw = undefined
@@ -375,7 +431,7 @@
 	// parked (error or stale/unapplied review) and return to a clean
 	// preflight so the user can actually kick a new one.
 	function startOver() {
-		graphBuildsCtx?.clearBuild()
+		graphBuildsCtx?.clearBuild(lorebookId)
 		step = "preflight"
 		errorMessage = ""
 		errorRaw = undefined
@@ -397,13 +453,37 @@
 		for (const release of applyProposalReleases) release()
 		applyProposalReleases = []
 	}
-	function handleApplied() {
+	/**
+	 * The apply in flight: its `requestId`, and what it sends, counted when it
+	 * was sent — the reply may land after the build (and so the review) is
+	 * gone. Only the answer naming this id settles it: an apply's reply
+	 * reaches every tab of the user, so another tab's apply of the same book
+	 * must not close this modal as a success. Its refusal reaches only the tab
+	 * that applied, where an earlier apply's refusal still must not un-stick it.
+	 */
+	let pendingApply: {
+		requestId: string
+		/** The build it applies — the one to forget once it has. */
+		activityId: string
+		counts: string
+	} | null = null
+
+	function handleApplied(msg: Sockets.NarrativeGraph.ApplyProposal.Response) {
+		if (!pendingApply || msg.requestId !== pendingApply.requestId) return
+		const { counts, activityId } = pendingApply
+		pendingApply = null
 		cleanupApplyProposal()
 		toaster.success({
 			title: "Graph applied",
-			description: `${activeNodes.length} nodes, ${activeNodeUpdates.length} updates and ${activeRels.length} relationships saved.`
+			description: [`Saved ${counts}.`, ...(msg.applyNotes ?? [])].join(
+				" "
+			)
 		})
-		graphBuildsCtx?.clearBuild("acted")
+		// The server consumed the build with the apply, and may already have
+		// said so — the shell's newest build can be another book's by now.
+		// Forget this one alone; dismissing "the current build" threw that
+		// other one away (a parked review lost, a running build cancelled).
+		graphBuildsCtx?.forgetBuild(activityId)
 		isApplying = false
 		onApplied?.()
 		onOpenChange({ open: false })
@@ -414,24 +494,40 @@
 	function handleApplyError(
 		msg: Sockets.NarrativeGraph.ApplyProposal.ErrorResponse
 	) {
-		// emitToUser is user-scoped — don't un-stick another tab's modal.
-		if (msg.lorebookId !== undefined && msg.lorebookId !== lorebookId)
+		if (!pendingApply) return
+		// A refusal of another apply (an earlier one of this tab's) is not
+		// this one's. A refusal naming no request can only
+		// un-stick, and only for this book.
+		if (
+			msg.requestId !== undefined
+				? msg.requestId !== pendingApply.requestId
+				: msg.lorebookId !== undefined && msg.lorebookId !== lorebookId
+		)
 			return
+		pendingApply = null
 		cleanupApplyProposal()
 		isApplying = false
+		// The build may have gone while this apply was in flight (another tab
+		// applied it — the refusal says so): catch the modal up with it now,
+		// which the restore held off while the apply was waiting.
+		if (buildKey !== restoredKey) {
+			restoredKey = buildKey
+			restore(build)
+		}
 	}
 
-	function apply() {
-		isApplying = true
+	/** "1 scene" / "3 scenes". */
+	const counted = (n: number, one: string, many: string) =>
+		`${n} ${n === 1 ? one : many}`
 
-		// No seedTempIdMap: the server derives `existing_<id>` → id itself now.
-		// Sending it was both redundant (it was a pure identity map) and
-		// dangerous — the server validated only its values, so a wrong pairing
-		// silently attached relationships to the wrong character.
-		const filteredProposal: Sockets.NarrativeGraph.GraphProposal = {
-			nodes: activeNodes.map(({ _deleted, ...n }) => n),
-			relationships: activeRels.map(({ _deleted, ...r }) => r),
-			updatedNodes: activeNodeUpdates.map(({ _deleted, ...u }) => u)
+	function apply() {
+		if (!build?.activityId || !canApply) return
+		isApplying = true
+		const requestId = nextApplyRequestId()
+		pendingApply = {
+			requestId,
+			activityId: build.activityId,
+			counts: `${counted(activeNodes.length, "new character", "new characters")}, ${counted(activeNodeUpdates.length, "change", "changes")} to the cast, ${counted(activeRels.length, "relationship", "relationships")} and who was in ${counted(sceneCastCount, "scene", "scenes")}`
 		}
 
 		// Declared BEFORE the emit, not after it as the raw listeners were:
@@ -452,14 +548,19 @@
 			)
 		]
 
-		socket.emit("narrativeGraph:applyProposal", {
-			lorebookId,
-			proposal: filteredProposal,
-			mode,
-			// The server marks as graphed exactly what THIS build read, which
-			// it keeps on the activity.
-			...(build?.activityId ? { activityId: build.activityId } : {})
-		} satisfies Sockets.NarrativeGraph.ApplyProposal.Params)
+		socket.emit(
+			"narrativeGraph:applyProposal",
+			applyProposalParams({
+				lorebookId,
+				build,
+				review: {
+					nodes: proposalNodes,
+					relationships: proposalRels,
+					updatedNodes: proposalNodeUpdates
+				},
+				requestId
+			})
+		)
 	}
 
 	onDestroy(() => {
@@ -482,17 +583,6 @@
 	}
 
 	const NODE_STATES = ["active", "deceased", "missing", "departed"] as const
-	const RELATIONSHIP_STATUSES = [
-		"active",
-		"resolved",
-		"broken",
-		"evolved"
-	] as const
-	const RELATIONSHIP_VISIBILITIES = [
-		"acknowledged",
-		"secret",
-		"public"
-	] as const
 
 	const REL_STATUS_COLOR: Record<string, string> = {
 		active: "text-success-500",
@@ -507,7 +597,7 @@
 			? () => {
 					if (build?.activityId)
 						socket.emit("activity:cancel", { id: build.activityId })
-					graphBuildsCtx?.clearBuild()
+					graphBuildsCtx?.clearBuild(lorebookId)
 					step = "preflight"
 					errorMessage = ""
 					errorRaw = undefined
@@ -517,12 +607,17 @@
 </script>
 
 {#snippet confirmBlock()}
+	{#if loreWrites.off}
+		<LoreWritesOffNotice />
+	{/if}
 	<p class="text-surface-700-300 mt-1 text-sm">
 		{mode === "extend"
 			? sessionId != null
-				? "The LLM will process this session's new scenes and add to your existing graph."
-				: "The LLM will process new scenes and add to your existing graph."
-			: "The LLM will process all summarised scenes and build a fresh graph."}
+				? "The LLM will process this session's new scenes on its line and add to your existing graph."
+				: branchId != null
+					? "The LLM will process this branch's new scenes and history entries and add them to the branch's graph."
+					: "The LLM will process new scenes and add to your existing graph."
+			: "The LLM will read main's summarised scenes and derive the links between cast members from them."}
 	</p>
 	<div class="mt-4 space-y-2">
 		{#if totalReadyCount > 0}
@@ -631,37 +726,33 @@
 					and a warning known to exaggerate stops being read at all.
 				-->
 				<!--
-					Owner ruling 6 (2026-09-28): a rebuild keeps its behaviour —
-					it deletes EVERY link in the book — so this must say how
-					many, and how many of them the builder will not put back.
-					It re-derives cast-to-cast links from scenes only; a link
-					with an entry at either end never comes back, and nothing
-					records which links were drawn by hand.
+					Owner ruling 2026-09-29 (Q1, places plan L1): a rebuild is
+					for the ties between cast members only. It deletes those,
+					every line's, and re-derives them from scenes; places and
+					every link with an entry at either end are out of its
+					reach. So this counts only what it deletes, and nothing
+					records which ties were drawn by hand.
 				-->
 				<span>
-					{#if existingRelationshipCount > 0}
-						This will replace the existing graph. All
-						<strong>{existingRelationshipCount}</strong>
-						link{existingRelationshipCount === 1 ? "" : "s"} in this
-						book will be deleted. A rebuild only re-creates links
-						between cast members from your scenes, so links drawn by
-						hand do not come back.
-						{#if entryLinkCount > 0}
-							<strong>{entryLinkCount}</strong>
-							{entryLinkCount === 1 ? "link has" : "links have"} an
-							entry at one or both ends ({existingEntryLinkCount}
-							between entries, {existingCastEntryLinkCount} between a
-							cast member and an entry) and will not be rebuilt.
-						{/if}
+					{#if existingCastToCastCount > 0}
+						This will delete the
+						<strong>{existingCastToCastCount}</strong>
+						link{existingCastToCastCount === 1 ? "" : "s"} between cast
+						members in this book, on main and on every branch, and
+						re-create them on main from your scenes, so any drawn by
+						hand or on a branch do not come back.
 					{:else}
-						This will replace the existing graph.
+						This will re-create the links between cast members from
+						your scenes.
 					{/if}
+					{" "}Places, and links with a place or other entry at either
+					end, are kept.
 					{#if existingUnboundNodeCount > 0}
-						{" "}Your characters are kept — including the{" "}
+						{" "}So are your characters — including the{" "}
 						<strong>{existingUnboundNodeCount}</strong>
 						unbound node{existingUnboundNodeCount === 1 ? "" : "s"}.
 					{:else}
-						{" "}Your characters are kept.
+						{" "}So are your characters.
 					{/if}
 				</span>
 			</div>
@@ -705,9 +796,25 @@
 {/snippet}
 
 {#snippet reviewBlock()}
+	{#if loreWrites.off}
+		<!-- A review reopened after the setting moved: it cannot apply. -->
+		<div class="mb-4"><LoreWritesOffNotice /></div>
+	{/if}
 	<p class="text-surface-700-300 -mt-1 mb-4 text-sm">
 		{activeNodes.length} new · {activeNodeUpdates.length} updated · {activeRels.length}
-		relationships
+		relationships{#if sceneCastCount > 0}
+			· who was in {sceneCastCount}
+			{sceneCastCount === 1 ? "scene" : "scenes"}{/if}
+	</p>
+	<!--
+		What Apply will do is the build's, not this modal's: a parked Rebuild
+		reopened from a session's Extend button is applied as a Rebuild, so the
+		review says so.
+	-->
+	<p class="text-surface-700-300 -mt-2 mb-4 text-sm">
+		{shownMode === "replace"
+			? "This is a rebuild: applying it deletes the links between cast members in this book, on main and on every branch, and puts these in their place."
+			: "Applying adds these to your graph."}
 	</p>
 
 	<!--
@@ -805,17 +912,24 @@
 				No new nodes extracted.
 			</p>
 		{/if}
+		{#if unnamedNode}
+			<p class="text-error-700-300 text-xs" role="status">
+				A new character needs a name before the graph can be applied.
+				Name it, or remove it.
+			</p>
+		{/if}
 		<!--
 			Screened-out names are reported, never dropped in silence. The
-			filter treats a name matching a World Lore entry as a subject of
-			the setting rather than a member of the cast — right for a station
-			or an artefact, wrong for a character who happens to have a lore
-			page. Naming them is what makes that second case recoverable.
+			filter treats a name matching a world lore, place or item entry as
+			a subject of the setting rather than a member of the cast — right
+			for a station or an artefact, wrong for a character who happens to
+			have a lore page. Naming them is what makes that second case
+			recoverable.
 		-->
 		{#if (build?.filteredWorldLoreNames?.length ?? 0) > 0}
 			<p class="text-surface-700-300 text-xs">
-				Not created — these match world lore entries, so they were read
-				as places or things rather than characters:
+				Not created — these match a world lore, place or item entry, so
+				they were read as places or things rather than characters:
 				<span class="font-semibold">
 					{build?.filteredWorldLoreNames?.join(", ")}
 				</span>
@@ -955,8 +1069,10 @@
 			</ul>
 		{/if}
 		{#each proposalRels as rel, i}
+			{@const goneWith = removedWith(rel, proposalNodes)}
 			<div
-				class="bg-surface-200-800 rounded-lg border transition-opacity {rel._deleted
+				class="bg-surface-200-800 rounded-lg border transition-opacity {rel._deleted ||
+				goneWith
 					? 'opacity-40'
 					: 'border-surface-300-700'}"
 			>
@@ -1010,21 +1126,32 @@
 							{sceneLabel(rel.sceneIndex)}
 						</span>
 					{/if}
-					<button
-						aria-label={rel._deleted ? "Restore relationship" : "Remove relationship"}
-						class="text-surface-600-400 hover:text-error-500 ml-1 shrink-0"
-						onclick={(e) => {
-							e.stopPropagation()
-							proposalRels[i]._deleted = !proposalRels[i]._deleted
-						}}
-						title={rel._deleted ? "Restore" : "Remove"}
-					>
-						{#if rel._deleted}
-							<Icons.RotateCcw size={14} />
-						{:else}
-							<Icons.Trash2 size={14} />
-						{/if}
-					</button>
+					{#if goneWith}
+						<!--
+							Removed with the character it names: a relationship
+							to someone who will not exist cannot be applied.
+							Restoring the character brings it back.
+						-->
+						<span class="text-surface-600-400 shrink-0 text-xs">
+							Removed with {goneWith.name}
+						</span>
+					{:else}
+						<button
+							aria-label={rel._deleted ? "Restore relationship" : "Remove relationship"}
+							class="text-surface-600-400 hover:text-error-500 ml-1 shrink-0"
+							onclick={(e) => {
+								e.stopPropagation()
+								proposalRels[i]._deleted = !proposalRels[i]._deleted
+							}}
+							title={rel._deleted ? "Restore" : "Remove"}
+						>
+							{#if rel._deleted}
+								<Icons.RotateCcw size={14} />
+							{:else}
+								<Icons.Trash2 size={14} />
+							{/if}
+						</button>
+					{/if}
 					<Icons.ChevronDown
 						size={14}
 						class="text-surface-600-400 transition-transform {expandedRelIdx ===
@@ -1033,7 +1160,7 @@
 							: ''}"
 					/>
 				</div>
-				{#if expandedRelIdx === i && !rel._deleted}
+				{#if expandedRelIdx === i && !rel._deleted && !goneWith}
 					<div
 						class="border-surface-300-700 space-y-2 border-t px-3 py-2"
 					>
@@ -1235,11 +1362,9 @@
 	step={aiStep}
 	{progressPercent}
 	{progressLabel}
-	canStart={totalReadyCount > 0}
+	canStart={!loreWrites.off && totalReadyCount > 0}
 	{startLabel}
-	canSave={activeNodes.length > 0 ||
-		activeNodeUpdates.length > 0 ||
-		activeRels.length > 0}
+	canSave={canApply}
 	saveLabel="Apply graph"
 	isSaving={isApplying}
 	{errorMessage}
@@ -1253,16 +1378,21 @@
 		errorMessage = ""
 		errorRaw = undefined
 		showRaw = false
+		// The failed build's own mode: a Rebuild that failed and was reopened
+		// from a session's Extend button resumes as the Rebuild it was.
 		socket.emit("narrativeGraph:build", {
 			lorebookId,
-			mode,
+			mode: shownMode,
 			resume: true,
-			...(mode === "extend" && sessionId != null ? { sessionId } : {})
+			...(shownMode === "extend" && sessionId != null ? { sessionId } : {}),
+			...(shownMode === "extend" && sessionId == null && branchId != null
+				? { branchId }
+				: {})
 		} satisfies Sockets.NarrativeGraph.Build.Params)
 	}}
 	onStartOver={startOver}
 	onDiscard={() => {
-		graphBuildsCtx?.clearBuild()
+		graphBuildsCtx?.clearBuild(lorebookId)
 		onOpenChange({ open: false })
 	}}
 	confirm={confirmBlock}

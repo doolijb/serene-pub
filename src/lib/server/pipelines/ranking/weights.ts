@@ -180,9 +180,12 @@ export interface SignalWeights {
 	 * `core:task/concat-candidates@1` exists to avoid.
 	 *
 	 * Non-zero in the shipped lore bands, unlike `proximity` — because the
-	 * *mechanism* ships off (`vector-search.maxEntries` is 0) and nothing carries the
-	 * signal until somebody turns it on. Zeroing both would make raising the cap
-	 * do nothing, which is the trap every two-switch feature sets.
+	 * *mechanism* has its own switch (`query-windows.searchByMeaning`, on the
+	 * chain's first node since 2026-09-29), which ships Automatic: on whenever
+	 * an embedding model is set up, local or a service alike, off with none. Nothing
+	 * carries the signal where it does not search. Zeroing both would make
+	 * turning the switch on do nothing, which is the trap every two-switch
+	 * feature sets.
 	 */
 	semantic: number
 	/**
@@ -309,8 +312,10 @@ export const DEFAULT_SIGNAL_WEIGHTS: Record<RetrievalBand, SignalWeights> = {
 	 *
 	 * ⚠ **Not populated on any shipped path**, which is what let three weights
 	 * hide here: the entity mechanism's `messages` out-port is deliberately
-	 * unwired (see `respond`), so nothing ranked a message and nothing noticed
-	 * that two of these three had no producer at all. `density` is produced now
+	 * unwired (see `respond`), and Search by meaning asks the index for the
+	 * lorebook's entries only (`SEMANTIC_SEARCH_SOURCES`, plan A1), so nothing
+	 * ranks a message and nothing noticed that two of these three had no
+	 * producer at all. `density` is produced now
 	 * and is left at 0.1 here rather than tidied — no mechanism writes it on a
 	 * *message* candidate either way, so the number cannot change an outcome
 	 * and moving it would be a re-tune with no reason attached.
@@ -360,15 +365,11 @@ export interface RetrievalParams {
 	guaranteedMessages: number
 	/** Fraction of `tokenLimit` the whole context may occupy. */
 	contextThresholdPercent: number
-	/**
-	 * How a lorebook key is matched.
-	 *
-	 * `substring` is today's behaviour and the default — `art` fires on
-	 * "hearth", `elf` on "self". `word` is the fix most users want once they
-	 * have been bitten; `regex` is today's `useRegex` boolean, folded in so
-	 * there is one field rather than a boolean plus an implicit third mode.
+	/*
+	 * ⚠ No `matchMode` here. How a key matches is the ENTRY's (`matchMode`
+	 * over `useRegex`, read by `modeOf` in `signals.ts`). A node-level mode
+	 * would be a second answer the scan never asks for.
 	 */
-	matchMode: MatchMode
 	/**
 	 * How many further passes an entry's own content may trigger.
 	 *
@@ -490,7 +491,6 @@ export const DEFAULT_RETRIEVAL: RetrievalParams = {
 	scanDepth: 10,
 	guaranteedMessages: 10,
 	contextThresholdPercent: 0.8,
-	matchMode: "substring",
 	maxRecursionDepth: 0,
 	admitThreshold: 0,
 	lexicalScoring: "overlap",

@@ -8,12 +8,12 @@
  *   1. `override`  — the session's `core:slot/sprite-set@1` on the speaker
  *                    (play, not canon: "she changed clothes in this scene");
  *   2. `amendment` — the cast member's `spriteSet`, resolved through
- *                    `castMemberAsOf` (the ONE server-side cast resolver —
- *                    agreed with the lorebooks session, never a second path);
+ *                    `cardMemberAt` (the card-keyed entry point to the one
+ *                    cast resolver, `castAsOf` — never a second resolver);
  *   3. `default`   — the card's default set.
  *
  * A name that the resolved card has no set for falls to the default set and
- * says so (`missing`), never silently.
+ * says so (`missing`, and `missingAskedBy` the rung that asked), never silently.
  *
  * ⚠ The CARD whose sprites are read is the cast member's RESOLVED
  * `characterId`, not the session's: a card-swap amendment ("the older card
@@ -27,7 +27,7 @@
  * the reading every other session-side reader of the book takes.
  *
  * ⚠ Appearances: a member placed twice at one moment is two people
- * (`castMemberAsOf(...).appearances`). A session speaker names a card, not an
+ * (`cardMemberAt(...).appearances`). A session speaker names a card, not an
  * appearance, so this reads the un-narrowed `member` — one face per card —
  * until a speaker can name which appearance is talking.
  */
@@ -36,7 +36,7 @@ import { and, desc, eq, lt } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import { valueOf } from "$lib/server/state/resolve"
 import { sessionReadingOf, lineOfReading } from "$lib/server/state/reading"
-import { castMemberAsOf } from "$lib/server/sockets/amendments"
+import { cardMemberAt } from "$lib/server/sockets/amendments"
 import { spriteLabelsFor } from "$lib/server/sprites"
 import {
 	asShownSprite,
@@ -68,6 +68,12 @@ export interface SpriteChoicesV1 {
 	decidedBy: SpriteSetDecidedBy
 	/** A set name was asked for and the card has none by that name. */
 	missing?: string
+	/**
+	 * Beside `missing`: which rung asked for it (plan A25). `decidedBy` is
+	 * `default` then — the card's default set is what shows — and this keeps
+	 * the session's override, or the member's set, on the receipt.
+	 */
+	missingAskedBy?: Exclude<SpriteSetDecidedBy, "default">
 	/** The line's text. */
 	text: string
 	/** Anything to choose between — the tail's junction reads this. */
@@ -121,12 +127,10 @@ export async function spriteChoicesFor(
 		slotId: SPRITE_SET_SLOT_ID
 	})
 	if (reading) {
-		const resolved = await castMemberAsOf(db, {
+		const resolved = await cardMemberAt(db, {
 			lorebookId: reading.lorebookId,
 			characterId: speakerId,
 			at: {
-				branchId: reading.branchId,
-				forkedAt: reading.forkedAt,
 				line: lineOfReading(reading),
 				moment: reading.moment
 			}
@@ -161,10 +165,12 @@ export async function spriteChoicesFor(
 
 	let set = defaultSet
 	let missing: string | undefined
+	let missingAskedBy: SpriteChoicesV1["missingAskedBy"]
 	if (wanted) {
 		if (art.sets.has(wanted)) set = wanted
 		else {
 			missing = wanted
+			if (decidedBy !== "default") missingAskedBy = decidedBy
 			decidedBy = "default"
 		}
 	}
@@ -202,6 +208,7 @@ export async function spriteChoicesFor(
 		recent,
 		decidedBy,
 		...(missing ? { missing } : {}),
+		...(missingAskedBy ? { missingAskedBy } : {}),
 		text,
 		has: labels.length > 0
 	}

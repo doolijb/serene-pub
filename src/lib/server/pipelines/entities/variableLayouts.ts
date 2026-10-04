@@ -224,7 +224,7 @@ const objectList = (key: string, fields: readonly string[]): string => {
 	)
 }
 
-/** `extra lore` is not a bare Handlebars path; `this.[extra lore]` is. */
+/** A key with a space is not a bare Handlebars path; `this.[a key]` is. */
 const path = (field: string): string =>
 	/^[A-Za-z_$][\w$]*$/.test(field) ? field : `this.[${field}]`
 
@@ -254,6 +254,21 @@ const recordEntries = (key: string): string =>
 	`{{#if ${key}}}{ {{~#each ${key}}}{{{jsonValue @key indent=0}}}:` +
 	`{{{jsonValue this indent=0}}}{{#unless @last}},{{/unless}}{{/each~}} }` +
 	`{{else}}{}{{/if}}`
+
+/**
+ * A list of `{ title, castMember?, content }`, entry by entry — minified JSON,
+ * byte for byte `JSON.stringify` of the list.
+ *
+ * The object's closing brace follows the `content` value, and a triple-stash
+ * followed by a brace reads to the lexer as a raw-block close; the tilde form
+ * (`{{~{…}~}} }`) strips the space that keeps the two apart, as
+ * `recordEntries` does for its own brace.
+ */
+const anchoredEntries = (key: string): string =>
+	`{{#if ${key}.length}}[{{#each ${key}}}{"title":{{{jsonValue title indent=0}}}` +
+	`{{#if (ne castMember undefined)}},"castMember":{{{jsonValue castMember indent=0}}}{{/if}}` +
+	`,"content":{{~{jsonValue content indent=0}~}} }{{#unless @last}},{{/unless}}{{/each}}]` +
+	`{{else}}[]{{/if}}`
 
 /**
  * `JSON.stringify(x, null, 1)`, which is what the narrative graph produced.
@@ -391,8 +406,7 @@ const VARIABLES: VariableDefinition[] = [
 				"name",
 				"nickname",
 				"description",
-				"personality",
-				"extra lore"
+				"personality"
 			]),
 			render: asIndentedJson,
 			explicit: true
@@ -494,6 +508,27 @@ const VARIABLES: VariableDefinition[] = [
 		wrapper: {
 			name: "Titled JSON block",
 			wrap: jsonBlock("World lore: ")
+		}
+	},
+	/**
+	 * Lore bound to a cast member, admitted by the budget: one object per
+	 * entry — `title`, `castMember` when it is bound to one, `content` — in
+	 * rank order, minified like the other lore. The cast member's name is in
+	 * the value because a template places this block apart from the cards, so
+	 * each entry has to say whose it is.
+	 */
+	{
+		variableId: "core:var/character-lore@1",
+		key: "characterLore",
+		content: {
+			name: "JSON",
+			source: anchoredEntries("characterLore"),
+			render: asMinifiedJson,
+			explicit: true
+		},
+		wrapper: {
+			name: "Titled JSON block",
+			wrap: jsonBlock("Character lore:")
 		}
 	},
 	/**

@@ -27,6 +27,8 @@
 	export interface ChangeRow {
 		option: Sockets.Pipelines.Option
 		stepKey: string
+		/** The agent (settings group) the step belongs to; "" for the one unheaded group. */
+		agent: string
 		stepLabel: string
 		state: "pending" | "pending-reset" | "saved"
 		current: unknown
@@ -58,10 +60,10 @@
 	}: Props = $props()
 
 	const columns: AdminColumn<ChangeRow>[] = [
-		{ key: "option", label: "Option", value: (r) => r.option.label },
+		{ key: "agent", label: "Agent", value: (r) => r.agent },
 		{ key: "step", label: "Step", value: (r) => r.stepLabel },
-		{ key: "facet", label: "Facet", value: (r) => r.option.facet },
-		{ key: "values", label: "Default → Current" },
+		{ key: "option", label: "Setting", value: (r) => r.option.label },
+		{ key: "values", label: "Was → Now" },
 		{
 			key: "state",
 			label: "State",
@@ -89,7 +91,7 @@
 		Everything this configuration departs from the shipped default by —
 		saved deviations and the unsaved draft together. A setting with no row
 		here follows the default, including when the default later moves.
-		Per-row Reset queues a change; nothing writes until Save all.
+		Per-row Reset queues a change; nothing writes until Save.
 	</p>
 	{#if canResetAll}
 		<button
@@ -106,7 +108,7 @@
 <AdminList
 	{rows}
 	{columns}
-	searchText={(r) => `${r.option.label} ${r.stepLabel} ${r.option.facet}`}
+	searchText={(r) => `${r.option.label} ${r.stepLabel} ${r.agent}`}
 	searchPlaceholder="Search changes…"
 	defaultSort="step"
 	storageKey="serene-pub:adminView:pipelineChanges"
@@ -118,8 +120,8 @@
 			<span class="font-semibold">{row.option.label}</span>
 		{:else if col.key === "step"}
 			<span class="text-surface-700-300 text-xs">{row.stepLabel}</span>
-		{:else if col.key === "facet"}
-			<span class="text-surface-600-400 text-xs">{row.option.facet}</span>
+		{:else if col.key === "agent"}
+			<span class="text-surface-700-300 text-xs">{row.agent || "—"}</span>
 		{:else if col.key === "values"}
 			<span class="font-mono text-xs">
 				<span class="text-surface-600-400">

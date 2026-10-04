@@ -8,6 +8,7 @@
 		withKeys,
 		withoutKey
 	} from "$lib/shared/entries/keyList"
+	import { runawayPatternOf } from "$lib/shared/entries/runawayPattern"
 
 	/**
 	 * A key list, as the things it holds: one chip per key.
@@ -54,6 +55,20 @@
 	// Deduplicated, because the chips are keyed on the word: a column holding
 	// the same keyword twice is one chip, not a crash.
 	let list = $derived(keyList(keys))
+	/**
+	 * The patterns Save would refuse (plan S3), said here first — the same
+	 * judgement the server makes (`runawayPatternOf`), so the chip and the
+	 * refusal cannot disagree. Only for a regex entry: in the other modes the
+	 * key is text and cannot run away.
+	 */
+	let runaway = $derived(
+		regex
+			? list.flatMap((key) => {
+					const found = runawayPatternOf(key)
+					return found ? [{ key, why: found.why }] : []
+				})
+			: []
+	)
 	let adding = $state(false)
 	let typed = $state("")
 	let input = $state<HTMLInputElement | null>(null)
@@ -99,7 +114,11 @@
 	>
 		{#each list as keyword (keyword)}
 			<span class="chip preset-tonal-surface gap-1">
-				<span class={regex ? "font-mono" : ""}>{keyword}</span>
+				<span
+					class="{regex ? 'font-mono' : ''} {runaway.some((r) => r.key === keyword)
+						? 'decoration-error-500 underline decoration-wavy'
+						: ''}">{keyword}</span
+				>
 				<button
 					type="button"
 					class="opacity-70 hover:opacity-100"
@@ -135,6 +154,19 @@
 			</button>
 		{/if}
 	</div>
+	{#if runaway.length}
+		<ul class="flex flex-col gap-0.5 text-xs">
+			{#each runaway as r (r.key)}
+				<li class="text-error-600-400 flex items-baseline gap-x-2">
+					<Icons.CircleX size={12} class="shrink-0 self-center" aria-hidden="true" />
+					<span
+						><span class="font-medium">Error</span>
+						<span class="font-mono">{r.key}</span> can't be saved: {r.why}.</span
+					>
+				</li>
+			{/each}
+		</ul>
+	{/if}
 	{#if regex}
 		<p class="text-surface-700-300 text-xs">
 			Each pattern is one keyword: press Enter to add it, and commas stay

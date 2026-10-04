@@ -207,7 +207,7 @@ function renderOnce(f: SupportReportFacts): string {
 			])
 	)
 
-	out.push("## Instance settings\n\n" + kv(Object.entries(f.settings)))
+	out.push("## Pub settings\n\n" + kv(Object.entries(f.settings)))
 
 	out.push(
 		"## Environment\n\nVariables that are set. Values are shown only for a short list of harmless ones; the rest say `(set)`.\n\n" +

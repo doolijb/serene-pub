@@ -43,7 +43,9 @@ export class TokenCounterOptions {
 			value: TokenCounterOptions.ANTHROPIC_CLAUDE,
 			label: "Anthropic Claude"
 		},
-		{ value: TokenCounterOptions.COHERE, label: "Cohere" },
+		// No Cohere tokenizer ships with Serene Pub: this counts with Gemma's
+		// (`@lenml/tokenizer-gemma`), so the label says it is an approximation.
+		{ value: TokenCounterOptions.COHERE, label: "Cohere (approximate)" },
 		{ value: TokenCounterOptions.GEMINI, label: "Google Gemini/PaLM" },
 		{ value: TokenCounterOptions.GEMMA, label: "Google Gemma" }
 	]

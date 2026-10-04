@@ -17,48 +17,54 @@ import {
 	type EntryTypeId
 } from "$lib/shared/entries/types"
 import {
+	DEFAULT_LENS,
 	LORE_SCOPES,
 	reduce,
 	SCOPE_KIND,
 	SCOPE_LABELS,
+	momentKey,
 	type LoreRoute,
 	type LoreScope
 } from "$lib/shared/lorebooks/loreRoute"
 import type { StoryDate } from "$lib/shared/lorebooks/storyDate"
-import { momentKey } from "./timelineStrip"
 import {
+	CAST_KIND,
 	emptyFilters,
-	hasKeywords,
+	needsKeywords,
 	SCENE_KIND,
 	type PoolFilters,
 	type PoolItem
 } from "./poolFilter"
+import { lensDrawsScope, lensListsPool } from "./lenses/registry"
 
 /** The kind the count of cast members is filed under, beside the type ids. */
-export const CAST_KIND = "cast"
+export { CAST_KIND }
 
-/** The kinds the pool draws, in the order the chips read them. */
+/**
+ * The kinds the pool draws, in the order the chips read them.
+ *
+ * Places are a pool kind (places plan B5): a place is a pool entry with its
+ * own door, so All lists it, search finds it, and the canvas is never the
+ * only way to reach one.
+ */
 export const POOL_KINDS = [
 	WORLD_LORE_TYPE_ID,
 	CHARACTER_LORE_TYPE_ID,
 	HISTORY_TYPE_ID,
+	LOCATION_TYPE_ID,
 	ITEM_TYPE_ID,
 	SCENE_KIND
 ] as const
 
 /**
- * The entry types the workspace loads for the whole book.
- *
- * Derived from `POOL_KINDS`, so the rail's copy of the book cannot drift from
- * the pool's again (#89: items were drawn by the pool and never loaded), plus
- * places — `core:entry/location` entries, the one definition the rail's
- * Places count and the Places board share — which the Places scope and the
- * Time lens narrow to without the pool drawing them.
+ * The entry types the workspace loads for the whole book: every kind the
+ * pool draws that is an entry. Derived from `POOL_KINDS`, so the rail's copy
+ * of the book cannot drift from the pool's again (#89: items were drawn by
+ * the pool and never loaded).
  */
-export const BOOK_ENTRY_TYPES: readonly EntryTypeId[] = [
-	...(POOL_KINDS.filter((kind) => kind !== SCENE_KIND) as EntryTypeId[]),
-	LOCATION_TYPE_ID
-]
+export const BOOK_ENTRY_TYPES: readonly EntryTypeId[] = POOL_KINDS.filter(
+	(kind) => kind !== SCENE_KIND
+) as EntryTypeId[]
 
 /**
  * How many entries the book holds on the line being read, from the server's
@@ -81,8 +87,7 @@ export function entryTotal(
  * of its own and sits at its history entry's.
  */
 export function timeLensKinds(scope: LoreScope): readonly string[] {
-	if (scope === "all")
-		return POOL_KINDS.filter((kind) => kind !== SCENE_KIND)
+	if (scope === "all") return POOL_KINDS.filter((kind) => kind !== SCENE_KIND)
 	if (scope === "scenes") return [HISTORY_TYPE_ID]
 	return scopeKinds(scope)
 }
@@ -117,11 +122,9 @@ export interface ScopeFacet {
  * The kinds one scope narrows to.
  *
  * Empty for `all`, which is every kind. `places` is its location entries —
- * the one definition of a place (decided 2026-09-28), which the pool does
- * not draw as a door of its own.
+ * the one definition of a place (decided 2026-09-28).
  */
 export function scopeKinds(scope: LoreScope): string[] {
-	if (scope === "places") return [LOCATION_TYPE_ID]
 	const kind = SCOPE_KIND[scope]
 	return kind ? [kind] : []
 }
@@ -129,13 +132,14 @@ export function scopeKinds(scope: LoreScope): string[] {
 /**
  * One scope's figure.
  *
- * `all` is every kind the pool draws summed, rather than a count of its own.
- * `cast` is the people, because the Cast board lists people; the lore anchored
- * to them is counted under its own kind like any other row.
+ * `all` is every kind the pool draws summed, the people included (note 12:
+ * All lists the cast too), rather than a count of its own. `cast` is the
+ * people, because the Cast board lists people; the lore anchored to them is
+ * counted under its own kind like any other row.
  */
 function countOf(scope: LoreScope, counts: Record<string, number>): number {
 	if (scope === "all")
-		return POOL_KINDS.reduce(
+		return [...POOL_KINDS, CAST_KIND].reduce(
 			(total, kind) => total + (counts[kind] ?? 0),
 			0
 		)
@@ -173,7 +177,7 @@ export function railScopes(
  */
 export function bookIsEmpty(counts: Record<string, number> | null): boolean {
 	if (!counts) return false
-	return countOf("all", counts) === 0 && countOf(CAST_KIND, counts) === 0
+	return countOf("all", counts) === 0
 }
 
 /**
@@ -296,71 +300,100 @@ export function replaceReadingSentence(
 	)
 }
 
-export type SavedScopeId = "needs-keywords" | "loose-ends" | "pinned"
+/**
+ * The saved scopes. "Needs keywords" and "Loose ends" were saved scopes
+ * until the Loose ends queue replaced both (note 5, 2026-10-02 —
+ * `looseEnds.ts`); the keyword chore survives as the pool's Needs keywords
+ * chip.
+ */
+export type SavedScopeId = "pinned"
 
 export const SAVED_SCOPES: {
 	id: SavedScopeId
 	label: string
 	title: string
-}[] = [
-	{
-		id: "needs-keywords",
-		label: "Needs keywords",
-		title: "Nothing in a message can match these yet"
-	},
-	{
-		id: "loose-ends",
-		label: "Loose ends",
-		title: "No keywords, and the newest run never read them in"
-	},
-	{ id: "pinned", label: "Pinned", title: "Always in the prompt" }
-]
+}[] = [{ id: "pinned", label: "Pinned", title: "Always in the prompt" }]
 
 /**
- * Whether one row answers a saved scope.
- *
- * Archived rows answer none of them: they are out of the book's way on
- * purpose, and a list of chores that keeps offering them is not a list of
- * chores.
+ * Whether one row answers a saved scope. Archived rows answer none: they are
+ * out of the book's way on purpose.
  */
-export function matchesSaved(
-	id: SavedScopeId,
-	item: PoolItem,
-	readInKeys: ReadonlySet<string>
-): boolean {
+export function matchesSaved(id: SavedScopeId, item: PoolItem): boolean {
 	if (item.archived) return false
 	switch (id) {
-		case "needs-keywords":
-			return !hasKeywords(item)
-		case "loose-ends":
-			return !hasKeywords(item) && !readInKeys.has(item.key)
 		case "pinned":
 			return item.pinned
 	}
 }
 
+/**
+ * The rows a saved scope is asked of from where the reader stands: the
+ * scope's own kind, or the whole book from All and from Cast (the Cast board
+ * lists people, so a saved scope chosen there opens All — see
+ * `savedScopeRoute`). So the rail's figure counts the list the click opens,
+ * never the whole book while the list shows one kind (note 6).
+ */
+export function savedScopePool(
+	items: readonly PoolItem[],
+	scope: LoreScope
+): PoolItem[] {
+	if (scope === "all" || scope === "cast") return [...items]
+	const kinds = scopeKinds(scope)
+	return items.filter((item) => kinds.includes(item.kind))
+}
+
+/**
+ * Where choosing a saved scope takes the reader: the same scope and lens
+ * when they draw the pool, else Everything / the default lens — a saved
+ * scope narrows a list, and on the Cast board or the Time lens it had
+ * nothing to narrow. Which lenses list the pool is the lens registry's
+ * (`listsPool`).
+ */
+export function savedScopeRoute(route: LoreRoute): LoreRoute {
+	let next = route
+	if (route.scope === "cast")
+		next = reduce(next, { type: "openScope", scope: "all" })
+	if (route.lens && !lensListsPool(route.lens))
+		next = reduce(next, { type: "setLens", lens: DEFAULT_LENS })
+	return next
+}
+
+/**
+ * Where choosing a scope takes the reader: that scope, through the same
+ * lens — unless the lens draws its own set whatever the scope (Places every
+ * place, Lives every member: `drawsScope` "ignores"), where the choice would
+ * change nothing on screen (the Cast × Places dead click). There it opens
+ * the scope in the default lens, so a scope chosen is a scope shown.
+ *
+ * ⚠ Only a CHOICE moves the lens. An address that pairs a scope with such a
+ * lens (`#lore=12/history?lens=places`) still draws that lens: a deep link
+ * lands where it says.
+ */
+export function scopeRoute(route: LoreRoute, scope: LoreScope): LoreRoute {
+	let next = reduce(route, { type: "openScope", scope })
+	const lens = next.lens ?? DEFAULT_LENS
+	if (lensDrawsScope(lens, scope) === "ignores")
+		next = reduce(next, { type: "setLens", lens: DEFAULT_LENS })
+	return next
+}
+
 export function savedScopeCount(
 	id: SavedScopeId,
-	items: readonly PoolItem[],
-	readInKeys: ReadonlySet<string>
+	items: readonly PoolItem[]
 ): number {
-	return items.filter((item) => matchesSaved(id, item, readInKeys)).length
+	return items.filter((item) => matchesSaved(id, item)).length
 }
 
 /** The same question as a narrowing, so the count and the list agree. */
 export function savedScopeFilters(
 	id: SavedScopeId | null
-): Pick<PoolFilters, "keywords" | "looseEnds" | "pinned"> {
+): Pick<PoolFilters, "keywords" | "needsKeywords" | "pinned"> {
 	const base = {
 		keywords: emptyFilters().keywords,
-		looseEnds: false,
+		needsKeywords: false,
 		pinned: false
 	}
 	switch (id) {
-		case "needs-keywords":
-			return { ...base, keywords: "none" }
-		case "loose-ends":
-			return { ...base, looseEnds: true }
 		case "pinned":
 			return { ...base, pinned: true }
 		default:
@@ -376,9 +409,8 @@ export interface FacetCounts {
 	off: number
 	archived: number
 	machineWritten: number
-	/** The saved scopes' questions, so their chips can stand in compact too. */
+	/** The Needs keywords chip's figure — `needsKeywords`, the queue's rule. */
 	needsKeywords: number
-	looseEnds: number
 	total: number
 }
 
@@ -401,7 +433,6 @@ export function facetCounts(
 		archived: 0,
 		machineWritten: 0,
 		needsKeywords: 0,
-		looseEnds: 0,
 		total: items.length
 	}
 	for (const item of items) {
@@ -411,10 +442,9 @@ export function facetCounts(
 		if (item.off) out.off++
 		if (item.archived) out.archived++
 		if (item.machineWritten) out.machineWritten++
-		// The same rule the rail's saved-scope figures use, so the chip and
-		// the rail never disagree about how many there are.
-		if (matchesSaved("needs-keywords", item, readInKeys)) out.needsKeywords++
-		if (matchesSaved("loose-ends", item, readInKeys)) out.looseEnds++
+		// The same rule the Loose ends queue's keyword chore uses, so the
+		// chip and the queue never disagree about how many there are.
+		if (!item.archived && needsKeywords(item)) out.needsKeywords++
 	}
 	const declared = POOL_KINDS.filter((kind) => byKind.has(kind))
 	const others = [...byKind.keys()].filter(

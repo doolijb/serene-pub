@@ -1,9 +1,9 @@
 /**
- * A plugin frame is a widget minus the iframe (R75, K6): the base sections it
- * declares it reads are the only ones posted into its document, as for a
- * remote — so a frame that does not read the log is never posted it. The
- * document itself is stood in for: the test takes the port the frame's load
- * hands over and speaks for the frame on it.
+ * No frame is a widget (the `surface` shortcut retired 2026-10-02): a frame is
+ * posted what its host passes — session, messages, props — and never the
+ * widget data a component's wire carries (`settings`, `layout`, `scoped`,
+ * `grants`). The document itself is stood in for: the test takes the port the
+ * frame's load hands over and speaks for the frame on it.
  */
 import { describe, expect, test } from "vitest"
 import { flushSync, mount, unmount } from "svelte"
@@ -23,7 +23,6 @@ async function open(props: Record<string, unknown>) {
 			surface: "panel",
 			session: { id: 1, name: "S" },
 			messages: [{ id: 1, content: "Hi" }],
-			settings: { zoom: 2 },
 			props: { panelId: "acme:map" },
 			...props
 		}
@@ -54,21 +53,13 @@ async function open(props: Record<string, unknown>) {
 	}
 }
 
-describe("a plugin frame's reads (R75)", () => {
-	test("only the sections it reads are posted into its document", async () => {
-		const f = await open({ reads: ["settings"] })
-		const kinds = f.got.map((m) => m.t)
-		expect(kinds).toContain("settings")
-		expect(kinds).not.toContain("messages")
-		expect(kinds).not.toContain("session")
-		expect(kinds).not.toContain("props")
-		f.close()
-	})
-
-	test("absent reads every section, as a frame written before R75 does", async () => {
+describe("what a plugin frame is posted", () => {
+	test("what its host passes, and never a widget's data", async () => {
 		const f = await open({})
 		const kinds = f.got.map((m) => m.t)
-		expect(kinds).toEqual(expect.arrayContaining(["session", "messages", "settings", "props"]))
+		expect(kinds).toEqual(expect.arrayContaining(["session", "messages", "props", "theme"]))
+		for (const widgetOnly of ["settings", "style", "layout", "scoped", "grants"])
+			expect(kinds).not.toContain(widgetOnly)
 		f.close()
 	})
 })

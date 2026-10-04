@@ -42,15 +42,11 @@
  *
  * ## Findings recorded here rather than fixed
  *
- * ⚠ **`RetrievalParams.matchMode` is a dead knob.** `retrievalParamsFrom`
- * (`runtime/bindings.ts:104`) maps a node's `matchMode` param onto
- * `retrieval.matchMode`, and `keywordQuery` never reads it — `modeOf`
- * (`ranking/signals.ts:81`) reads **`entry.matchMode`**, the column. So the
- * entry's own control is live and the node-level one changes nothing. This
- * corpus asserts the live half (`the match mode an entry declares`) and leaves
- * the dead half alone rather than pinning it with a passing test: a defect held
- * in place by an assertion is harder to remove than one that is merely written
- * down.
+ * ⚠ **`RetrievalParams.matchMode` was a dead knob, and is gone** (Phase D,
+ * 2026-10-02). `retrievalParamsFrom` mapped a node's `matchMode` param onto it
+ * and `keywordQuery` never read it — `modeOf` (`ranking/signals.ts`) reads
+ * **`entry.matchMode`**, the column. This corpus asserts that live half (`the
+ * match mode an entry declares`).
  *
  * ## A finding that was recorded here and has since been ruled on
  *

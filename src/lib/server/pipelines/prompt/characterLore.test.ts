@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest"
 import {
+	castTagName,
 	isCharacterLoreEntryVisible,
 	populateLorebookEntryBindings
 } from "$lib/server/pipelines/prompt/characterLore"
@@ -79,6 +80,69 @@ describe("populateLorebookEntryBindings — @@decorator stripping", () => {
 		})
 		const result = populateLorebookEntryBindings(entry, session)
 		expect(result.content).toBe("Plain lore content with no decorators.")
+	})
+})
+
+/**
+ * What a tag reads as (plan A19): the card's name, else the member's own —
+ * which the pipeline host resolves at the session's reading before this runs
+ * (`promptAtReading.int.test.ts` pins that half on the rendered prompt).
+ */
+describe("populateLorebookEntryBindings — a tag reads as its member", () => {
+	const substitute = (
+		bindings: Array<Record<string, unknown>>,
+		content: string
+	) => {
+		const entry = worldLoreEntry({ lorebookId: 1, content })
+		const session = buildSession({
+			lorebookId: 1,
+			lorebook: buildLorebook({
+				id: 1,
+				lorebookBindings: bindings as any,
+				worldLoreEntries: [entry]
+			})
+		})
+		return populateLorebookEntryBindings(entry, session).content
+	}
+
+	test("a member with no card reads as their own name", () => {
+		const member = lorebookBinding({ id: 3, name: "The Ashguard" } as any)
+		expect(
+			substitute([{ ...member, character: null }], "{{char:3}} guards the gate.")
+		).toBe("The Ashguard guards the gate.")
+	})
+
+	test("the card's nickname, then its name, win over the member's own", () => {
+		const card = character({ name: "Verity Hale", nickname: "Verity" })
+		const member = lorebookBinding({
+			id: 4,
+			characterId: card.id,
+			name: "The keeper"
+		} as any)
+		expect(
+			substitute([{ ...member, character: card }], "{{char:4}} waits.")
+		).toBe("Verity waits.")
+	})
+
+	test("a member with no name and no card leaves the tag as written", () => {
+		const member = lorebookBinding({ id: 5, name: "  " } as any)
+		expect(
+			substitute([{ ...member, character: null }], "{{char:5}} waits.")
+		).toBe("{{char:5}} waits.")
+	})
+
+	test("a name holding another tag's text is not read as a tag again", () => {
+		const a = lorebookBinding({ id: 6, name: "{{char:7}}" } as any)
+		const b = lorebookBinding({ id: 7, name: "Brask" } as any)
+		expect(
+			substitute(
+				[
+					{ ...a, character: null },
+					{ ...b, character: null }
+				],
+				"{{char:6}} and {{char:7}}"
+			)
+		).toBe("{{char:7}} and Brask")
 	})
 })
 
@@ -169,5 +233,81 @@ describe("isCharacterLoreEntryVisible — narrator visibility (decision 3)", () 
 		const { entry } = unbound()
 		const session = buildSession({ lorebookId: 1, lorebook: undefined })
 		expect(isCharacterLoreEntryVisible(entry, session, null)).toBe(false)
+	})
+})
+
+/**
+ * A member's cards (plan A25): the linked card and every card a dated change
+ * draws them with, on the binding as `memberCards` — what the host's read puts
+ * there from `castMemberCards`. A seat holding any of them is that member.
+ */
+describe("a member's dated card (A25)", () => {
+	const young = 11
+	const keeper = 12
+	const verity = lorebookBinding({
+		id: 5,
+		lorebookId: 1,
+		characterId: young,
+		memberCards: [young, keeper]
+	} as any)
+	const ashguard = lorebookBinding({
+		id: 6,
+		lorebookId: 1,
+		characterId: null,
+		memberCards: [keeper + 1]
+	} as any)
+	const secret = characterLoreEntry({
+		lorebookId: 1,
+		lorebookBindingId: verity.id,
+		name: "Her secret",
+		content: "She has the key."
+	})
+	const orders = characterLoreEntry({
+		lorebookId: 1,
+		lorebookBindingId: ashguard.id,
+		content: "Hold the gate."
+	})
+	const session = (seated: number) =>
+		buildSession({
+			lorebookId: 1,
+			lorebook: buildLorebook({
+				id: 1,
+				lorebookBindings: [verity, ashguard],
+				characterLoreEntries: [secret, orders]
+			}),
+			sessionCharacters: [
+				{ character: character({ id: seated, name: `Card ${seated}` }) }
+			]
+		})
+
+	test("a speaker holding either card reads her private lore", () => {
+		expect(isCharacterLoreEntryVisible(secret, session(keeper), keeper)).toBe(true)
+		expect(isCharacterLoreEntryVisible(secret, session(young), young)).toBe(true)
+		expect(isCharacterLoreEntryVisible(secret, session(keeper), 99)).toBe(false)
+		expect(isCharacterLoreEntryVisible(secret, session(keeper), null)).toBe(false)
+	})
+
+	test("a background member's dated card reads their lore, and so does the narrator", () => {
+		expect(isCharacterLoreEntryVisible(orders, session(keeper), keeper + 1)).toBe(true)
+		expect(isCharacterLoreEntryVisible(orders, session(keeper), null)).toBe(true)
+		expect(isCharacterLoreEntryVisible(orders, session(keeper), keeper)).toBe(false)
+	})
+
+})
+
+/**
+ * The name a cast member reads as — what the host's lore read puts on an
+ * anchored row as `castMember`, and Assemble's `characterLore` prints beside
+ * the entry.
+ */
+describe("castTagName", () => {
+	test("a carded member reads as the card's nickname, else its name", () => {
+		expect(castTagName({ name: "Verity", character: { name: "Verity Vane", nickname: "Vee" } })).toBe("Vee")
+		expect(castTagName({ name: "Verity", character: { name: "Verity Vane" } })).toBe("Verity Vane")
+	})
+
+	test("a member with no card reads as its own name, and nobody as empty", () => {
+		expect(castTagName({ name: "The Cook", character: null })).toBe("The Cook")
+		expect(castTagName({ name: null, character: null })).toBe("")
 	})
 })

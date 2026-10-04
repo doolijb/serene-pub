@@ -4,6 +4,9 @@
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { declareInterest } from "$lib/client/sockets/interest.svelte"
 	import { interestKey } from "$lib/shared/sockets/interest"
+	import { awaitReply, isReplyTimeout } from "$lib/client/utils/awaitReply"
+	import { toaster } from "$lib/client/utils/toaster"
+	import { v4 as uuid } from "uuid"
 	import {
 		compareDates,
 		formatDate as spellDate,
@@ -14,6 +17,8 @@
 		type LorebookEntry
 	} from "$lib/shared/entries/types"
 	import { lineOf, rowsReadingOnLine } from "$lib/shared/lorebooks/lineReading"
+	import { extendCountsOf } from "$lib/shared/lorebooks/graphBuildScope"
+	import { BookTime } from "$lib/client/lorebooks/time/bookTime.svelte"
 
 	type History = LorebookEntry<typeof HISTORY_TYPE_ID>
 
@@ -38,6 +43,17 @@
 		onEnterSummarizationMode
 	}: Props = $props()
 
+	/**
+	 * The two ids as primitives, and every effect below reads THESE. The
+	 * session page streams by replacing its whole `session` object per chunk,
+	 * and a prop handed down as `{session.lorebookId}` is a getter over that
+	 * object: an effect reading the prop directly would re-run per token —
+	 * six keys re-declared, `storyTime` and `entries:list` re-asked (B8). A
+	 * `$derived` compares its value, so these move only when the id does.
+	 */
+	const bookId = $derived(lorebookId)
+	const lineId = $derived(branchId)
+
 	const socket = useTypedSocket()
 	let historyEntryList = $state<History[]>([])
 	let isCreatingEntry = $state(false)
@@ -47,53 +63,33 @@
 	// radix-100 collision as the original. Deleted 2026-09-24; the shared
 	// `compareDates` is the ordering everywhere.
 
-	/** The book's calendar, or null for free-form (`lorebooks:storyTime`). */
-	let calendar = $state<ReturnType<typeof readStoryCalendar>>(null)
-
+	/**
+	 * The book's story time and lines (plan B6): its calendar, for spelling a
+	 * date, and its lines, for reading the session's one — the ancestor chain
+	 * and fork cuts (ruling 5). One reader of the book's own, kept current by
+	 * the story time family and `lorebooks:lines`; this tab asked for the
+	 * whole `amendments:list` for the line names before.
+	 */
+	const time = new BookTime()
 	$effect(() => {
-		const id = lorebookId
+		const id = bookId
 		if (!id) return
-		const release = declareInterest<"lorebooks:storyTime">(
-			interestKey("lorebooks:storyTime", id),
-			(res) => {
-				if (res.lorebookId !== id) return
-				calendar = readStoryCalendar(res.calendar ?? null)
-			}
-		)
-		socket.emit("lorebooks:storyTime", { lorebookId: id })
-		return release
+		return time.listen(socket, id)
 	})
+
+	/** The book's calendar, or null for free-form. */
+	let calendar = $derived(readStoryCalendar(time.calendar ?? null))
 
 	/** Spelled through the book's calendar, like every other dated heading. */
 	function formatDate(e: History): string {
 		return spellDate(e, calendar)
 	}
 
-	/**
-	 * The book's lines, for reading the session's one — its ancestor chain
-	 * and fork cuts (ruling 5). Asked for only when the session is on a
-	 * branch: main needs no chain, and this tab is the owner's alone.
-	 */
-	let branches = $state<Sockets.Amendments.Branch[]>([])
-	$effect(() => {
-		const id = lorebookId
-		if (!id || branchId == null) return
-		const release = declareInterest<"amendments:list">(
-			interestKey("amendments:list", id),
-			(res) => {
-				if (res.lorebookId !== id) return
-				branches = res.branches ?? []
-			}
-		)
-		socket.emit("amendments:list", { lorebookId: id })
-		return release
-	})
-
 	/** The history this session's line reads, fork cut included. */
 	let lineHistory = $derived(
 		rowsReadingOnLine(
 			historyEntryList as (History & { branchId?: number | null })[],
-			lineOf(branchId, branches),
+			lineOf(lineId, time.branches),
 			(e) => (typeof e.year === "number" ? e : null)
 		)
 	)
@@ -115,10 +111,6 @@
 		return counts
 	})
 
-	let ungraphedSceneCount = $derived(
-		sceneList.filter((s) => !s.graphed).length
-	)
-
 	/**
 	 * "Extend Graph" reads THIS session's scenes only (#51): the scenes here
 	 * are the session's own, so their session is the scope.
@@ -126,22 +118,72 @@
 	let sessionId = $derived(
 		sceneList.find((s) => s.sessionId != null)?.sessionId ?? null
 	)
-	let readyToGraph = $derived(
-		sceneList.filter((s) => !s.graphed && !!s.summary?.trim()).length
+	/**
+	 * What it will read, by the build's own rule: the session's scenes on
+	 * its line (plan A3 review). One it played on another line — on main
+	 * before its branch, say — is that line's to graph.
+	 */
+	let extendCounts = $derived(
+		extendCountsOf(sceneList, { branchId: lineId ?? null, sessionId })
+	)
+	let readyToGraph = $derived(extendCounts.ready)
+	let ungraphedSceneCount = $derived(
+		extendCounts.ready + extendCounts.unsummarized
 	)
 	let showGraphBuild = $state(false)
 
-	function handleNewEntry() {
+	/**
+	 * Only the press made HERE opens the new entry (plan B8): the reply goes
+	 * to every tab of the user, so the lorebook's own "Next date" — in this
+	 * tab or another — must not navigate this session page. The asker's
+	 * `requestId` is echoed on the reply and on its refusal; a refusal is
+	 * toasted by Layout, and either answer (or silence) stops the spinner.
+	 */
+	async function handleNewEntry() {
 		if (!latestEntry || isCreatingEntry) return
+		const id = bookId
+		const requestId = uuid()
 		isCreatingEntry = true
-		socket.emit("entries:iterateNext", {
-			id: latestEntry.id,
-			typeId: HISTORY_TYPE_ID,
-			// The session's line, not the source entry's: a session on a
-			// branch continuing from a shared entry writes the next one on
-			// its branch.
-			branchId
-		} satisfies Sockets.Entries.IterateNext.Params)
+		let reply: Sockets.Entries.IterateNext.Response
+		try {
+			reply = await awaitReply({
+				socket,
+				event: "entries:iterateNext",
+				params: {
+					id: latestEntry.id,
+					typeId: HISTORY_TYPE_ID,
+					// The session's line, not the source entry's: a session on
+					// a branch continuing from a shared entry writes the next
+					// one on its branch.
+					branchId,
+					requestId
+				} satisfies Sockets.Entries.IterateNext.Params,
+				replyKey: interestKey("entries:iterateNext", id),
+				errorEvent: "entries:iterateNext:error",
+				matchError: (data) =>
+					(data as { requestId?: string })?.requestId === requestId,
+				fallbackError: "The next entry could not be made.",
+				match: (data) => data.requestId === requestId
+			})
+		} catch (err) {
+			isCreatingEntry = false
+			if (isReplyTimeout(err))
+				toaster.error({
+					title: "No new history entry",
+					description: "The server did not answer in time."
+				})
+			return
+		}
+		isCreatingEntry = false
+		// The book moved under the press (the session now reads another):
+		// the entry stands, but this page shows a different book.
+		if (bookId !== id) return
+		const entry = reply.entry as History | undefined
+		if (entry) {
+			if (!historyEntryList.some((e) => e.id === entry.id))
+				historyEntryList = [...historyEntryList, entry]
+			onOpenEntry(id, entry.id)
+		}
 	}
 
 	/**
@@ -158,28 +200,29 @@
 	 * effects run in creation order, and both re-run together when the book
 	 * changes.
 	 *
-	 * ⚠ `handleIterateNext` has no id check of its own; the scope IS its
-	 * filter, which is why that key is on `entry.lorebookId`.
+	 * `handleIterateNext` only folds the row in; the press that asked opens
+	 * it (`handleNewEntry`, by `requestId`).
 	 */
 	$effect(() => {
 		// Guarded like the request below: `interestKey` with no scope yields
 		// the BARE key, which would quietly hold every book's entries.
-		if (!lorebookId) return
+		const id = bookId
+		if (!id) return
 		const releases = [
 			declareInterest<"entries:list">(
-				interestKey("entries:list", lorebookId),
+				interestKey("entries:list", id),
 				handleHistoryEntriesList
 			),
 			declareInterest<"entries:iterateNext">(
-				interestKey("entries:iterateNext", lorebookId),
+				interestKey("entries:iterateNext", id),
 				handleIterateNext
 			),
 			declareInterest<"entries:create">(
-				interestKey("entries:create", lorebookId),
+				interestKey("entries:create", id),
 				handleHistoryEntryCreate
 			),
 			declareInterest<"entries:update">(
-				interestKey("entries:update", lorebookId),
+				interestKey("entries:update", id),
 				handleHistoryEntryUpdate
 			)
 		]
@@ -189,9 +232,10 @@
 	})
 
 	$effect(() => {
-		if (lorebookId) {
+		const id = bookId
+		if (id) {
 			socket.emit("entries:list", {
-				lorebookId,
+				lorebookId: id,
 				typeId: HISTORY_TYPE_ID
 			} satisfies Sockets.Entries.List.Params)
 		}
@@ -204,14 +248,15 @@
 			historyEntryList = msg.entryList as History[]
 	}
 
+	/**
+	 * A next date made anywhere — this page, the lorebook, another tab —
+	 * joins the list. Opening it is the asker's alone (`handleNewEntry`).
+	 */
 	function handleIterateNext(msg: Sockets.Entries.IterateNext.Response) {
-		isCreatingEntry = false
 		const entry = msg.entry as History | undefined
-		if (entry) {
-			const exists = historyEntryList.some((e) => e.id === entry.id)
-			if (!exists) historyEntryList = [...historyEntryList, entry]
-			onOpenEntry(lorebookId, entry.id)
-		}
+		if (!entry || entry.lorebookId !== bookId) return
+		if (!historyEntryList.some((e) => e.id === entry.id))
+			historyEntryList = [...historyEntryList, entry]
 	}
 
 	function handleHistoryEntryCreate(msg: Sockets.Entries.Create.Response) {
@@ -299,7 +344,7 @@
 					title="Graph this session's {ungraphedSceneCount} ungraphed scene{ungraphedSceneCount ===
 					1
 						? ''
-						: 's'} into the lorebook's graph"
+						: 's'} on its line into the lorebook's graph"
 					onclick={() => (showGraphBuild = true)}
 				>
 					<Icons.Network size={13} />
@@ -340,15 +385,18 @@
 	{/if}
 </div>
 
+<!-- `bookId`, not the prop: the modal's restore effect reads it, and a
+     per-token re-run would reset a review in progress. -->
 <GraphBuildModal
 	open={showGraphBuild}
 	onOpenChange={(e) => (showGraphBuild = e.open)}
-	{lorebookId}
+	lorebookId={bookId}
 	mode="extend"
 	{sessionId}
 	readySceneCount={readyToGraph}
 	skippedSceneCount={ungraphedSceneCount - readyToGraph}
 	ungraphedHistoryEntryCount={0}
+	unresolvedCastSceneCount={extendCounts.unresolvedCast}
 	onApplied={() => {
 		// The scenes it read are graphed now; ask for the list again so the
 		// count on the button follows.

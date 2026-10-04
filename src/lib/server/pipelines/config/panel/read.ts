@@ -5,12 +5,11 @@
  * resolved — every declaration, its value, and **where that value won**. The
  * scope chain is walked most-specific-first by `layers`, and the winning layer
  * becomes the option's `source`, which is what lets the UI say "inherited from
- * the instance default" rather than just showing a value.
+ * the pub default" rather than just showing a value.
  */
 
 import { valueDeclOf } from "@serene-pub/sdk"
 import { and, asc, eq } from "drizzle-orm"
-import { getFacet } from "@serene-pub/sdk"
 import { resolveSampling } from "$lib/server/utils/resolveSampling"
 import { contextBudgetFrom } from "$lib/server/pipelines/runtime/contextWindow"
 import { slotModelId } from "$lib/shared/connections/slotRef"
@@ -25,10 +24,14 @@ import {
 	type Published,
 	declarations,
 	published,
-	stepLabels,
 	subscription
 } from "$lib/server/pipelines/config/panel/declarations"
-import { optionId } from "$lib/server/pipelines/config/panel/ids"
+import {
+	settingsGroupsOf,
+	type PlacedOption
+} from "$lib/server/pipelines/config/panel/groups"
+import { readingOf } from "$lib/server/pipelines/config/panel/provenance"
+import { optionId, stepKeyFor } from "$lib/server/pipelines/config/panel/ids"
 import { promptPoolKeyFor } from "$lib/server/pipelines/entities/promptPool"
 import {
 	acceptedEnginesOf,
@@ -40,7 +43,7 @@ import {
 } from "$lib/server/pipelines/config/panel/scopes"
 import {
 	type ConfigOption,
-	type ConfigStep,
+	type Decl,
 	type NamespaceSummary,
 	type NamespaceView,
 	type OptionSource,
@@ -153,61 +156,6 @@ export async function listNamespaces(db: Db): Promise<NamespaceSummary[]> {
 }
 
 /**
- * A facet nobody declared, made readable.
- *
- * `retrieval` becomes `Retrieval`. Not a guess at what the author meant — a
- * heading is better than no heading, and no heading is what an undeclared facet
- * used to get: its options matched no group in the client's fixed list and
- * rendered nowhere.
- */
-/**
- * One facet, as the panel needs it.
- *
- * Exported so the undeclared case can be tested at all — it is the branch that
- * matters and the one that used to lose settings, and it cannot be reached
- * through `namespaceView` without a plugin installed.
- *
- * An undeclared facet is not an error and not a drop: it gets a humanised
- * heading and sorts after everything core declares, because a heading somebody
- * did not choose is still better than a setting nobody can find.
- */
-/**
- * The facets a view contains, resolved and ordered.
- *
- * **Every distinct facet in, every one out.** Stated as its own function so
- * that property can be tested with a facet nothing declares — which is the case
- * that used to lose settings and the one a shipped pipeline cannot reach, since
- * core declares all of its own. A filter here would be invisible until somebody
- * installed a plugin.
- */
-export function facetsFor(used: Iterable<string>) {
-	return [...new Set(used)]
-		.map(resolveFacet)
-		.sort((a, b) => a.order - b.order || a.label.localeCompare(b.label))
-}
-
-export function resolveFacet(id: string): {
-	id: string
-	label: string
-	order: number
-	simple: boolean
-} {
-	const d = getFacet(id)
-	return {
-		id,
-		label: i18nText(d?.i18n) ?? humanizeFacet(id),
-		order: d?.order ?? 900,
-		simple: d?.simple ?? false
-	}
-}
-
-const humanizeFacet = (id: string): string =>
-	id
-		.replace(/[_-]+/g, " ")
-		.replace(/([a-z0-9])([A-Z])/g, "$1 $2")
-		.replace(/^./, (c) => c.toUpperCase())
-
-/**
  * The node keys the context-budget node's `sampling` and `connection` slots
  * refer to, off its stored config — `{ __ref: 'slot', slot, ofNode }` where the
  * spec wrote `slot.samplingOf(...)` / `slot.connectionOf(...)`. Undefined for
@@ -262,19 +210,22 @@ export async function namespaceView(
 	const connStops = await connectionStopsFor(db)
 	const scope = writeScopeFor(viewer)
 
-	// Group by node, in declaration order — which is node position, because
-	// that is how `declarations` walks. `advanced` splits the tuning
-	// parameters out so a step leads with its prompt and references.
-	const byNode = new Map<
-		string,
-		{ options: ConfigOption[]; advanced: ConfigOption[] }
-	>()
+	// Each node's options, for the budget's window figure below; the
+	// settings groups are shaped from `placed`.
+	const byNode = new Map<string, ConfigOption[]>()
 	/**
 	 * The budget node's margin as this viewer resolves it, for the window
 	 * figure below. Captured in the walk rather than looked up afterwards,
 	 * because an option carries no address — the payload never names a node.
 	 */
 	let safetyMargin: unknown
+	/** Every option drawn, beside its declaration — the settings groups are shaped from these. */
+	const placed: PlacedOption[] = []
+	/** The pub's defaults per capability, for what an unset Model or Sampling reads as. */
+	const { capabilityDefaults: loadCapabilityDefaults } = await import(
+		"$lib/server/connections/capabilityDefaults"
+	)
+	const pubByCapability = await loadCapabilityDefaults(db)
 	for (const d of decls) {
 		if (!visibleTo(d.matrixSlot, viewer)) continue
 
@@ -285,8 +236,12 @@ export async function namespaceView(
 		// shows a value the run does not use.
 		let value: unknown = d.authorDefault
 		let source: OptionSource = "author"
-		if (chain.session?.has(key)) {
-			value = chain.session.get(key)
+		// A session names no connection (ruled 2026-09-30): a session row at a
+		// connection address is not read, here or by the run (`world.ts`).
+		const sessionHas =
+			!!chain.session?.has(key) && d.matrixSlot !== "connection"
+		if (sessionHas) {
+			value = chain.session!.get(key)
 			source = "session"
 		} else if (chain.preset.has(key)) {
 			value = chain.preset.get(key)
@@ -351,12 +306,24 @@ export async function namespaceView(
 		// itself — which is why the global panel is an admin's surface, and a
 		// non-admin's levers are the session's.
 		const effScope: WriteScope = scope
+		const writable =
+			effScope === "session"
+				? !viewer.readOnlyBecause &&
+					mayWrite(d.matrixSlot, "session") &&
+					(viewer.isAdmin || d.matrixSlot === "prompts")
+				: viewer.isAdmin && mayWrite(d.matrixSlot, "config")
+		// A connection row that is not writable here — an administrator's,
+		// inside a session; nobody else is sent one (`visibleTo`) — is shown
+		// by NAME (`valueLabel`, below), without the list to choose from.
+		const namesOnly = d.control === "connection-ref" && !writable
 
 		const option: ConfigOption = {
 			id: optionId(secret, d.nodeKey, d.slot, d.path),
 			label: d.label,
-			facet: d.facet,
-			...(d.quick ? { quick: true } : {}),
+			step: {
+				key: stepKeyFor(secret, d.nodeKey),
+				heading: d.stepHeading ?? d.typeLabel
+			},
 			...(d.description ? { description: d.description } : {}),
 			control: d.control,
 			// The value declaration (24 T6c): the settings-schema entry
@@ -384,7 +351,9 @@ export async function namespaceView(
 			// editor renders rows from it rather than knowing what any given
 			// list holds.
 			...(d.item ? { item: d.item } : {}),
-			...((c) => (c ? { choices: c } : {}))(choicesFor(d, sets)),
+			...((c) => (c && !namesOnly ? { choices: c } : {}))(
+				choicesFor(d, sets, [value, d.authorDefault])
+			),
 			...(chainEntries ? { scripts: chainEntries } : {}),
 			...(d.control === "scripts-chain" &&
 			connStops &&
@@ -538,16 +507,9 @@ export async function namespaceView(
 			// (a config's values are what the whole instance resolves — R-10
 			// folded `instance` into `config`, the selected config; spelled
 			// `preset` until 2026-09-26).
-			writable:
-				effScope === "session"
-					? mayWrite(d.matrixSlot, "session") &&
-						(viewer.isAdmin || d.matrixSlot === "prompts")
-					: viewer.isAdmin &&
-						mayWrite(d.matrixSlot, "config"),
+			writable,
 			overriddenHere:
-				effScope === "session"
-					? !!chain.session?.has(key)
-					: chain.preset.has(key),
+				effScope === "session" ? sessionHas : chain.preset.has(key),
 			/**
 			 * Did somebody depart from the default here (ruled 2026-09-10)?
 			 *
@@ -570,59 +532,27 @@ export async function namespaceView(
 		if (d.matrixSlot === "params" && d.path === "safetyMargin")
 			safetyMargin = value
 
-		let group = byNode.get(d.nodeKey)
-		if (!group) {
-			group = { options: [], advanced: [] }
-			byNode.set(d.nodeKey, group)
-		}
-		// "Advanced" is the tuning surface — weights, budgets, thresholds —
-		// plus the raw templates. A template is the *rendering* of a step
-		// rather than a decision about it, it is empty until someone
-		// deliberately replaces the built-in wording, and an empty box
-		// labelled "Template" above the prompt is the panel's most confusing
-		// square inch. The step then leads with what people came for: its
-		// prompt, its connection, its review gate.
-		//
-		// Variable layouts go here too, on the same argument one level down: how
-		// characters are laid out is the *rendering* of a step rather than a
-		// decision about it. The other reason is arithmetic — the context step
-		// declares eight of them, and eight pickers above the prompt would bury
-		// the one thing most people opened the panel to change.
-		if (
-			d.matrixSlot === "params" ||
-			d.matrixSlot === "template" ||
-			d.matrixSlot === "variables"
+		// How a Model or Sampling value reads, and every reference's name.
+		Object.assign(
+			option,
+			readingOf({
+				d,
+				value: d.control === "secret" ? null : value,
+				source,
+				configured: {
+					has: chain.preset.has(key),
+					value: chain.preset.get(key)
+				},
+				scope,
+				configName: chain.selectedConfig?.name,
+				defaults: pubByCapability,
+				sets
+			})
 		)
-			group.advanced.push(option)
-		else group.options.push(option)
+		placed.push({ d, option })
+
+		byNode.set(d.nodeKey, [...(byNode.get(d.nodeKey) ?? []), option])
 	}
-
-	// `declarations()` already sorts these to the spine order: a node at its
-	// own position, a clause tied with (and just before) its first member,
-	// and an envoy pushed past the end — which is what lets the split below
-	// be a filter rather than a second sort.
-	const allNodeKeys = [...byNode.keys()]
-	const typeLabelOf = new Map<string, string>()
-	for (const d of decls)
-		if (!typeLabelOf.has(d.nodeKey)) typeLabelOf.set(d.nodeKey, d.typeLabel)
-	const labels = stepLabels(allNodeKeys, typeLabelOf)
-
-	// `key` is the step's ordinal, not the node key — the id scheme for
-	// writes stays the HMAC per option, and the payload still never names a
-	// node (see `ConfigStep`).
-	const kindOf = new Map<string, string>()
-	for (const d of decls)
-		if (!kindOf.has(d.nodeKey)) kindOf.set(d.nodeKey, d.nodeKind)
-
-	/**
-	 * An envoy is not a step in the run's spine — nothing executes it, and
-	 * counting it among "step N of M" would tell a reader a pipeline has one
-	 * more thing happening than it does. Its settings still need a home, so
-	 * they render after the steps in their own unnumbered group (U5g review
-	 * follow-up; `namespaceView` below, `alsoConfigured`).
-	 */
-	const nodeKeys = allNodeKeys.filter((k) => kindOf.get(k) !== "envoy")
-	const envoyKeys = allNodeKeys.filter((k) => kindOf.get(k) === "envoy")
 
 	/**
 	 * The tokens a share divides, read from the sampling config that is
@@ -636,10 +566,7 @@ export async function namespaceView(
 	 * Only the normalised control gets it. A ceiling is a count of entries, and
 	 * a token figure beside it would answer a question it does not ask.
 	 */
-	const all = [...byNode.values()].flatMap((n) => [
-		...n.options,
-		...n.advanced
-	])
+	const all = [...byNode.values()].flat()
 	/**
 	 * Which node's pair the budget sizes to — the node the budget's
 	 * `samplingOf` / `connectionOf` refs name (`generate` on the shipped
@@ -651,9 +578,7 @@ export async function namespaceView(
 	 */
 	const budgetRefs = await budgetPairNodes(db, at.specVersionId)
 	const refsOn = (nodeKey: string | undefined) =>
-		nodeKey && byNode.has(nodeKey)
-			? [...byNode.get(nodeKey)!.options, ...byNode.get(nodeKey)!.advanced]
-			: all
+		nodeKey && byNode.has(nodeKey) ? byNode.get(nodeKey)! : all
 	const samplingId = refsOn(budgetRefs.sampling).find(
 		(o) => o.control === "sampling-ref" && typeof o.value === "number"
 	)?.value as number | undefined
@@ -732,21 +657,16 @@ export async function namespaceView(
 		}
 	}
 
-	const steps: ConfigStep[] = nodeKeys.map((nodeKey, i) => ({
-		key: `s${i}`,
-		label: labels.get(nodeKey) ?? nodeKey,
-		kind: kindOf.get(nodeKey) ?? "",
-		options: byNode.get(nodeKey)!.options,
-		advanced: byNode.get(nodeKey)!.advanced
-	}))
-	// Trailing and unnumbered on purpose — see the filter above.
-	const alsoConfigured: ConfigStep[] = envoyKeys.map((nodeKey, i) => ({
-		key: `e${i}`,
-		label: labels.get(nodeKey) ?? nodeKey,
-		kind: kindOf.get(nodeKey) ?? "",
-		options: byNode.get(nodeKey)!.options,
-		advanced: byNode.get(nodeKey)!.advanced
-	}))
+	// The settings, grouped by model call — derived from the stored graph
+	// (`groups.ts`).
+	const { loadDocument } = await import("$lib/server/pipelines/boot/store")
+	const doc = await loadDocument(db, at.specVersionId)
+	const groups = settingsGroupsOf({
+		placed,
+		decls,
+		nodes: doc.nodes,
+		edges: doc.edges
+	})
 
 	/**
 	 * The configurations on offer, minus the ones an administrator withdrew.
@@ -772,19 +692,7 @@ export async function namespaceView(
 
 	const sub = await subscription(db, at.specVersionId)
 
-	/**
-	 * The facets this view actually contains, resolved for display.
-	 *
-	 * Only the ones in use, so the panel never renders an empty heading — and
-	 * an *undeclared* facet still appears, humanised, rather than being dropped.
-	 * A setting that exists and is writable must be reachable; the client used
-	 * to filter options into a fixed list, so anything it had not heard of
-	 * rendered nowhere.
-	 */
-	const facets = facetsFor(all.map((o) => o.facet))
-
 	return {
-		facets,
 		slug: at.slug,
 		name: at.name,
 		version: at.semver,
@@ -834,7 +742,7 @@ export async function namespaceView(
 		 *
 		 * Sent because the client cannot work it out. A selection made from
 		 * inside a session is the session's and anyone who owns that session
-		 * may make it; made from anywhere else it is the *instance's*, which is
+		 * may make it; made from anywhere else it is the *pub's*, which is
 		 * the administrator's alone — so for a non-admin outside a session
 		 * there is nothing to choose, and the picker was a live control whose
 		 * every use ended in a refusal toast.
@@ -843,9 +751,18 @@ export async function namespaceView(
 		 * point: this is what the server will accept, not a second opinion
 		 * about it.
 		 */
-		canSelectConfig: scope === "session" || viewer.isAdmin === true,
-		steps,
-		alsoConfigured,
-		writeScope: scope
+		canSelectConfig:
+			scope === "session" ? !viewer.readOnlyBecause : viewer.isAdmin === true,
+		groups,
+		scope:
+			scope === "session" && viewer.sessionId != null
+				? {
+						kind: "session",
+						sessionId: viewer.sessionId,
+						...(viewer.readOnlyBecause
+							? { readOnlyBecause: viewer.readOnlyBecause }
+							: {})
+					}
+				: { kind: "config" }
 	}
 }

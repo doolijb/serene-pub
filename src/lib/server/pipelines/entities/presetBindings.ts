@@ -244,7 +244,7 @@ export async function bindingRefusal(
 		(r) => r.activeVersionId === r.versionId && r.status === "published"
 	)
 	if (!hit)
-		return `'${opts.slug}' is not published on this instance — it was removed, retired, or never installed here.`
+		return `'${opts.slug}' is not published on this pub — it was removed, retired, or never installed here.`
 	if (hit.inputGenre !== opts.genreId || !answersEvent(hit, opts.event))
 		return (
 			`'${opts.slug}' now answers '${hit.inputEvent ?? "nothing"}' for ` +

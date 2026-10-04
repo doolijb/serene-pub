@@ -160,6 +160,11 @@ const STAGE_CSS = `/* Stage — prose in a reading column, the cast in lamp gold
 	font-size: calc(16px * var(--sp-prose-scale, 1));
 	font-style: italic;
 	text-align: center;
+}
+/* A line's images and files sit under it as cards (the base sheet's own row);
+   under centred narration they centre too. */
+[data-widget-part~="messages.message"][data-msg-role="narration"] [data-widget-part~="messages.media-strip"] {
+	justify-content: center;
 }`
 
 /** BUBBLES — a portrait beside a speech bubble; the persona's mirrored right. */
@@ -263,6 +268,15 @@ const BUBBLES_CSS = `/* Bubbles — portrait beside a speech bubble, the persona
 	border-color: var(--sp-bub-cast-edge);
 	font-style: italic;
 	text-align: center;
+}
+/* Images and files: square cards under the bubble, never in it (the base
+   sheet's own row), on the bubble's side — the persona's to the trailing
+   edge, narration's centred. */
+[data-widget-part~="messages.message"]:is([data-msg-role="user"], [data-msg-author="persona"]) [data-widget-part~="messages.media-strip"] {
+	justify-content: flex-end;
+}
+[data-widget-part~="messages.message"][data-msg-role="narration"] [data-widget-part~="messages.media-strip"] {
+	justify-content: center;
 }`
 
 /** NOVEL — flowing prose at a reading measure. No bubbles, no portraits. */
@@ -386,132 +400,146 @@ const COMPACT_CSS = `/* Compact — one dense line per message. The name is its 
 }`
 
 /**
- * CAMEO — after Moonlit Echoes' "Echo" style: a large, unframed portrait laid
- * into the leading edge of a glass card and fading into it.
+ * CAMEO — after Moonlit Echoes' "Echo" style: a large, unframed portrait in a
+ * column of its own at the leading edge of a glass card — beside the text,
+ * never under it, never outside the card (note 17, 2026-10-02). Declares no
+ * backing (`--sp-backing: none`): every card carries its own glass.
  */
 const CAMEO_CSS = `/* Dreamlit Cameo — after Moonlit Echoes' "Echo" message style: each line is a
-   soft glass card, and the speaker's portrait is LARGE and unframed, laid into
-   the card's leading edge and fading into it (toward the text and at the
-   bottom), so the face sits partly under the glass rather than in a box of
-   its own. The persona's turn mirrors to the trailing edge. In a narrow box
-   the portrait goes behind the text, faint, and the text takes the width.
+   soft, borderless glass card, and the speaker's portrait is LARGE and
+   unframed, laid into the card's leading top corner at a fixed WIDTH and its
+   own height up to twice its width — a tall picture shows that much and the
+   card grows to hold it; a long line grows the card, never the picture — its
+   text-side and bottom edges feathered into the glass. The portrait has a
+   column of its own, just wide enough for it: the text never sits on the picture, and the picture
+   never leaves the card — it is clipped to the card and sized by it, at any
+   width. The persona's turn mirrors to the trailing edge.
+
+   The glass is the THEME's (\`--sp-glass-*\`, the same tokens as the glass
+   backing), so a custom theme restyles it; this style only lays it out. Each
+   card carries its own surface, so the style asks for no backing behind the
+   log (\`--sp-backing: none\`, note 18) — the Card setting can still add one.
 
    The portrait's size answers the widget's box (\`cqi\`, the \`sp-widget\`
    container the host gives every widget), never the window. */
 [data-widget-part~="messages.root"] {
+	--sp-backing: none;
 	--sp-quote: light-dark(var(--color-surface-950), var(--color-surface-50));
-	--sp-body: light-dark(var(--color-surface-700), var(--color-surface-300));
+	--sp-body: light-dark(var(--color-surface-800), var(--color-surface-200));
 	--sp-speaker: light-dark(var(--color-primary-700), var(--color-primary-500));
 	--sp-speaker-persona: light-dark(var(--color-surface-800), var(--color-surface-200));
-	--sp-aside: light-dark(var(--color-surface-600), var(--color-surface-400));
-	--sp-portrait: clamp(8rem, 30cqi, 13rem);
-	--sp-cameo-glass: light-dark(
-		color-mix(in oklab, var(--color-surface-50) 74%, transparent),
-		color-mix(in oklab, var(--color-surface-900) 58%, transparent)
-	);
-	--sp-cameo-glass-hover: light-dark(
-		color-mix(in oklab, var(--color-surface-50) 90%, transparent),
-		color-mix(in oklab, var(--color-surface-900) 78%, transparent)
-	);
-	--sp-cameo-edge: light-dark(
-		color-mix(in oklab, var(--color-surface-400) 40%, transparent),
-		color-mix(in oklab, var(--color-surface-500) 24%, transparent)
-	);
-	--sp-cameo-glow: light-dark(
-		color-mix(in oklab, var(--color-surface-500) 30%, transparent),
-		color-mix(in oklab, var(--color-surface-950) 70%, transparent)
-	);
+	--sp-aside: light-dark(var(--color-surface-700), var(--color-surface-300));
+	--sp-portrait: clamp(5.5rem, 22cqi, 9.5rem);
+	--sp-portrait-h: calc(var(--sp-portrait) * 1.25);	/* the no-picture column only */
+	--sp-cameo-radius: 18px;
+	--sp-cameo-pad-top: 0.8rem;
+	--sp-cameo-pad-bottom: 1rem;
+	--sp-cameo-pad-inline: 1.1rem;
 }
-/* The card: the name row over the text, both clear of the portrait's
-   leading part (the inset), and at least as tall as the portrait wants. */
+/* The card: the portrait's column at the leading edge, the name row and the
+   text beside it. The portrait spans both rows, so the card is always at
+   least as tall as the picture: a short line still shows the whole face. */
 [data-widget-part~="messages.message"] {
-	--sp-cameo-inset: max(1.1rem, calc(var(--sp-portrait) * 0.72));
 	position: relative;
-	grid-template-columns: minmax(0, 1fr) auto;
+	grid-template-columns: var(--sp-portrait) minmax(0, 1fr) auto;
 	grid-template-areas:
-		"identity controls"
-		"content  content";
-	align-content: start;
-	column-gap: 0.75rem;
+		"avatar identity controls"
+		"avatar content  content";
+	grid-template-rows: auto 1fr;
+	align-content: stretch;
+	column-gap: 1rem;
 	row-gap: 0.35rem;
-	min-block-size: calc(var(--sp-portrait) * 0.9);
-	padding-block: 0.8rem 1rem;
-	padding-inline: var(--sp-cameo-inset) 1.1rem;
-	border-radius: 18px;
+	padding-block: var(--sp-cameo-pad-top) var(--sp-cameo-pad-bottom);
+	padding-inline: 0 var(--sp-cameo-pad-inline);
+	border-radius: var(--sp-cameo-radius);
 }
 /* The glass, behind the card's own ground: the shared selected / editing
-   overlays still paint over it. */
+   overlays still paint over it. Slightly glassy — the theme's glass tokens —
+   and borderless: the card's edge is where the glass ends. */
 [data-widget-part~="messages.message"]::before {
 	content: "";
 	position: absolute;
 	inset: 0;
+	/* The card ends with the content's row (plus the card's bottom padding):
+	   a line's images and files take the row below it (the base sheet's media
+	   strip cell), OUTSIDE the glass (note 40). With no files, this is the
+	   padding box's own bottom edge. */
+	grid-row-end: content-end;
+	inset-block-end: calc(-1 * var(--sp-cameo-pad-bottom));
 	z-index: -1;
 	border-radius: inherit;
-	background: var(--sp-cameo-glass);
-	border: 1px solid var(--sp-cameo-edge);
-	box-shadow: 0 14px 34px -24px var(--sp-cameo-glow);
-	backdrop-filter: blur(10px);
+	background: var(--sp-glass-bg);
+	box-shadow: 0 0 30px var(--sp-glass-glow) inset;
+	backdrop-filter: blur(var(--sp-glass-blur));
 	pointer-events: none;
-	transition: background-color 150ms ease-out;
 }
-[data-widget-part~="messages.message"][data-msg-state="normal"]:hover::before,
-[data-widget-part~="messages.message"][data-msg-state="normal"]:focus-within::before {
-	background: var(--sp-cameo-glass-hover);
-}
-/* A line in a scene carries the scene's colour along its leading edge. */
+/* A line in a scene carries the scene's colour as a soft wash at its
+   trailing edge (the leading one is the portrait) — a tint, never a rule. */
 [data-widget-part~="messages.message-row"][style*="--sp-scene"] [data-widget-part~="messages.message"]::before {
-	border-inline-start: 2px solid color-mix(in oklab, var(--sp-scene) 70%, transparent);
+	background:
+		linear-gradient(to left, color-mix(in oklab, var(--sp-scene) 22%, transparent), transparent 3rem),
+		var(--sp-glass-bg);
 }
-/* The portrait: laid into the card's leading edge, the card's full height,
-   no frame — it fades toward the text and at the bottom. */
+/* The portrait: its own column, from the card's top edge (it bleeds through
+   the card's top padding), no frame, clipped to the card's leading corners.
+   The column's width is fixed; the picture keeps its own aspect ratio, so a
+   tall one shows its height up to twice the column's width, from the top
+   (full-body art shows the upper part, fading out at the bottom). A long line
+   grows the card below it; the picture keeps its size. It feathers into the
+   glass toward the text and at its bottom — never at its top — inside its
+   own column, so it never runs under the text. */
 [data-widget-part~="messages.message-avatar"] {
-	--sp-av: var(--sp-portrait);
 	--sp-av-radius: 0;
-	grid-area: auto;
-	position: absolute;
-	inset-block: 0;
-	inset-inline-start: 0;
-	inline-size: var(--sp-portrait);
+	grid-area: avatar;
+	align-self: start;
+	position: relative;
+	min-block-size: 0;
+	margin-block-start: calc(-1 * var(--sp-cameo-pad-top));
 	overflow: hidden;
-	border-start-start-radius: 18px;
-	border-end-start-radius: 18px;
-	-webkit-mask-image:
-		linear-gradient(to right, #000 38%, transparent 100%),
-		linear-gradient(to bottom, #000 55%, transparent 100%);
-	-webkit-mask-composite: source-in;
-	mask-image:
-		linear-gradient(to right, #000 38%, transparent 100%),
-		linear-gradient(to bottom, #000 55%, transparent 100%);
-	mask-composite: intersect;
+	border-start-start-radius: var(--sp-cameo-radius);
+	border-end-start-radius: var(--sp-cameo-radius);
+}
+/* No picture: the column keeps a portrait's height for the initial. */
+[data-widget-part~="messages.message-avatar"]:has([data-widget-part~="messages.message-avatar-glyph"]) {
+	block-size: var(--sp-portrait-h);
 }
 [data-widget-part~="messages.message-avatar-button"] {
 	inline-size: 100%;
+	block-size: auto;
+}
+[data-widget-part~="messages.message-avatar"]:has([data-widget-part~="messages.message-avatar-glyph"]) [data-widget-part~="messages.message-avatar-button"] {
+	position: absolute;
+	inset: 0;
 	block-size: 100%;
 }
 [data-widget-part~="messages.message-avatar-img"] {
+	inline-size: 100%;
+	block-size: auto;
+	max-inline-size: 100%;
+	max-block-size: calc(var(--sp-portrait) * 2);
 	object-fit: cover;
-	object-position: 50% 18%;
+	object-position: top;
+	--sp-feather-toward: to right;
+	mask-image:
+		linear-gradient(var(--sp-feather-toward), #000 45%, transparent 100%),
+		linear-gradient(to bottom, #000 0, #000 78%, transparent 100%);
+	mask-composite: intersect;
 }
-/* No picture: the speaker's initial, large and faint, as a watermark. */
+/* No picture: the speaker's initial, large and faint, filling the column. */
 [data-widget-part~="messages.message-avatar-glyph"] {
+	position: absolute;
+	inset: 0;
 	inline-size: 100%;
 	block-size: 100%;
 	align-items: flex-start;
 	padding-block-start: 0.4rem;
-	font-size: calc(var(--sp-portrait) * 0.6);
+	font-size: calc(var(--sp-portrait) * 0.55);
 	background: linear-gradient(
 		160deg,
 		color-mix(in oklab, var(--color-primary-500) 22%, transparent),
 		transparent 75%
 	);
 	color: color-mix(in oklab, var(--color-primary-500) 55%, transparent);
-}
-/* The text rides above the portrait. */
-[data-widget-part~="messages.message-identity"],
-[data-widget-part~="messages.message-controls"],
-[data-widget-part~="messages.message-content"] {
-	position: relative;
-	z-index: 1;
 }
 [data-widget-part~="messages.message-controls"] {
 	min-inline-size: 0;
@@ -532,14 +560,14 @@ const CAMEO_CSS = `/* Dreamlit Cameo — after Moonlit Echoes' "Echo" message st
 	font-size: calc(17px * var(--sp-prose-scale, 1));
 	line-height: 1.65;
 }
-/* The persona's turn mirrors: the portrait on the trailing edge, fading the
-   other way, the name row set to the end. */
+/* The persona's turn mirrors: the portrait's column on the trailing edge, the
+   name row set to the end. */
 [data-widget-part~="messages.message"]:is([data-msg-role="user"], [data-msg-author="persona"]) {
-	grid-template-columns: auto minmax(0, 1fr);
+	grid-template-columns: auto minmax(0, 1fr) var(--sp-portrait);
 	grid-template-areas:
-		"controls identity"
-		"content  content";
-	padding-inline: 1.1rem var(--sp-cameo-inset);
+		"controls identity avatar"
+		"content  content  avatar";
+	padding-inline: var(--sp-cameo-pad-inline) 0;
 }
 [data-widget-part~="messages.message"]:is([data-msg-role="user"], [data-msg-author="persona"]) [data-widget-part~="messages.message-identity"] {
 	justify-content: flex-end;
@@ -549,29 +577,33 @@ const CAMEO_CSS = `/* Dreamlit Cameo — after Moonlit Echoes' "Echo" message st
 	justify-self: start;
 	flex-direction: row-reverse;
 }
+[data-widget-part~="messages.message"]:is([data-msg-role="user"], [data-msg-author="persona"]) [data-widget-part~="messages.message-avatar-img"] {
+	--sp-feather-toward: to left;
+}
 [data-widget-part~="messages.message"]:is([data-msg-role="user"], [data-msg-author="persona"]) [data-widget-part~="messages.message-avatar"] {
-	inset-inline: auto 0;
 	border-radius: 0;
-	border-start-end-radius: 18px;
-	border-end-end-radius: 18px;
-	-webkit-mask-image:
-		linear-gradient(to left, #000 38%, transparent 100%),
-		linear-gradient(to bottom, #000 55%, transparent 100%);
-	mask-image:
-		linear-gradient(to left, #000 38%, transparent 100%),
-		linear-gradient(to bottom, #000 55%, transparent 100%);
+	border-start-end-radius: var(--sp-cameo-radius);
+	border-end-end-radius: var(--sp-cameo-radius);
+}
+[data-widget-part~="messages.message-row"][style*="--sp-scene"] [data-widget-part~="messages.message"]:is([data-msg-role="user"], [data-msg-author="persona"])::before {
+	background:
+		linear-gradient(to right, color-mix(in oklab, var(--sp-scene) 22%, transparent), transparent 3rem),
+		var(--sp-glass-bg);
 }
 /* Narration: no portrait; the card at the full measure, its text centred. */
 [data-widget-part~="messages.message"][data-msg-role="narration"] {
+	grid-template-columns: minmax(0, 1fr) auto;
+	grid-template-areas:
+		"identity controls"
+		"content  content";
 	min-block-size: 0;
-	padding-inline: 1.1rem;
+	padding-inline: var(--sp-cameo-pad-inline);
 }
 [data-widget-part~="messages.message"][data-msg-role="narration"] [data-widget-part~="messages.message-avatar"] {
 	display: none;
 }
 [data-widget-part~="messages.message"][data-msg-role="narration"]::before {
-	border-style: dashed;
-	box-shadow: none;
+	background: color-mix(in oklab, var(--sp-glass-bg) 60%, transparent);
 }
 [data-widget-part~="messages.message"][data-msg-role="narration"] [data-widget-part~="messages.message-body"] {
 	--sp-body: var(--sp-aside);
@@ -579,17 +611,27 @@ const CAMEO_CSS = `/* Dreamlit Cameo — after Moonlit Echoes' "Echo" message st
 	font-style: italic;
 	text-align: center;
 }
-/* A narrow box: the portrait goes behind the text, faint, and the text takes
-   the card's width. */
+/* Images and files: square cards below the card, clear of its glass (which
+   reaches the card's bottom padding below the content), beside the text's
+   column — the persona's to the trailing edge, narration's centred. */
+[data-widget-part~="messages.message"] > [data-widget-part~="messages.media-strip"] {
+	margin-block-start: calc(var(--sp-cameo-pad-bottom) + 0.25rem);
+}
+[data-widget-part~="messages.message"]:is([data-msg-role="user"], [data-msg-author="persona"]) [data-widget-part~="messages.media-strip"] {
+	justify-content: flex-end;
+}
+[data-widget-part~="messages.message"][data-msg-role="narration"] [data-widget-part~="messages.media-strip"] {
+	justify-content: center;
+}
+/* A narrow box: the portrait's column narrows to a slim strip, still beside
+   the text and still inside the card. */
 @container sp-widget (max-width: 36rem) {
-	[data-widget-part~="messages.message"],
-	[data-widget-part~="messages.message"]:is([data-msg-role="user"], [data-msg-author="persona"]) {
-		--sp-portrait: clamp(7rem, 45cqi, 10rem);
-		min-block-size: 0;
-		padding-inline: 1rem;
+	[data-widget-part~="messages.root"] {
+		--sp-portrait: clamp(3.5rem, 18cqi, 5.5rem);
+		--sp-cameo-pad-inline: 0.85rem;
 	}
-	[data-widget-part~="messages.message-avatar"] {
-		opacity: 0.3;
+	[data-widget-part~="messages.message"] {
+		column-gap: 0.75rem;
 	}
 }`
 
@@ -653,7 +695,7 @@ const LEGACY_PACK_KEY: Record<string, "chat"> = {
 	messages: "chat"
 }
 
-/** The shape `ZoneLayout.styles` has carried since the pack rows shipped. */
+/** The shape `ZoneLayoutV1.styles` has carried since the pack rows shipped. */
 export interface LegacyStylePacks {
 	chat?: string | null
 }

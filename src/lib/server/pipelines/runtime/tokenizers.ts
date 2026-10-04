@@ -176,6 +176,19 @@ export function tokenizerFor(
 	world: ConfigWorld,
 	doc: SpecDocument
 ): string | undefined {
+	return budgetConnectionOf(world, doc)?.metadata?.tokenizer ?? undefined
+}
+
+/**
+ * The connection THIS run's budget is sized for — the one `tokenizerFor`
+ * reads its tokenizer off, by the same resolution. Exported so the backend
+ * token counter (`connections/backendTokenCount.ts`) asks the same
+ * connection the budget describes, never a second walk.
+ */
+export function budgetConnectionOf(
+	world: ConfigWorld,
+	doc: SpecDocument
+): ConfigWorld["connections"][number] | undefined {
 	try {
 		const budget = doc.nodes.find(
 			(n) => n.definitionId === "core:task/context-budget"
@@ -200,10 +213,7 @@ export function tokenizerFor(
 					: undefined
 				: slotConnectionId(stored)
 		if (chosenId == null) return undefined
-		const connection = world.connections.find(
-			(c) => String(c.id) === String(chosenId)
-		)
-		return connection?.metadata?.tokenizer ?? undefined
+		return world.connections.find((c) => String(c.id) === String(chosenId))
 	} catch {
 		return undefined
 	}

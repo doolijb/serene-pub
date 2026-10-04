@@ -17,8 +17,8 @@
 	 */
 	import Select from "$lib/client/components/inputs/Select.svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
-	import { declareInterest } from "$lib/client/sockets/interest.svelte"
-	import { interestKey } from "$lib/shared/sockets/interest"
+	import { untrack } from "svelte"
+	import { BookTime } from "$lib/client/lorebooks/time/bookTime.svelte"
 	import {
 		advanceStoryTime,
 		formatDate,
@@ -27,6 +27,7 @@
 		type StoryClock,
 		type StoryTimeUnit
 	} from "$lib/shared/lorebooks/storyDate"
+	import { survivingLineOf } from "$lib/shared/lorebooks/lineReading"
 
 	interface Props {
 		/** The book the session reads — the SAVED one. */
@@ -55,36 +56,44 @@
 
 	const socket = useTypedSocket()
 
-	type Branch = { id: number; name: string; forkYear: number | null; forkMonth: number | null; forkDay: number | null }
-	let branches = $state<Branch[]>([])
-	let calendar = $state<ReturnType<typeof readStoryCalendar>>(null)
-	/** Each line's present, as the server reads it — what a session with no clock follows. */
-	let presents = $state<Sockets.Lorebooks.BookStoryTime["presents"] | null>(null)
-
+	/**
+	 * The book's story time and lines (plan B6): one reader of the book's
+	 * own, kept current by the story time family and `lorebooks:lines` — the
+	 * lines alone, where this form asked for the whole `amendments:list`
+	 * before. Owner-only reads, so a guest's form asks for neither.
+	 */
+	const time = new BookTime()
 	$effect(() => {
 		const id = lorebookId
 		if (readOnly) return
-		const releases = [
-			declareInterest<"amendments:list">(interestKey("amendments:list", id), (res) => {
-				if (res.lorebookId !== undefined && res.lorebookId !== id) return
-				branches = (res.branches ?? []).filter((b) => b.lorebookId === id)
-				// A line deleted since the form loaded took this session back
-				// to main (`ON DELETE SET NULL`); say so here rather than keep
-				// offering a dead id (#136). The save sends it only because it
-				// now differs from what was loaded — which is the truth.
-				if (branchId != null && !branches.some((b) => b.id === branchId)) branchId = null
-			}),
-			declareInterest<"lorebooks:storyTime">(interestKey("lorebooks:storyTime", id), (res) => {
-				if (res.lorebookId !== id) return
-				calendar = readStoryCalendar(res.calendar ?? null)
-				presents = res.presents ?? null
-			})
-		]
-		socket.emit("amendments:list", { lorebookId: id })
-		socket.emit("lorebooks:storyTime", { lorebookId: id })
-		return () => {
-			for (const release of releases) release()
-		}
+		return time.listen(socket, id)
+	})
+	let branches = $derived(time.branches)
+	let calendar = $derived(readStoryCalendar(time.calendar ?? null))
+	/** Each line's present, as the server reads it — what a session with no clock follows. */
+	let presents = $derived(time.presents)
+
+	/**
+	 * A line deleted since the form loaded moved this session to the line it
+	 * left (`amendments:deleteBranch`); said here rather than offering a dead
+	 * id (#136). The save sends it only because it now differs from what was
+	 * loaded — which is the truth. Read only once the lines have arrived, and
+	 * against the lines held before this answer.
+	 */
+	let linesBefore: readonly Sockets.Amendments.Branch[] = []
+	let linesBook: number | null = null
+	$effect(() => {
+		const now = time.branches
+		if (!time.linesLoaded) return
+		untrack(() => {
+			// Another book's lines are no "before" for this one's.
+			if (time.lorebookId !== linesBook) {
+				linesBefore = []
+				linesBook = time.lorebookId
+			}
+			branchId = survivingLineOf(branchId, linesBefore, now)
+			linesBefore = now
+		})
 	})
 
 	const spell = (d: StoryClock) => formatDate(d, calendar)

@@ -289,6 +289,21 @@ describe("3–4 · advance", () => {
 		expect(await clockRow(s)).toMatchObject({ year: 5, month: 2, day: 31 })
 	})
 
+	test("two advances at once both land: read, stepped and written under one lock", async () => {
+		const b = await book()
+		await b.dated({ year: 5, month: 1, day: 10 })
+		const s = await create(b)
+		await update(b, { id: s, storyClockYear: 5, storyClockMonth: 1, storyClockDay: 10 })
+		const { advanceSessionStoryClock } = await import("$lib/server/state/storyTime")
+		// Read apart from the write, both stepped from day 10 and the second
+		// wrote over the first: two days forward landed one.
+		await Promise.all([
+			advanceSessionStoryClock(db(), s, 1, "days"),
+			advanceSessionStoryClock(db(), s, 1, "days")
+		])
+		expect(await clockRow(s)).toMatchObject({ year: 5, month: 1, day: 12 })
+	})
+
 	test("refused with no book and with no present to start from", async () => {
 		const b = await book()
 		const s = await create(b)
@@ -310,6 +325,25 @@ describe("3–4 · advance", () => {
 		expect(next.clock).toEqual({ year: 5, month: 2, day: 1, hour: 0, minute: 30 })
 		await expect(host.commit!({ params: { by: 0, unit: "days" } }, node)).rejects.toThrow(/whole number other than zero/)
 		await expect(host.commit!({ params: { by: 1, unit: "fortnights" } }, node)).rejects.toThrow(/one of minutes/)
+	})
+
+	test("the outlet's advance says the session moved: a session-updated naming the clock", async () => {
+		const b = await book()
+		await b.dated({ year: 5, month: 1, day: 30 })
+		const s = await create(b)
+		const { createHost } = await import("$lib/server/pipelines/runtime/host")
+		const host = createHost(db(), { sessionId: s, userId: b.user.id, specId: "test:spec/clock", runId: "run-clock-event" } as any)
+		const node = { key: "tick", definitionId: "core:outlet/advance-story-clock", definitionVersion: 1 } as any
+		await host.commit!({ params: { by: 1, unit: "days" } }, node)
+		const changes = await testDb
+			.select()
+			.from(schema.sessionChanges)
+			.where(eq(schema.sessionChanges.sessionId, s))
+		const updated = changes.filter((c) => c.event === "core:event/session-updated@1")
+		expect(updated).toHaveLength(1)
+		expect(updated[0].runId).toBe("run-clock-event")
+		expect((updated[0].payload as any).changed).toEqual(["storyClock"])
+		expect((updated[0].payload as any).cause).toMatchObject({ kind: "run" })
 	})
 })
 

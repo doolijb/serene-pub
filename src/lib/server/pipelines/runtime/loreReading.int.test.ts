@@ -330,8 +330,20 @@ describe("the link hop's edges (#151)", () => {
 				)[0]!.id
 			const kept = await edge({ fromEntryId: entry.hearth, toEntryId: entry.regex })
 			const onA = await edge({ fromEntryId: entry.hearth, toEntryId: entry.aerie, branchId: branch.A })
-			const ended = await edge({ fromEntryId: entry.hearth, toEntryId: entry.regex, status: "resolved" })
-			const secret = await edge({ fromEntryId: entry.hearth, toEntryId: entry.regex, visibility: "secret" })
+			// Named, so each is a way of its own: one way on one line at one
+			// date is one row (places-graph B1's `entry_pair_uq`).
+			const ended = await edge({
+				fromEntryId: entry.hearth,
+				toEntryId: entry.regex,
+				title: "the old stair",
+				status: "resolved"
+			})
+			const secret = await edge({
+				fromEntryId: entry.hearth,
+				toEntryId: entry.regex,
+				title: "the hidden stair",
+				visibility: "secret"
+			})
 			const toShelf = await edge({ fromEntryId: entry.hearth, toEntryId: entry.shelved })
 			const toOff = await edge({ fromEntryId: entry.hearth, toEntryId: entry.off })
 			const toOtherBook = await edge({ fromEntryId: entry.hearth, toEntryId: entry.far })

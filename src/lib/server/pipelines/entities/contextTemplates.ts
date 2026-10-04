@@ -358,7 +358,6 @@ export interface CreateContextTemplateInput {
 	createdForSpecId?: number | null
 	seedKey?: string
 	isImmutable?: boolean
-	migratedFromContextConfigId?: number | null
 }
 
 export async function createContextTemplate(
@@ -385,9 +384,7 @@ export async function createContextTemplate(
 			engine: input.engine ?? CORE_TEMPLATE_ENGINE,
 			createdForSpecId: input.createdForSpecId ?? null,
 			seedKey: input.seedKey ?? null,
-			isImmutable: input.isImmutable ?? false,
-			migratedFromContextConfigId:
-				input.migratedFromContextConfigId ?? null
+			isImmutable: input.isImmutable ?? false
 		})
 		.returning()
 	return toRecord(row)

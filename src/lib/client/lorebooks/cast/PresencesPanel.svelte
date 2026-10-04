@@ -2,8 +2,15 @@
 	import * as Icons from "@lucide/svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 	import { toaster } from "$lib/client/utils/toaster"
-	import { holdsAt } from "$lib/shared/lorebooks/presence"
+	import {
+		appearancesOf,
+		holdsAt,
+		presencesOnLine
+	} from "$lib/shared/lorebooks/presence"
+	import { lineOf, type Line } from "$lib/shared/lorebooks/lineReading"
+	import { presenceRemovalSentence } from "./castSave"
 	import { compareDates, formatDate } from "../sections/historyDates"
+	import { openBookTime } from "../time/bookTime.svelte"
 	import { parseMoment } from "../time/moment"
 	import {
 		draftNotice,
@@ -31,8 +38,9 @@
 	 * refused, and only because it is a slip.
 	 *
 	 * ⚠ A presence belongs to the LINE it was made on, like an amendment. The
-	 * panel shows the ones the line being read can see and says which line a
-	 * new one will be written to.
+	 * panel shows the ones the line being read can see — `presencesOnLine`,
+	 * the World bar's own filter — says which line a new one will be written
+	 * to, and, before a removal, every line it comes off.
 	 */
 	interface Props {
 		lorebookId: number
@@ -40,10 +48,10 @@
 		castId: number
 		/** Who they are, for the sentences. */
 		memberName: string
-		/** This member's presences, on every line. Filtered here. */
+		/** The book's presences, on every line; the line rule picks. */
 		presences: readonly Sockets.Amendments.Presence[]
-		/** The line being read. NULL = main. */
-		branchId: number | null
+		/** The line being read, with its ancestor chain (`lineOf`). */
+		line: Line
 		/** That line's name, for the sentence. Absent is main. */
 		branchName?: string | null
 		/** The moment being read, as the route spells it. Absent is now. */
@@ -55,7 +63,7 @@
 		castId,
 		memberName,
 		presences,
-		branchId,
+		line,
 		branchName = null,
 		moment
 	}: Props = $props()
@@ -69,31 +77,31 @@
 	let acknowledged = $state(false)
 
 	let cut = $derived(parseMoment(moment))
+	let branchId = $derived(line.branchId)
 	let lineName = $derived(branchName ?? "main")
 
 	/**
-	 * The presences this line can see, earliest first.
-	 *
-	 * ⚠ A presence on main is visible on every line — the same rule
-	 * amendments follow — so the filter is "mine or shared", not "mine".
+	 * The presences this line can see, earliest first: its own, and each
+	 * ancestor line's that began by that line's fork cut (`presencesOnLine`).
 	 */
 	let mine = $derived(
-		presences
-			.filter((p) => p.castId === castId)
-			.filter((p) => p.branchId == null || p.branchId === branchId)
-			.sort(
-				(a, b) =>
-					compareDates(
-						{ year: a.fromYear, month: a.fromMonth, day: a.fromDay },
-						{ year: b.fromYear, month: b.fromMonth, day: b.fromDay }
-					) ||
-					a.personalPosition - b.personalPosition ||
-					a.id - b.id
-			)
+		presencesOnLine(
+			presences.filter((p) => p.castId === castId),
+			line
+		).sort(
+			(a, b) =>
+				compareDates(
+					{ year: a.fromYear, month: a.fromMonth, day: a.fromDay },
+					{ year: b.fromYear, month: b.fromMonth, day: b.fromDay }
+				) ||
+				a.personalPosition - b.personalPosition ||
+				a.id - b.id
+		)
 	)
 
 	/**
-	 * Which of them are standing here at the moment being read.
+	 * Which of them are standing here at the moment being read:
+	 * `appearancesOf`, the World bar's answer, word for word.
 	 *
 	 * ⚠ By personal position, NOT by arrival date — the order `appearancesOf`
 	 * puts appearances in. The list below is chronological because that is how
@@ -101,12 +109,54 @@
 	 * lens state, and one screen must not give it in two orders.
 	 */
 	let hereNow = $derived(
-		mine
-			.filter((p) => holdsAt(p as any, cut))
-			.toSorted(
-				(a, b) => a.personalPosition - b.personalPosition || a.id - b.id
-			)
+		appearancesOf(castId, presences as any, { line, moment: cut })
+			.map((a) => mine.find((p) => p.id === a.presenceId))
+			.filter((p): p is (typeof mine)[number] => p != null)
 	)
+
+	const COUNT_WORDS = ["Two", "Three", "Four", "Five", "Six"]
+
+	/** "Two of them are here at once, at 34 and 50." — a list of any length. */
+	function hereTogether(): string {
+		const at = hereNow.map((p) => String(p.personalPosition))
+		return `${at.slice(0, -1).join(", ")} and ${at.at(-1)}`
+	}
+
+	/** Where a presence is from, said beside it when it is not main's. */
+	function whereFrom(p: Sockets.Amendments.Presence): string | null {
+		if (p.branchId == null) return null
+		return p.branchId === branchId
+			? `${lineName} only`
+			: `from ${openBookTime.lineName(p.branchId)}`
+	}
+
+	/**
+	 * What removing a presence asks: the line it comes off, and every other
+	 * line that reads it (`presencesOnLine` on each of the book's lines) —
+	 * one read from main or an ancestor line is removed THERE, so it comes
+	 * off each of them, this one included.
+	 */
+	function removalQuestion(p: Sockets.Amendments.Presence): string {
+		const branches = openBookTime.branches
+		const ids: (number | null)[] = [null, ...branches.map((b) => b.id)]
+		if (!ids.includes(branchId)) ids.push(branchId)
+		const nameOf = (id: number | null) =>
+			id === branchId ? lineName : openBookTime.lineName(id)
+		const readBy = ids
+			.filter(
+				(id) =>
+					presencesOnLine(
+						[p],
+						id === branchId ? line : lineOf(id, branches)
+					).length > 0
+			)
+			.map(nameOf)
+		return presenceRemovalSentence({
+			placedOn: nameOf(p.branchId ?? null),
+			readingOn: lineName,
+			readBy
+		})
+	}
 
 	let parsed = $derived(readDraft(draft))
 	let notice = $derived(
@@ -165,7 +215,7 @@
 </script>
 
 <div
-	class="border-border flex flex-col gap-3 border-t pt-3"
+	class="panel-inset flex flex-col gap-3"
 	data-lore-presences={castId}
 >
 	<div class="flex items-start gap-2">
@@ -184,10 +234,8 @@
 				{:else if hereNow.length === 1}
 					Here at {hereNow[0].personalPosition}.
 				{:else}
-					<strong>Two of them are here</strong>
-					at once, at {hereNow
-						.map((p) => p.personalPosition)
-						.join(" and ")}.
+					<strong>{COUNT_WORDS[hereNow.length - 2] ?? hereNow.length} of them are here</strong>
+					at once, at {hereTogether()}.
 				{/if}
 			</p>
 		</div>
@@ -222,11 +270,11 @@
 						<span class="min-w-0 flex-1 truncate text-xs">
 							{spanLabel(p)}
 						</span>
-						{#if p.branchId != null}
+						{#if whereFrom(p)}
 							<span
 								class="badge preset-tonal-primary shrink-0 text-[11px]"
 							>
-								{lineName} only
+								{whereFrom(p)}
 							</span>
 						{/if}
 						{#if confirmingRemove === p.id}
@@ -256,6 +304,11 @@
 							</button>
 						{/if}
 					</div>
+					{#if confirmingRemove === p.id}
+						<p class="text-surface-700-300 text-xs" data-presence-removal>
+							{removalQuestion(p)}
+						</p>
+					{/if}
 					{#if p.note}
 						<p class="text-surface-600-400 text-[11px] italic">
 							{p.note}

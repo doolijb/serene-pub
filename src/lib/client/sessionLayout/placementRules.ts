@@ -63,6 +63,16 @@ export function stageOf(o: StageInput): StagePick | null {
 		const id = primaryLogOf(o.middle, o.claims, o.primaryId)
 		return id ? { id, zone: "middle" } : null
 	}
+	return primaryLogPick(o)
+}
+
+/**
+ * The layout's primary log and the zone holding it, wherever it sits —
+ * whatever QE says. QE decides what the phone and Stage only DRAW; this is
+ * where the log IS, which the desktop needs either way: a side holding it
+ * neither tucks nor folds to an icon (`SessionLayout`'s `logSide`).
+ */
+export function primaryLogPick(o: StageInput): StagePick | null {
 	const id = primaryLogOf([...o.middle, ...o.left, ...o.right], o.claims, o.primaryId)
 	if (!id) return null
 	const zone: StageZone = o.middle.includes(id)

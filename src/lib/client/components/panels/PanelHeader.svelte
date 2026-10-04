@@ -17,7 +17,7 @@
 		    references "mobile-panel-title". */
 		titleId?: string
 		onClose: () => void
-		/** Accessible name for the close button, eg. "Close Sessions panel". */
+		/** Accessible name for the close button, eg. "Close Sessions view". */
 		closeLabel: string
 		/** Extra chrome controls, rendered before close. */
 		actions?: Snippet

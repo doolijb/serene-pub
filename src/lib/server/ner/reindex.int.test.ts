@@ -267,6 +267,148 @@ describe("starring an entity model", () => {
 		})
 		expect((await annotationsOf(entry.id)).length).toBe(had.length)
 	}, 60_000)
+
+	test("unstarring and re-starring the same model keeps the corpus", async () => {
+		// The A10 fix, for the entity star: the rows carry the model that
+		// annotated them, and that is what a star move is compared against —
+		// not the star before the write, which after an unstar is nothing.
+		const { entry } = await seedBook("Vell rode with the ashguard riders.")
+		const { annotationLane, settleAnnotationQueue } = await import(
+			"$lib/server/annotations/queue"
+		)
+		const { applyNerStarChange, currentNerModelId } = await import(
+			"./reindex"
+		)
+		const conn = await nerConnection("Xenova/bert-base-NER")
+		await star(conn.id)
+		annotationLane.start()
+		await settleAnnotationQueue()
+		const had = await annotationsOf(entry.id)
+		expect(had.some((r) => r.tier === "model")).toBe(true)
+
+		let before = await currentNerModelId(testDb)
+		await star(null)
+		await applyNerStarChange(testDb, before)
+		before = await currentNerModelId(testDb)
+		await star(conn.id)
+		const change = await applyNerStarChange(testDb, before)
+
+		expect(change).toMatchObject({ reannotated: false, cleared: 0 })
+		const kept = await annotationsOf(entry.id)
+		expect(kept.map((r) => [r.entityKey, r.annotatedAt])).toEqual(
+			had.map((r) => [r.entityKey, r.annotatedAt])
+		)
+	}, 60_000)
+
+	test("re-starring the model re-scans only what was annotated without it", async () => {
+		const conn = await nerConnection("Xenova/bert-base-NER")
+		const { enqueueLorebookAnnotation, settleAnnotationQueue } =
+			await import("$lib/server/annotations/queue")
+		const { applyNerStarChange, currentNerModelId } = await import(
+			"./reindex"
+		)
+		const { annotateEntry, EMPTY_VOCABULARY } = await import(
+			"$lib/server/annotations"
+		)
+		// A run still winding down from the last test would miss the group.
+		await settleAnnotationQueue()
+		await star(conn.id)
+		const { lorebook: book, entry: withModel } = await seedBook(
+			"Vell met the ashguard riders at dawn."
+		)
+		enqueueLorebookAnnotation(book.id, "Book")
+		await settleAnnotationQueue()
+		expect(
+			(await annotationsOf(withModel.id)).some((r) => r.tier === "model")
+		).toBe(true)
+		let before = await currentNerModelId(testDb)
+		await star(null)
+		await applyNerStarChange(testDb, before)
+
+		// Written while nothing was starred: the lexical tiers only.
+		const { lorebook: lexicalBook, entry: lexical } = await seedBook(
+			"Kaelen rode with the ashguard riders."
+		)
+		await annotateEntry(testDb, lexical.id, EMPTY_VOCABULARY, null)
+		expect(
+			(await annotationsOf(lexical.id)).some((r) => r.tier === "model")
+		).toBe(false)
+		const keptBefore = await annotationsOf(withModel.id)
+
+		before = await currentNerModelId(testDb)
+		await star(conn.id)
+		const change = await applyNerStarChange(testDb, before)
+		await settleAnnotationQueue()
+		enqueueLorebookAnnotation(lexicalBook.id, "Lexical book")
+		await settleAnnotationQueue()
+
+		expect(change.reannotated).toBe(true)
+		expect(change.cleared).toBeGreaterThan(0)
+		expect(
+			(await annotationsOf(withModel.id)).map((r) => r.annotatedAt)
+		).toEqual(keptBefore.map((r) => r.annotatedAt))
+		expect(
+			(await annotationsOf(lexical.id)).some((r) => r.tier === "model")
+		).toBe(true)
+	}, 60_000)
+
+	test("deleting the starred connection stops the lane, unloads the model and keeps the corpus", async () => {
+		const { entry } = await seedBook("Vell rode with the ashguard riders.")
+		const { annotationLane, settleAnnotationQueue } = await import(
+			"$lib/server/annotations/queue"
+		)
+		const { withStarConsequences } = await import(
+			"$lib/server/connections/starConsequences"
+		)
+		const conn = await nerConnection("Xenova/bert-base-NER")
+		await star(conn.id)
+		annotationLane.start()
+		await settleAnnotationQueue()
+		expect(resident).toBe("Xenova/bert-base-NER")
+		const had = await annotationsOf(entry.id)
+		const stop = vi.spyOn(annotationLane, "stop")
+
+		// What `connections:delete` runs.
+		await withStarConsequences(testDb, () =>
+			testDb
+				.delete(schema.connections)
+				.where(eq(schema.connections.id, conn.id))
+		)
+
+		expect(stop).toHaveBeenCalled()
+		expect(resident).toBeNull()
+		expect((await annotationsOf(entry.id)).length).toBe(had.length)
+		stop.mockRestore()
+	}, 60_000)
+
+	test("deleting the starred model does the same", async () => {
+		const { annotationLane, settleAnnotationQueue } = await import(
+			"$lib/server/annotations/queue"
+		)
+		const { withStarConsequences } = await import(
+			"$lib/server/connections/starConsequences"
+		)
+		const conn = await nerConnection("Xenova/bert-base-NER")
+		// Starred the way the handler stars it, so the lane restarts leasing
+		// the model; then work to do, so it loads it.
+		await withStarConsequences(testDb, () => star(conn.id))
+		await seedBook("Kaelen rode with the ashguard riders.")
+		annotationLane.start()
+		await settleAnnotationQueue()
+		expect(resident).toBe("Xenova/bert-base-NER")
+		const stop = vi.spyOn(annotationLane, "stop")
+
+		// What `connections:deleteModel` runs.
+		await withStarConsequences(testDb, () =>
+			testDb
+				.delete(schema.connectionModels)
+				.where(eq(schema.connectionModels.id, conn.modelId))
+		)
+
+		expect(stop).toHaveBeenCalled()
+		expect(resident).toBeNull()
+		stop.mockRestore()
+	}, 60_000)
 })
 
 describe("the cost the confirmation quotes", () => {

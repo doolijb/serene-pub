@@ -75,7 +75,7 @@ async function importFile(userId: number, lorebookData: object) {
 	const { lorebookImportHandler } = await import("./lorebooks")
 	return lorebookImportHandler.handler(
 		fakeSocket(userId),
-		{ lorebookData },
+		{ lorebookJson: JSON.stringify(lorebookData) },
 		noopEmit
 	)
 }
@@ -260,6 +260,255 @@ describe("importing a Serene Pub 0.5.3 export (PGlite integration)", () => {
 		expect(new Set(tokens).size).toBe(4)
 		expect(tokens).toContain("{{char:5}}")
 	}, 60_000)
+
+	/**
+	 * 0.5 had no rule against binding one card twice in a book, and today's
+	 * one-member-per-card index refused the second insert — the whole import
+	 * failed (plan A16). The second binding folds into the first member: its
+	 * lore, its scene appearances and its tags follow.
+	 */
+	test("a 0.5 book binding one character twice imports cleanly, as one member", async () => {
+		const user = await makeUser("import05-twice-user")
+		const file = fixture()
+		delete file.extensions.serenepub.uuid
+		const sp = file.extensions.serenepub
+		sp.bindings.push({
+			localId: 20,
+			bindingText: "{char:7}",
+			kind: "character",
+			characterLocalId: 1,
+			personaLocalId: null
+		})
+		sp.narrativeGraph.nodes.push({
+			localId: 21,
+			name: "Maren",
+			nodeState: "active",
+			nodeVisibility: "normal",
+			aliases: [],
+			absorbedAliases: ["the smith of the pass"],
+			summary: null,
+			bindingLocalId: 20,
+			parentLocalId: null,
+			historyEntryLocalId: null,
+			sceneLocalId: null,
+			characterUuids: []
+		})
+		const lore = file.entries.find(
+			(e: any) => e.comment === "Maren's secret"
+		)
+		file.entries.push({
+			...JSON.parse(JSON.stringify(lore)),
+			id: 901,
+			name: "The ledger",
+			comment: "The ledger",
+			keys: ["ledger"],
+			content: "{char:7} hides the ledger.",
+			extensions: {
+				serenepub: { entryType: "character", bindingLocalId: 20 }
+			}
+		})
+		const world = file.entries.find((e: any) => e.comment === "Emberfall")
+		file.entries.push({
+			...JSON.parse(JSON.stringify(world)),
+			id: 902,
+			name: "The blade",
+			comment: "The blade",
+			keys: ["blade"],
+			content: "{char:7} sharpens the blade that {{char:1}} forged.",
+			extensions: { serenepub: { entryType: "world" } }
+		})
+		const history = file.entries.find(
+			(e: any) => e.extensions?.serenepub?.localId === 1
+		)
+		history.extensions.serenepub.scenes[0].participantCharacters.push(20)
+
+		const res = await importFile(user.id, file)
+		expect(res.status).toBe("created")
+		const bookId = res.lorebook!.id
+
+		const bindings = await testDb.query.lorebookBindings.findMany({
+			where: (b, { eq }) => eq(b.lorebookId, bookId)
+		})
+		expect(bindings.map((b) => b.binding).sort()).toEqual([
+			"{{char:1}}",
+			"{{char:2}}",
+			"{{char:3}}",
+			"{{char:4}}"
+		])
+		const maren = bindings.find((b) => b.binding === "{{char:1}}")!
+		expect(maren.name).toBe("Maren")
+		expect(maren.summary).toBe("Emberfall's blacksmith.")
+		expect(maren.absorbedAliases).toEqual(["the smith of the pass"])
+
+		const entries = await loadBookEntries(testDb, bookId)
+		const byName = new Map(entries.map((e) => [e.name, e as any]))
+		expect(byName.get("The ledger").lorebookBindingId).toBe(maren.id)
+		expect(byName.get("The ledger").content).toBe(
+			"{{char:1}} hides the ledger."
+		)
+		expect(byName.get("The blade").content).toBe(
+			"{{char:1}} sharpens the blade that {{char:1}} forged."
+		)
+		const scenes = await testDb.query.scenes.findMany({
+			where: (s, { eq }) => eq(s.lorebookId, bookId),
+			with: { characters: true }
+		})
+		expect(
+			scenes[0].characters.filter(
+				(c: any) => c.bindingId === maren.id && c.role === "participant"
+			)
+		).toHaveLength(1)
+	}, 60_000)
+
+	/**
+	 * `{char:3}` and `{{char:3}}` were two members in 0.5 — its sync matched
+	 * each spelling to its own binding — and the import kept both under one
+	 * number. They stay two members: the old spelling's member takes a fresh
+	 * tag, and the text spelled its old way follows it.
+	 */
+	test("a 0.5 book holding both spellings of one tag keeps the two members apart", async () => {
+		const user = await makeUser("import05-spellings-user")
+		const file = fixture()
+		delete file.extensions.serenepub.uuid
+		const sp = file.extensions.serenepub
+		sp.bindings.push({
+			localId: 30,
+			bindingText: "{char:3}",
+			kind: "character",
+			characterLocalId: null,
+			personaLocalId: null
+		})
+		sp.narrativeGraph.nodes.push({
+			localId: 31,
+			name: "The ferryman",
+			nodeState: "active",
+			nodeVisibility: "normal",
+			aliases: [],
+			absorbedAliases: [],
+			summary: null,
+			bindingLocalId: 30,
+			parentLocalId: null,
+			historyEntryLocalId: null,
+			sceneLocalId: null,
+			characterUuids: []
+		})
+		const world = file.entries.find((e: any) => e.comment === "Emberfall")
+		file.entries.push({
+			...JSON.parse(JSON.stringify(world)),
+			id: 903,
+			name: "The river",
+			comment: "The river",
+			keys: ["river"],
+			content: "{char:3} rows while {{char:3}} pours.",
+			extensions: { serenepub: { entryType: "world" } }
+		})
+
+		const res = await importFile(user.id, file)
+		expect(res.status).toBe("created")
+		const bookId = res.lorebook!.id
+
+		const bindings = await testDb.query.lorebookBindings.findMany({
+			where: (b, { eq }) => eq(b.lorebookId, bookId)
+		})
+		const tags = bindings.map((b) => b.binding)
+		expect(new Set(tags).size).toBe(5)
+		const ferryman = bindings.find((b) => b.name === "The ferryman")!
+		expect(ferryman.binding).toBe("{{char:5}}")
+		expect(bindings.find((b) => b.binding === "{{char:3}}")!.name).toBe(
+			"The innkeeper"
+		)
+		const entries = await loadBookEntries(testDb, bookId)
+		const river = entries.find((e) => e.name === "The river") as any
+		expect(river.content).toBe("{{char:5}} rows while {{char:3}} pours.")
+	}, 60_000)
+
+	test("a fresh tag never lands on a number the file's text already names", async () => {
+		// The file names `{{char:5}}` for nobody. A member renumbered onto 5
+		// would make that text name them.
+		const user = await makeUser("import05-dangling-user")
+		const file = fixture()
+		delete file.extensions.serenepub.uuid
+		const sp = file.extensions.serenepub
+		sp.bindings.push({
+			localId: 30,
+			bindingText: "{char:3}",
+			kind: "character",
+			characterLocalId: null,
+			personaLocalId: null
+		})
+		sp.narrativeGraph.nodes.push({
+			localId: 31,
+			name: "The ferryman",
+			nodeState: "active",
+			nodeVisibility: "normal",
+			aliases: [],
+			absorbedAliases: [],
+			summary: null,
+			bindingLocalId: 30,
+			parentLocalId: null,
+			historyEntryLocalId: null,
+			sceneLocalId: null,
+			characterUuids: []
+		})
+		const world = file.entries.find((e: any) => e.comment === "Emberfall")
+		file.entries.push({
+			...JSON.parse(JSON.stringify(world)),
+			id: 903,
+			name: "The river",
+			comment: "The river",
+			keys: ["river", "{{char:6}}"],
+			content:
+				"{char:3} rows while {{char:3}} pours. {{char:5}} left long ago.",
+			extensions: { serenepub: { entryType: "world" } }
+		})
+
+		const res = await importFile(user.id, file)
+		const bookId = res.lorebook!.id
+		const bindings = await testDb.query.lorebookBindings.findMany({
+			where: (b, { eq }) => eq(b.lorebookId, bookId)
+		})
+		const tags = bindings.map((b) => b.binding)
+		expect(tags).not.toContain("{{char:5}}")
+		expect(tags).not.toContain("{{char:6}}")
+		const ferryman = bindings.find((b) => b.name === "The ferryman")!
+		const entries = await loadBookEntries(testDb, bookId)
+		const river = entries.find((e) => e.name === "The river") as any
+		expect(river.content).toBe(
+			`${ferryman.binding} rows while {{char:3}} pours. {{char:5}} left long ago.`
+		)
+	}, 60_000)
+
+	test("a relationship's words are cut to the ceilings, and a status or visibility it cannot have is the default", async () => {
+		const { RELATIONSHIP_TEXT_LIMITS } = await import(
+			"$lib/shared/lorebooks/linkVocabulary"
+		)
+		const user = await makeUser("import05-rel-caps-user")
+		const file = fixture()
+		delete file.extensions.serenepub.uuid
+		const [ally] = file.extensions.serenepub.narrativeGraph.relationships
+		Object.assign(ally, {
+			relationshipType: "w".repeat(5000),
+			description: "d".repeat(150_000),
+			reason: "r".repeat(50_000),
+			status: "vanished",
+			visibility: "everyone-and-their-dog"
+		})
+
+		const res = await importFile(user.id, file)
+		const rows = await testDb.query.narrativeRelationships.findMany({
+			where: (r, { eq }) => eq(r.lorebookId, res.lorebook!.id)
+		})
+		const row = rows.find((r) => r.relationshipType.startsWith("w"))!
+		expect(row.relationshipType).toBe(
+			"w".repeat(RELATIONSHIP_TEXT_LIMITS.wording)
+		)
+		expect(row.description).toBe(
+			"d".repeat(RELATIONSHIP_TEXT_LIMITS.description)
+		)
+		expect(row.reason).toBe("r".repeat(RELATIONSHIP_TEXT_LIMITS.reason))
+		expect(row.status).toBe("active")
+		expect(row.visibility).toBe("acknowledged")
+	}, 60_000)
 })
 
 describe("SillyTavern native World Info through lorebooks:import", () => {
@@ -343,14 +592,24 @@ describe("overwrite import", () => {
 			amendments: 1,
 			presences: 1,
 			branches: 1,
-			sceneLinks: 0
+			sceneLinks: 0,
+			// A 0.5 file is format 1; this book has no stats, places or items.
+			stats: 0,
+			places: 0,
+			items: 0,
+			// Nor a session's stat on a place, nor a stat sheet, nor anything a
+			// session holds of its entries (plan A13).
+			sessionStats: 0,
+			sheets: 0,
+			sessionLoreRefs: 0,
+			charactersRewritten: 0
 		})
 
 		await lorebookImportResolveHandler.handler(
 			fakeSocket(user.id),
 			{
 				action: "overwrite",
-				lorebookData: changed,
+				heldImportId: conflict.conflict!.heldImportId,
 				existingId: bookId
 			},
 			noopEmit
@@ -397,7 +656,11 @@ describe("overwrite import", () => {
 
 		await lorebookImportResolveHandler.handler(
 			fakeSocket(user.id),
-			{ action: "overwrite", lorebookData: file, existingId: bookId },
+			{
+				action: "overwrite",
+				heldImportId: conflict.conflict!.heldImportId,
+				existingId: bookId
+			},
 			noopEmit
 		)
 		const book = await testDb.query.lorebooks.findFirst({

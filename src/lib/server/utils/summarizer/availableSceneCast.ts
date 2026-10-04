@@ -7,10 +7,9 @@
  * (session characters/personas, lorebook bindings, narrative nodes) it used to.
  * A fourth former source — names mined from prior scenes'
  * participantCharacters/mentionedCharacters — is gone entirely: those
- * columns now store binding ids directly (resolved via this file's
- * resolveCharacterNamesToBindingIds(), called from scenes.ts right after
- * extraction), so every character a prior scene ever mentioned already has
- * a binding row, already covered by the single query below.
+ * columns now store binding ids directly, so every character a prior scene
+ * ever mentioned already has a binding row, already covered by the single
+ * query below.
  *
  * Real characters (characterId set) are always in scope
  * regardless of timeline. Background/NPC bindings (neither set) are only
@@ -27,6 +26,7 @@ import { historyDateOf } from "$lib/server/utils/lorebookEntries"
 import { eq, sql } from "drizzle-orm"
 import type { CastEntry, ExtractedCastRef } from "./templates"
 import { deriveNextBindingToken } from "$lib/server/utils/lorebookBindingToken"
+import { castMemberCards } from "$lib/server/utils/castMemberCards"
 
 export type { CastEntry, ExtractedCastRef }
 
@@ -351,11 +351,14 @@ export async function buildSceneCastList(
 		}
 	})
 	const bindingById = new Map(allBindings.map((b) => [b.id, b]))
-	const bindingByCharacterId = new Map(
-		allBindings
-			.filter((b) => b.characterId != null)
-			.map((b) => [b.characterId!, b])
-	)
+	// A seat is the member any card of theirs is — linked, or one a dated
+	// change draws them with (plan A25) — so the keeper's card seated lists
+	// as Verity, never as a stranger the extraction would suggest adding.
+	const { memberOf } = await castMemberCards(db, lorebookId)
+	const bindingOfCard = (characterId: number) => {
+		const memberId = memberOf.get(characterId)
+		return memberId == null ? undefined : bindingById.get(memberId)
+	}
 
 	const skipDedup = allBindings.length > MAX_BINDINGS_FOR_SCENE_CAST
 	if (skipDedup) {
@@ -394,9 +397,13 @@ export async function buildSceneCastList(
 		for (const cc of sessionChars) {
 			const char = (cc as any).character
 			if (!char?.name) continue
-			const binding = bindingByCharacterId.get(char.id)
+			const binding = bindingOfCard(char.id)
 			const name = binding ? binding.name || char.name : char.name
+			// The card's own name too: a dated card is often named otherwise
+			// than the member ("The Lamp Keeper" for Verity), and the model
+			// reads it on the seat.
 			const aliases = [
+				char.name,
 				...(char.nickname ? [char.nickname] : []),
 				...(char.aliases ?? [])
 			].filter((a: string) => !namesMatch(a, name))
@@ -408,9 +415,9 @@ export async function buildSceneCastList(
 			if (!persona?.name) continue
 			// Same map as the cast: a voiced character's binding IS a
 			// character binding.
-			const binding = bindingByCharacterId.get(persona.id)
+			const binding = bindingOfCard(persona.id)
 			const name = binding ? binding.name || persona.name : persona.name
-			const aliases = (persona.aliases ?? []).filter(
+			const aliases = [persona.name, ...(persona.aliases ?? [])].filter(
 				(a: string) => !namesMatch(a, name)
 			)
 			mergeOrPush(entries, name, aliases, binding?.id ?? null, skipDedup)
@@ -497,9 +504,8 @@ export async function buildSceneCastList(
 /**
  * Resolves character-extraction refs against a known-cast list WITHOUT
  * creating any new lorebookBindings rows — pure, no I/O, does not mutate
- * `castEntries`. A `{castId}` ref resolves the same way
- * resolveCharacterNamesToBindingIds does (trusted only if it verifies
- * against castEntries). A `{name}` ref that fuzzy-matches an existing entry
+ * `castEntries`. A `{castId}` ref is trusted only if it verifies against
+ * castEntries. A `{name}` ref that fuzzy-matches an existing entry
  * resolves to that entry's id. A name that matches nothing is returned as a
  * plain suggested name (deduped case-insensitively) instead of being minted
  * into a row — creation is deferred to the caller's own review/Save step
@@ -568,69 +574,6 @@ export function resolveCharacterRefs(
 }
 
 /**
- * Resolves character-extraction output to real lorebookBindings ids,
- * against a known-cast list already built for this scene by
- * buildSceneCastList(). Delegates matching to resolveCharacterRefs() above,
- * then creates a brand-new unbound (background/NPC) binding on the spot for
- * every name that didn't match — this is the same "unmatched name → new
- * node" responsibility graphBuilder.ts's old Phase 1 used to have, now
- * resolved once, here, at summarization time instead of later at
- * graph-build time (see the merge plan's scene character presence
- * redesign).
- *
- * Only used by callers with no review step downstream (narrativeGraph.ts's
- * direct-history-entry path and the scene-character-ids backfill script) —
- * scenes:process and sessions:summarize, which do have a Review & Save screen,
- * use resolveCharacterRefs()'s non-creating suggestions instead and only
- * create bindings via resolveOrCreateBindingByName() once the user accepts
- * them at Save.
- *
- * `castEntries` is mutated in place — a name that appears in both the
- * participants and mentioned lists (or repeats across calls for the same
- * scene) resolves to the same newly-created row rather than two duplicates.
- */
-export async function resolveCharacterNamesToBindingIds(
-	refs: ExtractedCastRef[],
-	lorebookId: number,
-	castEntries: CastEntry[],
-	dbInstance?: Db
-): Promise<number[]> {
-	const db = dbInstance ?? (await defaultDb())
-	const { ids, suggestedNames } = resolveCharacterRefs(refs, castEntries)
-
-	for (const name of suggestedNames) {
-		// New name — create an unbound background/NPC binding for it.
-		// Token derived from the lorebook's own per-lorebook counter
-		// (decision 1), never a recomputed max/count.
-		const newId = await db.transaction(async (tx) => {
-			const token = await deriveNextBindingToken(lorebookId, tx)
-			const [inserted] = await tx
-				.insert(schema.lorebookBindings)
-				.values({
-					lorebookId,
-					characterId: null,
-					binding: token,
-					name
-				})
-				.returning({ id: schema.lorebookBindings.id })
-			return inserted.id
-		})
-
-		// A transitional null-id entry for this name (shouldn't normally
-		// happen post-migration, but handled defensively) gets backfilled
-		// with the new row's id rather than duplicated.
-		const existing = castEntries.find((e) => entryMatches(e, name))
-		if (existing) {
-			existing.id = newId
-		} else {
-			castEntries.push({ name, aliases: [], id: newId })
-		}
-		ids.push(newId)
-	}
-	return [...new Set(ids)]
-}
-
-/**
  * Resolves a single free-form name to a real lorebookBindings id, creating
  * a new unbound (background/NPC) binding only if nothing in the lorebook's
  * current cast already matches — used at Save time by scenes:process and
@@ -638,8 +581,8 @@ export async function resolveCharacterNamesToBindingIds(
  * character" (from extraction or manually typed) into a real binding,
  * without risking a duplicate.
  *
- * Unlike resolveCharacterNamesToBindingIds (which resolves against a
- * `castEntries` snapshot built earlier in the request), this re-reads the
+ * Unlike resolveCharacterRefs (which resolves against a `castEntries`
+ * snapshot built earlier in the request), this re-reads the
  * lorebook's *current* bindings right before matching — the whole point is
  * to catch a match that appeared after extraction ran (another user, or an
  * earlier suggestion in the same save, created it in the meantime). A

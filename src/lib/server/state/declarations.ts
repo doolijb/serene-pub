@@ -66,7 +66,13 @@ import {
 	type SheetId,
 	type SlotId
 } from "@serene-pub/sdk"
-import { StateRefusal } from "$lib/server/state/write"
+import {
+	assertBookOwner,
+	assertSessionOwner,
+	holdOwner,
+	StateRefusal
+} from "$lib/server/state/write"
+import { LOCATION_TYPE_ID } from "$lib/shared/entries/types"
 import {
 	checkDerivationGraph,
 	isSessionScoped
@@ -750,6 +756,19 @@ export async function ownerSheets(
  * what rules run in, so "which ones and in what order" is one decision and has
  * to be one write.
  *
+ * **Who says** (plan A6), `by`: a person (`userId`), or a run for a session
+ * (`userId` null, `sessionId` set), which writes as the session's own user
+ * and only on what that session reaches — as a stat write through it
+ * (`assertSessionOwner`): its own book, that book's members and places, a
+ * card of its user. The owner's writer is the one the stat writes answer
+ * to — a book's own sheets, its members' and its places' are the book
+ * owner's, a card's its
+ * owner's — except that a session's (its own, a seat's, a place's in it) are
+ * the session owner's, since which sheets a session has is what it tracks
+ * (`state:setAttributePicks` is the owner's too). The owner is read again in
+ * the write's transaction (`holdOwner`), so a delete landing after the check
+ * refuses the write rather than leaving sheets for nobody.
+ *
  * ⚠ Every id must already have a row in `attribute_sheets` — the foreign key
  * says so, and the last-seen mirror is what makes that true for a genre's code
  * sheet as much as for an authored one.
@@ -758,15 +777,17 @@ export async function setOwnerSheets(
 	db: Db,
 	owner: StateOwner,
 	sheetIds: readonly string[],
-	sessionId?: number
+	by: { userId: number | null; sessionId?: number }
 ): Promise<void> {
 	const scoped = isSessionScoped(owner.kind)
+	const sessionId = by.sessionId
 	if (scoped && typeof sessionId !== "number")
 		throw new StateRefusal(
 			`a ${owner.kind} owner is inside a session, so which session has to be ` +
 				`said: its owner id is a character's, and without the session the same ` +
 				`sheets would be true of that character everywhere at once.`
 		)
+	await assertSheetsWriter(db, owner, by)
 	const wanted = [...new Set(sheetIds)]
 	if (wanted.length) {
 		const known = await db
@@ -777,32 +798,108 @@ export async function setOwnerSheets(
 		const missing = wanted.filter((id) => !have.has(id))
 		if (missing.length)
 			throw new StateRefusal(
-				`this install has no record of ${missing.join(", ")}. A sheet has to be ` +
+				`this pub has no record of ${missing.join(", ")}. A sheet has to be ` +
 					`declared — by a genre, an extension, or by somebody here — before an ` +
 					`owner can have it.`
 			)
 	}
-	await db
-		.delete(schema.ownerSheets)
-		.where(
-			and(
-				eq(schema.ownerSheets.ownerKind, owner.kind),
-				eq(schema.ownerSheets.ownerId, owner.id),
-				scoped
-					? eq(schema.ownerSheets.sessionId, sessionId!)
-					: isNull(schema.ownerSheets.sessionId)
+	await db.transaction(async (tx) => {
+		await holdOwner(tx, owner)
+		await tx
+			.delete(schema.ownerSheets)
+			.where(
+				and(
+					eq(schema.ownerSheets.ownerKind, owner.kind),
+					eq(schema.ownerSheets.ownerId, owner.id),
+					scoped
+						? eq(schema.ownerSheets.sessionId, sessionId!)
+						: isNull(schema.ownerSheets.sessionId)
+				)
 			)
+		if (!wanted.length) return
+		await tx.insert(schema.ownerSheets).values(
+			wanted.map((sheetId, position) => ({
+				ownerKind: owner.kind,
+				ownerId: owner.id,
+				sessionId: scoped ? sessionId! : null,
+				sheetId,
+				position
+			}))
 		)
-	if (!wanted.length) return
-	await db.insert(schema.ownerSheets).values(
-		wanted.map((sheetId, position) => ({
-			ownerKind: owner.kind,
-			ownerId: owner.id,
-			sessionId: scoped ? sessionId! : null,
-			sheetId,
-			position
-		}))
-	)
+	})
+}
+
+/** Refuses anyone but `owner`'s writer (see `setOwnerSheets`), and an owner that is not there. */
+async function assertSheetsWriter(
+	db: Db,
+	owner: StateOwner,
+	by: { userId: number | null; sessionId?: number }
+): Promise<void> {
+	const [session] =
+		typeof by.sessionId === "number"
+			? await db
+					.select({ userId: schema.sessions.userId })
+					.from(schema.sessions)
+					.where(eq(schema.sessions.id, by.sessionId))
+					.limit(1)
+			: []
+	const writer = by.userId ?? session?.userId ?? null
+	if (writer == null)
+		throw new StateRefusal(
+			"nobody is named to change these sheets: a person, or the session a run is for."
+		)
+	if (isSessionScoped(owner.kind)) {
+		if (!session || session.userId !== writer)
+			throw new StateRefusal("only the session's owner can change which sheets it has.")
+		// Of this session: itself, one of its seats, a place it sees.
+		await assertSessionOwner(db, by.sessionId!, owner, writer)
+		return
+	}
+	// A run reaches what its session does, as a stat write through it: the
+	// session's own book, a member or a place of it, a card of its user.
+	if (by.userId == null) {
+		await assertSessionOwner(db, by.sessionId!, owner, null)
+		return
+	}
+	if (owner.kind === "card") {
+		const [card] = await db
+			.select({ userId: schema.characters.userId })
+			.from(schema.characters)
+			.where(eq(schema.characters.id, owner.id))
+			.limit(1)
+		if (!card) throw new StateRefusal("that character no longer exists.")
+		if (card.userId !== writer)
+			throw new StateRefusal(
+				"that is not a card of yours. A card's sheets are changed by whoever owns it."
+			)
+		return
+	}
+	let lorebookId: number | undefined
+	if (owner.kind === "lorebook") lorebookId = owner.id
+	else if (owner.kind === "cast_member") {
+		const [member] = await db
+			.select({ lorebookId: schema.lorebookBindings.lorebookId })
+			.from(schema.lorebookBindings)
+			.where(eq(schema.lorebookBindings.id, owner.id))
+			.limit(1)
+		if (!member) throw new StateRefusal("that cast member no longer exists.")
+		lorebookId = member.lorebookId
+	} else if (owner.kind === "location") {
+		const [place] = await db
+			.select({
+				lorebookId: schema.lorebookEntries.lorebookId,
+				typeId: schema.lorebookEntries.typeId
+			})
+			.from(schema.lorebookEntries)
+			.where(eq(schema.lorebookEntries.id, owner.id))
+			.limit(1)
+		if (!place || place.typeId !== LOCATION_TYPE_ID)
+			throw new StateRefusal("that place no longer exists.")
+		lorebookId = place.lorebookId
+	}
+	if (lorebookId === undefined)
+		throw new StateRefusal(`'${String(owner.kind)}' is not an owner kind.`)
+	await assertBookOwner(db, lorebookId, writer)
 }
 
 export { StateRefusal }

@@ -24,6 +24,7 @@ import {
 	ensureConnectionModel,
 	forgetModelEverywhere
 } from "$lib/server/connections/models"
+import { withStarConsequences } from "$lib/server/connections/starConsequences"
 import { syncManyConnectionModels } from "$lib/server/connections/modelSync"
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 import {
@@ -226,7 +227,11 @@ export const ollamaDeleteModelHandler: Handler<
 				// empties — right for the one-model rows `connectModel` once
 				// made, and the way a managed connection would vanish the
 				// moment its last model was deleted.
-				await forgetModelOnHost(host.baseUrl, params.modelName)
+				// A starred model forgotten here releases its star by cascade,
+				// with the consequence every door runs.
+				await withStarConsequences(db, () =>
+					forgetModelOnHost(host.baseUrl, params.modelName)
+				)
 				await emitToUser("connections:list", () =>
 					buildConnectionsList()
 				)
@@ -240,7 +245,9 @@ export const ollamaDeleteModelHandler: Handler<
 			// them was pulled. For the one-model rows `connectModel` creates the
 			// outcome is identical, cascade release of `connection_defaults`
 			// included.
-			await forgetModelEverywhere(db, params.modelName, ["ollama"])
+			await withStarConsequences(db, () =>
+				forgetModelEverywhere(db, params.modelName, ["ollama"])
+			)
 
 			return res
 		} catch (error: any) {

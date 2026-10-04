@@ -11,9 +11,13 @@
  * half-copied session visible in the list.
  */
 
-import { and, asc, eq } from "drizzle-orm"
+import { and, asc, eq, gte, inArray } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
-import { insertLegacyMany } from "$lib/server/messages/store"
+import {
+	insertLegacyMany,
+	NATIVE_ORDINAL_BASE
+} from "$lib/server/messages/store"
+import { ATTACHMENT_PART_TYPES } from "$lib/server/attachments/references"
 import { canonicalChannel } from "$lib/server/messages/channels"
 import { markCharacterAsPersona } from "$lib/server/utils/markCharacterAsPersona"
 
@@ -177,11 +181,27 @@ export async function branchSession(
 							// write path that stops being true later.
 							channel: canonicalChannel((message as any).channel),
 							content: message.content,
+							// The copy's text is the original's, so the vector
+							// computed over it is the copy's too: carried with
+							// its model and source hash, a branch costs no
+							// embed. The queue's hash check still re-embeds a
+							// copy whose stored text came out different.
+							embedding: message.embedding,
+							embeddingModel: message.embeddingModel,
+							embeddingSourceHash: message.embeddingSourceHash,
+							vectorizedAt: message.vectorizedAt,
 							isHidden: message.isHidden,
 							isNarratorResponse: message.isNarratorResponse,
 							// Always settled: a copy is never being written.
 							isGenerating: false,
-							metadata: message.metadata
+							// The copy names the message it copies — the
+							// original, through any copy of a copy — so its
+							// place in play is the original's, not its own
+							// larger id (`inPlayOrder`).
+							metadata: {
+								...(message.metadata ?? {}),
+								copyOf: message.metadata?.copyOf ?? message.id
+							}
 						}) satisfies InsertSessionMessage
 				)
 			)
@@ -200,6 +220,8 @@ export async function branchSession(
 			const row = copied[i]
 			if (row) remap.set(message.id, row.id)
 		})
+		await copyAttachmentParts(tx, remap)
+
 		await copyStateRows(tx, {
 			sessionId,
 			created: created.id,
@@ -209,6 +231,50 @@ export async function branchSession(
 
 		return created
 	})
+}
+
+/**
+ * Copy the copied messages' attachments — a person's `core:image` /
+ * `core:file` parts and a pipeline's generated images — onto their copies
+ * (PLAN-composer-attachments phase 2 lane D).
+ *
+ * `insertLegacyMany` mirrors only what the legacy row can express (step 0,
+ * ordinals below `NATIVE_ORDINAL_BASE`), so without this a branch arrived with
+ * every picture gone. Each part keeps its coordinates — step 0, its revision,
+ * its native ordinal — so it sits beside the same swipe it sat beside. The
+ * FILE is not copied: the part's `assetId` names the same row, and the copy
+ * reaching the branch's messages is what makes it viewable there
+ * (`canViewMedia`'s part-reference branch). Parts on a native step ≥ 1 stay
+ * behind with the rest of that step, which the branch does not carry either.
+ */
+async function copyAttachmentParts(
+	tx: Db,
+	remap: Map<number, number>
+): Promise<void> {
+	if (!remap.size) return
+	const parts = await tx
+		.select()
+		.from(schema.messageParts)
+		.where(
+			and(
+				inArray(schema.messageParts.messageId, [...remap.keys()]),
+				inArray(schema.messageParts.type, [...ATTACHMENT_PART_TYPES]),
+				eq(schema.messageParts.step, 0),
+				gte(schema.messageParts.ordinal, NATIVE_ORDINAL_BASE)
+			)
+		)
+	if (!parts.length) return
+	await tx.insert(schema.messageParts).values(
+		parts.map((p) => ({
+			messageId: remap.get(p.messageId)!,
+			step: p.step,
+			revision: p.revision,
+			ordinal: p.ordinal,
+			type: p.type,
+			content: p.content,
+			data: p.data
+		}))
+	)
 }
 
 /**

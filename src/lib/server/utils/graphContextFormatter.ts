@@ -1,7 +1,12 @@
 import { db as defaultDb } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
 import { castEdgeOnly, isCastEdge } from "$lib/server/utils/narrativeEdges"
-import { and, desc, eq, inArray, isNull } from "drizzle-orm"
+import { castMemberCards } from "$lib/server/utils/castMemberCards"
+import {
+	nearestTieVersions,
+	type TieVersionLike
+} from "$lib/shared/lorebooks/tieVersions"
+import { and, desc, eq, inArray, isNull, or } from "drizzle-orm"
 import type {
 	NodeVisibility,
 	RelationshipVisibility
@@ -128,20 +133,31 @@ function relEntry(
 	return entry
 }
 
-/** Group relationships under the OTHER character's name. */
+/**
+ * Group relationships under the OTHER character's name.
+ *
+ * ⚠ In a `Map`, then `Object.fromEntries` — never `grouped[name] ??= []` on a
+ * plain `{}`. The name is untrusted (this file's header: a guest can bind an
+ * attacker-named character into a shared lorebook), and a character called
+ * `__proto__` or `constructor` read an inherited value there and threw on
+ * `.push`, losing the whole section (review 2026-09-29). `fromEntries` defines
+ * every key as an own property, so a name is only ever a name.
+ */
 function groupByOther(
 	rels: RelRow[],
 	nodeMap: Map<number, NodeInfo>,
 	otherSide: "to" | "from"
 ): Record<string, GraphRelationshipEntry[]> {
-	const grouped: Record<string, GraphRelationshipEntry[]> = {}
+	const grouped = new Map<string, GraphRelationshipEntry[]>()
 	for (const r of rels) {
 		const otherId = otherSide === "to" ? r.toNodeId : r.fromNodeId
 		const other = nodeMap.get(otherId)
 		const name = nodeName(other, `node#${otherId}`)
-		;(grouped[name] ??= []).push(relEntry(r, other))
+		const list = grouped.get(name)
+		if (list) list.push(relEntry(r, other))
+		else grouped.set(name, [relEntry(r, other)])
 	}
-	return grouped
+	return Object.fromEntries(grouped)
 }
 
 interface NodeInfo {
@@ -152,7 +168,10 @@ interface NodeInfo {
 	aliases: string[]
 }
 
-async function fetchNodeMap(db: Db, nodeIds: number[]) {
+/** A member as the session's reading has them — see `sessionLine`. */
+type MemberAt = <T extends { id: number; characterId?: number | null }>(member: T) => T
+
+async function fetchNodeMap(db: Db, nodeIds: number[], memberAt: MemberAt) {
 	if (nodeIds.length === 0) return new Map<number, NodeInfo>()
 	const nodes = await db.query.lorebookBindings.findMany({
 		where: inArray(schema.lorebookBindings.id, nodeIds),
@@ -166,14 +185,14 @@ async function fetchNodeMap(db: Db, nodeIds: number[]) {
 		}
 	})
 	return new Map(
-		nodes.map((n) => [
+		nodes.map(memberAt).map((n) => [
 			n.id,
 			{
 				name: n.name,
 				nodeState: n.nodeState,
 				nodeVisibility: n.nodeVisibility,
 				parentNodeId: n.parentNodeId,
-				aliases: n.aliases ?? []
+				aliases: Array.isArray(n.aliases) ? n.aliases : []
 			}
 		])
 	)
@@ -260,6 +279,62 @@ interface GraphLayers {
 }
 
 /**
+ * The session's line (findings #0/#143): an edge drawn on another line is that
+ * line's story, and one dated (by its history entry) after the session's clock
+ * or its line's fork cut has not happened here. The same rule every durable row
+ * and the link hop take (`rowsOnReading`). Where the line holds its own version
+ * of a tie it inherited, at the same date, that version is the one read
+ * (`nearestTieVersions`, plan A3 review). With no reading of this book — main
+ * at its head: shared edges only.
+ *
+ * One function for both walks below — the speaker's layers and the cast-wide read —
+ * so the two cannot come to disagree about which edges exist yet.
+ *
+ * ⚠ Filter a version's own columns — its visibility above all — AFTER this,
+ * never in the query: a branch's secret version of a tie must still hide the
+ * acknowledged one it inherited, and a query that left it out would read the
+ * inherited one in its place.
+ *
+ * `memberAt` is each member as the same reading has them (plan A25): the cast
+ * amendments on the line by the session's story now applied — a visibility
+ * (hidden, legendary), a name, aliases, a state or a summary set from a date.
+ * The card stays the member's own (`keepCard`). With no reading of this book,
+ * main at its head.
+ */
+async function sessionLine(db: Db, sessionId: number, lorebookId: number) {
+	const { sessionReadingOf, rowsOnReading } = await import(
+		"$lib/server/state/reading"
+	)
+	const { MAIN_HEAD, castOverlaysFor, castMemberAt } = await import(
+		"$lib/server/state/entriesOnReading"
+	)
+	const found = await sessionReadingOf(db, sessionId)
+	const reading = found && found.lorebookId === lorebookId ? found : null
+	const castReading = reading ?? MAIN_HEAD
+	const overlays = await castOverlaysFor(db, lorebookId, castReading)
+	const onLine = async <T extends TieVersionLike>(rows: T[]): Promise<T[]> =>
+		reading
+			? nearestTieVersions(
+					await rowsOnReading(db, rows, reading),
+					reading.line
+				)
+			: rows.filter((r) => r.branchId == null)
+	const memberAt: MemberAt = (member) =>
+		castMemberAt(member, overlays, castReading, { keepCard: true })
+	/** Members some overlay on the line gives a visibility. */
+	const visibilityAmended = [...overlays]
+		.filter(([, list]) => list.some((a) => "nodeVisibility" in a.fields))
+		.map(([memberId]) => memberId)
+	return { onLine, memberAt, visibilityAmended }
+}
+
+/** The visibilities a row may carry to be read, as a filter. */
+const visibleAs =
+	(allowed: readonly RelationshipVisibility[]) =>
+	(r: { visibility: string }): boolean =>
+		(allowed as readonly string[]).includes(r.visibility)
+
+/**
  * The three layers, walked once, before anything decides what to do with them.
  *
  * ⚠ **Extracted so there is exactly one reading of this graph.** Two callers
@@ -294,47 +369,25 @@ async function collectGraphLayers(params: {
 	const { sessionId, lorebookId, speakerCharacterId, speakerPersonaId } =
 		params
 	const db = params.db ?? defaultDb
-
-	/**
-	 * The session's line (findings #0/#143): an edge drawn on another line is
-	 * that line's story, and one dated (by its history entry) after the
-	 * session's clock or its line's fork cut has not happened here. The same
-	 * rule every durable row and the link hop take (`rowsOnReading`). With no
-	 * reading of this book — main at its head: shared edges only.
-	 */
-	const { sessionReadingOf, rowsOnReading } = await import(
-		"$lib/server/state/reading"
+	const { onLine, memberAt, visibilityAmended } = await sessionLine(
+		db,
+		sessionId,
+		lorebookId
 	)
-	const found = await sessionReadingOf(db, sessionId)
-	const reading = found && found.lorebookId === lorebookId ? found : null
-	const onLine = async <T extends { branchId?: number | null; historyEntryId?: number | null }>(
-		rows: T[]
-	): Promise<T[]> =>
-		reading
-			? await rowsOnReading(db, rows, reading)
-			: rows.filter((r) => r.branchId == null)
 
 	// Find the speaker's binding and node. One column: the speaker is a
 	// character whether the model or a user is voicing them, and the character
 	// id is preferred only because a turn carrying both is a character's turn.
+	// Any card of the member's finds them — linked, or one a dated change draws
+	// them with (plan A25).
 	const speakerId = speakerCharacterId ?? speakerPersonaId
-	const speakerBindingWhere = speakerId
-		? and(
-				eq(schema.lorebookBindings.lorebookId, lorebookId),
-				eq(schema.lorebookBindings.characterId, speakerId)
-			)
-		: null
-
-	if (!speakerBindingWhere) return null
-
-	const speakerBinding = await db.query.lorebookBindings.findFirst({
-		where: speakerBindingWhere,
-		columns: { id: true }
-	})
-	if (!speakerBinding) return null
+	if (!speakerId) return null
+	const cards = await castMemberCards(db, lorebookId)
+	const speakerMember = cards.memberOf.get(speakerId)
+	if (speakerMember == null) return null
 	// The binding IS the node now (see the lorebookBindings/narrativeNodes
 	// merge plan) — no separate lookup needed.
-	const speakerNodeId = speakerBinding.id
+	const speakerNodeId = speakerMember
 
 	// ── Layer 1: speaker outbound relationships (all visibilities, non-hidden targets) ──
 	// ⚠ `castEdgeOnly` on every layer below. These three layers ARE the cast
@@ -359,7 +412,7 @@ async function collectGraphLayers(params: {
 			...speakerRels.map((r) => r.toNodeId)
 		])
 	]
-	const l1NodeMap = await fetchNodeMap(db, l1NodeIds)
+	const l1NodeMap = await fetchNodeMap(db, l1NodeIds, memberAt)
 
 	// For alias-aware filtering: collect parentNodeIds of alias targets
 	const aliasTargetParentIds = new Set<number>()
@@ -447,25 +500,21 @@ async function collectGraphLayers(params: {
 	 */
 	const participantNodeIds = new Set<number>()
 	if (sessionCharIds.length > 0 || sessionPersonaIds.length > 0) {
-		// ONE query over ONE column — cast and voiced characters share an id
-		// space, so two reads would return overlapping rows.
+		// ONE list — cast and voiced characters share an id space, so two
+		// would overlap.
 		const participantIds = [
 			...new Set([...sessionCharIds, ...sessionPersonaIds])
 		]
-		const charConditions = [
-			eq(schema.lorebookBindings.lorebookId, lorebookId)
-		]
-		if (participantIds.length > 0)
-			charConditions.push(
-				inArray(schema.lorebookBindings.characterId, participantIds)
-			)
-		const charBindings = await db.query.lorebookBindings.findMany({
-			where: and(...charConditions),
-			columns: { id: true }
-		})
 		// A participant's binding IS their node — no separate lookup needed
-		// (post-merge simplification, see the merge plan).
-		const participantBindingIds = charBindings.map((b) => b.id)
+		// (post-merge simplification, see the merge plan) — found by any card
+		// of theirs, as the speaker is.
+		const participantBindingIds = [
+			...new Set(
+				participantIds
+					.map((id) => cards.memberOf.get(id))
+					.filter((id): id is number => id != null)
+			)
+		]
 		for (const id of participantBindingIds) participantNodeIds.add(id)
 		const participantParentIds = participantBindingIds.filter(
 			(id) => id !== speakerNodeId
@@ -488,14 +537,12 @@ async function collectGraphLayers(params: {
 						inArray(
 							schema.narrativeRelationships.fromNodeId,
 							participantParentIds
-						),
-						inArray(schema.narrativeRelationships.visibility, [
-							"acknowledged",
-							"public"
-						] as RelationshipVisibility[])
+						)
 					)
 				}))
-			).filter(isCastEdge)
+			)
+				.filter(isCastEdge)
+				.filter(visibleAs(["acknowledged", "public"]))
 			const coveredByDirect = new Set(directRels.map((r) => r.fromNodeId))
 			l2Rels = [...directRels]
 
@@ -531,18 +578,15 @@ async function collectGraphLayers(params: {
 								inArray(
 									schema.narrativeRelationships.fromNodeId,
 									aliasChildIds
-								),
-								inArray(
-									schema.narrativeRelationships.visibility,
-									[
-										"acknowledged",
-										"public"
-									] as RelationshipVisibility[]
 								)
 							)
 						})
 					)
-					l2Rels.push(...aliasRels.filter(isCastEdge))
+					l2Rels.push(
+						...aliasRels
+							.filter(isCastEdge)
+							.filter(visibleAs(["acknowledged", "public"]))
+					)
 				}
 			}
 		}
@@ -554,20 +598,35 @@ async function collectGraphLayers(params: {
 			...l2Rels.map((r) => r.toNodeId)
 		])
 	]
-	const l2NodeMap = await fetchNodeMap(db, l2NodeIds)
+	const l2NodeMap = await fetchNodeMap(db, l2NodeIds, memberAt)
 
 	// ── Layer 3: legendary nodes (nodeVisibility = "legendary") + public relationships ──
-	const legendaryNodes = await db.query.lorebookBindings.findMany({
-		where: and(
-			eq(schema.lorebookBindings.lorebookId, lorebookId),
-			eq(
-				schema.lorebookBindings.nodeVisibility,
-				"legendary" as NodeVisibility
-			)
-		),
-		orderBy: desc(schema.lorebookBindings.updatedAt),
-		limit: 5
-	})
+	// Legendary as the reading has them: stored so, or made so (or made
+	// otherwise) by a cast amendment by the session's story now. The five
+	// most recently changed.
+	const legendaryNodes = (
+		await db.query.lorebookBindings.findMany({
+			where: and(
+				eq(schema.lorebookBindings.lorebookId, lorebookId),
+				or(
+					eq(
+						schema.lorebookBindings.nodeVisibility,
+						"legendary" as NodeVisibility
+					),
+					visibilityAmended.length
+						? inArray(schema.lorebookBindings.id, visibilityAmended)
+						: undefined
+				)
+			),
+			orderBy: [
+				desc(schema.lorebookBindings.updatedAt),
+				desc(schema.lorebookBindings.id)
+			]
+		})
+	)
+		.map(memberAt)
+		.filter((n) => n.nodeVisibility === "legendary")
+		.slice(0, 5)
 
 	// Each figure with the rows behind it, in the order the query returned
 	// them. Projected — into sections or into candidates — by the callers below.
@@ -579,25 +638,23 @@ async function collectGraphLayers(params: {
 					where: and(
 						eq(schema.narrativeRelationships.lorebookId, lorebookId),
 						castEdgeOnly,
-						eq(schema.narrativeRelationships.fromNodeId, node.id),
-						eq(
-							schema.narrativeRelationships.visibility,
-							"public" as RelationshipVisibility
-						)
+						eq(schema.narrativeRelationships.fromNodeId, node.id)
 					)
 				})
 			)
-		).filter(isCastEdge)
+		)
+			.filter(isCastEdge)
+			.filter(visibleAs(["public"]))
 		const l3NodeIds = [
 			...new Set([node.id, ...pubRels.map((r) => r.toNodeId)])
 		]
-		const l3NodeMap = await fetchNodeMap(db, l3NodeIds)
+		const l3NodeMap = await fetchNodeMap(db, l3NodeIds, memberAt)
 		l3NodeMap.set(node.id, {
 			name: node.name,
 			nodeState: node.nodeState,
 			nodeVisibility: "legendary",
 			parentNodeId: null,
-			aliases: node.aliases ?? []
+			aliases: Array.isArray(node.aliases) ? node.aliases : []
 		})
 		legendary.push({
 			nodeId: node.id,
@@ -633,8 +690,10 @@ export async function buildGraphContextData(
 	const layers = await collectGraphLayers(params)
 	if (!layers) return null
 
-	// Keyed by name, same rule as the other two sections.
-	const legendaryFigures: Record<string, Record<string, unknown>> = {}
+	// Keyed by name, same rule as the other two sections — and built in a
+	// `Map` for `groupByOther`'s reason: a figure headed `__proto__` assigned
+	// here set this object's prototype and vanished from the section.
+	const legendaryFigures = new Map<string, Record<string, unknown>>()
 	for (const figureLayer of layers.legendary) {
 		const figure: Record<string, unknown> = {}
 		if (figureLayer.summary)
@@ -649,7 +708,7 @@ export async function buildGraphContextData(
 				"to"
 			)
 		}
-		legendaryFigures[figureLayer.header] = figure
+		legendaryFigures.set(figureLayer.header, figure)
 	}
 
 	// ── Format output ──
@@ -683,8 +742,8 @@ export async function buildGraphContextData(
 		)
 	}
 
-	if (Object.keys(legendaryFigures).length > 0) {
-		graph.legendaryFigures = legendaryFigures
+	if (legendaryFigures.size > 0) {
+		graph.legendaryFigures = Object.fromEntries(legendaryFigures)
 	}
 
 	if (Object.keys(graph).length === 0) return null
@@ -697,6 +756,13 @@ export type GraphRelationshipLane =
 	| "yourRelationships"
 	| "howOthersRegardYou"
 	| "legendaryFigures"
+	/**
+	 * The **cast-wide read** — nobody speaking (genre plan F6(a)): one
+	 * cast member's view of somebody, headed by the holder (`name`) and naming
+	 * the other end (`counterpart`). Never a claim about a speaker, so the
+	 * speaker's two sections never render it. See `buildCastRelationshipRows`.
+	 */
+	| "castRelationships"
 
 /**
  * One relationship, flat, with the three facts the ranked read orders by.
@@ -744,6 +810,13 @@ export interface GraphRelationshipRow {
 	present: boolean
 	/** The speaking character is party to this tie. */
 	touchesSpeaker: boolean
+	/**
+	 * The tie is the speaker's own **secret** (stored visibility `secret`) —
+	 * readable as theirs and nobody else's. Carried so a candidate built from
+	 * it can say whose secret it is (`secretOf`), which is what
+	 * `core:task/eligibility@1` gates a shared pool on (plan C2).
+	 */
+	secret?: true
 	/** When the row last changed, as epoch milliseconds. */
 	updatedAt: number
 }
@@ -796,6 +869,7 @@ export async function buildGraphRelationshipRows(
 			touchesSpeaker:
 				r.fromNodeId === layers.speakerNodeId ||
 				r.toNodeId === layers.speakerNodeId,
+			...(r.visibility === "secret" ? { secret: true as const } : {}),
 			updatedAt: r.updatedAt.getTime(),
 			...over
 		})
@@ -831,6 +905,176 @@ export async function buildGraphRelationshipRows(
 	}
 
 	return rows
+}
+
+/**
+ * Secrecy said from nobody's vantage — the cast-wide read's counterpart of
+ * `secrecyLabel`, which speaks as the holder ("Only I know").
+ *
+ * ⚠ The `secret` branch is unreachable while `CAST_WIDE_VISIBILITY` withholds
+ * secrets; it stays so that a ruling letting the planner and the narrator see
+ * them is that one list, not a label invented under deadline.
+ *
+ * The holder is named because the reader is not them: the planner and the
+ * narrator read every member's views at once, and "Only I know" under a heading
+ * would read as the model's own knowledge. An unrecognised value reads as known
+ * to both, for `secrecyLabel`'s reason.
+ */
+function castSecrecyLabel(visibility: string, holder: string): string {
+	switch (visibility) {
+		case "secret":
+			return `Only ${holder} knows`
+		case "public":
+			return "Everyone knows"
+		default:
+			return "Both know"
+	}
+}
+
+/**
+ * What the cast-wide read may carry: what both ends know, or everyone does.
+ *
+ * ⚠ **Never `secret`, until the owner rules otherwise** (review 2026-09-29).
+ * The cast-wide read is nobody's voice — an Adventure turn's planner and
+ * narrator — and the earshot rule (`withinEarshot`, `adventureContext.ts`)
+ * withholds every holder-only value from nobody's voice, failing closed. F6(a)
+ * handed the two a member's secrets, labelled as the holder's, and the leak it
+ * opened does not close by filtering the narrator alone: the planner's beats
+ * reach the narrator as "what happens in this scene", and the narrator's prose
+ * reaches the player and every later voice as history. Layer 2's rule, for the
+ * same reason: what another member may see of a tie is what it acknowledges.
+ */
+const CAST_WIDE_VISIBILITY: RelationshipVisibility[] = ["acknowledged", "public"]
+
+/**
+ * The **cast-wide read**: every relationship a cast member holds that is not
+ * that member's secret, as rows for `core:query/relationship-search@1` read
+ * with nobody speaking (genre plan F6(a), 2026-09-29).
+ *
+ * `collectGraphLayers` walks from a speaker's node, and a scope whose
+ * `currentCharacterId` is null has no speaker — an Adventure turn is the
+ * narrator's entry, and its planner and narrator are nobody's voice. What those
+ * two need is not one member's view but how the whole cast stand: layer 1 for
+ * every member at once, each tie headed by its holder and naming the other end.
+ *
+ * ⚠ **Secrets withheld** (`CAST_WIDE_VISIBILITY`, above) — the earshot rule
+ * applied to nobody's voice. Who may be handed this lane is still the spec's
+ * decision: Adventure hands it to the game master's two agents and wires no
+ * voice to it. Whether those two may also read a member's secret is an owner
+ * ruling that has not been made; until it is, the read fails closed.
+ *
+ * The same rules as the speaker's layer 1, so the two readings of one graph
+ * cannot drift: cast edges only, on the session's line, a hidden target left
+ * out, and an alias target suppressed when its holder also ties the real node.
+ * `present` is both ends in the cast — the holder always is. `null` when there
+ * is no cast member with a node in this book (nobody to hold a view); `[]`
+ * when they hold none.
+ */
+export async function buildCastRelationshipRows(params: {
+	sessionId: number
+	lorebookId: number
+	/** The host's own connection — see `collectGraphLayers`. */
+	db?: Db
+}): Promise<GraphRelationshipRow[] | null> {
+	const { sessionId, lorebookId } = params
+	const db = params.db ?? defaultDb
+	const { onLine, memberAt } = await sessionLine(db, sessionId, lorebookId)
+
+	// The cast, as `collectGraphLayers`' layer 2 reads it: `removedAt`, not
+	// `isActive`, and characters and voiced characters in one id space.
+	const [sessionChars, sessionPersonas] = await Promise.all([
+		db.query.sessionCharacters.findMany({
+			where: and(
+				eq(schema.sessionCharacters.sessionId, sessionId),
+				isNull(schema.sessionCharacters.removedAt)
+			),
+			columns: { characterId: true }
+		}),
+		db.query.sessionPersonas.findMany({
+			where: and(
+				eq(schema.sessionPersonas.sessionId, sessionId),
+				isNull(schema.sessionPersonas.removedAt)
+			),
+			columns: { personaId: true }
+		})
+	])
+	const memberIds = [
+		...new Set(
+			[
+				...sessionChars.map((c) => c.characterId),
+				...sessionPersonas.map((p) => p.personaId)
+			].filter((id): id is number => id !== null)
+		)
+	]
+	if (memberIds.length === 0) return null
+	// Each seat's member by any card of theirs (plan A25).
+	const { memberOf } = await castMemberCards(db, lorebookId)
+	const castNodeIds = new Set(
+		memberIds
+			.map((id) => memberOf.get(id))
+			.filter((id): id is number => id != null)
+	)
+	if (castNodeIds.size === 0) return null
+
+	const held = (
+		await onLine(
+			await db.query.narrativeRelationships.findMany({
+				where: and(
+					eq(schema.narrativeRelationships.lorebookId, lorebookId),
+					castEdgeOnly,
+					inArray(schema.narrativeRelationships.fromNodeId, [
+						...castNodeIds
+					])
+				)
+			})
+		)
+	)
+		.filter(isCastEdge)
+		// Secrets withheld — fail closed, see the docblock.
+		.filter(visibleAs(CAST_WIDE_VISIBILITY))
+
+	const nodeMap = await fetchNodeMap(
+		db,
+		[...new Set(held.flatMap((r) => [r.fromNodeId, r.toNodeId]))],
+		memberAt
+	)
+	// Layer 1's alias rule, per holder: a tie to an alias is dropped when the
+	// same holder also ties the real node it is an alias of.
+	const direct = new Set(held.map((r) => `${r.fromNodeId}:${r.toNodeId}`))
+	const kept = held.filter((r) => {
+		const to = nodeMap.get(r.toNodeId)
+		if (to?.nodeVisibility === "hidden") return false
+		return !(
+			to?.parentNodeId != null &&
+			direct.has(`${r.fromNodeId}:${to.parentNodeId}`)
+		)
+	})
+
+	return kept.map((r) => {
+		const holderNode = nodeMap.get(r.fromNodeId)
+		const other = nodeMap.get(r.toNodeId)
+		return {
+			id: r.id,
+			lane: "castRelationships" as const,
+			name: nodeName(holderNode, `node#${r.fromNodeId}`),
+			counterpart: nodeName(other, `node#${r.toNodeId}`),
+			entry: {
+				...relEntry(r, other),
+				// The bare name, not the heading: "Only Marrow knows", never
+				// the heading's "(a.k.a. …)" a second time.
+				secrecy: castSecrecyLabel(
+					r.visibility,
+					holderNode
+						? neutralizeGraphMarkers(holderNode.name)
+						: `node#${r.fromNodeId}`
+				)
+			},
+			present: castNodeIds.has(r.toNodeId),
+			// Nobody is speaking, so no tie is the speaker's.
+			touchesSpeaker: false,
+			updatedAt: r.updatedAt.getTime()
+		}
+	})
 }
 
 /**

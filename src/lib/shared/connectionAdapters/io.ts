@@ -230,6 +230,13 @@ export interface AdapterIo {
 	 * request shapes through to fail at the service.
 	 */
 	maxRequestBytes?: Cap
+	/**
+	 * 🚧 About how many prompt tokens one image costs this service — an
+	 * ESTIMATE for the run's receipt (PLAN-composer-attachments §3.5.7), never a
+	 * cap, so it carries no `source`. Absent: placement assumes 1,600, which is
+	 * Anthropic's ≈ (w·h)/750 at the fitted edge.
+	 */
+	tokensPerImage?: number
 }
 
 // ── Reading it ──────────────────────────────────────────────────────────────

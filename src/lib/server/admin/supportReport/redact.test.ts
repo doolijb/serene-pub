@@ -132,4 +132,15 @@ describe("redactForSupport — people and paths", () => {
 		})
 		expect(input.logs[0].text).toBe("jody at 10.0.0.2")
 	})
+
+	test("a failed query's values, wherever the text came from; its SQL stays", () => {
+		// A run's stored reason, a plugin failure, a log line: drizzle's
+		// `params:` line is whatever the query wrote.
+		const reason =
+			'node reply: Failed query: insert into "messages" ("content") values ($1)\nparams: the whole reply text'
+		const out = r(reason)
+		expect(out).toContain('insert into "messages"')
+		expect(out).toContain("[params withheld]")
+		expect(out).not.toContain("the whole reply text")
+	})
 })

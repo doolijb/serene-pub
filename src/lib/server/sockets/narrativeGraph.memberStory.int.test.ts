@@ -366,3 +366,233 @@ describe("narrativeGraph:deleteNode — their private lore (ruling 4)", () => {
 		).toHaveLength(0)
 	}, 60_000)
 })
+
+/**
+ * Stat cleanup when a member goes (plan A6): their stat sheets go with their
+ * stats, the absorb's saved copy keeps both, and an undo skips a stat whose
+ * line has been deleted since instead of failing on it.
+ */
+describe("a member's stats and stat sheets", () => {
+	let sheetSeq = 0
+	async function sheetFor(userId: number, bindingId: number) {
+		const sheetId = `test:sheet/member-story-${++sheetSeq}@1`
+		await testDb
+			.insert(schema.attributeSheets)
+			.values({ id: sheetId, userId, props: {} })
+		await testDb.insert(schema.ownerSheets).values({
+			ownerKind: "cast_member",
+			ownerId: bindingId,
+			sheetId,
+			position: 0
+		})
+		return sheetId
+	}
+	const memberSheets = (ownerId: number) =>
+		testDb
+			.select()
+			.from(schema.ownerSheets)
+			.where(
+				and(
+					eq(schema.ownerSheets.ownerKind, "cast_member"),
+					eq(schema.ownerSheets.ownerId, ownerId)
+				)
+			)
+
+	test("an absorb takes the absorbed member's sheets, and the undo gives them back", async () => {
+		const { narrativeGraphMergeNodeHandler, narrativeGraphUndoMergeHandler } =
+			await import("./narrativeGraph")
+		const b = await makeBook()
+		const survivor = await b.member("Kestrel")
+		const absorbed = await b.member("Kes")
+		const sheetId = await sheetFor(b.user.id, absorbed.id)
+
+		await narrativeGraphMergeNodeHandler.handler(
+			fakeSocket(b.user.id),
+			{ nodeId: absorbed.id, parentNodeId: survivor.id },
+			noopEmit
+		)
+		expect(await memberSheets(absorbed.id)).toHaveLength(0)
+
+		const undone = await narrativeGraphUndoMergeHandler.handler(
+			fakeSocket(b.user.id),
+			{ mergeLogId: (await latestLog(b.lorebook.id)).id },
+			noopEmit
+		)
+		expect(undone.unrestoredStoryCount).toBe(0)
+		expect(
+			(await memberSheets(undone.restoredNode.id)).map((s) => s.sheetId)
+		).toEqual([sheetId])
+	}, 60_000)
+
+	test("a sheet deleted since the absorb is left out of the undo, and counted", async () => {
+		const { narrativeGraphMergeNodeHandler, narrativeGraphUndoMergeHandler } =
+			await import("./narrativeGraph")
+		const b = await makeBook()
+		const survivor = await b.member("Kestrel")
+		const absorbed = await b.member("Kes")
+		const sheetId = await sheetFor(b.user.id, absorbed.id)
+		await narrativeGraphMergeNodeHandler.handler(
+			fakeSocket(b.user.id),
+			{ nodeId: absorbed.id, parentNodeId: survivor.id },
+			noopEmit
+		)
+		await testDb
+			.delete(schema.attributeSheets)
+			.where(eq(schema.attributeSheets.id, sheetId))
+
+		const undone = await narrativeGraphUndoMergeHandler.handler(
+			fakeSocket(b.user.id),
+			{ mergeLogId: (await latestLog(b.lorebook.id)).id },
+			noopEmit
+		)
+		expect(undone.restoredNode.name).toBe("Kes")
+		expect(undone.unrestoredStoryCount).toBe(1)
+		expect(await memberSheets(undone.restoredNode.id)).toHaveLength(0)
+	}, 60_000)
+
+	test("a stat recorded on a line deleted since the absorb is left out of the undo, and counted", async () => {
+		const { narrativeGraphMergeNodeHandler, narrativeGraphUndoMergeHandler } =
+			await import("./narrativeGraph")
+		const b = await makeBook()
+		const survivor = await b.member("Kestrel")
+		const absorbed = await b.member("Kes")
+		const [line] = await testDb
+			.insert(schema.lorebookBranches)
+			.values({ lorebookId: b.lorebook.id, name: "What if" })
+			.returning()
+		await testDb.insert(schema.attributeValues).values([
+			{
+				ownerKind: "cast_member",
+				ownerId: absorbed.id,
+				slotId: HP,
+				value: { v: 7 },
+				sessionId: null,
+				updatedBy: "user"
+			},
+			{
+				ownerKind: "cast_member",
+				ownerId: absorbed.id,
+				slotId: HP,
+				value: { v: 2 },
+				sessionId: null,
+				branchId: line.id,
+				updatedBy: "user"
+			}
+		])
+		await narrativeGraphMergeNodeHandler.handler(
+			fakeSocket(b.user.id),
+			{ nodeId: absorbed.id, parentNodeId: survivor.id },
+			noopEmit
+		)
+		await testDb
+			.delete(schema.lorebookBranches)
+			.where(eq(schema.lorebookBranches.id, line.id))
+
+		const undone = await narrativeGraphUndoMergeHandler.handler(
+			fakeSocket(b.user.id),
+			{ mergeLogId: (await latestLog(b.lorebook.id)).id },
+			noopEmit
+		)
+		expect(undone.unrestoredStoryCount).toBe(1)
+		expect(
+			(await memberAttributes(undone.restoredNode.id)).map((v) => v.value)
+		).toEqual([{ v: 7 }])
+	}, 60_000)
+
+	test("deleting a member deletes their sheets", async () => {
+		const { narrativeGraphDeleteNodeHandler } = await import(
+			"./narrativeGraph"
+		)
+		const b = await makeBook()
+		const member = await b.member("Mira")
+		const other = await b.member("Oren")
+		await sheetFor(b.user.id, member.id)
+		const kept = await sheetFor(b.user.id, other.id)
+
+		await narrativeGraphDeleteNodeHandler.handler(
+			fakeSocket(b.user.id),
+			{ id: member.id, privateLore: "keep" },
+			noopEmit
+		)
+		expect(await memberSheets(member.id)).toHaveLength(0)
+		expect((await memberSheets(other.id)).map((s) => s.sheetId)).toEqual([
+			kept
+		])
+	}, 60_000)
+})
+
+describe("a member's pending changes", () => {
+	/** A change to the member's stat, waiting in `sessionId`'s review, with `status`. */
+	async function change(sessionId: number, bindingId: number, status = "pending") {
+		const [row] = await testDb
+			.insert(schema.stateProposals)
+			.values({
+				sessionId,
+				kind: "value",
+				payload: { owner: { kind: "cast_member", id: bindingId }, slotId: HP, value: 3 },
+				status
+			})
+			.returning()
+		return row!
+	}
+	const sessionOf = async (b: Awaited<ReturnType<typeof makeBook>>) =>
+		(
+			await testDb
+				.insert(schema.sessions)
+				.values({ userId: b.user.id, isGroup: false, lorebookId: b.lorebook.id })
+				.returning()
+		)[0]!
+	const proposalsOf = (sessionId: number) =>
+		testDb
+			.select()
+			.from(schema.stateProposals)
+			.where(eq(schema.stateProposals.sessionId, sessionId))
+
+	test("deleting a member drops the changes still waiting for them; decided ones stay on the record", async () => {
+		const { narrativeGraphDeleteNodeHandler } = await import("./narrativeGraph")
+		const b = await makeBook()
+		const member = await b.member("Mira")
+		const other = await b.member("Oren")
+		const session = await sessionOf(b)
+		await change(session.id, member.id)
+		const decided = await change(session.id, member.id, "accepted")
+		const othersChange = await change(session.id, other.id)
+
+		await narrativeGraphDeleteNodeHandler.handler(
+			fakeSocket(b.user.id),
+			{ id: member.id, privateLore: "keep" },
+			noopEmit
+		)
+		expect((await proposalsOf(session.id)).map((p) => p.id).sort((x, y) => x - y)).toEqual(
+			[decided.id, othersChange.id].sort((x, y) => x - y)
+		)
+	}, 60_000)
+
+	test("an absorb drops them, and the undo puts them back on the member it recreates", async () => {
+		const { narrativeGraphMergeNodeHandler, narrativeGraphUndoMergeHandler } =
+			await import("./narrativeGraph")
+		const b = await makeBook()
+		const survivor = await b.member("Kestrel")
+		const absorbed = await b.member("Kes")
+		const session = await sessionOf(b)
+		await change(session.id, absorbed.id)
+
+		await narrativeGraphMergeNodeHandler.handler(
+			fakeSocket(b.user.id),
+			{ nodeId: absorbed.id, parentNodeId: survivor.id },
+			noopEmit
+		)
+		expect(await proposalsOf(session.id)).toHaveLength(0)
+
+		const undone = await narrativeGraphUndoMergeHandler.handler(
+			fakeSocket(b.user.id),
+			{ mergeLogId: (await latestLog(b.lorebook.id)).id },
+			noopEmit
+		)
+		expect(undone.unrestoredStoryCount).toBe(0)
+		const back = await proposalsOf(session.id)
+		expect(back.map((p) => ({ status: p.status, owner: (p.payload as any).owner }))).toEqual([
+			{ status: "pending", owner: { kind: "cast_member", id: undone.restoredNode.id } }
+		])
+	}, 60_000)
+})

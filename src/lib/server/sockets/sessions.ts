@@ -20,7 +20,8 @@ import { declaredWidgetReads } from "$lib/shared/widgets/reads"
 import {
 	insertLegacy,
 	updateLegacyWhere,
-	hasNativeSteps
+	hasNativeSteps,
+	attachParts
 } from "$lib/server/messages/store"
 import {
 	extendVerbRefusal,
@@ -42,7 +43,7 @@ import {
 	channelDeclsOf,
 	channelsOf
 } from "$lib/server/messages/channels"
-import { widgetOfInstance } from "$lib/shared/widgets/instanceId"
+import { isWidgetInstanceId, widgetOfInstance } from "@serene-pub/sdk"
 import {
 	and,
 	asc,
@@ -56,6 +57,7 @@ import {
 } from "drizzle-orm"
 import { alias } from "drizzle-orm/pg-core"
 import { resolveOrCreateBindingRow } from "$lib/server/utils/characterBindingSync"
+import { castMemberCards } from "$lib/server/utils/castMemberCards"
 import { markCharacterAsPersona } from "$lib/server/utils/markCharacterAsPersona"
 import { lastVisibleMessages } from "$lib/server/sessions/rowProjection"
 import { broadcastSessionRow } from "$lib/server/sessions/rowPush"
@@ -84,11 +86,10 @@ import { SessionTypes } from "$lib/shared/constants/SessionTypes"
 import { InterpolationEngine } from "../utils/interpolation/InterpolationEngine"
 import { dev } from "$app/environment"
 import type { Handler } from "$lib/shared/events"
+import { refusable } from "./refusable"
 import type { SessionIo } from "$lib/server/pipelines/runtime/liveRow"
 import type { RunProgress } from "$lib/shared/sockets/progress"
-import { getUserConfigurations } from "../utils/getUserConfigurations"
 import { resolveTaskConfig } from "../utils/resolveTaskConfig"
-import { resolveNarratorPromptConfig } from "../utils/resolveNarratorPromptConfig"
 import { llmQueue } from "../utils/llmQueue"
 import {
 	broadcastToSessionUsers,
@@ -98,14 +99,21 @@ import {
 import { relistBindings } from "./lorebooks"
 import { checkSessionAccess } from "$lib/server/utils/sessionAccess"
 import {
-	canApplyLayoutPreset,
+	cloneLayoutPreset,
+	copyLayoutIntoSession,
 	deleteUserLayoutPreset,
+	LAYOUT_PRESET_NEEDS_NAME,
+	LAYOUT_PRESET_UNKNOWN,
 	layoutPresetUsage,
 	listLayoutPresets,
 	renameUserLayoutPreset,
-	resolveActivePresetLayout,
-	saveUserLayoutPreset
+	resolveNewSessionLayout,
+	saveAsNewLayout,
+	saveChangesToLayout,
+	shareLayoutPreset,
+	startedFromUpdated
 } from "$lib/server/db/layoutPresets"
+import { setUserLayoutDefault } from "$lib/server/db/userLayoutDefaults"
 import {
 	readWidgetSettings,
 	storedWidgetSlugs,
@@ -122,6 +130,7 @@ import {
 	MAX_CHAT_MESSAGE_LENGTH,
 	MAX_NARRATOR_INSTRUCTIONS_LENGTH
 } from "$lib/shared/constants/MessageLimits"
+import { findOwnedBook } from "$lib/server/utils/ownedBook"
 
 // ===== SECURITY HELPERS =====
 
@@ -200,12 +209,7 @@ async function checkLorebookOwnership(
 	lorebookId: number,
 	userId: number
 ): Promise<boolean> {
-	const lorebook = await db.query.lorebooks.findFirst({
-		where: (l, { and, eq }) =>
-			and(eq(l.id, lorebookId), eq(l.userId, userId)),
-		columns: { id: true }
-	})
-	return !!lorebook
+	return !!(await findOwnedBook(db, userId, lorebookId))
 }
 
 // `checkMessageEditPermission` stood here — the item rule, evaluated on the
@@ -510,6 +514,15 @@ export const sessionsListHandler: Handler<
 }
 
 /**
+ * A widget's `maxInstances` as `sessions:view` carries it (brief 7b): a
+ * positive integer, else nothing — a stored manifest is read as it comes, and
+ * a cap that is not one is no cap (the SDK's `widget()` refuses it at build).
+ */
+function widgetCap(v: unknown): { maxInstances?: number } {
+	return typeof v === "number" && Number.isInteger(v) && v > 0 ? { maxInstances: v } : {}
+}
+
+/**
  * The session list, re-sent to the caller after a mutation that changed it.
  *
  * The LAZY form (socket-interest plan, ruling 4): `sessions:list` is the
@@ -623,7 +636,7 @@ export const sessionsCreateHandler: Handler<
 			)
 			if (!ownsLorebook) {
 				throw new Error(
-					"Access denied. You can only attach a lorebook you own."
+					"Access denied. You can only read a lorebook you own into a session."
 				)
 			}
 		}
@@ -791,30 +804,41 @@ export const sessionsCreateHandler: Handler<
 			).filter(([k]) => declaredFieldKeys.includes(k))
 		)
 
-		const sessionData: InsertSession = {
-			...sessionDataWithoutTags,
-			...(await sessionLinePatch({
-				before: null,
-				lorebookId: sessionDataWithoutTags.lorebookId ?? null,
-				lorebookBranchId: requestedBranchId,
-				clock:
-					requestedClockYear == null
-						? undefined
-						: clockFromColumns({
-								storyClockYear: requestedClockYear,
-								storyClockMonth: requestedClockMonth,
-								storyClockDay: requestedClockDay,
-								storyClockHour: requestedClockHour,
-								storyClockMinute: requestedClockMinute
-							})
-			})),
-			userId,
-			isGroup: characterIds.length > 1
-		}
-		const [newSession] = await db
-			.insert(schema.sessions)
-			.values(sessionData)
-			.returning()
+		// The clock is checked and the row written in one transaction, under
+		// the book's calendar lock (`sessionLinePatch`).
+		const newSession = await db.transaction(async (tx) => {
+			const sessionData: InsertSession = {
+				...sessionDataWithoutTags,
+				...(await sessionLinePatch(tx, {
+					before: null,
+					lorebookId: sessionDataWithoutTags.lorebookId ?? null,
+					lorebookBranchId: requestedBranchId,
+					clock:
+						requestedClockYear == null
+							? undefined
+							: clockFromColumns({
+									storyClockYear: requestedClockYear,
+									storyClockMonth: requestedClockMonth,
+									storyClockDay: requestedClockDay,
+									storyClockHour: requestedClockHour,
+									storyClockMinute: requestedClockMinute
+								})
+				})),
+				userId,
+				isGroup: characterIds.length > 1
+			}
+			const [row] = await tx
+				.insert(schema.sessions)
+				.values(sessionData)
+				.returning()
+			return row
+		})
+		// Creating until its create run is over (`sessions/creating.ts`): the
+		// window in which the create pipeline's settings still apply to it.
+		const { markCreating, markCreated } = await import(
+			"$lib/server/sessions/creating"
+		)
+		markCreating(newSession.id)
 
 		// Process tags after session creation
 		if (tags.length > 0) {
@@ -972,6 +996,8 @@ export const sessionsCreateHandler: Handler<
 				"session-created pipeline failed; seeding greetings imperatively:",
 				err
 			)
+		} finally {
+			markCreated(newSession.id)
 		}
 
 		if (!seededByPipeline) {
@@ -1299,16 +1325,23 @@ export const sessionsDeleteHandler: Handler<
 			// Best-effort and BEFORE the delete: a session the owner asked to
 			// delete must still be deleted if the recording fails, and there is
 			// nothing to record from afterwards.
+			let notRecorded: string[] = []
 			try {
 				const { newestHistoryEntryOf, recordToTimeline } = await import(
 					"$lib/server/state/durable"
 				)
+				// Dated where the session stands — the latest history entry
+				// on its line at or before its story clock — rather than at
+				// its newest capture, which the clock may have moved past
+				// (plan A22). The newest capture is its provenance.
 				const moment = await newestHistoryEntryOf(db, params.id)
-				await recordToTimeline(db, params.id, {
+				const report = await recordToTimeline(db, params.id, {
 					reason: "delete",
-					historyEntryId: moment.historyEntryId,
 					sceneId: moment.sceneId
 				})
+				// What the book would not take is said to whoever deleted
+				// the session (A18): nothing is left to record it from.
+				notRecorded = report.refused
 			} catch (e) {
 				console.warn(
 					"[sessions:delete] state was not recorded to the timeline:",
@@ -1316,6 +1349,10 @@ export const sessionsDeleteHandler: Handler<
 				)
 			}
 
+			// The scenes captured from this session outlive it (their
+			// `session_id` is set to NULL) and keep their spans: the ids are
+			// their place in play (`inPlayOrder`), and `deriveSceneMentions`
+			// counts only the messages that exist.
 			await db
 				.delete(schema.sessions)
 				.where(eq(schema.sessions.id, params.id))
@@ -1330,12 +1367,14 @@ export const sessionsDeleteHandler: Handler<
 			)
 
 			// Emit to user with the deleted session ID so frontend can update
-			emitToUser("sessions:delete", {
+			const res: Sockets.Sessions.Delete.Response = {
 				success: "Session deleted successfully",
-				id: params.id
-			})
+				id: params.id,
+				...(notRecorded.length ? { notRecorded } : {})
+			}
+			emitToUser("sessions:delete", res)
 
-			return { success: "Session deleted successfully", id: params.id }
+			return res
 		} catch (error) {
 			throw error
 		}
@@ -1484,8 +1523,8 @@ export const sessionsBindFunctionHandler: Handler<
 			return res
 		}
 		const scopeKind = params.scope ?? "session"
-		if (scopeKind === "instance" && !socket.user!.isAdmin)
-			return fail("Only administrators bind instance-wide.")
+		if (scopeKind === "pub" && !socket.user!.isAdmin)
+			return fail("Only administrators bind for the whole pub.")
 		const access = await checkSessionAccess(params.sessionId, userId)
 		if (!access.hasAccess || !access.isOwner)
 			return fail("Session not found.")
@@ -1570,8 +1609,8 @@ export const sessionsBindFunctionHandler: Handler<
 
 		const { error } = await bindSubject(db, {
 			scope:
-				scopeKind === "instance"
-					? { kind: "instance", id: 0 }
+				scopeKind === "pub"
+					? { kind: "pub", id: 0 }
 					: { kind: "session", id: params.sessionId },
 			genreId,
 			subject: params.subject,
@@ -2100,12 +2139,9 @@ export const sessionsFireActionHandler: Handler<
 }
 
 /**
- * The pipelines involved in a session, for the session's grouped settings:
- * the primary turn's pipeline plus every enabled contributed action's
- * (narrate, the summarize family, plugin actions). Each resolves to a spec
- * slug the config panel can render at session scope; the list is what lets
- * the settings group configurables **by pipeline** rather than by setting
- * type. Deduped by slug — one spec serving two actions is one card.
+ * The pipelines involved in a session, for the session's settings — one card
+ * per pipeline (`sessionPipelines`), each rendered by the config panel at
+ * session scope.
  */
 export const sessionsPipelinesHandler: Handler<
 	Sockets.Sessions.Pipelines.Params,
@@ -2120,84 +2156,16 @@ export const sessionsPipelinesHandler: Handler<
 			pipelines: []
 		}
 		if (access.hasAccess) {
-			const {
-				resolveSubjectVerdict,
-				enabledSessionFunctions,
-				STANDARD_GENRE_ID
-			} = await import("$lib/server/pipelines/entities/sessionGenres")
-			const { sessionEvents } = await import("@serene-pub/sdk")
-			const { actionIdentity } = await import("$lib/shared/actions/identity")
-			const [session] = await db
-				.select({ genreId: schema.sessions.genreId })
-				.from(schema.sessions)
-				.where(eq(schema.sessions.id, params.sessionId))
-				.limit(1)
-			const genreId = session?.genreId ?? STANDARD_GENRE_ID
-
-			const nameOf = async (slug: string): Promise<string | null> => {
-				const [row] = await db
-					.select({ name: schema.pipelineSpecs.name })
-					.from(schema.pipelineSpecs)
-					.where(eq(schema.pipelineSpecs.slug, slug))
-					.limit(1)
-				return row?.name ?? null
-			}
-			const seen = new Set<string>()
-			/**
-			 * Deduped by event as well as by slug: two functions bound to the
-			 * same dead pipeline is one thing wrong, not two.
-			 */
-			const fallbacks = new Map<
-				string,
-				Sockets.SessionAdmin.StaleBinding
-			>()
-			const add = async (
-				resolved: { spec: string | null; fallback?: any },
-				label: string
-			): Promise<void> => {
-				if (resolved.fallback)
-					fallbacks.set(resolved.fallback.event, {
-						event: resolved.fallback.event,
-						bound: resolved.fallback.bound,
-						reason: resolved.fallback.reason,
-						fallbackSpec: resolved.spec
-					})
-				const slug = resolved.spec
-				if (!slug || seen.has(slug)) return
-				seen.add(slug)
-				res.pipelines.push({
-					slug,
-					label: label || (await nameOf(slug)) || slug
-				})
-			}
-
-			// The reply pipeline is always involved; then every function the
-			// session actually has switched on (19 §4) — narrate included.
-			//
-			// The verdict rather than the slug (ruled 2026-09-10): a preset
-			// binding that stopped resolving must not fail this read, and the
-			// list must not quietly show a pipeline the preset does not name
-			// as though the preset had named it.
-			await add(
-				await resolveSubjectVerdict(db, genreId, sessionEvents.messageRespond, {
-					sessionId: params.sessionId
-				}),
-				"Respond"
+			const { sessionPipelines } = await import(
+				"$lib/server/pipelines/entities/sessionPipelines"
 			)
-			const fns = await enabledSessionFunctions(
+			const { pipelines, fallbacks } = await sessionPipelines(
 				db,
 				params.sessionId,
-				genreId,
 				userId
 			)
-			for (const fn of fns)
-				await add(
-					await resolveSubjectVerdict(db, genreId, actionIdentity(fn), {
-						sessionId: params.sessionId
-					}),
-					fn.name
-				)
-			if (fallbacks.size) res.presetFallbacks = [...fallbacks.values()]
+			res.pipelines = pipelines
+			if (fallbacks.length) res.presetFallbacks = fallbacks
 		}
 		emitToUser("sessions:pipelines", res)
 		return res
@@ -2287,8 +2255,8 @@ export const sessionsPresetStatusHandler: Handler<
 
 /**
  * The session's frame surfaces (20 §12): the mode-declared session-view and
- * every enabled plugin's declared panels, each resolved to a frame src on the
- * plugin-ui route. Presence is data — disabling a plugin takes its frames
+ * every enabled plugin's widgets (component and frame), each resolved to a src
+ * on the plugin-ui route. Presence is data — disabling a plugin takes its frames
  * with it, and a mode whose view-plugin is missing falls back to core's log
  * (the frame is simply absent, never an error).
  */
@@ -2302,7 +2270,6 @@ export const sessionsViewHandler: Handler<
 		const access = await checkSessionAccess(params.sessionId, userId)
 		const res: Sockets.Sessions.View.Response = {
 			sessionId: params.sessionId,
-			panels: [],
 			modePanels: [],
 			// The floor, replaced below once the genre is read. A caller with
 			// no access still learns that a session has one lane, which is
@@ -2321,9 +2288,8 @@ export const sessionsViewHandler: Handler<
 			// A row stored as `core` offers nothing: its frames would be
 			// answered as core's own (`notCoreRow`). Behind the extension
 			// flag like the R71 path below: with SP_PLUGINS_ENABLED off no
-			// plugin counts as enabled here, so no plugin panel (⏳
-			// `res.panels`), plugin widget, genre panel a plugin owns or
-			// session view is offered.
+			// plugin counts as enabled here, so no plugin widget, genre panel
+			// a plugin owns or session view is offered.
 			const { pluginsEnabled } = await import("$lib/server/plugins/flag")
 			const extensionsOn = pluginsEnabled()
 			const enabled = extensionsOn
@@ -2337,47 +2303,6 @@ export const sessionsViewHandler: Handler<
 						.from(schema.plugins)
 						.where(and(eq(schema.plugins.enabled, true), notCoreRow()))
 				: []
-
-			// Panels: every enabled plugin's own widgets, in name order.
-			//
-			// Read once, into two lists. `res.modePanels` gets them below,
-			// after the genre's, because that is where the client seats a
-			// widget; `res.panels` is the ⏳ pre-widget listing and this is its
-			// last producer.
-			//
-			// ⏳ REMOVE `res.panels` next release (0.7.0, with SDK 1.0).
-			// Nothing in this repo reads it — the client seats widgets off
-			// `modePanels` — and it survives only for a reader outside it. It
-			// keeps the **bare** declared id its consumers were written
-			// against; the widget id beside it is the namespaced one.
-			const pluginWidgets: {
-				pluginId: string
-				decl: WidgetDecl
-				surface: { kind: "frame"; pluginId: string; entry: string }
-			}[] = []
-			for (const p of enabled) {
-				const surfaces = surfacesOf(p.manifest, p.pluginId)
-				const prefix = `${p.pluginId}:`
-				for (const panel of surfaces.panels) {
-					const surface = resolveWidgetSurface(panel, p.pluginId)
-					if (surface?.kind !== "frame") continue
-					pluginWidgets.push({ pluginId: p.pluginId, decl: panel, surface })
-					// Stripped by the prefix this loop just put on, not parsed
-					// back out: an installed plugin id is not held to the slug
-					// grammar anywhere but the frame URL, so a stored
-					// `acme/mapper` would not parse and this row would have
-					// silently changed shape.
-					const bare = panel.id.startsWith(prefix)
-						? panel.id.slice(prefix.length)
-						: panel.id
-					res.panels.push({
-						pluginId: p.pluginId,
-						panelId: bare,
-						src: frameSrc(p.pluginId, surface.entry),
-						title: i18nText(panel.title) ?? bare
-					})
-				}
-			}
 
 			// The mode's declared session-view, when its plugin is enabled
 			// and declares the surface.
@@ -2462,7 +2387,7 @@ export const sessionsViewHandler: Handler<
 			if (typeof viewPlugin === "string") {
 				const owner = enabled.find((p) => p.pluginId === viewPlugin)
 				const decl = owner
-					? surfacesOf(owner.manifest, owner.pluginId).sessionView
+					? surfacesOf(owner.manifest).sessionView
 					: undefined
 				if (owner && decl)
 					res.sessionView = {
@@ -2472,15 +2397,13 @@ export const sessionsViewHandler: Handler<
 					}
 			}
 
-			// The mode's declared surface-grid panels (21), then every enabled
-			// plugin's own. Both are widgets to the client; they differ only in
-			// who declared them and, therefore, in whether their id is
-			// qualified.
+			// The mode's declared surface-grid panels (21). An enabled
+			// plugin's own widgets follow in the R71 pass below.
 			const declaredPanels = (mode?.shape as any)?.panels
 			const genrePanels = Array.isArray(declaredPanels)
 				? declaredPanels
 				: []
-			if (genrePanels.length || pluginWidgets.length) {
+			if (genrePanels.length) {
 				// The viewer's language (read above, `res.language`): a panel's
 				// title is display text (R-20) — a string or a locale map — and
 				// the client reads text.
@@ -2513,10 +2436,6 @@ export const sessionsViewHandler: Handler<
 					if (!p || typeof p.id !== "string") continue
 					const surface: WidgetSurface | null = resolveWidgetSurface(p, genreOwner)
 					if (!surface) continue
-					// A frame is always a plugin's document: with the
-					// extension subsystem off it is not offered at all, not
-					// even as the absent-plugin placeholder.
-					if (surface.kind === "frame" && !extensionsOn) continue
 					// A remote runs its owner's component module in the UI
 					// worker (§3.5): offered only when that plugin is enabled
 					// and declares the component; otherwise not offered rather
@@ -2526,13 +2445,12 @@ export const sessionsViewHandler: Handler<
 					let grants: string[] | undefined
 					// Core's own component holds every section scope it
 					// declares, as the page's default widgets do
-					// (`coreDefaultWidgets`). Never a frame: that is a
-					// plugin's document, whatever genre seats it.
-					if (surface.kind === "remote" && surface.owner === "core")
+					// (`coreDefaultWidgets`).
+					if (surface.owner === "core")
 						grants = (Array.isArray(p.scopes) ? (p.scopes as unknown[]) : []).filter(
 							(s): s is string => typeof s === "string" && Object.hasOwn(WIDGET_SCOPED_SECTIONS, s)
 						)
-					if (surface.kind === "remote" && surface.owner === "core") {
+					if (surface.owner === "core") {
 						// Core's own component: served by `/core-ui`, which
 						// serves every component core declares and nothing
 						// else — so one core does not declare is not offered,
@@ -2540,12 +2458,15 @@ export const sessionsViewHandler: Handler<
 						// looked up as a plugin row (`notCoreRow` hides any
 						// row named `core`).
 						if (!coreComponents.has(surface.component)) continue
-						// The conversation is the page's primary, mounted once
-						// by the layout; a second copy would share its element
-						// ids (`#message-<id>`), so a panel may not seat it.
+						// The conversation is not a panel: the layout draws
+						// every copy of it itself (`messages`, `messages#<name>`)
+						// and decides there which copies keep the page's
+						// element ids (`#message-<id>`) and which take their
+						// box's prefix. A panel seating it would sit outside
+						// that, so a panel may not.
 						if (surface.component === CORE_CONVERSATION_COMPONENT) continue
 						remoteSrc = `/core-ui/${surface.component}`
-					} else if (surface.kind === "remote") {
+					} else {
 						const owner = enabled.find((e) => e.pluginId === surface.owner)
 						const declared = (
 							(owner?.manifest as { components?: unknown } | undefined)?.components as
@@ -2595,64 +2516,14 @@ export const sessionsViewHandler: Handler<
 								: undefined,
 						// The base sections it reads (R75): only those are sent.
 						...(Array.isArray(p.reads) ? { reads: declaredWidgetReads(p.reads) } : {}),
+						...widgetCap(p.maxInstances),
 						defaultActive: !!p.defaultActive
 					}
-					if (surface.kind === "frame") {
-						const owner = enabled.find(
-							(e) => e.pluginId === surface.pluginId
-						)
-						if (owner)
-							panel.src = frameSrc(surface.pluginId, surface.entry)
-					} else if (remoteSrc) panel.src = remoteSrc
+					if (remoteSrc) panel.src = remoteSrc
 					if (grants?.length) panel.grants = grants as Sockets.Sessions.View.ModePanel["grants"]
 					res.modePanels.push(panel)
 				}
 
-				/**
-				 * A plugin's own widgets, seated in EVERY session (the ruling,
-				 * 2026-09-17). A genre declares which widgets its sessions
-				 * have; a plugin's panels belong to no genre, so the only
-				 * honest answer is "offered everywhere, active nowhere" —
-				 * `defaultActive` false unless the declaration says otherwise,
-				 * so an install never rearranges a session by itself.
-				 *
-				 * Their ids are namespaced (`surfacesOf` did it): a package
-				 * picked its panel id in private, and a layout row outlives the
-				 * install that could have told two `map`s apart.
-				 */
-				for (const { pluginId, decl, surface } of pluginWidgets) {
-					res.modePanels.push({
-						id: decl.id,
-						title: i18nText(decl.title, language) ?? decl.id,
-						...(typeof decl.icon === "string"
-							? { icon: decl.icon }
-							: {}),
-						// Never `primary`: the primary is the session's anchor
-						// and an installed package may not take it. A genre
-						// chooses its own view; a plugin offers a panel beside
-						// it.
-						role: "secondary",
-						surface,
-						// Resolved unconditionally — this list is built from
-						// the ENABLED plugins, so the owner is by construction
-						// installed and serving.
-						src: frameSrc(pluginId, surface.entry),
-						...(decl.channels ? { channels: decl.channels } : {}),
-						...(decl.layout ? { layout: decl.layout } : {}),
-						...(decl.settings
-							? {
-									settings: decl.settings as Record<
-										string,
-										unknown
-									>
-								}
-							: {}),
-						...(Array.isArray(decl.reads)
-							? { reads: declaredWidgetReads(decl.reads) }
-							: {}),
-						defaultActive: !!decl.defaultActive
-					})
-				}
 			}
 		}
 		// R71: a session offers every enabled package's widgets scoped to its
@@ -2704,16 +2575,21 @@ export const sessionsViewHandler: Handler<
 				}
 				if (!Array.isArray(m?.widgets)) continue
 				for (const w of m.widgets as WidgetDecl[]) {
-					if (!w || typeof w.id !== "string" || typeof w.component !== "string") continue
+					if (!w || typeof w.id !== "string") continue
 					if (Array.isArray(w.genres) && w.genres.length && !w.genres.includes(genreId)) continue
-					const built = (m.components ?? []).find((c) => c?.slug === w.component)
+					// What it renders: its own component, run in the UI worker.
+					// Anything else (nothing at all) is not offered.
+					const surface = resolveWidgetSurface(w, e.pluginId)
+					if (!surface) continue
+					const built = (m.components ?? []).find((c) => c?.slug === surface.component)
 					// The built module, never its source — otherwise not offered rather than offered broken.
 					if (typeof built?.entry !== "string" || !isServableEntry(built.entry) || !/\.m?js$/.test(built.entry))
 						continue
 					// Built for a host contract this host does not speak (F1): not offered, the reason in the admin list.
-					if (pluginComponentRefusal(e.manifest, w.component)) continue
+					if (pluginComponentRefusal(e.manifest, surface.component)) continue
+					const src = frameSrc(e.pluginId, built.entry)
 					const id = pluginWidgetId(e.pluginId, w.id)
-					if (seen.has(id)) continue // one declaration per id (a legacy panel of the same id wins)
+					if (seen.has(id)) continue // one declaration per id
 					seen.add(id)
 					const grants = panelGrants(w.scopes, e.manifest as never, e.adminDenied)
 					res.modePanels.push({
@@ -2724,12 +2600,14 @@ export const sessionsViewHandler: Handler<
 							w.role === "primary" && omit.has(CONVERSATION_WIDGET_ID) && genreOwner === e.pluginId
 								? "primary"
 								: "secondary",
-						surface: { kind: "remote", owner: e.pluginId, component: w.component },
-						src: frameSrc(e.pluginId, built.entry),
+						surface,
+						src,
 						...(Array.isArray(w.channels) ? { channels: w.channels } : {}),
+						...(w.layout && typeof w.layout === "object" ? { layout: w.layout } : {}),
 						...(w.settings ? { settings: w.settings as Record<string, unknown> } : {}),
 						...(Array.isArray(w.reads) ? { reads: declaredWidgetReads(w.reads) } : {}),
 						...(grants.length ? { grants: grants as Sockets.Sessions.View.ModePanel["grants"] } : {}),
+						...widgetCap(w.maxInstances),
 						defaultActive: !!w.defaultActive
 					})
 				}
@@ -2780,16 +2658,197 @@ async function genreOfSession(sessionId: number): Promise<string> {
 }
 
 /**
- * Read the caller's surface-grid layout for a session (21 §10, extended by the
- * PLAN 25 preset redesign). No row yet → an empty blob; the client then derives
- * its default layout from the mode's declared panels. Access-gated like every
- * other session read.
- *
- * `layout` is returned EXACTLY as it always was — the preset fields are strictly
- * additive, and the preset's own content never enters it. That is the whole
- * compatibility guarantee: a session that already has an arrangement in `layout`
- * gets back byte-identical bytes, and the client's manager reads its own slots
- * in preference to the preset base, so nothing it renders can change.
+ * `genreOfSession` for many sessions in one read: id → genre, by the same
+ * rule (no genre is Chat). A missing session is absent from the map. For the
+ * layout-list push (`sessions/startedFromPush.ts`), which has the sessions
+ * people have open and needs those of one genre.
+ */
+export async function sessionGenres(
+	sessionIds: readonly number[]
+): Promise<Map<number, string>> {
+	const out = new Map<number, string>()
+	if (!sessionIds.length) return out
+	const rows = await db
+		.select({ id: schema.sessions.id, genreId: schema.sessions.genreId })
+		.from(schema.sessions)
+		.where(inArray(schema.sessions.id, [...sessionIds]))
+	for (const row of rows) out.set(row.id, row.genreId ?? "core:genre/chat")
+	return out
+}
+
+/**
+ * The first open (the copy model, brief 3 of `PLAN-layout-one-format-2026-09-28`):
+ * a person with no layout row for this session gets a COPY of their
+ * new-session layout for the genre, else of the genre default layout, else an
+ * empty one (`resolveNewSessionLayout`, `copyLayoutIntoSession`). One
+ * transaction, and the insert does nothing on a conflict, so two tabs opening
+ * the session at once make one row. A session's layout is its own from here
+ * on: nothing is layered over it at read time.
+ */
+async function copyLayoutOnFirstOpen(
+	sessionId: number,
+	userId: number,
+	genreId: string
+): Promise<void> {
+	const mine = and(
+		eq(schema.sessionPanelLayouts.sessionId, sessionId),
+		eq(schema.sessionPanelLayouts.userId, userId)
+	)
+	// Every open but the first finds its row here, without taking a
+	// transaction (PGlite has one connection; a transaction holds it).
+	const [seen] = await db
+		.select({ id: schema.sessionPanelLayouts.id })
+		.from(schema.sessionPanelLayouts)
+		.where(mine)
+		.limit(1)
+	if (seen) return
+	await db.transaction(async (tx) => {
+		const [had] = await tx
+			.select({ id: schema.sessionPanelLayouts.id })
+			.from(schema.sessionPanelLayouts)
+			.where(mine)
+			.limit(1)
+		if (had) return
+		await copyLayoutIntoSession(tx, {
+			sessionId,
+			userId,
+			genreId,
+			layoutPresetId: await resolveNewSessionLayout(tx, userId, genreId),
+			onlyIfAbsent: true
+		})
+	})
+}
+
+/**
+ * The caller's whole session layout for a session, as `:get` and `:startFrom`
+ * both answer it: the row's layout, its provenance and whether that source
+ * was **Updated** since, the style pins, the widget settings, and the list the
+ * editor offers. A stranger to the session gets the empty answer.
+ */
+async function panelLayoutAnswer(
+	sessionId: number,
+	userId: number,
+	hasAccess: boolean
+): Promise<Sockets.Sessions.PanelLayout.Get.Response> {
+	const answer: Sockets.Sessions.PanelLayout.Get.Response = {
+		sessionId,
+		layout: {},
+		startedFromLayoutPresetId: null,
+		layoutCopiedAt: null,
+		startedFromUpdated: false,
+		layoutSettings: {},
+		widgetSettings: {},
+		presets: []
+	}
+	if (!hasAccess) return answer
+	const [row] = await db
+		.select({
+			layout: schema.sessionPanelLayouts.layout,
+			startedFromLayoutPresetId:
+				schema.sessionPanelLayouts.startedFromLayoutPresetId,
+			layoutCopiedAt: schema.sessionPanelLayouts.layoutCopiedAt,
+			layoutSettings: schema.sessionPanelLayouts.layoutSettings
+		})
+		.from(schema.sessionPanelLayouts)
+		.where(
+			and(
+				eq(schema.sessionPanelLayouts.sessionId, sessionId),
+				eq(schema.sessionPanelLayouts.userId, userId)
+			)
+		)
+		.limit(1)
+	if (row?.layout && typeof row.layout === "object")
+		answer.layout = row.layout as Record<string, unknown>
+	if (row?.layoutSettings && typeof row.layoutSettings === "object")
+		answer.layoutSettings = row.layoutSettings as Record<string, unknown>
+	answer.startedFromLayoutPresetId = row?.startedFromLayoutPresetId ?? null
+	answer.layoutCopiedAt = row?.layoutCopiedAt
+		? row.layoutCopiedAt.toISOString()
+		: null
+	answer.widgetSettings = await readWidgetSettings(sessionId, userId)
+	answer.presets = await listLayoutPresets(await genreOfSession(sessionId), userId)
+	answer.startedFromUpdated = startedFromUpdated(
+		answer.presets.find((p) => p.id === answer.startedFromLayoutPresetId),
+		row?.layoutCopiedAt ?? null
+	)
+	return answer
+}
+
+/**
+ * What `sessions:panelLayout:startedFromUpdated` carries (brief 6b): the
+ * **started from** half of `:get`'s answer — the provenance, the **Updated**
+ * flag and the refreshed list the editor's pane draws from — for one person
+ * on one session. Pushed when a layout it started from moved (built only for
+ * a socket that holds the session's scope, `sessions/startedFromPush.ts`),
+ * and answered when a page asks. Null for a person who is not in the
+ * session: there is nothing of theirs to label.
+ */
+export async function startedFromUpdatedAnswer(
+	sessionId: number,
+	userId: number
+): Promise<Sockets.Sessions.PanelLayout.StartedFromUpdated.Response | null> {
+	const access = await checkSessionAccess(sessionId, userId)
+	if (!access.hasAccess) return null
+	const [row] = await db
+		.select({
+			startedFromLayoutPresetId:
+				schema.sessionPanelLayouts.startedFromLayoutPresetId,
+			layoutCopiedAt: schema.sessionPanelLayouts.layoutCopiedAt
+		})
+		.from(schema.sessionPanelLayouts)
+		.where(
+			and(
+				eq(schema.sessionPanelLayouts.sessionId, sessionId),
+				eq(schema.sessionPanelLayouts.userId, userId)
+			)
+		)
+		.limit(1)
+	const presets = await listLayoutPresets(await genreOfSession(sessionId), userId)
+	const startedFromLayoutPresetId = row?.startedFromLayoutPresetId ?? null
+	return {
+		sessionId,
+		startedFromLayoutPresetId,
+		layoutCopiedAt: row?.layoutCopiedAt ? row.layoutCopiedAt.toISOString() : null,
+		startedFromUpdated: startedFromUpdated(
+			presets.find((p) => p.id === startedFromLayoutPresetId),
+			row?.layoutCopiedAt ?? null
+		),
+		presets
+	}
+}
+
+/**
+ * Ask for the **started from** facts again (brief 6b): what the push
+ * carries, for the caller. The page asks after a refused _Save changes to_
+ * — the news that the layout changed may not have reached this tab — so the
+ * next ask warns. A stranger to the session gets the empty answer.
+ */
+export const sessionsPanelLayoutStartedFromUpdatedHandler: Handler<
+	Sockets.Sessions.PanelLayout.StartedFromUpdated.Params,
+	Sockets.Sessions.PanelLayout.StartedFromUpdated.Response
+> = {
+	event: "sessions:panelLayout:startedFromUpdated",
+	handler: async (socket, params, emitToUser) => {
+		const sessionId = Number(params?.sessionId)
+		const res = (Number.isInteger(sessionId)
+			? await startedFromUpdatedAnswer(sessionId, socket.user!.id)
+			: null) ?? {
+			sessionId,
+			startedFromLayoutPresetId: null,
+			layoutCopiedAt: null,
+			startedFromUpdated: false,
+			presets: []
+		}
+		emitToUser("sessions:panelLayout:startedFromUpdated", res)
+		return res
+	}
+}
+
+/**
+ * Read the caller's session layout for a session (21 §10; the copy model).
+ * A first open copies one in (`copyLayoutOnFirstOpen`), so the answer is
+ * always the person's own whole layout — never a delta over a base.
+ * Access-gated like every other session read.
  */
 export const sessionsPanelLayoutGetHandler: Handler<
 	Sockets.Sessions.PanelLayout.Get.Params,
@@ -2799,57 +2858,67 @@ export const sessionsPanelLayoutGetHandler: Handler<
 	handler: async (socket, params, emitToUser) => {
 		const userId = socket.user!.id
 		const access = await checkSessionAccess(params.sessionId, userId)
-		let layout: Record<string, unknown> = {}
-		let layoutPresetId: number | null = null
-		let layoutSettings: Record<string, unknown> = {}
-		let widgetSettings: Record<string, Record<string, unknown>> = {}
-		let presetLayout: Record<string, unknown> = {}
-		let presets: Sockets.Sessions.LayoutPreset[] = []
-		if (access.hasAccess) {
-			const [row] = await db
-				.select({
-					layout: schema.sessionPanelLayouts.layout,
-					layoutPresetId:
-						schema.sessionPanelLayouts.startedFromLayoutPresetId,
-					layoutSettings: schema.sessionPanelLayouts.layoutSettings
-				})
-				.from(schema.sessionPanelLayouts)
-				.where(
-					and(
-						eq(
-							schema.sessionPanelLayouts.sessionId,
-							params.sessionId
-						),
-						eq(schema.sessionPanelLayouts.userId, userId)
-					)
-				)
-				.limit(1)
-			if (row?.layout && typeof row.layout === "object")
-				layout = row.layout as Record<string, unknown>
-			layoutPresetId = row?.layoutPresetId ?? null
-			if (row?.layoutSettings && typeof row.layoutSettings === "object")
-				layoutSettings = row.layoutSettings as Record<string, unknown>
-
-			widgetSettings = await readWidgetSettings(params.sessionId, userId)
-
-			const genreId = await genreOfSession(params.sessionId)
-			presetLayout = await resolveActivePresetLayout(
-				genreId,
+		if (access.hasAccess)
+			await copyLayoutOnFirstOpen(
+				params.sessionId,
 				userId,
-				layoutPresetId
+				await genreOfSession(params.sessionId)
 			)
-			presets = await listLayoutPresets(genreId, userId)
-		}
-		const res: Sockets.Sessions.PanelLayout.Get.Response = {
-			sessionId: params.sessionId,
-			layout,
-			layoutPresetId,
-			layoutSettings,
-			widgetSettings,
-			presetLayout,
-			presets
-		}
+		const res = await panelLayoutAnswer(
+			params.sessionId,
+			userId,
+			access.hasAccess
+		)
 		emitToUser("sessions:panelLayout:get", res)
+		return res
+	}
+}
+
+/**
+ * Replace the caller's session layout by COPYING one in: a session layout
+ * preset (_Start from_ a card, _Start again from "X"_, _Reset to genre default
+ * layout_) or `null` (_Start from scratch_). The incoming layout's widget
+ * settings and style pins win for each widget instance it names; the session
+ * keeps its others (owner LB). A preset the caller may not copy — another
+ * genre's, a withdrawn one, a stranger's private one, a missing id — is
+ * refused with one sentence and nothing is written.
+ *
+ * Answered like `:get`, so the page re-seeds from one message.
+ */
+export const sessionsPanelLayoutStartFromHandler: Handler<
+	Sockets.Sessions.PanelLayout.StartFrom.Params,
+	Sockets.Sessions.PanelLayout.StartFrom.Response
+> = {
+	event: "sessions:panelLayout:startFrom",
+	handler: async (socket, params, emitToUser) => {
+		const userId = socket.user!.id
+		const access = await checkSessionAccess(params.sessionId, userId)
+		let ok = false
+		let error: string | undefined
+		const presetId = params.layoutPresetId ?? null
+		if (!access.hasAccess) {
+			error = "No access to this session"
+		} else if (presetId !== null && !Number.isInteger(presetId)) {
+			error = LAYOUT_PRESET_UNKNOWN
+		} else {
+			const genreId = await genreOfSession(params.sessionId)
+			const outcome = await db.transaction((tx) =>
+				copyLayoutIntoSession(tx, {
+					sessionId: params.sessionId,
+					userId,
+					genreId,
+					layoutPresetId: presetId
+				})
+			)
+			if (outcome.ok) ok = true
+			else error = outcome.error
+		}
+		const res: Sockets.Sessions.PanelLayout.StartFrom.Response = {
+			...(await panelLayoutAnswer(params.sessionId, userId, access.hasAccess)),
+			ok,
+			error
+		}
+		emitToUser("sessions:panelLayout:startFrom", res)
 		return res
 	}
 }
@@ -2930,30 +2999,22 @@ async function seatedWidgetSettings(
 	return out
 }
 
-/** Guard behind `layoutPresetId`: this session's genre, and seeded or mine. */
-async function mayApplyPreset(
-	presetId: number,
-	sessionId: number,
-	userId: number
-): Promise<boolean> {
-	return canApplyLayoutPreset(
-		presetId,
-		await genreOfSession(sessionId),
-		userId
-	)
-}
-
 /**
- * Persist the caller's surface-grid layout for a session (21 §10, extended by
- * the PLAN 25 preset redesign). One row per (user, session); upsert. The
- * `layout` blob is stored verbatim — its shape is the client surface manager's
- * business, forward-compatible by design.
+ * Persist the caller's session layout for a session (21 §10; the copy model).
+ * One row per (user, session); upsert. The `layout` blob is stored verbatim —
+ * its shape is the client surface manager's business.
  *
- * `layoutPresetId` and `layoutSettings` are written ONLY when the caller sends
- * the key. That is not politeness, it is the correctness condition: the surface
- * manager's debounced save knows nothing about presets and posts `layout`
- * alone, several times a minute. If absence meant "clear", every drag of a
- * gutter would silently reset the user's chosen preset.
+ * Provenance (`started from`, `layout_copied_at`) is never written here: only
+ * a copy (`:startFrom`, the first open) and _Save as new layout_ write it, so a
+ * client cannot name a preset it never copied. A `layoutPresetId` key from an
+ * older client is ignored. The one exception is a set that INSERTS — no open
+ * came first — which stamps `layout_copied_at` with no source, so the row is
+ * never mistaken for a pre-copy-model one.
+ *
+ * `layoutSettings` and `widgetSettings` are written ONLY when the caller sends
+ * the key: the surface manager's debounced save posts `layout` alone, several
+ * times a minute, and absence meaning "clear" would wipe pins and settings on
+ * every drag of a gutter.
  */
 export const sessionsPanelLayoutSetHandler: Handler<
 	Sockets.Sessions.PanelLayout.Set.Params,
@@ -2965,7 +3026,6 @@ export const sessionsPanelLayoutSetHandler: Handler<
 		const access = await checkSessionAccess(params.sessionId, userId)
 		let ok = false
 		let error: string | undefined
-		const setsPreset = "layoutPresetId" in params
 		const setsSettings = "layoutSettings" in params
 		const setsWidgets = "widgetSettings" in params
 		if (!access.hasAccess) {
@@ -2983,19 +3043,6 @@ export const sessionsPanelLayoutSetHandler: Handler<
 			!isWidgetSettingsPayload(params.widgetSettings)
 		) {
 			error = "Invalid widget settings"
-		} else if (
-			setsPreset &&
-			params.layoutPresetId != null &&
-			!(await mayApplyPreset(
-				params.layoutPresetId,
-				params.sessionId,
-				userId
-			))
-		) {
-			// Not this session's genre, or somebody else's preset. Refuse rather
-			// than store: a pinned id that resolves for its author would render
-			// a stranger's layout to whoever pinned it.
-			error = "Unknown layout preset"
 		} else {
 			// Built conditionally so an absent key leaves its column alone.
 			// Typed against the table so a mistyped column name is a compile
@@ -3003,14 +3050,13 @@ export const sessionsPanelLayoutSetHandler: Handler<
 			const changes: Partial<
 				typeof schema.sessionPanelLayouts.$inferInsert
 			> = { layout: params.layout }
-			if (setsPreset)
-				changes.startedFromLayoutPresetId = params.layoutPresetId
 			if (setsSettings) changes.layoutSettings = params.layoutSettings
 			await db
 				.insert(schema.sessionPanelLayouts)
 				.values({
 					sessionId: params.sessionId,
 					userId,
+					layoutCopiedAt: new Date(),
 					...changes
 				})
 				.onConflictDoUpdate({
@@ -3046,10 +3092,14 @@ export const sessionsPanelLayoutSetHandler: Handler<
 }
 
 /**
- * Save the caller's current arrangement as a user-authored layout preset for
- * this session's genre (PLAN 25 redesign). Definitions only — this never
- * touches the caller's active selection; applying the new preset is a separate
- * `panelLayout:set`, so "save" and "switch to it" stay independent decisions.
+ * **Save as new layout** (owner L3): a new private session layout preset for
+ * this session's genre, written from this session's layout — the sent
+ * arrangement, with the settings and style pins of every widget instance the
+ * page draws (`drawnWidgetIds`, the floor's included) packed in server-side
+ * (`saveAsNewLayout`) — and made what this session **started from**, in one
+ * transaction. It is offered to every session of the genre, and choosing it
+ * there copies it in. An id that is not a widget instance id is dropped; a
+ * layout the app cannot draw is refused and nothing is written.
  */
 export const sessionsLayoutPresetSaveHandler: Handler<
 	Sockets.Sessions.PanelLayout.Save.Params,
@@ -3064,29 +3114,48 @@ export const sessionsLayoutPresetSaveHandler: Handler<
 		let error: string | undefined
 		let preset: Sockets.Sessions.LayoutPreset | undefined
 		let presets: Sockets.Sessions.LayoutPreset[] = []
+		let startedFromLayoutPresetId: number | undefined
+		let layoutCopiedAt: string | undefined
 		if (!access.hasAccess) {
 			error = "No access to this session"
 		} else if (!name) {
-			error = "A preset needs a name"
+			error = LAYOUT_PRESET_NEEDS_NAME
 		} else if (!params.layout || typeof params.layout !== "object") {
 			error = "Invalid layout"
 		} else {
 			const genreId = await genreOfSession(params.sessionId)
-			preset = await saveUserLayoutPreset({
+			const saved = await saveAsNewLayout({
+				sessionId: params.sessionId,
 				genreId,
 				userId,
 				name,
-				layout: params.layout
+				description:
+					typeof params.description === "string"
+						? params.description
+						: undefined,
+				layout: params.layout,
+				drawnWidgetIds: Array.isArray(params.drawnWidgetIds)
+					? params.drawnWidgetIds.filter(isWidgetInstanceId)
+					: []
 			})
-			presets = await listLayoutPresets(genreId, userId)
-			ok = true
+			if (!saved.ok) {
+				error = saved.error
+			} else {
+				preset = saved.preset
+				startedFromLayoutPresetId = saved.startedFromLayoutPresetId
+				layoutCopiedAt = saved.layoutCopiedAt.toISOString()
+				presets = await listLayoutPresets(genreId, userId)
+				ok = true
+			}
 		}
 		const res: Sockets.Sessions.PanelLayout.Save.Response = {
 			sessionId: params.sessionId,
 			ok,
 			error,
 			preset,
-			presets
+			presets,
+			startedFromLayoutPresetId,
+			layoutCopiedAt
 		}
 		emitToUser("sessions:layoutPreset:save", res)
 		return res
@@ -3094,12 +3163,14 @@ export const sessionsLayoutPresetSaveHandler: Handler<
 }
 
 /**
- * Rename one of the caller's OWN layout presets (PLAN 25 redesign).
+ * Rename one of the caller's OWN layout presets (PLAN 25 redesign) — or, for
+ * an admin, a shared one (`db/layoutPermissions.ts`'s matrix: a shared row is
+ * its author's and an admin's; a private one is its author's alone).
  *
  * Not session-scoped: a preset belongs to a genre and an author, not to the
  * session you happened to be looking at when you saved it. So there is no
- * session access check here — the only question is authorship, and it is asked
- * once, in `db/layoutPresets.ts`, for all three of rename/delete/usage.
+ * session access check here — the only question is who manages the row, and
+ * it is asked once, in `db/layoutPresets.ts`, for all of rename/delete/usage.
  *
  * The refreshed list rides the response exactly as `layoutPreset:save`'s does,
  * so the Presets tab never re-fetches to see its own edit.
@@ -3114,6 +3185,7 @@ export const sessionsLayoutPresetRenameHandler: Handler<
 		const outcome = await renameUserLayoutPreset({
 			presetId: params.id,
 			userId,
+			isAdmin: !!socket.user?.isAdmin,
 			name: params.name
 		})
 		const res: Sockets.Sessions.PanelLayout.Rename.Response = outcome.ok
@@ -3136,19 +3208,19 @@ export const sessionsLayoutPresetRenameHandler: Handler<
 					presets: []
 				}
 		emitToUser("sessions:layoutPreset:rename", res)
+		// A shared layout's new name reaches everyone else offered it.
+		if (outcome.ok && outcome.preset.visibility === "shared")
+			await pushListToOthers(outcome.preset.genreId, userId, socket)
 		return res
 	}
 }
 
 /**
- * Delete one of the caller's own layout presets, saying how many sessions were
- * on it.
- *
- * The count is the point. `session_panel_layouts.layout_preset_id` is
- * `ON DELETE SET NULL`, so deleting a preset silently drops every session using
- * it back to the genre default — correct, but invisible. Returning the number
- * lets the client ask first (`layoutPreset:usage`) and confirm with it, and
- * makes the after-the-fact report agree with that warning by construction.
+ * Delete one of the caller's own layout presets, saying how many sessions had
+ * started from it. No session's layout changes: each holds its own copy, and
+ * `session_panel_layouts.layout_preset_id` is `ON DELETE SET NULL`, so they
+ * lose only their "started from" label. The client asks first
+ * (`layoutPreset:usage`) and confirms with the counts.
  */
 export const sessionsLayoutPresetDeleteHandler: Handler<
 	Sockets.Sessions.PanelLayout.Delete.Params,
@@ -3159,7 +3231,8 @@ export const sessionsLayoutPresetDeleteHandler: Handler<
 		const userId = socket.user!.id
 		const outcome = await deleteUserLayoutPreset({
 			presetId: params.id,
-			userId
+			userId,
+			isAdmin: !!socket.user?.isAdmin
 		})
 		const res: Sockets.Sessions.PanelLayout.Delete.Response = outcome.ok
 			? {
@@ -3177,14 +3250,18 @@ export const sessionsLayoutPresetDeleteHandler: Handler<
 					presets: []
 				}
 		emitToUser("sessions:layoutPreset:delete", res)
+		// A shared layout's card leaves everyone else's list, and the
+		// sessions that started from it lose the name (the FK nulled it).
+		if (outcome.ok && outcome.visibility === "shared")
+			await pushListToOthers(outcome.genreId, userId, socket)
 		return res
 	}
 }
 
 /**
- * How many sessions are on one of the caller's own presets — the number the
- * delete confirmation warns with, behind the same authorship gate as the delete
- * it precedes.
+ * What the delete confirmation says about one of the caller's own presets —
+ * sessions that started from it, and people using it for new sessions —
+ * behind the same authorship gate as the delete it precedes.
  */
 export const sessionsLayoutPresetUsageHandler: Handler<
 	Sockets.Sessions.PanelLayout.Usage.Params,
@@ -3194,12 +3271,255 @@ export const sessionsLayoutPresetUsageHandler: Handler<
 	handler: async (socket, params, emitToUser) => {
 		const outcome = await layoutPresetUsage({
 			presetId: params.id,
-			userId: socket.user!.id
+			userId: socket.user!.id,
+			isAdmin: !!socket.user?.isAdmin
 		})
 		const res: Sockets.Sessions.PanelLayout.Usage.Response = outcome.ok
-			? { id: outcome.id, ok: true, sessions: outcome.sessions }
-			: { id: params.id, ok: false, error: outcome.error, sessions: 0 }
+			? {
+					id: outcome.id,
+					ok: true,
+					sessions: outcome.sessions,
+					newSessionLayoutUsers: outcome.newSessionLayoutUsers
+				}
+			: {
+					id: params.id,
+					ok: false,
+					error: outcome.error,
+					sessions: 0,
+					newSessionLayoutUsers: 0
+				}
 		emitToUser("sessions:layoutPreset:usage", res)
+		return res
+	}
+}
+
+/* ── the L4 verbs (brief 6a of PLAN-layout-one-format-2026-09-28) ─────────
+ * Share, make a copy, save changes to, and the new-session layout — on the
+ * live `sessions:layoutPreset:*` family, over the db module's functions and
+ * `db/layoutPermissions.ts`'s matrix. Every answer carries the refreshed list
+ * for the row's genre, so the editor's pane re-renders from one message; a
+ * refusal names no genre and lists nothing, as rename's does.
+ */
+
+/**
+ * After a verb that changes what OTHER people are offered — sharing, stopping
+ * sharing, renaming or deleting a shared layout — every other person with a
+ * session of its genre open gets their refreshed list, live
+ * (`pushLayoutListChanged`). After the caller's own answer; gated, so nobody
+ * watching reads nothing.
+ */
+async function pushListToOthers(
+	genreId: string,
+	actorId: number,
+	// `Handler`'s socket is untyped; its `io` is the server.
+	socket: { io?: Parameters<typeof import("$lib/server/sessions/startedFromPush").pushLayoutListChanged>[1] }
+): Promise<void> {
+	const { pushLayoutListChanged } = await import("$lib/server/sessions/startedFromPush")
+	await pushLayoutListChanged({ genreId, actorId }, socket.io)
+}
+
+/** The answer a managing verb gives: the row and its genre's list, or a refusal. */
+async function managedAnswer(
+	id: number,
+	userId: number,
+	outcome:
+		| { ok: true; preset: Sockets.Sessions.LayoutPreset }
+		| { ok: false; error: string }
+): Promise<Sockets.Sessions.PanelLayout.ManagedAnswer> {
+	if (!outcome.ok) return { id, ok: false, error: outcome.error, presets: [] }
+	return {
+		id,
+		ok: true,
+		genreId: outcome.preset.genreId,
+		preset: outcome.preset,
+		presets: await listLayoutPresets(outcome.preset.genreId, userId)
+	}
+}
+
+/**
+ * _Share with everyone on this server_ / _Stop sharing_ (`shareLayoutPreset`,
+ * behind `canShare`: the author, or an admin for a shared row; never a
+ * shipped row).
+ *
+ * ## Who is a guest (⚠ advisory)
+ *
+ * There is no account-level guest role (`users` carries one bit, `isAdmin`);
+ * a guest is a guest ON A SESSION (`session_guests`). So the verb names the
+ * session the editor is open in — the caller must be in it, and it must be of
+ * the layout's genre (its list is where the layout was offered) — and a guest
+ * THERE is refused publishing: the ruled matrix's "a guest may keep and change
+ * their own layouts, never publish one". A share that names no session, or
+ * one the caller is not in, is refused outright rather than read as "not a
+ * guest".
+ *
+ * This does NOT stop a person who is a guest somewhere from publishing: anyone
+ * may make a session, and in their own they are its owner, so the same share
+ * named through it is allowed (pinned by a test). "A guest never publishes"
+ * holds per session, not per account, until accounts carry a guest role —
+ * an owner question (plan: brief 6a review). Taking a layout private is never
+ * publishing, so it needs only the manage gate.
+ */
+export const sessionsLayoutPresetShareHandler: Handler<
+	Sockets.Sessions.PanelLayout.Share.Params,
+	Sockets.Sessions.PanelLayout.Share.Response
+> = {
+	event: "sessions:layoutPreset:share",
+	handler: async (socket, params, emitToUser) => {
+		const userId = socket.user!.id
+		const access = Number.isInteger(params?.sessionId)
+			? await checkSessionAccess(params.sessionId, userId)
+			: null
+		const res = await managedAnswer(
+			params?.id,
+			userId,
+			!access?.hasAccess
+				? { ok: false, error: "No access to this session" }
+				: await shareLayoutPreset({
+						presetId: params.id,
+						userId,
+						isAdmin: !!socket.user?.isAdmin,
+						isGuest: access.isGuest && !access.isOwner,
+						genreId: await genreOfSession(params.sessionId),
+						visibility: params.visibility
+					})
+		)
+		emitToUser("sessions:layoutPreset:share", res)
+		// Shared or taken private: everyone else's list gains or loses it.
+		if (res.ok && res.genreId) await pushListToOthers(res.genreId, userId, socket)
+		return res
+	}
+}
+
+/**
+ * _Make a copy_ (`cloneLayoutPreset`): any layout the caller can see becomes
+ * a new private layout of theirs. Seeing is the whole permission, so a guest
+ * may, and no session is named; a stranger's private row, a withdrawn one and
+ * a missing id all get the one unknown-layout sentence.
+ */
+export const sessionsLayoutPresetCloneHandler: Handler<
+	Sockets.Sessions.PanelLayout.Clone.Params,
+	Sockets.Sessions.PanelLayout.Clone.Response
+> = {
+	event: "sessions:layoutPreset:clone",
+	handler: async (socket, params, emitToUser) => {
+		const userId = socket.user!.id
+		const res = await managedAnswer(
+			params?.id,
+			userId,
+			await cloneLayoutPreset({
+				presetId: params?.id,
+				userId,
+				name: typeof params?.name === "string" ? params.name : undefined
+			})
+		)
+		emitToUser("sessions:layoutPreset:clone", res)
+		return res
+	}
+}
+
+/**
+ * _Save changes to "*Name*"_ (`saveChangesToLayout`): re-capture this
+ * session's layout into one of the caller's layouts — packed as Save as new
+ * packs it, from the session's own widget settings and style pins — and make
+ * it what this session **started from**. Behind session access and the manage
+ * gate (the author, or an admin for a shared row); a layout of another genre
+ * than the session's is unknown. Other sessions that started from it only
+ * read **Updated**, and only when the layout moved — and they are TOLD, live,
+ * after the caller's own answer (`pushStartedFromUpdated`, brief 6b).
+ *
+ * A session that itself reads the layout as **Updated** would overwrite what
+ * was saved into it since the copy, so that save is refused unless the page
+ * asked the person and sends `overwriteUpdated` (brief 6b).
+ */
+export const sessionsLayoutPresetUpdateHandler: Handler<
+	Sockets.Sessions.PanelLayout.Update.Params,
+	Sockets.Sessions.PanelLayout.Update.Response
+> = {
+	event: "sessions:layoutPreset:update",
+	handler: async (socket, params, emitToUser) => {
+		const userId = socket.user!.id
+		const access = Number.isInteger(params?.sessionId)
+			? await checkSessionAccess(params.sessionId, userId)
+			: null
+		let startedFromLayoutPresetId: number | undefined
+		let layoutCopiedAt: string | undefined
+		let moved = false
+		let outcome:
+			| { ok: true; preset: Sockets.Sessions.LayoutPreset }
+			| { ok: false; error: string }
+		if (!access?.hasAccess) {
+			outcome = { ok: false, error: "No access to this session" }
+		} else if (!params.layout || typeof params.layout !== "object") {
+			outcome = { ok: false, error: "Invalid layout" }
+		} else {
+			const saved = await saveChangesToLayout({
+				presetId: params.id,
+				sessionId: params.sessionId,
+				genreId: await genreOfSession(params.sessionId),
+				userId,
+				isAdmin: !!socket.user?.isAdmin,
+				layout: params.layout,
+				drawnWidgetIds: Array.isArray(params.drawnWidgetIds)
+					? params.drawnWidgetIds.filter(isWidgetInstanceId)
+					: [],
+				overwriteUpdated: params.overwriteUpdated === true
+			})
+			outcome = saved
+			if (saved.ok) {
+				startedFromLayoutPresetId = saved.startedFromLayoutPresetId
+				layoutCopiedAt = saved.layoutCopiedAt.toISOString()
+				moved = saved.moved
+			}
+		}
+		const res: Sockets.Sessions.PanelLayout.Update.Response = {
+			...(await managedAnswer(params?.id, userId, outcome)),
+			sessionId: params?.sessionId,
+			startedFromLayoutPresetId,
+			layoutCopiedAt
+		}
+		emitToUser("sessions:layoutPreset:update", res)
+		// After the caller's answer: the sessions that started from it and now
+		// read Updated hear it live (scoped, gated; nothing built for nobody).
+		if (moved) {
+			const { pushStartedFromUpdated } = await import(
+				"$lib/server/sessions/startedFromPush"
+			)
+			await pushStartedFromUpdated({ layoutPresetIds: [params.id] }, socket.io)
+		}
+		return res
+	}
+}
+
+/**
+ * _Use for new *Genre* sessions_ / _Stop using for new sessions_
+ * (`setUserLayoutDefault`): the caller's **new-session layout** for a genre,
+ * copied in by their next first open of a session of it. It must be a layout
+ * of that genre they can see; `null` clears it (the genre default layout
+ * applies). Genre-scoped, not session-scoped: a guest chooses their own.
+ */
+export const sessionsLayoutPresetSetNewSessionLayoutHandler: Handler<
+	Sockets.Sessions.PanelLayout.SetNewSessionLayout.Params,
+	Sockets.Sessions.PanelLayout.SetNewSessionLayout.Response
+> = {
+	event: "sessions:layoutPreset:setNewSessionLayout",
+	handler: async (socket, params, emitToUser) => {
+		const userId = socket.user!.id
+		const genreId = typeof params?.genreId === "string" ? params.genreId : ""
+		const outcome = await setUserLayoutDefault({
+			userId,
+			genreId,
+			presetId: params?.layoutPresetId ?? null
+		})
+		const res: Sockets.Sessions.PanelLayout.SetNewSessionLayout.Response =
+			outcome.ok
+				? {
+						genreId,
+						ok: true,
+						layoutPresetId: outcome.presetId,
+						presets: await listLayoutPresets(genreId, userId)
+					}
+				: { genreId, ok: false, error: outcome.error, presets: [] }
+		emitToUser("sessions:layoutPreset:setNewSessionLayout", res)
 		return res
 	}
 }
@@ -3878,7 +4198,10 @@ export const sessionsSaveDraftHandler: Handler<
 /**
  * The cast a session reads into its book, kept whole:
  * - Quietly create bindings for chars/personas that don't have one yet.
- * - Emit bindingCheck:result for any orphaned bindings (bindings without a char/persona).
+ * - Emit bindingCheck:result for any orphaned bindings (bindings without a char/persona),
+ *   which the home page puts to the person as a question — unless
+ *   `askAboutOrphans` is false: a caller that seats many sessions at once
+ *   (an import, an overwrite) seats them without asking anything per session.
  *
  * Ruling 2026-09-12: cast members arrive from the session on their own.
  * There is no "pull the cast" button to press, so every path that puts a
@@ -3897,7 +4220,8 @@ export async function runLorebookBindingCheck(
 	socket: any,
 	sessionId: number,
 	lorebookId: number,
-	emitToUser: (event: string, data: any) => void
+	emitToUser: (event: string, data: any) => void,
+	{ askAboutOrphans = true }: { askAboutOrphans?: boolean } = {}
 ): Promise<void> {
 	const [sessionChars, sessionPersonas, existingBindings] = await Promise.all(
 		[
@@ -3921,8 +4245,10 @@ export async function runLorebookBindingCheck(
 		]
 	)
 
+	// Every card a member has — linked, or one a dated change draws them with
+	// (plan A25): seating either is seating them, never a second member.
 	const bindingsByChar = new Set(
-		existingBindings.filter((b) => b.characterId).map((b) => b.characterId!)
+		(await castMemberCards(db, lorebookId)).memberOf.keys()
 	)
 	// The SAME set as `bindingsByChar` — a voiced character's binding IS a
 	// character binding, so a cast member who is also somebody's persona must
@@ -3934,23 +4260,24 @@ export async function runLorebookBindingCheck(
 	// reused after a delete) — never a recomputed max/count, which is what
 	// let deleted binding numbers get silently reused before.
 	let minted = false
+	// A deleted card still seated finds no member (null) and is given none.
 	for (const { characterId } of sessionChars) {
 		if (!characterId || bindingsByChar.has(characterId)) continue
-		const { created } = await resolveOrCreateBindingRow(
+		const found = await resolveOrCreateBindingRow(
 			{ lorebookId, characterId },
 			db
 		)
-		minted ||= created
+		minted ||= found?.created === true
 		bindingsByChar.add(characterId)
 	}
 
 	for (const { personaId } of sessionPersonas) {
 		if (!personaId || bindingsByPersona.has(personaId)) continue
-		const { created } = await resolveOrCreateBindingRow(
+		const found = await resolveOrCreateBindingRow(
 			{ lorebookId, characterId: personaId },
 			db
 		)
-		minted ||= created
+		minted ||= found?.created === true
 		bindingsByPersona.add(personaId)
 	}
 
@@ -3962,21 +4289,14 @@ export async function runLorebookBindingCheck(
 	// three-way join behind the cast is paid only when a socket is showing
 	// it.
 	if (minted) {
-		const ownedBook = await db.query.lorebooks.findFirst({
-			where: and(
-				eq(schema.lorebooks.id, lorebookId),
-				eq(schema.lorebooks.userId, socket.user!.id)
-			),
-			columns: { id: true }
-		})
-		if (ownedBook) await relistBindings(socket, lorebookId, emitToUser)
+		if (await findOwnedBook(db, socket.user!.id, lorebookId)) await relistBindings(socket, lorebookId, emitToUser)
 	}
 
 	// Flow 1b: Collect orphaned bindings (no character). Read off the
 	// pre-loop snapshot: a row minted above is bound by construction and can
 	// never be one.
 	const orphaned = existingBindings.filter((b) => !b.characterId)
-	if (orphaned.length > 0) {
+	if (askAboutOrphans && orphaned.length > 0) {
 		// The lazy form, with the projection INSIDE it: the orphan list is
 		// built for this payload and nothing else, so a session whose cast
 		// panel nobody has open builds none of it.
@@ -4017,14 +4337,23 @@ export async function runLorebookBindingCheck(
  * - A named branch must be a branch of the book the session will read.
  * - A named clock must land in that book's calendar; null clears it (the
  *   session follows its line's present).
+ * - A session moving to another book brings its own story-time stats: the
+ *   new book's calendar must place every one (A18(a)), or the move is
+ *   refused with the stats named.
+ *
+ * Call it with the transaction that writes the session row: before it checks
+ * a date it takes the book's calendar lock (`lockBookCalendar`, A18(d)), so a
+ * calendar is never declared between the check and the row.
  *
  * ⚠ Writes the SESSION's clock only. The book's present never moves here.
  */
-export async function sessionLinePatch(args: {
+export async function sessionLinePatch(tx: Db, args: {
 	before: {
 		lorebookId: number | null
 		lorebookBranchId: number | null
 	} | null
+	/** The session moving, when it exists: its stats move with it. */
+	session?: { id: number; name: string | null }
 	lorebookId?: number | null
 	lorebookBranchId?: number | null
 	clock?: {
@@ -4038,20 +4367,24 @@ export async function sessionLinePatch(args: {
 	const { mostRecentBranchOf, branchOfBook, BranchRefusal } = await import(
 		"$lib/server/state/reading"
 	)
-	const { bookCalendarOf, clockColumns, clockProblem } = await import(
-		"$lib/server/state/storyTime"
-	)
+	const {
+		bookCalendarOf,
+		clockColumns,
+		clockProblem,
+		lockBookCalendar,
+		sessionStatsThatDoNotLand
+	} = await import("$lib/server/state/storyTime")
 	const beforeBook = args.before?.lorebookId ?? null
 	const book = args.lorebookId !== undefined ? (args.lorebookId ?? null) : beforeBook
 	const patch: Partial<typeof schema.sessions.$inferInsert> = {}
 	const bookChanged = book !== beforeBook || !args.before
-	if (bookChanged) patch.lorebookBranchId = book ? await mostRecentBranchOf(db, book) : null
+	if (bookChanged) patch.lorebookBranchId = book ? await mostRecentBranchOf(tx, book) : null
 	if (args.lorebookBranchId !== undefined) {
 		const branchId = args.lorebookBranchId ?? null
 		if (branchId !== null) {
 			if (!book) throw new Error("A session with no lorebook reads no branch.")
 			try {
-				await branchOfBook(db, book, branchId)
+				await branchOfBook(tx, book, branchId)
 			} catch (e) {
 				if (e instanceof BranchRefusal)
 					throw new Error(`That branch is not a branch of this session's lorebook.`)
@@ -4060,14 +4393,34 @@ export async function sessionLinePatch(args: {
 		}
 		patch.lorebookBranchId = branchId
 	}
+	const settingClock = args.clock != null
+	const bringingStats = bookChanged && args.session != null
+	if (book && (settingClock || bringingStats)) {
+		await lockBookCalendar(tx, book)
+		const calendar = await bookCalendarOf(tx, book)
+		if (bringingStats) {
+			const strays = await sessionStatsThatDoNotLand(tx, args.session!, calendar)
+			if (strays.length)
+				throw new Error(
+					`That lorebook's calendar can't place ${strays.length === 1 ? "a date" : `${strays.length} dates`} this session holds: ` +
+						strays
+							.slice(0, 5)
+							.map((s) => `${s.label} (${s.problem})`)
+							.join("; ") +
+						(strays.length > 5 ? "; …" : "") +
+						`. Change ${strays.length === 1 ? "it" : "them"} first, or pick another lorebook.`
+				)
+		}
+		if (settingClock) {
+			const problem = clockProblem(args.clock!, calendar)
+			if (problem) throw new Error(`That clock does not fit this lorebook. ${problem}`)
+		}
+	}
 	if (args.clock !== undefined) {
 		if (args.clock === null) Object.assign(patch, clockColumns(null))
 		else {
 			if (!book) throw new Error("A session with no lorebook has no story clock to set.")
-			const clock = args.clock
-			const problem = clockProblem(clock, await bookCalendarOf(db, book))
-			if (problem) throw new Error(`That clock does not fit this lorebook: ${problem}`)
-			Object.assign(patch, clockColumns(clock))
+			Object.assign(patch, clockColumns(args.clock))
 		}
 	} else if (bookChanged) Object.assign(patch, clockColumns(null))
 	return patch
@@ -4095,9 +4448,9 @@ function clockFromColumns(cols: {
 export const sessionsUpdateHandler: Handler<
 	Sockets.Sessions.Update.Params,
 	Sockets.Sessions.Update.Response
-> = {
-	event: "sessions:update",
-	handler: async (socket, params, emitToUser) => {
+> = refusable(
+	"sessions:update",
+	async (socket, params: Sockets.Sessions.Update.Params, emitToUser) => {
 		try {
 			const userId = socket.user!.id
 
@@ -4107,9 +4460,6 @@ export const sessionsUpdateHandler: Handler<
 				userId
 			)
 			if (!sessionAccess.hasAccess) {
-				emitToUser("sessions:update:error", {
-					error: "Access denied. Only session owners can update sessions."
-				})
 				throw new Error(
 					"Access denied. Only session owners can update sessions."
 				)
@@ -4129,8 +4479,7 @@ export const sessionsUpdateHandler: Handler<
 				// lorebookId needs an ownership check (lorebooks is strictly
 				// per-user) before it's accepted — everything else here is
 				// either owner-only data or a reference to an admin-managed
-				// global table (samplingConfigs/promptConfigs/
-				// narratorPromptConfigs), which needs no such check.
+				// global table (samplingConfigs), which needs no such check.
 				//
 				// ⚠ `connectionId` was on that list, then was refused for
 				// non-admins, and is now simply gone (0130): a session names no
@@ -4146,7 +4495,7 @@ export const sessionsUpdateHandler: Handler<
 					)
 					if (!ownsLorebook) {
 						throw new Error(
-							"Access denied. You can only attach a lorebook you own."
+							"Access denied. You can only read a lorebook you own into a session."
 						)
 					}
 				}
@@ -4165,8 +4514,6 @@ export const sessionsUpdateHandler: Handler<
 					drafts,
 					lorebookId,
 					samplingConfigId,
-					promptConfigId,
-					narratorPromptConfigId,
 					genreFields,
 					lorebookBranchId,
 					storyClockYear,
@@ -4218,6 +4565,20 @@ export const sessionsUpdateHandler: Handler<
 					.from(schema.sessions)
 					.where(eq(schema.sessions.id, params.session.id!))
 					.limit(1)
+				// The session's sampling override is an admin's to set: a
+				// sampling profile is instance configuration, chosen for
+				// everyone's hardware and budget. A non-admin owner's form may
+				// post the stored value back unchanged — that is not a write.
+				if (
+					samplingConfigId !== undefined &&
+					(samplingConfigId ?? null) !== (before?.samplingConfigId ?? null) &&
+					!socket.user?.isAdmin
+				) {
+					throw new Error(
+						"Only an admin can change a session's sampling. It was left as it was."
+					)
+				}
+
 				const tagsBefore = (
 					await db
 						.select({ tagId: schema.sessionTags.tagId })
@@ -4233,50 +4594,67 @@ export const sessionsUpdateHandler: Handler<
 				// clock of its own (it follows that line's present); a named
 				// branch must be one of the book's own, and a clock must land
 				// in its calendar.
-				// Refused with a sentence, never quietly read as main.
-				const linePatch = await sessionLinePatch({
-					before: before ?? null,
-					lorebookId,
-					lorebookBranchId,
-					clock: clockFromColumns({
-						storyClockYear,
-						storyClockMonth,
-						storyClockDay,
-						storyClockHour,
-						storyClockMinute
+				// Refused with a sentence, never quietly read as main. The
+				// dates it checks (the clock, the stats a new book takes in)
+				// are checked and the row written in one transaction, under
+				// the book's calendar lock.
+				await db.transaction(async (tx) => {
+					const linePatch = await sessionLinePatch(tx, {
+						before: before ?? null,
+						session: before ? { id: before.id, name: before.name } : undefined,
+						lorebookId,
+						lorebookBranchId,
+						clock: clockFromColumns({
+							storyClockYear,
+							storyClockMonth,
+							storyClockDay,
+							storyClockHour,
+							storyClockMinute
+						})
 					})
-				})
 
-				await db
-					.update(schema.sessions)
-					.set({
-						...linePatch,
-						...(name !== undefined ? { name } : {}),
-						...(sessionType !== undefined ? { sessionType } : {}),
-						...(scenario !== undefined ? { scenario } : {}),
-						...(metadata !== undefined ? { metadata } : {}),
-						...(drafts !== undefined ? { drafts } : {}),
-						...(lorebookId !== undefined ? { lorebookId } : {}),
-						// The session's ONE remaining compute override, and it
-						// is not a connection: a sampling profile says how to
-						// sample, never where to send. Anyone who owns the
-						// session may set it — there is no instance resource
-						// behind it to protect.
-						...(samplingConfigId !== undefined
-							? { samplingConfigId }
-							: {}),
-						...(promptConfigId !== undefined
-							? { promptConfigId }
-							: {}),
-						...(narratorPromptConfigId !== undefined
-							? { narratorPromptConfigId }
-							: {}),
-						...(genreFieldsPatch !== undefined
-							? { genreFields: genreFieldsPatch }
-							: {}),
-						updatedAt: new Date().toISOString()
-					})
-					.where(eq(schema.sessions.id, params.session.id!))
+					// Genre fields MERGE over what is stored (2026-10-03): the
+					// form sends only the fields the person changed, so a field
+					// it never touched — the author's note saved from its widget
+					// while the form was open — keeps what was saved. Read
+					// inside this transaction, so no write lands between.
+					let mergedGenreFields: Record<string, unknown> | undefined
+					if (genreFieldsPatch !== undefined) {
+						const [stored] = await tx
+							.select({ genreFields: schema.sessions.genreFields })
+							.from(schema.sessions)
+							.where(eq(schema.sessions.id, params.session.id!))
+							.limit(1)
+						mergedGenreFields = {
+							...((stored?.genreFields ?? {}) as Record<string, unknown>),
+							...genreFieldsPatch
+						}
+					}
+
+					await tx
+						.update(schema.sessions)
+						.set({
+							...linePatch,
+							...(name !== undefined ? { name } : {}),
+							...(sessionType !== undefined ? { sessionType } : {}),
+							...(scenario !== undefined ? { scenario } : {}),
+							...(metadata !== undefined ? { metadata } : {}),
+							...(drafts !== undefined ? { drafts } : {}),
+							...(lorebookId !== undefined ? { lorebookId } : {}),
+							// The session's ONE remaining compute override, and it
+							// is not a connection: a sampling profile says how to
+							// sample, never where to send. Only an admin may
+							// change it (refused above for anyone else).
+							...(samplingConfigId !== undefined
+								? { samplingConfigId }
+								: {}),
+							...(mergedGenreFields !== undefined
+								? { genreFields: mergedGenreFields }
+								: {}),
+							updatedAt: new Date().toISOString()
+						})
+						.where(eq(schema.sessions.id, params.session.id!))
+				})
 
 				// The `playerLabel` override (lair re-plan R4): on the row's
 				// metadata, written as its own key so nothing else there moves.
@@ -4339,8 +4717,6 @@ export const sessionsUpdateHandler: Handler<
 							"drafts",
 							"lorebookId",
 							"samplingConfigId",
-							"promptConfigId",
-							"narratorPromptConfigId",
 							"genreFields",
 							"lorebookBranchId"
 						] as const)
@@ -4366,6 +4742,13 @@ export const sessionsUpdateHandler: Handler<
 							sessionId: params.session.id!
 						} satisfies Sockets.State.Changed.Response)
 					if (!same(tagsBefore, tagsAfter)) changed.push("tags")
+					// The owner's other open forms refresh what they hold of
+					// these fields (2026-10-03) — the owner alone edits them.
+					if (changed.includes("genreFields") && after)
+						emitToUser("sessions:genreFieldsChanged", {
+							sessionId: params.session.id!,
+							genreFields: (after.genreFields ?? {}) as Record<string, unknown>
+						} satisfies Sockets.Sessions.GenreFieldsChanged.Response)
 					if (changed.length) {
 						const { emitSessionEvent } = await import(
 							"$lib/server/pipelines/runtime/sessionEvents"
@@ -4458,11 +4841,8 @@ export const sessionsUpdateHandler: Handler<
 						userId
 					)
 					if (ownedCharacterIds.size !== characterIdsToAdd.length) {
-						emitToUser("sessions:update:error", {
-							error: "Access denied. You can only add characters you own."
-						})
 						throw new Error(
-							"Access denied. Attempted to add a character not owned by the user."
+							"Access denied. You can only add characters you own."
 						)
 					}
 				}
@@ -4582,11 +4962,8 @@ export const sessionsUpdateHandler: Handler<
 						userId
 					)
 					if (ownedPersonaIds.size !== personaIdsToAdd.length) {
-						emitToUser("sessions:update:error", {
-							error: "Access denied. You can only add personas you own."
-						})
 						throw new Error(
-							"Access denied. Attempted to add a persona not owned by the user."
+							"Access denied. You can only add personas you own."
 						)
 					}
 				}
@@ -4797,13 +5174,11 @@ export const sessionsUpdateHandler: Handler<
 			return res
 		} catch (error: any) {
 			console.error("Error updating session:", error)
-			emitToUser("sessions:update:error", {
-				error: "Failed to update session"
-			})
 			throw error
 		}
-	}
-}
+	},
+	"The session could not be saved."
+)
 
 export const sessionsAddPersonaHandler: Handler<
 	Sockets.Sessions.AddPersona.Params,
@@ -4929,6 +5304,8 @@ export const sessionsAddGuestHandler: Handler<
 			const sessionAccess = await checkSessionAccess(sessionId, userId)
 			if (!sessionAccess.isOwner) {
 				const res: Sockets.Sessions.AddGuest.Response = {
+					sessionId: params.sessionId,
+					guestUserId: params.guestUserId,
 					success: false,
 					error: "Access denied. Only session owners can add guests."
 				}
@@ -4957,6 +5334,8 @@ export const sessionsAddGuestHandler: Handler<
 			})
 			if (!guestUser || guestUser.isDeleted) {
 				const res: Sockets.Sessions.AddGuest.Response = {
+					sessionId: params.sessionId,
+					guestUserId: params.guestUserId,
 					success: false,
 					error: "Unable to add this guest."
 				}
@@ -4974,6 +5353,8 @@ export const sessionsAddGuestHandler: Handler<
 
 			if (existingGuest) {
 				const res: Sockets.Sessions.AddGuest.Response = {
+					sessionId: params.sessionId,
+					guestUserId: params.guestUserId,
 					success: false,
 					error: "Unable to add this guest."
 				}
@@ -5013,6 +5394,8 @@ export const sessionsAddGuestHandler: Handler<
 			).pushSessionActions(socket.io, sessionId)
 
 			const res: Sockets.Sessions.AddGuest.Response = {
+				sessionId: params.sessionId,
+				guestUserId: params.guestUserId,
 				success: true
 			}
 			emitToUser("sessions:addGuest", res)
@@ -5020,6 +5403,8 @@ export const sessionsAddGuestHandler: Handler<
 		} catch (error: any) {
 			console.error("Error adding guest to session:", error)
 			const res: Sockets.Sessions.AddGuest.Response = {
+				sessionId: params.sessionId,
+				guestUserId: params.guestUserId,
 				success: false,
 				error: "Failed to add guest to session"
 			}
@@ -5043,6 +5428,8 @@ export const sessionsRemoveGuestHandler: Handler<
 			const sessionAccess = await checkSessionAccess(sessionId, userId)
 			if (!sessionAccess.isOwner) {
 				const res: Sockets.Sessions.RemoveGuest.Response = {
+					sessionId: params.sessionId,
+					guestUserId: params.guestUserId,
 					success: false,
 					error: "Access denied. Only session owners can remove guests."
 				}
@@ -5098,6 +5485,8 @@ export const sessionsRemoveGuestHandler: Handler<
 			).pushSessionActions(socket.io, sessionId)
 
 			const res: Sockets.Sessions.RemoveGuest.Response = {
+				sessionId: params.sessionId,
+				guestUserId: params.guestUserId,
 				success: true
 			}
 			emitToUser("sessions:removeGuest", res)
@@ -5105,6 +5494,8 @@ export const sessionsRemoveGuestHandler: Handler<
 		} catch (error: any) {
 			console.error("Error removing guest from session:", error)
 			const res: Sockets.Sessions.RemoveGuest.Response = {
+				sessionId: params.sessionId,
+				guestUserId: params.guestUserId,
 				success: false,
 				error: "Failed to remove guest from session"
 			}
@@ -5494,6 +5885,7 @@ export const sessionMessagesSendPersonaMessageHandler: Handler<
 			if (!sessionAccess.hasAccess) {
 				const res: Sockets.SessionMessages.SendPersonaMessage.Response =
 					{
+						sessionId,
 						sessionMessage: undefined,
 						error: "Access denied. Session not found or no permission to access."
 					}
@@ -5511,7 +5903,7 @@ export const sessionMessagesSendPersonaMessageHandler: Handler<
 				const modeCheck = await sessionGenreAvailable(db, sessionId)
 				if (!modeCheck.available) {
 					const res: Sockets.SessionMessages.SendPersonaMessage.Response =
-						{ sessionMessage: undefined, error: modeCheck.reason }
+						{ sessionId, sessionMessage: undefined, error: modeCheck.reason }
 					emitToUser("sessionMessages:sendPersonaMessage", res)
 					return res
 				}
@@ -5526,6 +5918,7 @@ export const sessionMessagesSendPersonaMessageHandler: Handler<
 				if (!canUsePersona) {
 					const res: Sockets.SessionMessages.SendPersonaMessage.Response =
 						{
+							sessionId,
 							sessionMessage: undefined,
 							error: "Access denied. You can only send messages with personas you own."
 						}
@@ -5539,6 +5932,7 @@ export const sessionMessagesSendPersonaMessageHandler: Handler<
 			if (!session) {
 				const res: Sockets.SessionMessages.SendPersonaMessage.Response =
 					{
+						sessionId,
 						sessionMessage: undefined,
 						error: "Session not found"
 					}
@@ -5549,6 +5943,7 @@ export const sessionMessagesSendPersonaMessageHandler: Handler<
 			if (content && content.length > MAX_CHAT_MESSAGE_LENGTH) {
 				const res: Sockets.SessionMessages.SendPersonaMessage.Response =
 					{
+						sessionId,
 						sessionMessage: undefined,
 						error: `Message too long (max ${MAX_CHAT_MESSAGE_LENGTH.toLocaleString()} characters).`
 					}
@@ -5567,6 +5962,7 @@ export const sessionMessagesSendPersonaMessageHandler: Handler<
 				if (refusal) {
 					const res: Sockets.SessionMessages.SendPersonaMessage.Response =
 						{
+							sessionId,
 							sessionMessage: undefined,
 							error: `Cannot send here: ${refusal}`
 						}
@@ -5585,19 +5981,87 @@ export const sessionMessagesSendPersonaMessageHandler: Handler<
 				channel
 			}
 
-			const inserted = await insertLegacy(db, newMessage)
+			/**
+			 * Attachments (PLAN-composer-attachments §3.1, phase 2 lane D):
+			 * the sender's ready tray items become `core:image` / `core:file`
+			 * parts of this row, in one transaction with it — or the send is
+			 * refused whole and the tray stays. The readers verdict (§3.2,
+			 * `attachmentReaders`) is asked before the transaction, so a kind
+			 * the reply stopped reading since it was staged is refused here.
+			 * Guests send the same way (D8).
+			 */
+			const {
+				normaliseTrayItemIds,
+				commitTraySend
+			} = await import("$lib/server/attachments/send")
+			const { TrayRefusal } = await import("$lib/server/attachments/tray")
+			let inserted: Awaited<ReturnType<typeof insertLegacy>>
+			let attached = false
+			try {
+				const trayItemIds = normaliseTrayItemIds(params.trayItemIds)
+				if (trayItemIds.length) {
+					const { attachmentReaders } = await import(
+						"$lib/server/attachments/readers"
+					)
+					const readers = await attachmentReaders(db, {
+						sessionId,
+						userId,
+						channel
+					})
+					inserted = (
+						await commitTraySend(db, {
+							userId,
+							sessionId,
+							trayItemIds,
+							message: newMessage,
+							readers
+						})
+					).message
+					attached = true
+				} else {
+					inserted = await insertLegacy(db, newMessage)
+				}
+			} catch (error) {
+				if (!(error instanceof TrayRefusal)) throw error
+				const res: Sockets.SessionMessages.SendPersonaMessage.Response =
+					{
+						sessionId,
+						sessionMessage: undefined,
+						error: error.message
+					}
+				emitToUser("sessionMessages:sendPersonaMessage", res)
+				return res
+			}
+
+			// With parts on it when it carries any, so every view draws the
+			// attachments from the push itself (the same enrichment a load
+			// gets).
+			const outbound = attached
+				? ((await attachParts(db, [inserted]))[0] as typeof inserted)
+				: inserted
 
 			const res: Sockets.SessionMessages.SendPersonaMessage.Response = {
-				sessionMessage: inserted as any
+				sessionId,
+				sessionMessage: outbound as any
 			}
 			emitToUser("sessionMessages:sendPersonaMessage", res)
+
+			// The sent tray items are gone: every tab of the sender's drops
+			// their tiles from the same list reply a reload reads.
+			if (attached) {
+				const { listTray } = await import("$lib/server/attachments/tray")
+				emitToUser("attachments:list", {
+					sessionId,
+					tray: await listTray(db, userId, sessionId)
+				})
+			}
 
 			// Broadcast sessionMessage to all session participants
 			await broadcastToSessionUsers(
 				socket.io,
 				inserted.sessionId,
 				"sessionMessage",
-				{ sessionMessage: inserted }
+				{ sessionMessage: outbound }
 			)
 
 			// The line this session's cards quote has just changed.
@@ -5640,6 +6104,7 @@ export const sessionMessagesSendPersonaMessageHandler: Handler<
 		} catch (error: any) {
 			console.error("Error sending persona message:", error)
 			const res: Sockets.SessionMessages.SendPersonaMessage.Response = {
+				sessionId: params?.sessionId,
 				sessionMessage: undefined,
 				error: "Failed to send message"
 			}
@@ -6944,15 +7409,11 @@ export const promptTokenCountHandler: Handler<
 				where: (u, { eq }) => eq(u.id, userId)
 			})
 
-			// Get context/prompt config from user settings; resolve
-			// connection+sampling via resolveTaskConfig — the connection from
-			// `prompt config override → the instance's text->text default`, the
-			// sampling from the session's own choice above those two
-			const { contextConfig, promptConfig } =
-				await getUserConfigurations(userId)
+			// Connection and sampling via resolveTaskConfig — the connection is
+			// the instance's text->text default, the sampling the session's own
+			// choice above it.
 			const { connection, sampling, problem } = await resolveTaskConfig({
 				taskType: "session",
-				promptConfigId: promptConfig?.id,
 				sessionId: session.id
 			})
 
@@ -7596,6 +8057,27 @@ export const fireNarratorResponseHandler: Handler<
 	event: "sessions:fireNarratorResponse",
 	handler: async (socket, params, emitToUser) =>
 		withSessionGenerationLock(params.sessionId, async () => {
+			/**
+			 * A press refused before its run (C2 follow-up, 2026-09-29): the
+			 * page is told, because `register` discards what a handler
+			 * returns. The outcome settles the press (a `/narrate <text>`
+			 * draft is kept, the modal's text is kept for its next opening)
+			 * and the sentence goes on the ungated `:error` for the toast —
+			 * a gate never turns a refusal into silence (plan ruling 2).
+			 */
+			const refuse = (error: string) => {
+				emitToUser("sessions:fireNarratorResponse", {
+					sessionId: params.sessionId,
+					success: false
+				})
+				emitToUser("sessions:fireNarratorResponse:error", {
+					sessionId: params.sessionId,
+					error
+				})
+				return { error }
+			}
+			/** Whether the outcome went out — so the catch answers once. */
+			let answered = false
 			try {
 				const userId = socket.user!.id
 
@@ -7604,9 +8086,9 @@ export const fireNarratorResponseHandler: Handler<
 					params.instructions.length >
 						MAX_NARRATOR_INSTRUCTIONS_LENGTH
 				) {
-					return {
-						error: `Narrator instructions too long (max ${MAX_NARRATOR_INSTRUCTIONS_LENGTH} characters).`
-					}
+					return refuse(
+						`Narrator instructions too long (max ${MAX_NARRATOR_INSTRUCTIONS_LENGTH} characters).`
+					)
 				}
 
 				// Owner-only, same reasoning as the character trigger above:
@@ -7622,14 +8104,14 @@ export const fireNarratorResponseHandler: Handler<
 					userId
 				)
 				if (!access.hasAccess) {
-					return {
-						error: "Could not fire the Narrator response: session not found."
-					}
+					return refuse(
+						"Could not fire the Narrator response: session not found."
+					)
 				}
 				if (!access.isOwner) {
-					return {
-						error: "Access denied. Only the session owner can fire a Narrator response."
-					}
+					return refuse(
+						"Access denied. Only the session owner can fire a Narrator response."
+					)
 				}
 
 				const session = await getPromptSessionFromDb(
@@ -7637,18 +8119,18 @@ export const fireNarratorResponseHandler: Handler<
 					userId
 				)
 				if (!session) {
-					return {
-						error: "Could not fire the Narrator response: session not found."
-					}
+					return refuse(
+						"Could not fire the Narrator response: session not found."
+					)
 				}
 
 				const hasGeneratingMessages = session.sessionMessages.some(
 					(msg) => msg.isGenerating
 				)
 				if (hasGeneratingMessages) {
-					return {
-						error: "A response is already generating in this session."
-					}
+					return refuse(
+						"A response is already generating in this session."
+					)
 				}
 
 				/**
@@ -7672,7 +8154,7 @@ export const fireNarratorResponseHandler: Handler<
 						userId,
 						params.speaker
 					)
-					if (!resolution.ok) return { error: resolution.error }
+					if (!resolution.ok) return refuse(resolution.error)
 					sideCharacter = resolution.speaker
 				}
 
@@ -7697,9 +8179,19 @@ export const fireNarratorResponseHandler: Handler<
 							}
 						: { kind: "narrate", instructions: params.instructions }
 				})
+				// How the run went, to the page that fired it (genre uplift
+				// C2, 2026-09-29): what spends a `/narrate <text>` draft, which
+				// stays until the narration has run (S2) — kept on a stop or
+				// an error, as `sessions:fireAction`'s answer keeps one.
+				answered = true
+				emitToUser("sessions:fireNarratorResponse", {
+					sessionId: params.sessionId,
+					success: outcome.ok
+				})
 				if (outcome.error && !outcome.stopped) {
 					if (!outcome.shown)
 						emitToUser("sessions:fireNarratorResponse:error", {
+							sessionId: params.sessionId,
 							error: outcome.error
 						})
 					return { error: outcome.error }
@@ -7708,9 +8200,9 @@ export const fireNarratorResponseHandler: Handler<
 				return { success: outcome.ok }
 			} catch (error) {
 				console.error("Error in fireNarratorResponseHandler:", error)
-				return {
-					error: "Failed to fire the Narrator response."
-				}
+				const failed = "Failed to fire the Narrator response."
+				if (answered) return { error: failed }
+				return refuse(failed)
 			}
 		})
 }
@@ -7792,8 +8284,8 @@ export const sessionsSetFavoriteHandler: Handler<
 // Lets the client label the Narrator trigger button/modal correctly BEFORE any
 // message exists (e.g. a session-specific narrator name like "Fate" instead of
 // the default "Narrator"). Intentionally not admin-gated — any session
-// participant (owner or guest) needs to see this, unlike the
-// narratorPromptConfigs CRUD handlers which manage the underlying configs.
+// participant (owner or guest) needs to see this, unlike the pipeline panel
+// that configures the name.
 export const sessionsGetNarratorNameHandler: Handler<
 	Sockets.Sessions.GetNarratorName.Params,
 	Sockets.Sessions.GetNarratorName.Response
@@ -7806,15 +8298,17 @@ export const sessionsGetNarratorNameHandler: Handler<
 			return { sessionId: params.sessionId, narratorName: "Narrator" }
 		}
 
-		const session = await db.query.sessions.findFirst({
-			where: (c, { eq }) => eq(c.id, params.sessionId),
-			columns: { narratorPromptConfigId: true }
-		})
-
-		const config = await resolveNarratorPromptConfig(session, userId)
+		const { narratorNameFor } = await import(
+			"$lib/server/pipelines/runtime/host"
+		)
+		const narratorName = await narratorNameFor(
+			db,
+			params.sessionId,
+			userId
+		).catch(() => null)
 		const res: Sockets.Sessions.GetNarratorName.Response = {
 			sessionId: params.sessionId,
-			narratorName: config?.narratorName || "Narrator"
+			narratorName: narratorName || "Narrator"
 		}
 		emitToUser("sessions:getNarratorName", res)
 		return res
@@ -8020,32 +8514,45 @@ async function emitCastChanged(
 	}
 }
 
-export const toggleSessionCharacterActiveHandler: Handler<
-	Sockets.Sessions.ToggleSessionCharacterActive.Params,
-	Sockets.Sessions.ToggleSessionCharacterActive.Response
+/**
+ * Switch one cast seat on or off — SET to `params.enabled`, never flipped
+ * (note 34 follow-up): the Edit Session form holds the switch until Save,
+ * so a flip from a stale form would invert the seat. A repeated set is a
+ * no-op answered as a success. Every path answers the asker on this event,
+ * refusals with `error` and the seat as it stands, so the form can close
+ * on the answers (A24).
+ */
+export const sessionsSetCastSeatEnabledHandler: Handler<
+	Sockets.Sessions.SetCastSeatEnabled.Params,
+	Sockets.Sessions.SetCastSeatEnabled.Response
 > = {
-	event: "sessions:toggleSessionCharacterActive",
+	event: "sessions:setCastSeatEnabled",
 	handler: async (socket, params, emitToUser) => {
+		const refuse = (error: string, enabled = false) => {
+			const res: Sockets.Sessions.SetCastSeatEnabled.Response = {
+				sessionId: params.sessionId,
+				characterId: params.characterId,
+				enabled,
+				error
+			}
+			emitToUser("sessions:setCastSeatEnabled", res)
+			return res
+		}
 		try {
 			const userId = socket.user!.id
+			if (typeof params.enabled !== "boolean")
+				return refuse("Say whether the seat is switched on or off.")
 
 			// checkSessionAccess (owner OR guest), not an owner-only ad-hoc check —
 			// a guest who brought their own character into a shared session must
-			// be able to toggle that character's own active status; only the
-			// per-row escalation below decides whether *this* character is
-			// theirs to manage.
+			// be able to switch that character's own seat; only the per-row
+			// escalation below decides whether *this* character is theirs to
+			// manage.
 			const sessionAccess = await checkSessionAccess(
 				params.sessionId,
 				userId
 			)
-			if (!sessionAccess.hasAccess) {
-				return {
-					sessionId: params.sessionId,
-					characterId: params.characterId,
-					isActive: false,
-					error: "Error toggling character active: Session not found."
-				}
-			}
+			if (!sessionAccess.hasAccess) return refuse("Session not found.")
 
 			const session = await db.query.sessions.findFirst({
 				where: (c, { eq }) => eq(c.id, params.sessionId),
@@ -8064,33 +8571,34 @@ export const toggleSessionCharacterActiveHandler: Handler<
 			if (
 				!session?.sessionCharacters ||
 				session.sessionCharacters.length === 0
-			) {
-				return {
-					sessionId: params.sessionId,
-					characterId: params.characterId,
-					isActive: false,
-					error: "Session character not found."
-				}
-			}
+			)
+				return refuse("Session character not found.")
 
 			const sessionCharacter = session.sessionCharacters[0]
 			const canManage =
 				sessionAccess.isOwner ||
 				sessionCharacter.character?.userId === userId
-			if (!canManage) {
-				return {
-					sessionId: params.sessionId,
-					characterId: params.characterId,
-					isActive: false,
-					error: "Access denied. Only the session owner or this character's owner can change this."
-				}
-			}
+			if (!canManage)
+				return refuse(
+					"Access denied. Only the session owner or this character's owner can change this.",
+					!!sessionCharacter.isActive
+				)
 
-			const newActiveStatus = !sessionCharacter.isActive
+			const res: Sockets.Sessions.SetCastSeatEnabled.Response = {
+				sessionId: params.sessionId,
+				characterId: params.characterId,
+				enabled: params.enabled
+			}
+			// Already so: nothing moved, so no write and no cast-changed —
+			// the answer alone, so the asker still settles.
+			if (!!sessionCharacter.isActive === params.enabled) {
+				emitToUser("sessions:setCastSeatEnabled", res)
+				return res
+			}
 
 			await db
 				.update(schema.sessionCharacters)
-				.set({ isActive: newActiveStatus })
+				.set({ isActive: params.enabled })
 				.where(
 					and(
 						eq(
@@ -8101,17 +8609,7 @@ export const toggleSessionCharacterActiveHandler: Handler<
 					)
 				)
 
-			const res = {
-				sessionId: params.sessionId,
-				characterId: params.characterId,
-				isActive: newActiveStatus
-			}
-			// getSession (aliased from the legacy session() function) emits under the
-			// event name "session", which nothing on the client listens for — this
-			// silently dropped both the ack below and the session refresh. Emit the
-			// handler's own declared event, then refresh with the real sessions:get
-			// payload that EditSessionForm/the session page actually listen for.
-			emitToUser("sessions:toggleSessionCharacterActive", res)
+			emitToUser("sessions:setCastSeatEnabled", res)
 			await resendSession(socket, session.id, emitToUser)
 			// A seat's row moved (PLAN-turn-order §4.1, A2): `cast-changed`
 			// under the person's `settings` cause, which never fires a turn.
@@ -8120,21 +8618,13 @@ export const toggleSessionCharacterActiveHandler: Handler<
 				userId,
 				ref: `character:${params.characterId}`,
 				change: "enabled",
-				value: newActiveStatus
+				value: params.enabled
 			})
 
 			return res
 		} catch (error) {
-			console.error(
-				"Error in toggleSessionCharacterActiveHandler:",
-				error
-			)
-			return {
-				sessionId: params.sessionId,
-				characterId: params.characterId,
-				isActive: false,
-				error: "Failed to toggle character active status."
-			}
+			console.error("Error in sessionsSetCastSeatEnabledHandler:", error)
+			return refuse("Failed to switch the seat.")
 		}
 	}
 }
@@ -8211,9 +8701,8 @@ export const sessionsAccountVisibilityHandler: Handler<
 				)
 			)
 
-		// The session's lorebook is a single binding on the session row (the
-		// `sessionLorebooks` junction is unused legacy). Exposed only when the
-		// caller owns it.
+		// The session's lorebook is a single binding on the session row.
+		// Exposed only when the caller owns it.
 		const session = await db.query.sessions.findFirst({
 			where: eq(schema.sessions.id, params.sessionId),
 			columns: { userId: true, lorebookId: true }
@@ -8288,10 +8777,16 @@ export function registerSessionHandlers(
 	register(socket, sessionsViewHandler, emitToUser)
 	register(socket, sessionsPanelLayoutGetHandler, emitToUser)
 	register(socket, sessionsPanelLayoutSetHandler, emitToUser)
+	register(socket, sessionsPanelLayoutStartFromHandler, emitToUser)
+	register(socket, sessionsPanelLayoutStartedFromUpdatedHandler, emitToUser)
 	register(socket, sessionsLayoutPresetSaveHandler, emitToUser)
 	register(socket, sessionsLayoutPresetRenameHandler, emitToUser)
 	register(socket, sessionsLayoutPresetDeleteHandler, emitToUser)
 	register(socket, sessionsLayoutPresetUsageHandler, emitToUser)
+	register(socket, sessionsLayoutPresetShareHandler, emitToUser)
+	register(socket, sessionsLayoutPresetCloneHandler, emitToUser)
+	register(socket, sessionsLayoutPresetUpdateHandler, emitToUser)
+	register(socket, sessionsLayoutPresetSetNewSessionLayoutHandler, emitToUser)
 	register(socket, sessionsPipelinesHandler, emitToUser)
 	register(socket, sessionsPresetStatusHandler, emitToUser)
 	register(socket, sessionsFireActionHandler, emitToUser)
@@ -8332,7 +8827,7 @@ export function registerSessionHandlers(
 	register(socket, sessionsGetNarratorNameHandler, emitToUser)
 	register(socket, sessionsSetFavoriteHandler, emitToUser)
 	register(socket, sessionsSideCharacterOptionsHandler, emitToUser)
-	register(socket, toggleSessionCharacterActiveHandler, emitToUser)
+	register(socket, sessionsSetCastSeatEnabledHandler, emitToUser)
 	register(socket, sessionsSetEnvoySeatHandler, emitToUser)
 	register(socket, sessionsAccountVisibilityHandler, emitToUser)
 }

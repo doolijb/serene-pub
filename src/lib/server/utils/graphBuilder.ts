@@ -29,6 +29,7 @@ import { runQueuedLLMCall } from "./runQueuedLLMCall"
 import { SessionTypes } from "$lib/shared/constants/SessionTypes"
 import { extractCharactersFromContent } from "./summarizer"
 import { extractJson, hasJsonObject } from "./extractJson"
+import { WORLD_LORE_TYPE_ID } from "$lib/shared/entries/types"
 import {
 	resolveCharacterRefs,
 	namesMatch,
@@ -97,15 +98,92 @@ export interface GraphBuilderSeedNode {
 
 /**
  * A World Lore entry, used only to screen newly-proposed character nodes.
+ * Place and item entries ride here too (places plan L1): each was world lore
+ * before it had its own entry type, and none of them is a character.
  *
  * `category` is a free-text, nullable "grouping/filter tag" (schema.ts) with no
  * enforced taxonomy — in practice usually unset — so it cannot carry the
- * filter. It is honoured as a one-way OPT-OUT: an entry a user has tagged as
- * being about a person is not used to screen anything.
+ * filter. It is honoured as a one-way OPT-OUT, for WORLD LORE only: a lore
+ * page a user has tagged as being about a person is not used to screen
+ * anything. A place or an item is never a person, whatever its category says
+ * ("Castle", "Orchard" and "Charms" hold `cast` or `char`).
+ *
+ * `typeId` is the entry's type; absent is world lore. A place or an item
+ * screens a name only when the name IS its title — the same words, articles
+ * aside, or a typo of it — never when the title is a word of the name: "The
+ * Crypt" screens "Crypt", not the new character "Crypt Keeper" (L1 review).
+ * World lore keeps the cast matcher's looser rule (`namesMatch`).
  */
 export interface GraphBuilderWorldLoreEntry {
 	name: string
 	category?: string | null
+	typeId?: string
+}
+
+/** A name's words, lower-cased, articles aside. */
+const titleWords = (name: string) =>
+	name
+		.toLowerCase()
+		.replace(/[^\p{L}\p{N}\s'-]/gu, " ")
+		.split(/\s+/)
+		.filter((w) => w && w !== "the" && w !== "a" && w !== "an")
+
+/**
+ * The name IS the title: the same words in any order, articles aside — or
+ * one typo of it, as `namesMatch` allows (a Levenshtein step per six letters).
+ */
+export function isWholeTitle(title: string, name: string): boolean {
+	const a = titleWords(title)
+	const b = titleWords(name)
+	if (!a.length || !b.length) return false
+	if (a.length === b.length && a.every((w) => b.includes(w)) && b.every((w) => a.includes(w)))
+		return true
+	const ja = a.join(" ")
+	const jb = b.join(" ")
+	const shorter = Math.min(ja.length, jb.length)
+	if (shorter < 4 || a.length !== b.length) return false
+	return editDistanceWithin(ja, jb, shorter <= 6 ? 1 : Math.floor(shorter / 6))
+}
+
+/**
+ * Whether a name is a subject of the setting — a world lore, place or item
+ * entry's — rather than a character: the screen a build runs over every name
+ * it would add as a new cast member, and the one an apply runs again over the
+ * review's new names (a place created, or a name edited, while the review was
+ * open).
+ *
+ * World lore screens by the cast matcher's rule (`namesMatch`), and only when
+ * its `category` does not say it is about a person — `category` is free text
+ * and usually unset, so it works only as an opt-out. Places and items are
+ * never opted out, and screen only their whole title (`isWholeTitle`).
+ */
+export function worldLoreScreen(
+	worldLore: GraphBuilderWorldLoreEntry[]
+): (name: string) => boolean {
+	const isWorldLore = (e: GraphBuilderWorldLoreEntry) =>
+		!e.typeId || e.typeId === WORLD_LORE_TYPE_ID
+	const screenable = worldLore.filter(
+		(e) =>
+			!isWorldLore(e) ||
+			!/char|person|people|cast|npc|folk/i.test(e.category ?? "")
+	)
+	return (name) =>
+		screenable.some((e) =>
+			isWorldLore(e) ? namesMatch(e.name, name) : isWholeTitle(e.name, name)
+		)
+}
+
+/** Whether two strings are within `max` single-character edits. */
+function editDistanceWithin(a: string, b: string, max: number): boolean {
+	if (Math.abs(a.length - b.length) > max) return false
+	let prev = Array.from({ length: b.length + 1 }, (_, j) => j)
+	for (let i = 1; i <= a.length; i++) {
+		const row = [i]
+		for (let j = 1; j <= b.length; j++)
+			row[j] = Math.min(prev[j]! + 1, row[j - 1]! + 1, prev[j - 1]! + (a[i - 1] === b[j - 1] ? 0 : 1))
+		prev = row
+	}
+	return prev[b.length]! <= max
 }
 
 export interface GraphBuilderSeedRelationship {
@@ -136,6 +214,26 @@ export interface GraphBuilderResumeState {
 	 * first half already discovered, duplicating them in the same proposal.
 	 */
 	proposedByName: [string, string][]
+	/**
+	 * Everything else the scenes before the checkpoint produced (plan A21
+	 * review). Without these a resumed proposal kept those scenes'
+	 * relationships but not their casts — the apply saved none, their new
+	 * ties were born `secret`, and, stamped graphed all the same, no Extend
+	 * read them again — nor the changes to members they found, nor the count
+	 * the "nothing could be extracted" tripwire reads.
+	 */
+	resolvedSceneCast: ResolvedSceneCast[]
+	updatedNodeTempIds: string[]
+	stateChangeInfo: [string, { reason: string; sceneIndex: number }][]
+	scenesWithAnyCast: number
+	droppedDanglingIds: number
+	filteredWorldLoreNames: string[]
+	/** The review's account of the relationships the model's answers lost. */
+	perspectiveCalls: number
+	scenesSkippedNoPair: number
+	perspectiveDrops: Omit<PerspectiveDrops, "unresolvedTargets"> & {
+		unresolvedTargets: string[]
+	}
 }
 
 /** One LLM step the builder makes. Each is configurable independently. */
@@ -155,9 +253,8 @@ export interface GraphStepConfig {
 }
 
 /**
- * Code fallback per step, used when no graphBuildConfigs row resolves or when
- * its prompt column is blank — the columns default to "", so an unconfigured
- * step must fall back rather than send an empty system prompt.
+ * Code fallback per step, used when the step's resolved prompt is blank, so an
+ * unconfigured step falls back rather than sending an empty system prompt.
  */
 const GRAPH_STEP_FALLBACK_PROMPT: Record<GraphStepName, string> = {
 	nodeResolution: DEFAULT_GRAPH_NODE_RESOLUTION_SYSTEM_PROMPT,
@@ -172,10 +269,8 @@ export interface GraphBuilderInput {
 	/** Fallback connection/sampling for any step `steps` leaves unset. */
 	connection: SelectConnection
 	sampling: SelectSamplingConfig
-	contextConfig: SelectContextConfig
-	promptConfig: SelectPromptConfig
 	/**
-	 * Per-step overrides resolved from the active graphBuildConfigs row. Absent
+	 * Per-step overrides resolved from the graph build pipeline. Absent
 	 * or partial is fine — each step independently falls back to the code
 	 * prompt and to `connection`/`sampling` above.
 	 */
@@ -308,8 +403,6 @@ async function runLLM(
 	opts: {
 		connection: SelectConnection
 		sampling: SelectSamplingConfig
-		contextConfig: SelectContextConfig
-		promptConfig: SelectPromptConfig
 	},
 	label?: string,
 	responseSchema?: JsonSchemaNode,
@@ -341,8 +434,7 @@ async function runLLM(
 		// The adapter takes VALUES; the row is kept here because it is also
 		// what names the config in the queue (samplingName, below).
 		sampling: resolveSampling(opts.sampling),
-		contextConfig: opts.contextConfig,
-		promptConfig: { ...opts.promptConfig, systemPrompt },
+		systemPrompt,
 		session: fakeSession,
 		currentCharacterId: null,
 		tokenCounter,
@@ -818,8 +910,6 @@ export async function buildGraphFromScenes(
 		scenes,
 		connection,
 		sampling,
-		contextConfig,
-		promptConfig,
 		steps,
 		seedNodes,
 		seedRelationships,
@@ -847,12 +937,12 @@ export async function buildGraphFromScenes(
 		s.historyEntry ? formatEntryDate(s.historyEntry) : `Scene ${s.id}`
 	)
 
-	const llmOpts = { connection, sampling, contextConfig, promptConfig }
+	const llmOpts = { connection, sampling }
 
 	// Every call in this builder runs on the resolved connection and sampling
 	// config it was handed. Sampling belongs to configuration — samplingConfigs,
-	// and graphBuildConfigs' per-sub-task override resolved by resolveTaskConfig
-	// — never to hardcoded values in here. An override buried at the call site
+	// and each step's own pick in the graph build pipeline — never to hardcoded
+	// values in here. An override buried at the call site
 	// bypasses the config the user chose, contradicts what the UI reports as
 	// being in effect, and is invisible when the output is wrong.
 	//
@@ -951,18 +1041,7 @@ export async function buildGraphFromScenes(
 	 */
 	const filteredWorldLoreNames = new Set<string>()
 
-	/**
-	 * Non-character World Lore titles. `category` is free-text and usually
-	 * unset, so it works only as an opt-out: an entry the user tagged as being
-	 * about a person screens nothing.
-	 */
-	const screenableLoreTitles = (worldLore ?? []).filter(
-		(e) => !/char|person|people|cast|npc|folk/i.test(e.category ?? "")
-	)
-
-	function isScreenedByWorldLore(name: string): boolean {
-		return screenableLoreTitles.some((e) => namesMatch(e.name, name))
-	}
+	const isScreenedByWorldLore = worldLoreScreen(worldLore ?? [])
 
 	/** Why the relationship set came out the size it did — see RelationshipDiagnostics. */
 	const perspectiveDrops = emptyPerspectiveDrops()
@@ -1042,6 +1121,20 @@ export async function buildGraphFromScenes(
 		// so a snapshot can't outlive a restart into a newer build.
 		for (const [k, v] of resumeState.proposedByName ?? [])
 			proposedByName.set(k, v)
+		resolvedSceneCast.push(...resumeState.resolvedSceneCast)
+		for (const k of resumeState.updatedNodeTempIds)
+			updatedNodeTempIds.add(k)
+		for (const [k, v] of resumeState.stateChangeInfo)
+			stateChangeInfo.set(k, v)
+		scenesWithAnyCast = resumeState.scenesWithAnyCast
+		droppedDanglingIds = resumeState.droppedDanglingIds
+		for (const name of resumeState.filteredWorldLoreNames)
+			filteredWorldLoreNames.add(name)
+		perspectiveCalls = resumeState.perspectiveCalls
+		scenesSkippedNoPair = resumeState.scenesSkippedNoPair
+		const { unresolvedTargets, ...drops } = resumeState.perspectiveDrops
+		Object.assign(perspectiveDrops, drops)
+		for (const t of unresolvedTargets) perspectiveDrops.unresolvedTargets.add(t)
 	}
 
 	for (let i = startSceneIndex; i < scenesWithSummaries.length; i++) {
@@ -1063,7 +1156,23 @@ export async function buildGraphFromScenes(
 			newNodeTempIds: [...newNodeTempIds],
 			newRelKeys: [...newRelKeys],
 			nodeAliasMap: [...nodeAliasMap.entries()],
-			proposedByName: [...proposedByName.entries()]
+			proposedByName: [...proposedByName.entries()],
+			resolvedSceneCast: resolvedSceneCast.map((c) => ({
+				...c,
+				participantTempIds: [...c.participantTempIds],
+				mentionedTempIds: [...c.mentionedTempIds]
+			})),
+			updatedNodeTempIds: [...updatedNodeTempIds],
+			stateChangeInfo: [...stateChangeInfo].map(([k, v]) => [k, { ...v }]),
+			scenesWithAnyCast,
+			droppedDanglingIds,
+			filteredWorldLoreNames: [...filteredWorldLoreNames],
+			perspectiveCalls,
+			scenesSkippedNoPair,
+			perspectiveDrops: {
+				...perspectiveDrops,
+				unresolvedTargets: [...perspectiveDrops.unresolvedTargets]
+			}
 		})
 		const isDirectEntry = scene.sourceHistoryEntryId != null
 
@@ -1207,8 +1316,6 @@ export async function buildGraphFromScenes(
 				content: sceneSummary,
 				connection,
 				sampling,
-				contextConfig,
-				promptConfig,
 				knownCast: seedCastEntries,
 				// Without this the Debug pane silently omits every Pass 1 call,
 				// which is not a cosmetic gap: during an incident these were the
@@ -1562,7 +1669,7 @@ export async function buildGraphFromScenes(
 			 * It runs on the SAME resolved connection and sampling as the first
 			 * attempt. Sampling is configuration; if extraction needs different
 			 * decoding that belongs in a sampling config the user can see and
-			 * change, resolved through graphBuildConfigs — not forced from in
+			 * change, resolved through the graph build pipeline — not forced from in
 			 * here. Re-prompting alone recovered 1 in 13 on the model measured,
 			 * so do not expect much of this on its own.
 			 *
@@ -1698,7 +1805,7 @@ export async function buildGraphFromScenes(
 		// -id case names its cause.
 		if (filteredWorldLoreNames.size > 0) {
 			throw new Error(
-				`Nothing could be extracted from ${scenesWithSummaries.length} scene(s): the only name(s) found — ${[...filteredWorldLoreNames].join(", ")} — match World Lore entries, so they were treated as places or things rather than characters. Add them as characters if that is wrong.`
+				`Nothing could be extracted from ${scenesWithSummaries.length} scene(s): the only name(s) found — ${[...filteredWorldLoreNames].join(", ")} — match World Lore, place or item entries, so they were treated as places or things rather than characters. Add them as characters if that is wrong.`
 			)
 		}
 		throw new Error(

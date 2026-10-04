@@ -8,7 +8,7 @@
  *
  *  1. A line nobody claims — no character, persona, speaker or narration — in
  *     a genre that marks an envoy `fallback: true` posts as that envoy: the
- *     Guide's mascot, the Writing Room's scribe.
+ *     Guide's Serene, the Lair's Castellan.
  *  2. In a genre that declares no fallback (the standard chat) the row stays
  *     speakerless and the host's summary read names it with the
  *     generic `UNCLAIMED_LINE_NAME` — never "Unknown" (the summary
@@ -30,7 +30,7 @@ import { UNCLAIMED_LINE_NAME } from "@serene-pub/sdk"
 let db: TestDb
 let userId: number
 let guideSession: number
-let writingSession: number
+let lairSession: number
 let chatSession: number
 
 const writeNode = { key: "save", definitionId: "core:outlet/create-message" } as any
@@ -64,18 +64,18 @@ beforeAll(async () => {
 				.returning()
 		)[0]!.id
 	guideSession = await session("core:genre/guide")
-	writingSession = await session("core:genre/writing-room")
+	lairSession = await session("core:genre/lair")
 	chatSession = await session("core:genre/chat")
 }, 60_000)
 
 describe("a line nobody claims still has a name", () => {
-	it("in a genre with a fallback envoy, it posts as that envoy — the Guide, the Scribe", async () => {
+	it("in a genre with a fallback envoy, it posts as that envoy — the Guide, the Castellan", async () => {
 		const guide = await write(guideSession, { text: "Opened Settings." })
 		expect(await speakerOf(guide.id)).toBe("envoy:mascot")
 		expect((await rowOf(guide.id)).characterId).toBeNull()
 
-		const room = await write(writingSession, { text: "Chapter one saved." })
-		expect(await speakerOf(room.id)).toBe("envoy:scribe")
+		const lair = await write(lairSession, { text: "The torches gutter." })
+		expect(await speakerOf(lair.id)).toBe("envoy:castellan")
 	}, 60_000)
 
 	it("in a genre with none, the row stays speakerless and the summary read names it generically — never Unknown", async () => {
@@ -98,7 +98,7 @@ describe("a line nobody claims still has a name", () => {
 			{ sessionId: guideSession, messageIds: [res.id] },
 			{ key: "source", definitionId: "core:query/summarize-source@1" } as any
 		)) as Array<{ id: number; senderName: string }>
-		expect(lines.find((l) => l.id === res.id)!.senderName).toBe("Guide")
+		expect(lines.find((l) => l.id === res.id)!.senderName).toBe("Serene")
 	}, 60_000)
 })
 

@@ -1,197 +1,190 @@
 <script lang="ts">
 	/**
-	 * New-preset change page (23 §9). Nothing exists until Create — the
-	 * explicit-save rule. Starting from an existing preset copies its
-	 * selections server-side (fromPresetId); starting bare inherits every
-	 * pipeline's default config.
+	 * Admin › Presets › Add preset (23 §9): the add form. Nothing exists until
+	 * a Save — the explicit-save rule. Starting from an existing preset copies
+	 * its selections server-side (`fromPresetId`); starting bare inherits
+	 * every pipeline's default configuration. The bindings are set on the
+	 * change form "Save and continue editing" lands on.
+	 *
+	 * `?genre=<id>` preselects the genre and `?from=<id>` the preset to copy
+	 * (a genre's change form and a preset's Duplicate land here).
 	 */
-	import { getContext, onMount } from "svelte"
-	import * as Icons from "@lucide/svelte"
+	import { getContext } from "svelte"
 	import Select from "$lib/client/components/inputs/Select.svelte"
-	import { adminGoto as goto, adminUnsavedEdits } from "$lib/client/admin/adminRouter.svelte"
-	import { UnsavedEdits } from "$lib/client/forms/unsavedEdits.svelte"
+	import {
+		adminGoto,
+		adminPage,
+		adminUnsavedEdits
+	} from "$lib/client/admin/adminRouter.svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { getAdminInterestContext } from "$lib/client/sockets/interest.svelte"
 	import { toaster } from "$lib/client/utils/toaster"
-	import { ADMIN_SPLIT } from "$lib/client/components/admin/AdminSplit.svelte"
+	import AdminChangeForm, {
+		type AdminSaveIntent
+	} from "$lib/client/components/admin/AdminChangeForm.svelte"
+	import AdminFieldset from "$lib/client/components/admin/AdminFieldset.svelte"
+	import AdminField, { describedBy } from "$lib/client/components/admin/AdminField.svelte"
 
 	const userCtx: { user: SelectUser } = getContext("userCtx")
-	const split = getContext<{ mode: "desk" | "compact" } | undefined>(
-		ADMIN_SPLIT
-	)
 	const socket = useTypedSocket()
-	// The admin-only half of the registry (plan ruling 6b): `sessionGenres:`
-	// is a RESTRICTED interest family, and this context exists only inside the
-	// admin tree, which already turns non-admins away.
+	// The admin-only half of the registry (plan ruling 6b).
 	const interest = getAdminInterestContext()
 
-	let types: Sockets.SessionAdmin.GenreRow[] = $state([])
-	let presets: Sockets.SessionAdmin.PresetRow[] = $state([])
+	let genres = $state<Sockets.SessionAdmin.GenreRow[]>([])
+	let presets = $state<Sockets.SessionAdmin.PresetRow[]>([])
 	let loading = $state(true)
-	let creating = $state(false)
 
 	let name = $state("")
 	let description = $state("")
 	let genreId = $state("")
-	let fromPresetId: string = $state("")
+	let fromPresetId = $state("")
+	const dirty = $derived(!!name.trim() || !!description.trim())
+	adminUnsavedEdits(() => dirty && !saving)
 
-	/**
-	 * What is typed is what leaving would lose; the genre and copy-source
-	 * pickers open on defaults and are one click to redo.
-	 */
-	const edits = new UnsavedEdits(() => ({
-		name: name.trim(),
-		description: description.trim()
-	}))
-	edits.markSaved({ name: "", description: "" })
-	adminUnsavedEdits(() => edits.dirty)
+	const copyCandidates = $derived(presets.filter((p) => p.genreId === genreId))
 
-	let copyCandidates = $derived(presets.filter((p) => p.genreId === genreId))
-	let canCreate = $derived(!!name.trim() && !!genreId && !creating)
+	let saving = $state(false)
+	let pendingIntent: AdminSaveIntent | null = null
+	let formErrors = $state<string[]>([])
+	let nameError = $state<string | null>(null)
 
-	const onTypes = (res: Sockets.SessionAdmin.Genres.Response) => {
-		types = res.genres
-		if (!genreId && res.genres.length) genreId = res.genres[0].slug
-		loading = false
-	}
-	const onPresets = (res: Sockets.SessionAdmin.Presets.Response) => {
-		presets = res.presets
-	}
-	const onCreated = (res: Sockets.SessionAdmin.CreatePreset.Response) => {
-		if (!creating) return
-		creating = false
-		if (res.error) {
-			toaster.error({ title: res.error })
-			return
-		}
-		if (res.preset) {
-			toaster.success({ title: `Created "${res.preset.name}"` })
-			edits.forget()
-			goto(`/admin/session-presets/${res.preset.id}`)
-		}
-	}
-
-	onMount(() => {
-		if (!userCtx.user?.isAdmin) goto("/")
-	})
-
-	/**
-	 * The genres this form picks from and the presets it can copy, each asked
-	 * for and listened for in one, plus the create's answer — a STANDING key,
-	 * because it lands whenever the person presses Create rather than in reply
-	 * to anything asked here. All BARE: a preset is the instance's.
-	 */
 	$effect(() => {
 		if (!userCtx.user?.isAdmin) return
 		const releases = [
-			interest.declareInterest<"sessionPresets:create">(
-				"sessionPresets:create",
-				onCreated
+			interest.declareInterest<"sessionPresets:create">("sessionPresets:create", (res) => {
+				const intent = pendingIntent
+				if (!intent) return
+				pendingIntent = null
+				saving = false
+				if (!res.preset) return
+				toaster.success({ title: `Added ${res.preset.name}` })
+				name = ""
+				description = ""
+				if (intent === "save") void adminGoto("/admin/session-presets")
+				else if (intent === "continue")
+					void adminGoto(`/admin/session-presets/${res.preset.id}`, { replaceState: true })
+			}),
+			interest.declareInterest<"sessionPresets:create:error">(
+				"sessionPresets:create:error",
+				(res) => {
+					if (!pendingIntent) return
+					pendingIntent = null
+					saving = false
+					const error = res.error ?? "The preset was not added."
+					if (/name/i.test(error)) nameError = error
+					else formErrors = [error]
+				}
 			),
-			interest.requestWithInterest("sessionGenres:list", {}, onTypes),
-			interest.requestWithInterest("sessionPresets:list", {}, onPresets)
+			interest.requestWithInterest("sessionGenres:list", {}, (res) => {
+				genres = res.genres
+				if (!genreId) {
+					const want = adminPage.url.searchParams.get("genre")
+					genreId =
+						(want && res.genres.find((g) => g.slug === want)?.slug) ||
+						res.genres[0]?.slug ||
+						""
+				}
+				loading = false
+			}),
+			interest.requestWithInterest("sessionPresets:list", {}, (res) => {
+				presets = res.presets
+				const from = adminPage.url.searchParams.get("from")
+				const src = from ? res.presets.find((p) => String(p.id) === from) : undefined
+				if (src && !fromPresetId) {
+					genreId = src.genreId
+					fromPresetId = String(src.id)
+				}
+			})
 		]
 		return () => {
 			for (const release of releases) release()
 		}
 	})
 
-	// Changing type invalidates a copy-source from another type.
-	$effect(() => {
-		if (
-			fromPresetId &&
-			!copyCandidates.some((p) => String(p.id) === fromPresetId)
-		)
-			fromPresetId = ""
-	})
-
-	function create() {
-		if (!canCreate) return
-		creating = true
+	function save(intent: AdminSaveIntent) {
+		nameError = name.trim() ? null : "A preset needs a name."
+		formErrors = []
+		if (nameError || !genreId) return
+		saving = true
+		pendingIntent = intent
 		socket.emit("sessionPresets:create", {
 			name: name.trim(),
 			genreId,
 			description: description.trim() || undefined,
-			fromPresetId: fromPresetId ? Number(fromPresetId) : undefined
+			...(fromPresetId ? { fromPresetId: Number(fromPresetId) } : {})
 		})
 	}
 </script>
 
-{#if split?.mode !== "desk"}
-	<a
-		href="/admin/session-presets"
-		class="text-surface-600-400 hover:text-surface-950-50 mb-3 inline-flex items-center gap-1 self-start text-[13px]"
-	>
-		<Icons.ChevronLeft size={14} /> Back to presets
-	</a>
-{/if}
-
-<h2
-	class="text-surface-950-50 mb-4 [font-family:var(--typo-heading--font-family)] text-base font-semibold"
+<AdminChangeForm
+	mode="add"
+	title="Add preset"
+	purpose="A preset starts bare (every pipeline at its shipped configuration) or as a copy of another of its genre. You bind its events next."
+	noun="preset"
+	changelistHref="/admin/session-presets"
+	changelistLabel="Presets"
+	{dirty}
+	{saving}
+	canSave={!loading && !!genreId && !saving}
+	errors={formErrors}
+	fieldErrors={{ "preset-new-name": nameError }}
+	onSave={save}
 >
-	New session preset
-</h2>
-
-{#if loading}
-	<p class="text-surface-600-400 text-sm">Loading…</p>
-{:else}
-	<div class="panel-card flex max-w-[820px] flex-col gap-3">
-		<label class="flex flex-col gap-1 text-sm">
-			<span class="font-medium">Name</span>
-			<input
-				class="input"
-				bind:value={name}
-				placeholder="e.g. Fast local chat"
-			/>
-		</label>
-		<Select
-			class="text-sm"
-			label="Session genre"
-			options={types.map((t) => ({
-				value: t.slug,
-				label: `${t.name} (${t.slug})`
-			}))}
-			bind:value={genreId}
-		/>
-		<label class="flex flex-col gap-1 text-sm">
-			<span class="font-medium">Description</span>
-			<textarea
-				class="textarea w-full"
-				rows={2}
-				bind:value={description}
-				placeholder="What this preset is for — shown on the picker card."
-			></textarea>
-		</label>
-		<Select
-			class="text-sm"
-			label="Start from"
-			options={[
-				{ value: "", label: "Bare — every pipeline's default config" },
-				...copyCandidates.map((p) => ({
-					value: String(p.id),
-					label: `Copy of "${p.name}"`
-				}))
-			]}
-			bind:value={fromPresetId}
-		/>
-
-		<div class="flex flex-wrap items-center gap-2">
-			<button
-				class="btn btn-sm preset-filled-primary-500"
-				disabled={!canCreate}
-				onclick={create}
+	<AdminFieldset title="Preset">
+		<div class="grid gap-4 @min-[36rem]/content:grid-cols-2">
+			<AdminField id="preset-new-name" label="Name" required error={nameError}>
+				<input
+					id="preset-new-name"
+					class="input"
+					type="text"
+					bind:value={name}
+					aria-invalid={!!nameError}
+					aria-describedby={describedBy("preset-new-name", !!nameError)}
+				/>
+			</AdminField>
+			<AdminField
+				id="preset-new-genre"
+				label="Genre"
+				required
+				help="Decides which events the preset binds. Fixed once made."
 			>
-				<Icons.Plus size={14} /> Create preset
-			</button>
-			<a
-				class="btn btn-sm preset-tonal-surface"
-				href="/admin/session-presets"
+				<Select
+					label="Genre"
+					labelHidden
+					options={genres.map((g) => ({ value: g.slug, label: g.name }))}
+					value={genreId}
+					onValueChange={(v) => {
+						genreId = v
+						fromPresetId = ""
+					}}
+					placeholder={loading ? "Loading genres…" : "Pick a genre"}
+					describedBy={describedBy("preset-new-genre", false)}
+				/>
+			</AdminField>
+			<AdminField
+				id="preset-new-from"
+				label="Start from"
+				help="Copy another preset's bindings, configurations and actions."
 			>
-				Cancel
-			</a>
-			<span class="text-surface-600-400 text-xs">
-				Nothing is saved until you create it.
-			</span>
+				<Select
+					label="Start from"
+					labelHidden
+					options={[
+						{ value: "", label: "Nothing — shipped configurations" },
+						...copyCandidates.map((p) => ({ value: String(p.id), label: p.name }))
+					]}
+					bind:value={fromPresetId}
+					describedBy={describedBy("preset-new-from", false)}
+				/>
+			</AdminField>
+			<AdminField id="preset-new-description" label="Description" class="@min-[36rem]/content:col-span-2">
+				<textarea
+					id="preset-new-description"
+					class="textarea"
+					rows={2}
+					bind:value={description}
+				></textarea>
+			</AdminField>
 		</div>
-	</div>
-{/if}
+	</AdminFieldset>
+</AdminChangeForm>

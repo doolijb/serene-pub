@@ -53,8 +53,7 @@ function makeAdapter(baseUrl: string) {
 		} as any,
 		// Empty is what "the context budget is switched off" resolves to now:
 		sampling: {},
-		contextConfig: {} as any,
-		promptConfig: { systemPrompt: "You are a helpful narrator." } as any,
+		systemPrompt: "You are a helpful narrator.",
 		session: {
 			id: 1,
 			userId: 1,
@@ -101,7 +100,18 @@ describe("KoboldCppAdapter streaming — idle timeout (real HTTP server)", () =>
 	})
 
 	test("a server that accepts and never responds gets aborted once idle", async () => {
+		let abortPosted: any
 		server = http.createServer((req, res) => {
+			if (req.url === "/api/extra/abort") {
+				let body = ""
+				req.on("data", (c) => (body += c))
+				req.on("end", () => {
+					abortPosted = JSON.parse(body || "{}")
+					res.writeHead(200, { "Content-Type": "application/json" })
+					res.end('{"success":true}')
+				})
+				return
+			}
 			res.writeHead(200, { "Content-Type": "text/event-stream" })
 			// Never write anything, never end — a genuine hang.
 		})
@@ -119,6 +129,9 @@ describe("KoboldCppAdapter streaming — idle timeout (real HTTP server)", () =>
 		}
 		expect(caught).toBeTruthy()
 		expect(String(caught?.message)).toMatch(/idle/i)
+		// Dropping the connection does not stop KoboldCPP: the stall is
+		// also told to stop, by its genkey, so it frees the slot.
+		await vi.waitFor(() => expect(abortPosted?.genkey).toMatch(/\S/))
 	}, 10_000)
 
 	test("a server that trickles chunks inside the idle window is never aborted", async () => {

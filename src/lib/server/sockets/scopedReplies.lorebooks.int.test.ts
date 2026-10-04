@@ -217,7 +217,9 @@ describe("lorebook-family replies carry their scope key", () => {
 				"lorebooks:setClock",
 				st.lorebookSetClockHandler,
 				{ lorebookId, branchId: null, clock: { year: 1 } }
-			]
+			],
+			// The book's lines alone (plan B6).
+			["lorebooks:lines", st.lorebookLinesHandler, { lorebookId }]
 		] as const) {
 			await expectScoped(
 				event,
@@ -533,5 +535,43 @@ describe("lorebook-family replies carry their scope key", () => {
 				{ id: expect.any(Number), binding: "{{char:0}}" }
 			]
 		})
+	}, 60_000)
+})
+
+describe("Phase D wire hygiene", () => {
+	test("lorebooks:get answers the book and its tags — no entries, no cast", async () => {
+		const w = await makeWorld()
+		const { lorebooksGetHandler } = await import("./lorebooks")
+		const rec = recorder()
+		const res: any = await lorebooksGetHandler.handler(
+			fakeSocket(w.user.id),
+			{ id: w.book.id },
+			rec.emit
+		)
+		expect(res.lorebookId).toBe(w.book.id)
+		expect(res.lorebook).toMatchObject({ id: w.book.id, name: w.book.name, tags: [] })
+		// Book settings reads one row; entries and members have their own reads.
+		expect(res).not.toHaveProperty("entries")
+		expect(res.lorebook).not.toHaveProperty("lorebookBindings")
+	}, 60_000)
+
+	test("entries:updatePositions answers at its book's scope", async () => {
+		const w = await makeWorld()
+		const { updateEntryPositionsHandler } = await import("./entries")
+		await expectScoped(
+			"entries:updatePositions",
+			(emit) =>
+				updateEntryPositionsHandler.handler(
+					fakeSocket(w.user.id),
+					{
+						lorebookId: w.book.id,
+						typeId: w.history.typeId as any,
+						positions: [{ id: w.history.id, position: 1 }]
+					},
+					emit
+				),
+			w.book.id,
+			[w.book.id, w.session.id]
+		)
 	}, 60_000)
 })

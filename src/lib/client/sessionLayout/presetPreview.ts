@@ -17,6 +17,7 @@
  * id this build has retired draws no block — the picture has to show what the
  * preset will actually produce.
  */
+import type { ZoneId } from "@serene-pub/sdk"
 import { isRetiredWidget } from "./widgetGrid"
 
 export interface PreviewCell {
@@ -43,8 +44,6 @@ export interface LayoutPreview {
 /** The schematic's grid — small enough to read at thumbnail size. */
 const ROWS = 6
 const SIDE_COLS = 1
-
-type ZoneKey = "left" | "middle" | "right"
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
 	return !!v && typeof v === "object" && !Array.isArray(v)
@@ -158,7 +157,7 @@ export function previewOf(
 	const arranged = isPlainObject(blob.arrangedGrid) ? blob.arrangedGrid : {}
 	const zoneLayout = blob.zoneLayout
 
-	const zone = (key: ZoneKey): PreviewZone => {
+	const zone = (key: ZoneId): PreviewZone => {
 		const fromEditor = fromArranged(arranged[key], labelOf)
 		if (fromEditor) return fromEditor
 		if (key === "middle") return defaultMiddle(labelOf)

@@ -1307,7 +1307,7 @@
 													{#if tagSearchQuery.trim() && !filteredTags.some((tag) => tag.name.toLowerCase() === tagSearchQuery.toLowerCase())}
 														<button
 															type="button"
-															class="hover:bg-surface-200-800 border-surface-300-700 w-full border-b px-3 py-2 text-left text-sm"
+															class="hover:bg-surface-200-800 panel-edge w-full border-b px-3 py-2 text-left text-sm"
 															onclick={() =>
 																addTag(
 																	tagSearchQuery

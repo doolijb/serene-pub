@@ -2,7 +2,6 @@ import { describe, it, expect } from "vitest"
 import { coreBindings } from "$lib/server/pipelines/runtime/bindings"
 import {
 	describesAsAuthor,
-	keyTerms,
 	undescribedAnswer
 } from "$lib/server/pipelines/runtime/undescribedName"
 
@@ -58,12 +57,6 @@ describe("undescribed-name: the entry lookup", () => {
 		expect(a.entryId).toBe(2)
 	})
 
-	it("keys stored as a comma string split the same way", () => {
-		expect(keyTerms("vault, the Deep Vault ,, ")).toEqual(["vault", "the Deep Vault"])
-		expect(keyTerms(["a,b", "c"])).toEqual(["a", "b", "c"])
-		expect(keyTerms(undefined)).toEqual([])
-	})
-
 	it("any entry type counts, on `entries`, when no location entry answers", () => {
 		const book = [{ id: 9, name: "Brask's Journal", keys: "sunken vault" }]
 		const a = undescribedAnswer({ name: "The Sunken Vault", locationEntries: ROOMS, entries: book })
@@ -81,6 +74,26 @@ describe("undescribed-name: the entry lookup", () => {
 		const a = undescribedAnswer({ name: "The Stair Down", locationEntries: ROOMS })
 		expect(a.describedBy).toBe("")
 		expect(a.undescribed).toBe("The Stair Down")
+	})
+
+	/**
+	 * B6 review round: which row answers is tiered — exact name, then the
+	 * name as `sameName` reads it, then a key term — so a key never beats a
+	 * name, whatever the listing order. `{{locationEntry}}` resolves by the
+	 * same rule, so the room linked is the room whose block is shown.
+	 */
+	it("a room's name beats an earlier room's key, and an exact name a looser one", () => {
+		const rooms = [
+			{ id: 5, name: "The Barracks", keys: ["guardroom"] },
+			{ id: 6, name: "Guardroom" },
+			{ id: 7, name: "The Guardroom" }
+		]
+		expect(undescribedAnswer({ name: "Guardroom", locationEntries: rooms }).entryId).toBe(6)
+		expect(undescribedAnswer({ name: "the guardroom", locationEntries: rooms }).entryId).toBe(7)
+		// Only a key answers: the key's row.
+		expect(
+			undescribedAnswer({ name: "guardroom", locationEntries: [rooms[0]] }).entryId
+		).toBe(5)
 	})
 
 	it("an entry beats prose that also describes it", () => {
@@ -238,6 +251,143 @@ describe("undescribed-name: undescribed, and no name", () => {
 	it("anything but a string is no name, and nothing is undescribed", () => {
 		for (const name of [undefined, null, 3, { n: 1 }, "   "])
 			expect(undescribedAnswer({ name, locationEntries: ROOMS }).undescribed).toBe("")
+	})
+})
+
+/**
+ * `path` and a lore reference (places plan B6, 2026-09-29): *Answer the door*
+ * asks which room the party stand in — the world's `location`, read off a
+ * `session-state@1` document at `world.location` — so the new room can be
+ * linked to it. The value there is words, or a reference to a place entry.
+ */
+describe("undescribed-name: the name inside a document, and a lore reference", () => {
+	const STATE = (location: unknown) => ({ world: { location }, cast: {} })
+
+	it("`path` reads the name at a dotted path inside `name`", () => {
+		const a = undescribedAnswer({
+			name: STATE("the old well"),
+			locationEntries: ROOMS,
+			params: { path: "world.location" }
+		})
+		expect(a).toEqual({ undescribed: "", describedBy: "entry", entryId: 1, passage: "" })
+	})
+
+	it("a path that leaves the document is no name", () => {
+		const a = undescribedAnswer({
+			name: STATE("The Old Well"),
+			locationEntries: ROOMS,
+			params: { path: "world.nowhere.deeper" }
+		})
+		expect(a).toEqual({ undescribed: "", describedBy: "", entryId: null, passage: "" })
+	})
+
+	it("words naming no room are undescribed — the door links nothing", () => {
+		const a = undescribedAnswer({
+			name: STATE("somewhere in the dark"),
+			locationEntries: ROOMS,
+			params: { path: "world.location" }
+		})
+		expect(a.describedBy).toBe("")
+		expect(a.entryId).toBeNull()
+	})
+
+	it("a lore reference is the entry it references, when a listing holds it", () => {
+		const a = undescribedAnswer({
+			name: STATE({ entryId: 2, name: "The Stair" }),
+			locationEntries: ROOMS,
+			params: { path: "world.location" }
+		})
+		expect(a).toEqual({ undescribed: "", describedBy: "entry", entryId: 2, passage: "" })
+	})
+
+	it("a lore reference no listing holds is nothing — never its name's namesake", () => {
+		const a = undescribedAnswer({
+			// Entry 9 is not listed (archived, or hidden from this read); an
+			// entry that happens to share its name is not it.
+			name: { entryId: 9, name: "The Stair" },
+			locationEntries: ROOMS
+		})
+		expect(a).toEqual({ undescribed: "", describedBy: "", entryId: null, passage: "" })
+	})
+
+	it("the binding reads `path` from its params", async () => {
+		const out = await task({
+			name: STATE("The Stair"),
+			locationEntries: ROOMS,
+			params: { path: "world.location" }
+		})
+		expect(out.value.entryId).toBe(2)
+		expect(out.value.describedBy).toBe("entry")
+	})
+})
+
+/**
+ * `fallbackName` (plan A27, 2026-09-30): the world's location, else the
+ * planner's hint — the one reading `{{locationEntry}}` makes
+ * (`worldValueOrHint`), so the room the door links to is the room the prompt
+ * showed.
+ */
+describe("undescribed-name: the fallback name", () => {
+	const STATE = (location: unknown) => ({ world: { location }, cast: {} })
+	const at = { path: "world.location" }
+
+	it("names nothing at `path`: the fallback is looked for instead", () => {
+		for (const location of [undefined, "", "   ", null]) {
+			const a = undescribedAnswer({
+				name: STATE(location),
+				fallbackName: "the stair",
+				locationEntries: ROOMS,
+				params: at
+			} as any)
+			expect(a, String(location)).toEqual({
+				undescribed: "",
+				describedBy: "entry",
+				entryId: 2,
+				passage: ""
+			})
+		}
+	})
+
+	it("the world's words win, even naming no room — as they win in the prompt", () => {
+		const a = undescribedAnswer({
+			name: STATE("somewhere in the dark"),
+			fallbackName: "The Stair",
+			locationEntries: ROOMS,
+			params: at
+		} as any)
+		expect(a.entryId).toBeNull()
+	})
+
+	it("the world's place entry wins over the fallback", () => {
+		const a = undescribedAnswer({
+			name: STATE({ entryId: 1, name: "The Old Well" }),
+			fallbackName: "The Stair",
+			locationEntries: ROOMS,
+			params: at
+		} as any)
+		expect(a.entryId).toBe(1)
+	})
+
+	it("no fallback, or a blank one, is nothing", () => {
+		for (const fallbackName of [undefined, "", null, { nope: 1 }]) {
+			const a = undescribedAnswer({
+				name: STATE(undefined),
+				fallbackName,
+				locationEntries: ROOMS,
+				params: at
+			} as any)
+			expect(a).toEqual({ undescribed: "", describedBy: "", entryId: null, passage: "" })
+		}
+	})
+
+	it("the binding reads `fallbackName` off its port", async () => {
+		const out = await task({
+			name: STATE(undefined),
+			fallbackName: "The Old Well",
+			locationEntries: ROOMS,
+			params: at
+		})
+		expect(out.value.entryId).toBe(1)
 	})
 })
 

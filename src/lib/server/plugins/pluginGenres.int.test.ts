@@ -6,7 +6,7 @@
  *
  * The live walk this pins: the Twenty Questions plugin's `count` and `record`
  * steps (`core:task/set-state@1`) were refused — "'showcase.twenty-questions:
- * slot/questions-asked@1' is not a slot this install declares" — because the
+ * slot/questions-asked@1' is not a slot this pub declares" — because the
  * app never registered a manifest's `genres[].slots`; and `getGenre()` knowing
  * nothing of the genre made `vocabularyFor` fall back to EVERY core slot, so
  * the session showed case, gold, floor and hp.
@@ -349,7 +349,7 @@ describe("plugin genres (stored manifest → registries)", () => {
 			{} as any
 		)
 		expect(refused.value.applied).toHaveLength(0)
-		expect(refused.value.refused?.[0]).toMatch(/not a slot this install declares/)
+		expect(refused.value.refused?.[0]).toMatch(/not a slot this pub declares/)
 	}, 60_000)
 
 	test("a genre this process does not hold has an empty vocabulary (fail closed)", async () => {

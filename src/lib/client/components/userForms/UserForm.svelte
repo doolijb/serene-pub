@@ -320,7 +320,9 @@
 	</div>
 
 	<div class="flex-1 overflow-y-auto">
-		<div class="space-y-4">
+		<!-- Two columns once the detail has the room (notes 14): a name
+		     beside its display name, a passphrase beside its confirmation. -->
+		<div class="grid max-w-3xl gap-4 @xl/detail:grid-cols-2">
 			<div>
 				<label for="username" class="mb-1 block font-semibold">
 					Username*
@@ -348,7 +350,7 @@
 				/>
 			</div>
 
-			<div class="space-y-1">
+			<div class="space-y-1 @xl/detail:col-span-2">
 				<label
 					class="flex items-center gap-2 {canPromote || formIsAdmin
 						? 'cursor-pointer'
@@ -372,59 +374,70 @@
 				{/if}
 			</div>
 
-			<div class="space-y-2">
-				<label for="passphrase" class="mb-1 block font-semibold">
-					{isCreating ? "Passphrase*" : "New passphrase"}
-					{#if !isCreating}
-						<span class="text-surface-600-400 text-sm font-normal">
-							(leave blank to keep current)
-						</span>
-					{/if}
-				</label>
-				<div class="relative">
-					<input
-						id="passphrase"
-						type={showPassphrase ? "text" : "password"}
-						bind:value={formPassphrase}
-						autocomplete="new-password"
-						onblur={validatePassphrase}
-						placeholder="Enter passphrase"
-						class="input w-full pr-10 {passphraseError
-							? 'border-error-500'
-							: ''}"
-					/>
-					<button
-						aria-label={showPassphrase ? "Hide passphrase" : "Show passphrase"}
-						type="button"
-						class="text-surface-600-400 hover:text-surface-900-100 absolute top-1/2 right-2 -translate-y-1/2"
-						onclick={() => (showPassphrase = !showPassphrase)}
-					>
-						{#if showPassphrase}
-							<Icons.EyeOff size={20} />
-						{:else}
-							<Icons.Eye size={20} />
-						{/if}
-					</button>
-				</div>
-
-				<div>
-					<label
-						for="confirmPassphrase"
-						class="mb-1 block font-semibold"
-					>
-						Confirm passphrase
-					</label>
-					<input
-						id="confirmPassphrase"
-						type={showPassphrase ? "text" : "password"}
-						bind:value={formConfirmPassphrase}
-						autocomplete="new-password"
-						onblur={validatePassphrase}
-						placeholder="Confirm passphrase"
-						class="input w-full {passphraseError
-							? 'border-error-500'
-							: ''}"
-					/>
+			<div class="space-y-2 @xl/detail:col-span-2">
+				<div class="grid gap-4 @xl/detail:grid-cols-2">
+					<div>
+						<label
+							for="passphrase"
+							class="mb-1 block font-semibold"
+						>
+							{isCreating ? "Passphrase*" : "New passphrase"}
+							{#if !isCreating}
+								<span
+									class="text-surface-600-400 text-sm font-normal"
+								>
+									(leave blank to keep current)
+								</span>
+							{/if}
+						</label>
+						<div class="relative">
+							<input
+								id="passphrase"
+								type={showPassphrase ? "text" : "password"}
+								bind:value={formPassphrase}
+								autocomplete="new-password"
+								onblur={validatePassphrase}
+								placeholder="Enter passphrase"
+								class="input w-full pr-10 {passphraseError
+									? 'border-error-500'
+									: ''}"
+							/>
+							<button
+								aria-label={showPassphrase
+									? "Hide passphrase"
+									: "Show passphrase"}
+								type="button"
+								class="text-surface-600-400 hover:text-surface-900-100 absolute top-1/2 right-2 -translate-y-1/2"
+								onclick={() =>
+									(showPassphrase = !showPassphrase)}
+							>
+								{#if showPassphrase}
+									<Icons.EyeOff size={20} />
+								{:else}
+									<Icons.Eye size={20} />
+								{/if}
+							</button>
+						</div>
+					</div>
+					<div>
+						<label
+							for="confirmPassphrase"
+							class="mb-1 block font-semibold"
+						>
+							Confirm passphrase
+						</label>
+						<input
+							id="confirmPassphrase"
+							type={showPassphrase ? "text" : "password"}
+							bind:value={formConfirmPassphrase}
+							autocomplete="new-password"
+							onblur={validatePassphrase}
+							placeholder="Confirm passphrase"
+							class="input w-full {passphraseError
+								? 'border-error-500'
+								: ''}"
+						/>
+					</div>
 				</div>
 
 				{#if passphraseError}

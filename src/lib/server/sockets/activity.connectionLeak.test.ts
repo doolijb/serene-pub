@@ -28,6 +28,8 @@ import { readFileSync } from "node:fs"
 import { join, resolve } from "node:path"
 import { registerActivityHandlers } from "./activity"
 import { activityError, activityStore } from "$lib/server/utils/activityStore"
+import { DrizzleQueryError } from "drizzle-orm"
+import { QUERY_FAILED_SENTENCE } from "$lib/server/db/errors"
 import {
 	ComposedError,
 	connectionIdentity
@@ -280,6 +282,26 @@ describe("activityError", () => {
 		expect(
 			activityError(new ComposedError("we said so"))
 		).not.toHaveProperty("connection")
+	})
+
+	test("a failed query QUOTED in a message — a run's reason, a wrapper — reaches neither the card nor the detail", () => {
+		// drizzle-orm 0.44+: a failed query's message is its SQL and every
+		// value it bound. Only the top-level wrapper used to be caught.
+		const quoted = new DrizzleQueryError(
+			'insert into "lorebook_entries" ("content") values ($1)',
+			["SECRET-PROSE-a2"],
+			new Error("boom")
+		).message
+		for (const err of [
+			new ComposedError(`summarize: ${quoted}`),
+			new Error(`the save failed: ${quoted}`)
+		]) {
+			const split = activityError(err)
+			expect(JSON.stringify(split)).not.toMatch(/SECRET-PROSE|Failed query|insert into/)
+		}
+		expect(activityError(new ComposedError(`summarize: ${quoted}`)).errorMessage).toBe(
+			`summarize: ${QUERY_FAILED_SENTENCE}`
+		)
 	})
 })
 

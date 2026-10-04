@@ -27,6 +27,7 @@ import {
 	ScriptNotUsableError
 } from "$lib/server/pipelines/entities/scripts"
 import * as schema from "$lib/server/db/schema"
+import { groupOptions } from "$lib/server/pipelines/config/panel/groups"
 
 const SECRET = "test-instance-secret"
 
@@ -43,7 +44,7 @@ async function writeHookOption(): Promise<ConfigOption> {
 		RESPOND_SPEC_ID,
 		admin()
 	)
-	const all = view!.steps.flatMap((s) => [...s.options, ...s.advanced])
+	const all = groupOptions(view!.groups)
 	const chains = all.filter((o) => o.control === "scripts-chain")
 	expect(chains.length).toBeGreaterThan(0)
 	// The respond spec declares hooks on several steps; the write consumer's is
@@ -84,7 +85,7 @@ beforeAll(async () => {
 		shipped!.configId,
 		"Chain host"
 	)
-	await selectConfig(db, spec.id, "instance", 0, copy.id, adminId)
+	await selectConfig(db, spec.id, "pub", 0, copy.id, adminId)
 }, 60_000)
 
 describe("the hook in the panel", () => {
@@ -97,8 +98,7 @@ describe("the hook in the panel", () => {
 			userId: adminId + 1,
 			isAdmin: false
 		})
-		const userControls = view!.steps
-			.flatMap((s) => [...s.options, ...s.advanced])
+		const userControls = groupOptions(view!.groups)
 			.filter((o) => o.control === "scripts-chain")
 		expect(userControls).toEqual([])
 	})
@@ -223,8 +223,7 @@ describe("the hook in the panel", () => {
 			RESPOND_SPEC_ID,
 			admin()
 		)
-		const rankChain = view!.steps
-			.flatMap((s) => [...s.options, ...s.advanced])
+		const rankChain = groupOptions(view!.groups)
 			.filter((o) => o.control === "scripts-chain")[0]!
 		expect(rankChain.connectionScripts).toBeUndefined()
 	})

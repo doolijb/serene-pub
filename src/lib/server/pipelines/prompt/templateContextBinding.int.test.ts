@@ -18,6 +18,7 @@ import { describe, it, expect, beforeAll } from "vitest"
 import { createTestDb, type TestDb } from "$lib/server/utils/testDb"
 import { createHost, HostScopeError } from "$lib/server/pipelines/runtime/host"
 import { coreBindings } from "$lib/server/pipelines/runtime/bindings"
+import { stableExamplePick } from "$lib/server/pipelines/prompt/promptFields"
 import * as schema from "$lib/server/db/schema"
 import { bootstrapPipelines } from "$lib/server/pipelines/boot/bootstrap"
 
@@ -260,34 +261,47 @@ describe("the context task", () => {
 	describe("the example dialogue", () => {
 		const seeded = (value: number) => () => value
 
-		it("comes from the run's RNG, so a replay reproduces it", async () => {
-			// The property the legacy `Math.random()` cannot have. Without it a
-			// parity comparison between the two paths is not well-defined.
+		/**
+		 * Picked once per SESSION and speaker (B2, 2026-10-03) — never re-drawn
+		 * from the run's seed, which is fresh every turn: a pick that moves
+		 * changes the reminder block's bytes, and a backend that reuses its
+		 * cache only on an exact prefix reprocesses everything after them.
+		 */
+		it("is the same on every run of one session, whatever the run's seed", async () => {
 			const cast = (await readCast()).value.cast
-			const a = await buildFrom(cast, {}, seeded(0.9))
-			const b = await buildFrom(cast, {}, seeded(0.9))
-			expect(a.value.exampleDialogueIndex).toBe(2)
-			expect(b.value.exampleDialogueIndex).toBe(2)
-			expect(a.value.templateContext.postHistory.exampleDialogue).toBe(
-				b.value.templateContext.postHistory.exampleDialogue
-			)
-		})
-
-		it("varies with the seed, so the variety survives determinism", async () => {
-			const cast = (await readCast()).value.cast
+			expect(cast.sessionId).toBe(sessionId)
 			const picks = new Set<number>()
 			for (const v of [0.1, 0.5, 0.9])
 				picks.add(
 					(await buildFrom(cast, {}, seeded(v))).value
 						.exampleDialogueIndex
 				)
-			expect(picks.size).toBe(3)
+			expect(picks.size).toBe(1)
+			const expected = stableExamplePick(sessionId, aliceId, () => 0)(3)
+			expect([...picks][0]).toBe(expected)
+			const a = await buildFrom(cast, {}, seeded(0.1))
+			const b = await buildFrom(cast, {}, seeded(0.9))
+			expect(a.value.templateContext.postHistory.exampleDialogue).toBe(
+				b.value.templateContext.postHistory.exampleDialogue
+			)
 		})
 
-		it("takes the first when the type did not declare randomness", async () => {
+		it("differs between sessions and speakers by the key alone", () => {
+			const picks = new Set<number>()
+			for (let s = 1; s <= 12; s++) picks.add(stableExamplePick(s, 7, () => 0)(3))
+			expect(picks.size).toBeGreaterThan(1)
+		})
+
+		it("falls back to the run's RNG for a cast read with no session behind it", async () => {
+			const { sessionId: _drop, ...cast } = (await readCast()).value.cast
+			const r = await buildFrom(cast, {}, seeded(0.9))
+			expect(r.value.exampleDialogueIndex).toBe(2)
+		})
+
+		it("takes the first when there is neither a session nor declared randomness", async () => {
 			// `ctx.random` is absent unless the descriptor asks for it (F11). The
 			// fallback has to be deterministic, not a quiet `Math.random()`.
-			const cast = (await readCast()).value.cast
+			const { sessionId: _drop, ...cast } = (await readCast()).value.cast
 			const r = await buildFrom(cast)
 			expect(r.value.exampleDialogueIndex).toBe(0)
 		})

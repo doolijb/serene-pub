@@ -55,7 +55,7 @@
 		/** Optional per-row click (Django's "row opens the change form"). */
 		onRowClick?: (row: Row) => void
 		/**
-		 * The list pane of an `AdminSplit`: one row per item (title, a meta
+		 * The compact list (a pane beside a detail): one row per item (title, a meta
 		 * line, an optional badge) instead of a table or cards, sized for a
 		 * ~360px column. `rowTitle` is required in this mode.
 		 */
@@ -309,7 +309,7 @@
 			{search ? "No matches." : emptyMessage}
 		</div>
 	{:else if rowsMode}
-		<!-- ── rows: the list pane of an AdminSplit ───────────────── -->
+		<!-- ── rows: the compact list pane ───────────────────────── -->
 		<ul class="flex flex-col gap-1">
 			{#each pageRows as row, i (i)}
 				{@const selected = isSelected?.(row) ?? false}

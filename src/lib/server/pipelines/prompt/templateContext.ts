@@ -24,12 +24,7 @@
  * formatting — so a difference in output is a difference in *inputs*.
  */
 
-import {
-	CHARACTER_LORE_TYPE_ID,
-	type LorebookEntry
-} from "$lib/shared/entries/types"
 import { InterpolationEngine } from "$lib/server/utils/interpolation/InterpolationEngine"
-import { attachCharacterLoreToCharacters } from "$lib/server/pipelines/prompt/characterLore"
 import { joinWithAnd } from "$lib/shared/utils/joinWithAnd"
 import type { TemplateContext } from "$lib/server/pipelines/prompt/promptTypes"
 import type { VarValue } from "@serene-pub/sdk"
@@ -41,6 +36,7 @@ import {
 import type { RenderRun } from "$lib/server/pipelines/prompt/renderers"
 import { relationshipSections } from "$lib/server/pipelines/prompt/rankedRelationships"
 import { qualifiedSlotKey, slotKey } from "$lib/server/state/keys"
+import { readAuthorsNoteValue } from "$lib/server/pipelines/prompt/authorsNote"
 
 export interface CharacterRow {
 	id?: number
@@ -130,10 +126,6 @@ export interface BuildContextInput extends RenderRun {
 	 */
 	relationshipsPerspectives?: unknown
 	relationshipsKnown?: unknown
-	/** Character lore to fold into the cards. Empty on the current path. */
-	characterLore?: readonly LorebookEntry<typeof CHARACTER_LORE_TYPE_ID>[]
-	/** Needed only to map lore bindings onto cast members. */
-	session?: unknown
 	/**
 	 * The `variables` slot, resolved through the scope chain and dereferenced
 	 * into template sources by `world.ts`.
@@ -170,26 +162,35 @@ export interface BuildContextInput extends RenderRun {
 	 * `char` is a field, not a rename of the speaker.
 	 */
 	fields?: Record<string, unknown>
+	/**
+	 * 🚧 The session's AI replies before this one (AN1) — what the author's
+	 * note's `interval` divides. Off the cast read, which carries it only for
+	 * a session whose genre declares the note; absent otherwise.
+	 */
+	replyCount?: number
 }
-
-export class TemplateContextError extends Error {}
 
 /** The names an interpolation context owns; a genre field may not take one. */
 const RESERVED_FIELD_NAMES = new Set(["char", "character", "user", "persona"])
 
-/** A genre's fields as interpolation variables: a plain bag, reserved names out. */
+/**
+ * A genre's fields as interpolation variables: a plain bag, reserved names
+ * out — and the author's note out when it is the note (an object): it is
+ * placed by Assemble as its own block, and `{{authorsNote}}` in a prompt row
+ * would otherwise render `[object Object]`. A plugin's text field of the same
+ * name stays a variable (see `readAuthorsNoteValue`).
+ */
 function genreFields(fields: unknown): Record<string, unknown> {
 	if (!fields || typeof fields !== "object" || Array.isArray(fields))
 		return {}
 	return Object.fromEntries(
 		Object.entries(fields as Record<string, unknown>).filter(
-			([key]) => !RESERVED_FIELD_NAMES.has(key)
+			([key, value]) =>
+				!RESERVED_FIELD_NAMES.has(key) &&
+				!(key === "authorsNote" && readAuthorsNoteValue(value))
 		)
 	)
 }
-
-/** A session with no cast: the lore attachment finds nothing, and says nothing. */
-const EMPTY_CHAT = { sessionCharacters: [], sessionPersonas: [] }
 
 /**
  * Build the context a context template renders against.
@@ -222,6 +223,8 @@ export async function buildTemplateContext(
 		}
 	})
 
+	// The cards are the characters as written. Lore bound to a cast member is
+	// Assemble's `characterLore`, which the context template places itself.
 	const characters = input.characters.map((c) =>
 		interpolation.interpolateObject(c as any, interpolationContext, [
 			"name",
@@ -237,32 +240,6 @@ export async function buildTemplateContext(
 		])
 	)
 
-	// Personas go through the *character* helper, matching index.ts:720. A
-	// sibling `attachCharacterLoreToPersonas` used to exist and was called from
-	// nowhere at all; it was deleted in the dead-code sweep rather than wired in
-	// here, because using it would have been a behaviour change wearing the
-	// costume of a bug fix. Persona lore still never attaches on any live path.
-	const lore = input.characterLore ?? []
-	if (lore.length && !input.session)
-		throw new TemplateContextError(
-			`character lore was supplied without a session. The bindings that say which ` +
-				`character a lore entry belongs to live on the session's lorebook, so without ` +
-				`it every entry would be silently dropped and the prompt would come out ` +
-				`short with nothing to show for it.`
-		)
-	const session = (input.session ?? EMPTY_CHAT) as any
-
-	const charactersWithLore = attachCharacterLoreToCharacters(
-		characters,
-		lore as any,
-		session
-	)
-	const personasWithLore = attachCharacterLoreToCharacters(
-		personas as any,
-		lore as any,
-		session
-	)
-
 	const interpolate = (s: string | null | undefined): string =>
 		interpolation.interpolateString(s ?? "", interpolationContext) ?? ""
 
@@ -272,6 +249,21 @@ export async function buildTemplateContext(
 	)
 	const charPostHistory = interpolate(texts.charPostHistory)
 	const charExampleDialogue = interpolate(texts.charExampleDialogue)
+
+	/**
+	 * 🚧 The session's author's note (AN1), when its genre declares one: the
+	 * stored value with its text interpolated (`{{char}}`, `{{user}}`, as
+	 * SillyTavern's note is), carried to Assemble — which places it against
+	 * the final messages and decides the interval, as it does `postHistory`.
+	 * Absent for every genre that declares no note, so their context is the
+	 * object it was.
+	 */
+	const note = readAuthorsNoteValue(
+		input.fields && typeof input.fields === "object"
+			? (input.fields as Record<string, unknown>).authorsNote
+			: undefined
+	)
+	const authorsNoteText = note ? interpolate(note.text) : ""
 
 	/**
 	 * Each top-level variable now goes through its selected layout, and the
@@ -316,8 +308,8 @@ export async function buildTemplateContext(
 			"relationshipsKnown",
 			relationshipSections(input.relationshipsKnown, "known")
 		),
-		characters: await layout("characters", charactersWithLore),
-		personas: await layout("personas", personasWithLore),
+		characters: await layout("characters", characters),
+		personas: await layout("personas", personas),
 		characterNames: await layout(
 			"characterNames",
 			interpolationContext.characterNames
@@ -360,6 +352,22 @@ export async function buildTemplateContext(
 					charExampleDialogue
 			)
 		},
+		...(note
+			? {
+					authorsNote: {
+						gatedBy: "assemble" as const,
+						targetIndex: 0,
+						text: authorsNoteText || undefined,
+						role: note.role,
+						depth: note.depth,
+						interval: note.interval,
+						...(typeof input.replyCount === "number"
+							? { replyCount: input.replyCount }
+							: {}),
+						hasContent: Boolean(authorsNoteText.trim())
+					}
+				}
+			: {}),
 		sessionMessages: [],
 		// Structure, unrendered, and absent when nothing supplied it — so a
 		// template that tests `{{#if state}}` gets the honest answer.

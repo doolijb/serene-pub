@@ -9,7 +9,7 @@
  * nowhere else:
  *
  * 1. the genre's **fallback envoy** (`EnvoyDecl.fallback`) — the Lair's
- *    Castellan, the Guide's Guide, the Writing Room's Scribe;
+ *    Castellan, the Guide's Guide;
  * 2. else the session's narrator name (Edit Session's narrator prompt config);
  * 3. else the SDK's `UNCLAIMED_LINE_NAME` (_Narrator_) — never _Unknown_.
  *

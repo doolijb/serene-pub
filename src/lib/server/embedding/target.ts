@@ -41,6 +41,7 @@ import {
 	mergeEndpointModel
 } from "$lib/server/connections/models"
 import { decryptApiKeyField } from "$lib/server/utils/tokenCrypto"
+import { hostKey } from "$lib/shared/connections/hostKey"
 import {
 	DEFAULT_EMBEDDING_TTL_MINUTES,
 	EMBEDDING_CAPABILITY
@@ -69,6 +70,59 @@ export {
  */
 export function buildApiModelId(baseUrl: string, model: string): string {
 	return `api::${baseUrl}::${model}`
+}
+
+/**
+ * Whether two identities name the same model at the same address, spelled
+ * differently — `api::https://host/v1::m` and `api::https://HOST:443/v1/::m`.
+ *
+ * ⚠ The identity string itself stays byte for byte what it always was (see the
+ * header): respelling it would mark every stored vector stale on upgrade. So
+ * the forgiveness lives here, in a comparison, and the star's consequence uses
+ * it to re-stamp such vectors with the spelling now in force instead of paying
+ * to embed them again (`restampEquivalentVectors`).
+ *
+ * The address is compared by `hostKey` — the one rule for "the same address,
+ * typed twice": a trailing slash, the case of the scheme and host, a default
+ * port written out, and nothing more — plus the query string, which `hostKey`
+ * drops and which can name a deployment. `localhost` and `127.0.0.1` stay two
+ * addresses, the safe direction for a rule whose mistake would be keeping
+ * vectors from a different model. The model name is compared exactly. A local
+ * model's identity is its bare id and matches only itself.
+ */
+export function sameEmbeddingModel(a: string, b: string): boolean {
+	if (a === b) return true
+	const pa = splitApiModelId(a)
+	const pb = splitApiModelId(b)
+	return (
+		!!pa &&
+		!!pb &&
+		pa.model === pb.model &&
+		addressKey(pa.baseUrl) === addressKey(pb.baseUrl)
+	)
+}
+
+/**
+ * `buildApiModelId`, read back. The model is after the LAST `::` — an IPv6
+ * address carries `::` of its own, a model name does not.
+ */
+function splitApiModelId(
+	id: string
+): { baseUrl: string; model: string } | null {
+	if (!id.startsWith("api::")) return null
+	const cut = id.lastIndexOf("::")
+	if (cut <= 3) return null
+	return { baseUrl: id.slice(5, cut), model: id.slice(cut + 2) }
+}
+
+function addressKey(baseUrl: string): string | null {
+	const host = hostKey(baseUrl)
+	if (host === null) return null
+	try {
+		return host + new URL(baseUrl.trim()).search
+	} catch {
+		return host
+	}
 }
 
 export interface EmbeddingTarget {
@@ -138,13 +192,44 @@ export async function resolveEmbeddingTarget(
 ): Promise<EmbeddingTarget | null> {
 	const registered = await capabilityDefault(db, EMBEDDING_CAPABILITY)
 	if (!registered?.connectionId) return null
+	return resolveEmbeddingPair(db, {
+		connectionId: registered.connectionId,
+		connectionModelId: registered.connectionModelId ?? null
+	})
+}
 
-	const [endpoint] = await db
+/** An unsaved edit to a pair: the address and the model identifier, as typed. */
+export interface EmbeddingPairEdit {
+	baseUrl?: string
+	model?: string
+}
+
+/**
+ * A connection and one of its models, resolved as if they were starred.
+ *
+ * `resolveEmbeddingTarget` is this applied to the star. Its own export for the
+ * question asked BEFORE a star moves — what identity would this pair stamp,
+ * and so what would starring it clear (`embeddingReindexCost`) — which has to
+ * get the same answer the star will, or the confirmation prices a different
+ * switch from the one it performs.
+ *
+ * `edit` asks the same of an edit not saved yet — the starred connection's
+ * address, or its model's identifier, as the form holds them — so the
+ * confirmation in front of that save prices what the save will do.
+ */
+export async function resolveEmbeddingPair(
+	db: Db,
+	registered: { connectionId: number; connectionModelId: number | null },
+	edit?: EmbeddingPairEdit
+): Promise<EmbeddingTarget | null> {
+	const [stored] = await db
 		.select()
 		.from(schema.connections)
 		.where(eq(schema.connections.id, registered.connectionId))
 		.limit(1)
-	if (!endpoint) return null
+	if (!stored) return null
+	const endpoint =
+		edit?.baseUrl !== undefined ? { ...stored, baseUrl: edit.baseUrl } : stored
 
 	// The star names a pair, and both halves are required: a registration
 	// naming only the endpoint is incomplete, and the lane treats it as off
@@ -154,10 +239,12 @@ export async function resolveEmbeddingTarget(
 		: undefined
 	// A model row belongs to exactly one endpoint; one that names another is a
 	// pair no backend could serve.
-	const model =
+	const owned =
 		modelRow && modelRow.connectionId === registered.connectionId
 			? modelRow
 			: undefined
+	const model =
+		owned && edit?.model !== undefined ? { ...owned, model: edit.model } : owned
 	const connection = mergeEndpointModel(endpoint, model)
 
 	const modelName = (connection.model ?? "").trim()

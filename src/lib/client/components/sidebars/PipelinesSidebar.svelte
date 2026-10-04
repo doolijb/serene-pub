@@ -42,7 +42,8 @@
 	 *
 	 * The server decides where an edit lands from where the panel was opened —
 	 * the configuration itself from the list, session scope from inside a
-	 * session you own (05 §0a) — and says so in `writeScope`. This shows it
+	 * session you own (05 §0a), and there only for a pipeline that session
+	 * runs (owner Q7) — and says so in the view's `scope`. This shows it
 	 * rather than asking, because a scope picker asks the user to understand
 	 * the resolution chain before they can change a prompt.
 	 *
@@ -51,21 +52,28 @@
 	 * Which is why there are no configuration verbs on this panel and never
 	 * were: an administrator curates the set, and what reaches here is a
 	 * *selection* — for a session you are in, or, outside one, a statement of
-	 * which configuration the instance is on. The "Manage pipeline" link below
-	 * is the whole of the admin's extra surface, and it is a link, not a
-	 * disabled control.
+	 * which configuration the instance is on. The Admin links (the toolbar's
+	 * gear, a card's "Manage pipeline") are the whole of the admin's extra
+	 * surface, and they are links, not disabled controls.
 	 */
 	import { requestWithInterest } from "$lib/client/sockets/interest.svelte"
 	import { getContext, tick } from "svelte"
 	import { SvelteSet, SvelteMap } from "svelte/reactivity"
 	import * as Icons from "@lucide/svelte"
 	import PanelNavHeader from "$lib/client/components/panels/PanelNavHeader.svelte"
-	import PanelToolbar from "$lib/client/components/panels/PanelToolbar.svelte"
+	import ViewToolbar from "$lib/client/components/panels/ViewToolbar.svelte"
+	import { toolbarButtonClass } from "$lib/client/components/panels/toolbarButton"
+	import PanelFilterInput from "$lib/client/components/panels/PanelFilterInput.svelte"
 	import PanelSplit from "$lib/client/components/panels/PanelSplit.svelte"
 	import PipelineConfigOptions from "$lib/client/components/pipelines/PipelineConfigOptions.svelte"
+	import { sessionScopeFor } from "$lib/client/components/pipelines/settingsGroups"
+	import DocPeek from "$lib/client/components/docs/DocPeek.svelte"
+	import { docsHref } from "$lib/shared/utils/docsHref"
 	import EmptyState from "$lib/client/components/EmptyState.svelte"
 	import { ViewModeTracker } from "$lib/client/shell/viewMode.svelte"
 	import { eventDisplayName } from "$lib/client/utils/eventName"
+	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import { toaster } from "$lib/client/utils/toaster"
 	import {
 		genreRows,
 		pipelinesSidebarNav as nav,
@@ -94,8 +102,28 @@
 	let genres = $state<Genre[] | null>(null)
 	let presets = $state<Preset[] | null>(null)
 	let list = $state<Sockets.Pipelines.Namespace[] | null>(null)
+	/** The All pipelines list's filter box: name or slug, any case. */
+	let libraryFilter = $state("")
+	const filteredLibrary = $derived.by(() => {
+		const q = libraryFilter.trim().toLowerCase()
+		if (!list) return []
+		if (!q) return list
+		return list.filter(
+			(ns) =>
+				ns.name.toLowerCase().includes(q) ||
+				ns.slug.toLowerCase().includes(q)
+		)
+	})
 	/** The preset this session was started on, when opened inside one. */
 	let sessionPresetId = $state<number | null>(null)
+	/**
+	 * The pipelines the session in view runs (owner Q7): only these open at
+	 * the session's scope; any other is the configuration's. Null until
+	 * known, and no panel mounts before then — a panel asks once, on mount.
+	 */
+	let sessionRuns = $state<Set<string> | null>(null)
+	const panelsReady = $derived(sessionId == null || sessionRuns !== null)
+	const runs = $derived(sessionRuns ?? new Set<string>())
 
 	const loading = $derived(genres === null || presets === null)
 
@@ -208,6 +236,22 @@
 	function openPreset(presetId: number) {
 		go(() => nav.openPreset(presetId), HEAD)
 	}
+
+	const socket = useTypedSocket()
+	/**
+	 * "Make default for <Genre>" (owner note 27, 2026-10-02): the preset new
+	 * sessions of this genre start from. One record — the preset row's
+	 * `is_default`, one per genre — written through the same
+	 * `sessionPresets:update` the Admin preset page sends; the server clears
+	 * the genre's other default and re-sends `sessionPresets:list`, which is
+	 * what moves the mark here.
+	 */
+	function makeDefault(p: Preset) {
+		socket.emit("sessionPresets:update", { id: p.id, isDefault: true })
+		toaster.success({
+			title: `${p.name} is now the default for ${currentGenre?.name ?? "this genre"}`
+		})
+	}
 	function openLibrary() {
 		go(() => nav.openLibrary(), HEAD)
 	}
@@ -241,6 +285,10 @@
 	const onPresetStatus = (res: Sockets.Sessions.PresetStatus.Response) => {
 		if (res.sessionId === sessionId) sessionPresetId = res.presetId
 	}
+	const onSessionPipelines = (res: Sockets.Sessions.Pipelines.Response) => {
+		if (res.sessionId === sessionId)
+			sessionRuns = new Set(res.pipelines.map((p) => p.slug))
+	}
 
 	/**
 	 * Four reads, each declared ahead of its request (ruling 3). All BARE —
@@ -265,6 +313,14 @@
 			onPresetStatus
 		)
 	})
+	$effect(() => {
+		if (sessionId == null) return
+		return requestWithInterest(
+			"sessions:pipelines",
+			{ sessionId },
+			onSessionPipelines
+		)
+	})
 
 	/** A genre or preset that vanished while we were away steps back. */
 	$effect(() => {
@@ -278,11 +334,7 @@
 	const libraryOpen = $derived(viewMode.mode === "desk" && nav.inLibrary)
 </script>
 
-<div
-	class="flex min-h-0 flex-1 flex-col"
-	use:viewMode.observe
-	bind:this={root}
->
+<div class="flex min-h-0 flex-1 flex-col" use:viewMode.observe bind:this={root}>
 	<PanelSplit
 		mode={viewMode.mode}
 		{hasDetail}
@@ -308,6 +360,23 @@
 <!-- ── 1. Genres ─────────────────────────────────────────────────────── -->
 {#snippet genrePane()}
 	<div class="text-foreground flex h-full flex-col gap-3">
+		<!-- The view toolbar (STYLE-GUIDE §6.3; notes 25). Presets and
+		     pipelines are made and wired in Admin, so there is no New: an
+		     administrator's way there is the secondary icon button. -->
+		{#if isAdmin}
+			<ViewToolbar label="Pipelines">
+				{#snippet actions()}
+					<a
+						class={toolbarButtonClass()}
+						href="/admin/session-presets"
+						title="Manage session presets in Admin"
+						aria-label="Manage session presets in Admin"
+					>
+						<Icons.Settings2 size={16} aria-hidden="true" />
+					</a>
+				{/snippet}
+			</ViewToolbar>
+		{/if}
 		<p class="text-surface-600-400 text-sm">
 			Select a genre to see its presets and the pipelines they run.
 		</p>
@@ -317,14 +386,16 @@
 		{:else if !rows.length}
 			<EmptyState
 				icon={Icons.Shapes}
-				message="No genres are offered on this instance yet."
+				message="No genres are offered on this pub yet."
 			/>
 		{:else}
 			{#each rows as g (g.genreId)}
 				{@const isOpen =
 					viewMode.mode === "desk" && nav.genreId === g.genreId}
-				{@const defaultName = presetsOfGenre(g.genreId, presets ?? [])
-					.find((p) => p.isDefault)?.name}
+				{@const defaultName = presetsOfGenre(
+					g.genreId,
+					presets ?? []
+				).find((p) => p.isDefault)?.name}
 				<!-- The sampling view's category card, row for row. -->
 				<button
 					type="button"
@@ -342,7 +413,9 @@
 							<Icons.Shapes size={20} aria-hidden="true" />
 						</div>
 						<div class="min-w-0 flex-1">
-							<div class="flex items-center justify-between gap-2">
+							<div
+								class="flex items-center justify-between gap-2"
+							>
 								<span class="font-semibold">{g.name}</span>
 								<Icons.ChevronRight
 									size={16}
@@ -372,7 +445,9 @@
 											size={12}
 											aria-hidden="true"
 										/>
-										<span class="truncate">{defaultName}</span>
+										<span class="truncate">
+											{defaultName}
+										</span>
 									</span>
 								{/if}
 							</div>
@@ -409,7 +484,8 @@
 						/>
 					</div>
 					<p class="text-surface-600-400 mt-0.5 text-sm">
-						Every pipeline on this instance, whichever preset uses it.
+						Every pipeline on this pub, whichever preset uses
+						it.
 					</p>
 					{#if list}
 						<div class="text-surface-600-400 mt-2 text-xs">
@@ -442,62 +518,100 @@
 				message="This genre has no presets you can use yet."
 			/>
 		{:else}
+			<p class="text-surface-600-400 mb-2 flex items-start gap-2 text-sm">
+				<span class="min-w-0 flex-1">
+					Every preset of this genre. New sessions start from the
+					default; pick a preset to see the pipelines it runs.
+				</span>
+				<DocPeek
+					href={docsHref("pipelines", "a-genres-default-preset")}
+					topic="presets and the default"
+				/>
+			</p>
 			<div class="flex flex-col gap-2">
 				{#each genrePresets as p (p.id)}
-					<button
-						type="button"
-						data-preset={p.id}
-						class="card preset-filled-surface-100-900 hover:preset-tonal-primary group flex w-full items-center gap-3 rounded-xl p-3 text-left transition-colors"
-						onclick={() => openPreset(p.id)}
+					<div
+						class="card preset-filled-surface-100-900 flex w-full flex-col rounded-xl"
 					>
-						<Icons.Ticket
-							size={18}
-							class="shrink-0 opacity-70"
-							aria-hidden="true"
-						/>
-						<span class="min-w-0 flex-1">
-							<span class="flex min-w-0 flex-wrap items-center gap-1.5">
-								<span class="truncate font-medium">{p.name}</span>
-								{#if p.isDefault}
+						<button
+							type="button"
+							data-preset={p.id}
+							class="hover:preset-tonal-primary group flex w-full items-center gap-3 rounded-xl p-3 text-left transition-colors"
+							onclick={() => openPreset(p.id)}
+						>
+							<Icons.Ticket
+								size={18}
+								class="shrink-0 opacity-70"
+								aria-hidden="true"
+							/>
+							<span class="min-w-0 flex-1">
+								<span
+									class="flex min-w-0 flex-wrap items-center gap-1.5"
+								>
+									<span class="truncate font-medium">
+										{p.name}
+									</span>
+									{#if p.isDefault}
+										<span
+											class="preset-tonal-primary rounded-full px-1.5 py-0.5 text-[11px]"
+											title="New {currentGenre?.name ??
+												''} sessions start from this preset."
+										>
+											Default
+										</span>
+									{/if}
+									{#if p.isImmutable}
+										<span
+											class="preset-tonal-surface rounded-full px-1.5 py-0.5 text-[11px]"
+											title="Shipped with Serene Pub or a plugin. Its bindings are read-only."
+										>
+											Built-in
+										</span>
+									{/if}
+									{#if !p.enabled}
+										<span
+											class="preset-tonal-surface rounded-full px-1.5 py-0.5 text-[11px]"
+											title="Not offered when starting a session. An administrator can switch it on in Admin."
+										>
+											Hidden
+										</span>
+									{/if}
+									{#if sessionPresetId === p.id}
+										<span
+											class="preset-tonal-success rounded-full px-1.5 py-0.5 text-[11px]"
+										>
+											This session
+										</span>
+									{/if}
+								</span>
+								{#if p.description}
 									<span
-										class="preset-tonal-primary rounded-full px-1.5 py-0.5 text-[11px]"
-										>Default</span
+										class="text-surface-600-400 block truncate text-xs"
 									>
-								{/if}
-								{#if p.isImmutable}
-									<span
-										class="preset-tonal-surface rounded-full px-1.5 py-0.5 text-[11px]"
-										title="Shipped with Serene Pub or a plugin. Its bindings are read-only."
-										>Built-in</span
-									>
-								{/if}
-								{#if !p.enabled}
-									<span
-										class="preset-tonal-surface rounded-full px-1.5 py-0.5 text-[11px]"
-										>Hidden</span
-									>
-								{/if}
-								{#if sessionPresetId === p.id}
-									<span
-										class="preset-tonal-success rounded-full px-1.5 py-0.5 text-[11px]"
-										>This session</span
-									>
+										{p.description}
+									</span>
 								{/if}
 							</span>
-							{#if p.description}
-								<span
-									class="text-surface-600-400 block truncate text-xs"
+							<Icons.ChevronRight
+								size={16}
+								class="text-surface-600-400 shrink-0 transition-transform group-hover:translate-x-0.5"
+								aria-hidden="true"
+							/>
+						</button>
+						{#if isAdmin && !p.isDefault && p.enabled}
+							<div class="flex justify-end px-3 pb-2">
+								<button
+									type="button"
+									class="btn btn-sm preset-tonal-surface"
+									onclick={() => makeDefault(p)}
 								>
-									{p.description}
-								</span>
-							{/if}
-						</span>
-						<Icons.ChevronRight
-							size={16}
-							class="text-surface-600-400 shrink-0 transition-transform group-hover:translate-x-0.5"
-							aria-hidden="true"
-						/>
-					</button>
+									<Icons.Star size={14} aria-hidden="true" />
+									Make default for {currentGenre?.name ??
+										"this genre"}
+								</button>
+							</div>
+						{/if}
+					</div>
 				{/each}
 			</div>
 		{/if}
@@ -527,6 +641,23 @@
 			<p class="text-surface-600-400 text-sm">Loading…</p>
 		{:else}
 			{@const p = currentPreset}
+			{#if isAdmin}
+				<!-- The view toolbar (§6.3): the pipeline cards save as they
+				     are changed, so there is no primary; Admin is a secondary
+				     icon button, where it sits in every view. -->
+				<ViewToolbar label="Preset" class="mb-3">
+					{#snippet actions()}
+						<a
+							class={toolbarButtonClass()}
+							href="/admin/session-presets/{p.id}"
+							title="Manage this preset in Admin: which pipeline answers each event, its configurations, and whether it is offered"
+							aria-label="Manage this preset in Admin"
+						>
+							<Icons.Settings2 size={16} aria-hidden="true" />
+						</a>
+					{/snippet}
+				</ViewToolbar>
+			{/if}
 			{#if p.staleBindings?.length}
 				<div
 					class="preset-tonal-warning mb-3 flex items-start gap-2 rounded-xl p-2 text-sm"
@@ -540,8 +671,8 @@
 					<span>
 						{p.staleBindings.length === 1
 							? "One of this preset's pipelines is missing"
-							: `${p.staleBindings.length} of this preset's pipelines are missing`}, so
-						sessions on it use the genre's own instead.
+							: `${p.staleBindings.length} of this preset's pipelines are missing`},
+						so sessions on it use the genre's own instead.
 					</span>
 				</div>
 			{/if}
@@ -552,9 +683,17 @@
 					the genre's defaults.
 				</p>
 			{:else}
-				<p class="text-surface-600-400 mb-3 text-sm">
-					The pipelines sessions on this preset run. Open one to
-					change its prompts and settings.
+				<p
+					class="text-surface-600-400 mb-3 flex items-start gap-2 text-sm"
+				>
+					<span class="min-w-0 flex-1">
+						The pipelines sessions on this preset run. Open one to
+						change its prompts and settings, grouped by agent.
+					</span>
+					<DocPeek
+						href={docsHref("pipelines", "agents")}
+						topic="a pipeline's settings"
+					/>
 				</p>
 				{#if currentGroups.pipelines.length}
 					<div class="flex flex-col gap-3">
@@ -585,18 +724,6 @@
 					</div>
 				{/if}
 			{/if}
-
-			{#if isAdmin}
-				<PanelToolbar label="Preset management" class="mt-3 mb-4">
-					<a
-						class="btn btn-sm preset-tonal-primary flex-1"
-						href="/admin/session-presets/{p.id}"
-					>
-						<Icons.Ticket size={16} aria-hidden="true" /> Edit preset
-						bindings
-					</a>
-				</PanelToolbar>
-			{/if}
 		{/if}
 	</div>
 {/snippet}
@@ -606,54 +733,54 @@
 	{@const open = !!expanded.get(presetId)?.has(pp.slug)}
 	{@const detail = details.get(pp.slug)}
 	{@const presetConfig =
-		pp.configId != null
-			? configName(pp.slug, pp.configId)
-			: null}
+		pp.configId != null ? configName(pp.slug, pp.configId) : null}
 	{@const regionId = `preset-${presetId}-${pp.slug}`}
 	<section class="panel-card !p-0">
-		<button
-			type="button"
-			class="hover:bg-surface-200-800 flex w-full items-start gap-3 rounded-[12px] p-3 text-left"
-			aria-expanded={open}
-			aria-controls={regionId}
-			onclick={() => toggle(presetId, pp.slug)}
-		>
-			<Icons.Workflow
-				size={18}
-				class="mt-0.5 shrink-0 opacity-70"
-				aria-hidden="true"
-			/>
-			<span class="min-w-0 flex-1">
-				<span class="block truncate font-medium">
-					{pp.name}
+		<div class="flex items-start">
+			<button
+				type="button"
+				class="hover:bg-surface-200-800 flex min-w-0 flex-1 items-start gap-3 rounded-[12px] p-3 text-left"
+				aria-expanded={open}
+				aria-controls={regionId}
+				onclick={() => toggle(presetId, pp.slug)}
+			>
+				<Icons.Workflow
+					size={18}
+					class="mt-0.5 shrink-0 opacity-70"
+					aria-hidden="true"
+				/>
+				<span class="min-w-0 flex-1">
+					<span class="block truncate font-medium">
+						{pp.name}
+					</span>
+					<span
+						class="text-surface-600-400 block text-xs"
+						title={pp.events.length > EVENTS_SHOWN
+							? pp.events.map(eventDisplayName).join(" · ")
+							: undefined}
+					>
+						{#if pp.events.length}
+							{eventsLine(pp.events)}
+						{/if}
+						{#if pp.events.length && pp.actions.length}
+							·
+						{/if}
+						{#if pp.actions.length}
+							{pp.actions.length === 1 ? "Action" : "Actions"}: {pp.actions.join(
+								", "
+							)}
+						{/if}
+					</span>
 				</span>
-				<span
-					class="text-surface-600-400 block text-xs"
-					title={pp.events.length > EVENTS_SHOWN
-						? pp.events.map(eventDisplayName).join(" · ")
-						: undefined}
-				>
-					{#if pp.events.length}
-						{eventsLine(pp.events)}
-					{/if}
-					{#if pp.events.length && pp.actions.length}
-						·
-					{/if}
-					{#if pp.actions.length}
-						{pp.actions.length === 1
-							? "Action"
-							: "Actions"}: {pp.actions.join(", ")}
-					{/if}
-				</span>
-			</span>
-			<Icons.ChevronDown
-				size={16}
-				class="text-surface-600-400 mt-0.5 shrink-0 transition-transform {open
-					? 'rotate-180'
-					: ''}"
-				aria-hidden="true"
-			/>
-		</button>
+				<Icons.ChevronDown
+					size={16}
+					class="text-surface-600-400 mt-0.5 shrink-0 transition-transform {open
+						? 'rotate-180'
+						: ''}"
+					aria-hidden="true"
+				/>
+			</button>
+		</div>
 		{#if open}
 			<div id={regionId} class="px-3 pb-3">
 				{#if presetConfig && detail?.selectedConfig && detail.selectedConfig.id !== pp.configId}
@@ -661,30 +788,26 @@
 					     instance (or this session) has
 					     selected; say so when the preset
 					     names a different one. -->
-					<p
-						class="preset-tonal-surface mb-3 rounded-lg p-2 text-xs"
-					>
-						Sessions started on this preset run
-						“{presetConfig}”. The options below
-						are “{detail.selectedConfig.name}”.
+					<p class="preset-tonal-surface mb-3 rounded-lg p-2 text-xs">
+						Sessions started on this preset run “{presetConfig}”.
+						The options below are “{detail.selectedConfig.name}”.
 					</p>
 				{/if}
-				<PipelineConfigOptions
-					slug={pp.slug}
-					{sessionId}
-					onLoaded={(d) => details.set(pp.slug, d)}
-				/>
+				{#if panelsReady}
+					<PipelineConfigOptions
+						slug={pp.slug}
+						sessionId={sessionScopeFor(pp.slug, sessionId, runs)}
+						sessionDoesNotRun={sessionId != null &&
+							!runs.has(pp.slug)}
+						onLoaded={(d) => details.set(pp.slug, d)}
+					/>
+				{/if}
 				{#if isAdmin}
 					<a
 						class="btn btn-sm preset-tonal-surface mt-3 w-full"
-						href="/admin/pipelines/{encodeURIComponent(
-							pp.slug
-						)}"
+						href="/admin/pipelines/{encodeURIComponent(pp.slug)}"
 					>
-						<Icons.Settings2
-							size={16}
-							aria-hidden="true"
-						/> Manage pipeline
+						<Icons.Settings2 size={16} aria-hidden="true" /> Manage pipeline
 					</a>
 				{/if}
 			</div>
@@ -696,18 +819,39 @@
 {#snippet libraryPane()}
 	<div class="text-foreground">
 		<div class="mb-3" data-pane-head>
-			<PanelNavHeader title="All pipelines" onBack={back} backLabel="Genres" />
+			<PanelNavHeader
+				title="All pipelines"
+				onBack={back}
+				backLabel="Genres"
+			/>
 		</div>
+		{#if list?.length}
+			<ViewToolbar label="All pipelines" class="mb-3">
+				{#snippet filter()}
+					<PanelFilterInput
+						bind:value={libraryFilter}
+						placeholder="pipelines"
+						singular="pipeline"
+						count={list?.length ?? 0}
+					/>
+				{/snippet}
+			</ViewToolbar>
+		{/if}
 		{#if list === null}
 			<p class="text-surface-600-400 text-sm">Loading…</p>
 		{:else if !list.length}
 			<EmptyState
 				icon={Icons.Workflow}
-				message="No pipelines are published on this instance yet."
+				message="No pipelines are published on this pub yet."
 			/>
 		{:else}
 			<div class="flex flex-col gap-2">
-				{#each list as ns (ns.slug)}
+				{#if !filteredLibrary.length}
+					<p class="text-surface-600-400 text-sm">
+						No pipeline matches “{libraryFilter.trim()}”.
+					</p>
+				{/if}
+				{#each filteredLibrary as ns (ns.slug)}
 					<button
 						type="button"
 						data-pipeline={ns.slug}
@@ -723,7 +867,9 @@
 							<span class="block truncate font-medium">
 								{ns.name}
 							</span>
-							<span class="text-surface-600-400 block truncate text-xs">
+							<span
+								class="text-surface-600-400 block truncate text-xs"
+							>
 								v{ns.version}{ns.enabled ? "" : " · disabled"}
 							</span>
 						</span>
@@ -749,17 +895,27 @@
 			/>
 		</div>
 
-		<PipelineConfigOptions {slug} {sessionId} />
-
 		{#if isAdmin}
-			<PanelToolbar label="Pipeline management" class="mt-2 mb-4">
-				<a
-					class="btn btn-sm preset-tonal-primary flex-1"
-					href="/admin/pipelines/{encodeURIComponent(slug)}"
-				>
-					<Icons.Settings2 size={16} aria-hidden="true" /> Manage pipeline
-				</a>
-			</PanelToolbar>
+			<ViewToolbar label="Pipeline" class="mb-3">
+				{#snippet actions()}
+					<a
+						class={toolbarButtonClass()}
+						href="/admin/pipelines/{encodeURIComponent(slug)}"
+						title="Manage this pipeline in Admin"
+						aria-label="Manage this pipeline in Admin"
+					>
+						<Icons.Settings2 size={16} aria-hidden="true" />
+					</a>
+				{/snippet}
+			</ViewToolbar>
+		{/if}
+
+		{#if panelsReady}
+			<PipelineConfigOptions
+				{slug}
+				sessionId={sessionScopeFor(slug, sessionId, runs)}
+				sessionDoesNotRun={sessionId != null && !runs.has(slug)}
+			/>
 		{/if}
 	</div>
 {/snippet}

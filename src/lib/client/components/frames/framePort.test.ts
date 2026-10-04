@@ -28,7 +28,6 @@ import {
 	type HostFrameMessage
 } from "@serene-pub/sdk"
 import { buildEventMessage, buildLayoutMessage } from "./framePlacement"
-import { buildStyleMessage } from "./frameStyle"
 import {
 	buildPageMessage,
 	buildStateMessage,
@@ -74,7 +73,6 @@ const OUTGOING = [
 	},
 	{ t: "messages", messages: [{ id: 4, role: "user", content: "roll" }] },
 	{ t: "props", props: { panelId: "tray", title: "Dice tray" } },
-	{ t: "settings", settings: { sides: 6 } },
 	{ t: "actions", actions: {} },
 	{ t: "theme", theme: "cerberus", mode: "dark" },
 	{ t: "suspend" },
@@ -91,7 +89,6 @@ describe("the host posts only what the protocol declares", () => {
 			"channel",
 			"messages",
 			"props",
-			"settings",
 			"actions",
 			"theme",
 			"suspend",
@@ -105,10 +102,6 @@ describe("the host posts only what the protocol declares", () => {
 	})
 
 	it("the builders return the union's members", () => {
-		const style = buildStyleMessage({
-			css: ".sp-card{color:red}",
-			vars: { "--x": "1" }
-		}) satisfies HostFrameMessage
 		const layout = buildLayoutMessage(placement) satisfies HostFrameMessage
 		const event = buildEventMessage({
 			kind: "message:created",
@@ -117,7 +110,6 @@ describe("the host posts only what the protocol declares", () => {
 			lane: 1,
 			messageId: 4
 		}) satisfies HostFrameMessage
-		expect(style.t).toBe("style")
 		expect(layout.t).toBe("layout")
 		expect(event.t).toBe("event")
 	})

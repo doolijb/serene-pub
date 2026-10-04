@@ -182,15 +182,34 @@ afterAll(async () => {
 	await fs.rm(dataDir, { recursive: true, force: true })
 })
 
-const compare = (variantName: string | null) =>
-	comparePrompts({
+/**
+ * Both sides hold entity search at 0. It ships on (R5: all supported
+ * retrieval is on by default), and it finds `The Ashguard` by the names its
+ * content shares with the scene (the wastes, the city), so on the shipped
+ * configuration the admission gate is not the only way in. With it held off
+ * on both sides, the gate is the one difference between them.
+ */
+const ENTITY_SEARCH_OFF = [
+	{ nodeKey: "gather.entities.read", path: "maxEntries", value: 0 }
+]
+const BASE = {
+	name: `${SHIPPED.name}, entity search off`,
+	overrides: [...SHIPPED.overrides, ...ENTITY_SEARCH_OFF]
+}
+
+const compare = (variantName: string | null) => {
+	const preset = variantName ? presetVariant(variantName)! : null
+	return comparePrompts({
 		db: db,
 		sessionId,
 		userId,
 		currentCharacterId: characterId,
-		baseline: SHIPPED,
-		variant: variantName ? presetVariant(variantName)! : SHIPPED
+		baseline: BASE,
+		variant: preset
+			? { name: preset.name, overrides: [...BASE.overrides, ...preset.overrides] }
+			: BASE
 	})
+}
 
 describe("the tool does not manufacture a difference", () => {
 	it("reports the same configuration as identical, twice over", async () => {

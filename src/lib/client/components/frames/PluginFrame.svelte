@@ -15,30 +15,12 @@
 	 * literal — which is what tells the frame which members it may use.
 	 *
 	 * Read the unions for the wire itself; what follows is only this host's
-	 * side of it. Surfaces differ: a page or session-view frame is not a
-	 * widget, so it receives no `settings`, `style`, `layout`, `event` or
-	 * `actions` at all.
-	 *
-	 * A panel that declares `channels` is a *view onto those lanes*: it receives
-	 * only their messages (per-channel `channel` posts), never the whole log —
-	 * the same scoping a remote widget gets, enforced host-side. `suspend`
-	 * pauses an off-screen frame without unmounting it (the grid never
-	 * reparents, so the document — and this port — survive; suspend just tells
-	 * it to idle), and `resume` wakes it. This is what caps many-frame cost
-	 * without ever paying a reload (21 §7).
-	 *
-	 * `style` is the widget-skin half of PLAN 25 (ruled 2026-08-30): a frame
-	 * widget is treated identically to a remote one, host-resolved skin and all
-	 * — the only difference being that its CSS is injected into the frame's OWN
-	 * document rather than a scoped `<style>` out here. The frame is expected to
-	 * keep one `<style id="sp-widget-style">`, replaced in place, and to set
-	 * `vars` on its `document.documentElement`.
-	 *
-	 * It is PUSHED, never negotiated: a frame that has never heard of it — an old
-	 * sample, a third-party plugin — falls through its own switch and ignores it,
-	 * which is the whole of the compatibility story. Nothing here waits for an
-	 * ack, so an unstyled frame costs one dropped message and no error. See
-	 * `frameStyle.ts` for the sanitiser boundary this crosses.
+	 * side of it. No frame is a widget (the `surface` shortcut retired
+	 * 2026-10-02), so none is sent widget data — no `settings`, `layout`,
+	 * `scoped` or `grants`. A page frame gets the theme and the language; a
+	 * session-view frame also gets the session, its messages, the session's
+	 * `actions` and its `event`s; a document inside a component (`sp-frame`,
+	 * surface `panel`) gets the `props` its component passes.
 	 *
 	 * ## What this host answers (protocol 2)
 	 *
@@ -67,12 +49,8 @@
 	 */
 	import { onDestroy } from "svelte"
 	import * as Icons from "@lucide/svelte"
-	import type { SessionV1, WidgetBaseSection } from "@serene-pub/sdk"
-	import type {
-		PlacementInput,
-		ActionsV1,
-		WidgetEventSource
-	} from "$lib/shared/widgets/context"
+	import type { SessionV1 } from "@serene-pub/sdk"
+	import type { ActionsV1, WidgetEventSource } from "$lib/shared/widgets/context"
 	import type { ActionDispatch } from "$lib/shared/widgets/invokeAction"
 	import { frameInvokeVerdict, hasRecentActivation } from "./frameActivation"
 	import { frameOwnerOf } from "./frameOwner"
@@ -87,54 +65,23 @@
 		session?: SessionV1
 		/** Parts-native messages; re-sent wholesale on change. */
 		messages?: unknown[]
-		/**
-		 * Panel surfaces (21): the lanes this panel views. When set, the frame
-		 * receives only these channels' messages (per-channel posts), never the
-		 * whole log — the scoping is enforced here, host-side.
-		 */
-		channels?: string[]
-		/** Panel surfaces (21): declared props posted as `{ t: "props" }`. */
+		/** A document inside a component (`sp-frame`): what its component passes, posted as `{ t: "props" }`. */
 		props?: Record<string, unknown>
 		/**
-		 * Panel surfaces (25): this instance's effective settings, posted as
-		 * `{ t: "settings" }` — the same `settings.v1` a remote widget is posted,
-		 * defaults filled in and the user's deviations over them.
-		 * Undefined on the surfaces that are not widgets, and nothing is posted
-		 * for those.
-		 */
-		settings?: Record<string, unknown>
-		/**
-		 * Panel surfaces (25): the widget skin this frame should wear, already
-		 * resolved by the host (`effectiveWidgetSkin`, so an unsaved draft shows
-		 * while it is being typed). Undefined on the surfaces that are not
-		 * widgets — a page or session-view frame — and no `style` is posted at all
-		 * for those.
-		 */
-		skin?: { css: string; vars: Record<string, string> }
-		/**
-		 * Panel surfaces (25): this widget's measured cell geometry, pushed as
-		 * `{ t: "layout" }` — the same `layout.v1` a remote widget is posted.
-		 * Undefined on the surfaces that are not widgets, and no `layout`
-		 * is posted at all for those.
-		 */
-		placement?: PlacementInput
-		/**
-		 * Panel surfaces (25): the session-level event source (the
-		 * `SurfaceManager`). Its events are filtered to `channels` here, exactly
-		 * as the wire filters them for a remote widget, and forwarded as
-		 * `{ t: "event" }`.
+		 * A session-view frame: the session-level event source (the
+		 * `SurfaceManager`), forwarded as `{ t: "event" }`.
 		 */
 		source?: WidgetEventSource
 		/**
-		 * Panel surfaces (U5c): the session's action venues, posted as
+		 * A session-view frame (U5c): the session's action venues, posted as
 		 * `{ t: "actions" }` — the same `actions.v1` a remote widget is posted.
 		 * A frame invokes one by identity (or a key only one action
 		 * carries) with `{ t: "invoke" }`, which the host resolves to the
 		 * declaration exactly as the native `invoke` verb does (`makeInvoke`):
 		 * one of core's verbs to `actionDispatch.core`, a contributed one to
 		 * `actionDispatch.fire` — the host's own fire, not `onAction`, so a
-		 * frame's press is the one the chips make. Undefined on the surfaces
-		 * that are not widgets, and nothing is posted for those.
+		 * frame's press is the one the chips make. Undefined elsewhere, and
+		 * nothing is posted.
 		 */
 		actions?: ActionsV1
 		/**
@@ -148,20 +95,6 @@
 		actionDispatch?: ActionDispatch
 		/** Nested in a component (`sp-frame`): raise the document's invoke unresolved (`WireInputs.onInvoke`). */
 		onInvoke?: WireInputs["onInvoke"]
-		/**
-		 * Panel surfaces (R75): the base sections this widget reads — only
-		 * those are posted. Absent posts all, as every non-widget surface does.
-		 */
-		reads?: readonly WidgetBaseSection[]
-		/** Panel surfaces (21): idle the frame off-screen without unmounting. */
-		suspended?: boolean
-		/**
-		 * What this surface's saved view state is keyed on, beside the session
-		 * (`save-state` → `state`). A panel passes its instance id — the string
-		 * a saved layout row already names — and anything else falls back to the
-		 * document's own path, which is stable for a page or session-view frame.
-		 */
-		surfaceId?: string
 		/**
 		 * The audited fire. `action` is the pressed declaration's identity
 		 * when the frame named one (`invoke`); a bare `{ t: "action", fn }`
@@ -183,18 +116,11 @@
 		surface,
 		session,
 		messages,
-		channels,
 		props,
-		settings,
-		skin,
-		placement,
 		actions,
 		actionDispatch,
 		onInvoke,
-		reads,
 		source,
-		suspended = false,
-		surfaceId,
 		onAction,
 		class: klass = ""
 	}: Props = $props()
@@ -214,11 +140,8 @@
 	 */
 	let fatal = $state<string | null>(null)
 
-	/**
-	 * Where this surface's saved state is filed. Derived rather than captured,
-	 * so a panel moved between sessions files under the session it is now in.
-	 */
-	let stateKey = $derived(frameStateKey(session?.id, surfaceId ?? src))
+	/** Where this surface's saved state is filed: the session, and the document's own path. */
+	let stateKey = $derived(frameStateKey(session?.id, src))
 
 	/**
 	 * When focus last entered this frame, as the host can see it (S-C; W3) —
@@ -263,18 +186,12 @@
 		inputs: () => ({
 			session,
 			messages,
-			channels,
 			props,
-			settings,
-			skin,
-			placement,
 			actions,
 			source,
-			suspended,
 			stateKey,
-			widgetId: surfaceId ?? src,
+			widgetId: src,
 			owner: frameOwner,
-			reads,
 			actionDispatch,
 			onInvoke,
 			onAction

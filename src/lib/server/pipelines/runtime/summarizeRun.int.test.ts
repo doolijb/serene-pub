@@ -12,7 +12,7 @@
  * The model is faked and only the model.
  */
 
-import { describe, it, expect, beforeAll, vi } from "vitest"
+import { describe, it, expect, beforeAll, afterAll, vi } from "vitest"
 import { createTestDb, type TestDb } from "$lib/server/utils/testDb"
 import * as schema from "$lib/server/db/schema"
 import { WORLD_LORE_TYPE_ID, ofType } from "$lib/server/utils/lorebookEntries"
@@ -288,7 +288,7 @@ describe("a summarize run, stopped at the write", () => {
 				shipped!.configId,
 				"Chain host"
 			)
-			await selectConfig(db, spec.id, "instance", 0, copy.id)
+			await selectConfig(db, spec.id, "pub", 0, copy.id)
 			await db.insert(schema.pipelineConfigValues).values({
 				configId: copy.id,
 				nodeKey: batchNode.nodeKey,
@@ -335,4 +335,75 @@ describe("a summarize run, stopped at the write", () => {
 			}
 		])
 	})
+})
+
+/**
+ * Attachments in the summarize transcript (owner ruling 2026-10-03): the
+ * spec's `attachments` query reads the files the picked messages show, and
+ * `batches` names each after its message's text. A message that is only a
+ * picture reaches the draft as that picture's name and description, where it
+ * used to be an empty line.
+ */
+describe("a summarize run names a message's files", () => {
+	let dataDir: string
+	let priorDataDir: string | undefined
+
+	beforeAll(async () => {
+		const fs = await import("node:fs/promises")
+		const os = await import("node:os")
+		const path = await import("node:path")
+		dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "serene-pub-summarize-attach-"))
+		priorDataDir = process.env.SERENE_PUB_DATA_DIR
+		process.env.SERENE_PUB_DATA_DIR = dataDir
+	})
+
+	afterAll(async () => {
+		const fs = await import("node:fs/promises")
+		if (priorDataDir === undefined) delete process.env.SERENE_PUB_DATA_DIR
+		else process.env.SERENE_PUB_DATA_DIR = priorDataDir
+		await fs.rm(dataDir, { recursive: true, force: true })
+	})
+
+	it("an attachment-only message is drafted from its image's name and description", async () => {
+		const { PNG } = await import("pngjs")
+		const img = new PNG({ width: 4, height: 4 })
+		for (let i = 0; i < img.data.length; i++) img.data[i] = (i * 7) % 256
+		const { insertLegacy, appendParts } = await import("$lib/server/messages/store")
+		const { createMedia } = await import("$lib/server/media")
+		const { mediaPartFor } = await import("$lib/server/attachments/partData")
+		const row: any = await insertLegacy(db as any, {
+			sessionId,
+			role: "user",
+			content: "",
+			isGenerating: false
+		} as any)
+		const created = await createMedia(db as any, {
+			userId,
+			sessionId,
+			bytes: PNG.sync.write(img),
+			filename: "gate.png"
+		})
+		await appendParts(db as any, row.id, [
+			mediaPartFor(created.file, { alt: "a rusted iron gate" })
+		])
+
+		const { runSpec } = await import("$lib/server/pipelines/runtime/runTurn")
+		const { SUMMARIZE_WORLD_SPEC_ID } = await import(
+			"$lib/server/pipelines/specs/summarize"
+		)
+		calls.length = 0
+		const receipt = await runSpec({
+			db,
+			sessionId,
+			userId,
+			specId: SUMMARIZE_WORLD_SPEC_ID,
+			input: { scope: { sessionId }, request: { messageIds: [row.id] } },
+			preview: { atNode: "save" },
+			skipReceipt: true
+		})
+		expect(receipt.haltNodeKey, receipt.haltReason).toBe("save")
+		expect(calls[0]!.userPrompt).toContain(
+			"[image: gate.png — a rusted iron gate]"
+		)
+	}, 60_000)
 })

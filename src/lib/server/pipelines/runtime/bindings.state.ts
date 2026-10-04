@@ -89,6 +89,46 @@ export async function ownersFrom(
 }
 
 /**
+ * 🚧 `resolve-state-changes`'s `keeps` (stat ownership, owner ruling
+ * 2026-09-30), read as whose books this keeper keeps: `'world'` (the world
+ * and its places), a `character:<id>` reference (that seat), or a party
+ * speaker fact (`{ characterId }`, or `{ name }` as the planner wrote it,
+ * resolved against the cast the way a change's owner is). A list keeps the
+ * union of its items, read flat, an absent item adding nobody — the Lair's
+ * Castellan keeper wires `['world', …the delvers it voiced]`. Null when
+ * unwired: any owner. Anything else keeps nobody: every change refused,
+ * rather than every change let through.
+ */
+type Keeps = { world: boolean; cast: Set<number> }
+async function keepsFrom(
+	raw: unknown,
+	castNamed: (name: string) => Promise<number | null>
+): Promise<Keeps | null> {
+	if (raw === undefined || raw === null) return null
+	const keeps: Keeps = { world: false, cast: new Set() }
+	const items = Array.isArray(raw) ? raw.flat(Infinity) : [raw]
+	for (const item of items) {
+		if (item === "world") {
+			keeps.world = true
+			continue
+		}
+		if (typeof item === "string") {
+			const m = /^character:(\d+)$/.exec(item.trim())
+			if (m) keeps.cast.add(Number(m[1]))
+			continue
+		}
+		if (!item || typeof item !== "object") continue
+		const fact = item as { characterId?: unknown; name?: unknown }
+		if (typeof fact.characterId === "number") keeps.cast.add(fact.characterId)
+		else if (typeof fact.name === "string" && fact.name.trim()) {
+			const id = await castNamed(fact.name)
+			if (id !== null) keeps.cast.add(id)
+		}
+	}
+	return keeps
+}
+
+/**
  * `set-state`'s `worldRow` (lair pass R8): a committed write result's row id,
  * `undefined` when unwired, `false` when it is anything else — a bare id or a
  * literal is not a row this run wrote.
@@ -488,12 +528,55 @@ export function stateBindings(run: RenderRun = {}): Bindings {
 					slotId: string
 				) => `${owner.kind}:${owner.id}:${slotId}`
 
+				/**
+				 * 🚧 **Whose stats this keeper keeps** (`keeps`, owner ruling
+				 * 2026-09-30): `'world'` — the world and its places; a
+				 * `character:<id>` — that member alone. A change to anybody
+				 * else is a sentence, never a write. Unwired, anyone.
+				 */
+				const keeps = await keepsFrom(
+					(input as { keeps?: unknown })?.keeps,
+					async (name) => {
+						try {
+							const owner = await ownerFor(toolCtx, name)
+							return owner.kind === "session_cast" ? owner.id : null
+						} catch (e) {
+							if (e instanceof ToolError) return null
+							throw e
+						}
+					}
+				)
+				const keptRefusal = (
+					owner: { kind: string; id: number },
+					named: string
+				): string | null => {
+					if (!keeps) return null
+					const who = named.trim() || (owner.kind === "session_cast" ? "a delver" : "the world")
+					if (owner.kind !== "session_cast")
+						return keeps.world
+							? null
+							: `the world's stats (${who}) are kept on the world's turn, so this keeper — a delver's own — left them alone.`
+					if (keeps.cast.has(owner.id)) return null
+					if (!keeps.world)
+						return `${who} is not whose turn this was, so this keeper — that delver's own — left their stats alone.`
+					return keeps.cast.size
+						? `${who} did not speak this turn, so this keeper — the world's and the speakers' — left their stats alone.`
+						: `${who}'s stats are theirs to keep on their own turn, so this keeper — the world's — left them alone.`
+				}
+				/** The owner name the change was written with, for its refusal. */
+				let namedOwner = ""
+
 				/** Coerce, validate, and take the change or leave a sentence. */
 				const take = async (
 					owner: { kind: "session" | "session_cast" | "session_location"; id: number },
 					slotId: string,
 					written: unknown
 				): Promise<void> => {
+					const kept = keptRefusal(owner, namedOwner)
+					if (kept) {
+						refused.push(kept)
+						return
+					}
 					const value =
 						typeof written === "number" ||
 						typeof written === "string" ||
@@ -541,6 +624,7 @@ export function stateBindings(run: RenderRun = {}): Bindings {
 				}
 
 				for (const { line, owner: given } of lines) {
+					namedOwner = typeof line.owner === "string" ? line.owner : ""
 					try {
 						const owner =
 							given ??
@@ -563,6 +647,11 @@ export function stateBindings(run: RenderRun = {}): Bindings {
 								Number.isFinite(asked) && asked !== 0
 									? Math.trunc(asked)
 									: 1
+							const kept = keptRefusal(owner, namedOwner)
+							if (kept) {
+								refused.push(kept)
+								continue
+							}
 							const change = inventoryChange(owner, entryId, delta, base)!
 							// The gate's own doors, asked HERE so nothing it
 							// would refuse is shown as a change to accept: the
@@ -628,6 +717,7 @@ export function stateBindings(run: RenderRun = {}): Bindings {
 							.map((t) => [t.key, t.id])
 					)
 					const owner = { kind: "session" as const, id: sessionId }
+					namedOwner = "world"
 					for (const [key, wanted] of Object.entries(hints as Record<string, unknown>)) {
 						if (typeof wanted !== "string" || !wanted.trim()) continue
 						const slotId = onWorld.get(hintSlotName(key))
@@ -664,7 +754,7 @@ export function stateBindings(run: RenderRun = {}): Bindings {
 				}
 				return ok({ main, changes, refused })
 			},
-			{ ports: ["changes", "owners", "scope", "plan", "base", "supply"] }
+			{ ports: ["changes", "owners", "keeps", "scope", "plan", "base", "supply"] }
 		),
 
 		"core:task/set-state@1": reads<typeof C.setState>(
@@ -698,9 +788,13 @@ export function stateBindings(run: RenderRun = {}): Bindings {
 				 * accept to judge the same way.
 				 */
 				const nodeBase = readBase(input?.base)
-				const { applyChange, proposeChange, StateRefusal } =
+				const { applyAutomatic, loreWriteModeOnce, proposeChange, StateRefusal } =
 					await import("$lib/server/state/write")
 				const { db } = await import("$lib/server/db")
+				// A change to the BOOK in apply mode follows the book owner's
+				// lore write mode (plan A22): Full applies, Review changes
+				// proposes, Off refuses with the sentence naming the mode.
+				const modeOf = loreWriteModeOnce(db, sessionId)
 
 				// ⚠ **No `messageId`.** Under the turn lock (R9) a change
 				// anchors to the OWNER's own latest reply — that character's,
@@ -745,11 +839,11 @@ export function stateBindings(run: RenderRun = {}): Bindings {
 							? { ...raw, base: nodeBase }
 							: raw
 					try {
-						if (mode === "apply")
-							applied.push(
-								await applyChange(db, ctxFor(change), change)
-							)
-						else
+						if (mode === "apply") {
+							const done = await applyAutomatic(db, ctxFor(change), change, undefined, modeOf)
+							if ("applied" in done) applied.push(done.applied)
+							else proposed.push(done.proposed)
+						} else
 							proposed.push(
 								await proposeChange(db, ctxFor(change), change)
 							)

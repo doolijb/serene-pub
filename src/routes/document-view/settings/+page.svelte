@@ -3,6 +3,7 @@
 	import { goto } from "$app/navigation"
 	import { page } from "$app/state"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import { DISPLAY_NAME_MAX_LENGTH } from "$lib/shared/validation/displayName"
 	import {
 		requestWithInterest,
 		useInterest
@@ -42,7 +43,6 @@
 
 	function saveDisplayName(event: SubmitEvent) {
 		event.preventDefault()
-		if (!displayName.trim()) return
 		displayNameSaving = true
 		displayNameStatus = ""
 		socket.emit("users:current:updateDisplayName", {
@@ -146,8 +146,7 @@
 	let displayNameInitialized = $state(false)
 	$effect(() => {
 		if (!displayNameInitialized && userCtx.user) {
-			displayName =
-				userCtx.user.displayName || userCtx.user.username || ""
+			displayName = userCtx.user.displayName || ""
 			displayNameInitialized = true
 		}
 	})
@@ -259,10 +258,15 @@
 		<input
 			id="a11y-settings-display-name"
 			type="text"
-			required
+			maxlength={DISPLAY_NAME_MAX_LENGTH}
+			aria-describedby="a11y-settings-display-name-help"
 			bind:value={displayName}
 			disabled={displayNameSaving}
 		/>
+		<p id="a11y-settings-display-name-help">
+			What the app and the characters call you. Leave it empty to go by
+			your username.
+		</p>
 	</div>
 	<button
 		type="submit"

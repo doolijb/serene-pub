@@ -249,13 +249,24 @@ beforeAll(async () => {
 		} as any)
 }, 60_000)
 
+/**
+ * Held off in every turn: the description mechanism (`names.arm`) ships on
+ * (R5: all supported retrieval is on by default) and embeds through the same
+ * toy vectors, so it links "the lantern" to the light entry and breaks the
+ * authored tie this file's baseline is made of. This file measures the
+ * semantic mechanism alone.
+ */
+const DESCRIPTIONS_OFF = [
+	{ nodeKey: "names.arm.mentions", path: "maxMentions", value: 0 }
+]
+
 /** One turn of the shipped reply spec, stopped before the provider. */
 const turn = async (
 	overrides: Array<{ nodeKey: string; path: string; value: unknown }> = []
 ) => {
 	const { buildWorld } = await import("$lib/server/pipelines/config/world")
 	const world = await buildWorld(db, { sessionId })
-	for (const o of overrides)
+	for (const o of [...DESCRIPTIONS_OFF, ...overrides])
 		world.overrides.push({
 			nodeKey: o.nodeKey,
 			slot: "params",
@@ -295,15 +306,20 @@ const semanticOf = (receipt: any): Record<number, number> =>
 			.map((c: any) => [c.id as number, (c.signals?.semantic ?? 0) as number])
 	)
 
-/** The mechanism is off by default; this is what turning it on looks like. */
+/**
+ * The mechanism is off by default; this is what turning it on looks like —
+ * the switch on the chain's first node (since 2026-09-29), and the ceiling
+ * raised so it cannot bite.
+ */
 const MECHANISM_ON = [
+	{ nodeKey: "semantic.arm.queries", path: "searchByMeaning", value: "on" },
 	{ nodeKey: "semantic.arm.search", path: "maxEntries", value: 20 }
 ]
 
 describe("the mechanism ships off, and off means invisible", () => {
 	it("ranks by authored order when nothing has a cosine", async () => {
 		const receipt = await turn()
-		// The shipped cap is 0, so the mechanism returns nothing and every entry
+		// The shipped switch is off, so the mechanism asks nothing and every entry
 		// arrives with the keyword mechanism's signals only. All three tie, so this
 		// is authored position — the order they were written in.
 		expect(rankedIds(receipt)).toEqual([stoneId, waterId, lightId])

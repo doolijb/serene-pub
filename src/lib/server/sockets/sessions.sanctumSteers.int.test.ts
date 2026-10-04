@@ -58,13 +58,6 @@ vi.mock("$lib/server/sockets/utils/broadcastHelpers", () => ({
 	broadcastToSessionUsers: async () => {},
 	emitToUserRedacted: async () => {}
 }))
-vi.mock("$lib/server/utils/getUserConfigurations", () => ({
-	getUserConfigurations: async () => ({
-		contextConfig: { id: 1, template: "{{instructions}}" },
-		promptConfig: { id: 1, systemPrompt: "Be brief." },
-		narratorPromptConfig: null
-	})
-}))
 
 const BEAT = "BEAT-MARK Brannoc eyes the door."
 /** What the planner answers: one delver speaks. The keeper reads the same document. */

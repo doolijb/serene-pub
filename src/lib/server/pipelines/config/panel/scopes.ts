@@ -41,6 +41,16 @@ export const writeScopeFor = (viewer: Viewer): WriteScope =>
  * wording is the one thing that is genuinely theirs to change *for a session*;
  * outside a session their panel is a reading surface.
  *
+ * The test is the ROLE, not the moment (owner ruling 2026-09-30): a row is
+ * sent when this viewer's role can normally edit it somewhere, and only then.
+ * So a non-admin never sees a connection — not even its name — because they
+ * never change one anywhere; an administrator in a session sees the Model row
+ * read-only, because they change it in Pipelines. A row the role normally
+ * edits but which is locked right now (`Viewer.readOnlyBecause`) is still
+ * sent, read-only. And since a group is sent only when it holds a row, a
+ * group — and a session card — appears only when there is something here this
+ * role edits.
+ *
  * Narrower than the SDK write matrix on purpose. The matrix says what a scope
  * *may* store; this says what this application offers, and `resolveWriteScope`
  * enforces the same line so a minted id cannot reach what the panel does not
@@ -68,6 +78,11 @@ export function resolveWriteScope(
 ): { scope: WriteScope; scopeId: number } {
 	const scope: WriteScope = requested ?? writeScopeFor(viewer)
 
+	if (scope === "session" && viewer.readOnlyBecause)
+		throw new OptionNotWritableError(
+			`${viewer.readOnlyBecause} Nothing was saved.`
+		)
+
 	if (scope === "config" && !viewer.isAdmin)
 		throw new OptionNotWritableError(
 			"Only an administrator edits a configuration, because everyone " +
@@ -91,8 +106,9 @@ export function resolveWriteScope(
 		const allowed = WRITE_MATRIX[matrixSlot] ?? []
 		throw new OptionNotWritableError(
 			matrixSlot === "connection"
-				? "Connections stay with the administrator, so credentials and " +
-					"compute stay under their control."
+				? "A session never picks its own connection: it runs on the " +
+					"model its pipeline configuration names, or the pub " +
+					"default. Nothing was saved — change it in Pipelines."
 				: "That setting is not yours to change here. It is set " +
 					(allowed.length
 						? `at ${allowed.join(" or ")} level`

@@ -168,6 +168,16 @@ describe("the store", () => {
 		expect(now?.updatedAt.getTime()).toBe(first.updatedAt.getTime())
 	}, 60_000)
 
+	test("a widget's retired `cells` hint is neither judged nor stored — nothing reads it since WidgetDecl.cells went (layout brief 1)", async () => {
+		const store = await import("./store")
+		const withCells = content({
+			widget: { title: "Dice", cells: { minW: 2, maxH: "tall" } }
+		})
+		expect(store.authoredComponentFindings(withCells as never)).toEqual([])
+		const row = await store.createAuthoredComponent(testDb as never, withCells as never)
+		expect(row.widget).toEqual({ title: "Dice" })
+	}, 60_000)
+
 	test("content is refused with a sentence per fault", async () => {
 		const store = await import("./store")
 		const bad = content({

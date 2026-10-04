@@ -101,3 +101,27 @@ export function helpAnchorId(anchor: string): string {
 		? anchor
 		: `${HELP_ANCHOR_PREFIX}${anchor}`
 }
+
+/**
+ * Whether a docs link leaves Serene Pub: an absolute `http(s)` URL on another
+ * origin. Such links open in a new window so the reader keeps their place in
+ * the docs (owner, 2026-10-01). Everything else — `/docs/…`, `#…`, relative
+ * paths and same-origin URLs — stays in the view.
+ */
+export function isExternalDocLink(href: string, origin: string): boolean {
+	if (!/^https?:\/\//i.test(href)) return false
+	try {
+		return new URL(href).origin !== origin
+	} catch {
+		return false
+	}
+}
+
+/** Mark every external link in a rendered docs body to open in a new window. */
+export function openExternalLinksInNewWindow(root: ParentNode, origin: string) {
+	for (const link of root.querySelectorAll<HTMLAnchorElement>("a[href]")) {
+		if (!isExternalDocLink(link.getAttribute("href") ?? "", origin)) continue
+		link.setAttribute("target", "_blank")
+		link.setAttribute("rel", "noopener noreferrer")
+	}
+}

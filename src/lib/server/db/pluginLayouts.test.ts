@@ -9,7 +9,7 @@ vi.mock("$lib/server/db", () => ({ db: {} }))
 
 const { declaredLayoutsOf } = await import("./pluginLayouts")
 
-const preset = { layout: { version: 2, zones: { middle: { rows: ["grow"], cols: ["grow"], units: [] } } } }
+const preset = { zoneLayout: { version: 1, zones: { right: { kind: "side", widgets: ["stats"] } } } }
 
 describe("declaredLayoutsOf", () => {
 	test("reads a locale-map name and description in English", () => {

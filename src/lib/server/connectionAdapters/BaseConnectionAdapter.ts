@@ -12,6 +12,7 @@ import {
 	prepareAttachments,
 	type AttachmentInput,
 	type AttachmentPlan,
+	type PreparedAttachment,
 	type PrepareOptions
 } from "$lib/server/adapters/attachments"
 import { adapterIo } from "$lib/shared/connectionAdapters/manifest"
@@ -63,10 +64,9 @@ export interface BasePromptSession extends SelectSession {
 	lorebook?:
 		| (SelectLorebook & {
 				lorebookBindings: (SelectLorebookBinding & {
-					// characterId/personaId are nullable FKs (onDelete: "set null"),
-					// so the populated relation can likewise be null, not just absent.
+					// characterId is a nullable FK (onDelete: "set null"), so the
+					// populated relation can likewise be null, not just absent.
 					character?: SelectCharacter | null
-					persona?: SelectCharacter | null
 				})[]
 		  })
 		| null
@@ -336,8 +336,8 @@ export interface BaseConnectionAdapterParams {
 	 */
 	connection: AdapterConnection
 	sampling: ResolvedSampling
-	contextConfig: SelectContextConfig
-	promptConfig: SelectPromptConfig
+	/** The system prompt summarizer mode sends; read by nothing else. */
+	systemPrompt?: string
 	session: BasePromptSession
 	currentCharacterId: number | null
 	tokenCounter: TokenCounters
@@ -357,8 +357,7 @@ export type TestConnectionFn = (
 export abstract class BaseConnectionAdapter implements AdapterActions {
 	connection: AdapterConnection
 	sampling: ResolvedSampling
-	contextConfig: SelectContextConfig
-	promptConfig: SelectPromptConfig
+	systemPrompt?: string
 	session: BasePromptSession
 	currentCharacterId: number | null
 	isAborting = false
@@ -432,8 +431,7 @@ export abstract class BaseConnectionAdapter implements AdapterActions {
 	constructor({
 		connection,
 		sampling,
-		contextConfig,
-		promptConfig,
+		systemPrompt,
 		session,
 		currentCharacterId,
 		tokenCounter,
@@ -443,8 +441,7 @@ export abstract class BaseConnectionAdapter implements AdapterActions {
 	}: BaseConnectionAdapterParams) {
 		this.connection = connection
 		this.sampling = sampling
-		this.contextConfig = contextConfig
-		this.promptConfig = promptConfig
+		this.systemPrompt = systemPrompt
 		this.session = session
 		this.currentCharacterId = currentCharacterId
 		// Deliberately derived from generatingMessageMetadata rather than its
@@ -555,7 +552,7 @@ export abstract class BaseConnectionAdapter implements AdapterActions {
 	 * Write a reply. `text->text`, and the one action a text adapter must have.
 	 *
 	 * ⚠ Its inputs still arrive through the CONSTRUCTOR (session, sampling,
-	 * promptConfig, the injected prompt) rather than as a parameter, so this
+	 * systemPrompt, the injected prompt) rather than as a parameter, so this
 	 * satisfies "expected in, expected out" formally — the signature is fixed by
 	 * the action, which is what the derivation needs — but not literally the way
 	 * `generateImage(req, opts)` does. Collapsing the ten-param constructor into
@@ -659,6 +656,136 @@ export abstract class BaseConnectionAdapter implements AdapterActions {
 	/** What was handed over, in order. */
 	protected get attachments(): readonly AttachmentInput[] {
 		return this.suppliedAttachments
+	}
+
+	/**
+	 * 🚧 The files each MESSAGE carries (PLAN-composer-attachments §3.5), by
+	 * index into the compiled prompt's `messages` — a history line's image on
+	 * that line's own turn, where the request-level list above all lands on
+	 * the last user turn. `dispatch.ts` lifts them off the messages (so no
+	 * adapter ever puts an `attachments` key on a wire) and hands them here.
+	 */
+	private suppliedMessageAttachments: readonly (readonly AttachmentInput[])[] =
+		[]
+
+	/** Hand over the per-message files, indexed like `compiledPrompt.messages`. */
+	withMessageAttachments(
+		perMessage: readonly (readonly AttachmentInput[])[]
+	): this {
+		this.suppliedMessageAttachments = perMessage
+		return this
+	}
+
+	/** Whether this request carries any file, request-level or per message. */
+	protected get carriesAttachments(): boolean {
+		return (
+			this.suppliedAttachments.length > 0 ||
+			this.suppliedMessageAttachments.some((list) => list?.length)
+		)
+	}
+
+	/**
+	 * Every file this request carries, prepared ONCE over the flattened,
+	 * ordered list — so counts and request bytes are checked for the whole
+	 * request (`prepareAttachments`) — and split back by message, aligned with
+	 * `messages`.
+	 *
+	 * Two placement rules, the same for every sender:
+	 *
+	 *  - the request-level files go on the LAST user turn (what a vision step
+	 *    is asked about), after that turn's own;
+	 *  - a file travels on a USER turn. Chat APIs take images on user turns
+	 *    only (OpenAI and Anthropic reject them on an assistant turn), so a
+	 *    file on a character's or a system line moves to the next user turn,
+	 *    else the previous one. A request with files and no user turn at all
+	 *    is refused, never sent without them.
+	 *
+	 * A refusal from the engine leaves as a throw carrying its sentence.
+	 */
+	protected async filesByMessage(
+		messages: readonly { role?: unknown }[],
+		opts?: PrepareOptions
+	): Promise<PreparedAttachment[][]> {
+		const out = messages.map(() => [] as PreparedAttachment[])
+		if (!this.carriesAttachments) return out
+		const isUser = (i: number) => messages[i]?.role === "user"
+		const userTurnFor = (i: number): number => {
+			if (i >= 0 && i < messages.length && isUser(i)) return i
+			for (let j = Math.max(0, i + 1); j < messages.length; j++)
+				if (isUser(j)) return j
+			for (let j = Math.min(i, messages.length) - 1; j >= 0; j--)
+				if (isUser(j)) return j
+			return -1
+		}
+		const owners: number[] = []
+		const inputs: AttachmentInput[] = []
+		messages.forEach((_m, i) => {
+			for (const file of this.suppliedMessageAttachments[i] ?? []) {
+				owners.push(i)
+				inputs.push(file)
+			}
+		})
+		const lastUser = userTurnFor(messages.length)
+		for (const file of this.suppliedAttachments) {
+			owners.push(lastUser)
+			inputs.push(file)
+		}
+		if (owners.some((i) => userTurnFor(i) < 0))
+			throw new Error(
+				"this request carries files but no user turn to put them on, and chat APIs take files only on " +
+					"a user turn. It is not sent without them."
+			)
+		const plan = await this.prepareAttachments(inputs, opts)
+		if (!plan.ok) throw new Error(plan.reason)
+		plan.files.forEach((file, k) => out[userTurnFor(owners[k])]!.push(file))
+		return out
+	}
+
+	/**
+	 * 🚧 The chat messages with their files as OpenAI content parts
+	 * (PLAN-composer-attachments §3.6) — the shape OpenAI's
+	 * `/chat/completions`, KoboldCPP's and llama-server's
+	 * `/v1/chat/completions` all take: a turn with files becomes
+	 * `content: [{type:"image_url", image_url:{url:"data:…;base64,…"}}…, {type:"text", text}]`,
+	 * files first, the text part omitted when the turn has none. A turn with no
+	 * files is the SAME object. Measured against `requestWithoutFiles` — the
+	 * request as it stands before the files go in, base64 on the wire.
+	 *
+	 * Images only: none of these declare a document format, so the reading
+	 * rule never places a PDF on them, and one that arrives anyway is refused
+	 * naming the file rather than sent as something it is not.
+	 */
+	protected async openAIChatMessagesWithFiles<
+		M extends { role?: unknown; content?: unknown }
+	>(messages: readonly M[], requestWithoutFiles: unknown): Promise<M[]> {
+		const files = await this.filesByMessage(messages, {
+			transport: "base64",
+			overheadBytes: Buffer.byteLength(JSON.stringify(requestWithoutFiles))
+		})
+		let n = 0
+		return messages.map((msg, i) => {
+			const own = files[i] ?? []
+			if (!own.length) return msg
+			const parts = own.map((file) => {
+				n++
+				if (file.kind !== "image")
+					throw new Error(
+						`${file.filename ?? `attachment ${n}`} is ${file.mime}, and this connection type sends only ` +
+							`images alongside a prompt. It is not sent rather than sent as something it is not.`
+					)
+				return {
+					type: "image_url" as const,
+					image_url: {
+						url: `data:${file.mime};base64,${file.bytes.toString("base64")}`
+					}
+				}
+			})
+			const text = typeof msg.content === "string" ? msg.content : ""
+			return {
+				...msg,
+				content: [...parts, ...(text ? [{ type: "text" as const, text }] : [])]
+			}
+		})
 	}
 
 	// ── Stop sequences (not an action either) ───────────────────────────────
@@ -775,6 +902,25 @@ export abstract class BaseConnectionAdapter implements AdapterActions {
 	 * rather than being filled with something that is not a stop sequence.
 	 */
 	stopHit?: string
+
+	/**
+	 * Set by `generateText()` when this request asked a chat TEMPLATE to open a
+	 * reasoning block and the service returns that block's text inline on the
+	 * content channel — so the model's first token may already be reasoning,
+	 * with only the close ever generated. Read once by the dispatch, after
+	 * `generateText()` returned and before the stream is drained, as
+	 * {@link reasoningOpening}.
+	 *
+	 * False everywhere a service separates the trace itself (Ollama's
+	 * `message.thinking`, llama.cpp's parser, Anthropic's blocks): there the
+	 * content channel is the body from its first token.
+	 */
+	protected reasoningRequestedInline = false
+
+	/** See {@link reasoningRequestedInline}; `splitReasoningStream`'s opening. */
+	get reasoningOpening(): "requested" | undefined {
+		return this.reasoningRequestedInline ? "requested" : undefined
+	}
 
 	/**
 	 * What the service said ended the generation, in the service's own word:
@@ -1283,14 +1429,14 @@ export abstract class BaseConnectionAdapter implements AdapterActions {
 	}
 
 	/**
-	 * Compile summarizer prompt — passes promptConfig.systemPrompt directly to the LLM
+	 * Compile summarizer prompt — passes `systemPrompt` directly to the LLM
 	 * with no roleplay or assistant framing. Used for lore summarization.
 	 */
 	protected async compileSummarizerPrompt(): Promise<PromptBuilderCompiledPrompt> {
 		const messages: any[] = [
 			{
 				role: "system",
-				content: this.promptConfig.systemPrompt
+				content: this.systemPrompt ?? ""
 			}
 		]
 

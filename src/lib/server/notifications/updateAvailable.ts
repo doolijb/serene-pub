@@ -1,7 +1,8 @@
 /**
  * The `update-available` producer (PLAN-notifications §5): a newer release on
- * this install's channel raises a row for every admin. It replaced the interim
- * update bar; the Admin Overview's "Get <tag>" button is where the row lands.
+ * this install's channel raises a row for every admin. The row lands on
+ * Admin › Updates, which says how this install gets the release — the in-app
+ * update where the launcher can apply it, the releases page where it cannot.
  *
  * Called by `updates/updateCheck.ts` after each SUCCESSFUL check (at most
  * daily, never on a pre-release) with the notifiable tag, or null when the
@@ -22,8 +23,8 @@ import * as schema from "$lib/server/db/schema"
 import { UPDATE_AVAILABLE, regardingFor } from "$lib/shared/notifications/kinds"
 import { clearNotifications, raiseNotification } from "./store"
 
-/** Where the row lands: the Admin Overview, which carries "Get <tag>". */
-export const UPDATE_HREF = "/admin"
+/** Where the row lands: Admin › Updates. */
+export const UPDATE_HREF = "/admin/updates"
 
 export async function syncUpdateNotifications(
 	tag: string | null,

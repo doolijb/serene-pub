@@ -39,6 +39,7 @@ import {
 	scanContextTemplateFits,
 	sharedContextTemplateWarnings
 } from "$lib/server/pipelines/entities/contextTemplateFit"
+import { groupOptions } from "$lib/server/pipelines/config/panel/groups"
 
 const SECRET = "template-fit-secret"
 const ASSEMBLE_POOL = "core:task/assemble"
@@ -71,7 +72,7 @@ async function mutableConfig(slug: string): Promise<number> {
 		shipped!.configId,
 		unique("Fit host")
 	)
-	await selectConfig(db, row.id, "instance", 0, copy.id, adminId)
+	await selectConfig(db, row.id, "pub", 0, copy.id, adminId)
 	return copy.id
 }
 
@@ -90,8 +91,7 @@ async function templateOption(
 	expect(d, `${slug} declares a context template slot`).toBeTruthy()
 	const id = optionId(SECRET, d!.nodeKey, d!.slot, d!.path)
 	const view = await namespaceView(db, SECRET, slug, admin())
-	const option: ConfigOption | undefined = view!.steps
-		.flatMap((st) => [...st.options, ...st.advanced])
+	const option: ConfigOption | undefined = groupOptions(view!.groups)
 		.find((o) => o.id === id)
 	expect(option, "the panel offers it").toBeTruthy()
 	return {

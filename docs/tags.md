@@ -1,56 +1,61 @@
 # Tags
 
-Tags are short, colored labels you create once and then attach to [characters](./characters.md) (your [personas](./personas.md) included), [lorebooks](./lorebooks.md), and [sessions](./sessions.md) so related content is easier to find later.
+Tags are short coloured labels you put on [characters](./characters.md), [lorebooks](./lorebooks.md) and [sessions](./sessions.md), so related things are easy to find.
 
-## Overview
+:::tip What it's for
+- Grouping things across the app: "villain", "sci-fi", "in progress".
+- Narrowing a long list to one tag.
+- Seeing everything with one tag in one place.
+:::
 
-A tag is just a name (e.g. "villain", "sci-fi", "in-progress") with an optional description and a color. Tags belong to your account and are shared across the whole app — the same tag can be attached to any number of characters, personas, lorebooks, and sessions. You manage the master list of tags from the **Tags** view, and you attach or remove tags directly on the item you're editing (a character's form — personas included — a lorebook's settings, a session's settings).
+A tag is a name, an optional description and a colour. Your tags are yours, and one tag can go on any number of characters (personas included), lorebooks and sessions.
 
-## Opening the Tags View
+## The basics
 
-The Tags view is opened from the **Tags** icon (a tag/label icon) on the rail, beside the icons for Characters, Lorebooks, and Sessions (see [Getting Around](./getting-around.md)). On a phone the same view is under **Views** in the bottom bar. The view opens showing every tag you've created as a row of colored chips, with a search box above them for filtering the list by tag name or description.
+### Tag something
 
-## Creating a Tag
+You don't need to make a tag first. In the **Tags** field of a character's form, a lorebook's settings, or a session's settings:
 
-Inside the Tags view, click the **New** button at the top to open the **Create a tag** form. The form has three fields:
+1. Type a few letters. Your matching tags drop down, with their colours and descriptions.
+2. Click one to add it, or press **Enter** to create a new tag with what you typed.
+3. Save the character, lorebook or session.
 
-- **Name** — required; tag creation is blocked until a name is entered.
-- **Description (optional)** — free text shown when you later select the tag.
-- **Color preset** — a dropdown of color options (see below), with a live chip preview showing exactly how the tag will look.
+:::tip You should see
+The tag as a coloured chip under the field. Click the chip's **×** to take it off again before you save.
+:::
 
-Click **Create tag** to save it, or **Cancel** to discard the form. A "Tag created" confirmation appears once it's saved.
+### Find tagged things
 
-## Tag Colors
+- The search boxes in **Characters** and **Sessions** match tag names as well as names and descriptions.
+- The filter menu in Characters lists every tag, to narrow the list to exactly one (see [Find a character](./characters.md#find-a-character)). Sessions has the same in **Filter sessions**.
+- To see everything with one tag, open it in the **Tags** view (below).
 
-Each tag is rendered as a colored chip using one of 21 built-in color presets: seven color families (Primary, Secondary, Tertiary, Success, Warning, Error, Surface), each available in three styles — **Filled**, **Tonal**, and **Outlined**. Pick one from the Color preset dropdown when creating or editing a tag; the chip preview next to the dropdown updates immediately so you can see the result before saving.
+## The Tags view
 
-## Viewing and Editing a Tag
+Open **Tags** on the rail (on a phone, under **Views** in the bottom bar). It shows every tag as a coloured chip, with a box to filter them by name or description.
 
-Click any tag chip in the Tags view to open its detail view. This shows:
+### Create a tag
 
-- The tag's name and, if set, its description in a bordered panel.
-- A **Characters** section listing every character carrying that tag.
-- A **Lorebooks** section listing every lorebook carrying that tag.
-- A **Sessions** section listing every session carrying that tag.
+Press **New**. The **Create a tag** form has:
 
-A section with nothing in it is not shown.
+- **Name** (required).
+- **Description** (optional).
+- **Color preset**: seven colours (Primary, Secondary, Tertiary, Success, Warning, Error, Surface), each **filled**, **tonal** or **outlined**. A preview chip shows the result.
 
-Each listed item can be clicked to jump to it, and has its own edit button to open that item directly for editing. From the tag detail view you can also click the pencil (**Edit tag**) button to edit the tag's name, description, and color, or choose **Delete** from the header's menu to remove it.
+Press **Create tag**.
 
-## Deleting a Tag
+### Open a tag
 
-Choosing **Delete** opens a confirmation dialog: "Are you sure you want to delete the tag "\<name>"? This action cannot be undone and will remove the tag from all associated items." Confirming permanently deletes the tag and removes it from every character, lorebook, and session it was attached to — it does not delete those items themselves, only the tag association.
+Click a tag to see its description and, in separate sections, every **Character**, **Lorebook** and **Session** carrying it. Clicking a character shows its sessions; its edit button opens it in Characters. Clicking a lorebook or session opens it.
 
-## Assigning Tags to Characters, Lorebooks, and Sessions
+The pencil (**Edit tag**) changes the name, description and colour.
 
-Tags aren't assigned from the Tags view itself — you attach them from the **Tags** field inside the form for the item you're editing:
+### Delete a tag
 
-- The character form's Tags field (also available in the character creation/edit view).
-- The lorebook's settings, in its Tags field.
-- The session edit form's Tags field.
+**Delete** is in the tag's header menu. It asks first, then removes the tag from everything that had it. The characters, lorebooks and sessions themselves are untouched.
 
-In each case, typing in the Tags field shows a dropdown of your existing tags that match what you've typed, along with each tag's color and description for context. Click a suggestion to attach it, or press Enter with a new name to attach a brand-new tag (it's created automatically the first time you use it, so you don't need to pre-create tags in the Tags view). Attached tags appear underneath the field as colored chips; click a chip (or its remove button) to detach that tag before saving the form. Tag changes take effect when you save the character, persona, lorebook, or session.
+## Related
 
-## Finding Tagged Items
-
-The search boxes on the [Characters](./characters.md) and [Sessions](./sessions.md) views match against tag names in addition to names and descriptions. Typing a tag name (e.g. "villain") into one will surface any character (personas included) or session carrying a tag whose name contains that text. The Characters view's filter menu also lists each of your tags, so you can narrow the list to one tag exactly (see [Searching the Character List](./characters.md#searching-the-character-list)). To see everything tagged with a specific tag at a glance, open that tag from the Tags view instead and review its Characters, Lorebooks, and Sessions sections directly.
+- [Characters](./characters.md#favorites-folders-and-tags): tags beside favorites and folders.
+- [Sessions](./sessions.md#find-your-sessions)
+- [Lorebooks](./lorebooks.md)

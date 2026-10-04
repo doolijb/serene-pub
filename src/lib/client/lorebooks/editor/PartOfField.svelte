@@ -1,5 +1,6 @@
 <script lang="ts">
 	import Select from "$lib/client/components/inputs/Select.svelte"
+	import { isFileableEntryType } from "$lib/shared/entries/types"
 	import type { PoolItem } from "../poolFilter"
 	import { anchorCandidates } from "./partOf"
 
@@ -12,6 +13,12 @@
 	 * back to its own row is a tree nothing can draw. A parent the pool does not
 	 * hold is still named: the reader is being told where the row is, and a
 	 * blank picker would read as "top level".
+	 *
+	 * ⚠ **Not shown at all for a type that is never filed** — one that
+	 * declares no `parent` field role, a place (places plan B2, 2026-09-29):
+	 * places join by links, and a picker offering a parent would offer what
+	 * the server refuses. Asked of the role map, never of a type id. A draft
+	 * that names no type keeps the picker, and the server still judges it.
 	 */
 	interface Props {
 		draft: Record<string, any>
@@ -30,6 +37,9 @@
 
 	let { draft = $bindable(), pool, newRowBranchId }: Props = $props()
 
+	let fileable = $derived(
+		typeof draft.typeId !== "string" || isFileableEntryType(draft.typeId)
+	)
 	let subjectKey = $derived(
 		typeof draft.id === "number" ? `entry#${draft.id}` : null
 	)
@@ -49,22 +59,32 @@
 	)
 </script>
 
-<div class="flex flex-col gap-1">
-	<Select
-		label="Part of"
-		class="w-full text-sm [&_input]:text-base"
-		options={[
-			{ value: "", label: "top level" },
-			...(stray && current !== null
-				? [{ value: String(current), label: parent?.name || `#${current}` }]
-				: []),
-			...candidates.map((candidate) => ({
-				value: String(candidate.id),
-				label: candidate.name
-			}))
-		]}
-		value={current === null ? "" : String(current)}
-		onValueChange={(v) => (draft.anchorEntryId = v === "" ? null : Number(v))}
-	/>
-	<p class="text-surface-700-300 text-xs">or drag this row onto another</p>
-</div>
+{#if fileable}
+	<div class="flex flex-col gap-1">
+		<Select
+			label="Part of"
+			class="w-full text-sm [&_input]:text-base"
+			options={[
+				{ value: "", label: "top level" },
+				...(stray && current !== null
+					? [
+							{
+								value: String(current),
+								label: parent?.name || `#${current}`
+							}
+						]
+					: []),
+				...candidates.map((candidate) => ({
+					value: String(candidate.id),
+					label: candidate.name
+				}))
+			]}
+			value={current === null ? "" : String(current)}
+			onValueChange={(v) =>
+				(draft.anchorEntryId = v === "" ? null : Number(v))}
+		/>
+		<p class="text-surface-700-300 text-xs">
+			or drag this row onto another
+		</p>
+	</div>
+{/if}

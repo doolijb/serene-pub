@@ -111,7 +111,8 @@ export interface TextGenResult {
 		| string
 		| ((
 				contentCb: (chunk: string) => void,
-				thinkingCb?: (chunk: string) => void
+				/** The service's NATIVE reasoning trace, a chunk at a time. */
+				reasoningCb?: (chunk: string) => void
 		  ) => Promise<void>)
 	compiledPrompt: PromptBuilderCompiledPrompt
 	isAborted: boolean
@@ -129,11 +130,11 @@ export interface TextGenResult {
 	 */
 	toolCall?: ToolCall | null
 	/**
-	 * Native thinking/reasoning content returned by the model, if any. Only
-	 * populated for non-streaming responses — streaming adapters deliver thinking
-	 * through `thinkingCb`.
+	 * The model's native reasoning trace, if the service returned one. Only
+	 * populated for non-streaming responses — streaming adapters deliver
+	 * reasoning through `reasoningCb`.
 	 */
-	thinkingContent?: string
+	reasoningContent?: string
 	/**
 	 * How many tokens the PROMPT cost, as the service counted it.
 	 *

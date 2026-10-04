@@ -16,30 +16,48 @@
  *
  * Lookups, in order; the first hit wins:
  *  1. an entry whose `name` or any comma-split `keys` term is the same name —
- *     `locationEntries` before `entries`;
+ *     `locationEntries` before `entries`, by the one room rule
+ *     (`describingRow`, `$lib/shared/lorebooks/describingRow` — shared since
+ *     B7, whose Exits-line links find their rooms by it too);
  *  2. among the newest `window` rows of the `channels` named, the newest row
  *     written by a person, an envoy or a speakerless reply (never a
  *     character) holding a paragraph that names the name and has at least
  *     `minWords` other words;
  *  3. otherwise the name is undescribed.
+ *
+ * **`path` and a lore reference** (places plan B6, 2026-09-29): the name may
+ * sit inside `name` at a dotted `path` (the SDK's `readPath` — the Lair reads
+ * `world.location` off a session-state document to find the room the party
+ * stand in), and a value with an `entryId` (a location set to a place entry)
+ * is the listed entry with that id, never a namesake found by its title.
+ *
+ * **`fallbackName`** (plan A27, 2026-09-30): when the value at `path` names
+ * nothing — no words, no lore reference — the fallback is read in its place,
+ * whole and by the same rules. The Lair wires the knock's `vantage` (the room
+ * its planner said the party stood in), so its `here` takes the world's
+ * location, else the planner's hint — the order `worldValueOrHint` reads a
+ * play turn's location in.
  */
 
 import type { Bindings } from "@serene-pub/sdk"
 import {
+	isSlotLoreRef,
 	ok,
 	parseChannel,
 	passageNaming,
-	reads,
-	sameName
+	readPath,
+	reads
 } from "@serene-pub/sdk"
 import type * as C from "@serene-pub/contracts"
+import { describingRow } from "$lib/shared/lorebooks/describingRow"
 import type { NodeInput } from "./bindingTypes"
 
 /** The declared defaults, applied here too: a parameter is a control, not a promise. */
 export const UNDESCRIBED_DEFAULTS = {
 	channels: ["main"] as string[],
 	window: 40,
-	minWords: 12
+	minWords: 12,
+	path: ""
 }
 
 /** What the task answers. `describedBy` is empty when nothing describes the name. */
@@ -50,32 +68,22 @@ export interface UndescribedAnswer {
 	passage: string
 }
 
-/** An entry's `keys` as terms: a list, a comma-separated string, or both. */
-export function keyTerms(keys: unknown): string[] {
-	const raw = Array.isArray(keys) ? keys : typeof keys === "string" ? [keys] : []
-	return raw
-		.filter((k): k is string => typeof k === "string")
-		.flatMap((k) => k.split(","))
-		.map((k) => k.trim())
-		.filter(Boolean)
-}
-
-/** The first entry of `lists` (in order) whose name or a key term is `name`. */
+/** The entry of `lists` that `name` names (`describingRow`), by id. */
 export function describingEntry(
 	name: string,
 	...lists: unknown[]
 ): { id: number | null } | null {
+	const row = describingRow(name, ...lists) as { id?: unknown } | null
+	return row ? { id: typeof row.id === "number" ? row.id : null } : null
+}
+
+/** The id of the first row of `lists` whose `id` is `entryId`, or null. */
+function listedEntry(entryId: number, ...lists: unknown[]): number | null {
 	for (const list of lists) {
 		if (!Array.isArray(list)) continue
-		for (const e of list) {
-			if (!e || typeof e !== "object") continue
-			const row = e as { id?: unknown; name?: unknown; keys?: unknown }
-			if (
-				sameName(row.name, name) ||
-				keyTerms(row.keys).some((k) => sameName(k, name))
-			)
-				return { id: typeof row.id === "number" ? row.id : null }
-		}
+		for (const e of list)
+			if (e && typeof e === "object" && (e as { id?: unknown }).id === entryId)
+				return entryId
 	}
 	return null
 }
@@ -154,10 +162,16 @@ function wholeOr(value: unknown, fallback: number, min: number): number {
 /** The whole check, over plain values. */
 export function undescribedAnswer(input: {
 	name?: unknown
+	fallbackName?: unknown
 	locationEntries?: unknown
 	entries?: unknown
 	messages?: unknown
-	params?: { channels?: unknown; window?: unknown; minWords?: unknown }
+	params?: {
+		channels?: unknown
+		window?: unknown
+		minWords?: unknown
+		path?: unknown
+	}
 }): UndescribedAnswer {
 	const none: UndescribedAnswer = {
 		undescribed: "",
@@ -165,7 +179,21 @@ export function undescribedAnswer(input: {
 		entryId: null,
 		passage: ""
 	}
-	const name = typeof input.name === "string" ? input.name.trim() : ""
+	const path =
+		typeof input.params?.path === "string"
+			? input.params.path.trim()
+			: UNDESCRIBED_DEFAULTS.path
+	const held = readPath(input.name, path || undefined)
+	const names = (v: unknown) =>
+		isSlotLoreRef(v) || (typeof v === "string" && v.trim() !== "")
+	const value = names(held) ? held : input.fallbackName
+	// A lore reference is its entry, by id — or nothing, when no listing
+	// holds it. Never its title's namesake (B6).
+	if (isSlotLoreRef(value)) {
+		const listed = listedEntry(value.entryId, input.locationEntries, input.entries)
+		return listed ? { ...none, describedBy: "entry", entryId: listed } : none
+	}
+	const name = typeof value === "string" ? value.trim() : ""
 	if (!name) return none
 
 	const entry = describingEntry(name, input.locationEntries, input.entries)
@@ -193,8 +221,8 @@ export function undescribedNameBindings(): Bindings {
 				return ok({ main: answer.undescribed, ...answer })
 			},
 			{
-				ports: ["name", "locationEntries", "entries", "messages"],
-				params: ["channels", "window", "minWords"]
+				ports: ["name", "fallbackName", "locationEntries", "entries", "messages"],
+				params: ["channels", "window", "minWords", "path"]
 			}
 		)
 	}

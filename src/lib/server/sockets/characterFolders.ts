@@ -1,6 +1,7 @@
 import { db } from "$lib/server/db"
 import { and, eq, sql } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
+import { isFailedQuery, isUniqueViolation } from "$lib/server/db/errors"
 import type { Handler } from "$lib/shared/events"
 import { buildCharactersList } from "./characters"
 
@@ -103,13 +104,11 @@ export const characterFoldersCreate: Handler<
 			return res
 		} catch (e: any) {
 			console.error("Error creating character folder:", e)
-			// Drizzle wraps the raw pg error under `.cause` on some drivers.
-			const isUniqueViolation =
-				e?.code === "23505" || e?.cause?.code === "23505"
 			emitToUser("characterFolders:create:error", {
-				error: isUniqueViolation
+				error: isUniqueViolation(e)
 					? `A folder named "${(params.name ?? "").trim()}" already exists.`
-					: e.message || "Failed to create folder."
+					: (isFailedQuery(e) ? undefined : e.message) ||
+						"Failed to create folder."
 			})
 			throw e
 		}
@@ -157,13 +156,11 @@ export const characterFoldersUpdate: Handler<
 			return res
 		} catch (e: any) {
 			console.error("Error updating character folder:", e)
-			// Drizzle wraps the raw pg error under `.cause` on some drivers.
-			const isUniqueViolation =
-				e?.code === "23505" || e?.cause?.code === "23505"
 			emitToUser("characterFolders:update:error", {
-				error: isUniqueViolation
+				error: isUniqueViolation(e)
 					? `A folder named "${(params.name ?? "").trim()}" already exists.`
-					: e.message || "Failed to update folder."
+					: (isFailedQuery(e) ? undefined : e.message) ||
+						"Failed to update folder."
 			})
 			throw e
 		}

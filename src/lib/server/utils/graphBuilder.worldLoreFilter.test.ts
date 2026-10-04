@@ -49,8 +49,6 @@ const sampling = {
 	values: {},
 	enabled: []
 } as any
-const contextConfig = { id: 1 } as any
-const promptConfig = { id: 1 } as any
 
 function respondByLabel(map: Record<string, string>, fallback = "{}") {
 	runQueuedLLMCallMock.mockImplementation(async (opts: any) => {
@@ -84,7 +82,7 @@ function scene(id: number) {
 
 async function build(
 	participants: string[],
-	worldLore?: Array<{ name: string; category?: string | null }>
+	worldLore?: Array<{ name: string; category?: string | null; typeId?: string }>
 ) {
 	const { buildGraphFromScenes } = await import("./graphBuilder")
 	respondByLabel({
@@ -98,8 +96,6 @@ async function build(
 		scenes: [scene(1)] as any,
 		connection: conn,
 		sampling,
-		contextConfig,
-		promptConfig,
 		seedNodes: [seedAria],
 		worldLore
 	})
@@ -178,3 +174,68 @@ describe("World Lore screens proposed character nodes", () => {
 		expect(names(result)).toEqual(["Cassia"])
 	})
 })
+
+describe("places and items screen too (places plan L1), by their whole title", () => {
+	const PLACE = "core:entry/location"
+	const ITEM = "core:entry/item"
+
+	test("a place is screened whatever its category says — no person-word opt-out", async () => {
+		// L1 review: "Castle", "Forecastle", "Orchard", "Charnel", "Charms",
+		// "Folkestone" all hit /char|person|people|cast|npc|folk/, so a place
+		// filed under one was minted as a character on Rebuild.
+		for (const category of ["Castle", "Orchard", "Folkestone"]) {
+			const result = await build(["Aria", "Greywater Keep"], [{ name: "Greywater Keep", category, typeId: PLACE }])
+			expect(names(result)).not.toContain("Greywater Keep")
+			expect(result.filteredWorldLoreNames).toEqual(["Greywater Keep"])
+		}
+		const item = await build(["Aria", "The Moon Charm"], [{ name: "The Moon Charm", category: "Charms", typeId: ITEM }])
+		expect(item.filteredWorldLoreNames).toEqual(["The Moon Charm"])
+	})
+
+	test("a place screens its own name — articles and one typo aside — and nothing longer", async () => {
+		const crypt = [{ name: "The Crypt", typeId: PLACE }]
+		expect((await build(["Crypt"], crypt).catch(() => null)) ?? "screened").toBe("screened")
+		expect((await build(["Aria", "the crypt"], crypt)).filteredWorldLoreNames).toEqual(["the crypt"])
+		expect((await build(["Aria", "The Cript"], crypt)).filteredWorldLoreNames).toEqual(["The Cript"])
+		// L1 review: a short place title swallowed new characters named after it.
+		for (const [title, character] of [
+			["The Crypt", "Crypt Keeper"],
+			["The Crypt", "the Crypt Keeper"],
+			["Thorne Manor", "Thorne"],
+			["The Tower", "Captain of the Tower"],
+			["The Market", "Market Vendor"]
+		]) {
+			const result = await build(["Aria", character!], [{ name: title!, typeId: PLACE }])
+			expect(names(result)).toContain(character)
+			expect(result.filteredWorldLoreNames).toEqual([])
+		}
+		const key = await build(["Aria", "Iron"], [{ name: "The Iron Key", typeId: ITEM }])
+		expect(names(key)).toContain("Iron")
+	})
+
+	test("world lore keeps the looser rule and its opt-out", async () => {
+		// A lore page titled "The Crypt" still screens "Crypt Keeper" — the
+		// cast matcher's subset rule, unchanged — and a person-tagged page
+		// still screens nothing.
+		expect((await build(["Aria", "Crypt Keeper"], [{ name: "The Crypt" }])).filteredWorldLoreNames).toEqual([
+			"Crypt Keeper"
+		])
+		expect(
+			(await build(["Aria", "Rhea Marlin"], [{ name: "Rhea Marlin", category: "Characters", typeId: "core:entry/world-lore" }]))
+				.filteredWorldLoreNames
+		).toEqual([])
+	})
+})
+
+describe("isWholeTitle", () => {
+	test("the same words in any order, articles aside, or one typo", async () => {
+		const { isWholeTitle } = await import("./graphBuilder")
+		expect(isWholeTitle("The Crypt", "Crypt")).toBe(true)
+		expect(isWholeTitle("Keep, Greywater", "Greywater Keep")).toBe(true)
+		expect(isWholeTitle("Seraphis Station", "Seraphis Staton")).toBe(true)
+		expect(isWholeTitle("The Crypt", "Crypt Keeper")).toBe(false)
+		expect(isWholeTitle("Thorne Manor", "Thorne")).toBe(false)
+		expect(isWholeTitle("The", "The")).toBe(false)
+	})
+})
+

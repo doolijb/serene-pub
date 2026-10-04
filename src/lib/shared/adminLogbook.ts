@@ -1,5 +1,5 @@
 /**
- * The **admin logbook** — who changed what on this instance, and when (the
+ * The **admin logbook** — who changed what on this pub, and when (the
  * Django admin's "History"). One **logbook record** per successful admin
  * change: the actor, the object it touched, the action, a one-line summary
  * and a redacted field diff.
@@ -45,10 +45,10 @@ const at = (base: string) => (id: string | null) =>
  * Every **logbook object type**. The key is the `?type=` value in a History
  * link; `id` is the object's own id as text (numeric ids, a component's
  * 10-character id, a plugin slug, a genre id, a capability id). Singletons —
- * the instance settings, the tunnel, the managers — carry no id.
+ * the pub settings, the tunnel, the managers — carry no id.
  */
 export const LOGBOOK_OBJECT_TYPES = {
-	instance: { label: "instance settings", href: () => "/admin/general" },
+	pub: { label: "pub settings", href: () => "/admin/general" },
 	"capability-default": {
 		label: "capability default",
 		href: () => "/admin/defaults"
@@ -79,10 +79,16 @@ export const LOGBOOK_OBJECT_TYPES = {
 		href: at("/admin/variable-templates")
 	},
 	script: { label: "script", href: at("/admin/scripts") },
-	theme: { label: "instance theme" },
+	theme: { label: "pub theme" },
 	koboldcpp: { label: "KoboldCPP manager" },
 	ollama: { label: "Ollama manager" },
-	"chara-vault": { label: "CharaVault account", href: () => "/admin/general" }
+	"chara-vault": { label: "CharaVault account", href: () => "/admin/general" },
+	/**
+	 * What the 0.5.3 → 0.6 upgrade changed or could not carry (an **upgrade
+	 * note**): a clamped date, a renamed config, a converted connection. Written
+	 * once, by the attic restore and wiring, never by a person.
+	 */
+	"data-upgrade": { label: "data upgrade" }
 } satisfies Record<string, LogbookObjectType>
 
 export type LogbookObjectTypeId = keyof typeof LOGBOOK_OBJECT_TYPES

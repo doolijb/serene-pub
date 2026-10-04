@@ -1,9 +1,9 @@
 /**
- * The allocation precedence, from a stored row to what the ranker selected —
- * and migration 0196 on an install that has booted before.
+ * The allocation precedence, from a stored row to what the ranker selected, on
+ * a freshly booted database.
  *
- * Three things this file exists to prevent, and none of them is visible from
- * `select.test.ts` or on a fresh database.
+ * Two things this file exists to prevent, and neither is visible from
+ * `select.test.ts`.
  *
  * **An option nothing can reach.** `SelectOptions.scoreLedAllocation` was
  * built, tested and had **no runtime caller at all**: `core:task/rank-hybrid@1`
@@ -19,13 +19,11 @@
  * select exactly what it selected before, which is the property that leaves the
  * parity corpus measuring the shipped path and makes the change reviewable.
  *
- * **The registry refusal.** `rank-hybrid`'s content hash moved.
- * `syncDefinitionRegistry` refuses to republish a changed version,
- * `bootstrapPipelines` catches that refusal, records it in `report.conflict`
- * and **returns early** — no specs seeded, no configs reconciled, pipelines
- * dead on every upgraded install. 0196's re-projection is what stops that, and
- * the failure is asserted first so this cannot pass vacuously against a
- * migration that matches nothing.
+ * The upgrade of an install that booted before the field — the pre-squash
+ * migration 0196 (`0196_score_led_allocation`, archived; the 0094 baseline
+ * superseded it, and today's 0196 is an unrelated migration) — is not
+ * exercised here: `syncDefinitionRegistry` republishes a changed content hash
+ * (the pointer moves, the old declaration is archived).
  */
 
 import { describe, it, expect, beforeAll, vi } from "vitest"
@@ -220,9 +218,9 @@ const rankNode = async () => {
 /**
  * The config a run on this session actually resolves to.
  *
- * ⚠ Not the `pipeline-default:` row. `migrateContextTemplates` duplicates the
- * shipped config into a mutable "Default (customized)" and selects that at
- * instance scope, so a fixture writing to the immutable original would change
+ * ⚠ Not the `pipeline-default:` row. A run resolves through the session's
+ * selection chain, which may name a mutable configuration rather than the
+ * shipped one, so a fixture writing to the immutable original could change
  * nothing and prove nothing.
  */
 /** The one address this file tunes: the ranker's allocation switch. */
@@ -361,7 +359,7 @@ describe("the declared switch and the shipped behaviour are one answer", () => {
 					// And it resolves anyway, through the run's own resolver,
 					// for THIS config rather than for whichever one happened to
 					// be selected — the half a row count never checked.
-					await selectConfig(db, spec.id, "instance", 0, config.id)
+					await selectConfig(db, spec.id, "pub", 0, config.id)
 					const world = await buildWorld(db, { specId: slug })
 					const sources: any = resolveConfigSources(world as any, [
 						SWITCH_AT.nodeKey
@@ -378,7 +376,7 @@ describe("the declared switch and the shipped behaviour are one answer", () => {
 				await selectConfig(
 					db,
 					spec.id,
-					"instance",
+					"pub",
 					0,
 					before?.configId ?? null
 				)

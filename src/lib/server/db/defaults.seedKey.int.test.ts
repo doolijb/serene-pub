@@ -78,8 +78,8 @@ describe("seeded rows are keyed by seedKey", () => {
 			.where(eq(schema.samplingConfigs.seedKey, "sampling-default"))
 		expect(seeded).toHaveLength(1)
 
-		const prompts = await testDb.select().from(schema.promptConfigs)
-		const keys = prompts.map((p) => p.seedKey).filter(Boolean)
+		const all = await testDb.select().from(schema.samplingConfigs)
+		const keys = all.map((p) => p.seedKey).filter(Boolean)
 		expect(new Set(keys).size).toBe(keys.length)
 	})
 

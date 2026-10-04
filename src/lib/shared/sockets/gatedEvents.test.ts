@@ -115,7 +115,14 @@ const MIGRATED_FAMILIES = [
 	"pluginUserSettings:",
 	// Notifications (2026-09-28): born gated; its consumer is the shell's
 	// notifications store, declared at init scope in both shells.
-	"notifications:"
+	"notifications:",
+	// A lorebook's own stats (plan places-graph L4, 2026-09-29): born gated
+	// and scoped by book; its consumer (places/placeStatsApi.ts, the place
+	// editor's Stats section) asks through `awaitReply`.
+	"lorebookState:",
+	// Admin › Updates (2026-10-01): born gated; its one consumer
+	// (admin/sections/updates/Page.svelte) is on the registry.
+	"updates:"
 ]
 
 /**
@@ -310,6 +317,14 @@ describe("scopeOfPayload", () => {
 		expect(
 			scopeOfPayload("pipelines:progress", { runId: "r-1" })
 		).toBeNull()
+	})
+
+	test("reads `lorebookId` off a lorebook's own stats replies (L4)", () => {
+		const reply = { lorebookId: 12, owner: { kind: "location", id: 40 }, branchId: null }
+		expect(scopeOfPayload("lorebookState:get", reply)).toBe("12")
+		expect(scopeOfPayload("lorebookState:set", reply)).toBe("12")
+		expect(isGatedEvent("lorebookState:set")).toBe(true)
+		expect(isGatedEvent("lorebookState:set:error")).toBe(false)
 	})
 
 	test("is null for an event with no scope", () => {

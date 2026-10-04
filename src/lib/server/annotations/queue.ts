@@ -28,28 +28,29 @@
  * replaces is the old vectorization queue's `if (!candidateModel) break`, which
  * would have made a model-free feature impossible to run inside it.
  *
- * ## What is stale, and how it is found without recomputing a hash
+ * ## What is stale: the text, never a clock
  *
  * A row's annotation is fresh when its stored triple `(extractorVersion,
- * sourceHash, gazetteerHash)` still describes it. Two thirds of that is a
- * cheap SQL comparison — the extractor's version and the lorebook's vocabulary
- * hash are known before the query — and the third, the content hash, is not:
- * it has to be recomputed from the text. So the picker uses the same shape
- * `needsEmbedding` uses for the same problem: **`annotated_at >= updated_at`**
- * stands in for the content hash. It is a superset — an edit that changed no
- * annotated text still moves `updated_at` — which costs one redundant
- * extraction and never misses a real change.
+ * sourceHash, gazetteerHash)` still describes it, and all three are SQL
+ * comparisons: the extractor's version and the lorebook's vocabulary hash are
+ * known before the query, and the content hash is a GENERATED column on the
+ * row the text lives on (`annotationTextHash`: an entry's
+ * `annotation_text_hash`, a message's `embed_text_hash`) — the rule the
+ * embedding lane follows (plan A9, A23). So a mark, a reorder, a hidden message
+ * or a graph build's `graphed` flag costs no extraction and no entity-model
+ * lease, a write that pins `updated_at` is still seen when it moves the text,
+ * and no timestamp from one clock is compared with one from another.
  *
- * ⚠ That is also why the lane's unit of work writes **unconditionally** (see
- * `annotateEntry`): a pass that examined a row and decided it was fresh would
- * leave `annotated_at` where it was, the predicate would still be true, and the
- * picker would hand the same row back for ever. The write is what closes the
- * loop, and `writeAnnotations` never touches the parent row, so it cannot
+ * ⚠ The lane's unit of work stamps the column it read with the text (see
+ * `annotateEntry`), which is what closes the loop: the picker compares against
+ * that same column, so it hands a row back only when its text moved after the
+ * read. `writeAnnotations` never touches the parent row, so it cannot
  * re-trigger itself.
  *
  * ## What the background sweep will and will not start
  *
- * Entries, everywhere — the unscoped sweep walks every lorebook. Transcripts,
+ * Entries, in every lorebook whose owner's account is live — a deleted
+ * account's books are nobody's to index. Transcripts,
  * **only through a group**: the entity arm enqueues the session it is running
  * in, and only when its message half is switched on, so the group's existence
  * is the opt-in. An install that has not asked for retrieval over its
@@ -57,7 +58,7 @@
  * this lane continues what a turn started rather than starting it.
  */
 
-import { and, asc, desc, eq, gte, sql, notExists } from "drizzle-orm"
+import { and, asc, desc, eq, sql, notExists } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import { EXTRACTOR_VERSION } from "$lib/server/pipelines/ranking/entities"
 import {
@@ -65,6 +66,7 @@ import {
 	registerLane,
 	type LaneItem,
 	type LaneItemRef,
+	type LanePickContext,
 	type LaneWorkSource,
 	type PriorityGroup,
 	type PromotionReport
@@ -73,6 +75,7 @@ import {
 	ANNOTATION_BATCH,
 	annotateEntry,
 	annotateMessage,
+	annotationTextHash,
 	loadVocabulary,
 	type AnnotationVocabulary
 } from "./index"
@@ -129,9 +132,9 @@ const vocabularyFor = (
 /**
  * `NOT EXISTS (a fresh annotation for this entry)`.
  *
- * The three checks are the freshness triple, with the content hash standing in
- * as the timestamp comparison explained in this file's header. Any one of them
- * failing makes the row work.
+ * The three checks are the freshness triple; the content hash is compared with
+ * the entry's own GENERATED column, as this file's header explains. Any one of
+ * them failing makes the row work.
  */
 const entryNeedsAnnotation = (db: Db, gazetteerHash: string) =>
 	notExists(
@@ -149,33 +152,51 @@ const entryNeedsAnnotation = (db: Db, gazetteerHash: string) =>
 						EXTRACTOR_VERSION
 					),
 					eq(schema.entryAnnotations.gazetteerHash, gazetteerHash),
-					gte(
-						schema.entryAnnotations.annotatedAt,
-						schema.lorebookEntries.updatedAt
+					eq(
+						schema.entryAnnotations.sourceHash,
+						annotationTextHash.entry
 					)
 				)
 			)
 	)
 
+/**
+ * A settled message with no fresh annotation.
+ *
+ * A reply still generating is not work yet: its text moves with every chunk
+ * the stream persists, so an annotation of it is stale at the next chunk and
+ * the picker would take it again at once — an entity-model call per chunk,
+ * none of them kept. The embedding lane waits for the same thing (`settled` on
+ * its message store); the next pass over the session takes the finished text.
+ */
 const messageNeedsAnnotation = (db: Db, gazetteerHash: string) =>
-	notExists(
-		db
-			.select({ _: sql`1` })
-			.from(schema.messageAnnotations)
-			.where(
-				and(
-					eq(schema.messageAnnotations.messageId, schema.messages.id),
-					eq(
-						schema.messageAnnotations.extractorVersion,
-						EXTRACTOR_VERSION
-					),
-					eq(schema.messageAnnotations.gazetteerHash, gazetteerHash),
-					gte(
-						schema.messageAnnotations.annotatedAt,
-						schema.sessionMessages.updatedAt
+	and(
+		eq(schema.sessionMessages.isGenerating, false),
+		notExists(
+			db
+				.select({ _: sql`1` })
+				.from(schema.messageAnnotations)
+				.where(
+					and(
+						eq(
+							schema.messageAnnotations.messageId,
+							schema.messages.id
+						),
+						eq(
+							schema.messageAnnotations.extractorVersion,
+							EXTRACTOR_VERSION
+						),
+						eq(
+							schema.messageAnnotations.gazetteerHash,
+							gazetteerHash
+						),
+						eq(
+							schema.messageAnnotations.sourceHash,
+							annotationTextHash.message
+						)
 					)
 				)
-			)
+		)
 	)
 
 // ---------------------------------------------------------------------------
@@ -316,11 +337,17 @@ export interface AnnotationPromotionContext {
 
 function makeWorkSource(getDb: () => Promise<Db>): LaneWorkSource {
 	return {
-		async fromGroup(group: PriorityGroup, modelId: string | null) {
+		async fromGroup(
+			group: PriorityGroup,
+			modelId: string | null,
+			pick?: LanePickContext
+		) {
 			const db = await getDb()
 			for (const lorebookId of group.lorebookIds) {
 				const entry = await pickStaleEntry(db, lorebookId, modelId)
 				if (entry) return entry
+				// Each book costs a vocabulary build; give way between them.
+				if (await pick?.giveWay()) return null
 			}
 			/**
 			 * The transcript, and **only** through a group.
@@ -362,14 +389,32 @@ function makeWorkSource(getDb: () => Promise<Db>): LaneWorkSource {
 		 * every turn — to find sessions nobody asked about. Transcripts are
 		 * reached through the group the entity arm enqueues for the session it
 		 * is actually in, which is bounded to that session and asked for.
+		 *
+		 * ⚠ Only books whose owner's account is live. A deleted account is
+		 * soft-deleted and keeps its rows, and a sweep over every book would
+		 * index them for ever for nobody (plan A23).
 		 */
-		async global(modelId: string | null) {
+		async global(modelId: string | null, pick?: LanePickContext) {
 			const db = await getDb()
 			const books = await db
 				.select({ id: schema.lorebooks.id })
 				.from(schema.lorebooks)
+				.innerJoin(
+					schema.users,
+					eq(schema.users.id, schema.lorebooks.userId)
+				)
+				.where(eq(schema.users.isDeleted, false))
 				.orderBy(asc(schema.lorebooks.id))
 			for (const book of books) {
+				/**
+				 * Gives way before each book: this walk builds every book's
+				 * vocabulary to find one stale entry, which on a big pub is
+				 * the longest stretch of PGlite work the lane does — and the
+				 * lane starts on every turn. A turn or a promotion that turns
+				 * up mid-walk is served first; the lane reads the `null` as
+				 * interrupted and walks again afterwards.
+				 */
+				if (await pick?.giveWay()) return null
 				const item = await pickStaleEntry(db, book.id, modelId)
 				if (item) return item
 			}

@@ -42,6 +42,13 @@ export interface AwaitReplyOptions<
 	 * else's create must not settle this promise.
 	 */
 	match: (data: SocketEventMap[K]["response"]) => boolean
+	/**
+	 * Is this refusal the answer to THIS request? For a family whose refusals
+	 * echo the request's id (`lorebookState:*`): a refusal naming another
+	 * request — another stat's save, another tab's — is not this one's.
+	 * Omitted, every refusal of the event settles the call.
+	 */
+	matchError?: (data: unknown) => boolean
 	timeoutMs?: number
 	/** What the rejection says when the server's error carries no sentence. */
 	fallbackError?: string
@@ -59,6 +66,7 @@ export interface AwaitReplyOptions<
  * writes only `{ error }`), so a concurrent failure of the same event from
  * elsewhere in this tab rejects this promise too. A caller holds one such
  * save at a time, so that is a false failure it can retry, never a lost row.
+ * A family whose refusals do echo an id passes `matchError`.
  *
  * The error interest is declared BEFORE the emit, and the typed `emit`
  * flushes the pending interest sync ahead of the request, so neither answer
@@ -79,7 +87,7 @@ export function awaitReply<K extends InterestEvent, E extends InterestEvent>(
 		}
 
 		releaseError = declareInterest<E>(opts.errorEvent, (data) => {
-			if (settled) return
+			if (settled || (opts.matchError && !opts.matchError(data))) return
 			finish()
 			const message = (data as { error?: unknown } | undefined)?.error
 			reject(

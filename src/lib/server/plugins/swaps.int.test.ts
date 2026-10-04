@@ -48,7 +48,7 @@ describe("swapContributionProblems", () => {
 	it("a spec this instance does not publish is refused", async () => {
 		expect(
 			(await swapContributionProblems(db, manifest("acme:task/turn-natural@1", "core:spec/nope")))[0]
-		).toContain("is not a pipeline this instance publishes")
+		).toContain("is not a pipeline this pub publishes")
 	})
 
 	it("a node not in session settings is refused — guide's turn order exposes nothing (R42)", async () => {

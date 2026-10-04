@@ -1,16 +1,14 @@
 /**
- * Frame panels through the real server resolution (plan 21 §7 / §9). A mode
- * declares a panel whose surface is a plugin frame; `sessions:view` must return
- * it in `modePanels` with a resolved `/plugin-ui/...` src when the owning plugin
- * is installed, serve core's own component from `/core-ui` (dropping one core
- * does not declare), and drop a frame whose
- * plugin is absent to a placeholder (no src) — never an error.
+ * Genre panels and package widgets through the real server resolution (plan
+ * 21 §7 / §9). A mode declares panels naming components; `sessions:view` must
+ * serve core's own component from `/core-ui` (dropping one core does not
+ * declare), and offer no panel still spelling the retired `surface` frame
+ * shortcut (2026-10-02) — a widget always names a component.
  *
  * And, since the namespacing ruling (2026-09-17), the other half: a plugin's
- * OWN widgets — the ones it declares under `surfaces.panels`, which belong to
- * no genre — are seated in every session under `<pluginId>:<panelId>`, and
- * disabling the plugin takes them off the wire without touching anything a
- * person arranged.
+ * OWN widgets — `manifest.widgets`, which belong to no genre — are seated in
+ * every session under `<pluginId>:<widgetId>`, and disabling the plugin takes
+ * them off the wire without touching anything a person arranged.
  */
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest"
 import { eq } from "drizzle-orm"
@@ -44,8 +42,8 @@ async function makeUser(name: string) {
 	return createTestUser(testDb, name)
 }
 
-/** A mode that declares a frame panel + core components, and (optionally) an
- * installed plugin that owns the frame. */
+/** A mode that declares core components and a stale frame panel, and
+ * (optionally) an installed plugin that owns the frame's document. */
 async function scenario(installPlugin: boolean) {
 	const k = n++
 	const owner = await makeUser(`fp-owner-${k}`)
@@ -58,11 +56,7 @@ async function scenario(installPlugin: boolean) {
 			bundleSource: "// x",
 			bundleHash: "deadbeef",
 			enabled: true,
-			manifest: {
-				surfaces: {
-					panels: [{ id: "map", entry: "ui/map.html", title: "Map" }]
-				}
-			}
+			manifest: {}
 		})
 		await testDb.insert(schema.pluginFiles).values({
 			pluginId,
@@ -83,21 +77,23 @@ async function scenario(installPlugin: boolean) {
 		status: "live",
 		sessionShape: {
 			panels: [
+				// The retired frame shortcut: never offered, plugin or no.
 				{
 					id: "map",
 					title: "Map",
 					role: "secondary",
 					surface: { kind: "frame", pluginId, entry: "ui/map.html" },
-					channels: ["map"],
-					// R75: what it reads — a name that is no base section is
-					// dropped, never trusted off the stored declaration.
-					reads: ["settings", "made-up"]
+					channels: ["map"]
 				},
 				{
 					id: "notes",
 					title: "Notes",
 					role: "secondary",
-					component: "scene-portraits"
+					component: "scene-portraits",
+					channels: ["map"],
+					// R75: what it reads — a name that is no base section is
+					// dropped, never trusted off the stored declaration.
+					reads: ["settings", "made-up"]
 				},
 				// A component core does not declare: `/core-ui` would 404.
 				{
@@ -118,8 +114,8 @@ async function scenario(installPlugin: boolean) {
 	return { owner, session, pluginId }
 }
 
-describe("sessions:view — frame panels (21)", () => {
-	// Plugin frames are part of the extension subsystem (SP_PLUGINS_ENABLED).
+describe("sessions:view — a genre's panels (21)", () => {
+	// Plugin widgets are part of the extension subsystem (SP_PLUGINS_ENABLED).
 	beforeAll(() => {
 		vi.stubEnv("SP_PLUGINS_ENABLED", "1")
 	})
@@ -127,7 +123,7 @@ describe("sessions:view — frame panels (21)", () => {
 		vi.unstubAllEnvs()
 	})
 
-	test("resolves a mode's frame panel src when its plugin is installed", async () => {
+	test("resolves a mode's core component panels; a retired frame panel is not offered", async () => {
 		const { sessionsViewHandler } = await import("./sessions")
 		const s = await scenario(true)
 		const res = await sessionsViewHandler.handler(
@@ -136,12 +132,9 @@ describe("sessions:view — frame panels (21)", () => {
 			noop
 		)
 
-		const map = res.modePanels.find((p) => p.id === "map")!
-		expect(map.surface).toMatchObject({ kind: "frame", pluginId: s.pluginId })
-		expect(map.src).toBe(`/plugin-ui/${s.pluginId}/ui/map.html`)
-		expect(map.channels).toEqual(["map"])
-		// Only the sections it reads are sent to it (R75).
-		expect(map.reads).toEqual(["settings"])
+		// The `surface` shortcut is gone: its plugin installed or not, the
+		// panel resolves to nothing and is not offered.
+		expect(res.modePanels.some((p) => p.id === "map")).toBe(false)
 
 		// Core's own component: core's remote, served by `/core-ui` (R79).
 		const notes = res.modePanels.find((p) => p.id === "notes")!
@@ -151,16 +144,14 @@ describe("sessions:view — frame panels (21)", () => {
 			component: "scene-portraits"
 		})
 		expect(notes.src).toBe("/core-ui/scene-portraits")
+		expect(notes.channels).toEqual(["map"])
+		// Only the sections it reads are sent to it (R75).
+		expect(notes.reads).toEqual(["settings"])
 		// One core does not declare is not offered, rather than offered broken.
 		expect(res.modePanels.some((p) => p.id === "ghost")).toBe(false)
-		// No `reads` declared: every section, as before R75.
-		expect(notes.reads).toBeUndefined()
-
-		// the same plugin's panel also shows in the global panel list
-		expect(res.panels.some((f) => f.panelId === "map")).toBe(true)
 	})
 
-	test("a frame panel whose plugin is absent has no src (placeholder, not error)", async () => {
+	test("without the plugin the retired frame panel is still simply absent, never an error", async () => {
 		const { sessionsViewHandler } = await import("./sessions")
 		const s = await scenario(false)
 		const res = await sessionsViewHandler.handler(
@@ -168,13 +159,13 @@ describe("sessions:view — frame panels (21)", () => {
 			{ sessionId: s.session.id } as any,
 			noop
 		)
-		const map = res.modePanels.find((p) => p.id === "map")!
-		expect(map.surface).toMatchObject({ kind: "frame" })
-		expect(map.src).toBeUndefined()
+		expect(res.modePanels.some((p) => p.id === "map")).toBe(false)
+		expect(res.modePanels.some((p) => p.id === "notes")).toBe(true)
 	})
 
 	/**
-	 * A plugin with two panels of its own and a genre that declares neither.
+	 * A plugin with two component widgets of its own (and one still spelling
+	 * the retired frame shortcut) and a genre that declares none of them.
 	 * Deliberately declares a panel named `map` — the id the genre above uses —
 	 * so the namespacing is tested against the collision it exists to prevent.
 	 */
@@ -189,20 +180,33 @@ describe("sessions:view — frame panels (21)", () => {
 			bundleHash: "deadbeef",
 			enabled: true,
 			manifest: {
-				surfaces: {
-					panels: [
-						{
-							id: "map",
-							entry: "ui/tray.html",
-							title: "Dice tray",
-							channels: ["dice"],
-							settings: {
-								sides: { type: "number", default: 6 }
-							}
-						},
-						{ id: "log", entry: "ui/log.html", title: "Roll log" }
-					]
-				}
+				widgets: [
+					{
+						id: "map",
+						title: "Dice tray",
+						component: "tray",
+						channels: ["dice"],
+						settings: {
+							sides: { type: "number", default: 6 }
+						}
+					},
+					{
+						id: "log",
+						title: "Roll log",
+						component: "log"
+					},
+					// The retired frame shortcut: names no component, so it
+					// is never offered.
+					{
+						id: "framed",
+						title: "Framed",
+						surface: { kind: "frame", pluginId, entry: "ui/x.html" }
+					}
+				],
+				components: [
+					{ slug: "tray", entry: "ui/tray.js" },
+					{ slug: "log", entry: "ui/log.js" }
+				]
 			}
 		})
 		const typeId = `core:inlet/plainmode-${k}`
@@ -243,7 +247,7 @@ describe("sessions:view — frame panels (21)", () => {
 		)
 	}
 
-	test("an enabled plugin's own panels are seated under namespaced ids", async () => {
+	test("an enabled plugin's own widgets are seated under namespaced ids", async () => {
 		const s = await pluginOnlyScenario()
 		const res = await view(s.owner.id, s.session.id)
 
@@ -258,7 +262,12 @@ describe("sessions:view — frame panels (21)", () => {
 		const tray = mine.find((p) => p.id === `${s.pluginId}:map`)!
 		expect(tray.title).toBe("Dice tray")
 		expect(tray.role).toBe("secondary")
-		expect(tray.src).toBe(`/plugin-ui/${s.pluginId}/ui/tray.html`)
+		expect(tray.src).toBe(`/plugin-ui/${s.pluginId}/ui/tray.js`)
+		expect(tray.surface).toEqual({
+			kind: "remote",
+			owner: s.pluginId,
+			component: "tray"
+		})
 		expect(tray.channels).toEqual(["dice"])
 		// The declared schema reaches the wire — without it the settings card
 		// draws no controls, whoever declared the widget.
@@ -277,29 +286,19 @@ describe("sessions:view — frame panels (21)", () => {
 		expect(res.modePanels.indexOf(genreMap)).toBeLessThan(
 			res.modePanels.indexOf(tray)
 		)
-
-		// ⏳ The pre-widget listing keeps the BARE declared id its readers
-		// were written against.
-		expect(
-			res.panels
-				.filter((f) => f.pluginId === s.pluginId)
-				.map((f) => f.panelId)
-				.sort()
-		).toEqual(["log", "map"])
 	})
 
-	test("a plugin's own frame panel reads every section: the ⏳ frame-panel shape declares no `reads`", async () => {
+	test("a plugin widget carries the sections it reads (R75), and none without", async () => {
 		const s = await pluginOnlyScenario()
-		// Even one written into the stored manifest by hand is not carried:
-		// `FramePanelDecl` has no `reads`, so `surfacesOf` never reads one.
 		const [row] = await testDb.select().from(schema.plugins).where(eq(schema.plugins.pluginId, s.pluginId))
-		const manifest = row.manifest as { surfaces: { panels: Array<Record<string, unknown>> } }
-		manifest.surfaces.panels[0].reads = ["settings"]
+		const manifest = row.manifest as { widgets: Array<Record<string, unknown>> }
+		manifest.widgets[0].reads = ["settings", "made-up"]
 		await testDb.update(schema.plugins).set({ manifest }).where(eq(schema.plugins.pluginId, s.pluginId))
 		const res = await view(s.owner.id, s.session.id)
 		const tray = res.modePanels.find((p) => p.id === `${s.pluginId}:map`)!
-		expect(tray.src).toBe(`/plugin-ui/${s.pluginId}/ui/tray.html`)
-		expect(tray).not.toHaveProperty("reads")
+		expect(tray.reads).toEqual(["settings"])
+		const log = res.modePanels.find((p) => p.id === `${s.pluginId}:log`)!
+		expect(log).not.toHaveProperty("reads")
 	})
 
 	test("disabling the plugin takes its widgets off the wire, and nothing else", async () => {
@@ -322,7 +321,6 @@ describe("sessions:view — frame panels (21)", () => {
 		expect(
 			res.modePanels.some((p) => p.id.startsWith(`${s.pluginId}:`))
 		).toBe(false)
-		expect(res.panels.some((f) => f.pluginId === s.pluginId)).toBe(false)
 		// The genre's own widget is not collateral.
 		expect(res.modePanels.some((p) => p.id === "map")).toBe(true)
 	})
@@ -348,8 +346,9 @@ describe("sessions:view — package widgets (R71) carry what they read (R75)", (
 		const pluginId = `acme.hud-${k}`
 		const manifest = {
 			widgets: [
-				{ id: "hud", title: "HUD", component: "hud", reads: ["settings", "made-up", "settings", "session_full"] },
-				{ id: "all", title: "Everything", component: "all" },
+				{ id: "hud", title: "HUD", component: "hud", reads: ["settings", "made-up", "settings", "session_full"], maxInstances: 1 },
+				// A cap that is not a positive integer is no cap (brief 7b).
+				{ id: "all", title: "Everything", component: "all", maxInstances: 1.5 },
 				// The twenty-questions shape: scopes declared ONLY on a top-level widget.
 				{ id: "log", title: "Log", component: "log", scopes: ["session:full", "session:state"] },
 				// Asks for a scope of its own — granted only if its plugin was.
@@ -401,6 +400,15 @@ describe("sessions:view — package widgets (R71) carry what they read (R75)", (
 		expect(hud.reads).toEqual(["settings"])
 		const all = res.modePanels.find((p) => p.id === `${s.pluginId}:all`)!
 		expect(all).not.toHaveProperty("reads")
+	})
+
+	test("a widget's maxInstances rides on the wire for the Add menu; a bad one is no cap (brief 7b)", async () => {
+		const s = await packageScenario()
+		const { sessionsViewHandler } = await import("./sessions")
+		const res = await sessionsViewHandler.handler(fakeSocket(s.owner.id), { sessionId: s.session.id } as any, noop)
+		expect(res.modePanels.find((p) => p.id === `${s.pluginId}:hud`)!.maxInstances).toBe(1)
+		expect(res.modePanels.find((p) => p.id === `${s.pluginId}:all`)).not.toHaveProperty("maxInstances")
+		expect(res.modePanels.find((p) => p.id === `${s.pluginId}:log`)).not.toHaveProperty("maxInstances")
 	})
 
 	test("a top-level widget's scopes are refused until reviewed, then reach that widget's grants", async () => {
@@ -469,9 +477,8 @@ describe("sessions:view — package widgets (R71) carry what they read (R75)", (
 
 /**
  * With the extension subsystem off (SP_PLUGINS_ENABLED unset) no plugin UI of
- * any kind is offered: not a genre's frame panel, not a plugin's own
- * `surfaces.panels` (⏳ `res.panels` or `modePanels`), not a genre's
- * `shape.view` session-view — while core's own components still are.
+ * any kind is offered: not a plugin's own widget, not a genre's `shape.view`
+ * session-view — while core's own components still are.
  */
 describe("sessions:view — with SP_PLUGINS_ENABLED off no plugin UI is offered", () => {
 	beforeAll(() => {
@@ -493,9 +500,10 @@ describe("sessions:view — with SP_PLUGINS_ENABLED off no plugin UI is offered"
 			enabled: true,
 			manifest: {
 				surfaces: {
-					panels: [{ id: "tray", entry: "ui/tray.html", title: "Tray" }],
 					"session-view": { entry: "ui/view.html", title: "View" }
-				}
+				},
+				widgets: [{ id: "tray", title: "Tray", component: "tray" }],
+				components: [{ slug: "tray", entry: "ui/tray.js" }]
 			}
 		})
 		const typeId = `core:inlet/offmode-${k}`
@@ -506,15 +514,7 @@ describe("sessions:view — with SP_PLUGINS_ENABLED off no plugin UI is offered"
 			status: "live",
 			sessionShape: {
 				view: pluginId,
-				panels: [
-					{
-						id: "map",
-						title: "Map",
-						role: "secondary",
-						surface: { kind: "frame", pluginId, entry: "ui/tray.html" }
-					},
-					{ id: "notes", title: "Notes", role: "secondary", component: "scene-portraits" }
-				]
+				panels: [{ id: "notes", title: "Notes", role: "secondary", component: "scene-portraits" }]
 			}
 		})
 		const [session] = await testDb
@@ -529,12 +529,10 @@ describe("sessions:view — with SP_PLUGINS_ENABLED off no plugin UI is offered"
 		return sessionsViewHandler.handler(fakeSocket(userId), { sessionId } as any, noop)
 	}
 
-	test("offers no frame panel, plugin panel or session view; core's component stays", async () => {
+	test("offers no plugin widget or session view; core's component stays", async () => {
 		const s = await flagOffScenario()
 		const res = await view(s.owner.id, s.session.id)
-		expect(res.panels).toEqual([])
 		expect(res.sessionView).toBeUndefined()
-		expect(res.modePanels.some((p) => p.id === "map")).toBe(false)
 		expect(res.modePanels.some((p) => p.id.startsWith(`${s.pluginId}:`))).toBe(false)
 		expect(res.modePanels.some((p) => (p.src ?? "").startsWith("/plugin-ui/"))).toBe(false)
 		expect(res.modePanels.find((p) => p.id === "notes")?.src).toBe("/core-ui/scene-portraits")
@@ -545,10 +543,8 @@ describe("sessions:view — with SP_PLUGINS_ENABLED off no plugin UI is offered"
 		vi.stubEnv("SP_PLUGINS_ENABLED", "1")
 		try {
 			const res = await view(s.owner.id, s.session.id)
-			expect(res.panels.some((p) => p.pluginId === s.pluginId)).toBe(true)
 			expect(res.sessionView?.src).toBe(`/plugin-ui/${s.pluginId}/ui/view.html`)
-			expect(res.modePanels.find((p) => p.id === "map")?.src).toBe(`/plugin-ui/${s.pluginId}/ui/tray.html`)
-			expect(res.modePanels.some((p) => p.id === `${s.pluginId}:tray`)).toBe(true)
+			expect(res.modePanels.find((p) => p.id === `${s.pluginId}:tray`)?.src).toBe(`/plugin-ui/${s.pluginId}/ui/tray.js`)
 		} finally {
 			vi.stubEnv("SP_PLUGINS_ENABLED", "")
 		}

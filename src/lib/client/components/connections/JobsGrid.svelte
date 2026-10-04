@@ -45,6 +45,12 @@
 		 * in the readiness card too.
 		 *
 		 * `Infinity` at full page, where there is room for all of them.
+		 *
+		 * The index passes **3** since notes 42 (2026-10-03): the other three
+		 * modality defaults (images, embeddings, entities — chat is the status
+		 * strip above), then `N more`. Four cells: two rows of two in the
+		 * dock, one row across a wide list, and the connections — the list's
+		 * main business — start right under them.
 		 */
 		limit?: number
 		/**
@@ -56,8 +62,14 @@
 		 * squashed four tiles into a 340px strip reading "V…", "D…", "I…",
 		 * "E…". A column's own width is not something a `view` container can
 		 * answer; the caller knows it and says.
+		 *
+		 * `"fit"` (notes 42, 2026-10-03) asks the LIST pane's own container
+		 * instead — `@container/list`, which is the box the grid actually
+		 * sits in, never the whole view: two across in the dock, four from
+		 * 36rem of list. The index uses it now that it carries the grid at
+		 * every width (it is the defaults block at the top of the list).
 		 */
-		columns?: 2 | 4
+		columns?: 2 | 4 | "fit"
 	}
 	let { tiles, onOpen, limit = 4, columns = 2 }: Props = $props()
 
@@ -77,6 +89,12 @@
 		const rest = tiles.filter((t) => !(t.modelName && !t.problem))
 		return [...set, ...rest].slice(0, limit)
 	})
+	/**
+	 * What the fold tile names: the tiles NOT on screen. It named
+	 * `tiles.slice(limit)`, which once a set tile was pulled forward listed
+	 * that tile again behind the fold ("6 more · vision, …" beside Vision).
+	 */
+	const folded = $derived(tiles.filter((t) => !ordered.includes(t)))
 </script>
 
 <section aria-label="Other jobs">
@@ -89,8 +107,14 @@
 		</span>
 	</div>
 
-	<!-- Two across in a column, four in the detail pane. See `columns`. -->
-	<div class="grid gap-2 {columns === 4 ? 'grid-cols-4' : 'grid-cols-2'}">
+	<!-- Two across in a column, four across a wide list. See `columns`. -->
+	<div
+		class="grid gap-2 {columns === 4
+			? 'grid-cols-4'
+			: columns === 'fit'
+				? 'grid-cols-2 @min-[36rem]/list:grid-cols-4'
+				: 'grid-cols-2'}"
+	>
 		{#each ordered as tile (tile.capability)}
 			{@const TileIcon =
 				((Icons as any)[tile.icon ?? ""] as any) ?? Icons.Sparkles}
@@ -150,10 +174,7 @@
 					</span>
 				</span>
 				<span class="text-surface-600-400 truncate text-xs">
-					{tiles
-						.slice(limit)
-						.map((t) => t.label.toLowerCase())
-						.join(", ")}
+					{folded.map((t) => t.label.toLowerCase()).join(", ")}
 				</span>
 			</button>
 		{/if}

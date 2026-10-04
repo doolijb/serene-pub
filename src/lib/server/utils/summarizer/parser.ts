@@ -43,23 +43,3 @@ export function parseSummaryOutput(raw: string): ParsedSummary {
 		raw: trimmed
 	}
 }
-
-/**
- * Parse a date string like "Year 412, Month 3, Day 7" into numeric parts.
- * Returns nulls for any part that can't be parsed.
- */
-export function parseDateString(dateStr: string): {
-	year: number | null
-	month: number | null
-	day: number | null
-} {
-	const yearMatch = dateStr.match(/year\s+(\d+)/i)
-	const monthMatch = dateStr.match(/month\s+(\d+)/i)
-	const dayMatch = dateStr.match(/day\s+(\d+)/i)
-
-	return {
-		year: yearMatch ? parseInt(yearMatch[1], 10) : null,
-		month: monthMatch ? parseInt(monthMatch[1], 10) : null,
-		day: dayMatch ? parseInt(dayMatch[1], 10) : null
-	}
-}

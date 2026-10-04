@@ -213,7 +213,11 @@
 										onclick={() => choose(p)}
 									>
 										<div class="w-fit shrink-0">
-											<Avatar char={p} />
+											<Avatar
+												char={p}
+												size="lg"
+												decorative
+											/>
 										</div>
 										<div
 											class="relative flex w-0 min-w-0 flex-1 flex-col"

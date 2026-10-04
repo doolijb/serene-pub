@@ -13,15 +13,15 @@
  *   `playerLabel`; a shared session's persona-less line shows its member.
  *
  * The page's half — refusal, the prefilled modal, the fire — is `routePress`
- * (collects.test.ts); the clear is `shouldClearDraft` over the composer's
- * reported draft, driven here as the page drives it.
+ * (collects.test.ts); the clear is `draftHolds` at the press (note 31) over
+ * the composer's reported draft, driven here as the page drives it.
  */
 import { describe, expect, test } from "vitest"
 import { realpathSync } from "node:fs"
 import { resolve } from "node:path"
 import { mountComponent, type MountedComponent } from "@serene-pub/cli/testing"
 import { componentParitySections } from "@serene-pub/conformance"
-import { nextDraftWrite, routePress, shouldClearDraft, type DraftWrite, type ListedCollects } from "./collects"
+import { draftHolds, nextDraftWrite, routePress, type DraftWrite, type ListedCollects } from "./collects"
 import { answerDraft } from "./requests/draft"
 
 const CORE_CATALOG = realpathSync(resolve(process.cwd(), "node_modules/@serene-pub/core-catalog"))
@@ -125,25 +125,25 @@ class Page {
 		const inv = this.view.invoked.at(-1)!
 		return routePress(byIdentity(inv.key), inv.text !== undefined ? { text: inv.text } : undefined, inv.key)
 	}
-	/** The run landed: the page spends the draft it carried (D1). */
-	async landed(sent: string) {
-		if (shouldClearDraft({ success: true }, sent, this.newMessage)) this.writeDraft("")
+	/** The press fired: the page spends the draft it carried (D1, note 31). */
+	async fired(sent: string) {
+		if (draftHolds(sent, this.newMessage)) this.writeDraft("")
 		await this.view.push("scoped", { session_full: this.dossier() } as never)
 		await this.quiet()
 	}
 }
 
 describe("S2 · slash arguments in core's composer", () => {
-	test("/nudge go north + Enter presses Nudge with the argument; the landed run spends the draft", async () => {
+	test("/nudge go north + Enter presses Nudge with the argument; the fired press spends the draft", async () => {
 		const page = await new Page().open()
 		try {
 			await page.type("/nudge go north")
 			await page.enter()
 			expect(page.view.invoked).toEqual([{ key: "core:spec/lair-nudge#nudge", text: "go north" }])
 			expect(page.lastRoute()).toEqual({ route: "fire", collected: { text: "go north" } })
-			// Kept until the run answers: an error must not lose it.
+			// The composer leaves it for the page: only the page knows the press fired.
 			expect(page.newMessage).toBe("/nudge go north")
-			await page.landed("go north")
+			await page.fired("go north")
 			expect(page.field()).toBe("")
 			expect(page.newMessage).toBe("")
 		} finally {

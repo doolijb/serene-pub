@@ -3,7 +3,7 @@
  * narrativeGraph:createNode) inserted client-supplied
  * sceneId/historyEntryId (and, for applyProposal, relationship sceneId/
  * historyEntryId too) with no check they belonged to the target lorebook —
- * unlike updateNode/createRelationship/updateRelationship, which already
+ * unlike updateBinding/createRelationship/updateRelationship, which already
  * validate this exact pair of fields. applyProposal already had the
  * identical validation shape for seedTempIdMap values; this closes the gap
  * for sceneId/historyEntryId specifically.
@@ -13,6 +13,7 @@ import fs from "fs/promises"
 import os from "os"
 import path from "path"
 import * as schema from "$lib/server/db/schema"
+import { applyAtReview } from "./fixtures/graphReview"
 import { historyValues } from "$lib/server/pipelines/testing/fixtures"
 import type { TestDb } from "$lib/server/utils/testDb"
 
@@ -77,7 +78,7 @@ describe("narrativeGraph:applyProposal — sceneId/historyEntryId scoping (PGlit
 		await expect(
 			narrativeGraphApplyProposalHandler.handler(
 				fakeSocket(attacker.id),
-				{
+				applyAtReview(attacker.id, {
 					lorebookId: attackerLorebook.id,
 					mode: "extend",
 					proposal: {
@@ -92,10 +93,10 @@ describe("narrativeGraph:applyProposal — sceneId/historyEntryId scoping (PGlit
 						],
 						relationships: []
 					}
-				} as any,
+				} as any),
 				noopEmit
 			)
-		).rejects.toThrow()
+		).rejects.toThrow(/names a history entry from another book/)
 	})
 
 	test("rejects a proposal relationship referencing a foreign lorebook's scene", async () => {
@@ -129,7 +130,7 @@ describe("narrativeGraph:applyProposal — sceneId/historyEntryId scoping (PGlit
 		await expect(
 			narrativeGraphApplyProposalHandler.handler(
 				fakeSocket(attacker.id),
-				{
+				applyAtReview(attacker.id, {
 					lorebookId: attackerLorebook.id,
 					mode: "extend",
 					proposal: {
@@ -159,10 +160,10 @@ describe("narrativeGraph:applyProposal — sceneId/historyEntryId scoping (PGlit
 							}
 						]
 					}
-				} as any,
+				} as any),
 				noopEmit
 			)
-		).rejects.toThrow()
+		).rejects.toThrow(/names a scene from another book/)
 	})
 
 	test("accepts a proposal referencing scenes/history entries from the same lorebook", async () => {
@@ -182,7 +183,7 @@ describe("narrativeGraph:applyProposal — sceneId/historyEntryId scoping (PGlit
 
 		const res = await narrativeGraphApplyProposalHandler.handler(
 			fakeSocket(owner.id),
-			{
+			applyAtReview(owner.id, {
 				lorebookId: lorebook.id,
 				mode: "extend",
 				proposal: {
@@ -197,7 +198,7 @@ describe("narrativeGraph:applyProposal — sceneId/historyEntryId scoping (PGlit
 					],
 					relationships: []
 				}
-			} as any,
+			} as any),
 			noopEmit
 		)
 

@@ -19,6 +19,9 @@ import {
 	composeStops,
 	composeStopsFor,
 	explicitStopsFrom,
+	ownLabelsFor,
+	seedLabelOf,
+	stripOwnLabel,
 	trimAtSpeakerBoundary
 } from "./stops"
 import {
@@ -309,6 +312,29 @@ describe("trimAtSpeakerBoundary — where a reply ends", () => {
 		).toBe("*nods* Ash: no")
 	})
 
+	test("the own label in markdown emphasis comes off too — and several names are tried", () => {
+		for (const reply of [
+			"**Ash:** *nods*",
+			"**Ash**: *nods*",
+			"__Ash:__ *nods*",
+			"  Ash:  *nods*"
+		])
+			expect(trimAtSpeakerBoundary(reply, stops(), ["Ashen", "Ash"]).text).toBe(
+				"*nods*"
+			)
+		// Prose that merely starts with the name is not a label.
+		expect(stripOwnLabel("Ash nods.", "Ash")).toBe("Ash nods.")
+		expect(stripOwnLabel("Ashen: hi", "Ash")).toBe("Ashen: hi")
+	})
+
+	test("streaming holds back a body that is so far only the start of the label", () => {
+		for (const partial of ["A", "As", "Ash", "**As", "**Ash:*"])
+			expect(stripOwnLabel(partial, "Ash", { streaming: true })).toBe("")
+		// Ruled out the moment it diverges — and never held once stored.
+		expect(stripOwnLabel("Asking", "Ash", { streaming: true })).toBe("Asking")
+		expect(stripOwnLabel("As", "Ash")).toBe("As")
+	})
+
 	test("a list carrying no speaker stops cuts nothing", () => {
 		// A chat transcript with no inline labels composes no speaker stops, so
 		// there is no label to end a reply on and nothing to cut.
@@ -515,5 +541,47 @@ describe("explicitStopsFrom — what an author typed", () => {
 		expect(explicitStopsFrom(7)).toEqual([])
 		expect(explicitStopsFrom(undefined)).toEqual([])
 		expect(explicitStopsFrom([1, { a: 2 }])).toEqual([])
+	})
+})
+
+describe("seedLabelOf / ownLabelsFor — the names a turn is labelled with", () => {
+	test("the completion prompt's last line, and a chat payload's trailing assistant turn", () => {
+		expect(seedLabelOf({ prompt: "<|im_start|>assistant\nVerity:" })).toBe(
+			"Verity"
+		)
+		expect(
+			seedLabelOf({ prompt: "<|im_start|>assistant\nVerity: the rain had" })
+		).toBe("Verity")
+		expect(
+			seedLabelOf({
+				messages: [
+					{ role: "user", content: "Jody: hi" },
+					{ role: "assistant", content: "Verity:" }
+				]
+			})
+		).toBe("Verity")
+	})
+
+	test("no label when the prompt ends on none", () => {
+		expect(seedLabelOf({ prompt: "<|im_start|>assistant\n" })).toBeUndefined()
+		expect(
+			seedLabelOf({ messages: [{ role: "user", content: "Jody: hi" }] })
+		).toBeUndefined()
+		expect(seedLabelOf(null)).toBeUndefined()
+	})
+
+	test("the seed label, then the speaking character's name and nickname, once each", () => {
+		const session = {
+			sessionCharacters: [
+				{ character: { id: 1, name: "Verity Vane", nickname: "Verity" } },
+				{ character: { id: 2, name: "Rook" } }
+			]
+		}
+		expect(
+			ownLabelsFor(session, 1, { prompt: "…\nVerity:" })
+		).toEqual(["Verity", "Verity Vane"])
+		expect(ownLabelsFor(session, null, { prompt: "…\nNarrator:" })).toEqual([
+			"Narrator"
+		])
 	})
 })

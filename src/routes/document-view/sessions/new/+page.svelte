@@ -112,9 +112,7 @@
 				name: name.trim(),
 				scenario: scenario.trim(),
 				lorebookId: null,
-				samplingConfigId: null,
-				promptConfigId: null,
-				narratorPromptConfigId: null
+				samplingConfigId: null
 			} as any,
 			characterIds: selectedCharacters.map((c) => c.id),
 			personaIds: selectedPersonas.map((p) => p.id),

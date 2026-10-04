@@ -1,431 +1,469 @@
 # Connections
 
-Connections tell Serene Pub how to reach a model — which backend, which model, which API key, and how requests should be shaped. This page covers every connection type (text generation and image generation both), KoboldCPP and Ollama run by Serene Pub for local models, and the related Sampling Configs, Prompt Formats, and Token Counters that control how a connection actually generates.
+A **connection** tells Serene Pub where a model runs and how to reach it: a program on your computer, a machine on your network, or an online service. This page covers every kind of connection, the KoboldCPP and Ollama that Serene Pub can look after for you, and the settings that shape what a model is sent: sampling configs, prompt formats, token counters, stop sequences and streaming.
 
-## Overview
+:::tip Setting up for the first time?
+You need one connection and one model, and [Connect a model](./connect-a-model.md) walks you through it in about ten minutes. Come back here when you want to add a second service, tune how a model writes, or work out why something stopped answering.
+:::
 
-The **Connections** sidebar (opened from the rail, admin-only) is where you create, edit, test, and delete connections, and where a local runtime this pub runs or hosts for it — KoboldCPP, Ollama — is set up and looked after. Alongside it in the nav are **Sampling** and **Pipelines**. There are no separate manager items: a KoboldCPP or Ollama is a connection like any other, and its management lives in that connection's own view (see [KoboldCPP, run by Serene Pub](#koboldcpp-run-by-serene-pub) and [Ollama, managed](#ollama-managed)). Most of this lives behind the admin gate: non-admin users benefit from whatever connection and sampling config an admin has set as the system default, but can't open the sidebar themselves.
+Connections belong to the administrator. The **Connections** view on the rail is only offered to administrators, and so are **Sampling** and the **Admin › Models** pages. Everyone else uses whatever the administrator has set up.
 
-Prompts and context templates are configured in the **Pipelines** view rather than here — see [Context Templates](./context-templates.md). This page focuses on Connections and Sampling Configs.
+## How connections, models and defaults fit together
 
-Each connection is a named record holding a **type** (which backend adapter to use), a **Base URL** and/or **API Key** where applicable, one or more **Models** (see [Endpoints and models](#endpoints-and-models)), a **Prompt Format**, a **Token Counter**, and a bag of type-specific **Request settings** (stream mode and so on; chat messages vs. text completion is a capability, not a setting). A connection is never a default by itself: each capability's instance default names a connection **and one of its models** (see [Choosing a pair](#choosing-a-pair)), and an individual pipeline configuration can override it by naming another pair in its connection slot — see [Pipelines](./pipelines.md). A session never overrides the connection: overrides are by model, never by connection (see [Sessions](./sessions.md#which-connection-a-session-uses)).
+Four ideas carry the whole page.
 
-Creating a connection is done via **Add → A connection** (or Ctrl/Cmd+N) in the Connections sidebar, which opens the **New connection** dialog: enter a name, then pick a **Service** from a single searchable combobox (placeholder text: "Search for a service (Groq, Ollama, Mistral, ...)"). This picker flattens every native connection type _and_ every OpenAI-compatible preset (Groq, OpenRouter, Mistral, and so on — see [OpenAI Chat & Compatible Endpoint Presets](#openai-chat--compatible-endpoint-presets) below) into one list, grouped under **Cloud APIs**, **Local / Self-hosted**, and **Custom** — a preset isn't nested two levels deep behind a separate "OpenAI Chat" type selection; you can search and pick it directly. Whichever service you pick, its difficulty rating and description appear below the picker before you confirm. The view tracks unsaved changes and will prompt before you switch connections or close the sidebar; **Save** and **Discard** appear under the view only while something has changed, and **Delete connection** at its foot deletes it (with a confirmation modal) — see [A connection's view](#a-connections-view).
+- **A connection is a place.** It holds an address, an API key where the service needs one, and a few settings about how requests are sent. It does not, by itself, pick a model.
+- **A connection has models.** Serene Pub asks the service which models it offers and keeps that list up to date. One connection to OpenRouter can offer hundreds; one llama.cpp offers the one it was started with.
+- **Each job has a default model.** Chat, image generation, embeddings, named entities and the rest are **jobs** (also called capabilities). Each job's default names a connection _and_ one of its models, a **pair** such as _Nemo 12B · KoboldCPP_. A job with no default is switched off. You set them in [Admin › Models › Defaults](#admin--models--defaults), or with **Use** wherever a model is listed.
+- **A pipeline can ask for a different model.** A pipeline's configuration can name another pair for one of its model calls, for example a small fast model for Adventure's planner. Anything it leaves unset uses the job's default. See [Pipelines → Model and sampling](./pipelines.md#model-and-sampling).
 
-## The Connections sidebar
+A **session never picks a connection or a model.** Its replies use whatever its pipeline configuration names, else the pub default. To change the model a session uses, an administrator changes it in the **Pipelines** view (see [Sessions → Which connection a session uses](./sessions.md#which-connection-a-session-uses)).
 
-Connections is a rail item. Its view lives in the sidebar, can take half the window or the whole of it (Half and Focus), and is the same view on a phone (see [Getting Around](./getting-around.md)). The index answers one question first — _what can this pub do, and what is missing_ — and keeps everything else one tap in.
+## The Connections view
+
+Open **Connections** from the rail. Like any view it can sit beside your session, take half the window, or take all of it (see [Getting around](./getting-around.md)). It opens on a list of your **connections**, with the **defaults** (which model each job uses) at the top. A connection's models are inside it: open the connection to see them.
 
 ### The index, top to bottom
 
-- **Add** opens a menu with five doors: **A connection** (the New connection dialog, every service and preset), **KoboldCPP, run by Serene Pub** (installs and manages a local runtime — see [KoboldCPP, run by Serene Pub](#koboldcpp-run-by-serene-pub)), **Ollama** (points at a running Ollama), **A model** (the [model finder](#the-model-finder)), and **A model by name** (for a host that does not list its models). The Android app offers neither KoboldCPP nor Ollama here, as its setup wizard does not: it cannot run a local runtime. Beside it, **Get a model** opens the finder directly. Ctrl/Cmd+N still opens the New connection dialog.
-- **Filter** ("Filter N connections") matches a connection's name, service and host, and the names of its models — a connection stays in the list when one of its models matches. The popout beside it narrows to _Everything_, _Needs attention_, the _Defaults ledger_, or the connections that can serve _Chat_, _Images_, _Embeddings_ or _Entities_. The active filter shows as one chip under the row. There is deliberately no dropdown.
-- **The status strip** answers the one question that blocks play: _Sessions can reply_, with the model and connection that answer, and **Change** — or _Sessions can't reply yet_ and a gold **Set up chat**. It is the only gold button on the index.
-- **Other jobs** is a grid of tiles, one per remaining capability: two across in the sidebar, four in Focus, four shown with a **N more** tile for the rest. Each tile is the button. It says what is registered or _Not set up_, and a one-line description of what the job does. There is deliberately **no fraction**: nine of the ten jobs are optional and off is a perfectly good answer for all nine, so nothing here is scored out of ten.
-- **Connections** lists one row per endpoint, in two groups: **On this machine** (_private · free_) and **Services** (_billed per message_). That split is the trade you are actually choosing between, and the header names it once so no row has to.
+- **Add** opens a menu: **A connection** (the **New connection** dialog, with every service), **KoboldCPP, run by Serene Pub** (see [below](#koboldcpp-run-by-serene-pub)), **Ollama**, **A model** (the [model finder](#the-model-finder)) and, when some connection can take one, **A model by name**. The Android app does not offer KoboldCPP or Ollama here, because it cannot run them. **Get a model**, the download button at the other end of the row, opens the finder directly. **Ctrl/Cmd+N** opens the New connection dialog.
+- **Filter** matches a connection's name, service, address and the names of its models. The menu beside it narrows the list to _Needs attention_, the _Defaults ledger_ (every job with the pair it uses), or the connections that can serve _Chat_, _Images_, _Embeddings_ or _Entities_. The two buttons after it show the connections as a **list** or as **cards**; your choice is remembered in this browser.
+- **The defaults**, at the top:
+  - **The status strip** says whether sessions can reply: _Sessions can reply_ with the model and connection that answer and **Change**, or _Sessions can't reply yet_ with a gold **Set up chat**.
+  - **Other jobs** is a grid of tiles: images, embeddings and named entities first, then **N more** for the rest. Each says which model is set up for it, or _Not set up_, and opens that job's own [view](#the-capability-view). There is no score out of ten on purpose: every job except chat is optional, and leaving one off is fine.
+- **Connections**, the main list: one row or card per connection, in two groups: **On this machine** (_private · free_) and **Services** (_billed per message_). The group comes from the kind of connection: KoboldCPP, Ollama, LM Studio, llama.cpp, Stable Diffusion and the local ONNX models count as on this machine wherever their address points, and OpenAI, Anthropic and the OpenAI-compatible services count as services.
+- **Downloads**, at the foot while anything is downloading: a count, an overall bar, and **View** for the [Downloads list](#downloads).
 
-    A row is its **title**, a **service chip** where that adds something the title hasn't already said, and — on the right, in a column that lines up down the list — its **state** and one **metric**: _Ready · 9 models_, _Running · 4 models_, _Stopped · 2 on disk_, _Needs a key_. Under the title sits the host, or, when something failed, the host's own words. A gold star marks whatever the connection is the instance default for, so the list answers "which of these is my sessions actually using" without opening anything.
+Each row shows the connection's name, the host under it (or the host's own error when something failed), and on the right its **state** and one figure, such as _Ready · 9 models_ or _Stopped · 2 on disk_. A card shows the same, with room for all of it at once: what kind of connection it is, its state, how many models it has, its host, and its action. A small label after the name says what kind of connection it is, unless the name already says so. A gold star marks each job the connection is the default for, so you can see at a glance which connection your sessions use. A row or card offers at most one quick action, such as **Start**, **Set up**, **Fix** or **Refresh**. Tap it to open the connection.
 
-    There are five states and **only one of them is red**:
+There are five kinds of state, and only one of them is red:
 
-    | State                                                          | Means                                                                                                                                                            |
-    | -------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-    | **Ready** (green)                                              | It works right now.                                                                                                                                              |
-    | **Stopped**, **Offline**, **Not tested**, **Installed** (grey) | Set up, nothing wrong, not running. **Offline** is a KoboldCPP switched off with its install kept; its **Start** switches it back on and starts it in one press. |
-    | **Needs a key**, **Not set up**, **N no longer listed** (gold) | It is waiting on _you_. Nothing has failed.                                                                                                                      |
-    | **Checking**, **Downloading** (amber)                          | Something is in flight.                                                                                                                                          |
-    | **Not working**, **Not reachable**, **Crashed** (red)          | It was finished and it still failed.                                                                                                                             |
+| State | Colour | Means |
+| --- | --- | --- |
+| **Ready** | green | It works right now. |
+| **Stopped**, **Offline**, **Not tested**, **Installed** | grey | Set up, nothing wrong, not running. **Offline** is a KoboldCPP that is switched off with its files kept; **Start** switches it back on. |
+| **Needs a key**, **Not set up**, **N no longer listed** | gold | It is waiting for _you_. Nothing has failed. |
+| **Checking**, **Downloading** | amber | Something is in progress. |
+| **Not working**, **Not reachable**, **Crashed** | red | It was set up and it still failed. |
 
-    A connection you created a minute ago and haven't given a key to is **gold**, never red: it isn't broken, it's unfinished. A managed KoboldCPP row and the view it opens always say the same thing about the install — _Not installed_, _Not set up_, _Offline_ or the process state — because both read it one way. At most one inline action rides on a row — **Stop**/**Start** on a managed KoboldCPP, **Set up** when it needs a key, **Fix** when something genuinely failed, **Refresh** when models went missing. Tap the row to open the connection. A managed KoboldCPP is one row: its text and image models are both in that row's view.
+A connection you created a minute ago and haven't given a key yet is gold, not red: it is unfinished, not broken.
 
-- **Downloads tray**, at the foot while anything is downloading: a count, an overall bar, and **View** for the [Downloads view](#downloads).
+In the dock and at half width, opening a connection replaces the list, and **Back** returns to it. In Focus the list takes the whole view while nothing is open, with the job tiles four across and the cards side by side. Open something and the list moves to a column on the left (always as rows there) while what you opened fills the rest; the job tiles shrink to a row of small buttons, and **N more** gives the list the whole view again.
 
-Models no longer appear on the index. They are what a capability view lists and what a connection view manages.
+A connection's models are listed on its **Models** tab. Where there is room they are a table, with each model's context window, price per million tokens in and out, and what it can do, plus **hide** for models you will never use. Hiding is not deleting: the model, its settings and anything that names it are kept, and one press brings it back.
 
-### In Focus
+### First run and Set up chat
 
-Focusing the view keeps the list at 340px (wider on very large screens) and gives the rest to whatever you opened. With **nothing** open the pane shows every job tile four across, with room for the descriptions the sidebar has to clip; the list beside it keeps the status strip, so whether sessions can reply is answered once and stays answered while you open things. While something else is open, the jobs stay in reach as a row of small chips under the status strip — a dot for their state, one press to open the capability. Back always returns to the screen you came from — a capability, a connection, a connection's tab — and only lands on the index when the trail runs out. Which tab a managed connection was on survives switching between Dock, Half and Focus. With a connection open the pane holds what 400px cannot: its **model table**, with a column each for context window, price in and out per million tokens, and what each model can do, plus a filter and a **hide** control for the models you will never use (hiding is not deleting — the row, its settings and anything pointing at it all survive, and one press brings it back).
+With nothing connected, the index offers three doors: **On this machine** (KoboldCPP, installed and run by Serene Pub), **A service** (the New connection dialog), and **Something I already run** (the New connection dialog narrowed to programs such as Ollama, LM Studio, llama.cpp and KoboldCPP). **Add a connection** lists everything, for people who know what they want.
 
-### First run
+**On this machine**, or the status strip's **Set up chat**, opens **Set up chat**: three steps on one screen.
 
-With nothing connected the index is an invitation: "Nothing is connected yet. A session cannot reply until it has a chat model. Where should it run?" and three doors — **On this machine** (KoboldCPP, installed and run by Serene Pub), **A service** (the New connection dialog), or **Something I already run**, which opens the New connection dialog narrowed to **Local / Self-hosted** services — Ollama, LM Studio, llama.cpp, KoboldCPP and the rest — with **Show all** to widen it. A quiet link, **Add a connection**, lists every service and preset for people who know what they want. Under it, a second card names what can be set up later: images, embeddings and named entities.
+1. **Runtime.** Serene Pub adds a KoboldCPP connection and shows the build picker. Pick the build for your hardware; it downloads and starts by itself. If you already run KoboldCPP yourself, a link opens the connection's own view, where **I'll manage it myself** is offered.
+2. **Model.** The [model finder](#the-model-finder), already set to chat and to that KoboldCPP. Get one model.
+3. **Done.** The first model to arrive becomes the chat default, but only if no chat default was set, so a pub that already replies is never switched to another model. **Start a session** or **Open KoboldCPP**.
 
-### Setting up chat
-
-Chat is the one capability that blocks play, so it has a guided path: **On this machine** on the first-run card, or the status strip's gold **Set up chat** while nothing can chat yet, opens **Set up chat** — three steps on one screen, with dots for where you are.
-
-1. **Runtime.** Serene Pub adds a KoboldCPP connection, chooses managed mode for you, and shows the build picker: pick the build for your hardware and it downloads and starts on its own. Already running KoboldCPP yourself? A link opens the connection's own view, where **I'll manage it myself** is still offered.
-2. **Model.** The [model finder](#the-model-finder), already scoped to chat and to that KoboldCPP. Get one model.
-3. **Done.** The first model to land becomes what sessions reply with — only when no chat default was set, so a pub that already answers with something is never re-pointed. **Start a session** or **Open KoboldCPP**; images, embeddings and named entities can be set up later from their job tiles under **Other jobs**.
-
-The step is worked out from the facts each time, not remembered: close the sidebar with a download running and come back, and you land on the step the pub is actually at. A KoboldCPP you installed from its own view counts exactly the same.
-
-### Defaults at a glance
-
-Setting a default happens in several places: Admin → Defaults, a model view's **Set as default…**, a capability view's **Use**, a KoboldCPP or Ollama connection's **Use for chat**, or — for embeddings and entities — **Make active**. Every one of them is the same registration. The index shows the result three ways that always agree: the status strip and job tiles, the gold **Default** (or **Active**) chip on the model wherever it is listed, and the **Defaults ledger** filter, which turns the list into every transform grouped by output kind exactly as Admin → Defaults groups them, set ones naming their pair, unset ones dashed. An unset chat default is called out, because sessions cannot reply until it is set.
-
-### Admin › Models › Defaults
-
-`/admin/defaults` is where each job — each capability, such as **Chat**, **Image generation**, **Embeddings** or **Named entities** — is given its connection and model. Nothing is picked for you: a job with no default is off. The header shows one status line: in red, how many jobs a pipeline needs that are not set, or in green, that everything a pipeline needs is set. There is deliberately **no fraction** of jobs set up — most jobs are optional and off is a fine answer. The Admin overview's **Models** card says the same.
-
-Jobs are grouped into cards by what they produce (Text, Images, Embeddings, Named entities, …). Each job is one row: its name and a line on what it is for, how many node definitions ask for it, a status (**Set**, **Not set**, **Needed** when a pipeline requires it, **Model gone** when its model is no longer listed by its host), the connection picker, the model picker, and the sampling config. Every connection is listed in the picker; one that cannot do the job is greyed with the reason. A job nothing on the instance can do says so in one line with **Add a connection**; the first job a pipeline needs gets the one filled button. A card's **Sampling for all** writes every job in the group at once; a job's own picker can differ, and says so. Embeddings and entities have no sampling.
-
-The embeddings row carries what the old Settings card did: what it powers, that with none set retrieval falls back to keywords, and **Open embedding connections**. Changing the embedding or entity model here rebuilds the index or re-scans, exactly as the star in the Connections view does.
+The step is worked out from what is actually there each time. Close the view with a download running, come back later, and you land on the step you are really at.
 
 ### The capability view
 
-Tap a job tile (or the status strip's **Change**) and you get that one capability's own screen. At the top is a **status card**: one word for its state (_Ready_, _Not set_, _Downloading_, _Needs attention_), then the sentence that matters — for a ready capability, what happens when it is asked for ("Sessions reply with this model"); for anything else, the consequence the index already named, and the one fix when something is wrong. Under it, the registered pair (connection · model) with an **Admin → Defaults** link, or a dashed "Not set · pick one below".
+Tap a job tile, or the status strip's **Change**, to open that job's own screen.
 
-The second card, **Also able to \<verb\>** — chat, draw, embed, find entities, or _serve \<label\>_ for the six other transforms — lists every model on any connection that can serve this capability and is **here** — a host's listed models, and local ONNX models on disk — each as a kind tile, its name, its connection and one fact (size and dimensions for a local model), with **Use** on the right. A local model still downloading shows without **Use**. Local models not downloaded are not rows: a line under the list says how many more are available to download and opens the finder. The server refuses to make a not-downloaded ONNX model active from anywhere, because nothing fetches one on use. **Use** is the same capability-default registration as everywhere else, so switching the embedding or entity model still opens its costed confirmation (see [Local ONNX models](#local-onnx-models)); the view itself never writes a default behind your back. Tap a row to open that model. When nothing can serve the capability yet the card says so in one line.
+- A **status card** at the top: one word for its state (_Ready_, _Not set_, _Downloading_, _Needs attention_), one sentence on what that means ("Sessions reply with this model"), and the one fix when something is wrong. Under it, the pair in use with a link to **Admin › Defaults**, or _Not set · pick one below_.
+- **Also able to …** (chat, draw, embed, find entities) lists every model, on any connection, that can do this job and is ready to use, each with **Use**. A local model that is still downloading has no **Use** yet, and local models that aren't downloaded are counted in a line that opens the finder.
+- **Get a … model**, at the foot, opens the [model finder](#the-model-finder) for this job.
 
-At the foot, **Get a \<verb\> model** opens the [model finder](#the-model-finder) already scoped to this capability.
+**Use** sets the job's default, exactly as Admin › Defaults does. Switching the embedding or entity model can mean redoing stored work, so it asks first (see [Local ONNX models](#local-onnx-models)).
 
 ### The model finder
 
-One search box over every recommended list this pub can read and over Hugging Face, reached from the index's **Get a model**, from **Add → A model**, from a capability view, or in place on a managed connection's **Get** tab (where the destination is that connection and the **Download to** row is hidden). It asks four things, in order, as four rows:
+The finder searches the recommended model lists and Hugging Face from one box. Open it with **Get a model**, **Add › A model**, a capability view's **Get** link, or a managed connection's **Get** tab. It has four rows:
 
-1. **The query.** Typing filters the recommended rows at once and, after a short pause, searches Hugging Face for GGUF repos (or, for a local ONNX destination, offers **Add from Hugging Face by id**, because there is no search for those). Hub searches are rate-limited for the whole instance, so a search runs only for what you actually typed.
-2. **For** — what the model is for: **Chat**, **Images**, **Embeddings** or **Entities**. Opening the finder from a capability presets this.
-3. **Download to** — which managed connection the files land in: your KoboldCPP (text or image directory, decided by the scope), your Ollama, or the local ONNX connection for that lane. Only runtimes this pub can fetch _into_ appear; an API host is never a destination. The first pick is one that can take a file now — a KoboldCPP that is not installed or switched on is passed over for a running Ollama, and says so if you pick it anyway. A line under the pills says where files land and which **memory tier** is set, with **Change** (for GGUFs only — an ONNX model runs on the CPU, so the tier line is not shown).
-4. **The results.** **Recommended** rows come from the shared GGUF list (chat and images) or the ONNX lists (embeddings, entities); **Hugging Face** rows come from the search. A row is a kind tile, the repo name, a tier chip from the list (_Ultra Budget_ … _Enthusiast_ for GGUFs, _Fast_ / _Balanced_ / _Best_ for ONNX), and one line of size · parameters · description. A GGUF already on disk or already pulled says so instead of offering **Get**. For an ONNX destination, **Recommended** lists only what can still be downloaded; a line under it counts the models already on this machine and opens them.
+1. **Search.** Typing narrows the recommended models at once and, after a pause, searches Hugging Face for GGUF files. For a local ONNX connection there is no search; **Add from Hugging Face by id** takes a model's id instead.
+2. **For**: **Chat**, **Images**, **Embeddings** or **Entities**.
+3. **Download to**: which of your managed connections the files go into, such as your KoboldCPP, your Ollama, or a local ONNX connection. Only programs Serene Pub can download into are offered; an online service never is. A line under it says where files will land and which memory size is set, with **Change**.
+4. **Results.** **Recommended** rows come from Serene Pub's curated lists; **Hugging Face** rows come from the search. Each row has a tier chip (_Ultra Budget_ to _Enthusiast_ for GGUF files, _Fast_, _Balanced_ or _Best_ for ONNX), its size and a short description. A model you already have says so instead of offering **Get**.
 
-**Memory tier.** Every list quotes a size, and a size means nothing until you know what the machine has. **Change** on the tier line asks one question — _How much memory does this machine have?_ — with five answers: 4 GB, 8 GB, 12 GB, 24 GB+, or **Not sure**. With a tier set, the chip on each row whose tier matches turns gold and the first row that outright fits gets the one gold **Get**. **Not sure** is a real answer: it switches every fit hint off rather than guessing. The tier is remembered per browser, not per pub — a phone and a desktop reaching the same install can answer differently.
+**Memory size.** **Change** asks _How much memory does this machine have?_ with five answers: 4 GB, 8 GB, 12 GB, 24 GB+ or **Not sure**. Answer with your graphics card's memory, or your Mac's memory. Rows that suit it turn gold, and the first one that fits gets the one gold **Get**. **Not sure** switches all the size hints off rather than guessing. The answer is remembered in this browser, so a phone and a desktop can answer differently.
 
-**Get.** For a GGUF repo, **Get** opens the **quant picker**: one dialog for both KoboldCPP and Ollama listing each available file with its size and, when a tier is set, a second line saying _Fits in 8 GB_, _Tight in 8 GB_ or _Too big for 8 GB_ (_Fits · lower quality_ for Q2/Q3 files). **Recommended** on a row is the list's own claim, never inferred. **Download** starts it; the row shows a bytes bar in place, the [downloads tray](#downloads) appears at the index foot, and nothing anywhere shows a time estimate. For an Ollama library entry the pull starts at once; for an ONNX row the file goes into the local cache and the model becomes available to **Make active**.
+**Get.** For a GGUF model, **Get** opens a list of the model's files (its _quantizations_: smaller files are faster and lose a little quality). With a memory size set, each says _Fits in 8 GB_, _Tight in 8 GB_ or _Too big for 8 GB_. Choose one and press **Download**. Progress shows in the row and in [Downloads](#downloads). An Ollama model starts pulling at once; an ONNX model goes into the local cache.
 
 ### Downloads
 
-Everything this pub is fetching, in one list: GGUFs into KoboldCPP, the KoboldCPP binary itself, Ollama pulls (with a per-file bar, since a pull is several layers), and the local ONNX cache. Open it from the tray at the foot of the index while anything is in flight. A managed connection's **Arriving** tab is this same list, in place — every destination, not just that connection's, because one list is the point. Each row is a kind tile, the file or model name, where it is going, a bytes bar (_1.2 of 4.1 GB_) and **Cancel**. A finished download is listed once so you can see it landed, with **Clear finished** to tidy the list. Bytes and counts only; never a time estimate.
+Everything the pub is downloading, in one list: model files for KoboldCPP, the KoboldCPP program itself, Ollama pulls and ONNX models. Open it from the tray at the foot of the index. A managed connection's **Arriving** tab shows the same list. Each row has the name, where it is going, a progress bar (_1.2 of 4.1 GB_) and **Cancel**. Finished downloads stay listed until you press **Clear finished**. Serene Pub never shows a time estimate.
 
 ### A connection's view
 
-Tap a connection row and its view opens, titled with its name and its service chip. For a host this pub talks to — OpenRouter, Anthropic, a llama.cpp of your own — the view puts the _whether_ above the _how_: the **status card** first, then the connection's **tabs**.
+Tap a connection and its view opens. For a service you connect to, such as OpenRouter, Anthropic or your own llama.cpp, it has a status card and up to two tabs.
 
-Every connection has a **Settings** tab. A **Models** tab joins it when the host lists models you can choose between — OpenRouter, Anthropic, LM Studio, OpenAI-compatible hosts. llama.cpp and a KoboldCPP you run yourself report only the one model they were started with, so there is nothing to choose and no Models tab. When a connection has only Settings, there is no tab strip at all — its settings simply show. A connection that isn't finished yet (no API key) opens on Settings, where the key goes.
+- **Status card.** One word and one sentence: _Reachable · Answered just now_, _Not reachable · ECONNREFUSED_, _Couldn't list models · 401 Unauthorized_, or _Not checked yet_. **Test** asks the service using the settings as they are on screen, saved or not. A service that still needs a key says **Needs an API key**, in gold, with a **Get a key ↗** link to that service's key page.
+- **Models tab**, when the service offers models to choose from: how many it lists and how many are no longer listed, **Refresh**, the models themselves, each with **Use** (a table with context and prices where the view is wide enough), and **Add by name** for a service that doesn't publish a list. Tap a model to open its own settings.
+- **Settings tab.** The name, the API key, the address, and **Request settings** (token counter, streaming and anything particular to that service). Under **Advanced and notes** are your notes, **What this connection can do** (see [Chat messages or text completion](#chat-messages-or-text-completion)), any embedding or entity settings, and stop scripts. **Delete connection** is at the foot.
 
-- **Status card.** One dot, one word, one sentence: _Reachable · Answered just now_, _Not reachable · ECONNREFUSED_, _Listed · Models checked 3 minutes ago_, _Couldn't list models · 401 Unauthorized_, or _Not checked yet · Test it, or ask for its models_. **Test** (then **Test again**) asks the host with the settings as they are on the form, saved or not. Nothing is guessed: a test nobody ran is not a failure. There is exactly one Test button on the screen — the forms' own inline ones were removed in 0.6, because two buttons of the same name in different colours reporting into different places is not two features.
+A connection with nothing to choose between, such as llama.cpp, has no tabs: its settings simply show. A new connection without its key opens on Settings. **Save** and **Discard** appear only while something has changed, and leaving with unsaved changes asks first.
 
-    For a service that needs a key and hasn't got one, the card says so directly — **Needs an API key**, in gold, with _"Nothing has failed — this connection isn't finished"_ and a **Get a key ↗** link straight to that service's key page. It deliberately does **not** report the listing error a missing key obviously caused.
+KoboldCPP and Ollama run by Serene Pub, and the local ONNX connections, have their own views, described below.
 
-- **Models tab.** How many models the host lists and how many are no longer listed, with **Refresh** (ask again), **Show N models** (in the sidebar, the models as a list in place, each with **Use**; in Focus they are the model table), and — for a host that serves no list — **Add by name**, which takes the identifier exactly as the host expects it and an optional label.
-- **Settings tab.** The connection's name, then the thing it cannot work without — the **API key** — then the address. What shapes a request rather than establishing one (prompt format, token counter, streaming, wire mode) sits under **Request settings** inside the form.
-- **Advanced and notes.** One disclosure, open when you have written a note: notes, capabilities, the embeddings or entities lane panel, stop scripts.
-- **Delete connection** at the foot, with its confirmation.
-- **Save** and **Discard** appear only while something has changed, pinned under the view. Leaving with unsaved changes still asks.
+## Admin › Models › Defaults
 
-Advanced and notes and Delete sit inside the Settings tab.
+**Admin › Models › Defaults** is where each job is given its connection and model. Nothing is picked for you: a job with no default is off. A line at the top says, in red, how many jobs a pipeline needs that aren't set, or, in green, that everything needed is set.
 
-A managed KoboldCPP or Ollama has its own view instead (below). A local ONNX connection has the same four tabs as they do — **Models** (what is on this machine), **Get** (the model finder, scoped to this connection), **Arriving** (downloads in flight) and **Settings** — see [Local ONNX models](#local-onnx-models).
+Jobs are grouped by what they produce (text, images, embeddings, named entities). Each row shows the job, what it is for, its status (**Set**, **Not set**, **Needed** when a pipeline requires it, **Model gone** when its host stopped listing the model), a connection picker, a model picker, and a sampling config. A connection that can't do the job is still listed, greyed, with the reason. **Sampling for all** sets the sampling config for every job in a group at once. Embeddings and entities have no sampling.
+
+Defaults can also be set from a model's **Set as default…**, a capability view's **Use**, a KoboldCPP or Ollama model's **Use for chat**, or **Make active** on a local model. They all do the same thing. The index shows the result as the status strip and job tiles, a gold **Default** chip on the model, and the **Defaults ledger** filter.
+
+Changing the embedding or entity model here rebuilds stored work, so it asks first and shows how much; **Keep** puts the old choice back.
 
 ## Admin › Models › Connections
 
-**Admin › Models › Connections** (`/admin/connections`) manages the same connections the way an admin site does, rather than showing the Connections view again. It opens on a **list of every connection**: name, service, modality, how many models, which defaults it holds, and its state (_Ready_, _Unfinished_, _Broken_, …). Search matches the name, service, address and notes; **Filter** narrows by service, modality, status, or whether it holds a default (beside the table when there is room, behind the filter button in the dock), and a filter's count says what picking it would show. Column headers sort. Search, filters and sort are part of the address (`/admin/connections?service=Ollama&o=-models`), so a filtered list can be linked to. Tick rows and choose **Actions › Delete selected connections…** to delete several at once; the confirmation lists each one with the models that go with it and the defaults it releases. Deleting the KoboldCPP connection also switches KoboldCPP, run by Serene Pub, off, and deleting the last Ollama connection switches Ollama off, as removing them from the Connections view does.
+**Admin › Models › Connections** manages the same connections as a table, for working with several at once. It lists every connection with its service, kind, number of models, the defaults it holds and its state. Search matches name, service, address and notes; **Filter** narrows by service, kind, status or whether it holds a default; column headers sort. The address keeps your search and filters, so a filtered list can be bookmarked or shared.
 
-**Add connection** (`/admin/connections/new`) asks for the service and a name. **Save** returns to the list, **Save and continue editing** opens the new connection, and **Save and add another** clears the form for the next one.
+Tick rows and choose **Actions › Delete selected connections…** to delete several. The confirmation lists the models that go with each one and the defaults it releases. Deleting the KoboldCPP connection also switches KoboldCPP off, and deleting the last Ollama connection switches Ollama off.
 
-A row opens that connection's page (`/admin/connections/<id>`), in sections: **Status** (whether it answers, and **Test**), **Identity** (name and notes; service, type and modality shown), **Endpoint and credentials** (the same form the Connections view shows), **KoboldCPP runtime** for the managed KoboldCPP (its server address, binary and launch settings), **Models** (refresh, add by name, switch a model off, **Use** to make it a default, and download or cancel on a local ONNX endpoint), **Defaults** (which jobs point here, with a link to Admin › Defaults), **Stop scripts**, and **Advanced** (capabilities and the indexing lanes). Name, notes and the service form are saved together with **Save**, **Save and continue editing** (Ctrl+S) or **Save and add another**; everything else saves as you change it. Leaving with unsaved edits asks first. **Delete** asks first and lists what goes with it; **History** opens this connection's entries in Admin › History. Starting, stopping and setting up a runtime, and finding models to download, stay in the Connections view — **Open in Connections** opens it on this connection. Switching the embeddings or entities default to another model rebuilds stored work, so **Use** on such a model sends you to Admin › Defaults, which shows the cost first.
+**Add connection** asks for the service and a name. A connection's own page has sections for its status and **Test**, its name and notes, its address and key, the KoboldCPP runtime (for the managed KoboldCPP), its models, the defaults that point at it, stop scripts and advanced settings, with **Save**, **Save and continue editing** (Ctrl+S) and **Delete**. **History** shows what changed and when. Starting, stopping and downloading stay in the Connections view; **Open in Connections** takes you there.
 
-## Connection Types At A Glance
+In **Models**, a model's **hide** / **show** button and **Use** wait for **Save**, like every other change on the page. Each one you press is listed under the table as _Waiting for Save_, and its **×** puts it back. Save sends them one at a time and waits for each answer, showing first, then the defaults that need them; if one is refused, the page says which and why, and leaves it waiting so you can try again. **Refresh**, **Add by name** and a local model's **Download** or **Cancel** are not changes to save: they happen as soon as you press them.
 
-Serene Pub ships seven text-generation connection types, each with its own form and its own difficulty rating (shown in the New connection dialog):
+## Choosing a service
 
-| Type                | Label              | Difficulty                                 |
-| ------------------- | ------------------ | ------------------------------------------ |
-| `lmstudio`          | LM Studio          | Beginner (GUI) - Minimal setup required    |
-| `ollama`            | Ollama             | Beginner (No GUI) - Minimal setup required |
-| `openai`            | OpenAI Chat        | Beginner - Nothing to install              |
-| `llamacpp`          | Llama.cpp          | Intermediate - Not for beginners           |
-| `koboldcpp`         | KoboldCPP          | Beginner (GUI) - Simple setup              |
-| `koboldcpp_managed` | KoboldCPP, run by Serene Pub | Beginner (GUI) - Managed by Serene Pub |
-| `anthropic`         | Anthropic (Claude) | Beginner - Nothing to install              |
+The **New connection** dialog lists every service in one searchable box, grouped under **Cloud APIs**, **Local / Self-hosted** and **Custom**, with buttons to show only text, image, embedding or entity services. Picking one shows its description and how hard it is to set up.
 
-…plus an image-generation type, which the picker's **Image** filter lists and which image nodes in a pipeline draw from (the managed KoboldCPP above draws too — see [KoboldCPP, run by Serene Pub: the connection](#koboldcpp-run-by-serene-pub-the-connection)):
+| Service | Runs | Good for |
+| --- | --- | --- |
+| **KoboldCPP, run by Serene Pub** | On this machine | Most people running models locally. Serene Pub installs and looks after it. Added from **Add**, not from this dialog. |
+| **Ollama** | On this machine or your network | People who already use Ollama. Chat and embeddings from one connection. |
+| **LM Studio** | On this machine or your network | People who already use LM Studio and its window for managing models. |
+| **KoboldCPP** | On this machine or your network | A KoboldCPP you start yourself. |
+| **Llama.cpp** | On this machine or your network | People who build and run `llama-server` themselves. |
+| **OpenRouter**, **OpenAI (Official)** and other OpenAI-compatible services | Online | Hosted models. OpenRouter reaches hundreds with one key. |
+| **Anthropic (Claude)** | Online | Claude models, direct from Anthropic. |
+| **Stable Diffusion (A1111-compatible)** | On this machine or your network | Images from AUTOMATIC1111, Forge, SD.Next or a KoboldCPP with an image model. |
+| **Local embeddings (ONNX)**, **Local named entities (ONNX)** | Inside Serene Pub | Helping characters remember a long story. See [Local ONNX models](#local-onnx-models). |
+| **Embeddings (OpenAI-compatible)** | Online or your network | Embeddings from a service's `/embeddings` endpoint. |
 
-| Type    | Label                               | Difficulty                               |
-| ------- | ----------------------------------- | ---------------------------------------- |
-| `a1111` | Stable Diffusion (A1111-compatible) | Beginner (with KoboldCPP) - Simple setup |
+:::note Most people: pick one
+Running models on your own computer: **KoboldCPP, run by Serene Pub**. Using an online service: **OpenRouter**. Either can be added to later.
+:::
 
-Most connections serve one kind of model, decided by their type. **Two runtimes serve several:** one **Ollama** connection serves every kind of model its host has, chat and embeddings alike, and there is one connection per Ollama host; the **KoboldCPP run by Serene Pub** is one connection that chats and draws, because it is one process. Each of their models says what it is for — Ollama reports it per model, and KoboldCPP knows from its own model registry — so an embedding model is never offered for chat, nor a Stable Diffusion checkpoint for chat, nor a chat model for images. The separate **Ollama embeddings** and **KoboldCPP, run by Serene Pub (Image)** types are gone: on the next start, existing ones are folded into the Ollama or KoboldCPP connection they belong to, keeping their models and their place as a default. If you had both an Ollama and an Ollama embeddings connection to the same host, you will see two Ollama connections to it — either can be deleted. A KoboldCPP image connection is folded all the way in, with every default and pipeline that named it pointed at the one KoboldCPP connection.
+Every connection form shares a pattern: the key or address it can't work without comes first, then a **Token Counter**, then **Request settings** for how requests are sent. There is no Test button on the form; **Test** is on the connection's [status card](#a-connections-view).
 
-Every form shares a similar skeleton — the credential or address it cannot work without first, a **Token Counter** dropdown, and a collapsible **Request settings** section holding the behaviour switches (and, for most types, the Base URL). There is no Test button on the form: **Test** lives on the connection view's [status card](#a-connections-view). Whether a connection sends chat messages or a rendered text completion is a connection **capability**, not a form switch — see the **Chat messages** / **Text completion** control (auto/on/off, with provenance) in the Capabilities panel; when text completion is in effect, a **Prompt Format** dropdown appears so you can pick how the raw text prompt is assembled.
+Most connections serve one kind of model. **Ollama** and the **KoboldCPP run by Serene Pub** serve several: one Ollama connection offers every chat and embedding model its host has pulled, and the managed KoboldCPP both writes and draws. Each model knows what it is for, so an embedding model is never offered for chat and an image model never for text.
 
 ## LM Studio
 
-LM Studio's models are read from its REST API on their own (see [Models are synced from the host](#models-are-synced-from-the-host)). **Request settings** hold the **Base URL** (default `ws://localhost:1234` — note LM Studio's default here is a `ws://` URL, not `http://`), a **Stream** checkbox, and a **Keep Alive (seconds)** field (default 60) controlling how long LM Studio keeps the model resident after a request. Whether requests are sent as chat messages or a rendered text completion is a connection **capability**, not a form switch — see the **Chat messages** / **Text completion** control (auto/on/off, with provenance shown below it) in the Capabilities panel. LM Studio's REST API must be enabled in LM Studio's own settings before Serene Pub can reach it.
+Connects to LM Studio's REST API, which you must first switch on in LM Studio's own settings. Its models are the ones LM Studio has downloaded, listed automatically. **Request settings** hold the **Base URL** (default `ws://localhost:1234`, a `ws://` address rather than `http://`), **Stream**, and **Keep Alive (seconds)** (default 60), which is how long LM Studio keeps a model loaded after a request.
 
 ## Ollama
 
-One Ollama connection serves both chat and **embeddings** from the same host: pull an embedding model (`ollama pull nomic-embed-text`) and choose it for Embeddings under **Defaults**, or get one from the connection's **Get** tab, whose scope switches between Chat and Embeddings — each scope has its own recommended list, and Hub search in the Embeddings scope looks only for embedding models. Which of a host's models is which comes from Ollama itself (Ollama 0.6 or newer reports it); on an older Ollama every model is offered for both.
+Connects to an Ollama you installed and run yourself. Its models are whatever Ollama has pulled, listed automatically, and one connection serves both chat and **embeddings** from the same host. To use embeddings, pull an embedding model (for example `ollama pull nomic-embed-text`, or from the connection's **Get** tab) and choose it for Embeddings. Ollama 0.6 or newer says which models are which; with an older Ollama every model is offered for both.
 
-An Ollama connection's models are whatever Ollama has pulled, synced on their own, and pulled or removed in its [managed connection view](#ollama-managed). The form shows the **Base URL** (default `http://localhost:11434/`) up front; **Request settings** hold a **Keep Alive** control split into a number field and a unit dropdown (`ms` / `s` / `m` / `h`, default `5m`) and a **Stream** switch. Reasoning is not a connection setting: it is chosen per step on the sampling config (see [Reasoning](#reasoning)). Whether requests are sent as chat messages or a rendered text completion is a connection **capability** now, not a form switch — see the **Chat messages** / **Text completion** control (auto/on/off, with provenance shown below it) in the Capabilities panel. This connection type talks to a manually-installed, already-running Ollama server — for browsing, pulling, and deleting Ollama models from inside Serene Pub, see [Ollama, managed](#ollama-managed) below — the same connection's own view, not a separate sidebar.
+The form shows the **Base URL** (default `http://localhost:11434/`). **Request settings** hold **Keep Alive**, a number and a unit (default `5m`), which is how long Ollama keeps a model loaded, and **Stream**. Pulling, deleting and updating happen in the connection's own view: see [Ollama, managed](#ollama-managed).
 
-## OpenAI Chat & Compatible Endpoint Presets
+## OpenAI-compatible services
 
-OpenAI Chat is Serene Pub's generic OpenAI-compatible connection type, meant for the real OpenAI API as well as any of the many services that mimic its chat-completion schema. Its form has an **API Key** field (password-masked) first, then a **Base URL** field; models come from the service's `/models` listing when it serves one, and can be added by name when it does not. **Request settings** hold the **Token Counter** and a **Stream** switch. The old **Prerender Prompt** switch is gone: sending one rendered text prompt instead of role-tagged chat messages is the **Text completion** capability, and when it is in effect a **Prompt Format** dropdown appears.
+Many services accept requests in the same shape as OpenAI's API, so one kind of connection reaches all of them. The **Service** list in the New connection dialog names each of these services directly. Picking one fills in its address and a sensible token counter; you add the API key. Its models come from the service's own list when it publishes one, and **Add by name** covers a service that doesn't. **Request settings** hold the **Token Counter** and **Stream**.
 
-Because so many services speak this same protocol, the **Service** picker in the New connection dialog (see [Overview](#overview)) lists every OpenAI-compatible preset directly alongside the native connection types, pre-filling the Base URL and a sensible Token Counter/Prompt Format for each. Selecting any preset here still creates an `openai` (OpenAI Chat) connection underneath — the preset only decides the starting values:
+| Service | Base URL |
+| --- | --- |
+| Custom (OpenAI-Compatible) | _(blank: fill in your own)_ |
+| OpenRouter | `https://openrouter.ai/api/v1/` |
+| OpenAI (Official) | `https://api.openai.com/v1/` |
+| Groq | `https://api.groq.com/openai/v1/` |
+| Together AI | `https://api.together.xyz/v1/` |
+| DeepInfra | `https://api.deepinfra.com/v1/openai/` |
+| Fireworks AI | `https://api.fireworks.ai/inference/v1/` |
+| Perplexity AI | `https://api.perplexity.ai/v1/` |
+| AnyScale | `https://api.endpoints.anyscale.com/v1/` |
+| LocalAI | `http://localhost:8080/v1/` |
+| Ollama (via OpenAI-Compatible API) | `http://localhost:11434/v1/` |
+| KoboldCPP (via OpenAI-Compatible API) | `http://localhost:5001/v1/` |
+| Mistral AI _(Experimental)_ | `https://api.mistral.ai/v1/` |
+| xAI Grok _(Experimental)_ | `https://api.x.ai/v1/` |
+| DeepSeek _(Experimental)_ | `https://api.deepseek.com/v1/` |
+| Google Gemini _(Experimental)_ | `https://generativelanguage.googleapis.com/v1beta/openai/` |
+| Cohere _(Experimental)_ | `https://api.cohere.ai/compatibility/v1/` |
+| Novita AI _(Experimental)_ | `https://api.novita.ai/openai/` |
+| Featherless AI _(Experimental)_ | `https://api.featherless.ai/v1/` |
+| text-generation-webui _(Experimental)_ | `http://127.0.0.1:5000/v1/` |
+| vLLM _(Experimental)_ | `http://localhost:8000/v1/` |
+| SGLang _(Experimental)_ | `http://localhost:30000/v1/` |
+| Aphrodite Engine _(Experimental)_ | `http://localhost:2242/v1/` |
 
-| Preset                                 | Base URL                                                   |
-| -------------------------------------- | ---------------------------------------------------------- |
-| Custom (OpenAI-Compatible) / Empty     | _(blank — fill in your own)_                               |
-| Ollama (via OpenAI-Compatible API)     | `http://localhost:11434/v1/`                               |
-| OpenRouter                             | `https://openrouter.ai/api/v1/`                            |
-| OpenAI (Official)                      | `https://api.openai.com/v1/`                               |
-| LocalAI                                | `http://localhost:8080/v1/`                                |
-| AnyScale                               | `https://api.endpoints.anyscale.com/v1/`                   |
-| Groq                                   | `https://api.groq.com/openai/v1/`                          |
-| Together AI                            | `https://api.together.xyz/v1/`                             |
-| DeepInfra                              | `https://api.deepinfra.com/v1/openai/`                     |
-| Fireworks AI                           | `https://api.fireworks.ai/inference/v1/`                   |
-| Perplexity AI                          | `https://api.perplexity.ai/v1/`                            |
-| KoboldCPP (via OpenAI-Compatible API)  | `http://localhost:5001/v1/`                                |
-| Mistral AI _(Experimental)_            | `https://api.mistral.ai/v1/`                               |
-| xAI Grok _(Experimental)_              | `https://api.x.ai/v1/`                                     |
-| DeepSeek _(Experimental)_              | `https://api.deepseek.com/v1/`                             |
-| Google Gemini _(Experimental)_         | `https://generativelanguage.googleapis.com/v1beta/openai/` |
-| Cohere _(Experimental)_                | `https://api.cohere.ai/compatibility/v1/`                  |
-| Novita AI _(Experimental)_             | `https://api.novita.ai/openai/`                            |
-| Featherless AI _(Experimental)_        | `https://api.featherless.ai/v1/`                           |
-| text-generation-webui _(Experimental)_ | `http://127.0.0.1:5000/v1/`                                |
-| vLLM _(Experimental)_                  | `http://localhost:8000/v1/`                                |
-| SGLang _(Experimental)_                | `http://localhost:30000/v1/`                               |
-| Aphrodite Engine _(Experimental)_      | `http://localhost:2242/v1/`                                |
+_Experimental_ services have had less testing with Serene Pub; check the address and the service's own notes. Everything a preset fills in can be changed afterwards.
 
-Presets tagged **Experimental** are newer additions provided as a starting point but not yet as thoroughly exercised against Serene Pub as the original list above — double-check the Base URL and any service-specific quirks yourself. Every preset only sets the initial Base URL, Prompt Format, and Token Counter — you can change any of them afterward, and you'll still need to supply an API key for services that require one. The Ollama and KoboldCPP presets here talk to those backends' OpenAI-_compatible_ endpoints, a different wire protocol from the dedicated [Ollama](#ollama) and [KoboldCPP (Remote)](#koboldcpp-remote) connection types described below — the picker labels them "(via OpenAI-Compatible API)" to keep the two apart.
-
-## Llama.cpp
-
-Llama.cpp connects to `llama-server`'s completion API. It's the simplest form: a **Token Counter** dropdown, a **Prompt Format** dropdown (shown when text completion is in effect, which is this type's default; llama-server's chat API is available too, through the **Chat messages** capability), and **Request settings** holding just the **Base URL** (default `http://localhost:8080/`) and a **Stream** switch. There's no model picker or API key field — llama-server is expected to already have a model loaded. Its "Intermediate - Not for beginners" difficulty rating reflects that you're expected to build/run `llama-server` yourself.
-
-## Anthropic (Claude)
-
-Anthropic's models come from a built-in catalogue of Claude models, and a newer one can be added by name. The form has a **Token Counter** dropdown and an **API Key** field (placeholder `sk-ant-...`); **Request settings** hold a **Stream** switch. Extended thinking is no longer a connection switch: it is the **Reasoning** level and budget on the sampling config (see [Reasoning](#reasoning)). The connection preset points at `https://api.anthropic.com`, seeds `claude-sonnet-4-5` as the connection's first model, and (notably) an `OpenAI`-style default Prompt Format rather than the `Claude` one, since Anthropic sends chat messages — its only wire — rather than a rendered text prompt.
+The **(via OpenAI-Compatible API)** entries for Ollama and KoboldCPP use those programs' OpenAI-style endpoints. The dedicated [Ollama](#ollama) and [KoboldCPP](#koboldcpp-you-run-yourself) connections use their own native APIs, which Serene Pub supports more fully; prefer those.
 
 ### Where the API keys come from
 
-For OpenAI Chat and Anthropic, obtain a key from the respective service's console (`platform.openai.com` / `console.anthropic.com`, or the equivalent page for whichever OpenAI-compatible service you're using) and paste it into the connection's API Key field. Keys are stored per-connection, so you can run multiple connections against the same service with different keys or models.
+Make an account on the service's website, create an API key there, and paste it into the connection's **API Key** field. For OpenAI that is `platform.openai.com`, for Anthropic `console.anthropic.com`, and for OpenRouter its account settings. A key is a password for your account: keep it private. Keys are stored per connection, so you can have two connections to the same service with different keys.
 
-## KoboldCPP (Remote)
+## Llama.cpp
 
-The plain **KoboldCPP** connection type talks to a KoboldCPP instance you run and manage yourself — either on the same machine or a remote one — via KoboldCPP's native API. If this pub also [runs its own KoboldCPP](#koboldcpp-run-by-serene-pub), this form shows a warning banner suggesting you use that connection instead, unless this particular connection is deliberately pointed at a _different_ KoboldCPP instance than the one Serene Pub runs.
+Connects to `llama-server`. **Request settings** hold the **Base URL** (default `http://localhost:8080/`) and **Stream**. There is no API key and no model list to choose from: llama-server runs the one model it was started with, and the connection lists that model. It sends a text completion by default, so a **Prompt Format** setting is shown; its chat API can be used instead (see [Chat messages or text completion](#chat-messages-or-text-completion)).
 
-**Its models are whatever the instance has loaded.** Without KoboldCPP's admin API there is no way to ask what else is on its disk, so the connection lists the loaded text model and, when they are loaded, the image model and the embedding model — each offered only for what it is. Restart KoboldCPP with a different model and, on the next refresh, the old one is marked missing and the new one appears. Image generation and embeddings become available after **Test** confirms the instance has those models loaded.
+## Anthropic (Claude)
 
-For **embeddings**, KoboldCPP names the model that answered every request, and Serene Pub checks it: if the instance was restarted with a different embedding model than the one set as the default, requests are refused with both names rather than mixing vectors from two models into your lore and history. Refresh the connection's models and choose the new one — which, like any change of embedding model, rebuilds the index after asking. If you had pointed image generation at this connection's text model, pick its image model instead — the text model is no longer accepted for images.
+Connects directly to Anthropic's API with your **API Key** (it starts `sk-ant-`). Its models come from a built-in list of Claude models, and a newer one can be added by name. **Request settings** hold **Stream**. Extended thinking is set on the sampling config, not here: see [Reasoning](#reasoning).
 
-The form has a **Prompt format** dropdown (shown only when text completion is in effect), a **Token counter** dropdown, and a **Request settings** section with the **Base URL** (default `http://localhost:5001`) plus a long list of KoboldCPP-specific request options, all as toggle switches unless noted. Whether requests are sent as chat messages or a rendered text completion is a connection **capability**, not a form switch — see the **Chat messages** / **Text completion** control (auto/on/off, with provenance shown below it) in the Capabilities panel:
+## KoboldCPP you run yourself
 
-- **Stream** — stream tokens as they're generated.
-- **Use Memory** — when on, reveals a **Memory Text** textarea whose contents are forcefully prepended to every prompt sent to this connection.
-- **Trim Stop Sequences** — strip stop sequences out of the returned text.
-- **Render Special Tokens** — render special/control tokens in output instead of hiding them.
-- **Bypass EOS Token** — ignore the end-of-sequence token so generation isn't cut short by it.
-- **Retain Grammar State** — keep GBNF grammar state between requests.
-- **Return Logprobs** — request per-token log probabilities.
-- **Replace Instruct Placeholders** — substitute instruct-template placeholders in the prompt.
+The plain **KoboldCPP** connection talks to a KoboldCPP you start and manage yourself, on this machine or another one, through KoboldCPP's own API. If this pub also [runs its own KoboldCPP](#koboldcpp-run-by-serene-pub), the form warns you, since you probably want that connection instead.
 
-The old **Thinking / Reasoning** control is gone from this form; reasoning is chosen per step on the sampling config (see [Reasoning](#reasoning)).
+**Its models are whatever KoboldCPP has loaded.** It lists the loaded text model and, when they are loaded, the image and embedding models, each offered only for its own job. Restart KoboldCPP with a different model and, on the next refresh, the old one is marked no longer listed and the new one appears. When KoboldCPP is restarted with a different _embedding_ model than the one set as the default, Serene Pub refuses to use it and names both models, rather than mixing two models' results in your lore. Choose the new model as the embedding default, which re-indexes after asking.
 
-### Power-user note: KoboldCPP request options
+The form has the **Base URL** (default `http://localhost:5001`), a **Token Counter**, a **Prompt Format** when sending a text completion, and **Request settings**:
 
-These switches map directly to fields in KoboldCPP's own generation API, so they're most useful when you already know what a given KoboldCPP build supports. Toggling **Use Memory** is a convenient way to force-inject setting/world notes ahead of the assembled prompt without touching a Context Template. **Bypass EOS Token** combined with a hard **Response Tokens** cap (in the active Sampling Config — see below) is a common trick for forcing longer generations out of models that like to stop early.
+- **Stream**: show the reply as it is written.
+- **Use Memory**: reveals a **Memory Text** box whose text is added to the start of every text-completion request.
+- **Trim Stop Sequences** (on by default): cut the stop sequence that ended a reply off its end.
+- **Render Special Tokens**: show the model's special tokens (such as end-of-turn markers) in the text instead of hiding them.
+- **Bypass EOS Token**: keep writing past the point where the model would normally end its reply, until the length limit or a stop sequence.
+- **Retain Grammar State**: carry a response grammar's position over from one request to the next instead of starting it fresh.
+- **Replace Instruct Placeholders**: let KoboldCPP swap its own placeholders, such as `{{[INPUT]}}` and `{{[OUTPUT]}}`, for the loaded model's instruct tags. Serene Pub's own prompts never use them, so this only matters if you typed them yourself.
+
+Each switch is sent to KoboldCPP with every request, on both its chat and text-completion endpoints.
+
+## Stable Diffusion (A1111-compatible)
+
+For images from a program that speaks the AUTOMATIC1111 API: AUTOMATIC1111 itself, Forge, SD.Next, or a KoboldCPP with an image model loaded. Point the **Base URL** at it (default `http://localhost:5001`). Its models are the checkpoints the program lists. How a picture is drawn (size, steps, CFG) comes from an image [sampling config](#sampling-configs). If you use the KoboldCPP run by Serene Pub, you don't need this connection: it draws too (see [Images from the same connection](#images-from-the-same-connection)).
 
 ## KoboldCPP, run by Serene Pub
 
-A KoboldCPP this pub runs for you is a connection with a **managed connection view**: the whole lifecycle of a local KoboldCPP install — downloading the binary, fetching GGUF models, starting and stopping the process, swapping which model is loaded, live performance — lives on that connection's own screen, distinct from the plain KoboldCPP connection type above. You add one with **Add → KoboldCPP, run by Serene Pub** (or **On this machine** on a fresh pub's first-run card); that one press switches it on and creates the connection, so there is no toggle to find in Settings first. **Remove KoboldCPP from this pub**, in the view's **⋯** menu, switches it back off; files on disk are left where they are.
+Serene Pub can download KoboldCPP, start and stop it, fetch models into it, and load whichever model a request needs. All of that lives on one connection, **KoboldCPP, run by Serene Pub**, and its own view. Add it with **Add › KoboldCPP, run by Serene Pub**, or **On this machine** on a new pub. **Remove KoboldCPP from this pub**, in the view's **⋯** menu or at the foot of its Settings tab, switches it off again; files already on disk are left where they are.
 
-The view opens with the connection's title and a teal **KoboldCPP** chip. Until a mode and a binary exist it shows a setup screen and nothing else; once it has them, a **status card** sits at the top — the process state as one dot and one word (_Running_ · _Starting_ · _Stopped_ · _Crashed_), the loaded model, and **Start** or **Stop** — over four tabs: **Models**, **Get**, **Arriving** and **Settings**. Switched off with its install kept, the card says _Offline_ with **Start**, which switches it back on and starts it. Any line the server has not yet answered for is left out rather than guessed at. On the index the row reads the same way: _Not set up · choose how to run it_ until setup is done, then _Stopped · starts on first use · 3 on disk_ or _Running · Nemo 12B loaded_, with **Start** offered only after a crash — a stopped process starts itself on first use.
+The view starts with a setup screen. Once set up, a **status card** sits at the top and four tabs sit under it: **Models**, **Get**, **Arriving** and **Settings**. On the index its row reads _Not set up_ until setup is done, then something like _Stopped · starts on first use · 3 on disk_ or _Running · Nemo 12B loaded_. A stopped KoboldCPP starts by itself the first time something needs it.
 
-### Choosing Managed or External mode
+### Managed or External mode
 
-The first time you open the view, you're shown a setup screen with two choices:
+The setup screen asks how to run it:
 
-- **"Let Serene Pub manage it"** (Recommended) — automatically download a KoboldCPP binary and let Serene Pub start, stop, and load models automatically. This is **Managed mode**.
-- **"I'll manage it myself"** — start KoboldCPP yourself and connect Serene Pub to the running instance via URL. KoboldCPP's `--admin` API is required for integration. This is **External mode**.
+- **Let Serene Pub manage it** (recommended): Serene Pub downloads KoboldCPP and starts, stops and loads models for you. This is **Managed mode**.
+- **I'll manage it myself**: you start KoboldCPP and give Serene Pub its address. KoboldCPP must be started with `--admin` so Serene Pub can swap models and read its status. This is **External mode**.
 
-Choosing Managed mode takes you straight into the binary variant picker (below). Choosing External mode shows a screen where you enter the **Address** of your already-running instance and click **Save** (or **Test** to just check reachability) — your KoboldCPP process must have been started with `--admin` for model-swap and status features to work. **Let Serene Pub run KoboldCPP** on that screen goes back to the choice; on a managed install, **Connect to a KoboldCPP I run myself** → **Switch**, at the foot of the Settings tab, moves it to External mode.
-
-**Test** always checks whatever URL is currently typed into the field — including an edit you haven't saved yet — rather than re-checking the last-saved address. A failed test shows a **"Connection test failed"** toast with the specific error returned by the server (or a generic reachability message if none is available), instead of failing silently.
+Managed mode goes straight to the build picker. External mode asks for the **Address**, with **Test** to check it and **Save**. **Test** always checks the address as typed, saved or not, and a failed test says why. A managed install can move to External mode later: **Connect to a KoboldCPP I run myself** at the foot of the Settings tab.
 
 ### Downloading the KoboldCPP binary
 
-In Managed mode, the **Choose a KoboldCPP build** screen lets you pick a **Version** (defaults to "Latest", or choose a specific tagged GitHub release) and then choose a **build variant**, grouped by platform (Linux, Windows, macOS, Other) — each variant shows its filename, a short description, and its download size. Below the variant list is a **Download directory** field, pre-filled with a default directory and editable if you want the binary stored somewhere else.
+**Choose a KoboldCPP build** lists the builds of the chosen **Version** (default _Latest_), grouped by system (Linux, Windows, macOS, Other). Each shows a short description of the hardware it suits, and its size. The **Download directory** is filled in for you: a `koboldcpp` folder inside Serene Pub's data folder (the `SERENE_PUB_DATA_DIR` folder when that is set). Serene Pub needs to be able to write there, both to download and every time it loads a model.
 
-The default download directory is `<app data dir>/koboldcpp`, where the app data directory is either the `SERENE_PUB_DATA_DIR` environment variable (common in Docker/self-hosted deployments) or the OS-standard app-data path if that variable isn't set. This same directory also becomes the **Admin Directory** KoboldCPP uses for its `--admindir`-jailed config reload files, so Serene Pub needs write access to it for both the initial binary download and every later model-load/reload.
+**Download & Start** downloads and then starts KoboldCPP. If either step fails, the reason is shown right there; see [Troubleshooting: download or start failures](#troubleshooting-download-or-start-failures).
 
-Clicking **Download & Start** begins the download; progress (bytes downloaded / total, with a **Cancel** button) is shown inline. When the download finishes successfully, Serene Pub automatically marks the binary as installed and **auto-starts it as a subprocess** — you'll see "Download complete — KoboldCPP is starting…" before the sidebar switches to the main tabbed view. If either the download or the auto-start fails, the failure reason is shown directly in this screen (for a download failure) or under the status card (for a start failure) — see [Troubleshooting](#troubleshooting-download-or-start-failures) below. The binary download is also listed in [Downloads](#downloads) alongside everything else in flight.
+### The status card
+
+In Managed mode the card shows the process state (_Running_, _Starting_, _Stopped_, _Crashed_) with **Start** or **Stop**, how long it has been running, the **Loaded model** with **Unload** to free its memory without stopping KoboldCPP, and an **Update** button when a newer KoboldCPP is out. If KoboldCPP failed to start or crashed, the error is shown under the card. **Details** opens live performance figures: busy or idle, generation and prompt speed in tokens per second, the last request's timings, and totals. In External mode the card says whether the address answered and which version it runs.
 
 ### Models tab
 
-The **Models** tab lists every model file the connection can see, under **Text models** and **Image models** once there are both. Each row shows the model's name, the gold **Default** mark for anything it is the default for, and one quiet facts line; **Use for chat** (a text model) or **Use for images** (an image model) registers that model as the chat or image-generation default — the same registration **Admin → Defaults** makes — without loading it: it loads on demand the first time something asks. The row's `⋯` menu has **Model settings**, **Move to image models** / **Move to text models**, and **Delete from disk**, which asks first. A filter narrows the list by name, and the refresh button asks KoboldCPP for its models again.
+Lists every model file the connection has, under **Text models** and **Image models**. **Use for chat** on a text model, or **Use for images** on an image model, makes it that job's default without loading it: it loads the first time something asks. Each row's **⋯** menu has **Model settings**, **Move to image models** or **Move to text models** (for a file Serene Pub sorted wrongly), and **Delete from disk**, which asks first.
 
-Which list a file is in comes from its header, not its name: an image model dropped in the text folder is read before it is ever listed, so it lands under Image models and is never offered for chat, and an LLM dropped in the image folder is still recognised as an LLM. When the header can't settle it, **Move to image models** / **Move to text models** is how you say which it is.
-
-KoboldCPP currently holds one model at a time, so asking for a picture unloads the chat model and the next message reloads it; on large models that is minutes each way, not an instant switch.
+Whether a file is a text or an image model is read from inside the file, not guessed from its name or folder.
 
 ### Get and Arriving tabs
 
-There is no per-manager catalogue any more. **Get** is the [model finder](#the-model-finder) in place, with this connection as the destination — the same finder, with its scope, memory tier and quant picker, that every other door opens. Which directory a file lands in (the Models Directory, or the Image Models Directory when one is set and the scope is **Images**) is named on the finder's destination line. **Arriving** is the one [Downloads](#downloads) list in place — model downloads and the binary download (separate queues under the hood) beside everything else this pub is fetching.
-
-### The status card: live status and model lifecycle
-
-In Managed mode the status card at the top of the view is the operational heart of the connection: a colored dot and word (running/starting/stopped/crashed/stopping), the process's **PID** and uptime when running, and **Start**/**Stop**. If the process failed to start or crashed, the actual error message is displayed directly under the card — this is the same surface described in the troubleshooting section below. It also names the **Loaded model** (with **Unload** to free it from memory without stopping the whole process, and _Nothing loaded · loads on first use_ otherwise), whether **Admin mode** is active on the running instance, and an **Update available** chip with **Update** when a newer binary exists. A **Details** disclosure opens the performance panel (present for both Managed and External modes): an **Idle/Busy** badge, average generation and prompt-processing speed in tokens/sec, stats for the **Last Request** (tokens processed, prompt time, generation time), and system stats (**Uptime**, **Total generations**, **Queue depth**). In External mode the card instead says whether the address answered, and what version.
+**Get** is the [model finder](#the-model-finder) with this connection as the destination; its line says which folder files will land in. **Arriving** is the [Downloads](#downloads) list.
 
 ### Settings tab
 
-The **Settings** tab holds everything that configures the runtime itself rather than an individual model:
+- **Binary** (Managed mode): the installed build and version, the latest version, **Check for updates**, **Change binary**, and **Update binary** when there is a newer one.
+- **Model unload timer**: seconds of no use before the loaded model is unloaded (default 300; 0 means never).
+- **Subprocess idle timeout**: seconds of no use before KoboldCPP itself is stopped (default 1800; 0 means never).
+- **Server URL** and **Port** (default 5001): where Serene Pub reaches KoboldCPP. Changing the port needs a restart. If the two disagree, a warning says so: requests go to the Server URL, so make them match.
+- **Base URL** (External mode only): the address of your KoboldCPP.
+- **Models Directory**: where text models are stored and downloaded to. It must be set before anything can be listed or downloaded.
+- **Image Models Directory**: where image models go. Left blank, image models are looked for in the Models Directory. Setting it never moves files; models already in the Models Directory keep working.
+- **Active capabilities**: what the running KoboldCPP build supports (Image Gen, Vision, TTS, Speech-to-Text, Embeddings, Multiplayer, Web Search, Admin API).
+- **Image generation**: the thread count and quantization level for loading image models, and **Test Generation**, which draws a test picture with the current image default.
 
-- **Binary** info (Managed mode) — installed variant, installed version, and latest available version, with **Check for updates** and **Change binary** buttons; an "Update available" badge and an **Update binary** button appear when a newer release exists.
-- **Managed settings** — **Model unload timer** (seconds of inactivity before the loaded model is unloaded from memory; 0 means never, default 300s/5 min), **Subprocess idle timeout** (seconds before the whole subprocess is shut down when idle; 0 means never, default 1800s/30 min), **Server URL** (where Serene Pub reaches KoboldCPP — usually `http://127.0.0.1:<port>`; the same setting Document View's system settings edit), and **Port** (default 5001; changing it requires a restart to take effect). Port and Server URL are stored separately and can drift apart — if they disagree, a warning under the Port field says that every request actually goes to the server URL above, not this port, and the subprocess running here may be orphaned until you change one so they match.
-- **Base URL** (External mode only — in Managed mode it is the **Server URL** under Managed settings) and version/update-check info.
-- **Models Directory** — the server-side path where GGUF text models are stored and downloaded to; this must be set before the Models tab or the finder can list or fetch anything.
-- **Image Models Directory** — where Stable Diffusion models are stored and downloaded to. **Leave it blank and image models are looked for in the Models Directory**, which is how every installation worked before this field existed — so an upgrade keeps finding every model you already have, exactly where it is. Setting a path never moves anything on disk: new downloads from the Image list land in the new folder, and models still sitting in the Models Directory keep being listed, loaded and deleted from there. Downloads only ever write to the directory for the kind being downloaded.
-- **Active capabilities** — a badge row reporting what the connected KoboldCPP build supports: Image Gen, Vision, TTS, Speech-to-Text, Embeddings, Multiplayer, Web Search, and Admin API. **Image Gen** reports what the running process has loaded at that moment, which is a different question from whether an image model is connected — that one is answered in the Models tab's Image list.
+### Launch settings and when a model reloads
 
-### Power-user note: GPU layers, flash attention, batch size, and reload-on-change
+Further down the Settings tab, under the connection's own settings, **Managed mode launch settings** decide how KoboldCPP loads a model:
 
-Per-model launch settings — **GPU Layers**, **Flash Attention**, and **Batch Size** — aren't in the view's Settings tab at all; they live on the **KoboldCPP, run by Serene Pub** _connection_'s own form (see below), because different models on the same machine often need different settings. Whenever a session generates against the KoboldCPP connection run by Serene Pub, Serene Pub runs a preflight check before the request: it asks KoboldCPP which model is currently loaded and compares it (plus the last-applied GPU Layers/Flash Attention/Batch Size, and the requested context size from the active Sampling Config) against what this connection wants. If everything already matches, generation proceeds immediately with no reload. If the model, any of those three launch settings, or a larger context size than what's currently loaded don't match, Serene Pub writes a `.kcpps` config file into the Admin Directory and calls KoboldCPP's admin `reload_config` endpoint, then waits (up to 10 minutes) for the new model to finish loading before the request continues. In practice this means: switching which connection/model you're using, or editing GPU Layers/Flash Attention/Batch Size on a connection, causes a model reload the _next_ time that connection is used to generate — not immediately when you save the connection. Restarting Serene Pub while KoboldCPP keeps running costs one such reload on the first generation too: the new server has no record of what it loaded, so it reloads the same file and waits for KoboldCPP's listener to go down and come back before sending the request, rather than trusting the old process's answer.
+- **GPU Layers**: how many layers of the model go on the graphics card. `-1` (the default) fits as many as will fit; `0` runs on the processor only.
+- **Flash Attention**: a faster way of processing on graphics cards that support it. Off by default.
+- **Batch Size**: how much of the prompt is processed at a time. Default `512`.
 
-### Troubleshooting: no model loaded, or a rejected model load
+A text model can also have a **Vision projector**: its mmproj file, which lets it read images. Set it in the model's **Model settings** (the **⋯** menu in the Models tab), as the file's name; the file must be in the Models Directory, and files whose names contain `mmproj` are suggested. Setting one turns **Vision** on for that model. Clear the box to load the model without it.
 
-If KoboldCPP returns a response with `finish_reason: "error"` — which it can do with a normal-looking `200 OK` when no model is actually loaded (or it was started with `--nomodel`) — Serene Pub now surfaces this explicitly as an error ("KoboldCPP rejected the request — is a model loaded?") instead of silently showing a blank reply as if generation had succeeded.
+Before each request, Serene Pub checks which model KoboldCPP has loaded and with which settings. If the model, any of the three settings above, its vision projector, or a larger context size than the one loaded doesn't match, it reloads KoboldCPP with the right ones and waits (up to ten minutes) before sending the request. So a change to these settings, or switching to another model, takes effect the next time the model is used, not when you save. The first request after restarting Serene Pub also reloads once, because the new Serene Pub can't be sure what the old one loaded.
 
-In External mode specifically, if KoboldCPP's admin API rejects a model-load request outright, the error names the likely cause: a mismatched admin password or admin directory between what's configured on this connection and what KoboldCPP was actually started with (`--admin --adminpassword ... --admindir ...`).
-
-### Troubleshooting: download or start failures
-
-If a binary download fails (network error, or a failure creating the destination directory) or the automatic post-download start fails, the real underlying error message is surfaced to you — a download failure shows inline on the variant-picker/download screen, and a subprocess start failure shows under the status card, right under the colored status dot. Don't take a bare "download failed" or "crashed" status as the whole story — read the message underneath it first.
-
-A common cause on Docker and NAS-hosted deployments: the app's data directory (where the default `<app data dir>/koboldcpp` binary/admin directory lives) is a mounted volume, and the container's user doesn't have write access to it. If a download or auto-start is failing right after setup, check that the container can actually create directories and write files inside its mounted data volume before assuming the download itself is broken — this is worth checking first, before re-trying the download or picking a different variant.
-
-## KoboldCPP, run by Serene Pub: the connection
-
-The managed connection view above _is_ the **KoboldCPP, run by Serene Pub** connection — the `koboldcpp_managed` connection type from the [types table](#connection-types-at-a-glance). Once it has a binary installed (or is connected to an external instance with `--admin` enabled) and at least one model downloaded, its models are what sessions use. Its form is disabled (with a warning banner) if this pub no longer runs KoboldCPP.
-
-The connection's models are the GGUF files in its model directory, synced on their own; **Use for chat** in the view's Models tab is what registers one as the chat default. Prompt Format, Token Counter, and the same long list of KoboldCPP request switches (Stream, Use Memory, Trim Stop Sequences, Render Special Tokens, Bypass EOS Token, Retain Grammar State, Return Logprobs, Replace Instruct Placeholders) all work exactly as on the plain KoboldCPP form. The Base URL field is hidden entirely — Request settings notes "Base URL is the address Serene Pub runs KoboldCPP at, and isn't set per-connection." Underneath those familiar fields, a **Managed mode launch settings** section holds:
-
-- **GPU Layers** — number of model layers to offload to GPU; `-1` autofits as many as will fit, `0` forces CPU-only. Default `-1`.
-- **Flash Attention** — toggle KoboldCPP's flash-attention kernel. Default off.
-- **Batch Size** — prompt-processing batch size. Default `512`.
-
-These three are exactly the settings described in the reload-on-change note above — changing them takes effect the next time this connection generates, not instantly.
+The connection's settings also have the **Prompt Format**, **Token Counter** and the [same request settings](#koboldcpp-you-run-yourself) as a KoboldCPP you run yourself. There is no Base URL field: the address is the Server URL in the Settings tab.
 
 ### Images from the same connection
 
-The KoboldCPP connection draws as well as chats: it is one process, and its model manager swaps the model it holds. Its **Models** tab lists **Text models** and **Image models** separately, and each model is only ever offered for what it is — a text GGUF for chat, an image model for images. **Use for images** on an image model registers it as the image-generation default. Its **Settings** tab carries, under the text settings, an **Image generation** section: the two load settings that belong to an image model rather than a text one (the thread count and the quantization level KoboldCPP should load it at), and **Test Generation**, which draws with the current image default.
+The managed KoboldCPP draws as well as writes. **Use for images** on an image model makes it the image default. The image model is loaded when a picture is asked for. KoboldCPP holds one model at a time, so drawing a picture unloads the chat model and the next reply loads it again; with large models that can take minutes each way.
 
-Loading is deferred exactly as it is for text: the image model is loaded when something asks for a picture, and the request reports a "loading" stage while it happens. Since KoboldCPP holds one model at a time today, that load evicts the chat model and the next message reloads it — the same on-demand swap that already happens between two LLMs, with the same cost.
+### Troubleshooting: no model loaded, or a rejected model load
 
-> **Behaviour change:** KoboldCPP image models are no longer connections of their own. An existing **KoboldCPP, run by Serene Pub (Image)** connection is folded into the KoboldCPP connection on the next start: its models move across, and the image default, any pipeline node that named it, and its image settings all point at the KoboldCPP connection afterwards. Deleting the last model file never removes the KoboldCPP connection — it just has no models until you get one.
+If KoboldCPP answers without a model loaded (for example, it was started with `--nomodel`), the reply fails with _KoboldCPP rejected the request — is a model loaded?_ instead of arriving blank.
+
+In External mode, if KoboldCPP refuses to load a model, the most likely cause is that the admin password or admin directory on this connection doesn't match what KoboldCPP was started with (`--admin --adminpassword … --admindir …`).
+
+### Troubleshooting: download or start failures
+
+When the download or the first start fails, read the message under the status, not just the word _Failed_ or _Crashed_. A download failure is shown on the download screen; a start failure under the status card.
+
+On Docker or a NAS, the usual cause is that Serene Pub's data folder is a mounted volume the container can't write to. Check that it can create folders and files there before retrying the download or choosing another build.
 
 ## Ollama, managed
 
-Every Ollama connection gets the managed connection view, and each one is managed against **its own host** — its own address, status, models and pulls. Two Ollama connections (this machine and a box on the network, say) are two independent views. Ollama itself is a separate program you install and run outside Serene Pub (there's no "download a binary and let us launch it" flow), so the view only ever talks to an already-running Ollama server's API to browse, pull, and manage models — the `ollama` process's own lifecycle is outside Serene Pub's control, and there is no **Start**. You add one with **Add → Ollama**, or pick Ollama under **Something I already run**. **Remove this connection** removes that one Ollama connection; the others stay.
+Every Ollama connection gets its own view, and each one manages its own host: two Ollama connections (this machine and another computer, say) are two independent views. Serene Pub doesn't install or start Ollama; you install it yourself, and the view uses Ollama's API to list, pull and delete models. Add one with **Add › Ollama**, or **Something I already run** on a new pub.
 
-Ollama has no setup stages. Its **status card** says _Running · 0.30.7 · 4 models_ with an **Update available** chip when Ollama has a newer release (it opens the Settings tab's version line), or **Not reachable** with the address, **Check again**, **Change address** (which opens Settings, where the address is the connection's own Base URL field) and a **Get Ollama** link. On the index each Ollama row reads its own host: _Running · 4 models · localhost:11434_ or _Not reachable · ollama.lan:11434_.
+The **status card** reads, for example, _Running · 0.30.7 · 4 models_, with an **Update available** chip when Ollama has a newer release. When Ollama can't be reached it says **Not reachable** with the address, **Check again**, **Change address** and a **Get Ollama** link.
 
-### Models tab
+- **Models** lists what this host has pulled, under **Chat models** and **Embedding models**. **Use for chat** or **Use for embeddings** makes a model that job's default (embeddings ask first, since they rebuild the index). Each row's menu has **Model settings**, **View on ollama.com** and **Delete from disk**.
+- **Get** is the [model finder](#the-model-finder), pulling into this host. **Arriving** is the [Downloads](#downloads) list.
+- **Settings** shows Ollama's version with **Check for updates** (and **Download update** when Ollama runs on this machine), then the connection's name and **Base URL**.
 
-Lists every model this host has pulled — under **Chat models** and **Embedding models** when the host has both. A chat model's **Use for chat** registers that (connection, model) pair as the chat default; an embedding model's **Use for embeddings** registers it as the embedding default, asking first when that would rebuild the index — the same registrations **Admin → Defaults** makes. Each row's menu has **Model settings**, **View on ollama.com** and **Delete from disk**. Deleting removes the model from this host and forgets it on the connections that point at this host; it never deletes a connection.
+## Local ONNX models
 
-### Get and Arriving tabs
+**Local embeddings (ONNX)** and **Local named entities (ONNX)** run small models inside Serene Pub, on the processor, with no program to install and no key. They power the long-term memory described in [Embeddings and search by meaning](./embeddings-and-rag.md). They are not available on Android.
 
-**Get** is the [model finder](#the-model-finder) in place, pulling into this host (recommended chat or embedding models, Hugging Face search with the quant picker). **Arriving** is the one [Downloads](#downloads) list in place, where an Ollama pull shows a per-file bar because a model is several layers.
+Their models come from a recommended list Serene Pub downloads from [github.com/SerenePub/serene-pub-onnx-list](https://github.com/SerenePub/serene-pub-onnx-list) (with a built-in copy for when you're offline). Each model has a tier (_Fast_, _Balanced_, _Best_), a download size, the languages it handles and its licence. **Add from Hugging Face…** adds another model by its Hugging Face id (`org/name`), after checking it has what Serene Pub needs.
 
-### Settings tab
+### Download state and active state are independent
 
-A **Version** line — the host's version, and _0.34.4 available_ when a newer release exists — with **Check for updates**. **Download update** links to `ollama.com/download` only when the host is on this machine; an Ollama on another machine says to update it there. Under it is the connection's own form: its name and its **Base URL**, the one place the address is edited.
+A model's download state is about the disk:
 
-## Sampling Configs
+| State | Shows | Action |
+| --- | --- | --- |
+| Not downloaded | its size | **Download** |
+| Downloading | a progress bar | **Cancel** |
+| On disk | **On disk** and its size | **Make active** |
+| Download failed | Hugging Face's own message | **Retry** |
 
-A Sampling Config is a named, reusable bundle of generation parameters — the knobs that control how "creative" vs. deterministic a model's output is.
+Being **Active**, the default for that job, is separate. Downloading never makes a model active, and a model can be active without being on disk (it is shown in amber until downloaded). The active model is loaded when there is work and unloaded after the connection's idle timeout.
 
-### Categories
+**Make active** asks first whenever it would throw stored work away. For embeddings, it says how many items will be re-embedded and that retrieval falls back to keywords until that finishes; the old model stays on disk. When nothing would be lost, it switches straight away. The same question appears before **Admin › Defaults** or any other **Use** changes these models.
 
-The **Sampling** sidebar opens on a category picker, the same way Connections does. Admins can also manage every config from **Admin › Models › Sampling** — see [below](#admin--models--sampling).
+**Cancel** can't stop a file halfway, so the current file finishes first, then the partial download is deleted. A download interrupted by a restart is marked failed.
 
-- **Large Language Models** — temperature, penalties, context and response budgets: the parameters behind every generated reply.
-- **Image Generation** — steps, CFG, size, seed and the rest, shared by every image backend whatever a connection points at.
+The connection's view has four tabs, like KoboldCPP's: **Models** (on this machine first, then what's available to download), **Get**, **Arriving** and **Settings**. A model's own view shows whether it is loaded, **Unload now**, its size on disk with **Remove** (not for the active model), and its details. With room, the models show as a table.
 
-The two vocabularies have nothing in common, so a config belongs to exactly one of them and is only ever offered where it fits. Pick a category and you get its saved configs in a dropdown (built-in ones suffixed with `*`, the current default prefixed with a star), with the usual **Clone**, **Reset** (discard unsaved edits), and **Delete** (disabled for built-ins) toolbar buttons, plus **Update** and **Set as default**.
+## Endpoints and models
 
-### Admin › Models › Sampling
+Everywhere you choose "which model", you are choosing a **pair**: a connection and one of its models. A connection holds what is about _where_ (the address, key, how requests are sent, prompt format, token counter, stop scripts, notes). A model holds what is about _that model_: the name the service knows it by, a display name, its own capabilities, an optional context window, and optional prompt format and token counter that override the connection's. A model's settings start blank, and blank means "use the connection's".
 
-**Admin › Models › Sampling** (`/admin/sampling`) manages sampling configs the way an admin site does, rather than showing the Sampling view again. It opens on a **list of every config**: name, modality (_Text_ or _Image_), its key values (for text: temperature, top P, min P, context and reply tokens; for images: steps, CFG and size — only the ones switched on), how many parameters it sends, what uses it (the defaults it is set for and how many pipelines pick it), and whether it is built in or custom. Sampling configs belong to the instance, not to one user. Search matches the name, modality, and the defaults and pipelines using it; **Filter** narrows by modality, origin, or use (_Holds a default_, _Picked by a pipeline_, _Unused_). Column headers sort, and search, filters and sort are part of the address (`/admin/sampling?modality=image-gen`). Tick rows and choose **Actions › Delete selected sampling configs…** to delete several at once; the confirmation lists each one with the defaults it releases and the pipelines that pick it. Built-in configs are never deleted: the confirmation names them as kept, and if every selected config is built in it only offers **Close**. A default whose config is deleted goes unset, and requests for that job then use the backend's own settings.
+### Models are listed by the service
 
-**Add sampling config** (`/admin/sampling/new`) asks for a name, a modality and what it starts as — a copy of an existing config of that modality (its default is preselected) or nothing switched on. **Save** returns to the list, **Save and continue editing** opens the new config to tune it, and **Save and add another** clears the form.
+You don't normally add models by hand. Serene Pub asks each service what it offers when the Connections view opens, when you open a connection or model, after a connection is saved or tested, and after a download finishes. It skips a connection it asked less than ten minutes ago; **Refresh models** always asks again.
 
-A row opens that config's page (`/admin/sampling/<id>`), in sections: **Identity** (name; modality and origin shown), one section per group of parameters it sends (Core, Repetition, Budget, Size, …, with the same controls as the Sampling view), **Used by** (the defaults and pipelines that pick it, with a link to Admin › Defaults), and **Advanced**, closed at first, where parameters are switched on and off. Everything is saved together with **Save**, **Save and continue editing** (Ctrl+S) or **Save and add another**; leaving with unsaved edits asks first, and changing a value back is not an edit. **Delete** asks first and lists what it releases; **History** opens this config's entries in Admin › History. A built-in config is read-only here: **Duplicate** opens the add form with a copy of it (`/admin/sampling/new?from=<id>`). The list's **Open Sampling view** opens the Sampling view beside it.
+| Service | Lists |
+| --- | --- |
+| Ollama | the models it has pulled |
+| LM Studio | the models it has downloaded |
+| OpenAI-compatible services | the service's model list |
+| Anthropic | a built-in list of Claude models |
+| llama.cpp, a KoboldCPP you run | the model currently loaded |
+| KoboldCPP run by Serene Pub | the model files in its folders |
+| Local ONNX | the recommended list plus what you added |
+| Stable Diffusion | its checkpoints |
+
+A model the service stops listing is marked **no longer listed**, not deleted, so its settings survive if it comes back. If the service can't be reached, nothing changes: the connection says _Couldn't list models_ and its models stay as they were. A model you don't want offered can be switched **off** in its view instead.
+
+### A model that is no longer listed is unavailable everywhere
+
+A model that is no longer listed can't be used anywhere, and every screen says so: the row, the connection, the status strip and job tiles, **Admin › Defaults**, and the pipeline's **Model** setting. A run that would use it stops with a sentence pointing at the fix, rather than sending a request the service would reject. Its settings are kept: refresh once the service offers it again, or pick another model.
+
+### Adding and removing by hand
+
+Where a service's list can be incomplete, the connection's Models tab offers **Add by name**: the model's id exactly as the service expects it, and an optional display name. Use it for a service that publishes no list, or a new model the list hasn't caught up with. Models added this way can be removed from their own view.
+
+Ollama and the KoboldCPP run by Serene Pub have no **Add** or **Remove**: their models are pulled, downloaded and deleted in their own view, and the list follows. On a local ONNX connection, models are switched on or off, and downloaded or removed from disk.
+
+### Choosing a pair
+
+- **Admin › Defaults** sets one pair per job. Choosing a connection picks its first usable model; the model picker beside it changes that.
+- A pipeline configuration's **Model** setting picks a pair the same way, as one choice (see [Pipelines → Model and sampling](./pipelines.md#model-and-sampling)).
+- A model's own **Set as default…** makes it the default for one job it can do, or all of them.
+- A model that is deleted leaves whatever used it unset, with a message naming the fix. A model that is switched off or no longer listed is refused when used, rather than quietly replaced with another.
+
+## Sampling configs
+
+A **sampling config** is a named set of generation settings: how adventurous or predictable a model's writing is, how long a reply may be, how much of the story it is sent. Defaults name one per job, and a pipeline configuration can pick a different one for any of its model calls.
+
+Open **Sampling** from the rail, choose **Large Language Models** or **Image Generation** (the two have nothing in common, so a config belongs to one), and pick a config. Built-in configs are marked `*` and the current default with a star. The toolbar has **Update** (save), then **Reset unsaved changes** and **Clone to a new config** as icon buttons, and **⋯** for **Set as default** and **Delete** (not for built-ins).
+
+**Admin › Models › Sampling** lists every config as a table with its main values, what uses it, and whether it is built in, with search, filters and bulk delete. Built-in configs are read-only there; **Duplicate** makes an editable copy. Deleting a config that a default uses leaves that default unset, and requests for that job then use the service's own settings.
 
 ### Adjustable parameters
 
-Each parameter has its own checkbox and, when switched on, its own control — a slider with a click-to-edit numeric readout for numbers, a text box or one-per-line list for the rest. Ranges, defaults and descriptions all come from the parameter's own declaration, so the editor lists everything the category actually supports rather than a hand-picked subset.
+Each parameter has a checkbox and, when ticked, a slider or text box. For text there are about thirty, grouped as Core (temperature, top P, top K, min P, typical P, seed), Repetition (repetition, frequency and presence penalties, and more), Mirostat, XTC, DRY, Dynamic temperature, a KoboldCPP-only group (top A, N-sigma, smoothing factor, banned tokens), Reasoning, and Budget (response tokens, context tokens, stop sequences, logit bias). For images: steps, CFG scale, width, height, batch, seed, sampler, scheduler, CLIP skip and denoise.
 
-For text generation that is roughly thirty parameters, grouped: Core (temperature, top P, top K, min P, typical P, seed), Repetition (repetition/frequency/presence penalties, repeat-last-N, penalize newline), Mirostat, XTC, DRY, Dynamic temperature (including tail-free sampling), a KoboldCPP-only group (top A, N-sigma, smoothing factor, banned tokens), Reasoning (see below), and Budget (response tokens, context tokens, stop sequences, logit bias).
-
-For image generation: steps, CFG scale, width, height, batch, seed, sampler, scheduler, CLIP skip and denoise.
-
-Response Tokens and Context Tokens each have an **Unlock max** checkbox that raises the slider's ceiling well past the everyday range (to 65,536 and 524,288 respectively) for unusually long-context models.
-
-### Reasoning
-
-A model that reasons before it answers spends tokens nobody reads, and on most services those tokens count against the response limit. Two sampling parameters govern it, so the choice is made per step through the sampling slot rather than per connection:
-
-- **Reasoning**: `off`, `low`, `medium` or `high`. Unchecked, nothing is sent and the model does whatever it does by default. `off` asks the service for no reasoning at all.
-- **Reasoning budget**: a token count, up to 32768, for the services that take a number (Anthropic and llama.cpp). With a level and no budget the level sets it: low 2048, medium 8000, high 32000.
-
-What goes on the wire depends on the service: Ollama's `think` (true or false, or the level word for gpt-oss models), an OpenAI-style `reasoning_effort` (`none` for off), Anthropic's thinking block with a budget, llama.cpp's `reasoning_budget` and template switch on the chat wire only, KoboldCPP's thinking flag for on and off. Anything a service cannot express is recorded as an ignored sampler. Anthropic disables temperature, top P and top K while thinking is on, so those are dropped and recorded as ignored, and the Wire tab shows both the reasoning request and the dropped samplers. Where a service reports reasoning tokens separately, the run inspector's reply line shows them beside the completion count.
-
-The shipped **Precise (Extraction)** config sends `off`, and a **Background** config (Precise plus reasoning off) is what the Adventure genre's planner and state keeper use: steps nobody reads should not think out loud.
+**Response Tokens** is the longest reply allowed. **Context Tokens** is how much of the story, lore and instructions can be sent; set it to what your model supports. Each has **Unlock max** for unusually long-context models.
 
 ### Switching a parameter on and off
 
-A parameter's checkbox controls whether it is sent to the backend at all. Unchecked, the value is remembered but left out of the request, and the service uses its own default — so turning a sampler off and on again does not lose what you had set.
+A parameter's checkbox decides whether it is sent at all. Unticked, the value is remembered but not sent, and the service uses its own default. Those defaults are not always neutral: Ollama, for example, applies its own repeat penalty, top K and top P to any request that doesn't name them.
 
-Those service defaults are not always neutral. Ollama, for instance, applies a repeat penalty of 1.1, top K 40 and top P 0.9 to any request that does not name them, so the built-in **Default** config, which sends only temperature and the two token limits, is really "temperature plus whatever the backend decides". The run inspector's Wire tab shows exactly which parameters left the app; anything absent there was the backend's call.
+A ticked parameter may still not reach a given service, because not every service understands every setting (Anthropic accepts only temperature, top P, top K and response tokens). Those are left out of the request and noted, never an error. An administrator can see exactly what was sent in the run inspector's **Wire** tab (see [Pipelines → Inspecting a run](./pipelines.md#inspecting-a-run)).
 
-A parameter can be switched on and still not reach a given backend: not every connection type understands every sampler (Anthropic, for instance, accepts only temperature, top P, top K and response tokens). Those are dropped from the outgoing request and recorded as ignored rather than causing an error.
+### Reasoning
+
+Some models reason before they answer. That reasoning costs tokens and, on most services, counts against the reply length. It shows in the reply's **Reasoning** fold as it arrives, never in the reply itself. Two parameters control it:
+
+- **Reasoning**: `off`, `low`, `medium` or `high`. Unticked, the model does whatever it does by default.
+- **Reasoning budget**: a token count, for the services that take one (Anthropic and llama.cpp). With a level and no budget, the level decides: low 2048, medium 8000, high 32000.
+
+Each service is sent this in its own way, and a service that can't express it ignores it. While Anthropic's extended thinking is on it does not accept temperature, top P or top K, so those are left out. Where a service reports reasoning tokens separately, the run inspector shows them.
 
 ### Immutable presets
 
-Serene Pub ships nine built-in, non-deletable configs — four for text generation and five for image generation.
+Serene Pub ships nine configs you can't change or delete; clone one to make your own.
 
-Text generation:
+For text:
 
-- **Default** — temperature, response tokens and context tokens on; everything else deferring to the backend.
-- **Disabled** — nothing switched on at all, so every request goes out with the connection's own defaults.
-- **Precise (Extraction)** — low temperature with tightened top P/top K and reasoning off, for structured extraction rather than roleplay.
-- **Background** — the Precise values with reasoning off, for steps nobody reads: planning, state keeping, summaries.
+- **Default**: temperature, response tokens (reply length) and context tokens; everything else is left to the service.
+- **Disabled**: nothing at all, so the service's own settings apply.
+- **Precise (Extraction)**: low temperature, tighter top P and top K, and reasoning off, for steps that extract facts rather than write.
+- **Background**: the same values as Precise, named for steps nobody reads, such as planning, record-keeping and summaries. Adventure's planner and state keeper use it.
 
-Image generation, one per model family — a diffusion model rendered at the wrong size does not degrade, it duplicates and smears the subject, so the size is part of the family rather than a taste setting:
+For images, one per model family, because a model drawn at the wrong size duplicates and smears its subject:
 
-- **SD 1.5** — 512×512, 25 steps, CFG 7. The shipped global default.
-- **SDXL** — 1024×1024, 30 steps, CFG 6.
-- **SD 3.x** — 1024×1024, 28 steps, CFG 4.5.
-- **Flux** — 1024×1024, 20 steps, CFG 1.
-- **Turbo / Distilled** — 512×512, 4 steps, CFG 1. Covers SDXS, SD‑Turbo, SDXL‑Turbo, Lightning and LCM.
+- **SD 1.5**: 512×512, 25 steps, CFG 7. The default for images.
+- **SDXL**: 1024×1024, 30 steps, CFG 6.
+- **SD 3.x**: 1024×1024, 28 steps, CFG 4.5.
+- **Flux**: 1024×1024, 20 steps, CFG 1.
+- **Turbo / Distilled**: 512×512, 4 steps, CFG 1. For SDXS, SD-Turbo, SDXL-Turbo, Lightning and LCM models.
 
-CFG 1 on Flux and Turbo / Distilled is deliberate, not a placeholder: both are guidance-distilled and burn at higher CFG.
+CFG 1 on Flux and Turbo is deliberate: those models are made to run at that setting. Sampler and scheduler are left unset, so the program uses whatever it already uses. A config's name must be unique within text or within images.
 
-Sampler and scheduler are left unset on every image preset. The valid names are a property of the connection's checkpoint and build, so the only backend-independent answer is "whatever it already uses".
+An online image service such as OpenAI's has no steps or CFG; its size and quality options are on the connection instead.
 
-All nine are starting points to clone from. Names must be unique within a modality — "Default" can exist for text generation and for image generation, but not twice for either.
+## Chat messages or text completion
 
-> **Upgrading:** the row previously shown as **Default (Image)** is now **SD 1.5**, and its values changed from 1024×1024 / 25 steps / CFG 5 to 512×512 / 25 steps / CFG 7. An install that left the built-in image default selected will render smaller; pick the **SDXL** preset if 1024² was intended.
+A model can be sent the story in one of two ways:
 
-These five are a _local diffusion_ vocabulary. A hosted image service — OpenAI's `gpt-image-1`, for instance — has no steps, CFG, sampler or seed at all; it takes a size from a fixed list plus quality and format options. Those live on the connection's own profile, declared by its adapter, rather than in a sampling config, and anything a backend cannot honour is reported as ignored rather than dropped silently.
+- **Chat messages**: a list of messages, each marked as system, user or assistant. Online services and most programs work this way, and it is the right choice for nearly everyone.
+- **Text completion**: one long piece of text laid out with the model's own markers for whose turn it is. This needs a [Prompt Format](#prompt-formats-and-token-counters) that matches the model.
 
-### Power-user note: how sampling maps to each connection type
+Which one a connection uses is a capability, set under **Advanced and notes › What this connection can do** in the connection's Settings tab. Each capability is **Auto**, **On** or **Off**: Auto follows the service's preset and the last successful test, and a hand-set value overrides every later test. A line above the switches says which way requests are being sent. llama.cpp uses text completion by default; the others use chat messages.
 
-Internally, each Sampling Config's fields are translated to the parameter names the target API actually expects — for example `repetitionPenalty` becomes `rep_pen` for KoboldCPP but `repeat_penalty` for Ollama and `repetition_penalty` for LM Studio, and `contextTokens` becomes `num_ctx` (Ollama), `max_context_length` (LM Studio/KoboldCPP), or `n_ctx` (Llama.cpp) — OpenAI Chat and Anthropic don't accept a context-size parameter at all, so it's used only for local token-budget accounting on those types. Not every connection type supports every possible sampler in Serene Pub's data model; for example Anthropic maps only Temperature, Top P, Top K, and Response Tokens and has no equivalent for Frequency/Presence Penalty or Seed — unsupported fields are silently omitted from the outgoing request rather than causing an error.
+### Where placed reminders go
 
-Context templates — the Handlebars-style templates that assemble the full request sent to a model — are covered on their own page: see [Context Templates](./context-templates.md).
+Some text is placed _inside_ the conversation rather than at the top: the post-history reminder and an [author's note](./sessions.md#authors-note) sent as **system** (both just before the reply unless moved), and script injections (see [Context templates](./context-templates.md#on-the-chat-wire)). On chat messages each would be a system message in the middle of the list, and not every service keeps one there:
 
-## Prompt Formats and Token Counters
+- **OpenAI-compatible services** keep it where it is.
+- **Anthropic** takes system text only at the top, and **Ollama** gathers every system message to the top, so the reminder would lose its place.
+- **KoboldCPP** (both kinds), **llama.cpp** and **LM Studio** use the model's own chat template, and some refuse a system message that is not first. Qwen's does: KoboldCPP then drops it, so the reminder and the example dialogue never reached the model.
 
-Every connection form that can operate in text-completion mode (selected via the **Chat messages** / **Text completion** control in the Capabilities panel; text completion is Llama.cpp's default) exposes a **Prompt Format** dropdown controlling how the assembled Context Template gets flattened into a single text prompt with the right instruction/turn markers for the target model family:
+For all of these except the OpenAI-compatible services, Serene Pub folds the text into the user message right after it (or right before it, when it comes last) as a marked aside, `[System note]` … `[/System note]`, so it keeps its place everywhere. A text completion lays every block out in place and needs none of this.
 
-- **Vicuna** (the default)
+### Images and files
+
+Files attached to messages (see [Sessions](./sessions.md#attach-images-and-files)) reach a model only by **chat messages**: a text completion is one piece of text with nowhere to put a picture. Every connection type sends images on its chat messages: Anthropic, the OpenAI-compatible services, Ollama, KoboldCPP (both kinds), llama.cpp and LM Studio. Anthropic also takes PDFs; the others don't. Text files are put into the prompt as text, so every model reads them.
+
+Whether a model may be sent images is its **Vision** capability, under **What this connection can do**. On **Auto** it is decided per model, in this order, each one overruling the one before:
+
+1. the service's preset: Anthropic, OpenAI, OpenRouter and Gemini say their models can see;
+2. what the model's own host says, which is more specific than the preset: OpenRouter-style listings name each model's inputs, Ollama says which models have vision, LM Studio says which models are vision models, and a KoboldCPP run by Serene Pub says so for a model with a [Vision projector](#launch-settings-and-when-a-model-reloads). So a text-only model on OpenRouter isn't offered images, and `qwen2.5vl` in Ollama is, with nothing to switch;
+3. the last successful test, for a KoboldCPP you run yourself (whether it has a vision part loaded);
+4. your own **On** or **Off**, which wins over all of them.
+
+Anything nothing has spoken for stays off, because only you know whether the model you run can see. A local model needs its vision part loaded as well: start llama-server with `--mmproj`, and load the mmproj file in a KoboldCPP you run yourself. A host's word about a model is read when its models are listed, so press **Refresh** in its Models tab after pulling a new model. Images are sent as PNG or JPEG to the local servers, which can't read WebP, and are converted on the way when needed.
+
+## Prompt formats and token counters
+
+When a connection sends a text completion, its **Prompt Format** decides how the story is laid out for the model:
+
+- **Vicuna (Default)**
 - **ChatML**
 - **Basic / Legacy**
 - **OpenAI**
@@ -433,138 +471,43 @@ Every connection form that can operate in text-completion mode (selected via the
 - **Claude (Human/Assistant)**
 - **Instruct (Alpaca)**
 
-Picking the wrong format for a given model typically shows up as the model ignoring turn boundaries or continuing past where it should stop — if a text-completion connection is producing garbled or run-on output, checking this dropdown against the model's actual training format is a good first step. Prompt Format is unrelated to a step's prompts (the free-text instructions covered in [Pipelines → Prompts](./pipelines.md#prompts)) despite the name similarity — prompts supply _what_ to say, Prompt Format controls _how it's laid out_ on the wire.
+The wrong format usually shows up as a model that ignores whose turn it is or writes past where it should stop. If a text-completion connection writes garbled or run-on replies, check this against the format the model was trained on (its page on Hugging Face usually says). A prompt format is not the same thing as a [prompt](./pipelines.md#prompts): the prompt says _what_ to write, the format says how it is laid out.
 
-Every connection form also has a **Token Counter** dropdown, used for client-side token-budget estimates (for example, deciding how much lorebook/history content fits under a Sampling Config's Context Tokens limit) rather than for anything sent to the model itself. Options are **Estimate** (a fast heuristic, the default, and the only sensible choice for models without a dedicated counter below) plus tokenizer-specific counters for **OpenAI GPT-2/3**, **GPT-3.5 Turbo**, **GPT-4**, **GPT-4o**, **Llama**, **Llama 3**, **Mistral/Mixtral**, **Anthropic Claude**, **Cohere**, **Google Gemini/PaLM**, and **Google Gemma**. Picking the counter that actually matches your model gives more accurate context-budget math; picking the wrong one (or leaving it on Estimate for a model with unusual tokenization) can cause the app to under- or over-estimate how much history/lore fits in the remaining context.
+Every connection also has a **Token Counter**, which Serene Pub uses to estimate how much story and lore fits within the sampling config's **Context Tokens**. Nothing about it is sent to the model. **Estimate** (the default) is a quick approximation that suits most models. The others are for a model family. **OpenAI GPT-2/3**, **OpenAI GPT-3.5 Turbo**, **OpenAI GPT-4**, **OpenAI GPT-4o**, **Llama**, **Llama 3** and **Mistral/Mixtral** count with that family's own tokenizer. **Cohere (approximate)** counts with Gemma's tokenizer, because no Cohere tokenizer ships with Serene Pub. **Anthropic Claude**, **Google Gemini/PaLM** and **Google Gemma** are estimates. A matching counter gives a more accurate fit; a mismatched one can send too much or too little.
+
+**KoboldCPP** (both kinds) and **llama.cpp** can count with the loaded model's own tokenizer, and Serene Pub asks them to: the counts are kept per piece of text, so from the second turn on almost every count is the model's own, and the token counter only estimates what has not been counted yet (scaled up by how far it has been off). This matters because a prompt the estimate thought would fit, and the server finds too long, is cut by the server from the front, on every turn. The other services publish no tokenizer and keep the estimate.
+
+A model can override its connection's prompt format and token counter in its own view.
 
 ## Stop sequences
 
-A stop sequence is a string that ends the reply the moment the model writes it. Serene Pub composes one list per request, from three sources, and each entry carries the **kind** it came from:
+A stop sequence is a piece of text that ends the reply the moment the model writes it. Each request gets one list, from three sources:
 
-- **`format`** — the stop strings on the connection's **completion template** (the row behind the Prompt Format above). These name the template's own delimiters, such as ChatML's `<|im_end|>` or Vicuna's `### `.
-- **`speaker`** — a `Name:` label for every character and persona in the scene _except_ whoever is speaking. The speaker's own name is left out on purpose: the prompt already seeds `Ash: `, and stopping on `Ash:` would return an empty reply from any model that opens by repeating the name.
-- **`explicit`** — whatever you type into the reply step's **Stop sequences** parameter, one per line. `{{char}}` and `{{user}}` are interpolated.
+- **Format**: the prompt format's own markers, such as ChatML's `<|im_end|>`.
+- **Speaker**: a `Name:` label for every character and persona in the scene except the one speaking, so the model stops before writing someone else's line.
+- **Your own**: whatever you put in the sampling config's **Stop sequences**, one per line. `{{char}}` and `{{user}}` are filled in.
 
-**The wire rule.** Which kinds are actually sent depends on the connection's wire mode (the **Chat messages** / **Text completion** control in the Capabilities panel):
+Which of these are sent depends on how the connection sends the story:
 
-| Wire                | `format`  | `speaker`                            | `explicit` |
-| ------------------- | --------- | ------------------------------------ | ---------- |
-| **Text completion** | sent      | sent                                 | sent       |
-| **Chat messages**   | held back | sent when the transcript is labelled | sent       |
+| Sent as | Format | Speaker | Your own |
+| --- | --- | --- | --- |
+| **Text completion** | sent | sent | sent |
+| **Chat messages** | held back | sent when messages carry name labels | sent |
 
-A `format` stop names a delimiter of a flat prompt, so on a chat wire it matches nothing and _overrides_ the model's own native stop tokens on servers such as Ollama's OpenAI-compatibility layer, which truncates replies for no gain. Those stay held back.
+Format markers mean nothing in a list of chat messages, and some services let them override the model's own stopping point, cutting replies short, so they are held back. Speaker labels are still useful in chat messages when each message starts with a name, which the default context template does.
 
-A `speaker` stop is different, because the labels are usually still there. The default context template renders each turn as `{{{name}}}: {{{message}}}`, so on a chat wire the roles mark where a turn ends while the label _inside_ the message content is what says whose turn the next line is. The prompt ends with a seeded `Ash:` and a model handed that transcript simply carries on writing it, your line included. So when the compiled messages carry inline labels, the labels ride the chat wire too, newline-prefixed (`"\nAsh:"`), because a bare label would match at the very start of a reply that opens by naming somebody and end it before it had said anything. A chat transcript with no inline labels has nothing for them to match, and they stay held back.
+Some services ignore stop sequences on chat messages. So Serene Pub also cuts a reply at the first line that starts with another participant's label. Only the start of a line counts, never the reply's first line, so a name mid-sentence is kept.
 
-Your own stop sequences are your choice rather than the template's, so those ride either wire.
-
-**Where a reply ends.** Some backends ignore a stop list on their chat leg entirely. So whatever came back is also cut at the first line that opens with another participant's label, using the same labels that went out as `speaker` stops. Only line starts count, and never the reply's own first line: a name mid-sentence ("She said Ash: was late") is prose and is kept, and a reply that opens as somebody else keeps its text rather than arriving blank. The speaker's own opening label is stripped once, so a model that repeats the seed does not show it to you.
-
-**The exact request is kept.** Whatever an adapter renders a prompt into on its way to your endpoint is recorded on that turn's run receipt, along with the raw reply, and an administrator can read both in the run inspector's Wire tab (see [Pipelines](./pipelines.md)).
-
-Entries the wire rule holds back are **reported, not discarded**: a reply's **What actually fired** panel shows a **Stops** row listing what was sent (with its kind) and what was held back, each carrying the sentence that decided it, so "my stop sequence did nothing" and "my reply ran on past its turn" are answerable rather than guessed at. Where the backend names the sequence it actually matched — llama.cpp is the only one that reports the word rather than a reason code — that entry is highlighted. A reply that had to be cut at a speaker boundary says so on the same row, naming the label and how much was kept.
+When a reply runs on or stops too soon, the reply's **What actually fired** shows a **Stops** row: each stop sequence, whether it was sent or held back and why, and which one the model hit where the service reports it.
 
 ## Streaming
 
-Whether a request streams is normally the connection's choice (the **Stream** option on the connection form, whose default differs by service). Each generating node in a pipeline can also override it with its **Streaming** parameter:
+Streaming shows a reply as it is written rather than all at once. Each connection has a **Stream** setting. Each model call in a pipeline also has a **Streaming** setting: **Automatic** (the default) follows the connection, and **Off** waits for the whole answer. Off suits steps nobody watches, such as planning, record-keeping or summaries; some services answer those faster and report their token use more fully. Automatic never turns streaming on for a connection that has it off.
 
-- **Automatic** (the default) keeps the connection's answer.
-- **Off** sends one request and waits for the whole reply. On an image node it also stops the progress poll, so no previews arrive.
+## Everyday management
 
-Streaming only helps where somebody is watching tokens arrive, which on a multi-step pipeline is exactly one step: the one that writes the reply. A planner, a state keeper, a summariser or a lore extractor gains nothing from it, and some services answer a one-shot request faster and report their token usage more completely, so **Off** is the right setting for background steps. A step set to **Off** still returns its tool calls, its stop hit and its usage counts; the adapter reads them from the single response instead of the stream. **Automatic** never forces streaming on: a connection whose Stream option is off stays off.
-
-## Endpoints and models
-
-Since 0.6 a connection is an **endpoint** — where the compute is — and the models reachable through it are rows of their own. Anywhere you choose "which connection", you are really choosing an **(endpoint, model) pair**, and both halves are required: a connection has no default model.
-
-Before this, a connection row held a URL, a key, a wire mode, **one** model name and **one** set of capabilities. That conflated two different things. One llama.cpp host serving three GGUFs had to be three connections, each restating the same URL and key; testing one told you nothing about the other two; and probing a vision checkpoint taught the _endpoint_ vision, so every text-only model behind the same host inherited the claim.
-
-### What lives where
-
-| On the endpoint (the connection)            | On the model                                                            |
-| ------------------------------------------- | ----------------------------------------------------------------------- |
-| Base URL, API key, connection type / preset | The identifier the service knows it by (what actually goes on the wire) |
-| Wire mode (chat vs completion)              | A display name, so four quantisations of one model are tellable apart   |
-| Prompt Format, Token Counter                | **Overrides** of the endpoint's Prompt Format and Token Counter         |
-| Capabilities the _protocol_ can express     | Capabilities _this checkpoint_ has — layered over the endpoint's        |
-| Stop scripts                                | An optional Context window                                              |
-| Per-connection notes                        | Offered in pickers or not, and whether its host still lists it          |
-
-Every per-model setting starts blank, and blank means "whatever the connection says".
-
-### Models are synced from the host
-
-You do not add models by hand in the ordinary case. Serene Pub asks each connection's service what it serves and keeps the connection's model list in step with the answer:
-
-- **When it asks.** When the Connections sidebar opens, when you open a connection or a model, when a connection is created or saved, after a successful **Test**, and after a managed Ollama pulls a model or a KoboldCPP run by Serene Pub finishes a download. Automatic checks skip a connection whose listing is less than ten minutes old, so browsing costs nothing; **Refresh models** (on a group's menu, in the connection view, and in the model view) always asks again.
-- **What a listing does.** Every model the service names gets a row, enabled, named as the service names it. A model the service has **stopped** naming is marked **not listed** — kept, not deleted, so its overrides and anything registered against it survive its return. A model that comes back is cleared.
-- **What a failed listing does.** Nothing to any model. An unreachable host is a fact about the host, so the connection shows "Couldn't list models — …" and its rows are left exactly as they were.
-- **Who lists what.** Ollama lists what it has pulled; LM Studio lists what it has downloaded; OpenAI-compatible hosts list `/models`; Anthropic lists a built-in catalogue; llama.cpp and a plain KoboldCPP list the model currently loaded; the managed KoboldCPP process lists the GGUFs in its directory; the local ONNX backends list their catalogue plus anything downloaded to this machine; A1111 lists its checkpoints.
-
-A model you do not want in pickers is switched **off** in its model view rather than removed — a removed model that the host still lists would simply come back on the next refresh.
-
-### A model that is no longer listed is unavailable everywhere
-
-When a listing stops naming a model Serene Pub knows, that model is refused everywhere, and every screen says so:
-
-- the sidebar shows a **Not listed** chip on the row, a warning on its connection's health line, a count in the totals line, and the _Needs attention_ filter gathers them;
-- the model view leads with a warning naming since when, what it means, and **Check again**;
-- the status strip and job tiles flag a default that points at a missing model;
-- **Admin → Defaults** and a pipeline's connection option list it greyed with "no longer listed by its host", and warn beneath the picker when the chosen model is the missing one;
-- a run whose resolved pair names it is refused with a sentence pointing at the fix, rather than sent to a host that would answer with its own error.
-
-The model's settings are kept. Refresh once the host serves it again and everything resumes; or pick another model; or remove it.
-
-### Adding and removing by hand
-
-Where the listing can be incomplete, the connection view's models card offers **Add by name**: an OpenAI-compatible host that serves no `/models`, a catalogue that lags a launch, a llama.cpp that lists only what is loaded. Such rows can also be removed from the model view. On an **Ollama** or **KoboldCPP, run by Serene Pub** connection there is no Add and no Remove — models are pulled, downloaded and deleted in that manager, and the list follows it. On a **local ONNX** connection the rows are the recommended list plus anything added by Hugging Face id; a model is switched on or off rather than removed, and its files are downloaded and removed from disk from the sidebar — see [Local ONNX models](#local-onnx-models).
-
-### Choosing a pair
-
-Every picker that names a connection also names a model:
-
-- **Admin → Defaults** registers a pair per capability. Choosing a connection pins its first switched-on, listed model; the model picker beside it changes that.
-- A **pipeline's oracle node** (the Connection option on a Reply, Summarize or Image step) stores a pair the same way.
-- The **model view**'s _Set as default…_ menu registers that model for one capability it can serve, or for all of them at once.
-- Choosing a **different connection clears the model**, always. A model belongs to one endpoint, so carrying it across would leave a selection whose two halves name different connections.
-- A model that is deleted releases anything registered against it to an incomplete registration, which resolves as unconfigured with a sentence naming the fix. A model that is _switched off_ or _not listed_ while something still names it is refused at run time with a sentence saying so, instead of quietly running a different model.
-
-## Local ONNX models
-
-The two local connection types — **Local embeddings (ONNX)** and **Local named entities (ONNX)** — run inside Serene Pub with no server to start. Their models are the **recommended list**, fetched from [github.com/SerenePub/serene-pub-onnx-list](https://github.com/SerenePub/serene-pub-onnx-list) (`embeddings.yaml` and `ner.yaml`), cached for a day under the data directory, and backed by a built-in copy when the network is away. The list gives each model a tier (_Fast_, _Balanced_, _Best_), its download size, dimensions or labels, input length, pooling, prefixes, languages and licence, and the sidebar shows those as facts and tags. Entries whose pooling the loader cannot honour are left off. Ids never change, so stored vectors stay valid across list updates.
-
-### Download state and active state are independent
-
-Every ONNX row carries a state that is a fact about the disk, re-checked on every sync:
-
-| State           | Row                             | Action                                      |
-| --------------- | ------------------------------- | ------------------------------------------- |
-| Not downloaded  | size from the list              | **Download**                                |
-| Downloading     | progress bar, "x of y MB"       | **Cancel**                                  |
-| On disk         | **On disk** chip, measured size | **Make active** (or none, if it already is) |
-| Download failed | the Hub's own sentence          | **Retry**                                   |
-
-Being **Active** — the capability default for that modality — is a separate fact. A row can be active and not downloaded (the row shows it in amber, and _Needs attention_ gathers it), and a download never makes anything active. **Downloading warms the cache only**; the lane loads the active model lazily when it has work and unloads it after its idle timeout, which is set on the connection.
-
-**Make active** is the same registration as **Set as default…** on any other model, so it goes through the same confirmation: the dialog names how many stored vectors will be re-embedded (and across how many lorebooks and sessions), says that retrieval answers from keywords until that finishes, and notes that the previous model stays on disk. There is no time estimate, because nothing measures a rate. When nothing is stored yet, there is nothing to confirm and the switch is immediate. Entities work the same way with re-scanning.
-
-**Cancel** cannot interrupt the file in flight — the ONNX runtime exposes no way to abort a fetch — so the current file finishes first, then the partial download is deleted and the row returns to _Not downloaded_. The row says so while it waits. A download interrupted by a restart is marked failed at boot rather than believed.
-
-### The group, the model view, and the endpoint table
-
-The **group** header shows the active model and whether it is loaded ("Active: bge-small-en-v1.5 · loaded, idle 4 min" or "· on disk, not loaded"), an **Unload** button while it is loaded, and a health line with how many models are on disk, their total size, and the queue's state. Rows are split in two — **On this machine** (on disk, downloading or failed, the active model first) and **Available to download** (grouped by tier, folded away once anything is on this machine); models you added yourself sit under **Added by you**. The footer's **Add from Hugging Face…** takes a Hub id (`org/name`), validates it against the Hub before a row exists — the repo must be public and carry an ONNX export, with a readable hidden size for embeddings or an `id2label` for entities — and adds it as _Not downloaded_. The Hub's own sentence is shown when validation fails.
-
-The **model view** of a local ONNX model leads with its status: for the active model, whether it is loaded, the queue, when it was last used, and **Unload now** (embeddings also offer **Load**); for any other model, its download state and its one action, with the re-embed cost stated beneath **Make active** before you press it. Then **On this machine** (size on disk and **Remove**, which is refused for the active model — make another active first; a model you added can also be removed from the list), **About** (the list's description and facts, with a link to the model on Hugging Face), and, for the active model, the **Lane** — the idle timeout, set on the connection, and whether the model is listed in pickers.
-
-Given desk room, the **endpoint view** shows the same models as a table — size, dimensions or labels, input, languages, state and action — in the same two sections, with the endpoint's settings beneath it. At sidebar width the same two sections are a list of rows, each with its one action (**Make active**, **Download**, **Cancel**, **Retry**).
-
-## Testing, defaults, and everyday management
-
-A few behaviors apply across every connection type:
-
-- **Test** (on the connection view's status card) sends a live probe to the configured Base URL/API Key and reports success or the exact error returned, before you commit to using it anywhere.
-- **Set as default…** in a model's view — **Make active** on a local ONNX model — registers that pair as the instance default for a capability it can serve — the same registration **Admin → Defaults** makes — used by any run whose pipeline configuration names no pair of its own. Those are the only two tiers: the configuration's pair, then the instance default — see [Sessions](./sessions.md#which-connection-a-session-uses) for where that plays out during a conversation.
-- The **KoboldCPP, run by Serene Pub** connection can't be used while KoboldCPP is switched off. With its install kept, the row and its view say _Offline_ and **Start** switches it back on and starts it; with nothing set up they say _Not installed_ and **Set up**.
-- Defaults are per capability. **Use for chat** in an Ollama or KoboldCPP view's Models tab registers the text default; **Use for images** on a KoboldCPP image model registers the image one, and **Use for embeddings** on an Ollama embedding model the embedding one.
-- Deleting a connection, Sampling Config, or Context Template that's currently in use elsewhere doesn't cascade silently — model deletion from a KoboldCPP or Ollama connection's Models tab, for instance, explicitly blocks removing the model a capability default names, and the Connections sidebar's delete action always asks for confirmation first.
-- These sidebars (Connections and Sampling) track unsaved changes in-memory and will pop a confirmation modal before letting you switch selections, close the sidebar, or navigate away and lose edits.
+- **Test** on a connection's status card checks the address and key before you rely on it, and shows the service's own error when it fails.
+- **Defaults are per job.** **Use for chat**, **Use for images**, **Use for embeddings**, **Make active** and **Set as default…** all set the default for one job.
+- **The KoboldCPP run by Serene Pub can't be used while it is switched off.** Switched off with its files kept it says _Offline_, and **Start** switches it back on; with nothing set up it says _Not installed_ with **Set up**.
+- **Deleting asks first** and says what goes with it. A model that a job's default still names can't be deleted from disk until you pick another.
+- **Unsaved changes** in Connections and Sampling are kept until you save or discard; switching away asks first.

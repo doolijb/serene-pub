@@ -275,7 +275,7 @@ function cleanVisibility(
 		refuse(
 			emitToUser,
 			event,
-			"You can use and make your own styles, but not share one with the instance."
+			"You can use and make your own styles, but not share one with the pub."
 		)
 	return visibility
 }
@@ -412,7 +412,7 @@ export const widgetStylesCreate: Handler<
 			refuse(
 				emitToUser,
 				event,
-				`'${widgetSlug}' is not a widget on this instance.`
+				`'${widgetSlug}' is not a widget on this pub.`
 			)
 
 		const title = cleanTitle(params.title, emitToUser, event)

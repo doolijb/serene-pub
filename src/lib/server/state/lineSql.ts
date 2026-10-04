@@ -26,7 +26,7 @@ import type { StoryDate } from "$lib/shared/lorebooks/storyDate"
 /**
  * "Shared, or on a line of the chain" — membership only, no dates.
  *
- * The mirror of `isOnLine` / `rowsOnLine`. For a table whose rows carry no
+ * The mirror of `isOnLine` / `rowsReadingOnLine` with no dates. For a table whose rows carry no
  * story date (entries, scenes, edges, bindings).
  */
 export function onLineSql(branchColumn: AnyPgColumn, line: Line): SQL {

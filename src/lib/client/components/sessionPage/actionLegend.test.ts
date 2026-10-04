@@ -47,10 +47,10 @@ const venues: LegendVenues = {
 		],
 		overflow: [
 			act({
-				key: "echo",
-				specSlug: "core:spec/echo",
-				name: "Echo",
-				description: "Ask you for some text and post it.",
+				key: "look",
+				specSlug: "core:spec/adventure-look",
+				name: "Look",
+				description: "Describe where the party is.",
 				enabled: false,
 				reason: { i18n: { en: "Set a location first" } }
 			})
@@ -103,7 +103,7 @@ describe("legendSections", () => {
 		).toEqual([
 			"composer:core:spec/narrate#narrate:Ask the narrator to describe what happens next.",
 			"composer:core:spec/lair-build-room#build-room:Draft a new room.",
-			"composer:core:spec/echo#echo:Ask you for some text and post it.",
+			"composer:core:spec/adventure-look#look:Describe where the party is.",
 			"extra:core#advance:Let whoever is next in the turn order speak.",
 			"message:core#edit:Change the text of this message."
 		])
@@ -116,7 +116,7 @@ describe("legendSections", () => {
 		expect(bySlash).toEqual([
 			["Narrate", "narrate"],
 			["Build room", "build-room"],
-			["Echo", "echo"],
+			["Look", "look"],
 			["Continue", "advance"],
 			["Edit", null]
 		])
@@ -134,8 +134,8 @@ describe("legendSections", () => {
 				? { disabled: true, reason: a.reason?.i18n.en }
 				: { disabled: false }
 		)
-		const echo = sections[0]!.entries.find((e) => e.name === "Echo")!
-		expect(echo).toMatchObject({ disabled: true, reason: "Set a location first" })
+		const look = sections[0]!.entries.find((e) => e.name === "Look")!
+		expect(look).toMatchObject({ disabled: true, reason: "Set a location first" })
 		expect(sections[0]!.entries.filter((e) => e.disabled)).toHaveLength(1)
 	})
 
@@ -148,7 +148,7 @@ describe("legendSections", () => {
 		expect(asked).toEqual([
 			"composer:narrate",
 			"composer:build-room",
-			"composer:echo",
+			"composer:look",
 			"extra:advance",
 			"message:edit"
 		])

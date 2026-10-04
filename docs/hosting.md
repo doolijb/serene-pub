@@ -1,69 +1,54 @@
 # Hosting Serene Pub
 
-Common hosting and reverse-proxy setups for running Serene Pub outside of a
-plain `npm run dev` — whether that's `node build/index.js` directly, Docker, or
-behind a proxy or tunnel. For the full list of every environment variable, see
-[Environment Variables](./environment-variables.md). For Docker specifics
-(images, volumes, compose examples), see
-[DOCKER.md](https://github.com/doolijb/serene-pub/blob/main/DOCKER.md).
+Reach your pub from other devices, from outside your home, or from behind a reverse proxy, a tunnel or a container.
 
-**If you're just running Serene Pub for yourself on one machine** — plain
-`npm run dev`, or a built app you launch directly with nothing in front of it —
-you don't need this page. Everything here is about exposing the app beyond that:
-a reverse proxy, a tunnel, a container, or another device on your network.
+:::tip You may never need this page
+If you only use Serene Pub on the computer it runs on, there's nothing to set up here. Come back when you want to reach it from somewhere else.
+:::
 
-## Why this exists
+Every variable named on this page is described in [Environment variables](./environment-variables.md), with where to put it. For Docker images, volumes and compose files, see [DOCKER.md](https://github.com/doolijb/serene-pub/blob/main/DOCKER.md) in the repository.
 
-Serene Pub runs **one server** on one port (default `3000`). Real-time updates
-— session messages, generation progress, model status — travel over Socket.IO
-on that same port, under `/socket.io/`. A reverse proxy or tunnel in front of
-the app has nothing extra to route, but it **must forward WebSocket upgrades**
-(the `Upgrade` and `Connection` headers), or real-time features fail to connect
-even though the page itself loads fine.
+## First: turn on accounts
 
-The rest of this page is about telling the app its public address and which
-proxy to trust.
+Until [user accounts](./users-and-accounts.md) are on, anyone who can reach your pub is its administrator, with no sign-in. That's fine on your own computer. Before anyone else can reach it, turn accounts on in **Admin › General**. The built-in tunnel won't start until you do.
+
+## On your home network
+
+Serene Pub listens on every network your computer is on, so a phone or another computer on the same Wi-Fi can already open it at `http://<your computer's address>:3000` (for example `http://192.168.1.42:3000`). [Install](./install.md#everyday-use) shows how to find that address. Nothing needs configuring.
+
+To allow only the computer it runs on, set `HOST=127.0.0.1`.
+
+## From anywhere: the built-in tunnel
+
+The simplest way to reach your pub from outside your home is the tunnel in **Admin › Pub › Network**. It goes through Cloudflare, so there's nothing to change on your router and no address to buy.
+
+- **Easy**: a free Cloudflare quick tunnel. No account needed, but the address is random and changes every time the tunnel restarts, so a link you share lasts only until then.
+- **Custom domain**: your own hostname on a free Cloudflare account, with an address that stays the same.
+
+Press **Start tunnel**; once it reads *Running*, **Copy link** gives you the public address. [Pub settings](./system-settings.md#network) describes every option on the card. Tunnels aren't available in the Android app.
+
+The rest of this page is for running your own front door instead: a reverse proxy, your own Cloudflare Tunnel, or a container.
+
+## What a proxy must do
+
+Serene Pub is **one server on one port** (`3000` unless you set `PORT`). Live updates (new messages, a reply being written, model status) travel over a WebSocket connection on that same port, under `/socket.io/`. So a reverse proxy or tunnel in front of it has one thing to remember: it **must pass WebSocket upgrades through** (the `Upgrade` and `Connection` headers). Without that, pages load but nothing updates live.
 
 ## The two settings that matter
 
-Modern setups need exactly two variables:
+Behind a proxy, set exactly two variables:
 
 ```
 PUBLIC_URL=https://serene.example.com
-TRUSTED_PROXIES=172.16.0.0/12
+TRUSTED_PROXIES=127.0.0.1
 ```
 
-`PUBLIC_URL` is the address your users actually type. Everything else is
-derived from it — whether requests are HTTPS, whether session cookies get the
-`Secure` flag, whether HSTS is advertised, what URL the browser is told to open
-its socket connection to, and SvelteKit's CSRF origin.
+**`PUBLIC_URL`** is the address people actually type. Everything else follows from it: that requests are HTTPS, that sign-in cookies are marked `Secure`, the HSTS header, where the browser opens its live connection, and the origin used for form checks. It applies **only to requests arriving on that hostname**, so the same pub still answers plainly on `http://localhost:3000` at the same time. There's nothing to switch between local and public use.
 
-`TRUSTED_PROXIES` is which addresses your proxy connects from. It decides
-whether forwarded headers (`X-Forwarded-For`, `X-Forwarded-Host`,
-`X-Forwarded-Proto`) are believed at all, and it fills in `ADDRESS_HEADER`,
-`HOST_HEADER` and `PROTOCOL_HEADER` for you. Unset, the trusted range is the
-local network (loopback and private addresses), but those three header
-variables are left unset, so forwarded headers are not read — set it whenever a
-proxy sits in front of the app.
+**`TRUSTED_PROXIES`** is the address (or range) your proxy connects from. Only requests from there have their forwarded headers (`X-Forwarded-For`, `X-Forwarded-Host`, `X-Forwarded-Proto`) believed, and setting it turns on reading those headers. Without it, every visitor looks like the proxy, so they share one sign-in rate limit and one person's failed attempts can lock everyone out.
 
-Crucially, `PUBLIC_URL` applies **per request, matched on hostname**. A request
-arriving on `serene.example.com` gets the public answer; a request arriving on
-`localhost:3000` still auto-detects plain HTTP. One setting serves both at once,
-so you never have to flip configuration between local and public access.
+## Reverse proxy or tunnel on the same host
 
-## Common hosting configurations
-
-### Direct access, no proxy
-
-Nothing to configure. `http://localhost:3000` (or whatever `HOST`/`PORT` you
-set) works out of the box — the browser opens its socket to the same address
-the page came from.
-
-### Reverse proxy or tunnel on the same host
-
-The most common setup: a single public hostname (nginx, Nginx Proxy Manager,
-Caddy, Cloudflare Tunnel, Traefik) in front of the app. Proxy the one port, and
-make sure WebSocket upgrades are passed through:
+The usual setup: nginx, Nginx Proxy Manager, Caddy, Traefik or your own Cloudflare Tunnel on the same machine, with one public hostname. Proxy the one port and pass WebSocket upgrades through. For nginx:
 
 ```nginx
 server {
@@ -82,68 +67,26 @@ server {
 }
 ```
 
-Then everything is reachable through the one public hostname and port:
+Then:
 
 ```
 PUBLIC_URL=https://serene.example.com
 TRUSTED_PROXIES=127.0.0.1
 ```
 
-`/socket.io/` is served by that same `location /`, so the browser's socket
-connects to `https://serene.example.com` like every other request.
+`/socket.io/` is served by the same `location /`, so there's nothing else to route. If the proxy runs on the same machine, also consider `HOST=127.0.0.1` so the pub can only be reached through it.
 
-### Cloudflare Tunnel
+### Your own Cloudflare Tunnel
 
-Cloudflare Tunnel maps a public hostname to a local origin. Point the hostname
-at the app's port (`http://localhost:3000`, or a local reverse proxy in front of
-it); sockets ride the same origin, and `cloudflared` forwards WebSocket upgrades
-on its own. Then:
+Point the tunnel's public hostname at `http://localhost:3000` (or at a local proxy in front of it). `cloudflared` passes WebSocket upgrades through by itself. Use the same two settings as above. The hop from Cloudflare to `cloudflared` is always encrypted, so plain HTTP between `cloudflared` and the app on your own machine is normal.
 
-```
-PUBLIC_URL=https://serene.example.com
-TRUSTED_PROXIES=127.0.0.1
-```
+### Proxy on another machine or in Docker
 
-The edge-to-`cloudflared` hop is always encrypted regardless of how the local
-origin is configured, so `cloudflared` → proxy → app staying plain HTTP on your
-own machine is normal and not a security concern.
+Set `TRUSTED_PROXIES` to the proxy's address or network instead of `127.0.0.1`, for example `TRUSTED_PROXIES=172.16.0.0/12` for a proxy on a Docker network. The container exposes only `PORT`; the compose files in the release carry commented-out `PUBLIC_URL` and `TRUSTED_PROXIES` lines to fill in.
 
-> If you see **"Socket connection timeout"** with a Cloudflare Tunnel, check that
-> the tunnel (or the proxy it points at) passes WebSocket upgrades through to
-> the app's port. Older versions ran sockets on a second port that Cloudflare
-> could not serve; current versions do not.
+## Check what it resolved
 
-### Docker
-
-See [DOCKER.md](https://github.com/doolijb/serene-pub/blob/main/DOCKER.md). The
-same guidance applies — the container exposes only `PORT` (sockets share it),
-and the compose files carry commented-out `PUBLIC_URL` and `TRUSTED_PROXIES`
-examples.
-
-## Migrating to PUBLIC_URL
-
-Nothing below is broken and nothing needs changing on a schedule — the old
-variables are still honored. But one `PUBLIC_URL` replaces all of them, and
-Serene Pub prints a notice at startup for each of the first four you still have
-set, naming its replacement.
-
-| Deprecated | Replace with |
-|---|---|
-| `SOCKETS_HTTPS_HOSTS=example.com` | `PUBLIC_URL=https://example.com` |
-| `SOCKETS_HTTP_MODE=https` | `PUBLIC_URL=https://<your hostname>` |
-| `SERENE_PUB_SECURE_COOKIES=true` | `PUBLIC_URL=https://<your hostname>` |
-| `PUBLIC_SOCKETS_ENDPOINT=<url>` | Nothing — delete it. Sockets share the app's address, so there is no separate endpoint to name; it is ignored. |
-| `HOST_HEADER`, `PROTOCOL_HEADER`, `ADDRESS_HEADER` | `TRUSTED_PROXIES=<your proxy's address>` derives all three. |
-
-The old second-server settings — `SOCKETS_PORT` and `SOCKETS_ENDPOINT` — are
-gone rather than deprecated: there is no second server for them to describe, and
-nothing reads them. Delete them, and any second port mapping (such as `3001`),
-when you upgrade. `SOCKETS_ALLOWED_ORIGINS` is now `ALLOWED_ORIGINS`; the old
-name is no longer read, so rename it.
-
-## Startup banner
-
-Every start prints the configuration it actually resolved:
+Every start prints the configuration Serene Pub actually worked out, for example:
 
 ```
 [Serene Pub] Public URL:  https://serene.example.com   (from PUBLIC_URL)
@@ -152,56 +95,38 @@ Every start prints the configuration it actually resolved:
 [Serene Pub] Allowed origins: same-hostname (zero-config) + local network for non-browser clients
 ```
 
-If a setting isn't doing what you expect, this is the first place to look — it
-reports the resolved answer, not what you wrote.
+It also names the `.env` files it read, and warns about any setting it doesn't expect. When something isn't doing what you meant, look here first: it shows the answer, not what you wrote.
 
 ## Security notes
 
-- **Multi-user ("accounts") mode**: when disabled (the default), every socket
-  connection is automatically treated as the first admin user with no login at
-  all — appropriate for a single-person local instance, but it means anyone who
-  can reach the app's ports has full access. If you're exposing the instance
-  beyond your own machine, turn accounts on in Admin › General. The origin
-  allowlist works with zero configuration for virtually every setup; you
-  generally don't need to set anything for it.
-- **Don't set `ALLOWED_ORIGINS=*`** unless your page and socket
-  connection genuinely use different hostnames. It disables the origin allowlist
-  entirely *and* stops non-browser clients from being restricted to the local
-  network. Combined with accounts-disabled mode, anything that can reach the
-  port gets an unauthenticated admin session. Serene Pub warns at startup when
-  it is set.
-- **`TRUSTED_PROXIES` is worth narrowing.** The default trusts the whole local
-  network, and the app binds `0.0.0.0` by default — so any host on your LAN can
-  send a forged `X-Forwarded-For` and evade login rate limiting. Naming your
-  proxy's address specifically (`TRUSTED_PROXIES=127.0.0.1`) closes that, as
-  does binding `HOST=127.0.0.1` when the proxy runs on the same machine.
-- **Back up `meta.json` alongside your database.** It lives in
-  `SERENE_PUB_DATA_DIR` next to the database files and holds a secret key used
-  to derive both session tokens and stored passphrase hashes. If it's lost or
-  regenerated — for instance a partial restore that includes the DB but not this
-  file — every existing session is invalidated and every stored passphrase stops
-  validating. Treat it as part of the same backup set as the database, not a
-  disposable cache.
-- Session cookies expire after `USER_TOKEN_EXPIRATION_HOURS` (default 7 days)
-  and are `httpOnly`, plus `Secure` whenever the request is HTTPS. Logging out
-  revokes the session server-side immediately rather than just clearing the
-  cookie.
-- **Content-Security-Policy** is on by default and strict. If your hosting layer
-  injects its own scripts or styles — most commonly Cloudflare's "Browser
-  Insights" beacon (`static.cloudflareinsights.com`) — the browser console shows
-  a CSP violation naming the blocked URL. Prefer disabling that feature at the
-  CDN level (Cloudflare: Speed → Optimization → Browser Insights) since it's
-  third-party content this app doesn't control; otherwise allow the domain via
-  `CSP_EXTRA_SCRIPT_SRC`, `CSP_EXTRA_STYLE_SRC` or `CSP_EXTRA_CONNECT_SRC`.
+- **Turn accounts on** before anyone else can reach the pub (see [above](#first-turn-on-accounts)).
+- **Allowed origins need no setting.** A browser may open a live connection from the same hostname it loaded the page from; programs that send no origin (scripts, the Android app's own view) are allowed only from your local network. `ALLOWED_ORIGINS` adds extra hostnames for the rare setup where the page and the connection use different ones.
+- **Don't set `ALLOWED_ORIGINS=*`.** It switches the check off entirely, for browsers and other programs alike. With accounts off, anything that reaches the port gets an administrator. Serene Pub warns at startup when it's set.
+- **Narrow `TRUSTED_PROXIES`.** Set to `private`, it trusts every device on your local network to report a visitor's address, so any of them could dodge the sign-in rate limit. Name your proxy's own address instead.
+- **Keep `meta.json` with your database.** It sits in your [data folder](./environment-variables.md#data-and-storage) and holds the secret that sign-ins and stored passphrases depend on. Serene Pub's own backups keep a copy beside every database backup; if you back up by hand, copy it too. Restoring a database without it signs everyone out and makes every stored passphrase stop working.
+- **Backups leave out your pictures unless you ask.** By default a backup holds the database only. If the disk is lost and you restore one, characters and sessions come back but their avatars, sprites and media don't. Turn on **Include user files** in **Admin › Data and backups**, or copy the data folder's `users/` folder yourself. Each backup is also built in memory before it's written, so the server briefly needs about as much free memory as the compressed database takes on disk.
+- **Sign-ins last** `USER_TOKEN_EXPIRATION_HOURS` (7 days by default). The cookie can't be read by page scripts, is `Secure` over HTTPS, and **Logout** ends the session on the server at once.
+- **Content Security Policy** is on and strict. If your proxy or CDN injects its own scripts, the browser console shows a CSP error naming the blocked address. Most often it's Cloudflare's Browser Insights beacon (`static.cloudflareinsights.com`): turn that off in Cloudflare (Speed → Optimization → Browser Insights), or allow it with `CSP_EXTRA_SCRIPT_SRC`.
 
 ## Troubleshooting
 
-| Symptom | Likely cause |
-|---|---|
-| "Socket connection timeout", no CORS or 404 error at all | Your proxy or tunnel reaches the app but isn't forwarding WebSocket upgrades. Pass the `Upgrade` and `Connection` headers through — see the nginx example above. |
-| Console shows "Mixed Content... has been blocked" | The socket connects to the page's own origin, so this means the page itself was served over `http://` inside an `https://` context. Check your proxy, and set `PUBLIC_URL=https://<your hostname>`. |
-| "blocked by CORS policy" pointing at your own domain | The socket's `Origin` and the `Host` the app sees differ — usually a proxy rewriting `Host`. Forward the original `Host` (or set `TRUSTED_PROXIES` so `X-Forwarded-Host` is believed); `ALLOWED_ORIGINS` is the last resort. |
-| Socket requests 404 at `/socket.io/...` | Something in front of the app routes `/socket.io/` away from it. It is served by the app's own port — proxy it like every other path. |
-| Login rate limiting locks out everyone at once | `ADDRESS_HEADER` isn't set, so every user shares your proxy's address as one bucket. Set `TRUSTED_PROXIES`, which derives it. |
-| Browser refuses to load `http://localhost:3000`, forcing HTTPS | An older build advertised HSTS over plain HTTP. Clear the entry at `chrome://net-internals/#hsts`. Fixed in current versions. |
-| `.env` changes don't seem to apply | First, check the file is where Serene Pub looks: `<data dir>/.env` (see [Environment Variables](./environment-variables.md#where-env-lives)) — the startup banner's `Env files:` line names the files it actually read. Beyond that, variables read by the server framework itself (`PORT`, `HOST`, `ORIGIN`, `PROTOCOL_HEADER`, `HOST_HEADER`, `ADDRESS_HEADER`, `XFF_DEPTH`) must be set before any code runs. Current builds load `.env` early enough automatically; if you use a custom entrypoint, launch with `node --env-file=<data dir>/.env build/index.js`. The startup banner tells you which case you're in. |
+| What you see | Likely cause |
+| --- | --- |
+| Pages load but nothing updates; "Socket connection timeout" | The proxy or tunnel isn't passing WebSocket upgrades. Pass `Upgrade` and `Connection` through, as in the nginx example. |
+| Requests to `/socket.io/...` return 404 | Something in front of the app sends `/socket.io/` elsewhere. Proxy it to the app's port like every other path. |
+| "Mixed Content ... has been blocked" in the console | The page was served over `http://` inside an `https://` site. Check the proxy, and set `PUBLIC_URL=https://<your hostname>`. |
+| "blocked by CORS policy" naming your own domain | The proxy changes the `Host` header. Forward the original `Host`, or set `TRUSTED_PROXIES` so `X-Forwarded-Host` is believed. `ALLOWED_ORIGINS` is the last resort. |
+| One person's failed sign-ins lock everyone out | Forwarded addresses aren't being read, so everyone shares the proxy's address. Set `TRUSTED_PROXIES`. |
+| Changes to `.env` do nothing | Check the file is where Serene Pub looks: `<data folder>/.env` (see [Where `.env` lives](./environment-variables.md#where-env-lives)). The startup banner's `Env files:` line names the files it read. With a custom start command that skips the bundled one, start with `node --env-file=<data folder>/.env build/index.js`. |
+
+## Upgrading an older proxy setup
+
+Older releases used other variables for the same jobs. Where they still work, Serene Pub warns about each one at startup and names what replaces it:
+
+| Old | Use instead |
+| --- | --- |
+| `SOCKETS_HTTPS_HOSTS=example.com`, `SOCKETS_HTTP_MODE=https`, `SERENE_PUB_SECURE_COOKIES=true` | `PUBLIC_URL=https://example.com` |
+| `HOST_HEADER`, `PROTOCOL_HEADER`, `ADDRESS_HEADER` set by hand | `TRUSTED_PROXIES=<your proxy's address>`, which sets all three. The old way still works without a warning. |
+| `PUBLIC_SOCKETS_ENDPOINT` | Nothing: delete it. It's ignored. |
+| `SOCKETS_PORT`, `SOCKETS_ENDPOINT` | Nothing: delete them, and any second port mapping such as `3001`. They're no longer read. |
+| `SOCKETS_ALLOWED_ORIGINS` | `ALLOWED_ORIGINS`. The old name is no longer read. |

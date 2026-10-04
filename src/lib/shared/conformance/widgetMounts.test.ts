@@ -54,6 +54,7 @@ const HOSTS = [
 const MOUNTS = [
 	"WidgetHost",
 	"PluginFrame",
+	"RemoteWidget",
 	"Panel",
 	"SessionLayout",
 	"SurfaceGrid"

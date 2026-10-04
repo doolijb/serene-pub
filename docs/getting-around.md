@@ -1,67 +1,73 @@
-# Getting Around
+# Getting around
 
-Serene Pub has one rail, one sidebar, and one search. Everything you open lives in the sidebar
-until you want it to fill the page. This page describes the shell; each feature has its own page.
+Serene Pub has one rail, one sidebar and one search. Everything you open sits in the sidebar beside your story until you want it to fill the window. This page is the map; each feature has its own page.
+
+_Written for Serene Pub 0.6. This is the last step of [Start here](./getting-started.md), and a reference to come back to._
 
 ## The rail
 
-The strip down the left edge is the rail. Its icons are, from the top: Home; then Sessions,
-Characters, Lorebooks and Tags; then Connections, Sampling, Pipelines and Settings, with
-Users appearing when accounts are on and Help last; and at the foot, Activity,
-Admin (for administrators) and your account. Hover an icon for its name. The community character
-[Library](./characters.md#browsing-the-character-library) has no rail icon of its own: open it
-from **Browse the library** in the Characters view.
+The strip down the left edge is the **rail**. Hover an icon for its name. From the top:
 
-Click an icon and its view opens in the sidebar beside the rail. The small button above your
-account shows the navigation titles: the rail widens to show each icon's name, with the items
-grouped under **Play** and **Tune**. Press it again, at the end of your account row, to hide them.
-Your choice is remembered on this browser. The icon lights up with a gold bar
-on its left edge while that view is showing.
+- **Home**.
+- **Play**: **Sessions**, **Characters**, **Lorebooks** and **Tags**, the things you make and play with.
+- **Tune**: **Pipelines** and **Settings** for everyone; **Connections** and **Sampling** for administrators, and **Users** too once [accounts](./users-and-accounts.md) are on. **Help**, this documentation, is last.
+- At the foot: **Activity** (your notifications), **Admin** (administrators only) and your account.
+
+Click an icon and its **view** opens in the sidebar beside the rail; the icon gets a gold bar while its view is showing. The small button above your account widens the rail to show each icon's name, with the groups headed **Play** and **Tune**; press it again to hide them. This browser remembers your choice.
+
+The community character [Library](./characters.md#browsing-the-character-library) has no icon of its own: open it from **Browse the library** in the Characters view.
 
 ## The sidebar
 
-The sidebar shows one view at a time, but it does not forget the others. Open Characters, then
-Sampling, and Characters keeps its scroll position, its filter, and anything you were typing. A
-small gold dot on a rail icon means that view is open in the background; click the icon to bring
-it back. Up to six views stay open this way, and the one you used least recently makes room for a
-seventh.
+The sidebar shows one view at a time, but it doesn't forget the others. Open Characters, then Settings, and Characters keeps its scroll position, its filter and anything you were typing. A small gold dot on a rail icon means that view is still open in the background; click the icon to bring it back. Up to six views stay open this way; opening a seventh closes the one you used least recently.
 
-Click the icon of the view you are looking at, and the sidebar folds away. The view stays open
-behind its dot. Press the **×** in the sidebar's header to close a view for good, which forgets
-its state; a view with unsaved changes asks first.
-
-The sidebar remembers which views were open across a reload, though not what was inside them.
+Click the icon of the view you're looking at and the sidebar folds away, with the view still open behind its dot. The **×** in the sidebar's header closes a view for good and forgets its state; a view with unsaved changes asks first. After a reload the same views are open again, though not what was inside them.
 
 ## The admin area
 
-For administrators, the Admin icon opens the whole admin area as one view, like Characters or
-Lorebooks: dock it beside a session to change a setting while the story runs, or give it Focus to
-work in it. Docked, it shows the list of sections, and picking one shows that section with **All
-sections** to go back; in Focus the list stays beside the section. The sections are grouped by
-job: Overview, Models, People, Play, Pipelines, Writing, Extensions and Instance. In Focus each
-section has its own address (`/admin/prompts`, `/admin/users/3`), so Back, bookmarks and a link
-from anywhere open that section. The Admin icon carries a red or gold dot when something needs
-you. The first section,
-**Your pub**, says which version is running, whether accounts are on and how long it has been up.
-Its **Needs you** card lists what wants attention across every section, such as a job a pipeline
-needs with no model chosen, pipeline runs that failed today, or daily backups that have not run
-in two days, each with a button that takes you to the exact spot to fix it: the job's row on
-Defaults, the failed runs, the backup button. It also lists a tunnel that stopped with an error,
-a daily backup that failed, a default connection that can no longer list its models, and plugins
-waiting for you to review an update or their permissions — and these update the Admin dot the
-moment they happen, wherever you are in the app. Below it, one card per area shows how that
-area is doing and opens its section. The Admin view repeats the count above its list, and each
-section row carries a dot: red when something is broken or missing, gold when something waits
-on you.
+:::note Admins only
+Only administrators see the Admin icon.
+:::
+
+**Admin** opens the whole admin area as one view, like Characters or Lorebooks: dock it beside a session to change a setting while the story runs, or give it Focus to work in it. Its sections are grouped by job:
+
+| Group | Sections |
+| --- | --- |
+| *(top)* | **Overview**, headed **Your pub** |
+| **Models** | Defaults, Connections, Sampling |
+| **People** | Users (once accounts are on), Sessions |
+| **Play** | Genres, Presets |
+| **Pipelines** | Pipelines, Events, Configurations, Scripts |
+| **Writing** | Prompts, Context templates, Completion templates, Variable templates |
+| **Extensions** | Plugins, Components |
+| **Pub** | General, Network, Data and backups, Diagnostics, History ([Pub settings](./system-settings.md)) |
+
+Docked, the view lists the sections, and picking one shows it with **All sections** to go back; in Focus the list stays beside the section. In Focus each section has its own address (`/admin/prompts`, `/admin/users/3`), so Back, bookmarks and links work.
+
+### Lists, forms and deleting
+
+Every section that holds many things of one kind works the same way, after the Django admin many web admins share:
+
+- **The list** shows every one of them in a table, with a search box, **filters** (beside the table when there is room, behind the filter button when there isn't), sortable column headings and pages of 50 (**Show all** lifts that). Tick rows and use **Actions** to do something to all of them at once, such as **Delete selected**. **Add** (top right) starts a new one.
+- **The form** for one item groups its fields in titled cards and ends with a save row: **Save** (back to the list), **Save and continue editing** (Ctrl+S) and **Save and add another**. Built-in items are read-only; **Duplicate** makes a copy you can change.
+- **Related things the item owns are edited in the same form.** A genre's presets, for example, are a small table on the genre's page: rename one, tick **Offered**, **Add another preset** (marked _Ready to add_), or tick **Delete?** on a row, and none of it happens until you save. **Change** on a row opens that preset's own page. Related things the item doesn't own (the pipelines that use a prompt) are listed with a link to each.
+- **Nothing on a form saves until you press Save** — switches, ticks and permission approvals included. The save row says _Unsaved changes_ while anything differs, leaving asks first, and Save waits for every change to be accepted before it says _Saved_. If the server refuses one, the form names it at the top and keeps it, so you can fix it and save again.
+- **Deleting** always asks on its own page first. It lists everything that would go and what goes or changes with it, and names anything that stays and why: a built-in, something still in use, your own account. **No, take me back** returns you untouched.
+
+A line of links at the top of every admin page, such as **Admin › Writing › Prompts › Reply**, says where you are. The section's link brings the list back exactly as you left it: the same search, filters, sort and page. Sections that hold one set of settings (General, Network, Defaults) are a single form instead of a list.
+
+**Your pub** says which version is running, whether accounts are on and how long the server has been up. Its **Needs you** card lists what wants attention anywhere in the admin area, each with a button to the exact place to fix it: a job with no model chosen, pipeline runs that failed today, a daily backup that failed or hasn't run in two days, a tunnel that stopped with an error, a default connection that can no longer list its models, a plugin update or permission waiting for review. Below it, one card per area shows how that area is doing.
+
+The Admin icon, and each section in the list, carries a dot when something needs you: **red** when something is broken or missing, **gold** when something waits on you. The dot updates the moment it happens, wherever you are in the app.
 
 ## Activity
 
 The **Activity** icon, at the foot of the rail, opens the list of things that happened to you or
 are waiting on you. These are your notifications, and nobody else sees them. You get one when:
 
-- it is your turn in a session that has a rotation (see [Who is due next](./sessions.md#who-is-due-next));
+- it is your turn in a session that has a rotation (see [Who is due next](./group-sessions.md#who-is-due-next));
 - a character puts a question to you that is waiting for your answer (see
-  [Questions put to the cast](./sessions.md#questions-put-to-the-cast--forms));
+  [Questions put to the cast](./session-actions.md#questions-put-to-the-cast-forms));
 - a reply you asked for failed;
 - background work you started, such as a lorebook's graph build, a scene or lore summary or a
   history compile, is ready for you to review, or failed;
@@ -76,7 +82,7 @@ The view is in three parts, and a part with nothing in it is not shown:
   session** or **Answer**, and an **×** (**Dismiss**) to put it away yourself.
 - **In progress**: background work, such as building a lorebook's graph or summarizing a scene,
   with its progress and a button to review the result when it is ready (see
-  [Summarization](./summarization.md#the-activity-sidebar)).
+  [Summarization](./summarization.md#in-the-activity-view)).
 - **Earlier**: notifications that no longer need you, dimmed. Their buttons still take you there.
 
 A button that points at one message (a question, a failed reply) opens the session scrolled to
@@ -202,3 +208,15 @@ story. Jump opens as a sheet from the top.
 - **Alt ]**: focus the open sidebar view.
 - **Alt /**: focus the page.
 - **Ctrl Shift Y**: switch to Document View, which has its own navigation and no rail.
+
+## Where to go next
+
+You know enough now to find your way around. A few things to try:
+
+- Add a second character to a session and let them talk to each other: [Group sessions](./group-sessions.md).
+- Give your world a memory of its places, people and history: [Lorebooks](./lorebooks.md).
+- Try a different kind of session, such as a narrated [Adventure](./genre-adventure.md): [Genres](./genres.md).
+- Change how the app looks: [Themes and settings](./themes-and-settings.md).
+- Invite a friend to your pub: [Users and accounts](./users-and-accounts.md).
+
+Something not working? See [Troubleshooting](./troubleshooting.md), or ask on [Discord](https://discord.gg/3kUx3MDcSa).

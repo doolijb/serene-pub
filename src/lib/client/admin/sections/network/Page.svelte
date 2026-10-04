@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { docsHref } from "$lib/shared/utils/docsHref"
 	/**
-	 * Instance › Network: plan 26, how this instance becomes reachable from
+	 * Pub › Network: plan 26, how this instance becomes reachable from
 	 * outside, and which origins it trusts. `/admin/servers` redirects here.
 	 *
 	 * Two modes, not a provider dropdown. "Easy" is one switch and no account;
@@ -14,7 +14,7 @@
 	import { UnsavedEdits } from "$lib/client/forms/unsavedEdits.svelte"
 	import * as Icons from "@lucide/svelte"
 	import AdminPageHeader from "$lib/client/components/admin/AdminPageHeader.svelte"
-	import SettingSwitch from "$lib/client/components/admin/instance/SettingSwitch.svelte"
+	import SettingSwitch from "$lib/client/components/admin/pub/SettingSwitch.svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { getAdminInterestContext } from "$lib/client/sockets/interest.svelte"
@@ -306,7 +306,7 @@
 	<AdminPageHeader
 		title="Network"
 		doc={docsHref("system-settings", "network")}
-		purpose="How this instance is reached from outside your network, and which addresses it trusts."
+		purpose="How this pub is reached from outside your network, and which addresses it trusts."
 	/>
 
 	<div class="flex flex-col gap-4">
@@ -329,10 +329,10 @@
 					</p>
 					<p class="text-surface-600-400">
 						<code>ALLOWED_ORIGINS=*</code>
-						is set in this instance's environment, so every origin is
+						is set in this pub's environment, so every origin is
 						accepted and the hosts listed below have no effect. This is
 						a legitimate choice when a reverse proxy or Docker port
-						mapping already decides what can reach this instance — but
+						mapping already decides what can reach this pub — but
 						it is not the app's default, and nothing here will narrow it
 						until that variable changes.
 					</p>
@@ -352,7 +352,7 @@
 				<div class="flex flex-col gap-1">
 					<h2 id="tunnel-heading" class="text-sm font-medium">Tunnel</h2>
 					<p class="text-surface-600-400 text-sm">
-						Make this instance reachable from outside your network,
+						Make this pub reachable from outside your network,
 						without port forwarding.
 					</p>
 				</div>
@@ -592,7 +592,7 @@
 					<h2 id="hosts-heading" class="text-sm font-medium">Allowed hosts</h2>
 					<p class="text-surface-600-400 text-sm">
 						Which origins may open a realtime connection to this
-						instance, and where each one comes from.
+						pub, and where each one comes from.
 					</p>
 				</div>
 

@@ -1,277 +1,315 @@
 <script lang="ts">
 	/**
-	 * One prompt's dedicated change page (Django change form). A prompt is a
-	 * name plus named text fields, belonging to a **step** rather than to a
-	 * pipeline; built-in rows are read-only here — clone to make an editable
-	 * variant. Every write answers with the refreshed library view.
+	 * Admin › Prompts › one prompt: the change form (Django admin). A prompt
+	 * is a name plus named text fields, belonging to a **step** rather than to
+	 * a pipeline; built-in rows are read-only here — Duplicate makes an
+	 * editable variant (`/admin/prompts/new?from=<id>`). Fieldsets:
 	 *
-	 * Two things this page has to keep apart, because the row does:
+	 * - **Identity** — name; step, origin and where it was written, readonly.
+	 * - **Text** — the step's declared fields.
+	 * - **Pipelines** (inline) — every pipeline with a step that can pick it,
+	 *   and whether it picks it now; each opens that pipeline's workspace.
+	 * - **Archived** (collapsed) — text off fields the step does not
+	 *   declare: read-only, Copy only. `fields` and `archived` are two
+	 *   columns and never one list — editing archived text would write it
+	 *   back into `fields`, where the next boot's sweep moves it out again.
 	 *
-	 *  - **the pool** (`poolLabel`) is what the prompt is for, and it is not a
-	 *    pipeline: this row is offered in every pipeline that reuses its
-	 *    step, so the heading never names one pipeline as its owner. Where it
-	 *    was *written* is a secondary line.
-	 *  - **`fields` and `archived`** are two different columns and must not be
-	 *    rendered as one list. An archived key is text off a field the step
-	 *    stopped declaring; editing it would write it back into `fields`, where
-	 *    the next boot's sweep would move it out again — a row ping-ponging
-	 *    between two shapes forever. So archived text is read-only, below, with
-	 *    Copy as the only thing you can do to it.
+	 * Every write answers with the refreshed library view (`res.library`).
 	 */
+	import { untrack } from "svelte"
 	import * as Icons from "@lucide/svelte"
-	import { adminGoto as goto, adminUnsavedEdits } from "$lib/client/admin/adminRouter.svelte"
-	import { UnsavedEdits } from "$lib/client/forms/unsavedEdits.svelte"
-	import { adminPage as page } from "$lib/client/admin/adminRouter.svelte"
-	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
+	import { requestWithInterest, useInterest } from "$lib/client/sockets/interest.svelte"
 	import {
-		requestWithInterest,
-		useInterest
-	} from "$lib/client/sockets/interest.svelte"
+		adminGoto,
+		adminPage,
+		adminUnsavedEdits
+	} from "$lib/client/admin/adminRouter.svelte"
+	import { UnsavedEdits } from "$lib/client/forms/unsavedEdits.svelte"
 	import { toaster } from "$lib/client/utils/toaster"
-	import { getContext, untrack } from "svelte"
-	import { ADMIN_SPLIT } from "$lib/client/components/admin/AdminSplit.svelte"
+	import AdminChangeForm, {
+		type AdminSaveIntent
+	} from "$lib/client/components/admin/AdminChangeForm.svelte"
+	import AdminFieldset from "$lib/client/components/admin/AdminFieldset.svelte"
+	import AdminField, { describedBy } from "$lib/client/components/admin/AdminField.svelte"
+	import AdminInline from "$lib/client/components/admin/AdminInline.svelte"
+	import { pipelinesFitting, promptDeletion } from "./promptsAdmin"
 
 	type Prompt = Sockets.Pipelines.Library.LibraryPrompt
+	type Pipeline = Sockets.Pipelines.Library.LibraryPipeline
+	type Draft = { name: string; fields: Record<string, string> }
 
 	const socket = useTypedSocket()
-	const split = getContext<{ mode: "desk" | "compact" } | undefined>(
-		ADMIN_SPLIT
-	)
-	let id = $derived(Number(page.params.id))
+	const id = $derived(Number(adminPage.params.id))
+	const validId = $derived(Number.isInteger(id) && id > 0)
 
 	let view = $state<Sockets.Pipelines.Library.Response>({})
 	let loading = $state(true)
-	let name = $state("")
-	let fields = $state<Record<string, string>>({})
+	const row = $derived(((view.prompts ?? []) as Prompt[]).find((r) => r.id === id))
+	const readOnly = $derived(!!row?.isImmutable)
 
-	let row = $derived(
-		((view.prompts ?? []) as Prompt[]).find((r) => r.id === id)
-	)
-	let readonly = $derived(!!row?.isImmutable)
+	let draft = $state<Draft | undefined>(undefined)
+	const edits = new UnsavedEdits(() => draft)
+	adminUnsavedEdits(() => edits.dirty)
+	const toDraft = (r: Prompt): Draft => ({ name: r.name, fields: { ...r.fields } })
 
 	/**
 	 * Every push of the library moves the saved snapshot; only a clean form
 	 * is overwritten by it, so another tab's save never wipes what is typed
 	 * here and the echo of this page's own save makes it clean.
 	 */
-	const edits = new UnsavedEdits(() => ({ name, fields }))
 	$effect(() => {
 		if (loading || !row) return
-		const next = { name: row.name, fields: { ...row.fields } }
-		untrack(() =>
-			edits.adoptSaved(next, (n) => {
-				name = n.name
-				fields = { ...n.fields }
-			})
-		)
+		const next = toDraft(row)
+		untrack(() => {
+			if (draft === undefined) {
+				draft = next
+				edits.markSaved()
+			} else edits.adoptSaved(next, (d) => (draft = d))
+		})
 	})
-	let dirty = $derived(edits.dirty)
-	adminUnsavedEdits(() => edits.dirty)
 
-	function handleLibrary(res: Sockets.Pipelines.Library.Response) {
-		view = res
-		loading = false
-	}
-	function handleWrite(res: Sockets.Pipelines.Library.Response) {
-		view = res
-	}
-	function handleError(res: { error?: string }) {
-		toaster.error({ title: res.error ?? "The library refused the edit." })
-	}
+	$effect(() =>
+		requestWithInterest("pipelines:library", {}, (res) => {
+			view = res
+			loading = false
+		})
+	)
 
-	const WRITE_EVENTS = [
-		"pipelines:libraryUpdatePrompt",
-		"pipelines:libraryClonePrompt",
-		"pipelines:libraryDeletePrompt"
-	] as const
+	// ── save ────────────────────────────────────────────────────────────
+	let saving = $state(false)
+	let pendingIntent: AdminSaveIntent | null = null
+	let formErrors = $state<string[]>([])
+	let nameError = $state<string | null>(null)
+
+	function save(intent: AdminSaveIntent) {
+		if (!draft || !row || readOnly) return
+		const name = draft.name.trim()
+		nameError = name ? null : "A prompt needs a name."
+		formErrors = []
+		if (nameError) return
+		draft.name = name
+		if (!edits.dirty) return land(intent)
+		saving = true
+		pendingIntent = intent
+		const snap = $state.snapshot(draft)
+		socket.emit("pipelines:libraryUpdatePrompt", { id, name: snap.name, fields: snap.fields })
+	}
+	function land(intent: AdminSaveIntent) {
+		if (intent === "save") void adminGoto("/admin/prompts")
+		else if (intent === "another") void adminGoto(`/admin/prompts/new?from=${id}`)
+	}
+	useInterest<"pipelines:libraryUpdatePrompt">("pipelines:libraryUpdatePrompt", (res) => {
+		if (res.library) view = res.library
+		const mine = pendingIntent
+		if (!mine) return
+		pendingIntent = null
+		saving = false
+		const saved = ((res.library?.prompts ?? []) as Prompt[]).find((r) => r.id === id)
+		if (saved) {
+			draft = toDraft(saved)
+			edits.markSaved()
+		}
+		toaster.success({ title: `Saved ${saved?.name ?? "the prompt"}` })
+		land(mine)
+	})
+	useInterest<"pipelines:libraryUpdatePrompt:error">(
+		"pipelines:libraryUpdatePrompt:error",
+		(res) => {
+			if (!pendingIntent) return
+			pendingIntent = null
+			saving = false
+			const error = res.error ?? "The prompt was not saved."
+			if (/name/i.test(error)) nameError = error
+			else formErrors = [error]
+		}
+	)
+
+	// ── delete ──────────────────────────────────────────────────────────
+	let deleting = false
+	function remove() {
+		if (!row || readOnly) return
+		deleting = true
+		socket.emit("pipelines:libraryDeletePrompt", { id })
+	}
+	useInterest<"pipelines:libraryDeletePrompt">("pipelines:libraryDeletePrompt", (res) => {
+		if (res.library) view = res.library
+		if (!deleting) return
+		deleting = false
+		edits.forget()
+		toaster.success({ title: "Prompt deleted" })
+		void adminGoto("/admin/prompts", { replaceState: true })
+	})
+	useInterest<"pipelines:libraryDeletePrompt:error">(
+		"pipelines:libraryDeletePrompt:error",
+		(res) => {
+			if (!deleting) return
+			deleting = false
+			formErrors = [res.error ?? "The prompt was not deleted."]
+		}
+	)
 
 	/**
-	 * Every write on this page answers with the refreshed view, and a refusal
-	 * answers on the `:error` name — both arrive when the person presses the
-	 * button, not in reply to anything asked here, so their interest stands.
-	 * One `useInterest` call per key: each is its own `$effect`, released with
-	 * the page. BARE — the library is the instance's, not one session's.
-	 */
-	for (const ev of WRITE_EVENTS) {
-		useInterest<"pipelines:libraryUpdatePrompt">(ev, handleWrite)
-		useInterest<"pipelines:libraryUpdatePrompt:error">(
-			`${ev}:error`,
-			handleError
-		)
-	}
-
-	/** The library view, asked for and listened for in one. BARE, same reason. */
-	$effect(() => requestWithInterest("pipelines:library", {}, handleLibrary))
-
-	function save() {
-		if (!row) return
-		socket.emit("pipelines:libraryUpdatePrompt", { id, name, fields })
-		toaster.success({ title: "Prompt saved" })
-	}
-	function clone() {
-		socket.emit("pipelines:libraryClonePrompt", { id })
-		toaster.success({ title: "Prompt cloned" })
-		goto("/admin/prompts")
-	}
-	/**
-	 * Copy archived text, rather than restore it.
-	 *
-	 * The step does not declare the field, so putting the text back would put
-	 * it where nothing reads it. Copying hands it to the person, who knows
-	 * which prompt or pipeline it belongs in now — which is exactly what
-	 * "recover/archive so the user can reference/copy it later" asks for.
+	 * Copy archived text, rather than restore it: the step does not declare
+	 * the field, so putting the text back would put it where nothing reads it.
 	 */
 	async function copyArchived(text: string) {
 		try {
 			await navigator.clipboard.writeText(text)
 			toaster.success({ title: "Copied to the clipboard" })
 		} catch {
-			toaster.error({
-				title: "Could not reach the clipboard. Select the text and copy it."
-			})
+			toaster.error({ title: "Could not reach the clipboard. Select the text and copy it." })
 		}
 	}
 
-	function remove() {
-		if (!row) return
-		if (
-			!confirm(
-				row.usedBy.length
-					? `'${row.name}' is still used by ${row.usedBy.join(", ")}. ` +
-							`The server will refuse until those point somewhere else. Try anyway?`
-					: `Delete '${row.name}'? Nothing is using it.`
-			)
-		)
-			return
-		socket.emit("pipelines:libraryDeletePrompt", { id })
-		edits.forget()
-		goto("/admin/prompts")
-	}
+	const title = $derived(draft?.name.trim() || row?.name || "Prompt")
+	const fitting = $derived(row ? pipelinesFitting(row, (view.pipelines ?? []) as Pipeline[]) : [])
+	const archived = $derived(Object.entries(row?.archived ?? {}))
 </script>
 
-{#if split?.mode !== "desk"}
-	<a
-		href="/admin/prompts"
-		class="text-surface-600-400 hover:text-surface-950-50 mb-3 inline-flex items-center gap-1 self-start text-[13px]"
+{#if !validId}
+	<!-- Between addresses: nothing to show for a frame. -->
+{:else if loading}
+	<div
+		class="text-surface-600-400 flex items-center justify-center gap-2 py-16 text-sm"
+		role="status"
 	>
-		<Icons.ChevronLeft size={14} /> Back to prompts
-	</a>
-{/if}
-
-<div class="mb-4 flex flex-wrap items-center gap-3">
-	<div class="min-w-0 flex-1">
-		<h2
-			class="text-surface-950-50 flex flex-wrap items-center gap-2 [font-family:var(--typo-heading--font-family)] text-base font-semibold"
-		>
-			{row?.name ?? "Prompt"}
-			{#if readonly}
-				<span
-					class="preset-tonal-surface rounded-full px-2 py-0.5 font-sans text-xs font-normal"
-				>
-					built-in · read-only
-				</span>
-			{/if}
-		</h2>
-		{#if row}
-			<p class="text-surface-600-400 text-sm">
-				Step: {row.poolLabel}
-			</p>
-			{#if row.origin}
-				<!-- Secondary, and phrased as history rather than ownership:
-				     this row is offered in every pipeline reusing the step
-				     above, and editing it reaches all of them. -->
-				<p class="text-surface-600-400 text-xs">
-					Written in {row.origin} — edits reach every pipeline using this
-					step.
-				</p>
-			{/if}
-		{/if}
+		<Icons.LoaderCircle size={16} class="animate-spin" aria-hidden="true" />
+		Loading prompt…
 	</div>
-</div>
-
-{#if loading}
-	<p class="text-surface-600-400 text-sm">Loading…</p>
-{:else if !row}
-	<div class="panel-card text-surface-600-400 py-8 text-center text-sm">
-		This prompt no longer exists.
-		<a class="underline" href="/admin/prompts">Back to the list</a>
-		.
+{:else if !row || !draft}
+	<div class="m-auto flex flex-col items-center gap-3 py-16 text-center">
+		<p class="text-surface-600-400 text-sm">There is no prompt {id}.</p>
+		<a href="/admin/prompts" class="btn btn-sm preset-tonal-surface">All prompts</a>
 	</div>
 {:else}
-	<div class="flex flex-col gap-4">
-		<div class="panel-card flex flex-col gap-3">
-			<label class="flex max-w-md flex-col gap-1 text-sm">
-				<span class="font-medium">Name</span>
-				<input class="input" bind:value={name} {readonly} />
-			</label>
-
-			<!-- The declared fields, editable. `row.fields` only — never merged
-		     with `row.archived`; keeping them apart is why the two are separate
-		     columns. -->
-			{#each Object.keys(row.fields) as field (field)}
-				<label class="flex flex-col gap-1 text-sm">
-					<span class="font-medium">{field}</span>
-					<textarea
-						class="textarea w-full font-mono text-xs"
-						rows={readonly ? 4 : 8}
-						{readonly}
-						spellcheck="false"
-						bind:value={fields[field]}
-					></textarea>
-				</label>
-			{/each}
-
-			{#if row.usedBy.length}
-				<p class="text-surface-600-400 text-xs">
-					Used by: {row.usedBy.join(", ")}
-				</p>
-			{/if}
-
-			<div class="flex flex-wrap items-center gap-2">
-				{#if !readonly}
-					<button
-						class="btn btn-sm preset-filled-primary-500"
-						disabled={!dirty}
-						onclick={save}
-					>
-						<Icons.Save size={14} /> Save
-					</button>
-				{/if}
-				<div class="flex-1"></div>
-				<button class="btn btn-sm preset-tonal-surface" onclick={clone}>
-					<Icons.Copy size={14} /> Clone
-				</button>
-				{#if !readonly}
-					<button
-						class="btn btn-sm preset-tonal-error"
-						onclick={remove}
-					>
-						<Icons.Trash2 size={14} /> Delete
-					</button>
+	<AdminChangeForm
+		mode="change"
+		{title}
+		purpose={readOnly
+			? "A built-in prompt: read-only. Duplicate it to make one you can change."
+			: "Edits reach every pipeline whose step picks this prompt."}
+		noun="prompt"
+		changelistHref="/admin/prompts"
+		changelistLabel="Prompts"
+		dirty={edits.dirty}
+		{saving}
+		canSave={readOnly ? false : undefined}
+		errors={formErrors}
+		fieldErrors={{ "prompt-admin-name": nameError }}
+		deletion={readOnly ? undefined : () => promptDeletion([row!])}
+		onDelete={readOnly ? undefined : remove}
+		onSave={save}
+	>
+		{#snippet headerActions()}
+			<a href="/admin/prompts/new?from={id}" class="btn btn-sm preset-tonal-surface">
+				<Icons.Copy size={16} aria-hidden="true" />
+				Duplicate
+			</a>
+		{/snippet}
+		{#snippet headerExtra()}
+			<div class="flex flex-wrap items-center gap-1.5 text-xs">
+				<span class="border-surface-300-700 text-surface-600-400 rounded-full border px-2 py-0.5">
+					{row!.poolLabel}
+				</span>
+				{#if readOnly}
+					<span class="border-surface-300-700 text-surface-600-400 rounded-full border px-2 py-0.5">
+						Built-in
+					</span>
 				{/if}
 			</div>
-		</div>
-		{#if Object.keys(row.archived ?? {}).length}
-			<div class="panel-card flex flex-col gap-3">
-				<p class="text-surface-600-400 text-xs">
-					<Icons.Archive size={12} class="inline" />
-					<strong>Archived.</strong>
-					This step no longer has
-					{Object.keys(row.archived).length === 1
-						? "this field"
-						: "these fields"}, so the text is kept here rather than
-					lost. Read-only: it is copied somewhere it is still used,
-					not edited back into a field nothing reads.
-				</p>
-				{#each Object.entries(row.archived) as [field, text] (field)}
+		{/snippet}
+
+		<AdminFieldset title="Identity">
+			<div class="grid gap-4 @min-[36rem]/content:grid-cols-3">
+				{#if readOnly}
+					<AdminField id="prompt-admin-name" label="Name" value={draft.name} />
+				{:else}
+					<AdminField
+						id="prompt-admin-name"
+						label="Name"
+						required
+						error={nameError}
+						help="Unique within its step."
+					>
+						<input
+							id="prompt-admin-name"
+							class="input"
+							type="text"
+							bind:value={draft.name}
+							aria-invalid={!!nameError}
+							aria-describedby={describedBy("prompt-admin-name", !!nameError)}
+						/>
+					</AdminField>
+				{/if}
+				<AdminField id="prompt-admin-step" label="Step" value={row.poolLabel} />
+				<AdminField
+					id="prompt-admin-origin"
+					label="Origin"
+					value={(readOnly ? "Built-in" : "Custom") +
+						(row.origin ? ` · written in ${row.origin}` : "")}
+				/>
+			</div>
+		</AdminFieldset>
+
+		<AdminFieldset
+			title="Text"
+			description="The fields this step declares. Each is sent where the step places it."
+		>
+			{#each Object.keys(draft.fields) as field (field)}
+				<AdminField id="prompt-admin-field-{field}" label={field}>
+					<textarea
+						id="prompt-admin-field-{field}"
+						class="textarea w-full font-mono text-xs"
+						rows={readOnly ? 4 : 8}
+						readonly={readOnly}
+						spellcheck="false"
+						bind:value={draft.fields[field]}
+					></textarea>
+				</AdminField>
+			{:else}
+				<p class="text-surface-600-400 text-sm">This step declares no text fields.</p>
+			{/each}
+		</AdminFieldset>
+
+		<AdminInline
+			title="Pipelines"
+			description="Every pipeline with a step that can pick this prompt. Picking happens in the pipeline's settings."
+			rows={fitting}
+			rowKey={(p) => p.slug}
+			columns={[
+				{ key: "name", label: "Pipeline", primary: true, text: (p) => p.name },
+				{
+					key: "genres",
+					label: "Genres",
+					text: (p) => (p.genres ?? []).map((g) => g.name).join(", ") || "—"
+				},
+				{
+					key: "picks",
+					label: "Picks it now",
+					text: (p) => (row!.usedBy.includes(p.name) ? "Yes" : "No")
+				}
+			]}
+			rowHref={(p) => `/admin/pipelines/${encodeURIComponent(p.slug)}`}
+			emptyMessage="No installed pipeline has a step that reads this prompt's pool."
+		/>
+
+		{#if archived.length}
+			<AdminFieldset
+				title="Archived"
+				description="Text off fields this step no longer declares, kept rather than lost. Read-only: copy it somewhere it is still used."
+				collapsible
+			>
+				{#each archived as [field, text] (field)}
 					<div class="flex flex-col gap-1 text-sm">
 						<div class="flex items-center gap-2">
 							<span class="flex-1 font-medium">{field}</span>
 							<button
+								type="button"
 								class="btn btn-sm preset-tonal-surface shrink-0"
 								onclick={() => copyArchived(text)}
 							>
-								<Icons.Copy size={13} /> Copy
+								<Icons.Copy size={13} aria-hidden="true" /> Copy
 							</button>
 						</div>
 						<textarea
@@ -279,11 +317,12 @@
 							rows="4"
 							readonly
 							spellcheck="false"
+							aria-label="Archived {field}"
 							value={text}
 						></textarea>
 					</div>
 				{/each}
-			</div>
+			</AdminFieldset>
 		{/if}
-	</div>
+	</AdminChangeForm>
 {/if}

@@ -48,13 +48,20 @@ import {
 	EXTRACTOR_VERSION,
 	bindingNames,
 	buildGazetteer,
+	entityKey,
 	extractEntities,
 	EMPTY_GAZETTEER,
 	type Entity,
+	type EntityRef,
 	type Gazetteer,
 	type GazetteerName,
 	type ModelSpan
 } from "$lib/server/pipelines/ranking/entities"
+import {
+	castTag,
+	castTagNumber,
+	castTagSpans
+} from "$lib/server/utils/castTags"
 
 // db is the global Db — see db/types.d.ts
 
@@ -94,7 +101,8 @@ export const MAX_ANNOTATED_LENGTH = 20_000
 export const ANNOTATION_BATCH = 200
 
 /**
- * Tier zero's spans for one passage, or none.
+ * Tier zero's spans for one passage, or none — with the model that read it
+ * (`ModelPass`).
  *
  * `modelId` is the identity the lane took a LEASE on. Two things follow from
  * reading it here rather than asking the runtime what is loaded:
@@ -113,18 +121,33 @@ export const ANNOTATION_BATCH = 200
 async function modelSpansFor(
 	text: string,
 	modelId: string | null | undefined
-): Promise<ModelSpan[]> {
-	if (!modelId || !text) return []
+): Promise<ModelPass> {
+	const lexical: ModelPass = { spans: [], entityModel: null }
+	if (!modelId || !text) return lexical
 	try {
 		const { extractNerSpans, getLoadedNerModelId } = await import(
 			"$lib/server/ner"
 		)
-		if (getLoadedNerModelId() !== modelId) return []
-		return await extractNerSpans(text)
+		if (getLoadedNerModelId() !== modelId) return lexical
+		return { spans: await extractNerSpans(text), entityModel: modelId }
 	} catch (err) {
 		console.warn("[annotations] entity model produced nothing:", err)
-		return []
+		return lexical
 	}
+}
+
+/**
+ * Tier zero's answer for one passage: its spans, and the model that gave them.
+ *
+ * `entityModel` is the model's identity when it actually read the passage —
+ * found nothing counts, it looked — and null for a lexical pass: no model
+ * leased, a different one resident, or one that failed. It is what the rows are
+ * stamped with (`entry_annotations.entity_model`), and what a move of the
+ * entity star is judged against.
+ */
+interface ModelPass {
+	spans: ModelSpan[]
+	entityModel: string | null
 }
 
 /** Short digests: enough to distinguish, short enough to store on every row. */
@@ -134,14 +157,77 @@ const digest = (value: string) =>
 /** The vocabulary one lorebook matches against, and its identity. */
 export interface AnnotationVocabulary {
 	gazetteer: Gazetteer
-	/** Changes when a name does. Part of every row's freshness triple. */
+	/**
+	 * What each cast tag (`{{char:N}}`) names: member number → the member's
+	 * character, for every member bound to a live card. An entry's stored
+	 * text names a member only by tag (the name is written in at the
+	 * pipeline's read), so this is how its annotation reaches them
+	 * (`entryEntities`).
+	 */
+	castTags: ReadonlyMap<number, EntityRef>
+	/**
+	 * Changes when a name does, or what a tag names. Part of every row's
+	 * freshness triple.
+	 */
 	hash: string
 }
 
 /** `gazetteerHash` of nothing — a session with no lorebook, and a real state. */
 export const EMPTY_VOCABULARY: AnnotationVocabulary = {
 	gazetteer: EMPTY_GAZETTEER,
+	castTags: new Map(),
 	hash: digest("")
+}
+
+/**
+ * Every name the book's amendments give its cast members and entries, on any
+ * line and at any date — what `loadVocabulary` adds to the stored names
+ * (plan C1). A cast amendment's `name` and `aliases` (`CAST_AMENDABLE`), an
+ * entry amendment's `name` (the wire row's title). Trimmed, empty dropped,
+ * in amendment order (id), so the vocabulary is the same on every read.
+ */
+export async function amendedNamesOf(
+	db: Db,
+	lorebookId: number
+): Promise<{
+	cast: Map<number, string[]>
+	entries: Map<number, string[]>
+}> {
+	const [castRows, entryRows] = await Promise.all([
+		db
+			.select({
+				memberId: schema.castAmendments.lorebookBindingId,
+				fields: schema.castAmendments.fields
+			})
+			.from(schema.castAmendments)
+			.where(eq(schema.castAmendments.lorebookId, lorebookId))
+			.orderBy(asc(schema.castAmendments.id)),
+		db
+			.select({
+				entryId: schema.entryAmendments.entryId,
+				fields: schema.entryAmendments.fields
+			})
+			.from(schema.entryAmendments)
+			.where(eq(schema.entryAmendments.lorebookId, lorebookId))
+			.orderBy(asc(schema.entryAmendments.id))
+	])
+	const add = (into: Map<number, string[]>, id: number, raw: unknown) => {
+		if (typeof raw !== "string" || !raw.trim()) return
+		const list = into.get(id) ?? []
+		if (!list.includes(raw.trim())) list.push(raw.trim())
+		into.set(id, list)
+	}
+	const cast = new Map<number, string[]>()
+	for (const row of castRows) {
+		const fields = (row.fields ?? {}) as Record<string, unknown>
+		add(cast, row.memberId, fields.name)
+		if (Array.isArray(fields.aliases))
+			for (const alias of fields.aliases) add(cast, row.memberId, alias)
+	}
+	const entries = new Map<number, string[]>()
+	for (const row of entryRows)
+		add(entries, row.entryId, ((row.fields ?? {}) as Record<string, unknown>).name)
+	return { cast, entries }
 }
 
 /**
@@ -156,7 +242,24 @@ export const EMPTY_VOCABULARY: AnnotationVocabulary = {
  * *to*: `EntityRef` names a character or an entry, and inventing a
  * third kind is a schema decision this seam should not make on its own. Its
  * name is still extracted, as an open-tier string, which is exactly plan Part
- * 2's *"references that don't resolve yet"*.
+ * 2's *"references that don't resolve yet"*. A member whose card was deleted
+ * reads the same way (plan A25): a deleted card is nobody in a lorebook.
+ *
+ * **Amended names count (plan C1, owner ruling R1 "hybrid", 2026-09-30).** A
+ * member renamed by a cast amendment, or an entry retitled by an entry
+ * amendment, answers to the new name too: on every line, at every date. One
+ * vocabulary per BOOK, not per reading, because the rows it stamps are the
+ * book's (an entry's annotations and the cast suggestions are read by every
+ * session), and a hash that moved with the reader would mark them stale for
+ * every other one. So the names are a union — every stored name first (cast,
+ * then entries, as before), then every name an amendment gives them, in
+ * amendment order; the first claimant of a name still keeps it, so an
+ * amended name never takes a name another member or entry already holds.
+ * Without them a renamed member's new name read as nobody's, and the cast
+ * suggestions offered it as a new member (plan A23(a)'s leftover).
+ *
+ * ⚠ Names only. What an entry SAYS for search by meaning stays its base text
+ * (`embedding/ragContext.ts`); the ruling keeps content vectors on the base.
  */
 export async function loadVocabulary(
 	db: Db,
@@ -167,12 +270,19 @@ export async function loadVocabulary(
 	const [bindings, entries] = await Promise.all([
 		db
 			.select({
+				id: schema.lorebookBindings.id,
 				characterId: schema.lorebookBindings.characterId,
+				cardDeleted: schema.characters.isDeleted,
+				tag: schema.lorebookBindings.binding,
 				name: schema.lorebookBindings.name,
 				aliases: schema.lorebookBindings.aliases,
 				absorbedAliases: schema.lorebookBindings.absorbedAliases
 			})
 			.from(schema.lorebookBindings)
+			.leftJoin(
+				schema.characters,
+				eq(schema.characters.id, schema.lorebookBindings.characterId)
+			)
 			.where(eq(schema.lorebookBindings.lorebookId, lorebookId))
 			.orderBy(asc(schema.lorebookBindings.id)),
 		db
@@ -184,26 +294,57 @@ export async function loadVocabulary(
 			.where(eq(schema.lorebookEntries.lorebookId, lorebookId))
 			.orderBy(asc(schema.lorebookEntries.id))
 	])
+	const amendedNames = await amendedNamesOf(db, lorebookId)
 
 	const names: GazetteerName[] = []
+	const castTags = new Map<number, EntityRef>()
+	const castRefs: Array<[number, EntityRef]> = []
 	for (const binding of bindings) {
 		const ref =
-			binding.characterId != null
+			binding.characterId != null && binding.cardDeleted !== true
 				? ({ kind: "character", id: binding.characterId } as const)
 				: null
 		if (!ref) continue
+		castRefs.push([binding.id, ref])
 		for (const name of bindingNames(binding)) names.push({ name, ref })
+		const n = castTagNumber(binding.tag)
+		if (n !== null) castTags.set(n, ref)
 	}
+	for (const [memberId, ref] of castRefs)
+		for (const name of amendedNames.cast.get(memberId) ?? [])
+			names.push({ name, ref })
 	for (const entry of entries)
 		if (typeof entry.title === "string" && entry.title.trim())
 			names.push({
 				name: entry.title.trim(),
 				ref: { kind: "entry", id: entry.id }
 			})
+	for (const entry of entries)
+		for (const name of amendedNames.entries.get(entry.id) ?? [])
+			names.push({ name, ref: { kind: "entry", id: entry.id } })
 
 	const gazetteer = buildGazetteer(names)
+
+	/**
+	 * The tags the names do not already speak for.
+	 *
+	 * A book binds a card to one member at most
+	 * (`lorebook_bindings_character_unique`), so a `character:<id>` among the
+	 * gazetteer's answers is that member's own name, and binding them to
+	 * another card, or losing the card, moves that line of the hash already.
+	 * Only a member who answers to no name of their own — a name another
+	 * member claimed first, or one too short to match — needs their tag in the
+	 * hash. So a book whose members each own a name keeps the hash it had,
+	 * and nothing in it is re-annotated or re-embedded for the tags.
+	 */
+	const named = new Set([...gazetteer.byName.values()].map(entityKey))
+	const unnamedTags = [...castTags]
+		.filter(([, ref]) => !named.has(entityKey(ref)))
+		.map(([n, ref]) => `${castTag(n)}\0${entityKey(ref)}`)
+
 	return {
 		gazetteer,
+		castTags,
 		/**
 		 * Hashed over the compiled *keys*, not the names handed in, so the
 		 * identity describes what the matcher will actually do. A title that
@@ -211,51 +352,91 @@ export async function loadVocabulary(
 		 * without changing any name, and this is what notices.
 		 */
 		hash: digest(
-			[...gazetteer.byName]
-				.map(([name, ref]) => `${name}\0${ref.kind}:${ref.id}`)
+			[
+				...[...gazetteer.byName].map(
+					([name, ref]) => `${name}\0${ref.kind}:${ref.id}`
+				),
+				...unnamedTags
+			]
 				.sort()
 				.join("\u0001")
 		)
 	}
 }
 
-/** What the extractor is handed for one entry — title, keys and content. */
-export const entryAnnotationText = (row: {
+/**
+ * What the annotation lane reads for one entry, whole — title, keys and
+ * content, one space apart. `lorebook_entries.annotation_text_hash` spells the
+ * same recipe in SQL; `annotationTextHash.int.test.ts` pins the two equal.
+ */
+export const entryAnnotationSource = (row: {
 	title?: string | null
 	keys?: string[] | string | null
 	content?: string | null
 }): string =>
 	`${row.title ?? ""} ${
 		Array.isArray(row.keys) ? row.keys.join(", ") : (row.keys ?? "")
-	} ${row.content ?? ""}`.slice(0, MAX_ANNOTATED_LENGTH)
+	} ${row.content ?? ""}`
+
+/** What the extractor is handed for one entry: its source, cut to the bound. */
+export const entryAnnotationText = (row: {
+	title?: string | null
+	keys?: string[] | string | null
+	content?: string | null
+}): string => entryAnnotationSource(row).slice(0, MAX_ANNOTATED_LENGTH)
 
 export const contentHash = (text: string) => digest(text)
 
 /**
- * One entry's content identity — `entry_annotations.source_hash`, as a value
- * anything may compute.
+ * One entry's content identity — `lorebook_entries.annotation_text_hash`, as a
+ * value anything may compute.
  *
- * Exported because a **second** reader now needs the same fact for a different
+ * Exported because a **second** reader needs the same fact for a different
  * question. The lane asks *is this row's annotation stale*; a run receipt asks
  * *is this row still what my run scored*, and both are "did title, keys or
  * content move". Two hashes over the same three columns would be the dual-source
  * drift this codebase keeps finding — one that says "changed" while the other
- * says "fresh", with nothing to say which is right — so there is one recipe and
- * this is it.
+ * says "fresh", with nothing to say which is right — so there is one recipe,
+ * spelled here and in the column, and a test holds the two equal.
+ *
+ * Over the whole text, not the `MAX_ANNOTATED_LENGTH` cut the extractor reads:
+ * an edit past the cut is still an edit, and the whole text is what SQL can
+ * cut identically (JavaScript slices UTF-16 units, Postgres characters).
  *
  * ⚠ Over the **stored** columns, deliberately, and not over the hydrated text a
  * scan actually matched against. `{{char:1}}` substitution and `@@` decorator
  * stripping happen at the pipeline's read (`host.ts` `lorebook_entries`), so
- * renaming a bound character changes what was scored without moving this. That
- * is the same blind spot the annotation lane already has, which is the argument
- * for it rather than against: "this entry's content moved" means one thing
- * everywhere, and the two surfaces cannot disagree about an entry.
+ * renaming a bound character changes what was scored without moving this.
+ * "This entry's content moved" means one thing everywhere, and the two
+ * surfaces cannot disagree about an entry. The annotation lane reads a tag as
+ * its member by number, never by name (`entryEntities`), so a rename moves
+ * nothing it derives; what a tag names is the vocabulary's hash to track.
  */
 export const entrySourceHash = (row: {
 	title?: string | null
 	keys?: string[] | string | null
 	content?: string | null
-}): string => contentHash(entryAnnotationText(row))
+}): string => contentHash(entryAnnotationSource(row))
+
+/**
+ * The hash of the text each annotated table is read from now, as a column —
+ * what an annotation's `source_hash` must equal to be fresh (plan A23).
+ *
+ * Read in the same statement as the text a pass extracts from, and stamped on
+ * the rows it writes, so what is hashed is what was read. The picker compares
+ * the stored hash with the column in SQL, and every reader here does the same,
+ * so no reader recomputes a digest and none can disagree with the picker.
+ *
+ *  - `entry` — `lorebook_entries.annotation_text_hash`, over
+ *    `entryAnnotationSource`.
+ *  - `message` — `session_messages.embed_text_hash`: a message is annotated
+ *    from its content, which is exactly what it embeds, so the one GENERATED
+ *    column answers both lanes.
+ */
+export const annotationTextHash = {
+	entry: schema.lorebookEntries.annotationTextHash,
+	message: schema.sessionMessages.embedTextHash
+} as const
 
 /**
  * ⚠ The empty-extraction sentinel — see the `entry_annotations` schema note.
@@ -280,6 +461,7 @@ interface AnnotationValues {
 	extractorVersion: string
 	sourceHash: string
 	gazetteerHash: string
+	entityModel: string | null
 }
 
 /**
@@ -301,12 +483,14 @@ const CONFIDENCE: Record<string, number> = { gazetteer: 1, open: 0.5 }
 const valuesFor = (
 	entities: readonly Entity[],
 	sourceHash: string,
-	gazetteerHash: string
+	gazetteerHash: string,
+	entityModel: string | null
 ): AnnotationValues[] => {
 	const base = {
 		extractorVersion: EXTRACTOR_VERSION,
 		sourceHash,
-		gazetteerHash
+		gazetteerHash,
+		entityModel
 	}
 	if (entities.length === 0)
 		return [
@@ -335,6 +519,56 @@ const valuesFor = (
 		spans: e.spans,
 		...base
 	}))
+}
+
+/**
+ * The entities an entry's text names: the extractor's, and its cast tags.
+ *
+ * `{{char:N}}` is written as the member's name only at the pipeline's read,
+ * so the stored text the lane reads names a member by tag alone. Each tag is
+ * read here as the member it names (`AnnotationVocabulary.castTags`), by
+ * number, never through the name: `character:<id>`, a gazetteer answer, with
+ * the tag as written for its surface and the tag's own offsets for its span.
+ * A tag and the member's name in one entry are one entity, counted twice.
+ * A background member's tag, or one with no member, names nobody, as the
+ * vocabulary has nothing for them either.
+ *
+ * Past the extractor's `MAX_ENTITIES`: a book has few members, and a tag is
+ * the surest mention an entry can make.
+ */
+export function entryEntities(
+	text: string,
+	vocabulary: AnnotationVocabulary,
+	modelSpans: readonly ModelSpan[] = []
+): Entity[] {
+	const { entities } = extractEntities(text, vocabulary.gazetteer, modelSpans)
+	const byKey = new Map(entities.map((e) => [e.key, e]))
+	const out = [...entities]
+	for (const tag of castTagSpans(text)) {
+		const ref = vocabulary.castTags.get(tag.n)
+		if (!ref) continue
+		const key = entityKey(ref)
+		const span = { start: tag.start, end: tag.end }
+		const found = byKey.get(key)
+		if (found) {
+			found.count++
+			found.spans = [...found.spans, span].sort(
+				(a, b) => a.start - b.start
+			)
+			continue
+		}
+		const entity: Entity = {
+			key,
+			text: text.slice(tag.start, tag.end),
+			tier: "gazetteer",
+			ref,
+			count: 1,
+			spans: [span]
+		}
+		byKey.set(key, entity)
+		out.push(entity)
+	}
+	return out
 }
 
 /**
@@ -376,6 +610,7 @@ async function writeAnnotations(
 					extractorVersion: sql`excluded.extractor_version`,
 					sourceHash: sql`excluded.source_hash`,
 					gazetteerHash: sql`excluded.gazetteer_hash`,
+					entityModel: sql`excluded.entity_model`,
 					annotatedAt: sql`excluded.annotated_at`
 				}
 			})
@@ -468,7 +703,8 @@ export async function annotateEntries(
 			id: schema.lorebookEntries.id,
 			title: schema.lorebookEntries.title,
 			keys: schema.lorebookEntries.keys,
-			content: schema.lorebookEntries.content
+			content: schema.lorebookEntries.content,
+			sourceHash: annotationTextHash.entry
 		})
 		.from(schema.lorebookEntries)
 		.where(inArray(schema.lorebookEntries.id, entryIds as number[]))
@@ -483,25 +719,22 @@ export async function annotateEntries(
 	let written = 0
 	let deferred = 0
 	for (const row of rows) {
-		const text = entryAnnotationText(row)
-		const sourceHash = contentHash(text)
+		const { sourceHash } = row
 		if (isFresh(stored.get(row.id), sourceHash, vocabulary.hash)) continue
 		if (written >= limit) {
 			deferred++
 			continue
 		}
-		const { entities } = extractEntities(
-			text,
-			vocabulary.gazetteer,
-			await modelSpansFor(text, opts.modelId)
-		)
+		const text = entryAnnotationText(row)
+		const pass = await modelSpansFor(text, opts.modelId)
+		const entities = entryEntities(text, vocabulary, pass.spans)
 		await writeAnnotations(
 			db,
 			schema.entryAnnotations,
 			schema.entryAnnotations.entryId,
 			"entryId",
 			row.id,
-			valuesFor(entities, sourceHash, vocabulary.hash)
+			valuesFor(entities, sourceHash, vocabulary.hash, pass.entityModel)
 		)
 		written++
 	}
@@ -513,13 +746,11 @@ export async function annotateEntries(
  *
  * The difference from `annotateEntries` is who decides. That function is handed
  * a set and filters it by the freshness triple; this one is handed a row a
- * picker has *already* decided is stale, extracts, and writes. It writes even
- * when the recomputed hashes turn out to match, and that is deliberate rather
- * than wasteful: `annotated_at` is what the picker's SQL predicate compares
- * against, so a pass that examined a row and wrote nothing would leave the
- * predicate true and the picker would hand the same row back for ever. One
- * upsert closes the loop; the extraction it costs is a regex over at most
- * `MAX_ANNOTATED_LENGTH` characters.
+ * picker has *already* decided is stale, extracts, and writes. The hash it
+ * stamps is the column (`annotationTextHash`) read in the same statement as the
+ * text, which is exactly what the picker's SQL compares against, so the write
+ * is what closes the loop: the picker hands the row back only when its text
+ * moved after this read.
  *
  * Returns `false` when the row is gone — a delete that raced the pick, which is
  * not a failure.
@@ -536,7 +767,8 @@ export async function annotateEntry(
 			id: schema.lorebookEntries.id,
 			title: schema.lorebookEntries.title,
 			keys: schema.lorebookEntries.keys,
-			content: schema.lorebookEntries.content
+			content: schema.lorebookEntries.content,
+			sourceHash: annotationTextHash.entry
 		})
 		.from(schema.lorebookEntries)
 		.where(eq(schema.lorebookEntries.id, entryId))
@@ -545,18 +777,15 @@ export async function annotateEntry(
 	if (!row) return false
 
 	const text = entryAnnotationText(row)
-	const { entities } = extractEntities(
-		text,
-		vocabulary.gazetteer,
-		await modelSpansFor(text, modelId)
-	)
+	const pass = await modelSpansFor(text, modelId)
+	const entities = entryEntities(text, vocabulary, pass.spans)
 	await writeAnnotations(
 		db,
 		schema.entryAnnotations,
 		schema.entryAnnotations.entryId,
 		"entryId",
 		row.id,
-		valuesFor(entities, contentHash(text), vocabulary.hash)
+		valuesFor(entities, row.sourceHash, vocabulary.hash, pass.entityModel)
 	)
 	return true
 }
@@ -579,7 +808,8 @@ export async function annotateMessage(
 	const rows = await db
 		.select({
 			id: schema.messages.id,
-			content: schema.sessionMessages.content
+			content: schema.sessionMessages.content,
+			sourceHash: annotationTextHash.message
 		})
 		.from(schema.messages)
 		.innerJoin(
@@ -592,18 +822,15 @@ export async function annotateMessage(
 	if (!row) return false
 
 	const text = (row.content ?? "").slice(0, MAX_ANNOTATED_LENGTH)
-	const { entities } = extractEntities(
-		text,
-		vocabulary.gazetteer,
-		await modelSpansFor(text, modelId)
-	)
+	const pass = await modelSpansFor(text, modelId)
+	const { entities } = extractEntities(text, vocabulary.gazetteer, pass.spans)
 	await writeAnnotations(
 		db,
 		schema.messageAnnotations,
 		schema.messageAnnotations.messageId,
 		"messageId",
 		row.id,
-		valuesFor(entities, contentHash(text), vocabulary.hash)
+		valuesFor(entities, row.sourceHash, vocabulary.hash, pass.entityModel)
 	)
 	return true
 }
@@ -676,7 +903,8 @@ export async function annotateSessionMessages(
 	const rows = await db
 		.select({
 			id: schema.messages.id,
-			content: schema.sessionMessages.content
+			content: schema.sessionMessages.content,
+			sourceHash: annotationTextHash.message
 		})
 		.from(schema.messages)
 		.innerJoin(
@@ -697,17 +925,18 @@ export async function annotateSessionMessages(
 	let written = 0
 	let deferred = 0
 	for (const row of rows) {
-		const text = (row.content ?? "").slice(0, MAX_ANNOTATED_LENGTH)
-		const sourceHash = contentHash(text)
+		const { sourceHash } = row
 		if (isFresh(stored.get(row.id), sourceHash, vocabulary.hash)) continue
 		if (written >= limit) {
 			deferred++
 			continue
 		}
+		const text = (row.content ?? "").slice(0, MAX_ANNOTATED_LENGTH)
+		const pass = await modelSpansFor(text, opts.modelId)
 		const { entities } = extractEntities(
 			text,
 			vocabulary.gazetteer,
-			await modelSpansFor(text, opts.modelId)
+			pass.spans
 		)
 		await writeAnnotations(
 			db,
@@ -715,7 +944,7 @@ export async function annotateSessionMessages(
 			schema.messageAnnotations.messageId,
 			"messageId",
 			row.id,
-			valuesFor(entities, sourceHash, vocabulary.hash)
+			valuesFor(entities, sourceHash, vocabulary.hash, pass.entityModel)
 		)
 		written++
 	}
@@ -741,11 +970,13 @@ export type AnnotationIndex = Map<number, string[]>
 /**
  * Which of a set of entries names which entities.
  *
- * Only rows whose freshness triple matches are returned. A stale row is not a
- * fact about the text as it stands, and returning it would justify a hit with
- * content that no longer says it — §13.3's silent wrongness. For entries this
- * rarely fires, because `annotateEntries` runs first; the filter is here because
- * "the repair ran" is an assumption and this is the reader.
+ * Only rows whose freshness triple matches are returned — version, vocabulary
+ * and the entry's text (`annotationTextHash.entry`). A stale row is not a fact
+ * about the text as it stands, and returning it would justify a hit with
+ * content that does not say it any more — §13.3's silent wrongness. It fires
+ * when a bounded promotion left an edited entry for the background pass; the
+ * filter is here because "the repair ran" is an assumption and this is the
+ * reader.
  */
 export async function readEntryAnnotations(
 	db: Db,
@@ -759,13 +990,20 @@ export async function readEntryAnnotations(
 			entryId: schema.entryAnnotations.entryId,
 			entityKey: schema.entryAnnotations.entityKey,
 			gazetteerHash: schema.entryAnnotations.gazetteerHash,
-			version: schema.entryAnnotations.extractorVersion
+			version: schema.entryAnnotations.extractorVersion,
+			sourceHash: schema.entryAnnotations.sourceHash,
+			currentHash: annotationTextHash.entry
 		})
 		.from(schema.entryAnnotations)
+		.innerJoin(
+			schema.lorebookEntries,
+			eq(schema.lorebookEntries.id, schema.entryAnnotations.entryId)
+		)
 		.where(inArray(schema.entryAnnotations.entryId, entryIds as number[]))
 	for (const row of rows) {
 		if (row.version !== EXTRACTOR_VERSION) continue
 		if (row.gazetteerHash !== vocabulary.hash) continue
+		if (row.sourceHash !== row.currentHash) continue
 		if (row.entityKey === NO_ENTITIES_KEY) {
 			if (!out.has(row.entryId)) out.set(row.entryId, [])
 			continue
@@ -819,7 +1057,8 @@ export async function searchMessageAnnotations(
 			content: schema.sessionMessages.content,
 			gazetteerHash: schema.messageAnnotations.gazetteerHash,
 			version: schema.messageAnnotations.extractorVersion,
-			sourceHash: schema.messageAnnotations.sourceHash
+			sourceHash: schema.messageAnnotations.sourceHash,
+			currentHash: annotationTextHash.message
 		})
 		.from(schema.messageAnnotations)
 		.innerJoin(
@@ -857,8 +1096,7 @@ export async function searchMessageAnnotations(
 		 * turn), so the reader is the only place that can refuse a claim about
 		 * a sentence that has since been edited.
 		 */
-		const text = (row.content ?? "").slice(0, MAX_ANNOTATED_LENGTH)
-		if (row.sourceHash !== contentHash(text)) continue
+		if (row.sourceHash !== row.currentHash) continue
 		const seen = byId.get(row.id)
 		if (seen) seen.keys.push(row.entityKey)
 		else if (byId.size < limit)

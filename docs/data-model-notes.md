@@ -1,54 +1,39 @@
 # Data model notes
 
-Design rationale for tables in `src/lib/server/db/schema.ts` that is too long
-to live as a comment there. Each table's schema comment carries the
-present-tense rule and, where it points here, the paragraph behind it.
+Why some tables in `src/lib/server/db/schema.ts` are shaped the way they are, for contributors
+reading or changing the schema. Each table's comment in the schema states its rule; where the
+reason is too long for a comment, it points here.
 
 ## connection_models
 
-`connections` stays the ENDPOINT (its id, and every foreign key pointing at
-it, is untouched); `connection_models` holds the models reachable through
-that endpoint. Selection everywhere is an (endpoint, model) PAIR, and both
-halves are required: connections have no default model (0128 dropped
-`is_default` and the endpoint's `model` mirror), so a pair naming only the
-endpoint is incomplete and resolves as unconfigured rather than guessing.
+**A connection is an endpoint; its models are rows under it.** `connections` holds where the
+compute is: the base URL, the key, the wire mode, the token counter. `connection_models` holds the
+models reachable through that endpoint, each with its own settings. One llama.cpp host serving
+three models is one connection with three model rows, so its URL and key are stated once, and
+testing the endpoint covers every model behind it.
 
-**Rows are synced from the service, not imported (0129).** `missing_since`
-on a model row is set when a successful listing of its endpoint stops naming
-it, kept at its first value across later syncs, and cleared when the model is
-listed again. A missing model is refused at dispatch and by the star, and
-every picker shows it greyed with the reason; the row is kept so the overrides
-and selections naming it survive the model's return. `models_synced_at` /
-`models_sync_error` on the endpoint record the last attempt; a FAILED listing
-writes only those two and touches no model row, because an unreachable host
-is a fact about the host, not about any model. See
-`server/connections/modelSync.ts`.
+**Every selection is a pair.** Wherever something picks a model (the pub defaults, a
+pipeline config's connection slot) it names both the endpoint and the model. A connection has no
+default model, so a selection naming only the endpoint is incomplete and resolves as
+unconfigured rather than guessing.
 
-Before this split, a `connections` row was a URL, an auth bag, a wire mode,
-ONE model string and ONE capability set — conflating where the compute is
-(a key, a base URL, a token counter) with which model is being asked for (a
-context window, a completion template, a vision capability). One llama.cpp
-host serving three ggufs had to be three connections, each re-stating the
-same URL and key and each with its own probe, so testing one said nothing
-about the others and changing the key meant editing three rows.
+**Rows, not a JSON array on the connection.** `connection_defaults.connection_model_id` and the
+pipeline config's connection slot both reference a model, and a reference needs an id that a
+foreign key can clear. In an array the index would be the reference, and deleting the second of
+three models would silently repoint every selection that named the third.
 
-**Rows, not a JSON array on the connection.** `connection_defaults.connection_model_id`
-and the pipeline config's connection slot both REFERENCE a model, and a
-reference needs an id a foreign key can clear. In an array the index would be
-the reference, and deleting the second of three models would silently repoint
-every selection that named the third.
+**A model's settings are overrides, so they are nullable.** `prompt_format`, `token_counter` and
+`context_window` on a model row are NULL unless an admin set them, and NULL means "whatever the
+endpoint says". `capabilities` has the same `{ resolved, overrides, probe }` shape as
+`connections.capabilities`; `layerCapabilities` in `server/connections/models.ts` lays a model's
+capabilities over its endpoint's. It is resolved at every run and never cached on either row.
 
-**The settings on a model row are OVERRIDES, nullable for that reason.**
-`prompt_format`, `token_counter` and `context_window` are NULL on a row the
-migration that introduced this table created, and NULL means "whatever the
-endpoint says" — the backfill copied the model string and nothing else, so
-every merged pair was byte-identical to the row it replaced. `capabilities`
-follows the same shape `connections.capabilities` uses (`{resolved,
-overrides, probe}`); see `layerCapabilities` in `server/connections/models.ts`
-for how a model's layer sits over the endpoint's (resolved live at every run,
-never cached on either row).
+**Model rows are synced from the service.** When a listing of the endpoint succeeds and no longer
+names a model, `missing_since` is set on that model's row. It keeps its first value across later
+syncs, and is cleared when the model is listed again. A missing model is refused at dispatch and
+when starred, and every picker shows it greyed with the reason. The row is kept, so the overrides
+and selections that name it survive the model coming back.
 
-> "Endpoint/Model split. We would still need to be able to manage different
-> models independently with their own settings, and choose via
-> connection+model for i.e. system defaults & service node overrides."
-> — ruling, 2026-09-10
+`models_synced_at` and `models_sync_error` on the connection record the last attempt. A listing
+that **fails** writes only those two and touches no model row: an unreachable host is a fact
+about the host, not about any model. See `server/connections/modelSync.ts`.

@@ -18,6 +18,11 @@
  * `$lib/shared/widgets/context`): as `layout.v1.chrome.card`, and as
  * `data-sp-card="on" | "off"` on its box, for a stylesheet to key off.
  *
+ * The messages widget is the exception (note 18, 2026-10-02): its Card setting
+ * is a backing MODE (`backingMode`, Auto / On / Off) over the message backing
+ * its style declares (`$lib/shared/widgets/messageBacking`), and only a
+ * pop-over gets this host card.
+ *
  * "Card" alone is a character file (NOMENCLATURE, content): the setting key and
  * this module say `hostCard` — the card the HOST draws — and only the UI label
  * is the bare word.

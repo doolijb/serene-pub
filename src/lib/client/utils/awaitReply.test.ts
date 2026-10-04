@@ -92,3 +92,56 @@ describe("awaitReply", () => {
 		expect(released).toHaveLength(2)
 	})
 })
+
+describe("awaitReply — a refusal that names its request (matchError)", () => {
+	test("a place-stat save is settled only by its own refusal, or one naming no request", async () => {
+		// L4 review: another stat's refusal, or another tab's, rejected this
+		// save — the error showed under the wrong stat and a save that landed
+		// read as failed. `lorebookState:*` refusals echo the request id.
+		const { socketPlaceStatsApi } = await import("$lib/client/lorebooks/places/placeStatsApi")
+		const emits: Array<{ event: string; params: any }> = []
+		const api = socketPlaceStatsApi({ emit: (event: string, params: any) => emits.push({ event, params }) } as any)
+		const params = {
+			lorebookId: 4,
+			owner: { kind: "location", id: 42 },
+			branchId: null,
+			moment: null,
+			slotId: "core:slot/inventory@1",
+			value: ["gold"],
+			readValue: null
+		} as const
+		const saving = api.write(params as any)
+		const mine = emits.at(-1)!.params.requestId as string
+		expect(mine).toBeTruthy()
+		let settled = false
+		void saving.then(
+			() => (settled = true),
+			() => (settled = true)
+		)
+
+		// Someone else's refusal: ignored.
+		handlers.get("lorebookState:set:error")!({ error: "Lamps lit is out of bounds.", lorebookId: 4, requestId: "another" })
+		await Promise.resolve()
+		expect(settled).toBe(false)
+
+		// Its own reply resolves it.
+		const reply = { lorebookId: 4, requestId: mine, values: { "core:slot/inventory@1": ["gold"] } }
+		handlers.get("lorebookState:set#4")!(reply)
+		await expect(saving).resolves.toEqual(reply)
+	})
+
+	test("its own refusal, or a refusal naming no request, still rejects", async () => {
+		const { socketPlaceStatsApi } = await import("$lib/client/lorebooks/places/placeStatsApi")
+		const emits: Array<{ event: string; params: any }> = []
+		const api = socketPlaceStatsApi({ emit: (event: string, params: any) => emits.push({ event, params }) } as any)
+		const at = { lorebookId: 4, owner: { kind: "location", id: 42 }, branchId: null, moment: null } as const
+		const reading = api.read(at as any)
+		const mine = emits.at(-1)!.params.requestId as string
+		handlers.get("lorebookState:get:error")!({ error: "Lorebook not found.", requestId: mine })
+		await expect(reading).rejects.toThrow("Lorebook not found.")
+
+		const again = api.read(at as any)
+		handlers.get("lorebookState:get:error")!({ error: "Something broke." })
+		await expect(again).rejects.toThrow("Something broke.")
+	})
+})

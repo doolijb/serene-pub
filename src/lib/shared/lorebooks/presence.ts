@@ -20,7 +20,7 @@
  * workspace resolves for reading, and they must agree.
  */
 import { compareDates, type StoryDate } from "./storyDate"
-import { lineFromFork, rowReadsOnLine, type Line } from "./lineReading"
+import { MAIN_LINE, rowsReadingOnLine, type Line } from "./lineReading"
 
 export interface Presence {
 	id: number
@@ -74,20 +74,30 @@ export interface Appearance {
 export interface PresenceAt {
 	/** `null` = now: everything that has begun and not ended is here. */
 	moment?: StoryDate | null
-	/** `null` = main. */
-	branchId?: number | null
 	/**
-	 * The ancestor chain (`lineOf`). Authoritative when given: a presence on
-	 * an ancestor line is seen only when it begins at or before that line's
-	 * fork cut — a presence main records after the fork is main's story, not
-	 * this line's (the same cut every dated row takes).
+	 * The line (`lineOf`), its ancestor chain and fork cuts. Absent is main.
+	 * ⚠ No branch-id form: a bare id cannot see a grandparent or a fork cut.
 	 */
 	line?: Line
 }
 
-/** Whether this presence is one the line being read can see. */
-function onLine(p: Presence, line: Line): boolean {
-	return rowReadsOnLine(p, line, from(p))
+/**
+ * The presences the line being read can see, whatever the moment.
+ *
+ * The line's own, and each ancestor line's only when it BEGINS at or before
+ * that line's fork cut — a presence main records after the fork is main's
+ * story, not this line's (the same cut every dated row takes: a presence is
+ * dated by its arrival). Never a sibling line's.
+ *
+ * ⚠ The one filter. The member page's list, the World bar (`appearancesOf`)
+ * and the Lives lens all read through it, so one screen cannot list a
+ * presence another says is not on the line.
+ */
+export function presencesOnLine<P extends Presence>(
+	presences: readonly P[],
+	line: Line
+): P[] {
+	return rowsReadingOnLine(presences, line, from)
 }
 
 /**
@@ -116,10 +126,10 @@ export function appearancesOf(
 	presences: readonly Presence[],
 	at: PresenceAt = {}
 ): Appearance[] {
-	const line = at.line ?? lineFromFork(at.branchId ?? null, null)
 	const moment = at.moment ?? null
-	const mine = presences.filter(
-		(p) => p.castId === castId && onLine(p, line)
+	const mine = presencesOnLine(
+		presences.filter((p) => p.castId === castId),
+		at.line ?? MAIN_LINE
 	)
 	if (!mine.length)
 		return [{ castId, personalPosition: null, presenceId: null }]

@@ -387,7 +387,7 @@ describe("which sheets an owner has", () => {
 			db,
 			{ kind: "session", id: session.id },
 			[second, first],
-			session.id
+			{ userId: u.id, sessionId: session.id }
 		)
 		expect(
 			(
@@ -404,7 +404,7 @@ describe("which sheets an owner has", () => {
 			db,
 			{ kind: "session", id: session.id },
 			[first],
-			session.id
+			{ userId: u.id, sessionId: session.id }
 		)
 		expect(
 			(
@@ -423,8 +423,122 @@ describe("which sheets an owner has", () => {
 			"$lib/server/state/declarations"
 		)
 		await expect(
-			setOwnerSheets(db, { kind: "session_cast", id: 1 }, [])
+			setOwnerSheets(db, { kind: "session_cast", id: 1 }, [], { userId: 1 })
 		).rejects.toBeInstanceOf(StateRefusal)
+	})
+
+	test("a lorebook's sheets are its owner's to say; a stranger is refused and nothing moves", async () => {
+		reset()
+		const owner = await user()
+		const stranger = await user()
+		const { declareSheet, ownerSheets, setOwnerSheets, StateRefusal } =
+			await import("$lib/server/state/declarations")
+		const sheet = `author${n}:sheet/world@1`
+		await declareSheet(db, owner.id, sheet, { label: { en: "World" }, slots: [] })
+		const [book] = await db
+			.insert(schema.lorebooks)
+			.values({ name: "Vale", userId: owner.id })
+			.returning()
+		const owned = { kind: "lorebook" as const, id: book.id }
+
+		await expect(
+			setOwnerSheets(db, owned, [sheet], { userId: stranger.id })
+		).rejects.toBeInstanceOf(StateRefusal)
+		expect(await ownerSheets(db, owned)).toEqual([])
+
+		await setOwnerSheets(db, owned, [sheet], { userId: owner.id })
+		expect((await ownerSheets(db, owned)).map((r) => r.sheetId)).toEqual([sheet])
+	})
+
+	test("a session's sheets are its owner's, as what it tracks is; a guest is refused", async () => {
+		reset()
+		const host = await user()
+		const guest = await user()
+		const { declareSheet, ownerSheets, setOwnerSheets } = await import(
+			"$lib/server/state/declarations"
+		)
+		const sheet = `author${n}:sheet/hunt@1`
+		await declareSheet(db, host.id, sheet, { label: { en: "Hunt" }, slots: [] })
+		const [session] = await db
+			.insert(schema.sessions)
+			.values({ userId: host.id, isGroup: true, name: "Table" })
+			.returning()
+		await db.insert(schema.sessionGuests).values({ sessionId: session.id, userId: guest.id })
+		const owned = { kind: "session" as const, id: session.id }
+
+		await expect(
+			setOwnerSheets(db, owned, [sheet], { userId: guest.id, sessionId: session.id })
+		).rejects.toThrow(/session's owner/)
+		expect(await ownerSheets(db, owned, session.id)).toEqual([])
+
+		// A run names no person: it writes as the session's own user.
+		await setOwnerSheets(db, owned, [sheet], { userId: null, sessionId: session.id })
+		expect((await ownerSheets(db, owned, session.id)).map((r) => r.sheetId)).toEqual([sheet])
+	})
+
+	test("a run reaches only its own session's owners: another book of the same person is refused, and nothing moves", async () => {
+		reset()
+		const host = await user()
+		const { declareSheet, ownerSheets, setOwnerSheets, StateRefusal } = await import(
+			"$lib/server/state/declarations"
+		)
+		const sheet = `author${n}:sheet/reach@1`
+		await declareSheet(db, host.id, sheet, { label: { en: "Reach" }, slots: [] })
+		const [read, other] = await db
+			.insert(schema.lorebooks)
+			.values([
+				{ name: "Read", userId: host.id },
+				{ name: "Other", userId: host.id }
+			])
+			.returning()
+		const [session] = await db
+			.insert(schema.sessions)
+			.values({ userId: host.id, isGroup: false, name: "Run", lorebookId: read!.id } as any)
+			.returning()
+		const run = { userId: null, sessionId: session!.id }
+
+		const elsewhere = { kind: "lorebook" as const, id: other!.id }
+		await expect(setOwnerSheets(db, elsewhere, [sheet], run)).rejects.toBeInstanceOf(StateRefusal)
+		expect(await ownerSheets(db, elsewhere)).toEqual([])
+
+		// Its own book is the run's to say, as its user's.
+		const own = { kind: "lorebook" as const, id: read!.id }
+		await setOwnerSheets(db, own, [sheet], run)
+		expect((await ownerSheets(db, own)).map((r) => r.sheetId)).toEqual([sheet])
+
+		// A person may still say another book of theirs, with no session in it.
+		await setOwnerSheets(db, elsewhere, [sheet], { userId: host.id })
+		expect((await ownerSheets(db, elsewhere)).map((r) => r.sheetId)).toEqual([sheet])
+	})
+
+	test("an owner that does not exist gets no sheets", async () => {
+		reset()
+		const u = await user()
+		const { declareSheet, setOwnerSheets, StateRefusal } = await import(
+			"$lib/server/state/declarations"
+		)
+		const sheet = `author${n}:sheet/ghost@1`
+		await declareSheet(db, u.id, sheet, { label: { en: "Ghost" }, slots: [] })
+		const [book] = await db
+			.insert(schema.lorebooks)
+			.values({ name: "Gone", userId: u.id })
+			.returning()
+		await db.delete(schema.lorebooks).where(eq(schema.lorebooks.id, book.id))
+		const gone = [
+			{ kind: "lorebook" as const, id: book.id },
+			{ kind: "cast_member" as const, id: 2_000_000_000 },
+			{ kind: "location" as const, id: 2_000_000_000 },
+			{ kind: "card" as const, id: 2_000_000_000 }
+		]
+		for (const owner of gone)
+			await expect(
+				setOwnerSheets(db, owner, [sheet], { userId: u.id })
+			).rejects.toBeInstanceOf(StateRefusal)
+		const rows = await db
+			.select({ id: schema.ownerSheets.id })
+			.from(schema.ownerSheets)
+			.where(eq(schema.ownerSheets.sheetId, sheet))
+		expect(rows).toEqual([])
 	})
 
 	test("an owner cannot have a sheet this install has no record of", async () => {
@@ -442,7 +556,7 @@ describe("which sheets an owner has", () => {
 				db,
 				{ kind: "session", id: session.id },
 				["nobody:sheet/ghost@1"],
-				session.id
+				{ userId: u.id, sessionId: session.id }
 			)
 		).rejects.toThrow(/no record of/)
 	})

@@ -230,7 +230,7 @@ export function buildCharacterExtractionPrompt(
 	// The example must match what the model can actually do: with no known-
 	// cast list in context (a fresh lorebook, or a caller that didn't pass
 	// one), showing a {"castId": N} example anyway nudges the model into
-	// guessing an id it was never given — resolveCharacterNamesToBindingIds
+	// guessing an id it was never given — resolveCharacterRefs
 	// has no name to fall back to for a hallucinated id, so it just drops
 	// the entry, silently. Only show the castId form when there's an actual
 	// list above to reference.

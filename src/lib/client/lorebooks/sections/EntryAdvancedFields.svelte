@@ -4,6 +4,7 @@
 	import { Switch } from "@skeletonlabs/skeleton-svelte"
 	import { Priorities } from "$lib/shared/constants/Priorities"
 	import EntryConditionField from "$lib/client/components/lorebookForms/EntryConditionField.svelte"
+	import { readsAsRegex } from "$lib/shared/entries/runawayPattern"
 
 	/**
 	 * Level two of the editor's two levels of disclosure, shared by every
@@ -15,11 +16,11 @@
 	 * every entry has, above the account of what the run did.
 	 *
 	 * ⚠ **Nothing here hides when vectorization is on** — not Use regex, Case
-	 * sensitive or Priority. The keyword mechanism still runs with
-	 * vectorization on — an entry set to `keyword` or `both`, and every `rag`
-	 * entry on an instance whose model is not loaded, goes through it — and the
-	 * ranker adds the priority bonus either way. A hidden control that still
-	 * changes matching is a setting nobody can see or undo.
+	 * sensitive or Priority. The keyword mechanism runs for every entry beside
+	 * the semantic one — there is no per-entry retrieval strategy (see the entry
+	 * table in `schema.ts`) — and the ranker adds the priority bonus either
+	 * way. A hidden control that still changes matching is a setting nobody
+	 * can see or undo.
 	 */
 	interface Props {
 		draft: Record<string, any>
@@ -40,6 +41,25 @@
 		extra
 	}: Props = $props()
 
+	/**
+	 * Use regex shows the mode the MATCHER reads (`readsAsRegex`, the same
+	 * precedence as `ranking/signals.ts` `modeOf`): a stored `matchMode` wins
+	 * over the `useRegex` flag. A SillyTavern import sets `matchMode`, and a
+	 * switch drawn from `useRegex` alone could say on while the matcher read
+	 * whole words — or flip with no effect at all.
+	 */
+	let regexOn = $derived(readsAsRegex(draft))
+
+	/**
+	 * Writes both columns so they agree: turning regex on or off clears a
+	 * stored `matchMode`, leaving `useRegex` the one thing that decides. Whole
+	 * words and regex are exclusive, so either way a stored `word` goes.
+	 */
+	function setRegex(on: boolean) {
+		draft.useRegex = on
+		if (draft.matchMode != null) draft.matchMode = null
+	}
+
 	const switchClass =
 		"preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500"
 </script>
@@ -52,13 +72,13 @@
 		{#if vectorizationEnabled}
 			<p class="text-surface-600-400 text-xs">
 				Use regex and Case sensitive apply to keyword matching, which
-				still runs with embeddings on for entries that match by keyword.
+				still runs beside embeddings.
 			</p>
 		{/if}
 		<Switch
 			name="{idPrefix}Regex"
-			checked={draft.useRegex || false}
-			onCheckedChange={(e) => (draft.useRegex = e.checked)}
+			checked={regexOn}
+			onCheckedChange={(e) => setRegex(e.checked)}
 			class="flex w-full items-center justify-between gap-2"
 		>
 			<Switch.Label>Use regex</Switch.Label>
@@ -67,6 +87,20 @@
 			</Switch.Control>
 			<Switch.HiddenInput />
 		</Switch>
+		{#if draft.matchMode === "word"}
+			<!-- The one mode the editor has no switch for: an imported file's
+			     whole-word flag. Said, and undoable, rather than silent. -->
+			<p class="text-surface-600-400 flex flex-wrap items-baseline gap-x-2 text-xs">
+				Keys match whole words only, as the imported file set.
+				<button
+					type="button"
+					class="anchor"
+					onclick={() => (draft.matchMode = null)}
+				>
+					Match anywhere
+				</button>
+			</p>
+		{/if}
 		<Switch
 			name="{idPrefix}Case"
 			checked={draft.caseSensitive || false}
@@ -103,10 +137,18 @@
 				}}
 			/>
 		</div>
+		<!-- The entry's depth can only LOWER the pipeline's ceiling
+		     (`keywordQuery`: level > entry depth ?? ceiling), and the ceiling
+		     is 0 until someone raises it — so 1–3 levels read as dead unless
+		     this says why. -->
+		<p class="text-surface-600-400 -mt-2 text-xs">
+			Capped by the pipeline's “Follow keyword chains this deep”, which is
+			0 by default. Levels past the cap are never reached.
+		</p>
 		<EntryConditionField
 			bind:selectiveLogic={draft.selectiveLogic}
 			bind:secondaryKeys={draft.secondaryKeys}
-			regex={!!draft.useRegex || draft.matchMode === "regex"}
+			regex={regexOn}
 			{idPrefix}
 		/>
 		<Switch

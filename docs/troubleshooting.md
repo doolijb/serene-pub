@@ -1,183 +1,215 @@
 # Troubleshooting
 
-This page collects the most common ways Serene Pub gets stuck, organized by area, with a pointer to the full explanation elsewhere in the docs. If something here doesn't resolve it, [open an issue](https://github.com/doolijb/serene-pub/issues) or ask in [Discord](https://discord.gg/3kUx3MDcSa). Attach a support report (Admin → Diagnostics → **Copy report**, see [Instance settings](./system-settings.md#support-report)): it carries the versions, settings, plugins and recent errors an answer usually needs, with secrets and names removed.
+Find what you're seeing below. Each answer is a quick fix and a link to the page that explains more.
 
-## Connections
+:::tip Asking for help
+Still stuck? Ask in [Discord](https://discord.gg/3kUx3MDcSa) or [open an issue](https://github.com/doolijb/serene-pub/issues). An admin can attach a support report (**Admin › Diagnostics › Copy report**, see [Support report](./system-settings.md#support-report)): it has the versions, settings, plugins and recent errors an answer usually needs, with secrets and names removed.
+:::
 
-- **"Test: Failed!" on a connection.** The error shown directly under the Test Connection button is the real cause (bad Base URL, missing/incorrect API key, service not running, wrong port) — read it before assuming the connection type is broken. See [Connections](./connections.md).
-- **Model output is garbled, run-on, or ignores turn boundaries.** This is almost always the wrong **Prompt Format** for a text-completion connection — check it against the model's actual training format. See [Prompt Formats and Token Counters](./connections.md#prompt-formats-and-token-counters).
-- **Context budget seems off (too much or too little history/lore fits).** Check the connection's **Token Counter** — leaving it on the generic **Estimate** for a model with unusual tokenization can under- or over-estimate how much fits under the Sampling Config's Context Tokens limit.
-- **A custom Context Template broke every session using it.** A template that parses but says the wrong thing can break generation for every pipeline that selects it. Test edits on a low-stakes session before selecting a custom template for the pipelines everyone uses. See [Context Templates](./context-templates.md).
+## It won't start
 
-## KoboldCPP, run by Serene Pub
+- **Nothing opens, the window closes at once, or the port is in use**: see [Install → Check that it worked](./install.md#check-that-it-worked).
+- **A page says "Serene Pub started, but the database could not be opened."**: see [Database won't open](#database-wont-open) below.
+- **The first start after upgrading from 0.5 takes minutes**: it's converting your data. Leave it running. See [Upgrading from 0.5](./upgrading-from-0.5.md).
+- **It won't open after upgrading from 0.5**: the conversion was undone, so nothing is lost. The startup log says why, and the next start tries again.
+- **The startup log says "This build is older (or newer) than its database migrations"** (running from source): the app was built before the database migrations in `drizzle/` last changed, or after. It stops before touching your data, because an old build can't update the database correctly with new migrations. Run `npm run build` again, then start it. The downloaded app always ships its build and migrations together, so you won't see this there.
 
-- **Binary download or auto-start failed.** The real underlying error is shown inline (download failure) or under the status dot on the connection's status card (start failure) — read that message first. See [Troubleshooting: download or start failures](./connections.md#troubleshooting-download-or-start-failures).
-- **Failing right after setup on Docker or a NAS.** The most common cause is the app's data directory (where the KoboldCPP binary/admin directory live) being a mounted volume the container's user can't write to. Confirm the container can create directories and write files in its mounted data volume before assuming the download itself is broken.
-- **A model reload takes a while after switching connections or editing GPU Layers/Flash Attention/Batch Size.** This is expected — those settings only take effect the _next_ time the connection generates, and a reload can take up to 10 minutes for a large model. See the [reload-on-change note](./connections.md#power-user-note-gpu-layers-flash-attention-batch-size-and-reload-on-change).
+## Nobody replies
 
-## Ollama, managed
+- **The Connections view doesn't say *Sessions can reply***: open it from the rail. A connection that says **Needs a key** wants its API key; **Not reachable** means the program or service can't be found (is it running? is the address right?). See [Connect a model](./connect-a-model.md#check-that-it-worked).
+- **KoboldCPP says *Crashed*, or the model never finishes loading**: the model is probably too big for your memory. Pick a smaller one. The connection's status card shows the real error. See [KoboldCPP, run by Serene Pub](./connections.md#troubleshooting-download-or-start-failures).
+- **The first reply after changing a KoboldCPP setting takes ages**: settings like GPU layers reload the model on the next reply, which can take several minutes for a big one. See [Launch settings](./connections.md#launch-settings-and-when-a-model-reloads).
+- **In a group session, nobody takes a turn**: **Auto-advance** may be off, or the turn order **Manual**. Press **Continue** or **Pick who speaks**. See [Sessions → Troubleshooting](./sessions.md#troubleshooting).
+- **KoboldCPP fails right after setup in Docker or on a NAS**: the data folder is often a mounted volume the container can't write to. Check it can create files there.
 
-- **"Update Available" but nothing updates in-app.** Serene Pub can't update Ollama itself — the callout links out to `ollama.com/download` because updating the Ollama installation is outside Serene Pub's control.
+## Replies are garbled or wrong
 
-## Embeddings & RAG
+- **Run-on, garbled, or the AI writes your lines too**: on a text-completion connection this is almost always the wrong prompt format for the model. See [Prompt formats and token counters](./connections.md#prompt-formats-and-token-counters).
+- **The reasoning shows up in the reply, or the reply in the Reasoning fold**: Serene Pub splits them on the model's own reasoning markers (`<think>…</think>` and similar) or on a separate reasoning field, never on how the text reads. When **Reasoning** is on, a model whose chat template opens the reasoning itself (Qwen 3.5 and Qwen3's Thinking models, for example) is routed into the fold from its first word. If a model writes something reply-like before its `</think>`, that part lands in the fold, because the model marked it as reasoning. With **Reasoning** unset, such a model's reasoning shows in the reply until its `</think>` arrives, then moves to the fold. Turn **Reasoning** on in the step's sampling to route it from the start. The other way round, **Reasoning** on for a model that doesn't reason makes its reply fill the fold while it streams; it moves into place when the reply finishes. Turn **Reasoning** off for that model.
+- **Too much or too little history fits**: check the connection's token counter. The generic estimate can be off for some models.
+- **Every session broke after a context template was edited**: a template that says the wrong thing affects every pipeline that uses it. Switch back to the shipped one and test edits on a spare session. See [Context templates](./context-templates.md).
+- **The service refuses to write your scene**: that's the service's content rules, not Serene Pub. Try another model, or a local one.
 
-- **The embeddings queue is stuck at "Idle" with items still waiting.** Check the starred embedding connection's detail first: the queue silently stops if embeddings are disabled, if a local model failed to auto-load (not cached, or the server restarted and needs a reload), or if an external API connection stopped validating. Reload/re-download the model, then press **Start** on the queue's status card. See [Troubleshooting a stuck or empty queue](./embeddings-and-rag.md#troubleshooting-a-stuck-or-empty-queue).
-- **A specific session's RAG notice never clears.** Use that notice's **Prioritize in queue** button to jump its content to the front of the embeddings queue.
-- **RAG doesn't seem to retrieve anything in a short session.** Sessions with 10 or fewer messages are expected to show no RAG activity — everything already fits in the guaranteed context window. See [Why some short sessions never show RAG activity](./embeddings-and-rag.md#why-some-short-sessions-never-show-rag-activity).
+## A long reply stops partway
 
-## Summarization, Scenes & the Narrative Graph
+A reply isn't cut off for taking a long time. Waiting for the model, loading it, reading a long prompt, reasoning and writing all count as working, however long they take. A reply stops on its own only when:
 
-- **A graph build, scene summarization, or compile job sits at "running" too long.** Check the admin **LLM Queue** tab (Activity sidebar) to see whether the underlying generation call is queued behind other work, still generating, or has silently disappeared — the latter usually means an error on the connection side. See [Troubleshooting a job that seems stuck](./summarization.md#troubleshooting-a-job-that-seems-stuck).
-- **"Generate Summary" refuses to run on a Scene selection.** The selected messages must form one consecutive, gap-free run with no unselected visible message in between — reselect a truly contiguous range.
-- **Character Lore summarization won't generate.** Unlike World Lore, a Character Lore summary requires a focus topic (e.g. "abilities" or "relationship with Kira") before it will run.
-- **A scene's "ready to process" count for the graph seems low.** Step 4 (Build/Extend Graph) silently skips any scene that hasn't been through Process Scene (or reviewed from the initial Summarize-to-Lorebook step) yet — check for scenes still missing a summary. See [From a session to the graph](./lorebooks.md#from-a-session-to-the-graph).
+- **The model sends nothing for 10 minutes** (*connection idle* or *did not respond*): the program running the model has probably hung or crashed. Check its window or log. On slow hardware with a very long prompt, try a shorter context or a smaller model.
+- **One step runs for over an hour** (*timeout after 3600000ms (the pub's ceiling)*): the step is stopped however busy it is. Lower the reply length or use a faster model.
+- **A step that isn't generating goes quiet for its own limit** (*timeout after … without progress*): something inside Serene Pub stalled. Ask for help with a support report (see the tip at the top).
 
-## Accounts & Login
+When a reply is stopped, Serene Pub also tells KoboldCPP to stop generating, so the next reply doesn't wait behind the abandoned one.
 
-- **The "User accounts" switch looks locked/greyed out.** This is intentional — enabling User Accounts is a one-way, permanent switch with no UI path back to single-user mode.
-- **A standard user or second admin forgot their passphrase.** An admin resets it from the Users view — **Edit** the account and fill in **New passphrase** / **Confirm passphrase**; leaving those fields blank leaves the existing passphrase untouched.
-- **Locked out of the admin account after enabling User Accounts.** If another admin exists, they can reset it from the Users view. If not, set `SERENE_PUB_RECOVERY_KEY` (any new string you choose) and `SERENE_PUB_RECOVERY_PASSWORD` in the environment and restart: the first admin's passphrase is reset, its two-factor is cleared and its logins are revoked. See [Account recovery](./environment-variables.md#account-recovery) and [If the admin account itself is locked out](./users-and-accounts.md#if-the-admin-account-itself-is-locked-out).
+## Every reply is slow to start on a local model
+
+A local server can reuse its work on the start of the prompt from the turn before, and only read what is new. When every reply starts slowly, re-reading the whole conversation each time, something at the start of the prompt changed:
+
+- **Hybrid models on KoboldCPP** (Qwen 3.5, 3.6 and 3.8, and other models KoboldCPP calls *RNN or Hybrid*) reuse their cache only when the new prompt begins with the old one exactly. Serene Pub keeps the start of the prompt the same where it can: the story's date sits at the end of the instructions, the example dialogue a character shows stays the same for a whole session, the line naming who speaks next isn't sent on chat messages, the post-history reminder and the author's note go at the end by default, a long session is read by how much the window holds rather than as its newest 100 messages, and when the conversation outgrows the window its oldest messages are left out in one larger step rather than one message every turn.
+- **The window is full**: when the prompt is longer than the model's context, the server trims it from the front, which changes the start on every turn. Raise **Context Tokens** in the [sampling config](./connections.md#sampling-configs) if the model allows it. Serene Pub counts with KoboldCPP's and llama.cpp's own tokenizer to avoid this; the first reply after starting the app still estimates.
+- **What changes every turn**: lore chosen for this turn, the post-history reminder (once the conversation passes its trigger) and an author's note move with the conversation. At their default depth of 0 they sit after the newest message, so only the last exchange is read again; an author's note moved further back (**Messages from the end** above 0) moves everything after it. Most servers then read again only from the first change; a hybrid model on KoboldCPP reads again from its last saved point, which is often the start. A post-history reminder near the end of every prompt is the usual cause once a conversation passes the reminder's trigger; see [The postHistory object](./context-templates.md#the-posthistory-object).
+- **The model was swapped or reloaded**: its cache starts empty.
+
+## My model ignores images
+
+Open the reply's prompt details first. An image the model was sent shows as a file on its message's turn; one it wasn't sent shows as its name, such as `[image: cat.png]`.
+
+- **The composer won't take an image at all**: open **More** (⋮) in the composer and choose **What can be attached**. It says which part of the reply can't read images and why. See [Attach images and files](./sessions.md#attach-images-and-files).
+- **Vision is off for the model**: Vision turns on by itself when the model's host says the model reads images (OpenRouter and similar listings, Ollama, LM Studio), or when a KoboldCPP run by Serene Pub has a **Vision projector** set for the model. Otherwise set **Vision** to **On** under **What this connection can do**. Setting it to **Off** there wins over everything else. See [Images and files](./connections.md#images-and-files).
+- **The connection sends text completions**: a text completion has nowhere to put a picture. Switch it to **Chat messages**. See [Chat messages or text completion](./connections.md#chat-messages-or-text-completion).
+- **The image is older than the media lookback**: only the last 10 messages send their images; older ones go as their names. Raise **Media lookback** on the reply pipeline's **Place attachments** step. See [Attachments in a prompt](./pipelines.md#attachments-in-a-prompt).
+- **Your context template doesn't render attachments**: a template needs `{{{attachments}}}` after `{{{message}}}` in its message loop. The shipped one has it; the prompt details say *this template does not render attachments* when yours doesn't. See [Context templates](./context-templates.md).
+- **A local model can't see**: its vision part has to be loaded too. Start llama.cpp's server with `--mmproj`; for KoboldCPP run by Serene Pub, set the model's **Vision projector**; in Ollama or LM Studio use a vision model such as `qwen2.5vl`.
+
+## Characters don't remember
+
+- **The embeddings queue sits at Idle with work waiting**: the embedding model may need loading, or its service stopped answering. See [Troubleshooting a stuck or empty queue](./embeddings-and-rag.md#troubleshooting-a-stuck-or-empty-queue).
+- **One session's memory notice never clears**: press **Prioritize in queue** on the notice.
+- **A short session shows no notice**: sessions of 10 messages or fewer never do; Search by meaning still works in them. See [Why some short sessions never show a RAG notice](./embeddings-and-rag.md#why-some-short-sessions-never-show-a-rag-notice).
+
+## Lore is missing from a reply
+
+Open the reply's run in the [run inspector](./pipelines.md#inspecting-a-run) (administrators: **Inspect run** in the reply's **⋮** menu).
+
+- **A warning says a step ran out of time**: each lore read has a few seconds. A reply always comes before background work: while a reply is being written, and for a moment after, the pub doesn't index lorebooks or conversations, and indexing picks up again between replies. So a lore read that still runs out of time is usually a very large lorebook on a slow machine, or the first reply after many entries were imported or changed, when that reply has to index them before it can read them. The next reply usually has them.
+- **No warning, and the entry isn't in the prompt**: select the lore step and read its **Prompt** table. It says whether each entry was considered and why it was left out.
+
+## A summary or graph build seems stuck
+
+Check **Activity**: a failed job keeps its card, with a way to see the error. Admins can also check the **LLM queue** tab to see whether the call is waiting, generating, or gone. See [Troubleshooting a job that seems stuck](./summarization.md#troubleshooting-a-job-that-seems-stuck).
+
+## Can't sign in
+
+- **Someone forgot their passphrase**: an admin resets it from the Users view. See [A member forgot their passphrase](./users-and-accounts.md#a-member-forgot-their-passphrase).
+- **Lost your authenticator and recovery codes**: another admin can clear your two-factor. See [Lost your authenticator](./users-and-accounts.md#lost-your-authenticator-and-your-recovery-codes).
+- **The only admin is locked out**: recover with two settings on the server. See [If the admin account itself is locked out](./users-and-accounts.md#if-the-admin-account-itself-is-locked-out).
+- **The User accounts switch can't be turned off**: that's by design. Once accounts are on, they stay on.
+
+## Something from 0.5 is missing or different
+
+- **Where did it go?** See [Upgrading from 0.5 → Where things are now](./upgrading-from-0.5.md#where-things-are-now).
+- **What changed in my data?** Open **Admin › History** and filter to the data upgrade. Every change the upgrade made, and everything it couldn't carry, is listed by name.
+- **Where's the copy from before the upgrade?** In your data folder's `backups/`, named `serene-pub-0.5.3-beta-<date>.tgz` (or `serene-pub-0.0.0-<date>.tgz` for an install only ever run from source).
+- **Saved API keys stopped working after restoring a 0.5 backup**: copy the 0.5 install's `cryptoSecretKey` into `meta.json` with Serene Pub stopped, or enter the keys again. See [Restoring a 0.5 backup later](./upgrading-from-0.5.md#restoring-a-05-backup-later).
+
+## Can't reach it from another device
+
+Most problems behind a reverse proxy or tunnel (nothing updates, "Mixed Content", "blocked by CORS policy", `.env` changes ignored) are covered in [Hosting → Troubleshooting](./hosting.md#troubleshooting). In Docker, data that vanishes after a restart usually means the data folder isn't mounted where you think; see [DOCKER.md](https://github.com/doolijb/serene-pub/blob/main/DOCKER.md).
+
+## Stuck in Document View
+
+- **Can't find the way back**: press **Ctrl+Shift+Y**. See [Leaving Document View](./document-view.md#leaving-document-view).
+- **It keeps turning back on, or won't stay on**: the choice is remembered per browser. A private window forgets it.
+- **A feature is missing**: Document View covers less on purpose. See [What's different](./document-view.md#whats-different-from-the-usual-interface).
+
+## A feature is missing on Android
+
+Running models on the phone, local embeddings, SillyTavern import and a few connection types aren't available there. See [Android app → Feature limitations](./android.md#feature-limitations).
 
 ## Database
 
+This section is for when the database itself is damaged. It's rare, and nothing here happens on its own: every step is yours.
+
 ### Database won't open
 
-**Symptom.** Serene Pub starts, but every page answers with "Serene Pub started, but the database could not be opened." (HTTP 503) and no part of the app works. Launched from a terminal, the startup log carries a multi-line `[db] The database could not be opened.` report naming the same paths.
+**What you see.** Every page says "Serene Pub started, but the database could not be opened." (an HTTP 503), and nothing else works. Started from a terminal, the startup log has a `[db] The database could not be opened.` report naming the same paths.
 
-**Cause.** Serene Pub stores everything in an embedded PostgreSQL data directory. A force-quit, an out-of-memory kill, or a power loss can stop the server mid-write and leave that directory in a state PostgreSQL refuses to start on. The boot log's `[db] previous shutdown: clean | unclean | unknown` line says which ending the last run had — `unclean` means nothing ran on the way out, which is the usual case here.
+**Why.** A force-quit, an out-of-memory kill or a power cut can stop the server mid-write and leave the database in a state it refuses to open. The startup log's `[db] previous shutdown:` line says how the last run ended; `unclean` is the usual case here.
 
-**Serene Pub changes nothing on its own.** It does not repair, move, or delete the data directory in this state, and it will keep serving that page until the database opens. Everything below is done by hand, and the first step of all of them is a copy.
+**Serene Pub changes nothing by itself.** It won't repair, move or delete the database, and keeps showing that page until the database opens. The quickest fix is the [recovery page](#the-quickest-route-the-recovery-page).
 
 #### Where your data is
 
-The database lives in a `data/` folder inside your data directory:
+Your **data folder**:
 
-| OS      | Data directory                            |
-| ------- | ----------------------------------------- |
-| Linux   | `~/.local/share/SerenePub`                |
-| Windows | `%LOCALAPPDATA%\SerenePub\Data`           |
-| macOS   | `~/Library/Application Support/SerenePub` |
+| System | Data folder |
+| --- | --- |
+| Linux | `~/.local/share/SerenePub` |
+| Windows | `%LOCALAPPDATA%\SerenePub\Data` |
+| macOS | `~/Library/Application Support/SerenePub` |
 
-If you've set [`SERENE_PUB_DATA_DIR`](./environment-variables.md#serene_pub_data_dir-is-the-one-exception), it's that directory instead. You never have to guess: the startup log's `Using PGlite database at:` line names the exact path, and so does the 503 page.
+If you set [`SERENE_PUB_DATA_DIR`](./environment-variables.md#serene_pub_data_dir-is-the-one-exception), it's that folder instead. The startup log's `Using PGlite database at:` line names the exact path, and so does the 503 page.
 
-Inside `<data directory>/data` you'll find:
+Inside it, the `data` folder holds:
 
-- **`serene-pub.db/`** — the database. It's a **folder**, not a file, and it is the thing that won't open.
-- **`meta.json`** — a small sibling file holding the schema version and `cryptoSecretKey`. That key encrypts stored API passphrases and signs login sessions, and it is **not** inside `serene-pub.db/` or inside any backup archive — a copy travels _beside_ each one instead, see below. Keep it. Losing it means re-entering every saved API key and everyone logging in again — but it also means a restored or brand-new database still works with your existing credentials, which is why it survives everything below.
-- **`backups/`** — `.tgz` archives of the whole `serene-pub.db/` folder, named `serene-pub-<version>-<timestamp>.tgz`. One is taken **once a day** and one **before a version upgrade runs migrations**; you can take one any time from **Settings → Data** or with `npm run db:recover -- --backup`. None are ever deleted automatically. A fresh install often has none at all.
-
-    Two settings on **Admin › Data and backups**, in the **Backup policy** card, control this: _Back up daily_ (on by default), and _Include user files_ (off by default). Neither ever deletes anything — turning daily backups off just stops new ones being taken.
-
-- **`backups/<archive>.tgz.meta.json`** — a copy of `meta.json` as it was when that backup was taken, kept _beside_ the archive rather than inside it so the archive stays exactly what `tar -xzf` and Serene Pub both expect. It is what lets a restored database's stored API passphrases still decrypt. Archives taken before this existed simply don't have one, and restore then keeps your current `meta.json`.
-- **`backups/<archive>.tgz.users.tgz`** — your user files (media and avatars: everything under `<data directory>/data/users/`), archived beside the dump when _Include user files_ is on. Present only for backups taken with that setting on, so most installs have none. Beside rather than inside for the same reason as `meta.json`, and separate because it is by far the larger of the two: a dump is measured in megabytes, a media library has no ceiling.
-
-    Card-import caches (`users/<id>/cache/`) are deliberately left out — they're rebuilt from the cards you still have.
-
-    It matters more than its size suggests. Avatars are real foreign keys into the database's `files` table, so a database restored **without** its user files points at images that were never archived.
-
-- **`serene-pub.db.broken-<timestamp>/`** — a database a recovery set aside. Serene Pub never deletes one; **Settings → Data** and the recovery page both list them with a delete button when you want the space back.
-- **`users.broken-<timestamp>/`** — the user files a restore replaced, moved aside the same way and just as permanently. Only appears when you restore a backup that carries user files.
+- **`serene-pub.db/`**: the database. It's a folder, not a file.
+- **`meta.json`**: a small file with the database version and the key (`cryptoSecretKey`) that encrypts saved API keys and signs logins. It isn't inside the database or the backups, so it survives everything below. Keep it: losing it means re-entering every API key and everyone logging in again.
+- **`backups/`**: `.tgz` copies of the database, named `serene-pub-<version>-<date>.tgz`. One is taken each day (unless **Back up daily** is off in **Admin › Data and backups**) and one before an update changes the database; take one any time from **Settings › Data**. None is ever deleted automatically. A new install may have none.
+- **`backups/<archive>.tgz.meta.json`**: the `meta.json` from when that backup was taken, kept beside it so a restored database's API keys still decrypt.
+- **`backups/<archive>.tgz.users.tgz`**: your pictures and media from when that backup was taken. Only there when **Include user files** was on.
+- **`serene-pub.db.broken-<date>/`** and **`users.broken-<date>/`**: a database or media folder a recovery set aside. Never deleted automatically; **Settings › Data** and the recovery page can delete them when you want the space back.
 
 #### The quickest route: the recovery page
 
-When the database won't open, Serene Pub still starts and still answers on its usual address — it just serves one page instead of the app. Open it (the same URL you always use) and follow the **Open recovery** button. Launched from a desktop shortcut or the applications menu, the launcher opens that page in your browser for you as soon as it sees the app come up in this state, and if the app never starts at all it writes `serene-pub-last-error.log` into your data directory (and raises a desktop dialog where one is available) instead of failing silently. On macOS that includes double-clicking `Serene Pub.app` from the Dock or Finder — the bundle runs the same launcher, so it opens the recovery page for you and leaves the same log, without a dialog (raising one there costs a Finder permission prompt of its own). From there you can:
+When the database won't open, Serene Pub still answers at its usual address with one page. Open it and press **Open recovery**. (Started from its launcher, Serene Pub opens it for you. If the app doesn't start at all, the tray icon says it stopped: choose **View Logs**, and `server.log` says why.)
 
-- **Restore a backup** — the broken database is _moved_ to `serene-pub.db.broken-<date>` in the same folder and the backup is unpacked in its place. Nothing is deleted. The archive is checked before anything moves, and the restored copy has to open before it is put in place; if it doesn't, the attempt is left as `serene-pub.db.restore-failed-<date>` and your database is untouched. If the backup carries user files, the confirmation page offers to put those back too (ticked by default) — your current `users/` is moved to `users.broken-<date>`, again without deleting anything.
-- **Start fresh** — moves the broken database aside and creates an empty one on the next start. `meta.json` is left alone, so your login and saved API passphrases keep working.
-- **Download the broken database** as a `.tgz`, for a bug report or for the `pg_resetwal` route below.
-- **Delete** a backup or a set-aside database, one at a time, with a confirmation.
+From there you can:
 
-Each action asks you to confirm on a second page that restates exactly what will move, and every one of them is written to the server log and to `meta.json`'s `recoveryLog`.
+- **Restore a backup**: the broken database is moved aside to `serene-pub.db.broken-<date>`, and the backup is unpacked in its place. Nothing is deleted. The backup is checked first: it has to open, and its lorebooks have to read in full, before it's put in place. If the backup has your media too, you're offered to put that back as well.
+- **Start fresh**: move the broken database aside and start with an empty one. `meta.json` stays, so logins and API keys keep working.
+- **Download the broken database**, for a bug report or the repair below.
+- **Delete** a backup or a set-aside database, with a confirmation.
 
-**The recovery page only answers this machine and your local network** (loopback and the private ranges — `10.x`, `172.16–31.x`, `192.168.x`, link-local, and IPv6 `fc00::/7`). There is no database in this state, so there are no accounts and nothing to log in with; the address is the only credential there is. Anything else gets a bare 503 that names no paths and offers no actions. If you reach your instance only through a tunnel or a reverse proxy, use the command line instead — a forwarded `X-Forwarded-For` is deliberately not believed here.
+Each action shows exactly what will move and asks you to confirm.
+
+The recovery page only answers this computer and your local network. Over a tunnel or reverse proxy, use the command line instead.
 
 #### From a terminal: `npm run db:recover`
 
-The same operations, for Docker, a NAS, or anything reached over SSH. Run it with Serene Pub **stopped** — it takes the same database lock the other `db:` commands do, and refuses if the app is holding it.
+The same actions, for Docker, a NAS, or a server you reach over SSH. Run it with Serene Pub **stopped**.
 
 ```
 npm run db:recover -- --list                 # what's here, and what can be restored
-npm run db:recover -- --backup [label]       # take one now (needs a database that opens)
+npm run db:recover -- --backup [label]       # take a backup now (needs a database that opens)
 npm run db:recover -- --restore <file>       # put a backup in place of the current database
 npm run db:recover -- --fresh                # set the current one aside, start empty
 npm run db:recover -- --delete-backup <file>
 npm run db:recover -- --delete-aside <dir>
 ```
 
-`--restore` and `--fresh` print exactly what will move and wait for you to type `yes`. Add `--yes` to answer in advance — required when there is no terminal to ask (a script, a container's entrypoint).
-
-Two more flags cover the user-file tier:
-
-- `--users` with `--backup` archives `users/` beside the dump for this backup, whatever the stored setting says.
-- `--no-users` with `--restore` leaves your current `users/` alone. Without it, a backup that carries user files puts them back and moves the ones you have to `users.broken-<date>` — which is the default because a database restored on its own points at media that came with it.
+`--restore` and `--fresh` show what will move and wait for you to type `yes`; add `--yes` to answer in advance (needed in a script). `--users` with `--backup` includes your media in that backup; `--no-users` with `--restore` leaves your current media alone.
 
 #### Restore the newest backup by hand
 
-Do this with Serene Pub **stopped**. Nothing here deletes anything.
+With Serene Pub **stopped**. Nothing here deletes anything.
 
-1. Move the broken database aside — **never delete it.** It is still the only copy of anything newer than your last backup, and it may be repairable.
+1. Move the broken database aside. **Never delete it**: it's the only copy of anything since your last backup, and it may be repairable.
 
     ```
-    cd "<data directory>/data"
+    cd "<data folder>/data"
     mv serene-pub.db serene-pub.db.broken-2026-09-09
     ```
 
     On Windows, rename the `serene-pub.db` folder in Explorer.
 
-2. Pick the newest archive in `backups/` — the 503 page and the startup log both name it — and extract it into a **new, empty** `serene-pub.db` folder:
+2. Pick the newest archive in `backups/` and unpack it into a **new, empty** `serene-pub.db` folder:
 
     ```
     mkdir serene-pub.db
-    tar -xzf backups/serene-pub-0.5.9-2026-02-02T00-00-00.tgz -C serene-pub.db
+    tar -xzf backups/serene-pub-0.6.0-2026-09-01T00-00-00.tgz -C serene-pub.db
     ```
 
-    `tar` will print `Removing leading '/' from member names`. That is expected: the archive stores the database's own paths from its root, and every tar that ships with Linux, macOS and Windows strips that leading slash. Check afterwards that `serene-pub.db/PG_VERSION` and `serene-pub.db/base` exist — if the folder came out empty, or with one folder inside it, you extracted to the wrong place.
+    `tar` may print `Removing leading '/' from member names`; that's expected. Afterwards, `serene-pub.db/PG_VERSION` and `serene-pub.db/base` should exist. If the folder is empty, or has one folder inside it, you unpacked to the wrong place.
 
-3. **`meta.json` is not in the archive**, and the safe default is to leave the one you have exactly where it is. If it is missing or unreadable, Serene Pub creates a new one with a new key and your saved API passphrases will no longer decrypt.
+3. Leave `meta.json` where it is. If you're restoring an *older* backup that has a `.tgz.meta.json` beside it, its API keys were encrypted with the key in that file: copy `cryptoSecretKey` (and `version`) from it into `meta.json`, after keeping a copy of yours. The recovery page and `db:recover --restore` do this for you.
 
-    If the backup has a companion `backups/<archive>.tgz.meta.json` and you are restoring an _old_ backup, the passphrases stored inside that database were encrypted with the key in the companion, not the one you have now. Copy `cryptoSecretKey` (and `version`) across by hand — keep a copy of your current `meta.json` first — or let the recovery page or `npm run db:recover -- --restore` do it, which is what they do automatically and why they keep the file they replaced as `meta.json.replaced-<date>`.
-
-4. If the backup has a `backups/<archive>.tgz.users.tgz` beside it and you want the media that came with it, move your current `users/` aside — again, don't delete it — and unpack the tier in its place. The archive contains a single `users/` folder, so extract it into the data directory itself, not into `users/`:
+4. To restore the media from that time too, if a `.tgz.users.tgz` is beside the backup: move your current `users/` folder aside and unpack it into the `data` folder itself:
 
     ```
     mv users users.broken-2026-09-09
-    tar -xzf backups/serene-pub-0.5.9-2026-02-02T00-00-00.tgz.users.tgz -C .
+    tar -xzf backups/serene-pub-0.6.0-2026-09-01T00-00-00.tgz.users.tgz -C .
     ```
 
-    Skip this and your media stays exactly as it is — which is fine, except that avatars added since the backup will point at images the restored database has no rows for, and the other way round.
+    Skip this and your media stays as it is; pictures added since the backup won't match the restored database.
 
-5. Start Serene Pub. You are back at the moment that backup was taken; anything after it is only in the folder you set aside in step 1.
+5. Start Serene Pub. You're back to when the backup was taken. Anything newer is only in the folder you set aside in step 1.
 
-**If there is no backup**, moving `serene-pub.db` aside on its own is enough to start over — this is what the recovery page's **Start fresh** and `npm run db:recover -- --fresh` do — Serene Pub creates a new, empty database on the next launch. Sessions, characters and lorebooks are gone, but because `meta.json` stays, stored passphrases and accounts still work. Keep the folder you moved aside until you're certain you don't want it repaired.
+**No backup?** Moving `serene-pub.db` aside on its own is enough to start over with an empty database. Your sessions, characters and lorebooks are in the folder you moved, so keep it until you're sure you don't want it repaired.
 
-#### Advanced: repairing the directory with `pg_resetwal`
+#### Advanced: repairing it with `pg_resetwal`
 
-Only worth trying if the data since your last backup matters. It has recovered data fully intact before, but it can also make things worse, which is why it is done on a copy.
+Only worth trying if what changed since your last backup matters. It has recovered databases fully before, but it can also make things worse, so always work on a copy. You'll need the PostgreSQL 16 `pg_resetwal` and `pg_controldata` tools, which Serene Pub doesn't ship.
 
-This needs PostgreSQL 16 client binaries that Serene Pub does not ship (`apt-get download postgresql-16` then `dpkg -x`; the `.deb` is the route because the npm embedded-postgres package lacks `pg_resetwal`).
-
-1. Work on a **copy** of `serene-pub.db`; remove `postmaster.pid` (the embedded server writes a synthetic one).
-2. `pg_controldata -D <copy>` — if state is "shut down" with a valid checkpoint, recovery is likely.
-3. `pg_resetwal -n -D <copy>` (dry run), then without `-n`.
-4. Open the copy with Serene Pub before swapping it in — point `SERENE_PUB_DATA_DIR` at a scratch directory containing it, rather than replacing your real one to find out.
-
-Partial or table-level repair isn't covered: none of the tooling for it ships with Serene Pub.
-
-## Document View
-
-- **Can't find the way back to the standard site.** Press **Ctrl+Shift+Y** from anywhere — it's a toggle, so it switches you back the same way it switched you in. The header's **Browse Standard Site** button and the Settings page's **Turn Off Document View** button both work too; see [Document View](./document-view.md#leaving-document-view) for the difference between them.
-- **Document View keeps turning itself back on** after you turn it off, or keeps starting in the standard interface after you turn it on. Your choice is remembered per browser (not per account) via a stored preference, which always wins over the server-wide `PUBLIC_DOCUMENT_VIEW_DEFAULT` default — if it's not sticking, check that the browser you're testing in isn't in a private/incognito window that clears storage between sessions.
-- **A feature I use isn't there.** Document View intentionally covers a smaller surface than the full app — see [What's Different From the Standard Site](./document-view.md#whats-different-from-the-standard-site) for the full list of what to reach for the standard site for instead.
-
-## Android
-
-Several features (local embedding models, KoboldCPP or Ollama run by Serene Pub, SillyTavern import, and a handful of connection types/token counters) aren't available on Android due to constraints of running a full server inside a mobile app. See [Android App](./android.md#feature-limitations) for the complete list before assuming something is broken.
-
-## Docker & Self-Hosting
-
-Networking, volumes, reverse proxies, and environment variables are covered in [DOCKER.md](https://github.com/doolijb/serene-pub/blob/main/DOCKER.md) and [Hosting Serene Pub](./hosting.md) — most "can't reach the server" or "my data disappeared after a restart" issues trace back to the `SERENE_PUB_DATA_DIR` volume not being mounted where you think it is. A few real-time symptoms behind a reverse proxy — note that sockets now share the app's port, so most of these mean "upgrade headers aren't being forwarded" rather than "the second port isn't routed":
-
-- **Browser console shows "Mixed Content... has been blocked."** The socket connects to the same origin as the page, so this now means the page itself was served over `http://` from an `https://` context — check your proxy, and set `PROTOCOL_HEADER` if it sets `X-Forwarded-Proto`.
-- **"blocked by CORS policy" pointing at your own domain.** Your proxy is rewriting the `Host` header so it no longer matches the `Origin` the page was loaded from — set `HOST_HEADER`, or add the hostname to `ALLOWED_ORIGINS`.
-- **Socket requests 404 at `/socket.io/...`, or a "Socket connection timeout" with no CORS/404 error at all.** Your proxy is reaching the app but not forwarding WebSocket upgrades — make sure it passes the `Upgrade` and `Connection` headers through. `/socket.io/` is served by the same port as the app, so no extra routing is needed.
-- **`.env` changes don't seem to apply.** Check it's in the right place first: `.env` lives in your [data directory](./environment-variables.md#where-env-lives), not next to the executable, and the startup banner's `Env files:` line names the files that were actually read. If you launch through a custom entrypoint rather than `build/index.js`, `PORT`, `HOST`, `PROTOCOL_HEADER`, `HOST_HEADER`, and `ORIGIN` are read by adapter-node before the app's own `.env` loading runs — use `node --env-file=<data dir>/.env build/index.js`.
+1. Copy `serene-pub.db`, and delete `postmaster.pid` from the copy.
+2. `pg_controldata -D <copy>`: if the state is "shut down" with a valid checkpoint, recovery is likely.
+3. `pg_resetwal -n -D <copy>` for a dry run, then again without `-n`.
+4. Test the copy before swapping it in: point `SERENE_PUB_DATA_DIR` at a scratch folder containing it.

@@ -175,7 +175,12 @@ export function describeProposal(
 ): string {
 	const payload = proposal.payload ?? {}
 	const owner = payload.owner as { kind: string; id: number } | undefined
-	const who = owner ? names.ownerLabel?.(owner) : undefined
+	// A change to the book comes named by the server (`ownerLabel`, plan A22):
+	// the session's own owners are all a surface can name.
+	const who = owner
+		? (names.ownerLabel?.(owner) ??
+			(typeof payload.ownerLabel === "string" ? payload.ownerLabel : undefined))
+		: undefined
 	const prefix = who ? `${who} ` : ""
 
 	const slotId = typeof payload.slotId === "string" ? payload.slotId : ""

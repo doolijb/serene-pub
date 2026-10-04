@@ -13,6 +13,7 @@
 	 */
 	import { getContext, onMount, setContext, type Component } from "svelte"
 	import * as Icons from "@lucide/svelte"
+	import { page } from "$app/state"
 	import { adminNavFor } from "$lib/client/shell/adminNav"
 	import { adminHealth } from "./adminHealth.svelte"
 	import { adminRouter, interceptAdminLink } from "./adminRouter.svelte"
@@ -67,7 +68,10 @@
 	let attention = $derived(adminHealth.attention)
 
 	let nav = $derived(
-		adminNavFor(systemSettingsCtx?.settings?.isAccountsEnabled !== false)
+		adminNavFor(
+			systemSettingsCtx?.settings?.isAccountsEnabled !== false,
+			page.data?.isPrerelease === true
+		)
 	)
 	let hrefs = $derived(nav.flatMap((g) => g.items.map((i) => i.href)))
 	let activeHref = $derived(sectionHrefFor(adminRouter.path, hrefs))
@@ -338,7 +342,7 @@
 >
 	{#if vm.mode === "desk"}
 		<div
-			class="border-surface-200-800 w-60 shrink-0 overflow-y-auto border-r"
+			class="panel-edge w-60 shrink-0 overflow-y-auto border-r"
 		>
 			{@render sectionList()}
 		</div>
@@ -351,7 +355,7 @@
 		<div class="flex min-h-0 flex-1 flex-col">
 			<button
 				type="button"
-				class="text-surface-600-400 hover:text-surface-950-50 focus-visible:outline-primary-500 border-surface-200-800 flex min-h-11 shrink-0 items-center gap-1.5 border-b px-3 text-sm focus-visible:outline-2"
+				class="text-surface-600-400 hover:text-surface-950-50 focus-visible:outline-primary-500 panel-edge flex min-h-11 shrink-0 items-center gap-1.5 border-b px-3 text-sm focus-visible:outline-2"
 				onclick={showSectionList}
 			>
 				<Icons.ChevronLeft size={16} aria-hidden="true" />

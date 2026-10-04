@@ -24,6 +24,7 @@ import {
 	LLM_NONSTREAMING_TIMEOUT_MS
 } from "./idleTimeout"
 import { ToolCallDeltaAccumulator } from "./streamingToolCalls"
+import { modelServerFetch } from "./modelServerFetch"
 
 /**
  * What this service says a call cost: two counts and nothing else.
@@ -68,6 +69,19 @@ function doneReasonFrom(response: unknown): string | undefined {
 
 class OllamaAdapter extends BaseConnectionAdapter {
 	/**
+	 * 🚧 Yes, on the chat wire (PLAN-composer-attachments §3.6): `/api/chat`
+	 * takes base64 images per message (`messages[i].images`). `/api/generate`
+	 * has one request-level `images` field and no per-turn placement, so the
+	 * completion wire sends none. A fact about the CODE, not a capability
+	 * claim — see the base class. Constant, because the conformance pin reads
+	 * it off the prototype; a completion-wire request with files is refused in
+	 * `dispatch.ts` from the manifest's `sendsAttachments.completion`.
+	 */
+	override get consumesAttachments(): boolean {
+		return true
+	}
+
+	/**
 	 * `ollama.chat()` takes `tools` and answers with `tool_calls`, so this
 	 * class sends them — **on the chat wire and only there**.
 	 *
@@ -89,8 +103,7 @@ class OllamaAdapter extends BaseConnectionAdapter {
 	constructor({
 		connection,
 		sampling,
-		contextConfig,
-		promptConfig,
+		systemPrompt,
 		session,
 		currentCharacterId,
 		tokenCounter,
@@ -100,8 +113,7 @@ class OllamaAdapter extends BaseConnectionAdapter {
 	}: {
 		connection: SelectConnection
 		sampling: ResolvedSampling
-		contextConfig: SelectContextConfig
-		promptConfig: SelectPromptConfig
+		systemPrompt?: string
 		session: BasePromptSession
 		currentCharacterId: number | null
 		tokenCounter?: TokenCounters
@@ -112,8 +124,7 @@ class OllamaAdapter extends BaseConnectionAdapter {
 		super({
 			connection,
 			sampling,
-			contextConfig,
-			promptConfig,
+			systemPrompt,
 			session,
 			currentCharacterId,
 			tokenCounter:
@@ -165,7 +176,7 @@ class OllamaAdapter extends BaseConnectionAdapter {
 	 * connection-level answer on the same terms.
 	 *
 	 * Saying nothing rather than `think: false` is what "the config did not ask"
-	 * has to mean: `false` is a real instruction to a thinking model, and
+	 * has to mean: `false` is a real instruction to a reasoning model, and
 	 * sending it for every config that never enabled the sampler would switch
 	 * reasoning off across the product from a slot nobody set.
 	 *
@@ -191,7 +202,10 @@ class OllamaAdapter extends BaseConnectionAdapter {
 	getClient() {
 		if (!this._client) {
 			const host = normalizeBaseUrl(this.connection.baseUrl) || undefined
-			this._client = new Ollama({ host })
+			// `modelServerFetch`: undici's five-minute timeouts would end a
+			// long model load or a long unstreamed reply before this
+			// adapter's own bounds could judge it.
+			this._client = new Ollama({ host, fetch: modelServerFetch })
 		}
 		return this._client
 	}
@@ -337,6 +351,34 @@ class OllamaAdapter extends BaseConnectionAdapter {
 						}
 					: {})
 			} as ChatRequest
+			// 🚧 The files, each on its own turn (PLAN-composer-attachments
+			// §3.6): `images` beside the turn's text, base64. Images only —
+			// Ollama reads no other file — and measured against the request as
+			// it stands without them.
+			if (this.carriesAttachments) {
+				const chat = req as ChatRequest
+				const files = await this.filesByMessage(chat.messages ?? [], {
+					transport: "base64",
+					overheadBytes: Buffer.byteLength(JSON.stringify(chat))
+				})
+				let n = 0
+				chat.messages = (chat.messages ?? []).map((msg, i) => {
+					const own = files[i] ?? []
+					if (!own.length) return msg
+					return {
+						...msg,
+						images: own.map((file) => {
+							n++
+							if (file.kind !== "image")
+								throw new Error(
+									`${file.filename ?? `attachment ${n}`} is ${file.mime}, and Ollama reads only images ` +
+										`alongside a prompt. It is not sent rather than sent as something it is not.`
+								)
+							return file.bytes.toString("base64")
+						})
+					}
+				})
+			}
 		} else {
 			req = {
 				model,
@@ -386,7 +428,7 @@ class OllamaAdapter extends BaseConnectionAdapter {
 			return {
 				completionResult: async (
 					contentCb: (chunk: string) => void,
-					thinkingCb?: (chunk: string) => void
+					reasoningCb?: (chunk: string) => void
 				) => {
 					let content = ""
 					let idleTimedOut = false
@@ -428,9 +470,9 @@ class OllamaAdapter extends BaseConnectionAdapter {
 								this.finishReason =
 									doneReasonFrom(part) ?? this.finishReason
 								if (part.message) {
-									// Forward thinking chunks before content starts
+									// Forward reasoning chunks before content starts
 									if (part.message.thinking) {
-										thinkingCb?.(part.message.thinking)
+										reasoningCb?.(part.message.thinking)
 									}
 									if (part.message.content) {
 										content += part.message.content
@@ -461,7 +503,7 @@ class OllamaAdapter extends BaseConnectionAdapter {
 								this.finishReason =
 									doneReasonFrom(part) ?? this.finishReason
 								if (part.thinking) {
-									thinkingCb?.(part.thinking)
+									reasoningCb?.(part.thinking)
 								}
 								if (part.response) {
 									content += part.response
@@ -521,7 +563,7 @@ class OllamaAdapter extends BaseConnectionAdapter {
 						})
 						wire.received(res)
 						if (this.isAborting) {
-							return { content: undefined, thinking: undefined }
+							return { content: undefined, reasoning: undefined }
 						}
 						if (
 							res &&
@@ -530,7 +572,7 @@ class OllamaAdapter extends BaseConnectionAdapter {
 						) {
 							return {
 								content: res.message.content || "",
-								thinking: res.message.thinking,
+								reasoning: res.message.thinking,
 								usage: usageFrom(res),
 								finishReason: doneReasonFrom(res),
 								// The first call only — see
@@ -555,7 +597,7 @@ class OllamaAdapter extends BaseConnectionAdapter {
 						})
 						wire.received(res)
 						if (this.isAborting) {
-							return { content: undefined, thinking: undefined }
+							return { content: undefined, reasoning: undefined }
 						}
 						if (
 							res &&
@@ -564,7 +606,7 @@ class OllamaAdapter extends BaseConnectionAdapter {
 						) {
 							return {
 								content: res.response || "",
-								thinking: res.thinking,
+								reasoning: res.thinking,
 								usage: usageFrom(res),
 								finishReason: doneReasonFrom(res)
 							}
@@ -579,7 +621,7 @@ class OllamaAdapter extends BaseConnectionAdapter {
 						)
 					}
 					if (this.isAborting) {
-						return { content: undefined, thinking: undefined }
+						return { content: undefined, reasoning: undefined }
 					}
 					throw e
 				} finally {
@@ -593,7 +635,7 @@ class OllamaAdapter extends BaseConnectionAdapter {
 				completionResult: result.content ?? "",
 				compiledPrompt,
 				isAborted: this.isAborting,
-				thinkingContent: result.thinking || undefined,
+				reasoningContent: result.reasoning || undefined,
 				toolCall: (result as { toolCall?: any }).toolCall ?? null,
 				// Recorded, never acted on: see `TextGenResult.tokensCached`.
 				...((
@@ -636,6 +678,82 @@ export function ollamaModelModality(entry: unknown): string | undefined {
 	return embeds ? "embeddings" : "text-gen"
 }
 
+/** The most the listing spends on `/api/show`, all models together. */
+const SHOW_BUDGET_MS = 8_000
+/** One model's `/api/show`, at most. */
+const SHOW_TIMEOUT_MS = 4_000
+/** How many `/api/show` requests are in flight at once. */
+const SHOW_CONCURRENCY = 4
+
+/**
+ * Each listed model's `capabilities`, from `/api/show`, copied onto its entry.
+ *
+ * `/api/tags` does not carry the list (ollama-js 0.6.3 types it on
+ * `ShowResponse` only), and it is the one place Ollama says whether a model
+ * reads images (`vision`) — which the host-declared capability layer turns into
+ * Vision for that model — and whether it is a chat or an embedding model
+ * (`ollamaModelModality`). An entry that already carries the list (an Ollama
+ * that puts it on `/api/tags`) is left as it is.
+ *
+ * ⚠ Bounded twice, because the whole listing has to fit inside the sync's own
+ * timeout (`MODEL_SYNC_TIMEOUT_MS`, 15 s) or the sync records an error and
+ * touches no row: a per-model timeout, and a total budget after which the
+ * remaining entries go unasked. An unanswered or failed show leaves its entry
+ * exactly as `/api/tags` gave it — silence, which every reader treats as
+ * unknown, never as "cannot".
+ */
+export async function withShowCapabilities(
+	client: { show: (request: { model: string }) => Promise<unknown> },
+	models: readonly any[],
+	now: () => number = Date.now
+): Promise<any[]> {
+	const out = models.slice()
+	const deadline = now() + SHOW_BUDGET_MS
+	let next = 0
+	const askOne = async (model: string, ms: number): Promise<unknown> => {
+		let timer: ReturnType<typeof setTimeout> | undefined
+		try {
+			return await Promise.race([
+				client.show({ model }),
+				new Promise((resolve) => {
+					timer = setTimeout(() => resolve(undefined), ms)
+				})
+			])
+		} finally {
+			if (timer) clearTimeout(timer)
+		}
+	}
+	const worker = async () => {
+		while (next < out.length) {
+			const i = next++
+			const entry = out[i]
+			if (Array.isArray(entry?.capabilities)) continue
+			const name = entry?.model ?? entry?.name
+			if (typeof name !== "string" || !name) continue
+			const left = deadline - now()
+			if (left <= 0) return
+			try {
+				const shown = (await askOne(
+					name,
+					Math.min(left, SHOW_TIMEOUT_MS)
+				)) as { capabilities?: unknown } | undefined
+				if (Array.isArray(shown?.capabilities))
+					out[i] = { ...entry, capabilities: shown!.capabilities }
+			} catch {
+				// An older Ollama, or a model removed mid-listing: leave the
+				// entry as `/api/tags` gave it.
+			}
+		}
+	}
+	await Promise.all(
+		Array.from(
+			{ length: Math.min(SHOW_CONCURRENCY, out.length) },
+			worker
+		)
+	)
+	return out
+}
+
 async function listModels(
 	connection: SelectConnection
 ): Promise<{ models: any[]; error?: string }> {
@@ -646,8 +764,9 @@ async function listModels(
 		})
 		const res = await ollama.list()
 		if (res && Array.isArray(res.models)) {
+			const listed = await withShowCapabilities(ollama, res.models)
 			return {
-				models: res.models.map((m) => {
+				models: listed.map((m) => {
 					const modality = ollamaModelModality(m)
 					return modality ? { ...m, modality } : m
 				})

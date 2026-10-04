@@ -239,6 +239,34 @@ describe("2 · the fork cut", () => {
 		expect(hpOf(await h.read("lorebook_state", { branch: "main" }), b)).toBe(30)
 	})
 
+	test("a fork of a fork publishes the effective cut: the earliest fork date along the chain", async () => {
+		const { b, fork } = await forkedBook()
+		const [child] = await testDb
+			.insert(schema.lorebookBranches)
+			.values({
+				lorebookId: b.lorebook.id,
+				name: `child ${++n}`,
+				forkedFromBranchId: fork.id,
+				forkYear: 9
+			})
+			.returning()
+		const h = await host({ lorebookId: b.lorebook.id })
+		const onChild: any = await h.read("lorebook_state", { branch: child.id })
+		// Main is read only to year 5 (the parent's fork), never to year 9.
+		expect(hpOf(onChild, b)).toBe(10)
+		expect(onChild.forkedAt).toEqual({ year: 5, month: null, day: null })
+		const trail: any = await h.read("stat_trail", {
+			owner: cast(b),
+			slotId: "hp",
+			mode: "timeline",
+			branch: child.id
+		})
+		expect(trail.forkedAt).toEqual({ year: 5, month: null, day: null })
+		// With the cut lifted, nothing is reported as cut.
+		const uncut: any = await h.read("lorebook_state", { branch: child.id, forkCut: false })
+		expect(uncut.forkedAt).toBeNull()
+	})
+
 	test("a fork made at now (no date) keeps following main", async () => {
 		declareSlots()
 		const b = await book()

@@ -1,136 +1,180 @@
 <script lang="ts">
 	/**
-	 * The configurations inventory (admin IA 2026-08-28): every named config
-	 * across every pipeline, with its dependents — the reverse edges no
-	 * single workspace can show. An index, on purpose, not an editor: a
-	 * config is meaningless without its spec (its option space IS the spec's
-	 * declarations), so rows deep-link into the owning workspace's Configure
-	 * tab and editing stays one surface.
+	 * Admin › Configurations: the changelist (note 37, Django admin) of every
+	 * named configuration across every pipeline, with its dependents — the
+	 * reverse edges no single workspace can show. Filters by pipeline,
+	 * origin, default and use; "Delete selected" keeps shipped and default
+	 * configurations and those a preset or session still uses.
+	 *
+	 * The change view is the owning workspace's Configure tab: a config is
+	 * meaningless without its spec (its option space IS the spec's
+	 * declarations), so a row opens `/admin/pipelines/<slug>?config=<id>` and
+	 * editing stays one surface. A config is added there too.
 	 */
 	import { getContext, onMount } from "svelte"
 	import * as Icons from "@lucide/svelte"
 	import { adminGoto as goto } from "$lib/client/admin/adminRouter.svelte"
-	import { requestWithInterest } from "$lib/client/sockets/interest.svelte"
-	import AdminList, {
-		type AdminColumn
-	} from "$lib/client/components/admin/AdminList.svelte"
-	import AdminPageHeader from "$lib/client/components/admin/AdminPageHeader.svelte"
+	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
+	import { requestWithInterest, useInterest } from "$lib/client/sockets/interest.svelte"
+	import { toaster } from "$lib/client/utils/toaster"
+	import AdminChangelist from "$lib/client/components/admin/AdminChangelist.svelte"
+	import {
+		deletionFor,
+		type AdminBulkAction,
+		type AdminChangelistColumn,
+		type AdminChangelistFilter
+	} from "$lib/client/components/admin/changelist"
 
 	const userCtx: { user: SelectUser } = getContext("userCtx")
+	const socket = useTypedSocket()
 
 	type Row = Sockets.Pipelines.ConfigsIndex.Row
-	let rows: Row[] = $state([])
+	const noun = { singular: "configuration", plural: "configurations" }
+	let rows = $state<Row[]>([])
 	let loading = $state(true)
 
-	const onIndex = (res: Sockets.Pipelines.ConfigsIndex.Response) => {
-		rows = res.configs
-		loading = false
-	}
-
 	onMount(() => {
-		if (!userCtx.user?.isAdmin) {
-			goto("/")
-			return
-		}
+		if (!userCtx.user?.isAdmin) goto("/")
 	})
 
 	/**
 	 * The inventory, asked for and listened for in one. BARE — it spans every
-	 * pipeline, so there is nothing to scope it to.
-	 *
-	 * The app-wide registry, not `adminInterest`: `pipelines:` is a MIXED
-	 * family — most of its handlers answer every user — so this is an ordinary
-	 * key, and the admin check here is the same one the redirect above makes.
+	 * pipeline. The app-wide registry: `pipelines:` is a MIXED family.
 	 */
+	function load() {
+		return requestWithInterest("pipelines:configsIndex", {}, (res) => {
+			rows = res.configs
+			loading = false
+		})
+	}
 	$effect(() => {
 		if (!userCtx.user?.isAdmin) return
-		return requestWithInterest("pipelines:configsIndex", {}, onIndex)
+		return load()
+	})
+
+	let deleting = $state(0)
+	useInterest<"pipelines:deleteConfig">("pipelines:deleteConfig", () => {
+		if (!deleting) return
+		if (--deleting === 0) {
+			toaster.success({ title: "Deleted" })
+			socket.emit("pipelines:configsIndex", {})
+		}
+	})
+	useInterest<"pipelines:deleteConfig:error">("pipelines:deleteConfig:error", (res) => {
+		if (!deleting) return
+		deleting--
+		toaster.error({ title: res.error ?? "The configuration was not deleted." })
+		if (!deleting) socket.emit("pipelines:configsIndex", {})
 	})
 
 	const workspaceHref = (r: Row) =>
 		`/admin/pipelines/${encodeURIComponent(r.specSlug)}?config=${r.id}`
 
-	const columns: AdminColumn<Row>[] = [
-		{ key: "name", label: "Configuration", value: (r) => r.name },
-		{ key: "pipeline", label: "Pipeline", value: (r) => r.specName },
+	const columns: AdminChangelistColumn<Row>[] = [
+		{
+			key: "name",
+			label: "Configuration",
+			primary: true,
+			text: (r) => r.name + (r.isDefault ? " (default)" : ""),
+			sortValue: (r) => r.name
+		},
+		{ key: "pipeline", label: "Pipeline", text: (r) => r.specName, sortValue: (r) => r.specName },
 		{
 			key: "usedByPresets",
 			label: "Presets",
-			value: (r) => r.usedByPresets,
-			class: "text-right"
+			numeric: true,
+			text: (r) => (r.usedByPresets ? String(r.usedByPresets) : "—"),
+			sortValue: (r) => r.usedByPresets || null
 		},
 		{
 			key: "usedBySessions",
 			label: "Sessions",
-			value: (r) => r.usedBySessions,
-			class: "text-right"
+			numeric: true,
+			text: (r) => (r.usedBySessions ? String(r.usedBySessions) : "—"),
+			sortValue: (r) => r.usedBySessions || null
 		},
 		{
-			key: "kind",
-			label: "Kind",
-			value: (r) => (r.isImmutable ? 0 : 1)
+			key: "origin",
+			label: "Origin",
+			text: (r) => (r.isImmutable ? "Shipped" : "Custom"),
+			sortValue: (r) => (r.isImmutable ? 0 : 1)
+		}
+	]
+
+	const filters: AdminChangelistFilter<Row>[] = $derived([
+		{
+			key: "pipeline",
+			label: "Pipeline",
+			values: (r) => r.specSlug,
+			optionLabel: (v) => rows.find((r) => r.specSlug === v)?.specName ?? v
 		},
-		{ key: "actions", label: "", class: "w-px text-right" }
+		{
+			key: "origin",
+			label: "Origin",
+			values: (r) => (r.isImmutable ? "shipped" : "custom"),
+			optionLabel: (v) => (v === "shipped" ? "Shipped" : "Custom"),
+			order: ["shipped", "custom"]
+		},
+		{
+			key: "default",
+			label: "Default",
+			values: (r) => (r.isDefault ? "yes" : "no"),
+			optionLabel: (v) => (v === "yes" ? "Its pipeline's default" : "Not the default"),
+			order: ["yes", "no"]
+		},
+		{
+			key: "use",
+			label: "Use",
+			values: (r) => (r.usedByPresets || r.usedBySessions ? "used" : "unused"),
+			optionLabel: (v) => (v === "used" ? "Used by a preset or session" : "Unused"),
+			order: ["used", "unused"]
+		}
+	])
+
+	const protect = (r: Row) =>
+		r.isImmutable
+			? "shipped configurations are replaced by updates"
+			: r.isDefault
+				? "it is its pipeline's default — make another the default first"
+				: r.usedByPresets || r.usedBySessions
+					? "a preset or session still uses it"
+					: null
+
+	const bulkActions: AdminBulkAction<Row>[] = [
+		{
+			key: "delete",
+			label: "Delete selected configurations…",
+			icon: Icons.Trash2,
+			destructive: true,
+			confirm: (selected) =>
+				deletionFor(selected, {
+					noun,
+					label: (r) => `${r.name} (${r.specName})`,
+					protect
+				}),
+			run: (selected) => {
+				const going = selected.filter((r) => !protect(r))
+				deleting += going.length
+				for (const r of going)
+					socket.emit("pipelines:deleteConfig", { slug: r.specSlug, configId: r.id })
+			}
+		}
 	]
 </script>
 
-<div class="mx-auto w-full max-w-[1120px]">
-<AdminPageHeader
+<AdminChangelist
 	title="Configurations"
-	purpose="Every named tuning across every pipeline, and what depends on each one. Edit a configuration in its pipeline's workspace."
-/>
-
-<AdminList
+	purpose="Every named tuning across every pipeline, and what depends on each one. Open one to edit it in its pipeline's workspace."
 	{rows}
+	rowKey={(r) => r.id}
 	{columns}
+	{filters}
+	{bulkActions}
 	{loading}
+	{noun}
 	searchText={(r) => `${r.name} ${r.specName} ${r.specSlug}`}
-	searchPlaceholder="Search configurations…"
+	rowHref={workspaceHref}
 	defaultSort="pipeline"
-	storageKey="serene-pub:adminView:configurations"
+	emptyIcon={Icons.SlidersVertical}
 	emptyMessage="No configurations — every pipeline ships one at startup, so an empty list means the bootstrap failed."
-	onRowClick={(r) => goto(workspaceHref(r))}
->
-	{#snippet cell(row, col)}
-		{#if col.key === "name"}
-			<span class="font-semibold">{row.name}</span>
-			{#if row.isDefault}
-				<span
-					class="preset-tonal-primary ml-1.5 rounded-full px-1.5 py-0.5 text-[11px] font-semibold"
-					>default</span
-				>
-			{/if}
-		{:else if col.key === "pipeline"}
-			<span class="text-surface-700-300 text-xs">{row.specName}</span>
-			<span class="text-surface-600-400 block font-mono text-[11px]">
-				{row.specSlug}
-			</span>
-		{:else if col.key === "usedByPresets"}
-			<span class="text-xs">{row.usedByPresets || "—"}</span>
-		{:else if col.key === "usedBySessions"}
-			<span class="text-xs">{row.usedBySessions || "—"}</span>
-		{:else if col.key === "kind"}
-			{#if row.isImmutable}
-				<span
-					class="preset-tonal-surface rounded-full px-2 py-0.5 text-xs"
-				>
-					<Icons.Lock size={10} class="mr-0.5 inline" />shipped
-				</span>
-			{:else}
-				<span
-					class="preset-tonal-secondary rounded-full px-2 py-0.5 text-xs"
-					>custom</span
-				>
-			{/if}
-		{:else if col.key === "actions"}
-			<a
-				class="btn btn-sm preset-tonal-surface"
-				href={workspaceHref(row)}
-				onclick={(e) => e.stopPropagation()}
-			>
-				<Icons.Settings2 size={13} /> Open in workspace
-			</a>
-		{/if}
-	{/snippet}
-</AdminList>
-</div>
+/>

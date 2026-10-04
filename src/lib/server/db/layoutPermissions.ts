@@ -61,6 +61,11 @@ export interface LayoutPresetOwnership {
  * their own while never publishing one to the instance. The caller that has a
  * session in hand sets it (`checkSessionAccess(...).isGuest`); one that does
  * not leaves it absent, which reads as "not acting as a guest".
+ *
+ * ⚠ So the refusal is only as strong as the session named: the same person in
+ * a session they own is its owner there, and anyone may make a session. Until
+ * accounts carry a guest role, "a guest never publishes" is advisory (the
+ * share handler in `sockets/sessions.ts` says so, and a test pins it).
  */
 export interface LayoutActor {
 	id: number
@@ -101,11 +106,12 @@ export function canManage(
 }
 
 /**
- * May this person change this row's visibility?
+ * May this person PUBLISH this row (make it shared)?
  *
  * Management plus the one thing a guest may not do. Publishing a layout to the
  * whole instance is the act a guest is refused; keeping and editing their own
- * is not.
+ * is not, and neither is taking one private again, which the caller asks of
+ * `canManage` alone.
  */
 export function canShare(
 	row: LayoutPresetOwnership,

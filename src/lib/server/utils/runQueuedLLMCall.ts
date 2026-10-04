@@ -1,7 +1,7 @@
 import { llmQueue } from "./llmQueue"
 import type { TaskType } from "./resolveTaskConfig"
 import type { BaseConnectionAdapter } from "../connectionAdapters/BaseConnectionAdapter"
-import { resolveThinking } from "$lib/shared/utils/thinkingDelimiters"
+import { resolveReasoning } from "$lib/shared/utils/reasoningDelimiters"
 
 export interface RunQueuedLLMCallParams {
 	adapter: BaseConnectionAdapter
@@ -21,7 +21,7 @@ export interface RunQueuedLLMCallParams {
 
 export interface RunQueuedLLMCallResult {
 	text: string
-	thinkingContent?: string
+	reasoningContent?: string
 	isAborted: boolean
 }
 
@@ -39,9 +39,9 @@ export interface RunQueuedLLMCallResult {
  * of them has any use for a `<think>` block. It was reaching them: the only
  * inline parser lived inside `generateResponse` and was private to it, so a
  * backend without a reasoning parser of its own handed the delimiters straight
- * through into the stored text. `thinkingContent` is where it belongs and the
+ * through into the stored text. `reasoningContent` is where it belongs and the
  * shape of this result already has that field, so the trace is moved rather
- * than dropped. See `$lib/shared/utils/thinkingDelimiters` for the rules.
+ * than dropped. See `$lib/shared/utils/reasoningDelimiters` for the rules.
  */
 export async function runQueuedLLMCall({
 	adapter,
@@ -64,40 +64,40 @@ export async function runQueuedLLMCall({
 		label,
 		preflight: (signal) => adapter.preflight(signal),
 		execute: async (signal) => {
-			const { completionResult, isAborted, thinkingContent } =
+			const { completionResult, isAborted, reasoningContent } =
 				await adapter.generateText()
 
 			if (typeof completionResult === "string") {
-				const resolved = resolveThinking(
+				const resolved = resolveReasoning(
 					completionResult.trim(),
-					thinkingContent
+					reasoningContent
 				)
 				return {
 					text: resolved.content.trim(),
-					thinkingContent: resolved.thinking,
+					reasoningContent: resolved.reasoning,
 					isAborted
 				}
 			}
 
 			let text = ""
-			let thinking = ""
+			let reasoning = ""
 			await completionResult(
 				(chunk) => {
 					if (signal.aborted) return
 					text += chunk
 				},
-				(thinkChunk) => {
+				(reasoningChunk) => {
 					if (signal.aborted) return
-					thinking += thinkChunk
+					reasoning += reasoningChunk
 				}
 			)
-			const resolved = resolveThinking(
+			const resolved = resolveReasoning(
 				text.trim(),
-				thinking.trim() || thinkingContent
+				reasoning.trim() || reasoningContent
 			)
 			return {
 				text: resolved.content.trim(),
-				thinkingContent: resolved.thinking,
+				reasoningContent: resolved.reasoning,
 				isAborted
 			}
 		},

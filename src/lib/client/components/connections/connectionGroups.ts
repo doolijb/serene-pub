@@ -23,13 +23,13 @@
  *
  * ⚠ Pure. No Svelte, no socket, no icons — the view maps these to components.
  */
-import type { EndpointKind } from "./modelManagement"
-
-/** Which half of the list a row falls in. */
-export type GroupId = "local" | "service"
+import {
+	connectionGroupOf,
+	type ConnectionGroupId
+} from "$lib/shared/connections/connectionGroup"
 
 export interface ConnectionGroup {
-	id: GroupId
+	id: ConnectionGroupId
 	label: string
 	/**
 	 * The trade, in three words, on the header's right.
@@ -59,25 +59,15 @@ export const CONNECTION_GROUPS: readonly ConnectionGroup[] = [
 ]
 
 /**
- * Kinds that run here. Everything else is something we talk to.
- *
- * ⚠ An Ollama at `localhost` and an Ollama on the box downstairs are both
- * `local`: the kind is the claim, not the hostname. A person who points Serene
- * Pub at their own machine on the LAN has made the same trade — their words do
- * not leave their network and nobody bills them — and sorting that row under
- * "Services" because the host is not `127.0.0.1` would be a lie about the only
- * thing the group header promises.
+ * Which group a connection TYPE falls in — `connectionGroupOf`, defined in
+ * `$lib/shared/connections/connectionGroup` since 2026-09-29, where the
+ * server's semantic search reads the same rule. It is the type's own
+ * `category`, the one the New connection picker files it by: a KoboldCPP,
+ * LM Studio or llama.cpp you run yourself is **On this machine**, and an
+ * Ollama on the box downstairs still is — the type is the claim, not the
+ * hostname.
  */
-const LOCAL_KINDS: ReadonlySet<EndpointKind> = new Set<EndpointKind>([
-	"koboldcpp-managed",
-	"ollama",
-	"onnx-embeddings",
-	"onnx-entities"
-])
-
-export function groupOf(kind: EndpointKind): GroupId {
-	return LOCAL_KINDS.has(kind) ? "local" : "service"
-}
+export { connectionGroupOf }
 
 export interface GroupedConnection {
 	id: number
@@ -97,12 +87,11 @@ export interface GroupedRows<C> {
  * category they have not used.
  */
 export function groupConnections<C extends GroupedConnection>(
-	rows: readonly C[],
-	kindOf: (type: string | null | undefined) => EndpointKind
+	rows: readonly C[]
 ): GroupedRows<C>[] {
 	const out: GroupedRows<C>[] = []
 	for (const group of CONNECTION_GROUPS) {
-		const inGroup = rows.filter((r) => groupOf(kindOf(r.type)) === group.id)
+		const inGroup = rows.filter((r) => connectionGroupOf(r.type) === group.id)
 		if (inGroup.length) out.push({ group, rows: inGroup })
 	}
 	return out

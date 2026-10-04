@@ -1,0 +1,9 @@
+# Alias so github.com/webview/webview_go — which hard-codes
+# `pkg-config: gtk+-3.0 webkit2gtk-4.0` — builds against WebKitGTK 4.1, the
+# only version Ubuntu 24.04 / ubuntu-latest ship. build.mjs prepends this
+# directory to PKG_CONFIG_PATH on Linux; the helper then links
+# libwebkit2gtk-4.1.so.0. (Contract §C9.)
+Name: webkit2gtk-4.0
+Description: Alias for webkit2gtk-4.1 (Serene Pub window helper build)
+Version: 2.40.0
+Requires: webkit2gtk-4.1

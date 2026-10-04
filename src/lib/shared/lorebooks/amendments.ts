@@ -51,10 +51,8 @@ import { compareDates, type StoryDate } from "./storyDate"
 import {
 	amendmentsAheadOnLine,
 	amendmentsOnLine,
-	asLine,
-	lineFromFork,
 	MAIN_LINE,
-	stepOf,
+	rowReadsOnLine,
 	type Line
 } from "./lineReading"
 
@@ -74,32 +72,22 @@ export interface Amendment {
 export interface AsOf {
 	/** `null` = now: every dated amendment applies. */
 	moment?: StoryDate | null
-	/** `null` = main. */
-	branchId?: number | null
 	/**
-	 * Where this branch left the line it forked from.
+	 * The line: its ancestor chain with each step's fork cut (`lineOf` in
+	 * `./lineReading`, `lineOfBook` on the server). A fork of a branch reads
+	 * its parent's amendments before its own fork date, and the grandparent's
+	 * before the earlier cut (owner ruling 5, 2026-09-28); main's after a
+	 * fork date never reach the fork.
 	 *
-	 * ⚠ Supplying it CUTS main off at the fork: main's amendments after that
-	 * date do not reach the branch, which is the only reading under which a
-	 * branch is insulated from what main went on to do. Omitting it lets all of
-	 * main through, which is the reading for main itself (no fork) and the
-	 * conservative default for a caller that does not know.
-	 *
-	 * ⚠ One level only: it cannot see a grandparent. Pass `line` instead.
-	 */
-	forkedAt?: StoryDate | null
-	/**
-	 * The whole ancestor chain (`lineOf` in `./lineReading`). When given it
-	 * is authoritative and `branchId`/`forkedAt` are ignored — a fork of a
-	 * branch reads its parent's amendments before its own fork date, and the
-	 * grandparent's before the earlier cut (owner ruling 5, 2026-09-28).
+	 * Absent is main — main is the absence of a branch. ⚠ There is no
+	 * branch-id form: a bare id cannot see a grandparent or a fork cut.
 	 */
 	line?: Line
 }
 
-/** The line an `AsOf` names: its `line`, or the one-level line it spells. */
+/** The line an `AsOf` reads: its `line`, or main. */
 export function lineOfAsOf(at: AsOf = {}): Line {
-	return at.line ?? lineFromFork(at.branchId ?? null, at.forkedAt ?? null)
+	return at.line ?? MAIN_LINE
 }
 
 /**
@@ -125,6 +113,9 @@ export function amendmentsAsOf(
  * one keyword as of Y2" is not a thing the author can express or read back. If
  * per-item history is ever wanted it is a different feature, not a deeper
  * merge.
+ *
+ * ⚠ A `NEVER_AMENDED` key is never read from an amendment: the date SQL cuts
+ * a row on (`entryOnReadingSql`) is the date the row reads, on every path.
  */
 export function applyAmendments<T extends object>(
 	base: T,
@@ -136,7 +127,7 @@ export function applyAmendments<T extends object>(
 	const out = { ...base } as Record<string, unknown>
 	for (const amendment of applies)
 		for (const [key, value] of Object.entries(amendment.fields))
-			out[key] = value
+			if (!NEVER_AMENDED.has(key)) out[key] = value
 	return out as T
 }
 
@@ -193,7 +184,7 @@ export function castAsOf<T extends object>(
  * differently at one world moment. An appearance at no particular point
  * (`null`) reads every overlay, as a member with no presences always has.
  *
- * ⚠ The one filter. `castMemberAsOf` (server) and the workspace roster both
+ * ⚠ The one filter. `cardMemberAt` (server) and the workspace roster both
  * call it — two copies is how the roster and the prompt came to disagree.
  */
 export function amendmentsForAppearance<
@@ -227,14 +218,10 @@ export function groupAmendments<A extends { [k: string]: any }>(
 }
 
 /**
- * Columns that belong to the row, never to what the row SAYS.
- *
- * An amendment overlays what an entry says at a date. Its identity, its book,
- * its type and its bookkeeping are not things that can read differently at one
- * moment and another — an entry that is a different row at Y2 is a different
- * entry — so a change to one of these is never an amendment.
+ * The row's identity and bookkeeping: never part of what an author changed,
+ * so never in a diff (`changedFields`) and never in an amendment.
  */
-export const NEVER_AMENDED: ReadonlySet<string> = new Set([
+const BOOKKEEPING = [
 	"id",
 	"lorebookId",
 	"typeId",
@@ -242,7 +229,48 @@ export const NEVER_AMENDED: ReadonlySet<string> = new Set([
 	"position",
 	"createdAt",
 	"updatedAt"
+] as const
+
+/**
+ * The parts of a dated entry's date — when a history entry happened.
+ *
+ * ⚠ **A date is identity, not content** (owner ruling A18(b), 2026-09-30).
+ * Re-dating an entry is editing the entry: a date is what every line cuts
+ * the entry on, so an overlay that moved it would read one date while the
+ * book filed the entry at another. Not the amendment's OWN date (`year`,
+ * `month`, `day` on the amendment row), which is when its change begins.
+ */
+export const ENTRY_DATE_PARTS = ["year", "month", "day"] as const
+
+/**
+ * Columns that belong to the row, never to what the row SAYS.
+ *
+ * An amendment overlays what an entry says at a date. Its identity, its book,
+ * its type, its bookkeeping and its date are not things that can read
+ * differently at one moment and another — an entry that is a different row,
+ * or happened at a different date, at Y2 is a different entry — so a change to
+ * one of these is never an amendment. The resolver never reads one from an
+ * amendment (`applyAmendments`), and the server refuses an amendment that
+ * names a date part (`amendmentDateProblem`).
+ */
+export const NEVER_AMENDED: ReadonlySet<string> = new Set([
+	...BOOKKEEPING,
+	...ENTRY_DATE_PARTS
 ])
+
+/**
+ * Why an amendment with these fields cannot be filed, or null when it can:
+ * it names a part of the entry's date (`ENTRY_DATE_PARTS`). The same sentence
+ * for the editor that is about to send one and the door that refuses it.
+ */
+export function amendmentDateProblem(fields: Record<string, unknown>): string | null {
+	if (!ENTRY_DATE_PARTS.some((part) => Object.prototype.hasOwnProperty.call(fields, part)))
+		return null
+	return (
+		"An amendment can't change when an entry happened: the date is part of " +
+		"the entry, so re-dating it means changing the entry itself."
+	)
+}
 
 /** Same value, for the scalars and the small arrays a draft field holds. */
 function same(a: unknown, b: unknown): boolean {
@@ -261,6 +289,9 @@ function same(a: unknown, b: unknown): boolean {
  * into wherever it landed. The diff is what both save actions write: as an
  * amendment's `fields`, or as a patch to the base.
  *
+ * ⚠ A re-date is in the diff: it is a change to the entry, which only the
+ * base save may write. The amendment save asks `amendmentDateProblem` first.
+ *
  * ⚠ Compared against the draft as it was BUILT, not against the stored row.
  * `toDraft` may normalise, and a normalisation the author never saw is not a
  * change they made.
@@ -274,40 +305,10 @@ export function changedFields(
 ): Record<string, unknown> {
 	const out: Record<string, unknown> = {}
 	for (const [key, value] of Object.entries(draft)) {
-		if (NEVER_AMENDED.has(key)) continue
+		if ((BOOKKEEPING as readonly string[]).includes(key)) continue
 		if (!same(value, pristine[key])) out[key] = value
 	}
 	return out
-}
-
-/**
- * Whether a row belongs to the line being read (its branch is in the chain).
- *
- * A row with no branch is **shared**: it reads the same on every line, which
- * is what makes a branch cheap — the entries both lines agree about are one
- * row, not two. A row with a branch belongs to that line and to the lines
- * forked from it (ruling 5), so main never sees what a fork wrote and no fork
- * sees a sibling's.
- *
- * ⚠ Pass a `Line` (`lineOf`). A bare branch id is read as a one-level fork of
- * main and cannot see a grandparent's rows. Dates are not considered here —
- * `rowReadsOnLine` in `./lineReading` is the date-aware form (a shared row
- * dated after the fork is cut from the branch).
- */
-export function onLine<T extends { branchId?: number | null }>(
-	row: T,
-	line: Line | number | null | undefined
-): boolean {
-	return stepOf(asLine(line), row.branchId) !== undefined
-}
-
-/** The rows of a list that the line being read can see. */
-export function rowsOnLine<T extends { branchId?: number | null }>(
-	rows: readonly T[],
-	line: Line | number | null | undefined
-): T[] {
-	const l = asLine(line)
-	return rows.filter((row) => stepOf(l, row.branchId) !== undefined)
 }
 
 /** One amendment to write: a date and the fields that begin at it. */
@@ -396,6 +397,12 @@ export interface LineDifference<T> {
 	main: T | null
 	/** The row as this line reads it. */
 	line: T
+	/**
+	 * The line reads it at the head but the moment has not reached it yet
+	 * (its own date is after the moment). Listed all the same and drawn
+	 * dimmed, as the pool draws it, not hidden. Always false at the head.
+	 */
+	later: boolean
 }
 
 /**
@@ -406,27 +413,34 @@ export interface LineDifference<T> {
  * could become one. The design's sentence: *no merge, ever.*
  *
  * ⚠ **Main is read WITHOUT the fork cut, the line WITH it.** That is not a
- * detail: main is not cut off from itself, so `forkedAt` belongs only to the
- * line's reading. Passing it to both would compare a line against a main that
- * had been frozen at the fork, and every later change on main would vanish
- * from the comparison instead of showing up as a difference.
+ * detail: main is not cut off from itself, so the fork cuts belong only to
+ * the line's reading. Applying them to both would compare a line against a
+ * main that had been frozen at the fork, and every later change on main would
+ * vanish from the comparison instead of showing up as a difference.
  *
- * ⚠ A row on a SIBLING line is not a difference, it is somebody else's story.
- * It is skipped, exactly as `rowsOnLine` skips it.
+ * ⚠ **Only rows the line READS are compared** (`rowReadsOnLine`, by each
+ * row's own date, `dateOf`): a row on a sibling line is somebody else's
+ * story, and a dated row past its step's fork cut — an ancestor's history
+ * after the fork — never happened on this line, so it is neither something
+ * the line has nor something the two read differently. Fork cuts decide what
+ * is listed; the moment only marks: a row dated after it is still the line's,
+ * listed with `later`, as the pool dims it. Omit `dateOf` for rows that carry
+ * no date (cast members).
  */
 export function compareLines<
 	T extends { id: number; branchId?: number | null }
 >(
 	rows: readonly T[],
 	overlaysFor: (id: number) => readonly Amendment[],
-	branchId: number,
-	at: Omit<AsOf, "branchId"> = {}
+	at: { line: Line; moment?: StoryDate | null },
+	dateOf?: (row: T) => StoryDate | null | undefined
 ): LineDifference<T>[] {
-	const line = at.line ?? lineFromFork(branchId, at.forkedAt ?? null)
+	const line = at.line
 	const out: LineDifference<T>[] = []
 	for (const row of rows) {
-		// A row on a line outside the chain is somebody else's story.
-		if (!stepOf(line, row.branchId)) continue
+		const date = dateOf ? (dateOf(row) ?? null) : null
+		if (!rowReadsOnLine(row, line, date)) continue
+		const later = !rowReadsOnLine(row, line, date, at.moment ?? null)
 		// On this line or an ancestor branch: main has nothing beside it.
 		if (row.branchId != null) {
 			out.push({
@@ -434,7 +448,8 @@ export function compareLines<
 				kind: "only",
 				fields: [],
 				main: null,
-				line: row
+				line: row,
+				later
 			})
 			continue
 		}
@@ -456,7 +471,14 @@ export function compareLines<
 				)
 		)
 		if (fields.length)
-			out.push({ id: row.id, kind: "differs", fields, main, line: lineRead })
+			out.push({
+				id: row.id,
+				kind: "differs",
+				fields,
+				main,
+				line: lineRead,
+				later
+			})
 	}
 	return out
 }

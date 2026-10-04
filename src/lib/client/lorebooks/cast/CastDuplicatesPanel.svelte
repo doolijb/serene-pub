@@ -1,6 +1,6 @@
 <script lang="ts">
 	import * as Icons from "@lucide/svelte"
-	import { onMount } from "svelte"
+	import { onDestroy, onMount } from "svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 	import {
 		declareInterest,
@@ -8,7 +8,11 @@
 	} from "$lib/client/sockets/interest.svelte"
 	import { interestKey } from "$lib/shared/sockets/interest"
 	import { toaster } from "$lib/client/utils/toaster"
-	import { undoMergeToast } from "./castSave"
+	import {
+		absorbCastMember,
+		notAbsorbedTitle,
+		undoMergeToast
+	} from "./castSave"
 
 	/**
 	 * Two people who are one person, and the way back from saying so.
@@ -54,34 +58,74 @@
 		if (msg.lorebookId === lorebookId) mergeLogs = msg.mergeLogs
 	}
 
+	/**
+	 * A merge anywhere in THIS book moves both lists; another book's does
+	 * not. No toast here: the absorb this panel sent says how it went
+	 * (`absorb`), and a merge from the graph, another tab or a session is not
+	 * this panel's news (plan B8).
+	 */
 	function handleMergeNode(msg: Sockets.NarrativeGraph.MergeNode.Response) {
-		toaster.success({
-			title: "Absorbed",
-			description: `Merged into "${msg.survivorNode.name}". Undo from Recent merges if this was a mistake.`
-		})
+		if (msg.survivorNode?.lorebookId !== lorebookId) return
 		fetchAll()
 	}
+
+	/** The undos this panel sent, by merge record, until each is answered. */
+	const undoing = new Set<number>()
 
 	/**
 	 * An undo says who is back, and — when the server could not put
 	 * everything back — how many relationships and dated rows stayed lost,
 	 * because an end, a line or a session was deleted since the merge.
+	 * Said only for an undo pressed here (by its merge record); any undo in
+	 * this book re-reads the lists.
 	 */
 	function handleUndoMerge(msg: Sockets.NarrativeGraph.UndoMerge.Response) {
-		const toast = undoMergeToast(msg)
-		const shown = { title: toast.title, description: toast.description }
-		if (toast.kind === "warning") toaster.warning(shown)
-		else toaster.success(shown)
+		if (msg.lorebookId !== lorebookId) return
+		if (undoing.delete(msg.mergeLogId)) {
+			const toast = undoMergeToast(msg)
+			const shown = { title: toast.title, description: toast.description }
+			if (toast.kind === "warning") toaster.warning(shown)
+			else toaster.success(shown)
+		}
 		fetchAll()
 	}
 
+	function undo(mergeLogId: number) {
+		undoing.add(mergeLogId)
+		socket.emit("narrativeGraph:undoMerge", {
+			mergeLogId
+		} satisfies Sockets.NarrativeGraph.UndoMerge.Params)
+	}
+
+	let gone = false
+	onDestroy(() => {
+		gone = true
+	})
+
+	/**
+	 * Its refusal is said here, as a toast — Layout leaves
+	 * `narrativeGraph:mergeNode:error` to the surface that asked — and only
+	 * the refusal naming this pair (`absorbCastMember`): the absorb window's
+	 * is the window's to say. The list is read again so the pair comes back.
+	 */
 	function absorb(
 		candidate: Sockets.NarrativeGraph.DuplicateCandidates.Candidate
 	) {
-		socket.emit("narrativeGraph:mergeNode", {
+		absorbCastMember(socket, {
 			nodeId: candidate.bindingIdA,
 			parentNodeId: candidate.bindingIdB
-		} satisfies Sockets.NarrativeGraph.MergeNode.Params)
+		}).then((res) => {
+			toaster.success({
+				title: "Absorbed",
+				description: `Merged into "${res.survivorNode.name}". Undo from Recent merges if this was a mistake.`
+			})
+		}, (err: unknown) => {
+			toaster.error({
+				title: notAbsorbedTitle(candidate.nameA),
+				description: err instanceof Error ? err.message : undefined
+			})
+			if (!gone) fetchAll()
+		})
 		// Optimistic: the server re-emits its own candidate list after the
 		// merge and corrects this if anything is off.
 		candidates = candidates.filter((c) => c !== candidate)
@@ -192,7 +236,7 @@
 				<div class="mt-2 flex flex-col gap-1.5">
 					{#each mergeLogs as log (log.id)}
 						<div
-							class="border-border flex items-center justify-between gap-2 rounded-lg border px-3 py-2 text-xs"
+							class="panel-edge flex items-center justify-between gap-2 rounded-lg border px-3 py-2 text-xs"
 						>
 							<span class="text-surface-600-400 min-w-0">
 								"{log.absorbedName}" absorbed into "{log.survivorName ??
@@ -205,10 +249,7 @@
 								title={log.survivorId === null
 									? "Cannot be undone: the surviving member has since been absorbed elsewhere or deleted."
 									: "Undo this merge"}
-								onclick={() =>
-									socket.emit("narrativeGraph:undoMerge", {
-										mergeLogId: log.id
-									} satisfies Sockets.NarrativeGraph.UndoMerge.Params)}
+								onclick={() => undo(log.id)}
 							>
 								Undo
 							</button>

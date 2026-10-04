@@ -213,7 +213,7 @@ describe("sanitizeWidgetCss", () => {
 })
 
 describe("scopeWidgetCss", () => {
-	const S = '[data-widget-instance="ws-1"]'
+	const S = '[data-skin-scope="ws-1"]'
 
 	test("prefixes every selector in a list", () => {
 		expect(scopeWidgetCss(".a,.b{color:red}", "ws-1")).toBe(

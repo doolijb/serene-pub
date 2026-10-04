@@ -70,7 +70,7 @@ export interface ComponentShareFile {
 /** A share file that cannot be imported; `findings` are sentences, one per fault. */
 export class ComponentShareRefused extends Error {
 	constructor(readonly findings: string[]) {
-		super(`that is not a component share file this instance can import: ${findings.join("; ")}`)
+		super(`that is not a component share file this pub can import: ${findings.join("; ")}`)
 		this.name = "ComponentShareRefused"
 	}
 }

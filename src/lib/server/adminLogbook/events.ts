@@ -8,7 +8,7 @@
  * has to know it is being logged, so a new admin verb is covered by adding a
  * row here, not by remembering a call.
  *
- * Only an ADMIN actor's change is recorded (the logbook is the instance's
+ * Only an ADMIN actor's change is recorded (the logbook is the pub's
  * change history, not a user's activity), and only on success: no throw, no
  * `{event}:error` emitted, no `{ error }` returned.
  *
@@ -58,7 +58,7 @@ export interface LogbookEventSpec {
 	verb?: (params: any, label: string) => string
 	/** The object's name from the params, when no snapshot supplies one. */
 	label?: (params: any) => string | null | undefined
-	/** Record only when this holds, e.g. a pipeline change at instance scope. */
+	/** Record only when this holds, e.g. a pipeline change at pub scope. */
 	when?: (params: any) => boolean
 }
 
@@ -211,10 +211,10 @@ const capabilityDefaultSnap: Snapshot = async (db, id) => {
 const tunnelSnap = singleton(schema.tunnels, "Tunnel")
 
 /**
- * The instance settings row, less the CharaVault credential columns (redacted
+ * The pub settings row, less the CharaVault credential columns (redacted
  * anyway by name — dropped here so an unrelated change never even diffs them).
  */
-const instanceSnap = singleton(schema.systemSettings, "Instance settings", [
+const pubSnap = singleton(schema.systemSettings, "Pub settings", [
 	"charaVaultEncryptedToken",
 	"charaVaultTokenIv",
 	"charaVaultTokenAuthTag",
@@ -303,16 +303,16 @@ const libraryTemplateSnap: Snapshot = (db, id, params) =>
 /* ── helpers for the table ────────────────────────────────────────────── */
 
 const idOf = (p: any) => p?.id
-/** A pipeline change made to the instance, not inside one session. */
-const instanceScope = (p: any) => p?.sessionId == null
+/** A pipeline change made to the pub, not inside one session. */
+const pubScope = (p: any) => p?.sessionId == null
 const q = (s: unknown) => (s == null || s === "" ? "" : ` “${String(s)}”`)
 
 const systemSetting = (
 	fields?: readonly string[]
 ): LogbookEventSpec => ({
-	objectType: "instance",
+	objectType: "pub",
 	action: "change",
-	snapshot: instanceSnap,
+	snapshot: pubSnap,
 	...(fields ? { fields } : {})
 })
 
@@ -338,23 +338,24 @@ const byName = (table: any) => rowById(table)
 /* ── the table ────────────────────────────────────────────────────────── */
 
 export const LOGBOOK_EVENTS: Record<string, LogbookEventSpec> = {
-	/* Instance settings */
+	/* Pub settings */
 	"systemSettings:updateScriptsEnabled": systemSetting(),
 	"systemSettings:updateContextDebuggingEnabled": systemSetting(),
 	"systemSettings:updateAccountsEnabled": systemSetting(),
 	"systemSettings:updateRequireTwoFactor": systemSetting(),
 	"systemSettings:updateDefaultLanguage": systemSetting(),
+	"systemSettings:updateLoreWriteModeDefault": systemSetting(),
 	"systemSettings:updateAutoTranslate": systemSetting(),
 	"systemSettings:updateBackupSettings": systemSetting(),
-	"customThemes:setInstanceTheme": {
+	"customThemes:setPubTheme": {
 		objectType: "theme",
 		action: "change",
 		id: idOf,
 		snapshot: rowById(schema.customThemes, (r) => r.label ?? r.name),
 		verb: (p, label) =>
 			p?.enabled
-				? `Made${q(label)} the instance theme`
-				: `Stopped using${q(label)} as the instance theme`
+				? `Made${q(label)} the pub theme`
+				: `Stopped using${q(label)} as the pub theme`
 	},
 	"cardSources:charaVault:connect": {
 		objectType: "chara-vault",
@@ -630,16 +631,16 @@ export const LOGBOOK_EVENTS: Record<string, LogbookEventSpec> = {
 		snapshot: byName(schema.sessionPresets)
 	},
 
-	/* Pipelines — instance scope only; a session's own override is its owner's. */
+	/* Pipelines — pub scope only; a session's own override is its owner's. */
 	"pipelines:setOption": {
 		objectType: "pipeline",
 		action: "change",
 		id: (p) => p?.slug,
 		label: (p) => p?.slug,
-		when: instanceScope,
+		when: pubScope,
 		fields: ["configId", "optionId"],
 		// The VALUE is not recorded: an option may be a credential, and the
-		// panel stores those sealed with the instance secret.
+		// panel stores those sealed with the pub secret.
 		verb: (p) => `Changed option${q(p?.optionId)}`
 	},
 	"pipelines:clearOption": {
@@ -647,7 +648,7 @@ export const LOGBOOK_EVENTS: Record<string, LogbookEventSpec> = {
 		action: "change",
 		id: (p) => p?.slug,
 		label: (p) => p?.slug,
-		when: instanceScope,
+		when: pubScope,
 		fields: ["configId", "optionId"],
 		verb: (p) => `Reset option${q(p?.optionId)}`
 	},
@@ -656,7 +657,7 @@ export const LOGBOOK_EVENTS: Record<string, LogbookEventSpec> = {
 		action: "change",
 		id: (p) => p?.slug,
 		label: (p) => p?.slug,
-		when: instanceScope,
+		when: pubScope,
 		fields: ["configId"],
 		verb: (p) => {
 			const set = p?.set && typeof p.set === "object" ? Object.keys(p.set) : []
@@ -670,7 +671,7 @@ export const LOGBOOK_EVENTS: Record<string, LogbookEventSpec> = {
 		action: "change",
 		id: (p) => p?.slug,
 		label: (p) => p?.slug,
-		when: instanceScope,
+		when: pubScope,
 		fields: ["configId"],
 		verb: () => "Reset a configuration to its defaults"
 	},
@@ -679,7 +680,7 @@ export const LOGBOOK_EVENTS: Record<string, LogbookEventSpec> = {
 		action: "change",
 		id: (p) => p?.slug,
 		label: (p) => p?.slug,
-		when: instanceScope,
+		when: pubScope,
 		fields: ["configId", "includedActions", "enabled"]
 	},
 	"pipelines:createConfig": {
@@ -687,7 +688,7 @@ export const LOGBOOK_EVENTS: Record<string, LogbookEventSpec> = {
 		action: "change",
 		id: (p) => p?.slug,
 		label: (p) => p?.slug,
-		when: instanceScope,
+		when: pubScope,
 		fields: ["name", "fromConfigId"],
 		verb: (p) => `Added configuration${q(p?.name)}`
 	},
@@ -696,7 +697,7 @@ export const LOGBOOK_EVENTS: Record<string, LogbookEventSpec> = {
 		action: "change",
 		id: (p) => p?.slug,
 		label: (p) => p?.slug,
-		when: instanceScope,
+		when: pubScope,
 		fields: ["configId", "name"],
 		verb: (p) => `Renamed configuration #${p?.configId} to${q(p?.name)}`
 	},
@@ -705,7 +706,7 @@ export const LOGBOOK_EVENTS: Record<string, LogbookEventSpec> = {
 		action: "change",
 		id: (p) => p?.slug,
 		label: (p) => p?.slug,
-		when: instanceScope,
+		when: pubScope,
 		fields: ["configId"],
 		verb: (p) => `Deleted configuration #${p?.configId}`
 	},
@@ -714,19 +715,19 @@ export const LOGBOOK_EVENTS: Record<string, LogbookEventSpec> = {
 		action: "change",
 		id: (p) => p?.slug,
 		label: (p) => p?.slug,
-		when: instanceScope,
+		when: pubScope,
 		fields: ["configId", "scope"],
 		verb: (p) => `Selected configuration #${p?.configId}`
 	},
 
-	/* Writing — through a pipeline's panel (instance scope) and the library */
+	/* Writing — through a pipeline's panel (pub scope) and the library */
 	"pipelines:createPrompt": {
 		objectType: "prompt",
 		action: "add",
 		idFromResult: "promptId",
 		snapshot: byName(schema.pipelinePrompts),
 		label: (p) => p?.name,
-		when: instanceScope
+		when: pubScope
 	},
 	"pipelines:clonePrompt": {
 		objectType: "prompt",
@@ -734,21 +735,21 @@ export const LOGBOOK_EVENTS: Record<string, LogbookEventSpec> = {
 		idFromResult: "promptId",
 		snapshot: byName(schema.pipelinePrompts),
 		label: (p) => p?.name,
-		when: instanceScope
+		when: pubScope
 	},
 	"pipelines:updatePrompt": {
 		objectType: "prompt",
 		action: "change",
 		id: (p) => p?.promptId,
 		snapshot: byName(schema.pipelinePrompts),
-		when: instanceScope
+		when: pubScope
 	},
 	"pipelines:deletePrompt": {
 		objectType: "prompt",
 		action: "delete",
 		id: (p) => p?.promptId ?? p?.templateId,
 		snapshot: byName(schema.pipelinePrompts),
-		when: instanceScope
+		when: pubScope
 	},
 	"pipelines:libraryClonePrompt": {
 		objectType: "prompt",
@@ -774,7 +775,7 @@ export const LOGBOOK_EVENTS: Record<string, LogbookEventSpec> = {
 		idFromResult: "templateId",
 		snapshot: byName(schema.pipelineContextTemplates),
 		label: (p) => p?.name,
-		when: instanceScope
+		when: pubScope
 	},
 	"pipelines:cloneContextTemplate": {
 		objectType: "context-template",
@@ -782,21 +783,21 @@ export const LOGBOOK_EVENTS: Record<string, LogbookEventSpec> = {
 		idFromResult: "templateId",
 		snapshot: byName(schema.pipelineContextTemplates),
 		label: (p) => p?.name,
-		when: instanceScope
+		when: pubScope
 	},
 	"pipelines:updateContextTemplate": {
 		objectType: "context-template",
 		action: "change",
 		id: (p) => p?.templateId,
 		snapshot: byName(schema.pipelineContextTemplates),
-		when: instanceScope
+		when: pubScope
 	},
 	"pipelines:deleteContextTemplate": {
 		objectType: "context-template",
 		action: "delete",
 		id: (p) => p?.templateId,
 		snapshot: byName(schema.pipelineContextTemplates),
-		when: instanceScope
+		when: pubScope
 	},
 	"pipelines:cloneVariableTemplate": {
 		objectType: "variable-template",
@@ -804,21 +805,21 @@ export const LOGBOOK_EVENTS: Record<string, LogbookEventSpec> = {
 		idFromResult: "templateId",
 		snapshot: byName(schema.pipelineVariableTemplates),
 		label: (p) => p?.name,
-		when: instanceScope
+		when: pubScope
 	},
 	"pipelines:updateVariableTemplate": {
 		objectType: "variable-template",
 		action: "change",
 		id: (p) => p?.templateId,
 		snapshot: byName(schema.pipelineVariableTemplates),
-		when: instanceScope
+		when: pubScope
 	},
 	"pipelines:deleteVariableTemplate": {
 		objectType: "variable-template",
 		action: "delete",
 		id: (p) => p?.templateId,
 		snapshot: byName(schema.pipelineVariableTemplates),
-		when: instanceScope
+		when: pubScope
 	},
 	// The library's template verbs carry `kind`; the record's object type
 	// follows it (see `resolveObjectType`).

@@ -3,7 +3,8 @@
 	import { useInterest } from "$lib/client/sockets/interest.svelte"
 	import { getContext, onMount } from "svelte"
 	import * as Icons from "@lucide/svelte"
-	import PanelToolbar from "$lib/client/components/panels/PanelToolbar.svelte"
+	import ViewToolbar from "$lib/client/components/panels/ViewToolbar.svelte"
+	import { toolbarButtonClass } from "$lib/client/components/panels/toolbarButton"
 	import PanelNavHeader from "$lib/client/components/panels/PanelNavHeader.svelte"
 	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
 	import SamplingConfigUnsavedChangesModal from "../modals/PromptConfigUnsavedChangesModal.svelte"
@@ -80,7 +81,14 @@
 
 	function openCategory(s: string) {
 		shape = s
-		selectedSamplingId = defaultIdFor(s) ?? firstOfShape(s)
+		const next = defaultIdFor(s) ?? firstOfShape(s)
+		// Re-ask when the id does not move: the effect that fetches on a change
+		// of `selectedSamplingId` has nothing to react to, and a row that never
+		// arrived (or belongs to the other category) would stay missing.
+		if (next != null && next === selectedSamplingId && sampling?.id !== next) {
+			socket.emit("samplingConfigs:get", { id: next })
+		}
+		selectedSamplingId = next
 		view = "list"
 	}
 
@@ -189,12 +197,6 @@
 	// `selected` attributes on <option> don't reliably survive that; the
 	// browser falls back to the first option, which looked like "the
 	// selection reverts to the default config" after saving.
-	$effect(() => {
-		if (selectedSamplingId) {
-			socket.emit("samplingConfigs:get", { id: selectedSamplingId })
-		}
-	})
-
 	function handleSetDefault() {
 		if (!selectedSamplingId) return
 		socket.emit("samplingConfigs:setUserActive", { id: selectedSamplingId })
@@ -437,6 +439,20 @@
 		handleSamplingConfigsSetUserActive
 	)
 
+	// ⚠ AFTER the `useInterest` declarations above, never before them. Effects
+	// run in declaration order, and every `samplingConfigs:` reply is GATED: a
+	// `:get` emitted by an effect declared earlier reached the server before
+	// the interest sync naming its key, so the server dropped the reply and the
+	// first open of a category drew an empty pane (owner note 26, 2026-10-02).
+	// Nothing re-asked, because opening the category set the SAME id the mount
+	// had already (unanswered) asked for. `requestConfig` below is the repair
+	// for that second half.
+	$effect(() => {
+		if (selectedSamplingId) {
+			socket.emit("samplingConfigs:get", { id: selectedSamplingId })
+		}
+	})
+
 	onMount(() => {
 		onclose = handleOnClose
 		socket.emit("samplingConfigs:list", {})
@@ -583,37 +599,71 @@
 				No sampling configurations in this category yet.
 			</p>
 		{:else if !!sampling}
-			<div class="panel-actions mt-2 mb-2 @lg/view:mt-0">
-				<button
-					type="button"
-					class="btn btn-sm preset-tonal-surface"
-					onclick={handleNew}
-					title="Clone to new config"
-				>
-					<Icons.Plus size={16} />
-					Clone
-				</button>
-				<button
-					type="button"
-					class="btn btn-sm preset-tonal-surface"
-					onclick={handleReset}
-					disabled={!unsavedChanges}
-					title="Reset unsaved changes"
-				>
-					<Icons.RefreshCcw size={16} />
-					Reset
-				</button>
-				<button
-					type="button"
-					class="btn btn-sm preset-tonal-error"
-					onclick={handleDelete}
-					disabled={!!sampling && sampling.isImmutable}
-					title="Delete sampling config"
-				>
-					<Icons.X size={16} />
-					Delete
-				</button>
-			</div>
+			<!-- The view toolbar (STYLE-GUIDE §6.3), on an editor: saving is
+			     the primary, Reset and Clone the secondary icon buttons, and
+			     Set default and Delete one ⋯ away. -->
+			<ViewToolbar
+				label="Sampling config"
+				class="mt-2 mb-3 @lg/view:mt-0"
+				menuItems={[
+					{
+						label:
+							selectedSamplingId === activeSamplingConfigId
+								? "Already the default"
+								: "Set as default",
+						icon: Icons.Star,
+						disabled:
+							!selectedSamplingId ||
+							selectedSamplingId === activeSamplingConfigId,
+						onSelect: handleSetDefault
+					},
+					{ separator: true },
+					{
+						label: "Delete",
+						icon: Icons.Trash2,
+						destructive: true,
+						disabled: !!sampling && sampling.isImmutable,
+						title:
+							!!sampling && sampling.isImmutable
+								? "A built-in config cannot be deleted"
+								: undefined,
+						onSelect: handleDelete
+					}
+				]}
+			>
+				{#snippet primary()}
+					<button
+						type="button"
+						class="btn btn-sm preset-filled-primary-500 shrink-0"
+						onclick={handleUpdate}
+						disabled={(!!sampling && sampling.isImmutable) ||
+							!unsavedChanges}
+					>
+						<Icons.Save size={16} aria-hidden="true" /> Update
+					</button>
+				{/snippet}
+				{#snippet actions()}
+					<button
+						type="button"
+						class={toolbarButtonClass()}
+						onclick={handleReset}
+						disabled={!unsavedChanges}
+						title="Reset unsaved changes"
+						aria-label="Reset unsaved changes"
+					>
+						<Icons.RefreshCcw size={16} aria-hidden="true" />
+					</button>
+					<button
+						type="button"
+						class={toolbarButtonClass()}
+						onclick={handleNew}
+						title="Clone to a new config"
+						aria-label="Clone to a new config"
+					>
+						<Icons.CopyPlus size={16} aria-hidden="true" />
+					</button>
+				{/snippet}
+			</ViewToolbar>
 			<div class="mb-4">
 				<Select
 					label="Sampling config"
@@ -641,37 +691,6 @@
 					it to make changes.
 				</div>
 			{/if}
-			<PanelToolbar label="Sampling config actions" class="mb-4">
-				<button
-					type="button"
-					class="btn btn-sm preset-filled-primary-500 min-w-[6rem] flex-1"
-					onclick={handleUpdate}
-					disabled={(!!sampling && sampling.isImmutable) ||
-						!unsavedChanges}
-				>
-					<Icons.Save size={16} /> Update
-				</button>
-				<button
-					type="button"
-					class="btn btn-sm preset-tonal-surface shrink-0"
-					onclick={handleSetDefault}
-					disabled={!selectedSamplingId ||
-						selectedSamplingId === activeSamplingConfigId}
-					title={selectedSamplingId === activeSamplingConfigId
-						? "Already the default"
-						: "Set as default"}
-				>
-					<Icons.Star
-						size={16}
-						fill={selectedSamplingId === activeSamplingConfigId
-							? "currentColor"
-							: "none"}
-					/>
-					{selectedSamplingId === activeSamplingConfigId
-						? "Default"
-						: "Set default"}
-				</button>
-			</PanelToolbar>
 
 			<form class="space-y-4">
 				<div class="flex flex-col gap-1">
@@ -738,6 +757,14 @@
 					disabled={sampling.isImmutable}
 				/>
 			</form>
+		{:else}
+			<!-- Asked, not yet answered — said, never a blank pane. -->
+			<p
+				class="text-surface-600-400 py-8 text-center text-sm"
+				role="status"
+			>
+				Loading sampling config…
+			</p>
 		{/if}
 	</div>
 {/snippet}

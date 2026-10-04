@@ -11,14 +11,17 @@
 	import FileDropzone from "$lib/client/components/FileDropzone.svelte"
 	import * as Icons from "@lucide/svelte"
 	import PanelFilterInput from "$lib/client/components/panels/PanelFilterInput.svelte"
+	import ViewToolbar from "$lib/client/components/panels/ViewToolbar.svelte"
+	import ListCardToggle from "$lib/client/components/panels/ListCardToggle.svelte"
+	import { toolbarButtonClass } from "$lib/client/components/panels/toolbarButton"
 	import PanelSplit from "$lib/client/components/panels/PanelSplit.svelte"
 	import { ViewModeTracker } from "$lib/client/shell/viewMode.svelte"
 	import CharacterForm from "../characterForms/CharacterForm.svelte"
 	import CharacterCreator from "../modals/CharacterCreatorModal.svelte"
 	import CharacterUnsavedChangesModal from "../modals/CharacterUnsavedChangesModal.svelte"
 	import { toaster } from "$lib/client/utils/toaster"
+	import { cardFileForUpload } from "$lib/client/utils/cardUpload"
 	import { createViewMode } from "$lib/client/utils/viewMode.svelte"
-	import type { SpecV3 } from "@lenml/char-card-reader"
 	import CharacterListItem from "../listItems/CharacterListItem.svelte"
 	import CharacterViewPanel from "../characterForms/CharacterViewPanel.svelte"
 	import CharacterCardItem from "../listItems/CharacterCardItem.svelte"
@@ -28,6 +31,7 @@
 	import EmptyState from "../EmptyState.svelte"
 	import ImportConflictModal from "../modals/ImportConflictModal.svelte"
 	import { describeOverwriteLosses } from "$lib/client/lorebooks/overwriteLosses"
+	import { lorebookImportedToast } from "$lib/client/lorebooks/lorebookImportedToast"
 	import CharacterExportModal from "../modals/CharacterExportModal.svelte"
 	import { downloadBlob } from "$lib/client/utils/downloadBlob"
 	import type { SocketEventMap } from "$lib/client/sockets/typedSocket"
@@ -80,7 +84,10 @@
 	let confirmCloseSidebarResolve: ((v: boolean) => void) | null = null
 	let showImportModal = $state(false)
 	let onEditFormCancel: (() => void) | undefined = $state()
-	let importingLorebook: SpecV3.Lorebook | null = $state(null)
+	/** The card's own book, held on the server for the dialog (NOMENCLATURE §16). */
+	let importingLorebook: Sockets.Characters.HeldCardBook | null = $state(null)
+	/** The dialog's name field, starting at the book's own name. */
+	let importingLorebookName = $state("")
 	let importingLorebookCharacter: SelectCharacter | null = $state(null)
 	let showLorebookImportConfirmationModal = $state(false)
 	// Set when lorebooks:import comes back with status "conflict" — the
@@ -99,9 +106,10 @@
 	let lorebookImportPending = $state(false)
 	// Set when characters:importCard comes back with status "conflict" — the
 	// card's uuid matched a character this user already has, but its
-	// content differs.
+	// content differs. The file waits on the server as a held import; the
+	// choice names it.
 	let characterImportConflict:
-		| { existingCharacter: SelectCharacter; file: string }
+		| Sockets.Characters.ImportCard.Response["conflict"]
 		| undefined = $state(undefined)
 	let showCharacterImportConflictModal = $state(false)
 	let exportingCharacter: {
@@ -744,17 +752,14 @@
 
 	async function handleFileImport(details: FileAcceptDetails) {
 		if (!details.files || details.files.length === 0) return
-		const file = details.files[0]
-		const reader = new FileReader()
-		reader.onload = function (e) {
-			const base64 = (e.target?.result as string)?.split(",")[1]
-			if (base64) {
-				socket.emit("characters:importCard", { file: base64 })
-				showImportModal = false
-			}
-		}
-		reader.readAsDataURL(file)
 		showImportModal = false
+		// The server's own ceiling, said before a byte is uploaded.
+		const upload = await cardFileForUpload(details.files[0])
+		if ("refused" in upload) {
+			toaster.error({ title: upload.refused })
+			return
+		}
+		socket.emit("characters:importCard", { file: upload.base64 })
 	}
 
 	/**
@@ -804,8 +809,13 @@
 	}
 
 	function confirmLorebookImport() {
-		const req = {
-			lorebookData: importingLorebook!
+		// The card's book is held on the server since the card import; the
+		// dialog names it, and sends the name only when it was changed.
+		const book = importingLorebook!
+		const name = importingLorebookName.trim()
+		const req: Sockets.Lorebooks.Import.Params = {
+			heldImportId: book.heldImportId,
+			...(name && name !== book.name ? { name } : {})
 		}
 		lorebookImportPending = true
 		socket.emit("lorebooks:import", req)
@@ -819,7 +829,7 @@
 		lorebookImportPending = true
 		socket.emit("lorebooks:importResolve", {
 			action: "overwrite",
-			lorebookData: lorebookImportConflict.lorebookData,
+			heldImportId: lorebookImportConflict.heldImportId,
 			existingId: lorebookImportConflict.existingLorebook.id
 		})
 		showLorebookImportConflictModal = false
@@ -831,7 +841,7 @@
 		lorebookImportPending = true
 		socket.emit("lorebooks:importResolve", {
 			action: "createNew",
-			lorebookData: lorebookImportConflict.lorebookData,
+			heldImportId: lorebookImportConflict.heldImportId,
 			existingId: lorebookImportConflict.existingLorebook.id
 		})
 		showLorebookImportConflictModal = false
@@ -847,7 +857,7 @@
 		if (!characterImportConflict) return
 		socket.emit("characters:importResolve", {
 			action: "overwrite",
-			file: characterImportConflict.file,
+			heldImportId: characterImportConflict.heldImportId,
 			existingId: characterImportConflict.existingCharacter.id
 		})
 		showCharacterImportConflictModal = false
@@ -858,7 +868,7 @@
 		if (!characterImportConflict) return
 		socket.emit("characters:importResolve", {
 			action: "createNew",
-			file: characterImportConflict.file,
+			heldImportId: characterImportConflict.heldImportId,
 			existingId: characterImportConflict.existingCharacter.id
 		})
 		showCharacterImportConflictModal = false
@@ -964,6 +974,7 @@
 			return
 		}
 		importingLorebook = msg.book || null
+		importingLorebookName = msg.book?.name ?? ""
 		// A warning means the character DID import, with part of the card
 		// (usually an over-sized image) skipped. It is a warning toast and
 		// never an error one: an error reads as "nothing was imported", which
@@ -989,6 +1000,7 @@
 		msg: Sockets.Characters.ImportResolve.Response
 	) {
 		importingLorebook = msg.book || null
+		importingLorebookName = msg.book?.name ?? ""
 		if (msg.warnings?.length) {
 			toaster.warning({
 				title: `Character imported with warnings`,
@@ -1043,10 +1055,8 @@
 			})
 			return
 		}
-		toaster.success({
-			title: `Lorebook imported`,
-			description: `Lorebook imported successfully.`
-		})
+		const toast = lorebookImportedToast(msg.warnings)
+		toaster[toast.kind]({ title: toast.title, description: toast.description })
 	}
 
 	function handleLorebooksImportError(msg: Sockets.ErrorResponse) {
@@ -1060,10 +1070,8 @@
 	) {
 		if (!lorebookImportPending) return
 		lorebookImportPending = false
-		toaster.success({
-			title: `Lorebook imported`,
-			description: `Lorebook imported successfully.`
-		})
+		const toast = lorebookImportedToast(msg.warnings)
+		toaster[toast.kind]({ title: toast.title, description: toast.description })
 	}
 
 	function handleLorebooksImportResolveError(msg: Sockets.ErrorResponse) {
@@ -1345,222 +1353,177 @@
 				role="region"
 				aria-label="Characters list and card drop zone"
 			>
-				<!-- The one thing this view is FOR, on its own line above the
-				     controls that narrow it: creating a character is not a way of
-				     filtering the list, and one row holding both would read as
-				     though it were. -->
-				<div class="mb-2 flex min-w-0 shrink-0 items-center">
-					<!-- The three ways a character gets in, behind one button:
-					     write one, browse the library, or hand over a file.
-					     The pane is a drop target as well, which is a fourth
-					     way and not a menu item — there is nothing to pick. -->
-					<Popover
-						open={newOpen}
-						onOpenChange={(e) => handleNewOpenChange(e.open)}
-						positioning={{ placement: "bottom-end" }}
-					>
-						<Popover.Trigger
-							class="btn btn-sm preset-filled-primary-500 shrink-0 {panelsCtx
-								.digest.tutorial
-								? 'ring-primary-500/50 animate-pulse ring-4'
-								: ''}"
-							title="New character"
-							aria-label="New character"
-							aria-haspopup="menu"
-							aria-expanded={newOpen}
+				<!-- The view toolbar (STYLE-GUIDE §6.3). The three ways a
+				     character gets in are behind New — write one, browse the
+				     library, or hand over a file; the pane is a drop target as
+				     well, which is a fourth way and not a menu item. -->
+				<ViewToolbar label="Characters" class="mb-2">
+					{#snippet primary()}
+						<Popover
+							open={newOpen}
+							onOpenChange={(e) => handleNewOpenChange(e.open)}
+							positioning={{ placement: "bottom-end" }}
 						>
-							<Icons.Plus size={16} aria-hidden="true" />
-							New
-						</Popover.Trigger>
-						<Portal>
-							<Popover.Positioner class="z-[1000]!">
-								<Popover.Content
-									class="card bg-surface-100-900 border-surface-300-700 w-[min(90vw,280px)] border p-1 shadow-xl"
-								>
-									<!-- `tabindex={-1}` and not 0: the menu is one tab
-									     stop, and the stop is whichever ITEM holds the
-									     roving focus. The container takes focus only
-									     programmatically. -->
-									<div
-										role="menu"
-										aria-label="New character"
-										tabindex={-1}
-										class="flex flex-col"
-										onkeydown={handleNewMenuKeydown}
+							<Popover.Trigger
+								class="btn btn-sm preset-filled-primary-500 shrink-0 {panelsCtx
+									.digest.tutorial
+									? 'ring-primary-500/50 animate-pulse ring-4'
+									: ''}"
+								title="New character"
+								aria-label="New character"
+								aria-haspopup="menu"
+								aria-expanded={newOpen}
+							>
+								<Icons.Plus size={16} aria-hidden="true" />
+								New
+							</Popover.Trigger>
+							<Portal>
+								<Popover.Positioner class="z-[1000]!">
+									<Popover.Content
+										class="card bg-surface-50-950 border-surface-200-800 w-[min(90vw,280px)] border p-1 shadow-xl"
 									>
-										{#each newMenuItems as item, i (item.key)}
-											<button
-												type="button"
-												role="menuitem"
-												tabindex={i === newMenuIndex
-													? 0
-													: -1}
-												class="hover:bg-surface-200-800 flex items-start gap-3 rounded-lg px-2.5 py-2 text-left"
-												onclick={() =>
-													runNewMenuItem(item)}
-											>
-												<item.icon
-													size={18}
-													class="text-surface-600-400 mt-0.5 shrink-0"
-													aria-hidden="true"
-												/>
-												<span class="min-w-0">
-													<span
-														class="block text-sm font-medium"
-													>
-														{item.title}
+										<!-- `tabindex={-1}` and not 0: the menu is one tab
+										     stop, and the stop is whichever ITEM holds the
+										     roving focus. The container takes focus only
+										     programmatically. -->
+										<div
+											role="menu"
+											aria-label="New character"
+											tabindex={-1}
+											class="flex flex-col"
+											onkeydown={handleNewMenuKeydown}
+										>
+											{#each newMenuItems as item, i (item.key)}
+												<button
+													type="button"
+													role="menuitem"
+													tabindex={i === newMenuIndex
+														? 0
+														: -1}
+													class="hover:bg-surface-200-800 flex items-start gap-3 rounded-lg px-2.5 py-2 text-left"
+													onclick={() =>
+														runNewMenuItem(item)}
+												>
+													<item.icon
+														size={18}
+														class="text-surface-600-400 mt-0.5 shrink-0"
+														aria-hidden="true"
+													/>
+													<span class="min-w-0">
+														<span
+															class="block text-sm font-medium"
+														>
+															{item.title}
+														</span>
+														<span
+															class="text-surface-600-400 block text-xs"
+														>
+															{item.blurb}
+														</span>
 													</span>
-													<span
-														class="text-surface-600-400 block text-xs"
-													>
-														{item.blurb}
-													</span>
-												</span>
-											</button>
-										{/each}
-									</div>
-								</Popover.Content>
-							</Popover.Positioner>
-						</Portal>
-					</Popover>
-				</div>
-				<!-- Filter box, filter popout, view-mode pair: everything that
-				     says "which of these am I looking at" on one line, with the
-				     two icon controls pinned at the end so the box takes the
-				     rest. Every child is shrinkable or fixed, so the row fits a
-				     399px dock without scrolling sideways. -->
-				<div class="mb-2 flex min-w-0 shrink-0 items-center gap-2">
-					<div class="min-w-0 flex-1">
+												</button>
+											{/each}
+										</div>
+									</Popover.Content>
+								</Popover.Positioner>
+							</Portal>
+						</Popover>
+					{/snippet}
+					{#snippet filter()}
 						<PanelFilterInput
 							id="character-search"
 							bind:value={search}
 							placeholder="characters"
-					singular="character"
+							singular="character"
 							count={characterList.length}
 							aria-label="Filter characters by name, description, or tags"
 						/>
-					</div>
-					<!-- The tag and favourite picks live in a popout rather than
-					     a row of chips: the row grows with the tag list, and the
-					     list pane has no sideways room to grow into. -->
-					<Popover
-						open={filterOpen}
-						onOpenChange={(e) => (filterOpen = e.open)}
-						positioning={{ placement: "bottom-end" }}
-					>
-						<Popover.Trigger
-							class="btn grid size-10 shrink-0 place-items-center p-0 {activeChip !==
-							'all'
-								? 'preset-tonal-primary'
-								: ''}"
-							title="Filter characters"
-							aria-label="Filter characters"
-							aria-expanded={filterOpen}
+					{/snippet}
+					{#snippet filterActions()}
+						<!-- The tag and favourite picks live in a popout rather
+						     than a row of chips: the row grows with the tag
+						     list, and the list pane has no sideways room. -->
+						<Popover
+							open={filterOpen}
+							onOpenChange={(e) => (filterOpen = e.open)}
+							positioning={{ placement: "bottom-end" }}
 						>
-							<Icons.SlidersHorizontal
-								size={16}
-								aria-hidden="true"
-							/>
-						</Popover.Trigger>
-						<Portal>
-							<Popover.Positioner class="z-[1000]!">
-								<Popover.Content
-									class="card bg-surface-100-900 border-surface-300-700 w-[min(90vw,260px)] border p-2 shadow-xl"
-								>
-									<div
-										class="flex max-h-[min(60vh,320px)] flex-col gap-0.5 overflow-y-auto"
-										role="radiogroup"
-										aria-label="Filter characters"
-									>
-										{#each filterOptions as option (option.value)}
-											{@const checked =
-												activeChip === option.value}
-											<button
-												type="button"
-												role="radio"
-												aria-checked={checked}
-												class="flex h-9 w-full items-center gap-2 rounded-lg px-2.5 text-left text-sm {checked
-													? 'sidebar-row-active'
-													: 'hover:preset-tonal-primary'}"
-												onclick={() =>
-													pickFilter(option.value)}
-											>
-												{#if option.value.startsWith("tag:")}
-													<span
-														class="size-2 shrink-0 rounded-full {tagDotPreset(
-															option.colorPreset
-														)}"
-														aria-hidden="true"
-													></span>
-												{/if}
-												<span class="min-w-0 truncate">
-													{option.label}
-												</span>
-											</button>
-										{/each}
-									</div>
-								</Popover.Content>
-							</Popover.Positioner>
-						</Portal>
-					</Popover>
-					<!-- The chosen view mode is TONAL, never filled primary: a
-					     filled primary background is this app's call to action,
-					     and "you are already looking at this" is not one. -->
-					<div
-						class="flex shrink-0 gap-1"
-						role="group"
-						aria-label="View mode"
-					>
-						<button
-							type="button"
-							class="btn btn-sm p-2 {viewMode.value === 'list'
-								? 'preset-tonal-primary'
-								: ''}"
-							onclick={() => (viewMode.value = "list")}
-							title="List view"
-							aria-label="List view"
-							aria-pressed={viewMode.value === "list"}
-						>
-							<Icons.List size={16} aria-hidden="true" />
-						</button>
-						<button
-							type="button"
-							class="btn btn-sm p-2 {viewMode.value === 'cards'
-								? 'preset-tonal-primary'
-								: ''}"
-							onclick={() => (viewMode.value = "cards")}
-							title="Card view"
-							aria-label="Card view"
-							aria-pressed={viewMode.value === "cards"}
-						>
-							<Icons.LayoutGrid size={16} aria-hidden="true" />
-						</button>
-					</div>
-				</div>
-				<!-- The one narrowing in force, said once. At `All` there is
-				     nothing to say and the strip is absent entirely. -->
-				{#if activeFilterLabel}
-					<div
-						class="mb-3 flex min-w-0 shrink-0 flex-wrap items-center gap-2"
-					>
-						<span
-							class="bg-surface-200-800 text-surface-800-200 flex min-w-0 items-center gap-1 rounded-full px-2.5 py-1 text-xs"
-						>
-							<span class="min-w-0 truncate">
-								{activeFilterLabel}
-							</span>
-							<button
-								type="button"
-								class="hover:text-foreground shrink-0"
-								onclick={() => pickFilter("all")}
-								title="Clear filter"
-								aria-label="Clear filter: {activeFilterLabel}"
+							<Popover.Trigger
+								class={toolbarButtonClass(activeChip !== "all")}
+								title="Filter characters"
+								aria-label="Filter characters"
+								aria-expanded={filterOpen}
 							>
-								<Icons.X size={12} aria-hidden="true" />
-							</button>
-						</span>
-					</div>
-				{/if}
+								<Icons.SlidersHorizontal
+									size={16}
+									aria-hidden="true"
+								/>
+							</Popover.Trigger>
+							<Portal>
+								<Popover.Positioner class="z-[1000]!">
+									<Popover.Content
+										class="card bg-surface-50-950 border-surface-200-800 w-[min(90vw,260px)] border p-2 shadow-xl"
+									>
+										<div
+											class="flex max-h-[min(60vh,320px)] flex-col gap-0.5 overflow-y-auto"
+											role="radiogroup"
+											aria-label="Filter characters"
+										>
+											{#each filterOptions as option (option.value)}
+												{@const checked =
+													activeChip === option.value}
+												<button
+													type="button"
+													role="radio"
+													aria-checked={checked}
+													class="flex h-9 w-full items-center gap-2 rounded-lg px-2.5 text-left text-sm {checked
+														? 'sidebar-row-active'
+														: 'hover:bg-surface-200-800'}"
+													onclick={() =>
+														pickFilter(option.value)}
+												>
+													{#if option.value.startsWith("tag:")}
+														<span
+															class="size-2 shrink-0 rounded-full {tagDotPreset(
+																option.colorPreset
+															)}"
+															aria-hidden="true"
+														></span>
+													{/if}
+													<span class="min-w-0 truncate">
+														{option.label}
+													</span>
+												</button>
+											{/each}
+										</div>
+									</Popover.Content>
+								</Popover.Positioner>
+							</Portal>
+						</Popover>
+						<ListCardToggle mode={viewMode} label="Characters" />
+					{/snippet}
+					{#snippet chips()}
+						<!-- The one narrowing in force, said once. -->
+						{#if activeFilterLabel}
+							<span
+								class="bg-surface-200-800 text-surface-800-200 flex min-w-0 items-center gap-1 rounded-full px-2.5 py-1 text-xs"
+							>
+								<span class="min-w-0 truncate">
+									{activeFilterLabel}
+								</span>
+								<button
+									type="button"
+									class="hover:text-foreground shrink-0"
+									onclick={() => pickFilter("all")}
+									title="Clear filter"
+									aria-label="Clear filter: {activeFilterLabel}"
+								>
+									<Icons.X size={12} aria-hidden="true" />
+								</button>
+							</span>
+						{/if}
+					{/snippet}
+				</ViewToolbar>
 				<div class="min-h-0 flex-1 overflow-y-auto">
 					{#if isLoading}
 						<div class="flex items-center justify-center py-8">
@@ -1796,7 +1759,7 @@
 							name="lorebookName"
 							type="text"
 							class="input mb-4 w-full"
-							bind:value={importingLorebook!.name}
+							bind:value={importingLorebookName}
 						/>
 						<div class="flex justify-end gap-2">
 							<button

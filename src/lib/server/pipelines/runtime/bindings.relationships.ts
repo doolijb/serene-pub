@@ -36,6 +36,10 @@ import {
 	DEFAULT_GROUPS,
 	withDefaults
 } from "$lib/server/pipelines/ranking/weights"
+import {
+	relationshipReading,
+	relationshipSentence
+} from "$lib/shared/lorebooks/linkVocabulary"
 // ⚠ A cycle with `bindings.ts`, which imports this module's own export back.
 // Both sides import a hoisted function declaration and call it at run time, not
 // at module evaluation, so the cycle resolves; the alternative is a second
@@ -50,18 +54,25 @@ import { castEntityRefs } from "./bindings"
  * layouts that render them — the shape was A/B tested before 0.1.0 and prose is
  * opt-in everywhere else in this codebase, so a mechanism inventing prose here
  * would be the one place the rule does not hold. `with` leads on a legendary tie
- * because the heading is the figure and the counterpart is the news.
+ * because the heading is the figure and the counterpart is the news. A cast-view
+ * tie names its holder too (`from`): nobody is speaking, so no heading is
+ * implied, and the budget counts the name the prompt will carry.
  */
 const contentOf = (row: GraphRelationshipRow): string =>
 	JSON.stringify(
-		row.counterpart ? { with: row.counterpart, ...row.entry } : row.entry
+		row.lane === "castRelationships"
+			? { from: row.name, with: row.counterpart, ...row.entry }
+			: row.counterpart
+				? { with: row.counterpart, ...row.entry }
+				: row.entry
 	)
 
-/** The three lanes, as a sentence a receipt can say out loud. */
+/** The lanes, as a sentence a receipt can say out loud. */
 const LANE_LABELS: Record<GraphRelationshipRow["lane"], string> = {
 	yourRelationships: "how the speaker regards others",
 	howOthersRegardYou: "how others regard the speaker",
-	legendaryFigures: "figures everyone knows of"
+	legendaryFigures: "figures everyone knows of",
+	castRelationships: "how the cast regard each other"
 }
 
 // ─── The link hop ─────────────────────────────────────────────────────────────
@@ -81,7 +92,19 @@ interface LinkedRow {
 	name: string
 	/** The chosen entry it was reached from. */
 	from: string
-	entry: { type: string; secrecy: string; status?: string; note?: string }
+	/**
+	 * `type` is the wording read from the chosen entry — `from` + `type` +
+	 * `name`. A one-way relationship reached from its `to` end has no wording
+	 * from there, so it carries `says` instead: the relationship said from the
+	 * far end (`name`'s side), through `relationshipSentence`.
+	 */
+	entry: {
+		type?: string
+		says?: string
+		secrecy: string
+		status?: string
+		note?: string
+	}
 	updatedAt: number
 }
 
@@ -162,6 +185,11 @@ async function chosenEntryIds(
  * endpoint is in the prompt on its own account — and an endpoint reached twice
  * is contributed once, by the more recently changed edge, so a crossroads does
  * not spend its band four times over.
+ *
+ * ⚠ **Said the right way round** (plan places-graph §6.3). Walked from the
+ * `to` end, a relationship reads through its reverse relationship type; a
+ * one-way one has no wording from there, so it is said from the far end's
+ * side instead — "A leads to B" reached from B never reads "B leads to A".
  */
 function linkedRows(
 	links: readonly GraphEntryLink[],
@@ -181,12 +209,24 @@ function linkedRows(
 		] as const) {
 			if (!isChosen(near) || isChosen(far) || !mayShow(far)) continue
 			const key = `${far.kind}:${far.id}`
+			const reading = relationshipReading(link, near)
+			const said =
+				reading?.way === "inbound"
+					? {
+							says:
+								relationshipSentence(link, far, (end) =>
+									end.kind === near.kind && end.id === near.id
+										? near.name
+										: far.name
+								) ?? undefined
+						}
+					: { type: reading?.wording ?? link.relationshipType }
 			const row: LinkedRow = {
 				id: link.id,
 				name: far.name,
 				from: near.name,
 				entry: {
-					type: link.relationshipType,
+					...said,
 					secrecy: secrecyLabel(link.visibility),
 					...(link.status && link.status !== "active"
 						? { status: link.status }
@@ -265,6 +305,34 @@ export function relationshipSearchBindings(): Bindings {
 							? input.params.priority
 							: DEFAULT_GROUPS.priority.relationships
 				})
+				/**
+				 * Whether to walk the lore-link hop at all (F6(a),
+				 * 2026-09-29). Declared `true`, so only an explicit `false`
+				 * turns it off — Adventure's preset, which leaves a place's ways
+				 * out to the place. Off costs nothing: the link read and the second scan
+				 * are both skipped, not run and discarded.
+				 *
+				 * ⚠ **And only when the band can spend (plan A2).** At a share
+				 * of 0 — Chat's shipped default — `select` excludes every
+				 * candidate of this band, and at a ceiling of 0 none is
+				 * published, so a hop would be paid for (the link read, three
+				 * reads and a keyword scan) and thrown away. With places in a
+				 * book, links between entries are common, so that was most
+				 * turns. The direct ties are still read: they are one read, and
+				 * the receipt lists them as switched off.
+				 */
+				const bandCanSpend =
+					(intent.intent.share ?? DEFAULT_GROUPS.share.relationships) >
+						0 && intent.intent.maxEntries !== 0
+				const loreLinks =
+					input?.params?.loreLinks !== false && bandCanSpend
+				/**
+				 * `graph_relationships` answers by the scope: a speaker's walk
+				 * when there is one, the **cast-wide read** when there is not
+				 * (`host.ts`) — nobody's voice, an Adventure turn's planner and
+				 * narrator, reads how every member regards the others, a
+				 * member's secrets withheld.
+				 */
 				const [rows, links]: [
 					GraphRelationshipRow[] | null,
 					GraphEntryLink[] | null
@@ -274,9 +342,11 @@ export function relationshipSearchBindings(): Bindings {
 						currentCharacterId:
 							input?.scope?.currentCharacterId ?? null
 					}),
-					ctx.read("graph_entry_links", {
-						sessionId: input?.scope?.sessionId
-					})
+					loreLinks
+						? ctx.read("graph_entry_links", {
+								sessionId: input?.scope?.sessionId
+							})
+						: Promise.resolve(null)
 				])
 
 				/**
@@ -313,11 +383,16 @@ export function relationshipSearchBindings(): Bindings {
 							linked: 0,
 							linkedEntries: [],
 							relationships:
-								"no narrative graph for this session, or the speaker has no node in it"
+								"no narrative graph for this session, or no node in it for the speaker — with nobody speaking, for anyone in the cast"
 						}
 					})
 
 				const ranked = rankRelationships(rows ?? [])
+				/** The scope's speaker, as a participant reference — a secret's holder. */
+				const holder =
+					typeof input?.scope?.currentCharacterId === "number"
+						? `character:${input.scope.currentCharacterId}`
+						: null
 
 				/**
 				 * ⚠ **A band strictly under the direct one, derived rather than
@@ -424,6 +499,14 @@ export function relationshipSearchBindings(): Bindings {
 							entry: row.entry,
 							...(row.figure ? { figure: row.figure } : {}),
 							/**
+							 * Whose secret this is, when it is one (plan C2): the
+							 * speaker the scope walked from, the only reader the
+							 * tie is for. `core:task/eligibility@1` marks it
+							 * ineligible for any other speaker a shared pool is
+							 * ranked for.
+							 */
+							...(row.secret && holder ? { secretOf: holder } : {}),
+							/**
 							 * What the explanation panel keys its rank reasons off
 							 * — the same field `entity-search` marks its own hits
 							 * with, for the same purpose: a `presetScore` with no
@@ -490,7 +573,10 @@ export function relationshipSearchBindings(): Bindings {
 			},
 			// `share` and `priority` beside the ceiling: the band's own intent
 			// (R-7 P5), read here and published, not on the ranker.
-			{ ports: ["scope"], params: ["maxEntries", "share", "priority"] }
+			{
+				ports: ["scope"],
+				params: ["maxEntries", "share", "priority", "loreLinks"]
+			}
 		)
 	}
 }

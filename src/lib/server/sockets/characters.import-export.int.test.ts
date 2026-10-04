@@ -139,9 +139,11 @@ describe("characters import/export (PGlite integration)", () => {
 		)
 
 		expect(res.status).toBe("created")
-		expect(res.book).toBeDefined()
+		// The book is held for the "Import the lorebook?" dialog, not sent.
 		expect(res.book?.name).toBe("Aria's Lore")
-		expect(res.book?.entries).toHaveLength(1)
+		const { takeHeldImport } = await import("$lib/server/imports/heldImports")
+		const held = takeHeldImport(user.id, "lorebook", res.book!.heldImportId)
+		expect(JSON.parse(held.lorebookJson).entries).toHaveLength(1)
 	})
 
 	test("imports a CHARX (zip) card with its lorebook and its main icon as the avatar", async () => {
@@ -305,10 +307,12 @@ describe("characters import/export (PGlite integration)", () => {
 			created.character!.id
 		)
 
+		// The reply names the held file; it never carries it back.
+		expect(conflictRes.conflict).not.toHaveProperty("file")
 		const overwritten = await charactersImportResolve.handler(
 			fakeSocket(user.id),
 			{
-				file: editedBase64,
+				heldImportId: conflictRes.conflict!.heldImportId,
 				action: "overwrite",
 				existingId: created.character!.id
 			},
@@ -319,9 +323,26 @@ describe("characters import/export (PGlite integration)", () => {
 			"A completely different description"
 		)
 
+		// A held import is settled once; answering again takes a new
+		// conflict (edited once more, so it still differs).
+		exportedCard.data.description = "Different again"
+		const secondConflict = await charactersImportCard.handler(
+			fakeSocket(user.id),
+			{
+				file: Buffer.from(JSON.stringify(exportedCard), "utf-8").toString(
+					"base64"
+				)
+			},
+			noopEmit
+		)
+		expect(secondConflict.status).toBe("conflict")
 		const asNew = await charactersImportResolve.handler(
 			fakeSocket(user.id),
-			{ file: editedBase64, action: "createNew", existingId: -1 },
+			{
+				heldImportId: secondConflict.conflict!.heldImportId,
+				action: "createNew",
+				existingId: -1
+			},
 			noopEmit
 		)
 		expect(asNew.character.id).not.toBe(created.character!.id)
@@ -533,7 +554,7 @@ describe("characters import/export (PGlite integration)", () => {
 
 		const reimportedBook = await lorebookImportHandler.handler(
 			fakeSocket(user.id),
-			{ lorebookData: reimportedCharacter.book! },
+			{ heldImportId: reimportedCharacter.book!.heldImportId },
 			noopEmit
 		)
 		expect(reimportedBook.status).toBe("created")

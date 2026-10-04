@@ -19,18 +19,7 @@ import {
 	formatDate,
 	type StoryDate
 } from "./sections/historyDates"
-
-/**
- * A story date as an address: `Y3`, `Y3-2`, `Y3-2-12`. Lossless — the one
- * identity a date has on the axis (re-exported by `time/moment.ts`, which is
- * where the route's reading of it lives).
- */
-export function momentKey(date: StoryDate): string {
-	const parts = [`Y${date.year}`]
-	if (date.month != null) parts.push(String(date.month))
-	if (date.month != null && date.day != null) parts.push(String(date.day))
-	return parts.join("-")
-}
+import { momentKey } from "$lib/shared/lorebooks/loreRoute"
 
 /** A dated row — a history entry, as the axis reads it. */
 export interface DatedRow extends StoryDate {
@@ -44,8 +33,9 @@ export interface TimelineTick {
 	/** `momentKey(date)`: the tick's identity and the address it writes. */
 	key: string
 	/**
-	 * `year×10000 + month×100 + day` — PLACEMENT only. Two dates can share
-	 * one (a day past 100), so it never identifies or orders a tick.
+	 * `dateValue(date)` — PLACEMENT only. It keeps the calendar's order (a
+	 * part past 99 is squeezed, not overflowed), but squeezed parts crowd
+	 * together, so it never identifies a tick: `key` does.
 	 */
 	value: number
 	label: string
@@ -122,6 +112,31 @@ export function buildTicks(rows: readonly DatedRow[]): TimelineTick[] {
 }
 
 /** The tick a click or a drag at this fraction of the axis lands on. */
+/**
+ * Where along a track a pointer is, as a fraction of the part the ticks are
+ * drawn on (plan B7). Ticks sit at `calc(inset + ratio * (100% - 2·inset))`
+ * — the strip, the moment bar and the Time lens's axis all inset them by
+ * half a rem — so the box's own width over-reads near both ends: a drop at
+ * the last tick read as short of it. Clamped to [0, 1]; null when the track
+ * has no room to read.
+ */
+export function ratioAlongTrack(
+	clientX: number,
+	track: { left: number; width: number },
+	insetPx: number
+): number | null {
+	const span = track.width - 2 * insetPx
+	if (!(span > 0)) return null
+	return Math.min(1, Math.max(0, (clientX - track.left - insetPx) / span))
+}
+
+/** Half a rem in pixels: the inset every timeline track draws its ticks in. */
+export function trackInsetPx(): number {
+	if (typeof document === "undefined") return 8
+	const rem = parseFloat(getComputedStyle(document.documentElement).fontSize)
+	return (Number.isFinite(rem) && rem > 0 ? rem : 16) / 2
+}
+
 export function tickAtRatio(
 	ticks: readonly TimelineTick[],
 	ratio: number

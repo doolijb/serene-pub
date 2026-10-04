@@ -7,6 +7,8 @@
 	import UserForm from "../userForms/UserForm.svelte"
 	import UserViewPanel from "../userForms/UserViewPanel.svelte"
 	import PanelFilterInput from "../panels/PanelFilterInput.svelte"
+	import ViewToolbar from "../panels/ViewToolbar.svelte"
+	import { toolbarButtonClass } from "../panels/toolbarButton"
 	import PanelSplit from "../panels/PanelSplit.svelte"
 	import { ViewModeTracker } from "$lib/client/shell/viewMode.svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
@@ -217,53 +219,35 @@
 		{/snippet}
 
 		{#snippet list()}
-			<!-- Header -->
-			<div class="mb-2 flex flex-wrap gap-2">
-				{#if isCurrentUserAdmin}
-					<button
-						class="btn btn-sm preset-filled-primary-500"
-						onclick={startCreate}
-						title="Create new user"
-					>
-						<Icons.Plus size={16} />
-						New
-					</button>
-					<!-- Pressed is tonal, never filled primary: a filled
-					     primary background is this app's call to action, and a
-					     toggle that is merely ON is not one. -->
-					<button
-						class="btn btn-sm {showInvites
-							? 'preset-tonal-primary'
-							: 'preset-filled-surface-400-600'}"
-						onclick={() => (showInvites = !showInvites)}
-						aria-pressed={showInvites}
-						title="Create an invite link"
-					>
-						<Icons.UserPlus size={16} />
-						Invite
-					</button>
-				{/if}
-			</div>
+			<!-- The view toolbar (STYLE-GUIDE §6.3): New is the primary;
+			     Invite is a secondary toggle, tonal primary while its panel
+			     is open — pressed is tonal, never filled. -->
+			<ViewToolbar
+				label="Users"
+				class="mb-4"
+				primary={isCurrentUserAdmin ? newUserButton : undefined}
+				actions={isCurrentUserAdmin ? inviteToggle : undefined}
+			>
+				{#snippet filter()}
+					<!-- The same `search` the `users:list` effect re-requests
+					     on — the box changed, the round-trip did not. -->
+					<PanelFilterInput
+						bind:value={search}
+						placeholder="users"
+						singular="user"
+						count={userList.length}
+						aria-label="Filter users by name or username"
+					/>
+				{/snippet}
+			</ViewToolbar>
 
 			{#if isCurrentUserAdmin && showInvites}
 				<!-- Same component the Users admin page renders, so the two
 				     cannot drift; `compact` only trims it for this width. -->
-				<div class="card preset-filled-surface-100-900 mb-4 p-3">
+				<div class="panel-card mb-4">
 					<InvitePanel compact />
 				</div>
 			{/if}
-
-			<!-- Search. The same `search` the `users:list` effect re-requests
-			     on — the box changed, the round-trip did not. -->
-			<div class="mb-4">
-				<PanelFilterInput
-					bind:value={search}
-					placeholder="users"
-					singular="user"
-					count={userList.length}
-					aria-label="Filter users by name or username"
-				/>
-			</div>
 
 			<!-- User List -->
 			<div class="min-h-0 flex-1 overflow-y-auto">
@@ -381,7 +365,7 @@
 			class="fixed inset-0 z-50 flex items-center justify-center p-4"
 		>
 			<Dialog.Content
-				class="card bg-surface-100-900 border-surface-300-700 max-w-[95vw] space-y-4 border p-4 shadow-xl"
+				class="card bg-surface-100-900 border-surface-200-800 max-w-[95vw] space-y-4 border p-4 shadow-xl"
 			>
 				<div class="p-6">
 					<h3 class="mb-4 text-lg font-semibold">Delete user?</h3>
@@ -412,3 +396,28 @@
 		</Dialog.Positioner>
 	</Portal>
 </Dialog>
+
+<!-- The admin's two toolbar actions, handed to ViewToolbar only for an admin. -->
+{#snippet newUserButton()}
+	<button
+		type="button"
+		class="btn btn-sm preset-filled-primary-500 shrink-0"
+		onclick={startCreate}
+		title="Create new user"
+	>
+		<Icons.Plus size={16} aria-hidden="true" />
+		New
+	</button>
+{/snippet}
+{#snippet inviteToggle()}
+	<button
+		type="button"
+		class={toolbarButtonClass(showInvites)}
+		onclick={() => (showInvites = !showInvites)}
+		aria-pressed={showInvites}
+		title="Invite links"
+		aria-label="Invite links"
+	>
+		<Icons.UserPlus size={16} aria-hidden="true" />
+	</button>
+{/snippet}

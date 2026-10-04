@@ -1,6 +1,9 @@
 <script lang="ts">
 	/**
-	 * One completion template's change form.
+	 * Admin › Completion templates › one template: the change form (note 37,
+	 * Django admin, on `AdminChangeForm`). Fieldsets: Template (name, key,
+	 * offered), Framing (each role's opening and closing), Stop strings, and
+	 * the Live preview.
 	 *
 	 * ## The preview is the point
 	 *
@@ -20,8 +23,12 @@
 	 * with nothing to catch it. Clone is the way to a variant.
 	 */
 	import * as Icons from "@lucide/svelte"
-	import { getContext } from "svelte"
-	import { ADMIN_SPLIT } from "$lib/client/components/admin/AdminSplit.svelte"
+	import AdminChangeForm, {
+		type AdminSaveIntent
+	} from "$lib/client/components/admin/AdminChangeForm.svelte"
+	import AdminFieldset from "$lib/client/components/admin/AdminFieldset.svelte"
+	import AdminField from "$lib/client/components/admin/AdminField.svelte"
+	import { deletionFor } from "$lib/client/components/admin/changelist"
 	import { adminGoto as goto, adminUnsavedEdits } from "$lib/client/admin/adminRouter.svelte"
 	import { UnsavedEdits } from "$lib/client/forms/unsavedEdits.svelte"
 	import { adminPage as page } from "$lib/client/admin/adminRouter.svelte"
@@ -39,9 +46,6 @@
 	import { refreshCompletionTemplateOptions } from "$lib/client/stores/completionTemplateOptions.svelte"
 
 	const socket = useTypedSocket()
-	const split = getContext<{ mode: "desk" | "compact" } | undefined>(
-		ADMIN_SPLIT
-	)
 	const interest = getInterestContext()
 	let id = $derived(Number(page.params.id))
 
@@ -189,6 +193,7 @@
 		toaster.error({ title: res.error ?? "Completion template not found." })
 	}
 	function handleUpdate(res: Sockets.CompletionTemplates.Update.Response) {
+		if (res.completionTemplate?.id !== id) return
 		row = res.completionTemplate
 		// The saved row moved: a clean form follows it, and the echo of this
 		// form's own save makes it clean.
@@ -196,7 +201,14 @@
 			seed(res.completionTemplate)
 		})
 		refreshCompletionTemplateOptions()
-		toaster.success({ title: "Template saved" })
+		const intent = pendingIntent
+		if (!intent) return
+		pendingIntent = null
+		saving = false
+		edits.markSaved()
+		toaster.success({ title: `Saved ${res.completionTemplate.name}` })
+		if (intent === "save") goto("/admin/completion-templates")
+		else if (intent === "another") goto(`/admin/completion-templates/new?from=${id}`)
 	}
 	function handleClone(res: Sockets.CompletionTemplates.Clone.Response) {
 		refreshCompletionTemplateOptions()
@@ -204,12 +216,21 @@
 		goto(`/admin/completion-templates/${res.completionTemplate.id}`)
 	}
 	function handleDelete(res: { success?: string }) {
+		if (!deleting) return
+		deleting = false
 		refreshCompletionTemplateOptions()
 		if (res.success) toaster.success({ title: res.success })
 		edits.forget()
-		goto("/admin/completion-templates")
+		goto("/admin/completion-templates", { replaceState: true })
 	}
 	function handleError(res: { error?: string }) {
+		if (pendingIntent || deleting) {
+			pendingIntent = null
+			saving = false
+			deleting = false
+			formErrors = [res.error ?? "The server refused the edit."]
+			return
+		}
 		toaster.error({ title: res.error ?? "The server refused the edit." })
 	}
 
@@ -299,8 +320,21 @@
 		socket.emit("completionTemplates:get", { id })
 	})
 
-	function save() {
+	let saving = $state(false)
+	let pendingIntent: AdminSaveIntent | null = null
+	let deleting = false
+	let formErrors = $state<string[]>([])
+
+	function save(intent: AdminSaveIntent) {
 		if (!row || problem) return
+		formErrors = []
+		if (!dirty) {
+			if (intent === "save") goto("/admin/completion-templates")
+			else if (intent === "another") goto(`/admin/completion-templates/new?from=${id}`)
+			return
+		}
+		saving = true
+		pendingIntent = intent
 		socket.emit("completionTemplates:update", {
 			completionTemplate: {
 				id: row.id,
@@ -317,87 +351,95 @@
 	}
 	function remove() {
 		if (!row) return
-		if (
-			!confirm(
-				`Delete '${row.name}'? Any connection using it loses its format ` +
-					`and renders with the default until one is chosen again.`
-			)
-		)
-			return
+		deleting = true
 		socket.emit("completionTemplates:delete", { id: row.id })
 	}
+	const deletion = () =>
+		deletionFor([row!], {
+			noun: { singular: "completion template", plural: "completion templates" },
+			label: (r) => r.name,
+			consequence: () =>
+				"Any connection using it loses its format and renders with the default until one is chosen again"
+		})
 </script>
 
-{#if split?.mode !== "desk"}
-	<a
-		href="/admin/completion-templates"
-		class="text-surface-600-400 hover:text-surface-950-50 mb-3 inline-flex items-center gap-1 self-start text-[13px]"
-	>
-		<Icons.ChevronLeft size={14} /> Back to completion templates
-	</a>
-{/if}
-
-<h2
-	class="text-surface-950-50 mb-4 flex flex-wrap items-center gap-2 [font-family:var(--typo-heading--font-family)] text-base font-semibold"
->
-	{row?.name ?? "Completion template"}
-	{#if readonly}
-		<span
-			class="preset-tonal-surface rounded-full px-2 py-0.5 font-sans text-xs font-normal"
-		>
-			built-in · read-only
-		</span>
-	{/if}
-</h2>
-
 {#if loading}
-	<p class="text-surface-600-400 text-sm">Loading…</p>
+	<div class="text-surface-600-400 flex items-center justify-center gap-2 py-16 text-sm" role="status">
+		<Icons.LoaderCircle size={16} class="animate-spin" aria-hidden="true" />
+		Loading completion template…
+	</div>
 {:else if missing || !row}
-	<div class="panel-card text-surface-600-400 py-8 text-center text-sm">
-		This completion template no longer exists.
-		<a class="underline" href="/admin/completion-templates">
-			Back to the list
+	<div class="m-auto flex flex-col items-center gap-3 py-16 text-center">
+		<p class="text-surface-600-400 text-sm">There is no completion template {id}.</p>
+		<a href="/admin/completion-templates" class="btn btn-sm preset-tonal-surface">
+			All completion templates
 		</a>
-		.
 	</div>
 {:else}
-	<div class="editor-grid">
-		<div class="flex min-w-0 flex-col gap-3">
-			<div class="panel-card flex flex-col gap-3">
-				<div class="flex flex-wrap gap-3">
-					<label class="flex min-w-48 flex-1 flex-col gap-1 text-sm">
-						<span class="font-medium">Name</span>
-						<input class="input" bind:value={name} {readonly} />
-					</label>
-					<label class="flex min-w-48 flex-1 flex-col gap-1 text-sm">
-						<span class="font-medium">Key</span>
-						<!-- Always read-only, on every row. It is the target of
-					     `connections.prompt_format`'s foreign key, so a rename
-					     is a rename of something other rows are pointing at —
-					     the server refuses it and says to clone instead. -->
-						<input class="input" value={row.key} readonly />
-						<span class="text-surface-600-400 text-xs">
-							Stored on every connection that selects this
-							template. It cannot change — clone under a new key
-							instead.
-						</span>
-					</label>
-				</div>
+	<AdminChangeForm
+		mode="change"
+		title={name.trim() || row.name}
+		purpose={readonly
+			? "A built-in template: read-only — every boot re-applies it. Duplicate it to make a variant."
+			: undefined}
+		noun="completion template"
+		changelistHref="/admin/completion-templates"
+		changelistLabel="Completion templates"
+		{dirty}
+		{saving}
+		canSave={readonly || !!problem ? false : undefined}
+		errors={problem ? [problem, ...formErrors] : formErrors}
+		deletion={readonly ? undefined : deletion}
+		onDelete={readonly ? undefined : remove}
+		onSave={save}
+	>
+		{#snippet headerActions()}
+			<button type="button" class="btn btn-sm preset-tonal-surface" onclick={clone}>
+				<Icons.Copy size={16} aria-hidden="true" /> Duplicate
+			</button>
+		{/snippet}
+		{#snippet headerExtra()}
+			{#if readonly}
+				<span class="border-surface-300-700 text-surface-600-400 self-start rounded-full border px-2 py-0.5 text-xs">
+					Built-in
+				</span>
+			{/if}
+		{/snippet}
 
-				<label class="flex items-center gap-2 text-sm">
-					<input
-						type="checkbox"
-						class="checkbox"
-						bind:checked={isSelectable}
-						disabled={readonly}
-					/>
-					<span>
+		<div class="editor-grid">
+			<div class="flex min-w-0 flex-col gap-3">
+				<AdminFieldset title="Template">
+					<div class="grid gap-4 @min-[36rem]/content:grid-cols-2">
+						{#if readonly}
+							<AdminField id="ct-admin-name" label="Name" value={name} />
+						{:else}
+							<AdminField id="ct-admin-name" label="Name" required>
+								<input id="ct-admin-name" class="input" type="text" bind:value={name} />
+							</AdminField>
+						{/if}
+						<!-- Always readonly, on every row: it is the target of
+						     `connections.prompt_format`'s foreign key, so a rename
+						     is a rename of something other rows point at — the
+						     server refuses it and says to duplicate instead. -->
+						<AdminField
+							id="ct-admin-key"
+							label="Key"
+							value={row.key}
+							help="Stored on every connection that selects this template. It cannot change — duplicate under a new key instead."
+						/>
+					</div>
+					<label class="flex min-h-10 items-center gap-2 text-sm">
+						<input
+							type="checkbox"
+							class="checkbox"
+							bind:checked={isSelectable}
+							disabled={readonly}
+						/>
 						Offer this template in a connection's format picker
-					</span>
-				</label>
-			</div>
+					</label>
+				</AdminFieldset>
 
-			<div class="panel-card flex flex-col gap-2">
+				<AdminFieldset title="Framing" description="What opens and closes each role's block.">
 				<p class="text-surface-600-400 text-xs">
 					<strong>Escapes, not characters.</strong>
 					Type
@@ -458,10 +500,9 @@
 						spellcheck="false"
 					/>
 				</div>
-			</div>
+				</AdminFieldset>
 
-			<div class="panel-card flex flex-col gap-1">
-				<span class="text-sm font-medium">Stop strings</span>
+				<AdminFieldset title="Stop strings">
 				<code class="text-surface-700-300 text-xs break-all">
 					{(row.stopStrings ?? []).length
 						? (row.stopStrings as string[]).join("  ·  ")
@@ -480,51 +521,18 @@
 					chat mode they are held back, because a chat request
 					contains none of these markers. Not editable here yet.
 				</span>
+				</AdminFieldset>
 			</div>
 
-			{#if problem}
-				<p class="preset-tonal-error rounded-[10px] p-2 text-xs">
-					{problem}
-				</p>
-			{/if}
-
-			<div class="flex flex-wrap items-center gap-2">
-				{#if !readonly}
-					<button
-						class="btn btn-sm preset-filled-primary-500"
-						disabled={!dirty || !!problem}
-						onclick={save}
-					>
-						<Icons.Save size={14} /> Save
-					</button>
-				{/if}
-				<div class="flex-1"></div>
-				<button class="btn btn-sm preset-tonal-surface" onclick={clone}>
-					<Icons.Copy size={14} /> Clone
-				</button>
-				{#if !readonly}
-					<button
-						class="btn btn-sm preset-tonal-error"
-						onclick={remove}
-					>
-						<Icons.Trash2 size={14} /> Delete
-					</button>
-				{/if}
-			</div>
+			<AdminFieldset
+				title="Live preview"
+				description="Three blocks, wrapped by this draft through the same formatter the prompt renderer uses. Unsaved edits show here immediately."
+			>
+				<pre
+					class="bg-surface-50-950 max-h-[28rem] overflow-auto rounded-[10px] p-2 font-mono text-xs whitespace-pre-wrap">{preview}</pre>
+			</AdminFieldset>
 		</div>
-
-		<div class="panel-card flex flex-col gap-2">
-			<h3 class="flex items-center gap-2 text-sm font-semibold">
-				<Icons.Eye size={16} /> Live preview
-			</h3>
-			<p class="text-surface-600-400 text-xs">
-				Three blocks, wrapped by this draft through the same formatter
-				the prompt renderer uses. Unsaved edits show here immediately.
-			</p>
-			<pre
-				class="bg-surface-50-950 max-h-[28rem] overflow-auto rounded-[10px] p-2 font-mono text-xs whitespace-pre-wrap">{preview}</pre>
-		</div>
-	</div>
+	</AdminChangeForm>
 {/if}
 
 <style>
@@ -533,10 +541,9 @@
 		gap: 0.75rem;
 		grid-template-columns: minmax(0, 1fr);
 	}
-	/* Beside each other only when the detail itself has room: the section
-	   pane is the `content` container, and at desk width the list takes
-	   ~360px of it. */
-	@container content (min-width: 1300px) {
+	/* Beside each other only when the change form itself has room: the
+	   section pane is the `content` container. */
+	@container content (min-width: 1000px) {
 		.editor-grid {
 			grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
 			align-items: start;

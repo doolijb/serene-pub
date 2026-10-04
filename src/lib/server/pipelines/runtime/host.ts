@@ -19,12 +19,11 @@
  * allowed to see rather than against the query it happened to send (F30).
  */
 
-import { and, asc, desc, eq, inArray, isNull, sql, type SQL } from "drizzle-orm"
+import { and, asc, count, desc, eq, gte, inArray, isNull, sql, type SQL } from "drizzle-orm"
 import { MAIN_LINE } from "$lib/shared/lorebooks/lineReading"
 import * as schema from "$lib/server/db/schema"
 import {
 	BINDING_VISIBILITY_POLICY,
-	DEFAULT_VECTOR_NAME,
 	ENTRY_TYPE_IDS,
 	WORLD_LORE_TYPE_ID,
 	entryInsert,
@@ -77,7 +76,7 @@ import {
 } from "@serene-pub/sdk"
 import { randomUUID } from "node:crypto"
 import { CORE_BLOCKS_PART } from "$lib/server/messages/blocks"
-import { loreWriteRefusal } from "$lib/server/messages/writes"
+import { loreWriteRefusal, loreWritesOffRefusal } from "$lib/server/messages/writes"
 import { slotModelId } from "$lib/shared/connections/slotRef"
 import type { RunProgress } from "$lib/shared/sockets/progress"
 import type { RunArtifact } from "$lib/server/pipelines/runtime/receipts"
@@ -85,10 +84,20 @@ import { participantRowId } from "$lib/server/pipelines/runtime/portrayals"
 import type { FormAwaitingPerson } from "$lib/server/notifications/openForm"
 import { resolvePersonaName } from "$lib/shared/utils/resolveCharacterName"
 import { streamingModeFrom } from "$lib/server/connections/streaming"
+import { tether } from "$lib/server/pipelines/runtime/callTether"
 import type { LiveRow, SessionIo } from "$lib/server/pipelines/runtime/liveRow"
 import type { StatusRelay } from "$lib/server/pipelines/runtime/runStatus"
 import { broadcastToSessionUsers } from "$lib/server/sockets/utils/broadcastHelpers"
 import { speakerRefOf } from "$lib/server/messages/sessionChanges"
+import { errorWithoutQueryText } from "$lib/server/db/errors"
+import {
+	assertRelationshipWrite,
+	linksOnReadingThatWay,
+	LINKED_THAT_WAY,
+	type LinkOnReading
+} from "$lib/server/utils/relationshipGuards"
+import { RELATIONSHIP_TEXT_LIMITS } from "$lib/shared/lorebooks/linkVocabulary"
+import type { LineReading } from "$lib/server/state/reading"
 import { SHOW_SPRITE_SPEC_ID } from "@serene-pub/core-catalog"
 import {
 	asShownSprite,
@@ -220,6 +229,14 @@ export interface HostScope {
 	 */
 	verb?: "regenerate" | "swipe" | "extend"
 	/**
+	 * "Choose sprites" is off for this run: the sprite picker's `enabled`
+	 * parameter, as the run's own world resolves it (`runSpec`). Read by
+	 * `sprites_for`, which sits BEFORE the picker and would otherwise embed
+	 * the line for a choice nobody will make — a provider call per reply with
+	 * an embedding service starred. Absent means on.
+	 */
+	spriteChoiceOff?: boolean
+	/**
 	 * Which channel this turn was **triggered on** — the stored string, lane
 	 * included (`main`, `manuscript`, `phone:3`). Absent means `main`, which
 	 * is every session whose genre declares no channel of its own.
@@ -257,6 +274,17 @@ export interface HostScope {
 	 * `message-completed` in `create-message`). Never stamped on the row.
 	 */
 	answersForm?: { messageId: number; blockId: string; toOwner?: boolean }
+	/**
+	 * 🚧 The **plan row** whose turn this run takes (Lair character turns,
+	 * owner ruling 2026-09-30) — set by `runReply` for a planned turn (a fire
+	 * `via: 'plan'`, or a verb re-driving a row one wrote), the way
+	 * `answersForm` rides. `create-message` stamps it on every row the run
+	 * writes as `metadata.planRowId`: a planned turn's rows belong to the
+	 * turn that planned them, so its yield, its retake and the world's open
+	 * anchor read them as that turn's (`turnYield.ts`, `state/write.ts`).
+	 * Absent on every other run.
+	 */
+	planRowId?: number
 	/**
 	 * The document this run is executing, by slug — `runSpec` always names
 	 * it. Read by the built-in writes' commits, which refuse to perform under
@@ -370,7 +398,7 @@ export interface HostScope {
 	 */
 	sink?: {
 		onChunk?: (chunk: string) => void
-		onThinking?: (chunk: string) => void
+		onReasoning?: (chunk: string) => void
 		/**
 		 * Where a Provider that cannot stream reports its progress instead.
 		 *
@@ -599,42 +627,29 @@ function sameJson(a: unknown, b: unknown): boolean {
  * The narrator's display name for a session, snapshotted onto a narration row
  * at the write so a later rename does not relabel messages already made.
  *
- * The session's own override (Edit Session) wins, else the instance default —
- * the same chain `resolveNarratorPromptConfig` walks with the retired user
- * layer removed. Read through the run's `db` rather than the global one, for
- * the reason every host read is: a run against another database must not
- * quietly read this from the application's.
+ * The `narratorName` field of the narrator pipeline's `context` prompts, as
+ * that session resolves it — its own selection or override, else the
+ * instance's configuration, else the shipped prompt. Read through the run's
+ * `db` rather than the global one, for the reason every host read is: a run
+ * against another database must not quietly read this from the
+ * application's. Null when nothing resolves a name (no narrator pipeline
+ * published), and callers fall back to "Narrator".
  */
 export async function narratorNameFor(
 	db: Db,
 	sessionId: number,
 	_userId: number | undefined
 ): Promise<string | null> {
-	const [session] = await db
-		.select({
-			narratorPromptConfigId: schema.sessions.narratorPromptConfigId
-		})
-		.from(schema.sessions)
-		.where(eq(schema.sessions.id, sessionId))
-		.limit(1)
-	let configId = session?.narratorPromptConfigId ?? null
-	if (configId == null) {
-		const [system] = await db
-			.select({
-				defaultNarratorPromptConfigId:
-					schema.systemSettings.defaultNarratorPromptConfigId
-			})
-			.from(schema.systemSettings)
-			.limit(1)
-		configId = system?.defaultNarratorPromptConfigId ?? null
-	}
-	if (configId == null) return null
-	const [config] = await db
-		.select({ narratorName: schema.narratorPromptConfigs.narratorName })
-		.from(schema.narratorPromptConfigs)
-		.where(eq(schema.narratorPromptConfigs.id, configId))
-		.limit(1)
-	return config?.narratorName ?? null
+	const [{ buildWorld }, { resolveConfigSources }, { NARRATE_SPEC_ID }] =
+		await Promise.all([
+			import("$lib/server/pipelines/config/world"),
+			import("@serene-pub/sdk"),
+			import("$lib/server/pipelines/specs")
+		])
+	const world = await buildWorld(db, { specId: NARRATE_SPEC_ID, sessionId })
+	const sourced = resolveConfigSources(world as any, ["context"]) as any
+	const name = sourced?.context?.prompts?.narratorName?.value
+	return typeof name === "string" && name.trim() ? name : null
 }
 
 /**
@@ -714,6 +729,18 @@ const refId = (v: unknown): number | null => {
 }
 
 /**
+ * A message row id, as a spec hands one over: a bare id, or the
+ * `{ status, ids }` write result an outlet publishes — `$.save.messageId` IS
+ * that result, and `refId` alone reads its `id`, which it has none of.
+ */
+const messageRefId = (v: unknown): number | null =>
+	refId(
+		v && typeof v === "object" && "ids" in v
+			? (v as { ids?: { id?: unknown } }).ids?.id
+			: v
+	)
+
+/**
  * The MODEL half of a RESOLVED connection slot (0114).
  *
  * `refId` above reduces a resolved slot to the endpoint's row id; this is the
@@ -761,12 +788,18 @@ const NO_SUCH_CHARACTER = -1
  * (W1) the two lore queries declare. See the long note at the read for why a
  * wired-but-unresolvable reference is `NO_SUCH_CHARACTER` rather than `null`.
  */
+/**
+ * Whether the query wired `speaker` to something. Absent, null, or an empty
+ * string: the port is unwired (or wired to a node that published nothing this
+ * turn).
+ */
+const speakerIsWired = (q: Record<string, any>): boolean =>
+	q.speaker !== undefined && q.speaker !== null && q.speaker !== ""
+
 const loreVisibilitySubject = (q: Record<string, any>): number | null => {
 	const ref = q.speaker
-	// Absent, null, or an empty string: the port is unwired (or wired to a
-	// node that published nothing this turn), and the scope decides as it
-	// always did.
-	if (ref === undefined || ref === null || ref === "") return q.currentCharacterId ?? null
+	// Unwired: the scope decides as it always did.
+	if (!speakerIsWired(q)) return q.currentCharacterId ?? null
 	if (!isParticipantRef(ref)) return NO_SUCH_CHARACTER
 	const parsed = parseParticipantRef(ref)
 	if (parsed.kind !== "character") return NO_SUCH_CHARACTER
@@ -1008,9 +1041,14 @@ async function mediaParts(
 			.limit(1)
 		if (!row) continue
 
+		// …or already shown in this session by an attachment part (§6.3 of
+		// PLAN-composer-attachments) — the same three-way rule dispatch keeps.
 		const ownedHere =
 			(row.sessionId != null && row.sessionId === sessionId) ||
-			(scope.userId != null && row.userId === scope.userId)
+			(scope.userId != null && row.userId === scope.userId) ||
+			(await (
+				await import("$lib/server/attachments/references")
+			).isFileReferencedInSession(db, row.id, sessionId))
 		if (!ownedHere)
 			throw new HostScopeError(
 				`${node.key} (${node.definitionId}) tried to post media ${uuid}, which belongs ` +
@@ -1018,29 +1056,11 @@ async function mediaParts(
 			)
 
 		const alt = (ref as Record<string, any>)?.text
-		parts.push(
-			row.kind === "image"
-				? {
-						type: "core:image",
-						data: {
-							assetId: row.id,
-							...(alt ? { alt: String(alt) } : {})
-						}
-					}
-				: {
-						type: "core:file",
-						data: {
-							assetId: row.id,
-							// The display variant's mime,
-							// denormalised onto the file so this
-							// stays one query. Null would mean a
-							// file with no display pointer, which
-							// `createMedia` never leaves behind.
-							mime: row.displayMime ?? "application/octet-stream",
-							...(row.filename ? { name: row.filename } : {})
-						}
-					}
-		)
+		// One writer for the part (`attachments/partData`): the image's
+		// width, height and name, a file's mime, name and size — so a
+		// generated image and a person's attachment are the same part.
+		const { mediaPartFor } = await import("$lib/server/attachments/partData")
+		parts.push(mediaPartFor(row, { alt: alt ? String(alt) : null }))
 	}
 
 	return parts
@@ -1088,100 +1108,100 @@ const linkEndId = (raw: unknown): number | null => {
  * The other end of a lore link — an entry id, or a **name** resolved within
  * this lorebook (L2, 2026-09-17).
  *
+ * An end is an entry the session sees (plan A27, `whyUnseen(…, "session")`):
+ * on its line at its moment and, as the line's amendments leave it by then,
+ * neither archived nor switched Off — what every session reader of the book
+ * answers by, the hop that reads links back included. A link to an entry the
+ * session does not see would be a link its own story never reads.
+ *
  * A name is what lets a link follow a create without holding an id — a later
  * outlet in the same run, or a later run, has only the name to go on. It is
- * also the half
- * that can be wrong in two ways, and both are refused with a sentence rather
- * than repaired:
+ * found by the rooms' own name rule (`entryNamed`: the name exactly, then a
+ * looser spelling with a leading "the" aside, then a key), over the names the
+ * session shows — as amended, never a stored title a dated change replaced.
+ * It is also the half that can be wrong, and each way is refused with a
+ * sentence rather than repaired:
  *
  *  · **Nothing answers to it.** Creating the missing entry here would make a
  *    link outlet a second entry writer, which is the write law again with the
  *    name changed.
- *  · **Two entries answer to it.** Picking one would link the wrong room, and
- *    it would do it silently — a duplicate name is the author's to resolve,
- *    and the refusal is what tells them it exists.
+ *  · **Two entries answer to it alike.** Picking one would link the wrong
+ *    room, and it would do it silently — a duplicate name is the author's to
+ *    resolve, and the refusal is what tells them it exists.
+ *  · **Only an entry the session does not see answers.** The same sentence as
+ *    an id pointing at it.
  *
- * Case and surrounding space are ignored, which is the one normalisation the
- * app already performs on a link's own type (`entries:counts`). One lorebook,
- * both ends: an edge whose ends live in two books belongs to neither and the
- * row carries one `lorebook_id`, so a cross-book end is refused exactly as the
- * socket handlers refuse one — held again here because a pipeline does not
- * come through them.
+ * One lorebook, both ends: an edge whose ends live in two books belongs to
+ * neither and the row carries one `lorebook_id`, so a cross-book end is
+ * refused exactly as the socket handlers refuse one — held again here because
+ * a pipeline does not come through them.
  */
 async function resolveLoreLinkEnd(
 	tx: Db,
 	lorebookId: number,
 	raw: unknown,
 	where: string,
-	/**
-	 * The session's line (`onLineSql` over the entry's branch): an end on a
-	 * line this session is not reading — a sibling fork's own room — is not
-	 * an entry here to link to. Membership only; a link is not dated here.
-	 */
-	onLine: SQL
+	/** The session's reading: its line's chain, fork cuts and moment. */
+	reading: LineReading
 ): Promise<number> {
+	const { entriesAsRead, entryNamed } = await import(
+		"$lib/server/state/entriesOnReading"
+	)
+	const { unseenSentence } = await import("$lib/shared/lorebooks/placeSight")
 	const id = linkEndId(raw)
 	if (id !== null) {
-		const [row] = await tx
-			.select({ id: schema.lorebookEntries.id })
-			.from(schema.lorebookEntries)
-			.where(
-				and(
-					eq(schema.lorebookEntries.id, id),
-					eq(schema.lorebookEntries.lorebookId, lorebookId),
-					onLine
-				)
-			)
-			.limit(1)
+		const [row] = await entriesAsRead(tx, lorebookId, reading, "session", null, [id])
 		if (!row)
 			throw new HostScopeError(
 				`${where}: entry ${id} is not in this session's lorebook, so there is nothing here to link it to. Both ends of a link live in one book.`
 			)
-		return row.id
+		if (row.unseen)
+			throw new HostScopeError(
+				`${where}: ${unseenSentence(row.name ? `'${row.name}'` : `entry ${id}`, row.unseen)}`
+			)
+		return row.entryId
 	}
 	const name = typeof raw === "string" ? raw.trim() : ""
 	if (!name)
 		throw new HostScopeError(
 			`${where}: there is nothing to link to — wire an entry id, the write result of the entry that made it, or the name of an entry in this session's lorebook.`
 		)
-	const matches = await tx
-		.select({
-			id: schema.lorebookEntries.id,
-			title: schema.lorebookEntries.title
-		})
-		.from(schema.lorebookEntries)
-		.where(
-			and(
-				eq(schema.lorebookEntries.lorebookId, lorebookId),
-				onLine,
-				sql`lower(trim(${schema.lorebookEntries.title})) = ${name.toLowerCase()}`
-			)
-		)
-		.orderBy(asc(schema.lorebookEntries.id))
-		.limit(2)
-	if (!matches.length)
+	const hit = entryNamed(
+		name,
+		await entriesAsRead(tx, lorebookId, reading, "session", null)
+	)
+	if (hit.kind === "one") return hit.entryId
+	if (hit.kind === "tie")
 		throw new HostScopeError(
-			`${where}: no entry in this session's lorebook is called “${name}”. Write it first — a link outlet never creates the entry it names.`
+			`${where}: “${name}” is the name of more than one entry in this session's lorebook (${hit.names.map((n) => `'${n}'`).join(", ")}), and picking one would link the wrong one silently. Rename one of them, or wire the entry's id.`
 		)
-	if (matches.length > 1)
-		throw new HostScopeError(
-			`${where}: “${name}” is the name of more than one entry in this session's lorebook, and picking one would link the wrong one silently. Rename one of them, or wire the entry's id.`
-		)
-	return matches[0]!.id
-}
-
-/** One link a spec asked for, taken apart. */
-interface LoreLinkRequest {
-	to: unknown
-	linkType?: unknown
-	label?: unknown
+	if (hit.kind === "unseen")
+		throw new HostScopeError(`${where}: ${unseenSentence(`'${hit.name}'`, hit.why)}`)
+	throw new HostScopeError(
+		`${where}: no entry in this session's lorebook is called “${name}”. Write it first — a link outlet never creates the entry it names.`
+	)
 }
 
 /**
- * The links an outlet was handed: a list of names, ids, or
- * `{ to, linkType?, label? }`. Anything that is not a list is none, and an
- * entry with no `to` is dropped here so the refusal below names the wiring
- * rather than an empty object.
+ * One link a spec asked for, taken apart — the SDK's `LoreLinkInput`
+ * (`@serene-pub/contracts`), unchecked: every field is whatever arrived, and
+ * `writeLoreLink` reads only strings from it.
+ */
+interface LoreLinkRequest {
+	to: unknown
+	linkType?: unknown
+	reverseLinkType?: unknown
+	name?: unknown
+	description?: unknown
+}
+
+/**
+ * The links an outlet was handed: a list of names, ids, or `LoreLinkInput`s
+ * (`{ to, linkType?, reverseLinkType?, name?, description? }`, places plan B2).
+ * Anything that is not a list is none, and an entry with no `to` is dropped
+ * here so the refusal below names the wiring rather than an empty object.
+ * ⚠ The retired `label` is not read (no alias): it was the description under
+ * a second name.
  */
 const loreLinkRequests = (raw: unknown): LoreLinkRequest[] => {
 	if (!Array.isArray(raw)) return []
@@ -1194,7 +1214,13 @@ const loreLinkRequests = (raw: unknown): LoreLinkRequest[] => {
 			// itself the other end.
 			out.push(
 				"to" in o
-					? { to: o.to, linkType: o.linkType, label: o.label }
+					? {
+							to: o.to,
+							linkType: o.linkType,
+							reverseLinkType: o.reverseLinkType,
+							name: o.name,
+							description: o.description
+						}
 					: { to: o }
 			)
 		} else out.push({ to: item })
@@ -1203,21 +1229,38 @@ const loreLinkRequests = (raw: unknown): LoreLinkRequest[] => {
 }
 
 /**
- * The kind of link a row carries when nothing said.
- *
- * `leads to` is a **travel** kind (`TRAVEL_LINK_TYPES`), which is the one set
- * anything reads semantically: it is what turns a pair of entries into a place
- * you can walk between. Free text in the row and free text here — the app's
- * list is a vocabulary of suggestions, never a constraint.
+ * The relationship type a row carries when nothing said. Free text in the row
+ * and free text here — the app's list is a vocabulary of suggestions, never a
+ * constraint, and nothing reads a relationship type semantically (places plan
+ * B2): which way a link walks is its `reverse_relationship_type`, and nothing
+ * said is one way.
  */
 const DEFAULT_LORE_LINK_TYPE = "leads to"
 
-/** Where a session's lore writes land: its line, as a branch and as a filter. */
+/**
+ * A request's text field, trimmed and cut to its `RELATIONSHIP_TEXT_LIMITS`
+ * ceiling — a cut, never a refusal, since a model wrote it (as the graph
+ * build's apply cuts). Anything that is not a string is empty.
+ */
+const loreLinkText = (v: unknown, limit: number): string =>
+	typeof v === "string" ? v.trim().slice(0, limit).trim() : ""
+
+/** Where a session's lore writes land: its line, as a branch, and its reading. */
 interface LoreWriteLine {
 	/** Stamped on every row written. Null is main — shared. */
 	branchId: number | null
-	/** `onLineSql` over `lorebook_entries.branch_id` for this line. */
-	onLine: SQL
+	/**
+	 * The dating a dated row written here carries (plan A22): the latest
+	 * history entry the session's reading sees (`writeDatingAt`), null when
+	 * it sees none. A lore link is dated by it, as a session's stat is.
+	 */
+	historyEntryId: number | null
+	/**
+	 * The session's whole reading — its line's chain, fork cuts and moment —
+	 * which a lore link's ends are judged on (`resolveLoreLinkEnd`) and asks
+	 * whether the session already reads that link.
+	 */
+	reading: LineReading
 }
 
 /**
@@ -1227,20 +1270,83 @@ interface LoreWriteLine {
  * a session on a branch that stamped nothing landed on main and so on every
  * line.
  */
-async function loreWriteLineOf(db: Db, sessionId: number): Promise<LoreWriteLine> {
-	const { sessionReadingOf, lineOfReading } = await import(
+async function loreWriteLineOf(
+	db: Db,
+	sessionId: number,
+	lorebookId: number
+): Promise<LoreWriteLine> {
+	const { sessionReadingOf, writeDatingAt } = await import(
 		"$lib/server/state/reading"
 	)
-	const { onLineSql } = await import("$lib/server/state/lineSql")
-	const reading = await sessionReadingOf(db, sessionId)
-	const line = reading ? lineOfReading(reading) : MAIN_LINE
+	const reading = (await sessionReadingOf(db, sessionId)) ?? {
+		lorebookId,
+		branchId: null,
+		moment: null,
+		forkedAt: null,
+		line: MAIN_LINE
+	}
 	return {
-		branchId: reading?.branchId ?? null,
-		onLine: onLineSql(schema.lorebookEntries.branchId, line)
+		branchId: reading.branchId ?? null,
+		historyEntryId: (await writeDatingAt(db, reading))?.historyEntryId ?? null,
+		reading
 	}
 }
 
-/** Write one lore link, on the session's line. Returns the row's id. */
+/** What `writeLoreLink` did: the row's id, and whether this call made it. */
+interface LoreLinkWrite {
+	id: number
+	/**
+	 * The row's own `from` end: the requested `from`, or — when the session
+	 * already read the link drawn from the far end (its mirror) — the far end.
+	 */
+	fromEntryId: number
+	/**
+	 * False when the session already read the link (the same way, or its
+	 * mirror): the id is the standing row's, and nothing was written.
+	 */
+	written: boolean
+}
+
+/** A lore link that shares words with one the session reads, but not all of them. */
+const LINKED_IN_PART =
+	"The link that stands says only part of what this one asks, and a pipeline never rewords a link. Change it in the lorebook, or ask for what it already says."
+
+/** Why a lore link the session holds is not read: it is ended, or secret. */
+const linkNotStanding = (link: LinkOnReading): string =>
+	link.visibility === "secret"
+		? "That link is secret, and a pipeline never reveals a secret link."
+		: `That link is ${link.status}, and a pipeline never reopens a link.`
+
+/**
+ * Write one lore link, on the session's line — or find the one that already
+ * says it (places plan B2).
+ *
+ * **Idempotent, as the session reads.** The question is "does this session
+ * already read this link?" (`linksOnReadingThatWay`, review round): a
+ * relationship with this name (case aside) that the session's reading holds —
+ * its own line or one it inherits (main's before the fork), undated or dated
+ * at or before its moment — and that says EVERYTHING the request says: the
+ * same words read from the same end, both ways when both were asked, or its
+ * true mirror drawn from the far end. Its id comes back with `written: false`
+ * and nothing is inserted, so a re-run, a swipe or a repeated line in `links`
+ * never stacks a room's ways out. The standing row is never rewritten: a
+ * pipeline's repeat does not reword a link somebody drew.
+ *
+ * Refused with a sentence, never answered with a row the request does not
+ * match: a row that shares ONE sentence and not the rest (a one-way door
+ * where both ways was asked — a second row would say that sentence twice, and
+ * no call here can add the way back), and a row that says it all but no
+ * longer stands (resolved, broken, secret) — nothing the session reads would
+ * state it, and a pipeline does not reopen or reveal it.
+ *
+ * ⚠ **A found row is not the run's.** The caller must not record it as a
+ * `lore_link` artifact the run `created`: an undo of the run would delete a
+ * row it never made. (Nothing undoes by artifact today; the rule stands for
+ * whatever does. One known gap from B1: 0193 folded stored duplicates keeping
+ * the one with the most description, so a pre-B1 row recorded as a run's may
+ * now stand in for a hand-drawn twin it absorbed — an undo built later must
+ * not delete a relationship by artifact alone.)
+ */
 async function writeLoreLink(
 	tx: Db,
 	lorebookId: number,
@@ -1248,18 +1354,57 @@ async function writeLoreLink(
 	req: LoreLinkRequest,
 	where: string,
 	line: LoreWriteLine
-): Promise<number> {
+): Promise<LoreLinkWrite> {
 	const toEntryId = await resolveLoreLinkEnd(
 		tx,
 		lorebookId,
 		req.to,
 		where,
-		line.onLine
+		line.reading
 	)
+	const ends = { fromNodeId: null, fromEntryId, toNodeId: null, toEntryId }
 	const linkType =
-		(typeof req.linkType === "string" ? req.linkType.trim() : "") ||
+		loreLinkText(req.linkType, RELATIONSHIP_TEXT_LIMITS.wording) ||
 		DEFAULT_LORE_LINK_TYPE
-	const label = typeof req.label === "string" ? req.label.trim() : ""
+	// Blank is one way — NULL in the row, never an empty wording.
+	const reverseLinkType =
+		loreLinkText(req.reverseLinkType, RELATIONSHIP_TEXT_LIMITS.wording) ||
+		null
+	const name = loreLinkText(req.name, RELATIONSHIP_TEXT_LIMITS.name)
+	const description = loreLinkText(
+		req.description,
+		RELATIONSHIP_TEXT_LIMITS.description
+	)
+	const saying = {
+		lorebookId,
+		title: name,
+		relationshipType: linkType,
+		reverseRelationshipType: reverseLinkType
+	}
+	// The guard the canvas's writes go through (plan B0): never an entry
+	// linked to itself — a room whose way out names the room. Judged before
+	// the standing-row lookup, so a self-link is refused, never "found".
+	await assertRelationshipWrite(tx, { op: "create", ends, where })
+	const held = await linksOnReadingThatWay(tx, ends, saying, line.reading)
+	const whole =
+		held.find((link) => link.saysAll && link.standing) ??
+		held.find((link) => link.saysAll)
+	if (whole?.standing)
+		return {
+			id: whole.id,
+			fromEntryId: whole.fromEntryId ?? fromEntryId,
+			written: false
+		}
+	if (whole)
+		throw new HostScopeError(
+			`${where}: ${LINKED_THAT_WAY} ${linkNotStanding(whole)}`
+		)
+	if (held.length)
+		throw new HostScopeError(`${where}: ${LINKED_THAT_WAY} ${LINKED_IN_PART}`)
+	// Inserted on the session's own line at its dating (`writeDatingAt`,
+	// plan A22) — a history entry the reading sees, so the row is one the
+	// reading holds, and the unique index's exact twin (line and dating are
+	// in it) was found above rather than raised here.
 	const [row] = await tx
 		.insert(schema.narrativeRelationships)
 		.values({
@@ -1271,12 +1416,17 @@ async function writeLoreLink(
 			fromEntryId,
 			toEntryId,
 			relationshipType: linkType,
-			description: label,
+			reverseRelationshipType: reverseLinkType,
+			title: name,
+			description,
 			// The session's line: a road drawn on a fork is that fork's road.
-			branchId: line.branchId
+			branchId: line.branchId,
+			// Where the session stands: a road found in Year 7 was not there
+			// from the start of the line.
+			historyEntryId: line.historyEntryId
 		})
 		.returning({ id: schema.narrativeRelationships.id })
-	return row!.id
+	return { id: row!.id, fromEntryId, written: true }
 }
 
 /** A session's per-channel prompt shaping, by slug — see `channelShapingOf`. */
@@ -1356,6 +1506,12 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 		}
 		return cached
 	}
+	/**
+	 * The `lorebook_entries` read's per-run memo (plan C4): one book read per
+	 * session, book and reading, with its scans inside. See the case. Cleared
+	 * by the one lore write this host makes, `core:outlet/create-lore-entry`.
+	 */
+	const lorebookReads = new Map<string, Promise<any>>()
 
 	/**
 	 * A row this run wrote, announced to everyone in the session. The trigger
@@ -2003,6 +2159,52 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 						typeof q.messageId === "number" && Number.isInteger(q.messageId)
 							? q.messageId
 							: null
+					/**
+					 * **Sized by the window** (history window, 2026-10-03):
+					 * `readTokens` is `session-history@1`'s wired `budget`,
+					 * doubled (`historyReadTokens`). The window is then the
+					 * newest rows up to that estimate — every row when they
+					 * never reach it, never more than `HISTORY_READ_MAX_ROWS` —
+					 * in place of the newest `limit`. Two reads, so a long
+					 * session's text beyond the window never leaves the
+					 * database: each row's size first (`octet_length`, which
+					 * Postgres answers off the stored header), then the rows
+					 * from the first one kept. Same filters, same order as the
+					 * count window below; not for the talk or a row by id.
+					 */
+					const windowWhere = and(
+						eq(schema.sessionMessages.sessionId, sessionId),
+						eq(schema.sessionMessages.isHidden, false),
+						eq(schema.sessionMessages.isGenerating, false),
+						channelWhere(schema.sessionMessages.channel, channel)
+					)
+					const readTokens =
+						byId === null &&
+						q.unplayedOnly !== true &&
+						typeof q.readTokens === "number" &&
+						q.readTokens > 0
+							? q.readTokens
+							: 0
+					const sizedFrom = readTokens
+						? await (async () => {
+								const { historyReadRowCount, HISTORY_READ_MAX_ROWS } =
+									await import("$lib/server/pipelines/prompt/transcriptFit")
+								const sizes = await db
+									.select({
+										id: schema.sessionMessages.id,
+										bytes: sql<number>`coalesce(octet_length(${schema.sessionMessages.content}), 0)`
+									})
+									.from(schema.sessionMessages)
+									.where(windowWhere)
+									.orderBy(desc(schema.sessionMessages.id))
+									.limit(HISTORY_READ_MAX_ROWS)
+								const n = historyReadRowCount(
+									sizes.map((s: { bytes: unknown }) => Number(s.bytes)),
+									readTokens
+								)
+								return n > 0 ? Number(sizes[n - 1].id) : null
+							})()
+						: undefined
 					const read =
 						byId !== null
 							? await db
@@ -2026,28 +2228,33 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 									channel,
 									Math.min(q.limit ?? 100, 500)
 								)
-							: // Reversed after a descending limit: "the most recent
-								// N, in reading order" is what every caller wants, and
-								// doing it here means no binding has to remember which
-								// end it got.
-								(
-									await db
-										.select()
-										.from(schema.sessionMessages)
-										.where(
-											and(
-												eq(schema.sessionMessages.sessionId, sessionId),
-												eq(schema.sessionMessages.isHidden, false),
-												eq(schema.sessionMessages.isGenerating, false),
-												channelWhere(
-													schema.sessionMessages.channel,
-													channel
+							: sizedFrom === null
+								? []
+								: sizedFrom !== undefined
+									? (
+											await db
+												.select()
+												.from(schema.sessionMessages)
+												.where(
+													and(
+														windowWhere,
+														gte(schema.sessionMessages.id, sizedFrom)
+													)
 												)
-											)
-										)
-										.orderBy(desc(schema.sessionMessages.id))
-										.limit(Math.min(q.limit ?? 100, 500))
-								).reverse()
+												.orderBy(desc(schema.sessionMessages.id))
+										).reverse()
+									: // Reversed after a descending limit: "the most recent
+										// N, in reading order" is what every caller wants, and
+										// doing it here means no binding has to remember which
+										// end it got.
+										(
+											await db
+												.select()
+												.from(schema.sessionMessages)
+												.where(windowWhere)
+												.orderBy(desc(schema.sessionMessages.id))
+												.limit(Math.min(q.limit ?? 100, 500))
+										).reverse()
 					/**
 					 * **Side channels as talk** (`talkOnly`, lair re-plan R10's
 					 * fold-in of the R9 follow-up): every non-`main` row that
@@ -2235,6 +2442,31 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 							aiHolds(refs, speaker as never)
 						)[owner] ?? {}
 					)
+				}
+
+				case "history_attachments": {
+					// The files a transcript's rows show (PLAN-composer-
+					// attachments §3.5) — `core:query/history-attachments@1`.
+					// Always the run's own session: a message id of any other
+					// session contributes nothing, however it got here.
+					const sessionId = scope.sessionId
+					if (sessionId === undefined) return {}
+					const ids = Array.isArray(q.messageIds)
+						? (q.messageIds as unknown[]).filter(
+								(id): id is number => typeof id === "number"
+							)
+						: []
+					const { historyAttachmentsFor } = await import(
+						"$lib/server/attachments/history"
+					)
+					return historyAttachmentsFor(db, {
+						sessionId,
+						messageIds: ids,
+						textFileBytes:
+							typeof q.textFileBytes === "number"
+								? q.textFileBytes
+								: undefined
+					})
 				}
 
 				case "session_greetings": {
@@ -2458,7 +2690,8 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 					 *    row before ANY mechanism sees it (`entryAt`) — so the
 					 *    keyword scan, the vector gate, the listing and the
 					 *    prompt all read the entry as it stands now, not as it
-					 *    was first written.
+					 *    was first written. (Its stored VECTOR is still the
+					 *    base text's — owner ruling R1, see `ragContext.ts`.)
 					 *
 					 * On main with no clock the rule is `branch_id IS NULL`
 					 * and no amendment exists, so a book with no lines reads
@@ -2476,12 +2709,275 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 					} = await import("$lib/server/state/entriesOnReading")
 					const reading =
 						(await sessionReadingOf(db, sessionId)) ?? MAIN_HEAD
-					const overlays = await entryOverlaysFor(
-						db,
-						session.lorebookId,
-						reading
-					)
-					const amended = amendedFieldNames(overlays)
+					/**
+					 * **The book is read once per run** (plan C4). A respond turn asks
+					 * this case up to six times — the three keyword lanes, the vector and
+					 * entity arms, the hop — and every one of them read the same book at
+					 * the same reading: the overlays, the cast, the seats, the scan.
+					 * Everything that does not depend on the asker is now read once and
+					 * kept on the host (`lorebookReads`; one host serves one run), keyed
+					 * on the session, its book and the reading. The reading is still
+					 * asked every time, so a clock the run advanced reads a new moment,
+					 * never the old one. Per asker, only the narrowings (one scan each,
+					 * also kept) and the speaker's gate run again.
+					 *
+					 * A run is a snapshot: nothing invalidates the memo except a lore
+					 * entry this host itself writes (`core:outlet/create-lore-entry`
+					 * clears it), so a run that files a room and then lists the book
+					 * sees the room. No content hash moves — the rows are the rows the
+					 * reads always produced.
+					 */
+					// Narrowed above; a closure would widen it again.
+					const bookId: number = session.lorebookId
+					const bookKey = `${sessionId}:${bookId}:${JSON.stringify(reading)}`
+					let bookPending = lorebookReads.get(bookKey)
+					if (!bookPending) {
+						bookPending = (async () => {
+							const overlays = await entryOverlaysFor(
+								db,
+								bookId,
+								reading
+							)
+							const amended = amendedFieldNames(overlays)
+
+							/**
+							 * Each row as the reading sees it, keyed by id — the wire
+							 * shape (`toEntryRow`), with the keys left as the stored
+							 * LIST: joining them for the wire and splitting them again
+							 * in the matcher tore a regex `{1,3}` in two (finding
+							 * #146). The editor now sends amendment `keys` as a list
+							 * too; an amendment stored before that may still hold the
+							 * comma string, and the matcher reads both.
+							 */
+							const resolvedOf = (row: any) =>
+								entryAt(
+									{
+										...toEntryRow(row),
+										keys: row.keys ?? [],
+										secondaryKeys: row.secondaryKeys ?? []
+									} as any,
+									overlays,
+									reading
+								)
+
+							/**
+							 * Normalized here, at the read, for the same reason
+							 * `session_messages` honours `isHidden` here rather than in
+							 * each binding: a new Query type cannot forget it.
+							 *
+							 * Two transforms, and **both were missing on the pipeline
+							 * path entirely** — found by mapping what only the legacy
+							 * engines called. `@@` decorator lines were reaching models
+							 * as literal text while `handlebarsLint.ts` promises users
+							 * they are stripped, and `{{char:1}}` binding placeholders
+							 * were arriving unsubstituted. The still-legacy token-count
+							 * preview *did* strip them, so the number on screen and the
+							 * prompt actually sent disagreed on any session using either.
+							 *
+							 * The legacy function is reused rather than reimplemented.
+							 * A second copy of "what a lore entry looks like once it is
+							 * ready" is exactly the drift this branch keeps finding —
+							 * and this one would show up as a prompt difference nobody
+							 * could localise. It relocates with the module when the
+							 * legacy split happens; it does not get rewritten.
+							 */
+							const bindings = await db
+								.select()
+								.from(schema.lorebookBindings)
+								.where(
+									eq(
+										schema.lorebookBindings.lorebookId,
+										bookId
+									)
+								)
+							/**
+							 * Every card of each member's (plan A25): the linked one and
+							 * each a dated change draws them with, on any line and at
+							 * any date. A seat holding any of them is that member, so
+							 * the private-lore gate below reads them as `memberCards`
+							 * on the binding.
+							 */
+							const { castMemberCards } = await import(
+								"$lib/server/utils/castMemberCards"
+							)
+							const { cardsOf } = await castMemberCards(
+								db,
+								bookId
+							)
+							/**
+							 * Each member as the session's reading has them (plan A19):
+							 * a cast amendment by then renames them, and a tag reads
+							 * as the card the reading draws them with — a dated
+							 * Unlink, Link or Change card included, as the editor's
+							 * chip does — else as that name. `characterId` stays the
+							 * member's own: it is the key a seat holds, and the
+							 * private-lore gate below reads it.
+							 */
+							const { castOverlaysFor, castMemberAt } = await import(
+								"$lib/server/state/entriesOnReading"
+							)
+							const castOverlays = await castOverlaysFor(
+								db,
+								bookId,
+								reading
+							)
+							const atReading = bindings.map((b) =>
+								castMemberAt(b, castOverlays, reading)
+							)
+							const hydrated = (await hydrateBindings(db, atReading)).map(
+								(m, i) => ({
+									...m,
+									name: m.name ?? null,
+									characterId: bindings[i].characterId,
+									memberCards: cardsOf.get(m.id) ?? []
+								})
+							)
+							/**
+							 * Which character each binding names, for character lore's
+							 * co-occurrence signal.
+							 *
+							 * Resolved here because the rows are already in hand — the
+							 * ranker asking for them again would be a second query per
+							 * turn for a fact this read has already paid for. A binding
+							 * naming nobody resolves to null, which is what legacy's
+							 * `binding?.characterId` test does.
+							 *
+							 * The card is the one this session SEATS of the member's
+							 * (plan A25) — the signal asks whether that card spoke, and
+							 * a seat holding the keeper's card speaks as it — else the
+							 * linked card. The linked card wins when both are seated.
+							 */
+							const seated = new Set(
+								(
+									await db
+										.select({
+											characterId:
+												schema.sessionCharacters.characterId
+										})
+										.from(schema.sessionCharacters)
+										.where(
+											eq(
+												schema.sessionCharacters.sessionId,
+												sessionId
+											)
+										)
+								).map((r) => r.characterId)
+							)
+							const bindingCharacter = new Map<number, number | null>(
+								bindings.map((b) => [
+									b.id,
+									b.characterId != null && seated.has(b.characterId)
+										? b.characterId
+										: ((cardsOf.get(b.id) ?? []).find((c) =>
+												seated.has(c)
+											) ??
+											b.characterId ??
+											null)
+								])
+							)
+							const boundCharacterOf = (e: any) =>
+								e?.lorebookBindingId != null
+									? (bindingCharacter.get(e.lorebookBindingId) ??
+										null)
+									: null
+							// The visibility rule below reads the session's personas, so
+							// they are part of the shape it is handed.
+							const sessionPersonas = await db
+								.select()
+								.from(schema.sessionPersonas)
+								.where(eq(schema.sessionPersonas.sessionId, sessionId))
+							const asSession = {
+								lorebookId: bookId,
+								lorebook: {
+									id: bookId,
+									lorebookBindings: hydrated
+								},
+								sessionPersonas: sessionPersonas.map((cp) => ({
+									persona: { id: cp.personaId }
+								}))
+							} as any
+
+							const {
+								populateLorebookEntryBindings,
+								isCharacterLoreEntryVisible,
+								castTagName
+							} = await import(
+								"$lib/server/pipelines/prompt/characterLore"
+							)
+							const ready = (e: any) =>
+								populateLorebookEntryBindings(e, asSession)
+							/**
+							 * The cast member an anchored row is bound to, named as the
+							 * reading has them (`castTagName` — the name its cast tag
+							 * reads as). Assemble's `characterLore` shows it beside the
+							 * entry, so a template placing the block apart from the
+							 * cards still says whose each secret is. Null for a row
+							 * bound to nobody.
+							 */
+							const hydratedById = new Map(
+								hydrated.map((b: any) => [b.id, b])
+							)
+							const castMemberOf = (e: any): string | null => {
+								const b =
+									e?.lorebookBindingId != null
+										? hydratedById.get(e.lorebookBindingId)
+										: undefined
+								return (b && castTagName(b)) || null
+							}
+
+							/**
+							 * The annotation lane's own content hash, borrowed whole —
+							 * see `entrySourceHash`. Imported the way this case imports
+							 * everything else it needs, so the module graph a socket
+							 * pulls in is unchanged.
+							 */
+							const { entrySourceHash } = await import(
+								"$lib/server/annotations"
+							)
+
+							/**
+							 * Each row as the reading sees it, made ready for a prompt
+							 * (`ready` rewrites the content in place, so it runs once
+							 * per row per run, never once per asker).
+							 */
+							const entries = new Map<number, any>()
+							const entryOf = (row: { id: number }) => {
+								let entry = entries.get(row.id)
+								if (!entry) {
+									entry = ready(resolvedOf(row))
+									entries.set(row.id, entry)
+								}
+								return entry
+							}
+							return {
+								amended,
+								entryOf,
+								asSession,
+								boundCharacterOf,
+								castMemberOf,
+								entrySourceHash,
+								isCharacterLoreEntryVisible,
+								scans: new Map<
+									string,
+									Promise<Array<typeof schema.lorebookEntries.$inferSelect>>
+								>()
+							}
+						})()
+						lorebookReads.set(bookKey, bookPending)
+						// A failed read is not a snapshot: the next asker reads again.
+						bookPending.catch(() => lorebookReads.delete(bookKey))
+					}
+					const {
+						amended,
+						entryOf,
+						asSession,
+						boundCharacterOf,
+						castMemberOf,
+						entrySourceHash,
+						isCharacterLoreEntryVisible,
+						scans
+					} = await bookPending
+
 
 					/**
 					 * The five optional narrowings, added for
@@ -2587,12 +3083,23 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 					 * types, and partitioning in memory preserves whatever
 					 * order the heap gave, which is arbitrary. Id order is the
 					 * one deterministic choice.
+					 *
+					 * Under a ceiling the NEWEST rows are the ones kept (plan
+					 * A27): read from the newest down, then put back in id
+					 * order. A book past the ceiling otherwise dropped the room
+					 * Answer the door had just built from the next turn's
+					 * `{{knownLocations}}`.
 					 */
+					const capped = typeof q.limit === "number"
 					const scan = db
 						.select()
 						.from(schema.lorebookEntries)
 						.where(and(...wheres))
-						.orderBy(asc(schema.lorebookEntries.id))
+						.orderBy(
+							capped
+								? desc(schema.lorebookEntries.id)
+								: asc(schema.lorebookEntries.id)
+						)
 					/**
 					 * A ceiling on **rows read**, and the gate below may still
 					 * reduce it: a caller asking for 50 and speaking as a
@@ -2603,170 +3110,42 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 					 * exists to avoid. In the case the listing exists for —
 					 * narrator-shaped, nothing gated — the count is exact.
 					 */
-					/**
-					 * Each row as the reading sees it, keyed by id — the wire
-					 * shape (`toEntryRow`), with the keys left as the stored
-					 * LIST: joining them for the wire and splitting them again
-					 * in the matcher tore a regex `{1,3}` in two (finding
-					 * #146). The editor now sends amendment `keys` as a list
-					 * too; an amendment stored before that may still hold the
-					 * comma string, and the matcher reads both.
-					 */
-					const resolvedOf = (row: any) =>
-						entryAt(
-							{
-								...toEntryRow(row),
-								keys: row.keys ?? [],
-								secondaryKeys: row.secondaryKeys ?? []
-							} as any,
-							overlays,
-							reading
-						)
-					const resolved = new Map<number, any>()
-					let rows: Array<typeof schema.lorebookEntries.$inferSelect>
-					if (afterResolve.length === 0) {
-						rows = await (typeof q.limit === "number"
-							? scan.limit(q.limit)
-							: scan)
-						for (const row of rows) resolved.set(row.id, resolvedOf(row))
-					} else {
-						// A narrowing an amendment moved: every candidate is
-						// resolved before it is asked, and the ceiling counts
-						// what survived — never rows an amendment turned away.
-						rows = []
-						for (const row of await scan) {
-							if (typeof q.limit === "number" && rows.length >= q.limit)
-								break
-							const entry = resolvedOf(row)
-							if (!afterResolve.every((keep) => keep(entry))) continue
-							resolved.set(row.id, entry)
-							rows.push(row)
-						}
+					// One scan per set of narrowings per run (C4): the retrieval
+					// lanes all ask the bare book and share it.
+					const scanKey = JSON.stringify([
+						wantedTypes,
+						typeof q.name === "string" ? q.name.trim().toLowerCase() : null,
+						typeof q.enabled === "boolean" ? q.enabled : null,
+						typeof q.archived === "boolean" ? q.archived : null,
+						capped ? q.limit : null
+					])
+					let scanned = scans.get(scanKey)
+					if (!scanned) {
+						scanned = (async () => {
+							let rows: Array<typeof schema.lorebookEntries.$inferSelect>
+							if (afterResolve.length === 0) {
+								rows = await (capped ? scan.limit(q.limit) : scan)
+							} else {
+								// A narrowing an amendment moved: every candidate is
+								// resolved before it is asked, and the ceiling counts
+								// what survived — never rows an amendment turned away.
+								rows = []
+								for (const row of await scan) {
+									if (capped && rows.length >= q.limit) break
+									if (!afterResolve.every((keep) => keep(entryOf(row))))
+										continue
+									rows.push(row)
+								}
+							}
+							// Back in id order: the ceiling chose which rows, never their order.
+							if (capped) rows.reverse()
+							return rows
+						})()
+						scans.set(scanKey, scanned)
+						scanned.catch(() => scans.delete(scanKey))
 					}
+					const rows = await scanned
 
-					/**
-					 * Which entries have a usable vector — the ids, not the
-					 * vectors.
-					 *
-					 * The legacy shape carried `embedding` on the row itself
-					 * and `toLoreEntry` reduced it to a boolean immediately.
-					 * Now that vectors live in their own table, fetching them
-					 * to answer the same boolean would pull every float in the
-					 * lorebook across on every turn.
-					 */
-					const vectored = new Set<number>(
-						(
-							await db
-								.select({
-									entryId: schema.lorebookEntryVectors.entryId
-								})
-								.from(schema.lorebookEntryVectors)
-								.where(
-									and(
-										inArray(
-											schema.lorebookEntryVectors.entryId,
-											rows.map((r) => r.id)
-										),
-										eq(
-											schema.lorebookEntryVectors
-												.vectorName,
-											DEFAULT_VECTOR_NAME
-										),
-										eq(
-											schema.lorebookEntryVectors
-												.chunkIndex,
-											0
-										),
-										sql`array_length(${schema.lorebookEntryVectors.vector}, 1) > 0`
-									)
-								)
-						).map((v) => v.entryId)
-					)
-
-					/**
-					 * Normalized here, at the read, for the same reason
-					 * `session_messages` honours `isHidden` here rather than in
-					 * each binding: a new Query type cannot forget it.
-					 *
-					 * Two transforms, and **both were missing on the pipeline
-					 * path entirely** — found by mapping what only the legacy
-					 * engines called. `@@` decorator lines were reaching models
-					 * as literal text while `handlebarsLint.ts` promises users
-					 * they are stripped, and `{{char:1}}` binding placeholders
-					 * were arriving unsubstituted. The still-legacy token-count
-					 * preview *did* strip them, so the number on screen and the
-					 * prompt actually sent disagreed on any session using either.
-					 *
-					 * The legacy function is reused rather than reimplemented.
-					 * A second copy of "what a lore entry looks like once it is
-					 * ready" is exactly the drift this branch keeps finding —
-					 * and this one would show up as a prompt difference nobody
-					 * could localise. It relocates with the module when the
-					 * legacy split happens; it does not get rewritten.
-					 */
-					const bindings = await db
-						.select()
-						.from(schema.lorebookBindings)
-						.where(
-							eq(
-								schema.lorebookBindings.lorebookId,
-								session.lorebookId
-							)
-						)
-					const hydrated = await hydrateBindings(db, bindings)
-					/**
-					 * Which character each binding names, for character lore's
-					 * co-occurrence signal.
-					 *
-					 * Resolved here because the rows are already in hand — the
-					 * ranker asking for them again would be a second query per
-					 * turn for a fact this read has already paid for. A binding
-					 * naming a persona, or naming nobody, resolves to null,
-					 * which is what legacy's `binding?.characterId` test does.
-					 */
-					const bindingCharacter = new Map<number, number | null>(
-						bindings.map((b) => [b.id, b.characterId ?? null])
-					)
-					const boundCharacterOf = (e: any) =>
-						e?.lorebookBindingId != null
-							? (bindingCharacter.get(e.lorebookBindingId) ??
-								null)
-							: null
-					// The visibility rule below reads the session's personas, so
-					// they are part of the shape it is handed.
-					const sessionPersonas = await db
-						.select()
-						.from(schema.sessionPersonas)
-						.where(eq(schema.sessionPersonas.sessionId, sessionId))
-					const asSession = {
-						lorebookId: session.lorebookId,
-						lorebook: {
-							id: session.lorebookId,
-							lorebookBindings: hydrated
-						},
-						sessionPersonas: sessionPersonas.map((cp) => ({
-							persona: { id: cp.personaId }
-						}))
-					} as any
-
-					const {
-						populateLorebookEntryBindings,
-						isCharacterLoreEntryVisible
-					} = await import(
-						"$lib/server/pipelines/prompt/characterLore"
-					)
-					const ready = (e: any) =>
-						populateLorebookEntryBindings(e, asSession)
-
-					/**
-					 * The annotation lane's own content hash, borrowed whole —
-					 * see `entrySourceHash`. Imported the way this case imports
-					 * everything else it needs, so the module graph a socket
-					 * pulls in is unchanged.
-					 */
-					const { entrySourceHash } = await import(
-						"$lib/server/annotations"
-					)
 
 					/**
 					 * Character lore is private self-knowledge.
@@ -2798,12 +3177,13 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 					 * INSIDE the clause — and it is the subject here, in place
 					 * of the scope's.
 					 *
-					 * ⚠ A wired `speaker` never widens the gate. Absent (the
-					 * port unwired, which is every spec written before this),
-					 * the scope decides exactly as it did. Wired and naming a
-					 * character row, that character decides. Wired and naming
-					 * anybody else — an envoy, a role, a free-form side
-					 * character the cast does not hold — the subject is
+					 * ⚠ A wired `speaker` never widens the gate. Absent, null or
+					 * empty (the port unwired, which is every spec written
+					 * before this — and a free-form side character, whose
+					 * context publishes null), the scope decides exactly as it
+					 * did. Wired and naming a character row, that character
+					 * decides. Wired and naming anybody else — an envoy, a
+					 * role, a bare name — the subject is
 					 * `NO_SUCH_CHARACTER`, a value no binding can carry, so the
 					 * voice reads no private lore at all. That third case is
 					 * the one that must not fall back to `null`: `null` is the
@@ -2841,14 +3221,14 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 							| "history"
 						for (const row of rows) {
 							if (row.typeId !== typeId) continue
-							const entry = ready(resolved.get(row.id))
+							const entry = entryOf(row)
 							if (gated && !visible(entry)) continue
 							out.push(
 								toLoreEntry(
 									entry,
 									source,
-									vectored.has(row.id),
 									boundCharacterOf(entry),
+									gated ? castMemberOf(entry) : null,
 									// ⚠ `row`, not `entry`. The stored columns
 									// are what a later reader can hash again;
 									// the hydrated entry is not reproducible
@@ -2858,8 +3238,91 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 							)
 						}
 					}
+
+					/**
+					 * `withLinks` (places plan B2): each listed row's lore
+					 * links, said from that row — `LoreLinkRow[]` on `links`.
+					 *
+					 * The relationship hop's own reading (`readGraphEntryLinks`:
+					 * the session's line at its moment, standing and not
+					 * secret, both ends live), projected per row by
+					 * `loreLinkRowsOf` — so a room's ways out in a prompt and
+					 * the hop never disagree. Absent, rows carry no `links`
+					 * key at all.
+					 *
+					 * ⚠ **A far end is named for the WIRED speaker only.** A
+					 * listing with no `speaker` wired is read once and may be
+					 * shared by every voice in the turn — the Lair's rooms are
+					 * (B6 review round): one read feeds the narration, the
+					 * planner and each delver's prompt. The scope's subject is
+					 * then whoever heads the turn, or nobody on an envoy's
+					 * turn (`null`, the omniscient narrator) — not the one
+					 * reading. So, unwired, gated character lore that is not
+					 * itself listed is named as a far end only when
+					 * `NO_SUCH_CHARACTER` may see it: when any voice may (a
+					 * persona's lore). Wired, the speaker decides, as for a
+					 * listed row. A far end the listing itself carries is
+					 * named either way — the output already holds it.
+					 */
+					if (q.withLinks === true && out.length) {
+						const { readGraphEntryLinks, loreLinkRowsOf } =
+							await import("$lib/server/utils/graphEntryLinks")
+						const standing =
+							(await readGraphEntryLinks(db, sessionId)) ?? []
+						const listed = new Set(out.map((e) => e.id))
+						const farIds = [
+							...new Set(
+								standing.flatMap((l) =>
+									[l.from, l.to]
+										.filter(
+											(end) =>
+												end.kind === "entry" &&
+												!listed.has(end.id)
+										)
+										.map((end) => end.id)
+								)
+							)
+						]
+						// Listed rows passed the gate already; a far end the
+						// listing did not carry is asked here, by its type's
+						// declared anchor policy — for the wired speaker, or
+						// for any voice when none is wired (above).
+						const seen = new Set<number>(listed)
+						const farRows = farIds.length
+							? await db
+									.select()
+									.from(schema.lorebookEntries)
+									.where(
+										inArray(schema.lorebookEntries.id, farIds)
+									)
+							: []
+						const farSubject = speakerIsWired(q)
+							? speaker
+							: NO_SUCH_CHARACTER
+						for (const row of farRows) {
+							const gated =
+								entryDeclaration(row.typeId)?.roles.anchor
+									?.policy === BINDING_VISIBILITY_POLICY
+							if (
+								!gated ||
+								isCharacterLoreEntryVisible(
+									entryOf(row),
+									asSession,
+									farSubject
+								)
+							)
+								seen.add(row.id)
+						}
+						// A listed row the gate withheld is not in `out`, so
+						// it is unseen here too: `listed` is what went out.
+						for (const e of out)
+							e.links = loreLinkRowsOf(e.id, standing, (id) =>
+								seen.has(id)
+							)
+					}
 					return out
 				}
+
 
 				case "session_cast": {
 					/**
@@ -3056,20 +3519,28 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 							}
 						})
 						lorebookBindings = bindings
-						for (const b of bindings) {
+						// Every card of a member's carries what they absorbed —
+						// the linked one and each a dated change draws them with
+						// (plan A25) — so a seat holding either hears it.
+						const { castMemberCards } = await import(
+							"$lib/server/utils/castMemberCards"
+						)
+						const { cardsOf } = await castMemberCards(
+							db,
+							session.lorebookId
+						)
+						for (const [i, b] of bindings.entries()) {
 							const names = Array.isArray(b.absorbedAliases)
 								? b.absorbedAliases
 								: []
 							if (!names.length) continue
-							// Nullable — an unbound background graph node sets
-							// no character — so an unbound row contributes no
-							// absorbed identity to anybody.
-							const id = b.characterId
-							if (id == null) continue
-							absorbedByCharacter.set(id, [
-								...(absorbedByCharacter.get(id) ?? []),
-								...names
-							])
+							// An unbound background graph node has no card, so
+							// it contributes no absorbed identity to anybody.
+							for (const id of cardsOf.get(stored[i].id) ?? [])
+								absorbedByCharacter.set(id, [
+									...(absorbedByCharacter.get(id) ?? []),
+									...names
+								])
 						}
 					}
 
@@ -3218,8 +3689,39 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 					const { genreFieldsFor, playerLabelFor } = await import(
 						"$lib/server/pipelines/entities/sessionGenres"
 					)
-					const characterDetail = (await genreFieldsFor(db, sessionId))
-						.characterDetail
+					const sessionFields = await genreFieldsFor(db, sessionId)
+					const characterDetail = sessionFields.characterDetail
+					/**
+					 * 🚧 The session's AI replies so far (AN1), for the
+					 * author's note's `interval`: the main channel's completed
+					 * assistant lines — the reply being written now is still
+					 * generating and is not one of them, so a regenerate counts
+					 * as the reply it replaces did. On the cast read for
+					 * `characterDetail`'s reason. ⚠ Absent — no key, no
+					 * query — unless the genre declares the note (an object
+					 * value), so every other session's cast is the object it
+					 * was.
+					 */
+					const replyCount =
+						sessionFields.authorsNote &&
+						typeof sessionFields.authorsNote === "object" &&
+						!Array.isArray(sessionFields.authorsNote)
+							? Number(
+									(
+										await db
+											.select({ n: count() })
+											.from(schema.sessionMessages)
+											.where(
+												and(
+													eq(schema.sessionMessages.sessionId, sessionId),
+													eq(schema.sessionMessages.role, "assistant"),
+													eq(schema.sessionMessages.channel, "main"),
+													eq(schema.sessionMessages.isGenerating, false)
+												)
+											)
+									)[0]?.n ?? 0
+								)
+							: undefined
 					/**
 					 * What a person's persona-less line is called (lair
 					 * re-plan R4): the session's override, else the genre's
@@ -3240,6 +3742,7 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 						...(typeof characterDetail === "string"
 							? { characterDetail }
 							: {}),
+						...(replyCount !== undefined ? { replyCount } : {}),
 						sessionCharacters: sessionCharacters.map((cc) => ({
 							...cc,
 							enabled: cc.enabled !== false,
@@ -3260,7 +3763,14 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 						memberNames,
 						lorebookBindings,
 						sessionScenario: session.scenario ?? null,
-						isGroup: Boolean(session.isGroup)
+						isGroup: Boolean(session.isGroup),
+						/**
+						 * Whose session this cast is (B2, 2026-10-03) — the key
+						 * the speaker's example dialogue is picked by, so the
+						 * pick holds for the whole session instead of being
+						 * re-drawn from each run's seed (`build-template-context`).
+						 */
+						sessionId
 					}
 				}
 
@@ -3468,9 +3978,34 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 						.limit(1)
 					if (!session?.lorebookId) return null
 
-					const { buildGraphRelationshipRows } = await import(
-						"$lib/server/utils/graphContextFormatter"
-					)
+					const { buildGraphRelationshipRows, buildCastRelationshipRows } =
+						await import("$lib/server/utils/graphContextFormatter")
+					/**
+					 * ⚠ **Nobody speaking takes the cast-wide read** (genre
+					 * plan F6(a)). A null `currentCharacterId` is nobody's
+					 * voice — an Adventure turn's planner and narrator — and
+					 * the speaker's walk has nowhere to start from, so it
+					 * answers every tie a cast member holds that is not their
+					 * secret, in their own lane, which the speaker's two
+					 * sections never render. Same line, and layer 2's
+					 * visibility rule (`CAST_WIDE_VISIBILITY`).
+					 *
+					 * ⚠ Keyed on the missing speaker, not on a request, so
+					 * every null-speaker read gets it — Chat's envoy turns
+					 * included, where nothing renders the lane. Withholding
+					 * secrets is what makes that safe; at a non-zero share
+					 * there it still spends band room on ties no section
+					 * shows. An explicit param on `relationship-search@1` would
+					 * close it, at a contract move (review 2026-09-29).
+					 */
+					if (q.currentCharacterId == null)
+						return (
+							(await buildCastRelationshipRows({
+								sessionId,
+								lorebookId: session.lorebookId,
+								db
+							})) ?? null
+						)
 					return (
 						(await buildGraphRelationshipRows({
 							sessionId,
@@ -3480,6 +4015,23 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 							db
 						})) ?? null
 					)
+				}
+
+				case "cast_presences": {
+					/**
+					 * Who is in the world, and when (plan E-2, R4): the
+					 * presences on the session's line and the moment it reads
+					 * at. The line is resolved HERE, so no node ever sees
+					 * another line's spans (`presencesOnReading`). No session,
+					 * or no book: nothing, at the head.
+					 */
+					const sessionId = q.sessionId ?? scope.sessionId
+					assertScoped(node, q.sessionId, scope.sessionId)
+					if (sessionId === undefined) return { rows: [], at: null }
+					const { presencesOnReading } = await import(
+						"$lib/server/state/presencesOnReading"
+					)
+					return await presencesOnReading(db, sessionId)
 				}
 
 				case "graph_entry_links": {
@@ -3659,8 +4211,11 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 						context,
 						modelId,
 						{
-							excludeRecentMessages:
-								q.excludeRecentMessages ?? 10,
+							// Only what the fetch below will look at: a row
+							// embedded for a source it never searches is an
+							// embed call inside the turn bought for nothing.
+							sources: q.sources,
+							excludeRecentMessages: q.excludeRecentMessages,
 							channel: resolveChannel(q.channel)
 						}
 					)
@@ -3677,8 +4232,7 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 						await fetchScopedCandidates(context, {
 							modelId,
 							sources: q.sources,
-							excludeRecentMessages:
-								q.excludeRecentMessages ?? 10,
+							excludeRecentMessages: q.excludeRecentMessages,
 							// The semantic mechanism reaches the prompt, so it is
 							// scoped exactly like the history read (20 §7): an
 							// omitted channel is `main`, never every lane at
@@ -3993,7 +4547,7 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 					 */
 					const sessionId = q.sessionId ?? scope.sessionId
 					assertScoped(node, q.sessionId, scope.sessionId)
-					const messageId = refId(q.message)
+					const messageId = messageRefId(q.message)
 					if (sessionId === undefined || messageId === null) return null
 					const { spriteChoicesFor } = await import(
 						"$lib/server/sprites/choices"
@@ -4010,10 +4564,19 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 						)
 						return null
 					}
-					if (!choices.has)
+					if (!choices.has || scope.spriteChoiceOff)
 						return { ...choices, lineVector: null, labelVectors: null }
-					// The local lane, exactly as `entity-link` embeds names: no
-					// connection, no model call added to the turn.
+					// Through the install's embedding model, exactly as
+					// `entity-link` embeds names: no connection slot on the spec.
+					// ⚠ Not "no model call" (corrected 2026-09-29, genre uplift
+					// C3): `batchEmbed` is the same function retrieval uses, and
+					// with an API embedding connection starred it is a provider
+					// call (`embedding/index.ts`) — one per reply whose speaker
+					// has sprites, after the save. Free only on a local ONNX
+					// model. Reached only past `has`, so a speaker without
+					// sprites costs nothing, and only with the picker's
+					// `enabled` on (`scope.spriteChoiceOff`, resolved by
+					// `runSpec`), so "Choose sprites" off costs nothing either.
 					const { spriteVectors } = await import(
 						"$lib/server/sprites/vectors"
 					)
@@ -4058,6 +4621,10 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 						.where(eq(schema.sessions.id, sessionId))
 						.limit(1)
 					if (!session) return empty
+					// No book, nothing a description could be linked to: the
+					// mechanism is unavailable, so it is skipped (R5) — and the
+					// embed of its texts is never bought (lorebooks A23(b)).
+					if (session.lorebookId == null) return empty
 
 					const { loadVocabulary } = await import(
 						"$lib/server/annotations"
@@ -4260,8 +4827,14 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 			}
 		},
 
-		async call(payload, node, run) {
+		async call(payload, node, run, handles) {
 			const p = (payload ?? {}) as Record<string, any>
+			/**
+			 * The node's clock, tied to the request below (`callTether`): the
+			 * dispatch aborts on the run's cancel or the node's own timeout,
+			 * and the request's signs of life keep an idle node's window open.
+			 */
+			const line = tether(handles, scope.signal)
 
 			switch (node.definitionId) {
 				case "core:oracle/embed-text": {
@@ -4343,7 +4916,14 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 						typeof run.liveRow === "number"
 							? run.liveRow
 							: undefined
-					const stream = scope.live?.attach(run.liveRow, node.key)
+					// The reply's phase, off the same split as its text: the
+					// status reads *{speaker} is reasoning* while the trace
+					// streams and goes back to the node's own (*is typing*) at
+					// the first body token (`StatusRelay.reasoning`).
+					const stream = scope.live?.attach(run.liveRow, node.key, {
+						onPhase: (phase) =>
+							scope.status?.reasoning(phase === "reasoning")
+					})
 					const queueItemId =
 						liveRow !== undefined && scope.live
 							? await scope.live.claim(liveRow)
@@ -4351,10 +4931,11 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 
 					let result: Awaited<ReturnType<typeof dispatchGeneration>>
 					try {
-						result = await dispatchGeneration({
+						const sessionId = scope.sessionId
+						result = await line.hold(() => dispatchGeneration({
 							compiledPrompt: p.compiledPrompt,
 							db,
-							sessionId: scope.sessionId,
+							sessionId,
 							userId: scope.userId,
 							// The payload's value when a caller supplied one,
 							// otherwise the run's. Neither is authoritative alone:
@@ -4422,15 +5003,22 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 								node.definitionId === "core:oracle/generate-json"
 									? { schema: p.schema ?? undefined }
 									: undefined,
+							// Every chunk, body or reasoning, is a sign of life
+							// for the node's idle clock (`callTether`).
 							onChunk: (chunk) => {
+								line.pulse()
 								stream?.onChunk(chunk)
 								scope.sink?.onChunk?.(chunk)
 							},
-							onThinking: (chunk) => {
-								stream?.onThinking(chunk)
-								scope.sink?.onThinking?.(chunk)
+							onReasoning: (chunk) => {
+								line.pulse()
+								stream?.onReasoning(chunk)
+								scope.sink?.onReasoning?.(chunk)
 							},
-							signal: scope.signal,
+							onReplyFacts: (facts) => stream?.onReplyFacts(facts),
+							// The run's cancel OR the node's own timeout: a node
+							// that timed out must not leave the request running.
+							signal: line.signal,
 							/**
 							 * Through the LLM queue — one model call at a time
 							 * across the application, the same lane every other
@@ -4459,11 +5047,15 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 								messageId: liveRow,
 								userId: scope.userId,
 								queueItemId,
-								onStatusChange: scope.status
-									? (status) => scope.status!.queue(status)
-									: undefined
+								// Waiting its turn and a model loading are the
+								// node's honest wait, not a stall: each change
+								// pulses, and `hold` keeps beating between them.
+								onStatusChange: (status) => {
+									line.pulse()
+									scope.status?.queue(status)
+								}
 							}
-						})
+						}))
 					} catch (err) {
 						// The object, for the row's error write at the end of
 						// the run — the executor keeps only the message, and
@@ -4489,7 +5081,9 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 					const { dispatchImage } = await import(
 						"$lib/server/pipelines/runtime/dispatchImage"
 					)
-					return await dispatchImage(db, {
+					// A render pulses like a reply: on every progress report
+					// and on the in-flight beat (`callTether`).
+					return await line.hold(() => dispatchImage(db, {
 						prompt: String(p.prompt ?? ""),
 						negative:
 							p.negative === undefined || p.negative === null
@@ -4515,7 +5109,7 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 						// the receipt for the run to be reconstructed from.
 						artifacts: scope.artifacts,
 						nodeKey: node.key,
-						signal: scope.signal,
+						signal: line.signal,
 						// The author's send shape. On a render `off` is what
 						// stops the progress poll and the previews, so it is
 						// read where `onProgress` is decided rather than here.
@@ -4532,14 +5126,16 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 						// id, which hides the hole.
 						onProgress:
 							scope.sink?.onProgress && scope.runId
-								? (e) =>
+								? (e) => {
+										line.pulse()
 										scope.sink!.onProgress!({
 											runId: scope.runId!,
 											nodeKey: node.key,
 											...e
 										})
+									}
 								: undefined
-					})
+					}))
 				}
 
 				case "core:oracle/run-tool": {
@@ -4610,7 +5206,8 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 									sessionId: scope.sessionId,
 									currentCharacterId:
 										scope.currentCharacterId ?? null,
-									signal: scope.signal,
+									// The run's cancel or the node's timeout.
+									signal: line.signal,
 									// The state tools' one door. Granted only
 									// where there is a session to propose
 									// against; absent, they refuse by name.
@@ -4663,7 +5260,7 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 						if (!pluginsEnabled())
 							return {
 								tool: name,
-								error: `'${name}' is provided by an extension, and extensions are switched off on this instance.`
+								error: `'${name}' is provided by an extension, and extensions are switched off on this pub.`
 							}
 						const manager = getManager()
 						const r = await manager.callHook(
@@ -4720,7 +5317,9 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 						const { dispatchStep } = await import(
 							"$lib/server/pipelines/runtime/dispatchStep"
 						)
-						const { text, connection } = await dispatchStep(db, {
+						// Queued, then unstreamed: the in-flight beat is its
+						// only sign of life (`callTether`).
+						const { text, connection } = await line.hold(() => dispatchStep(db, {
 							systemPrompt: String(p.systemPrompt ?? ""),
 							userPrompt: stepUserPrompt(p),
 							connectionId: refId(p.connection),
@@ -4729,11 +5328,11 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 							),
 							samplingId: refId(p.sampling),
 							label: p.label,
-							signal: scope.signal,
+							signal: line.signal,
 							// A step that asks for a shape (turn-advise) gets the
 							// strongest structured door its connection has.
 							...(p.schema ? { schema: p.schema } : {})
-						})
+						}))
 						// Steps that ask for JSON get it parsed here rather than
 						// in each binding: the models wrap it in prose often
 						// enough that every caller would need the same salvage.
@@ -4933,9 +5532,23 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 										blockId: scope.answersForm.blockId
 									}
 								}
+							: {}),
+						...(scope.planRowId !== undefined
+							? { planRowId: scope.planRowId }
 							: {})
 					}
 					if (sections?.length) metadata.sections = sections
+					/**
+					 * 🚧 The turns a planner's row plans (Lair character
+					 * turns): resolved to participant references here, once,
+					 * and stored — the history projects it for the turn
+					 * order and `turn-plan@1` (`sessions/turnPlan.ts`).
+					 */
+					if (p.turnPlan != null) {
+						const { storedTurnPlan } = await import("$lib/server/sessions/turnPlan")
+						const turnPlan = await storedTurnPlan(db, sessionId, p.turnPlan)
+						if (turnPlan) metadata.turnPlan = turnPlan
+					}
 
 					/**
 					 * An existing row, claimed rather than inserted (the
@@ -5334,8 +5947,8 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 					if (ownRow && !current.isGenerating)
 						return { id: current.id, sessionId: current.sessionId }
 					if (current.isGenerating) {
-						const { buildThinkingMetadata } = await import(
-							"$lib/server/messages/thinkingMetadata"
+						const { buildReasoningMetadata } = await import(
+							"$lib/server/messages/reasoningMetadata"
 						)
 						const { joinContinuation } = await import(
 							"$lib/server/messages/continuation"
@@ -5352,14 +5965,25 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 								: (current.content ?? ""),
 							text
 						)
-						const thinking =
-							typeof p.thinking === "string" && p.thinking.length
-								? p.thinking
+						const reasoning =
+							typeof p.reasoning === "string" && p.reasoning.length
+								? p.reasoning
 								: undefined
-						const thought = buildThinkingMetadata(
+						// A generation that ended with NO reasoning clears what
+						// its live frames showed in the fold — a model asked to
+						// reason that never did streamed its reply there until
+						// the stream ended (`splitReasoningStream`, `requested`).
+						const shown = (
+							current.metadata as { reasoning?: unknown } | null
+						)?.reasoning
+						const stale =
+							reasoning === undefined &&
+							typeof shown === "string" &&
+							shown.length > 0
+						const thought = buildReasoningMetadata(
 							current.metadata,
 							content,
-							thinking,
+							stale ? null : reasoning,
 							true
 						)
 						/**
@@ -5952,6 +6576,23 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 						await broadcastToSessionUsers(scope.io, sessionId, "state:changed", {
 							sessionId
 						} satisfies Sockets.State.Changed.Response)
+					// And the session itself moved: `session-updated` names the
+					// clock, as `sessions:update` does for a person's move, so a
+					// spec bound to it and an open settings form hear it. A
+					// child of this run (`asChild`): a spec answering it may
+					// advance the clock again, and the lineage caps that loop.
+					await emit(
+						"core:event/session-updated@1",
+						{ sessionId, changed: ["storyClock"] },
+						{ kind: "run" },
+						{ asChild: true }
+					)
+					if (scope.io) {
+						const { broadcastSessionRow } = await import(
+							"$lib/server/sessions/rowPush"
+						)
+						broadcastSessionRow(scope.io, sessionId)
+					}
 					return { id: sessionId, sessionId, clock: moved.clock, label: moved.label }
 				}
 
@@ -5959,7 +6600,7 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 					/**
 					 * Record a line's **shown sprite** (DESIGN-sprites §5.2) on
 					 * its ACTIVE swipe — `swipes.spriteHistory[currentIdx]`,
-					 * mirrored to `metadata.sprite` exactly as `thinking` is.
+					 * mirrored to `metadata.sprite` exactly as `reasoning` is.
 					 *
 					 * Who chose it is decided HERE, never by a port: a run of
 					 * `core:spec/show-sprite` is a person's pick from the
@@ -5968,7 +6609,7 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 					 * overwrites a person's pick, and a picker that chose
 					 * nothing leaves a line that shows nothing untouched.
 					 */
-					const id = refId(p.target)
+					const id = messageRefId(p.target)
 					if (id === null)
 						throw new HostScopeError(
 							`${node.key} was given no message id — wire 'target' from the saved line.`
@@ -6095,15 +6736,27 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 					// back and forth does not resurrect the old text.
 					const metadata = current.metadata as Record<string, any>
 					const swipes = metadata?.swipes
+					const { committedContent, updateLegacy } = await import(
+						"$lib/server/messages/store"
+					)
 					const patch: Partial<
 						typeof schema.sessionMessages.$inferInsert
 					> = {
 						content: text,
 						isEdited: true,
-						// Content changed — cleared so the vectorization
-						// queue re-embeds it.
-						embedding: null,
-						embeddingModel: null
+						// The vector goes only when the stored words do, so
+						// retrieval never matches words the row does not
+						// hold. Judged on the text as the store will save it
+						// (edge whitespace off), so a save of the same words
+						// keeps it. The queue re-embeds on the text hash
+						// either way.
+						...(committedContent(text) !== current.content
+							? {
+									embedding: null,
+									embeddingModel: null,
+									embeddingSourceHash: null
+								}
+							: {})
 					}
 					if (swipes && Array.isArray(swipes.history)) {
 						const currentIdx = swipes.currentIdx ?? 0
@@ -6115,9 +6768,6 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 							swipes: { ...swipes, history }
 						}
 					}
-					const { updateLegacy } = await import(
-						"$lib/server/messages/store"
-					)
 					const row = await updateLegacy(db, id, patch)
 					if (!row)
 						throw new HostScopeError(
@@ -6157,7 +6807,7 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 					>
 					/**
 					 * The alternatives as the row keeps them: `history` is
-					 * every text, `thinkingHistory` the reasoning beside each,
+					 * every text, `reasoningHistory` the reasoning beside each,
 					 * `currentIdx` which is showing (null until a second
 					 * alternative exists — the shape the swipe handlers have
 					 * always written).
@@ -6165,7 +6815,7 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 					const swipes = {
 						currentIdx: null as number | null,
 						history: [] as string[],
-						thinkingHistory: [] as (string | null)[],
+						reasoningHistory: [] as (string | null)[],
 						// DESIGN-sprites §3.3: each alternative keeps its own face.
 						spriteHistory: [] as (ShownSprite | null)[],
 						...(metadata.swipes ?? {})
@@ -6189,15 +6839,15 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 							]
 						}
 						while (
-							swipes.thinkingHistory.length < swipes.history.length
+							swipes.reasoningHistory.length < swipes.history.length
 						)
-							swipes.thinkingHistory.push(null)
+							swipes.reasoningHistory.push(null)
 						while (
 							swipes.spriteHistory.length < swipes.history.length
 						)
 							swipes.spriteHistory.push(null)
 						swipes.history.push(p.text)
-						swipes.thinkingHistory.push(null)
+						swipes.reasoningHistory.push(null)
 						swipes.spriteHistory.push(null)
 						swipeIndex = swipes.history.length - 1
 					} else {
@@ -6223,7 +6873,7 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 							...metadata,
 							swipes,
 							// The reasoning shown follows the alternative.
-							thinking: swipes.thinkingHistory[swipeIndex] ?? null,
+							reasoning: swipes.reasoningHistory[swipeIndex] ?? null,
 							// And so does the face (DESIGN-sprites §3.3).
 							sprite: swipes.spriteHistory?.[swipeIndex] ?? null
 						},
@@ -6610,27 +7260,19 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 						// row it was projected from, already in hand here.
 						mime: stored.file.displayMime ?? stored.original.mime
 					}
+					// The same part writer as every other path
+					// (`attachments/partData`): the stored file's width,
+					// height, name and size ride on the part.
+					const { mediaPartFor } = await import(
+						"$lib/server/attachments/partData"
+					)
 					await appendParts(db, messageId, [
-						isImage
-							? {
-									type: "core:image",
-									data: {
-										assetId: asset.id,
-										...(media.alt
-											? { alt: String(media.alt) }
-											: {})
-									}
-								}
-							: {
-									type: "core:file",
-									data: {
-										assetId: asset.id,
-										mime: asset.mime,
-										...(media.name
-											? { name: String(media.name) }
-											: {})
-									}
-								}
+						mediaPartFor(stored.file, {
+							as: isImage ? "image" : "file",
+							alt: media.alt ? String(media.alt) : null,
+							name: media.name ? String(media.name) : null,
+							mime: asset.mime
+						}) as any
 					])
 					record(node, "message", messageId, "updated")
 					// The message row as `id` here too — see the reference
@@ -6681,12 +7323,19 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 					 * telling somebody to attach one would send them to a
 					 * screen that cannot help.
 					 */
-					const noLore = await loreWriteRefusal(db, sessionId)
+					// The genre's declared writes, then the book owner's lore
+					// write mode: Off refuses the write (plan A22). Review
+					// changes writes: this outlet is reviewed only when the
+					// spec parks it (`settings.review`), which the mode cannot
+					// force.
+					const noLore =
+						(await loreWriteRefusal(db, sessionId)) ??
+						(await loreWritesOffRefusal(db, sessionId))
 					if (noLore) throw new HostScopeError(`${node.key}: ${noLore}`)
 
 					if (!session?.lorebookId)
 						throw new HostScopeError(
-							`${node.key}: this session has no lorebook, so there is nowhere to save the summary. Attach one first.`
+							`${node.key}: this session has no lorebook, so there is nowhere to save the summary. Read one into this session first.`
 						)
 
 					const name = String(p.name ?? "").trim() || "Untitled"
@@ -6738,8 +7387,8 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 					// The session's line, read before the transaction (only
 					// `tx` inside it): the entry and its links are that
 					// line's own, never main's by omission (finding #0).
-					const line = await loreWriteLineOf(db, sessionId)
-					const { row, linkIds } = await db.transaction(
+					const line = await loreWriteLineOf(db, sessionId, lorebookId)
+					const { row, linkIds, madeLinkIds } = await db.transaction(
 						async (tx) => {
 							await tx.execute(
 								sql`select pg_advisory_xact_lock(${lorebookId})`
@@ -6747,40 +7396,55 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 							const [created] = await tx
 								.insert(schema.lorebookEntries)
 								.values(
-									entryInsert({
-										typeId,
-										lorebookId,
-										name,
-										content,
-										branchId: line.branchId,
-										position: await nextPosition(
-											tx,
+									entryInsert(
+										{
+											typeId,
 											lorebookId,
-											typeId
-										)
-									})
+											name,
+											content,
+											branchId: line.branchId,
+											position: await nextPosition(
+												tx,
+												lorebookId,
+												typeId
+											)
+										},
+										// A pipeline wrote it, never a person: the
+										// rail's machine-written scope counts it.
+										{ provenance: "pipeline" }
+									)
 								)
 								.returning()
 							const ids: number[] = []
-							for (const link of links)
-								ids.push(
-									await writeLoreLink(
-										tx,
-										lorebookId,
-										created!.id,
-										link,
-										node.key,
-										line
-									)
+							// The rows THIS write made. A link the list states
+							// twice is found the second time (`written: false`),
+							// and is the run's once, not twice.
+							const made: number[] = []
+							for (const link of links) {
+								const wrote = await writeLoreLink(
+									tx,
+									lorebookId,
+									created!.id,
+									link,
+									node.key,
+									line
 								)
-							return { row: created!, linkIds: ids }
+								ids.push(wrote.id)
+								if (wrote.written) made.push(wrote.id)
+							}
+							return { row: created!, linkIds: ids, madeLinkIds: made }
 						}
 					)
+					// The run's book read (C4) predates this entry: a later
+					// read in the same run must see it.
+					lorebookReads.clear()
 					// Invisible to the run until now: a summarize pipeline wrote
 					// an entry and the run row said it had produced nothing.
 					record(node, "lore_entry", row.id, "created")
-					for (const id of linkIds)
+					for (const id of madeLinkIds)
 						record(node, "lore_link", id, "created")
+					// `linkIds` is one id per requested link, in order: a
+					// repeated link names the row it repeated.
 					return {
 						id: row.id,
 						lorebookId,
@@ -6808,7 +7472,14 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 							`${node.key} has no session to link lore in — the run was started without a session scope`
 						)
 
-					const noLore = await loreWriteRefusal(db, sessionId)
+					// The genre's declared writes, then the book owner's lore
+					// write mode: Off refuses the write (plan A22). Review
+					// changes writes: this outlet is reviewed only when the
+					// spec parks it (`settings.review`), which the mode cannot
+					// force.
+					const noLore =
+						(await loreWriteRefusal(db, sessionId)) ??
+						(await loreWritesOffRefusal(db, sessionId))
 					if (noLore) throw new HostScopeError(`${node.key}: ${noLore}`)
 
 					const [session] = await db
@@ -6818,15 +7489,16 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 						.limit(1)
 					if (!session?.lorebookId)
 						throw new HostScopeError(
-							`${node.key}: this session has no lorebook, so there is nothing to link. Attach one first.`
+							`${node.key}: this session has no lorebook, so there is nothing to link. Read one into this session first.`
 						)
 
 					const lorebookId = session.lorebookId
-					const line = await loreWriteLineOf(db, sessionId)
+					const line = await loreWriteLineOf(db, sessionId, lorebookId)
 					// Both ends under the book's own lock, for the reason the
 					// entry write takes it: an end resolved by name must not be
-					// renumbered or renamed out from under the insert.
-					const { fromId, linkId } = await db.transaction(
+					// renumbered or renamed out from under the insert — and the
+					// standing-row lookup must not race a second run's insert.
+					const { fromId, link } = await db.transaction(
 						async (tx) => {
 							await tx.execute(
 								sql`select pg_advisory_xact_lock(${lorebookId})`
@@ -6836,18 +7508,20 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 								lorebookId,
 								p.from,
 								node.key,
-								line.onLine
+								line.reading
 							)
 							return {
 								fromId: from,
-								linkId: await writeLoreLink(
+								link: await writeLoreLink(
 									tx,
 									lorebookId,
 									from,
 									{
 										to: p.to,
 										linkType: p.params?.linkType,
-										label: p.label
+										reverseLinkType: p.params?.reverseLinkType,
+										name: p.name,
+										description: p.description
 									},
 									node.key,
 									line
@@ -6855,8 +7529,23 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 							}
 						}
 					)
-					record(node, "lore_link", linkId, "created")
-					return { id: linkId, fromEntryId: fromId, lorebookId }
+					/**
+					 * Idempotent (places plan B2): a link the session already
+					 * reads answers with the standing row's id, and it is not
+					 * this run's — no artifact (an undo must never delete it)
+					 * and `written: false`, so the executor causes no
+					 * `lore-link-created`: nothing was linked. `fromEntryId` is
+					 * the row's own: on a mirror, the far end.
+					 */
+					if (!link.written)
+						return {
+							id: link.id,
+							fromEntryId: link.fromEntryId,
+							lorebookId,
+							written: false
+						}
+					record(node, "lore_link", link.id, "created")
+					return { id: link.id, fromEntryId: fromId, lorebookId }
 				}
 
 				case "core:outlet/graph-proposal": {
@@ -6904,6 +7593,57 @@ export function createHost(db: Db, scope: HostScope = {}): CoreHostServices {
 							`cannot perform is one a user could add to a pipeline and watch fail at run time.`
 					)
 			}
+		}
+	}
+
+	/**
+	 * No failed query's text leaves the host (`db/errors.ts`).
+	 *
+	 * The executor keeps only a thrown error's `message`, and that message
+	 * becomes the node's reason, the run's `haltReason`, the reply row's error
+	 * (`LiveRow` → `persistGenerationErrorRow`, shown to every member of the
+	 * session), a `reply-failed` notification and a plugin binding's view of
+	 * the failure. Since drizzle-orm 0.44 a failed query's message is its SQL
+	 * and every value it bound, so a query that fails under `read`, `call` or
+	 * `commit` leaves here as the plain sentence (a wrapper's own words kept),
+	 * and the whole error goes to the server log. Every other error passes
+	 * through as the same object, so no class a caller checks is lost.
+	 *
+	 * The generate road records the raw error on the live row BEFORE this
+	 * (`scope.live?.failedWith`), so the row's error write still reads the
+	 * class — `friendlyErrorFromUnknown` answers a failed query itself.
+	 */
+	const plain = (e: unknown, node: NodeRef): unknown => {
+		const safe = errorWithoutQueryText(e)
+		if (safe !== e)
+			console.error(
+				`[pipelines] ${node.key} (${node.definitionId}): a query failed; the run reads the plain sentence. It was:`,
+				e
+			)
+		return safe
+	}
+	const { read, call, commit } = host
+	host.read = async (table, query, node) => {
+		try {
+			return await read!.call(host, table, query, node)
+		} catch (e) {
+			throw plain(e, node)
+		}
+	}
+	host.call = async (payload, node, run, handles) => {
+		try {
+			// `handles` forwarded: dropping them here would cut every
+			// request off from its node's clock (`callTether`).
+			return await call!.call(host, payload, node, run, handles)
+		} catch (e) {
+			throw plain(e, node)
+		}
+	}
+	host.commit = async (payload, node) => {
+		try {
+			return await commit!.call(host, payload, node)
+		} catch (e) {
+			throw plain(e, node)
 		}
 	}
 	return host
@@ -7002,6 +7742,13 @@ function toMessage(r: any, shaping?: ChannelShaping | null) {
 		...(r.role === "user" && !r.personaId && r.userId != null
 			? { userId: r.userId }
 			: {}),
+		// 🚧 The turns a planner's row plans (Lair character turns): what the
+		// narrator strategy and `turn-plan@1` read. Only on such a row.
+		...(r.metadata?.turnPlan && typeof r.metadata.turnPlan === "object"
+			? { turnPlan: r.metadata.turnPlan }
+			: {}),
+		// A stopped row ends a standing turn plan (R34). Only when stopped.
+		...(r.generationOutcome === "stopped" ? { stopped: true } : {}),
 		createdAt: r.createdAt
 	}
 }
@@ -7015,13 +7762,16 @@ function toMessage(r: any, shaping?: ChannelShaping | null) {
  * computed during retrieval and arrives as a score.
  */
 /**
- * Bindings with the character or persona each one names.
+ * Bindings with the card each one names.
  *
- * `populateLorebookEntryBindings` reads `binding.character` / `binding.persona`
- * to resolve `{{char:1}}` into a name, and the binding rows carry only ids —
- * so without this the substitution silently does nothing, which is the failure
- * it is being wired in to fix. Two queries rather than a join per binding: a
- * lorebook has a handful of bindings and this runs once per read.
+ * `populateLorebookEntryBindings` reads `binding.character` to resolve
+ * `{{char:1}}` into a name, and the binding rows carry only ids — so without
+ * this the substitution silently does nothing, which is the failure it is being
+ * wired in to fix. Two queries rather than a join per binding: a lorebook has a
+ * handful of bindings and this runs once per read.
+ *
+ * A deleted card is nobody in a lorebook (plan A25): its member reads as their
+ * own name, as a member with no card does (`character` null).
  */
 async function hydrateBindings(db: Db, bindings: any[]): Promise<any[]> {
 	const characterIds = [
@@ -7032,28 +7782,27 @@ async function hydrateBindings(db: Db, bindings: any[]): Promise<any[]> {
 		? await db
 				.select()
 				.from(schema.characters)
-				.where(inArray(schema.characters.id, characterIds))
+				.where(
+					and(
+						inArray(schema.characters.id, characterIds),
+						eq(schema.characters.isDeleted, false)
+					)
+				)
 		: []
 
 	const byCharacter = new Map(characters.map((c) => [c.id, c]))
 
-	// `persona` is attached, and always null: a binding on a character the user
-	// voices is a character binding, so `character` above answers for both and
-	// this field exists only to keep a reader that asks for it from throwing.
 	return bindings.map((b) => ({
 		...b,
 		character: b.characterId
 			? (byCharacter.get(b.characterId) ?? null)
-			: null,
-		persona: null
+			: null
 	}))
 }
 
 function toLoreEntry(
 	row: any,
 	source: "worldLore" | "characterLore" | "history",
-	/** Whether this entry has a usable vector, not the vector itself. */
-	hasEmbedding: boolean,
 	/**
 	 * The character this entry's binding names, already resolved.
 	 *
@@ -7062,6 +7811,13 @@ function toLoreEntry(
 	 * every entry that is not a character's.
 	 */
 	bindingCharacterId: number | null = null,
+	/**
+	 * The name of the cast member an anchored entry is bound to, as the
+	 * session's reading has them — what Assemble's `characterLore` prints
+	 * beside the entry. Null for an entry of an unanchored type, or bound to
+	 * nobody.
+	 */
+	castMember: string | null = null,
 	/**
 	 * What this entry said when the run read it — `entrySourceHash` over the
 	 * **stored** title, keys and content (16 §7c).
@@ -7113,10 +7869,10 @@ function toLoreEntry(
 		position: row.position ?? 0,
 		lorebookBindingId: row.lorebookBindingId ?? null,
 		bindingCharacterId,
+		castMember,
 		/** History entries only; used for the recency signal. */
 		year: row.year ?? null,
 		month: row.month ?? null,
-		day: row.day ?? null,
-		hasEmbedding
+		day: row.day ?? null
 	}
 }

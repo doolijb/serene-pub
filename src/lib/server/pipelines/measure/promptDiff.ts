@@ -735,7 +735,16 @@ export const PRESETS: Record<string, Preset> = {
 	},
 	semantic: {
 		about: "the vector mechanism on: entries scored on meaning as well as words",
+		// The switch is `query-windows`' (the chain's first node, since
+		// 2026-09-29), set On rather than left Automatic — which searches only
+		// when an embedding model is set up, and this corpus stars none — and
+		// the ceiling is raised beside it so it cannot bite.
 		overrides: [
+			{
+				nodeKey: "semantic.arm.queries",
+				path: "searchByMeaning",
+				value: "on"
+			},
 			{ nodeKey: "semantic.arm.search", path: "maxEntries", value: 20 }
 		]
 	},

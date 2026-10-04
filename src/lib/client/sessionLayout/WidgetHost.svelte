@@ -1,11 +1,13 @@
 <script lang="ts" module>
 	/**
-	 * One key per MOUNT, not per widget id: the same widget can be on screen
-	 * twice (a rail and its flyout, or a margin rail rendered alongside the
-	 * inline one), and two mounts sharing a scope attribute would share one
-	 * style element whose lifetime neither of them owns.
+	 * The **skin scope**: one key per MOUNT, not per widget instance: the same
+	 * instance can be on screen twice (a rail and its flyout, or a margin rail
+	 * rendered alongside the inline one), and two mounts sharing a scope
+	 * attribute would share one style element whose lifetime neither of them
+	 * owns. The style PIN is per widget instance (`widget.id`); the scope a
+	 * skin is confined to is per mount (`data-skin-scope`).
 	 */
-	let nextInstance = 0
+	let nextScope = 0
 </script>
 
 <script lang="ts">
@@ -42,7 +44,7 @@
 	 *   • `vars` as custom properties on this wrapper — they inherit into the
 	 *     widget's subtree and nowhere else;
 	 *   • `css`, every selector re-written to sit under this wrapper's
-	 *     `data-widget-instance`, in a style element of our own in the
+	 *     `data-skin-scope`, in a style element of our own in the
 	 *     document head.
 	 *
 	 * The wrapper is `display: contents`, so it adds NO box and cannot shift a
@@ -59,7 +61,7 @@
 	// starts the one fetch, and `effectiveWidgetSkin` reads the same module
 	// state, so the derived below re-runs when the rows or the pins land.
 	widgetStylesStore()
-	const instanceKey = `ws${++nextInstance}`
+	const scopeKey = `ws${++nextScope}`
 	// `effectiveWidgetSkin`, not the pinned row: while this widget's style is
 	// being written the store hands back the UNSAVED draft instead, so the
 	// author sees their CSS as they type it. It is the same two values either
@@ -68,7 +70,7 @@
 	let skin = $derived(effectiveWidgetSkin(widget.id))
 	let skinVars = $derived(varsToStyle(skin.vars))
 	let skinCss = $derived(
-		skin.css ? scopeWidgetCss(skin.css, instanceKey) : ""
+		skin.css ? scopeWidgetCss(skin.css, scopeKey) : ""
 	)
 
 	/* The app's light/dark switch is `data-mode` on `<html>` (Layout.svelte
@@ -102,7 +104,7 @@
 		const css = skinCss
 		if (!css) return
 		const el = document.createElement("style")
-		el.dataset.widgetStyle = instanceKey
+		el.dataset.widgetStyle = scopeKey
 		// textContent, never innerHTML: the text cannot terminate its own
 		// element, whatever the sanitiser did or did not catch.
 		el.textContent = css
@@ -113,7 +115,7 @@
 
 <div
 	class="widget-style-scope"
-	data-widget-instance={instanceKey}
+	data-skin-scope={scopeKey}
 	data-mode={mode}
 	style={skinVars}
 >
@@ -123,7 +125,7 @@
      is open — the component renders nothing at all otherwise.
 
      Deliberately a SIBLING of the scope wrapper, not a child: inside it the
-     widget's own skin would paint the controls (a real `[data-widget-instance]
+     widget's own skin would paint the controls (a real `[data-skin-scope]
      div { outline: … }` skin did exactly that), and a skin that can restyle —
      or hide — the buttons you would use to take it off is a skin nobody can
      get rid of. `display: contents` on the wrapper means both land in the same

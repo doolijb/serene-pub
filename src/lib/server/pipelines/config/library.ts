@@ -36,7 +36,7 @@ import {
 	declarations,
 	humanizeTypeId
 } from "$lib/server/pipelines/config/panel"
-import { getVariable, type TemplateScope } from "@serene-pub/sdk"
+import { getGenre, getVariable, i18nText, type TemplateScope } from "@serene-pub/sdk"
 import {
 	contextPoolKeyFor,
 	poolKeyFor
@@ -68,6 +68,18 @@ export interface LibraryPipeline {
 	version: string | null
 	status: string | null
 	nodeCount: number
+	/**
+	 * The prompt pools (`<node type>#<slot>`) this pipeline's active version
+	 * declares a prompts slot for — the prompts it can offer. Admin › Prompts
+	 * filters by pipeline on this, so "this pipeline's prompts" means every
+	 * prompt valid for one of its steps, not only the ones picked today.
+	 */
+	promptPools: string[]
+	/**
+	 * The genres whose presets bind this pipeline to an event, by id and
+	 * name. Admin › Prompts' genre filter is pipeline → genre through here.
+	 */
+	genres: { id: string; name: string }[]
 }
 
 export interface LibraryPrompt {
@@ -280,6 +292,7 @@ export async function libraryView(db: Db): Promise<LibraryView> {
 			: []
 
 		let nodeCount = 0
+		const pools = new Set<string>()
 		if (version) {
 			nodeCount = (
 				await db
@@ -296,6 +309,8 @@ export async function libraryView(db: Db): Promise<LibraryView> {
 				const engines = acceptedEnginesOf(d)
 				if (d.control === "prompts-ref") {
 					promptSlots.add(d.slot)
+					if (d.nodeDefinitionId)
+						pools.add(promptPoolKeyFor(d.nodeDefinitionId, d.slot))
 					if (d.nodeDefinitionId)
 						promptLabels.set(
 							promptPoolKeyFor(d.nodeDefinitionId, d.slot),
@@ -337,9 +352,34 @@ export async function libraryView(db: Db): Promise<LibraryView> {
 			name: spec.name,
 			version: version?.semver ?? null,
 			status: version?.status ?? null,
-			nodeCount
+			nodeCount,
+			promptPools: [...pools].sort(),
+			genres: []
 		})
 	}
+
+	// Pipeline → genre, through the presets that bind it (a withdrawn
+	// preset's genre still counts: its rows are still on the instance).
+	const genresBySlug = new Map<string, Map<string, string>>()
+	for (const preset of (await db.select().from(schema.sessionPresets)) as any[]) {
+		const genreId = preset.genreId as string
+		const name = (() => {
+			const g = getGenre(genreId)
+			return (g && i18nText(g.name)) || genreId
+		})()
+		for (const b of Object.values(
+			(preset.bindings ?? {}) as Record<string, { spec?: string } | null>
+		)) {
+			if (!b?.spec) continue
+			const m = genresBySlug.get(b.spec) ?? new Map<string, string>()
+			m.set(genreId, name)
+			genresBySlug.set(b.spec, m)
+		}
+	}
+	for (const p of pipelines)
+		p.genres = [...(genresBySlug.get(p.slug) ?? new Map())]
+			.map(([id, name]) => ({ id, name }))
+			.sort((a, b) => a.name.localeCompare(b.name))
 
 	const specName = new Map<number, string>(
 		(specs as any[]).map((s) => [s.id, s.name ?? s.slug])

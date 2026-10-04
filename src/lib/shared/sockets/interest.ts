@@ -119,6 +119,24 @@ export const SCOPED_EVENTS: ReadonlyMap<string, InterestScopeExtractor> =
 		// was written (R81). Only the session page declares it, scoped.
 		["sessions:loreRanked", (payload) => payload?.sessionId],
 
+		// A summarize run's frames and result (`sessions/summarize.ts`), each
+		// carrying the run's `sessionId` top-level. Two tabs on two sessions
+		// never cross-feed: the modal declares its own session's scope.
+		// (`sessions:summarize:error` is a refusal, sent to the asking tab
+		// alone and never gated.)
+		["sessions:summarize:progress", (payload) => payload?.sessionId],
+		["sessions:summarize:complete", (payload) => payload?.sessionId],
+
+		// `{ sessionId, startedFromLayoutPresetId, startedFromUpdated, … }` —
+		// a layout this session started from moved (brief 6b of the layout
+		// plan). Pushed per person by `sessions/startedFromPush.ts`, and the
+		// reply when a page asks; the session page declares its own scope,
+		// so nothing is built for a tab on another session.
+		[
+			"sessions:panelLayout:startedFromUpdated",
+			(payload) => payload?.sessionId
+		],
+
 		// `{ sessionId, channel, venues }` — the session's action list (U5e):
 		// the reply to `sessions:actions` and the push every finished run
 		// makes (`pushSessionActions`). A session page declares its own
@@ -178,6 +196,8 @@ export const SCOPED_EVENTS: ReadonlyMap<string, InterestScopeExtractor> =
 		["lorebooks:checkCalendar", (payload) => payload?.lorebookId],
 		["lorebooks:setCalendar", (payload) => payload?.lorebookId],
 		["lorebooks:setClock", (payload) => payload?.lorebookId],
+		// The book's lines alone (plan B6): `lorebookId` top-level.
+		["lorebooks:lines", (payload) => payload?.lorebookId],
 		// Amendments (2026-09-23). Every verb — create, update, delete, fork,
 		// rename/delete a branch, place, unplace — answers with the SAME
 		// whole-book `amendments:list` (see `server/sockets/amendments.ts`),
@@ -191,7 +211,15 @@ export const SCOPED_EVENTS: ReadonlyMap<string, InterestScopeExtractor> =
 		["entries:create", (payload) => payload?.entry?.lorebookId],
 		["entries:update", (payload) => payload?.entry?.lorebookId],
 		["entries:iterateNext", (payload) => payload?.entry?.lorebookId],
+		// `{ success, lorebookId, typeId }` — the reorder reply (E-6). The
+		// entry channel declares its book's scope and filters on the type.
+		["entries:updatePositions", (payload) => payload?.lorebookId],
 		["bindingSuggestions:list", (payload) => payload?.lorebookId],
+		// 🚧 A lorebook's own stats (plan places-graph L4): the place editor's
+		// Stats section. Both replies are the place's whole read, `lorebookId`
+		// top-level; the refusals carry it too, and stay ungated.
+		["lorebookState:get", (payload) => payload?.lorebookId],
+		["lorebookState:set", (payload) => payload?.lorebookId],
 		// `{ lorebookId, sessionId, orphanedBindings }`.
 		["bindingCheck:result", (payload) => payload?.sessionId],
 
@@ -370,6 +398,9 @@ export const RESTRICTED_INTEREST_PREFIXES: readonly string[] = [
 	// The admin overhaul (2026-09-27): `sockets/adminOverview.ts`, one
 	// handler, admin-only. Read by `client/admin/adminHealth.svelte.ts`.
 	"admin:",
+	// Admin › Updates (2026-10-01): `sockets/updates.ts`, 5 handlers, all
+	// `requireAdmin`; the `updates:progress` push goes to admin sockets only.
+	"updates:",
 	// C6 P4 (2026-09-26): `sockets/components.ts`, every VERB admin-only — but
 	// NOT the `components:` prefix: `components:changed` is the push every
 	// session page (any user's) hears when a widget it draws was rebuilt.
@@ -448,6 +479,16 @@ export const GATED_EVENTS: ReadonlySet<string> = new Set<string>([
 	"backups:create",
 	"backups:delete",
 
+	// updates: — consumers: client/admin/sections/updates/Page.svelte (on the
+	// registry). Restricted interest too. `updates:progress` is pushed with
+	// `emitToInterested` while a download runs, to admin sockets only.
+	"updates:get",
+	"updates:download",
+	"updates:cancel",
+	"updates:discard",
+	"updates:apply",
+	"updates:progress",
+
 	// sessions: — slice 2 (2026-09-14). Consumers, all on the registry:
 	// routes/sessions/[id]/+page.svelte, routes/+page.svelte, the four
 	// routes/document-view/sessions/** pages, routes/admin/{sessions,pipelines,
@@ -490,9 +531,16 @@ export const GATED_EVENTS: ReadonlySet<string> = new Set<string>([
 	"sessions:get",
 	"sessions:getNarratorName",
 	"sessions:setFavorite",
+	// The L4 verbs (brief 6a: make a copy, share, save changes to, the
+	// new-session layout) — consumer: the session page's layout editor,
+	// which adopts each answer's refreshed list.
+	"sessions:layoutPreset:clone",
 	"sessions:layoutPreset:delete",
 	"sessions:layoutPreset:rename",
 	"sessions:layoutPreset:save",
+	"sessions:layoutPreset:setNewSessionLayout",
+	"sessions:layoutPreset:share",
+	"sessions:layoutPreset:update",
 	"sessions:layoutPreset:usage",
 	"sessions:list",
 	// The lore-ranked push (R81) — consumer: the session page, SCOPED, which
@@ -500,6 +548,13 @@ export const GATED_EVENTS: ReadonlySet<string> = new Set<string>([
 	"sessions:loreRanked",
 	"sessions:panelLayout:get",
 	"sessions:panelLayout:set",
+	// The copy model's one replace verb (Start from · Start again from ·
+	// Reset to genre default layout · Start from scratch) — consumer: the
+	// session page, which re-seeds its layout from the answer.
+	"sessions:panelLayout:startFrom",
+	// **Updated**, live (brief 6b) — consumer: the session page, SCOPED,
+	// which relabels its editor from it. Pushed, and answered when asked.
+	"sessions:panelLayout:startedFromUpdated",
 	"sessions:pipelines",
 	"sessions:presetStatus",
 	"sessions:presets",
@@ -517,6 +572,7 @@ export const GATED_EVENTS: ReadonlySet<string> = new Set<string>([
 	// client/components/sidebars/SessionsSidebar.svelte, on the registry.
 	"sessions:runStatus",
 	"sessions:saveDraft",
+	"sessions:setCastSeatEnabled",
 	"sessions:setEnvoySeat",
 	"sessions:setFunction",
 	"sessions:setLorebook",
@@ -525,7 +581,6 @@ export const GATED_EVENTS: ReadonlySet<string> = new Set<string>([
 	"sessions:summarize:complete",
 	"sessions:summarize:progress",
 	"sessions:surfaceIntent",
-	"sessions:toggleSessionCharacterActive",
 	"sessions:fireAction",
 	"sessions:fireNarratorResponse",
 	"sessions:typing",
@@ -710,6 +765,7 @@ export const GATED_EVENTS: ReadonlySet<string> = new Set<string>([
 	"lorebooks:get",
 	"lorebooks:import",
 	"lorebooks:importResolve",
+	"lorebooks:lines",
 	"lorebooks:list",
 	"lorebooks:resolveOrCreateBindingByName",
 	"lorebooks:setCalendar",
@@ -725,7 +781,7 @@ export const GATED_EVENTS: ReadonlySet<string> = new Set<string>([
 	// client/lorebooks/**, client/components/
 	// {modals,sessionMessages,media,sidebars,settingsTabs}/**, Layout.svelte,
 	// routes/sessions/[id]/+page.svelte, routes/document-view/sessions/[id]/
-	// +page.svelte, routes/import/+page.svelte, routes/admin/session-{presets,
+	// +page.svelte, settingsTabs/ImportSettingsTab.svelte, routes/admin/session-{presets,
 	// genres}/**. DEFERRED with the model-column work, so NOT listed: the
 	// vectorization queue/model events read by components/connections/
 	// EmbeddingQueuePanel.svelte, `ner:status` (NerLanePanel, ConnectionsSidebar),
@@ -757,7 +813,6 @@ export const GATED_EVENTS: ReadonlySet<string> = new Set<string>([
 	"narrativeGraph:listMergeLogs",
 	"narrativeGraph:mergeNode",
 	"narrativeGraph:undoMerge",
-	"narrativeGraph:updateNode",
 	"narrativeGraph:updateRelationship",
 	"scenes:compile:complete",
 	"scenes:compile:progress",
@@ -811,7 +866,7 @@ export const GATED_EVENTS: ReadonlySet<string> = new Set<string>([
 	"customThemes:getCss",
 	"customThemes:list",
 	"customThemes:save",
-	"customThemes:setInstanceTheme",
+	"customThemes:setPubTheme",
 	"invites:create",
 	"invites:list",
 	"invites:revoke",
@@ -852,6 +907,7 @@ export const GATED_EVENTS: ReadonlySet<string> = new Set<string>([
 	"systemSettings:updateContextDebuggingEnabled",
 	"systemSettings:updateDefaultLanguage",
 	"systemSettings:updateKoboldCppManagerEnabled",
+	"systemSettings:updateLoreWriteModeDefault",
 	"systemSettings:updateOllamaManagerEnabled",
 	"systemSettings:updateRequireTwoFactor",
 	"systemSettings:updateScriptsEnabled",
@@ -874,6 +930,7 @@ export const GATED_EVENTS: ReadonlySet<string> = new Set<string>([
 	"userSettings:updateDarkMode",
 	"userSettings:updateEasyCharacterCreation",
 	"userSettings:updateLanguage",
+	"userSettings:updateLoreWriteMode",
 	"userSettings:updateShowAllCharacterFields",
 	"userSettings:updateShowHomePageBanner",
 	"userSettings:updateTheme",
@@ -1072,7 +1129,15 @@ export const GATED_EVENTS: ReadonlySet<string> = new Set<string>([
 	// Bare, not scoped: the user room already scopes it. Pushed from anywhere
 	// through `utils/userPush.ts`, which honours this gate.
 	"notifications:list",
-	"notifications:changed"
+	"notifications:changed",
+
+	// `lorebookState:` — a lorebook's own stats, read and written with no
+	// session (plan places-graph L4, 2026-09-29), born gated and SCOPED by
+	// `lorebookId`. Consumer: client/lorebooks/places/placeStatsApi.ts (the
+	// place editor's Stats section), on the registry through `awaitReply`.
+	// The book's sessions hear a write as `state:changed`.
+	"lorebookState:get",
+	"lorebookState:set"
 ])
 
 export function isGatedEvent(event: string): boolean {

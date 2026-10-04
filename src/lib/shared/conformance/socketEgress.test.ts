@@ -480,6 +480,19 @@ const BARE = SITES.filter((s) => !s.redacting).map((s) => s.subject)
 const REDACTING_EMITTERS: Deliberate[] = [
 	{
 		subject:
+			"src/lib/server/sockets/attachments.ts :: replyToAsker → socket.emit(<computed>)",
+		reason:
+			"The composer tray's asker-only replies (`attachments:begin`, " +
+			"`attachments:chunk`, `attachments:readers`): a chunk ack is progress " +
+			"for one upload in one tab, so it answers the socket that asked and " +
+			"no other. The room is that socket and the subject is its own " +
+			"`socket.user`, so recipient and subject are the same person — " +
+			"redacted per socket, as `emitToUser` does per room. `readers` " +
+			"carries each reading call's `connection` pair, which reaches " +
+			"administrators alone."
+	},
+	{
+		subject:
 			"src/lib/server/sockets/utils/broadcastHelpers.ts :: emitToInterested → io.to(…).emit(<computed>)",
 		reason:
 			"The instance-wide push for a GATED event (`components:changed`): it " +
@@ -525,7 +538,20 @@ const REDACTING_EMITTERS: Deliberate[] = [
 	},
 	{
 		subject:
-			"src/lib/server/sockets/pipelines.ts :: registerPipelineHandlers.push → socket.io.to(…).emit(<computed>)",
+			"src/lib/server/sockets/index.ts :: answerAsker.send → socket.io.to(…).emit(<computed>)",
+		reason:
+			"A request's refusal, sent to the socket that asked (A24) — or, " +
+			"when that tab has gone, to its user's room. Either way the " +
+			"recipient is `socket.user`: the socket itself, or the room " +
+			"`user_<socket.user.id>`. The subject is that same `socket.user`, " +
+			"so recipient and subject are one person, and demotion force-" +
+			"disconnects, as for `emitToUser`. Every refusal takes this road: " +
+			"a handler's own `<event>:error`, the setup gate's and " +
+			"`register()`'s generic sentence."
+	},
+	{
+		subject:
+			"src/lib/server/sockets/utils/userPush.ts :: installUserPush.push → io.to(…).emit(<computed>)",
 		reason:
 			"Hole 1, closed. The review gate's push transport — shared with " +
 			"the cap pause (E1c), which parks the same way — bound once per " +
@@ -533,7 +559,9 @@ const REDACTING_EMITTERS: Deliberate[] = [
 			"rather than through the handler that started the run, and the " +
 			"socket it was installed from belongs to whoever connected last. " +
 			"The subject is therefore a fresh `users.isAdmin` read for the " +
-			"RECIPIENT, not `socket.user`. Affordable because a review and a " +
+			"RECIPIENT, not `socket.user`; that one subject covers both the " +
+			"room emit and the per-socket gated emit (notifications share " +
+			"this push). Affordable because a review and a " +
 			"cap pause are human-paced: one push per gated node or parked run, " +
 			"per person."
 	},
@@ -574,27 +602,12 @@ describe("§1 socket egress — every in-place projection is written down", () =
  * through `emitToUser` since 2026-09-15. A list that shrinks by a fix rather
  * than by an edit is the only kind of shrinking worth having.
  *
- * Four entries against four sanctioned emitters is a thin-looking margin, and it
+ * A short list beside the sanctioned emitters is a thin-looking margin, and it
  * is stated rather than hidden: this file's value is not the ratio, it is that
  * the population is CLOSED. Every site accounted for, and the next one fails on
  * the day it is written.
  */
 const UNREDACTED_EMITS: Deliberate[] = [
-	{
-		subject:
-			"src/lib/server/sockets/index.ts :: register → socket.io.to(…).emit(`${handler.event}:error`)",
-		reason:
-			"The generic catch-all in `register`, and its payload is one frozen " +
-			'sentence written on the line above it — `{ error: "An error ' +
-			'occurred while processing your request." }`. Nothing from the ' +
-			"handler, the params or the thrown error reaches it, which is the " +
-			"whole design: the specific, useful message was already emitted " +
-			"through `emitToUser` by whichever handler caught its own failure. " +
-			"⚠ `emitToUser` is a parameter of `register` and is in scope on " +
-			"this very line, so this raw emit buys nothing; routing it through " +
-			"the wrapper would delete this entry. Left alone deliberately — " +
-			"this lane guards, it does not fix."
-	},
 	{
 		subject:
 			'src/lib/server/sockets/sessions.ts :: sessionsRemoveGuestHandler.handler → socket.io.to(…).emit("sessions:removedAsGuest")',
@@ -668,7 +681,7 @@ describe("§3 socket egress — the scan is reading something", () => {
 		for (const file of [
 			"src/lib/server/sockets/index.ts",
 			"src/lib/server/sockets/activity.ts",
-			"src/lib/server/sockets/pipelines.ts",
+			"src/lib/server/sockets/utils/userPush.ts",
 			"src/lib/server/sockets/utils/broadcastHelpers.ts"
 		])
 			expect(

@@ -1,12 +1,16 @@
 /**
- * The preset half of the per-user layout row (PLAN 25 redesign, 2026-08-30).
+ * The session layout presets a session is offered, and the verbs a person
+ * manages their own with (PLAN 25 redesign; the copy model of
+ * `PLAN-layout-one-format-2026-09-28` brief 3).
  *
- * Proven here: a seeded genre default is listed and resolved; a user preset
- * saves, lists, and re-applies; an absent key on `set` leaves its column alone
- * (the property that stops the surface manager's debounced blob save from
- * clobbering a preset choice); another user's preset can neither be listed nor
- * pinned; and — the one that guards everyone's existing layouts — the `layout`
- * blob a session already has is returned untouched by all of it.
+ * Proven here: the seeded genre default is listed as the genre default layout
+ * and is what a first open copies; Save as new is listed to its author and is
+ * what the session now started from; a blob-only set leaves the provenance and
+ * the style pins alone (the property that stops the surface manager's
+ * debounced save from clobbering them); another user's private preset can be
+ * neither listed nor started from; and a layout a session already has is
+ * returned untouched. The copy semantics themselves live in
+ * `sessions.layoutCopy.int.test.ts`.
  */
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest"
 import { eq } from "drizzle-orm"
@@ -29,7 +33,12 @@ beforeAll(async () => {
 
 afterAll(() => {})
 
-const GENRE = "core:genre/chat"
+/**
+ * A core genre whose genre default layout is the empty floor: the Guide.
+ * (Chat's places the Author's note since 2026-10-03; these tests are about
+ * the preset verbs, not what a genre ships.)
+ */
+const GENRE = "core:genre/guide"
 
 function fakeSocket(userId: number) {
 	return { user: { id: userId }, io: { to: () => ({ emit: () => {} }) } } as any
@@ -56,7 +65,7 @@ async function scenario() {
 /** Seed the genre default exactly as boot does. */
 async function seedDefault() {
 	const { syncLayoutPresets } = await import("$lib/server/db/layoutPresets")
-	await syncLayoutPresets([{ genreId: GENRE }])
+	await syncLayoutPresets([GENRE])
 	const [row] = await testDb
 		.select()
 		.from(schema.sessionLayoutPresets)
@@ -68,9 +77,30 @@ async function seedDefault() {
 
 const handlers = () => import("./sessions")
 
+/**
+ * An arrangement, as the editor sends one to Save as new — its grid read
+ * through `loadChatLayout`, so every entry carries an anchor (a save is now
+ * checked with `validateSessionLayout`, which requires one).
+ */
+const ARRANGED = {
+	widgetGrid: {
+		version: 1,
+		cell: 44,
+		widgets: [
+			{
+				id: "messages",
+				zone: "middle",
+				order: 0,
+				size: { w: "grow", h: "grow" },
+				anchor: { top: true, bottom: true, left: true, right: true }
+			}
+		]
+	}
+}
+
 describe("sessions:panelLayout — presets", () => {
 	test(
-		"the seeded genre default is listed and is what an unpinned session resolves to",
+		"the seeded genre default is listed as the genre default layout, and the first open copies it",
 		async () => {
 			const def = await seedDefault()
 			const { sessionsPanelLayoutGetHandler } = await handlers()
@@ -82,12 +112,12 @@ describe("sessions:panelLayout — presets", () => {
 			)
 			expect(res.presets.map((p) => p.id)).toContain(def.id)
 			const listed = res.presets.find((p) => p.id === def.id)!
-			expect(listed.isDefault).toBe(true)
+			expect(listed.isGenreDefault).toBe(true)
+			expect(listed.mine).toBe(false)
 			expect(listed.name).toBe("Default")
-			expect(res.layoutPresetId).toBeNull()
-			// The shipped default is "no overrides" — so an untouched session
-			// resolves to an empty base and renders exactly as it always did.
-			expect(res.presetLayout).toEqual({})
+			expect(res.startedFromLayoutPresetId).toBe(def.id)
+			// The Guide's genre default is empty: the copy draws the floor, exactly
+			// as an untouched session always did.
 			expect(res.layout).toEqual({})
 			expect(res.layoutSettings).toEqual({})
 		},
@@ -95,57 +125,35 @@ describe("sessions:panelLayout — presets", () => {
 	)
 
 	test(
-		"a user preset saves, is listed to its author, and re-applies",
+		"Save as new is listed to its author and is what the session now started from",
 		async () => {
 			await seedDefault()
-			const {
-				sessionsLayoutPresetSaveHandler,
-				sessionsPanelLayoutSetHandler,
-				sessionsPanelLayoutGetHandler
-			} = await handlers()
+			const { sessionsLayoutPresetSaveHandler, sessionsPanelLayoutGetHandler } =
+				await handlers()
 			const s = await scenario()
-			const mine = { zoneLayout: { version: 1, zones: {} }, mine: true }
-
 			const saved = await sessionsLayoutPresetSaveHandler.handler(
 				fakeSocket(s.owner.id),
 				{
 					sessionId: s.session.id,
 					name: "  My Layout  ",
-					layout: mine
+					layout: ARRANGED
 				} as any,
 				noopEmit
 			)
 			expect(saved.ok).toBe(true)
 			expect(saved.preset!.name).toBe("My Layout")
-			expect(saved.preset!.isDefault).toBe(false)
+			expect(saved.preset!.mine).toBe(true)
+			expect(saved.preset!.isGenreDefault).toBe(false)
 			expect(saved.presets.map((p) => p.id)).toContain(saved.preset!.id)
+			expect(saved.startedFromLayoutPresetId).toBe(saved.preset!.id)
 
-			// It is a DEFINITION — saving does not switch you onto it.
-			const beforeApply = await sessionsPanelLayoutGetHandler.handler(
-				fakeSocket(s.owner.id),
-				{ sessionId: s.session.id } as any,
-				noopEmit
-			)
-			expect(beforeApply.layoutPresetId).toBeNull()
-
-			// Applying is a separate write, and then it resolves.
-			const set = await sessionsPanelLayoutSetHandler.handler(
-				fakeSocket(s.owner.id),
-				{
-					sessionId: s.session.id,
-					layout: {},
-					layoutPresetId: saved.preset!.id
-				} as any,
-				noopEmit
-			)
-			expect(set.ok).toBe(true)
 			const got = await sessionsPanelLayoutGetHandler.handler(
 				fakeSocket(s.owner.id),
 				{ sessionId: s.session.id } as any,
 				noopEmit
 			)
-			expect(got.layoutPresetId).toBe(saved.preset!.id)
-			expect(got.presetLayout).toEqual(mine)
+			expect(got.startedFromLayoutPresetId).toBe(saved.preset!.id)
+			expect(saved.preset!.layout).toEqual(ARRANGED)
 		},
 		60_000
 	)
@@ -161,7 +169,7 @@ describe("sessions:panelLayout — presets", () => {
 				{
 					sessionId: s.session.id,
 					name: "Reseed survivor",
-					layout: { survivor: true }
+					layout: ARRANGED
 				} as any,
 				noopEmit
 			)
@@ -178,7 +186,7 @@ describe("sessions:panelLayout — presets", () => {
 			const { syncLayoutPresets } = await import(
 				"$lib/server/db/layoutPresets"
 			)
-			await syncLayoutPresets([{ genreId: GENRE }])
+			await syncLayoutPresets([GENRE])
 			const [after] = await testDb
 				.select()
 				.from(schema.sessionLayoutPresets)
@@ -189,7 +197,7 @@ describe("sessions:panelLayout — presets", () => {
 	)
 
 	test(
-		"a blob-only set leaves layoutPresetId and layoutSettings alone",
+		"a blob-only set leaves the provenance and layoutSettings alone",
 		async () => {
 			await seedDefault()
 			const {
@@ -203,7 +211,7 @@ describe("sessions:panelLayout — presets", () => {
 				{
 					sessionId: s.session.id,
 					name: "Sticky",
-					layout: { sticky: true }
+					layout: ARRANGED
 				} as any,
 				noopEmit
 			)
@@ -211,9 +219,8 @@ describe("sessions:panelLayout — presets", () => {
 				fakeSocket(s.owner.id),
 				{
 					sessionId: s.session.id,
-					layout: {},
-					layoutPresetId: saved.preset!.id,
-					layoutSettings: { "scene-portraits": { bg: "x" } }
+					layout: ARRANGED,
+					layoutSettings: { widgetStyles: { messages: { id: 1, slug: "x" } } }
 				} as any,
 				noopEmit
 			)
@@ -231,9 +238,9 @@ describe("sessions:panelLayout — presets", () => {
 				{ sessionId: s.session.id } as any,
 				noopEmit
 			)
-			expect(got.layoutPresetId).toBe(saved.preset!.id)
+			expect(got.startedFromLayoutPresetId).toBe(saved.preset!.id)
 			expect(got.layoutSettings).toEqual({
-				"scene-portraits": { bg: "x" }
+				widgetStyles: { messages: { id: 1, slug: "x" } }
 			})
 			expect(got.layout).toEqual({ active: [], tierSizeOverrides: {} })
 		},
@@ -241,60 +248,12 @@ describe("sessions:panelLayout — presets", () => {
 	)
 
 	test(
-		"an explicit null clears the selection back to the genre default",
+		"another user's private preset is neither listed nor startable",
 		async () => {
 			const def = await seedDefault()
 			const {
 				sessionsLayoutPresetSaveHandler,
-				sessionsPanelLayoutSetHandler,
-				sessionsPanelLayoutGetHandler
-			} = await handlers()
-			const s = await scenario()
-			const saved = await sessionsLayoutPresetSaveHandler.handler(
-				fakeSocket(s.owner.id),
-				{
-					sessionId: s.session.id,
-					name: "Temp",
-					layout: { temp: true }
-				} as any,
-				noopEmit
-			)
-			await sessionsPanelLayoutSetHandler.handler(
-				fakeSocket(s.owner.id),
-				{
-					sessionId: s.session.id,
-					layout: {},
-					layoutPresetId: saved.preset!.id
-				} as any,
-				noopEmit
-			)
-			await sessionsPanelLayoutSetHandler.handler(
-				fakeSocket(s.owner.id),
-				{
-					sessionId: s.session.id,
-					layout: {},
-					layoutPresetId: null
-				} as any,
-				noopEmit
-			)
-			const got = await sessionsPanelLayoutGetHandler.handler(
-				fakeSocket(s.owner.id),
-				{ sessionId: s.session.id } as any,
-				noopEmit
-			)
-			expect(got.layoutPresetId).toBeNull()
-			expect(got.presetLayout).toEqual(def.layout)
-		},
-		60_000
-	)
-
-	test(
-		"another user's preset is neither listed nor pinnable",
-		async () => {
-			await seedDefault()
-			const {
-				sessionsLayoutPresetSaveHandler,
-				sessionsPanelLayoutSetHandler,
+				sessionsPanelLayoutStartFromHandler,
 				sessionsPanelLayoutGetHandler
 			} = await handlers()
 			const s = await scenario()
@@ -303,7 +262,7 @@ describe("sessions:panelLayout — presets", () => {
 				{
 					sessionId: s.session.id,
 					name: "Owner only",
-					layout: { secret: true }
+					layout: ARRANGED
 				} as any,
 				noopEmit
 			)
@@ -316,24 +275,16 @@ describe("sessions:panelLayout — presets", () => {
 			expect(guestGot.presets.map((p) => p.id)).not.toContain(
 				saved.preset!.id
 			)
-			const set = await sessionsPanelLayoutSetHandler.handler(
+			const res = await sessionsPanelLayoutStartFromHandler.handler(
 				fakeSocket(s.guest.id),
-				{
-					sessionId: s.session.id,
-					layout: {},
-					layoutPresetId: saved.preset!.id
-				} as any,
+				{ sessionId: s.session.id, layoutPresetId: saved.preset!.id } as any,
 				noopEmit
 			)
-			expect(set.ok).toBe(false)
-			expect(set.error).toBe("Unknown layout preset")
-			// And nothing was stored — not even the blob.
-			const guestAfter = await sessionsPanelLayoutGetHandler.handler(
-				fakeSocket(s.guest.id),
-				{ sessionId: s.session.id } as any,
-				noopEmit
-			)
-			expect(guestAfter.layoutPresetId).toBeNull()
+			expect(res.ok).toBe(false)
+			expect(res.error).toBe("That layout isn't available.")
+			// And nothing moved: the guest is still on their first-open copy.
+			expect(res.startedFromLayoutPresetId).toBe(def.id)
+			expect(res.layout).toEqual({})
 		},
 		60_000
 	)
@@ -345,29 +296,25 @@ describe("sessions:panelLayout — presets", () => {
 			const { syncLayoutPresets } = await import(
 				"$lib/server/db/layoutPresets"
 			)
-			await syncLayoutPresets([{ genreId: "other:genre/thing" }])
+			await syncLayoutPresets(["core:genre/other-thing"])
 			const [foreign] = await testDb
 				.select()
 				.from(schema.sessionLayoutPresets)
 				.where(
 					eq(
 						schema.sessionLayoutPresets.seedKey,
-						layoutPresetSeedKey("other:genre/thing")
+						layoutPresetSeedKey("core:genre/other-thing")
 					)
 				)
-			const { sessionsPanelLayoutSetHandler } = await handlers()
+			const { sessionsPanelLayoutStartFromHandler } = await handlers()
 			const s = await scenario()
-			const set = await sessionsPanelLayoutSetHandler.handler(
+			const res = await sessionsPanelLayoutStartFromHandler.handler(
 				fakeSocket(s.owner.id),
-				{
-					sessionId: s.session.id,
-					layout: {},
-					layoutPresetId: foreign.id
-				} as any,
+				{ sessionId: s.session.id, layoutPresetId: foreign.id } as any,
 				noopEmit
 			)
-			expect(set.ok).toBe(false)
-			expect(set.error).toBe("Unknown layout preset")
+			expect(res.ok).toBe(false)
+			expect(res.error).toBe("That layout isn't available.")
 		},
 		60_000
 	)
@@ -389,7 +336,8 @@ describe("sessions:panelLayout — presets", () => {
 				noopEmit
 			)
 			expect(got.presets).toEqual([])
-			expect(got.presetLayout).toEqual({})
+			expect(got.layout).toEqual({})
+			expect(got.startedFromLayoutPresetId).toBeNull()
 			const saved = await sessionsLayoutPresetSaveHandler.handler(
 				fakeSocket(stranger.id),
 				{
@@ -418,14 +366,14 @@ describe("sessions:panelLayout — presets", () => {
 					noopEmit
 				)
 				expect(res.ok).toBe(false)
-				expect(res.error).toBe("A preset needs a name")
+				expect(res.error).toBe("A layout needs a name.")
 			}
 		},
 		60_000
 	)
 
 	test(
-		"an existing session's layout blob is returned untouched by all of this",
+		"a layout a session already has is returned untouched — the first-open copy never runs over it",
 		async () => {
 			await seedDefault()
 			const {
@@ -433,9 +381,8 @@ describe("sessions:panelLayout — presets", () => {
 				sessionsPanelLayoutGetHandler
 			} = await handlers()
 			const s = await scenario()
-			// A layout saved before presets existed — the exact blob shape the
-			// surface manager writes today.
-			const legacy = {
+			// The exact blob shape the surface manager writes.
+			const arranged = {
 				active: [
 					{
 						id: "scene-portraits",
@@ -451,7 +398,7 @@ describe("sessions:panelLayout — presets", () => {
 			}
 			await sessionsPanelLayoutSetHandler.handler(
 				fakeSocket(s.owner.id),
-				{ sessionId: s.session.id, layout: legacy } as any,
+				{ sessionId: s.session.id, layout: arranged } as any,
 				noopEmit
 			)
 			const got = await sessionsPanelLayoutGetHandler.handler(
@@ -459,10 +406,8 @@ describe("sessions:panelLayout — presets", () => {
 				{ sessionId: s.session.id } as any,
 				noopEmit
 			)
-			expect(got.layout).toEqual(legacy)
-			// Nothing from the preset layer leaked into it.
-			expect(got.presetLayout).toEqual({})
-			expect(got.layoutPresetId).toBeNull()
+			expect(got.layout).toEqual(arranged)
+			expect(got.startedFromLayoutPresetId).toBeNull()
 		},
 		60_000
 	)
@@ -485,7 +430,7 @@ describe("sessions:layoutPreset — rename, delete, usage", () => {
 		sessionId: number,
 		userId: number,
 		name: string,
-		layout: Record<string, unknown> = { saved: true }
+		layout: Record<string, unknown> = ARRANGED
 	) {
 		const { sessionsLayoutPresetSaveHandler } = await handlers()
 		const res = await sessionsLayoutPresetSaveHandler.handler(
@@ -524,7 +469,7 @@ describe("sessions:layoutPreset — rename, delete, usage", () => {
 				.where(eq(schema.sessionLayoutPresets.id, mine.id))
 			expect(row.name).toBe("After")
 			// Renaming is a name change and nothing else.
-			expect(row.layout).toEqual({ saved: true })
+			expect(row.layout).toEqual(ARRANGED)
 			expect(row.authorUserId).toBe(s.owner.id)
 			expect(row.seedKey).toBeNull()
 		},
@@ -559,7 +504,7 @@ describe("sessions:layoutPreset — rename, delete, usage", () => {
 			expect(missing.ok).toBe(false)
 			// Identical, deliberately: "yours doesn't exist" and "that one is
 			// somebody else's" must be indistinguishable.
-			expect(foreign.error).toBe("Unknown layout preset")
+			expect(foreign.error).toBe("That layout isn't available.")
 			expect(missing.error).toBe(foreign.error)
 			expect(foreign.preset).toBeUndefined()
 			expect(foreign.presets).toEqual([])
@@ -612,7 +557,7 @@ describe("sessions:layoutPreset — rename, delete, usage", () => {
 					noopEmit
 				)
 				expect(res.ok).toBe(false)
-				expect(res.error).toBe("A preset needs a name")
+				expect(res.error).toBe("A layout needs a name.")
 			}
 			const [row] = await testDb
 				.select()
@@ -624,27 +569,22 @@ describe("sessions:layoutPreset — rename, delete, usage", () => {
 	)
 
 	test(
-		"deleting your own preset removes the row and drops the sessions on it back to the default",
+		"deleting your own preset removes the row; a session that started from it keeps its layout",
 		async () => {
 			await seedDefault()
 			const {
 				sessionsLayoutPresetDeleteHandler,
-				sessionsPanelLayoutSetHandler,
 				sessionsPanelLayoutGetHandler
 			} = await handlers()
 			const s = await scenario()
-			const mine = await savePreset(s.session.id, s.owner.id, "Doomed", {
-				doomed: true
-			})
-			await sessionsPanelLayoutSetHandler.handler(
+			// Save as new: the session now started from it.
+			const mine = await savePreset(s.session.id, s.owner.id, "Doomed")
+			const before = await sessionsPanelLayoutGetHandler.handler(
 				fakeSocket(s.owner.id),
-				{
-					sessionId: s.session.id,
-					layout: {},
-					layoutPresetId: mine.id
-				} as any,
+				{ sessionId: s.session.id } as any,
 				noopEmit
 			)
+			expect(before.startedFromLayoutPresetId).toBe(mine.id)
 
 			const res = await sessionsLayoutPresetDeleteHandler.handler(
 				fakeSocket(s.owner.id),
@@ -664,22 +604,14 @@ describe("sessions:layoutPreset — rename, delete, usage", () => {
 				.where(eq(schema.sessionLayoutPresets.id, mine.id))
 			expect(rows).toEqual([])
 
-			// The session that was on it is intact and back on the genre
-			// default — `ON DELETE SET NULL` doing exactly what it promises.
-			const [layoutRow] = await testDb
-				.select()
-				.from(schema.sessionPanelLayouts)
-				.where(
-					eq(schema.sessionPanelLayouts.sessionId, s.session.id)
-				)
-			expect(layoutRow.startedFromLayoutPresetId).toBeNull()
+			// The session's layout is its own copy: only the label went.
 			const got = await sessionsPanelLayoutGetHandler.handler(
 				fakeSocket(s.owner.id),
 				{ sessionId: s.session.id } as any,
 				noopEmit
 			)
-			expect(got.layoutPresetId).toBeNull()
-			expect(got.presetLayout).toEqual({})
+			expect(got.startedFromLayoutPresetId).toBeNull()
+			expect(got.layout).toEqual(before.layout)
 		},
 		60_000
 	)
@@ -697,7 +629,7 @@ describe("sessions:layoutPreset — rename, delete, usage", () => {
 				noopEmit
 			)
 			expect(res.ok).toBe(false)
-			expect(res.error).toBe("Unknown layout preset")
+			expect(res.error).toBe("That layout isn't available.")
 			expect(res.affectedSessions).toBe(0)
 			const rows = await testDb
 				.select()
@@ -731,15 +663,24 @@ describe("sessions:layoutPreset — rename, delete, usage", () => {
 	)
 
 	test(
-		"usage counts the sessions on a preset, and is the author's to ask",
+		"usage counts the sessions that started from a preset and the people using it for new sessions, and is the author's to ask",
 		async () => {
 			await seedDefault()
 			const {
 				sessionsLayoutPresetUsageHandler,
-				sessionsPanelLayoutSetHandler
+				sessionsPanelLayoutStartFromHandler
 			} = await handlers()
 			const s = await scenario()
-			const mine = await savePreset(s.session.id, s.owner.id, "Counted")
+			// Written straight to the table, so no session started from it yet.
+			const { saveUserLayoutPreset } = await import(
+				"$lib/server/db/layoutPresets"
+			)
+			const mine = await saveUserLayoutPreset({
+				genreId: GENRE,
+				userId: s.owner.id,
+				name: "Counted",
+				layout: ARRANGED
+			})
 
 			// Nobody on it yet.
 			const before = await sessionsLayoutPresetUsageHandler.handler(
@@ -749,9 +690,10 @@ describe("sessions:layoutPreset — rename, delete, usage", () => {
 			)
 			expect(before.ok).toBe(true)
 			expect(before.sessions).toBe(0)
+			expect(before.newSessionLayoutUsers).toBe(0)
 
-			// A second session of the same genre, same owner, on the same
-			// preset: the count is sessions, not saves.
+			// A second session of the same genre, same owner, both started
+			// from it: the count is sessions, not saves.
 			const [second] = await testDb
 				.insert(schema.sessions)
 				.values({
@@ -761,16 +703,22 @@ describe("sessions:layoutPreset — rename, delete, usage", () => {
 				})
 				.returning()
 			for (const sessionId of [s.session.id, second.id]) {
-				await sessionsPanelLayoutSetHandler.handler(
+				const res = await sessionsPanelLayoutStartFromHandler.handler(
 					fakeSocket(s.owner.id),
-					{
-						sessionId,
-						layout: {},
-						layoutPresetId: mine.id
-					} as any,
+					{ sessionId, layoutPresetId: mine.id } as any,
 					noopEmit
 				)
+				expect(res.ok).toBe(true)
 			}
+			// …and one person uses it for their new sessions.
+			const { setUserLayoutDefault } = await import(
+				"$lib/server/db/userLayoutDefaults"
+			)
+			await setUserLayoutDefault({
+				userId: s.owner.id,
+				genreId: GENRE,
+				presetId: mine.id
+			})
 			const after = await sessionsLayoutPresetUsageHandler.handler(
 				fakeSocket(s.owner.id),
 				{ id: mine.id } as any,
@@ -778,6 +726,7 @@ describe("sessions:layoutPreset — rename, delete, usage", () => {
 			)
 			expect(after.ok).toBe(true)
 			expect(after.sessions).toBe(2)
+			expect(after.newSessionLayoutUsers).toBe(1)
 
 			// And it is not a peephole into someone else's shelf.
 			const guestAsk = await sessionsLayoutPresetUsageHandler.handler(
@@ -786,8 +735,107 @@ describe("sessions:layoutPreset — rename, delete, usage", () => {
 				noopEmit
 			)
 			expect(guestAsk.ok).toBe(false)
-			expect(guestAsk.error).toBe("Unknown layout preset")
+			expect(guestAsk.error).toBe("That layout isn't available.")
 			expect(guestAsk.sessions).toBe(0)
+		},
+		60_000
+	)
+})
+
+describe("a plugin genre's own layout (layout plan brief 1)", () => {
+	/**
+	 * The gap brief 1 closes: a plugin that owns its genre and ships its
+	 * `default` layout used to draw nothing of it — its row stored `{}`, and
+	 * the genre-default lookup matched only core's key, under which core had
+	 * seeded an empty row for every plugin genre. Now the row holds the
+	 * session layout the manifest declares, core seeds nothing for the genre
+	 * (and prunes what it once did), and the genre default layout is the
+	 * owner's row — so a session starts from the plugin's layout.
+	 */
+	const PLUGIN_ID = "acme/board"
+	const PLUGIN_GENRE = "acme.board:genre/board"
+	const BOARD_LAYOUT = {
+		widgetGrid: {
+			version: 1,
+			cell: 44,
+			widgets: [
+				{
+					id: "acme.board:board",
+					zone: "middle",
+					order: 0,
+					size: { w: "grow", h: "grow" },
+					anchor: { top: true, bottom: true, left: true, right: true }
+				}
+			]
+		},
+		widgetSettings: { "acme.board:board": { zoom: "fit" } }
+	}
+
+	test(
+		"is what a session of that genre starts from, not an empty core row",
+		async () => {
+			// What an older reconciler left behind: an empty `origin: core`
+			// default under the genre's core key.
+			await testDb.insert(schema.sessionLayoutPresets).values({
+				seedKey: layoutPresetSeedKey(PLUGIN_GENRE),
+				genreId: PLUGIN_GENRE,
+				origin: "core",
+				authorUserId: null,
+				slug: "default",
+				visibility: "shared",
+				name: "Default",
+				layout: {}
+			})
+			await testDb.insert(schema.plugins).values({
+				pluginId: PLUGIN_ID,
+				name: "Board",
+				version: "1.0.0",
+				bundleSource: "// none",
+				bundleHash: "hash-board",
+				enabled: true,
+				manifest: {
+					layouts: [
+						{
+							genreId: PLUGIN_GENRE,
+							slug: "default",
+							name: "Board",
+							preset: BOARD_LAYOUT
+						}
+					]
+				}
+			})
+			// Boot's two reconcilers, in boot's order.
+			const { syncPluginLayouts } = await import("$lib/server/db/pluginLayouts")
+			await syncPluginLayouts(testDb as never)
+			const { syncLayoutPresets } = await import("$lib/server/db/layoutPresets")
+			await syncLayoutPresets([GENRE, PLUGIN_GENRE])
+
+			const { createTestUser } = await import("$lib/server/utils/testDb")
+			const owner = await createTestUser(testDb, `lp-board-${n++}`)
+			const [session] = await testDb
+				.insert(schema.sessions)
+				.values({ userId: owner.id, isGroup: false, genreId: PLUGIN_GENRE })
+				.returning()
+			const { sessionsPanelLayoutGetHandler } = await handlers()
+			const res = await sessionsPanelLayoutGetHandler.handler(
+				fakeSocket(owner.id),
+				{ sessionId: session.id } as any,
+				noopEmit
+			)
+			// Listed once, as the plugin's; core's empty row is gone.
+			expect(res.presets.map((p) => [p.name, p.layout])).toEqual([
+				["Board", BOARD_LAYOUT]
+			])
+			// …and it is what the first open copied: the arrangement into the
+			// session's row, the rest into its own homes.
+			expect(res.startedFromLayoutPresetId).toBe(res.presets[0].id)
+			expect(res.presets[0].isGenreDefault).toBe(true)
+			expect(res.layout).toEqual({ widgetGrid: BOARD_LAYOUT.widgetGrid })
+			const coreRows = await testDb
+				.select()
+				.from(schema.sessionLayoutPresets)
+				.where(eq(schema.sessionLayoutPresets.genreId, PLUGIN_GENRE))
+			expect(coreRows.map((r) => r.origin)).toEqual(["plugin"])
 		},
 		60_000
 	)

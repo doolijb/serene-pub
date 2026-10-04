@@ -17,10 +17,11 @@
  * rendered, validated and stored a value for eight spec versions without ever
  * reaching the scan (bug 12). This starts at a stored row.
  *
- * **The default.** `respond@1.18.0` ships the mechanism inert. That is the property
- * the parity corpus rests on, and asserting it *before* turning the mechanism on is
- * what stops the rest of this file passing vacuously against a node that does
- * nothing.
+ * **The default.** `respond@1.18.0` shipped the mechanism inert; since retrieval
+ * went on by default (R5, lorebooks A23(b), 2026-10-02) it ships at 5 entries and
+ * 20 messages, and 0 is off. Asserting off *before* turning the mechanism on is
+ * still what stops the rest of this file passing vacuously against a node that
+ * does nothing, so the file turns it off first.
  */
 
 import { describe, it, expect, beforeAll, vi } from "vitest"
@@ -153,11 +154,11 @@ beforeAll(async () => {
 	 * ⚠ **The transcript half only has anything to find on a long session, and
 	 * that is the design rather than a fixture inconvenience.**
 	 *
-	 * The prompt already carries the most recent messages verbatim — the same
-	 * hundred `core:query/session-history@1` reads — so retrieving one of those
-	 * would spend the budget twice on one span. Retrieval starts where the
-	 * verbatim window ends. These 110 filler lines are what pushes the message
-	 * above out of that window and into the searchable corpus.
+	 * The prompt already carries the most recent messages verbatim, so
+	 * retrieving one of those would spend the budget twice on one span.
+	 * Retrieval starts where the lore scans' read window ends (the newest
+	 * hundred, `LORE_MESSAGE_WINDOW`). These 110 filler lines are what pushes
+	 * the message above out of that window and into the searchable corpus.
 	 *
 	 * They go straight into the legacy table with no mirror on purpose, and the
 	 * pass ignores them for it: the annotation's parent is `messages`, so an
@@ -238,9 +239,9 @@ const turn = async () => {
 /**
  * The config a run on this session actually resolves to.
  *
- * ⚠ Not the `pipeline-default:` row. `migrateContextTemplates` duplicates the
- * shipped config into a mutable "Default (customized)" and selects that at
- * instance scope, so a fixture writing to the immutable original would change
+ * ⚠ Not the `pipeline-default:` row. A run resolves through the session's
+ * selection chain, which may name a mutable configuration rather than the
+ * shipped one, so a fixture writing to the immutable original could change
  * nothing and prove nothing.
  */
 const selectedConfigId = async () => {
@@ -275,8 +276,8 @@ const annotationsOf = async (entryId: number) =>
 		.from(schema.entryAnnotations)
 		.where(eq(schema.entryAnnotations.entryId, entryId))
 
-describe("the mechanism ships inert", () => {
-	it("declares 0 for both caps in the projected registry row", async () => {
+describe("the mechanism ships on, and 0 turns it off", () => {
+	it("declares 5 and 20 for the two caps in the projected registry row", async () => {
 		// Read from the row the panel renders and a config back-fills from, not
 		// from a literal: a declaration corrected in the contracts package but
 		// never re-projected would still ship the old number.
@@ -294,17 +295,22 @@ describe("the mechanism ships inert", () => {
 			)
 			.limit(1)
 		const schemaOf = (row?.slots as any)?.params?.schema
-		expect(schemaOf?.maxEntries?.default).toBe(0)
-		expect(schemaOf?.maxMessages?.default).toBe(0)
+		// On by default (R5, 2026-10-02); 0 was the shipped value before.
+		expect(schemaOf?.maxEntries?.default).toBe(5)
+		expect(schemaOf?.maxMessages?.default).toBe(20)
 	})
 
 	it("retrieves nothing and writes nothing while it is off", async () => {
+		// Off is both caps at 0 — stored, since each differs from its default.
+		// The rest of the file turns one cap back on at a time.
+		await setParam("maxEntries", 0)
+		await setParam("maxMessages", 0)
 		const off = await turn()
 		expect(off.hits).toEqual([])
 		expect(off.messages).toEqual([])
 		expect(off.diagnostics.reason).toMatch(/off/)
-		// ⚠ Not just "found nothing" — an install that has not asked for this
-		// should not be paying for the index either.
+		// ⚠ Not just "found nothing" — an install that turned it off should
+		// not be paying for the index either.
 		expect(await annotationsOf(ashguardId)).toEqual([])
 	})
 })
@@ -675,7 +681,9 @@ describe("the transcript half", () => {
 	it("wired but unplaced, the receipt names the band and the fix", async () => {
 		const wired = await wiredTurn(SHIPPED_CONTEXT_TEMPLATE)
 		expect(wired.decisions.some((d) => d.included)).toBe(true)
-		expect(wired.rendered).not.toContain("third milestone")
+		// The band's own line form: the budget-sized transcript may carry the
+		// same message verbatim, which is the history band, not this one.
+		expect(wired.rendered).not.toContain("Earlier (turn 1) —")
 		expect(wired.notes).toContain(
 			"band 'recalledLines' was ranked and included but the template does " +
 				"not render it — place it with {{{recalledLines}}}"

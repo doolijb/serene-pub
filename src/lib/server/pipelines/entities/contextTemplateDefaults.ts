@@ -30,8 +30,12 @@
  * longer reconstruct 0.5's template from this one for that block, and records
  * the exception rather than being weakened to accept anything.
  *
- * The two sit with **no blank line between them**, unlike every other pair of
- * blocks here, and that is deliberate. Handlebars emits the newline after a
+ * `characterLore` — the admitted lore of cast members, each entry naming
+ * whose it is — sits directly under the cards it is about, placed here by the
+ * template like every other value; nothing folds it into a card.
+ *
+ * Those two pairs sit with **no blank line between them**, unlike every other
+ * pair of blocks here, and that is deliberate. Handlebars emits the newline after a
  * `{{/if}}` whether or not the block rendered, so a blank separator would put
  * one extra empty line into every prompt on every install that has never
  * opened the narrative graph — which is most of them. The parity corpus caught
@@ -67,10 +71,28 @@ export const CONTEXT_TEMPLATE_SEED_KEY =
 
 export const SHIPPED_CONTEXT_TEMPLATE_NAME = "Default"
 
+/*
+ * 🚧 The author's note (2026-10-02, AN1) renders FIRST at its index — before
+ * the inject scripts and the post-history block — so the pipeline's "how to
+ * respond" stays closest to the reply. Absent for every genre that declares
+ * no note, and a `{{#with}}` over nothing renders nothing, so their prompt is
+ * the bytes it was. The shipped row is re-projected at boot when this source
+ * drifts (`seedContextTemplates`); a person's own copy keeps what they wrote
+ * and gets no note until they add the block.
+ */
+
+/*
+ * The story's current date sits LAST in the system block (B2, 2026-10-03),
+ * not first. The top of the prompt is the part a backend's cache can reuse
+ * from one turn to the next, and the date is the one thing in the system block
+ * that changes on its own — on a book with a clock, as story time passes. At
+ * the top it moved every byte after it; here it moves only itself. It sits
+ * with no blank line above it, like the two pairs described above, so a
+ * prompt with no date — every session without a dated book — renders the
+ * bytes it always did. `SHIPPED_PROMPT_BLOCK_IDS` (SDK) carries the same order.
+ */
+
 export const SHIPPED_CONTEXT_TEMPLATE = `{{#systemBlock}}
-{{#if currentDate}}
-{{{currentDate}}}
-{{/if}}
 
 {{#if instructions}}
 {{{instructions}}}
@@ -82,6 +104,9 @@ export const SHIPPED_CONTEXT_TEMPLATE = `{{#systemBlock}}
 
 {{#if personas}}
 {{{personas}}}
+{{/if}}
+{{#if characterLore}}
+{{{characterLore}}}
 {{/if}}
 
 {{#if scenario}}
@@ -102,10 +127,30 @@ export const SHIPPED_CONTEXT_TEMPLATE = `{{#systemBlock}}
 {{#if relationshipsKnown}}
 {{{relationshipsKnown}}}
 {{/if}}
+{{#if currentDate}}
+{{{currentDate}}}
+{{/if}}
 
 {{/systemBlock}}
 
 {{#each sessionMessages as |sessionMessage msgIndex|}}
+{{#with ../authorsNote}}
+{{#if (and (eq msgIndex targetIndex) hasContent)}}
+{{#if (eq role "user")}}
+{{#userBlock}}
+{{{text}}}
+{{/userBlock}}
+{{else if (eq role "assistant")}}
+{{#assistantBlock}}
+{{{text}}}
+{{/assistantBlock}}
+{{else}}
+{{#systemBlock}}
+{{{text}}}
+{{/systemBlock}}
+{{/if}}
+{{/if}}
+{{/with}}
 {{#each (lookup ../injectionsByIndex msgIndex)}}
 {{#if (eq this.role "assistant")}}
 {{#assistantBlock}}
@@ -147,12 +192,12 @@ Example dialogue:
 {{/with}}
 {{#if (eq role "assistant")}}
 {{#assistantBlock}}
-{{{name}}}: {{{message}}}
+{{{name}}}: {{{message}}}{{{attachments}}}
 {{/assistantBlock}}
 {{/if}}
 {{#if (eq role "user")}}
 {{#userBlock}}
-{{{name}}}: {{{message}}}
+{{{name}}}: {{{message}}}{{{attachments}}}
 {{/userBlock}}
 {{/if}}
 {{/each}}`

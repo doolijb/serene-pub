@@ -39,6 +39,8 @@ import {
 	shortDownloadError
 } from "./downloads"
 import { UPDATE_HREF, syncUpdateNotifications } from "./updateAvailable"
+import { DrizzleQueryError } from "drizzle-orm"
+import { QUERY_FAILED_SENTENCE } from "$lib/server/db/errors"
 import { dismissNotifications, openNotifications } from "./store"
 import {
 	DOWNLOAD_DONE,
@@ -155,6 +157,16 @@ describe("download-settled", () => {
 		expect(long.length).toBe(DOWNLOAD_ERROR_MAX)
 		expect(long.startsWith("a b x")).toBe(true)
 		expect(shortDownloadError("")).toBe("Unknown error")
+		// A failed query's SQL and values (drizzle-orm 0.44+), before the
+		// whitespace collapse would hide its `params:` line from later checks.
+		const quoted = new DrizzleQueryError(
+			'update "connection_models" set "status" = $1 where "id" = $2',
+			["SECRET-VALUE-d1", 3],
+			new Error("boom")
+		)
+		for (const err of [quoted, new Error(`bookkeeping: ${quoted.message}`)])
+			expect(shortDownloadError(err)).not.toMatch(/SECRET-VALUE|Failed query|update "/)
+		expect(shortDownloadError(quoted)).toBe(QUERY_FAILED_SENTENCE)
 	})
 })
 

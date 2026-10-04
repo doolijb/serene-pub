@@ -32,6 +32,7 @@
 import { and, eq, isNull } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import { sessionReadingOf } from "$lib/server/state/reading"
+import { castMemberCards } from "$lib/server/utils/castMemberCards"
 import {
 	MAIN_HEAD,
 	castMemberAt,
@@ -59,6 +60,13 @@ export interface SideCharacterFact {
 	known: boolean
 	/** Present only when the pick was a real character. */
 	character: SideCharacterCard | null
+	/**
+	 * Who the side character is, as a participant reference
+	 * (`character:<id>`), when the fact was written by a press that named a
+	 * row — Whodunit's *Answer* stores the option's. The builder resolves a
+	 * fact carrying it by the row, never by the name.
+	 */
+	ref?: string
 }
 
 /** What the trigger's first step can send. */
@@ -110,6 +118,10 @@ async function lorebookNames(
 		// The card stays the member's own: it is who is seated.
 		(b) => castMemberAt(b, castOverlays, reading, { keepCard: true })
 	)
+	// Every card of a member's is a card the book knows: the linked one, and
+	// each a dated change draws them with (plan A25).
+	for (const card of (await castMemberCards(db, lorebookId)).memberOf.keys())
+		characterIds.add(card)
 	for (const b of bindings) {
 		if (typeof b.characterId === "number") characterIds.add(b.characterId)
 		for (const n of [

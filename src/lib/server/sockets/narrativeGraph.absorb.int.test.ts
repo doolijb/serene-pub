@@ -62,13 +62,23 @@ async function makeLorebook(userId: number, name = "Test Book") {
 	return lorebook
 }
 
+/**
+ * A tag of its own for each seeded member: one member per tag per book
+ * (`lorebook_bindings_binding_unique`). Not a number, so it is never a cast
+ * tag and never moves a book's counter.
+ */
+let seedTag = 0
 async function makeBinding(
 	lorebookId: number,
 	overrides: Partial<typeof schema.lorebookBindings.$inferInsert> = {}
 ) {
 	const [binding] = await testDb
 		.insert(schema.lorebookBindings)
-		.values({ lorebookId, binding: "", ...overrides })
+		.values({
+			lorebookId,
+			binding: `{{char:seed-${++seedTag}}}`,
+			...overrides
+		})
 		.returning()
 	return binding
 }
@@ -143,7 +153,40 @@ describe("narrativeGraphMergeNodeHandler — absorb (PGlite integration)", () =>
 				{ nodeId: bindingA.id, parentNodeId: bindingB.id },
 				noopEmit
 			)
-		).rejects.toThrow(/both linked to character bindings/)
+		).rejects.toThrow(/different people, and cannot be merged/)
+	})
+
+	test("a refusal names the pair it refuses, so the surface that sent it — and only that one — says it", async () => {
+		const { narrativeGraphMergeNodeHandler } = await import(
+			"./narrativeGraph"
+		)
+		const user = await makeUser("absorb-refusal-echo-user")
+		const lorebook = await makeLorebook(user.id, "Echo Book")
+		const node = await makeBinding(lorebook.id, { name: "Solo" })
+		const out: Array<{ event: string; data: any }> = []
+
+		await expect(
+			narrativeGraphMergeNodeHandler.handler(
+				fakeSocket(user.id),
+				{ nodeId: node.id, parentNodeId: node.id },
+				(event: string, data: any) => {
+					out.push({ event, data })
+				}
+			)
+		).rejects.toThrow()
+
+		expect(
+			out.filter((o) => o.event === "narrativeGraph:mergeNode:error")
+		).toEqual([
+			{
+				event: "narrativeGraph:mergeNode:error",
+				data: {
+					nodeId: node.id,
+					parentNodeId: node.id,
+					error: "A cast member cannot be merged into itself."
+				}
+			}
+		])
 	})
 
 	test("refuses to merge a node with itself", async () => {
@@ -160,7 +203,7 @@ describe("narrativeGraphMergeNodeHandler — absorb (PGlite integration)", () =>
 				{ nodeId: node.id, parentNodeId: node.id },
 				noopEmit
 			)
-		).rejects.toThrow(/cannot merge a node with itself/i)
+		).rejects.toThrow(/cannot be merged into itself/i)
 
 		// The node must still exist, untouched.
 		const stillThere = await testDb.query.lorebookBindings.findFirst({
@@ -458,7 +501,7 @@ describe("narrativeGraphMergeNodeHandler — absorb (PGlite integration)", () =>
 		expect(afterSync?.absorbedAliases).toContain("Ghost NPC")
 	})
 
-	test("nulls the survivor's vectorizedAt/embedding after absorb", async () => {
+	test("keeps the survivor's vector: a merge changes neither its name nor its summary", async () => {
 		const { narrativeGraphMergeNodeHandler } = await import(
 			"./narrativeGraph"
 		)
@@ -482,9 +525,11 @@ describe("narrativeGraphMergeNodeHandler — absorb (PGlite integration)", () =>
 		const after = await testDb.query.lorebookBindings.findFirst({
 			where: eq(schema.lorebookBindings.id, bound.id)
 		})
-		expect(after?.embedding).toBeNull()
-		expect(after?.embeddingModel).toBeNull()
-		expect(after?.vectorizedAt).toBeNull()
+		// The absorbed names go to `absorbedAliases`, which are not embedded;
+		// a text the merge does move is caught by the queue's text hash
+		// (`columnStoreRewrites.int.test.ts` counts the embeds).
+		expect(after?.embedding).toEqual([0.1, 0.2])
+		expect(after?.embeddingModel).toBe("test-model")
 	})
 
 	test("writes an audit log entry capturing the absorbed snapshot", async () => {

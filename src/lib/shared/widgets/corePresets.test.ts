@@ -262,7 +262,7 @@ describe("legacyLayoutAttr — the transitional data-*-layout value", () => {
 })
 
 describe("folded sections in every pack (B4)", () => {
-	// A reply's Plan and Thinking fold in the one SessionMessage every pack
+	// A reply's Plan and Reasoning fold in the one SessionMessage every pack
 	// skins; a pack owns the LOOK, never whether a fold is there. So no pack
 	// may reach the fold chrome — its button, its track or its list.
 	test.each(MESSAGE_STYLE_PRESETS.map((p) => [p.slug, p.css] as const))(

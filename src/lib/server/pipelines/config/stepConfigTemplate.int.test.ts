@@ -85,7 +85,7 @@ beforeAll(async () => {
 		shipped.id,
 		"Graph step template copy"
 	)
-	await selectConfig(db, spec.id, "instance", 0, copy.id, admin.id)
+	await selectConfig(db, spec.id, "pub", 0, copy.id, admin.id)
 
 	await db.insert(schema.pipelineConfigValues).values({
 		configId: copy.id,

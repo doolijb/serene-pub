@@ -203,6 +203,14 @@ const turn = async (
 const MECHANISM_ON = [
 	{ nodeKey: "names.arm.mentions", path: "maxMentions", value: 4 }
 ]
+/**
+ * The same switch at 0. Off is no longer the shipped default — retrieval is
+ * on by default (R5, lorebooks A23(b), 2026-10-02: `maxMentions` ships at
+ * 8) — so the "off" cases below set it, and nothing else.
+ */
+const MECHANISM_OFF = [
+	{ nodeKey: "names.arm.mentions", path: "maxMentions", value: 0 }
+]
 
 const node = (receipt: any, key: string) =>
 	receipt.nodes.find((n: any) => n.nodeKey === key)
@@ -246,10 +254,19 @@ const retrievalOutcome = (receipt: any) => {
 
 const CLEAN = { failed: [], haltedInRetrieval: [], reachedRank: true }
 
-describe("the mechanism ships off, and off costs nothing", () => {
-	it("reads nothing and embeds nothing at the declared defaults", async () => {
+describe("0 switches the mechanism off, and off costs nothing", () => {
+	it("ships on: the shipped spec reads descriptions at its declared default", async () => {
 		modelReady = true
 		const receipt = await turn()
+		expect(retrievalOutcome(receipt)).toEqual(CLEAN)
+		const mentions = node(receipt, "names.arm.mentions")
+		expect(mentions!.result).toBe("ok")
+		expect((mentions!.output as any)?.texts ?? []).not.toEqual([])
+	}, 30_000)
+
+	it("reads nothing and embeds nothing at 0", async () => {
+		modelReady = true
+		const receipt = await turn(MECHANISM_OFF)
 		expect(retrievalOutcome(receipt)).toEqual(CLEAN)
 
 		const mentions = node(receipt, "names.arm.mentions")
@@ -275,7 +292,7 @@ describe("the mechanism ships off, and off costs nothing", () => {
 		// The `loreLinked` concatenation's fallback source, asserted rather than
 		// assumed: an empty mechanism must not cost a candidate.
 		modelReady = true
-		const off = await turn()
+		const off = await turn(MECHANISM_OFF)
 		expect(rankedKeys(off).length).toBeGreaterThan(0)
 		for (const c of ranked(off))
 			expect(c.signals?.entityVector).toBeUndefined()
@@ -318,7 +335,7 @@ describe("no embedding model — the mechanism subtracts a signal and nothing el
 	it("gives the ranker the same candidates it gives with the mechanism off", async () => {
 		modelReady = false
 		const withMechanism = new Set(rankedKeys(await turn(MECHANISM_ON)))
-		const without = new Set(rankedKeys(await turn()))
+		const without = new Set(rankedKeys(await turn(MECHANISM_OFF)))
 		expect([...withMechanism].sort()).toEqual([...without].sort())
 	}, 30_000)
 })
@@ -406,7 +423,7 @@ describe("one switch, and a receipt somebody can read", () => {
 		// and whose weight both ship at zero is one where raising the cap
 		// appears to do nothing. `maxMentions` is the only control touched here.
 		modelReady = true
-		const off = await turn()
+		const off = await turn(MECHANISM_OFF)
 		const on = await turn(MECHANISM_ON)
 		const scoreOf = (r: any, id: number) =>
 			((node(r, "rank")?.output as any)?.decisions ?? []).find(

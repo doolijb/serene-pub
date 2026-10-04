@@ -57,7 +57,10 @@ type DistributiveOmit<T, K extends keyof never> = T extends unknown
  * no filesystem path. Which directory that filename lives in is a two-column
  * question and this module answers it, so a caller cannot get it wrong.
  */
-export type ManagedModelSpec = DistributiveOmit<ManagedModelRequest, "path">
+export type ManagedModelSpec = DistributiveOmit<
+	ManagedModelRequest,
+	"path" | "mmprojPath"
+>
 
 /**
  * Where the named model actually is on disk.
@@ -79,6 +82,29 @@ async function resolveRequestPath(
 	// directory setting. Nothing to contain it against, and nothing to stat.
 	if (!modelsDirFor(spec.kind, settings)) return spec.file
 	return resolveModelPath(spec.kind, spec.file, settings, { mustExist: true })
+}
+
+/**
+ * Where a text model's vision projector is on disk — the text models folder,
+ * found and contained the way the model itself is.
+ *
+ * Its own refusal sentence, because the model's ("pick another model") is the
+ * wrong fix: the projector is a setting of the model, cleared in its settings.
+ */
+async function resolveProjectorPath(
+	file: string,
+	settings: KoboldCppSettings
+): Promise<string> {
+	if (!modelsDirFor("text", settings)) return file
+	try {
+		return await resolveModelPath("text", file, settings, {
+			mustExist: true
+		})
+	} catch {
+		throw new Error(
+			`The vision projector "${file}" is not in the models folder. Put the mmproj file there, or clear Vision projector in this model's settings.`
+		)
+	}
 }
 
 /**
@@ -115,7 +141,18 @@ export async function ensureManagedReady(
 	const modelPath = await resolveRequestPath(spec, settings)
 	const request: ManagedModelRequest =
 		spec.kind === "text"
-			? { ...spec, path: modelPath }
+			? {
+					...spec,
+					path: modelPath,
+					...(spec.mmproj
+						? {
+								mmprojPath: await resolveProjectorPath(
+									spec.mmproj,
+									settings
+								)
+							}
+						: {})
+				}
 			: { ...spec, path: modelPath }
 
 	const baseUrl = settings.koboldCppManagerBaseUrl
@@ -191,7 +228,10 @@ async function attemptLoad(
 		opts.connectionId,
 		`${request.kind} model`,
 		request.file,
-		request.kind === "text" ? `contextSize ${request.contextSize}` : ""
+		request.kind === "text" ? `contextSize ${request.contextSize}` : "",
+		request.kind === "text" && request.mmproj
+			? `mmproj ${request.mmproj}`
+			: ""
 	)
 
 	// A model load can leave koboldcpp unresponsive to other requests for

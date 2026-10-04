@@ -48,9 +48,9 @@ const stored: SelectSessionMessage = {
 		swipes: {
 			currentIdx: 1,
 			history: ["The door is locked.", "The door creaks open."],
-			thinkingHistory: [null, "They asked twice."]
+			reasoningHistory: [null, "They asked twice."]
 		},
-		thinking: "They asked twice.",
+		reasoning: "They asked twice.",
 		answersForm: { messageId: 39, blockId: "q1" }
 	},
 	isGenerating: true,
@@ -69,6 +69,8 @@ const stored: SelectSessionMessage = {
 	debugMeta: null,
 	embedding: [0.0125, -0.33, 0.9],
 	embeddingModel: "all-MiniLM-L6-v2",
+	embeddingSourceHash: "3f1d8a0c5b7e2a94",
+	embedTextHash: "3f1d8a0c5b7e2a94",
 	vectorizedAt: new Date("2026-09-25T18:04:12.000Z"),
 	parts: [
 		{

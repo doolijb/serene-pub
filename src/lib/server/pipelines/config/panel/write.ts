@@ -8,7 +8,7 @@
  *
  * **Reset deletes.** `clearOption` removes the row rather than writing the
  * inherited value into it. The difference is invisible until the day an admin
- * moves the instance value: a deleted row inherits the new one, a pinned copy
+ * moves the pub value: a deleted row inherits the new one, a pinned copy
  * does not. That is the whole point of resolving per path rather than per slot
  * (F20).
  *
@@ -22,7 +22,7 @@
 
 import { and, eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
-import { isDeviation } from "$lib/server/pipelines/config/deviations"
+import { holdsRow } from "$lib/server/pipelines/config/deviations"
 import { acceptedEnginesOf } from "$lib/shared/pipelines/templateEngines"
 import {
 	type Published,
@@ -322,12 +322,12 @@ async function checkChain(
 }
 
 /**
- * The named config a global edit lands in: the instance's selection, resolved
+ * The named config a global edit lands in: the pub's selection, resolved
  * by the runtime's own resolver, then gated exactly as an explicit `configId`
  * would be — same immutability refusal, same spec check. Shipped defaults
  * refuse with the duplicate suggestion rather than silently absorbing edits.
  */
-async function instanceConfigTarget(db: Db, at: Published) {
+async function pubConfigTarget(db: Db, at: Published) {
 	const { resolveSelectedConfig } = await import(
 		"$lib/server/pipelines/config/named"
 	)
@@ -420,7 +420,7 @@ export async function writeOption(
 		const row =
 			configId != null
 				? await configTarget(db, at, configId)
-				: await instanceConfigTarget(db, at)
+				: await pubConfigTarget(db, at)
 
 		// ── setting it back to the default is a reset (ruled 2026-09-10) ──
 		//
@@ -433,7 +433,18 @@ export async function writeOption(
 		//
 		// The delete rather than a skip, because there may be a row to remove:
 		// this is the path a slider dragged back to where it started takes.
-		if (!isDeviation(decl, value)) {
+		//
+		// "The default" is what this config would otherwise inherit. Where the
+		// shipped config holds a different value than the declaration, the
+		// declared value is a choice like any other and keeps its row — deleted,
+		// the next boot's back-fill would hand the shipped value back.
+		const { inheritedValues } = await import(
+			"$lib/server/pipelines/config/named"
+		)
+		const inherited = (await inheritedValues(db, at.specId, row.id)).get(
+			`${decl.nodeKey}\u0000${decl.slot}\u0000${decl.path}`
+		)
+		if (!holdsRow(decl, value, inherited)) {
 			await db
 				.delete(schema.pipelineConfigValues)
 				.where(
@@ -522,7 +533,7 @@ export async function clearOption(
 		const row =
 			configId != null
 				? await configTarget(db, at, configId)
-				: await instanceConfigTarget(db, at)
+				: await pubConfigTarget(db, at)
 		await db
 			.delete(schema.pipelineConfigValues)
 			.where(
@@ -600,7 +611,7 @@ export async function resetConfig(
 	const row =
 		configId != null
 			? await configTarget(db, at, configId)
-			: await instanceConfigTarget(db, at)
+			: await pubConfigTarget(db, at)
 
 	const gone = await db
 		.delete(schema.pipelineConfigValues)
@@ -632,7 +643,7 @@ export async function selectNamedConfig(
 	slug: string,
 	viewer: Viewer,
 	configId: number,
-	scope?: "session" | "instance"
+	scope?: "session" | "pub"
 ): Promise<void> {
 	const at = await published(db, slug)
 	if (!at)
@@ -641,13 +652,13 @@ export async function selectNamedConfig(
 		)
 
 	// The two selection scopes left (ruled 2026-08-24): the session's own choice,
-	// else the instance default. From inside a session the selection is the
-	// session's; everywhere else it is the instance's, which is the admin's.
-	const target: "session" | "instance" =
-		scope ?? (viewer.sessionId != null ? "session" : "instance")
-	if (target === "instance" && !viewer.isAdmin)
+	// else the pub default. From inside a session the selection is the
+	// session's; everywhere else it is the pub's, which is the admin's.
+	const target: "session" | "pub" =
+		scope ?? (viewer.sessionId != null ? "session" : "pub")
+	if (target === "pub" && !viewer.isAdmin)
 		throw new OptionNotWritableError(
-			"Only an administrator chooses the configuration for everyone on this instance."
+			"Only an administrator chooses the configuration for everyone on this pub."
 		)
 
 	// `scope: "session"` from a caller who is not in one — or is in someone
@@ -659,6 +670,10 @@ export async function selectNamedConfig(
 		throw new OptionNotWritableError(
 			"A configuration is chosen for a session you are in. Open the session " +
 				"you want to change and choose there."
+		)
+	if (target === "session" && viewer.readOnlyBecause)
+		throw new OptionNotWritableError(
+			`${viewer.readOnlyBecause} Nothing was saved.`
 		)
 
 	// The administrator's curation is a rule, not a hint (R8). `namespaceView`
@@ -673,7 +688,7 @@ export async function selectNamedConfig(
 	if (config && (config as any).enabled === false && !viewer.isAdmin)
 		throw new OptionNotWritableError(
 			`'${(config as any).name}' is not one of the configurations this ` +
-				`instance offers. An administrator withdrew it.`
+				`pub offers. An administrator withdrew it.`
 		)
 
 	// `!` survives the guard above rather than in spite of it: the throw is what

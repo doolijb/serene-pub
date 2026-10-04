@@ -9,15 +9,16 @@
  * the database stays stuck. A silent no-op is the failure mode this file
  * exists to make impossible.
  *
- * The constant below is the sha256 of `drizzle/0100_narration_split_reprojection.sql`
- * as it ships, and it is the hash of the row sitting in the reported install's
- * ledger. If this test fails, exactly one of two things happened:
+ * The constant below is the sha256 of `drizzle/0093_green_bushwacker.sql`, the
+ * last migration 0.5.3 shipped, as every 0.5.3 install's ledger recorded it.
+ * That file can never change again: an upgrading install is matched to it by
+ * this hash. If this test fails, exactly one of two things happened:
  *
  *   - that migration file was edited, in which case it can no longer be matched
- *     to any row already written from it, and the constant needs updating
- *     alongside a hard look at why an applied migration was rewritten; or
+ *     to any row already written from it, and every 0.5.3 install is cut off
+ *     from the upgrade; or
  *   - the hashing changed, in which case the repair is inert and every install
- *     still on a poisoned ledger stays there.
+ *     on a poisoned ledger stays there.
  */
 
 import { createHash } from "node:crypto"
@@ -27,12 +28,12 @@ import { describe, expect, it } from "vitest"
 import { readJournalMigrations } from "./migrationLedgerRepair"
 
 const FOLDER = resolve(process.cwd(), "drizzle")
-const TAG = "0100_narration_split_reprojection"
+const TAG = "0093_green_bushwacker"
 
-/** The hash drizzle wrote for this file on the install that got stuck. */
+/** The hash drizzle wrote for this file on every 0.5.3 install. */
 const KNOWN_HASH =
-	"b4a4af2847c057dfd2e62007c12951e71e76ae8b6dd2d7e38098aa032c0bcb99"
-const KNOWN_WHEN = 1788827887780
+	"492c53227102374f0158a8c57144e7ebdc7ec89c8a4895a3f51689df76d63c41"
+const KNOWN_WHEN = 1786511598724
 
 describe("readJournalMigrations", () => {
 	it("reproduces the hash a real ledger row was written with", () => {
@@ -51,9 +52,8 @@ describe("readJournalMigrations", () => {
 
 	it("keeps the breakpoint markers inside the hashed text", () => {
 		// The near-miss worth ruling out: hashing the *statements* drizzle
-		// splits the file into, rather than the file. 0100 happens to contain
-		// no markers, so it cannot tell the two apart — a file that does is
-		// what makes the distinction visible.
+		// splits the file into, rather than the file. Only a file that holds
+		// markers can tell the two apart.
 		const withBreakpoints = readJournalMigrations(FOLDER).find((m) =>
 			readFileSync(resolve(FOLDER, `${m.tag}.sql`))
 				.toString()

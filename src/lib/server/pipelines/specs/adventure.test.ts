@@ -16,7 +16,7 @@
  */
 
 import { describe, expect, it } from "vitest"
-import { canonicalHash, sessionEvents } from "@serene-pub/sdk"
+import { canonicalHash, i18nText, sessionEvents } from "@serene-pub/sdk"
 import {
 	ADVENTURE_ADVANCE_TIME_SPEC_ID,
 	ADVENTURE_CREATE_SPEC_ID,
@@ -30,8 +30,7 @@ import {
 	CORE_PROMPTS,
 	CORE_SPECS,
 	RESPOND_SPEC_ID,
-	adventureGenre,
-	coreLayoutPreset
+	adventureGenre
 } from "@serene-pub/core-catalog"
 
 const built = (slug: string) => {
@@ -150,6 +149,38 @@ describe("the turn is a multi-agent turn", () => {
 			"sceneContext",
 			"voices.item.context"
 		])
+	})
+
+	it("hands the cast's relationships to the planner and the narrator, and to no voice (F6(a))", () => {
+		// The 09-10 mechanism, read once in the gather, ranked with the lore,
+		// and read back by the game master's two agents only. A voice is a cast
+		// member speaking; another member's secret must never reach it.
+		const d = doc()
+		const graph = d.nodes.find(
+			(n: any) => n.key === "gather.relationships.read"
+		)
+		expect(graph?.definitionId).toBe("core:query/relationship-search")
+		expect(
+			d.edges
+				.filter((e: any) => e.toPort === "castRelationships")
+				.map((e: any) => `${e.from}->${e.to}`)
+				.sort()
+		).toEqual(["rank->planContext", "rank->sceneContext"])
+		expect(
+			d.edges.filter(
+				(e: any) =>
+					e.from === "gather.relationships.read" &&
+					String(e.to).startsWith("voices.")
+			)
+		).toEqual([])
+		// On, with a share; the lore-link hop off — a place says its own ways
+		// out, so a door is never said twice.
+		const preset = d.presets.find((p: any) => p.default)
+		const params = preset?.values.find(
+			(v: any) => v.nodeKey === "gather.relationships.read"
+		)?.value as { share?: number; loreLinks?: boolean } | undefined
+		expect(params?.share).toBeGreaterThan(0)
+		expect(params?.loreLinks).toBe(false)
 	})
 
 	it("the voices each-clause is bounded, and it runs over the planner's speakers", () => {
@@ -407,15 +438,70 @@ describe("the preset and the prompts", () => {
 	})
 })
 
-describe("the Adventure layout", () => {
-	const layout = () => coreLayoutPreset(ADVENTURE_GENRE_ID)!
+/**
+ * **Look is shown the places** (owner ruling 2026-10-03): its context step is
+ * the scene builder, fed the same `rooms` listing and room rule as the turn,
+ * and its prompt row lives in the scene builder's pool. On
+ * `build-template-context` it computed no place, so Look described somewhere
+ * it had never been shown.
+ */
+describe("Look reads the places on the scene builder", () => {
+	const doc = () => built(ADVENTURE_LOOK_SPEC_ID)
+	const node = (key: string) =>
+		doc().nodes.find((n: any) => n.key === key) as any
 
-	it("is shipped for the genre, under its own name", () => {
-		expect(layout().name).toBe("Adventure")
+	it("builds its context with the scene builder, from the places listing", () => {
+		expect(node("context")?.definitionId).toBe("core:task/build-scene-context")
+		expect(node("gather.rooms.read")?.definitionId).toBe(
+			"core:query/lorebook-entries"
+		)
+		const into = (port: string) =>
+			doc()
+				.edges.filter((e: any) => e.toPort === port)
+				.map((e: any) => `${e.from}->${e.to}`)
+				.sort()
+		expect(into("locationEntries")).toEqual([
+			"gather.rooms.read->context",
+			"gather.rooms.read->place"
+		])
+		// The room rule: the room `{{locationEntry}}` shows spends no lore budget.
+		expect(into("shownElsewhere")).toEqual(["place->rank"])
+		expect(doc().nodes.some((n: any) => n.key === "plan")).toBe(false)
+	})
+
+	it("ships the listing's and the room rule's values on its default preset", () => {
+		const preset = (doc() as any).presets?.find((p: any) => p.default)
+		expect(JSON.stringify(preset)).toContain("core:entry/location")
+		expect(JSON.stringify(preset)).toContain("world.location")
+	})
+
+	it("starts on a prompt row in the scene pool that writes the place", () => {
+		const rows = CORE_PROMPTS.filter((p) =>
+			p.defaultForSpecs.includes(ADVENTURE_LOOK_SPEC_ID)
+		)
+		expect(rows).toHaveLength(1)
+		expect(rows[0].nodeType).toBe("core:task/build-scene-context")
+		expect(rows[0].seedKey).toBe(
+			"pipeline-prompt:core:task/build-scene-context:prompts:adventure-look"
+		)
+		expect(rows[0].fields.systemPrompt).toContain("{{location}}")
+		expect(rows[0].fields.systemPrompt).toContain("{{locationEntry}}")
+		expect(rows[0].fields.systemPrompt).toContain("{{knownLocations}}")
+		expect(rows[0].fields.narratorName).toBe("Narrator")
+	})
+})
+
+describe("the Adventure layout", () => {
+	const layout = () => adventureGenre.layouts![0]!
+
+	it("is shipped for the genre, as its default, under its own name", () => {
+		expect(adventureGenre.id).toBe(ADVENTURE_GENRE_ID)
+		expect(layout().slug).toBe("default")
+		expect(i18nText(layout().name)).toBe("Adventure")
 	})
 
 	it("docks the party down the right and puts the world above the messages", () => {
-		const l = layout().layout as any
+		const l = layout().preset as any
 		expect(l.zoneLayout.zones.right.pinned).toBe(true)
 		// No Inventory: R79 removed that widget for now.
 		expect(l.zoneLayout.zones.right.widgets).toEqual([
@@ -461,6 +547,25 @@ describe("parity", () => {
 		// Moved 2026-09-27 (lair pass B3/B18): the streaming stage and the stage
 		// statuses are declared on `expose` (`stream`, `status`). Proven: with those
 		// two keys stripped, the document hashes back to the old pin. (was '1970a642240009')
-		expect(canonicalHash(built(RESPOND_SPEC_ID))).toBe("ab24c4c296be8")
+		// Moved 2026-09-29 (genre uplift F1): `semantic.arm.queries` wires
+		// `connection: slot.connectionOf('semantic.arm.embed')` — not adventure's.
+		// Proven in `boot/specHashes.test.ts` (F1's edits reverted hash back to
+		// the old pin), which recorded it; this copy was missed. (was "ab24c4c296be8")
+		// Moved 2026-09-30 (config grouping, catalog lane): the two embed steps
+		// carry an `expose.label` — not adventure's. Proven in
+		// `boot/specHashes.test.ts`, which records it. (was "e1d9077ca6b80")
+		// Moved 2026-10-01 (post-history trigger): the default preset is `default` /
+		// "Default" — not adventure's. Proven in `boot/specHashes.test.ts`, which
+		// records it. (was "58982f85e91a9")
+		// Moved 2026-10-02 (author's note AN1; lorebooks wave 8 presences +
+		// eligible; attachments phase 4 history-attachments + place-attachments)
+		// — none adventure's. Proven in `boot/specHashes.test.ts`, which records
+		// each move. (was "29d6c133bf60f")
+		// Moved 2026-10-03 (owner note 39: `save` wires `reasoning`) — not
+		// adventure's; `boot/specHashes.test.ts` recorded it, this copy was
+		// missed. (was "df7c86394a82")
+		// Moved 2026-10-03 (history window: `session-history` reads by `budget`)
+		// — not adventure's; `boot/specHashes.test.ts` records it. (was "75db48c05464b")
+		expect(canonicalHash(built(RESPOND_SPEC_ID))).toBe("6b320446a5eb1")
 	})
 })

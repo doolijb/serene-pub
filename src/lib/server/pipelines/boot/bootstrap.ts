@@ -76,10 +76,6 @@ import type { BindingSubjectReport } from "$lib/server/pipelines/boot/bindingSub
 import type { DeclarationLoadReport } from "$lib/server/state/declarations"
 import { seedVariableTemplates } from "$lib/server/pipelines/boot/seedVariableTemplates"
 import { seedContextTemplates } from "$lib/server/pipelines/boot/seedContextTemplates"
-import {
-	migrateContextTemplates,
-	type ContextTemplateMigrationReport
-} from "$lib/server/pipelines/migrate/migrateContextTemplates"
 import * as schema from "$lib/server/db/schema"
 import { eq, and } from "drizzle-orm"
 
@@ -110,10 +106,15 @@ export interface BootstrapReport {
 	/** The shipped story string every assemble node's default points at. */
 	contextTemplates: { created: number; present: number }
 	specs: SpecSeedReport[]
+	/**
+	 * The rows core shipped for a genre it does not ship, deleted this boot
+	 * (`retiredGenres.ts`). All zero on every boot but the first after one.
+	 */
+	retiredGenres?: import("$lib/server/pipelines/boot/retiredGenres").RetiredGenreCullReport
+	/** Core specs that left core on their own (`RETIRED_CORE_SPECS`), deleted this boot. */
+	retiredSpecs?: number
 	/** What a user's existing configuration became. Empty after the first boot. */
 	migration: FullMigrationReport
-	/** What each scope's legacy context config became, and what that pinned. */
-	contextTemplateMigration: ContextTemplateMigrationReport
 	/**
 	 * What each entry type's declared schema became in the database — the CHECK
 	 * constraints and indexes projected from `config_schema`, plus the rows that
@@ -168,15 +169,7 @@ export async function bootstrapPipelines(db: Db): Promise<BootstrapReport> {
 		variableTemplates: { created: 0, present: 0 },
 		contextTemplates: { created: 0, present: 0 },
 		specs: [],
-		migration: { configs: [], params: 0, selections: 0 },
-		contextTemplateMigration: {
-			ran: false,
-			copied: 0,
-			selected: 0,
-			pinned: 0,
-			customScopes: [],
-			rePointed: 0
-		}
+		migration: { configs: [], selections: 0 }
 	}
 
 	// FIRST, and before anything reads a slot. The attribute registry has two
@@ -375,6 +368,18 @@ export async function bootstrapPipelines(db: Db): Promise<BootstrapReport> {
 		present: templates.present.length
 	}
 
+	// Before the specs: a genre core stopped shipping keeps its rows until
+	// something deletes them, and the picker lists it from its create spec.
+	const { cullRetiredCoreGenres } = await import(
+		"$lib/server/pipelines/boot/retiredGenres"
+	)
+	report.retiredGenres = await cullRetiredCoreGenres(db)
+	// And a core spec that left on its own (Echo, 2026-10-02).
+	const { cullRetiredCoreSpecs } = await import(
+		"$lib/server/pipelines/boot/retiredGenres"
+	)
+	report.retiredSpecs = await cullRetiredCoreSpecs(db)
+
 	report.specs = await seedCoreSpecs(db)
 
 	// After the specs: a preset names a type by slug, and the slug's spec row
@@ -437,11 +442,6 @@ export async function bootstrapPipelines(db: Db): Promise<BootstrapReport> {
 	// Last, and only once. Everything it writes references a spec, a prompt or a
 	// config that the three steps above had to create first.
 	report.migration = await migrateLegacyToPipelines(db)
-
-	// After that migration rather than beside it, and the order matters: this
-	// declines to write over an override that is already there, so it has to
-	// run once every override anybody else was going to write exists.
-	report.contextTemplateMigration = await migrateContextTemplates(db)
 
 	// Last of all, once every selection anybody was going to write exists: a
 	// pass over every stored context-template selection × the step it renders

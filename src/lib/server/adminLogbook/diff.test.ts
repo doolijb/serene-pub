@@ -130,7 +130,7 @@ describe("summarize", () => {
 			summarize({
 				action: "change",
 				objectTypeLabel: "instance settings",
-				objectLabel: "Instance settings",
+				objectLabel: "Pub settings",
 				changes: diffSnapshots(
 					{ defaultLanguage: "en" },
 					{ defaultLanguage: "fr" }

@@ -24,13 +24,15 @@
 	} from "$lib/client/sockets/interest.svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 	import { refusedSwapsSentence } from "./refusedSwaps"
-	import Avatar from "../Avatar.svelte"
+	import CharacterPickRow from "./CharacterPickRow.svelte"
 	import PanelFilterInput from "../panels/PanelFilterInput.svelte"
 	import PanelNavHeader from "../panels/PanelNavHeader.svelte"
 	import {
 		autoSessionName,
 		castCountHint,
+		castOptions,
 		defaultGenreId,
+		filterPickRows,
 		finalSessionName,
 		genreFacts,
 		playAsOptions,
@@ -308,14 +310,9 @@
 	const personaOptions = $derived(
 		playAsOptions(characterOptions, flow.characterIds)
 	)
-	const filteredPersonas = $derived.by(() => {
-		const q = personaFilter.trim().toLowerCase()
-		if (!q) return personaOptions
-		return personaOptions.filter((p) =>
-			characterName(p).toLowerCase().includes(q) ||
-			(p.name || "").toLowerCase().includes(q)
-		)
-	})
+	const filteredPersonas = $derived(
+		filterPickRows(personaOptions, personaFilter)
+	)
 
 	/**
 	 * The lorebook step, asked only of a genre whose shape has the
@@ -374,13 +371,17 @@
 			.join(" · ") || "Nobody yet"
 	)
 
-	const filteredCharacters = $derived.by(() => {
-		const q = characterFilter.trim().toLowerCase()
-		if (!q) return characterOptions
-		return characterOptions.filter((c) =>
-			characterName(c).toLowerCase().includes(q)
-		)
-	})
+	/**
+	 * Who the cast picker offers: everyone but the one the person plays as —
+	 * the mirror of `personaOptions` (note 33), so the two lists never share
+	 * a row.
+	 */
+	const castPickOptions = $derived(
+		castOptions(characterOptions, flow.personaIds)
+	)
+	const filteredCharacters = $derived(
+		filterPickRows(castPickOptions, characterFilter)
+	)
 
 	/**
 	 * The Scenario box, revealed rather than standing.
@@ -726,11 +727,11 @@
 									? ` — ${characterCountHint}`
 									: ""}
 							</p>
-							{#if characterOptions.length > 8}
+							{#if castPickOptions.length > 8}
 								<PanelFilterInput
 									bind:value={characterFilter}
 									placeholder="characters"
-									count={characterOptions.length}
+									count={castPickOptions.length}
 								/>
 							{/if}
 							{#if characterOptions.length === 0}
@@ -738,34 +739,28 @@
 									You have no characters yet. Write one in the
 									Characters view, then come back.
 								</p>
+							{:else if castPickOptions.length === 0}
+								<p class="text-surface-600-400 text-[13px]">
+									The only character you have is the one you
+									play as. Pick someone else to play as, or
+									write another character.
+								</p>
 							{:else}
-								<ul class="flex flex-col gap-1">
+								<ul
+									class="flex flex-col gap-1"
+									aria-label="Characters"
+								>
 									{#each filteredCharacters as c (c.id)}
-										{@const checked =
-											flow.characterIds.includes(c.id)}
 										<li>
-											<label
-												class="hover:bg-surface-200-800 flex min-h-11 w-full cursor-pointer items-center gap-2.5 rounded-[10px] px-2 py-1.5 {checked
-													? 'sidebar-row-active'
-													: ''}"
-											>
-												<input
-													type="checkbox"
-													class="checkbox shrink-0"
-													{checked}
-													onchange={() =>
-														toggleCharacter(c.id)}
-												/>
-												<Avatar
-													char={c}
-													size="w-8 h-8"
-												/>
-												<span
-													class="min-w-0 flex-1 truncate text-[15px] font-medium"
-												>
-													{characterName(c)}
-												</span>
-											</label>
+											<CharacterPickRow
+												character={c}
+												kind="checkbox"
+												checked={flow.characterIds.includes(
+													c.id
+												)}
+												onchange={() =>
+													toggleCharacter(c.id)}
+											/>
 										</li>
 									{/each}
 								</ul>
@@ -805,45 +800,17 @@
 									aria-label="Who you play as"
 								>
 									{#each filteredPersonas as p (p.id)}
-										{@const selected =
-											flow.personaIds.includes(p.id)}
 										<li>
-											<button
-												type="button"
-												role="radio"
-												aria-checked={selected}
-												class="hover:bg-surface-200-800 flex min-h-11 w-full items-center gap-2.5 rounded-[10px] px-2 py-1.5 text-left {selected
-													? 'sidebar-row-active'
-													: ''}"
-												onclick={() =>
+											<CharacterPickRow
+												character={p}
+												kind="radio"
+												group="start-play-as"
+												checked={flow.personaIds.includes(
+													p.id
+												)}
+												onchange={() =>
 													choosePersona(p.id)}
-											>
-												<Avatar
-													char={p}
-													size="w-8 h-8"
-												/>
-												<span
-													class="min-w-0 flex-1 truncate text-[15px] font-medium"
-												>
-													{p.name}
-												</span>
-												{#if p.isPersona}
-													<span
-														class="text-surface-600-400 shrink-0 text-[11px]"
-													>
-														{p.isDefaultPersona
-															? "Default persona"
-															: "Persona"}
-													</span>
-												{/if}
-												{#if selected}
-													<Icons.Check
-														size={16}
-														class="text-primary-500 shrink-0"
-														aria-hidden="true"
-													/>
-												{/if}
-											</button>
+											/>
 										</li>
 									{/each}
 								</ul>

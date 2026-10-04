@@ -314,3 +314,61 @@ describe("a failure lands only on the row its run still owns", () => {
 		expect(failed.queueItemId).toBeNull()
 	}, 60_000)
 })
+
+describe("a failed query on the row (drizzle-orm 0.44+)", () => {
+	/**
+	 * A failed query's message is its SQL and every value it bound. The review
+	 * found it reaching the row by two roads no `instanceof` check saw: a
+	 * halted run's reason carried in a `ComposedError` (`LiveRow.finish`, whose
+	 * words everyone reads) and a wrapper's `${label}: ${e.message}` (whose
+	 * text went into the administrator's `connection.detail`). A real failed
+	 * query supplies the text; its bound value stands in for a person's.
+	 */
+	const SECRET = "SECRET-PROSE-g7"
+	async function failedQueryMessage(): Promise<string> {
+		await makeUser(SECRET)
+		const e = await testDb
+			.insert(schema.users)
+			.values({ username: SECRET })
+			.then(
+				() => null,
+				(err: unknown) => err as Error
+			)
+		expect(e?.message).toContain(SECRET)
+		return e!.message
+	}
+	const leaks = (v: unknown) =>
+		new RegExp(`Failed query|insert into|${SECRET}`, "i").test(JSON.stringify(v ?? null))
+
+	test("a run's reason in a ComposedError, and a wrapped message, reach nobody — admin included — nor the stored row", async () => {
+		const { persistGenerationErrorRow } = await import("./generationStatus")
+		const { ComposedError } = await import("$lib/server/connections/visibility")
+		const { QUERY_FAILED_SENTENCE } = await import("$lib/server/db/errors")
+		const quoted = await failedQueryMessage()
+		const spy = vi.spyOn(console, "error").mockImplementation(() => {})
+		try {
+			for (const [tag, err] of [
+				["composed", new ComposedError(`history: ${quoted}`)],
+				["wrapped", new Error(`the save failed: ${quoted}`)]
+			] as const) {
+				const { owner, guest, admin, session, message } = await scenario(`fq-${tag}`)
+				const { io, received } = makeIoSpy()
+				await persistGenerationErrorRow(io, session.id, message.id, err)
+
+				for (const who of [owner, guest, admin]) {
+					const payload = received[`user_${who.id}`]?.[0]
+					expect(payload, `${tag}: user ${who.id} heard nothing`).toBeTruthy()
+					expect(leaks(payload), `${tag}: leaked to user ${who.id}`).toBe(false)
+				}
+				const [row] = await testDb
+					.select()
+					.from(schema.sessionMessages)
+					.where(eq(schema.sessionMessages.id, message.id))
+				expect(leaks(row.error), `${tag}: stored`).toBe(false)
+				expect(JSON.stringify(row.error)).toContain(QUERY_FAILED_SENTENCE)
+			}
+		} finally {
+			spy.mockRestore()
+		}
+	})
+})

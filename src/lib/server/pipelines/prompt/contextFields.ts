@@ -87,9 +87,7 @@ export function characterExampleDialogue(
  * The top-level `postHistoryInstructions` variable.
  *
  * A character's own field wins. With no current character the mode is narrator
- * (no-perspective), and the narrator config's field is the fallback — the
- * config row at runtime is `narratorPromptConfigs`, which carries the column
- * even though the declared type does not.
+ * (no-perspective), and the narrator prompt's field is the fallback.
  */
 export function postHistoryInstructions(
 	config: PromptConfigFields,

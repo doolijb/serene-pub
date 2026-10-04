@@ -41,6 +41,11 @@ export interface TimeItem {
 	note: string
 	/** The cast present in it, by binding id, first appearance first. */
 	present: number[]
+	/**
+	 * The row this one is filed under, by key: a scene's history entry.
+	 * Absent for everything else — history is never filed under another row.
+	 */
+	parentKey?: string
 }
 
 /** An entry as the wire sends it. Only history carries date fields today. */
@@ -194,7 +199,8 @@ export function storyItems(input: StoryTimeInput): TimeItem[] {
 			date: dateOf(entry),
 			value: dateValue(dateOf(entry)),
 			note: sceneNote(scene),
-			present: [...(scene.participantCharacters ?? [])]
+			present: [...(scene.participantCharacters ?? [])],
+			parentKey: `entry#${entry.id}`
 		})
 	}
 
@@ -211,6 +217,32 @@ export function storyItems(input: StoryTimeInput): TimeItem[] {
 		})
 
 	return items.sort(compareItems)
+}
+
+/** One history entry (or other dated row) on the list, its scenes under it. */
+export interface TimeListGroup {
+	item: TimeItem
+	children: TimeItem[]
+}
+
+/**
+ * The Time list as groups: each row in story order, with the scenes filed
+ * under a history entry nested beneath it rather than interleaved with
+ * whatever else shares its date (note 4). A scene whose entry is not on the
+ * list stands on its own; nothing is ever dropped.
+ */
+export function timeListGroups(items: readonly TimeItem[]): TimeListGroup[] {
+	const keys = new Set(items.map((i) => i.key))
+	const children = new Map<string, TimeItem[]>()
+	for (const item of items) {
+		if (!item.parentKey || !keys.has(item.parentKey)) continue
+		const list = children.get(item.parentKey) ?? []
+		list.push(item)
+		children.set(item.parentKey, list)
+	}
+	return items
+		.filter((item) => !item.parentKey || !keys.has(item.parentKey))
+		.map((item) => ({ item, children: children.get(item.key) ?? [] }))
 }
 
 export type LaneKind = "story" | "cast" | "world"

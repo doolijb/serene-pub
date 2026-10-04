@@ -44,7 +44,7 @@ const STATIC: AdminSetting[] = [
 	{ label: "Context debugging", href: "/admin/diagnostics#enable-context-debugging", page: "Diagnostics", keywords: "prompt debug logs" },
 	// Extensions
 	{ label: "Plugin sandbox", href: "/admin/plugins#plugin-sandbox", page: "Plugins", keywords: "SP_PLUGINS_ENABLED hooks enable" },
-	{ label: "Installed plugins", href: "/admin/plugins#installed-plugins", page: "Plugins", keywords: "extensions permissions backend" },
+	{ label: "Installed plugins", href: "/admin/plugins", page: "Plugins", keywords: "extensions permissions backend" },
 	{ label: "Recent hook calls", href: "/admin/plugins#hook-calls", page: "Plugins", keywords: "errors timeouts" },
 	// People
 	{ label: "Invites", href: `${ADMIN_USERS_HREF}/invites`, page: "Users", keywords: "invite link sign up" },

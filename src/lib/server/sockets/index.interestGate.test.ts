@@ -99,7 +99,30 @@ vi.mock("./language", () => ({
 }))
 
 import { connectSockets } from "./index"
+import { refusable } from "./refusable"
 import { emitToUserRedacted } from "./utils/broadcastHelpers"
+
+/** Refuses with its own sentence, the way every lorebook handler does. */
+const REFUSING = "refusing:request"
+/** Tells every tab something, then refuses. */
+const PUSH_THEN_REFUSE = "refusing:afterPush"
+seam.handlers.push(
+	refusable(
+		REFUSING,
+		async () => {
+			throw new Error("Nothing can be linked to itself.")
+		},
+		"The link could not be saved."
+	),
+	refusable(
+		PUSH_THEN_REFUSE,
+		async (_socket, _params, emitToUser) => {
+			emitToUser(UNGATED_PUSH, { rows: [1] })
+			throw new Error("That branch is not a line of this book.")
+		},
+		"The line could not be read."
+	)
+)
 
 const NON_ADMIN = { id: 2, username: "reader", isAdmin: false }
 const ADMIN = { id: 3, username: "owner", isAdmin: true }
@@ -412,7 +435,7 @@ describe("a thunk that rejects", () => {
 })
 
 describe("the generic {event}:error fallback", () => {
-	test("reaches the room even when its own event is gated and unwanted", async () => {
+	test("reaches the asking socket even when its own event is gated and unwanted", async () => {
 		const h = fresh()
 		const client = h.connect("s1", NON_ADMIN)
 
@@ -424,9 +447,97 @@ describe("the generic {event}:error fallback", () => {
 
 		expect(h.emits).toEqual([
 			{
-				target: "user_2",
+				target: "s1",
 				event: `${GATED_BOOM}:error`,
 				data: { error: GENERIC_ERROR }
+			}
+		])
+	})
+})
+
+/**
+ * A refusal belongs to the request that drew it (A24). The user's other tabs
+ * did not ask, so they neither toast it (Layout's `:error` catch-all) nor
+ * settle a wait of their own on it (`awaitReply`).
+ */
+describe("a refusal answers the tab that asked", () => {
+	test("the generic fallback reaches the asking tab and no other", async () => {
+		const h = fresh()
+		const asking = h.connect("s1", NON_ADMIN)
+		h.connect("s2", NON_ADMIN)
+
+		await asking.fire(GATED_BOOM, {})
+
+		expect(h.emits).toEqual([
+			{ target: "s1", event: `${GATED_BOOM}:error`, data: { error: GENERIC_ERROR } }
+		])
+	})
+
+	test("a refusable handler's sentence reaches the asking tab and no other", async () => {
+		const h = fresh()
+		h.connect("s1", NON_ADMIN)
+		const asking = h.connect("s2", NON_ADMIN)
+
+		await asking.fire(REFUSING, {})
+
+		expect(h.emits).toEqual([
+			{
+				target: "s2",
+				event: `${REFUSING}:error`,
+				data: { error: "Nothing can be linked to itself." }
+			}
+		])
+	})
+
+	test("the handler's other emits still reach every tab", async () => {
+		const h = fresh()
+		const asking = h.connect("s1", NON_ADMIN)
+		h.connect("s2", NON_ADMIN)
+
+		await asking.fire(PUSH_THEN_REFUSE, {})
+
+		expect(h.emits).toEqual([
+			{ target: "user_2", event: UNGATED_PUSH, data: { rows: [1] } },
+			{
+				target: "s1",
+				event: `${PUSH_THEN_REFUSE}:error`,
+				data: { error: "That branch is not a line of this book." }
+			}
+		])
+	})
+
+	test("a tab that has gone hands its refusal to the user's other tabs", async () => {
+		const h = fresh()
+		const asking = h.connect("s1", NON_ADMIN)
+		h.connect("s2", NON_ADMIN)
+		// Reloaded while a long request was still out: nobody is left on the
+		// asking socket, and a failure told to nobody is lost.
+		asking.socket.disconnected = true
+
+		await asking.fire(REFUSING, {})
+
+		expect(h.emits).toEqual([
+			{
+				target: "user_2",
+				event: `${REFUSING}:error`,
+				data: { error: "Nothing can be linked to itself." }
+			}
+		])
+	})
+
+	test("the setup gate's refusal reaches only the asking tab", async () => {
+		const h = fresh()
+		const asking = h.connect("s1", NON_ADMIN)
+		h.connect("s2", NON_ADMIN)
+		asking.socket.pendingSetup = ["password"]
+
+		await asking.fire(REFUSING, {})
+
+		expect(h.emits).toEqual([
+			{
+				target: "s1",
+				event: `${REFUSING}:error`,
+				data: { error: "Set a new password to continue." }
 			}
 		])
 	})

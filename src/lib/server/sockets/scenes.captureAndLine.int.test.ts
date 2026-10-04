@@ -432,4 +432,82 @@ describe("the replies the lorebook views listen for", () => {
 			"987654"
 		)
 	}, 60_000)
+
+	test("a query that fails before the run is answered in a sentence that names the scene, once", async () => {
+		const { sceneProcessHandler } = await import("./scenes")
+		const w = await makeWorld()
+		const { emits, emit } = recorder()
+		// A scene id past `integer`: the scene read itself fails, as a query.
+		const pastInteger = 99_999_999_999
+
+		await expect(
+			sceneProcessHandler.handler(
+				fakeSocket(w.user.id),
+				{ sceneId: pastInteger },
+				emit
+			)
+		).rejects.toThrow()
+
+		expect(emits.filter((e) => e.event === "scenes:process:error")).toEqual([
+			{
+				event: "scenes:process:error",
+				data: {
+					sceneId: pastInteger,
+					error: "The scene could not be summarized."
+				}
+			}
+		])
+	}, 60_000)
+
+	test("a query that fails once the run started ends its card and names the scene, once", async () => {
+		const { sceneProcessHandler } = await import("./scenes")
+		const { activityStore } = await import("$lib/server/utils/activityStore")
+		const { isFailedQuery } = await import("$lib/server/db/errors")
+		const { sql } = await import("drizzle-orm")
+		const w = await makeWorld()
+		const [scene] = await testDb
+			.insert(schema.scenes)
+			.values({
+				lorebookId: w.lorebook.id,
+				sessionId: w.session.id,
+				historyEntryId: w.history.id,
+				selectedMessageIds: [w.messages[0].id]
+			})
+			.returning()
+		const failed = await testDb
+			.execute(sql`select * from no_such_table_a24`)
+			.then(
+				() => null,
+				(e: unknown) => e
+			)
+		expect(isFailedQuery(failed)).toBe(true)
+		// The run's one message read — taken after its card is up — fails.
+		const read = vi
+			.spyOn(testDb.query.sessionMessages, "findMany")
+			.mockRejectedValueOnce(failed)
+		const { emits, emit } = recorder()
+		try {
+			await expect(
+				sceneProcessHandler.handler(
+					fakeSocket(w.user.id),
+					{ sceneId: scene.id },
+					emit
+				)
+			).rejects.toThrow()
+		} finally {
+			read.mockRestore()
+		}
+
+		const card = activityStore
+			.getFor(w.user.id, false)
+			.find((a) => a.kind === "scene_summarize" && a.sceneId === scene.id)
+		// Not left "running", which would refuse every retry.
+		expect(card?.status).toBe("error")
+		const refusals = emits.filter((e) => e.event === "scenes:process:error")
+		expect(refusals).toHaveLength(1)
+		expect(refusals[0]!.data.sceneId).toBe(scene.id)
+		expect(refusals[0]!.data.error).toBe((card as any).errorMessage)
+		// The person hears a sentence, never the query.
+		expect(JSON.stringify(refusals)).not.toMatch(/no_such_table|select/i)
+	}, 60_000)
 })

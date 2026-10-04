@@ -223,30 +223,6 @@ export global {
 	export type UpdateSessionLayoutPreset =
 		Partial<SelectSessionLayoutPreset> & { id: number }
 
-	// Context Config types
-	export type SelectContextConfig = typeof schema.contextConfigs.$inferSelect
-	export type InsertContextConfig = typeof schema.contextConfigs.$inferInsert
-	export type UpdateContextConfig = Partial<SelectContextConfig> & {
-		id: number
-	}
-
-	// Prompt Config types
-	export type SelectPromptConfig = typeof schema.promptConfigs.$inferSelect
-	export type InsertPromptConfig = typeof schema.promptConfigs.$inferInsert
-	export type UpdatePromptConfig = Partial<SelectPromptConfig> & {
-		id: number
-	}
-
-	// Narrator Prompt Config types
-	export type SelectNarratorPromptConfig =
-		typeof schema.narratorPromptConfigs.$inferSelect
-	export type InsertNarratorPromptConfig =
-		typeof schema.narratorPromptConfigs.$inferInsert
-	export type UpdateNarratorPromptConfig =
-		Partial<SelectNarratorPromptConfig> & {
-			id: number
-		}
-
 	// Lorebook types
 	export type SelectLorebook = typeof schema.lorebooks.$inferSelect
 	export type InsertLorebook = typeof schema.lorebooks.$inferInsert
@@ -403,39 +379,6 @@ export global {
 		typeof schema.narrativeRelationships.$inferInsert
 	export type UpdateNarrativeRelationship =
 		Partial<SelectNarrativeRelationship> & { id: number }
-
-	// World Summarize Config types
-	export type SelectWorldSummarizeConfig =
-		typeof schema.worldSummarizeConfigs.$inferSelect
-	export type InsertWorldSummarizeConfig =
-		typeof schema.worldSummarizeConfigs.$inferInsert
-	export type UpdateWorldSummarizeConfig =
-		Partial<SelectWorldSummarizeConfig> & { id: number }
-
-	// Character Summarize Config types
-	export type SelectCharacterSummarizeConfig =
-		typeof schema.characterSummarizeConfigs.$inferSelect
-	export type InsertCharacterSummarizeConfig =
-		typeof schema.characterSummarizeConfigs.$inferInsert
-	export type UpdateCharacterSummarizeConfig =
-		Partial<SelectCharacterSummarizeConfig> & { id: number }
-
-	// Scene Summarize Config types
-	export type SelectSceneSummarizeConfig =
-		typeof schema.sceneSummarizeConfigs.$inferSelect
-	export type InsertSceneSummarizeConfig =
-		typeof schema.sceneSummarizeConfigs.$inferInsert
-	export type UpdateSceneSummarizeConfig =
-		Partial<SelectSceneSummarizeConfig> & { id: number }
-
-	// Graph Build Config types
-	export type SelectGraphBuildConfig =
-		typeof schema.graphBuildConfigs.$inferSelect
-	export type InsertGraphBuildConfig =
-		typeof schema.graphBuildConfigs.$inferInsert
-	export type UpdateGraphBuildConfig = Partial<SelectGraphBuildConfig> & {
-		id: number
-	}
 
 	// Account invite types (plan 27)
 	export type SelectAccountInvite = typeof schema.accountInvites.$inferSelect

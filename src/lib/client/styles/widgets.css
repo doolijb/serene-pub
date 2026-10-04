@@ -18,6 +18,7 @@
  *   §lore-entries     — was styles/lore-entries.css
  *   §state-widgets    — was styles/state-widgets.css (World State, Stats, slot control)
  *   §scene-portraits  — was styles/scene-portraits.css
+ *   §authors-note     — new with the widget (2026-10-02, AN1)
  * The P3 phases re-key these rules on widget parts (`data-widget-part`,
  * STYLE-GUIDE §6.16 "Widget parts"), one widget at a time: Stats (P3a),
  * World State (P3b), Scene Portraits (P3c), Lore entries (P3d), and the
@@ -37,7 +38,7 @@
    in a theme. Each default is the literal it replaced, so the defaults draw
    exactly what the sheet drew before.
 
-   Declared on `:root`, not on `[data-widget-instance]`: a token must resolve
+   Declared on `:root`, not on `[data-skin-scope]`: a token must resolve
    wherever a sheet class is drawn — inside a WidgetHost box, in a popover
    panel portalled to `<body>`, and in a mount with no WidgetHost around it —
    or the declaration that reads it falls back to its initial value. A box's
@@ -105,14 +106,8 @@
 	min-inline-size: 0;
 	min-block-size: 0;
 	block-size: 100%;
-	/* The glass panel's colours, light first and paired below — a message
-	   sits on the page's ground, and the panel is one step off it. */
-	--sp-glass-bg: color-mix(in oklab, var(--color-surface-50) 78%, transparent);
-	--sp-glass-bd: color-mix(in oklab, var(--color-surface-300) 70%, transparent);
-}
-[data-mode="dark"] [data-widget-part~="messages.root"] {
-	--sp-glass-bg: color-mix(in oklab, var(--color-surface-950) 78%, transparent);
-	--sp-glass-bd: color-mix(in oklab, var(--color-surface-800) 70%, transparent);
+	/* The glass backing's colours are the theme's (`--sp-glass-*`, app.css),
+	   not this widget's: a custom theme restyles them in one place. */
 }
 
 /* The width: the log's rows (the stage, `messages.stage`, SessionContainer)
@@ -192,30 +187,41 @@
 	order: -1;
 }
 
-/* The glass panel, painted only where a backdrop image is behind it: one
-   pane behind the rows and the composer — the box's width less an 8px
-   margin, or the column's under Comfortable — standing still while the log
-   scrolls over it. The box keeps the pane's margin, border and padding on
-   its block ends, so the log clips at the pane's inner edge; the rows and
-   the field keep them on their inline ends, so they sit inside the pane. */
-[data-widget-part~="messages.root"][data-backdrop] {
+/* THE MESSAGE BACKING (note 18; `$lib/shared/widgets/messageBacking`): the
+   host resolves the widget's Card setting (Auto / On / Off) against what its
+   message style declares and the app background, and says the answer as
+   `data-sp-backing` on the widget's box. A backing is one pane behind the
+   rows and the composer — the box's width less an 8px margin, or the
+   column's under Comfortable — standing still while the log scrolls over it.
+   The box keeps the pane's margin, border and padding on its block ends, so
+   the log clips at the pane's inner edge; the rows and the field keep them
+   on their inline ends, so they sit inside the pane.
+
+   How a card and a glass pane LOOK is the theme's, never a style's: the card
+   is Skeleton's `card` with a filled surface preset, the glass is the
+   theme's `preset-glass-surface` (app.css). `none` draws nothing. */
+[data-sp-backing]:not([data-sp-backing="none"]) [data-widget-part~="messages.root"] {
 	padding-block: 17px 33px;
 }
-[data-widget-part~="messages.root"][data-backdrop]::before {
+[data-sp-backing]:not([data-sp-backing="none"]) [data-widget-part~="messages.root"]::before {
 	content: "";
 	position: absolute;
 	z-index: -1;
 	inset-block: 8px 16px;
 	inset-inline: 8px;
-	background: var(--sp-glass-bg);
-	backdrop-filter: blur(14px);
-	border: 1px solid var(--sp-glass-bd);
-	border-radius: 14px;
+	/* Skeleton's card radius — the theme's, as `card` itself reads it. */
+	border-radius: var(--radius-container);
 	pointer-events: none;
+}
+[data-sp-backing="card"] [data-widget-part~="messages.root"]::before {
+	@apply preset-filled-surface-100-900 border-surface-200-800 border shadow-sm;
+}
+[data-sp-backing="glass"] [data-widget-part~="messages.root"]::before {
+	@apply preset-glass-surface;
 }
 /* Under Comfortable the pane is the column's, balance included (see the
    Line width rules above). */
-[data-widget-part~="messages.root"][data-backdrop][data-line-width="comfortable"]::before {
+[data-sp-backing]:not([data-sp-backing="none"]) [data-widget-part~="messages.root"][data-line-width="comfortable"]::before {
 	inset-inline: clamp(
 			0px,
 			(100% - var(--sp-column-width)) / 2 + var(--sp-column-shift),
@@ -224,8 +230,8 @@
 		auto;
 	inline-size: min(100%, var(--sp-column-width));
 }
-[data-widget-part~="messages.root"][data-backdrop] [data-widget-part~="messages.stage"],
-[data-widget-part~="messages.root"][data-backdrop] [data-widget-part~="messages.compose"] {
+[data-sp-backing]:not([data-sp-backing="none"]) [data-widget-part~="messages.root"] [data-widget-part~="messages.stage"],
+[data-sp-backing]:not([data-sp-backing="none"]) [data-widget-part~="messages.root"] [data-widget-part~="messages.compose"] {
 	padding-inline: 25px;
 }
 
@@ -720,8 +726,10 @@
 	min-width: 0px;
 }
 
-/* The actions row: the genre's actions and the turn controls as chips. The
-   host views draw ordinary buttons; the chip shape is set here, on the row. */
+/* The actions row: ONE group of chips (next-pass note 30, 2026-10-02) — the
+   turn controls, the genre's actions, More, and the "?" legend last. The host
+   views draw ordinary buttons; the chip shape and colour are set here, on the
+   row, so every chip reads alike. */
 [data-widget-part~="messages.composer-actions-row"] {
 	display: flex;
 	flex-wrap: wrap;
@@ -735,6 +743,11 @@
 	flex-wrap: wrap;
 	align-items: center;
 	gap: calc(var(--spacing) * 1.5);
+}
+/* A host view's chips are the row's own: `sp-host-view` (and its internal
+   root, already `display: contents`) lays out no box between them. */
+[data-widget-part~="messages.composer-chips"] > sp-host-view {
+	display: contents;
 }
 [data-widget-part~="messages.composer-chips"] :where(button) {
 	display: inline-flex;
@@ -754,7 +767,8 @@
 	width: calc(var(--spacing) * 4);
 	height: calc(var(--spacing) * 4);
 }
-/* The genre's contributed actions read as the session's own vocabulary. */
+/* Every chip in the row — turn control, genre action, More, the legend — one
+   surface tone; under the pointer each brightens as `.btn` does. */
 [data-widget-part~="messages.composer-actions"] :where(button) {
 	--tw-border-style: none;
 	border-style: none;
@@ -764,18 +778,6 @@
 [data-widget-part~="messages.composer-actions"] :where(button):where([data-mode="dark"], [data-mode="dark"] *) {
 	background-color: var(--color-surface-800);
 	color: var(--color-surface-200);
-}
-/* The turn controls sit a step quieter than the genre's own actions. */
-[data-widget-part~="messages.composer-turn-controls"] :where(button) {
-	border-style: var(--tw-border-style);
-	border-width: var(--default-border-width, 1px);
-	border-color: var(--color-surface-300);
-	background-color: transparent;
-	color: var(--color-surface-600);
-}
-[data-widget-part~="messages.composer-turn-controls"] :where(button):where([data-mode="dark"], [data-mode="dark"] *) {
-	border-color: var(--color-surface-800);
-	color: var(--color-surface-400);
 }
 /* More actions (the overflow's trigger, a chip): what `btn btn-sm` adds under
    the chip, and the room for the newcomer's dot. */
@@ -854,22 +856,6 @@
 	--tw-ring-shadow: var(--tw-ring-inset,) 0 0 0 calc(1px + var(--tw-ring-offset-width)) var(--tw-ring-color, currentcolor);
 	box-shadow: var(--tw-inset-shadow), var(--tw-inset-ring-shadow), var(--tw-ring-offset-shadow), var(--tw-ring-shadow), var(--tw-shadow);
 	--tw-ring-color: var(--color-primary-500);
-}
-[data-composer-skin="minimal"] [data-widget-part~="messages.composer-card"] {
-	border-radius: 9999px;
-	padding-inline: calc(var(--spacing) * 2);
-}
-/* In a narrow box (a side panel, the Lair's Sanctum) the pill's footer wraps
-   under its field, and a stadium around two rows reads as a bubble: a card
-   with round corners instead. */
-@container sp-widget (width < 30rem) {
-	[data-composer-skin="minimal"] [data-widget-part~="messages.composer-card"] {
-		border-radius: 1.25rem;
-	}
-	/* Two lines, so a placeholder that wraps is read whole. */
-	[data-composer-skin="minimal"] [data-widget-part~="messages.composer-field"] textarea {
-		max-block-size: 3.2em;
-	}
 }
 /* The draft's share of the context window, along the card's top inner edge. */
 [data-widget-part~="messages.composer-meter"] {
@@ -1066,9 +1052,6 @@
 [data-widget-part~="messages.composer-field"] textarea::placeholder {
 	color: oklch(55.1% 0.027 264.364);
 }
-[data-composer-skin="minimal"] [data-widget-part~="messages.composer-field"] textarea {
-	max-block-size: 1.6em;
-}
 [data-composer-skin="writer"] [data-widget-part~="messages.composer-field"] textarea {
 	font-family: var(--sp-prose, inherit);
 	/* Story text size multiplies it, as it does the message styles' prose. */
@@ -1145,10 +1128,6 @@ button[data-widget-part~="messages.composer-persona"] {
 	button[data-widget-part~="messages.composer-persona"]:where([data-mode="dark"], [data-mode="dark"] *):hover {
 		background-color: var(--color-surface-800);
 	}
-}
-[data-composer-skin="minimal"] [data-widget-part~="messages.composer-persona-name"],
-[data-composer-skin="minimal"] [data-widget-part~="messages.composer-persona"] > :where(svg, sp-icon) {
-	display: none;
 }
 /* The persona menu (the popover's body, portalled to <body>): a `card` that
    names whom one writes as, and a row per persona. */
@@ -1635,6 +1614,333 @@ button[data-widget-part~="messages.composer-persona"] {
 	}
 }
 
+/* ── the composer's attachments (composer attachments §3.3) ──────────────── */
+
+/* The drop zone is the card's box: a drag of files over it draws the
+   overlay (STYLE-GUIDE §6.7, "Drop to attach"). */
+[data-widget-part~="messages.composer-drop"] {
+	display: block;
+}
+/* The tray: this line's files under the field, one row of tiles that scrolls
+   sideways when it outgrows the card (a phone's 56px tiles). */
+[data-widget-part~="messages.composer-tray"] {
+	display: flex;
+	gap: calc(var(--spacing) * 2);
+	margin: 0;
+	padding: calc(var(--spacing) * 2) calc(var(--spacing) * 2) 0;
+	list-style: none;
+	overflow-x: auto;
+	scrollbar-width: thin;
+}
+[data-widget-part~="messages.composer-tray-item"] {
+	position: relative;
+	flex: none;
+	display: grid;
+	grid-template-columns: 2.5rem minmax(0, 1fr);
+	grid-template-rows: auto auto;
+	align-items: center;
+	column-gap: calc(var(--spacing) * 2);
+	inline-size: 12rem;
+	min-block-size: 3.5rem;
+	padding: calc(var(--spacing) * 1.5);
+	padding-inline-end: calc(var(--spacing) * 7);
+	border: 1px solid var(--color-surface-300-700);
+	border-radius: 0.5rem;
+	background-color: var(--color-surface-50-950);
+	font-size: calc(0.75rem * var(--text-scaling));
+	line-height: calc(calc(1 / 0.75) * var(--text-scaling));
+	color: var(--color-surface-950-50);
+}
+[data-widget-part~="messages.composer-tray-item"][data-status="refused"] {
+	border-color: var(--color-error-500);
+	border-style: dashed;
+}
+[data-widget-part~="messages.composer-tray-thumb"],
+[data-widget-part~="messages.composer-tray-icon"] {
+	grid-row: 1 / span 2;
+	inline-size: 2.5rem;
+	block-size: 2.5rem;
+	border-radius: 0.25rem;
+	object-fit: cover;
+}
+[data-widget-part~="messages.composer-tray-icon"] {
+	display: grid;
+	place-items: center;
+	background-color: var(--color-surface-100-900);
+	color: var(--color-surface-700-300);
+}
+[data-widget-part~="messages.composer-tray-name"] {
+	min-inline-size: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-weight: 500;
+}
+/* Upload progress: a thin bar filling to `--sp-fill`. */
+[data-widget-part~="messages.composer-tray-progress"] {
+	display: block;
+	block-size: 4px;
+	border-radius: 9999px;
+	background: linear-gradient(to right, var(--color-primary-500) var(--sp-fill, 0%), var(--color-surface-200-800) var(--sp-fill, 0%));
+}
+[data-widget-part~="messages.composer-tray-refusal"] {
+	grid-column: 2;
+	color: var(--color-error-700-300);
+	overflow-wrap: anywhere;
+}
+[data-widget-part~="messages.composer-tray-item"]:has([data-widget-part~="messages.composer-tray-refusal"]) {
+	inline-size: 16rem;
+}
+[data-widget-part~="messages.composer-tray-remove"] {
+	position: absolute;
+	inset-block-start: calc(var(--spacing) * 1);
+	inset-inline-end: calc(var(--spacing) * 1);
+	display: grid;
+	place-items: center;
+	inline-size: 1.5rem;
+	block-size: 1.5rem;
+	padding: 0;
+	border-radius: 9999px;
+	color: var(--color-surface-700-300);
+	cursor: pointer;
+}
+@media (hover: hover) {
+	[data-widget-part~="messages.composer-tray-remove"]:hover {
+		background-color: var(--color-surface-200-800);
+		color: var(--color-surface-950-50);
+	}
+}
+@media (pointer: coarse) {
+	[data-widget-part~="messages.composer-tray-remove"] {
+		inline-size: 2.75rem;
+		block-size: 2.75rem;
+		inset-block-start: 0;
+		inset-inline-end: 0;
+	}
+}
+/* A narrow box (a phone's): smaller tiles, the name only. */
+@container sp-widget (max-width: 40rem) {
+	[data-widget-part~="messages.composer-tray-item"] {
+		inline-size: 9rem;
+	}
+}
+/* What this reply can read (note 41, 2026-10-03): no longer in the
+   composer's body — More › **What can be attached** opens it in a dialog
+   (`sp-dialog`, portalled): the summary, every kind with the reason a refused
+   one can't be attached, and each model call's reading. */
+[data-widget-part~="messages.composer-readers"] {
+	display: grid;
+	gap: calc(var(--spacing) * 3);
+	font-size: calc(0.875rem * var(--text-scaling));
+	line-height: calc(calc(1.25 / 0.875) * var(--text-scaling));
+	color: var(--color-surface-950-50);
+}
+[data-widget-part~="messages.composer-readers-line"] {
+	margin: 0;
+	font-weight: 500;
+}
+[data-widget-part~="messages.composer-readers-kinds"],
+[data-widget-part~="messages.composer-readers-calls"] {
+	display: grid;
+	gap: var(--spacing);
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+[data-widget-part~="messages.composer-readers-calls"] {
+	padding-block-start: calc(var(--spacing) * 3);
+	border-block-start: 1px solid var(--color-surface-300-700);
+	color: var(--color-surface-700-300);
+}
+[data-widget-part~="messages.composer-readers-kind"]:not([data-allowed]) {
+	color: var(--color-surface-700-300);
+}
+[data-widget-part~="messages.composer-readers-reason"] {
+	color: var(--color-warning-800-200);
+}
+/* Said aloud, not shown: "cat.png attached", a refusal, a removal. */
+[data-widget-part~="messages.composer-announce"] {
+	position: absolute;
+	inline-size: 1px;
+	block-size: 1px;
+	margin: 0;
+	overflow: hidden;
+	clip-path: inset(50%);
+	white-space: nowrap;
+}
+
+/* ── the composer skins (the widget's `composer` setting) ─────────────────── */
+
+/* The pill (`minimal`, redesigned for next-pass note 21, 2026-10-02): ONE row,
+   never a stadium around two. Who you write as on the left (the face alone),
+   the field taking the rest, Preview and More as quiet round icons, and Send
+   a filled round icon at the end. Every control is 36px and sits on the
+   field's last line, so a draft that grows to a few lines lifts the field and
+   leaves the controls where the thumb was; the 24px radius is a stadium at
+   one line and a soft card past it. Later than the base rules and keyed on
+   the skin, so it wins the coarse and narrow targets too (re-stated below). */
+[data-composer-skin="minimal"] [data-widget-part~="messages.composer-card"] {
+	display: flex;
+	align-items: flex-end;
+	gap: var(--spacing);
+	min-block-size: calc(var(--spacing) * 12);
+	padding: calc(var(--spacing) * 1.5);
+	border-radius: 1.5rem;
+}
+[data-composer-skin="minimal"] [data-widget-part~="messages.composer-footer"] {
+	display: contents;
+}
+/* The pill keeps its one row; the tray and the readers line take a row of
+   their own beneath it, and the card goes soft around them. */
+[data-composer-skin="minimal"] [data-widget-part~="messages.composer-card"]:has([data-widget-part~="messages.composer-tray"]) {
+	flex-wrap: wrap;
+}
+[data-composer-skin="minimal"] [data-widget-part~="messages.composer-tray"] {
+	order: 2;
+	flex-basis: 100%;
+	padding-inline: calc(var(--spacing) * 1.5);
+}
+[data-composer-skin="minimal"] :is([data-widget-part~="messages.composer-channels"], [data-widget-part~="messages.composer-persona"]) {
+	order: -1;
+}
+[data-composer-skin="minimal"] [data-widget-part~="messages.composer-body"] {
+	flex: 1 1 auto;
+	min-inline-size: 0;
+	align-self: center;
+	padding-block: calc(var(--spacing) * 1.5);
+	padding-inline: calc(var(--spacing) * 1.5);
+}
+[data-composer-skin="minimal"] [data-widget-part~="messages.composer-footer-end"] {
+	order: 1;
+	margin-left: 0;
+	gap: calc(var(--spacing) * 0.5);
+}
+[data-composer-skin="minimal"] [data-widget-part~="messages.composer-field"] textarea {
+	max-block-size: 6em; /* four lines, then it scrolls */
+}
+/* The face alone: the placeholder already says whom you write as. */
+[data-composer-skin="minimal"] [data-widget-part~="messages.composer-persona"] {
+	block-size: calc(var(--spacing) * 9);
+	min-inline-size: calc(var(--spacing) * 9);
+	justify-content: center;
+	padding: 0;
+}
+[data-composer-skin="minimal"] [data-widget-part~="messages.composer-persona-name"],
+[data-composer-skin="minimal"] [data-widget-part~="messages.composer-persona"] > :where(svg, sp-icon[name="chevron-down"]) {
+	display: none;
+}
+[data-composer-skin="minimal"] [data-widget-part~="messages.composer-icon-button"] {
+	inline-size: calc(var(--spacing) * 9);
+	block-size: calc(var(--spacing) * 9);
+}
+/* Send and Stop: the round icon; the word stays their accessible name. */
+[data-composer-skin="minimal"] :is([data-widget-part~="messages.composer-send"], [data-widget-part~="messages.composer-stop"]) {
+	inline-size: calc(var(--spacing) * 9);
+	block-size: calc(var(--spacing) * 9);
+	padding: 0;
+}
+[data-composer-skin="minimal"] :is([data-widget-part~="messages.composer-send"], [data-widget-part~="messages.composer-stop"]) > span {
+	position: absolute;
+	inline-size: 1px;
+	block-size: 1px;
+	overflow: hidden;
+	clip-path: inset(50%);
+	white-space: nowrap;
+}
+@media (pointer: coarse) {
+	[data-composer-skin="minimal"] :is([data-widget-part~="messages.composer-persona"], [data-widget-part~="messages.composer-icon-button"], [data-widget-part~="messages.composer-send"], [data-widget-part~="messages.composer-stop"]) {
+		inline-size: calc(var(--spacing) * 11);
+		block-size: calc(var(--spacing) * 11);
+	}
+}
+
+/* The page line (`quill`, next-pass note 22, 2026-10-02): no box at all. The
+   draft is the story's next line — the prose face, size and colour the
+   messages are set in, on the column they run down — with only a faint
+   underline (`--sp-quill-rule`, a low-contrast surface step) marking where
+   the writing goes, a shade firmer while you write. The footer stays quiet
+   until the line has your attention, and Send appears once there is
+   something to send. Pairs with a message style that draws no backing. */
+[data-composer-skin="quill"] {
+	--sp-quill-rule: light-dark(
+		color-mix(in oklab, var(--color-surface-400) 55%, transparent),
+		color-mix(in oklab, var(--color-surface-600) 55%, transparent)
+	);
+	--sp-quill-rule-active: light-dark(var(--color-surface-400), var(--color-surface-600));
+}
+[data-composer-skin="quill"] [data-widget-part~="messages.composer-card"],
+[data-composer-skin="quill"] [data-widget-part~="messages.composer-card"]:where([data-mode="dark"], [data-mode="dark"] *) {
+	border-style: none;
+	border-radius: 0;
+	background-color: transparent;
+}
+[data-composer-skin="quill"] [data-widget-part~="messages.composer-card"]:focus-within {
+	box-shadow: none;
+}
+[data-composer-skin="quill"] [data-widget-part~="messages.composer-body"] {
+	padding-inline: 0;
+	padding-top: calc(var(--spacing) * 3);
+	border-bottom: 1px solid var(--sp-quill-rule);
+	transition: border-color var(--default-transition-duration) var(--default-transition-timing-function);
+}
+[data-composer-skin="quill"] [data-widget-part~="messages.composer"]:focus-within [data-widget-part~="messages.composer-body"],
+[data-composer-skin="quill"][data-widget-part~="messages.composer"]:focus-within [data-widget-part~="messages.composer-body"] {
+	border-bottom-color: var(--sp-quill-rule-active);
+}
+[data-composer-skin="quill"] [data-widget-part~="messages.composer-field"] textarea {
+	font-family: var(--sp-prose, inherit);
+	font-size: calc(17px * var(--sp-prose-scale, 1));
+	line-height: 1.65;
+	color: var(--sp-body, inherit);
+	max-block-size: 13.2em; /* eight lines of prose, then it scrolls */
+	padding-bottom: calc(var(--spacing) * 0.5);
+}
+[data-composer-skin="quill"] [data-widget-part~="messages.composer-field"] textarea::placeholder {
+	font-style: italic;
+	color: var(--color-surface-500);
+}
+/* The footer: small and faint until the composer has your attention. */
+[data-composer-skin="quill"] [data-widget-part~="messages.composer-footer"] {
+	padding-inline: 0;
+	padding-block: var(--spacing);
+	opacity: 0.55;
+	transition: opacity var(--default-transition-duration) var(--default-transition-timing-function);
+}
+[data-composer-skin="quill"]:is(:hover, :focus-within) [data-widget-part~="messages.composer-footer"],
+[data-composer-skin="quill"] [data-widget-part~="messages.composer"]:is(:hover, :focus-within) [data-widget-part~="messages.composer-footer"] {
+	opacity: 1;
+}
+/* Send: a word in the accent, no fill; there only while there is a draft. */
+[data-composer-skin="quill"] [data-widget-part~="messages.composer-send"],
+[data-composer-skin="quill"] [data-widget-part~="messages.composer-send"][data-someone-due] {
+	background-color: transparent;
+	color: var(--color-primary-700-300);
+}
+@media (hover: hover) {
+	[data-composer-skin="quill"] [data-widget-part~="messages.composer-send"]:not(:disabled):hover {
+		background-color: var(--color-primary-50-950);
+		filter: none;
+	}
+}
+[data-composer-skin="quill"] [data-widget-part~="messages.composer-send"]:disabled {
+	visibility: hidden;
+}
+[data-composer-skin="quill"] [data-widget-part~="messages.composer-stop"] {
+	background-color: transparent;
+}
+/* The page line: the tray sits under the rule, unboxed tiles on the page; the
+   readers line is as quiet as the footer. */
+[data-composer-skin="quill"] [data-widget-part~="messages.composer-tray"] {
+	padding-inline: 0;
+}
+[data-composer-skin="quill"] [data-widget-part~="messages.composer-tray-item"] {
+	background-color: transparent;
+}
+/* Send stays while files wait to go, even with no words. */
+[data-composer-skin="quill"] [data-widget-part~="messages.composer-card"]:has([data-widget-part~="messages.composer-tray-item"]:not([data-status="refused"])) [data-widget-part~="messages.composer-send"] {
+	visibility: visible;
+}
+
 /* ── motion (was JS: softFade, animateHeight) ────────────────────────────── */
 
 /* The newest message fades in as it arrives; older pages and the rows that
@@ -1841,7 +2147,7 @@ button[data-widget-part~="messages.composer-persona"] {
 
 /* ── disclosures and meters (SessionMessage, MessageBlocksView, SessionComposer) ── */
 
-/* A message's thinking and narrator-instructions tracks: 0fr → 1fr, and a
+/* A message's reasoning and narrator-instructions tracks: 0fr → 1fr, and a
    collapsed track's focusables out of the tab order. */
 [data-widget-part~="messages.message-disclosure-track"] {
 	grid-template-rows: 0fr;
@@ -2363,7 +2669,7 @@ button[data-widget-part~="messages.composer-persona"] {
 	color: light-dark(var(--color-surface-600), var(--color-surface-400));
 }
 
-/* A reply's typed parts (MessagePartsView): thinking, a section, a tool call
+/* A reply's typed parts (MessagePartsView): reasoning, a section, a tool call
    or result, and an unknown type are one collapsible each; a step after the
    first is set off by a rule; an image opens the viewer; a file downloads. */
 [data-widget-part~="messages.part-disclosure"] {
@@ -2420,34 +2726,176 @@ button[data-widget-part~="messages.composer-persona"] {
 	border-color: var(--color-surface-300-700);
 	opacity: 40%;
 }
-[data-widget-part~="messages.part-image"] {
-	display: block;
-	width: fit-content;
-	margin-top: calc(var(--spacing) * 2);
-	padding: 0px;
-	border-style: var(--tw-border-style);
-	border-width: 0px;
-	background-color: transparent;
-	cursor: pointer;
-}
-[data-widget-part~="messages.part-image-img"],
 [data-widget-part~="messages.block-image"] {
 	max-width: 100%;
 	max-height: calc(var(--spacing) * 96);
 	border-radius: 0.25rem;
 }
-[data-widget-part~="messages.part-file"] {
+
+/* The media strip (MessageMediaStrip, composer attachments §3.4; next-pass
+   note 40, 2026-10-03): a message's images and files as a row of square
+   TILES below the message's card — its own cell of the message grid, placed
+   under `content` by the base sheet (messageLayouts.css), so no pack's card
+   ever holds it. Every image, one or many, is a square `?v=thumb` TILE cropped
+   to fill (`object-fit: cover`), one size each — 7rem, 5rem in a narrow box —
+   with the rest past six folded into a count tile. A file is a FILE TILE the
+   same size: its kind's icon, its name on up to two lines, its size, a
+   download glyph in the corner. Tiles are radius 12px (§4, a card's step);
+   every target is 44px on touch (§9). */
+[data-widget-part~="messages.media-strip"] {
 	display: flex;
-	width: fit-content;
-	align-items: center;
+	flex-wrap: wrap;
+	align-items: flex-start;
 	gap: calc(var(--spacing) * 2);
+	min-inline-size: 0;
 	margin-top: calc(var(--spacing) * 2);
-	padding: calc(var(--spacing) * 2);
-	border-radius: 0.25rem;
-	font-size: calc(0.875rem * var(--text-scaling));
-	line-height: calc(calc(1.25 / 0.875) * var(--text-scaling));
-	background-color: var(--color-surface-50-950);
+	--sp-media-tile: 7rem;
+}
+@container sp-widget (width < 30rem) {
+	[data-widget-part~="messages.media-strip"] {
+		--sp-media-tile: 5rem;
+	}
+}
+[data-widget-part~="messages.media-images"],
+[data-widget-part~="messages.media-files"] {
+	display: flex;
+	flex-wrap: wrap;
+	justify-content: inherit;
+	gap: calc(var(--spacing) * 2);
+	min-inline-size: 0;
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+[data-widget-part~="messages.media-item"] {
+	position: relative;
+	display: block;
+	min-inline-size: 0;
+}
+[data-widget-part~="messages.media-tile"],
+[data-widget-part~="messages.media-more"],
+[data-widget-part~="messages.media-missing"],
+[data-widget-part~="messages.media-file"] {
+	inline-size: var(--sp-media-tile);
+	block-size: var(--sp-media-tile);
+	border: 1px solid var(--color-surface-300-700);
+	border-radius: 12px;
+	overflow: hidden;
+}
+[data-widget-part~="messages.media-tile"],
+[data-widget-part~="messages.media-more"] {
+	display: block;
+	padding: 0;
+	background-color: var(--color-surface-200-800);
+	cursor: zoom-in;
+}
+[data-widget-part~="messages.media-tile-img"] {
+	display: block;
+	inline-size: 100%;
+	block-size: 100%;
+	object-fit: cover;
+}
+[data-widget-part~="messages.media-more"] {
+	display: grid;
+	place-items: center;
+	font-weight: 600;
+	font-size: calc(1rem * var(--text-scaling));
 	color: var(--color-surface-950-50);
+	cursor: pointer;
+}
+[data-widget-part~="messages.media-missing"] {
+	display: grid;
+	place-content: center;
+	justify-items: center;
+	gap: var(--spacing);
+	padding: var(--spacing);
+	border-style: dashed;
+	border-color: var(--color-surface-400-600);
+	text-align: center;
+	font-size: calc(0.75rem * var(--text-scaling));
+	line-height: 1.2;
+	color: var(--color-surface-700-300);
+}
+/* The file tile: icon on top, the name on up to two lines, the size under it,
+   the download glyph in the top trailing corner. */
+[data-widget-part~="messages.media-file"] {
+	position: relative;
+	display: flex;
+	flex-direction: column;
+	justify-content: center;
+	gap: var(--spacing);
+	padding: calc(var(--spacing) * 2);
+	background-color: var(--color-surface-50-950);
+	font-size: calc(0.75rem * var(--text-scaling));
+	line-height: calc(calc(1 / 0.75) * var(--text-scaling));
+	color: var(--color-surface-950-50);
+	text-decoration: none;
+}
+[data-widget-part~="messages.media-file"] > sp-icon:first-child {
+	color: var(--color-surface-700-300);
+}
+[data-widget-part~="messages.media-file"] > sp-icon[name="download"] {
+	position: absolute;
+	inset-block-start: calc(var(--spacing) * 2);
+	inset-inline-end: calc(var(--spacing) * 2);
+	color: var(--color-surface-700-300);
+}
+[data-widget-part~="messages.media-file-name"] {
+	display: -webkit-box;
+	-webkit-box-orient: vertical;
+	-webkit-line-clamp: 2;
+	line-clamp: 2;
+	min-inline-size: 0;
+	overflow: hidden;
+	overflow-wrap: anywhere;
+	font-weight: 500;
+}
+[data-widget-part~="messages.media-file-size"] {
+	flex: none;
+	color: var(--color-surface-700-300);
+}
+@container sp-widget (width < 30rem) {
+	[data-widget-part~="messages.media-file"] {
+		padding: calc(var(--spacing) * 1.5);
+	}
+	[data-widget-part~="messages.media-file"] > sp-icon[name="download"] {
+		display: none;
+	}
+}
+[data-widget-part~="messages.media-remove"] {
+	position: absolute;
+	inset-block-start: calc(var(--spacing) * -2);
+	inset-inline-end: calc(var(--spacing) * -2);
+	display: grid;
+	place-items: center;
+	inline-size: 1.5rem;
+	block-size: 1.5rem;
+	padding: 0;
+	border: 1px solid var(--color-surface-300-700);
+	border-radius: 9999px;
+	background-color: var(--color-surface-100-900);
+	color: var(--color-surface-950-50);
+	cursor: pointer;
+}
+[data-widget-part~="messages.media-tile"]:hover,
+[data-widget-part~="messages.media-more"]:hover,
+[data-widget-part~="messages.media-file"]:hover {
+	border-color: var(--color-primary-500);
+}
+[data-widget-part~="messages.media-tile"]:focus-visible,
+[data-widget-part~="messages.media-more"]:focus-visible,
+[data-widget-part~="messages.media-file"]:focus-visible,
+[data-widget-part~="messages.media-remove"]:focus-visible {
+	outline: 2px solid var(--color-primary-500);
+	outline-offset: 2px;
+}
+@media (pointer: coarse) {
+	[data-widget-part~="messages.media-remove"] {
+		inline-size: 2.75rem;
+		block-size: 2.75rem;
+		inset-block-start: calc(var(--spacing) * -3);
+		inset-inline-end: calc(var(--spacing) * -3);
+	}
 }
 
 /* A block tree (MessageBlocksView, 20 §6): plugin content as data, drawn
@@ -2900,6 +3348,15 @@ button[data-widget-part~="messages.composer-persona"] {
 	font-size: calc(0.75rem * var(--text-scaling));
 	line-height: calc(calc(1 / 0.75) * var(--text-scaling));
 	color: light-dark(var(--color-error-600), var(--color-error-400));
+}
+
+/* A mark saved to the entry that a dated amendment still decides here (A14):
+   not a failure, so muted rather than the error tone. */
+[data-widget-part~="lore-entries.held"] {
+	padding-inline: calc(var(--spacing) * 2);
+	font-size: calc(0.75rem * var(--text-scaling));
+	line-height: calc(calc(1 / 0.75) * var(--text-scaling));
+	color: light-dark(var(--color-surface-600), var(--color-surface-400));
 }
 
 /* ── the entries ────────────────────────────────────────────────────────── */
@@ -4016,6 +4473,152 @@ button[data-widget-part~="messages.composer-persona"] {
 	width: var(--sp-fill, 0%);
 	border-radius: var(--sp-w-meter-radius);
 	background: var(--sp-w-meter-fill-bg);
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   §authors-note (2026-10-02, AN1)
+   ════════════════════════════════════════════════════════════════════════ */
+
+/*
+ * Core's Author's note widget, keyed on its widget parts; the markup carries
+ * no look. Parts: authors-note.root · .note · .alert · .field · .label ·
+ * .text · .numbers · .number · .help · .advanced · .role · .role-field ·
+ * .actions · .unsaved · .discard · .save · .last-reply (STYLE-GUIDE §6.16).
+ * State: `data-dirty` on the root while the draft differs from what is
+ * saved; `data-applied` on the last-reply line when the newest reply carried
+ * the note; a field the viewer may not change is its own `disabled`.
+ */
+[data-widget-part~="authors-note.root"] {
+	display: flex;
+	flex-direction: column;
+	gap: calc(var(--spacing) * 3);
+	padding: calc(var(--spacing) * 3);
+}
+[data-widget-part~="authors-note.note"],
+[data-widget-part~="authors-note.help"],
+[data-widget-part~="authors-note.last-reply"] {
+	font-size: calc(0.75rem * var(--text-scaling));
+	line-height: calc(calc(1 / 0.75) * var(--text-scaling));
+	color: light-dark(var(--color-surface-600), var(--color-surface-400));
+}
+[data-widget-part~="authors-note.note"] {
+	font-size: calc(0.875rem * var(--text-scaling));
+	line-height: calc(calc(1.25 / 0.875) * var(--text-scaling));
+}
+[data-widget-part~="authors-note.alert"] {
+	font-size: calc(0.75rem * var(--text-scaling));
+	line-height: calc(calc(1 / 0.75) * var(--text-scaling));
+	color: light-dark(var(--color-error-600), var(--color-error-400));
+}
+[data-widget-part~="authors-note.field"] {
+	display: flex;
+	flex-direction: column;
+	gap: calc(var(--spacing) * 1);
+	min-width: 0;
+}
+[data-widget-part~="authors-note.label"] {
+	font-size: calc(0.875rem * var(--text-scaling));
+	line-height: calc(calc(1.25 / 0.875) * var(--text-scaling));
+	font-weight: 500;
+}
+/* Two numbers side by side, stacking in a narrow box. */
+[data-widget-part~="authors-note.numbers"] {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+	gap: calc(var(--spacing) * 3);
+}
+/* Skeleton's `textarea` and `input`, as the lore search field draws one. */
+[data-widget-part~="authors-note.text"],
+[data-widget-part~="authors-note.number"] {
+	display: block;
+	width: 100%;
+	padding: calc(var(--spacing) * 2);
+	border-width: 0;
+	border-radius: var(--radius-base);
+	font-size: calc(0.875rem * var(--text-scaling));
+	line-height: calc(calc(1.25 / 0.875) * var(--text-scaling));
+	color: var(--color-surface-950-50);
+	background-color: var(--color-surface-50-950);
+	box-shadow: inset 0 0 0 1px var(--color-surface-300-700);
+	outline-color: transparent;
+}
+[data-widget-part~="authors-note.text"] {
+	resize: vertical;
+	min-height: calc(var(--spacing) * 24);
+}
+[data-widget-part~="authors-note.text"]:focus,
+[data-widget-part~="authors-note.number"]:focus {
+	box-shadow: inset 0 0 0 2px var(--color-primary-500);
+}
+[data-widget-part~="authors-note.text"]:disabled,
+[data-widget-part~="authors-note.number"]:disabled {
+	opacity: 70%;
+	cursor: not-allowed;
+}
+/* Save and Discard at the end of one row; the unsaved line before them. */
+[data-widget-part~="authors-note.actions"] {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	justify-content: flex-end;
+	gap: calc(var(--spacing) * 2);
+}
+[data-widget-part~="authors-note.unsaved"] {
+	margin-inline-end: auto;
+	font-size: calc(0.75rem * var(--text-scaling));
+	color: light-dark(var(--color-warning-700), var(--color-warning-400));
+}
+[data-widget-part~="authors-note.save"],
+[data-widget-part~="authors-note.discard"] {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	min-height: calc(var(--spacing) * 9);
+	padding-inline: calc(var(--spacing) * 3);
+	border-radius: var(--radius-base);
+	font-size: var(--text-sm);
+	white-space: nowrap;
+	transition-property: var(--default-transition-property);
+	transition-duration: var(--default-transition-duration);
+}
+/* `btn preset-filled-primary-500`. */
+[data-widget-part~="authors-note.save"] {
+	background-color: var(--color-primary-500);
+	color: var(--color-primary-contrast-500);
+}
+@media (hover: hover) {
+	[data-widget-part~="authors-note.save"]:not(:disabled):hover,
+	[data-widget-part~="authors-note.discard"]:not(:disabled):hover {
+		filter: brightness(110%);
+	}
+	[data-widget-part~="authors-note.discard"]:not(:disabled):hover {
+		background-color: var(--color-surface-50-950);
+	}
+}
+[data-widget-part~="authors-note.save"]:focus-visible,
+[data-widget-part~="authors-note.discard"]:focus-visible {
+	box-shadow:
+		0 0 0 2px #fff,
+		0 0 0 4px var(--color-primary-500);
+	outline-style: none;
+}
+[data-widget-part~="authors-note.save"]:disabled,
+[data-widget-part~="authors-note.discard"]:disabled {
+	pointer-events: none;
+	opacity: 40%;
+	filter: grayscale(0.3);
+}
+[data-widget-part~="authors-note.last-reply"][data-applied] {
+	color: light-dark(var(--color-success-700), var(--color-success-400));
+}
+
+/* STYLE-GUIDE §9: a finger lands on 44px, however small the control reads. */
+@media (pointer: coarse) {
+	[data-widget-part~="authors-note.save"],
+	[data-widget-part~="authors-note.discard"],
+	[data-widget-part~="authors-note.number"] {
+		min-height: 44px;
+	}
 }
 
 } /* @layer sp-widgets */

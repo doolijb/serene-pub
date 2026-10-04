@@ -8,9 +8,10 @@ import {
 	sidesTucked,
 	tuckThresholdPx,
 	toggleTuckedFlyout,
+	tuckedSidesOf,
 	type TuckedFlyout
 } from "./tuckedSides"
-import { emptyColumnsPx } from "./sideSlot"
+import { MIN_CENTER_PX, emptyColumnsPx } from "./sideSlot"
 
 describe("tuckThresholdPx — derived from the zones' own minimums", () => {
 	it("is the sides' footprints, their gaps and the stage's measure", () => {
@@ -247,5 +248,38 @@ describe("stagePlanPx — a classic scrollbar is planned for, so the rows centre
 			expect(Math.abs(composer + W / 2 - body / 2)).toBeLessThanOrEqual(1)
 			expect(Math.abs(rows - composer)).toBeLessThanOrEqual(1)
 		}
+	})
+})
+
+describe("tuckedSidesOf — the side holding the log never tucks (brief 7a review)", () => {
+	const rail = 264
+	const gap = 8
+	it("with the log in the middle, both sides tuck together, exactly as before", () => {
+		const o = { leftPx: rail, rightPx: rail, gapPx: gap, logSide: null, middleMinPx: MIN_CENTER_PX }
+		const need = tuckThresholdPx(o)
+		expect(tuckedSidesOf({ ...o, bodyPx: need - 1 })).toEqual({ left: true, right: true })
+		expect(tuckedSidesOf({ ...o, bodyPx: need })).toEqual({ left: false, right: false })
+	})
+
+	it("Adventure with the log moved left, at a 1280 window: nothing tucks", () => {
+		// Seen live: 264 + 264 + gaps + the log's measure (≈1250) tucked a
+		// ~1216px body, and the log became a rail icon. The middle holds no
+		// log now, so it is owed the centre's reserve, not the log's measure.
+		const o = { leftPx: rail, rightPx: rail, gapPx: gap, logSide: "left" as const, middleMinPx: MIN_CENTER_PX }
+		expect(tuckedSidesOf({ ...o, bodyPx: 1216 })).toEqual({ left: false, right: false })
+	})
+
+	it("tight enough that the middle's reserve is at stake: the OTHER side tucks, the log's never", () => {
+		const o = { leftPx: rail, rightPx: rail, gapPx: gap, middleMinPx: MIN_CENTER_PX }
+		const need = rail + rail + 2 * gap + MIN_CENTER_PX
+		expect(tuckedSidesOf({ ...o, logSide: "left", bodyPx: need - 1 })).toEqual({ left: false, right: true })
+		expect(tuckedSidesOf({ ...o, logSide: "right", bodyPx: need - 1 })).toEqual({ left: true, right: false })
+	})
+
+	it("the log alone in the right rail of a ~966px body (a 1030 window): it stays a rail", () => {
+		// Seen live: the Chat session with Messages in the right tucked at
+		// 1030×800 and drew a World State strip over a blank body.
+		const o = { leftPx: 0, rightPx: rail, gapPx: gap, logSide: "right" as const, middleMinPx: MIN_CENTER_PX }
+		expect(tuckedSidesOf({ ...o, bodyPx: 966 }).right).toBe(false)
 	})
 })

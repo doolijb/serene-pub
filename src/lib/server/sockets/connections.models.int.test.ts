@@ -370,6 +370,39 @@ describe("every model handler is admin-only", () => {
 	}, 60_000)
 })
 
+describe("connections:updateModel always answers", () => {
+	// Admin → Connections' Save sends each model switch as one write and
+	// waits for ITS reply (`awaitReply`, STYLE-GUIDE §6.11). A path that
+	// returned without emitting left that Save waiting for a timeout.
+	test("a write that changes nothing still emits its reply", async () => {
+		const { connectionsUpdateModel } = await import("./connections")
+		const conn = await createConnection("no-op", "noop")
+		const [row] = await modelsOf(conn.id)
+		const sent: Array<[string, any]> = []
+		await connectionsUpdateModel.handler(
+			admin(),
+			{ id: conn.id, modelId: row.id, model: {} },
+			((event: string, data: unknown) => sent.push([event, data])) as any
+		)
+		const reply = sent.find(([event]) => event === "connections:updateModel")
+		expect(reply?.[1]?.connectionId).toBe(conn.id)
+	}, 60_000)
+
+	test("a refusal answers on the :error sibling", async () => {
+		const { connectionsUpdateModel } = await import("./connections")
+		const conn = await createConnection("elsewhere", "refused")
+		const sent: Array<[string, any]> = []
+		await connectionsUpdateModel.handler(
+			admin(),
+			{ id: conn.id, modelId: 987654, model: { enabled: false } },
+			((event: string, data: unknown) => sent.push([event, data])) as any
+		)
+		expect(sent.map(([event]) => event)).toContain(
+			"connections:updateModel:error"
+		)
+	}, 60_000)
+})
+
 describe("connections:models answers satisfiable transforms per pair", () => {
 	test("an enabled model names what the pair may default for; a switched-off one names nothing", async () => {
 		const mod = await import("./connections")
@@ -398,5 +431,106 @@ describe("connections:models answers satisfiable transforms per pair", () => {
 			noop
 		)
 		expect(res2.models![0].satisfiableCapabilities).toEqual([])
+	}, 60_000)
+})
+
+describe("a managed KoboldCPP model's vision projector", () => {
+	async function managedPair() {
+		const [conn] = await db
+			.insert(schema.connections)
+			.values({
+				name: `managed ${Math.random()}`,
+				type: CONNECTION_TYPE.KOBOLDCPP_MANAGED,
+				baseUrl: "http://localhost:5001"
+			} as any)
+			.returning()
+		const [model] = await db
+			.insert(schema.connectionModels)
+			.values({
+				connectionId: conn.id,
+				model: "gemma-3-4b.gguf",
+				name: "gemma-3-4b.gguf",
+				enabled: true,
+				extraJson: { keep: "me" }
+			} as any)
+			.returning()
+		return { conn, model }
+	}
+
+	test("is stored on the model's extra_json, shown on its row, and turns Vision on", async () => {
+		const mod = await import("./connections")
+		const { mergeEndpointModel } = await import(
+			"$lib/server/connections/models"
+		)
+		const { capabilityRefusal } = await import(
+			"$lib/server/pipelines/runtime/capabilityGuard"
+		)
+		const { conn, model } = await managedPair()
+
+		const res = await mod.connectionsUpdateModel.handler(
+			admin(),
+			{
+				id: conn.id,
+				modelId: model.id,
+				model: { visionProjector: " mmproj-gemma-3-4b-f16.gguf " }
+			},
+			noop
+		)
+		expect(res.error).toBeUndefined()
+		expect(res.models![0].visionProjector).toBe("mmproj-gemma-3-4b-f16.gguf")
+		const [row] = await modelsOf(conn.id)
+		// One key written; the rest of the adapter's bag kept.
+		expect(row.extraJson).toEqual({
+			keep: "me",
+			mmproj: "mmproj-gemma-3-4b-f16.gguf"
+		})
+		const pair = mergeEndpointModel(await endpoint(conn.id), row)
+		expect(capabilityRefusal(pair, "text+image->text")).toBeNull()
+
+		// Blank clears it, and Vision goes back to the adapter's default.
+		const cleared = await mod.connectionsUpdateModel.handler(
+			admin(),
+			{ id: conn.id, modelId: model.id, model: { visionProjector: "" } },
+			noop
+		)
+		expect(cleared.models![0].visionProjector).toBeNull()
+		const [after] = await modelsOf(conn.id)
+		expect(after.extraJson).toEqual({ keep: "me" })
+		expect(
+			capabilityRefusal(
+				mergeEndpointModel(await endpoint(conn.id), after),
+				"text+image->text"
+			)
+		).not.toBeNull()
+	}, 60_000)
+
+	test("refuses a path, a non-gguf name, and any endpoint that does not launch models", async () => {
+		const mod = await import("./connections")
+		const { conn, model } = await managedPair()
+		for (const bad of ["../etc/passwd.gguf", "dir/mmproj.gguf", "mmproj.bin"]) {
+			const res = await mod.connectionsUpdateModel.handler(
+				admin(),
+				{ id: conn.id, modelId: model.id, model: { visionProjector: bad } },
+				noop
+			)
+			expect(res.error).toMatch(/vision projector/i)
+		}
+		const [row] = await modelsOf(conn.id)
+		expect(row.extraJson).toEqual({ keep: "me" })
+
+		const ollama = await createConnection("llava:7b", "ollama projector")
+		const [om] = await modelsOf(ollama!.id)
+		const refused = await mod.connectionsUpdateModel.handler(
+			admin(),
+			{ id: ollama!.id, modelId: om.id, model: { visionProjector: "x.gguf" } },
+			noop
+		)
+		expect(refused.error).toMatch(/KoboldCPP/)
+		const listed = await mod.connectionsModels.handler(
+			admin(),
+			{ id: ollama!.id },
+			noop
+		)
+		expect("visionProjector" in listed.models![0]).toBe(false)
 	}, 60_000)
 })

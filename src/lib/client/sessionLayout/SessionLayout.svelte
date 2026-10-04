@@ -3,7 +3,7 @@
 	/**
 	 * The modular session layout (mockup: serene-pub-chat-layout.html, ruled
 	 * 2026-08-28). The chat core (the page-supplied primary snippet) sits in
-	 * the middle; every zone around it comes from the free-form ZoneLayout
+	 * the middle; every zone around it comes from the free-form ZoneLayoutV1
 	 * template in the user's layout blob — any zone ids, any widget lists, any
 	 * number of width rules, resolved against the MEASURED container width.
 	 *
@@ -32,11 +32,10 @@
 		resolveZone,
 		withWidget,
 		withoutWidget,
-		type ResolvedZone,
-		type ZoneLayout
+		type ResolvedZone
 	} from "./schema"
-	// The BASE conversation styling (the zero-styled grid skeleton, the
-	// shared message-state treatment, and the mode-aware `--sp-*` skin palette).
+	// The BASE conversation styling (the zero-styled grid skeleton and the
+	// shared message-state treatment).
 	// The looks themselves are widget styles now — see messageLayouts.css.
 	// Imported here as a plain global sheet so it lands outside Tailwind's
 	// cascade layers and wins over the components' utility classes.
@@ -65,20 +64,25 @@
 		placementOf,
 		widgetsInZone,
 		withGridWidget,
-		withoutGridWidget,
-		type GridLayout,
-		type WidgetConfig,
-		type Zone
+		withoutGridWidget
 	} from "./widgetGrid"
 	import {
 		floorKeeps,
+		floorKeptId,
 		floorNote,
+		floorRefusal,
 		withPrimaryFloor
 	} from "./primaryFloor"
 	import { placementAtDone } from "./donePlacement"
+	import { editorSeedKey, editorZoneIds, type ZoneMembers } from "./editorSeed"
 	// The two owner questions free placement leaves open (QE, QF), answered
 	// with the plan's recommended defaults — flipped in that one file.
-	import { emptyMiddleRefusal, stageOf, type StagePick } from "./placementRules"
+	import {
+		emptyMiddleRefusal,
+		primaryLogPick,
+		stageOf,
+		type StagePick
+	} from "./placementRules"
 	import { toaster } from "$lib/client/utils/toaster"
 	import type {
 		ActionsV1,
@@ -100,10 +104,7 @@
 	// See GridStackZone — gridstack owns its DOM, Svelte owns only the host.
 	import {
 		GS_CELL_PX,
-		type GsAnchor,
-		type GsItem,
-		type GsLayout,
-		type GsPos
+		type GsItem
 	} from "./GridStackZone.svelte"
 	// The saved-arrangement round trip (rehydrate → lay over the editor's items
 	// → re-express in the zone as measured now), pure and tested away from the
@@ -112,17 +113,13 @@
 		MIDDLE_TARGET,
 		arrangedIds,
 		arrangementIsEmpty,
-		clampPos,
 		dedupeArranged,
-		firstSlot,
 		loadArranged,
-		makeRoom,
+		seatCard,
 		seedPositions,
 		unitPinned,
 		withGeometry,
-		withPins,
-		type Arranged,
-		type ZoneKey
+		withPins
 	} from "./arrangedGeometry"
 	// The Move tab's screen-size simulator: the ONE implementation of the
 	// editor's ¼ | ½ | ¼ split, called with the real width or a tier's width.
@@ -133,12 +130,14 @@
 		narrowWidth,
 		simulatedGeometry,
 		simulationExit,
+		simulationRebase,
 		type SimGeometry,
 		type SimTier
 	} from "./simulator"
 	import { unitsOf, type RenderUnit } from "./tabGroups"
 	import {
 		dockedZoneWidths,
+		MIN_CENTER_PX,
 		emptyColumnPx,
 		emptyColumnsPx,
 		sideFlowPx,
@@ -178,21 +177,30 @@
 	// time; and the column is centred by a balance the middle zone carries.
 	import {
 		balancedGutters,
-		sidesTucked,
 		stagePlanPx,
+		tuckedSidesOf,
 		toggleTuckedFlyout,
 		type Gutters,
 		type TuckedFlyout
 	} from "./tuckedSides"
 	import { HOST_CARD_CLASS, hostCardShown } from "./hostCard"
+	import {
+		BACKING_MODE_KEY,
+		declaredBacking,
+		resolveBacking
+	} from "$lib/shared/widgets/messageBacking"
 	// Per-widget styling (PLAN 25) is NOT a panel any more (ruled 2026-09-09):
 	// each widget wears its own hover overlay, mounted by WidgetHost. All this
 	// file still owns is turning that mode on and persisting the pins.
 	import {
+		dropWidgetStylePins,
+		effectiveWidgetSkin,
 		resolveWidgetStyle,
 		setLegacyStylePacks,
 		setWidgetStyleMode,
+		setWidgetStylePin,
 		setWidgetStylePinWriter,
+		widgetStylePins,
 		widgetStylesStore
 	} from "$lib/client/stores/widgetStyles.svelte"
 	import type { WidgetStyleRef } from "$lib/shared/widgets/types"
@@ -200,7 +208,11 @@
 	// way the style pins do: this file is the one component that sees every
 	// widget on screen, so it pushes the declarations the panel renders from.
 	import {
+		allWidgetSettingValues,
+		dropWidgetSettings,
+		putWidgetSettings,
 		setWidgetSettingDecls,
+		storedWidgetSettingIds,
 		widgetSettingValues
 	} from "$lib/client/stores/widgetSettings.svelte"
 	import {
@@ -211,8 +223,48 @@
 	// A second copy of a widget is placed under `<widget id>#<instance name>`
 	// (the Lair's `messages#sanctum`, S1): its settings and pins are the copy's,
 	// its declaration the widget's.
-	import { isInstanceOf, widgetOfInstance } from "$lib/shared/widgets/instanceId"
-	import { channelClaims, channelsForCopy, primaryLogOf } from "./channelClaims"
+	import {
+		type ArrangedGridV1,
+		type ArrangedItem,
+		type ArrangedZone,
+		type GridWidget,
+		isInstanceOf,
+		type WidgetAnchor,
+		type WidgetGridV1,
+		widgetOfInstance,
+		ZONE_IDS,
+		type ZoneId,
+		type ZoneLayoutV1
+	} from "@serene-pub/sdk"
+	import {
+		channelClaims,
+		channelsForCopy,
+		pageIdsHolders,
+		primaryLogOf
+	} from "./channelClaims"
+	// More than one of each widget (brief 7b): the Add menu, the mint, the
+	// caps and Duplicate's QD default, pure (./widgetInstances); the Settings
+	// tab's overlay reaches Duplicate through ./widgetDuplicate.
+	import {
+		capRefusal,
+		distinctTitles,
+		duplicateOffered,
+		duplicateValues,
+		instancesOf,
+		mintInstanceId,
+		trayOffers,
+		trayWidgets as trayWidgetsOf,
+		type TrayOffer,
+		type TrayWidget
+	} from "./widgetInstances"
+	import { setWidgetDuplicator } from "./widgetDuplicate.svelte"
+	import { instanceTitle } from "$lib/client/surfaces/types"
+	// A frame's saved view state is held per instance id (a scroll, an open
+	// tab); a freshly minted copy starts without one.
+	import {
+		frameStateKey,
+		savedFrameState
+	} from "$lib/client/components/frames/framePort"
 	// A widget's settings and style open in ONE app-level modal (owner ruling
 	// 2026-09-27); every entry point calls `openWidgetSettings`, and this file
 	// mounts the modal once.
@@ -243,6 +295,8 @@
 	const PREVIEW_ZONES = ["left", "middle", "right"] as const
 
 	import { desktop } from "$lib/client/utils/breakpoint.svelte"
+	// The session header furled (note 29): the top strips roll up with it.
+	import { shellPrefs } from "$lib/client/shell/shellPrefs.svelte"
 	import { primaryUnitKey, stageOnlyActive } from "./stageOnly"
 
 	interface Props {
@@ -255,18 +309,38 @@
 		 */
 		conversationDossier?: ConversationDossierV1 | null
 		/**
-		 * The layout presets this user may pick for the session's genre (PLAN
-		 * 25 redesign): the shipped default first, then their own saved ones.
-		 * Read-only here — the page owns the socket round trips.
+		 * The session layout presets this person may start from in the
+		 * session's genre, grouped as the server orders them (the genre
+		 * default layout first). Read-only here — the page owns the socket
+		 * round trips.
 		 */
 		presets?: Sockets.Sessions.LayoutPreset[]
-		/** The applied preset, or null for the genre default. */
-		activePresetId?: number | null
-		onApplyPreset?: (presetId: number | null) => void
-		onSavePreset?: (name: string) => void
+		/**
+		 * The preset this session's layout **started from** (provenance: a
+		 * label and "Start again from", never a base), or null after Start
+		 * from scratch.
+		 */
+		startedFromLayoutPresetId?: number | null
+		/** That preset changed since the copy (the **Updated** mark). */
+		startedFromUpdated?: boolean
+		/**
+		 * Replace this session's layout by copying one in: a preset's id, or
+		 * `null` for Start from scratch. The page re-seeds the manager from
+		 * the server's answer, and the editor follows (`manager.seedCount`).
+		 * Resolves `false` when the copy was refused, so the editor stops
+		 * waiting for it.
+		 */
+		onStartFrom?: (layoutPresetId: number | null) => Promise<boolean>
+		/**
+		 * Save as new layout: the page sends the committed arrangement, and
+		 * `drawn` — every widget instance this session draws, the floor's
+		 * included — so the server packs those instances' settings and pins —
+		 * with the name and the optional description the person gave it.
+		 */
+		onSavePreset?: (name: string, drawn: string[], description?: string) => void
 		/**
 		 * Managing a preset you saved. Only ever asked for a card this user
-		 * authored (`isDefault: false`) — the shipped default is offered no
+		 * may manage (`mine`) — the shipped ones are offered no
 		 * actions at all, so the server's "built-in layouts can't be renamed"
 		 * refusal is a backstop rather than something a person can walk into.
 		 * The page owns the round trips and pushes the refreshed list back down
@@ -275,19 +349,51 @@
 		onRenamePreset?: (presetId: number, name: string) => void
 		onDeletePreset?: (presetId: number) => void
 		/**
-		 * Ask how many sessions are on a preset. Deleting one silently drops
-		 * every session using it back to the genre default, so the count is
-		 * fetched BEFORE the confirmation rather than reported after it — the
-		 * answer arrives back as `presetUsage`.
+		 * Ask what deleting a preset touches. No session's layout changes
+		 * (each holds its own copy), but a person using it for new sessions
+		 * gets the genre default layout instead, so the counts are fetched
+		 * BEFORE the confirmation rather than reported after it — the answer
+		 * arrives back as `presetUsage`.
 		 */
 		onPresetUsage?: (presetId: number) => void
 		/**
 		 * The answer to the last `onPresetUsage` ask. `null` while nothing has
 		 * been asked or an ask is still in flight, which is what the pending
 		 * confirmation renders as "Checking…" — an unknown count must never be
-		 * drawn as zero.
+		 * drawn as zero. A failed ask comes back `unknown`, so the question
+		 * never waits for good.
 		 */
-		presetUsage?: { id: number; sessions: number } | null
+		presetUsage?: import("./startFrom").LayoutPresetUsage | null
+		/**
+		 * **Save changes to "*Name*"** (brief 6b): the page sends the
+		 * committed arrangement into the layout of this person's that the
+		 * session started from, with `drawn` as Save as new sends it;
+		 * `overwriteUpdated` once the person was told it changed since the
+		 * copy and said to save over it.
+		 */
+		onSaveChanges?: (
+			presetId: number,
+			drawn: string[],
+			overwriteUpdated: boolean
+		) => void
+		/**
+		 * The card menu's verbs (brief 6b): share or stop sharing a layout
+		 * this person manages, make a copy of any, and choose (or with
+		 * `null`, stop using) their new-session layout for the genre. None
+		 * touches this session's layout; the page owns the round trips.
+		 */
+		onShareLayout?: (presetId: number, visibility: "shared" | "private") => void
+		onCloneLayout?: (presetId: number) => void
+		onSetNewSessionLayout?: (presetId: number | null) => void
+		/** The genre's name, for _Use for new *Genre* sessions_. */
+		genreName?: string | null
+		/**
+		 * The viewer is a guest in THIS session: no share control is drawn
+		 * (a guest is a guest on a session, and publishing is not theirs).
+		 */
+		isGuest?: boolean
+		/** The viewer is an admin: they manage someone else's shared layout too. */
+		isAdmin?: boolean
 		/**
 		 * This user's per-widget layout settings blob, round-tripped by the
 		 * page. Read-only here; the Settings tab writes through
@@ -323,13 +429,21 @@
 		session,
 		conversationDossier = null,
 		presets = [],
-		activePresetId = null,
-		onApplyPreset,
+		startedFromLayoutPresetId = null,
+		startedFromUpdated = false,
+		onStartFrom,
 		onSavePreset,
 		onRenamePreset,
 		onDeletePreset,
 		onPresetUsage,
 		presetUsage = null,
+		onSaveChanges,
+		onShareLayout,
+		onCloneLayout,
+		onSetNewSessionLayout,
+		genreName = null,
+		isGuest = false,
+		isAdmin = false,
 		layoutSettings = {},
 		onLayoutSettings,
 		actions,
@@ -346,36 +460,39 @@
 	// withholds it (R71) — its own (Battleship's board).
 	let primaryId = $derived(
 		manager.omitted.has("messages")
-			? (manager.instances.find((p) => p.role === "primary")?.id ?? "messages")
+			? (manager.decls.find((p) => p.role === "primary")?.id ?? "messages")
 			: "messages"
 	)
-	let savedGrid = $derived<GridLayout>(
-		loadChatLayout(manager.effectiveWidgetGrid, primaryId, manager.omitted)
+	let savedGrid = $derived<WidgetGridV1>(
+		loadChatLayout(manager.widgetGrid, primaryId, manager.omitted)
 	)
 	/** The saved arrangement, before the floor (see `floored`). */
-	let storedArranged = $derived<Arranged>(
-		loadArranged(manager.effectiveArrangedGrid)
+	let storedArranged = $derived<ArrangedGridV1>(
+		loadArranged(manager.arrangedGrid)
 	)
 	/**
 	 * The layout with the PRIMARY FLOOR applied (./primaryFloor): handed back
-	 * by reference when an instance of the primary is placed anywhere — a side
+	 * by reference when an instance of the primary is drawn anywhere — a side
 	 * list, the grid or the arrangement — else with the bare primary appended
-	 * to the middle, in the grid and in an arranged middle alike. While the
-	 * editor is open the arrangement asked is its working copy, so a card
-	 * dragged into a side is still placed. Declared up here, read lazily:
-	 * `saved`, `editing` and `editArranged` are further down.
+	 * to the middle, in the grid and in an arranged middle alike.
+	 *
+	 * Always asked of the SAVED layout, the editor's session included. The
+	 * editor's working arrangement is its own zones' report, and the middle's
+	 * cards come from this answer: asked of that report, the floor stopped
+	 * adding the log as soon as the middle reported it, the middle re-seeded
+	 * without it, reported it gone, and the floor added it again — for ever,
+	 * on every layout that never saved a grid. What a drag does before Done
+	 * is the editor's to keep (./editorSeed), and Done asks the floor of the
+	 * layout it would commit (`commitArrangement`). Declared up here, read
+	 * lazily: `saved` is further down.
 	 */
 	let floored = $derived.by(() =>
 		withPrimaryFloor(
-			{
-				zones: saved,
-				grid: savedGrid,
-				arranged: editing ? editArranged : storedArranged
-			},
+			{ zones: saved, grid: savedGrid, arranged: storedArranged },
 			primaryId
 		)
 	)
-	let chatGrid = $derived<GridLayout>(floored.grid)
+	let chatGrid = $derived<WidgetGridV1>(floored.grid)
 	/**
 	 * The ids the middle widget grid places. The zone template covers the sides
 	 * and never names the middle, so every "is this widget placed?" question has
@@ -486,7 +603,7 @@
 	// the signal). A gesture at a narrow tier is a deliberate edit to the ONE
 	// arrangement, at every size, which is what the panel's note says out loud.
 	/** The arrangement as it stood the moment Actual was left. */
-	let simSnapshot = $state<Arranged | null>(null)
+	let simSnapshot = $state<ArrangedGridV1 | null>(null)
 	/** Whether the user has arranged anything since. */
 	let simDirty = $state(false)
 	/** A zone reported a user gesture — only meaningful while simulating. */
@@ -503,7 +620,7 @@
 		// Tier→tier keeps the original snapshot: the arrangement to restore is
 		// still the one from before any preview, not the last preview's clamp.
 		if (simTier === null) {
-			simSnapshot = $state.snapshot(editArranged) as Arranged
+			simSnapshot = $state.snapshot(editArranged) as ArrangedGridV1
 			simDirty = false
 		}
 		simTier = tier
@@ -520,7 +637,7 @@
 		if (simTier === null) return
 		editArranged = simulationExit(
 			simSnapshot,
-			$state.snapshot(editArranged) as Arranged,
+			$state.snapshot(editArranged) as ArrangedGridV1,
 			simDirty
 		).arranged
 		simTier = null
@@ -689,7 +806,7 @@
 		requestAnimationFrame(updateMargins)
 	})
 
-	/* ── the effective layout ──────────────────────────────────────── */
+	/* ── the layout as drawn ────────────────────────────────────────── */
 	// Seed: with no saved template, active secondaries land in the right zone.
 	let activeSecondaryIds = $derived(
 		manager.instances
@@ -697,7 +814,7 @@
 			.map((p) => p.id)
 	)
 	let saved = $derived(
-		normalizeZoneLayout(manager.effectiveZoneLayout, activeSecondaryIds)
+		normalizeZoneLayout(manager.zoneLayout, activeSecondaryIds)
 	)
 	// Widgets activated after the template was saved (channel intents, the old
 	// grid menu) still need a home: append them to the first side zone. A widget
@@ -710,12 +827,17 @@
 	// the conversation's included) is drawn in that side: folded into the
 	// side's first zone here, after what the list already holds. Done then
 	// writes it into the list for good (./donePlacement).
-	let layout = $derived.by((): ZoneLayout => {
+	//
+	// Read off the FLOORED template: where the floor appends the log because
+	// a list named it where the arrangement draws over it, the floor takes it
+	// out of that list (./primaryFloor), so it is listed once.
+	let layout = $derived.by((): ZoneLayoutV1 => {
+		const base = floored.zones
 		const sideZoneOf = (side: "left" | "right") =>
-			Object.entries(saved.zones).find(
+			Object.entries(base.zones).find(
 				([, z]) => z.kind === "side" && (side === "left" ? z.side === "left" : z.side !== "left")
 			)?.[0]
-		let out = saved
+		let out = base
 		for (const w of chatGrid.widgets) {
 			if (w.zone === "middle" || placedWidgetIds(out).includes(w.id)) continue
 			const host = sideZoneOf(w.zone)
@@ -731,7 +853,7 @@
 		return extras.reduce((l, id) => withWidget(l, host, id), out)
 	})
 
-	function commit(next: ZoneLayout) {
+	function commit(next: ZoneLayoutV1) {
 		manager.setZoneLayout(next)
 	}
 	/**
@@ -739,15 +861,29 @@
 	 * zones' widgets live in the zone template above, the MIDDLE's in the chat
 	 * widget grid, which that template never names. See `place`.
 	 */
-	function commitGrid(next: GridLayout) {
+	function commitGrid(next: WidgetGridV1) {
 		manager.setWidgetGrid(next)
 	}
 
-	/** Every zone as the ladder resolves it at this width — the DOCKED answer. */
+	/**
+	 * Every zone as the ladder resolves it at this width — the DOCKED answer.
+	 *
+	 * On the desktop, the side zone holding the layout's primary log is a rail
+	 * whatever its rung or pin says (brief 7a review): a drawer rung or an
+	 * unpinned icon strip would put the log a person reads and writes in
+	 * behind a button, and an outside click would put it away again. Only the
+	 * rail path reads this — an arranged side ignores the zone's mode.
+	 */
 	let resolvedDocked = $derived(
-		Object.entries(layout.zones).map(([id, def]) =>
-			resolveZone(id, def, containerW)
-		)
+		Object.entries(layout.zones).map(([id, def]) => {
+			const z = resolveZone(id, def, containerW)
+			return logSide &&
+				def.kind === "side" &&
+				(def.side === "left" ? "left" : "right") === logSide &&
+				def.widgets.includes(logPick!.id)
+				? dockedZone(z)
+				: z
+		})
 	)
 	/**
 	 * What is drawn. While the sides are tucked (./tuckedSides) a docked rail
@@ -755,13 +891,13 @@
 	 * had; nothing is written, so untucking draws the rail again.
 	 */
 	let resolved = $derived(
-		tuckedNow()
-			? resolvedDocked.map((z) =>
-					z.def.kind === "side" && z.mode === "rail"
-						? { ...z, mode: "icons" as const }
-						: z
-				)
-			: resolvedDocked
+		resolvedDocked.map((z) =>
+			z.def.kind === "side" &&
+			z.mode === "rail" &&
+			tuckedNow(z.def.side === "left" ? "left" : "right")
+				? { ...z, mode: "icons" as const }
+				: z
+		)
 	)
 	let leftZones = $derived(
 		resolved.filter((z) => z.def.kind === "side" && z.def.side === "left")
@@ -830,7 +966,7 @@
 	}
 	/**
 	 * A zone as ./sideSlot's populated test reads it: its mode and its entry
-	 * count, conversation copies included — so the desktop's empty column and
+	 * count, conversations included — so the desktop's empty column and
 	 * the phone's panels menu answer one question the same way.
 	 */
 	function zoneFill(z: ResolvedZone): SideZoneFill {
@@ -872,18 +1008,18 @@
 	// widget's grow/fixed/anchor shows exactly as it will on Done — the editor
 	// is the live layout plus cell guides.
 	//   Middle: the real chat grid, at the editor's cell module.
-	let editorMiddleGrid = $derived<GridLayout>({
+	let editorMiddleGrid = $derived<WidgetGridV1>({
 		...chatGrid,
 		cell: EDITOR_CELL
 	})
 	//   Sides: each panel is a full-width widget (grow width, a min-height so an
 	//   empty card reads as a real block), top-anchored — the panel stack.
-	function editorSideGrid(zoneKey: Zone, panels: { id: string }[]): GridLayout {
+	function editorSideGrid(zoneKey: ZoneId, panels: { id: string }[]): WidgetGridV1 {
 		return {
 			version: 1,
 			cell: EDITOR_CELL,
 			widgets: panels.map(
-				(p, i): WidgetConfig => ({
+				(p, i): GridWidget => ({
 					id: p.id,
 					zone: zoneKey,
 					order: i,
@@ -923,14 +1059,14 @@
 	// default render. (Declared here, above the GsItems that read it — and with
 	// `editing`, which the derived reads where it is written.)
 	let editing = $state(false)
-	let editArranged = $state<Arranged>({})
+	let editArranged = $state<ArrangedGridV1>({})
 	/**
 	 * The zones' membership as the editor opened, and the whole of what Cancel
 	 * can put back: adding or removing a widget writes straight through to the
 	 * layout, so an editor that could only restore the arrangement would leave
 	 * a cancelled add behind.
 	 */
-	let editZonesSnapshot = $state<ZoneLayout | null>(null)
+	let editZonesSnapshot = $state<ZoneLayoutV1 | null>(null)
 	/**
 	 * Which secondaries were ACTIVE as the editor opened — the other half of
 	 * what Cancel puts back. Adding a widget activates its panel and removing
@@ -946,12 +1082,10 @@
 	 * puts back, because adding or removing a widget there writes straight
 	 * through to the widget grid and `editZonesSnapshot` cannot see it.
 	 *
-	 * The manager's OWN slot, never `effectiveWidgetGrid`: a session on a
-	 * preset has this unset, and reading the effective one back would copy the
-	 * preset's content into this user's column — turning a live reference into
-	 * a snapshot (see the manager's `baseLayout`). Boxed so that `undefined`
-	 * is a value to restore rather than "nothing was taken". Not `$state`:
-	 * nothing renders it.
+	 * The stored blob, verbatim: the slot is legitimately `undefined` on a
+	 * layout that never saved a grid (the floor draws it), and that is a value
+	 * to put back. Boxed so that `undefined` is a value to restore rather than
+	 * "nothing was taken". Not `$state`: nothing renders it.
 	 */
 	let editWidgetGridSnapshot: { value: unknown } | null = null
 	/**
@@ -960,8 +1094,8 @@
 	 * `commitArrangement`'s one-zone-per-widget invariant breaks a tie with.
 	 * Not `$state`: nothing renders it.
 	 */
-	let lastDropped: { id: string; zone: ZoneKey } | null = null
-	let arranged = $derived<Arranged>(
+	let lastDropped: { id: string; zone: ZoneId } | null = null
+	let arranged = $derived<ArrangedGridV1>(
 		editing ? editArranged : floored.arranged
 	)
 
@@ -969,51 +1103,94 @@
 	// any saved x/y/w/h from the working copy so re-opening the editor restores
 	// what was arranged rather than re-laying-out from defaults (the
 	// reset-to-defaults bug).
+	//
+	// WHICH cards each zone holds is ./editorSeed's: the zone's committed
+	// members (the middle's grid, a side's zone lists), less what another
+	// zone's working frame took, plus what its own working frame holds that it
+	// does not list — a card dragged in, or a stored arrangement that draws a
+	// widget its list does not name. A zone re-seeds only on `editorSeedKeys`,
+	// never on a drag.
+	let editorCommitted = $derived<ZoneMembers>({
+		left: editorLeftPanels.map((p) => p.id),
+		middle: widgetsInZone(chatGrid, "middle").map((w) => w.id),
+		right: editorRightPanels.map((p) => p.id)
+	})
+	let editorSeedIds = $derived<ZoneMembers>({
+		left: editorZoneIds("left", editorCommitted, editArranged),
+		middle: editorZoneIds("middle", editorCommitted, editArranged),
+		right: editorZoneIds("right", editorCommitted, editArranged)
+	})
+	/** The card the primary floor keeps, if exactly one instance is placed. */
+	let floorKept = $derived.by(() => floorKeptId(placedIds, primaryId))
+	/**
+	 * The widgets at their `maxInstances` cap (brief 7b review): their cards
+	 * say so where Duplicate would be, and that is drawn at seed — so it is
+	 * part of every zone's seed key. No core widget has a cap.
+	 */
+	let cappedWidgets = $derived.by(() =>
+		trayWidgets.filter((t) => t.full).map((t) => t.id)
+	)
+	let editorSeedKeys = $derived<Record<ZoneId, string>>({
+		left: editorSeedKey(editorCommitted.left, floorKept, cappedWidgets),
+		middle: editorSeedKey(editorCommitted.middle, floorKept, cappedWidgets),
+		right: editorSeedKey(editorCommitted.right, floorKept, cappedWidgets)
+	})
 	let middleGsItems = $derived<GsItem[]>(
 		withGeometry(
-			widgetsInZone(chatGrid, "middle").map((w) => ({
-				id: w.id,
-				title: widgetLabel(w.id),
-				// The primary floor: the LAST placed Messages (or an R71
-				// genre's own primary) offers no ×, and says why. Every card
-				// moves, into any zone — placement is free (brief 7a).
-				...floorNoteProp(w.id),
+			editorSeedIds.middle.flatMap((id): GsItem[] => {
+				const w = chatGrid.widgets.find(
+					(g) => g.id === id && g.zone === "middle"
+				)
+				// A card the working arrangement brought in has no grid entry
+				// until Done; it is admitted when the middle can draw it.
+				if (!w && !isConversation(id) && !inst(id)) return []
 				// The chat's bound default, read off the widget rather than its
 				// name: a GROW height fills what is left, a FIXED one docks three
-				// cells deep against the edge it anchors to. Both full-width.
-				...(w.size.h === "grow"
-					? { place: "fill" as const }
-					: {
-							place: (w.anchor.bottom
-								? "bottom"
-								: "top") as GsItem["place"],
-							h: 3
-						})
-			})),
+				// cells deep against the edge it anchors to. Both full-width. A
+				// newcomer grows when it is a log (the floor's shape).
+				const grows = w
+					? w.size.h === "grow"
+					: isConversation(id) || isInstanceOf(id, primaryId)
+				return [
+					{
+						id,
+						title: widgetLabel(id),
+						// The primary floor: the LAST placed Messages (or an R71
+						// genre's own primary) offers no ×, and says why. Every
+						// card moves, into any zone — placement is free (brief 7a).
+						...floorNoteProp(id),
+						...copyRefusalProp(id),
+						...(grows
+							? { place: "fill" as const }
+							: {
+									place: (w?.anchor.bottom
+										? "bottom"
+										: "top") as GsItem["place"],
+									h: 3
+								})
+					}
+				]
+			}),
 			editArranged.middle
 		)
 	)
-	let leftGsItems = $derived<GsItem[]>(
-		withGeometry(
-			editorLeftPanels.map((p) => ({
+	/** A side zone's cards: the panels and conversations its seed ids name. */
+	function sideGsItems(ids: readonly string[]): GsItem[] {
+		return zoneEntries(ids, manager.instances, isConversation, widgetLabel).map(
+			(p) => ({
 				id: p.id,
 				title: p.title,
 				h: 3,
-				...floorNoteProp(p.id)
-			})),
-			editArranged.left
+				...floorNoteProp(p.id),
+				...copyRefusalProp(p.id)
+			})
 		)
+	}
+	let leftGsItems = $derived<GsItem[]>(
+		withGeometry(sideGsItems(editorSeedIds.left), editArranged.left)
 	)
 	let rightGsItems = $derived<GsItem[]>(
-		withGeometry(
-			editorRightPanels.map((p) => ({
-				id: p.id,
-				title: p.title,
-				h: 3,
-				...floorNoteProp(p.id)
-			})),
-			editArranged.right
-		)
+		withGeometry(sideGsItems(editorSeedIds.right), editArranged.right)
 	)
 	/**
 	 * The primary floor's note for a widget (./primaryFloor): what its card
@@ -1023,12 +1200,22 @@
 	 */
 	function floorNoteOf(id: string): string | null {
 		if (!floorKeeps(id, placedIds, primaryId)) return null
-		const decl = CORE_WIDGETS.find((w) => w.id === widgetOfInstance(id))
-		return floorNote(decl?.title ?? inst(id)?.title ?? widgetLabel(id))
+		return floorNote(primaryTitle)
 	}
+	/** The primary widget's own title — the floor's note names the widget. */
+	let primaryTitle = $derived(
+		CORE_WIDGETS.find((w) => w.id === widgetOfInstance(primaryId))?.title ??
+			inst(primaryId)?.title ??
+			widgetLabel(primaryId)
+	)
 	function floorNoteProp(id: string): { floorNote?: string } {
 		const note = floorNoteOf(id)
 		return note ? { floorNote: note } : {}
+	}
+	/** A card whose widget is at its cap says so where Duplicate would be (brief 7b). */
+	function copyRefusalProp(id: string): { copyRefusal?: string } {
+		const note = copyRefusalOf(id)
+		return note ? { copyRefusal: note } : {}
 	}
 
 	/**
@@ -1043,7 +1230,7 @@
 		if (far) return "end"
 		return "stretch"
 	}
-	function anchorCellStyle(a?: GsAnchor): string {
+	function anchorCellStyle(a?: WidgetAnchor): string {
 		if (!a) return ""
 		return `justify-self:${cellSelfAlign(a.left, a.right)};align-self:${cellSelfAlign(a.top, a.bottom)};`
 	}
@@ -1073,7 +1260,11 @@
 	 * threads: the title override, the lane, and the settings themselves. */
 	function widgetDeclOf(id: string): WidgetSettingsDecl {
 		const p = inst(id)
-		if (p && p.role !== "primary")
+		// A panel instance — a genre's OWN primary included (R71: Battleship's
+		// board, and every copy of it, whose title is its declaration's, the
+		// copy's `· 2` already on it). Only the conversation is declared by
+		// core below.
+		if (p && (p.role !== "primary" || !isInstanceOf(id, "messages")))
 			return {
 				id,
 				title: p.title,
@@ -1082,11 +1273,14 @@
 			}
 		// A copy (`messages#sanctum`) is declared by its widget; a
 		// conversation copy pinned to a channel is titled by the channel's
-		// declared label (S1: the panel reads _Sanctum_).
+		// declared label (S1: the panel reads _Sanctum_), any other copy by its
+		// widget and its instance name (_Messages · 2_, brief 7b).
 		const core = CORE_WIDGETS.find((w) => w.id === widgetOfInstance(id))
 		return {
 			id,
-			title: pinnedChannelTitle(id) ?? core?.title ?? middleWidgetLabel(id),
+			title:
+				pinnedChannelTitle(id) ??
+				instanceTitle(core?.title ?? middleWidgetLabel(id), id),
 			channels: core?.channels,
 			settings: core?.settings
 		}
@@ -1112,8 +1306,29 @@
 		)
 	}
 	function resolvedWidget(id: string) {
-		return resolveWidgetInstance(widgetDeclOf(id), widgetSettingValues(id))
+		const r = resolveWidgetInstance(widgetDeclOf(id), widgetSettingValues(id))
+		const told = titleApart.get(id)
+		return told ? { ...r, title: told } : r
 	}
+	/**
+	 * Placed instances that would read the same — a Duplicate copies the
+	 * source's `title`, and a Messages copy's `channel` titles it — told apart
+	 * by their instance names (./widgetInstances `distinctTitles`: _Sanctum_,
+	 * _Sanctum · 2_). Only the ids whose title changes; `resolvedWidget` and
+	 * the panels' own headers (`Panel`'s `title`) read it.
+	 */
+	let titleApart = $derived.by(() =>
+		distinctTitles(
+			[...placedIds].map(
+				(id) =>
+					[
+						id,
+						resolveWidgetInstance(widgetDeclOf(id), widgetSettingValues(id))
+							.title
+					] as const
+			)
+		)
+	)
 	$effect(() => {
 		const out: Record<string, WidgetSettingsDecl> = {}
 		for (const w of CORE_WIDGETS)
@@ -1168,8 +1383,37 @@
 	 */
 	let primaryLog = $derived.by(() =>
 		primaryLogOf(
-			[...readingOrder.middle, ...readingOrder.left, ...readingOrder.right],
+			[
+				...readingOrder.middle,
+				...readingOrder.left,
+				...readingOrder.right,
+				// The strips too: `claims` counts a copy placed there, so a
+				// primary log picked without them would hand the claiming copy
+				// the rest while the strip's unclaimed copy showed it as well —
+				// the same rows twice.
+				...readingOrder.strips
+			],
 			claims
+		)
+	)
+	/**
+	 * The conversation mounts that hold the page's message ids
+	 * (./channelClaims `pageIdsHolders`, brief 7b review): the primary log, then
+	 * every other copy in reading order whose channels share none with a mount
+	 * already holding them — so every row drawn keeps one `#message-<id>` a
+	 * link or j/k can land on, and a second view of one channel takes its box's
+	 * prefix instead of putting that id on the page twice.
+	 */
+	let pageIdsHeld = $derived.by(() =>
+		pageIdsHolders(
+			[
+				...readingOrder.middle,
+				...readingOrder.left,
+				...readingOrder.right,
+				...readingOrder.strips
+			],
+			claims,
+			conversationDossier?.composer.channels ?? []
 		)
 	)
 	/**
@@ -1221,13 +1465,13 @@
 
 	let cellWidths = $state<Record<string, number>>({})
 	/* The block size of the same cells, keyed the same way. Bound beside the
-	   width so the contract's `layout.v1.box.px` can report a real box: cell
-	   COUNTS are the interim grid's and lose their meaning under the layout
-	   document, while the pixels a browser resolved keep it whatever the
-	   tracks are made of. Absent until both axes have a number. */
+	   width so the contract's `layout.v1.box.px` can report a real box: a cell
+	   COUNT is only as wide as the zone it is drawn in, while the pixels a
+	   browser resolved are the box itself. Absent until both axes have a
+	   number. */
 	let cellHeights = $state<Record<string, number>>({})
 	function unitPlacement(
-		zone: { cols: number; rows: number },
+		zone: { cols: number; rows: number } | undefined,
 		u: RenderUnit,
 		widthPx: number,
 		id: string,
@@ -1239,7 +1483,12 @@
 		const p = inst(id)
 		const primary = isInstanceOf(id, "messages")
 		return placementOf({
-			zone: { cols: zone.cols, rows: zone.rows },
+			// `zone` is absent only for the one read a mount can still make
+			// while its arranged zone is being taken down — a copy landing
+			// under an open editor replaces the arrangement wholesale, and a
+			// reader outside the zone's `{#if}` may ask a mount inside it
+			// before the block is gone. The answer is thrown away with it.
+			zone: { cols: zone?.cols ?? 1, rows: zone?.rows ?? 1 },
 			box: u.box,
 			widthPx,
 			heightPx,
@@ -1329,7 +1578,7 @@
 		// would draw it twice. The warning is deliberate — a silent repair
 		// hides the regression that made the repair necessary.
 		const deduped = dedupeArranged(
-			$state.snapshot(editArranged) as Arranged,
+			$state.snapshot(editArranged) as ArrangedGridV1,
 			lastDropped
 		)
 		for (const d of deduped.duplicates)
@@ -1347,28 +1596,37 @@
 			zones: layout,
 			grid: chatGrid,
 			arrangement,
-			sideZoneIds: { left: leftZoneId, right: rightZoneId }
+			sideZoneIds: { left: leftZoneId, right: rightZoneId },
+			primaryId
 		})
-		const refusal = emptyMiddleRefusal(done.middle)
+		// The floor, asked of what Done would commit (./primaryFloor): the
+		// editor never offers to remove the last instance, so this is the
+		// backstop for a card lost some other way — refused and said, never
+		// committed for every reader to repair with a card nobody arranged.
+		// Then QF (./placementRules): an empty middle is a move half-made.
+		const refusal =
+			floorRefusal(
+				{ zones: done.zones, grid: done.grid, arranged: arrangement },
+				primaryId,
+				primaryTitle
+			) ?? emptyMiddleRefusal(done.middle)
 		if (refusal) {
 			toaster.error({ title: refusal })
 			return false
 		}
 		if (done.zones !== layout) commit(done.zones)
-		if (done.grid !== chatGrid) commitGrid(done.grid)
+		// Against the SAVED grid, not `chatGrid`: where the floor appended the
+		// log to a layout that never saved one, `chatGrid` already holds it,
+		// and Done is what makes that placement the saved one.
+		if (done.grid !== savedGrid) commitGrid(done.grid)
 		// The manager is now the live view's only source (`arranged` derives
 		// from it), so this write is also what repaints the session behind the
-		// editor when Done closes it.
-		//
-		// ⚠ Except when there is nothing to write. Opening the editor and
-		// pressing Done without any zone reporting — only reachable with no
-		// widgets at all — leaves `editArranged` empty, and `{}` is TRUTHY:
-		// `effectiveArrangedGrid`'s `??` would short-circuit on it and mask the
-		// preset base for good, so the session would be stuck on the pre-edit
-		// default with no way back but a reset. Stop asserting an arrangement
-		// instead, which is what an empty one means and what reset already does.
-		if (arrangementIsEmpty(arrangement)) manager.clearArrangement()
-		else manager.setArrangedGrid(arrangement)
+		// editor when Done closes it. An arrangement with no widgets in it —
+		// only reachable with no widgets at all — is stored as none, which is
+		// what an empty one means: the zone lists and the grid then draw.
+		manager.setArrangedGrid(
+			arrangementIsEmpty(arrangement) ? undefined : arrangement
+		)
 		return true
 	}
 
@@ -1408,7 +1666,7 @@
 	/** The un-arranged zone holding the tucked panel that is out, if any. */
 	let tuckedZoneId = $derived.by(() => {
 		const t = tuckedFlyout
-		if (!t || !sidesAreTucked || arrangedHere(t.side)) return null
+		if (!t || !tucked[t.side] || arrangedHere(t.side)) return null
 		const zones = t.side === "left" ? leftZones : rightZones
 		return zones.find((z) => z.def.widgets.includes(t.key))?.id ?? null
 	})
@@ -1467,7 +1725,8 @@
 	// Untucking puts the panel away: the docked layout is back, and its own
 	// open/closed choices with it.
 	$effect(() => {
-		if (!sidesAreTucked && untrack(() => tuckedFlyout)) closeTucked(false)
+		const t = untrack(() => tuckedFlyout)
+		if (t && !tucked[t.side]) closeTucked(false)
 	})
 	$effect(() => {
 		if (!tuckedFlyout) return
@@ -1684,7 +1943,10 @@
 	// not re-reveal a flyout the user left open on a wider screen.
 	$effect(() => {
 		// Tucking retires it too: a tucked zone's flyout is `tuckedFlyout`'s.
-		if (isNarrow || sidesAreTucked) popId = null
+		// Only a TUCKED side's — the side holding the log never tucks.
+		const side = popId ? layout.zones[popId]?.side : undefined
+		if (isNarrow || (popId && tucked[side === "left" ? "left" : "right"]))
+			popId = null
 	})
 	let mobileSide = $derived(isNarrow ? mobileSidePanels.open : null)
 	/**
@@ -1844,20 +2106,29 @@
 	 * decision needs the docked footprints declared further down, and a
 	 * derived's closure is only evaluated after the script has run.
 	 */
-	function tuckedNow(): boolean {
-		return sidesAreTucked
+	function tuckedNow(side: "left" | "right"): boolean {
+		return tucked[side]
 	}
-	let sidesAreTucked = $derived(
-		mounted &&
-			!isNarrow &&
-			!editing &&
-			sidesTucked({
-				leftPx: dockedFlow.left,
-				rightPx: dockedFlow.right,
-				gapPx: BODY_GAP_PX,
-				bodyPx: containerW
-			})
+	/**
+	 * Which sides are tucked, side by side (./tuckedSides `tuckedSidesOf`): the
+	 * side holding the primary log never is (`logSide`, brief 7a review) — it
+	 * would put the log behind a rail icon — and the other side tucks once the
+	 * body cannot hold both docked sides and the middle's own reserve.
+	 */
+	let tucked = $derived.by((): { left: boolean; right: boolean } =>
+		mounted && !isNarrow && !editing
+			? tuckedSidesOf({
+					leftPx: dockedFlow.left,
+					rightPx: dockedFlow.right,
+					gapPx: BODY_GAP_PX,
+					bodyPx: containerW,
+					logSide,
+					middleMinPx: MIN_CENTER_PX
+				})
+			: { left: false, right: false }
 	)
+	/** Is either side tucked — for what the whole body does about it. */
+	let sidesAreTucked = $derived(tucked.left || tucked.right)
 
 	/**
 	 * The MIDDLE grows with the window; a docked side keeps its ladder width
@@ -1882,14 +2153,14 @@
 			arranged: arrangedHere("left"),
 			arrangedPx: ladderPx(leftZones, "left"),
 			railPx: railLadderPx(leftZones),
-			tucked: sidesAreTucked
+			tucked: tucked.left
 		}),
 		right: sideFlowPx({
 			slot: rightSlot,
 			arranged: arrangedHere("right"),
 			arrangedPx: ladderPx(rightZones, "right"),
 			railPx: railLadderPx(rightZones),
-			tucked: sidesAreTucked
+			tucked: tucked.right
 		})
 	})
 	/**
@@ -1908,13 +2179,13 @@
 			hardRightPx: drawnFlow.right,
 			emptyLeftPx: emptyColumnPx({
 				slot: leftSlot,
-				tucked: sidesAreTucked,
+				tucked: tucked.left,
 				populated: populatedHere("left", leftZones),
 				zones: dockedZonesOf("left")
 			}),
 			emptyRightPx: emptyColumnPx({
 				slot: rightSlot,
-				tucked: sidesAreTucked,
+				tucked: tucked.right,
 				populated: populatedHere("right", rightZones),
 				zones: dockedZonesOf("right")
 			}),
@@ -2000,7 +2271,7 @@
 	 * groups open and close. It must not: a keyed `{#each}` MOVES its nodes to
 	 * follow a reorder, and moving an iframe reloads it.
 	 */
-	function columnUnits(items: GsPos[]): RenderUnit[] {
+	function columnUnits(items: ArrangedItem[]): RenderUnit[] {
 		return unitsOf(items).sort(
 			(a, b) => a.box.y - b.box.y || a.box.x - b.box.x
 		)
@@ -2236,7 +2507,7 @@
 		columnLayout("left", leftUnits, arranged.left?.rows ?? 1, {
 			sheet: leftSlot === "overlay",
 			narrow: isNarrow,
-			tucked: sidesAreTucked,
+			tucked: tucked.left,
 			heightPx: columnPx.left,
 			widthPx: columnWPx.left
 		})
@@ -2245,7 +2516,7 @@
 		columnLayout("right", rightUnits, arranged.right?.rows ?? 1, {
 			sheet: rightSlot === "overlay",
 			narrow: isNarrow,
-			tucked: sidesAreTucked,
+			tucked: tucked.right,
 			heightPx: columnPx.right,
 			widthPx: columnWPx.right
 		})
@@ -2286,8 +2557,8 @@
 	/** Is the previewed width below the app's breakpoint? */
 	let simNarrow = $derived(narrowWidth(simWidth ?? vw))
 
-	/* The three keys an arrangement is stored under are ./arrangedGeometry's
-	   `ZoneKey`, imported above — the blob's shape is that module's, and two
+	/* The three keys an arrangement is stored under are the SDK's `ZoneId`,
+	   imported above — the blob's shape is the session layout's, and two
 	   declarations of the same three words is one too many. */
 
 	/**
@@ -2299,7 +2570,7 @@
 	 */
 	const MIDDLE_SEED_ROWS = 12
 
-	function previewColumn(side: ZoneKey): {
+	function previewColumn(side: ZoneId): {
 		/**
 		 * The arrangement the preview is a view of. It IS `editArranged[side]`
 		 * when there is one; without one it is the default placement resolved
@@ -2307,7 +2578,7 @@
 		 * the moment it mounted. Either way it is a frame the pin toggle can
 		 * write into (see `toggleGroupPin`).
 		 */
-		frame: GsLayout
+		frame: ArrangedZone
 		units: RenderUnit[]
 	} {
 		const items =
@@ -2334,7 +2605,7 @@
 		const meta = new Map(items.map((it) => [it.id, it]))
 		// `seedPositions` reads cells and returns cells; group, anchor and the
 		// group's pin ride on the ITEMS, so they are laid back over its answer.
-		const pos: GsPos[] = seedPositions(items, cols, rows, frame).map((c) => {
+		const pos: ArrangedItem[] = seedPositions(items, cols, rows, frame).map((c) => {
 			const m = meta.get(c.id)
 			return {
 				...c,
@@ -2350,7 +2621,7 @@
 	let middlePreview = $derived(previewColumn("middle"))
 	function previewRail(
 		side: "left" | "right",
-		p: { frame: GsLayout; units: RenderUnit[] }
+		p: { frame: ArrangedZone; units: RenderUnit[] }
 	): ColumnLayout {
 		// The same call the live column makes, over the previewed device's
 		// numbers: below 1024 a side takes no layout space at all, so the
@@ -2464,11 +2735,14 @@
 	})
 
 	$effect(() => {
-		if (!flyoutKey.left && !flyoutKey.right) return
-		// Tucked, the flyout is `tuckedFlyout`'s and so are its closers.
-		if (sidesAreTucked) return
+		// Tucked, a side's flyout is `tuckedFlyout`'s and so are its closers;
+		// the side holding the log never tucks, so the other may be alone.
+		const sides = (["left", "right"] as const).filter(
+			(side) => flyoutKey[side] && !tucked[side]
+		)
+		if (!sides.length) return
 		const shut = () => {
-			for (const side of ["left", "right"] as const) {
+			for (const side of sides) {
 				const k = flyoutKey[side]
 				if (!k) continue
 				groupOpen[groupKey(side, k)] = false
@@ -2526,7 +2800,7 @@
 		// and the other icons on it — stay in reach.
 		const edge =
 			(side === "left" ? bLeft : bRight) +
-			(sidesAreTucked ? flowEdge[side === "left" ? "start" : "end"] : 0)
+			(tucked[side] ? flowEdge[side === "left" ? "start" : "end"] : 0)
 		const start = side === "left" ? "inset-inline-start" : "inset-inline-end"
 		return `position:fixed;z-index:30;inset-block-start:${liveTop}px;inset-block-end:0;${start}:${edge}px;inline-size:min(22rem,86vw);`
 	}
@@ -2622,28 +2896,71 @@
 	/* ── the way in: the header's Layout button ─────────────────────── */
 	/** Open the editor on the layout that is actually saved. */
 	function openEditor() {
-		// Reseed from the persisted arrangement (not wiped) so the editor
-		// opens on what was last saved — the source of truth, so there's no
-		// stale in-memory state to re-commit, and a saved layout restores
-		// into the grid instead of resetting to defaults. The EFFECTIVE
-		// one: a session on a preset it has never overridden has its own
-		// slot empty, and reading that empty slot opened the editor on
-		// nothing and then wrote that nothing back over the preset.
-		editArranged = loadArranged(manager.effectiveArrangedGrid)
-		// What Cancel puts back; the arrangement's own restore is the
-		// reseed above.
-		editZonesSnapshot = JSON.parse(JSON.stringify(layout)) as ZoneLayout
-		// The middle's half of the same restore. `$state.snapshot` rather than
-		// the JSON round trip above because the slot is legitimately
-		// `undefined` on a session that has never overridden its preset, and
-		// that is a value to put back.
-		editWidgetGridSnapshot = { value: $state.snapshot(manager.widgetGrid) }
-		// The other half of it: which panels were on. See the field's comment.
-		editActiveSnapshot = new Set(activeSecondaryIds)
+		seedEditor()
 		// A drop from a previous editing session says nothing about this one.
 		lastDropped = null
 		editing = true
 	}
+	/**
+	 * Seed the editor's working copy and what Cancel puts back from the
+	 * layout as it is saved — on open, and again whenever that layout is
+	 * REPLACED underneath an open editor (a copy landing, a Save as new).
+	 */
+	function seedEditor() {
+		// Reseed from the persisted arrangement (not wiped) so the editor
+		// opens on what was last saved — the source of truth, so there's no
+		// stale in-memory state to re-commit, and a saved layout restores
+		// into the grid instead of resetting to defaults.
+		editArranged = loadArranged(manager.arrangedGrid)
+		// What Cancel puts back; the arrangement's own restore is the
+		// reseed above.
+		editZonesSnapshot = JSON.parse(JSON.stringify(layout)) as ZoneLayoutV1
+		// The middle's half of the same restore. `$state.snapshot` rather than
+		// the JSON round trip above because the slot is legitimately
+		// `undefined` on a layout that never saved a grid, and that is a value
+		// to put back.
+		editWidgetGridSnapshot = { value: $state.snapshot(manager.widgetGrid) }
+		// The other half of it: which panels were on. See the field's comment.
+		editActiveSnapshot = new Set(activeSecondaryIds)
+		// What Cancel takes back starts again from here too.
+		duplicatedIds = []
+		// A layout replaced under the phone-width preview (a copy asked for
+		// from its Presets sheet or Reset chip): the preview's "before" is now
+		// the replacement, or Done's `exitSimulation` would put the pre-copy
+		// arrangement back and save it under the copy's provenance.
+		const guard = simulationRebase(
+			simTier !== null,
+			$state.snapshot(editArranged) as ArrangedGridV1
+		)
+		simSnapshot = guard.snapshot
+		simDirty = guard.dirty
+	}
+	/**
+	 * How many copies this editor asked for (Start from, Start again, Reset,
+	 * Start from scratch) whose answers have not re-seeded the manager yet. A
+	 * refused one is taken back (`startFrom`), so a later re-seed from
+	 * anywhere else never throws away an edit in progress. Not `$state`: only
+	 * the effect below and `startFrom` read it.
+	 */
+	let copiesPending = 0
+	// When that copy lands the page re-seeds the manager, and the open editor
+	// must then draw the new layout, not the one it opened on. Only for a copy
+	// it asked for: a re-seed from anywhere else (another tab opening the
+	// session) never throws away an edit in progress.
+	let seenSeeds = untrack(() => manager.seedCount)
+	$effect(() => {
+		const n = manager.seedCount
+		if (n === seenSeeds) return
+		seenSeeds = n
+		untrack(() => {
+			if (!editing || copiesPending === 0) return
+			copiesPending--
+			seedEditor()
+			lastDropped = null
+			popId = null
+			armedId = null
+		})
+	})
 	// The header's Layout button asks; this is the only place that answers. Seeded
 	// from the current count so a request made on a previous session page does
 	// not fire here on mount.
@@ -2748,10 +3065,13 @@
 	/** The zone currently under a drag (highlight). */
 	let dragOverZone = $state<string | null>(null)
 
-	let paletteWidgets = $derived.by(() => {
-		// The middle is the ARRANGED zone once there is an arrangement and the
-		// widget grid until then — the same precedence the live view draws on,
-		// so a widget taken out of the middle is offered here again.
+	/**
+	 * Every widget instance placed right now, as the Add menu counts them.
+	 * The middle is the ARRANGED zone once there is an arrangement and the
+	 * widget grid until then — the same precedence the live view draws on, so
+	 * a widget taken out of the middle is counted where it went.
+	 */
+	let placedNow = $derived.by(() => {
 		const middle = arranged.middle
 			? arranged.middle.items.map((i) => i.id)
 			: [...middleGridIds]
@@ -2759,21 +3079,62 @@
 		// While EDITING, committed membership is not yet the truth: the
 		// arrangement in progress is. A card dragged from the MIDDLE into a
 		// side is reported by both zones' frames at once, but neither list
-		// above has caught up — `layout.zones` gains it only at Done, and the
+		// above holds it until Done — `layout.zones` gains it then, and the
 		// middle's own membership lives in `chatGrid`, which `commitArrangement`
-		// reconciles only at Done too. So for a moment the card was in no list
-		// and the tray offered it again, ready to be added a second time.
-		//
-		// A side→side drag never showed it: the SOURCE zone's committed widget
-		// list still names the card until Done, so `placedWidgetIds` covered it
-		// the whole way across. The middle has no such list to lag behind.
-		//
-		// The live view is unchanged — it reads `arranged`/`layout` as before.
+		// reconciles at Done too — so the working frames are counted as well,
+		// or the card would count nowhere. (A side→side drag stays counted
+		// the whole way: the SOURCE zone's committed list names it until Done.)
 		if (editing) for (const id of arrangedIds(editArranged)) placed.add(id)
-		return manager.instances.filter(
-			(p) => p.role !== "primary" && !placed.has(p.id)
-		)
+		return placed
 	})
+	/**
+	 * Every widget kind this session can add (brief 7b): Messages — unless
+	 * the genre withholds it — then every declared widget, placed or not.
+	 */
+	let offers = $derived<TrayOffer[]>(
+		trayOffers(
+			manager.decls,
+			manager.omitted.has("messages")
+				? null
+				: {
+						id: "messages",
+						title:
+							CORE_WIDGETS.find((w) => w.id === "messages")?.title ??
+							"Messages",
+						icon: "MessagesSquare"
+					}
+		)
+	)
+	/**
+	 * The Add menu (brief 7b): every kind, every time — a placed one with its
+	 * count, and one at its `maxInstances` disabled with the reason. Adding
+	 * mints the instance id (`addWidget`).
+	 */
+	let trayWidgets = $derived<TrayWidget[]>(trayWidgetsOf(offers, placedNow))
+	/** A tray chip's icon, as a component to draw with. */
+	function trayIcon(t: { icon?: string }) {
+		return (t.icon && (Icons as any)[t.icon]) || Icons.LayoutPanelTop
+	}
+	/**
+	 * Why one more instance of this placed widget cannot be added — its
+	 * widget's cap — else null. What a card's Duplicate says instead.
+	 */
+	function copyRefusalOf(id: string): string | null {
+		const widget = widgetOfInstance(id)
+		const offer = offers.find((o) => o.id === widget)
+		return capRefusal(offer?.maxInstances, instancesOf(widget, placedNow).length)
+	}
+	/**
+	 * The ids a minted one must not reuse: everything placed, drawn or still
+	 * held by the surface manager — the working arrangement included.
+	 */
+	function mintTaken(): string[] {
+		return [...placedNow, ...placedIds, ...manager.copies.map((c) => c.id)]
+	}
+	/** The ids holding stored widget settings or a style pin in this session. */
+	function storedIds(): string[] {
+		return [...storedWidgetSettingIds(), ...Object.keys(widgetStylePins())]
+	}
 
 	// Add/remove don't go through gridstack's own gesture events (they change the
 	// id set, which re-seeds the zone), so they report themselves here.
@@ -2806,54 +3167,50 @@
 	 */
 	const NEW_CARD_ROWS = 3
 	/** Which working arrangement a place target writes its cells into. */
-	function targetZoneKey(target: string): ZoneKey | null {
+	function targetZoneKey(target: string): ZoneId | null {
 		if (target === MIDDLE_TARGET) return "middle"
 		if (target === leftZoneId) return "left"
 		if (target === rightZoneId) return "right"
 		return null
 	}
 	/**
-	 * Seat one more card in a zone's working arrangement: make room if the zone
-	 * is full, then WRITE the newcomer's own cells at the slot that opens.
+	 * Where seating card `id` in `target` would leave the working arrangement
+	 * (./arrangedGeometry `seatCard`: room made, the newcomer's cells written):
+	 * the zone and its new frame; `"free"` when there is no frame to seat in —
+	 * the phone editor, which writes its own rows (`MobileLayoutEditor`
+	 * `landAtFoot`), a strip, or a zone that has not reported yet; or null when
+	 * the zone has no room: no card can give up rows (`MIN_CARD_ROWS`), or the
+	 * rows they give up are not together in one place — cards keep their top
+	 * edges (float), so shrinking never closes the gaps between them.
 	 *
-	 * Both halves are needed, and the second is the one that does the work.
-	 * `makeRoom` frees rows under the biggest card, which is not where
-	 * `seedPositions` puts a card with no saved cells: that goes to the foot of
-	 * the x = 0 stack and, in a full zone, is clamped straight back on top of
-	 * whatever holds the bottom rows — and gridstack, capped by `maxRow`,
-	 * cannot move anything out of the way, so the two simply overlap (the block
-	 * above `MIN_CARD_ROWS` in ./arrangedGeometry has the whole story). Writing
-	 * the cells also makes the frame account for exactly the cards on screen,
-	 * so the re-seeded zone reads as a faithful restore and draws them.
-	 *
-	 * A zone reports a frame the moment it mounts, so the no-frame return is a
-	 * safety net rather than a path. A zone that cannot make room is left
-	 * exactly as it was — today's behaviour, and the Full note stays true.
+	 * A Duplicate asks for its source's size first; where the zone cannot make
+	 * that much room it takes the newcomer's footprint like any add.
 	 */
-	function seatInFrame(target: string, widgetId: string) {
+	function seatingIn(
+		target: string,
+		id: string,
+		size?: { w: number; h: number }
+	): { zoneKey: ZoneId; frame: ArrangedZone } | "free" | null {
+		if (mobileEdit) return "free"
 		const zoneKey = targetZoneKey(target)
-		if (!zoneKey) return
+		if (!zoneKey) return "free"
 		const frame = editArranged[zoneKey]
-		if (!frame) return
-		const need = { w: frame.cols, h: NEW_CARD_ROWS }
-		const roomy = makeRoom(frame, need)
-		const slot = firstSlot(roomy, need)
-		if (!slot) return
-		editArranged[zoneKey] = {
-			...roomy,
-			// `clampPos` rather than the raw `need`: it is the clamp
-			// `firstSlot` measured the slot with and the one `seedPositions`
-			// ends on, so the card written here is the card the zone draws.
-			items: [
-				...roomy.items,
-				clampPos(
-					{ id: widgetId, x: slot.x, y: slot.y, ...need },
-					roomy.cols,
-					roomy.rows
-				)
-			]
-		}
-		markSimDirty()
+		if (!frame) return "free"
+		const footprint = { w: frame.cols, h: NEW_CARD_ROWS }
+		const seated = seatCard(frame, id, size ? [size, footprint] : [footprint])
+		return seated ? { zoneKey, frame: seated } : null
+	}
+	/** What an add says when its zone has no room left (brief 7b review). */
+	function noRoomIn(target: string) {
+		const zoneKey = targetZoneKey(target)
+		toaster.info({
+			title:
+				zoneKey === "middle"
+					? "No room in the middle"
+					: `No room in the ${zoneKey ?? ""} column`,
+			description:
+				"Make a widget there shorter, or move or remove one, then add it again."
+		})
 	}
 	/**
 	 * The tray's one landing — a drop or a tap-to-place, into a side zone or
@@ -2864,9 +3221,21 @@
 	 * are the zone template's; the middle's are the chat widget grid's, which
 	 * `withWidget` cannot reach, so the middle's drop has its own path.
 	 */
-	function place(target: string, widgetId: string, beforeId?: string) {
+	function place(
+		target: string,
+		widgetId: string,
+		beforeId?: string,
+		size?: { w: number; h: number }
+	): boolean {
+		// Room first: a zone with none turns the card away rather than seat it
+		// on top of another (./arrangedGeometry `seatCard`).
+		const seating = seatingIn(target, widgetId, size)
+		if (!seating) {
+			noRoomIn(target)
+			return false
+		}
 		manager.activate(widgetId)
-		seatInFrame(target, widgetId)
+		if (seating !== "free") editArranged[seating.zoneKey] = seating.frame
 		// A widget lives in ONE zone. `withWidget` already clears the template
 		// before it adds, and `withGridWidget` the grid — but neither can see
 		// the other half, so landing across the two models clears the one being
@@ -2886,7 +3255,142 @@
 		}
 		armedId = null
 		markSimDirty()
+		return true
 	}
+	/**
+	 * Add widget `widgetId` from the Add menu (brief 7b): mint its instance id
+	 * (./widgetInstances `mintInstanceId`: the bare id when no instance holds
+	 * it, else `W#n`, skipping what is placed or stored) and land it. Refused
+	 * — with the reason — at its `maxInstances`. Answers the id it placed.
+	 */
+	function addWidget(
+		target: string,
+		widgetId: string,
+		beforeId?: string
+	): string | null {
+		armedId = null
+		const offer = offers.find((o) => o.id === widgetId)
+		if (!offer) return null
+		const refusal = capRefusal(
+			offer.maxInstances,
+			instancesOf(widgetId, placedNow).length
+		)
+		if (refusal) {
+			toaster.info({ title: refusal })
+			return null
+		}
+		const id = mintInstanceId(widgetId, mintTaken(), storedIds())
+		if (!place(target, id, beforeId)) return null
+		forgetViewState(id)
+		return id
+	}
+	/**
+	 * A newly minted COPY starts with no saved view state (a frame's scroll,
+	 * an open tab): that is held in memory under the instance id
+	 * (`frameStateKey`), so a `#n` re-minted after a removal would otherwise
+	 * open where the removed one left off (brief 7b review). A bare id keeps
+	 * its own, as it keeps its settings (plan M.3.4).
+	 */
+	function forgetViewState(id: string) {
+		if (id !== widgetOfInstance(id))
+			savedFrameState.clear(frameStateKey(sessionId, id))
+	}
+	/**
+	 * Where a placed instance sits right now, as a `place` target: the zone
+	 * of the working frame that holds it while editing, else the middle grid
+	 * or the zone list that names it.
+	 */
+	function placeTargetOf(id: string): string | null {
+		if (editing)
+			for (const key of ZONE_IDS)
+				if (editArranged[key]?.items.some((i) => i.id === id))
+					return key === "middle"
+						? MIDDLE_TARGET
+						: key === "left"
+							? leftZoneId
+							: rightZoneId
+		if (middleGridIds.has(id)) return MIDDLE_TARGET
+		return (
+			Object.entries(layout.zones).find(([, z]) => z.widgets.includes(id))?.[0] ??
+			null
+		)
+	}
+	/**
+	 * **Duplicate** a placed widget (brief 7b; QD, the plan's recommended
+	 * default — ./widgetInstances `DUPLICATE_RULE`): mint a copy of its widget,
+	 * hand it the source's settings and style pin verbatim — `channel`
+	 * included — and seat it beside the source, at the source's size where
+	 * the zone can make that much room, else at a new card's footprint.
+	 * Refused at the widget's cap, and in a zone with no room at all. Answers
+	 * the copy's id.
+	 *
+	 * The copy's id is minted FRESH (`mintInstanceId`'s `fresh`): never one
+	 * holding stored values, the bare id included, so the writes below never
+	 * overwrite anything. They go straight to the server, as every settings
+	 * write does; the ids are remembered so Cancel can take them back
+	 * (`duplicatedIds`).
+	 */
+	function duplicateWidget(sourceId: string): string | null {
+		if (!duplicateOffered()) return null
+		const widgetId = widgetOfInstance(sourceId)
+		if (!offers.some((o) => o.id === widgetId)) return null
+		const refusal = copyRefusalOf(sourceId)
+		if (refusal) {
+			toaster.info({ title: refusal })
+			return null
+		}
+		const target = placeTargetOf(sourceId)
+		if (!target) return null
+		const id = mintInstanceId(widgetId, mintTaken(), storedIds(), {
+			fresh: true
+		})
+		// Beside the source: after it in a list, and at its size in a frame.
+		const list =
+			target === MIDDLE_TARGET ? null : layout.zones[target]?.widgets
+		const at = list ? list.indexOf(sourceId) : -1
+		const after = list && at >= 0 ? list[at + 1] : undefined
+		const zoneKey = targetZoneKey(target)
+		const src = zoneKey
+			? editArranged[zoneKey]?.items.find((i) => i.id === sourceId)
+			: undefined
+		const size = src ? { w: src.w, h: src.h } : undefined
+		// Room before anything is written: a refused copy leaves nothing
+		// behind, on the server or on screen.
+		if (!seatingIn(target, id, size)) {
+			noRoomIn(target)
+			return null
+		}
+		forgetViewState(id)
+		// The values first, so the copy's first draw already wears them.
+		const carry = duplicateValues(
+			sourceId,
+			allWidgetSettingValues(),
+			widgetStylePins()
+		)
+		if (carry.settings) putWidgetSettings(id, carry.settings)
+		if (carry.pin) setWidgetStylePin(id, carry.pin)
+		if (carry.settings || carry.pin) duplicatedIds.push(id)
+		place(target, id, after, size)
+		return id
+	}
+	/**
+	 * The ids this editing session's Duplicates wrote settings or a pin
+	 * under — every one minted fresh, so none held anything before. Cancel
+	 * clears them (`cancelEditing`); Done and a re-seed (a copy landing, Save
+	 * as new) keep them, and start the list again. Not `$state`: nothing
+	 * renders it.
+	 */
+	let duplicatedIds: string[] = []
+	// The Settings tab's overlay offers Duplicate while the editor is open —
+	// never under QD's (1), tray only.
+	$effect(() => {
+		setWidgetDuplicator(
+			editing && duplicateOffered()
+				? { duplicate: duplicateWidget, refusal: copyRefusalOf }
+				: null
+		)
+		return () => setWidgetDuplicator(null)
+	})
 	/** Does the chat widget grid hold this id, in any zone? */
 	function gridHolds(id: string): boolean {
 		return chatGrid.widgets.some((w) => w.id === id)
@@ -2906,12 +3410,34 @@
 		// re-seed would bring it straight back from `chatGrid`.
 		if (gridHolds(widgetId))
 			commitGrid(withoutGridWidget(chatGrid, widgetId))
+		// And out of the working arrangement: a zone is seeded from its
+		// working frame too (./editorSeed), so a card left there — one dragged
+		// in, which no committed list names — would be seeded straight back.
+		for (const key of ZONE_IDS) {
+			const frame = editArranged[key]
+			if (frame?.items.some((i) => i.id === widgetId))
+				editArranged[key] = {
+					...frame,
+					items: frame.items.filter((i) => i.id !== widgetId)
+				}
+		}
 		manager.close(widgetId)
 		markSimDirty()
 	}
 
 	function onChipDragStart(e: DragEvent, id: string) {
 		e.dataTransfer?.setData("text/sp-widget", id)
+		if (e.dataTransfer) e.dataTransfer.effectAllowed = "move"
+	}
+	/**
+	 * A tray chip's drag carries a WIDGET id, under its own type: dropped, it
+	 * mints a new instance (`addWidget`), where a placed card's drag
+	 * (`text/sp-widget`, an instance id) moves that instance.
+	 */
+	const TRAY_DRAG_TYPE = "text/sp-tray-widget"
+	function onTrayDragStart(e: DragEvent, widgetId: string) {
+		e.dataTransfer?.setData(TRAY_DRAG_TYPE, widgetId)
+		// "move", as a card's: the zones answer every drag with that effect.
 		if (e.dataTransfer) e.dataTransfer.effectAllowed = "move"
 	}
 	function draggedId(e: DragEvent): string | null {
@@ -2930,26 +3456,26 @@
 		e.preventDefault()
 		e.stopPropagation()
 		dragOverZone = null
+		const widgetId = e.dataTransfer?.getData(TRAY_DRAG_TYPE)
+		if (widgetId) {
+			addWidget(target, widgetId, beforeId)
+			return
+		}
 		const id = draggedId(e)
 		if (id) place(target, id, beforeId)
 	}
 	function onZoneClick(target: string) {
-		if (placing && armedId) place(target, armedId)
+		if (placing && armedId) addWidget(target, armedId)
 	}
 
 	/**
-	 * Drop this user's own arrangement so the active preset shows through. NOT
-	 * "copy the default over mine": the row stops asserting an arrangement
-	 * instead of storing a snapshot, which is what keeps a preset a live
-	 * reference. With no preset (the shipped default composes to no base at
-	 * all) this is exactly the old reset — every slot back to undefined.
+	 * **Reset to genre default layout**: copy the genre default layout back
+	 * into this session. A genre whose owner ships none has no such row, and
+	 * resetting it is starting from scratch — which is what its sessions
+	 * started from in the first place.
 	 */
 	function resetLayout() {
-		manager.clearArrangement()
-		// The live view follows the manager on its own; this is the editor's
-		// working copy catching up with what "persisted" now means.
-		editArranged = loadArranged(manager.effectiveArrangedGrid)
-		popId = null
+		startFrom(genreDefaultPreset?.id ?? null)
 	}
 
 	/* ── the PHONE editor (ruled 2026-09-10) ───────────────────────────────
@@ -2995,7 +3521,7 @@
 	 * join the panels menu as "Middle". Marks and containers only — nothing
 	 * unmounts, and nothing is written. */
 	/** A zone's placed ids in reading order: by row, then by column. */
-	function readingIds(frame: GsLayout | undefined): string[] {
+	function readingIds(frame: ArrangedZone | undefined): string[] {
 		return [...(frame?.items ?? [])]
 			.sort((a, b) => a.y - b.y || a.x - b.x)
 			.map((i) => i.id)
@@ -3018,16 +3544,42 @@
 			.flatMap((z) => z.widgets)
 			.filter((id) => isConversation(id) || !!inst(id))
 	}
-	/** Every zone's placed ids in reading order — middle, left, right. */
+	/**
+	 * Every zone's placed ids in reading order — middle, left, right, and the
+	 * strips (top, then bottom) the stage never draws but the claims count.
+	 */
 	let readingOrder = $derived({
 		middle: arranged.middle
 			? readingIds(arranged.middle)
 			: widgetsInZone(chatGrid, "middle").map((w) => w.id),
 		left: sideReadingIds("left"),
-		right: sideReadingIds("right")
+		right: sideReadingIds("right"),
+		strips: Object.values(layout.zones)
+			.filter((z) => z.kind === "strip")
+			.sort((a, b) => Number(a.area === "bottom") - Number(b.area === "bottom"))
+			.flatMap((z) => z.widgets)
+			.filter((id) => isConversation(id) || !!inst(id))
 	})
 	let stagePick = $derived<StagePick | null>(
 		stageOf({ ...readingOrder, claims, primaryId })
+	)
+	/** Where the layout's primary log IS, whatever QE draws (./placementRules). */
+	let logPick = $derived<StagePick | null>(
+		primaryLogPick({ ...readingOrder, claims, primaryId })
+	)
+	/**
+	 * The side holding the primary log on the DESKTOP, or null when the middle
+	 * holds it (brief 7a review). That side never tucks (`tucked`) and, on the
+	 * rail path, its zone holding the log is a rail whatever its rung or pin
+	 * (`resolvedDocked`): a log moved into a side has to stay where it was put,
+	 * readable, at every desktop width — not collapse to a rail icon that an
+	 * outside click puts away. Not below the breakpoint (the phone's stage,
+	 * QE) and not while editing (the editor draws the whole layout).
+	 */
+	let logSide = $derived<"left" | "right" | null>(
+		mounted && !isNarrow && !editing && logPick && logPick.zone !== "middle"
+			? logPick.zone
+			: null
 	)
 	/**
 	 * The side drawn as the stage right now, or null: on the phone, and in
@@ -3043,12 +3595,19 @@
 	 * The middle on the phone while a side is the stage: stowed (mounted,
 	 * `display: none`), or opened from the panels menu as a sheet of its own.
 	 * `flow` everywhere else — Stage only hides it with a mark instead.
+	 *
+	 * Also `flow` while the STAGE side's own sheet is open: that sheet is the
+	 * side's one mount, stage cell and all, so the body behind the scrim would
+	 * otherwise be blank. The middle stands behind it instead, as the log
+	 * stands behind any sheet when the middle holds it.
 	 */
 	let centerSlot = $derived<"flow" | "stowed" | "overlay">(
 		stageSide && isNarrow
 			? mobileSide === "middle"
 				? "overlay"
-				: "stowed"
+				: mobileSide === stageSide
+					? "flow"
+					: "stowed"
 			: "flow"
 	)
 	/**
@@ -3097,13 +3656,14 @@
 			? new Set(ids.filter((id) => id !== stageMiddleId))
 			: undefined
 	})
-	/** Leave the editor, keeping everything — the desktop Done, and the bar's. */
+	/**
+	 * Leave the editor, keeping everything — the desktop Done, and the bar's.
+	 * Done saves to THIS SESSION only (owner L3); a named layout is Save as
+	 * new layout's, never Done's. A refused Done (QF: an empty middle) leaves
+	 * the editor open on the arrangement as it is.
+	 */
 	function finishEditing() {
-		// Commit FIRST: the save reads the arrangement this writes, so a preset
-		// saved on Done captures what was just arranged. A refused Done (QF:
-		// an empty middle) leaves the editor open on the arrangement as it is.
 		if (!commitArrangement()) return
-		savePreset()
 		closeEditor()
 	}
 	/**
@@ -3133,12 +3693,19 @@
 		// the stored blob, verbatim and possibly unset, not a parsed grid.
 		if (editWidgetGridSnapshot)
 			manager.setWidgetGrid(editWidgetGridSnapshot.value)
-		editArranged = loadArranged(manager.effectiveArrangedGrid)
-		presetName = ""
+		editArranged = loadArranged(manager.arrangedGrid)
+		// …and what this edit's Duplicates wrote, under ids the restored
+		// layout does not place (each was minted holding nothing).
+		if (duplicatedIds.length) {
+			dropWidgetSettings(duplicatedIds)
+			dropWidgetStylePins(duplicatedIds)
+		}
 		closeEditor()
 	}
 	function closeEditor() {
+		duplicatedIds = []
 		editing = false
+		copiesPending = 0
 		armedId = null
 		editZonesSnapshot = null
 		editActiveSnapshot = null
@@ -3151,37 +3718,72 @@
 		closeWidgetSettings()
 	}
 
-	/* ── presets (PLAN 25 redesign) ─────────────────────────────────────
-	 * The tab lists the genre default plus this user's saved layouts. The page
-	 * owns the socket round trips; this only decides what is shown and hands
-	 * back the intent. */
-	/** The preset in force — the pinned one, else the shipped default. */
-	let activePreset = $derived(
-		presets.find((p) => p.id === activePresetId) ??
-			presets.find((p) => p.isDefault) ??
-			null
+	/* ── starting points (the copy model) ───────────────────────────────
+	 * The pane lists the session layout presets this person may start from.
+	 * Every verb here REPLACES this session's layout with a copy (brief 3 of
+	 * `PLAN-layout-one-format-2026-09-28`); the page owns the round trips, and
+	 * the copy's answer re-seeds the manager, which the open editor follows.
+	 * Both editors ask before they call `startFrom` or `resetLayout` (brief 4,
+	 * `./startFrom` and `LayoutConfirmDialog`), so nothing here asks again. */
+	/** The preset this session's layout started from, if it is still listed. */
+	let startedFrom = $derived(
+		presets.find((p) => p.id === startedFromLayoutPresetId) ?? null
 	)
-	/** The name box for "save this arrangement as a preset". */
-	let presetName = $state("")
+	/** The genre's genre default layout, if its owner ships one. */
+	let genreDefaultPreset = $derived(
+		presets.find((p) => p.isGenreDefault) ?? null
+	)
+	/**
+	 * What **Start again from "X"** re-copies: the source, when it is still
+	 * one this person can start from and is not the genre default layout
+	 * (Reset covers that one).
+	 */
+	let startAgainFrom = $derived(
+		startedFrom && !startedFrom.isGenreDefault ? startedFrom : null
+	)
 
-	function applyPreset(presetId: number) {
-		onApplyPreset?.(presetId)
-		// The editor's working copy is seeded on open, so re-read it from the
-		// base that just changed — otherwise the editor would keep drawing the
-		// arrangement that was just discarded. (The live view underneath is
-		// derived from the manager and needs no such nudge, here or when the
-		// round trip lands a new base a moment later.)
-		editArranged = loadArranged(manager.effectiveArrangedGrid)
+	/** Copy a preset in (`null`: Start from scratch). */
+	async function startFrom(layoutPresetId: number | null) {
+		if (!onStartFrom) return
+		copiesPending++
+		const asked = onStartFrom(layoutPresetId)
 		popId = null
 		armedId = null
+		// Refused (the preset went, another genre's, a thrown handler): no
+		// re-seed is coming for it. Landed: the re-seed already took it back.
+		if (!(await asked) && copiesPending > 0) copiesPending--
 	}
 
-	/** Save the current arrangement as a new preset. A no-op without a name. */
-	function savePreset() {
-		const name = presetName.trim()
-		if (!name) return
-		onSavePreset?.(name)
-		presetName = ""
+	/**
+	 * **Save as new layout**: commit what is arranged (as Done would — the
+	 * saved layout is what this session now holds), then save it as a new
+	 * named layout the session started from. The editor stays open, re-seeded
+	 * on the committed layout: Cancel puts back the saved layout.
+	 * A no-op without a name, and nothing is saved when the commit is refused;
+	 * returns whether it was sent, so the editor's dialog keeps a refused
+	 * name for the next try.
+	 */
+	function savePreset(name: string, description = ""): boolean {
+		const n = name.trim()
+		if (!n) return false
+		if (!commitArrangement()) return false
+		onSavePreset?.(n, [...placedIds], description.trim() || undefined)
+		seedEditor()
+		return true
+	}
+
+	/**
+	 * **Save changes to "*Name*"** (brief 6b): commit what is arranged, as
+	 * Save as new does, then write it back into the layout of this person's
+	 * that the session started from. The editor stays open, re-seeded on the
+	 * committed layout. Returns whether it was sent (false: the commit was
+	 * refused, and said why).
+	 */
+	function saveChanges(presetId: number, overwriteUpdated: boolean): boolean {
+		if (!commitArrangement()) return false
+		onSaveChanges?.(presetId, [...placedIds], overwriteUpdated)
+		seedEditor()
+		return true
 	}
 </script>
 
@@ -3248,10 +3850,21 @@
 		<!-- Each copy is told its own channels (S1): the Sanctum copy the
 		     Sanctum, the story's log what no copy claims. -->
 		{@const copyDossier = dossierFor(id)}
-		<!-- The conversation has no panel around it, so its card (./hostCard) is
-		     worn by its own box — the same classes, never a wrapper that comes
-		     and goes with the setting (that would remount it). -->
-		{@const carded = hostCardShown({ setting: r.settings.hostCard, popover })}
+		<!-- The conversation has no panel around it. Opened over the session
+		     (a pop-over) its box wears the host card (./hostCard) — the same
+		     classes, never a wrapper that comes and goes (that would remount
+		     it). Placed, its Card setting is a backing mode (note 18;
+		     $lib/shared/widgets/messageBacking): Auto follows what its message
+		     style declares, On / Off are the person's word, and the pane is
+		     drawn by widgets.css from `data-sp-backing` in the theme's look. -->
+		{@const carded = hostCardShown({ setting: false, popover })}
+		{@const backing = carded
+			? "none"
+			: resolveBacking({
+					mode: r.settings[BACKING_MODE_KEY],
+					declared: declaredBacking(effectiveWidgetSkin(id)),
+					background: !!copyDossier?.backdrop
+				})}
 		{#if session}
 			<RemoteWidget
 				widget={{ id, title: r.title }}
@@ -3262,7 +3875,8 @@
 				props={{ widgetId: id, title: r.title }}
 				settings={r.settings}
 				reads={CORE_CONVERSATION.reads}
-				placement={withHostCard(placement, carded, false)}
+				placement={withHostCard(placement, carded || backing === "card", false)}
+				{backing}
 				source={manager}
 				{actions}
 				{actionDispatch}
@@ -3271,6 +3885,7 @@
 				scoped={copyDossier ? { session_full: copyDossier } : undefined}
 				class="h-full {carded ? HOST_CARD_CLASS : ''}"
 				eager
+				pageIds={pageIdsHeld.has(id)}
 			/>
 		{/if}
 	{:else}
@@ -3280,6 +3895,7 @@
 		{#if p && (p.role !== "primary" || manager.omitted.has("messages"))}
 			<Panel
 				instance={p}
+				title={titleApart.get(p.id)}
 				{manager}
 				{sessionId}
 				{session}
@@ -3292,6 +3908,32 @@
 				{onFrameAction}
 			/>
 		{/if}
+	{/if}
+{/snippet}
+
+<!-- Duplicate on an edit bar (brief 7b; QD — ./widgetInstances): a copy of
+     this widget beside it, its settings and style copied. At its widget's
+     cap the bar says why instead. -->
+{#snippet duplicateButton(p: ZoneEntry)}
+	{@const full = copyRefusalOf(p.id)}
+	{#if !duplicateOffered()}
+		<!-- QD's "tray only": no Duplicate. -->
+	{:else if full}
+		<span class="edit-dup edit-nocopy" role="note" title={full} aria-label={full}>
+			<Icons.Copy size={12} aria-hidden="true" />
+		</span>
+	{:else}
+		<button
+			class="edit-dup"
+			title="Duplicate"
+			aria-label="Duplicate {p.title}"
+			onclick={(e) => {
+				e.stopPropagation()
+				duplicateWidget(p.id)
+			}}
+		>
+			<Icons.Copy size={12} />
+		</button>
 	{/if}
 {/snippet}
 
@@ -3309,6 +3951,7 @@
 		<div class="edit-item-bar">
 			<Icons.GripVertical size={12} />
 			<span class="min-w-0 flex-1 truncate">{p.title}</span>
+			{@render duplicateButton(p)}
 			{#if keep}
 				<span class="edit-x" role="note" title={keep} aria-label={keep}>
 					<Icons.Lock size={12} aria-hidden="true" />
@@ -3331,6 +3974,7 @@
 	{#if p.panel}
 		<Panel
 			instance={p.panel}
+			title={titleApart.get(p.panel.id)}
 			{manager}
 			{sessionId}
 			{session}
@@ -3498,7 +4142,8 @@
 				{#each widgets as p, i (p.id)}
 					{@const IconCmp = entryIcon(p)}
 					{@const zSide = z.def.side === "left" ? "left" : "right"}
-					{@const out = sidesAreTucked && tuckedOpen(zSide, p.id)}
+					{@const zTucked = tucked[zSide]}
+					{@const out = zTucked && tuckedOpen(zSide, p.id)}
 					<!-- Template literals, not "{p.title}": inside an expression
 					     those braces are ordinary characters, and a screen reader
 					     was announcing the literal text "Open {p.title}". -->
@@ -3507,16 +4152,16 @@
 						tabindex={i === rovingStop(railStop[`z:${z.id}`], widgets.length) ? 0 : -1}
 						onkeydown={(e) => onRailKeydown(e, `z:${z.id}`)}
 						onfocus={() => (railStop[`z:${z.id}`] = i)}
-						class:active={sidesAreTucked ? out : popId === z.id}
+						class:active={zTucked ? out : popId === z.id}
 						class:edit-item={placing}
 						draggable={placing}
 						title={placing ? `Drag to move ${p.title}` : p.title}
 						aria-label={placing
 							? `Move ${p.title}`
 							: `Open ${p.title}`}
-						aria-pressed={sidesAreTucked ? undefined : popId === z.id}
-						aria-expanded={sidesAreTucked ? out : undefined}
-						aria-haspopup={sidesAreTucked ? "dialog" : undefined}
+						aria-pressed={zTucked ? undefined : popId === z.id}
+						aria-expanded={zTucked ? out : undefined}
+						aria-haspopup={zTucked ? "dialog" : undefined}
 						aria-controls={out ? `tucked-zone-${z.id}` : undefined}
 						ondragstart={(e) => onChipDragStart(e, p.id)}
 						onclick={(e) => {
@@ -3525,7 +4170,7 @@
 							// widget between zones, not an opener. Tucked, it brings
 							// THIS widget out, one at a time (./tuckedSides).
 							if (placing) return
-							if (sidesAreTucked)
+							if (zTucked)
 								toggleTucked(zSide, p.id, e.currentTarget)
 							else togglePop(z.id, p.id)
 						}}
@@ -3547,9 +4192,14 @@
 	{@const widgets = zoneEntriesOf(z)}
 	{#if z.mode !== "hidden" && (widgets.length || placing)}
 		<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+		<!-- A top strip is a header row: it rolls up with a furled session
+		     header (note 29), except while the layout is being edited. -->
 		<div
 			class="zone-strip"
-			data-stage-hidden={stageOnly ? "" : undefined}
+			data-stage-hidden={stageOnly ||
+			(shellPrefs.headerFurled && !editing && z.def.area !== "bottom")
+				? ""
+				: undefined}
 			class:edit-zone={placing}
 			class:drag-over={dragOverZone === z.id}
 			aria-label={labelOf(z)}
@@ -3576,6 +4226,7 @@
 						<div class="edit-item-bar">
 							<Icons.GripVertical size={12} />
 							<span class="min-w-0 flex-1 truncate">{p.title}</span>
+							{@render duplicateButton(p)}
 							{#if keep}
 								<span class="edit-x" role="note" title={keep} aria-label={keep}>
 									<Icons.Lock size={12} aria-hidden="true" />
@@ -3598,6 +4249,7 @@
 					{#if p.panel}
 						<Panel
 							instance={p.panel}
+							title={titleApart.get(p.panel.id)}
 							{manager}
 							{sessionId}
 							{session}
@@ -3708,14 +4360,14 @@
 				class:pinned={markPinned && groupPinned(u)}
 				title={title}
 				aria-label={title}
-				aria-pressed={sidesAreTucked ? undefined : st !== "collapsed"}
-				aria-expanded={sidesAreTucked ? tuckedOpen(side, u.key) : undefined}
-				aria-haspopup={sidesAreTucked ? "dialog" : undefined}
-				aria-controls={sidesAreTucked && tuckedOpen(side, u.key)
+				aria-pressed={tucked[side] ? undefined : st !== "collapsed"}
+				aria-expanded={tucked[side] ? tuckedOpen(side, u.key) : undefined}
+				aria-haspopup={tucked[side] ? "dialog" : undefined}
+				aria-controls={tucked[side] && tuckedOpen(side, u.key)
 					? `tucked-${side}-${u.key}`
 					: undefined}
 				onclick={(e) =>
-					sidesAreTucked
+					tucked[side]
 						? toggleTucked(side, u.key, e.currentTarget)
 						: toggleGroup(side, u)}
 			>
@@ -3746,7 +4398,7 @@
 		<div
 			class="side-column"
 			class:col-left={side === "left"}
-			class:tucked={sidesAreTucked && !sheet && !asStage}
+			class:tucked={tucked[side] && !sheet && !asStage}
 			style={flowPx > 0
 				? `flex:0 0 ${flowPx}px; inline-size:${flowPx}px;`
 				: ""}
@@ -3787,7 +4439,7 @@
 					     positioned over the session. Four containers, one mount —
 					     a second call site for any of them would reload every
 					     iframe in it. -->
-					{@const tuckedOut = sidesAreTucked && st === "flyout"}
+					{@const tuckedOut = tucked[side] && st === "flyout"}
 					<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
 					<div
 						class="live-side-cell cell-{st}"
@@ -3975,22 +4627,31 @@
 			insetStart={placing ? 0 : mLeft}
 			bind:height={toolbarH}
 			{presets}
-			{activePreset}
-			{applyPreset}
-			bind:presetName
+			{startedFrom}
+			{startedFromUpdated}
+			{startAgainFrom}
+			{startFrom}
 			{savePreset}
 			{resetLayout}
+			mainWidgetTitle={primaryTitle}
 			{onRenamePreset}
 			{onDeletePreset}
 			{onPresetUsage}
 			{presetUsage}
 			{presetPicture}
+			{saveChanges}
+			{genreName}
+			{isGuest}
+			{isAdmin}
+			{onShareLayout}
+			{onCloneLayout}
+			{onSetNewSessionLayout}
 			{styleableWidgets}
-			{paletteWidgets}
-			{iconOf}
+			{trayWidgets}
+			{trayIcon}
 			bind:armedId
 			bind:dragOverZone
-			{onChipDragStart}
+			{onTrayDragStart}
 			{draggedId}
 			{removeWidget}
 			{simTier}
@@ -4040,6 +4701,7 @@
 						{leftGsItems}
 						{middleGsItems}
 						{rightGsItems}
+						seedKeys={editorSeedKeys}
 						bind:editArranged
 						{railPreview}
 						bind:dragOverZone
@@ -4051,6 +4713,7 @@
 						{layout}
 						{toggleZonePin}
 						{removeWidget}
+						{duplicateWidget}
 						onDropped={(id, zone) => (lastDropped = { id, zone })}
 						{pinOnDrop}
 						{markSimDirty}
@@ -4083,6 +4746,7 @@
 					{leftGsItems}
 					{middleGsItems}
 					{rightGsItems}
+					seedKeys={editorSeedKeys}
 					bind:editArranged
 					{railPreview}
 					bind:dragOverZone
@@ -4094,6 +4758,7 @@
 					{layout}
 					{toggleZonePin}
 					{removeWidget}
+					{duplicateWidget}
 					onDropped={(id, zone) => (lastDropped = { id, zone })}
 					{pinOnDrop}
 					{markSimDirty}
@@ -4147,16 +4812,31 @@
 					{iconOf}
 					{middleWidgetIcon}
 					{widgetLabel}
-					{paletteWidgets}
-					{place}
+					{trayWidgets}
+					{trayIcon}
+					{addWidget}
+					{duplicateWidget}
 					{removeWidget}
 					{floorNoteOf}
 					{presets}
-					{activePreset}
-					{applyPreset}
-					bind:presetName
+					{startedFrom}
+					{startedFromUpdated}
+					{startAgainFrom}
+					{startFrom}
 					{savePreset}
 					{resetLayout}
+					mainWidgetTitle={primaryTitle}
+					{onRenamePreset}
+					{onDeletePreset}
+					{onPresetUsage}
+					{presetUsage}
+					{saveChanges}
+					{genreName}
+					{isGuest}
+					{isAdmin}
+					{onShareLayout}
+					{onCloneLayout}
+					{onSetNewSessionLayout}
 					onCancel={cancelEditing}
 					onDone={finishEditing}
 					{presetPicture}
@@ -4345,8 +5025,10 @@
 		     overlay, and the icon strips that arm this one are not rendered. -->
 		{#if !isNarrow}
 			{#each keptPops as z (z.id)}
-				{@const tuckedHere = sidesAreTucked && !!tuckedShown[z.id]}
-				{@const open = sidesAreTucked ? z.id === tuckedZoneId : z.id === popId}
+				<!-- Tucked per side: the side holding the log never is. -->
+				{@const zTucked = tucked[z.def.side === "left" ? "left" : "right"]}
+				{@const tuckedHere = zTucked && !!tuckedShown[z.id]}
+				{@const open = zTucked ? z.id === tuckedZoneId : z.id === popId}
 				{@const onLeft = z.def.side === "left"}
 				{@const shownZone = tuckedHere ? tuckedZone(z) : z}
 				{@const title = tuckedHere
@@ -4361,7 +5043,7 @@
 						class="pop-scrim"
 						data-stage-hidden={stageOnly ? "" : undefined}
 						onclick={() =>
-							sidesAreTucked ? closeTucked(false) : (popId = null)}
+							zTucked ? closeTucked(false) : (popId = null)}
 					></div>
 				{/if}
 				<!-- Closed, it is `display: none` — kept, not unmounted (`keptPops`). -->
@@ -4374,20 +5056,20 @@
 					data-stage-hidden={stageOnly ? "" : undefined}
 					class:from-left={onLeft}
 					class:pop-closed={!open}
-					style="inline-size:min({z.width}px, 86%);{sidesAreTucked
+					style="inline-size:min({z.width}px, 86%);{zTucked
 						? `${onLeft ? 'inset-inline-start' : 'inset-inline-end'}:${onLeft ? flowEdge.start : flowEdge.end}px;`
 						: ''}"
 					role="dialog"
 					aria-label={title}
-					id={sidesAreTucked ? `tucked-zone-${z.id}` : undefined}
-					data-tucked-flyout={sidesAreTucked && open ? "" : undefined}
-					tabindex={sidesAreTucked ? -1 : undefined}
+					id={zTucked ? `tucked-zone-${z.id}` : undefined}
+					data-tucked-flyout={zTucked && open ? "" : undefined}
+					tabindex={zTucked ? -1 : undefined}
 					data-pop-keep
 				>
 					<div class="zone-head">
 						<span class="zone-label always">{title}</span>
 						<span class="flex-1"></span>
-						{#if z.mode === "icons" && !sidesAreTucked}
+						{#if z.mode === "icons" && !zTucked}
 							<button
 								class="zone-head-btn"
 								title="Pin — keep this zone open"
@@ -4402,7 +5084,7 @@
 							title="Close"
 							aria-label="Close {title}"
 							onclick={() =>
-								sidesAreTucked ? closeTucked(true) : (popId = null)}
+								zTucked ? closeTucked(true) : (popId = null)}
 						>
 							<Icons.X size={13} />
 						</button>
@@ -4511,16 +5193,31 @@
 			{iconOf}
 			{middleWidgetIcon}
 			{widgetLabel}
-			{paletteWidgets}
-			{place}
+			{trayWidgets}
+			{trayIcon}
+			{addWidget}
+			{duplicateWidget}
 			{removeWidget}
 			{floorNoteOf}
 			{presets}
-			{activePreset}
-			{applyPreset}
-			bind:presetName
+			{startedFrom}
+			{startedFromUpdated}
+			{startAgainFrom}
+			{startFrom}
 			{savePreset}
 			{resetLayout}
+			mainWidgetTitle={primaryTitle}
+			{onRenamePreset}
+			{onDeletePreset}
+			{onPresetUsage}
+			{presetUsage}
+			{saveChanges}
+			{genreName}
+			{isGuest}
+			{isAdmin}
+			{onShareLayout}
+			{onCloneLayout}
+			{onSetNewSessionLayout}
 			onCancel={cancelEditing}
 			onDone={finishEditing}
 			{presetPicture}
@@ -4713,17 +5410,16 @@
 		flex-direction: row-reverse;
 	}
 	/* An EMPTY side's column (ruled 2026-09-29, `emptyColumns`): the room its
-	   first widget will take, kept so the middle does not move into it. A
-	   quiet region — a faint tint of the mid stop, which reads the same over
-	   a dark or a light ground (STYLE-GUIDE 2.6), no border and no text: a
-	   drop hint belongs to the editor, where there is something to drop
-	   (6.7). Its width is the inline `flex-basis` `sideMount` writes. */
+	   first widget will take, kept so the middle does not move into it. It
+	   shows the page's own background — no tint, no border and no text, so
+	   an empty column reads as part of the body (owner, 2026-10-01): a drop
+	   hint belongs to the editor, where there is something to drop (6.7).
+	   Its width is the inline `flex-basis` `sideMount` writes. */
 	.side-empty {
 		flex: none;
 		block-size: 100%;
 		min-inline-size: 0;
-		border-radius: 12px;
-		background: color-mix(in oklab, var(--color-surface-500) 7%, transparent);
+		background: transparent;
 	}
 	/* Tucked (./tuckedSides): the column is its rail and nothing more. The
 	   stack keeps its mount and its cells — the one out is a fixed flyout, the
@@ -5051,6 +5747,19 @@
 	.zone-panel.conversation {
 		flex: 1;
 		min-block-size: 0;
+	}
+	/* …and in the grid-math stack (a flyout, a pop-over, a multi-column rail),
+	   whose auto rows would size the log to its whole transcript and push the
+	   composer below it: while the stack holds a conversation its rows share
+	   the stack's height (each at least a readable 12rem, the stack scrolling
+	   past that), and every panel scrolls inside its own row. */
+	.zone-stack:has(> .zone-panel.conversation) {
+		grid-auto-rows: minmax(min(12rem, 100%), 1fr);
+		align-content: stretch;
+	}
+	.zone-stack:has(> .zone-panel.conversation) > .zone-panel {
+		min-block-size: 0;
+		overflow: auto;
 	}
 	.zone-head {
 		display: flex;
@@ -5421,6 +6130,19 @@
 	}
 	.edit-x:hover {
 		background: color-mix(in oklab, var(--color-error-500) 25%, transparent);
+	}
+	/* Duplicate beside the × (brief 7b): it adds, so it never wears the ×'s
+	   error hover; at the widget's cap it is a dimmed note, not a button. */
+	.edit-dup {
+		display: flex;
+		border-radius: 0.3rem;
+		padding: 0.1rem;
+	}
+	button.edit-dup:hover {
+		background: color-mix(in oklab, var(--color-primary-500) 25%, transparent);
+	}
+	.edit-nocopy {
+		opacity: 0.45;
 	}
 
 	@media (prefers-reduced-motion: reduce) {

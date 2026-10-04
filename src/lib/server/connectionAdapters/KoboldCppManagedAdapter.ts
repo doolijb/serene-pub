@@ -13,6 +13,7 @@ import {
 } from "$lib/server/koboldcpp/modelManager"
 import { ensureManagedReady } from "$lib/server/koboldcpp/managedPreflight"
 import { normalizeBaseUrl } from "$lib/shared/utils/normalizeBaseUrl"
+import { visionProjectorOf } from "$lib/shared/connections/hostCapabilities"
 import * as fsPromises from "fs/promises"
 import { modelsDirFor, resolveModelPath } from "$lib/server/koboldcpp/modelsDir"
 import {
@@ -97,10 +98,10 @@ class KoboldCppManagedAdapter extends KoboldCppAdapter {
 				...result,
 				completionResult: async (
 					contentCb: (chunk: string) => void,
-					thinkingCb?: (chunk: string) => void
+					reasoningCb?: (chunk: string) => void
 				) => {
 					try {
-						await originalStream(contentCb, thinkingCb)
+						await originalStream(contentCb, reasoningCb)
 						await resetIfStillAlive()
 					} catch (err) {
 						await resetIfStillAlive()
@@ -129,6 +130,7 @@ class KoboldCppManagedAdapter extends KoboldCppAdapter {
 			...DEFAULT_MANAGED_CONFIG,
 			...(this.connection.extraJson?.managedConfig ?? {})
 		}
+		const mmproj = visionProjectorOf(this.connection.extraJson)
 		const { baseUrl } = await ensureManagedReady(
 			{
 				kind: "text",
@@ -142,7 +144,10 @@ class KoboldCppManagedAdapter extends KoboldCppAdapter {
 				// The resolved value (resolveSampling.ts), so a config that never
 				// switched context tokens on loads the model at the same 4096 the
 				// adapter's own getContextTokenLimit() falls back to.
-				contextSize: this.sampling?.contextTokens ?? 4096
+				contextSize: this.sampling?.contextTokens ?? 4096,
+				// The model's vision projector, from the pair's merged
+				// `extraJson` (the model row's half) — absent reads no images.
+				...(mmproj ? { mmproj } : {})
 			},
 			{ connectionId: this.connection.id, signal }
 		)

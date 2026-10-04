@@ -189,8 +189,7 @@ function params(connection: any) {
 	return {
 		connection,
 		sampling: {} as any,
-		contextConfig: {} as any,
-		promptConfig: { systemPrompt: "You are terse." } as any,
+		systemPrompt: "You are terse.",
 		session: makeSession(),
 		currentCharacterId: null,
 		tokenCounter: { countTokens: async () => 1 } as any,

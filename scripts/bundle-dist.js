@@ -1,22 +1,45 @@
 // scripts/bundle-dist.js
-// Bundles app and launcher for each OS into
-// ./dist/serene-pub-<version>-<os>/serene-pub/ — see scripts/dist-layout.js for
-// why the shipped directory is unversioned and why the payload sits under
-// app/.
+// Bundles the app and its launcher for one target into
+// ./dist/serene-pub-<version>-<target>/serene-pub/ — see scripts/dist-layout.js
+// for the layout and why it is shaped that way.
+//
+// Usage:
+//   node scripts/bundle-dist.js <target> [--launcher-dir <dir>]
+//       Needs, beforehand: npm run build; node launcher/build.mjs --target
+//       <target> … --out dist/launcher/<target> (the default --launcher-dir);
+//       node scripts/create-executables.js <target>; the target's Node
+//       runtime at ./node or ./node.exe.
+//   node scripts/bundle-dist.js --checksum <zip>
+//       Writes <zip>.sha256 beside it in the format the updater verifies
+//       (dist-layout.js checksumLine). One implementation for all three
+//       runners, so no shell's encoding/line-ending defaults can leak in.
 
 import fs from "fs"
 import path from "path"
-import { fileURLToPath } from "url"
-import child_process from "child_process"
+import { fileURLToPath, pathToFileURL } from "url"
 
 import pkg from "../package.json" with { type: "json" }
 import { pruneDist } from "./prune-dist.js"
-import { appDir, bundleRootDir, MACOS_APP_BUNDLE_NAME } from "./dist-layout.js"
+import {
+	appDir,
+	bundleRootDir,
+	generatedAssetsDir,
+	launcherDestPath,
+	launcherFileName,
+	launcherOutputDir,
+	macosBundleDir,
+	MACOS_ICON_FILE,
+	targetPlatform,
+	windowHelperDestPath,
+	windowHelperFileName,
+	writeChecksumFile
+} from "./dist-layout.js"
 import { isAcceptableLicense, isWhitelisted } from "./licenseExpression.js"
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 const version = pkg.version
+const repoRoot = path.resolve(__dirname, "..")
 const distDir = path.resolve(__dirname, "../dist")
 const buildDir = path.resolve(__dirname, "../build")
 // Top-level docs, copied beside the app/ payload rather than into it — they
@@ -104,71 +127,223 @@ function checkAllLicensesAcceptable(nodeModulesPath) {
 	return problematic
 }
 
-/**
- * macOS: give the .app bundle its OWN copy of the forwarder, and make sure
- * CFBundleExecutable is executable. Pulled out of the darwin branch below so
- * bundle-dist.test.js can exercise the placement directly rather than
- * spawning the whole script.
- *
- * @param {object} args
- * @param {string} args.platformDir dist-assets/macos
- * @param {string} args.bundleRoot stageDir/serene-pub
- * @param {string} args.payloadDir bundleRoot/Serene Pub.app/Contents/Resources/app
- */
-export function placeDarwinForwarder({ platformDir, bundleRoot, payloadDir }) {
-	// Beside the payload: payloadDir is the bundle's
-	// Contents/Resources/app, so its parent is Contents/Resources.
-	const bundleForwarder = path.join(path.dirname(payloadDir), "run.sh")
-	fs.copyFileSync(path.join(platformDir, "run.sh"), bundleForwarder)
-	fs.chmodSync(bundleForwarder, 0o755)
-
-	// copyFileSync creates the destination with the source's mode, so
-	// the stub copied with the .app above arrives executable already —
-	// stated here anyway, because a bundle whose CFBundleExecutable is
-	// not executable does not launch at all, and a build machine with
-	// a checkout that lost the bit would ship one silently.
-	const bundleExecutable = path.join(
-		bundleRoot,
-		MACOS_APP_BUNDLE_NAME,
-		"Contents",
-		"MacOS",
-		"serene-pub"
-	)
-	if (fs.existsSync(bundleExecutable)) {
-		fs.chmodSync(bundleExecutable, 0o755)
-	} else {
-		console.warn(
-			`Warning: ${MACOS_APP_BUNDLE_NAME} has no Contents/MacOS/serene-pub — a Dock launch will do nothing.`
-		)
-	}
-	console.log("Copied file: run.sh (into Serene Pub.app/Contents/Resources)")
-}
-
-// Define all target OS/arch combinations
+// The targets a release can be bundled for — exactly the ones the launcher is
+// built for (dist-layout.js LAUNCHER_TARGETS). linux-arm64/ppc64, linux-arm,
+// windows-arm64 and linux-ia32 used to be listed too, but none had a working
+// CI row and none has a launcher build, and a bundle without its launcher is
+// refused (see placeLauncher).
 const targets = [
 	{ name: "linux-x64", platform: "linux", arch: "x64" },
-	{ name: "linux-arm64", platform: "linux", arch: "arm64" },
-	{ name: "linux-arm", platform: "linux", arch: "arm" },
-	{ name: "linux-ia32", platform: "linux", arch: "ia32" },
-	{ name: "linux-ppc64", platform: "linux", arch: "ppc64" },
 	{ name: "macos-x64", platform: "darwin", arch: "x64" },
 	{ name: "macos-arm64", platform: "darwin", arch: "arm64" },
-	{ name: "windows-x64", platform: "win32", arch: "x64" },
-	{ name: "windows-arm64", platform: "win32", arch: "arm64" }
+	{ name: "windows-x64", platform: "win32", arch: "x64" }
 ]
 
 /**
- * Guards the CLI entry point so importing this module for its exports (e.g.
- * placeDarwinForwarder, for a test) does not also run the build — only
- * `node bundle-dist.js <target>` does.
+ * Copy `src` to `dest`, creating parents; 0755 when `executable` (POSIX
+ * targets only — Windows has no mode bits, and Compress-Archive writes none).
  */
-const isMain = import.meta.url === `file://${process.argv[1]}`
+function placeFile(src, dest, executable) {
+	fs.mkdirSync(path.dirname(dest), { recursive: true })
+	fs.copyFileSync(src, dest)
+	if (executable) fs.chmodSync(dest, 0o755)
+}
+
+/**
+ * The launcher outputs for a target, as launcher/build.mjs writes them (§C7).
+ * Throws — naming the command that makes them — when either is missing. There
+ * is deliberately no shim fallback: a release whose double-click start is a
+ * shell script instead of the launcher would look like it works and then have
+ * no tray, no window and no update path.
+ *
+ * @param {string} launcherDir dist/launcher/<target>
+ * @param {string} targetName
+ */
+export function requireLauncherOutputs(launcherDir, targetName) {
+	const launcher = path.join(launcherDir, launcherFileName(targetName))
+	const helper = path.join(launcherDir, windowHelperFileName(targetName))
+	const missing = [launcher, helper].filter((f) => !fs.existsSync(f))
+	if (missing.length) {
+		throw new Error(
+			`launcher outputs missing for ${targetName}:\n` +
+				missing.map((f) => `  ${f}`).join("\n") +
+				`\nBuild them first: node launcher/build.mjs --target ${targetName} ` +
+				`--version <version> --channel <channel> --commit <sha> --out ${launcherDir}`
+		)
+	}
+	return { launcher, helper }
+}
+
+/**
+ * Place the launcher and the window helper per §C1: the launcher at the top
+ * of the extracted folder (Windows/Linux) or as the bundle's
+ * CFBundleExecutable (macOS); the window helper inside the payload.
+ *
+ * @param {object} args
+ * @param {string} args.targetName
+ * @param {string} args.stageDir dist/serene-pub-<version>-<target>
+ * @param {string} args.launcherDir dist/launcher/<target>
+ */
+export function placeLauncher({ targetName, stageDir, launcherDir }) {
+	const { launcher, helper } = requireLauncherOutputs(launcherDir, targetName)
+	const posix = targetPlatform(targetName) !== "win32"
+	placeFile(launcher, launcherDestPath(stageDir, targetName), posix)
+	placeFile(helper, windowHelperDestPath(stageDir, targetName), posix)
+}
+
+/**
+ * Everything in the release EXCEPT the heavy payload (build/, node_modules/,
+ * drizzle/, the Node runtime, package.json): the launcher and window helper,
+ * the top-level docs, the platform's generated files, the macOS bundle's
+ * skeleton and the bare entrypoint. Starts from an empty stage directory.
+ * Split out of main() so bundle-dist.test.ts can assert the layout per
+ * target against stub launcher binaries, without a build.
+ *
+ * @param {object} args
+ * @param {string} args.targetName
+ * @param {string} args.stageDir dist/serene-pub-<version>-<target>
+ * @param {string} args.repoRoot
+ * @param {string} args.launcherDir dist/launcher/<target>
+ * @param {string} args.generatedDir dist/generated/<target>
+ */
+export function assembleShell({
+	targetName,
+	stageDir,
+	repoRoot,
+	launcherDir,
+	generatedDir
+}) {
+	const platform = targetPlatform(targetName)
+	const posix = platform !== "win32"
+	const assetsDir = path.join(repoRoot, "dist-assets")
+	const platformDir = path.join(assetsDir, targetName.split("-")[0])
+	const bundleRoot = bundleRootDir(stageDir)
+	const payloadDir = appDir(stageDir, targetName)
+
+	// Fail before touching anything when an input is missing.
+	requireLauncherOutputs(launcherDir, targetName)
+	const generated =
+		platform === "darwin"
+			? ["Info.plist", MACOS_ICON_FILE]
+			: platform === "linux"
+				? ["install-desktop-shortcut.sh"]
+				: []
+	const missingGenerated = generated.filter(
+		(f) => !fs.existsSync(path.join(generatedDir, f))
+	)
+	if (missingGenerated.length) {
+		throw new Error(
+			`generated files missing for ${targetName}: ${missingGenerated.join(", ")} in ${generatedDir}\n` +
+				`Render them first: node scripts/create-executables.js ${targetName}`
+		)
+	}
+
+	if (fs.existsSync(stageDir))
+		fs.rmSync(stageDir, { recursive: true, force: true })
+	fs.mkdirSync(payloadDir, { recursive: true })
+
+	// ── The launcher and window helper (§C1) ─────────────────────────────
+	placeLauncher({ targetName, stageDir, launcherDir })
+
+	// ── What the user sees when they extract ─────────────────────────────
+	// Docs at the top level, outside the swap unit: they are for the person
+	// who extracted the folder. The launcher refreshes them from an update's
+	// payload after a successful swap (§C8 step 8).
+	for (const file of [...filesToCopy, ".env.example", "INSTRUCTIONS.txt"]) {
+		const src =
+			file === ".env.example"
+				? path.join(assetsDir, ".env.example")
+				: file === "INSTRUCTIONS.txt"
+					? path.join(platformDir, "INSTRUCTIONS.txt")
+					: path.join(repoRoot, file)
+		// The shipped .env.example is a checked-in file (it used to be a
+		// heredoc in release.yml that drifted from the repo's own). It sits at
+		// the top level because a legacy .env is looked for at the install
+		// root (preloadEnv.js, via SERENE_PUB_INSTALL_ROOT); its own text
+		// points the reader at the OS data directory, which is better still.
+		if (fs.existsSync(src))
+			placeFile(src, path.join(bundleRoot, file), false)
+	}
+
+	if (platform === "linux") {
+		// Writes a .desktop entry on the user's machine — an entry cannot be
+		// produced at build time, because the spec requires absolute paths and
+		// the only absolute path a build machine knows is its own.
+		placeFile(
+			path.join(generatedDir, "install-desktop-shortcut.sh"),
+			path.join(bundleRoot, "install-desktop-shortcut.sh"),
+			true
+		)
+	}
+
+	if (platform === "darwin") {
+		const contents = path.join(macosBundleDir(stageDir), "Contents")
+		placeFile(
+			path.join(generatedDir, "Info.plist"),
+			path.join(contents, "Info.plist"),
+			false
+		)
+		placeFile(
+			path.join(generatedDir, MACOS_ICON_FILE),
+			path.join(contents, "Resources", MACOS_ICON_FILE),
+			false
+		)
+		// Portable only: a terminal shortcut that exec's the bundle's bare
+		// entrypoint. Outside the bundle, so it never touches the signature.
+		placeFile(
+			path.join(platformDir, "run.sh"),
+			path.join(bundleRoot, "run.sh"),
+			true
+		)
+	}
+
+	// ── The bare entrypoint ──────────────────────────────────────────────
+	// Starts the Node server and nothing else. Lives with the payload because
+	// it is version-locked to it (it knows where build/index.js and the
+	// bundled runtime are), and is the supported way to run headless, from a
+	// service unit, or while debugging.
+	const appAssetsDir = path.join(platformDir, "app")
+	for (const runFile of fs
+		.readdirSync(appAssetsDir)
+		.filter((f) => f.startsWith("run."))) {
+		placeFile(
+			path.join(appAssetsDir, runFile),
+			path.join(payloadDir, runFile),
+			posix && runFile.endsWith(".sh")
+		)
+	}
+
+	return { bundleRoot, payloadDir }
+}
+
+/**
+ * Guards the CLI entry point so importing this module for its exports (for a
+ * test) does not also run the build.
+ */
+const isMain =
+	!!process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href
 
 async function main() {
-	// Accept a single target as a command-line argument
-	const argTarget = process.argv[2]
-	if (!argTarget) {
-		console.error("Usage: node bundle-dist.js <target>")
+	const args = process.argv.slice(2)
+	if (args[0] === "--checksum") {
+		if (!args[1]) {
+			console.error("Usage: node bundle-dist.js --checksum <zip>")
+			process.exit(1)
+		}
+		const out = await writeChecksumFile(path.resolve(args[1]))
+		process.stdout.write(fs.readFileSync(out, "ascii"))
+		return
+	}
+	const argTarget = args[0]
+	const launcherFlag = args.indexOf("--launcher-dir")
+	const launcherDirArg =
+		launcherFlag >= 0 && args[launcherFlag + 1]
+			? path.resolve(args[launcherFlag + 1])
+			: undefined
+	if (!argTarget || argTarget.startsWith("--")) {
+		console.error(
+			"Usage: node bundle-dist.js <target> [--launcher-dir <dir>] | --checksum <zip>"
+		)
 		console.error("Valid targets:", targets.map((t) => t.name).join(", "))
 		process.exit(1)
 	}
@@ -202,170 +377,24 @@ async function main() {
 		//              per-target so several targets coexist and release.yml can
 		//              still find the one it just built. Never shipped.
 		//   bundleRoot stageDir/serene-pub — the single, UNVERSIONED entry that
-		//              gets zipped, so extracting yields serene-pub/ exactly once
-		//              and "extract over your old folder" is a valid upgrade.
-		//   payloadDir bundleRoot/app (or, on macOS, the same thing inside the
-		//              .app bundle's Resources) — everything that IS the
-		//              application, in one directory a future updater can replace
-		//              with a single rename.
+		//              gets zipped.
+		//   payloadDir bundleRoot/app (or, on macOS, Contents/Resources/app in
+		//              the .app bundle) — everything that IS the application.
 		const stageDir = path.join(
 			distDir,
 			`serene-pub-${version}-${target.name}`
 		)
-		const bundleRoot = bundleRootDir(stageDir)
-		const payloadDir = appDir(stageDir, target.name)
-		if (fs.existsSync(stageDir))
-			fs.rmSync(stageDir, { recursive: true, force: true })
-		fs.mkdirSync(payloadDir, { recursive: true })
-
-		const platformDir = path.resolve(
-			__dirname,
-			`../dist-assets/${target.name.split("-")[0]}`
-		)
+		const { bundleRoot, payloadDir } = assembleShell({
+			targetName: target.name,
+			stageDir,
+			repoRoot,
+			launcherDir:
+				launcherDirArg ?? launcherOutputDir(distDir, target.name),
+			generatedDir: generatedAssetsDir(distDir, target.name)
+		})
 		const isWindows = target.platform === "win32"
 
-		// ── What the user sees when they extract ────────────────────────────
-		// Docs and launchers, at the top level, outside the payload: they are
-		// for the person who extracted the folder, and the launcher in
-		// particular has to survive the payload being swapped underneath it.
-
-		// Platform-specific executables and icons. The macOS .app bundle is
-		// copied here too, before the payload is written inside it.
-		for (const file of fs.readdirSync(platformDir)) {
-			// run.* is the forwarder (copied below, needs chmod), app/ holds the
-			// bare entrypoint that belongs in the payload, and INSTRUCTIONS.txt
-			// is copied separately.
-			if (
-				file.startsWith("run.") ||
-				file === "app" ||
-				file === "INSTRUCTIONS.txt"
-			) {
-				continue
-			}
-			// A .desktop entry cannot be produced at build time: the spec
-			// requires absolute Exec=/Icon=/Path= values, and the only absolute
-			// path a build machine knows is its own. Shipping one anyway is what
-			// this repo used to do — every Linux release carried an entry
-			// pointing into the CI runner's filesystem. install-desktop-shortcut.sh
-			// writes a correct entry on the user's machine instead, so nothing
-			// with a baked-in path is allowed into the bundle even if one is
-			// left lying around in dist-assets/.
-			if (file.endsWith(".desktop")) {
-				console.warn(
-					`Skipping ${file}: a .desktop entry's absolute paths are only valid on the machine that wrote them (install-desktop-shortcut.sh writes one after extraction).`
-				)
-				continue
-			}
-
-			const srcPath = path.join(platformDir, file)
-			const destPath = path.join(bundleRoot, file)
-
-			if (fs.lstatSync(srcPath).isDirectory()) {
-				// Copy directories recursively (like .app bundles)
-				copyRecursive(srcPath, destPath)
-				console.log(`Copied directory: ${file}`)
-			} else {
-				fs.copyFileSync(srcPath, destPath)
-
-				// Make executables executable on Unix platforms
-				if (
-					!isWindows &&
-					(file === "Serene Pub" || file.endsWith(".sh"))
-				) {
-					fs.chmodSync(destPath, 0o755)
-				}
-				console.log(`Copied file: ${file}`)
-			}
-		}
-
-		// The thin forwarder into the payload — the path people bookmark, pin
-		// and put in shortcuts, kept working across an update that replaces
-		// everything under it. A later phase swaps it for a compiled launcher.
-		for (const runFile of fs
-			.readdirSync(platformDir)
-			.filter((f) => f.startsWith("run."))) {
-			const dest = path.join(bundleRoot, runFile)
-			fs.copyFileSync(path.join(platformDir, runFile), dest)
-			if (!isWindows && runFile.endsWith(".sh")) {
-				fs.chmodSync(dest, 0o755)
-			}
-		}
-
-		// macOS: the .app carries its OWN copy of that same forwarder.
-		//
-		// Info.plist names Contents/MacOS/serene-pub as CFBundleExecutable, so
-		// it is the only thing a Dock or Finder launch runs, and it used to
-		// exec the payload's bare app/run.sh directly. A double-click
-		// therefore got none of the forwarder's startup watch — on the one
-		// launch path that has no terminal to fall back on, a database that
-		// would not open produced no window, no browser tab and no log at all.
-		// The launcher beside the .app could not fix that: nothing invokes it,
-		// and a bundle dragged to /Applications leaves it behind entirely.
-		//
-		// A COPY, not a second script. The forwarder locates the payload
-		// relative to itself, so one text serves both placements — two
-		// divergent launcher texts, each true of one launch path, is the
-		// failure this replaces rather than the fix for it.
-		if (target.platform === "darwin") {
-			placeDarwinForwarder({ platformDir, bundleRoot, payloadDir })
-		}
-
-		// Copy LICENSE, README, etc.
-		for (const file of filesToCopy) {
-			if (fs.existsSync(path.resolve(__dirname, "..", file))) {
-				fs.copyFileSync(
-					path.resolve(__dirname, "..", file),
-					path.join(bundleRoot, file)
-				)
-			}
-		}
-
-		// Copy platform-specific instructions
-		const instrFile = path.join(platformDir, "INSTRUCTIONS.txt")
-		if (fs.existsSync(instrFile)) {
-			fs.copyFileSync(
-				instrFile,
-				path.join(bundleRoot, "INSTRUCTIONS.txt")
-			)
-		}
-
-		// The shipped .env.example. This used to be generated inline by a
-		// heredoc in .github/workflows/release.yml, which meant desktop users
-		// got a four-variable file that had drifted far from the repo's own
-		// .env.example and never mentioned any hosting setting at all. Keeping
-		// it as a checked-in file is the only way the two stay in sync.
-		//
-		// It belongs at the top level, not with the payload: a template has to
-		// sit where the file it is a template FOR is read from, and the legacy
-		// .env is looked for at the install root first (preloadEnv.js, via the
-		// SERENE_PUB_INSTALL_ROOT the entrypoint exports). It is also the only
-		// placement that survives an update, since app/ is replaced wholesale.
-		// The file's own text points the reader at the OS data directory, which
-		// is better still.
-		const envExample = path.resolve(
-			__dirname,
-			"../dist-assets/.env.example"
-		)
-		if (fs.existsSync(envExample)) {
-			fs.copyFileSync(envExample, path.join(bundleRoot, ".env.example"))
-		}
-
 		// ── The payload ────────────────────────────────────────────────────
-
-		// The bare entrypoint: starts the Node server and nothing else. Lives
-		// with the payload because it is version-locked to it (it knows where
-		// build/index.js and the bundled runtime are), and is the supported way
-		// to run headless, from a service unit, or while debugging.
-		const appAssetsDir = path.join(platformDir, "app")
-		for (const runFile of fs
-			.readdirSync(appAssetsDir)
-			.filter((f) => f.startsWith("run."))) {
-			const dest = path.join(payloadDir, runFile)
-			fs.copyFileSync(path.join(appAssetsDir, runFile), dest)
-			if (!isWindows && runFile.endsWith(".sh")) {
-				fs.chmodSync(dest, 0o755)
-			}
-		}
 
 		// Copy build. static/ is NOT copied separately — build/client already
 		// contains everything SvelteKit put there from static/ at build time,

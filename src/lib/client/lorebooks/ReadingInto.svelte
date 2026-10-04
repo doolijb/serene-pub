@@ -79,7 +79,7 @@
 </script>
 
 <section
-	class="border-border flex flex-col gap-2 rounded-[10px] border p-2"
+	class="panel-edge flex flex-col gap-2 rounded-[10px] border p-2"
 	data-lore-reading-into
 >
 	<button

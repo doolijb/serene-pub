@@ -122,4 +122,39 @@ describe("narrativeGraph duplicate detection handlers (PGlite integration)", () 
 			)
 		).rejects.toThrow(/access denied|not found/i)
 	})
+
+	test("dismisses only a pair of this lorebook's own members", async () => {
+		const { narrativeGraphDismissDuplicateHandler } = await import("./narrativeGraph")
+		const owner = await makeUser("dupdetect-victim")
+		const intruder = await makeUser("dupdetect-prober")
+		const book = async (userId: number, name: string) =>
+			(await testDb.insert(schema.lorebooks).values({ name, userId }).returning())[0]!
+		const member = async (lorebookId: number, n: number) =>
+			(
+				await testDb
+					.insert(schema.lorebookBindings)
+					.values({ lorebookId, binding: `{{char:${n}}}`, name: "Bram" })
+					.returning()
+			)[0]!
+		const theirs = await book(owner.id, "Their Book")
+		const mine = await book(intruder.id, "My Book")
+		const [a, b] = [await member(theirs.id, 1), await member(theirs.id, 2)]
+		const own = await member(mine.id, 1)
+
+		for (const [bindingIdA, bindingIdB] of [
+			[a.id, b.id],
+			[own.id, a.id],
+			[own.id, 999_999]
+		])
+			await expect(
+				narrativeGraphDismissDuplicateHandler.handler(
+					fakeSocket(intruder.id),
+					{ lorebookId: mine.id, bindingIdA, bindingIdB },
+					noopEmit
+				)
+			).rejects.toThrow("Those two are not both cast members of this lorebook.")
+		expect(await testDb.select().from(schema.dismissedDuplicatePairs)).toEqual(
+			expect.not.arrayContaining([expect.objectContaining({ lorebookId: mine.id })])
+		)
+	})
 })

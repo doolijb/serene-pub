@@ -13,6 +13,8 @@ import {
 import {
 	CHARACTER_LORE_TYPE_ID,
 	HISTORY_TYPE_ID,
+	ITEM_TYPE_ID,
+	LOCATION_TYPE_ID,
 	WORLD_LORE_TYPE_ID
 } from "$lib/shared/entries/types"
 
@@ -408,8 +410,10 @@ describe("buildSpecV3Lorebook", () => {
 			{ name: "Book", description: "", uuid: "the-uuid", extraJson: {} },
 			[]
 		)
+		// `formatVersion` 2: places and items carry their own wire names,
+		// stats travel, and the shared per-entry facts ride in the bag (A26).
 		expect(book.extensions).toEqual({
-			serenepub: { version: 1, uuid: "the-uuid" }
+			serenepub: { formatVersion: 2, uuid: "the-uuid" }
 		})
 	})
 
@@ -473,6 +477,28 @@ describe("assignEntryLocalIds", () => {
 			[7, 1],
 			[8, 2],
 			[9, 3]
+		])
+	})
+
+	test("numbers in the file's own order, so the book an import makes numbers the same", () => {
+		// The importer inserts in the file's order — world before places — so
+		// numbering by this install's ids (a place written first) made the
+		// imported book's own export differ from the file it came from.
+		const map = assignEntryLocalIds(
+			[
+				{
+					...baseEntry,
+					id: 7,
+					typeId: LOCATION_TYPE_ID,
+					position: 0
+				},
+				{ ...baseEntry, id: 8, position: 0 }
+			],
+			[7, 8]
+		)
+		expect([...map.entries()]).toEqual([
+			[8, 1],
+			[7, 2]
 		])
 	})
 })
@@ -719,5 +745,191 @@ describe("attachNarrativeGraph", () => {
 		})
 		// Preserves existing serenepub keys (uuid/version) rather than replacing them.
 		expect(book.extensions.serenepub.uuid).toBe("u1")
+	})
+})
+
+describe("every core type under its own wire name (plan A26, E-8)", () => {
+	const place = {
+		...baseEntry,
+		id: 20,
+		typeId: LOCATION_TYPE_ID as string,
+		name: "The Crypt",
+		category: "Undercroft"
+	}
+	const item = {
+		...baseEntry,
+		id: 21,
+		typeId: ITEM_TYPE_ID as string,
+		name: "Iron Key",
+		category: "Keys",
+		supply: "limited",
+		supplyLimit: 3
+	}
+
+	test("a place exports as `location` and an item as `item`, their fields in the bag", () => {
+		expect(mapEntry(place, 0).extensions.serenepub).toEqual({
+			entryType: "location",
+			category: "Undercroft"
+		})
+		expect(mapEntry(item, 0).extensions.serenepub).toEqual({
+			entryType: "item",
+			category: "Keys",
+			supply: "limited",
+			supplyLimit: 3
+		})
+	})
+
+	test("a foreign reader still sees one flat list of plain entries", () => {
+		// SillyTavern reads the spec's own fields and never the serenepub bag:
+		// a place is a titled, keyed entry like any other there.
+		const wire = mapEntry(place, 4) as Record<string, unknown>
+		expect(wire).toMatchObject({
+			keys: ["alpha", "beta"],
+			content: "Some content",
+			enabled: true,
+			insertion_order: 4,
+			name: "The Crypt",
+			comment: "The Crypt",
+			priority: 2
+		})
+		const spec = new Set([
+			"keys",
+			"content",
+			"enabled",
+			"insertion_order",
+			"case_sensitive",
+			"use_regex",
+			"constant",
+			"name",
+			"comment",
+			"priority",
+			"secondary_keys",
+			"selective",
+			"id",
+			"extensions"
+		])
+		expect(Object.keys(wire).filter((k) => !spec.has(k))).toEqual([])
+	})
+
+	test("the 0.5-compat profile writes only the three names 0.5 reads", () => {
+		expect(
+			mapEntry(place, 0, {}, "0.5-compat").extensions.serenepub.entryType
+		).toBe("world")
+		expect(
+			mapEntry(item, 0, {}, "0.5-compat").extensions.serenepub.entryType
+		).toBe("world")
+		expect(
+			mapEntry(
+				{ ...baseEntry, typeId: CHARACTER_LORE_TYPE_ID },
+				0,
+				{},
+				"0.5-compat"
+			).extensions.serenepub.entryType
+		).toBe("character")
+	})
+
+	test("places and items keep their own groups, so a re-export numbers them the same", () => {
+		const book = buildSpecV3Lorebook(
+			{ name: "Book", description: "", uuid: "u1", extraJson: {} },
+			[
+				{ ...item, position: 0 },
+				{ ...place, position: 0 },
+				{ ...baseEntry, id: 1, category: null, position: 0 }
+			]
+		)
+		expect(
+			book.entries.map((e) => e.extensions.serenepub.entryType)
+		).toEqual(["world", "location", "item"])
+	})
+})
+
+describe("the per-entry facts every type carries (plan A26, E-8)", () => {
+	const row = (overrides: Record<string, unknown> = {}) => ({
+		...baseEntry,
+		category: null,
+		...overrides
+	})
+
+	test("an entry that sets none of them exports exactly as before", () => {
+		expect(
+			mapEntry(
+				row({
+					archived: false,
+					matchMode: null,
+					recursionDepth: null,
+					provenance: "human"
+				}),
+				0
+			).extensions
+		).toEqual({ serenepub: { entryType: "world" } })
+	})
+
+	test("an archived entry is off for a foreign reader and archived for Serene Pub", () => {
+		const wire = mapEntry(row({ archived: true }), 0)
+		// SillyTavern has no archive: an archived entry must not fire there.
+		expect(wire.enabled).toBe(false)
+		expect(wire.extensions.serenepub).toMatchObject({
+			archived: true,
+			enabled: true
+		})
+		// An entry already off stays off either way.
+		expect(
+			mapEntry(row({ archived: true, enabled: false }), 0).extensions
+				.serenepub.enabled
+		).toBe(false)
+	})
+
+	test("recursionDepth and a machine provenance ride in the bag", () => {
+		expect(
+			mapEntry(row({ recursionDepth: 2, provenance: "summarizer" }), 0)
+				.extensions.serenepub
+		).toEqual({
+			entryType: "world",
+			recursionDepth: 2,
+			provenance: "summarizer"
+		})
+	})
+
+	test("matchMode is written authoritatively, over a stale SillyTavern flag", () => {
+		const wire = (matchMode: string | null, flag?: boolean) =>
+			mapEntry(
+				row({
+					matchMode,
+					extraJson: flag === undefined ? {} : { match_whole_words: flag }
+				}),
+				0
+			).extensions
+		// The in-app edit wins over what the file it came from said. Word and
+		// substring go out on SillyTavern's own flag ONLY: SillyTavern keeps
+		// the whole bag and writes it back, so a copy in `serenepub` would
+		// outlive an edit made there and undo it on the next import.
+		expect(wire("substring", true)).toEqual({
+			match_whole_words: false,
+			serenepub: { entryType: "world" }
+		})
+		expect(wire("word")).toEqual({
+			match_whole_words: true,
+			serenepub: { entryType: "world" }
+		})
+		// Regex and "no opinion" have no SillyTavern spelling: a stale flag
+		// is removed, or the importer would read it straight back.
+		expect(wire("regex", true)).toEqual({
+			serenepub: { entryType: "world", matchMode: "regex" }
+		})
+		expect(wire(null, true)).toEqual({
+			serenepub: { entryType: "world" }
+		})
+	})
+
+	test("the keys go out in the mode the matcher reads, not the legacy flag", () => {
+		// `regex` with the legacy flag off reads as a regex here, so the keys
+		// must go out as patterns for SillyTavern and the importer alike.
+		const regex = mapEntry(row({ matchMode: "regex", useRegex: false }), 0)
+		expect(regex.keys).toEqual(["/alpha/", "/beta/"])
+		expect(regex.use_regex).toBe(true)
+		// `word` over a stale `useRegex: true` reads as words here: plain keys.
+		const word = mapEntry(row({ matchMode: "word", useRegex: true }), 0)
+		expect(word.keys).toEqual(["alpha", "beta"])
+		expect(word.use_regex).toBe(false)
 	})
 })

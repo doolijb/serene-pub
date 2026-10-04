@@ -66,8 +66,8 @@
 	{:else}
 		<p class="text-surface-600-400 mb-3 text-xs">
 			{#if view.customAttributes}
-				What this session keeps track of. Changes apply from now on; only what is
-				tracked is written back to the world.
+				What this session keeps track of. Applies at once, from now on — not
+				held for Save; only what is tracked is written back to the world.
 			{:else}
 				This session's genre decides what it tracks.
 			{/if}

@@ -1,12 +1,17 @@
 <script lang="ts">
 	import * as Icons from "@lucide/svelte"
+	import ResizableSplit from "$lib/client/components/panels/ResizableSplit.svelte"
+	import { LORE_SPLIT_KEY } from "./layoutMode"
 	import { embeddingsStarred } from "$lib/shared/constants/embeddings"
-	import { getContext, onDestroy, onMount } from "svelte"
+	import { getContext, onDestroy, onMount, tick } from "svelte"
 	import { Popover, Portal } from "@skeletonlabs/skeleton-svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 	import { declareInterest } from "$lib/client/sockets/interest.svelte"
 	import { interestKey } from "$lib/shared/sockets/interest"
-	import { rowsOnLine } from "$lib/shared/lorebooks/amendments"
+	import {
+		rowsReadingOnLine,
+		type Line
+	} from "$lib/shared/lorebooks/lineReading"
 	import { toaster } from "$lib/client/utils/toaster"
 	import CompileHistoryEntryModal from "$lib/client/components/modals/CompileHistoryEntryModal.svelte"
 	import DeleteLorebookEntryConfirmModal from "$lib/client/components/modals/DeleteLorebookEntryConfirmModal.svelte"
@@ -15,8 +20,13 @@
 		entryChannel,
 		type BindingWithRelations
 	} from "$lib/client/components/lorebookForms/entryManager"
-	import { HISTORY_TYPE_ID } from "$lib/shared/entries/types"
+	import {
+		HISTORY_TYPE_ID,
+		LOCATION_TYPE_ID
+	} from "$lib/shared/entries/types"
 	import EntryPool from "./EntryPool.svelte"
+	import LooseEndsQueue from "./LooseEndsQueue.svelte"
+	import type { ChoreField, LooseEnd } from "./looseEnds"
 	import ReadInLine from "./editor/ReadInLine.svelte"
 	import {
 		canFileUnder,
@@ -24,17 +34,24 @@
 		descendantCount
 	} from "./editor/partOf"
 	import {
+		amendmentDateToast,
 		fileEntryAmendments,
 		lineName,
 		maskedBaseWarning,
 		maskedFields,
 		maskingAmendment
 	} from "./editor/entrySave"
+	import { compileActivityAt } from "./editor/compileSave"
 	import { awaitReply, isReplyTimeout } from "$lib/client/utils/awaitReply"
+	import { toastUnsaved } from "$lib/client/utils/toastUnsaved"
 	import type { RefLink } from "./editor/refs"
 	import { retrievalReadout } from "./editor/retrievalReadout.svelte"
 	import { loreRoute } from "./loreRoute.svelte"
-	import { compactStep, type LoreLens } from "$lib/shared/lorebooks/loreRoute"
+	import {
+		compactStep,
+		sameLineAndMoment,
+		type LoreLens
+	} from "$lib/shared/lorebooks/loreRoute"
 	import {
 		comparePoolBy,
 		filterPool,
@@ -55,13 +72,18 @@
 		editorPlaceholder
 	} from "./sections"
 	import EntryInspector from "./sections/EntryInspector.svelte"
+	import CastPoolRow from "./sections/CastPoolRow.svelte"
+	import type { CastPoolItem } from "./castPool"
+	import { newPlaceEntry } from "./places/placeGraph"
 	import { kindLabel } from "./sections/kinds"
 	import { setLorePoolCtx } from "./sections/poolContext"
+	import { getBookData } from "./bookData.svelte"
 	import type { EntryDecisions } from "./markers"
 	import type { PoolSource, SectionDescriptor } from "./sections/types"
 	import { compareDates, dateValue } from "./sections/historyDates"
 	import { formatDate } from "./sections/historyDates"
 	import { parseMoment } from "./time/moment"
+	import type { StoryDate } from "$lib/shared/lorebooks/storyDate"
 	import AmendmentList from "./time/AmendmentList.svelte"
 	import {
 		changedFields,
@@ -98,6 +120,13 @@
 		 */
 		bookPool: PoolItem[]
 		/**
+		 * The cast on the line being read, as rows of Everything (note 12):
+		 * All lists every kind the book holds, the people included. Drawn only
+		 * by the door with no kind of its own; choosing one opens the Cast
+		 * board.
+		 */
+		castItems?: CastPoolItem[]
+		/**
 		 * The book's dated overlays, as a function over rows.
 		 *
 		 * This scope keeps its own copy of the rows, so it cannot read the
@@ -112,6 +141,18 @@
 		 * scan can find. Empty until the graph read lands, never guessed at.
 		 */
 		bookLinks: RefLink[]
+		/**
+		 * Every history entry the book holds, on every line — what dates a
+		 * relationship, for a place's Links list.
+		 */
+		historyEntries?: PoolSource[]
+		/**
+		 * The line being read, with its ancestor chain and fork cuts — the
+		 * shell's (`lineOf`), so this scope reads exactly the rows the rest of
+		 * the workspace does. Required: a mount that forgot it would read main
+		 * while the reader is on a branch.
+		 */
+		line: Line
 		mode: "desk" | "compact"
 		hasUnsavedChanges: boolean
 		/** Which of the three reading lenses draws the list. */
@@ -130,6 +171,25 @@
 		decisions: EntryDecisions | null
 		onFilters: (filters: PoolFilters) => void
 		onNavigateToGraph?: () => void
+		/**
+		 * The Loose ends queue, when it is open (note 5): drawn in place of
+		 * the list, and Save in the editor moves on to its next row.
+		 */
+		queue?: {
+			rows: LooseEnd[]
+			currentId: string | null
+			onOpen: (row: LooseEnd) => void
+			onNext: () => void
+			onLeave: () => void
+		} | null
+		/**
+		 * The field to focus once this entry's editor is drawn — the one a
+		 * loose end's fix is. `n` makes a second press of the same row a new
+		 * request.
+		 */
+		focusField?: { entryId: number; field: ChoreField; n: number } | null
+		/** An entry was saved from the editor (the queue's Save → Next). */
+		onSaved?: (entryId: number) => void
 	}
 
 	let {
@@ -137,9 +197,12 @@
 		descriptor,
 		doors,
 		bookPool,
+		castItems = [],
 		resolve,
 		amendmentsFor,
 		bookLinks,
+		historyEntries = [],
+		line,
 		mode,
 		hasUnsavedChanges = $bindable(false),
 		lens,
@@ -148,7 +211,10 @@
 		readInKeys,
 		decisions,
 		onFilters,
-		onNavigateToGraph
+		onNavigateToGraph,
+		queue = null,
+		focusField = null,
+		onSaved
 	}: Props = $props()
 
 	const socket = useTypedSocket()
@@ -168,7 +234,7 @@
 	/**
 	 * The doors whose rows this list holds. A door with a kind of its own
 	 * presets the pool to it; the pool door holds every other door's kind,
-	 * which is what makes "All entries" the same list with nothing narrowed.
+	 * which is what makes "Everything" the same list with nothing narrowed.
 	 */
 	let poolDoors = $derived(
 		descriptor.kind ? [descriptor] : doors.filter((d) => d.kind)
@@ -176,11 +242,35 @@
 	let entryDoors = $derived(poolDoors.filter((d) => d.store === "entries"))
 	let scenesInScope = $derived(poolDoors.some((d) => d.store === "scenes"))
 
-	let rowsByKind = $state<Record<string, PoolSource[]>>({})
-	let sceneList = $state<Sockets.Scenes.SceneWithMeta[]>([])
-	let scenesLoaded = $state(false)
+	/**
+	 * The book, as the workspace holds it (plan B4): this scope asks for
+	 * nothing on mount and keeps no copy of its own — every door's rows, the
+	 * scenes and the cast are the workspace's, which already asked for the
+	 * whole book and hears every cascade about it. A scope switch re-lists
+	 * nothing.
+	 */
+	const book = getBookData()
+	/** The doors' rows as stored; a kind absent has not arrived yet. */
+	let rowsByKind = $derived.by(() => {
+		const out: Record<string, PoolSource[]> = {}
+		for (const door of entryDoors) {
+			const rows = book.rawRows[door.kind!]
+			if (rows !== undefined) out[door.kind!] = rows
+		}
+		return out
+	})
+	let sceneList = $derived(
+		book.allScenes as unknown as Sockets.Scenes.SceneWithMeta[]
+	)
+	let scenesLoaded = $derived(book.loaded("scenes"))
+	/**
+	 * The cast, held as state so the editor's binding picker can add to it,
+	 * and following the workspace's whenever that moves.
+	 */
 	let bindings = $state<BindingWithRelations[]>([])
-	let loading = $state(true)
+	$effect(() => {
+		bindings = [...book.cast] as BindingWithRelations[]
+	})
 
 	/** Null is the pool's own default, which differs from a choice. */
 	let chosenOrder = $state<string | null>(null)
@@ -214,6 +304,17 @@
 	let compileActivityId = $state<string | null>(null)
 	let compilePendingResult = $state<{ content: string } | null>(null)
 	let compileInitialStep = $state<"review" | "running" | undefined>(undefined)
+	/**
+	 * The reading a compile runs and saves at, fixed when its modal opens:
+	 * a resumed compile's is the line and moment it was ASKED at, which its
+	 * activity holds; a fresh one's is the route's at the click. Never
+	 * wherever this workspace stands later — Back or Forward on the hash
+	 * moves the route under an open dialog.
+	 */
+	let compileReading = $state<{
+		branchId: number | null
+		moment: StoryDate | null
+	}>({ branchId: null, moment: null })
 	let compileOpen = $state(false)
 
 	let processSceneId = $state<number | null>(null)
@@ -233,12 +334,13 @@
 
 	let route = $derived(loreRoute.route)
 	/**
-	 * The scenes on the line being read — shared ones plus this branch's own,
-	 * the rule `entries:counts` counts by. `scenes:listByLorebook` answers with
+	 * The scenes on the line being read — shared ones, this branch's own and
+	 * each ancestor line's (the chain, never a sibling's): the rule
+	 * `entries:counts` counts by (`onLineSql`). `scenes:listByLorebook` answers with
 	 * every line (its reply reaches every view of the book), so the pool and
 	 * the count agree only if the pool keeps to its line.
 	 */
-	let scenesOnLine = $derived(rowsOnLine(sceneList, route.branch ?? null))
+	let scenesOnLine = $derived(rowsReadingOnLine(sceneList, line))
 	/** An empty set is "read nothing"; no set at all is "nobody is reading". */
 	let readIn = $derived(readInKeys ?? new Set<string>())
 
@@ -273,6 +375,13 @@
 		return out
 	})
 
+	/** How All draws a cast member's row: their face, and no entry menu. */
+	let castRowDoor = $derived<SectionDescriptor>({
+		...descriptor,
+		row: CastPoolRow,
+		rowMenu: undefined
+	})
+
 	let poolItems = $derived.by(() => {
 		const out: PoolItem[] = []
 		for (const door of poolDoors) {
@@ -282,6 +391,8 @@
 					: (resolvedByKind[door.kind!] ?? [])
 			for (const row of rows) out.push(door.toPoolItem(row))
 		}
+		// Everything is every kind, the people too (note 12).
+		if (!descriptor.kind) out.push(...castItems)
 		return out
 	})
 
@@ -302,6 +413,9 @@
 					: (resolvedByKind[door.kind!] ?? [])
 			for (const row of rows) map.set(door.toPoolItem(row).key, row)
 		}
+		// A cast row's source is the row itself: it lists, and opens Cast.
+		if (!descriptor.kind)
+			for (const item of castItems) map.set(item.key, { ...item })
 		return map
 	})
 
@@ -411,6 +525,8 @@
 		entryDoors.every((d) => rowsByKind[d.kind!] !== undefined) &&
 			(!scenesInScope || scenesLoaded)
 	)
+	/** The list says it is loading until its doors have answered. */
+	let loading = $derived(!poolReady)
 	/** An address that names a row this pool does not hold. */
 	let selectionMissing = $derived(
 		!isNew && !!selectedKey && !selectedSource && poolReady
@@ -547,23 +663,66 @@
 		bindingName: (id) => bindingNameById.get(id) ?? `#${id}`,
 		bindingForTag: (tag) => bindingNameByTag.get(tag) ?? null,
 		openCompile: (entry) => openCompile(entry),
+		compileActivityOf: (id) =>
+			compileActivityAt(compileEntriesCtx?.activities, id, {
+				branchId: route.branch ?? null,
+				moment: momentDate
+			}),
 		openProcess: (sceneId, activityId) => openProcess(sceneId, activityId),
 		refreshScenes: () => fetchScenes(),
 		get onNavigateToGraph() {
 			return onNavigateToGraph
-		}
+		},
+		get historyEntries() {
+			return historyEntries as any
+		},
+		createPlace
 	})
 
-	function fetchScenes() {
-		socket.emit("scenes:listByLorebook", {
-			lorebookId
-		} satisfies Sockets.Scenes.ListByLorebook.Params)
+	/**
+	 * A new place with this name, on the line being read — **New place…** at
+	 * the far end of a place's link. The entry's own create, answered the
+	 * same way: `entries:create` is broadcast to every tab of this user, so
+	 * the reply is claimed only when it is this row.
+	 */
+	async function createPlace(
+		name: string
+	): Promise<{ id: number; name: string }> {
+		const wanted = name.trim()
+		if (!wanted) throw new Error("A new place needs a name.")
+		const created = await awaitReply({
+			socket,
+			event: "entries:create",
+			// The one way a place is made on the spot (the canvas's too).
+			params: newPlaceEntry(lorebookId, wanted, route.branch ?? null),
+			replyKey: interestKey("entries:create", lorebookId),
+			errorEvent: "entries:create:error",
+			fallbackError: "The place could not be created.",
+			match: (data) =>
+				data.entry?.lorebookId === lorebookId &&
+				data.entry.typeId === LOCATION_TYPE_ID &&
+				trimmed(data.entry.name) === wanted
+		})
+		toaster.success({ title: `Place created: ${wanted}` })
+		return { id: created.entry.id, name: created.entry.name ?? wanted }
 	}
 
-	function openCompile(entry: PoolSource) {
-		const activity = compileEntriesCtx?.activities?.find(
-			(a) => a.historyEntryId === entry.id
-		)
+	/** The scenes, asked for again through the workspace (it holds the list). */
+	function fetchScenes() {
+		book.refreshScenes()
+	}
+
+	/**
+	 * The compile modal for a history entry: on `activity` when the Activity
+	 * card named one, else on the compile asked at the reading being read —
+	 * never another line's compile of the same entry, whose review saves
+	 * somewhere else.
+	 */
+	function openCompile(entry: PoolSource, named?: CompileEntryState) {
+		const here = { branchId: route.branch ?? null, moment: momentDate }
+		const activity =
+			named ??
+			compileActivityAt(compileEntriesCtx?.activities, entry.id, here)
 		compileTarget = entry
 		compileActivityId = activity?.activityId ?? null
 		compilePendingResult = activity?.pendingResult ?? null
@@ -573,6 +732,9 @@
 				: activity?.status === "running"
 					? "running"
 					: undefined
+		compileReading = compileInitialStep
+			? { branchId: activity!.branchId, moment: activity!.moment }
+			: here
 		compileOpen = true
 	}
 
@@ -660,6 +822,20 @@
 	let momentDate = $derived(parseMoment(route.moment))
 
 	/**
+	 * The moment the draft is being typed at, which is where its save files
+	 * (plan B7). A clean draft follows the reading — it is rebuilt from the
+	 * row as it reads — so its moment does too; once the author has typed,
+	 * it keeps the moment the typing began at. Text typed at A and saved
+	 * after the bar moved to B files at A, never at B (and text typed at now
+	 * is never filed as an amendment because the bar moved off now).
+	 */
+	let draftMoment = $state<StoryDate | null>(null)
+	$effect(() => {
+		const at = momentDate
+		if (!dirty) draftMoment = at
+	})
+
+	/**
 	 * Whether this save is a choice.
 	 *
 	 * Only an existing ENTRY read at a moment can be amended: a scene has no
@@ -667,7 +843,7 @@
 	 * alone.
 	 */
 	let canAmend = $derived(
-		momentDate !== null &&
+		draftMoment !== null &&
 			!isNew &&
 			activeDoor.store === "entries" &&
 			selectedSource != null
@@ -734,12 +910,18 @@
 	 * and a draft built before that is a copy of the old reading.
 	 */
 	async function saveAsAmendment() {
-		if (!momentDate || !selectedSource || saving) return
+		if (!draftMoment || !selectedSource || saving) return
 		const fields = pendingFields()
 		if (!fields) return
+		const dated = amendmentDateToast(fields)
+		if (dated) {
+			toaster.error(dated)
+			return
+		}
 		const entryId = selectedSource.id
 		const branchId = route.branch ?? null
-		const date = momentDate
+		// The draft's moment, not the bar's (see `draftMoment`).
+		const date = draftMoment
 		const key = `entry#${entryId}`
 		const sent = $state.snapshot(draft) as Record<string, unknown>
 		saving = true
@@ -762,6 +944,18 @@
 			title: `Amended as of ${formatDate(date)}${line ? ` on ${line}` : ""}`
 		})
 		settleDraft(key, sent)
+		await savedThen(entryId)
+	}
+
+	/**
+	 * Tells the frame an entry was saved — the Loose ends queue's Save → Next.
+	 * After a tick, so the draft the reply settled is settled before anything
+	 * navigates (a move asked while it still looked dirty would be guarded).
+	 */
+	async function savedThen(entryId: number) {
+		if (!onSaved) return
+		await tick()
+		onSaved(entryId)
 	}
 
 	/**
@@ -861,7 +1055,7 @@
 					field,
 					(resolved as Record<string, unknown>)[field],
 					overlays,
-					route.branch ?? null,
+					line,
 					// The moment being read: an overlay dated after it is not
 					// the one masking the save here.
 					parseMoment(route.moment)
@@ -925,7 +1119,7 @@
 			} catch (err) {
 				saving = false
 				if (awaitingSave === pendingKey) awaitingSave = null
-				reportUnanswered(err, `${door.label} was not created`)
+				toastUnsaved(err, `${door.label} was not created`)
 				return
 			}
 			saving = false
@@ -945,7 +1139,12 @@
 			// it reads at the moment, so the draft holds other amendments'
 			// values too — writing it whole would bake them into the base.
 			const fields = pendingFields()
-			if (!fields) return
+			// Nothing to write. In the queue, Save still moves on: the row
+			// stays a loose end and the reader has chosen to pass it.
+			if (!fields) {
+				await savedThen(payload.id as number)
+				return
+			}
 			const id = payload.id as number
 			const key = `entry#${id}`
 			const warning = baseSaveWarning(kind, id, fields)
@@ -972,6 +1171,7 @@
 			// hears the same reply; this only says how it went.
 			if (warning) toaster.warning(warning)
 			else toaster.success({ title: `${door.label} saved` })
+			await savedThen(id)
 		}
 	}
 
@@ -1079,22 +1279,60 @@
 		pristineDraft = draft ? { ...$state.snapshot(draft) } : null
 	})
 
+	/**
+	 * A loose end opens with the field that fixes it focused (note 5): once
+	 * the asked-for entry's editor is drawn, the first control inside its
+	 * `data-lore-field` takes focus. Each request is honoured once.
+	 */
+	let focusedRequest = 0
+	$effect(() => {
+		const want = focusField
+		if (!want || want.n === focusedRequest) return
+		if (!draft || draftKey !== `entry#${want.entryId}`) return
+		focusedRequest = want.n
+		void tick().then(() => {
+			const field = document.querySelector<HTMLElement>(
+				`[data-lore-editor] [data-lore-field="${want.field}"]`
+			)
+			const control = field?.querySelector<HTMLElement>(
+				'[contenteditable="true"], input:not([type="hidden"]):not([disabled]), textarea, select'
+			)
+			control?.focus()
+			field?.scrollIntoView?.({ block: "nearest" })
+		})
+	})
+
 	$effect(() => {
 		hasUnsavedChanges = dirty
 	})
 
-	// The activity sidebar asks for a review by naming the row, not the panel,
-	// so the workspace is what answers — and only for rows it actually holds.
+	// The activity sidebar asks for a review by naming the compile, not the
+	// panel, so the workspace is what answers — and only for rows it actually
+	// holds. The sidebar also moves the route to the compile's reading; the
+	// modal opens once the workspace reads there, so the entry it is diffed
+	// against is the entry as that line and moment read it.
 	$effect(() => {
-		const id = compileEntriesCtx?.reviewHistoryEntryId
-		if (!id) return
+		const activityId = compileEntriesCtx?.reviewActivityId
+		if (!activityId) return
+		const activity = compileEntriesCtx.activities.find(
+			(a) => a.activityId === activityId
+		)
+		if (
+			activity &&
+			!sameLineAndMoment(activity, {
+				branchId: route.branch ?? null,
+				moment: momentDate
+			})
+		)
+			return
+		const id = activity?.historyEntryId
 		// As it READS on this line, so the compile's diff is against what the
 		// author sees; the raw row only when the line does not show it.
 		const entry =
 			(resolvedByKind[HISTORY_TYPE_ID] ?? []).find((e) => e.id === id) ??
 			(rowsByKind[HISTORY_TYPE_ID] ?? []).find((e) => e.id === id)
-		compileEntriesCtx.setReviewHistoryEntryId(null)
-		if (entry) openCompile(entry)
+		compileEntriesCtx.setReviewActivityId(null)
+		if (entry && activity) openCompile(entry, activity)
 	})
 
 	$effect(() => {
@@ -1126,52 +1364,25 @@
 	 */
 	let releases: Array<() => void> = []
 
-	function handleBindingList(msg: Sockets.Lorebooks.BindingList.Response) {
-		if (msg.lorebookId !== lorebookId) return
-		bindings = msg.lorebookBindingList as BindingWithRelations[]
-	}
-
-	function handleScenesList(msg: Sockets.Scenes.ListByLorebook.Response) {
-		if (msg.lorebookId !== lorebookId) return
-		// Every line's scenes, kept whole — `scenesOnLine` is what is shown.
-		sceneList = msg.sceneList
-		scenesLoaded = true
-		loading = false
-	}
-
+	/**
+	 * A scene save of OURS settles here: said once it lands, and the draft
+	 * re-read from the saved row. The row itself is patched into the list by
+	 * the workspace (plan B4), which may hear the save before or after this,
+	 * so the saved fields are laid over whatever the list holds.
+	 */
 	function handleSceneUpdate(msg: Sockets.Scenes.Update.Response) {
 		if (!msg.scene) return
-		sceneList = sceneList.map((s) =>
-			s.id === msg.scene.id ? { ...s, ...msg.scene } : s
-		)
 		const key = `scene#${msg.scene.id}`
 		if (awaitingSave !== key) return
 		awaitingSave = null
 		// Said once the scene is saved, never before.
 		toaster.success({ title: "Scene updated" })
-		if (draftKey === key)
+		if (draftKey === key) {
+			const held = sceneList.find((s) => s.id === msg.scene.id)
 			draft = (descriptorForKind(SCENE_KIND) ?? descriptor).toDraft(
-				sceneList.find((s) => s.id === msg.scene.id) ?? msg.scene
+				(held ? { ...held, ...msg.scene } : msg.scene) as any
 			)
-	}
-
-	function handleSceneWritten(
-		msg: Sockets.Scenes.Create.Response | Sockets.Scenes.Delete.Response
-	) {
-		// Both are bare, so another book's writes arrive here too.
-		const bookId =
-			"scene" in msg ? msg.scene?.lorebookId : msg?.lorebookId
-		if (bookId !== undefined && bookId !== lorebookId) return
-		fetchScenes()
-	}
-
-	function handleSceneProcessError(
-		msg: Sockets.Scenes.Process.ErrorResponse
-	) {
-		toaster.error({
-			title: "Scene processing failed",
-			description: msg.error
-		})
+		}
 	}
 
 	// The run behind the marks is read once for the whole editor, and re-read
@@ -1193,24 +1404,10 @@
 					typeId: kind as any,
 					vectorSource: door.vectorSource ?? kind,
 					handlers: {
-						onList(entries) {
-							rowsByKind = {
-								...rowsByKind,
-								[kind]: entries as PoolSource[]
-							}
-							loading = false
-						},
-						// The vectorization queue writes `embeddingModel`
-						// straight to the row, so without this the badge only
-						// refreshes on the next explicit write.
-						onVectorized(id, embeddingModel) {
-							rowsByKind = {
-								...rowsByKind,
-								[kind]: (rowsByKind[kind] ?? []).map((e) =>
-									e.id === id ? { ...e, embeddingModel } : e
-								)
-							}
-						},
+						// The rows themselves (and their embedding badges)
+						// are the workspace's (plan B4): the channel is this
+						// door's WRITES, and what their replies settle.
+						onList() {},
 						// A create of ours is answered in `save`, which waits
 						// for it; one from anywhere else only moves the list,
 						// so it is not toasted here.
@@ -1245,7 +1442,9 @@
 						// Only the delete this workspace asked for is news here.
 						onDeleted: (_id, askedHere) => {
 							if (askedHere)
-								toaster.success({ title: `${door.label} deleted` })
+								toaster.success({
+									title: `${door.label} deleted`
+								})
 						},
 						onReordered: () =>
 							toaster.success({ title: "Entries reordered" })
@@ -1253,57 +1452,26 @@
 				})
 			)
 		}
-		for (const channel of channels.values()) channel.open()
-		// The cast is needed by every door: it resolves `{{char:N}}` in a
-		// preview, names a scene's cast, and fills the character lore picker.
-		// An entry channel asks for it on open, so only a door with no channel
-		// of its own (Scenes) has to ask.
-		// A STANDING key, not a one-shot: every entry channel's write cascades
-		// a fresh cast list, so the workspace holds it whether or not it is the
-		// one asking below.
-		releases.push(
-			declareInterest<"lorebooks:bindingList">(
-				interestKey("lorebooks:bindingList", lorebookId),
-				handleBindingList
-			)
-		)
-		if (entryDoors.length === 0)
-			socket.emit("lorebooks:bindingList", { lorebookId })
-		if (entryDoors.length === 0 && !scenesInScope) loading = false
+		// Writes only: the lists, the cast and the badges are the
+		// workspace's, already asked for when the book opened (plan B4).
+		for (const channel of channels.values()) channel.open({ read: false })
 
 		if (
 			scenesInScope ||
 			poolDoors.some((d) => d.kind === HISTORY_TYPE_ID)
 		) {
-			// Only the list names a book. The three writes answer with the
-			// scene alone and `scenes:process:error` names one this workspace
-			// has never heard of, so all four are BARE — none has an entry in
-			// `SCOPED_EVENTS`, and a scoped key for an unscoped event matches
-			// nothing at all. `scenes:delete` names its book, and
-			// `handleSceneWritten` drops another book's.
+			// A scene save of ours settles on its reply (BARE — not in
+			// `SCOPED_EVENTS`; `handleSceneUpdate` checks it is the one it is
+			// waiting on). The list, its creates and deletes are the
+			// workspace's. A failed summarize run is not heard here: the
+			// Process scene window says it, or Layout does once the window is
+			// closed (`sceneRunShown.ts`).
 			releases.push(
-				declareInterest<"scenes:listByLorebook">(
-					interestKey("scenes:listByLorebook", lorebookId),
-					handleScenesList
-				),
 				declareInterest<"scenes:update">(
 					"scenes:update",
 					handleSceneUpdate
-				),
-				declareInterest<"scenes:delete">(
-					"scenes:delete",
-					handleSceneWritten
-				),
-				declareInterest<"scenes:create">(
-					"scenes:create",
-					handleSceneWritten
-				),
-				declareInterest<"scenes:process:error">(
-					"scenes:process:error",
-					handleSceneProcessError
 				)
 			)
-			fetchScenes()
 		}
 	})
 
@@ -1364,44 +1532,57 @@
 {/snippet}
 
 {#snippet list()}
-	<EntryPool
-		items={visibleItems}
-		sourceOf={(item) => sourceByKey.get(item.key)}
-		descriptorOf={(item) => descriptorForKind(item.kind) ?? descriptor}
-		{descriptor}
-		{bindings}
-		{vectorizationEnabled}
-		{selectedKey}
-		{lens}
-		{filters}
-		{facets}
-		{scopeTitle}
-		{summary}
-		{orderBy}
-		{mode}
-		{loading}
-		{dimmedKeys}
-		{decisions}
-		onSelect={select}
-		onMarker={(item) => select(item, "fires")}
-		onDelete={(item) => (deleteTarget = item)}
-		onNew={creatableDoors.length
-			? () => startCreate(creatableDoors[0])
-			: undefined}
-		{onFilters}
-		onOrderBy={(next) => (chosenOrder = next)}
-		onReorder={reorder}
-	>
-		{#snippet newControl()}
-			{@render newButton()}
-		{/snippet}
-		{#snippet toolbarExtra()}
-			{#if descriptor.listActions}
-				{@const Actions = descriptor.listActions}
-				<Actions sources={rowsByKind[descriptor.kind ?? ""] ?? []} />
-			{/if}
-		{/snippet}
-	</EntryPool>
+	{#if queue}
+		<LooseEndsQueue
+			rows={queue.rows}
+			currentId={queue.currentId}
+			onOpen={queue.onOpen}
+			onNext={queue.onNext}
+			onLeave={queue.onLeave}
+		/>
+	{:else}
+		<EntryPool
+			items={visibleItems}
+			sourceOf={(item) => sourceByKey.get(item.key)}
+			descriptorOf={(item) =>
+				item.kind === CAST_KIND
+					? castRowDoor
+					: (descriptorForKind(item.kind) ?? descriptor)}
+			{descriptor}
+			{bindings}
+			{vectorizationEnabled}
+			{selectedKey}
+			{lens}
+			{filters}
+			{facets}
+			{scopeTitle}
+			{summary}
+			{orderBy}
+			{mode}
+			{loading}
+			{dimmedKeys}
+			{decisions}
+			onSelect={select}
+			onMarker={(item) => select(item, "fires")}
+			onDelete={(item) => (deleteTarget = item)}
+			onNew={creatableDoors.length
+				? () => startCreate(creatableDoors[0])
+				: undefined}
+			{onFilters}
+			onOrderBy={(next) => (chosenOrder = next)}
+			onReorder={reorder}
+		>
+			{#snippet newControl()}
+				{@render newButton()}
+			{/snippet}
+			{#snippet toolbarExtra()}
+				{#if descriptor.listActions}
+					{@const Actions = descriptor.listActions}
+					<Actions sources={rowsByKind[descriptor.kind ?? ""] ?? []} />
+				{/if}
+			{/snippet}
+		</EntryPool>
+	{/if}
 {/snippet}
 
 {#snippet editorBack()}
@@ -1554,7 +1735,7 @@
 	  it carries the whole warning in the item itself — a toast afterwards would
 	  arrive after the base was already rewritten.
 	-->
-	{@const dated = formatDate(momentDate!)}
+	{@const dated = formatDate(draftMoment!)}
 	<div class="flex shrink-0 items-center">
 		<button
 			class="btn btn-sm preset-filled-primary-500 rounded-r-none"
@@ -1631,9 +1812,7 @@
 		<div class="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto">
 			<div class="flex flex-wrap items-center gap-2">
 				{@render editorBack()}
-				<span
-					class="text-surface-600-400 shrink-0 text-xs"
-				>
+				<span class="text-surface-600-400 shrink-0 text-xs">
 					{kindLabel(selectedItem?.kind ?? activeDoor.kind ?? "")}
 				</span>
 				<h3 class="min-w-0 flex-1 truncate text-sm font-semibold">
@@ -1662,14 +1841,34 @@
 						class="btn btn-sm preset-filled-primary-500 shrink-0"
 						type="button"
 						onclick={save}
-						disabled={saving || !activeDoor.validate(draft, siblings)}
+						disabled={saving ||
+							!activeDoor.validate(draft, siblings)}
 					>
 						<Icons.Save size={16} aria-hidden="true" />
-						<span>{isNew ? "Create" : "Save"}</span>
+						<span
+							>{isNew
+								? "Create"
+								: queue
+									? "Save & next"
+									: "Save"}</span
+						>
 					</button>
 				{/if}
 				{#if !isNew && selectedSource && activeDoor.store === "entries"}
 					{@render editorMenu()}
+				{/if}
+				{#if queue && !isNew && mode === "compact"}
+					<!-- The queue's own Next, for the compact step where the
+					     queue list is not on screen beside the editor. -->
+					<button
+						type="button"
+						class="btn btn-sm preset-tonal-surface shrink-0 gap-1"
+						data-loose-ends-next
+						onclick={queue.onNext}
+					>
+						<span>Next loose end</span>
+						<Icons.ArrowRight size={14} aria-hidden="true" />
+					</button>
 				{/if}
 			</div>
 			<div class="flex flex-col gap-4">
@@ -1798,17 +1997,23 @@
 	data-lore-lens={lens}
 >
 	{#if mode === "desk"}
-		<div class="flex min-h-0 flex-1 gap-4">
-			<div class="flex min-h-0 min-w-0 flex-1 flex-col">
+		<!-- The reader sets the split (owner, 2026-10-02): a divider between
+		     list and editor, dragged or stepped with the arrow keys, and
+		     remembered on this device — one share for Entries, Time and Cast,
+		     so changing lens never moves it. -->
+		<ResizableSplit storageKey={LORE_SPLIT_KEY} firstId="loreSplitList">
+			{#snippet first()}
 				{@render list()}
-			</div>
-			<div
-				class="border-border flex min-h-0 w-[420px] shrink-0 flex-col border-l pl-4"
-				data-lore-editor
-			>
-				{@render editor()}
-			</div>
-		</div>
+			{/snippet}
+			{#snippet second()}
+				<div
+					class="panel-card flex min-h-0 min-w-0 flex-1 flex-col p-3"
+					data-lore-editor
+				>
+					{@render editor()}
+				</div>
+			{/snippet}
+		</ResizableSplit>
 	{:else if step === "inspector"}
 		<div class="flex min-h-0 flex-1 flex-col" data-lore-inspector-step>
 			{@render inspectorPane()}
@@ -1853,8 +2058,8 @@
 		activityId={compileActivityId}
 		pendingResult={compilePendingResult}
 		initialStep={compileInitialStep}
-		moment={momentDate}
-		branchId={route.branch ?? null}
+		moment={compileReading.moment}
+		branchId={compileReading.branchId}
 		knownAmendmentIds={knownAmendmentIds(compileTarget.id)}
 		onDiscarded={(activityId) => compileEntriesCtx?.dismiss(activityId)}
 	/>

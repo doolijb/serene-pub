@@ -85,7 +85,7 @@
 
 <!-- One button per section. The modalities never mix in one picker. -->
 <div
-	class="border-surface-300-700 mb-2 inline-flex overflow-hidden rounded-lg border"
+	class="panel-edge mb-2 inline-flex overflow-hidden rounded-lg border"
 	role="group"
 	aria-label="Connection type"
 >

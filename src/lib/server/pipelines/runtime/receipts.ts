@@ -27,6 +27,7 @@ import type { SessionIo } from "$lib/server/pipelines/runtime/liveRow"
 import * as schema from "$lib/server/db/schema"
 import { eq, and, asc, desc, inArray, sql } from "drizzle-orm"
 import { WIRE_RAW_LIMIT } from "$lib/server/connectionAdapters/BaseConnectionAdapter"
+import { withoutQueryText } from "$lib/server/db/errors"
 
 /**
  * One row a run left behind.
@@ -173,7 +174,7 @@ async function resolveSpecVersion(
 // carries `core:provider/…` and is capped on the same terms when re-saved.
 const GENERATE_TYPE = /^core:(?:oracle|provider)\/generate-(text|with-tools|json)@/
 
-/** The save node, whose `input.text`/`input.thinking` are the reply again. */
+/** The save node, whose `input.text`/`input.reasoning` are the reply again. */
 const UPDATE_MESSAGE_TYPE = /^core:(?:outlet|consumer)\/update-message/
 
 /** A byte count as UTF-8, which is what the column stores. */
@@ -219,10 +220,10 @@ function boundedField(
  * the column. Nothing about the RUN changes — the node's published value is
  * the port the save read, untouched — only what is kept of it afterwards.
  *
- * `update-message`'s `input.text`/`input.thinking` carry the same reply a
+ * `update-message`'s `input.text`/`input.reasoning` carry the same reply a
  * generate node already published, recorded a second time as this node's own
  * input — so the same bound applies there, and to a generate node's own
- * `output.thinking` beside `text`.
+ * `output.reasoning` beside `text`.
  *
  * The truncation is said on the node: a `<field>Truncated` marker beside the
  * field with the original size, and a note, so a reader who finds a reply cut
@@ -243,7 +244,7 @@ export function boundedForStorage(receipt: Receipt): Receipt {
 		if (isGenerate && output && typeof output === "object") {
 			const boundedOutput = boundedField(
 				boundedField(output, "text", notes),
-				"thinking",
+				"reasoning",
 				notes
 			)
 			if (boundedOutput !== output) output = boundedOutput
@@ -252,7 +253,7 @@ export function boundedForStorage(receipt: Receipt): Receipt {
 		if (isUpdateMessage && input && typeof input === "object") {
 			const boundedInput = boundedField(
 				boundedField(input, "text", notes),
-				"thinking",
+				"reasoning",
 				notes
 			)
 			if (boundedInput !== input) input = boundedInput
@@ -270,6 +271,48 @@ export function boundedForStorage(receipt: Receipt): Receipt {
 }
 
 /**
+ * The receipt with no failed query's text in its reasons — in place, and
+ * returned for convenience.
+ *
+ * A receipt's reasons are caught messages, and people read them: the run
+ * card, the reply row's error (`onRunEnd` → `LiveRow.finish`), a summary's or
+ * a scene's failure card, the support report. Since drizzle-orm 0.44 a failed
+ * query's message is its SQL and every value it bound (`db/errors.ts`). The
+ * host already answers its own failed queries with the plain sentence; this
+ * is the backstop for every other road — a binding that quoted one, a
+ * plugin's reason, the executor's own catch, a run-end hook that failed — run
+ * before the live row is finished (`runTurn.ts`) and again before the receipt
+ * is stored. Each original goes to the server log.
+ */
+export function receiptWithoutQueryText<R extends Receipt>(receipt: R): R {
+	const clean = (text: string, where: string): string => {
+		const safe = withoutQueryText(text)
+		if (safe !== text)
+			console.warn(
+				`[pipelines] run ${receipt.runId}: ${where} quoted a failed query; it reads the plain sentence. It was:`,
+				text
+			)
+		return safe
+	}
+	const cleanAll = (texts: string[] | undefined, where: string) =>
+		texts?.some((t) => typeof t === "string" && withoutQueryText(t) !== t)
+			? texts.map((t) => (typeof t === "string" ? clean(t, where) : t))
+			: texts
+	if (typeof receipt.haltReason === "string")
+		receipt.haltReason = clean(receipt.haltReason, "its halt reason")
+	if (receipt.notes) receipt.notes = cleanAll(receipt.notes, "a note")
+	for (const n of receipt.nodes ?? []) {
+		if (typeof n.reason === "string")
+			n.reason = clean(n.reason, `node ${n.nodeKey}'s reason`)
+		if (n.notes) n.notes = cleanAll(n.notes, `a note on ${n.nodeKey}`)
+		for (const script of n.scripts ?? [])
+			if (typeof script.reason === "string")
+				script.reason = clean(script.reason, `a script on ${n.nodeKey}`)
+	}
+	return receipt
+}
+
+/**
  * Store a receipt and its node trail.
  *
  * Returns the row id, or null when it could not be written — never throws. See
@@ -281,6 +324,8 @@ export async function saveReceipt(
 	receipt: Receipt,
 	scope: SaveReceiptScope = {}
 ): Promise<number | null> {
+	// Its reasons are read by people; see `receiptWithoutQueryText`.
+	receiptWithoutQueryText(receipt)
 	// Deduped here rather than left to the unique constraint, because a
 	// constraint violation would abort the whole insert and the `catch` below
 	// would swallow the entire receipt. Two `attach-image` nodes on one message

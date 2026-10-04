@@ -10,38 +10,49 @@
 // direction of embedding a character into a lorebook export) — same reason
 // characterBindingSync.ts is its own file rather than living in lorebooks.ts.
 //
-// All three callers used to be separate implementations; the comparison
-// side used to rebuild a bare buildSpecV3Lorebook() with no bindings/
-// characters/personas/narrativeGraph attached (spurious "conflict" on every
-// re-import), and charactersExportCard used to skip bindings/graph entirely
-// (silently dropping every character-lore entry's privacy binding and all
-// graph data on a character-with-lorebook export) — see the merge plan.
+// One builder for all three, so the comparison and the card embed carry
+// exactly what an export carries — bindings, cards, graph and stats included.
+//
+// ⚠ **A file carries MAIN only, as its base rows** (lorebooks plan A4). Every
+// read here filters through `onLineSql(…, MAIN_LINE)` — `branch_id IS NULL` —
+// so a branch's own entries, scenes, links and stats never leave the book,
+// and no amendment is applied: an amendment is a change at a story date, and
+// folding one into the base would state it as true from the start. Carrying
+// branches and amendments is a format question for export un-pausing.
 
 import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
-import { and, eq } from "drizzle-orm"
+import { and, asc, eq, inArray, isNull, or } from "drizzle-orm"
 import {
 	buildSpecV3Lorebook,
 	type ExportableEntryWithPosition,
 	assignEntryLocalIds,
 	assignHistoryEntryLocalIds,
 	attachBoundEntities,
+	attachStats,
 	mapSceneForExport,
 	mapNarrativeNode,
 	mapNarrativeRelationship,
+	mapStatRowForExport,
 	attachNarrativeGraph,
+	statValueEntryIds,
+	EXPORTED_STAT_OWNER_KINDS,
 	type ExportedBoundCharacter,
 	type ExportedBoundPersona,
 	type ExportedBinding,
-	type ExportedScene
+	type ExportedScene,
+	type ExportedStatRow,
+	type LorebookExportProfile
 } from "$lib/server/utils/lorebookExportMapper"
 import {
 	HISTORY_TYPE_ID,
 	entriesOfType,
-	loadBookEntries
+	toEntryRow
 } from "$lib/server/utils/lorebookEntries"
 import { buildCharacterCardV3 } from "$lib/server/utils/characterCardParser"
 import { buildPersonaExportCard } from "$lib/server/utils/personaCard"
+import { onLineSql } from "$lib/server/state/lineSql"
+import { MAIN_LINE } from "$lib/shared/lorebooks/lineReading"
 
 import { clockOf } from "$lib/server/state/storyTime"
 
@@ -52,6 +63,8 @@ export async function buildLorebookExportData(
 		includeCharacters?: boolean
 		includePersonas?: boolean
 		includeNarrativeGraph?: boolean
+		/** Which wire names the entries go out under; see the mapper. */
+		exportProfile?: LorebookExportProfile
 	} = {}
 ) {
 	const lorebook = await db.query.lorebooks.findFirst({
@@ -62,9 +75,13 @@ export async function buildLorebookExportData(
 		with: {
 			// `characters` are the scene_characters join rows; the export
 			// mapper still wants the flat id arrays, so they're projected
-			// below. Ordered so export bytes stay stable — import compares
-			// them to detect "unchanged vs conflict".
-			scenes: { with: { characters: true } }
+			// below. Main's scenes only (see the header), in write order so
+			// the bytes the import compares stay stable.
+			scenes: {
+				where: onLineSql(schema.scenes.branchId, MAIN_LINE),
+				orderBy: asc(schema.scenes.id),
+				with: { characters: true }
+			}
 		}
 	})
 
@@ -72,10 +89,21 @@ export async function buildLorebookExportData(
 		throw new Error("Lorebook not found.")
 	}
 
-	// One list, one shape. The export's wire names stay
-	// `world`/`character`/`history` — a type id never goes into a file — and
-	// `buildSpecV3Lorebook` is what groups the list back into that order.
-	const entries = await loadBookEntries(db, lorebookId)
+	// One list, one shape, main's rows only. A type id never goes into a
+	// file — `buildSpecV3Lorebook` writes each type's wire name and groups
+	// the list in the file's order. No vectors: a file carries none.
+	const entries = (
+		await db
+			.select()
+			.from(schema.lorebookEntries)
+			.where(
+				and(
+					eq(schema.lorebookEntries.lorebookId, lorebookId),
+					onLineSql(schema.lorebookEntries.branchId, MAIN_LINE)
+				)
+			)
+			.orderBy(asc(schema.lorebookEntries.id))
+	).map((row) => toEntryRow(row))
 	const historyEntries = entriesOfType(entries, HISTORY_TYPE_ID)
 
 	// All default to true — matches the original always-include-everything
@@ -123,7 +151,10 @@ export async function buildLorebookExportData(
 		// hold, so it stays — the split is now made from `isPersona` rather
 		// than from which id column was set, and a persona still exports as a
 		// persona card (the small shape; see personaCard.ts).
-		const isOwned = binding.character?.userId === userId
+		// A deleted card is not carried (plan A25): the member goes out as a
+		// member without a card, as when the file leaves cards out.
+		const isOwned =
+			binding.character?.userId === userId && !binding.character.isDeleted
 		const asPersona = !!binding.character?.isPersona
 		if (binding.character && isOwned && !asPersona && includeCharacters) {
 			characterLocalId = nextLocalId++
@@ -155,7 +186,8 @@ export async function buildLorebookExportData(
 			bindingText: binding.binding,
 			kind: asPersona ? "persona" : "character",
 			characterLocalId,
-			personaLocalId
+			personaLocalId,
+			...(binding.spriteSet ? { spriteSet: binding.spriteSet } : {})
 		})
 	}
 
@@ -207,15 +239,35 @@ export async function buildLorebookExportData(
 	// too — an anchor still numbers its target either way.
 	const narrativeRelationshipRows = includeNarrativeGraph
 		? await db.query.narrativeRelationships.findMany({
-				where: eq(schema.narrativeRelationships.lorebookId, lorebook.id)
+				where: and(
+					eq(schema.narrativeRelationships.lorebookId, lorebook.id),
+					onLineSql(schema.narrativeRelationships.branchId, MAIN_LINE)
+				),
+				orderBy: asc(schema.narrativeRelationships.id)
 			})
 		: []
-	const entryLocalIdByRealId = assignEntryLocalIds(
-		exportableEntries,
-		narrativeRelationshipRows
+	// The stats the book owns before play, on main: the book's own, its cast
+	// members' and its places' (plan A26). A stat names entries too — its
+	// place, and the entries its lore references hold — so it is read before
+	// the numbering as well. `0.5-compat` writes format 1, which carries none.
+	const exportProfile = options.exportProfile ?? "native"
+	const statRows =
+		exportProfile === "native"
+			? await readBookStats(
+					lorebook.id,
+					bindingRows.map((b) => b.id),
+					entries.map((e) => e.id)
+				)
+			: []
+	const entryLocalIdByRealId = assignEntryLocalIds(exportableEntries, [
+		...narrativeRelationshipRows
 			.flatMap((rel) => [rel.fromEntryId, rel.toEntryId])
-			.filter((id): id is number => id !== null)
-	)
+			.filter((id): id is number => id !== null),
+		...statRows.flatMap((row) => [
+			...(row.ownerKind === "location" ? [row.ownerId] : []),
+			...statValueEntryIds(row.value)
+		])
+	], exportProfile)
 
 	const specBook = attachBoundEntities(
 		buildSpecV3Lorebook(
@@ -224,7 +276,8 @@ export async function buildLorebookExportData(
 			bindingLocalIdByRealId,
 			scenesByHistoryEntryId,
 			historyEntryLocalIdByRealId,
-			entryLocalIdByRealId
+			entryLocalIdByRealId,
+			exportProfile
 		),
 		characters,
 		personas,
@@ -294,6 +347,23 @@ export async function buildLorebookExportData(
 		)
 	}
 
+	const statMaps = {
+		lorebookId: lorebook.id,
+		bindingLocalIdByRealId,
+		entryLocalIdByRealId,
+		historyEntryLocalIdByRealId,
+		sceneLocalIdByRealId
+	}
+	const exportedStats = (table: "config" | "value") =>
+		statRows
+			.filter((row) => row.table === table)
+			.map((row) => mapStatRowForExport(row, statMaps))
+			.filter((row): row is ExportedStatRow => row !== null)
+	specBookWithGraph = attachStats(specBookWithGraph, {
+		configs: exportedStats("config"),
+		values: exportedStats("value")
+	})
+
 	// The book's calendar and main's clock (DESIGN-story-time P5: "it is
 	// data, so it exports with the book"). Only when there is something to
 	// carry, so a free-form book with no clock exports the bytes it always
@@ -318,4 +388,75 @@ export async function buildLorebookExportData(
 	}
 
 	return { name: lorebook.name, specBookWithGraph }
+}
+
+/**
+ * The template-layer stat rows this book owns on main — configurations, then
+ * values, each in write order so the file's bytes are stable. `session_id`
+ * NULL is the template layer; `branch_id` NULL is main.
+ */
+async function readBookStats(
+	lorebookId: number,
+	bindingIds: number[],
+	entryIds: number[]
+) {
+	const ownersOf: Record<
+		(typeof EXPORTED_STAT_OWNER_KINDS)[number],
+		number[]
+	> = {
+		lorebook: [lorebookId],
+		cast_member: bindingIds,
+		location: entryIds
+	}
+	const rows: Array<{
+		table: "config" | "value"
+		ownerKind: string
+		ownerId: number
+		slotId: string
+		config?: Record<string, unknown>
+		value?: { v: unknown }
+		historyEntryId: number | null
+		sceneId: number | null
+		updatedBy: string
+		note: string | null
+	}> = []
+	for (const [table, source] of [
+		["config", schema.attributeConfigs],
+		["value", schema.attributeValues]
+	] as const) {
+		const owned = EXPORTED_STAT_OWNER_KINDS.filter(
+			(kind) => ownersOf[kind].length > 0
+		).map((kind) =>
+			and(
+				eq(source.ownerKind, kind),
+				inArray(source.ownerId, ownersOf[kind])
+			)
+		)
+		const found: any[] = await db
+			.select()
+			.from(source)
+			.where(
+				and(
+					isNull(source.sessionId),
+					onLineSql(source.branchId, MAIN_LINE),
+					or(...owned)
+				)
+			)
+			.orderBy(asc(source.id))
+		for (const row of found)
+			rows.push({
+				table,
+				ownerKind: row.ownerKind,
+				ownerId: row.ownerId,
+				slotId: row.slotId,
+				...(table === "config"
+					? { config: row.config }
+					: { value: row.value }),
+				historyEntryId: row.historyEntryId,
+				sceneId: row.sceneId,
+				updatedBy: row.updatedBy,
+				note: row.note
+			})
+	}
+	return rows
 }

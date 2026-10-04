@@ -128,7 +128,7 @@ async function world(custom: "allow" | "deny") {
 	const { declareSheet, setOwnerSheets } = await import("$lib/server/state/declarations")
 	const sheet = `author${k}:sheet/world@1`
 	await declareSheet(testDb as never, user.id, sheet, { label: { en: "World" }, slots: [{ id: MOOD }] })
-	await setOwnerSheets(testDb as never, { kind: "lorebook", id: lorebook.id }, [sheet])
+	await setOwnerSheets(testDb as never, { kind: "lorebook", id: lorebook.id }, [sheet], { userId: user.id })
 	// …and Weather through its timeline: a value an earlier session recorded.
 	await testDb.insert(schema.attributeValues).values({
 		ownerKind: "lorebook",
@@ -228,6 +228,12 @@ describe("the session picks, and a pick carries forward", () => {
 
 	test("only what the session tracks is written back to the world; the rest carries forward", async () => {
 		const w = await world("allow")
+		// Recording writes the world under Full (plan A22; Review changes, the
+		// default, would file proposals instead).
+		await testDb
+			.insert(schema.userSettings)
+			.values({ userId: w.user.id, loreWriteMode: "full" })
+			.onConflictDoUpdate({ target: schema.userSettings.userId, set: { loreWriteMode: "full" } })
 		await pick(w.user.id, w.session.id, { picks: [{ slotId: WEATHER, enabled: false }] })
 		// The session plays on: Mood moves; Weather it no longer tracks.
 		const { setValue } = await import("$lib/server/state/write")

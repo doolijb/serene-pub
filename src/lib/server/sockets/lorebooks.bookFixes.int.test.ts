@@ -254,14 +254,11 @@ describe("cast member guards", () => {
 			)
 		).rejects.toThrow(/aliases filed under them/)
 
-		// The graph's own door applies the same rule.
-		const { narrativeGraphUpdateNodeHandler } = await import(
-			"./narrativeGraph"
-		)
+		// Nobody is filed under themselves.
 		await expect(
-			narrativeGraphUpdateNodeHandler.handler(
+			updateLorebookBindingHandler.handler(
 				fakeSocket(user.id),
-				{ node: { id: c.id, parentNodeId: c.id } } as any,
+				{ lorebookBinding: { id: c.id, parentNodeId: c.id } } as any,
 				noopEmit
 			)
 		).rejects.toThrow(/themselves/)

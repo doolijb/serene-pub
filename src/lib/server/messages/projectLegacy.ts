@@ -8,13 +8,13 @@
  *
  * - `content === metadata.swipes.history[currentIdx]` whenever swipes exist,
  *   maintained by every legacy write path; `currentIdx: null` means 0.
- * - `metadata.thinking` mirrors `thinkingHistory[currentIdx]` (denormalized).
+ * - `metadata.reasoning` mirrors `reasoningHistory[currentIdx]` (denormalized).
  * - `isNarratorResponse` marks a narration: role stays "assistant",
  *   characterId stays null, the display name sits in `metadata.narratorName`.
  *
  * ## Fixed ordinals
  *
- * Within a revision, parts land at fixed slots — instructions 0, thinking 1,
+ * Within a revision, parts land at fixed slots — instructions 0, reasoning 1,
  * markdown 2 — rather than being packed. Gaps are legal (the address is
  * unique, not dense), and fixed slots make the projection deterministic and
  * idempotent: re-projecting a row always produces byte-identical parts.
@@ -22,7 +22,7 @@
  * A revision carrying **folded sections** (B4; D5, 2026-09-27 —
  * `metadata.sections`, or `swipes.sectionsHistory[i]`, read through the SDK's
  * one `foldedSectionsOf`) lays them out after the instructions and shifts the
- * other two down: instructions 0, sections 1…k, thinking k+1, markdown k+2 —
+ * other two down: instructions 0, sections 1…k, reasoning k+1, markdown k+2 —
  * a Plan reads above the reasoning and the reply. With no sections that is
  * exactly 0, 1, 2, so every row written before B4 projects byte-identically.
  * `MAX_FOLDED_SECTIONS` keeps the whole layout under the store's
@@ -53,11 +53,11 @@ export interface LegacyMessageRow {
 		swipes?: {
 			currentIdx: number | null
 			history: string[]
-			thinkingHistory?: (string | null)[]
+			reasoningHistory?: (string | null)[]
 			/** B4: each alternative's folded sections, parallel to `history`. */
 			sectionsHistory?: unknown[]
 		}
-		thinking?: string | null
+		reasoning?: string | null
 		/** B4: the row's folded sections while it has no alternatives. */
 		sections?: unknown
 		narratorInstructions?: string
@@ -86,7 +86,7 @@ export type NewMessage = typeof messages.$inferInsert
 export type NewPart = Omit<typeof messageParts.$inferInsert, "messageId">
 
 export const ORDINAL_INSTRUCTIONS = 0
-export const ORDINAL_THINKING = 1
+export const ORDINAL_REASONING = 1
 export const ORDINAL_MARKDOWN = 2
 
 export function projectLegacy(row: LegacyMessageRow): {
@@ -103,12 +103,12 @@ export function projectLegacy(row: LegacyMessageRow): {
 		? Math.max(0, Math.min(swipes!.currentIdx ?? 0, revisions.length - 1))
 		: 0
 
-	const thinkingFor = (i: number): string | null => {
-		const fromHistory = swipes?.thinkingHistory?.[i]
+	const reasoningFor = (i: number): string | null => {
+		const fromHistory = swipes?.reasoningHistory?.[i]
 		if (typeof fromHistory === "string" && fromHistory) return fromHistory
-		// A single-revision message stores its thinking only in the
+		// A single-revision message stores its reasoning only in the
 		// denormalized field; it belongs to the active (only) revision.
-		if (!hasSwipes && i === 0 && meta.thinking) return meta.thinking
+		if (!hasSwipes && i === 0 && meta.reasoning) return meta.reasoning
 		return null
 	}
 
@@ -126,28 +126,28 @@ export function projectLegacy(row: LegacyMessageRow): {
 				data: { title: "Instructions" }
 			})
 		// Folded sections (B4): the slots after the instructions, pushing
-		// thinking and the body down by as many as there are.
+		// reasoning and the body down by as many as there are.
 		const sections = foldedSectionsOf(meta, i)
 		sections.forEach((section, k) => {
 			const part = foldedSectionPart(section)
 			parts.push({
 				step: 0,
 				revision: i,
-				ordinal: ORDINAL_THINKING + k,
+				ordinal: ORDINAL_REASONING + k,
 				type: part.type,
 				content: part.content,
 				data: { ...part.data }
 			})
 		})
 		const shift = sections.length
-		const thinking = thinkingFor(i)
-		if (thinking)
+		const reasoning = reasoningFor(i)
+		if (reasoning)
 			parts.push({
 				step: 0,
 				revision: i,
-				ordinal: ORDINAL_THINKING + shift,
-				type: "core:thinking",
-				content: thinking,
+				ordinal: ORDINAL_REASONING + shift,
+				type: "core:reasoning",
+				content: reasoning,
 				data: null
 			})
 		parts.push({

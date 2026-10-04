@@ -7,111 +7,99 @@ What's in this folder
 
    serene-pub/
      Serene Pub.app               <- double-click to start
-       Contents/Resources/app/    <- the application itself
-         run.sh                   <- starts only the server, no launcher
-     run.sh                       <- the same thing, from a terminal
+     run.sh                       <- starts only the server, from a terminal
      .env.example                 <- settings reference
 
-Everything that IS the application lives inside the bundle's "app" folder. An
-update replaces that one folder in a single move, which is why nothing you own
-is kept inside it — your database and settings live in your data directory
-instead (see Configuration below).
+Everything that IS the application lives inside "Serene Pub.app". An update
+replaces the app in a single move, which is why nothing you own is kept inside
+it - your database and settings live in your data directory instead (see
+Configuration below). You can drag "Serene Pub.app" into Applications.
 
 To run the app
 --------------
 
-1. Extract the archive to your preferred location.
+1. Double-click "Serene Pub.app".
 
-2. Double-click "Serene Pub.app".
+2. The first time, macOS refuses it, because Serene Pub isn't registered with
+   Apple. Click "Done". Then open System Settings > Privacy & Security, scroll
+   down to the message about Serene Pub, and click "Open Anyway".
 
-   The first launch may be blocked because the app isn't notarized: right-click
-   (or Control-click) it, choose "Open", and confirm.
+   Or, in Terminal, once (use the path to wherever the app is):
 
-   Prefer a terminal? Open Terminal, then:
+         xattr -dr com.apple.quarantine "/Applications/Serene Pub.app"
 
-      cd /path/to/serene-pub
-      bash run.sh
+   You only do this once: updates installed from inside Serene Pub are not
+   blocked again.
 
-   Headless Mac, a launchd job, or debugging a startup problem? Run
-   "Serene Pub.app/Contents/Resources/app/run.sh" instead. It starts the Node
-   server and nothing else — no launcher, no browser — and prints the server's
-   output directly.
+3. A Serene Pub icon appears in the menu bar (top right), and Serene Pub opens
+   in its own window. Node.js is included - nothing else to install.
 
-3. Node.js runtime is included - no installation or download required! The
-   application will start immediately.
+4. The menu-bar icon's menu opens Serene Pub again (in a window or your
+   browser), chooses which one is the default, shows the logs, and has "Quit",
+   which is how you stop Serene Pub. Closing the window does not stop it.
 
-4. To stop the application, press Ctrl+C in the terminal window.
-
-5. On your Mac, access Serene Pub from http://localhost:3000.
+Headless Mac, a launchd job, or debugging a startup problem? Run "run.sh" in
+this folder from Terminal (or "Serene Pub.app/Contents/Resources/app/run.sh"
+from wherever the app is). It starts the server and nothing else - no menu-bar
+icon, nothing opens - and prints its output. Stop it with Ctrl+C.
 
 Configuration
 -------------
 
-Serene Pub runs with no configuration at all — this section is only for
+Serene Pub runs with no configuration at all - this section is only for
 changing something specific, like the port.
 
-Settings go in a ".env" file in your DATA directory, not in this folder:
+Settings go in a ".env" file in your DATA directory, not in the app:
 
       ~/Library/Application Support/SerenePub/.env
 
-".env.example" (at the top of this folder) lists every available setting with
-an explanation; copy it to the path above and edit it there. Common ones:
+".env.example" (in this folder) lists every available setting with an
+explanation; copy it to the path above and edit it there. Common ones:
 
    - PORT=3000                    change the web UI's port
    - HOST=127.0.0.1               local connections only
    - AUTO_OPEN_CLIENT=0           don't open Serene Pub on startup
    - SERENE_PUB_DATA_DIR=...      keep your data somewhere else entirely
 
-Why the data directory and not the app folder? Because an update replaces the
-application folder, and editing a file inside a signed .app bundle breaks its
-signature. Serene Pub prints the settings files it actually read each time it
-starts.
+Never edit files inside "Serene Pub.app": that breaks its signature and macOS
+will refuse to open it.
 
 (SERENE_PUB_DATA_DIR is the one exception: it chooses the data directory, so it
-has to be set in a ".env" at the top of this folder, or as a real environment
-variable. A relative path like "./data" is resolved against this folder, so it
-means the same place wherever you launch from.)
+has to be set in a ".env" in the folder that contains "Serene Pub.app", or as a
+real environment variable. A relative path is resolved against that folder.)
 
-Upgrading
----------
+Updating
+--------
 
-Download the new release and extract it over your existing "serene-pub" folder,
-replacing files when asked. Your database and settings are untouched — they
-live in your data directory, not here.
+An administrator can update from inside Serene Pub: Admin > Updates. If the
+new version fails to start, the old one is put back automatically.
 
-Notes
------
-
-- Serene Pub will attempt to automatically identify your local network IP
-  address, allowing access across other devices (e.g. mobile phones.)
-    - To find your local IP, run: ipconfig getifaddr en0
-    - For example, if the result is 192.168.1.42, you can access Serene Pub
-      from your phone at http://192.168.1.42:3000
+By hand: quit Serene Pub, then replace "Serene Pub.app" with the new one. Your
+database and settings are untouched - they live in your data directory.
 
 Troubleshooting
 ---------------
 
-- If the database won't open, double-clicking the app opens the recovery page
-  in your browser by itself; if nothing starts at all it leaves the reason in
-  "serene-pub-last-error.log" in your data directory.
-- If macOS refuses to open the app, right-click it and choose "Open" rather
-  than double-clicking.
-- If you get a permission error, run: chmod +x run.sh
-- If the app fails to start and the window closes too fast to read, run the
-  bundle's Contents/Resources/app/run.sh from a terminal.
+- Nothing opened: click the menu-bar icon, or open http://localhost:3000.
+- It stopped: choose "View Logs" from the menu-bar icon. "server.log" is what
+  the app printed; include its last lines when asking for help.
+- "Serene Pub is damaged and can't be opened": run the xattr command above.
+- Nothing happens at all: run "bash run.sh" in this folder from Terminal to
+  see why.
+- Using it from your phone: run "ipconfig getifaddr en0", then open
+  http://<that address>:3000 on the phone (same Wi-Fi).
 
 Feedback & Help
 ---------------
 
-- For questions, feedback, or to report issues, please visit:
-  https://github.com/doolijb/serene-pub
+- https://github.com/doolijb/serene-pub
 
 Uninstall
 ---------
 
-- Delete this folder to remove the program.
-- Your characters, sessions and settings live separately, in
-  ~/Library/Application Support/SerenePub — delete that too if you want
-  everything gone, or keep it to carry your data to a future install.
+- Quit Serene Pub, then delete "Serene Pub.app" (and this folder).
+- Your characters, sessions, settings and logs live separately, in
+  ~/Library/Application Support/SerenePub - delete that too if you want
+  everything gone.
 
 Enjoy using Serene Pub!

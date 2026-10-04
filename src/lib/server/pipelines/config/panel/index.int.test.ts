@@ -31,6 +31,7 @@ import {
 	type NamespaceView
 } from "$lib/server/pipelines/config/panel"
 import { RESPOND_SPEC_ID } from "$lib/server/pipelines/boot/bootstrap"
+import { groupOptions, groupSteps } from "$lib/server/pipelines/config/panel/groups"
 
 const SECRET = "test-instance-secret"
 
@@ -84,8 +85,7 @@ const view = (over: any = {}): Promise<NamespaceView> =>
 		viewer(over)
 	) as Promise<NamespaceView>
 
-const allOptions = (v: NamespaceView): ConfigOption[] =>
-	v.steps.flatMap((s) => [...s.options, ...s.advanced])
+const allOptions = (v: NamespaceView): ConfigOption[] => groupOptions(v.groups)
 
 describe("the namespace list", () => {
 	it("lists what core published, from rows", async () => {
@@ -143,7 +143,20 @@ describe("the option payload", () => {
 		// happens to be a node key. Exempting it keeps the scan pointed at
 		// *leaks*, which are fields core populates, rather than at what a person
 		// chose to write in a box.
-		const PROSE = new Set(["label", "description", "name", "source"])
+		//
+		// `heading`, `purpose` and `valueLabel` are prose of the same class: a
+		// settings group's heading and purpose, a step's heading, and the NAME of
+		// the row a reference points at ("Build template context" is a
+		// definition's name, not the `context` node).
+		const PROSE = new Set([
+			"label",
+			"description",
+			"name",
+			"source",
+			"heading",
+			"purpose",
+			"valueLabel"
+		])
 		// `taxonomy.mode` (23 §2) is a session-mode id — public vocabulary the
 		// session picker already ships to every user (`sessions:genres`), not
 		// this pipeline's wiring. The word-boundary scan flags it only because
@@ -180,10 +193,11 @@ describe("the option payload", () => {
 						for (const key of keys)
 							if (new RegExp(`\\b${key}\\b`).test(k))
 								offences.push(`${path}.${k} is named for a node`)
+					// Prose is a subtree property: the prompt row's `fields` are authored text.
 					walk(
 						v,
 						`${path}.${k}`,
-						PROSE.has(k) || PUBLIC_IDS.has(k) || PAYLOAD_FIELDS.has(k)
+						prose || PROSE.has(k) || PUBLIC_IDS.has(k) || PAYLOAD_FIELDS.has(k)
 					)
 				}
 		}
@@ -222,30 +236,28 @@ describe("the option payload", () => {
 			expect(keys.has(o.label.toLowerCase())).toBe(false)
 	})
 
-	it("groups options by step, in run order, with opaque keys", async () => {
+	it("names each option's step by an opaque handle, never an ordinal or a node key", async () => {
 		const v = await view({ userId: adminId, isAdmin: true })
-		expect(v.steps.length).toBeGreaterThan(0)
-		// The key is an ordinal, never a node key — grouping by step reveals
-		// count and order (the ratified 0.6 trade, DECOMPOSITION §26), not
-		// addresses.
-		expect(v.steps.map((s) => s.key)).toEqual(
-			v.steps.map((_, i) => `s${i}`)
-		)
+		const steps = groupSteps(v.groups)
+		expect(steps.length).toBeGreaterThan(1)
+		for (const s of steps) {
+			expect(s.key).toMatch(/^[0-9a-f]{16}$/)
+			expect(s.heading).not.toMatch(/\s\d+$/)
+		}
 		expect(allOptions(v).length).toBeGreaterThan(0)
 	})
 
-	it("splits tuning parameters into the step's advanced group", async () => {
-		// Weights and budgets are present but set aside, so a step leads with
-		// its prompt and references. Number-controlled params land in
-		// `advanced`; the prompts-ref never does. Admin view — params are the
+	it("fronts the prompt and folds the tuning parameters into Advanced", async () => {
+		// Weights and budgets are present but set aside, so a group leads with
+		// its prompt and references. Admin view — params are the
 		// administrator's now.
 		const v = await view({ userId: adminId, isAdmin: true })
-		const advanced = v.steps.flatMap((s) => s.advanced)
+		const advanced = v.groups.flatMap((g) => g.advanced.flatMap((s) => s.options))
 		expect(advanced.length).toBeGreaterThan(0)
 		for (const o of advanced)
 			expect(o.control === "prompts-ref").toBe(false)
-		const primary = v.steps.flatMap((s) => s.options)
-		expect(primary.some((o) => o.control === "prompts-ref")).toBe(true)
+		const front = v.groups.flatMap((g) => g.front)
+		expect(front.some((o) => o.control === "prompts-ref")).toBe(true)
 	})
 
 	it("carries the selected prompt row on a prompts-ref option", async () => {
@@ -320,13 +332,59 @@ describe("the option payload", () => {
 		)
 	})
 
-	it("offers a non-admin prompts and nothing else", async () => {
+	it("offers a non-admin prompts and nothing else — not even the model by name", async () => {
 		// Not disabled — absent. The 0.6 line: to a non-admin the pipeline is
 		// how the application works; wording is the one thing that is theirs.
-		const asUser = await view()
-		expect(allOptions(asUser).length).toBeGreaterThan(0)
-		for (const o of allOptions(asUser))
-			expect(o.control).toBe("prompts-ref")
+		// A row is shown to a role that can normally edit it (owner ruling
+		// 2026-09-30), and a non-admin never edits a connection anywhere.
+		for (const over of [{}, { sessionId }]) {
+			const asUser = await view(over)
+			expect(allOptions(asUser).length).toBeGreaterThan(0)
+			for (const o of allOptions(asUser))
+				expect(o.control, JSON.stringify(over)).toBe("prompts-ref")
+		}
+	})
+
+	it("draws a non-admin no group, on any pipeline, that holds only an administrator's rows", async () => {
+		// "Only show cards if there's settings the user can edit": a group —
+		// and so a session card, which is drawn when it has a group — is sent
+		// only when it holds a row this role normally edits.
+		for (const { slug } of await listNamespaces(db)) {
+			const v = (await namespaceView(db, SECRET, slug, viewer({ sessionId }))) as
+				| NamespaceView
+				| null
+			if (!v) continue
+			for (const g of v.groups) {
+				// In their own, unlocked session every row a non-admin is sent is
+				// one they edit — a prompt (an envoy's texts are prompts too).
+				const rows = groupOptions([g])
+				const at = `${slug} / ${g.heading ?? g.key}`
+				expect(rows.length, at).toBeGreaterThan(0)
+				expect(
+					rows.filter((o) => !o.writable).map((o) => [o.control, o.label]),
+					at
+				).toEqual([])
+				expect(
+					rows.filter((o) => o.control === "connection-ref" || o.control === "sampling-ref"),
+					at
+				).toEqual([])
+			}
+		}
+	})
+
+	it("gives a non-admin a prompt-bearing card in their own session, writable", async () => {
+		const inSession = await view({ sessionId })
+		expect(inSession.groups.length).toBeGreaterThan(0)
+		const prompts = allOptions(inSession).filter((o) => o.control === "prompts-ref")
+		expect(prompts.length).toBeGreaterThan(0)
+		expect(prompts.every((o) => o.writable)).toBe(true)
+	})
+
+	it("still shows an administrator in a session the model, read-only — theirs to change in Pipelines", async () => {
+		const asAdmin = await view({ userId: adminId, isAdmin: true, sessionId })
+		const model = allOptions(asAdmin).find((o) => o.control === "connection-ref")
+		expect(model).toBeTruthy()
+		expect(model!.writable).toBe(false)
 	})
 
 	it("gives an admin live controls — global edits are config edits now", async () => {
@@ -416,7 +474,7 @@ describe("resolution and provenance", () => {
 				)
 			)
 		const copy = await duplicateConfig(db, shipped.id, "Walk copy")
-		await selectConfig(db, spec.id, "instance", 0, copy.id, adminId)
+		await selectConfig(db, spec.id, "pub", 0, copy.id, adminId)
 
 		// Clearing deletes the copy's row, so the author default resolves —
 		// the bottom of the chain, seen before the layers stack back up.
@@ -476,7 +534,7 @@ describe("resolution and provenance", () => {
 			viewer({ sessionId }),
 			target.id
 		)
-		await selectConfig(db, spec.id, "instance", 0, null, adminId)
+		await selectConfig(db, spec.id, "pub", 0, null, adminId)
 	})
 
 	it("a global edit lands in the selected configuration — and a shipped one refuses", async () => {
@@ -515,7 +573,7 @@ describe("resolution and provenance", () => {
 		await selectConfig(
 			db,
 			spec.id,
-			"instance",
+			"pub",
 			0,
 			landing.id,
 			adminId
@@ -552,7 +610,7 @@ describe("resolution and provenance", () => {
 		expect(back.value).not.toBe(777)
 		expect(back.source).not.toBe("config")
 
-		await selectConfig(db, spec.id, "instance", 0, null, adminId)
+		await selectConfig(db, spec.id, "pub", 0, null, adminId)
 	})
 
 	it("keeps one session's overrides out of another's view", async () => {
@@ -698,19 +756,19 @@ describe("named configs", () => {
 			RESPOND_SPEC_ID,
 			viewer({ userId: adminId, isAdmin: true }),
 			copy.id,
-			"instance"
+			"pub"
 		)
 		const [row] = await db
 			.select()
 			.from(schema.pipelineConfigSelections)
-			.where(eq(schema.pipelineConfigSelections.scopeKind, "instance"))
+			.where(eq(schema.pipelineConfigSelections.scopeKind, "pub"))
 		expect(row.configId).toBe(copy.id)
 
 		const v = await view()
 		expect(v.selectedConfig).toEqual({
 			id: copy.id,
 			name: "My copy",
-			source: "instance"
+			source: "pub"
 		})
 		expect(v.configs.map((c) => c.id)).toContain(copy.id)
 	})
@@ -737,7 +795,7 @@ describe("named configs", () => {
 				RESPOND_SPEC_ID,
 				viewer({ userId: adminId, isAdmin: true }),
 				other.id,
-				"instance"
+				"pub"
 			)
 		).rejects.toThrow(/different pipeline/)
 	})
@@ -845,12 +903,12 @@ describe("the curated set", () => {
 			RESPOND_SPEC_ID,
 			viewer({ userId: adminId, isAdmin: true }),
 			withdrawn,
-			"instance"
+			"pub"
 		)
 		const [row] = await db
 			.select()
 			.from(schema.pipelineConfigSelections)
-			.where(eq(schema.pipelineConfigSelections.scopeKind, "instance"))
+			.where(eq(schema.pipelineConfigSelections.scopeKind, "pub"))
 		expect(row.configId).toBe(withdrawn)
 	})
 
@@ -889,7 +947,7 @@ describe("the curated set", () => {
  * neither the viewer's role nor the scope rule. Without it the Pipelines panel
  * rendered a live dropdown for a non-admin standing outside a session, whose
  * every use ended in "only an administrator chooses the configuration for
- * everyone on this instance" — a control that would have worked for somebody
+ * everyone on this pub" — a control that would have worked for somebody
  * else, which is worse than no control at all.
  */
 describe("whether the selection is this viewer's to make", () => {
@@ -966,8 +1024,7 @@ describe("configurations hold their own values", () => {
 		// Any scalar option in the panel. This was the ranker's "Guaranteed
 		// conversation", which is a per-source stack now — what these tests
 		// need is a single number with an address, not that setting.
-		return v.steps
-			.flatMap((s) => [...s.options, ...s.advanced])
+		return groupOptions(v.groups)
 			.find((o) => o.label === "Limit")!
 	}
 
@@ -975,7 +1032,7 @@ describe("configurations hold their own values", () => {
 		const { selectConfig } = await import(
 			"$lib/server/pipelines/config/named"
 		)
-		await selectConfig(db, specId, "instance" as any, 0, configId)
+		await selectConfig(db, specId, "pub" as any, 0, configId)
 	}
 
 	beforeAll(async () => {
@@ -1132,8 +1189,7 @@ describe("each source carries its own intent", () => {
 			userId: 1,
 			isAdmin: true
 		})) as NamespaceView
-		return v.steps
-			.flatMap((s) => [...s.options, ...s.advanced])
+		return groupOptions(v.groups)
 			.filter((o) => /^Share — /.test(o.label))
 	}
 
@@ -1191,8 +1247,7 @@ describe("each source carries its own intent", () => {
 			userId: 1,
 			isAdmin: true
 		})) as NamespaceView
-		const sampling = v.steps
-			.flatMap((s) => [...s.options, ...s.advanced])
+		const sampling = groupOptions(v.groups)
 			.find((o) => o.control === "sampling-ref")
 		expect(sampling, "no sampling slot to read a window from").toBeTruthy()
 
@@ -1239,8 +1294,7 @@ describe("each source carries its own intent", () => {
 			userId: 1,
 			isAdmin: true
 		})) as NamespaceView
-		const matrix = v.steps
-			.flatMap((s) => [...s.options, ...s.advanced])
+		const matrix = groupOptions(v.groups)
 			.filter((o) => o.control === "per-member")
 		expect(matrix.length).toBeGreaterThan(0)
 		for (const row of matrix) {
@@ -1297,8 +1351,7 @@ describe("every reference control has something to reference", () => {
 			// What is left is what core seeds through `bootstrapPipelines`
 			// alone — the context templates and variable layouts — which
 			// is exactly the class the dead `template` slots were in.
-			for (const step of v.steps)
-				for (const o of [...step.options, ...step.advanced])
+			for (const o of groupOptions(v.groups))
 					if (
 						/-ref$/.test(o.control) &&
 						![
@@ -1309,7 +1362,7 @@ describe("every reference control has something to reference", () => {
 						!(o.choices ?? []).length
 					)
 						empty.push(
-							`${ns.slug} › ${step.label} › ${o.label} [${o.control}]`
+							`${ns.slug} › ${o.step.heading} › ${o.label} [${o.control}]`
 						)
 		}
 		expect(empty).toEqual([])
@@ -1485,106 +1538,31 @@ describe("a shared slot renders once, on its owner", () => {
 })
 
 /**
- * A facet the client has never heard of still gets a heading.
+ * Every setting lands somewhere.
  *
- * The panel used to hold the facet list itself, and match options *into* it. So
- * an option whose facet was not in that list matched no group and rendered
- * nowhere: a plugin's settings could exist in the database, be writable through
- * the socket, and be invisible on the only screen that configures them. Nothing
- * failed — which is the whole problem with a filter posing as a fallback.
+ * The panel once matched options into a fixed list of kinds, so an option of a
+ * kind it had not heard of — a plugin's — rendered nowhere. The groups are
+ * shaped from every option drawn, so each one lands in exactly one group.
  */
-describe("the facet vocabulary travels with the view", () => {
-	const view = async () =>
-		(await namespaceView(db, SECRET, RESPOND_SPEC_ID, {
+describe("every option drawn has a group", () => {
+	it("places each option once, whatever its kind", async () => {
+		const v = (await namespaceView(db, SECRET, RESPOND_SPEC_ID, {
 			userId: 1,
 			isAdmin: true
 		})) as NamespaceView
-
-	it("names every facet the pipeline actually uses, and no others", async () => {
-		const v = await view()
-		const used = new Set(
-			v.steps
-				.flatMap((s) => [...s.options, ...s.advanced])
-				.map((o) => o.facet)
+		const [spec] = await db
+			.select()
+			.from(schema.pipelineSpecs)
+			.where(eq(schema.pipelineSpecs.slug, RESPOND_SPEC_ID))
+		const { declarations } = await import(
+			"$lib/server/pipelines/config/panel/declarations"
 		)
-		expect(new Set(v.facets.map((f) => f.id))).toEqual(used)
-	})
-
-	it("resolves each heading, in order, from the declaration", async () => {
-		const v = await view()
-		const byId = new Map(v.facets.map((f) => [f.id, f]))
-		expect(byId.get("prompts")?.label).toBe("Prompt")
-		// One heading, two facets — the panel no longer pairs them itself.
-		expect(byId.get("connection")?.label).toBe("Model")
-		expect(byId.get("sampling")?.label).toBe("Model")
-		expect(byId.get("weights")?.label).toBe("Tuning")
-		const orders = v.facets.map((f) => f.order)
-		expect([...orders].sort((a, b) => a - b)).toEqual(orders)
-	})
-
-	it("says which lead the panel rather than the client deciding", async () => {
-		const v = await view()
-		const simple = v.facets
-			.filter((f) => f.simple)
-			.map((f) => f.id)
-			.sort()
-		expect(simple).toEqual(["connection", "prompts", "review", "sampling"])
-	})
-
-	it("gives an undeclared facet a humanised heading rather than dropping it", async () => {
-		// The branch that matters, and the one that used to lose settings. It
-		// cannot be reached through `namespaceView` without a plugin installed,
-		// so the resolution is tested where it lives.
-		const { resolveFacet } = await import(
-			"$lib/server/pipelines/config/panel/read"
+		const decls = await declarations(db, spec!.activeVersionId!)
+		const ids = groupOptions(v.groups).map((o) => o.id)
+		expect(new Set(ids).size).toBe(ids.length)
+		expect(new Set(ids)).toEqual(
+			new Set(decls.map((d) => optionId(SECRET, d.nodeKey, d.slot, d.path)))
 		)
-		const { getFacet } = await import("@serene-pub/sdk")
-		expect(
-			getFacet("retrieval_tuning"),
-			"picked a name core declares"
-		).toBeUndefined()
-
-		expect(resolveFacet("retrieval_tuning")).toEqual({
-			id: "retrieval_tuning",
-			label: "Retrieval tuning",
-			// After everything core declares, so a plugin cannot push its own
-			// settings above the prompt.
-			order: 900,
-			// And behind the tuning door: leading the panel is a claim only a
-			// declaration gets to make.
-			simple: false
-		})
-		expect(resolveFacet("someOtherThing").label).toBe("Some Other Thing")
-	})
-
-	it("keeps a facet nothing declares, rather than filtering it out", async () => {
-		// The property a shipped pipeline cannot exercise, because core
-		// declares all of its own facets — so a filter here would stay
-		// invisible until somebody installed a plugin, which is exactly how the
-		// client-side version of this bug survived.
-		const { facetsFor } = await import(
-			"$lib/server/pipelines/config/panel/read"
-		)
-		const out = facetsFor(["weights", "retrieval_tuning", "prompts"])
-		expect(out.map((f) => f.id)).toEqual([
-			"prompts",
-			"weights",
-			// Last, because nothing declared an order for it.
-			"retrieval_tuning"
-		])
-		expect(out.at(-1)!.label).toBe("Retrieval tuning")
-	})
-
-	it("resolves a declared facet the same way", async () => {
-		const { resolveFacet } = await import(
-			"$lib/server/pipelines/config/panel/read"
-		)
-		expect(resolveFacet("prompts")).toEqual({
-			id: "prompts",
-			label: "Prompt",
-			order: 0,
-			simple: true
-		})
 	})
 })
 
@@ -1661,7 +1639,8 @@ describe("the substrate's settings render from the row, like any slot", () => {
 				quick: true,
 				control: "boolean",
 				authorDefault: true,
-				label: "Use this source"
+				// A source reads as one; a model call (the embed steps) as a step.
+				label: row.kind === "query" ? "Use this source" : "Run this step"
 			})
 		}
 	})
@@ -1855,17 +1834,11 @@ describe("options arrive in the order they were declared", () => {
 			rankOptionIds.size,
 			"no declarations on the rank node"
 		).toBeGreaterThan(0)
-		const rank = v.steps.find((s) =>
-			[...s.options, ...s.advanced].some((o) => rankOptionIds.has(o.id))
+		const rank = groupSteps(v.groups).find((s) =>
+			s.options.some((o) => rankOptionIds.has(o.id))
 		)
 		expect(rank, "no ranking step").toBeTruthy()
-		expect(
-			[...rank!.options, ...rank!.advanced].map((o) => o.label)
-		).toEqual([
-			// The chain first: `scripts` is a headline option, not a tuning
-			// parameter, so it lands in `options` while the shares sit in
-			// `advanced` — declaration order within each group still holds.
-			"Scripts",
+		expect(rank!.options.map((o) => o.label)).toEqual([
 			// ⚠ "Context split", "Most entries per source" and "Always keep at
 			// least" led this list until 2026-09-16 and are gone from the
 			// ranker (R-7 P5): each source declares its own share, ceiling and
@@ -1905,9 +1878,14 @@ describe("options arrive in the order they were declared", () => {
 			"Author priority",
 			// How the sources' shares divide the window (R-7 P5) — the one
 			// thing about shares that is the ranker's — then the allocation
-			// switch (migration 0196), declared last and rendered last.
+			// switch (`scoreLedAllocation`, from the pre-squash migration 0196 —
+			// archived, superseded by the 0094 baseline), declared last and
+			// rendered last.
 			"How shares divide the window",
-			"Let the best entries lead"
+			"Let the best entries lead",
+			// The hook's chain, which `declarations()` appends after the
+			// node's own slots.
+			"Scripts"
 		])
 	})
 
@@ -1920,9 +1898,9 @@ describe("options arrive in the order they were declared", () => {
 			userId: 1,
 			isAdmin: true
 		})) as NamespaceView
-		const asm = v.steps.find((s) => /assemble/i.test(s.label))
+		const asm = groupSteps(v.groups).find((s) => /assemble/i.test(s.heading))
 		expect(asm, "no assembly step").toBeTruthy()
-		const labels = asm!.advanced.map((o) => o.label)
+		const labels = asm!.options.map((o) => o.label)
 		expect(labels[0], "the template slot is declared first").toBe(
 			"Template"
 		)
@@ -1937,8 +1915,8 @@ describe("options arrive in the order they were declared", () => {
 			userId: 1,
 			isAdmin: true
 		})) as NamespaceView
-		// The order the machine runs in, which is what the step rail numbers.
-		const labels = v.steps.map((s) => s.label)
+		// The order the machine runs in: each Advanced lists its steps so.
+		const labels = v.groups.flatMap((g) => g.advanced.map((s) => s.heading))
 		expect(labels.indexOf("Context budget")).toBeLessThan(
 			labels.indexOf("Rank hybrid")
 		)
@@ -1949,18 +1927,16 @@ describe("options arrive in the order they were declared", () => {
 })
 
 /**
- * The panel step list's IA (plans/29 R-18 (2); U5g review follow-up): a
- * gather clause's settings step sits at the spine position of its first
- * member node rather than at the tail, and an envoy's step is not a step of
- * the run at all — it moves to `alsoConfigured`, a trailing, unnumbered
- * group, rather than being counted among `steps`.
+ * A clause's settings sit at the spine position of its first member, and an
+ * envoy's instructions are the prompt of the call that reads them — never a
+ * detached step of their own (owner rulings 2026-09-30).
  *
  * `guide-respond` is the one shipped spec with both in one document: a
  * `gather` clause (`history`/`cast`/`docs`, run in parallel) and a reference
  * to the guide genre's one envoy, `mascot`, on `context`'s `prompts` slot.
  */
-describe("a clause's step sits at its spine position; an envoy's step is not a step", () => {
-	it("guide-respond: the gather clause precedes its first member; the envoy is offered in `alsoConfigured`, not `steps`", async () => {
+describe("a clause's step sits at its spine position; an envoy's prompt is a front row", () => {
+	it("guide-respond: the gather clause precedes its first member; the envoy's texts are on the front", async () => {
 		const { GUIDE_RESPOND_SPEC_ID } = await import(
 			"@serene-pub/core-catalog"
 		)
@@ -1969,7 +1945,7 @@ describe("a clause's step sits at its spine position; an envoy's step is not a s
 			isAdmin: true
 		})) as NamespaceView
 
-		const labels = v.steps.map((s) => s.label)
+		const labels = v.groups.flatMap((g) => g.advanced.map((s) => s.heading))
 		const gatherAt = labels.findIndex((l) => /gather/i.test(l))
 		const historyAt = labels.findIndex((l) => /session history/i.test(l))
 		expect(gatherAt, labels.join(", ")).toBeGreaterThanOrEqual(0)
@@ -1978,20 +1954,16 @@ describe("a clause's step sits at its spine position; an envoy's step is not a s
 		// appended after every node in the document (`save` included).
 		expect(gatherAt).toBeLessThan(historyAt)
 		expect(gatherAt).toBeLessThan(labels.length - 1)
-		expect(v.steps[gatherAt]!.kind).toBe("clause")
 
-		// The envoy is not a step of the run: nothing executes it, so it is
-		// absent from `steps` and never counted in "step N of M".
-		expect(v.steps.some((s) => s.kind === "envoy")).toBe(false)
-		expect(v.steps.some((s) => /envoy/i.test(s.label))).toBe(false)
-
-		// It is still offered — in the trailing, unnumbered group.
-		expect(v.alsoConfigured.length).toBeGreaterThan(0)
-		expect(v.alsoConfigured.every((s) => s.kind === "envoy")).toBe(true)
-		expect(v.alsoConfigured.some((s) => /envoy/i.test(s.label))).toBe(
-			true
-		)
-		// Unnumbered: none of its keys is one of `steps`' `s<i>` ordinals.
-		for (const s of v.alsoConfigured) expect(s.key).not.toMatch(/^s\d+$/)
+		// The envoy is no step and no group of its own…
+		const headings = [
+			...v.groups.map((g) => g.heading ?? ""),
+			...labels
+		]
+		expect(headings.some((h) => /envoy/i.test(h))).toBe(false)
+		// …its texts are the prompt on a group's front.
+		expect(
+			v.groups.some((g) => g.front.some((o) => o.control === "text"))
+		).toBe(true)
 	})
 })

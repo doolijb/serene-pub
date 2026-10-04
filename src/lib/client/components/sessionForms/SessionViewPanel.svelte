@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { avatarSrc } from "$lib/client/utils/media"
-	import { Avatar } from "@skeletonlabs/skeleton-svelte"
+	import Avatar from "$lib/client/components/Avatar.svelte"
 	import * as Icons from "@lucide/svelte"
 	import PanelNavHeader from "$lib/client/components/panels/PanelNavHeader.svelte"
 	import DetailHero from "$lib/client/components/panels/DetailHero.svelte"
@@ -160,11 +160,6 @@
 			backLabel="Back to sessions"
 			actionsLabel="Session"
 			menuItems={[
-				canEdit && {
-					label: "Edit session",
-					icon: Icons.Pencil,
-					onSelect: onEdit
-				},
 				lorebookId != null &&
 					onViewLorebook && {
 						label: "View lorebook",
@@ -188,17 +183,6 @@
 					}
 			]}
 		>
-			{#snippet primaryAction()}
-				<button
-					class="btn btn-sm preset-filled-primary-500 shrink-0 p-2"
-					onclick={onOpen}
-					title="Open session"
-					aria-label="Open session"
-					type="button"
-				>
-					<Icons.ArrowRight size={16} aria-hidden="true" />
-				</button>
-			{/snippet}
 		</PanelNavHeader>
 	</div>
 
@@ -218,29 +202,23 @@
 				subtitle={heroMeta.length ? heroMeta.join(" · ") : undefined}
 				badge={isGroup ? groupBadge : undefined}
 				chips={tags.length > 0 ? tagChips : undefined}
+				actions={heroActions}
 			/>
 
 			<!-- One card per section. A section whose fact this session has
 			     none of is not rendered at all: an empty card states a blank
 			     where the session simply has none, and the card boundary is
 			     the separator, so there is no rule between them. -->
-			<div class="flex flex-col gap-3 pb-3">
+			<!-- Two columns of cards once the detail has the room (notes 14): a
+			     wide detail was one column of short cards on an ocean of empty. -->
+			<div class="grid items-start gap-3 pb-3 @2xl/detail:grid-cols-2">
 				{#if characters.length > 0 || personas.length > 0}
 					<section class="panel-card">
 						<p class="text-surface-600-400 mb-1.5 text-xs">Cast</p>
 						<div class="flex flex-col gap-2">
 							{#each characters as c}
 								<div class="flex items-center gap-2">
-									<Avatar class="h-8 min-h-8 w-8 min-w-8">
-										<Avatar.Image
-											src={avatarSrc(c) || ""}
-											alt={c.nickname || c.name}
-											class="object-cover"
-										/>
-										<Avatar.Fallback>
-											<Icons.UsersRound size={16} />
-										</Avatar.Fallback>
-									</Avatar>
+									<Avatar char={c} size="sm" decorative />
 									<span class="truncate text-sm font-medium">
 										{c.nickname || c.name}
 									</span>
@@ -254,16 +232,12 @@
 							<div class="flex flex-col gap-2">
 								{#each personas as p}
 									<div class="flex items-center gap-2">
-										<Avatar class="h-8 min-h-8 w-8 min-w-8">
-											<Avatar.Image
-												src={avatarSrc(p) || ""}
-												alt={p.name}
-												class="object-cover"
-											/>
-											<Avatar.Fallback>
-												<Icons.UserCog size={16} />
-											</Avatar.Fallback>
-										</Avatar>
+										<Avatar
+											char={p}
+											size="sm"
+											kind="persona"
+											decorative
+										/>
 										<span
 											class="truncate text-sm font-medium"
 										>
@@ -375,6 +349,33 @@
 				aria-hidden="true"
 			/>
 		</span>
+	{/if}
+{/snippet}
+
+<!-- The detail's two things to do, in the open (notes 32, 2026-10-02): going
+     into the session is the one primary, and Edit sits beside it as a labelled
+     secondary rather than a ⋯ away. The rest — the lorebook, the star, Delete —
+     stays in the header's ⋯. -->
+{#snippet heroActions()}
+	<button
+		type="button"
+		class="btn btn-sm preset-filled-primary-500"
+		onclick={onOpen}
+		data-session-open
+	>
+		<Icons.ArrowRight size={16} aria-hidden="true" />
+		Open session
+	</button>
+	{#if canEdit}
+		<button
+			type="button"
+			class="btn btn-sm preset-tonal-surface"
+			onclick={onEdit}
+			data-session-edit
+		>
+			<Icons.Pencil size={16} aria-hidden="true" />
+			Edit
+		</button>
 	{/if}
 {/snippet}
 

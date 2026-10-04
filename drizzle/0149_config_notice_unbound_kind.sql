@@ -1,2 +1,0 @@
-ALTER TABLE "pipeline_config_notices" DROP CONSTRAINT "pipeline_config_notices_kind_check";--> statement-breakpoint
-ALTER TABLE "pipeline_config_notices" ADD CONSTRAINT "pipeline_config_notices_kind_check" CHECK ("pipeline_config_notices"."kind" IN ('culled', 'backfilled', 'unbound'));

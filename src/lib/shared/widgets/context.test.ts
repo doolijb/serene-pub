@@ -214,7 +214,7 @@ describe("actions.v1 and invoke", () => {
 		quick: false,
 		audience: { see: ["participant"], act: ["owner"] },
 		venue: "widget",
-		origin: "attachment",
+		origin: "foreign",
 		floor: false,
 		canAct: true,
 		itemGated: false,

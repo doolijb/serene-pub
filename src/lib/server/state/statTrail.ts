@@ -25,7 +25,7 @@
  *   timeline row this session itself recorded is dropped in `both`: write-back
  *   copies a value the session already holds, and it is already a point.
  *
- * Every read is on the line being read (`onLine`: shared, or that branch).
+ * Every read is on the line being read (`isOnLine`: shared, or a line of its chain).
  * The timeline stands at a `LineReading` (`state/reading.ts`, rulings 15 and
  * 16): on a branch, main's dated rows only up to the fork date; at a moment,
  * nothing dated after it. The session's messages are its own and are not cut.
@@ -35,8 +35,8 @@ import { and, eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import type { SlotValue } from "@serene-pub/sdk"
 import { compareDates, type StoryDate } from "$lib/shared/lorebooks/storyDate"
-import { onLine } from "$lib/shared/lorebooks/amendments"
-import { loadEntryDates, readingOf, rowsOnReading, type LineReading } from "$lib/server/state/reading"
+import { isOnLine } from "$lib/shared/lorebooks/lineReading"
+import { loadEntryDates, mainCutOf, readingOf, rowsOnReading, type LineReading } from "$lib/server/state/reading"
 import type { StateOwner } from "$lib/server/state/owners"
 import { nameLoreRefs, vocabularyFor } from "$lib/server/state/resolve"
 import {
@@ -103,7 +103,10 @@ export interface StatTrail {
 	branchId: number | null
 	/** 🚧 The moment the timeline was read at; null is the head. */
 	moment: StoryDate | null
-	/** 🚧 Where main was cut for this branch; null when nothing was. */
+	/**
+	 * 🚧 Where main was cut for this branch — the earliest fork date along
+	 * its parent chain (`mainCutOf`); null when nothing was.
+	 */
 	forkedAt: StoryDate | null
 	owner: LorebookOwnerFilter
 	/** The slot's full id, or the name asked for when nothing tracks it. */
@@ -154,7 +157,9 @@ export async function statTrailFor(db: Db, query: StatTrailQuery): Promise<StatT
 		sessionId,
 		branchId,
 		moment: reading.moment,
-		forkedAt: reading.forkedAt,
+		// The effective cut — the earliest fork along the chain — not the
+		// branch's own fork date, which a fork of a fork can postdate.
+		forkedAt: mainCutOf(reading),
 		owner: query.owner,
 		slotId: decl?.id ?? query.slotId,
 		mode,
@@ -226,7 +231,7 @@ export async function statTrailFor(db: Db, query: StatTrailQuery): Promise<StatT
 				)
 			)
 		messages = rows
-			.filter((r) => onLine(r, branchId))
+			.filter((r) => isOnLine(r, reading.line))
 			.filter(
 				(r) =>
 					typeof query.sinceMessageId !== "number" ||
@@ -255,7 +260,7 @@ export async function statTrailFor(db: Db, query: StatTrailQuery): Promise<StatT
 	if (typeof query.last === "number" && query.last > 0) points = points.slice(-Math.trunc(query.last))
 	// A lore reference reads by its title, as `stateFor` names them — read-time only.
 	const bags = points.map((p) => ({ value: p.value }) as Record<string, unknown>)
-	await nameLoreRefs(db, bags)
+	await nameLoreRefs(db, bags, reading, "book")
 	points.forEach((p, i) => (p.value = bags[i].value as SlotValue))
 	answer.points = points
 	return answer

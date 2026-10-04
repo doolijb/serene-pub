@@ -1,7 +1,8 @@
 import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
-import { eq, inArray, asc, and } from "drizzle-orm"
+import { eq, inArray, asc, and, sql } from "drizzle-orm"
 import type { Handler } from "$lib/shared/events"
+import { askerOf, refusable } from "./refusable"
 import { resolvePersonaName } from "$lib/shared/utils/resolveCharacterName"
 import {
 	HISTORY_TYPE_ID,
@@ -22,17 +23,37 @@ import {
 	reconcileSuggestedNames,
 	resolveCharacterRefs
 } from "$lib/server/utils/summarizer/availableSceneCast"
-import { getUserConfigurations } from "$lib/server/utils/getUserConfigurations"
 import {
 	resolveCapabilityTarget,
 	TEXT_CAPABILITY
 } from "$lib/server/connections/capabilityTarget"
 import { activityError, activityStore } from "$lib/server/utils/activityStore"
-import { sceneWriteRefusal } from "$lib/server/messages/writes"
+import { loreWritesOffRefusal, sceneWriteRefusal } from "$lib/server/messages/writes"
+import { bookLoreWriteMode } from "$lib/server/state/loreWriteMode"
+import { LORE_WRITES_OFF } from "$lib/shared/lorebooks/loreWriteMode"
 import { withSessionGenerationLock } from "$lib/server/utils/sessionGenerationLock"
 import { checkSessionAccess } from "$lib/server/utils/sessionAccess"
 import { resolveOrCreateBinding } from "$lib/server/utils/characterBindingSync"
-import { formatDate, readStoryCalendar } from "$lib/shared/lorebooks/storyDate"
+import {
+	compareDates,
+	formatDate,
+	readStoryCalendar
+} from "$lib/shared/lorebooks/storyDate"
+import {
+	rowReadsOnLine,
+	rowsReadingOnLine,
+	type Line
+} from "$lib/shared/lorebooks/lineReading"
+import { inPlayOrder } from "$lib/shared/lorebooks/sceneOrder"
+import {
+	BranchRefusal,
+	historyEntryDate,
+	lineOfBook,
+	storyDateFrom
+} from "$lib/server/state/reading"
+import { onLineSql } from "$lib/server/state/lineSql"
+import { lockBookCalendar } from "$lib/server/state/storyTime"
+import { assertOwnedBook, findOwnedBook } from "$lib/server/utils/ownedBook"
 
 /**
  * Every downstream consumer (graphBuilder.ts, lorebookExportMapper.ts,
@@ -87,6 +108,7 @@ async function filterCharacterIdsToLorebook(
  * edited, whose own capture is not an overlap with itself.
  */
 async function capturableMessageIds(
+	tx: Db,
 	sessionId: number | null,
 	requested: number[] | null,
 	exceptSceneId?: number
@@ -97,7 +119,17 @@ async function capturableMessageIds(
 	if (sessionId == null)
 		throw new Error("A scene can only capture messages from a session.")
 
-	const found = await db
+	// ⚠ Called on the write's transaction, and the overlap check holds the
+	// session's capture lock until that write commits: read apart from the
+	// write, two saves of one selection each find the other's scene not yet
+	// there and both land — the same message captured twice. Keyed on the
+	// SESSION, not the book: the rule is "no message in two of this
+	// session's scenes", whatever book each scene files under.
+	await tx.execute(
+		sql`select pg_advisory_xact_lock(hashtext('sceneCapture'), ${sessionId})`
+	)
+
+	const found = await tx
 		.select({ id: schema.sessionMessages.id })
 		.from(schema.sessionMessages)
 		.where(
@@ -113,7 +145,7 @@ async function capturableMessageIds(
 
 	const captured = new Set(
 		(
-			await db.query.scenes.findMany({
+			await tx.query.scenes.findMany({
 				where: eq(schema.scenes.sessionId, sessionId),
 				columns: { id: true, selectedMessageIds: true }
 			})
@@ -130,6 +162,14 @@ async function capturableMessageIds(
 		)
 	return ids
 }
+
+/**
+ * What a scene list reply carries of a scene row: everything but the latent
+ * vector columns. A list is projected, never a spread of the stored row — the
+ * session's list reaches every guest, and a vector is the server's index, not
+ * something any view reads.
+ */
+const SCENE_REPLY_COLUMNS = { embedding: false, embeddingModel: false } as const
 
 /**
  * The scene list for one session.
@@ -166,6 +206,8 @@ async function buildSceneList(
 	const scenes = await db.query.scenes.findMany({
 		where: eq(schema.scenes.sessionId, sessionId),
 		orderBy: (s, { asc }) => asc(s.id),
+		// Projected (`SCENE_REPLY_COLUMNS`): this list reaches every guest.
+		columns: SCENE_REPLY_COLUMNS,
 		with: {
 			// The date and the completion flag are declared fields now,
 			// so the row carries `fields` and the projection below reads
@@ -199,21 +241,22 @@ async function buildSceneList(
 export const sceneListHandler: Handler<
 	Sockets.Scenes.List.Params,
 	Sockets.Scenes.List.Response
-> = {
-	event: "scenes:list",
-	handler: async (socket, params, emitToUser) => {
+> = refusable(
+	"scenes:list",
+	async (socket, params: Sockets.Scenes.List.Params, emitToUser) => {
 		const res = await buildSceneList(params.sessionId, socket.user!.id)
 		emitToUser("scenes:list", res)
 		return res
-	}
-}
+	},
+	"The session's scenes could not be listed."
+)
 
 export const sceneCreateHandler: Handler<
 	Sockets.Scenes.Create.Params,
 	Sockets.Scenes.Create.Response
-> = {
-	event: "scenes:create",
-	handler: async (socket, params, emitToUser) => {
+> = refusable(
+	"scenes:create",
+	async (socket, params: Sockets.Scenes.Create.Params, emitToUser) => {
 		const userId = socket.user!.id
 		/**
 		 * An ALLOWLIST of what the client may say, never a spread of it.
@@ -237,20 +280,14 @@ export const sceneCreateHandler: Handler<
 		} = params.scene as InsertScene & Partial<Sockets.Scenes.SceneCast>
 
 		// Verify lorebook ownership
-		const lorebook = await db.query.lorebooks.findFirst({
-			where: (l, { and, eq }) =>
-				and(eq(l.id, lorebookId), eq(l.userId, userId))
-		})
-
-		if (!lorebook) {
-			throw new Error("Lorebook not found or access denied.")
-		}
+		const lorebook = await assertOwnedBook(db, userId, lorebookId)
 
 		// A scene written from a session is on the session's line — the branch
 		// it reads this book on — and a scene written anywhere else is on main.
 		// Only when the session reads THIS book: a session reading another
 		// book (or none) has no line in this one.
 		let branchId: number | null = null
+		let onSessionLine = false
 
 		// If sessionId provided, verify session ownership
 		if (sessionId) {
@@ -270,35 +307,15 @@ export const sceneCreateHandler: Handler<
 			 */
 			const noScenes = await sceneWriteRefusal(db, sessionId)
 			if (noScenes) throw new Error(noScenes)
-			if (session.lorebookId === lorebookId)
+			// A scene saved from a session is a session writing the book: the
+			// book owner's lore write mode Off refuses it (plan A22).
+			const off = await loreWritesOffRefusal(db, sessionId)
+			if (off) throw new Error(off)
+			if (session.lorebookId === lorebookId) {
 				branchId = session.lorebookBranchId ?? null
+				onSessionLine = true
+			}
 		}
-
-		// Without this, a scene could be created with an attacker's own
-		// lorebookId/sessionId but a guessed historyEntryId from a victim's
-		// private lorebook — sceneCompileHandler queries scenes by
-		// historyEntryId alone, so the injected scene's content would feed
-		// directly into the victim's own LLM-driven compile call the next
-		// time they compile that history entry.
-		const [historyEntry] = await db
-			.select({ lorebookId: schema.lorebookEntries.lorebookId })
-			.from(schema.lorebookEntries)
-			.where(
-				and(
-					eq(schema.lorebookEntries.id, historyEntryId),
-					eq(schema.lorebookEntries.typeId, HISTORY_TYPE_ID)
-				)
-			)
-		if (!historyEntry || historyEntry.lorebookId !== lorebookId) {
-			throw new Error(
-				"History entry not found or does not belong to this lorebook."
-			)
-		}
-
-		const selectedMessageIds = await capturableMessageIds(
-			sessionId ?? null,
-			requestedMessageIds ?? null
-		)
 
 		const carriesCast =
 			rawParticipants !== undefined || rawMentioned !== undefined
@@ -311,34 +328,102 @@ export const sceneCreateHandler: Handler<
 			rawMentioned ?? []
 		)
 
-		const sceneRow: InsertScene = {
-			lorebookId,
-			sessionId: sessionId ?? null,
-			historyEntryId,
-			branchId,
-			...(name !== undefined ? { name } : {}),
-			...(summary !== undefined ? { summary } : {}),
-			...(selectedMessageIds !== null ? { selectedMessageIds } : {}),
-			// Mark the cast resolved ONLY when this insert actually carries
-			// cast — never unconditionally. scenes:create can carry a
-			// summary without cast (SummarizeLoreModal emits both together, but
-			// nothing requires it), and marking such a row resolved would let a
-			// summarized-but-never-resolved scene claim it needs no extraction —
-			// silently re-enacting the bug that column exists to end.
-			...(carriesCast ? { castResolvedAt: new Date() } : {})
-		}
+		// The line check and the insert in one transaction under the book's
+		// lock (`lockBookCalendar`), the lock a re-date takes: checked apart,
+		// an entry re-dated past the line's fork between the two would have
+		// this scene filed under a moment its line never had, and the re-date
+		// would not have seen the scene to refuse (`assertRedateKeepsLines`).
+		//
+		// The capture rules are checked on the same transaction, under the
+		// session's capture lock (`capturableMessageIds`), so two saves of one
+		// selection cannot both pass the overlap check before either lands.
+		const newScene = await db.transaction(async (tx) => {
+			await lockBookCalendar(tx, lorebookId)
+			const selectedMessageIds = await capturableMessageIds(
+				tx,
+				sessionId ?? null,
+				requestedMessageIds ?? null
+			)
+			// Without this, a scene could be created with an attacker's own
+			// lorebookId/sessionId but a guessed historyEntryId from a victim's
+			// private lorebook — sceneCompileHandler queries scenes by
+			// historyEntryId alone, so the injected scene's content would feed
+			// directly into the victim's own LLM-driven compile call the next
+			// time they compile that history entry.
+			const [historyEntry] = await tx
+				.select({
+					lorebookId: schema.lorebookEntries.lorebookId,
+					branchId: schema.lorebookEntries.branchId,
+					fields: schema.lorebookEntries.fields
+				})
+				.from(schema.lorebookEntries)
+				.where(
+					and(
+						eq(schema.lorebookEntries.id, historyEntryId),
+						eq(schema.lorebookEntries.typeId, HISTORY_TYPE_ID)
+					)
+				)
+			if (!historyEntry || historyEntry.lorebookId !== lorebookId) {
+				throw new Error(
+					"History entry not found or does not belong to this lorebook."
+				)
+			}
+			// Filed only under a history entry the scene's line reads (plan A8),
+			// by the rule `scenes:compile` reads it by: never a sibling line's
+			// entry, nor an ancestor's dated after the line forked. A scene under
+			// an entry its line never read goes with a line it is not on: a main
+			// scene with a deleted branch's entry, a fork's with the line it left
+			// (`keepHistoryForForks` keeps for a fork only the entries it reads).
+			let line: Line
+			try {
+				line = await lineOfBook(tx, lorebookId, branchId)
+			} catch (e) {
+				if (e instanceof BranchRefusal)
+					throw new Error("This session's line is not one of this lorebook's.", {
+						cause: e
+					})
+				throw e
+			}
+			if (
+				!rowReadsOnLine(historyEntry, line, historyEntryDate(historyEntry.fields))
+			)
+				throw new Error(
+					onSessionLine
+						? "That history entry is not on this session's line of the lorebook, so the scene cannot be filed under it."
+						: "That history entry is not on main, where this scene is saved, so the scene cannot be filed under it."
+				)
 
-		const [newScene] = await db
-			.insert(schema.scenes)
-			.values(sceneRow)
-			.returning()
+			const sceneRow: InsertScene = {
+				lorebookId,
+				sessionId: sessionId ?? null,
+				historyEntryId,
+				branchId,
+				...(name !== undefined ? { name } : {}),
+				...(summary !== undefined ? { summary } : {}),
+				...(selectedMessageIds !== null ? { selectedMessageIds } : {}),
+				// Mark the cast resolved ONLY when this insert actually carries
+				// cast — never unconditionally. scenes:create can carry a
+				// summary without cast (SummarizeLoreModal emits both together, but
+				// nothing requires it), and marking such a row resolved would let a
+				// summarized-but-never-resolved scene claim it needs no extraction —
+				// silently re-enacting the bug that column exists to end.
+				...(carriesCast ? { castResolvedAt: new Date() } : {})
+			}
 
-		if (carriesCast) {
-			await writeSceneCast(newScene.id, {
-				participantCharacters,
-				mentionedCharacters
-			})
-		}
+			const [inserted] = await tx
+				.insert(schema.scenes)
+				.values(sceneRow)
+				.returning()
+
+			if (carriesCast) {
+				await writeSceneCast(
+					inserted.id,
+					{ participantCharacters, mentionedCharacters },
+					tx
+				)
+			}
+			return inserted
+		})
 
 		// A capture is one of the three moments a session's numbers are written
 		// onto the world's timeline (R8): the scene names the history entry, so
@@ -346,16 +431,20 @@ export const sceneCreateHandler: Handler<
 		// filed at. Best-effort — a capture that succeeded must not be reported
 		// as failed because the timeline write did — and silent for a session
 		// with no world, which has no timeline by design.
+		let notRecorded: string[] = []
 		if (newScene.sessionId) {
 			try {
 				const { recordToTimeline } = await import(
 					"$lib/server/state/durable"
 				)
-				await recordToTimeline(db, newScene.sessionId, {
+				// What the book would not take is said to whoever saved the
+				// scene (A18); the scene stands either way.
+				const report = await recordToTimeline(db, newScene.sessionId, {
 					reason: "scene",
 					sceneId: newScene.id,
 					historyEntryId: newScene.historyEntryId
 				})
+				notRecorded = report.refused
 			} catch (e) {
 				console.warn(
 					"[scenes:create] state was not recorded to the timeline:",
@@ -383,24 +472,29 @@ export const sceneCreateHandler: Handler<
 			)
 		}
 
-		const res = {
+		const res: Sockets.Scenes.Create.Response = {
 			scene: {
 				...newScene,
 				participantCharacters,
 				mentionedCharacters
-			}
+			},
+			...(notRecorded.length ? { notRecorded } : {}),
+			...askerOf(params)
 		}
 		emitToUser("scenes:create", res)
 		return res
-	}
-}
+	},
+	"The scene could not be saved.",
+	undefined,
+	askerOf
+)
 
 export const sceneUpdateHandler: Handler<
 	Sockets.Scenes.Update.Params,
 	Sockets.Scenes.Update.Response
-> = {
-	event: "scenes:update",
-	handler: async (socket, params, emitToUser) => {
+> = refusable(
+	"scenes:update",
+	async (socket, params: Sockets.Scenes.Update.Params, emitToUser) => {
 		const userId = socket.user!.id
 
 		const existing = await db.query.scenes.findFirst({
@@ -409,13 +503,17 @@ export const sceneUpdateHandler: Handler<
 
 		if (!existing) throw new Error("Scene not found.")
 
-		const lorebook = await db.query.lorebooks.findFirst({
-			where: (l, { and, eq }) =>
-				and(eq(l.id, existing.lorebookId), eq(l.userId, userId))
-		})
+		const lorebook = await findOwnedBook(db, userId, existing.lorebookId)
 
 		if (!lorebook) {
 			throw new Error("Scene not found or access denied.")
+		}
+		// A session's scene saved is a session writing the book: lore writes
+		// Off refuses it, as it refuses the scene's creation (plan A22). A
+		// scene with no session is a person at a book, which it does not touch.
+		if (existing.sessionId != null) {
+			const off = await loreWritesOffRefusal(db, existing.sessionId)
+			if (off) throw new Error(off)
 		}
 
 		// Explicit allowlist, not a spread — ownership above is only checked
@@ -433,17 +531,6 @@ export const sceneUpdateHandler: Handler<
 			graphed
 		} = params.scene
 
-		// The same two capture rules `scenes:create` holds — this session's
-		// messages only, none already in another scene — minus this scene's
-		// own capture, which is not an overlap with itself.
-		if (selectedMessageIds !== undefined)
-			selectedMessageIds =
-				(await capturableMessageIds(
-					existing.sessionId ?? null,
-					selectedMessageIds ?? null,
-					existing.id
-				)) ?? undefined
-
 		// Cast is only rewritten when the payload actually carries it; a rename
 		// or summary edit leaves the existing scene_characters rows alone.
 		const carriesCast =
@@ -460,28 +547,44 @@ export const sceneUpdateHandler: Handler<
 			)
 		}
 
-		await db
-			.update(schema.scenes)
-			.set({
-				...(name !== undefined ? { name } : {}),
-				...(summary !== undefined ? { summary } : {}),
-				...(selectedMessageIds !== undefined
-					? { selectedMessageIds }
-					: {}),
-				// Only an update that actually carries cast marks it resolved.
-				// A rename or a summary edit must not — otherwise every scene
-				// touched for any reason would claim it needs no extraction.
-				...(carriesCast ? { castResolvedAt: new Date() } : {}),
-				...(graphed !== undefined ? { graphed } : {})
-			})
-			.where(eq(schema.scenes.id, params.scene.id))
+		await db.transaction(async (tx) => {
+			// The same two capture rules `scenes:create` holds — this session's
+			// messages only, none already in another scene — minus this scene's
+			// own capture, which is not an overlap with itself. Checked on the
+			// write's transaction under the session's capture lock, as there.
+			if (selectedMessageIds !== undefined)
+				selectedMessageIds =
+					(await capturableMessageIds(
+						tx,
+						existing.sessionId ?? null,
+						selectedMessageIds ?? null,
+						existing.id
+					)) ?? undefined
 
-		if (carriesCast) {
-			await writeSceneCast(params.scene.id, {
-				participantCharacters,
-				mentionedCharacters
-			})
-		}
+			await tx
+				.update(schema.scenes)
+				.set({
+					...(name !== undefined ? { name } : {}),
+					...(summary !== undefined ? { summary } : {}),
+					...(selectedMessageIds !== undefined
+						? { selectedMessageIds }
+						: {}),
+					// Only an update that actually carries cast marks it resolved.
+					// A rename or a summary edit must not — otherwise every scene
+					// touched for any reason would claim it needs no extraction.
+					...(carriesCast ? { castResolvedAt: new Date() } : {}),
+					...(graphed !== undefined ? { graphed } : {})
+				})
+				.where(eq(schema.scenes.id, params.scene.id))
+
+			if (carriesCast) {
+				await writeSceneCast(
+					params.scene.id,
+					{ participantCharacters, mentionedCharacters },
+					tx
+				)
+			}
+		})
 
 		const [updated] = await db
 			.select()
@@ -529,15 +632,16 @@ export const sceneUpdateHandler: Handler<
 
 		emitToUser("scenes:update", res)
 		return res
-	}
-}
+	},
+	"The scene could not be saved."
+)
 
 export const sceneDeleteHandler: Handler<
 	Sockets.Scenes.Delete.Params,
 	Sockets.Scenes.Delete.Response
-> = {
-	event: "scenes:delete",
-	handler: async (socket, params, emitToUser) => {
+> = refusable(
+	"scenes:delete",
+	async (socket, params: Sockets.Scenes.Delete.Params, emitToUser) => {
 		const userId = socket.user!.id
 
 		const existing = await db.query.scenes.findFirst({
@@ -546,10 +650,7 @@ export const sceneDeleteHandler: Handler<
 
 		if (!existing) throw new Error("Scene not found.")
 
-		const lorebook = await db.query.lorebooks.findFirst({
-			where: (l, { and, eq }) =>
-				and(eq(l.id, existing.lorebookId), eq(l.userId, userId))
-		})
+		const lorebook = await findOwnedBook(db, userId, existing.lorebookId)
 
 		if (!lorebook) {
 			throw new Error("Scene not found or access denied.")
@@ -587,8 +688,9 @@ export const sceneDeleteHandler: Handler<
 		}
 		emitToUser("scenes:delete", res)
 		return res
-	}
-}
+	},
+	"The scene could not be deleted."
+)
 
 /**
  * Which messages of a session are already captured in a scene.
@@ -622,36 +724,34 @@ async function buildScenedMessageIds(
 export const scenedMessageIdsHandler: Handler<
 	Sockets.Scenes.SenedMessageIds.Params,
 	Sockets.Scenes.SenedMessageIds.Response
-> = {
-	event: "scenes:scenedMessageIds",
-	handler: async (socket, params, emitToUser) => {
+> = refusable(
+	"scenes:scenedMessageIds",
+	async (socket, params: Sockets.Scenes.SenedMessageIds.Params, emitToUser) => {
 		const res = await buildScenedMessageIds(
 			params.sessionId,
 			socket.user!.id
 		)
 		emitToUser("scenes:scenedMessageIds", res)
 		return res
-	}
-}
+	},
+	"Which messages are in a scene could not be read."
+)
 
 export const sceneListByLorebookHandler: Handler<
 	Sockets.Scenes.ListByLorebook.Params,
 	Sockets.Scenes.ListByLorebook.Response
-> = {
-	event: "scenes:listByLorebook",
-	handler: async (socket, params, emitToUser) => {
+> = refusable(
+	"scenes:listByLorebook",
+	async (socket, params: Sockets.Scenes.ListByLorebook.Params, emitToUser) => {
 		const userId = socket.user!.id
 
 		// Verify lorebook ownership
-		const lorebook = await db.query.lorebooks.findFirst({
-			where: (l, { and, eq }) =>
-				and(eq(l.id, params.lorebookId), eq(l.userId, userId))
-		})
-		if (!lorebook) throw new Error("Lorebook not found or access denied.")
+		const lorebook = await assertOwnedBook(db, userId, params.lorebookId)
 
 		const scenes = await db.query.scenes.findMany({
 			where: eq(schema.scenes.lorebookId, params.lorebookId),
-			orderBy: [asc(schema.scenes.historyEntryId), asc(schema.scenes.id)]
+			orderBy: [asc(schema.scenes.historyEntryId), asc(schema.scenes.id)],
+			columns: SCENE_REPLY_COLUMNS
 		})
 
 		// Resolve session names in a single query
@@ -689,14 +789,40 @@ export const sceneListByLorebookHandler: Handler<
 		// `entries:list` answers: the reply is broadcast to every view of the
 		// book, and those views read different lines, so a reply filtered for
 		// one would be wrong for the next. A view keeps the rows on its line
-		// with `rowsOnLine`, the rule `entries:counts` counts by.
+		// with `rowsReadingOnLine`, the rule `entries:counts` counts by.
 		const res: Sockets.Scenes.ListByLorebook.Response = {
 			lorebookId: params.lorebookId,
 			sceneList
 		}
 		emitToUser("scenes:listByLorebook", res)
 		return res
+	},
+	"The book's scenes could not be listed."
+)
+
+/**
+ * Each message's place in play (`inPlayOrder`): its id, or for a branched
+ * session's copy the id of the message it copies (`metadata.copyOf`). A
+ * message that no longer exists keeps its id as its place.
+ */
+async function placesInPlay(
+	messageIds: readonly number[]
+): Promise<(messageId: number) => number> {
+	const ids = [...new Set(messageIds)]
+	if (!ids.length) return (id) => id
+	const rows = await db
+		.select({
+			id: schema.sessionMessages.id,
+			metadata: schema.sessionMessages.metadata
+		})
+		.from(schema.sessionMessages)
+		.where(inArray(schema.sessionMessages.id, ids))
+	const copyOf = new Map<number, number>()
+	for (const row of rows) {
+		const original = row.metadata?.copyOf
+		if (typeof original === "number") copyOf.set(row.id, original)
 	}
+	return (id) => copyOf.get(id) ?? id
 }
 
 export const sceneCompileHandler: Handler<
@@ -706,6 +832,34 @@ export const sceneCompileHandler: Handler<
 	event: "scenes:compile",
 	handler: async (socket, params, emitToUser) => {
 		const userId = socket.user!.id
+
+		/**
+		 * A refusal the compile modal hears as the sentence it is. The throw
+		 * still follows, for the log, and `register()` sees the specific error
+		 * went out and adds no second one.
+		 *
+		 * ⚠ This handler answers every refusal itself — the run's failure with
+		 * the card's own sentence, never the adapter's words — so it is not
+		 * wrapped in `refusable()`, which would answer each one twice.
+		 */
+		/**
+		 * The entry the compile was asked about, when the request named one —
+		 * every refusal carries it, so a second Compile window in the tab
+		 * (a lorebook docked beside a session page) is not flipped to the
+		 * error step by this one's failure (plan B8).
+		 */
+		const about =
+			typeof params?.historyEntryId === "number" &&
+			Number.isInteger(params.historyEntryId)
+				? { historyEntryId: params.historyEntryId }
+				: {}
+		const refuse = (error: string, cause?: unknown): never => {
+			emitToUser("scenes:compile:error", {
+				...about,
+				error
+			} satisfies Sockets.Scenes.Compile.ErrorResponse)
+			throw new Error(error, cause === undefined ? undefined : { cause })
+		}
 
 		// Verify history entry ownership via lorebook
 		const [row] = await db
@@ -724,9 +878,13 @@ export const sceneCompileHandler: Handler<
 					eq(schema.lorebookEntries.typeId, HISTORY_TYPE_ID)
 				)
 			)
-		if (!row || row.lorebook.userId !== userId) {
-			throw new Error("History entry not found or access denied.")
-		}
+		if (!row || row.lorebook.userId !== userId)
+			return refuse("History entry not found or access denied.")
+		// A compile folds what sessions played into the book: the owner's
+		// lore write mode Off refuses it before any work (plan A22). Its save
+		// is an ordinary entry edit, so the refusal sits here.
+		if ((await bookLoreWriteMode(db, row.lorebook.id)) === "off")
+			return refuse(LORE_WRITES_OFF)
 		// Narrowed to the dated type, which the `type_id` predicate above
 		// already guaranteed: `toEntryRow` returns the union of every declared
 		// shape, and reading a date off that union is exactly the mistake the
@@ -736,25 +894,68 @@ export const sceneCompileHandler: Handler<
 			lorebook: row.lorebook
 		}
 
-		// Fetch scenes for this history entry — defense-in-depth: also scope
-		// to this lorebook (already known-owned, checked above), not just
-		// historyEntryId, in case any other scene-creation path ever again
-		// allows historyEntryId/lorebookId to drift apart the way
-		// scenes:create used to.
-		const scenes = await db.query.scenes.findMany({
-			where: and(
-				eq(schema.scenes.historyEntryId, params.historyEntryId),
-				eq(schema.scenes.lorebookId, historyEntry.lorebookId)
-			),
-			orderBy: asc(schema.scenes.id)
-		})
-
-		if (scenes.length === 0) {
-			throw new Error("No scenes found for this history entry.")
+		/**
+		 * The reading the compile is asked from: the line its reader stands on
+		 * (null is main) and the moment (null is now). The line decides which
+		 * scenes are compiled; the moment is where the review saves. Both ride
+		 * the activity, so a review reopened later saves where it was asked.
+		 */
+		const branchId = params.branchId ?? null
+		const moment = params.moment == null ? null : storyDateFrom(params.moment)
+		if (params.moment != null && !moment)
+			return refuse("That moment is not a story date.")
+		let line: Line
+		try {
+			line = await lineOfBook(db, historyEntry.lorebookId, branchId)
+		} catch (e) {
+			if (e instanceof BranchRefusal)
+				return refuse("That line is not one of this lorebook's.", e)
+			throw e
 		}
+		const entryDate =
+			typeof historyEntry.year === "number"
+				? {
+						year: historyEntry.year,
+						month: historyEntry.month ?? null,
+						day: historyEntry.day ?? null
+					}
+				: null
+		// The entry must read on this line: a sibling line's entry is not on
+		// it at all, and an ancestor's entry dated past the line's fork cut
+		// is a story this line never had.
+		if (!rowReadsOnLine(row.entry, line, entryDate))
+			return refuse("That history entry is not on the line you are reading.")
+		// At a moment before the entry's own date the event has not happened,
+		// and an amendment dated then would be a change to nothing.
+		if (moment && entryDate && compareDates(moment, entryDate) < 0)
+			return refuse(
+				"That moment is before this history entry's date, so there is nothing to compile into yet."
+			)
 
-		const { contextConfig, promptConfig } =
-			await getUserConfigurations(userId)
+		// The scenes this line reads under this entry: main's shared ones and
+		// the chain's own, each ancestor's only up to its fork cut — never a
+		// sibling line's. Scoped to this lorebook too (already known-owned),
+		// not just historyEntryId, so a scene whose entry and book drifted
+		// apart is never read. A scene is dated by its entry, so every one of
+		// them shares that date.
+		const lineScenes = rowsReadingOnLine(
+			await db.query.scenes.findMany({
+				where: and(
+					eq(schema.scenes.historyEntryId, params.historyEntryId),
+					eq(schema.scenes.lorebookId, historyEntry.lorebookId),
+					onLineSql(schema.scenes.branchId, line)
+				)
+			}),
+			line,
+			() => entryDate
+		)
+		const scenes = inPlayOrder(
+			lineScenes,
+			await placesInPlay(lineScenes.flatMap((s) => s.selectedMessageIds ?? []))
+		)
+
+		if (scenes.length === 0)
+			return refuse("No scenes found for this history entry.")
 
 		/**
 		 * The synthesis step's config comes from the **history summarize
@@ -791,7 +992,7 @@ export const sceneCompileHandler: Handler<
 				samplingConfigId: synthCfg?.sampling?.id ?? null
 			}
 		})
-		if (!target.ok) throw new Error(target.problem.message)
+		if (!target.ok) return refuse(target.problem.message)
 		const compileConnection = target.connection
 		// ⚠ A missing sampling config is NOT fatal to the chain — `resolveSampling
 		// (null)` means "let the backend use its own defaults" — but it is fatal
@@ -802,7 +1003,7 @@ export const sceneCompileHandler: Handler<
 		// It is only reachable if somebody clears the sampling half explicitly —
 		// `db/defaults.ts` re-seeds `text->text` on every boot while it is unset.
 		if (!target.sampling)
-			throw new Error(
+			return refuse(
 				"No sampling config is set for chat, and summarizing needs one. " +
 					"Choose one in Admin → Defaults."
 			)
@@ -817,16 +1018,24 @@ export const sceneCompileHandler: Handler<
 		)
 
 		const abortController = new AbortController()
-		const activityId = activityStore.startCompile(
-			{
-				userId,
-				historyEntryId: params.historyEntryId,
-				historyEntryDate,
-				lorebookId: historyEntry.lorebookId,
-				lorebookLabel: lorebook.name
-			},
-			abortController
-		)
+		let activityId: string
+		try {
+			activityId = activityStore.startCompile(
+				{
+					userId,
+					historyEntryId: params.historyEntryId,
+					historyEntryDate,
+					lorebookId: historyEntry.lorebookId,
+					lorebookLabel: lorebook.name,
+					branchId,
+					moment
+				},
+				abortController
+			)
+		} catch (e: any) {
+			// "A compile of this entry is already in progress for this line and moment." — ours.
+			return refuse(e?.message || "That history entry could not be compiled.", e)
+		}
 
 		let result
 		try {
@@ -834,8 +1043,6 @@ export const sceneCompileHandler: Handler<
 				scenes,
 				connection: compileConnection,
 				sampling: compileSampling,
-				contextConfig,
-				promptConfig,
 				synthSystemPrompt: synthCfg?.prompts?.synth ?? null,
 				signal: abortController.signal,
 				onProgress: (data) => {
@@ -850,7 +1057,11 @@ export const sceneCompileHandler: Handler<
 						// compile is asked for one history entry, and only
 						// the view watching that entry should be told how
 						// far it has got. `:complete` already carried it.
-						historyEntryId: params.historyEntryId
+						historyEntryId: params.historyEntryId,
+						// The reading too: two lines' compiles of one entry
+						// are two runs, and a modal hears only its own.
+						branchId,
+						moment
 					} satisfies Sockets.Scenes.Compile.Progress)
 				}
 			})
@@ -868,11 +1079,18 @@ export const sceneCompileHandler: Handler<
 			}
 			// `activityError` rather than `err.message`: this record is served
 			// back to a non-admin by `activityStore.getFor`, and an adapter
-			// failure's words are the base URL and the model file.
+			// failure's words are the base URL and the model file. The modal
+			// is told the card's own sentence, never the adapter's; the log
+			// keeps the whole error.
+			const failure = activityError(err)
 			activityStore.updateCompile(activityId, {
 				status: "error",
-				...activityError(err)
+				...failure
 			})
+			emitToUser("scenes:compile:error", {
+				...about,
+				error: failure.errorMessage
+			} satisfies Sockets.Scenes.Compile.ErrorResponse)
 			throw err
 		}
 
@@ -884,8 +1102,11 @@ export const sceneCompileHandler: Handler<
 		}
 
 		// A run row for the compile — halted at the write, truthfully: the
-		// result is held for review and the save is the person's act.
-		{
+		// result is held for review and the save is the person's act. A row
+		// that cannot be written is the run's record lost, not the text: the
+		// compiled text still goes to review (a second compile would pay for
+		// the same text again), and the log keeps the failure.
+		try {
 			const { saveReceipt } = await import(
 				"$lib/server/pipelines/runtime/receipts"
 			)
@@ -908,6 +1129,11 @@ export const sceneCompileHandler: Handler<
 				} as any,
 				{ userId }
 			)
+		} catch (err) {
+			console.warn(
+				`[scenes:compile] the run row for history entry ${params.historyEntryId} could not be written; the compiled text goes to review without it.`,
+				err
+			)
 		}
 
 		activityStore.updateCompile(activityId, {
@@ -918,6 +1144,8 @@ export const sceneCompileHandler: Handler<
 		const response: Sockets.Scenes.Compile.Response = {
 			content: result.content ?? result.raw,
 			historyEntryId: params.historyEntryId,
+			branchId,
+			moment,
 			activityId
 		}
 		emitToUser("scenes:compile:complete", response)
@@ -925,41 +1153,34 @@ export const sceneCompileHandler: Handler<
 	}
 }
 
+/**
+ * A refusal the review modal can hear: `refusable()` answers every failure —
+ * a sentence this handler words, a query that failed, a bug — on
+ * `scenes:process:error` with the request's `sceneId`, because the modal
+ * listens on `scenes:process:error#<sceneId>`: a refusal naming no scene never
+ * reaches it, and the modal would spin at "running".
+ */
 export const sceneProcessHandler: Handler<
 	Sockets.Scenes.Process.Params,
 	Sockets.Scenes.Process.Response
-> = {
-	event: "scenes:process",
-	handler: async (socket, params, emitToUser) => {
+> = refusable(
+	"scenes:process",
+	async (socket, params: Sockets.Scenes.Process.Params, emitToUser) => {
 		const userId = socket.user!.id
-
-		/**
-		 * A refusal the review modal can hear.
-		 *
-		 * `register()`'s fallback reply carries no `sceneId`, and the modal
-		 * listens on `scenes:process:error#<sceneId>` — so a bare throw left it
-		 * spinning at "running" forever. The id is known from the request, so
-		 * every failure names it; the throw still follows, for the log, and
-		 * `register()` sees the specific error was sent and adds no second one.
-		 */
-		const refuse = (error: string): never => {
-			emitToUser("scenes:process:error", {
-				sceneId: params.sceneId,
-				error
-			} satisfies Sockets.Scenes.Process.ErrorResponse)
-			throw new Error(error)
-		}
 
 		const scene = await db.query.scenes.findFirst({
 			where: eq(schema.scenes.id, params.sceneId)
 		})
-		if (!scene) return refuse("Scene not found.")
+		if (!scene) throw new Error("Scene not found.")
 
-		const lorebook = await db.query.lorebooks.findFirst({
-			where: (l, { and, eq }) =>
-				and(eq(l.id, scene.lorebookId), eq(l.userId, userId))
-		})
-		if (!lorebook) return refuse("Scene not found or access denied.")
+		const lorebook = await findOwnedBook(db, userId, scene.lorebookId)
+		if (!lorebook) throw new Error("Scene not found or access denied.")
+		// Nothing drafted here could be saved with lore writes Off, so none is
+		// drafted — refused before a card starts, as a summarize is (plan A22).
+		if (scene.sessionId != null) {
+			const off = await loreWritesOffRefusal(db, scene.sessionId)
+			if (off) throw new Error(off)
+		}
 
 		// Register the activity BEFORE any queued work.
 		//
@@ -998,85 +1219,90 @@ export const sceneProcessHandler: Handler<
 			abortController
 		)
 
-		/** Terminalise the activity alongside the error event. */
-		const failRun = (error: string) => {
+		/**
+		 * The card ends in `error` whatever stopped the run — a sentence of its
+		 * own (`failRun`) or a failure it did not word (a query, the model's
+		 * service) — and the throw is the refusal `refusable()` names by
+		 * scene. A card left "running" refuses every retry.
+		 */
+		let ended = false
+		const failRun = (error: string): never => {
+			ended = true
 			activityStore.updateScene(activityId, {
 				status: "error",
 				errorMessage: error
 			})
-			emitToUser("scenes:process:error", {
-				sceneId: params.sceneId,
-				error
-			} satisfies Sockets.Scenes.Process.ErrorResponse)
-			return null as any
+			throw new Error(error)
 		}
 
-		if (!scene.sessionId || !scene.selectedMessageIds?.length) {
-			return failRun("Scene has no linked messages to process.")
-		}
-
-		// Snapshot inside the lock, LLM outside it.
-		//
-		// This is the only sessionMessages read in the whole path and it is pinned
-		// to selectedMessageIds — no surrounding window, no "all" fallback — and
-		// generateSummary touches no DB at all. So the lock only has to cover
-		// the read, closing the TOCTOU against a concurrent delete or
-		// generation. Holding it across the run would instead queue the user's
-		// next message behind minutes of LLM calls, which is precisely the trap
-		// a minimize-first flow must not set.
-		const rawMessages = await withSessionGenerationLock(
-			scene.sessionId,
-			async () =>
-				db.query.sessionMessages.findMany({
-					where: (cm, { and, eq, inArray }) =>
-						and(
-							eq(cm.sessionId, scene.sessionId!),
-							inArray(cm.id, scene.selectedMessageIds!)
-						),
-					orderBy: (cm, { asc }) => asc(cm.id)
-				})
-		)
-
-		if (abortController.signal.aborted) return null as any
-
-		if (rawMessages.length === 0) {
-			return failRun("No messages found for this scene.")
-		}
-
-		const charIds = [
-			...new Set(
-				rawMessages
-					.filter((m) => m.characterId)
-					.map((m) => m.characterId!)
-			)
-		]
-		const personaIds = [
-			...new Set(
-				rawMessages.filter((m) => m.personaId).map((m) => m.personaId!)
-			)
-		]
-
-		const knownCast = await buildSceneCastList(
-			params.sceneId,
-			scene.lorebookId,
-			scene.sessionId ?? null
-		)
-
-		/**
-		 * The scene summarize pipeline — its own namespace, with the cast
-		 * extraction step the other three lore types do not carry. Stopped
-		 * before its `save` consumer: this handler's result goes to the
-		 * Review & Save screen, and the save there is the person's act.
-		 */
-		let result: {
-			content: string
-			name?: string
-			raw: string
-			batchCount: number
-			participantCharacters?: any[]
-			mentionedCharacters?: any[]
-		}
 		try {
+			if (!scene.sessionId || !scene.selectedMessageIds?.length) {
+				return failRun("Scene has no linked messages to process.")
+			}
+
+			// Snapshot inside the lock, LLM outside it.
+			//
+			// This is the only sessionMessages read in the whole path and it is pinned
+			// to selectedMessageIds — no surrounding window, no "all" fallback — and
+			// the summarize-scene run reads no messages itself. So the lock only has to cover
+			// the read, closing the TOCTOU against a concurrent delete or
+			// generation. Holding it across the run would instead queue the user's
+			// next message behind minutes of LLM calls, which is precisely the trap
+			// a minimize-first flow must not set.
+			const rawMessages = await withSessionGenerationLock(
+				scene.sessionId,
+				async () =>
+					db.query.sessionMessages.findMany({
+						where: (cm, { and, eq, inArray }) =>
+							and(
+								eq(cm.sessionId, scene.sessionId!),
+								inArray(cm.id, scene.selectedMessageIds!)
+							),
+						orderBy: (cm, { asc }) => asc(cm.id)
+					})
+			)
+
+			if (abortController.signal.aborted) return null as any
+
+			if (rawMessages.length === 0) {
+				return failRun("No messages found for this scene.")
+			}
+
+			const charIds = [
+				...new Set(
+					rawMessages
+						.filter((m) => m.characterId)
+						.map((m) => m.characterId!)
+				)
+			]
+			const personaIds = [
+				...new Set(
+					rawMessages.filter((m) => m.personaId).map((m) => m.personaId!)
+				)
+			]
+
+			const knownCast = await buildSceneCastList(
+				params.sceneId,
+				scene.lorebookId,
+				scene.sessionId ?? null
+			)
+
+			/**
+			 * The scene summarize pipeline — its own namespace, with the cast
+			 * extraction step the other three lore types do not carry. Stopped
+			 * before its `save` consumer: this handler's result goes to the
+			 * Review & Save screen, and the save there is the person's act.
+			 */
+			let result: {
+				content: string
+				name?: string
+				raw: string
+				batchCount: number
+				participantCharacters?: any[]
+				mentionedCharacters?: any[]
+			}
+			// A failure here — the model's service, a query — reaches the catch
+			// that ends this run's card, in the card's own sentence.
 			const { runSpec } = await import(
 				"$lib/server/pipelines/runtime/runTurn"
 			)
@@ -1174,6 +1400,97 @@ export const sceneProcessHandler: Handler<
 				participantCharacters: castOut?.participants,
 				mentionedCharacters: castOut?.mentioned
 			}
+
+			// Cooperating abort can make the call above resolve normally (with a
+			// truncated/partial result) rather than throw — see
+			// runQueuedLLMCall/runGeneration. Bail out here, before any of the
+			// binding-creation/DB-write work below runs against a cancelled
+			// generation's partial result.
+			if (abortController.signal.aborted) {
+				return null as any
+			}
+
+			// Resolve the LLM's raw name output against the same knownCast built
+			// above — a name that matches nothing becomes a suggested name
+			// instead of an immediate new binding, so the user gets to accept or
+			// reject it on the Review & Save screen before anything is created
+			// (see resolveOrCreateBindingByName, called at Save time).
+			const {
+				participantIds,
+				mentionedIds,
+				suggestedParticipants,
+				suggestedMentioned
+			} = (() => {
+				const participants = resolveCharacterRefs(
+					result.participantCharacters ?? [],
+					knownCast
+				)
+				// ⚠ ICED (plan §1/§6). `result.mentionedCharacters` is deliberately
+				// not resolved: `mentioned` is derived from `message_annotations`
+				// now (utils/sceneMentions.ts) and is internal — §6 ruled it is not
+				// surfaced — so the Review & Save screen has nothing to write back.
+				// The field is left on `result` so reviving the extraction is a
+				// one-line change rather than a re-derivation.
+				const suggested = reconcileSuggestedNames(
+					participants.suggestedNames,
+					[]
+				)
+				return {
+					participantIds: participants.ids,
+					mentionedIds: [] as number[],
+					suggestedParticipants: suggested.participants,
+					suggestedMentioned: suggested.mentioned
+				}
+			})()
+
+			// Guarantee: whoever actually sent a message in this scene is a
+			// participant, regardless of what the extraction LLM decided —
+			// charIds/personaIds (every distinct sender) were already computed
+			// above for building sender names.
+			//
+			// A sender whose card was deleted, and no member has, is left out
+			// rather than given a member (null).
+			const senderBindingIds = new Set<number>()
+			for (const characterId of [...charIds, ...personaIds]) {
+				const memberId = await resolveOrCreateBinding({
+					lorebookId: scene.lorebookId,
+					characterId
+				})
+				if (memberId != null) senderBindingIds.add(memberId)
+			}
+
+			const {
+				participants: resolvedParticipants,
+				mentioned: resolvedMentioned
+			} = reconcileParticipantsAndMentioned(
+				participantIds,
+				mentionedIds,
+				senderBindingIds
+			)
+
+			const pendingResult = {
+				content: result.content ?? result.raw ?? "",
+				name: result.name ?? scene.name ?? undefined,
+				participantCharacters: resolvedParticipants,
+				mentionedCharacters: resolvedMentioned,
+				suggestedParticipantCharacters: suggestedParticipants,
+				suggestedMentionedCharacters: suggestedMentioned,
+				raw: result.raw
+			}
+
+			activityStore.updateScene(activityId, {
+				status: "review",
+				sceneName: pendingResult.name,
+				pendingResult
+			})
+
+			const response: Sockets.Scenes.Process.Response = {
+				sceneId: params.sceneId,
+				activityId,
+				...pendingResult
+			}
+			emitToUser("scenes:process:complete", response)
+			return response
 		} catch (err) {
 			// Deliberately narrower than narrativeGraph.ts's equivalent guard
 			// — do NOT add `|| isQueueCancellation(err) || err.name ===
@@ -1185,121 +1502,24 @@ export const sceneProcessHandler: Handler<
 			if (abortController.signal.aborted) {
 				return null as any // already removed by activityStore.cancel() — nothing to update
 			}
-			// See the note on the identical write in the compile handler above.
+			if (ended) throw err
+			// The card's sentence, never `err.message`: this record is served
+			// back to a non-admin by `activityStore.getFor`, and an adapter
+			// failure's words are the base URL and the model file; a failed
+			// query's are its SQL. The modal is told the card's own sentence;
+			// the log keeps the whole error, as the cause.
 			const failure = activityError(err)
 			activityStore.updateScene(activityId, {
 				status: "error",
 				...failure
 			})
-			// Named by scene, like every other failure of this run: the
-			// generic fallback `register()` would send carries no `sceneId`,
-			// and the review modal listening on this scene's key never heard
-			// it. The redacted sentence, never `err.message` — see above.
-			emitToUser("scenes:process:error", {
-				sceneId: params.sceneId,
-				error: failure.errorMessage
-			} satisfies Sockets.Scenes.Process.ErrorResponse)
-			throw err
+			throw new Error(failure.errorMessage, { cause: err })
 		}
-
-		// Cooperating abort can make the call above resolve normally (with a
-		// truncated/partial result) rather than throw — see
-		// runQueuedLLMCall/runGeneration. Bail out here, before any of the
-		// binding-creation/DB-write work below runs against a cancelled
-		// generation's partial result.
-		if (abortController.signal.aborted) {
-			return null as any
-		}
-
-		// Resolve the LLM's raw name output against the same knownCast built
-		// above — a name that matches nothing becomes a suggested name
-		// instead of an immediate new binding, so the user gets to accept or
-		// reject it on the Review & Save screen before anything is created
-		// (see resolveOrCreateBindingByName, called at Save time).
-		const {
-			participantIds,
-			mentionedIds,
-			suggestedParticipants,
-			suggestedMentioned
-		} = (() => {
-			const participants = resolveCharacterRefs(
-				result.participantCharacters ?? [],
-				knownCast
-			)
-			// ⚠ ICED (plan §1/§6). `result.mentionedCharacters` is deliberately
-			// not resolved: `mentioned` is derived from `message_annotations`
-			// now (utils/sceneMentions.ts) and is internal — §6 ruled it is not
-			// surfaced — so the Review & Save screen has nothing to write back.
-			// The field is left on `result` so reviving the extraction is a
-			// one-line change rather than a re-derivation.
-			const suggested = reconcileSuggestedNames(
-				participants.suggestedNames,
-				[]
-			)
-			return {
-				participantIds: participants.ids,
-				mentionedIds: [] as number[],
-				suggestedParticipants: suggested.participants,
-				suggestedMentioned: suggested.mentioned
-			}
-		})()
-
-		// Guarantee: whoever actually sent a message in this scene is a
-		// participant, regardless of what the extraction LLM decided —
-		// charIds/personaIds (every distinct sender) were already computed
-		// above for building sender names.
-		const senderBindingIds = new Set<number>()
-		for (const characterId of charIds) {
-			senderBindingIds.add(
-				await resolveOrCreateBinding({
-					lorebookId: scene.lorebookId,
-					characterId
-				})
-			)
-		}
-		for (const personaId of personaIds) {
-			senderBindingIds.add(
-				await resolveOrCreateBinding({
-					lorebookId: scene.lorebookId,
-					characterId: personaId
-				})
-			)
-		}
-
-		const {
-			participants: resolvedParticipants,
-			mentioned: resolvedMentioned
-		} = reconcileParticipantsAndMentioned(
-			participantIds,
-			mentionedIds,
-			senderBindingIds
-		)
-
-		const pendingResult = {
-			content: result.content ?? result.raw ?? "",
-			name: result.name ?? scene.name ?? undefined,
-			participantCharacters: resolvedParticipants,
-			mentionedCharacters: resolvedMentioned,
-			suggestedParticipantCharacters: suggestedParticipants,
-			suggestedMentionedCharacters: suggestedMentioned,
-			raw: result.raw
-		}
-
-		activityStore.updateScene(activityId, {
-			status: "review",
-			sceneName: pendingResult.name,
-			pendingResult
-		})
-
-		const response: Sockets.Scenes.Process.Response = {
-			sceneId: params.sceneId,
-			activityId,
-			...pendingResult
-		}
-		emitToUser("scenes:process:complete", response)
-		return response
-	}
-}
+	},
+	"The scene could not be summarized.",
+	undefined,
+	(params) => ({ sceneId: (params as { sceneId?: unknown } | undefined)?.sceneId })
+)
 
 /**
  * Delete a scene that existed only to carry a summarize run, when that run is
@@ -1324,10 +1544,7 @@ activityStore.setEphemeralSceneCleanup(async (sceneId, userId) => {
 	if (!scene) return
 
 	// Ownership, via the owning lorebook — same check the delete handler makes.
-	const lorebook = await db.query.lorebooks.findFirst({
-		where: (l, { and, eq }) =>
-			and(eq(l.id, scene.lorebookId), eq(l.userId, userId))
-	})
+	const lorebook = await findOwnedBook(db, userId, scene.lorebookId)
 	if (!lorebook) return
 
 	// Provably untouched: never summarised, never had its cast resolved.

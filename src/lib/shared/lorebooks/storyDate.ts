@@ -6,8 +6,10 @@
  * rule its editor enforces.
  *
  * `compareDates` is the ordering. `dateValue` packs the same three numbers into
- * one scalar for PLACEMENT only — spacing a tick, measuring a gap — and is not
- * safe to sort on. An absent month or day sorts before a present one in both.
+ * one scalar for PLACEMENT — spacing a tick, measuring a gap. It never places a
+ * later date before an earlier one, but it is not exact at every magnitude, so
+ * nothing sorts or identifies by it. An absent month or day sorts before a
+ * present one in both.
  *
  * ⚠ **Shared, not client.** This was `client/lorebooks/sections/historyDates.ts`
  * until 2026-09-23, when amendments needed the same ordering on the server —
@@ -62,12 +64,12 @@ const part = (value: number | null | undefined) => value ?? 0
 /**
  * Which of two dates comes first. **The ordering key — use this to sort.**
  *
- * Element-wise, so it is correct for any magnitude. `dateValue` below packs
- * three numbers into one at radix 100, which is a *placement* value and a
- * silent liar as an ordering one: nothing bounds month or day at input, so a
- * book numbering days of the year — "Year 3, day 250", a perfectly ordinary
- * free-form habit — carries month and day past 100 and sorts wrongly. Day 250
- * of year 3 and day 50 of year 5 compare as equal.
+ * Element-wise, so it is exact for any magnitude. `dateValue` below packs
+ * three numbers into one for *placement*: a month or a day has no ceiling (a
+ * free-form book numbering days of the year, a calendar with 1000-day months),
+ * so past 99 it squeezes a part into the last hundredth before the next one —
+ * still in order, but too close together to tell apart once the parts grow
+ * large enough. Sort and compare with this, never with the packed value.
  *
  * ⚠ An absent month or day is 0, which sorts BEFORE a present one: "Year 2" is
  * the whole year and comes before "Year 2, Mo. 5" inside it.
@@ -79,17 +81,40 @@ export function compareDates(a: StoryDate, b: StoryDate): number {
 }
 
 /**
+ * Where a month or a day sits inside its parent's hundred units: at its own
+ * number up to 99, and past that squeezed toward 100 without reaching it
+ * (`100 − 1/(n − 98)`: 99.5, 99.67, 99.75 …).
+ */
+const slot = (n: number): number => (n <= 99 ? n : 100 - 1 / (n - 98))
+
+/** How many of its parent's units part `n` owns: the gap to part `n + 1`. */
+const width = (n: number): number => slot(n + 1) - slot(n)
+
+/** The part whose slot a (slot-exact) number of units names. */
+const unslot = (units: number): number =>
+	units < 98.5 ? Math.round(units) : Math.round(98 + 1 / (100 - units))
+
+/**
  * The date as one number, for PLACEMENT — spacing a tick along an axis,
  * measuring the gap between two dates.
  *
- * ⚠ **Not an ordering key.** It assumes month and day are each under 100 and
- * says nothing useful when they are not; `compareDates` is the comparator.
- * Kept because placement genuinely needs a scalar — a ratio cannot be computed
- * from a comparison — and because a free-form book has no real intervals
- * anyway, so an approximate placement is the honest most it can offer.
+ * `year×10000 + month×100 + day` while month and day are under 99 — the
+ * spelling every stored axis position and test relies on. From 99 on a part
+ * does not own a whole unit: it is squeezed into what is left before the next
+ * one (`slot` above), so the value stays **monotone** under `compareDates`
+ * however large the day or month. A plain radix-100 packing is not: it puts
+ * Mo. 1 Day 150 after Mo. 2 Day 1, and history days past 99 are storable
+ * (A15).
+ *
+ * ⚠ **Still not an ordering key.** Squeezed parts crowd together and, at large
+ * enough years and parts, meet inside a float's precision — so sort and
+ * identify with `compareDates` and `momentKey`, and read this only to space
+ * things out. A free-form book has no real intervals anyway, so an
+ * approximate, order-keeping placement is the honest most it can offer.
  */
 export function dateValue(date: StoryDate): number {
-	return date.year * 10000 + part(date.month) * 100 + part(date.day)
+	const month = part(date.month)
+	return date.year * 10000 + slot(month) * 100 + width(month) * slot(part(date.day))
 }
 
 /** A placement value, spelled — through the book's calendar when it has one. */
@@ -105,14 +130,20 @@ export function formatDateValue(
  *
  * The inverse of `dateValue`, and the one place the encoding is taken apart:
  * a month or a day of zero is an absent one rather than a real zeroth, so the
- * date that comes back is the date that went in.
+ * date that comes back is the date that went in — squeezed parts included,
+ * within a float's precision.
  */
 export function dateFromValue(value: number): StoryDate {
-	return {
-		year: Math.floor(value / 10000),
-		month: Math.floor((value % 10000) / 100) || null,
-		day: value % 100 || null
-	}
+	const year = Math.floor(value / 10000)
+	const rest = value - year * 10000
+	// The month is the last slot at or below `rest`; the estimate is exact
+	// under 99 and at most a step off past it.
+	let month =
+		rest < 9900 ? Math.floor(rest / 100) : Math.floor(98 + 1 / (100 - rest / 100))
+	while (month > 0 && slot(month) * 100 > rest) month--
+	while (slot(month + 1) * 100 <= rest) month++
+	const day = unslot((rest - slot(month) * 100) / width(month))
+	return { year, month: month || null, day: day || null }
 }
 
 /**
@@ -173,9 +204,13 @@ export function readStoryCalendar(value: unknown): StoryCalendar | null {
 	}
 }
 
-/** Why one date does not land in a calendar, or `null` when it does. */
+/**
+ * Why one date — or clock reading — does not land in a calendar, or `null`
+ * when it does. The SDK's `storyTimeProblem`: every rung's ranges and
+ * narrowing rule first, then the calendar's own.
+ */
 export function dateProblem(
-	date: StoryDate,
+	date: StoryClock,
 	calendar: StoryCalendar | null | undefined
 ): string | null {
 	return storyTimeProblem(date, calendar)

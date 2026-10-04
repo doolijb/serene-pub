@@ -241,7 +241,14 @@
 <div class="mx-auto w-full max-w-[1120px]">
 	<AdminPageHeader title="Your pub" {purpose}>
 		{#snippet actions()}
-			{#if page.data?.isNewerReleaseAvailable}
+			{#if page.data?.isNewerReleaseAvailable && page.data?.canUpdateInApp}
+				<!-- The launcher can apply it: Admin › Updates downloads,
+				     verifies and restarts into it. -->
+				<a href="/admin/updates" class="btn preset-filled-primary-500">
+					<Icons.Download size={16} aria-hidden="true" />
+					Update to {page.data?.latestReleaseTag ?? "the new version"}
+				</a>
+			{:else if page.data?.isNewerReleaseAvailable}
 				<a
 					href="https://github.com/doolijb/serene-pub/releases"
 					target="_blank"

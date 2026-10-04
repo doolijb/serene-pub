@@ -5,8 +5,10 @@ REM Source: https://github.com/doolijb/serene-pub
 REM
 REM This starts the Node server and nothing else: no launcher, no tray. It is
 REM the supported way to run Serene Pub headless, as a service, or when
-REM debugging a start-up problem. The forwarder one directory up (..\run.cmd)
-REM exists so a double-click still works; it does nothing but call this file.
+REM debugging a start-up problem. The launcher one directory up
+REM ("..\Serene Pub.exe") is the double-click start; it does not run this file
+REM but starts the same node.exe + build\index.js itself. Start this first and
+REM the launcher attaches to it instead of starting a second server.
 REM
 REM Everything the application is made of lives in this directory ("app\") so
 REM that an update can replace the whole directory in one rename. Nothing the

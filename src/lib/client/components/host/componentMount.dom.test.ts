@@ -51,7 +51,7 @@ vi.mock("./receiverPolicy", async (importOriginal) => {
 const settle = () => new Promise((r) => setTimeout(r, 20))
 const edit = { key: "edit", specSlug: "core", name: "Edit", venue: "message", origin: "core", canAct: true, enabled: true }
 
-async function open(owner: string, src: string) {
+async function open(owner: string, src: string, extra: { pageIds?: boolean } = {}) {
 	const edited: unknown[] = []
 	const target = document.createElement("div")
 	document.body.appendChild(target)
@@ -61,6 +61,7 @@ async function open(owner: string, src: string) {
 			owner,
 			src,
 			title: "Box",
+			...extra,
 			actions: { message: { primary: [edit], overflow: [] } } as never,
 			actionDispatch: { core: { edit: (args: unknown) => edited.push(args) }, fire: () => {} }
 		}
@@ -120,7 +121,7 @@ describe("a remote's box", () => {
 		await box.close()
 	})
 
-	test("core's conversation keeps the ids the page navigates by; a plugin's are its box's", async () => {
+	test("the conversation told `pageIds` keeps the ids the page navigates by; a plugin's are its box's", async () => {
 		const place = (box: Awaited<ReturnType<typeof open>>) =>
 			worker.routes.get(box.mounted!.mountId)!({
 				k: "mutate",
@@ -129,16 +130,48 @@ describe("a remote's box", () => {
 					[MUTATION_TYPE_INSERT_CHILD, ROOT_ID, { id: "n1", type: 1, element: "div", attributes: { id: "message-5" }, children: [] }, 0]
 				]
 			})
-		const core = await open("core", "/core-ui/messages")
+		const core = await open("core", "/core-ui/messages", { pageIds: true })
 		place(core)
 		expect(core.target.querySelector("#message-5")).not.toBeNull()
 		await core.close()
 		worker.posted.length = 0
-		const plugin = await open("acme", "/plugin-ui/acme/ui/w.js")
+		// A plugin told it anyway never gets the page's ids.
+		const plugin = await open("acme", "/plugin-ui/acme/ui/w.js", { pageIds: true })
 		place(plugin)
 		expect(plugin.target.querySelector("#message-5")).toBeNull()
 		expect(plugin.target.querySelector('[id$="-message-5"]')).not.toBeNull()
 		await plugin.close()
+	})
+
+	/**
+	 * More than one Messages widget (brief 7b, plan §M.3.8 as amended): a mount
+	 * of the conversation holds the page's ids only when the layout names it
+	 * `pageIds` — the story's log, and each copy showing channels no earlier one
+	 * shows (`channelClaims` `pageIdsHolders`); a second view of one channel is
+	 * not named and takes its box's prefix, as every other core widget does (F8).
+	 * Two copies showing the same row then put one `#message-<id>` on the page.
+	 */
+	test("two Messages mounts showing one row: exactly one #message-5 on the page", async () => {
+		const place = (box: Awaited<ReturnType<typeof open>>) =>
+			worker.routes.get(box.mounted!.mountId)!({
+				k: "mutate",
+				mountId: box.mounted!.mountId,
+				records: [
+					[MUTATION_TYPE_INSERT_CHILD, ROOT_ID, { id: "n1", type: 1, element: "div", attributes: { id: "message-5" }, children: [] }, 0]
+				]
+			})
+		const story = await open("core", "/core-ui/messages", { pageIds: true })
+		place(story)
+		worker.posted.length = 0
+		const view = await open("core", "/core-ui/messages")
+		place(view)
+		expect(document.querySelectorAll("#message-5").length).toBe(1)
+		expect(story.target.querySelector("#message-5")).not.toBeNull()
+		expect(view.target.querySelector('[id$="-message-5"]')).not.toBeNull()
+		// The prefixed copy is still j/k's blind spot: nothing it draws starts `message-`.
+		expect(view.target.querySelector('[id^="message-"]')).toBeNull()
+		await story.close()
+		await view.close()
 	})
 
 	test("core's other modules are widgets: their ids are their box's and they paint inside it, as a plugin's (F8)", async () => {
@@ -163,7 +196,7 @@ describe("a remote's box", () => {
 		expect((first.target.querySelector(".sp-remote-box") as HTMLElement).style.contain).toBe("paint")
 		await first.close()
 		await second.close()
-		// The conversation alone keeps the page's ids and paints unheld.
+		// The conversation, every copy of it, paints unheld.
 		worker.posted.length = 0
 		const conversation = await open("core", "/core-ui/messages")
 		expect((conversation.target.querySelector(".sp-remote-box") as HTMLElement).style.contain).toBe("")

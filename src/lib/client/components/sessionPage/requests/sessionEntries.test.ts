@@ -8,6 +8,7 @@ import { describe, expect, test } from "vitest"
 import { createPendingAsks } from "./pendingAsks"
 import {
 	answerSessionEntries,
+	hearSessionEntries,
 	sessionEntriesReplyKey,
 	tokenedEntriesRead,
 	type SessionEntriesRead
@@ -151,5 +152,53 @@ describe("each ask takes its own reply (the stale-reply token)", () => {
 		hear({ sessionId: 7, rows: [row(1)], total: 1, request: "t:1" })
 		expect((await mine).rows.map((r) => r.id)).toEqual([1])
 		expect(asks.size).toBe(0)
+	})
+})
+
+describe("a refused read settles its ask with the server's sentence", () => {
+	function page() {
+		let reply: ((r: Response) => void) | null = null
+		let refusal: ((r: Sockets.Entries.SessionEntries.ErrorResponse) => void) | null = null
+		const asks = createPendingAsks<Sockets.Entries.SessionEntries.Params, Response>({
+			emit: () => {},
+			listen: hearSessionEntries({
+				reply: (cb) => {
+					reply = cb
+					return () => (reply = null)
+				},
+				refusal: (cb) => {
+					refusal = cb
+					return () => (refusal = null)
+				}
+			}),
+			keyOf: sessionEntriesReplyKey,
+			timeout: "the lore entries did not arrive: the server did not answer",
+			timeoutMs: 50
+		})
+		return {
+			asks,
+			read: tokenedEntriesRead(asks, "t"),
+			refuse: (r: Sockets.Entries.SessionEntries.ErrorResponse) => refusal?.(r),
+			listening: () => reply !== null && refusal !== null
+		}
+	}
+
+	test("the refusal naming the ask rejects it in the server's words, not the timeout's", async () => {
+		const { asks, read, refuse, listening } = page()
+		const mine = answerSessionEntries({}, 7, read)
+		expect(listening()).toBe(true)
+		refuse({ sessionId: 7, request: "t:1", error: "The session's lore could not be read." })
+		await expect(mine).rejects.toThrow("The session's lore could not be read.")
+		expect(asks.size).toBe(0)
+		expect(listening()).toBe(false)
+	})
+
+	test("a refusal naming no ask of this page settles nothing", async () => {
+		const { asks, read, refuse } = page()
+		const mine = answerSessionEntries({}, 7, read)
+		refuse({ sessionId: 7, request: "native:4", error: "Not yours." })
+		refuse({ sessionId: 7, error: "Not yours either." })
+		expect(asks.size).toBe(1)
+		await expect(mine).rejects.toThrow(/did not arrive/)
 	})
 })

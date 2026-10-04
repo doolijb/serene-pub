@@ -4,7 +4,7 @@
  * The read model is tested against its own claims in
  * `pipelines/config.int.test.ts`. This file tests the layer above it, where the
  * inputs come from a browser: a `sessionId` is a small integer somebody can guess,
- * `scope: "instance"` is a word anyone can put in a payload, and the management
+ * `scope: "pub"` is a word anyone can put in a payload, and the management
  * handlers are the ones allowed to talk about topology.
  *
  * Three properties, each of which is a hole if it is missing:
@@ -23,7 +23,9 @@ import { and, eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import type { TestDb } from "$lib/server/utils/testDb"
 import { RESPOND_SPEC_ID } from "$lib/server/pipelines/boot/bootstrap"
+import { ADVENTURE_CREATE_SPEC_ID, ADVENTURE_GENRE_ID } from "@serene-pub/core-catalog"
 import { humanizeTypeId } from "$lib/server/pipelines/config/panel"
+import { groupOptions, groupSteps } from "$lib/server/pipelines/config/panel/groups"
 
 let testDb: TestDb
 let dataDir: string
@@ -109,8 +111,7 @@ async function firstWritableOptionId(userId: number) {
 	// handles independent of the viewer, and since the layer simplification
 	// (2026-08-24) a non-admin's *global* view is read-only, so the non-admin
 	// cases below exercise refusals against an id that certainly exists.
-	const option = view!.steps
-		.flatMap((s) => [...s.options, ...s.advanced])
+	const option = groupOptions(view!.groups)
 		.find((o) => o.control === "prompts-ref")
 	if (!option) throw new Error("the respond spec exposes no prompts option")
 	return option.id
@@ -188,6 +189,316 @@ describe("a session id from the client is not a capability", () => {
 	})
 })
 
+describe("a session's scope covers only the pipelines it runs (owner Q7)", () => {
+	/** A published pipeline this session does not run. */
+	async function notRun(): Promise<string> {
+		const { listNamespaces } = await import("$lib/server/pipelines/config/panel")
+		const { sessionPipelines } = await import(
+			"$lib/server/pipelines/entities/sessionPipelines"
+		)
+		const runs = new Set(
+			(await sessionPipelines(testDb as any, ownersSessionId, owner.id)).pipelines.map(
+				(p) => p.slug
+			)
+		)
+		expect(runs.has(RESPOND_SPEC_ID)).toBe(true)
+		const other = (await listNamespaces(testDb as any)).find((n) => !runs.has(n.slug))
+		if (!other) throw new Error("every published pipeline is run by the session")
+		return other.slug
+	}
+
+	test("the view of a pipeline the session runs is the session's", async () => {
+		const { pipelinesGet } = await import("./pipelines")
+		const res = await pipelinesGet.handler(
+			socketFor(owner.id),
+			{ slug: RESPOND_SPEC_ID, sessionId: ownersSessionId },
+			noopEmit
+		)
+		expect(res.pipeline?.scope).toEqual({ kind: "session", sessionId: ownersSessionId })
+	})
+
+	test("any other pipeline opened from the session is the configuration's", async () => {
+		const { pipelinesGet } = await import("./pipelines")
+		const slug = await notRun()
+		const res = await pipelinesGet.handler(
+			socketFor(owner.id),
+			{ slug, sessionId: ownersSessionId },
+			noopEmit
+		)
+		expect(res.pipeline?.scope).toEqual({ kind: "config" })
+		// Read-only for someone who is not an administrator.
+		expect(
+			res.pipeline!.groups.flatMap((g) => g.front).every((o) => !o.writable)
+		).toBe(true)
+	})
+})
+
+describe("a session's creation pipeline (owner ruling 2026-09-30)", () => {
+	/**
+	 * An administrator's Adventure session: core's create specs call no model,
+	 * so what a session could set on one is an administrator's (the seeding
+	 * step's Review), and that is what a creation-time write exercises.
+	 */
+	let adventureSessionId: number
+
+	beforeAll(async () => {
+		const [row] = await testDb
+			.insert(schema.sessions)
+			.values({ userId: admin.id, isGroup: false, genreId: ADVENTURE_GENRE_ID })
+			.returning()
+		adventureSessionId = row.id
+	})
+
+	/** A setting of the create spec a session scope may hold. */
+	async function createSpecOption() {
+		const { namespaceView } = await import("$lib/server/pipelines/config/panel")
+		const view = await namespaceView(
+			testDb as any,
+			"socket-scoping-test-secret",
+			ADVENTURE_CREATE_SPEC_ID,
+			{ userId: admin.id, isAdmin: true, sessionId: adventureSessionId }
+		)
+		const option = groupOptions(view!.groups).find((o) => o.control === "enum")
+		if (!option) throw new Error("the adventure create spec exposes no enum setting")
+		return option
+	}
+
+	const sessionRows = () =>
+		testDb
+			.select()
+			.from(schema.pipelineNodeOverrides)
+			.where(
+				and(
+					eq(schema.pipelineNodeOverrides.scopeKind, "session"),
+					eq(schema.pipelineNodeOverrides.scopeId, adventureSessionId)
+				)
+			)
+
+	test("is listed last, marked as the creation pipeline, and says whether creation is over", async () => {
+		const { sessionPipelines } = await import(
+			"$lib/server/pipelines/entities/sessionPipelines"
+		)
+		const { markCreating, markCreated } = await import("$lib/server/sessions/creating")
+
+		const after = (await sessionPipelines(testDb as any, adventureSessionId, admin.id))
+			.pipelines
+		expect(after.at(-1)).toMatchObject({
+			slug: ADVENTURE_CREATE_SPEC_ID,
+			creation: "created"
+		})
+		// Titled by the spec's own name, like the reply's card.
+		expect(after.at(-1)!.label).not.toBe(ADVENTURE_CREATE_SPEC_ID)
+		// The others carry no creation mark.
+		expect(after.slice(0, -1).every((p) => p.creation === undefined)).toBe(true)
+
+		markCreating(adventureSessionId)
+		try {
+			const during = (await sessionPipelines(testDb as any, adventureSessionId, admin.id))
+				.pipelines
+			expect(during.find((p) => p.slug === ADVENTURE_CREATE_SPEC_ID)?.creation).toBe(
+				"creating"
+			)
+		} finally {
+			markCreated(adventureSessionId)
+		}
+	})
+
+	test("opens at the session's scope, read-only once the session is created", async () => {
+		const { pipelinesGet } = await import("./pipelines")
+		const res = await pipelinesGet.handler(
+			socketFor(admin.id, true),
+			{ slug: ADVENTURE_CREATE_SPEC_ID, sessionId: adventureSessionId },
+			noopEmit
+		)
+		expect(res.pipeline?.scope).toMatchObject({
+			kind: "session",
+			sessionId: adventureSessionId
+		})
+		expect((res.pipeline?.scope as any).readOnlyBecause).toMatch(/has been created/)
+		const options = groupOptions(res.pipeline!.groups)
+		expect(options.length).toBeGreaterThan(0)
+		expect(options.every((o) => !o.writable)).toBe(true)
+		expect(res.pipeline!.canSelectConfig).toBe(false)
+	})
+
+	test("is no card for someone who is not an administrator: nothing on it is theirs to edit", async () => {
+		// Visibility is by role, not by the lock (owner ruling 2026-09-30):
+		// the administrator above sees this card locked because they could
+		// normally edit it; core's create specs hold no prompt, so the
+		// session's non-admin owner is sent no group, and no card is drawn.
+		const [row] = await testDb
+			.insert(schema.sessions)
+			.values({ userId: owner.id, isGroup: false, genreId: ADVENTURE_GENRE_ID })
+			.returning()
+		const { pipelinesGet } = await import("./pipelines")
+		const res = await pipelinesGet.handler(
+			socketFor(owner.id),
+			{ slug: ADVENTURE_CREATE_SPEC_ID, sessionId: row.id },
+			noopEmit
+		)
+		expect(res.pipeline?.scope).toMatchObject({ kind: "session", sessionId: row.id })
+		expect(res.pipeline!.groups).toEqual([])
+	})
+
+	test("a session-scope write after creation is refused in a sentence; one while creating lands", async () => {
+		const { pipelinesSetOption } = await import("./pipelines")
+		const { markCreating, markCreated } = await import("$lib/server/sessions/creating")
+		const option = await createSpecOption()
+		const value = option.of!.at(-1)!
+
+		const rec = recordingEmit()
+		await pipelinesSetOption.handler(
+			socketFor(admin.id, true),
+			{
+				slug: ADVENTURE_CREATE_SPEC_ID,
+				optionId: option.id,
+				value,
+				sessionId: adventureSessionId
+			},
+			rec.emit
+		)
+		expect(rec.last("pipelines:setOption:error")?.error).toMatch(
+			/has been created.*Nothing was saved/
+		)
+		expect(await sessionRows()).toHaveLength(0)
+
+		markCreating(adventureSessionId)
+		try {
+			const ok = recordingEmit()
+			await pipelinesSetOption.handler(
+				socketFor(admin.id, true),
+				{
+					slug: ADVENTURE_CREATE_SPEC_ID,
+					optionId: option.id,
+					value,
+					sessionId: adventureSessionId
+				},
+				ok.emit
+			)
+			expect(ok.last("pipelines:setOption:error")).toBeUndefined()
+		} finally {
+			markCreated(adventureSessionId)
+		}
+		expect(await sessionRows()).toHaveLength(1)
+	})
+
+	test("choosing a configuration for it after creation is refused too", async () => {
+		const { pipelinesSelectConfig } = await import("./pipelines")
+		const [spec] = await testDb
+			.select()
+			.from(schema.pipelineSpecs)
+			.where(eq(schema.pipelineSpecs.slug, ADVENTURE_CREATE_SPEC_ID))
+		const [config] = await testDb
+			.select()
+			.from(schema.pipelineConfigs)
+			.where(eq(schema.pipelineConfigs.specId, spec.id))
+			.limit(1)
+		const rec = recordingEmit()
+		await pipelinesSelectConfig.handler(
+			socketFor(admin.id, true),
+			{
+				slug: ADVENTURE_CREATE_SPEC_ID,
+				configId: config.id,
+				sessionId: adventureSessionId
+			},
+			rec.emit
+		)
+		expect(rec.last("pipelines:selectConfig:error")?.error).toMatch(/has been created/)
+	})
+
+	test("after creation the card names the create spec that ran, not what the binding resolves to now", async () => {
+		const { LAIR_CREATE_SPEC_ID } = await import("@serene-pub/core-catalog")
+		const { sessionPipelines } = await import(
+			"$lib/server/pipelines/entities/sessionPipelines"
+		)
+		const { markCreating, markCreated } = await import("$lib/server/sessions/creating")
+		const [row] = await testDb
+			.insert(schema.sessions)
+			.values({ userId: admin.id, isGroup: false, genreId: ADVENTURE_GENRE_ID })
+			.returning()
+		const sessionId = row.id
+
+		// No run recorded yet: the current binding answers.
+		markCreating(sessionId)
+		try {
+			const during = (await sessionPipelines(testDb as any, sessionId, admin.id)).pipelines
+			expect(during.at(-1)).toMatchObject({
+				slug: ADVENTURE_CREATE_SPEC_ID,
+				creation: "creating"
+			})
+		} finally {
+			markCreated(sessionId)
+		}
+
+		const runOf = async (slug: string, runId: string) => {
+			const [spec] = await testDb
+				.select()
+				.from(schema.pipelineSpecs)
+				.where(eq(schema.pipelineSpecs.slug, slug))
+			const now = new Date()
+			await testDb.insert(schema.pipelineRuns).values({
+				runId,
+				specSlug: slug,
+				specVersion: "1.0.0",
+				specVersionId: spec.activeVersionId,
+				sessionId,
+				userId: admin.id,
+				outcome: "ok",
+				triggerSource: "event",
+				seed: "",
+				startedAt: now,
+				endedAt: now,
+				receipt: {}
+			})
+		}
+		// A reply's run is not the create run, whichever came first.
+		await runOf(RESPOND_SPEC_ID, `scoping-reply-${sessionId}`)
+		await runOf(LAIR_CREATE_SPEC_ID, `scoping-create-${sessionId}`)
+
+		const after = (await sessionPipelines(testDb as any, sessionId, admin.id)).pipelines
+		expect(after.at(-1)).toMatchObject({
+			slug: LAIR_CREATE_SPEC_ID,
+			creation: "created"
+		})
+		expect(after.some((p) => p.slug === ADVENTURE_CREATE_SPEC_ID)).toBe(false)
+	})
+
+	test("a node swap on it after creation is refused with the same sentence", async () => {
+		const { sessionsSetNodeRebindHandler } = await import("./sessions")
+		const { CREATION_READ_ONLY_NOTE } = await import(
+			"$lib/server/pipelines/entities/sessionPipelines"
+		)
+		const { markCreating, markCreated } = await import("$lib/server/sessions/creating")
+		const params = {
+			sessionId: adventureSessionId,
+			spec: ADVENTURE_CREATE_SPEC_ID,
+			nodeKey: "seed",
+			definitionId: null
+		}
+
+		const rec = recordingEmit()
+		const res = await sessionsSetNodeRebindHandler.handler(
+			socketFor(admin.id, true),
+			params,
+			rec.emit
+		)
+		expect(res.error).toBe(`${CREATION_READ_ONLY_NOTE} Nothing was saved.`)
+		expect(rec.last("sessions:setNodeRebind")?.error).toBe(res.error)
+
+		markCreating(adventureSessionId)
+		try {
+			const during = await sessionsSetNodeRebindHandler.handler(
+				socketFor(admin.id, true),
+				params,
+				noopEmit
+			)
+			expect(during.error ?? "").not.toMatch(/has been created/)
+		} finally {
+			markCreated(adventureSessionId)
+		}
+	})
+})
+
 describe("instance scope is the administrator's", () => {
 	test("a non-admin asking for it is refused, in a sentence", async () => {
 		const { pipelinesSetOption } = await import("./pipelines")
@@ -210,7 +521,7 @@ describe("instance scope is the administrator's", () => {
 		const rows = await testDb
 			.select()
 			.from(schema.pipelineNodeOverrides)
-			.where(eq(schema.pipelineNodeOverrides.scopeKind, "instance"))
+			.where(eq(schema.pipelineNodeOverrides.scopeKind, "pub"))
 		expect(rows).toHaveLength(0)
 	})
 
@@ -254,7 +565,7 @@ describe("instance scope is the administrator's", () => {
 			shipped!.configId,
 			"Everyone's"
 		)
-		await selectConfig(testDb as any, spec.id, "instance", 0, copy.id)
+		await selectConfig(testDb as any, spec.id, "pub", 0, copy.id)
 
 		await pipelinesSetOption.handler(
 			socketFor(admin.id, true),
@@ -277,7 +588,7 @@ describe("instance scope is the administrator's", () => {
 		const overrides = await testDb
 			.select()
 			.from(schema.pipelineNodeOverrides)
-			.where(eq(schema.pipelineNodeOverrides.scopeKind, "instance"))
+			.where(eq(schema.pipelineNodeOverrides.scopeKind, "pub"))
 		expect(overrides).toHaveLength(0)
 	})
 })
@@ -548,8 +859,7 @@ describe("prompt CRUD is gated on the option, not on ownership", () => {
 		expect(res.promptId).not.toBe(promptId)
 		// The copy's name is derived and unique; the view already offers it.
 		const view = rec.last("pipelines:get")?.pipeline
-		const labels = view.steps
-			.flatMap((s: any) => [...s.options, ...s.advanced])
+		const labels = groupOptions(view.groups)
 			.filter((o: any) => o.control === "prompts-ref")
 			.flatMap((o: any) => o.choices ?? [])
 			.map((c: any) => c.label)
@@ -707,8 +1017,7 @@ describe("prompt CRUD is gated on the option, not on ownership", () => {
 			RESPOND_SPEC_ID,
 			{ userId: admin.id, isAdmin: true }
 		)
-		const other = view!.steps
-			.flatMap((s) => [...s.options, ...s.advanced])
+		const other = groupOptions(view!.groups)
 			.find((o) => o.control === "context-template-ref")!
 		const { pipelinesUpdatePrompt } = await import("./pipelines")
 		const res: any = await pipelinesUpdatePrompt.handler(
@@ -1051,12 +1360,14 @@ describe("the builder's structural payload", () => {
 			{ userId: admin.id, isAdmin: true }
 		)
 		const generate = spec.graph.nodes.find((n: any) => n.key === "generate")
-		const step = view.steps.find((s: any) => s.key === generate.stepKey)
+		const step = groupSteps(view.groups).find(
+			(s) => s.key === generate.stepKey
+		)
 		expect(step, "generate's stepKey matches no step").toBeTruthy()
-		expect(step.label).toBe(generate.label)
+		expect(step!.heading).toBe(generate.label)
 	})
 
-	test("the reads arrive as one block, one chain each", async () => {
+	test("the reads arrive as one block, one chain per source", async () => {
 		// The map draws a frame with columns from exactly this: same clauseId,
 		// different clauseChain. Were they to arrive with no block, or all on
 		// one chain, the page would draw four sequential cards for something
@@ -1070,10 +1381,22 @@ describe("the builder's structural payload", () => {
 		// adding a source is a one-line change here instead of a puzzle.
 		expect(reads.length).toBeGreaterThanOrEqual(4)
 		expect(reads.every((n: any) => n.clauseKind === "gather")).toBe(true)
-		expect(new Set(reads.map((n: any) => n.clauseChain)).size).toBe(
-			reads.length
-		)
-		expect(reads.map((n: any) => n.clauseChain).sort()).toEqual([
+		// A chain is one column; a column may run more than one step in
+		// order. `history` reads the transcript, then the files its rows show.
+		const nodesOf = (chain: string) =>
+			reads
+				.filter((n: any) => n.clauseChain === chain)
+				.map((n: any) => n.key)
+		expect(nodesOf("history")).toEqual([
+			"gather.history.read",
+			"gather.history.attachments"
+		])
+		const multiStep = new Set(["history"])
+		for (const chain of new Set(reads.map((n: any) => n.clauseChain))) {
+			if (!multiStep.has(chain as string))
+				expect(nodesOf(chain as string), chain as string).toHaveLength(1)
+		}
+		expect([...new Set(reads.map((n: any) => n.clauseChain))].sort()).toEqual([
 			"cast",
 			"characterLore",
 			// Spec 1.18.0: the entity mechanism, a third way of retrieving lore —
@@ -1081,6 +1404,8 @@ describe("the builder's structural payload", () => {
 			"entities",
 			"history",
 			"historyEntries",
+			// The cast's presences on this line, for `eligible` (wave 8 C2).
+			"presences",
 			// The narrative graph as ranked candidates (ruling 2026-09-10, Q1),
 			// beside the two branches that hand it to the template as keyed
 			// sections. Three graph reads in one block, and the map draws them

@@ -1,23 +1,41 @@
 import { describe, expect, test } from "vitest"
 import {
+	amendmentDateProblem,
 	amendmentsAfter,
 	amendmentsAsOf,
 	applyAmendments,
 	changedFields,
+	ENTRY_DATE_PARTS,
+	NEVER_AMENDED,
 	compareLines,
 	offWindowAmendments,
 	offWindowProblem,
-	onLine,
-	rowsOnLine,
 	castAsOf,
 	entryAsOf,
 	groupAmendments,
 	type Amendment
 } from "./amendments"
-import { compareDates, dateValue } from "./storyDate"
+import { isOnLine, lineOf, MAIN_LINE, rowsReadingOnLine } from "./lineReading"
+import { compareDates, dateValue, type StoryDate } from "./storyDate"
 
 const am = (over: Partial<Amendment> & Pick<Amendment, "id" | "year">) =>
 	({ branchId: null, fields: {}, ...over }) as Amendment
+
+/** Branch `branchId` off main, at `forkedAt` (absent: at now, no cut). */
+const on = (branchId: number | null, forkedAt?: StoryDate) =>
+	lineOf(
+		branchId,
+		branchId == null
+			? []
+			: [
+					{
+						id: branchId,
+						forkYear: forkedAt?.year ?? null,
+						forkMonth: forkedAt?.month ?? null,
+						forkDay: forkedAt?.day ?? null
+					}
+				]
+	)
 
 const entry = { id: 1, name: "Verity", content: "A keeper.", enabled: true }
 
@@ -64,7 +82,7 @@ describe("precedence", () => {
 					fields: { content: "branch" }
 				})
 			],
-			{ branchId: 7 }
+			{ line: on(7) }
 		)
 		expect(out.content).toBe("branch")
 	})
@@ -83,7 +101,7 @@ describe("precedence", () => {
 					fields: { content: "branch" }
 				})
 			],
-			{ branchId: 7 }
+			{ line: on(7) }
 		)
 		expect(out.content).toBe("branch")
 	})
@@ -135,16 +153,16 @@ describe("branch isolation", () => {
 	]
 
 	test("reading main ignores every branch", () => {
-		expect(entryAsOf(entry, mixed, { branchId: null }).content).toBe(
+		expect(entryAsOf(entry, mixed, { line: MAIN_LINE }).content).toBe(
 			"main Y2"
 		)
 	})
 
 	test("reading a branch sees main plus its own, and no sibling's", () => {
-		expect(entryAsOf(entry, mixed, { branchId: 7 }).content).toBe(
+		expect(entryAsOf(entry, mixed, { line: on(7) }).content).toBe(
 			"branch 7"
 		)
-		expect(entryAsOf(entry, mixed, { branchId: 8 }).content).toBe(
+		expect(entryAsOf(entry, mixed, { line: on(8) }).content).toBe(
 			"branch 8"
 		)
 	})
@@ -156,7 +174,7 @@ describe("branch isolation", () => {
 				am({ id: 1, year: 9, fields: { name: "main renamed at Y9" } }),
 				am({ id: 2, year: 4, branchId: 7, fields: { content: "b" } })
 			],
-			{ branchId: 7 }
+			{ line: on(7) }
 		)
 		expect(out.name).toBe("main renamed at Y9")
 	})
@@ -175,7 +193,7 @@ describe("branch isolation", () => {
 				}),
 				am({ id: 3, year: 4, branchId: 7, fields: { content: "b" } })
 			],
-			{ branchId: 7, forkedAt: { year: 5 } }
+			{ line: on(7, { year: 5 }) }
 		)
 		expect(out.name).toBe("before the fork")
 	})
@@ -184,7 +202,7 @@ describe("branch isolation", () => {
 		const out = entryAsOf(
 			entry,
 			[am({ id: 1, year: 4, fields: { name: "main Y4" } })],
-			{ branchId: 7, forkedAt: { year: 9 }, moment: { year: 2 } }
+			{ line: on(7, { year: 9 }), moment: { year: 2 } }
 		)
 		expect(out.name).toBe("Verity")
 	})
@@ -244,7 +262,7 @@ describe("amendmentsAsOf", () => {
 				am({ id: 2, year: 4 }),
 				am({ id: 3, year: 2 })
 			],
-			{ branchId: 7 }
+			{ line: on(7) }
 		)
 		expect(list.map((a) => a.id)).toEqual([3, 2, 1])
 	})
@@ -270,7 +288,7 @@ describe("amendmentsAfter", () => {
 	test("a sibling branch's future is not ours", () => {
 		const later = amendmentsAfter([am({ id: 1, year: 9, branchId: 8 })], {
 			moment: { year: 1 },
-			branchId: 7
+			line: on(7)
 		})
 		expect(later).toEqual([])
 	})
@@ -384,6 +402,38 @@ describe("changedFields", () => {
 	})
 })
 
+describe("a date is part of the entry, never of an amendment (A18(b))", () => {
+	const history = { id: 3, year: 4, month: 2, day: 9, content: "The flood." }
+
+	test("the date parts are never amended", () => {
+		for (const part of ENTRY_DATE_PARTS) expect(NEVER_AMENDED.has(part)).toBe(true)
+		expect([...ENTRY_DATE_PARTS]).toEqual(["year", "month", "day"])
+	})
+
+	test("a re-date is still a change of the entry: the diff names it, for Change the base", () => {
+		expect(changedFields({ ...history, year: 5, month: null }, history)).toEqual({
+			year: 5,
+			month: null
+		})
+	})
+
+	test("an amendment naming a date part is refused in a sentence; one naming none is not", () => {
+		expect(amendmentDateProblem({ content: "Later." })).toBeNull()
+		expect(amendmentDateProblem({ day: 3, content: "Later." })).toMatch(
+			/can't change when an entry happened/
+		)
+		expect(amendmentDateProblem({ year: null })).not.toBeNull()
+	})
+
+	test("the resolver never reads a date, or an identity, from an amendment", () => {
+		// A row an older build stored: nothing re-dates or re-ids the entry.
+		const read = entryAsOf(history, [
+			am({ id: 1, year: 6, fields: { year: 1, day: 30, id: 99, content: "Later." } })
+		])
+		expect(read).toEqual({ ...history, content: "Later." })
+	})
+})
+
 describe("which rows a line can see", () => {
 	const rows = [
 		{ id: 1, name: "shared" },
@@ -393,26 +443,22 @@ describe("which rows a line can see", () => {
 	]
 
 	test("main sees only the shared rows", () => {
-		expect(rowsOnLine(rows, null).map((r) => r.id)).toEqual([1, 4])
+		expect(rowsReadingOnLine(rows, MAIN_LINE).map((r) => r.id)).toEqual([1, 4])
 	})
 
 	test("a branch sees the shared rows and its own", () => {
-		expect(rowsOnLine(rows, 7).map((r) => r.id)).toEqual([1, 2, 4])
+		expect(rowsReadingOnLine(rows, on(7)).map((r) => r.id)).toEqual([1, 2, 4])
 	})
 
 	test("a branch never sees a sibling's", () => {
-		expect(rowsOnLine(rows, 8).some((r) => r.id === 2)).toBe(false)
-	})
-
-	test("an undefined line reads as main", () => {
-		expect(rowsOnLine(rows, undefined).map((r) => r.id)).toEqual([1, 4])
+		expect(rowsReadingOnLine(rows, on(8)).some((r) => r.id === 2)).toBe(false)
 	})
 
 	test("a row with no branch column at all is shared", () => {
 		// A row written before the column existed: the wire carries no
 		// `branchId` at all, which must read as shared and not as hidden.
 		const legacy = { id: 9 } as { id: number; branchId?: number | null }
-		expect(onLine(legacy, 7)).toBe(true)
+		expect(isOnLine(legacy, on(7))).toBe(true)
 	})
 })
 
@@ -528,8 +574,8 @@ describe("the card a cast member is represented by", () => {
 			am({ id: 1, year: 5, fields: { characterId: 11 } }),
 			am({ id: 2, year: 5, branchId: 7, fields: { characterId: 12 } })
 		]
-		expect(castAsOf(member, rows, { branchId: null }).characterId).toBe(11)
-		expect(castAsOf(member, rows, { branchId: 7 }).characterId).toBe(12)
+		expect(castAsOf(member, rows, { line: MAIN_LINE }).characterId).toBe(11)
+		expect(castAsOf(member, rows, { line: on(7) }).characterId).toBe(12)
 	})
 })
 
@@ -546,13 +592,13 @@ describe("compareLines — this line against main", () => {
 	const by = (m: Record<number, Amendment[]>) => (id: number) => m[id] ?? []
 
 	test("a row written on this line has nothing to put beside it", () => {
-		const out = compareLines(rows, by({}), 7)
+		const out = compareLines(rows, by({}), { line: on(7) })
 		expect(out).toHaveLength(1)
 		expect(out[0]).toMatchObject({ id: 2, kind: "only", main: null })
 	})
 
 	test("a sibling's row is not a difference", () => {
-		expect(compareLines(rows, by({}), 7).some((d) => d.id === 3)).toBe(
+		expect(compareLines(rows, by({}), { line: on(7) }).some((d) => d.id === 3)).toBe(
 			false
 		)
 	})
@@ -571,7 +617,7 @@ describe("compareLines — this line against main", () => {
 					})
 				]
 			}),
-			7
+			{ line: on(7) }
 		)
 		expect(out).toHaveLength(1)
 		expect(out[0].kind).toBe("differs")
@@ -584,13 +630,13 @@ describe("compareLines — this line against main", () => {
 		const out = compareLines(
 			[shared],
 			by({ 1: [am({ id: 1, year: 2, fields: { content: "both" } })] }),
-			7
+			{ line: on(7) }
 		)
 		expect(out).toEqual([])
 	})
 
 	test("a shared row with no overlays at all is not listed", () => {
-		expect(compareLines([shared], by({}), 7)).toEqual([])
+		expect(compareLines([shared], by({}), { line: on(7) })).toEqual([])
 	})
 
 	test("MAIN is read without the fork cut", () => {
@@ -602,8 +648,7 @@ describe("compareLines — this line against main", () => {
 			by({
 				1: [am({ id: 1, year: 9, fields: { content: "main, later" } })]
 			}),
-			7,
-			{ forkedAt: { year: 5 } }
+			{ line: on(7, { year: 5 }) }
 		)
 		expect(out).toHaveLength(1)
 		expect(out[0].main?.content).toBe("main, later")
@@ -623,10 +668,10 @@ describe("compareLines — this line against main", () => {
 			]
 		})
 		expect(
-			compareLines([shared], overlays, 7, { moment: { year: 4 } })
+			compareLines([shared], overlays, { line: on(7), moment: { year: 4 } })
 		).toEqual([])
 		expect(
-			compareLines([shared], overlays, 7, { moment: { year: 9 } })
+			compareLines([shared], overlays, { line: on(7), moment: { year: 9 } })
 		).toHaveLength(1)
 	})
 
@@ -643,7 +688,7 @@ describe("compareLines — this line against main", () => {
 					})
 				]
 			}),
-			7
+			{ line: on(7) }
 		)
 		expect(out[0].fields.sort()).toEqual(["content", "name"])
 	})
@@ -677,22 +722,24 @@ describe("compareDates — the ordering key", () => {
 		expect(compareDates({ year: 2, month: null }, { year: 2 })).toBe(0)
 	})
 
-	test("⚠ it is correct where the packed value is WRONG", () => {
+	test("⚠ it is correct where a radix-100 packing was WRONG", () => {
 		// "Year 3, day 250" is an ordinary free-form habit — days of the year.
-		// Packed: 3*10000 + 250 = 30250, and 5*10000 + 50 = 50050 … fine. But
-		// month overflows the same way and collides outright:
+		// Radix-100 packed, month 100 of year 5 was 60000 — the same number as
+		// year 6. `dateValue` now squeezes a part past 99 below the next one
+		// (2026-09-30), so placement agrees; the comparator was always right.
 		const a = { year: 5, month: 100, day: 0 }
 		const b = { year: 6, month: 0, day: 0 }
-		expect(dateValue(a)).toBe(dateValue(b)) // the bug, stated
-		expect(compareDates(a, b)).toBeLessThan(0) // the fix
+		expect(compareDates(a, b)).toBeLessThan(0)
+		expect(dateValue(a)).toBeLessThan(dateValue(b))
 	})
 
 	test("a day past 100 no longer bleeds into the month", () => {
 		const a = { year: 3, month: 1, day: 250 }
 		const b = { year: 3, month: 3, day: 1 }
 		expect(compareDates(a, b)).toBeLessThan(0)
-		// Packed, `a` lands at 3*10000 + 100 + 250 = 30350, past b's 30301.
-		expect(dateValue(a)).toBeGreaterThan(dateValue(b))
+		// Radix-100 packed, `a` landed at 3*10000 + 100 + 250 = 30350, past
+		// b's 30301. Placement now keeps it inside month 1.
+		expect(dateValue(a)).toBeLessThan(dateValue(b))
 	})
 
 	test("negative years order correctly, for the era work to come", () => {
@@ -705,11 +752,12 @@ describe("resolution is correct where the packed value collided", () => {
 	const entry = { id: 1, content: "base" }
 
 	test("a day past 100 no longer collides with a later month", () => {
-		// Packed, Y3 M3 D50 and Y3 M1 D250 are both 30350 — equal — so an
-		// amendment in month 3 counted as "already happened" while the reader
-		// stood in month 1. Element-wise it plainly has not.
-		expect(dateValue({ year: 3, month: 3, day: 50 })).toBe(
-			dateValue({ year: 3, month: 1, day: 250 })
+		// Radix-100 packed, Y3 M3 D50 and Y3 M1 D250 were both 30350 — equal —
+		// so an amendment in month 3 counted as "already happened" while the
+		// reader stood in month 1. Element-wise it plainly has not (and
+		// `dateValue` no longer packs them together either).
+		expect(dateValue({ year: 3, month: 1, day: 250 })).toBeLessThan(
+			dateValue({ year: 3, month: 3, day: 50 })
 		)
 		const rows = [
 			am({ id: 1, year: 3, month: 3, day: 50, fields: { content: "m3" } })
@@ -755,8 +803,7 @@ describe("resolution is correct where the packed value collided", () => {
 		]
 		// The fork left at Y3 M1 D100; main's D250 is after it and must not reach.
 		const out = entryAsOf(entry, rows, {
-			branchId: 7,
-			forkedAt: { year: 3, month: 1, day: 100 }
+			line: on(7, { year: 3, month: 1, day: 100 })
 		})
 		expect(out.content).toBe("fork")
 	})

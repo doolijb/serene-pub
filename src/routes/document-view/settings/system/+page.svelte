@@ -416,8 +416,7 @@
 		</p>
 		<p>
 			<strong>Accounts are enabled.</strong>
-			This can't be turned off from Document View — use the standard site's
-			System settings if you need to disable it.
+			This is permanent: accounts can't be turned off again.
 		</p>
 	{:else}
 		<p class="a11y-hint">

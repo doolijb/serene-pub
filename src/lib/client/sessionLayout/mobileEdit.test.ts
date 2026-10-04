@@ -3,7 +3,7 @@
  * covered without a phone, a gridstack or a viewport.
  */
 import { describe, expect, it } from "vitest"
-import type { GsLayout } from "./GridStackZone.svelte"
+import type { ArrangedZone } from "@serene-pub/sdk"
 import { collapsedOrder } from "./sideRail"
 import { unitsOf } from "./tabGroups"
 import {
@@ -16,7 +16,7 @@ import {
 } from "./mobileEdit"
 
 /** A side column: three full-width groups stacked, the ordinary case. */
-const side = (): GsLayout => ({
+const side = (): ArrangedZone => ({
 	cols: 1,
 	rows: 9,
 	items: [
@@ -27,7 +27,7 @@ const side = (): GsLayout => ({
 })
 
 /** The chat middle: one tall widget over a short one. */
-const middle = (): GsLayout => ({
+const middle = (): ArrangedZone => ({
 	cols: 4,
 	rows: 12,
 	items: [
@@ -37,7 +37,7 @@ const middle = (): GsLayout => ({
 })
 
 /** Two widgets side by side over a full-width one. */
-const twoD = (): GsLayout => ({
+const twoD = (): ArrangedZone => ({
 	cols: 4,
 	rows: 8,
 	items: [
@@ -48,7 +48,7 @@ const twoD = (): GsLayout => ({
 })
 
 /** A tab group of two, over a lone widget. */
-const grouped = (): GsLayout => ({
+const grouped = (): ArrangedZone => ({
 	cols: 2,
 	rows: 8,
 	items: [
@@ -59,7 +59,7 @@ const grouped = (): GsLayout => ({
 })
 
 /** The order the collapsed (phone) render draws in, straight from the runtime. */
-function renderedOrder(z: GsLayout): string[] {
+function renderedOrder(z: ArrangedZone): string[] {
 	const units = unitsOf(z.items)
 	return collapsedOrder(
 		units.map((u) => ({
@@ -71,7 +71,7 @@ function renderedOrder(z: GsLayout): string[] {
 }
 
 /** Do any two render units sit on the same cells? */
-function overlaps(z: GsLayout): number {
+function overlaps(z: ArrangedZone): number {
 	const boxes = unitsOf(z.items).map((u) => u.box)
 	let n = 0
 	for (let i = 0; i < boxes.length; i++)
@@ -90,14 +90,14 @@ function overlaps(z: GsLayout): number {
 }
 
 /** Every box inside the grid the zone declares. */
-function inBounds(z: GsLayout): boolean {
+function inBounds(z: ArrangedZone): boolean {
 	return z.items.every(
 		(i) =>
 			i.x >= 0 && i.y >= 0 && i.x + i.w <= z.cols && i.y + i.h <= z.rows
 	)
 }
 
-function item(z: GsLayout, id: string): string {
+function item(z: ArrangedZone, id: string): string {
 	return JSON.stringify(z.items.find((i) => i.id === id))
 }
 

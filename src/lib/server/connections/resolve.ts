@@ -5,7 +5,8 @@
  * takes four layers and collapses them. This is the app-side wrapper that knows
  * where those layers live: the adapter's declaration in the static manifest, the
  * preset slug on the row, the probe the last successful test wrote, and the
- * person's own toggles.
+ * person's own toggles — plus, for a merged pair, the HOST-DECLARED layer (what
+ * the model's own host said; `hostCapabilities` on the row, laid over the preset).
  *
  * The split between the two halves of the `capabilities` column is the thing to
  * keep straight while reading this file:
@@ -74,6 +75,13 @@ export interface CapabilityRow {
 	type: string
 	preset?: string | null
 	capabilities?: Record<string, unknown> | null
+	/**
+	 * The HOST-DECLARED layer (`$lib/shared/connections/hostCapabilities`):
+	 * what the model's own host said, as switches. Only a merged PAIR carries
+	 * it (`mergeEndpointModel` reads the model's facts and launch options); an
+	 * endpoint alone has no model to speak for, so the field is absent there.
+	 */
+	hostCapabilities?: Partial<Record<string, boolean>> | null
 }
 
 const column = (
@@ -135,9 +143,18 @@ export function resolveConnectionCapabilities(
 	// set, not a guess, so a slot refuses it at bind rather than at the request.
 	if (!adapter) return {}
 	const stored = column(row)
+	const preset = row.preset ? PRESET_CAPABILITIES[row.preset] : undefined
 	return resolveCapabilities({
 		adapter,
-		preset: row.preset ? PRESET_CAPABILITIES[row.preset] : undefined,
+		// The host-declared layer rides in the preset's slot, laid OVER it:
+		// both are assertions with the same meaning (`true` → the protocol's
+		// ceiling, `false` → off), and the host's claim is about this MODEL
+		// where the preset's is about the service, so the more specific one
+		// wins. The probe and the person's switches still outrank both — the
+		// order is adapter → preset → host → probe → override.
+		preset: row.hostCapabilities
+			? { ...(preset ?? {}), ...row.hostCapabilities }
+			: preset,
 		probe: probe ?? stored.probe?.found,
 		overrides: stored.overrides
 	})

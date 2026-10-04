@@ -4,6 +4,7 @@
  * land on the budget group that pays for it.
  */
 import { describe, it, expect } from "vitest"
+import * as C from "@serene-pub/contracts"
 import {
 	BUDGET_GROUP_ALIASES,
 	DEFAULT_GROUPS,
@@ -66,5 +67,69 @@ describe("bandsFromIntents", () => {
 		expect(groups.maxEntries.deep).toBeUndefined()
 		expect(groups.minEntries.deep).toBe(0)
 		expect(groups.priority.deep).toBe("high")
+	})
+})
+
+describe("the defaults reproduce today's effective values", () => {
+	/**
+	 * The ranker's fallback table and the five definitions' declared defaults
+	 * are ONE set. Disagreeing, a person who tuned nothing would see a
+	 * different split depending on which of the two a run fell back to.
+	 */
+	const declared = (def: { descriptor: any }, field: string) =>
+		def.descriptor.slots?.params?.schema?.[field]?.default
+	const SOURCES = {
+		messages: C.sessionHistory,
+		worldLore: C.worldLore,
+		characterLore: C.characterLore,
+		history: C.historyEntries,
+		relationships: C.relationshipSearch
+	} as const
+
+	it("declares on each source exactly what the ranker's map held", () => {
+		for (const [band, def] of Object.entries(SOURCES)) {
+			expect(declared(def, "share"), `${band} share`).toBe(
+				DEFAULT_GROUPS.share[band as keyof typeof DEFAULT_GROUPS.share]
+			)
+			expect(declared(def, "maxEntries"), `${band} maxEntries`).toBe(
+				DEFAULT_GROUPS.maxEntries[band as keyof typeof DEFAULT_GROUPS.maxEntries]
+			)
+			expect(declared(def, "priority"), `${band} priority`).toBe("normal")
+		}
+		// The one floor: the conversation's six; the lore lanes and the graph
+		// declare none (R6).
+		expect(declared(C.sessionHistory, "minEntries")).toBe(6)
+		for (const def of [C.worldLore, C.characterLore, C.historyEntries, C.relationshipSearch])
+			expect(declared(def, "minEntries")).toBeUndefined()
+		expect(DEFAULT_GROUPS.share).toEqual({
+			messages: 0.5,
+			worldLore: 0.1667,
+			characterLore: 0.1667,
+			history: 0.1666,
+			relationships: 0
+		})
+		expect(DEFAULT_GROUPS.minEntries.messages).toBe(6)
+	})
+
+	it("resolves the same table from no intents at all as from the declared ones", () => {
+		const fromNothing = bandsFromIntents([]).groups
+		const fromDeclared = bandsFromIntents(
+			Object.entries(SOURCES).map(([band, def]) => ({
+				band,
+				intent: {
+					share: declared(def, "share"),
+					maxEntries: declared(def, "maxEntries"),
+					minEntries: declared(def, "minEntries"),
+					priority: declared(def, "priority")
+				}
+			}))
+		).groups
+		expect(fromDeclared).toEqual(fromNothing)
+	})
+
+	it("declares none of the three maps on the ranker any more", () => {
+		const schema = C.rankHybrid.descriptor.slots?.params?.schema ?? {}
+		for (const gone of ["share", "maxEntries", "minEntries"])
+			expect(gone in schema, `${gone} still on rank-hybrid`).toBe(false)
 	})
 })

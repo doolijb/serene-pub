@@ -14,8 +14,10 @@ import {
 	CHARACTER_LORE_TYPE_ID,
 	HISTORY_TYPE_ID,
 	ITEM_TYPE_ID,
+	LOCATION_TYPE_ID,
 	WORLD_LORE_TYPE_ID
 } from "$lib/shared/entries/types"
+import type { StoryDate } from "./storyDate"
 
 /**
  * The kind facets, which are the navigation. Character Lore is not among them:
@@ -34,7 +36,13 @@ export const LORE_SCOPES = [
 
 export type LoreScope = (typeof LORE_SCOPES)[number]
 
-/** How the set is drawn. Every lens draws every scope. */
+/**
+ * How the set is drawn — the route's spelling of each lens (`?lens=`), in the
+ * lens row's order. Everything else a lens is (its label, icon, mount, what
+ * it does with a scope) is its descriptor in the client's lens registry
+ * (`client/lorebooks/lenses/registry.ts`), which the compiler holds to this
+ * list: a lens added here and not there does not build.
+ */
 export const LORE_LENSES = [
 	"list",
 	"cards",
@@ -54,14 +62,16 @@ export const DEFAULT_LENS: LoreLens = "list"
 /**
  * The pool kind a scope narrows to, where it has one.
  *
- * `all` has none, which is what makes it the same list with nothing narrowed;
- * `places` has none yet, because no declared kind carries a place role.
+ * `all` has none, which is what makes it the same list with nothing narrowed.
+ * `places` is its `core:entry/location` entries — the one definition of a
+ * place (2026-09-28), a pool kind since places plan B5.
  */
 export const SCOPE_KIND: Partial<Record<LoreScope, string>> = {
 	cast: CHARACTER_LORE_TYPE_ID,
 	world: WORLD_LORE_TYPE_ID,
 	history: HISTORY_TYPE_ID,
 	scenes: "scene",
+	places: LOCATION_TYPE_ID,
 	items: ITEM_TYPE_ID
 }
 
@@ -100,23 +110,13 @@ export interface LoreRoute {
 }
 
 export const SCOPE_LABELS: Record<LoreScope, string> = {
-	all: "All entries",
+	all: "Everything",
 	cast: "Cast",
 	world: "World lore",
 	history: "History",
 	scenes: "Scenes",
 	places: "Places",
 	items: "Items"
-}
-
-export const LENS_LABELS: Record<LoreLens, string> = {
-	list: "List",
-	cards: "Cards",
-	tree: "Tree",
-	graph: "Graph",
-	time: "Time",
-	lives: "Lives",
-	places: "Places"
 }
 
 export type LoreAction =
@@ -314,6 +314,32 @@ export function compactStep(
 	if (state.isNew) return "editor"
 	if (!state.hasSelection) return "list"
 	return route.inspector ? "inspector" : "editor"
+}
+
+/**
+ * A story date as an address — the route's `moment`: `Y3`, `Y3-2`, `Y3-2-12`.
+ * Lossless, the one identity a date has on the axis, and the one spelling a
+ * server link and the workspace both write (`time/moment.ts` reads it back).
+ */
+export function momentKey(date: StoryDate): string {
+	const parts = [`Y${date.year}`]
+	if (date.month != null) parts.push(String(date.month))
+	if (date.month != null && date.day != null) parts.push(String(date.day))
+	return parts.join("-")
+}
+
+/**
+ * Whether two readings are the same line (null = main) at the same moment
+ * (null = now), by the moment's address — so `{ year: 3 }` and
+ * `{ year: 3, month: null, day: null }` are one moment.
+ */
+export function sameLineAndMoment(
+	a: { branchId: number | null; moment: StoryDate | null },
+	b: { branchId: number | null; moment: StoryDate | null }
+): boolean {
+	if ((a.branchId ?? null) !== (b.branchId ?? null)) return false
+	if (!a.moment || !b.moment) return !a.moment && !b.moment
+	return momentKey(a.moment) === momentKey(b.moment)
 }
 
 /**

@@ -50,7 +50,8 @@
 
 	const triggerClass = $derived(
 		variant === "chip"
-			? "btn btn-sm preset-tonal-surface px-2 pointer-coarse:min-h-11 pointer-coarse:min-w-11"
+			? // Last in the composer's one Actions row (note 30), after More.
+				"btn btn-sm preset-tonal-surface order-last px-2 pointer-coarse:min-h-11 pointer-coarse:min-w-11"
 			: "btn btn-sm preset-tonal-surface self-start"
 	)
 </script>

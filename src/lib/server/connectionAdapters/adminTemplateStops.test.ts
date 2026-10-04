@@ -206,8 +206,7 @@ function params(connection: any, session: any) {
 	return {
 		connection,
 		sampling: {} as any,
-		contextConfig: {} as any,
-		promptConfig: { systemPrompt: "You are terse." } as any,
+		systemPrompt: "You are terse.",
 		session,
 		currentCharacterId: null,
 		tokenCounter: { countTokens: async () => 1 } as any,

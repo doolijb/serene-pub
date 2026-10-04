@@ -30,9 +30,15 @@ import {
 	completionTemplateOf,
 	type CompletionTemplate
 } from "$lib/shared/constants/completionTemplates"
-import { parseSplitChatPrompt } from "$lib/shared/utils/parseSplitChatPrompt"
+import { parseChatWire } from "$lib/shared/utils/parseSplitChatPrompt"
+import {
+	flattenMediaMarkers,
+	liftMediaMarkers,
+	neutralizeRenderScope
+} from "$lib/shared/utils/mediaMarkers"
 import { PromptFormats } from "$lib/shared/constants/PromptFormats"
 import type { WireMode } from "$lib/shared/connectionAdapters/wireMode"
+import type { MidSystem } from "$lib/shared/connectionAdapters/midSystem"
 import { entryDeclarations } from "$lib/server/entries/declarations"
 import type { EntryOrderKey, EntryRoles, StoryCalendar } from "@serene-pub/sdk"
 import { formatStoryTime, FORBIDDEN_TEMPLATE_NAMES } from "@serene-pub/sdk"
@@ -132,7 +138,9 @@ export function allocate(
 			meta:
 				d.candidate.source === RECALLED_LINES_BAND
 					? recalledLineMeta(payload)
-					: orderMeta(d.candidate.source, payload),
+					: rolesOfSource(d.candidate.source)?.anchor
+						? castMemberMeta(payload)
+						: orderMeta(d.candidate.source, payload),
 			included: d.included,
 			why: [d.why, `score ${d.score.toFixed(3)}`, d.reason]
 		}
@@ -214,7 +222,7 @@ export function objectByRole(
 	if (!roles?.title && roles?.order) {
 		for (const a of sortByOrder(allocations, roles.order)) {
 			if (!a.content?.trim()) continue
-			obj[orderKeyOf(a, roles.order)] = a.content
+			obj[distinctKey(obj, orderKeyOf(a, roles.order))] = a.content
 		}
 	} else {
 		for (const a of allocations)
@@ -261,22 +269,42 @@ const partOf = (a: Allocation, field: string): number =>
  * is. A second one wants a **named policy** — the way `anchor` names
  * `core:policy/binding-visibility@1` — rather than a branch in this function.
  *
- * Byte for byte what `formatHistoryDateKey` produced over the same parts: the
- * first key bare with an absent one reading `0`, every later present key
- * appended zero-padded to two, and an absent middle key skipped rather than
- * terminating the string.
+ * What `formatHistoryDateKey` produced over the same parts — the first key
+ * with an absent one reading `0`, every later present key appended zero-padded
+ * to two, an absent middle key skipped rather than terminating the string —
+ * except a heading of the first key alone, which is named: `Year 412`, never
+ * `412` (plan A20 b). A bare `412` is an integer-like key, and an object lists
+ * those ascending ahead of every other key, so the oldest year-only entry
+ * would lead a list that is newest first everywhere else.
  */
 const orderKeyOf = (a: Allocation, order: readonly EntryOrderKey[]): string => {
 	const meta = a.meta as Record<string, unknown> | undefined
 	const parts = order.map((k) => meta?.[k.field])
-	let key = String(parts[0] ?? 0)
-	for (const part of parts.slice(1))
-		if (part != null) key += `-${String(part).padStart(2, "0")}`
-	return key
+	const lead = String(parts[0] ?? 0)
+	const rest = parts.slice(1).filter((part) => part != null)
+	if (!rest.length) return `${partName(order[0].field)} ${lead}`
+	return [lead, ...rest.map((part) => String(part).padStart(2, "0"))].join("-")
+}
+
+/** An order key's field as a heading word: `year` → `Year`. */
+const partName = (field: string): string =>
+	field.charAt(0).toUpperCase() + field.slice(1)
+
+/**
+ * `key`, or — when an earlier allocation already holds it — `key (2)`,
+ * `key (3)`, … (plan A20 a). Two history entries on one date are two events,
+ * and a heading that repeated would keep only the last of them.
+ */
+const distinctKey = (taken: Record<string, string>, key: string): string => {
+	if (!Object.hasOwn(taken, key)) return key
+	let n = 2
+	while (Object.hasOwn(taken, `${key} (${n})`)) n++
+	return `${key} (${n})`
 }
 
 /**
- * The most recent history entry's date, as parts.
+ * The story's present, as parts: the session's story now when the book gives
+ * one, else the most recent allocated history entry's date.
  *
  * ⚠ Returned `formatDate(...)` — a finished `"412-03"` — until the layout took
  * over the formatting. A pre-formatted value is one a layout cannot lay out:
@@ -320,14 +348,14 @@ function currentDateOf(
 				calendar?: StoryCalendar | null
 		  }
 		| undefined
-	// A stored clock wins — the session's own (story-time P3), else its
-	// line's: it is where the story stands, set on purpose. Without one, the
-	// newest ALLOCATED history entry, as always.
+	// The story's present wins: the session's own clock (story-time P3), else
+	// its line's present — the line's clock, else the newest history entry
+	// the line holds (`sessionStoryNowOf`), retrieved this turn or not (plan
+	// A20 c). The newest ALLOCATED entry only without one: no book.
 	let date:
 		| { year: number; month?: number; day?: number; hour?: number; minute?: number }
 		| undefined
-	const clock =
-		story?.now?.from === "clock" || story?.now?.from === "session" ? story.now : undefined
+	const clock = story?.now ?? undefined
 	if (clock) {
 		date = {
 			year: clock.year,
@@ -378,6 +406,40 @@ function orderMeta(
 	const lead = payload[order[0].field]
 	if (lead === undefined || lead === null) return undefined
 	return Object.fromEntries(order.map((k) => [k.field, payload[k.field]]))
+}
+
+/**
+ * Whose an anchored row is — `{ castMember }`, the name the lore read gave
+ * the cast member it is bound to (the session's reading of them). Only the
+ * name travels: the binding's id and the member's private fields stay on the
+ * row. `undefined` for a row bound to nobody.
+ */
+const castMemberMeta = (
+	payload: Record<string, unknown>
+): Record<string, unknown> | undefined =>
+	typeof payload.castMember === "string" && payload.castMember
+		? { castMember: payload.castMember }
+		: undefined
+
+/**
+ * Admitted anchored rows as `core:var/character-lore@1` declares them —
+ * `{ title, castMember?, content }`, in rank order — or `undefined` when none
+ * was included, so `{{#if characterLore}}` is false and no heading renders.
+ */
+function anchoredEntriesOf(
+	allocations: readonly Allocation[]
+): Array<{ title: string; castMember?: string; content: string }> | undefined {
+	const entries = allocations
+		.filter((a) => a.content)
+		.map((a) => {
+			const castMember = a.meta?.castMember
+			return {
+				title: a.name ?? "",
+				...(typeof castMember === "string" ? { castMember } : {}),
+				content: a.content
+			}
+		})
+	return entries.length ? entries : undefined
 }
 
 /**
@@ -470,6 +532,13 @@ export interface RenderInput extends RenderRun {
 	 * never expressed a position at all.
 	 */
 	postHistory?: Record<string, unknown>
+	/**
+	 * 🚧 The author's note, placed (AN1) — resolved upstream like
+	 * `postHistory`, for the same reason. Absent when the context carries no
+	 * note; and when it carries the builder's unplaced copy and nothing
+	 * placed it, that copy is dropped rather than rendered at index 0.
+	 */
+	authorsNote?: Record<string, unknown>
 	/** The context config's story string. */
 	template: string
 	/**
@@ -500,6 +569,8 @@ export interface RenderInput extends RenderRun {
 		role: string
 		content: string
 		name?: string
+		/** 🚧 The line's files, placed (`core:task/place-attachments@1`). */
+		attachments?: string
 	}>
 	/**
 	 * Decides whether the result is one string or role-tagged messages, and
@@ -546,6 +617,15 @@ export interface RenderInput extends RenderRun {
 	 */
 	wireMode?: WireMode
 	/**
+	 * What the connection's chat wire does with a system message below the
+	 * top (AN3) — `fold` asks the message builder to fold depth-placed system
+	 * text (the post-history reminder, the author's note, inject scripts) into
+	 * the nearest user message. From the same `connection` slot as `wireMode`,
+	 * through `midSystemFor`; absent means `keep`, and it has no effect off
+	 * the chat wire.
+	 */
+	midSystem?: MidSystem
+	/**
 	 * Which template language `template` is written in.
 	 *
 	 * **Required, and no longer nullable.** It was `string | null`, on the
@@ -584,6 +664,11 @@ export interface RenderedContext {
 	 * documenting it".
 	 */
 	promptFormat?: string
+	/**
+	 * The label of the seed line the chat wire did not send (B2) — `Aria`.
+	 * Absent when the seed went out as written, or there was none.
+	 */
+	seedLabel?: string
 	/** What the template actually referenced, for the variable-awareness panel. */
 	usedVariables: string[]
 	/**
@@ -662,8 +747,7 @@ export async function render(input: RenderInput): Promise<RenderedContext> {
 	 * node's `variables` slot resolved beyond its own `renders`: the bands
 	 * declared upstream of `candidates` (`rendersBands`, SDK `rendersAt`). Each
 	 * is laid out through its variable's selected layout, with the in-code
-	 * floor when none is selected; `characterLore` is the one exception, the
-	 * raw list it has always been (`rendersBands.raw`).
+	 * floor when none is selected.
 	 *
 	 * Laid out ahead of the object literal because layouts may render through
 	 * a plugin's engine — an await inside the literal would read fine and
@@ -712,11 +796,8 @@ export async function render(input: RenderInput): Promise<RenderedContext> {
 		...(input.prompts ?? {}),
 		...(input.templateContext ?? {}),
 		worldLore: laidOut.worldLore,
-		// Not laid out, and not an oversight: nothing renders this. Lore bound
-		// to a character is folded into that character inside `characters`,
-		// under an `"extra lore"` key (docs/context-templates.md is explicit).
-		// A layout for it would be a setting that changes nothing — which is
-		// why the variables slot names it `raw`.
+		// Admitted lore of cast members, laid out. It reaches the prompt where
+		// the template writes `{{{characterLore}}}` — the shipped one does.
 		characterLore: laidOut.characterLore,
 		history: laidOut.history,
 		currentDate: currentDateLaidOut,
@@ -745,7 +826,15 @@ export async function render(input: RenderInput): Promise<RenderedContext> {
 		...(annex ? { annex } : {}),
 		// Last, so the resolved block wins over the placeholder the template
 		// context carries.
-		...(input.postHistory ? { postHistory: input.postHistory } : {})
+		...(input.postHistory ? { postHistory: input.postHistory } : {}),
+		// The note, placed — or, when only the builder's unplaced copy is in
+		// the context, nothing: an unplaced note would land at the top.
+		...(input.authorsNote
+			? { authorsNote: input.authorsNote }
+			: (input.templateContext as { authorsNote?: { gatedBy?: unknown } } | undefined)
+						?.authorsNote?.gatedBy
+				? { authorsNote: undefined }
+				: {})
 	}
 
 	/**
@@ -808,7 +897,12 @@ export async function render(input: RenderInput): Promise<RenderedContext> {
 
 	const rendered = await renderTemplate(input.engine, {
 		template: packed.template,
-		variables: context,
+		// 🚧 Every value the template can render, with media markers broken —
+		// except each transcript line's `attachments`, which placement wrote
+		// (PLAN-composer-attachments §3.5.4; `mediaMarkers.ts`). The same object
+		// when nothing in it holds one, so a prompt with no attachments renders
+		// from the very scope it always did.
+		variables: neutralizeRenderScope(context),
 		promptFormat,
 		// The resolved row, where the caller had one to resolve. The key stays
 		// beside it: it is what the receipt reports and what a plugin's engine
@@ -822,12 +916,26 @@ export async function render(input: RenderInput): Promise<RenderedContext> {
 	})
 
 	const isSplit = emit.renderMode === "role_array"
-	const messages = isSplit
-		? (parseSplitChatPrompt(rendered) as Array<{
-				role: string
-				content: string
-			}>)
+	/**
+	 * The chat wire's two adjustments (B2, 2026-10-03; `ChatWireShape`): the
+	 * label-only seed line is not sent as a trailing assistant turn — the
+	 * backend's chat template renders it differently there than as history,
+	 * which broke every cache that reuses an exact prefix — and depth-placed
+	 * system text is folded where the connection hoists or rejects it (AN3).
+	 * Only in chat wire mode: a role-array COMPLETION template, and every
+	 * caller with no connection in scope, parse exactly as before.
+	 */
+	const parsedWire = isSplit
+		? parseChatWire(
+				rendered,
+				chatWire
+					? { labelSeed: "drop", midSystem: input.midSystem ?? "keep" }
+					: {}
+			)
 		: undefined
+	const messages = parsedWire?.messages as
+		| Array<{ role: string; content: string; attachments?: { uuid: string }[] }>
+		| undefined
 
 	/**
 	 * A context template that emits no role blocks: degrade LOUDLY, never refuse.
@@ -880,7 +988,20 @@ export async function render(input: RenderInput): Promise<RenderedContext> {
 	for (const band of unrenderedBands(bandsInPlay, packed.template, declared))
 		notes.push(unrenderedBandNote(band, declared.includes(band)))
 	if (isSplit && messages!.length === 0 && rendered.trim() !== "") {
-		messages!.push({ role: "user", content: rendered })
+		// 🚧 The one turn there is carries the files placed into it
+		// (attachments follow-ups, 2026-10-03: the tool loop's template has no
+		// role blocks). Lifted as the parser lifts a block's, never sent as a
+		// raw `<@media:` marker; a render with none is the bytes it was.
+		const lifted = liftMediaMarkers(rendered)
+		messages!.push(
+			lifted.uuids.length
+				? {
+						role: "user",
+						content: lifted.content,
+						attachments: lifted.uuids.map((uuid) => ({ uuid }))
+					}
+				: { role: "user", content: rendered }
+		)
 		notes.push(
 			// The same sentence the throw carried, and the same branch, because
 			// the fix still differs: a chat CONNECTION is changed on the
@@ -903,9 +1024,30 @@ export async function render(input: RenderInput): Promise<RenderedContext> {
 		)
 	}
 
+	// 🚧 Placed attachments the template never renders (a story string written
+	// without `{{{attachments}}}`): noted, never a failure — the
+	// `unrenderedBands` pattern (PLAN-composer-attachments §3.5.3).
+	if (
+		input.messages.some(
+			(m) => typeof (m as { attachments?: unknown })?.attachments === "string"
+		) &&
+		!/\battachments\b/.test(packed.template)
+	)
+		notes.push(
+			"this template does not render attachments: the transcript's files were placed, " +
+				"but the story string has no {{{attachments}}} in its message loop, so the model " +
+				"receives none of them — not even their names."
+		)
+
 	return {
-		rendered: isSplit ? undefined : rendered,
+		// A flat (completion) render carries no files: a marker that reached it
+		// anyway becomes a plain placeholder rather than markup the model reads.
+		rendered: isSplit ? undefined : flattenMediaMarkers(rendered),
 		messages,
+		// The label of a seed line the chat wire did not send — whose reply
+		// this is, for `stripOwnLabel` (`seedLabelOf` reads it off the
+		// payload). Absent whenever the seed went out, or there was none.
+		...(parsedWire?.seedLabel ? { seedLabel: parsedWire.seedLabel } : {}),
 		promptFormat,
 		// The template that ACTUALLY rendered, which is not `input.template`
 		// once a pack has dropped a block: the variable-awareness panel lists
@@ -944,14 +1086,6 @@ const CORE_BANDS: ReadonlySet<string> = new Set([
  */
 const CORE_RENDERED_BANDS = ["worldLore", "characterLore", "history"] as const
 
-/**
- * The bands this node exposes with no layout — `rendersBands.raw` on
- * Assemble's `variables` slot, read from the contract rather than restated.
- */
-const RAW_BANDS: ReadonlySet<string> = new Set(
-	assembleContract.descriptor.slots?.variables?.rendersBands?.raw ?? []
-)
-
 /** Assemble's static `renders` — its own variables, which are not bands. */
 const OWN_RENDERS: ReadonlySet<string> = new Set(
 	Object.keys(assembleContract.descriptor.slots?.variables?.renders ?? {})
@@ -983,10 +1117,9 @@ export function declaredBandKeys(variables: ResolvedLayouts | undefined): string
 /**
  * One band's value as the template sees it.
  *
- * - `characterLore` (raw): the included entries' text, as a list — what it
- *   has always been.
- * - core's laid-out two: the role-shaped object through the selected layout,
- *   exactly the two calls this replaced.
+ * - `characterLore` (a type with an `anchor` role): the admitted rows as
+ *   `{ title, castMember?, content }` in rank order, through its layout.
+ * - core's other two: the role-shaped object through the selected layout.
  * - a declared band: the title-keyed object (a minified-JSON array of the
  *   contents when no allocation carries a title), through the variable's
  *   selected layout; with none selected, the in-code floor is that value as
@@ -1003,7 +1136,8 @@ async function bandValue(
 	layout: (key: string, value: unknown) => Promise<string>,
 	opts: { selected: boolean }
 ): Promise<unknown> {
-	if (RAW_BANDS.has(key)) return allocations.map((a) => a.content)
+	if (rolesOfSource(key)?.anchor)
+		return await layout(key, anchoredEntriesOf(allocations))
 	if (key === RECALLED_LINES_BAND) {
 		const lines = recalledLinesOf(allocations)
 		return lines === undefined ? undefined : await layout(key, lines)

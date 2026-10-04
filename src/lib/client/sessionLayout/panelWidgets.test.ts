@@ -6,8 +6,8 @@
 import { describe, expect, it } from "vitest"
 import type { PanelInstance } from "../surfaces/types"
 import { widgetsFromSideZones, zoneEntries } from "./panelWidgets"
-import { isInstanceOf } from "$lib/shared/widgets/instanceId"
-import type { ResolvedZone, ZoneDef } from "./schema"
+import { isInstanceOf, type LayoutZoneDef } from "@serene-pub/sdk"
+import type { ResolvedZone } from "./schema"
 
 function panel(id: string, over: Partial<PanelInstance> = {}): PanelInstance {
 	return {
@@ -34,13 +34,13 @@ function panel(id: string, over: Partial<PanelInstance> = {}): PanelInstance {
 
 function zone(
 	id: string,
-	def: Partial<ZoneDef> & { widgets: string[] },
+	def: Partial<LayoutZoneDef> & { widgets: string[] },
 	mode: ResolvedZone["mode"],
 	over: Partial<Pick<ResolvedZone, "width" | "columns">> = {}
 ): ResolvedZone {
 	return {
 		id,
-		def: { kind: "side", side: "right", ...def } as ZoneDef,
+		def: { kind: "side", side: "right", ...def } as LayoutZoneDef,
 		mode,
 		width: 264,
 		columns: 1,

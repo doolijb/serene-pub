@@ -16,7 +16,9 @@ import { rawRows } from "./rawRows"
  * under it and is skipped, silently, with no error and no log line, on every
  * boot from then on.
  *
- * That is not hypothetical. `0100_narration_split_reprojection` shipped for a
+ * That is not hypothetical. `0100_narration_split_reprojection` (a pre-release
+ * file, archived in `~/.claude/plans/ARCHIVE-drizzle-migrations-0094-0221-v2.tar.gz`;
+ * today's `0100` would be a different one) shipped for a
  * window stamped `1788910000000` — a round number picked by hand, about a day
  * ahead of the clock — and was corrected to the `1788827887780` it was actually
  * generated at. Correcting the journal fixed every database that had not yet
@@ -105,7 +107,7 @@ export function readJournalMigrations(
 }
 
 /** Whether this database has a migrations ledger at all. */
-async function ledgerExists(db: MigrationDb): Promise<boolean> {
+export async function ledgerExists(db: MigrationDb): Promise<boolean> {
 	// `to_regclass` answers with NULL rather than raising for a missing schema,
 	// so this stays a question rather than an exception to swallow. Catching
 	// instead would also swallow a real failure — and a repair that skips
@@ -135,7 +137,8 @@ async function ledgerExists(db: MigrationDb): Promise<boolean> {
  * loud. It means either that the file was edited after this database applied
  * it, or that the row came from a build this one does not contain — and in
  * both cases there is no honest way to guess which entry it belongs to. Moving
- * it on a guess could skip a migration rather than unblock one.
+ * it on a guess could skip a migration rather than unblock one. The one time
+ * such rows are deleted is the 0.5.3 → 0.6 upgrade (`pruneUnshippedLedgerRows`).
  */
 export async function repairMigrationLedger(
 	db: MigrationDb,
@@ -220,4 +223,52 @@ export async function repairMigrationLedger(
 	}
 
 	return { repaired, unrecognised }
+}
+
+/**
+ * Delete every ledger row whose hash matches no migration file in the shipped
+ * chain — the rows a 0.5.x install kept from its old or dev chains — and
+ * return what was deleted.
+ *
+ * **Runs once, during the 0.5.3 → 0.6 upgrade and nowhere else** (owner
+ * ruling 2026-10-02): its only caller is the attic stash's `run`
+ * (`dataUpgrades/0095_schema_0_6_0.ts`), inside the transaction that applies
+ * `0095_schema_0_6_0`, which a fresh pub never enters and a pub already on 0.6
+ * never enters again. Everywhere else an unrecognised row is only warned about
+ * (`repairMigrationLedger`): outside the upgrade there is no telling a stray
+ * row from one a newer build wrote.
+ *
+ * Matched by hash alone, the handle `repairMigrationLedger` matches by; a row
+ * whose `created_at` disagrees with its file is that function's to correct,
+ * not this one's to delete. Only `tx` is used — the caller's transaction.
+ */
+export async function pruneUnshippedLedgerRows(
+	tx: MigrationTx,
+	shippedHashes: ReadonlySet<string>
+): Promise<UnrecognisedLedgerRow[]> {
+	const rows = rawRows<{ id: unknown; hash: unknown; created_at: unknown }>(
+		await tx.execute(
+			sql.raw(`select id, hash, created_at from ${LEDGER} order by id asc`)
+		)
+	)
+	const stray: UnrecognisedLedgerRow[] = rows
+		.filter((r) => !shippedHashes.has(String(r.hash)))
+		.map((r) => ({
+			id: Number(r.id),
+			hash: String(r.hash),
+			createdAt: Number(r.created_at)
+		}))
+	if (!stray.length) return stray
+	for (let i = 0; i < stray.length; i += 500) {
+		const ids = stray.slice(i, i + 500).map((r) => r.id)
+		await tx.execute(
+			sql`delete from ${sql.identifier(MIGRATIONS_SCHEMA)}.${sql.identifier(MIGRATIONS_TABLE)}
+				where id in (${sql.join(ids.map((id) => sql`${id}`), sql`, `)})`
+		)
+	}
+	console.log(
+		`[migration-ledger] pruned ${stray.length} of ${rows.length} ledger row(s) that match no migration file in the shipped chain ` +
+			`(left by an earlier 0.5.x build); ${rows.length - stray.length} kept.`
+	)
+	return stray
 }

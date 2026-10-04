@@ -33,6 +33,8 @@ import {
 } from "$lib/server/pipelines/runtime/tools"
 import { slotKey } from "$lib/server/state/keys"
 import { inventoryChange } from "$lib/server/state/inventory"
+import { unseenSentence } from "$lib/shared/lorebooks/placeSight"
+import { tieSentence } from "$lib/shared/lorebooks/describingRow"
 
 /** A cast row as `session_cast` hands it over. */
 const castName = (row: any): string =>
@@ -89,21 +91,38 @@ export async function ownerFor(
 	// 🚧 A place (attributes phase 4): a location of the session's world holds
 	// state too — "the key is left in the crypt". Asked after the cast, so a
 	// character and a place sharing a name resolve to the character.
+	// Two places answering alike, or only a place out of the story: a
+	// sentence, never the first of them (`sessionPlaceNamed`).
 	const place = ctx.sessionId ? await locationNamed(ctx.sessionId, who) : null
-	if (place !== null) return { kind: "session_location", id: place }
+	if (place?.kind === "one") return { kind: "session_location", id: place.entryId }
+	if (place && place.kind !== "none") throw new ToolError(place.refusal)
 	throw new ToolError(
 		`there is nobody called '${who}' in this scene, and no place by that name. Use the name as it appears in the conversation or the lorebook, or 'world'.`
 	)
 }
 
-/** The entry id of the session's location called `name`, or null. */
-async function locationNamed(sessionId: number, name: string): Promise<number | null> {
+/**
+ * The place the session sees that `name` names — by the one rule every reader
+ * of a room's name answers by (plan A27, `sessionPlaceNamed`: among the places
+ * the session sees, the name exactly, then a looser spelling with a leading
+ * "the" aside, then a key) — or why none is taken: two answer alike, or only a
+ * place the session does not see answers.
+ */
+async function locationNamed(
+	sessionId: number,
+	name: string
+): Promise<
+	{ kind: "one"; entryId: number } | { kind: "refused"; refusal: string } | { kind: "none" }
+> {
 	// Dynamic, as `bindings.state.ts` reads the database: this module is
 	// loaded by the tool registry, which must not open the database to load.
 	const { db } = await import("$lib/server/db")
-	const { sessionLinks } = await import("$lib/server/state/resolve")
-	const { locations } = await sessionLinks(db, sessionId)
-	return locations.find((l) => same(l.name, name))?.entryId ?? null
+	const { sessionPlaceNamed } = await import("$lib/server/state/entriesOnReading")
+	const hit = await sessionPlaceNamed(db, sessionId, name)
+	if (hit.kind === "tie") return { kind: "refused", refusal: tieSentence(name, hit.names) }
+	if (hit.kind === "unseen")
+		return { kind: "refused", refusal: unseenSentence(`'${hit.name}'`, hit.why) }
+	return hit
 }
 
 /**

@@ -71,7 +71,7 @@ describe("widgets.css — a widget fills its granted width", () => {
 				r.selector.includes('[data-widget-part~="messages.stage"]') &&
 				r.selector.includes('[data-widget-part~="messages.compose"]') &&
 				!r.selector.includes("data-line-width") &&
-				!r.selector.includes("data-backdrop")
+				!r.selector.includes("data-sp-backing")
 		)
 		expect(base).toBeDefined()
 		expect(base!.body).toMatch(/inline-size:\s*100%/)

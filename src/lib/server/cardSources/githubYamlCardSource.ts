@@ -13,6 +13,8 @@ import {
 } from "./types"
 import { TtlCache } from "./cache"
 import { getOrFetchImportedCardBytes } from "./importCache"
+import { readCappedBody } from "./readCappedBody"
+import { IMPORT_FILE_CAPS } from "$lib/shared/imports/fileCaps"
 
 const REPO_BASE =
 	"https://raw.githubusercontent.com/SerenePub/serene-pub-chara-list/main"
@@ -291,8 +293,9 @@ export async function fetchGithubCardBytes(file: string): Promise<Buffer> {
 		throw new CardSourceInvalidRefError("Invalid GitHub card reference")
 	}
 	let response: Response
+	const over = new AbortController()
 	try {
-		response = await fetch(url)
+		response = await fetch(url, { signal: over.signal })
 	} catch (e) {
 		throw new CardSourceUnavailableError(
 			`Failed to reach GitHub: ${(e as Error).message}`
@@ -303,5 +306,6 @@ export async function fetchGithubCardBytes(file: string): Promise<Buffer> {
 			`Failed to fetch character file: ${response.status}`
 		)
 	}
-	return Buffer.from(await response.arrayBuffer())
+	// Streamed under the card ceiling and aborted past it (plan S4).
+	return readCappedBody(response, IMPORT_FILE_CAPS.cardBytes, over)
 }

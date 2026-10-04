@@ -16,7 +16,7 @@
  * Core and a genre name a panel by its plain id. A **plugin** names its OWN
  * panel by the bare id it declared, and this module prefixes it with the
  * emitter's plugin id — the same `<pluginId>:<panelId>` the session view seats
- * it under (`frameHost.surfacesOf`). The prefix is added HERE, at the one seam
+ * it under (`pluginWidgetId`). The prefix is added HERE, at the one seam
  * where the emitter's identity is still in hand, rather than asked of the
  * plugin: an intent is not a capability check, and a package that had to
  * namespace its own ids could name someone else's.

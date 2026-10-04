@@ -1,149 +1,209 @@
-# Embeddings & RAG
+# Embeddings and search by meaning
 
-Serene Pub can quietly turn your characters, personas, and lorebook content into searchable embeddings, then pull the most relevant pieces back into the prompt as a conversation grows.
+Keywords only find an entry when somebody types its words. **Search by meaning** finds lore by what it's about: a message about *"the dwarf's bar"* can bring in your entry on the Gilded Tankard even though neither word is a keyword. It works by turning every lorebook entry into an **embedding**, a list of numbers that captures its meaning, and comparing the conversation against them before each reply. This is what people call **RAG** (retrieval-augmented generation).
 
-This is a separate system from [Summarization](./summarization.md), which condenses session messages into permanent lorebook entries — the two are related (summarization output gets embedded too) but configured separately; only RAG has a switch.
+It's optional. Without it, lorebooks work on keywords alone. With it, keywords still work, and meaning adds to them.
 
-## Overview
+:::note By the end of this page
+You'll have an embedding model set up, your lorebook indexed, and Search by meaning finding entries in your sessions. Power users will also find how to choose a model, what each turn costs, and how retrieved lore is ranked.
+:::
 
-- **Embeddings** (internally "vectorization") turns text — session messages, character/persona descriptions, lorebook entries, narrative graph nodes — into a numeric vector that captures its meaning. This can run locally via a small on-device model, or against any external OpenAI-compatible embeddings API.
-- **RAG (Retrieval-Augmented Generation)** is what happens at generation time: right before the model writes a reply, Serene Pub compares the current conversation against all those embeddings and pulls in the handful that are most semantically relevant — even if they're from messages or lore entries that fell out of the normal context window long ago.
+## Turning it on
 
-As a session gets long, older messages and related lore don't just disappear from the model's awareness — if embeddings are enabled, the most relevant ones are found by meaning and quietly re-inserted.
+1. Open the **Connections** view from the rail and find the **Embeddings** section.
+2. Add a connection. Most people should pick **Local embeddings (ONNX)**: it runs on your own computer, offline and free.
+3. Choose a model from the recommended list (see [Choosing a local embedding model](#choosing-a-local-embedding-model)), download it, and press **Use for embeddings** to star it.
 
-### How retrieval fits into a generated reply
+That's all. Indexing starts by itself, and **Search by meaning** is on its default, **Automatic**, which searches whenever an embedding model is starred.
 
-When you send a message, Serene Pub's prompt builder checks whether embeddings are enabled and ready. If so, it runs a semantic search scoped to the current session: the session's own messages plus the content of the session's own lorebook only — deliberately _not_ a linked character's or persona's own separate lorebook, and not messages from other sessions, even ones sharing the same lorebook and cast. RAG only ever draws on the story world the session itself is scoped to, never on an unrelated lorebook a cast member happens to also be attached to elsewhere. Within that lorebook it reads what the session reads: the entries on the session's line, as they stand at its story clock (with the lorebook's dated changes applied), and never an archived or switched-off entry — see [Branches](./lorebooks.md#branches). Results are ranked by similarity, boosted slightly for recency, and capped per content type (a handful of messages, world lore entries, character lore entries, history entries, and narrative-graph relationships) so retrieved context doesn't crowd out the guaranteed recent messages. If embeddings are off or the model isn't ready, prompt building falls back to non-semantic (keyword/recency-based) content selection instead.
+:::tip You should see
+The starred connection's queue reads **Running** while it indexes, then **Idle**. Open a session with a lorebook: each entry row in the lorebook shows a small lightning bolt once it's indexed. Later, an entry's **Read in?** tab shows a meaning score beside the keyword score.
+:::
 
-### What gets embedded
-
-Everything embeddings touch falls into one of these buckets: session messages, character descriptions, persona descriptions, and everything inside a lorebook — world lore entries, character lore entries, history entries, places and items, and (if the lorebook has one) narrative graph nodes and relationships. Places and items are searched alongside world lore. See [Lorebooks](./lorebooks.md) for what those lorebook content types are and how the narrative graph itself is built. A row only ever counts as "embedded" for the specific model (and, in External API mode, the specific endpoint) that produced it — switching models or backends effectively resets everything to needing re-embedding, as covered below.
-
-Narrative graph **nodes** are embedded and tracked for staleness like everything else, but they're not actually part of RAG's similarity search — retrieval only searches messages, world lore (places and items included), character lore, history entries, and narrative _relationships_. Graph context that reaches the prompt comes from relationship matches plus a direct node lookup, not from a node's own embedding being found by meaning.
-
-### Why some short sessions never show RAG activity
-
-RAG scoring only ever considers messages _older_ than the most recent ten in a session — those ten are always included in the prompt directly, so there's nothing for retrieval to add. This also means sessions with ten or fewer messages are treated as not applicable for RAG at all: there's no [RAG notice](#understanding-rag-notices), and nothing gets prioritized in the queue for them, because everything already fits in the guaranteed window.
+:::warning If this didn't work
+- **The queue stays Idle with nothing done.** Press **Start** on the status card. If it says **Backend not loaded**, press **Load now**. See [Troubleshooting a stuck or empty queue](#troubleshooting-a-stuck-or-empty-queue).
+- **Local embeddings isn't offered.** It isn't available in the Android app; use a service or a computer on your network instead.
+:::
 
 ## Embedding connections
 
-Embeddings are a section of the **Connections** sidebar, beside LLMs and Image. An embedding connection is a connection like any other: a service, a base URL and key where the service needs them, a model, and a model idle timeout. Three services are offered:
+An embedding connection is a connection like any other: a service, an address and key where the service needs them, and a model. One of them is starred, **Use for embeddings**, and that star decides which model indexes your lore. With no star, retrieval runs on keywords alone.
 
-- **Local ONNX** runs a model on this device: pick one from the recommended list in the Connections sidebar, download it, make it active, and it runs fully offline with no per-request cost. Downloading, cancelling, removing from disk and adding a model by Hugging Face id all happen in the sidebar — see [Local ONNX models](./connections.md#local-onnx-models). Not offered where the native runtime is unavailable (Android).
-- **OpenAI-compatible** points at any `/embeddings` endpoint: OpenAI, or a self-hosted LM Studio or llama.cpp server on your network.
-- **Ollama** uses Ollama's own embed endpoint with any embedding model it has pulled.
+| Service | Runs | Cost | Good for |
+| --- | --- | --- | --- |
+| **Local embeddings (ONNX)** | On this computer, offline | Free | Most people. Pick, download and star a model in the Connections view. See [Local ONNX models](./connections.md#local-onnx-models). |
+| **Ollama embeddings** | In Ollama, on this computer or your network | Free | People already running Ollama: any embedding model it has pulled. |
+| **Embeddings (OpenAI-compatible)** | A service such as OpenAI, or LM Studio or llama.cpp on your network | Per request on a paid service | No spare memory locally, or a preferred hosted model. |
+| **KoboldCPP** | Your KoboldCPP | Free | A KoboldCPP connection with an embedding model loaded can answer embeddings on the same address as text. |
 
-One embedding connection is starred, **Use for embeddings**, and that star is what turns retrieval by meaning on. With no star, retrieval runs on keywords alone. There is no separate switch.
+An administrator can also set the embedding model in **Admin › Defaults**, under **Embeddings**. It's the same choice as the star, and changing it asks first in the same way.
 
-The same choice is the **Embeddings** job on **Admin › Models › Defaults**: pick the connection and model there, or use **Open embedding connections** on that row to set one up. Changing it there rebuilds the index exactly as moving the star does. **Named entities** (the people-and-places scanner) is a job on the same page.
-
-The setup wizard does not ask about embeddings: they are optional, and nothing in setup waits on them. Turn them on here whenever you like.
+The setup wizard doesn't ask about embeddings. Turn them on whenever you like.
 
 ### Choosing a local embedding model
 
-Local ONNX offers three tiers, each trading speed for retrieval quality:
+The recommended list offers three tiers, trading speed and memory for how well they find things:
 
-| Tier     | Model               | Dimensions | Size    | Notes                                                                                                                                                                     |
-| -------- | ------------------- | ---------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Fast     | all-MiniLM-L6-v2    | 384        | ~80 MB  | Lightweight; good for shorter lorebook entries and fact-style lore; best if RAM is limited or you want to get started immediately.                                        |
-| Balanced | EmbeddingGemma-300M | 768        | ~300 MB | Google's current-generation embedding model; multilingual, with strong semantic understanding of longer prose and character descriptions; a good default for most setups. |
-| Best     | bge-m3              | 1024       | ~570 MB | Top-tier, multilingual retrieval quality with an 8192-token context window, useful for long character and lorebook entries; recommended if you have the RAM.              |
+| Tier | Model | Size | Notes |
+| --- | --- | --- | --- |
+| Fast | all-MiniLM-L6-v2 | ~80 MB | Light and quick; fine for short, fact-style lore and low-memory machines. English. |
+| Balanced | EmbeddingGemma-300M | ~300 MB | A good default. Multilingual, and handles longer prose and character descriptions well. |
+| Best | bge-m3 | ~570 MB | The strongest retrieval, multilingual, with room for very long entries. Worth it if you have the memory. |
 
-Models you have placed under the local models folder with the embeddings modality are offered beside these.
-
-### Moving the star re-indexes everything
-
-Every embedded row records which model and endpoint produced it. Starring a different embedding connection asks you to confirm and names the cost: "Every embedded row is re-indexed against the new model: N rows". On confirm the old vectors are deleted and the queue starts from the beginning against the new model. Starring a second connection that names the same endpoint and model is a no-op. Unstarring stops the queue and keeps the vectors.
+The list is kept up to date online, so you may see more models than these. Models you've placed in the local models folder as embedding models are offered too.
 
 ### Model idle timeout
 
-On a Local ONNX connection, **Model idle timeout** unloads the model after that long with nothing to do, freeing RAM between bursts of embedding work. 0 keeps it loaded. On a hosted endpoint the field is kept for consistency but unloads nothing.
+On a local connection, **Model idle timeout** unloads the model after it has had nothing to do for that many minutes (5 by default), freeing memory between bursts of work. **0** keeps it loaded. On a hosted service the field does nothing.
 
-## Named entity connections
+## Search by meaning
 
-Named entities are a fourth Connections section. One local service is offered (ONNX, token classification); its models come from the recommended list — from distilbert-NER (English; people, places, organisations, other; about 67 MB) up to larger and multilingual checkpoints that also emit dates — and are downloaded and made active from the Connections sidebar, exactly like embeddings. The form has no base URL or key, only a model idle timeout.
+**Search by meaning** is a setting on the **Retrieval queries** step of the reply pipeline, in the **Pipelines** view:
 
-Starring one, **Use for entity extraction**, adds a tier to name extraction: the spans the model finds are stored beside the names the lorebook already knows, so an entry can be matched by what a scene calls it even in lower case. With no star the extraction lane runs on the lorebook's own names and capitalised words, which is a working state rather than an off one. A starred model that fails to load falls back to that state and says so.
+- **Automatic** (the default) searches whenever an embedding model is starred, local or paid.
+- **On** searches on every turn.
+- **Off** never searches by meaning, but keeps the index up to date.
 
-Starring a different entity model asks first and names the cost: "Every annotated row is re-scanned against the new model: N rows". On confirm every annotation is dropped and rebuilt through the background lane. A second connection naming the same model is a no-op; unstarring keeps what has been scanned.
+Its companions are on the **Semantic search** step:
 
-## The starred connection's detail
+- **Entries found by meaning** (5): the most entries a search may add to one turn. Raising it doesn't turn the search on.
+- **Closest matches per query** (40): how many candidates each search looks at.
+- **Discount weak matches** (1): how much a loose resemblance counts against a close one. Higher pushes vague matches down without removing them.
 
-The starred embedding connection shows its queue:
+The search always uses the starred model, because a question embedded by a different model wouldn't match the index. The retrieval explanation for a turn says whether it searched, and why not when it didn't.
 
-- A **status card** (Running / Paused / Idle) with Start or Stop, live Completed and Queued counters, and the label of the item being embedded.
-- A **Queue** of pending priority groups: one session together with its lorebook, linked characters and linked personas, so a session's content is embedded as a unit.
-- A **Recent** list of completed groups.
-- A **Load now** action and a download bar when the local model is not in memory, for example after a server restart.
+### What it searches
 
-Within a group, content is embedded in a fixed order: session messages first, then lorebook content (world lore, places, items, character lore, history entries, narrative graph nodes, narrative graph relationships), then characters, then personas.
+Search by meaning searches the **entries of the session's own lorebook** and nothing else: world lore (places and items included), character lore and history. It reads what the session reads, on its line and as of its story clock (see [Time, history and branches](./lorebook-time.md#which-line-a-session-reads)), and never an entry that is off or archived.
 
-### Understanding queue states
+It never searches messages. The recent conversation is already in the prompt, and a message found by meaning would only take room from lore. Characters, personas and the graph are indexed too, but nothing searches them by meaning yet.
 
-The queue has three states, shown on the starred connection's status card:
+An entry found by meaning reaches the prompt exactly as one found by keyword. If it was found both ways, it ranks above one found either way alone.
 
-- **Idle** — nothing queued, or the queue has been explicitly stopped.
-- **Running** — actively embedding items one at a time.
-- **Paused** — reserved for pausing the queue without fully stopping it (for example, to avoid competing with the model during an active session generation).
+Adventure and the Lair search by meaning and by name too, as Chat does. A character's own turn there searches as that character, so it finds their private lore and never another's.
+
+### What a starred model costs per turn
+
+With a model **on this computer** (local, Ollama, KoboldCPP), these are work on your own hardware and nothing is billed. With a **paid service**, each is a billed request:
+
+- **Search by meaning**, when it searches: one request per turn. On **Automatic**, that's every turn; set **Off** if you want the index without the searches.
+- **Indexing the reply** once it lands: one request.
+- **Indexing your own message** and anything else not yet indexed: about one more request.
+- **Sprites**: when the speaker has sprites, picking a face for the reply is one request.
+- **Descriptions to follow up**, on the **Descriptive mentions** step: on by default (up to 8). One request per turn that has a description such as *"the captain"* to match. Set it to 0 to turn it off.
+
+Embedding requests are small, so even on a paid service a long evening usually costs very little.
+
+## Keeping the index up to date
+
+Everything is indexed in the background, a session at a time with its lorebook and characters, and kept current as you edit.
+
+**Replies come first.** While a reply is being written, and for a moment after, background indexing waits, so it never slows the reply's own lookups. It picks up again between replies, so the queue can show **Running** with nothing changing while a reply is written. A reply that needs particular entries indexed right away still gets them: those go to the front of the queue and aren't held back.
+
+**Only a change to the text re-embeds.** Each piece of content is embedded again only when the text it embeds changes:
+
+| Content | Embedded text |
+| --- | --- |
+| A lorebook entry | Its name and content (a history entry: its content). The entry's own text, not its dated changes. |
+| A message | Its content, once the reply has finished. |
+| A character or persona | Its name and description. |
+| A cast member | Their name and summary. |
+| A relationship | Both names, its type, description and reason. |
+
+So pinning, switching off, archiving, reordering, editing keywords or dating an entry costs nothing, and neither does hiding a message or changing a character's avatar. Spaces at either end of the text don't count as a change. Renaming a cast member re-embeds them and the relationships that name them.
+
+### Changing the embedding model
+
+Every stored embedding remembers which model and address made it. When you star a different model, Serene Pub counts the embeddings the new model can't use, tells you how many will be redone across how many lorebooks and sessions, and asks first. On confirm, those are deleted and indexing starts again with the new model. If there's nothing to redo (the first model on a new install, or the same model again), the star simply moves.
+
+Editing the starred connection's address or model counts as a change of model and asks the same way. The same address written differently (a trailing slash, capitals, the default port) is not a change. `localhost` and `127.0.0.1` count as two different addresses.
+
+Unstarring, or deleting the starred connection, stops indexing and keeps the embeddings, so starring the same model again later picks up where it left off.
+
+### The queue
+
+The starred connection's view shows its queue:
+
+- A **status card**, **Running** or **Idle**, with **Start** and **Stop**, live counts, and what is being embedded now.
+- **Queue**: what's waiting, grouped by session (with its lorebook and characters) so a session's content is indexed together.
+- **Recent**: what was finished.
+- **Load now**, when the local model isn't in memory, for example after a restart.
 
 ### Troubleshooting a stuck or empty queue
 
-If the queue looks stuck at "Idle" with items still needing embeddings, check the starred connection's detail first — the queue silently stops (and logs a warning server-side) if embeddings are disabled, if a local model fails to auto-load (most commonly because it isn't cached and can't be re-downloaded, or the server restarted and the model needs to be reloaded), or if an External API config has stopped validating. Reloading or re-downloading the model from the warning banner, then pressing **Start** on the status card, resolves most local-mode cases. If a specific session's content never seems to finish indexing, the RAG notice inside that session has a "Prioritize in queue" button that jumps its content to the very front of the queue.
+If the queue sits at **Idle** with content still waiting:
 
-## Understanding RAG Notices
+- **Backend not loaded**: press **Load now**, then **Start**. If the model was removed from disk, download it again.
+- **A service stopped answering**: check its address and key in the connection.
+- **One session never finishes**: its notice (below) has **Prioritize in queue**, which moves that session to the front.
 
-Inside a session, a **RAG notice** can appear as a quiet line above the composer, opposite the Actions label, once a conversation has grown past 10 messages — below that threshold everything already fits in the guaranteed context window, so the notice doesn't apply. It checks the embedding status of the session's older messages, its linked characters, personas, and lorebook content, and shows one of three variants:
+The server log has a warning whenever the queue stops by itself.
 
-- **Not yet indexed** — none of the applicable older content has been embedded yet ("Older messages and characters aren't embedded yet, so RAG can't surface them."), so RAG can't surface anything from this session.
-- **Indexed with a different model** — everything was embedded with a previous model/backend and needs re-indexing with the currently active one, which the line names.
-- **Indexing in progress** — a mix of ready and pending content; shows a running count like "Indexing 12 of 40, lorebook entries pending." and adds "Queue paused." if the queue itself is paused.
+## Understanding RAG notices
 
-Each notice includes a **Prioritize in queue** button, which moves the session (and its linked lorebook/characters/personas) to the front of the embeddings queue, and an **Ignore for this session** button, which silences the notice for that specific session going forward (shown afterward as a small "RAG is off for this session." line with a **Re-enable** link). Once every applicable item is fully indexed with the current model, the notice disappears on its own.
+Once a session passes 10 messages, a quiet line can appear above the composer when its lorebook isn't fully searchable yet:
 
-### The per-item vectorization status icon
+- *Lorebook entries aren't indexed yet, so Search by meaning can't find them.*
+- *Lorebook entries were embedded with a different model and need re-indexing with ‹model›.*
+- *Indexing 12 of 40 lorebook entries.* While the queue isn't running, it says *12 of 40 lorebook entries are indexed. The rest are waiting in the embedding queue.*
 
-Elsewhere in the UI (the character editor, for example), a small icon next to an entity's name reflects its individual embedding status against the currently active model: a lightning bolt for "vectors up to date," a refresh icon for "vectors stale — model changed," and nothing shown at all if embeddings are disabled or the item has never been embedded.
+**Prioritize in queue** moves the session to the front. **Hide for this session** hides the notice; Search by meaning still searches whatever is indexed, and **Show again** brings it back. Only the session's owner can hide it. The notice goes away by itself once every entry is indexed.
+
+### Why some short sessions never show a RAG notice
+
+Sessions with 10 messages or fewer show no notice. Search by meaning still searches their lorebook on every turn it's set to.
+
+### The status icon
+
+Lorebook entry rows and character rows carry a small icon for their own index state: a lightning bolt when they're indexed with the current model, a refresh icon when they were indexed with a different one, and nothing when embeddings are off or they haven't been indexed yet.
+
+## Named entities
+
+**Named entities** is a fourth section of the Connections view, with one service, **Local named entities (ONNX)**. Its models, from a small English one (about 67 MB) to larger multilingual ones, find the people, places and things a message names. Download one and star it with **Use for entity extraction**.
+
+It helps lore be matched by name even when nobody set a keyword, or when a scene writes a name in lower case. Without it, Serene Pub matches on the names the lorebook already knows and on capitalised words, which works well for most books.
+
+Starring a different entity model asks first and says how many rows will be re-read. Like embeddings, only a change to the text re-reads a row.
 
 ## How Serene Pub ranks retrieved content
 
-Most of this is internal behavior with no knob of its own — the shares and ceilings that are tunable live on the pipeline's retrieval steps (see [Where the weights live](./pipelines.md#where-the-weights-live)) — but understanding it helps explain why the model sometimes does or doesn't seem to "remember" something.
+Most of this happens without settings; the ones you can change live on the reply pipeline's retrieval steps (see [Where the weights live](./pipelines.md#where-the-weights-live)). Knowing it helps explain why the model does or doesn't seem to remember something.
 
-### Two-pass semantic queries
+### How Search by meaning scores entries
 
-Rather than a single similarity search, retrieval runs two passes: a "current" query built from the last couple of messages (what's being discussed right now), and a broader "recent" query built from the few messages before that. Results from the current-topic pass are merged in first and get priority; the recent-context pass only contributes items the current pass didn't already surface. This keeps retrieval responsive to sudden topic changes instead of anchoring too heavily on whatever was relevant several messages ago.
+On a turn it searches, Search by meaning embeds the latest two messages separately and searches with each. An entry's closeness is the best it scored against either, so an entry close to what was just said counts even if the message before was about something else. Closeness is added to what its keywords earned, never replaces it.
 
-### Blending and de-duplicating results
+### What is left out before ranking
 
-Each of the two passes (current and recent) actually embeds every message in its query window individually, runs a separate similarity search per message-embedding, and combines those per-message result lists with Reciprocal Rank Fusion (an item's position in each list counts more than its raw score) before re-ranking with Maximal Marginal Relevance, which intentionally trades a little relevance for diversity so the retrieved set doesn't fill up with five near-duplicate restatements of the same fact — all of this RRF+MMR work happens _within_ a single pass. The current-pass and recent-pass results are then combined by simple de-duplication (the current pass's items win; the recent pass only contributes items not already seen), not by a second round of RRF across passes. A small recency boost is also applied to message scores, and only results that clear an adaptive similarity threshold are kept.
+Before anything is ranked, a few rules take out lore the turn mustn't use, however it was found. Each one shows in the retrieval explanation as left out, with its reason:
 
-One consequence worth knowing: the per-content-type budget described below is enforced separately inside each of the two passes, not globally across both. If the current and recent passes surface mostly disjoint items, the effective number of results for a given content type in one generation can end up close to double the stated per-pass budget, not capped at it.
+- **Its own conditions.** An entry whose secondary keys or logic rule it out on this turn is left out even when Search by meaning or a name brought it in.
+- **Secrets.** A secret relationship reaches only its holder.
+- **Not in the world yet, or any more.** Lore about a cast member who has presences, none of them covering the session's story date, is left out (see [When a cast member is in the world](./lorebook-cast.md#when-a-cast-member-is-in-the-world)). A member with no presences is always here.
+- **Already shown.** In Adventure and the Lair, the room the party stand in is written under its own heading, so it isn't ranked in a second time as lore.
 
-### Relationships from the narrative graph
+Searching by name is on by default too: up to 5 entries whose names the recent conversation shares (**Entries found by name**, on the **Entity search** step). The same step also finds up to 20 earlier lines naming the same people and places (**Earlier messages found by name**), which keeps the session's messages indexed by name; they reach a prompt only where a context template places `{{{recalledLines}}}`, and no shipped one does (see [Context templates](./context-templates.md)). Set either to 0 to turn that half off.
 
-Relationships are retrieved the same way lore is. Serene Pub walks the narrative graph from whoever is speaking — what they think of the others, what the others think of them, and any figures the whole world knows of — and offers each individual relationship as a candidate that competes for the context window, rather than pasting the whole graph in.
+### Pinned entries
 
-They are ordered by three things, in this order:
+Pinned entries are taken first, before anything is ranked, and they count against the room set aside for lore. They're never shortened: one that doesn't fit is left out whole. A book with a lot of pinned text leaves little room for anything else, so pin sparingly.
 
-1. **Who is in the scene.** A relationship with someone in this session's cast outranks one with a character who is only in the lorebook.
-2. **Whose relationship it is.** A tie the speaking character is party to outranks one between two other people.
-3. **What changed most recently.** Among relationships that tie on the first two, the ones edited most recently come first.
+### Relationships from the graph
 
-The order is strict: presence beats everything under it, and being the speaker's own beats recency. A relationship the scene is present for is never pushed down by one that was merely edited a minute ago.
+Relationships between cast members are offered from the point of view of whoever is speaking: what they think of the others, what the others think of them, and figures the whole world knows of. A secret relationship reaches only its holder.
 
-**Relationships get no share of the context window until you give them one.** **Share — relationships** on the _Relationships: ranked_ step starts at zero, which leaves the whole graph out of the budget — so the retrieval panel lists every relationship as _Left out — Relationships is switched off: its share is zero_, and nothing is spent. Raise it above zero and relationships start competing for room like world lore and history do. (Each source carries its own share on its own step — see _Where the weights live_ in the pipelines guide.)
+**By default, all of them are included**: the prompt carries every relationship the speaker's view reaches, outside the lore budget, limited only by **Most relationships** on the relationship steps. To make them compete for room instead, raise **Share — relationships** on the **Relationships: ranked** step above zero. Then they're ranked, and only those that earn room are written, in this order:
 
-The band is also what the prompt's relationship sections are written from. While it has no share, nothing is selected and those sections carry the narrative-graph block they always have — every relationship the walk reached, in whatever order the rows came back, governed only by the **Most relationships** ceiling on the two relationship steps. Give the band a share and the same sections are rebuilt from what ranking actually chose: the relationships that were selected, in the order above, and only as many as the band's slice of the window and the ranked step's own **Most relationships** ceiling had room for — one ceiling, the source's, which the ranker reads as the band's. Nothing else about them changes — the same headings, the same layout, the same **Relationship perspectives** and **Known relationships** blocks — so raising the share narrows the graph in the prompt to the part of it that earned the room, and lowering it back to zero restores the full block.
+1. **Who is in the scene.** A relationship with someone in the session's cast outranks one with someone who's only in the lorebook.
+2. **Whose it is.** A relationship the speaker is party to outranks one between two other people.
+3. **What changed most recently.**
 
-Every relationship that is considered shows up in the retrieval explanation with its reasons written out — _someone on this tie is in the cast_, _the speaking character is party to it_, _2nd most recently changed of 6_ — so an absent relationship has an answer rather than a shrug. See [Lorebooks](./lorebooks.md) for how relationships are created and edited.
+The order is strict: presence beats everything below it. Set the share back to zero to return to the full set. The retrieval explanation lists every relationship it considered, with its reasons written out.
 
-### Always-included content
+When nobody is speaking, as on an Adventure narrator's turn, there's no one to see from: the planner and narrator read every relationship any cast member holds, except secrets. Adventure gives relationships a share of their own out of the box. See [Adventure](./genre-adventure.md).
 
-Two categories bypass ranking entirely: the most recent handful of session messages (the "guaranteed window") are always in the prompt regardless of token budget, and any lorebook entry marked **constant** is always included as long as it's enabled — constant entries are lore the model should never forget, so they skip the relevance contest altogether. See [Lorebooks](./lorebooks.md) for how the constant flag is set on an entry.
+**Follow lore links**, on the same step, also ranks links reached from entries the turn found, such as a room's ways out. These count toward the relationships' share, but they aren't written into the prompt; a place's ways reach Adventure and Lair turns in their own way (see [Places and maps](./lorebook-places.md#how-a-session-uses-places)).
 
-Bypassing the relevance contest also means bypassing token-budget trimming — pinned/constant world lore, character lore, and history entries aren't among the content types the token-budget enforcement step is allowed to shrink. In practice this is rarely an issue, but if the combined content you've marked constant/pinned in a lorebook is large enough on its own, there's currently no mechanism to trim it back down to fit the model's context limit the way ordinary RAG-recalled content is.
+## Context debugging
 
-## Context Debugging
-
-An instance setting, **Context debugging** (Admin › Diagnostics), is worth knowing about alongside RAG: when turned on, it adds a Statistics tab and a debug icon to session messages, computes full retrieval diagnostics (RAG included) for each generation, and saves that metadata alongside the message so you can inspect exactly what content the model saw — including which RAG results were retrieved — after the fact. This is an admin-only, opt-in setting since the extra computation and stored metadata add overhead; it's primarily useful when troubleshooting why a particular reply did or didn't seem to "remember" something. See [Instance Settings](./system-settings.md) for the rest of the instance settings.
-
-One diagnostic gotcha worth knowing: because the current and recent passes each compute their own adaptive similarity threshold, and the recorded value is simply whatever ran last, the "adaptive similarity threshold" figure shown in Prompt Details reflects only the **recent** pass's threshold, not the current pass's — keep that in mind if the number looks like it doesn't match what you'd expect from the most recent messages specifically.
+To see exactly what the model was given, an administrator can turn on **Context debugging** in **Admin › Diagnostics**. Each reply then saves its full retrieval details, including what Search by meaning found, so you can inspect them afterwards from the message. It adds some work and storage to every reply, so leave it off unless you're investigating. See [Pub settings](./system-settings.md).

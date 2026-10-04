@@ -1,12 +1,14 @@
 /**
  * Lair pass D1: a press that spends the composer's draft empties core's
  * composer — not just the page's copy — and a reload agrees with it. Since
+ * note 31 (2026-10-02) the draft leaves at the press, and a run that is
+ * refused or fails gives it back. Since
  * R3 (2026-09-28) no press reads the draft; S2's slash argument is the one
  * that will, so this models its press: the draft's text is what was sent.
  *
  * Core's conversation is the BUILT module, mounted by the SDK's harness in
  * core's box. The page's half is its own helpers, as `+page.svelte` wires
- * them: `draftText` on the press, `shouldClearDraft` on the run's
+ * them: `draftHolds` on the press, `draftToGiveBack` on the run's
  * answer, `nextDraftWrite` for the write it posts in the dossier
  * (`composer.draft`), and `answerDraft` for the draft the composer reports —
  * the page's `newMessage`, which it autosaves and a reload opens with.
@@ -18,9 +20,10 @@ import { resolve } from "node:path"
 import { mountComponent, type MountedComponent } from "@serene-pub/cli/testing"
 import { componentParitySections } from "@serene-pub/conformance"
 import {
+	draftHolds,
 	draftText,
+	draftToGiveBack,
 	nextDraftWrite,
-	shouldClearDraft,
 	type DraftWrite
 } from "./collects"
 import { answerDraft } from "./requests/draft"
@@ -74,18 +77,34 @@ class Page {
 		await this.view.dispatch(FIELD, "input", { value: text })
 		await this.quiet()
 	}
-	/** Press an action with the draft as its text (Nudge) and hear its run answer. */
-	async nudge(answer: { success?: boolean; parked?: boolean }) {
+	/** Press an action with the draft as its text (Nudge): the page spends the draft. */
+	async press() {
 		const sent = draftText(this.newMessage)
 		expect(sent).not.toBe("")
-		if (shouldClearDraft(answer, sent, this.newMessage)) this.writeDraft("")
-		// The page re-posts its dossier on any change; this is that post.
+		expect(draftHolds(sent, this.newMessage)).toBe(true)
+		const spent = this.newMessage
+		this.writeDraft("")
+		await this.post()
+		return spent
+	}
+	/** Its run's answer: a refusal or failure gives the draft back. */
+	async answer(spent: string, outcome: { success?: boolean; parked?: boolean }) {
+		const back = draftToGiveBack(outcome, spent, this.newMessage)
+		if (back !== null) this.writeDraft(back)
+		await this.post()
+	}
+	async nudge(outcome: { success?: boolean; parked?: boolean }) {
+		const spent = await this.press()
+		await this.answer(spent, outcome)
+	}
+	/** The page re-posts its dossier on any change; this is that post. */
+	async post() {
 		await this.view.push("scoped", { session_full: this.dossier() } as never)
 		await this.quiet()
 	}
 }
 
-describe("D1 · a spent composer action empties core's composer", () => {
+describe("D1 · a composer action spends its draft at the press (note 31)", () => {
 	test("after a successful Nudge the composer's draft is empty, and a reload agrees", async () => {
 		const page = await new Page("").open()
 		let saved = ""
@@ -120,7 +139,19 @@ describe("D1 · a spent composer action empties core's composer", () => {
 		}
 	}, 120_000)
 
-	test("an error keeps the draft, and a reload shows it", async () => {
+	test("the press empties the composer before its run answers", async () => {
+		const page = await new Page("").open()
+		try {
+			await page.type("The torches gutter.")
+			await page.press()
+			expect(page.field()).toBe("")
+			expect(page.newMessage).toBe("")
+		} finally {
+			await page.view.unmount()
+		}
+	}, 120_000)
+
+	test("an error gives the draft back, and a reload shows it", async () => {
 		const page = await new Page("The torches gutter.").open()
 		let saved = ""
 		try {

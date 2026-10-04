@@ -1,1 +1,0 @@
-ALTER TABLE "pipeline_definition_registry" ADD COLUMN "removed_at" timestamp;

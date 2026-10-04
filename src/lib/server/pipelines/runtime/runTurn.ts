@@ -24,6 +24,7 @@
  */
 
 import {
+	resolveConfig,
 	run,
 	sessionEvents,
 	type FormAddressedPayload,
@@ -41,13 +42,17 @@ import {
 	releaseRoot,
 	type RunLineage
 } from "$lib/server/pipelines/runtime/lineage"
-import { createReviewer } from "$lib/server/pipelines/runtime/reviewGate"
+import {
+	createReviewer,
+	previewReviewer
+} from "$lib/server/pipelines/runtime/reviewGate"
 import {
 	createHost,
 	type HostScope,
 	type PendingFire
 } from "$lib/server/pipelines/runtime/host"
 import { buildWorld } from "$lib/server/pipelines/config/world"
+import { SPRITE_PICKER_NODE_KEY } from "@serene-pub/core-catalog"
 import { coreBindings } from "$lib/server/pipelines/runtime/bindings"
 import { pluginNodeBindings } from "$lib/server/pipelines/runtime/pluginBindings"
 import {
@@ -57,6 +62,7 @@ import {
 import { specOwnerPluginId } from "$lib/server/pipelines/boot/store"
 import {
 	saveReceipt,
+	receiptWithoutQueryText,
 	type RunArtifact
 } from "$lib/server/pipelines/runtime/receipts"
 import {
@@ -66,11 +72,13 @@ import {
 	scriptsEnabledFor
 } from "$lib/server/pipelines/scripts/chains"
 import { genreFieldsFor } from "$lib/server/pipelines/entities/sessionGenres"
+import { withTurnHold } from "$lib/server/indexing/turnHold"
 // Imported for `tokenizerFor`, and for the eight loaders that module registers
 // with the SDK as it evaluates. Both halves matter: the id below means nothing
 // without a loader behind it, and importing the resolver is what guarantees the
 // registration cannot be tree-shaken out from under it.
 import { tokenizerFor } from "$lib/server/pipelines/runtime/tokenizers"
+import { runTokenCounterFor } from "$lib/server/pipelines/runtime/runTokenCounter"
 import { pluginsEnabled } from "$lib/server/plugins/flag"
 import {
 	createLiveRow,
@@ -101,6 +109,7 @@ import type { FormAwaitingPerson } from "$lib/server/notifications/openForm"
 import { v4 as uuidv4 } from "uuid"
 import { eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
+import { NODE_TIMEOUT_CEILING_MS } from "$lib/server/pipelines/runtime/callTether"
 
 export class PipelineUnavailableError extends Error {}
 
@@ -132,6 +141,8 @@ export interface TurnRequest {
 	sideCharacter?: SpecRunRequest["sideCharacter"]
 	/** A message being composed but not stored — see `HostScope.draftMessage`. */
 	draftMessage?: { content: string; personaId?: number | null }
+	/** 🚧 A planned turn's plan row — see `HostScope.planRowId`. */
+	planRowId?: number
 	/** The message that triggered this turn. */
 	text: string
 	/**
@@ -331,6 +342,12 @@ export interface SpecRunRequest {
 	 * rows it writes as `metadata.answersForm`. See `HostScope.answersForm`.
 	 */
 	answersForm?: { messageId: number; blockId: string; toOwner?: boolean }
+	/**
+	 * 🚧 The plan row whose turn this run takes — set by `runReply` for a
+	 * planned turn; reaches the host scope, where `create-message` stamps it
+	 * on the rows it writes. See `HostScope.planRowId`.
+	 */
+	planRowId?: number
 	/**
 	 * Rows this run is producing that the caller already knows about. The
 	 * host records everything the run writes as it is written, so almost no
@@ -686,6 +703,7 @@ async function runSpecOnce(request: SpecRunRequest): Promise<Receipt> {
 		channel: request.channel,
 		previous: request.previous,
 		answersForm: request.answersForm,
+		planRowId: request.planRowId,
 		// Which document this is, so the built-in writes can refuse to
 		// perform under any but their own (U5b review W8).
 		specId,
@@ -771,6 +789,15 @@ async function runSpecOnce(request: SpecRunRequest): Promise<Receipt> {
 	// is written and the next turn resolves exactly as it would have.
 	forceOverrides(world, request.overrides, request.sessionId)
 
+	// "Choose sprites" off spares the sprite tail's embed, not only its choice:
+	// the picker's `enabled`, resolved from this run's world exactly as the
+	// executor will resolve it for the picker, handed to the host before the
+	// tail's `sprites_for` read embeds anything.
+	if (doc.nodes.some((n: any) => n.key === SPRITE_PICKER_NODE_KEY))
+		scope.spriteChoiceOff =
+			resolveConfig(world, [SPRITE_PICKER_NODE_KEY])[SPRITE_PICKER_NODE_KEY]
+				?.params?.enabled === false
+
 	/**
 	 * The settings document (PLAN-turn-order §4.12, R13), resolved **once
 	 * per run, here, after every write that caused this run has landed** and
@@ -811,6 +838,19 @@ async function runSpecOnce(request: SpecRunRequest): Promise<Receipt> {
 					cast: session.cast
 				}
 			: request.input
+
+	/**
+	 * The model's own token counts, where its server publishes them (B2,
+	 * 2026-10-03; `runTokenCounter.ts`): the budget then measures what the
+	 * server will measure, so a prompt fitted to the window is not trimmed by
+	 * the server from the front. `undefined` for every other connection, which
+	 * leaves the tokenizer id below doing exactly what it always did.
+	 */
+	const tokenizerId = tokenizerFor(world, doc)
+	const serverCounts = await runTokenCounterFor(request.db, world, doc, {
+		tokenizer: tokenizerId,
+		preview: !!request.preview
+	})
 
 	const receipt = await run(doc, {
 		world,
@@ -888,6 +928,10 @@ async function runSpecOnce(request: SpecRunRequest): Promise<Receipt> {
 		// `{speaker}` and routes it (R-19). Absent on a pre-call preview.
 		...(status ? { onStatus: (nodeKey, text) => status.set(nodeKey, text) } : {}),
 		cancelSignal: request.cancelSignal,
+		// The absolute bound on any one node (F36). An idle-timed node — a
+		// reply, a render — keeps its window open while its request is alive
+		// (`callTether`); this is what still ends one that never ends.
+		timeoutCeilingMs: NODE_TIMEOUT_CEILING_MS,
 		/**
 		 * The run-level guarantee (R-17): a row this run created and did not
 		 * fill is finalised here — stopped with the partial text, failed with
@@ -897,6 +941,10 @@ async function runSpecOnce(request: SpecRunRequest): Promise<Receipt> {
 		 * the session list hears `null` once the row has settled.
 		 */
 		onRunEnd: async (end) => {
+			// Before the row reads its reason: a failed query quoted anywhere
+			// in the receipt becomes the plain sentence (`receipts.ts`), for
+			// the row, its notification, the stored run and every caller.
+			receiptWithoutQueryText(end.receipt)
 			// `status.end()` in `finally`: a row that failed to finalise must
 			// not also leave the session list stuck on the run's last status —
 			// a rejecting `finish` would otherwise skip straight past it and
@@ -927,20 +975,36 @@ async function runSpecOnce(request: SpecRunRequest): Promise<Receipt> {
 		// allocation loop stays a loop. An id nobody can load degrades to the
 		// rough estimate and says so on the receipt — a tokenizer never fails a
 		// turn.
-		tokenizer: tokenizerFor(world, doc),
+		tokenizer: tokenizerId,
+		// Wins over `tokenizer` when present (`RunOptions.countTokens`); the
+		// id above still names the estimate underneath it.
+		...(serverCounts ? { countTokens: serverCounts.count } : {}),
 		// Every run can park at a gated node — the review position is a
 		// config option (`settings.review`), so whether it *does* is the
 		// person's to decide in the panel, never the trigger's to wire.
-		reviewer: createReviewer({
-			userId: request.userId,
-			sessionId: request.sessionId,
-			specId,
-			signal: request.signal,
-			...(request.onParked
-				? { onParked: () => request.onParked!({ runId, specId }) }
-				: {})
-		})
+		//
+		// A preview is dry — it commits nothing — so it never parks (note 16,
+		// 2026-10-02): respond's gated `placeholder` sits before the preview
+		// halt, and a token count runs a preview on every debounced keystroke.
+		// The SDK executor skips the gate on a dry run; the host states the
+		// same rule here so a preview can never reach a person's reviewer.
+		reviewer: request.preview
+			? previewReviewer
+			: createReviewer({
+					userId: request.userId,
+					sessionId: request.sessionId,
+					specId,
+					signal: request.signal,
+					...(request.onParked
+						? { onParked: () => request.onParked!({ runId, specId }) }
+						: {})
+				})
 	})
+
+	// The SDK says so when a tokenizer degraded; a counter handed in as a
+	// function bypasses that, so the host says it instead.
+	if (serverCounts?.degraded)
+		receipt.notes = [...(receipt.notes ?? []), serverCounts.degraded]
 
 	// Recorded before returning, and never allowed to fail the turn. A run that
 	// produced a good reply and then could not write its own receipt has still
@@ -1241,8 +1305,22 @@ async function dispatchAddressedForms(
  * deliberate: a caller needs to know *whether* it ran, what it decided, and what
  * it wrote, and a turn that halted legibly is a normal outcome rather than an
  * exception. Text is on the receipt for callers that only want that.
+ *
+ * **Turns before background work.** The whole run is under a turn hold
+ * (`indexing/turnHold.ts`): the indexing lanes pick no background item until it
+ * ends and a short grace passes, so this turn's reads — the lore reads on their
+ * 2 s node clocks above all — never queue behind an annotation sweep on
+ * PGlite's one thread. A preview holds too: it runs the same reads on the same
+ * clocks. Promotions the turn asks for are still served.
  */
-export async function runTurn(request: TurnRequest): Promise<Receipt> {
+export function runTurn(request: TurnRequest): Promise<Receipt> {
+	return withTurnHold(
+		() => runTurnUnderHold(request),
+		`turn in session ${request.sessionId}`
+	)
+}
+
+async function runTurnUnderHold(request: TurnRequest): Promise<Receipt> {
 	// The speaker as a reference: what the caller said, else the bare id
 	// spelled as one, else nobody (a narrator turn).
 	const speaker: ParticipantRef | null =
@@ -1317,6 +1395,7 @@ export async function runTurn(request: TurnRequest): Promise<Receipt> {
 		verb: request.verb,
 		channel: request.channel,
 		previous: request.previous,
+		planRowId: request.planRowId,
 		io: request.io,
 		onNode: request.onNode,
 		onStatus: request.onStatus,

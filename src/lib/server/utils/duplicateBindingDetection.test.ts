@@ -32,13 +32,23 @@ async function makeLorebook(userId: number, name = "Test Book") {
 	return lorebook
 }
 
+/**
+ * A tag of its own for each seeded member: one member per tag per book
+ * (`lorebook_bindings_binding_unique`). Not a number, so it is never a cast
+ * tag and never moves a book's counter.
+ */
+let seedTag = 0
 async function makeBinding(
 	lorebookId: number,
 	overrides: Partial<typeof schema.lorebookBindings.$inferInsert> = {}
 ) {
 	const [binding] = await testDb
 		.insert(schema.lorebookBindings)
-		.values({ lorebookId, binding: "", ...overrides })
+		.values({
+			lorebookId,
+			binding: `{{char:seed-${++seedTag}}}`,
+			...overrides
+		})
 		.returning()
 	return binding
 }

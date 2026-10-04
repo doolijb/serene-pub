@@ -8,10 +8,13 @@
  * those edges are read here instead: a flat list of the ones with an entry on
  * at least one end, with both ends already named.
  *
- * Its one reader is `core:query/relationship-search@1`'s link hop, which turns
- * an edge touching an entry the lore mechanisms chose this turn into a
- * candidate for the other end. One hop and no more — the hop expands chosen
- * entries, never the entries it just produced.
+ * Two readers. `core:query/relationship-search@1`'s link hop turns an edge
+ * touching an entry the lore mechanisms chose this turn into a candidate for
+ * the other end — one hop and no more; the hop expands chosen entries, never
+ * the entries it just produced. And `core:query/lorebook-entries@1`'s
+ * `withLinks` (places plan B2) lists each row's links said from that row
+ * (`loreLinkRowsOf`), so a room's ways out in a prompt and the hop read one
+ * list by one rule.
  *
  * ## Which edges (finding #151)
  *
@@ -24,6 +27,9 @@
  * has no side to speak from, so it never carries one. Both ends must be of
  * this book and, when an end is an entry, a live one on the line: a hop to an
  * archived room, or to a sibling fork's, is a hop to nowhere this session is.
+ * A cast end is the member as the same reading has them (`castMemberAt`): named
+ * as the story calls them by then, and a member hidden by then drops the edge,
+ * as a hidden target drops out of the cast's own ties (`graphContextFormatter`).
  *
  * Whether the FAR end may be shown to the speaker (character lore that is not
  * theirs) is the caller's to ask of its own `lorebook_entries` read — the one
@@ -31,14 +37,18 @@
  */
 
 import { and, eq, inArray, isNotNull, ne, or } from "drizzle-orm"
+import type { LoreLinkRow } from "@serene-pub/contracts"
 import * as schema from "$lib/server/db/schema"
 import { rowsOnReading, sessionReadingOf } from "$lib/server/state/reading"
 import {
 	MAIN_HEAD,
+	castMemberAt,
+	castOverlaysFor,
 	entryAt,
 	entryOnLineSql,
 	entryOverlaysFor
 } from "$lib/server/state/entriesOnReading"
+import { seesPlace } from "$lib/shared/lorebooks/placeSight"
 
 /** One end of an edge, named. */
 export interface GraphEntryLinkEnd {
@@ -51,7 +61,12 @@ export interface GraphEntryLinkEnd {
 export interface GraphEntryLink {
 	/** `narrative_relationships.id` — what a candidate is addressed by. */
 	id: number
+	/** Read from the `from` end ("leads north to"). */
 	relationshipType: string
+	/** Read from the `to` end ("leads south to"); null is one way (plan B1). */
+	reverseRelationshipType: string | null
+	/** The relationship's own name (column `title`); empty is unnamed. */
+	name: string
 	description: string
 	visibility: string
 	status: string
@@ -122,7 +137,7 @@ export async function readGraphEntryLinks(
 			)
 		)
 	]
-	const [entries, nodes, overlays] = await Promise.all([
+	const [entries, nodes, overlays, castOverlays] = await Promise.all([
 		entryIds.length
 			? db
 					.select({
@@ -146,7 +161,9 @@ export async function readGraphEntryLinks(
 			? db
 					.select({
 						id: schema.lorebookBindings.id,
-						name: schema.lorebookBindings.name
+						name: schema.lorebookBindings.name,
+						characterId: schema.lorebookBindings.characterId,
+						nodeVisibility: schema.lorebookBindings.nodeVisibility
 					})
 					.from(schema.lorebookBindings)
 					.where(
@@ -156,10 +173,14 @@ export async function readGraphEntryLinks(
 						)
 					)
 			: [],
-		entryOverlaysFor(db, lorebookId, reading, entryIds)
+		entryOverlaysFor(db, lorebookId, reading, entryIds),
+		nodeIds.length
+			? castOverlaysFor(db, lorebookId, reading)
+			: new Map()
 	])
 	// Each end as the reading sees it: its amended title, and Off/archived
-	// as amended by then. A switched-off or shelved end drops the edge.
+	// as amended by then. An entry end the session does not see — by the
+	// one rule its places are seen by (plan A27, `seesPlace`) — drops the edge.
 	const entryNames = new Map<number, string>()
 	for (const e of entries) {
 		const seen = entryAt(
@@ -167,10 +188,15 @@ export async function readGraphEntryLinks(
 			overlays,
 			reading
 		)
-		if (seen.enabled === false || seen.archived === true) continue
+		if (!seesPlace(seen, "session")) continue
 		entryNames.set(e.id, typeof seen.name === "string" ? seen.name : "")
 	}
-	const nodeNames = new Map(nodes.map((n) => [n.id, n.name]))
+	const nodeNames = new Map<number, string>()
+	for (const n of nodes) {
+		const seen = castMemberAt(n, castOverlays, reading, { keepCard: true })
+		if (seen.nodeVisibility === "hidden") continue
+		nodeNames.set(n.id, seen.name ?? "")
+	}
 	const live = (nodeId: number | null, entryId: number | null) =>
 		entryId != null ? entryNames.has(entryId) : nodeId != null && nodeNames.has(nodeId)
 
@@ -195,6 +221,8 @@ export async function readGraphEntryLinks(
 		.map((r) => ({
 		id: r.id,
 		relationshipType: r.relationshipType,
+		reverseRelationshipType: r.reverseRelationshipType,
+		name: r.title,
 		description: r.description,
 		visibility: r.visibility,
 		status: r.status,
@@ -202,4 +230,51 @@ export async function readGraphEntryLinks(
 		from: end(r.fromNodeId, r.fromEntryId),
 		to: end(r.toNodeId, r.toEntryId)
 	}))
+}
+
+/**
+ * One entry's lore links, said FROM that entry — what
+ * `core:query/lorebook-entries@1` puts on a row as `links` when asked
+ * `withLinks` (places plan B2, §6.3), and what `{{locationEntry}}`'s "From
+ * here:" block is written from.
+ *
+ * Only entry↔entry links (a tie to a cast member is not a way out of a room),
+ * and only the ones that have a sentence from here: a row drawn from this
+ * entry reads by its relationship type; one drawn TO it reads by its reverse
+ * type, and without one (one way, inbound) it is left out — it is no way out
+ * of here. `links` is `readGraphEntryLinks`' list, so the standing, line,
+ * moment and live-ends rules are already applied. `farVisible` is the
+ * caller's privacy gate for the far end (the listing's own), absent = all.
+ *
+ * Ordered by relationship id, so a prompt built from it is stable.
+ */
+export function loreLinkRowsOf(
+	entryId: number,
+	links: readonly GraphEntryLink[],
+	farVisible: (entryId: number) => boolean = () => true
+): LoreLinkRow[] {
+	const out: LoreLinkRow[] = []
+	for (const link of [...links].sort((a, b) => a.id - b.id)) {
+		if (link.from.kind !== "entry" || link.to.kind !== "entry") continue
+		const outbound = link.from.id === entryId
+		const inbound = link.to.id === entryId
+		if (!outbound && !(inbound && link.reverseRelationshipType)) continue
+		const far = outbound ? link.to : link.from
+		if (!farVisible(far.id)) continue
+		const linkType = outbound
+			? link.relationshipType
+			: link.reverseRelationshipType!
+		const back = outbound
+			? link.reverseRelationshipType
+			: link.relationshipType
+		out.push({
+			id: link.id,
+			to: { entryId: far.id, name: far.name },
+			linkType,
+			...(back ? { reverseLinkType: back } : {}),
+			...(link.name ? { name: link.name } : {}),
+			...(link.description ? { description: link.description } : {})
+		})
+	}
+	return out
 }

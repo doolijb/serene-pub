@@ -1,0 +1,1007 @@
+{
+  "fixture": "big",
+  "generator": "scripts/fixtures/populate-0.5.3.ts",
+  "generatedAt": "2026-10-01T09:27:18.965Z",
+  "bundle": {
+    "path": "/home/jody/Downloads/serene-pub-v0.5.3-linux-x64/serene-pub-0.5.3-beta-linux-x64",
+    "version": "0.5.3-beta",
+    "pglite": "0.2.17",
+    "lastMigration": "0093_green_bushwacker"
+  },
+  "meta": {
+    "version": "0.5.3-beta",
+    "devVariant": "meta.dev.json (version 0.0.0)",
+    "hasCryptoSecretKey": true
+  },
+  "credentials": {
+    "admin": [
+      "admin",
+      "Fixture-Admin-1!"
+    ],
+    "bard": [
+      "bard",
+      "Fixture-Bard-1!"
+    ],
+    "guest": [
+      "guest",
+      "Fixture-Guest-1!"
+    ]
+  },
+  "fakeModelHost": "http://127.0.0.1:47991",
+  "counts": {
+    "binding_merge_logs": 1,
+    "character_gallery_images": 16,
+    "character_lore_entries": 666,
+    "character_summarize_configs": 2,
+    "character_tags": 30,
+    "characters": 60,
+    "chat_characters": 83,
+    "chat_guests": 2,
+    "chat_lorebooks": 0,
+    "chat_messages": 20000,
+    "chat_personas": 42,
+    "chat_tags": 26,
+    "chats": 40,
+    "connections": 9,
+    "context_configs": 2,
+    "custom_themes": 1,
+    "dismissed_duplicate_pairs": 1,
+    "graph_build_configs": 2,
+    "history_entries": 665,
+    "koboldcpp_models": 4,
+    "koboldcpp_settings": 1,
+    "lorebook_bindings": 19,
+    "lorebook_tags": 6,
+    "lorebooks": 12,
+    "narrative_relationships": 30,
+    "narrator_prompt_configs": 2,
+    "ollama_settings": 1,
+    "passphrases": 3,
+    "persona_gallery_images": 3,
+    "persona_tags": 8,
+    "personas": 8,
+    "prompt_configs": 14,
+    "sampling_configs": 11,
+    "scene_characters": 23,
+    "scene_summarize_configs": 2,
+    "scenes": 10,
+    "setup": 1,
+    "system_settings": 1,
+    "tags": 16,
+    "user_settings": 3,
+    "user_tokens": 4,
+    "users": 3,
+    "vectorization_configs": 1,
+    "world_lore_entries": 669,
+    "world_summarize_configs": 2
+  },
+  "migrationLedger": {
+    "n": 94,
+    "max": "1786511598724"
+  },
+  "detail": {
+    "connectionsByType": {
+      "anthropic": 1,
+      "koboldcpp": 1,
+      "koboldcpp_managed": 1,
+      "llamacpp_completion": 1,
+      "llmman": 1,
+      "lmstudio": 1,
+      "ollama": 1,
+      "openai": 2
+    },
+    "chatsByStrategy": {
+      "(null)": 6,
+      "manual": 7,
+      "ordered": 20,
+      "userSplit": 7
+    },
+    "chatsByType": {
+      "roleplay/solo": 16,
+      "roleplay/group": 23,
+      "summarize/solo": 1
+    },
+    "chatCharacterVisibility": {
+      "hidden": 28,
+      "minimal": 20,
+      "visible": 35
+    },
+    "messages": {
+      "total": 20000,
+      "generating": 2,
+      "errors": 2,
+      "hidden": 202,
+      "narrator": 352,
+      "edited": 3,
+      "multi_swipe": 875,
+      "thinking": 9566,
+      "greetings": 24,
+      "persona_authored": 9621
+    },
+    "embeddingsByModel": [
+      {
+        "t": "character_lore_entries",
+        "m": "api::http://127.0.0.1:47991/v1::all-minilm",
+        "d": 384,
+        "n": 89
+      },
+      {
+        "t": "characters",
+        "m": "api::http://127.0.0.1:47991/v1::all-minilm",
+        "d": 384,
+        "n": 19
+      },
+      {
+        "t": "characters",
+        "m": "legacy-mystery-embed",
+        "d": 128,
+        "n": 5
+      },
+      {
+        "t": "chat_messages",
+        "m": "Xenova/all-MiniLM-L6-v2",
+        "d": 384,
+        "n": 100
+      },
+      {
+        "t": "chat_messages",
+        "m": "api::http://127.0.0.1:47991/v1::all-minilm",
+        "d": 384,
+        "n": 1280
+      },
+      {
+        "t": "history_entries",
+        "m": "api::http://127.0.0.1:47991/v1::all-minilm",
+        "d": 384,
+        "n": 88
+      },
+      {
+        "t": "history_entries",
+        "m": "legacy-mystery-embed",
+        "d": 128,
+        "n": 40
+      },
+      {
+        "t": "lorebook_bindings",
+        "m": "Xenova/all-MiniLM-L6-v2",
+        "d": 384,
+        "n": 5
+      },
+      {
+        "t": "lorebook_bindings",
+        "m": "api::http://127.0.0.1:47991/v1::all-minilm",
+        "d": 384,
+        "n": 14
+      },
+      {
+        "t": "narrative_relationships",
+        "m": "api::http://127.0.0.1:47991/v1::all-minilm",
+        "d": 384,
+        "n": 5
+      },
+      {
+        "t": "narrative_relationships",
+        "m": "legacy-mystery-embed",
+        "d": 128,
+        "n": 3
+      },
+      {
+        "t": "personas",
+        "m": "api::http://127.0.0.1:47991/v1::all-minilm",
+        "d": 384,
+        "n": 6
+      },
+      {
+        "t": "personas",
+        "m": "legacy-mystery-embed",
+        "d": 128,
+        "n": 2
+      },
+      {
+        "t": "world_lore_entries",
+        "m": "Xenova/all-MiniLM-L6-v2",
+        "d": 384,
+        "n": 40
+      },
+      {
+        "t": "world_lore_entries",
+        "m": "api::http://127.0.0.1:47991/v1::all-minilm",
+        "d": 384,
+        "n": 128
+      }
+    ],
+    "bindingTokens": {
+      "double": 17,
+      "single": 2
+    },
+    "historyClampCandidates": 7,
+    "usersAdmin": {
+      "admin": true,
+      "bard": true,
+      "guest": false
+    },
+    "systemSettings": {
+      "is_accounts_enabled": true,
+      "vectorization_enabled": true,
+      "embedding_model_name": "api::http://127.0.0.1:47991/v1::all-minilm",
+      "embedding_model_dimensions": 384,
+      "summarization_enabled": true,
+      "default_connection_id": 1,
+      "default_sampling_id": 8
+    },
+    "vectorizationConfig": {
+      "mode": "api",
+      "api_base_url": "http://127.0.0.1:47991/v1",
+      "api_model": "all-minilm",
+      "api_dimensions": 384,
+      "has_key": true
+    }
+  },
+  "ids": {
+    "users": {
+      "admin": 1,
+      "bard": 2,
+      "guest": 3
+    },
+    "connections": {
+      "openai": 1,
+      "ollama": 2,
+      "llmman": 3,
+      "lmstudio": 4,
+      "llamacpp": 5,
+      "kobold": 6,
+      "koboldManaged": 7,
+      "anthropic": 8,
+      "dead": 9
+    },
+    "sampling": {
+      "creative": 4,
+      "creative2": 5,
+      "precise": 6,
+      "precise2": 7,
+      "mirostat": 8,
+      "dry": 9,
+      "all": 10,
+      "none": 11
+    },
+    "legacyConfigs": {
+      "context": 2,
+      "prompt": 13,
+      "prompt2": 14,
+      "narrator": 2,
+      "world": 2,
+      "character": 2,
+      "scene": 2,
+      "graph": 2
+    },
+    "lorebooks": {
+      "atlas": 1,
+      "emberfall": 2,
+      "graph": 3,
+      "legacy": 5
+    },
+    "chats": {
+      "solo": 1,
+      "thinking": 2,
+      "llmman": 3,
+      "dead": 4,
+      "ordered": 5,
+      "manual": 6,
+      "visibility": 7,
+      "allHidden": 8,
+      "allMinimal": 9,
+      "removed": 10,
+      "summarize": 11,
+      "branch": 12,
+      "userSplit": 13,
+      "bard": 14,
+      "guest": 15
+    },
+    "characters": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14
+    ],
+    "personas": [
+      1,
+      2,
+      3,
+      4
+    ],
+    "perUser": {
+      "bardPersona": 6,
+      "guestPersona": 7,
+      "guestPersona2": 8,
+      "bardChar": 18,
+      "guestChar": 19
+    },
+    "graph": {
+      "gb0": 8,
+      "gb1": 9,
+      "gbP": 10,
+      "nA": 11,
+      "nB": 12,
+      "nC": 13,
+      "nD": 14,
+      "gh": 7,
+      "rels": [
+        3,
+        4,
+        5,
+        6,
+        7,
+        8
+      ],
+      "cLoreOnB": 8,
+      "h2": 8
+    },
+    "embedding": {
+      "configuredModel": {
+        "m": "api::http://127.0.0.1:47991/v1::all-minilm",
+        "d": 384
+      }
+    }
+  },
+  "edgeCases": [
+    {
+      "id": "connection-every-type",
+      "table": "connections",
+      "note": "one connection per 0.5.3 type: openai, ollama, llmman, lmstudio, llamacpp_completion, koboldcpp, koboldcpp_managed, anthropic",
+      "rowIds": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ]
+    },
+    {
+      "id": "connection-llmman",
+      "table": "connections",
+      "note": "type 'llmman' — gone in 0.6; D9 (revised): becomes an Ollama connection at the same base URL, carrying its options (incl. think), with a notice",
+      "rowIds": [
+        3
+      ]
+    },
+    {
+      "id": "connection-llamacpp-completion",
+      "table": "connections",
+      "note": "type 'llamacpp_completion' → 'llamacpp' (0105)",
+      "rowIds": [
+        5
+      ]
+    },
+    {
+      "id": "connection-unknown-prompt-format",
+      "table": "connections",
+      "note": "prompt_format 'mystery_format_v9' (no completion template knows it) → NULL",
+      "rowIds": [
+        6
+      ]
+    },
+    {
+      "id": "connection-empty-prompt-format",
+      "table": "connections",
+      "note": "prompt_format '' → NULL",
+      "rowIds": [
+        9
+      ]
+    },
+    {
+      "id": "connection-api-key",
+      "table": "connections",
+      "note": "encrypted extraJson.apiKey envelopes — decrypt only with meta.json cryptoSecretKey",
+      "rowIds": [
+        1,
+        8
+      ]
+    },
+    {
+      "id": "connection-dead",
+      "table": "connections",
+      "note": "unreachable base URL and no API key; the chat using it holds a real 0.5.3 error row",
+      "rowIds": [
+        9
+      ]
+    },
+    {
+      "id": "sampling-name-collision",
+      "table": "sampling_configs",
+      "note": "user configs whose names collide on lower(btrim(name)): 'Creative'/' creative ' and 'Precise'/'PRECISE' → suffix ' (2)'",
+      "rowIds": [
+        4,
+        5,
+        6,
+        7
+      ]
+    },
+    {
+      "id": "sampling-all-enabled",
+      "table": "sampling_configs",
+      "note": "every *_enabled flag true, logitBias/stop/drySequenceBreakers non-empty",
+      "rowIds": [
+        10
+      ]
+    },
+    {
+      "id": "sampling-null-values",
+      "table": "sampling_configs",
+      "note": "nullable value columns NULL (top_p, top_k), all switches off",
+      "rowIds": [
+        11
+      ]
+    },
+    {
+      "id": "system-default-sampling-user-row",
+      "table": "system_settings",
+      "note": "default_sampling_id points at a USER sampling row (remap by id map)",
+      "rowIds": [
+        8
+      ]
+    },
+    {
+      "id": "legacy-user-configs",
+      "table": "context_configs,prompt_configs,narrator_prompt_configs,*_summarize_configs,graph_build_configs",
+      "note": "one user row per legacy config table, each selected as the admin's active/default — Part C must produce a migrated: marker for each",
+      "rowIds": [
+        2,
+        13,
+        14,
+        2,
+        2,
+        2,
+        2,
+        2
+      ]
+    },
+    {
+      "id": "character-gallery",
+      "table": "character_gallery_images",
+      "note": "3 gallery images on each of 4 characters, reordered; one character's avatar IS a gallery image",
+      "rowIds": [
+        1,
+        2,
+        3,
+        4
+      ]
+    },
+    {
+      "id": "character-imported-v3",
+      "table": "characters",
+      "note": "V3 card import: assets (D-loss 1), creator_notes_multilingual, group_only_greetings, source, extensions.depth_prompt; embedded character_book",
+      "rowIds": [
+        15
+      ]
+    },
+    {
+      "id": "character-imported-png",
+      "table": "characters",
+      "note": "V2 PNG card import: avatar written from the card image",
+      "rowIds": [
+        16
+      ]
+    },
+    {
+      "id": "character-soft-deleted",
+      "table": "characters",
+      "note": "is_deleted=true (soft delete)",
+      "rowIds": [
+        14
+      ]
+    },
+    {
+      "id": "character-favourite",
+      "table": "characters",
+      "note": "is_favorite=true",
+      "rowIds": [
+        2
+      ]
+    },
+    {
+      "id": "persona-gallery",
+      "table": "persona_gallery_images",
+      "note": "2 gallery images on one persona",
+      "rowIds": [
+        2
+      ]
+    },
+    {
+      "id": "lorebook-every-entry-kind",
+      "table": "lorebooks",
+      "note": "Atlas of Everything: world (regex, case-sensitive, constant, disabled, extra_json), character lore (bound to a character binding, a persona binding, unbound), history (full date, month only, year only)",
+      "rowIds": [
+        1
+      ]
+    },
+    {
+      "id": "lorebook-imported-export",
+      "table": "lorebooks",
+      "note": "0.5.3 lorebook export imported through lorebooks:import (carries its own characters/personas/graph)",
+      "rowIds": [
+        2
+      ]
+    },
+    {
+      "id": "binding-merge-log",
+      "table": "binding_merge_logs",
+      "note": "narrativeGraph:mergeNode absorbed a node: relationship_rewrites + reassigned_character_lore_entry_ids populated (remap to new entry ids, D5)",
+      "rowIds": [
+        3
+      ]
+    },
+    {
+      "id": "dismissed-duplicate-pair",
+      "table": "dismissed_duplicate_pairs",
+      "note": "dismissed (binding_id_a < binding_id_b) pair",
+      "rowIds": [
+        13,
+        14
+      ]
+    },
+    {
+      "id": "graph-nodes-unbound",
+      "table": "lorebook_bindings",
+      "note": "unbound background nodes (character_id and persona_id both NULL) in every node_state/node_visibility",
+      "rowIds": [
+        11,
+        13,
+        14
+      ]
+    },
+    {
+      "id": "message-swipes",
+      "table": "chat_messages",
+      "note": "metadata.swipes with history>1 and currentIdx < last (swipeRight ×2, swipeLeft); regenerate + continue on an older message; one edited (is_edited), one hidden, one deleted",
+      "rowIds": [
+        13,
+        9
+      ]
+    },
+    {
+      "id": "chat-drafts",
+      "table": "chats",
+      "note": "drafts JSON non-empty (chats:saveDraft)",
+      "rowIds": [
+        1
+      ]
+    },
+    {
+      "id": "message-thinking",
+      "table": "chat_messages",
+      "note": "metadata.thinking + swipes.thinkingHistory written by the Ollama adapter (think:true); chats.connection_id set (D-loss 3)",
+      "rowIds": [
+        2
+      ]
+    },
+    {
+      "id": "message-error",
+      "table": "chat_messages",
+      "note": "error JSON {message} written by 0.5.3's persistGenerationErrorRow (chat id listed)",
+      "rowIds": [
+        4
+      ]
+    },
+    {
+      "id": "group-manual",
+      "table": "chats",
+      "note": "group_reply_strategy='manual' (D8) with two personas",
+      "rowIds": [
+        6
+      ]
+    },
+    {
+      "id": "visibility-mixed",
+      "table": "chat_characters",
+      "note": "one chat mixing visible/minimal/hidden (D7: most verbose wins) + an inactive character; narrator responses (is_narrator_response, metadata.narratorName/narratorInstructions); chat-level prompt/narrator/sampling overrides",
+      "rowIds": [
+        7
+      ]
+    },
+    {
+      "id": "removed-participant",
+      "table": "chat_characters",
+      "note": "removed_at/removed_name set by chats:update dropping a character that has spoken",
+      "rowIds": [
+        10
+      ]
+    },
+    {
+      "id": "chat-summarize-type",
+      "table": "chats",
+      "note": "chat_type='summarize' (written via chats:update; 0.5.3's summarizer itself never persists one)",
+      "rowIds": [
+        11
+      ]
+    },
+    {
+      "id": "chat-seeded-prompt-7",
+      "table": "chats",
+      "note": "prompt_config_id = 7 (seeded 'prompt-neutral-chat', renamed 'prompt-neutral-session' in 0.6) — resolve by seed_key (E4.1)",
+      "rowIds": [
+        11
+      ]
+    },
+    {
+      "id": "chat-branch",
+      "table": "chats",
+      "note": "chats:branch copy of a chat up to a message",
+      "rowIds": [
+        12
+      ]
+    },
+    {
+      "id": "chat-rag-ignored",
+      "table": "chats",
+      "note": "metadata.ragIgnored=true",
+      "rowIds": [
+        5
+      ]
+    },
+    {
+      "id": "scene-with-cast",
+      "table": "scenes",
+      "note": "scene with selected_message_ids, scene_characters (participant + mentioned), history entry",
+      "rowIds": [
+        2
+      ]
+    },
+    {
+      "id": "custom-theme",
+      "table": "custom_themes",
+      "note": "instance custom theme",
+      "rowIds": [
+        1
+      ]
+    },
+    {
+      "id": "uploaded-background",
+      "table": "user_settings",
+      "note": "background_image_path names an UPLOADED file (→ files row + background_media_id)",
+      "rowIds": [
+        1
+      ]
+    },
+    {
+      "id": "multi-user",
+      "table": "users",
+      "note": "3 users, accounts enabled, one non-admin; every user has a passphrase and a live user_tokens row",
+      "rowIds": [
+        1,
+        2,
+        3
+      ]
+    },
+    {
+      "id": "tag-name-across-users",
+      "table": "tags",
+      "note": "'fantasy'/'Fantasy' exist for three different users (per-user lower(name) uniqueness)"
+    },
+    {
+      "id": "group-user-split-guests",
+      "table": "chats,chat_guests",
+      "note": "group_reply_strategy='userSplit' with two guests (one with a persona in the chat, one guest user without)",
+      "rowIds": [
+        13
+      ]
+    },
+    {
+      "id": "character-soft-deleted-other-user",
+      "table": "characters",
+      "note": "soft-deleted character owned by a non-admin user",
+      "rowIds": [
+        71
+      ]
+    },
+    {
+      "id": "persona-character-uuid-collision",
+      "table": "personas",
+      "note": "persona shares its uuid with a character of the same user (0133 path: fresh uuid on merge)",
+      "rowIds": [
+        3,
+        6
+      ]
+    },
+    {
+      "id": "persona-two-defaults",
+      "table": "personas",
+      "note": "guest has two is_default personas → is_default_persona kept only on the lowest id (partial unique)",
+      "rowIds": [
+        7,
+        8
+      ]
+    },
+    {
+      "id": "persona-position",
+      "table": "personas",
+      "note": "non-zero position (D-loss 2)",
+      "rowIds": [
+        2
+      ]
+    },
+    {
+      "id": "lorebook-tags",
+      "table": "lorebook_tags",
+      "note": "lorebook_tags rows (0.5.3 has no writer for them — processLorebookTags is never called — but older installs carry them)",
+      "rowIds": [
+        1,
+        3,
+        5
+      ]
+    },
+    {
+      "id": "persona-tags",
+      "table": "persona_tags",
+      "note": "every admin persona tagged; persona_tags → character_tags through the persona map",
+      "rowIds": [
+        1,
+        2,
+        3,
+        4
+      ]
+    },
+    {
+      "id": "binding-duplicate-character",
+      "table": "lorebook_bindings",
+      "note": "two bindings for the same character in one book (allowed in 0.5.3: persona_id NULL defeats the unique index) — 0.6 unique (lorebook, character) must merge",
+      "rowIds": [
+        1,
+        34
+      ]
+    },
+    {
+      "id": "binding-legacy-token",
+      "table": "lorebook_bindings",
+      "note": "old '{char:N}' spelling",
+      "rowIds": [
+        15,
+        16
+      ]
+    },
+    {
+      "id": "binding-token-collision",
+      "table": "lorebook_bindings",
+      "note": "'{char:2}' and '{{char:2}}' in the same book → normalise + renumber (0200), (lorebook_id, binding) unique in 0.6 (0201)",
+      "rowIds": [
+        16,
+        17
+      ]
+    },
+    {
+      "id": "binding-persona-character-same-uuid",
+      "table": "lorebook_bindings",
+      "note": "a book binds both the persona and the character that share a uuid",
+      "rowIds": [
+        35,
+        36
+      ]
+    },
+    {
+      "id": "binding-parent-and-history",
+      "table": "lorebook_bindings",
+      "note": "parent_node_id alias child + history_entry_id (→ remapped entry id)",
+      "rowIds": [
+        14
+      ]
+    },
+    {
+      "id": "entry-duplicate-positions",
+      "table": "world_lore_entries,character_lore_entries,history_entries",
+      "note": "duplicate position values within (lorebook, kind) → renumber unique per (lorebook, type)"
+    },
+    {
+      "id": "entry-key-shapes",
+      "table": "world_lore_entries,character_lore_entries,history_entries",
+      "note": "keys text in odd shapes: empty, ', ,,', leading/trailing spaces, regex, unicode → text[] by 0.5.3's split"
+    },
+    {
+      "id": "history-clamp",
+      "table": "history_entries",
+      "note": "dates that must clamp (year≥1, month/day ≥1 or null, day without month → month 1): [year,month,day] = [[0,0,5],[-3,4,1],[10,0,null],[11,null,9],[12,13,2],[13,2,0],[14,5,32]]",
+      "rowIds": [
+        685,
+        676,
+        667,
+        658,
+        649,
+        640,
+        631
+      ]
+    },
+    {
+      "id": "embedding-known-model",
+      "table": "*",
+      "note": "vectors from the configured model 'api::http://127.0.0.1:47991/v1::all-minilm' (384d, vectorization_configs api mode) — D4 carry-when-match",
+      "rowIds": [
+        34,
+        35,
+        36
+      ]
+    },
+    {
+      "id": "embedding-identity-mismatch",
+      "table": "world_lore_entries,lorebook_bindings",
+      "note": "vectors from 'Xenova/all-MiniLM-L6-v2' — SAME dims (384) as the configured model but a different identity → drop",
+      "rowIds": [
+        154,
+        155,
+        156
+      ]
+    },
+    {
+      "id": "embedding-unknown-model",
+      "table": "history_entries,characters,personas,narrative_relationships",
+      "note": "vectors from 'legacy-mystery-embed' (128d, no config names it) → drop",
+      "rowIds": [
+        114,
+        115,
+        116,
+        70,
+        71,
+        72,
+        73,
+        74,
+        7,
+        8,
+        6,
+        7,
+        8
+      ]
+    },
+    {
+      "id": "embedding-synthetic-bulk",
+      "table": "*",
+      "note": "bulk-planted vectors are seeded noise, not embeddings of the row's text (socket-layer vectors were written by 0.5.3's own queue against the fake API)"
+    },
+    {
+      "id": "chat-null-strategy",
+      "table": "chats",
+      "note": "group_reply_strategy NULL (column is nullable in 0.5.3)",
+      "rowIds": [
+        37,
+        41,
+        45
+      ]
+    },
+    {
+      "id": "chat-connection-override",
+      "table": "chats",
+      "note": "connection_id set (D-loss 3: a session names no connection)",
+      "rowIds": [
+        34,
+        39,
+        44,
+        49,
+        54
+      ]
+    },
+    {
+      "id": "message-stuck-generating",
+      "table": "chat_messages",
+      "note": "is_generating=true left by a crash (stage 'generating' and 'queued', queue_item_id set) → false with an aborted generation_status",
+      "rowIds": [
+        896,
+        1693
+      ]
+    },
+    {
+      "id": "message-is-edited",
+      "table": "chat_messages",
+      "note": "is_edited=true (0.5.3's own edit path never sets it; older versions did)",
+      "rowIds": [
+        2494,
+        2492,
+        2496
+      ]
+    },
+    {
+      "id": "message-error-with-code",
+      "table": "chat_messages",
+      "note": "error {message, code}",
+      "rowIds": [
+        1694
+      ]
+    },
+    {
+      "id": "message-hidden",
+      "table": "chat_messages",
+      "note": "is_hidden=true on every 97th bulk message"
+    },
+    {
+      "id": "message-embedding-subset",
+      "table": "chat_messages",
+      "note": "1200 assistant rows embedded with the configured model, 100 user rows with 'Xenova/all-MiniLM-L6-v2'"
+    },
+    {
+      "id": "scene-chat-null",
+      "table": "scenes",
+      "note": "scene whose chat was deleted (chat_id NULL)"
+    },
+    {
+      "id": "scene-character-both-roles",
+      "table": "scene_characters",
+      "note": "the same binding is both participant and mentioned in one scene"
+    },
+    {
+      "id": "scene-on-clamped-history",
+      "table": "scenes",
+      "note": "scene pointing at a history entry whose date clamps",
+      "rowIds": [
+        41
+      ]
+    },
+    {
+      "id": "koboldcpp-models",
+      "table": "koboldcpp_models",
+      "note": "complete ×2, downloading, error → local_models (format gguf, kind text, kind_source assumed)"
+    },
+    {
+      "id": "koboldcpp-settings-managed",
+      "table": "koboldcpp_settings",
+      "note": "managed mode with admin password, custom port/ttl/release tag"
+    }
+  ],
+  "files": {
+    "usersTgz": "users.tgz",
+    "entries": [
+      "1/backgrounds/bg-b5907dbf.png",
+      "1/characters/1/avatar-184f.png",
+      "1/characters/1/img-2b19b929.png",
+      "1/characters/1/img-2e6cb824.png",
+      "1/characters/1/img-c53ce276.png",
+      "1/characters/16/avatar-8458.png",
+      "1/characters/2/avatar-02ff.png",
+      "1/characters/2/img-1eaf86da.png",
+      "1/characters/2/img-2968f1aa.png",
+      "1/characters/2/img-42430f83.png",
+      "1/characters/3/avatar-41fe.png",
+      "1/characters/3/img-76aed9d4.png",
+      "1/characters/3/img-9d952bce.png",
+      "1/characters/3/img-b1343a41.png",
+      "1/characters/4/avatar-0c1d.png",
+      "1/characters/4/img-ec2e87c5.png",
+      "1/characters/4/img-ef4bad85.png",
+      "1/characters/4/img-f9c3ba06.png",
+      "1/characters/5/avatar-06ec.png",
+      "1/characters/6/avatar-4992.png",
+      "1/characters/7/avatar-22a9.png",
+      "1/characters/8/avatar-f5b8.png",
+      "1/personas/1/avatar-101c.png",
+      "1/personas/2/avatar-afc1.png",
+      "1/personas/2/img-0f910259.png",
+      "1/personas/2/img-3e4ddb61.png",
+      "2/personas/6/avatar-9293.png"
+    ]
+  },
+  "gate": {
+    "accountsEnabled": true,
+    "loginProbe": 401,
+    "characterList": null,
+    "chatList": null,
+    "suspiciousLogLines": [
+      " generationStatus  generation failed: OpenAIError: Missing credentials. Please pass an `apiKey`, or set the `OPENAI_API_KEY` environment variable.",
+      " embedding  Failed to activate API backend api::http://127.0.0.1:47991/v1::all-minilm: APIConnectionError: Connection error.",
+      "  error: undefined,",
+      "  cause: [TypeError: fetch failed] {",
+      "    [cause]: Error: connect ECONNREFUSED 127.0.0.1:47991",
+      " vectorization  Failed to auto-load model: APIConnectionError: Connection error.",
+      "  error: undefined,",
+      "  cause: [TypeError: fetch failed] {",
+      "    [cause]: Error: connect ECONNREFUSED 127.0.0.1:47991"
+    ]
+  }
+}

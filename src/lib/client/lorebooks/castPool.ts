@@ -1,3 +1,5 @@
+import { CAST_KIND, type PoolItem } from "./poolFilter"
+
 /**
  * The cast, as arithmetic.
  *
@@ -63,6 +65,17 @@ export interface CastMember {
 	linked: boolean
 }
 
+/**
+ * A member's face as the Cast board draws it: name, kind and the linked
+ * card's avatar URL (absent for a background member or a card with none).
+ */
+export interface CastFace {
+	id: number
+	name: string
+	kind: CastKind
+	src?: string
+}
+
 /** An entry that may be anchored to a member. */
 export interface AnchoredLore {
 	id: number
@@ -102,6 +115,64 @@ export function toCastMember(row: CastRow): CastMember {
 		visibility: row.nodeVisibility || "normal",
 		summary: row.summary ?? "",
 		linked: kind !== "background"
+	}
+}
+
+/** A cast row of Everything, carrying what its row draws. */
+export type CastPoolItem = PoolItem & {
+	castKind: CastKind
+	summary: string
+	avatar?: string
+}
+
+/**
+ * A member as a row of Everything (note 12, 2026-10-02): All lists every
+ * kind the book holds, and the people are part of the book.
+ *
+ * The row only lists and finds them — choosing it opens the Cast board, which
+ * is where a member is edited. It is never pinned, off or filed under
+ * anything, and it has no keywords to need: a member is reached by name and
+ * alias, which search reads from `content`.
+ *
+ * `cardName` is the card the member reads as at the moment, when an
+ * amendment swapped it — the joined `character` is the stored one.
+ */
+export function castPoolItem(
+	row: CastRow & {
+		branchId?: number | null
+		createdAt?: unknown
+		updatedAt?: unknown
+	},
+	cardName?: string,
+	avatar?: string
+): CastPoolItem {
+	const member = toCastMember(row)
+	const timeOf = (value: unknown) => {
+		if (!value) return 0
+		const ms = new Date(value as string).getTime()
+		return Number.isFinite(ms) ? ms : 0
+	}
+	return {
+		key: `cast#${row.id}`,
+		id: row.id,
+		kind: CAST_KIND,
+		name: (row.characterId != null && cardName) || member.name,
+		content: [member.summary, ...member.aliases].filter(Boolean).join("\n"),
+		keys: [],
+		pinned: false,
+		off: false,
+		archived: false,
+		machineWritten: false,
+		parentKey: null,
+		branchId: row.branchId ?? null,
+		order: row.id,
+		position: row.id,
+		priority: 0,
+		createdAt: timeOf(row.createdAt),
+		updatedAt: timeOf(row.updatedAt),
+		castKind: member.kind,
+		summary: member.summary,
+		avatar
 	}
 }
 

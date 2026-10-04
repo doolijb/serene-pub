@@ -17,6 +17,13 @@
  * the world (`session`), each cast member (`session_cast`) and each location
  * (`session_location`, phase 4) — of the value in force (`valueOf`, so an
  * inherited pack counts too).
+ *
+ * ⚠ Every place the BOOK sees, not only those the session does (plan A27,
+ * `placesOnReading(…, "book")`): a room switched Off, or off for a while, is
+ * out of the story, and what lies in it is still one of the supply — a crown
+ * in a room switched off is still the one crown, and counting it as not held
+ * would hand out a second that is there when the room comes back. An archived
+ * room is out of the book too, and what lies there is not counted.
  */
 
 import { and, eq, inArray } from "drizzle-orm"
@@ -30,7 +37,8 @@ import {
 	MAIN_HEAD,
 	entryAt,
 	entryOnReadingSql,
-	entryOverlaysFor
+	entryOverlaysFor,
+	placesOnReading
 } from "$lib/server/state/entriesOnReading"
 import type { StateOwner } from "$lib/server/state/owners"
 
@@ -135,6 +143,10 @@ async function holdingsFor(
 	const links = await sessionLinks(db, sessionId)
 	const vocabulary = await vocabularyFor(db, sessionId, links)
 	const lists = vocabulary.entries.map((e) => e.decl).filter((d) => d.type === "list")
+	// The places the book sees — Off ones too (see the header).
+	const places = links.lorebookId
+		? await placesOnReading(db, links.lorebookId, links.reading ?? MAIN_HEAD, "book")
+		: []
 	const owners: Array<{
 		owner: StateOwner & { kind: ItemHolder["ownerKind"] }
 		facet: "world" | "cast" | "location"
@@ -146,7 +158,7 @@ async function holdingsFor(
 		})),
 		// What is lying in a place is held there (phase 4): a key left in the
 		// crypt is one of the limited supply as much as a key in a pocket.
-		...links.locations.map((l) => ({
+		...places.map((l) => ({
 			owner: { kind: "session_location" as const, id: l.entryId },
 			facet: "location" as const
 		}))

@@ -40,11 +40,18 @@ import {
 	buildTermFreq,
 	lastRefRecencySignal,
 	densitySignal,
+	patternRequestsOf,
 	type LexicalDocument,
 	type LexicalOptions,
 	type ScanWindow,
 	type TrigramFolding
 } from "$lib/server/pipelines/ranking/signals"
+import {
+	patternBudget,
+	patternKey,
+	patternsNotRun,
+	primePatterns
+} from "$lib/server/pipelines/ranking/boundedPattern"
 import {
 	buildEvidenceProfile,
 	buildGazetteer,
@@ -111,7 +118,6 @@ export interface LoreRow {
 	/** An archived entry is out of retrieval, like a disabled one (L1). */
 	archived?: boolean | null
 	position?: number | null
-	hasEmbedding?: boolean
 }
 
 export interface MessageRow {
@@ -147,15 +153,10 @@ export interface KeywordQueryInput {
 	entityRefs?: readonly GazetteerName[]
 	retrieval: RetrievalParams
 	/*
-	 * ⚠ There were two more inputs here and both are gone, for one reason.
-	 *
-	 * `defaultStrategy` was the query node's `retrievalMode` — what an entry
-	 * that had declared nothing was treated as — culled with its declaration by
-	 * pre-squash migration 0203 (now in `0094_baseline_0_6`). `availability`
-	 * was `{ vectorSearchAvailable }`, and this
-	 * mechanism consulted it only to ask whether an entry's own
-	 * `retrieval_strategy` sent it elsewhere; pre-squash 0204 dropped that
-	 * column, so the question has no asker and the answer no reader.
+	 * ⚠ There is no `defaultStrategy` (a node-level retrieval mode) and no
+	 * `availability` (`{ vectorSearchAvailable }`) here, for one reason: an
+	 * entry has no retrieval strategy that could send it elsewhere, so the
+	 * question has no asker and the answer no reader.
 	 *
 	 * Neither comes back. A mode a node can set, or a column an entry can set,
 	 * is a mechanism that can be switched off for candidates whose authors never
@@ -190,6 +191,19 @@ export interface KeywordQueryInput {
  * this" is the same class, decided elsewhere.
  */
 export type SkipKind = "missed" | "excluded"
+
+/**
+ * The two `excluded` reasons that are about the row's own state rather than
+ * its selective logic: a shelved row. `exclusionsFrom` (`bindings.ts`) leaves
+ * them out of the eligibility verdicts — no other mechanism returns such a
+ * row, so there is no copy for a verdict to rule out.
+ */
+export const ARCHIVED_SKIP_REASON = "entry is archived"
+export const DISABLED_SKIP_REASON = "entry is disabled"
+export const SHELVED_SKIP_REASONS: ReadonlySet<string> = new Set([
+	ARCHIVED_SKIP_REASON,
+	DISABLED_SKIP_REASON
+])
 
 export interface KeywordQueryResult {
 	candidates: Candidate[]
@@ -238,6 +252,20 @@ export interface KeywordQueryResult {
 		 * the named-vector design applies to `(model, modelVersion, …)`.
 		 */
 		extractorVersion?: string
+		/**
+		 * Regex keys this scan did not run, and why (plan S3): a runaway
+		 * pattern (`shared/entries/runawayPattern.ts`), one that tripped the
+		 * time bound, or one the scan's time ran out before. A key that is not
+		 * run does not match, so without this line an entry keyed only by one
+		 * would read as "no key matched" with nothing to say the key never
+		 * looked. One row per entry and key, whichever list it is in.
+		 */
+		patternsNotRun: Array<{
+			id: number
+			source: RetrievalBand
+			key: string
+			why: string
+		}>
 	}
 }
 
@@ -284,12 +312,32 @@ const selectiveNote = (entry: LoreRow): string => {
  * problems with different fixes, which is exactly the confusion `skipped`
  * exists to prevent.
  */
+/**
+ * The deepest the scan follows keyword chains, whatever `maxRecursionDepth`
+ * asks: every level is another pass over the pool. Far past any chain a book
+ * is written for — an entry can be found once, so a real chain runs out long
+ * before — and short enough that a typo of 400 cannot bill a turn for 400
+ * passes.
+ */
+export const MAX_RECURSION_DEPTH = 10
+
 export function keywordQuery(input: KeywordQueryInput): KeywordQueryResult {
 	const { entries, messages, entityRefs, retrieval, countTokens } = input
 
 	// Clamped at 0: a negative ceiling is not "unlimited", and reading it as
 	// one would make a typo in a config the most expensive setting in the app.
-	const maxDepth = Math.max(0, retrieval.maxRecursionDepth ?? 0)
+	// And at `MAX_RECURSION_DEPTH`, for the same reason from the other side.
+	const maxDepth = Math.min(
+		MAX_RECURSION_DEPTH,
+		Math.max(0, retrieval.maxRecursionDepth ?? 0)
+	)
+	/**
+	 * This scan's time for regex keys (`boundedPattern.ts`): the last-mention
+	 * pass, every recursion level and every condition window charge ONE
+	 * budget. A budget per pass would bill a deep recursion for its patterns
+	 * once per level — seconds, at forty.
+	 */
+	const patterns = patternBudget()
 
 	const sessionWindow = buildScanWindow(messages, retrieval.scanDepth)
 	// tf-idf scores against the **guaranteed** window, not the scan window.
@@ -311,7 +359,7 @@ export function keywordQuery(input: KeywordQueryInput): KeywordQueryResult {
 		retrieval.guaranteedMessages
 	)
 	const idf = buildIdf(messages)
-	const lastRef = buildLastRefMap(messages, entries)
+	const lastRef = buildLastRefMap(messages, entries, patterns)
 
 	/**
 	 * The mean entry length, for `density`.
@@ -503,6 +551,8 @@ export function keywordQuery(input: KeywordQueryInput): KeywordQueryResult {
 	 */
 	const settled = new Set<string>()
 	const keyOf = (e: LoreRow) => `${e.source}:${e.id}`
+	/** Every pass's windows, read back for `patternsNotRun` at the end. */
+	const scannedWindows: Array<{ window: ScanWindow; conditionWindow: ScanWindow }> = []
 
 	for (const entry of entries) {
 		if (entry.archived === true) {
@@ -511,7 +561,7 @@ export function keywordQuery(input: KeywordQueryInput): KeywordQueryResult {
 				id: entry.id,
 				source: entry.source,
 				kind: "excluded",
-				reason: "entry is archived"
+				reason: ARCHIVED_SKIP_REASON
 			})
 			continue
 		}
@@ -524,7 +574,7 @@ export function keywordQuery(input: KeywordQueryInput): KeywordQueryResult {
 				// conversation could have brought a disabled entry in, and
 				// no retrieval setting will.
 				kind: "excluded",
-				reason: "entry is disabled"
+				reason: DISABLED_SKIP_REASON
 			})
 			continue
 		}
@@ -570,6 +620,23 @@ export function keywordQuery(input: KeywordQueryInput): KeywordQueryResult {
 		conditionWindow: ScanWindow = window
 	): LoreRow[] => {
 		const hits: LoreRow[] = []
+		/**
+		 * Every regex key this pass can read, run in one bounded batch per
+		 * window before the loop asks for them one at a time
+		 * (`boundedPattern.ts`): a watchdog per key would cost more than the
+		 * matching. Condition keys go against the condition window, which at
+		 * level 0 is this window — then one batch holds both lists.
+		 */
+		const unsettled = entries.filter((e) => !settled.has(keyOf(e)))
+		const primary = patternRequestsOf(unsettled, "keys")
+		const condition = patternRequestsOf(unsettled, "secondaryKeys")
+		if (conditionWindow === window)
+			primePatterns([window], [...primary, ...condition], patterns)
+		else {
+			primePatterns([window], primary, patterns)
+			primePatterns([conditionWindow], condition, patterns)
+		}
+		scannedWindows.push({ window, conditionWindow })
 		for (const entry of entries) {
 			if (settled.has(keyOf(entry))) continue
 			// An entry's own limit, under the node's. NULL is no opinion, so
@@ -750,15 +817,28 @@ export function keywordQuery(input: KeywordQueryInput): KeywordQueryResult {
 		if (found.length > 0) depth = level
 	}
 
+	/**
+	 * The regex keys no pass ran, per entry — the first reason found wins, since
+	 * a key that tripped the bound on one pass is remembered and reads the same
+	 * on every pass after it.
+	 */
+	const notRun = notRunByEntry(entries, scannedWindows)
+
 	// Reported last, and only for what nothing reached. Saying "no key matched"
 	// after the first pass would name entries that the second pass then pulled
 	// in, so the receipt would contradict the prompt.
 	for (const entry of entries) {
 		if (settled.has(keyOf(entry))) continue
+		const unchecked = notRun.get(keyOf(entry))
 		const base =
-			maxDepth > 0
+			(maxDepth > 0
 				? `no key matched in the last ${retrieval.scanDepth} messages, or in ${depth} level(s) of triggered entries`
-				: `no key matched in the last ${retrieval.scanDepth} messages`
+				: `no key matched in the last ${retrieval.scanDepth} messages`) +
+			// "No key matched" about a key that was never checked sends
+			// somebody to reword a key that is fine; the pattern is named.
+			(unchecked?.length
+				? ` (${unchecked.map((u) => `the pattern “${u.key}” was not checked: ${u.why}`).join("; ")})`
+				: "")
 		// How close it came, when the other way in was open. "No key matched"
 		// alone sends somebody to write another key; a near miss says the
 		// entry was found and judged, and which control moves it.
@@ -805,9 +885,57 @@ export function keywordQuery(input: KeywordQueryInput): KeywordQueryResult {
 			// about "the Ashguard" is readable, and one saying `entry:41` is
 			// an id nobody asked about.
 			entities: (profile?.entities ?? []).map((e) => e.text),
-			extractorVersion: profile?.extractorVersion
+			extractorVersion: profile?.extractorVersion,
+			patternsNotRun: entries.flatMap((entry) =>
+				(notRun.get(keyOf(entry)) ?? []).map((u) => ({
+					id: entry.id,
+					source: entry.source,
+					key: u.key,
+					why: u.why
+				}))
+			)
 		}
 	}
+}
+
+/**
+ * Which regex keys of each entry were not run, keyed `source:id`.
+ *
+ * Read off the windows after the scan rather than threaded through the
+ * matcher: the signal functions stay pure over (key, entry, window), and the
+ * windows already hold every answer `boundedPattern` gave.
+ */
+function notRunByEntry(
+	entries: readonly LoreRow[],
+	scanned: ReadonlyArray<{ window: ScanWindow; conditionWindow: ScanWindow }>
+): Map<string, Array<{ key: string; why: string }>> {
+	const out = new Map<string, Array<{ key: string; why: string }>>()
+	const lists = scanned.map(({ window, conditionWindow }) => ({
+		keys: patternsNotRun(window),
+		secondaryKeys: patternsNotRun(conditionWindow)
+	}))
+	if (lists.every((l) => l.keys.size === 0 && l.secondaryKeys.size === 0)) return out
+	for (const entry of entries) {
+		const sensitive = !!entry.caseSensitive
+		const found = new Map<string, string>()
+		for (const list of ["keys", "secondaryKeys"] as const)
+			for (const key of patternRequestsOf([entry], list)) {
+				if (found.has(key.pattern)) continue
+				for (const l of lists) {
+					const why = l[list].get(patternKey(key.pattern, sensitive))?.why
+					if (why) {
+						found.set(key.pattern, why)
+						break
+					}
+				}
+			}
+		if (found.size)
+			out.set(
+				`${entry.source}:${entry.id}`,
+				[...found].map(([key, why]) => ({ key, why }))
+			)
+	}
+	return out
 }
 
 function scoreSignals(

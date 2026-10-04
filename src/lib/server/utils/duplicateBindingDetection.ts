@@ -29,8 +29,17 @@ export interface DuplicateCandidate {
 	nameB: string
 }
 
+/**
+ * A dismissed pair as `dismissed_duplicate_pairs` stores it: the smaller
+ * binding id first. The table's unique index is on the ordered columns, so a
+ * pair written in both orders would stand twice; every writer orders it here.
+ */
+export function orderedBindingPair(a: number, b: number): [number, number] {
+	return a < b ? [a, b] : [b, a]
+}
+
 function pairKey(a: number, b: number): string {
-	return a < b ? `${a}:${b}` : `${b}:${a}`
+	return orderedBindingPair(a, b).join(":")
 }
 
 // The nested loop below is O(n^2) with a fuzzy (Levenshtein-based) match per

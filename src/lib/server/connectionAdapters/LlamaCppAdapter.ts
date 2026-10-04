@@ -280,6 +280,19 @@ export interface LoraAdapter {
 export type LoraAdaptersResponse = LoraAdapter[]
 
 class LlamaCppAdapter extends BaseConnectionAdapter {
+	/**
+	 * 🚧 Yes, on the chat wire (PLAN-composer-attachments §3.6): images ride each turn of
+	 * `/v1/chat/completions` as OpenAI `image_url` parts; llama-server must be
+	 * started with `--mmproj`. `/completion`'s `multimodal_data` is not sent.
+	 * A fact about the CODE, not a capability claim — see the base class.
+	 * Constant, because the conformance pin reads it off the prototype; a
+	 * completion-wire request with files is refused in `dispatch.ts` from the
+	 * manifest's `sendsAttachments.completion`.
+	 */
+	override get consumesAttachments(): boolean {
+		return true
+	}
+
 	private abortController?: AbortController
 	// Stored on `this` (not a local const, as it was before) for the exact
 	// same reason as abortController above — abort() is called externally
@@ -293,16 +306,14 @@ class LlamaCppAdapter extends BaseConnectionAdapter {
 	constructor({
 		connection,
 		sampling,
-		contextConfig,
-		promptConfig,
+		systemPrompt,
 		session,
 		currentCharacterId,
 		generatingMessageMetadata
 	}: {
 		connection: SelectConnection
 		sampling: ResolvedSampling
-		contextConfig: SelectContextConfig
-		promptConfig: SelectPromptConfig
+		systemPrompt?: string
 		session: BasePromptSession
 		currentCharacterId: number | null
 		generatingMessageMetadata?: any
@@ -310,8 +321,7 @@ class LlamaCppAdapter extends BaseConnectionAdapter {
 		super({
 			connection,
 			sampling,
-			contextConfig,
-			promptConfig,
+			systemPrompt,
 			session: {
 				...session,
 				sessionCharacters: session.sessionCharacters || [],
@@ -502,6 +512,13 @@ class LlamaCppAdapter extends BaseConnectionAdapter {
 							}
 					: {})
 			}
+			// 🚧 The files, each on its own turn (PLAN-composer-attachments
+			// §3.6), measured against the request as it stands without them.
+			if (this.carriesAttachments)
+				(req as any).messages = await this.openAIChatMessagesWithFiles(
+					(req as any).messages,
+					req
+				)
 		} else {
 			// Both shapes, through the one accessor the other adapters use.
 			//
@@ -544,7 +561,7 @@ class LlamaCppAdapter extends BaseConnectionAdapter {
 		if (stream) {
 			return {
 				/**
-				 * ⚠ `thinkingCb` fires on ONE of this adapter's two routes, and
+				 * ⚠ `reasoningCb` fires on ONE of this adapter's two routes, and
 				 * which one is the whole of the fact — read both halves before
 				 * concluding anything about whether this connection can reason.
 				 *
@@ -578,7 +595,7 @@ class LlamaCppAdapter extends BaseConnectionAdapter {
 				 */
 				completionResult: async (
 					contentCb: (chunk: string) => void,
-					thinkingCb?: (chunk: string) => void
+					reasoningCb?: (chunk: string) => void
 				) => {
 					let content = ""
 					this.cancelTokenSource = axios.CancelToken.source()
@@ -629,16 +646,16 @@ class LlamaCppAdapter extends BaseConnectionAdapter {
 									// reasoning in a SIBLING FIELD there —
 									// which the native route has no equivalent
 									// of at all (see the note on this
-									// callback's `_thinkingCb` history below).
+									// callback's `_reasoningCb` history below).
 									const delta = useChat
 										? data.choices?.[0]?.delta
 										: data
-									const thinking = delta?.reasoning_content
+									const reasoning = delta?.reasoning_content
 									if (
-										typeof thinking === "string" &&
-										thinking.length > 0
+										typeof reasoning === "string" &&
+										reasoning.length > 0
 									)
-										thinkingCb?.(thinking)
+										reasoningCb?.(reasoning)
 									if (
 										typeof delta?.content === "string" &&
 										delta.content.length > 0
@@ -718,7 +735,7 @@ class LlamaCppAdapter extends BaseConnectionAdapter {
 				const content = useChat
 					? message?.content || ""
 					: result?.content || result?.response || ""
-				const thinkingContent = useChat
+				const reasoningContent = useChat
 					? typeof message?.reasoning_content === "string" &&
 						message.reasoning_content.length > 0
 						? message.reasoning_content
@@ -735,7 +752,7 @@ class LlamaCppAdapter extends BaseConnectionAdapter {
 					completionResult: content,
 					compiledPrompt,
 					isAborted: this.isAborting,
-					...(thinkingContent ? { thinkingContent } : {}),
+					...(reasoningContent ? { reasoningContent } : {}),
 					// Recorded, never acted on: see `TextGenResult.tokensCached`.
 					...cacheUsageFrom(
 						useChat ? (result as any)?.usage : result

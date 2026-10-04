@@ -1,6 +1,8 @@
 <script lang="ts">
 	/**
-	 * One preset's change page — the admin's mirror of the modder's
+	 * Admin › Presets › one preset: the change form (note 37, Django admin;
+	 * the address the Pipelines view's "Manage in Admin" opens) — the admin's
+	 * mirror of the modder's
 	 * `preset()` (24 §7, admin IA 2026-08-28). A preset populates its genre's
 	 * event slots: for each non-open slot, a pipeline whose input lock
 	 * answers it, and optionally a named configuration of that pipeline.
@@ -9,7 +11,8 @@
 	 *
 	 * Everything is a draft behind an explicit Save (the standing rule);
 	 * built-ins accept availability flags only — duplicate to change what
-	 * they bind.
+	 * they bind. Fieldsets: Preset (name, genre, description, availability),
+	 * Event bindings, Creation defaults; Delete asks on the confirmation page.
 	 */
 	import { getContext, onMount, untrack } from "svelte"
 	import * as Icons from "@lucide/svelte"
@@ -24,12 +27,14 @@
 	} from "$lib/client/sockets/interest.svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 	import { eventDisplayName } from "$lib/client/utils/eventName"
-	import { ADMIN_SPLIT } from "$lib/client/components/admin/AdminSplit.svelte"
+	import AdminChangeForm, {
+		type AdminSaveIntent
+	} from "$lib/client/components/admin/AdminChangeForm.svelte"
+	import AdminFieldset from "$lib/client/components/admin/AdminFieldset.svelte"
+	import AdminField, { describedBy } from "$lib/client/components/admin/AdminField.svelte"
+	import { presetDeletion } from "./presetsAdmin"
 
 	const userCtx: { user: SelectUser } = getContext("userCtx")
-	const split = getContext<{ mode: "desk" | "compact" } | undefined>(
-		ADMIN_SPLIT
-	)
 	const socket = useTypedSocket()
 	// The admin-only half of the registry (plan ruling 6b) for the restricted
 	// `sessionGenres:` family; `pipelines:configsIndex` below is a MIXED
@@ -218,6 +223,8 @@
 	const onError = (res: { error?: string }) => {
 		if (res.error) toaster.error({ title: res.error })
 	}
+	let genres = $state<Sockets.SessionAdmin.GenreRow[]>([])
+	const genreName = (slug: string) => genres.find((g) => g.slug === slug)?.name ?? slug
 
 	onMount(() => {
 		if (!userCtx.user?.isAdmin) goto("/")
@@ -243,15 +250,25 @@
 				"sessionGenres:detail",
 				onDetail
 			),
+			interest.declareInterest<"sessionPresets:update">("sessionPresets:update", onUpdated),
 			interest.declareInterest<"sessionPresets:update:error">(
 				"sessionPresets:update:error",
-				onError
+				onUpdateError
 			),
+			interest.declareInterest<"sessionPresets:delete">("sessionPresets:delete", onDeleted),
 			interest.declareInterest<"sessionPresets:delete:error">(
 				"sessionPresets:delete:error",
+				onDeleteError
+			),
+			interest.declareInterest<"sessionPresets:create">("sessionPresets:create", onDuplicated),
+			interest.declareInterest<"sessionPresets:create:error">(
+				"sessionPresets:create:error",
 				onError
 			),
-			interest.requestWithInterest("sessionPresets:list", {}, onPresets)
+			interest.requestWithInterest("sessionPresets:list", {}, onPresets),
+			interest.requestWithInterest("sessionGenres:list", {}, (res) => {
+				genres = res.genres
+			})
 		]
 		return () => {
 			for (const release of releases) release()
@@ -271,80 +288,144 @@
 		return requestWithInterest("pipelines:configsIndex", {}, onConfigs)
 	})
 
-	function save() {
-		if (!row || !dirty) return
+	// ── save ────────────────────────────────────────────────────────────
+	let saving = $state(false)
+	let pendingIntent: AdminSaveIntent | null = null
+	let formErrors = $state<string[]>([])
+	let nameError = $state<string | null>(null)
+
+	function save(intent: AdminSaveIntent) {
+		if (!row) return
+		nameError = name.trim() ? null : "A preset needs a name."
+		formErrors = []
+		if (nameError) return
+		if (!dirty) return land(intent)
+		saving = true
+		pendingIntent = intent
 		socket.emit("sessionPresets:update", {
 			id,
-			name,
+			name: name.trim(),
 			description: description || null,
 			enabled,
 			isDefault,
 			...(readonly ? {} : { bindings, defaults })
 		})
-		toaster.success({ title: "Preset saved" })
 	}
+	function land(intent: AdminSaveIntent) {
+		if (intent === "save") void goto("/admin/session-presets")
+		else if (intent === "another")
+			void goto(`/admin/session-presets/new?genre=${encodeURIComponent(row?.genreId ?? "")}`)
+	}
+	function onUpdated(res: Sockets.SessionAdmin.UpdatePreset.Response) {
+		if (!res.preset || res.preset.id !== id) return
+		const intent = pendingIntent
+		if (!intent) return
+		pendingIntent = null
+		saving = false
+		edits.markSaved()
+		toaster.success({ title: `Saved ${res.preset.name}` })
+		land(intent)
+	}
+	function onUpdateError(res: { error?: string }) {
+		if (!pendingIntent) {
+			onError(res)
+			return
+		}
+		pendingIntent = null
+		saving = false
+		formErrors = [res.error ?? "The preset was not saved."]
+	}
+
+	// ── duplicate and delete ────────────────────────────────────────────
+	let duplicating = false
 	function duplicate() {
 		if (!row) return
+		duplicating = true
 		socket.emit("sessionPresets:create", {
 			name: `${row.name} copy`,
 			genreId: row.genreId,
 			description: row.description ?? undefined,
 			fromPresetId: row.id
 		})
-		toaster.success({ title: "Preset duplicated" })
-		goto("/admin/session-presets")
 	}
+	function onDuplicated(res: Sockets.SessionAdmin.CreatePreset.Response) {
+		if (!duplicating || !res.preset) return
+		duplicating = false
+		toaster.success({ title: `Duplicated as ${res.preset.name}` })
+		void goto(`/admin/session-presets/${res.preset.id}`)
+	}
+	let deleting = false
 	function remove() {
 		if (!row || readonly) return
-		if (
-			!confirm(
-				`Delete "${row.name}"? Sessions born from it keep running; they simply reference nothing.`
-			)
-		)
-			return
+		deleting = true
 		socket.emit("sessionPresets:delete", { id })
+	}
+	function onDeleted(res: Sockets.SessionAdmin.DeletePreset.Response) {
+		if (!deleting || res.id !== id) return
+		deleting = false
 		edits.forget()
-		goto("/admin/session-presets")
+		toaster.success({ title: "Preset deleted" })
+		void goto("/admin/session-presets", { replaceState: true })
+	}
+	function onDeleteError(res: { error?: string }) {
+		if (!deleting) return onError(res)
+		deleting = false
+		formErrors = [res.error ?? "The preset was not deleted."]
 	}
 </script>
 
-{#if split?.mode !== "desk"}
-	<a
-		href="/admin/session-presets"
-		class="text-surface-600-400 hover:text-surface-950-50 mb-3 inline-flex items-center gap-1 self-start text-[13px]"
-	>
-		<Icons.ChevronLeft size={14} /> Back to presets
-	</a>
-{/if}
-
-<h2
-	class="text-surface-950-50 mb-4 flex flex-wrap items-center gap-2 [font-family:var(--typo-heading--font-family)] text-base font-semibold"
->
-	{row?.name ?? "Preset"}
-	{#if readonly}
-		<span
-			class="preset-tonal-surface rounded-full px-2 py-0.5 font-sans text-xs font-normal"
-		>
-			built-in · availability only
-		</span>
-	{/if}
-</h2>
-
 {#if loading}
-	<p class="text-surface-600-400 text-sm">Loading…</p>
+	<div class="text-surface-600-400 flex items-center justify-center gap-2 py-16 text-sm" role="status">
+		<Icons.LoaderCircle size={16} class="animate-spin" aria-hidden="true" />
+		Loading preset…
+	</div>
 {:else if !row}
-	<div class="panel-card text-surface-600-400 py-8 text-center text-sm">
-		This preset no longer exists.
-		<a class="underline" href="/admin/session-presets">Back to the list</a>
-		.
+	<div class="m-auto flex flex-col items-center gap-3 py-16 text-center">
+		<p class="text-surface-600-400 text-sm">There is no preset {id}.</p>
+		<a href="/admin/session-presets" class="btn btn-sm preset-tonal-surface">All presets</a>
 	</div>
 {:else}
-	<div class="flex max-w-[820px] flex-col gap-4">
-		<!-- A slot the instance cannot honour (ruled 2026-09-10). First on the
-		     page because it is the one thing here that is currently untrue:
-		     every session on this preset is running something else for that
-		     event. It says so rather than blocking — nothing is stopped, and
-		     the fix is a rebind, which is what the button goes to. -->
+	<AdminChangeForm
+		mode="change"
+		title={name.trim() || row.name}
+		purpose={readonly
+			? "A built-in preset: only its availability can change here. Duplicate it to change what it binds."
+			: undefined}
+		noun="preset"
+		changelistHref="/admin/session-presets"
+		changelistLabel="Presets"
+		{dirty}
+		{saving}
+		errors={formErrors}
+		fieldErrors={{ "preset-admin-name": nameError }}
+		deletion={readonly ? undefined : () => presetDeletion([row!], genreName)}
+		onDelete={readonly ? undefined : remove}
+		onSave={save}
+	>
+		{#snippet headerActions()}
+			<button type="button" class="btn btn-sm preset-tonal-surface" onclick={duplicate}>
+				<Icons.Copy size={16} aria-hidden="true" /> Duplicate
+			</button>
+		{/snippet}
+		{#snippet headerExtra()}
+			<div class="flex flex-wrap items-center gap-1.5 text-xs">
+				<a
+					class="border-surface-300-700 text-surface-600-400 rounded-full border px-2 py-0.5 hover:underline"
+					href="/admin/session-genres/{encodeURIComponent(row!.genreId)}"
+				>
+					{genreName(row!.genreId)}
+				</a>
+				{#if row!.isDefault}
+					<span class="preset-tonal-primary rounded-full px-2 py-0.5">Default for its genre</span>
+				{/if}
+				{#if readonly}
+					<span class="border-surface-300-700 text-surface-600-400 rounded-full border px-2 py-0.5">
+						Built-in · availability only
+					</span>
+				{/if}
+			</div>
+		{/snippet}
+
 		{#if row.staleBindings?.length}
 			<div
 				class="preset-tonal-warning flex flex-wrap items-start gap-3 rounded-[12px] p-3"
@@ -354,8 +435,8 @@
 				<div class="flex min-w-0 flex-1 flex-col gap-1 text-sm">
 					<p class="font-semibold">
 						{row.staleBindings.length === 1
-							? "One binding is not available on this instance."
-							: `${row.staleBindings.length} bindings are not available on this instance.`}
+							? "One binding is not available on this pub."
+							: `${row.staleBindings.length} bindings are not available on this pub.`}
 					</p>
 					<ul class="flex flex-col gap-0.5 text-xs">
 						{#each row.staleBindings as b (b.event)}
@@ -389,66 +470,55 @@
 			</div>
 		{/if}
 
-		<div class="panel-card flex flex-col gap-3">
-			<div class="field-row">
-				<label class="flex flex-col gap-1 text-sm">
-					<span class="font-medium">Name</span>
-					<input class="input" bind:value={name} {readonly} />
-				</label>
-				<div class="flex flex-col gap-1 text-sm">
-					<span class="font-medium">Genre</span>
-					<a
-						class="input flex items-center font-mono text-xs hover:underline"
-						href="/admin/session-genres/{encodeURIComponent(
-							row.genreId
-						)}"
-						title="Open the genre dashboard"
-					>
-						{row.genreId}
-					</a>
-				</div>
+		<AdminFieldset title="Preset">
+			<div class="grid gap-4 @min-[36rem]/content:grid-cols-2">
+				{#if readonly}
+					<AdminField id="preset-admin-name" label="Name" value={name} />
+				{:else}
+					<AdminField id="preset-admin-name" label="Name" required error={nameError}>
+						<input
+							id="preset-admin-name"
+							class="input"
+							type="text"
+							bind:value={name}
+							aria-invalid={!!nameError}
+							aria-describedby={describedBy("preset-admin-name", !!nameError)}
+						/>
+					</AdminField>
+				{/if}
+				<AdminField id="preset-admin-genre" label="Genre" value={`${genreName(row.genreId)} (${row.genreId})`} />
+				<AdminField
+					id="preset-admin-description"
+					label="Description"
+					class="@min-[36rem]/content:col-span-2"
+				>
+					<textarea
+						id="preset-admin-description"
+						class="textarea w-full"
+						rows={2}
+						{readonly}
+						bind:value={description}
+					></textarea>
+				</AdminField>
 			</div>
-			<label class="flex flex-col gap-1 text-sm">
-				<span class="font-medium">Description</span>
-				<textarea
-					class="textarea w-full"
-					rows={2}
-					{readonly}
-					bind:value={description}
-				></textarea>
-			</label>
 			<div class="flex flex-wrap gap-4">
-				<label class="flex items-center gap-2 text-sm">
-					<input
-						type="checkbox"
-						class="checkbox"
-						bind:checked={enabled}
-					/>
+				<label class="flex min-h-10 items-center gap-2 text-sm">
+					<input type="checkbox" class="checkbox" bind:checked={enabled} />
 					Available to users
 				</label>
-				<label class="flex items-center gap-2 text-sm">
-					<input
-						type="checkbox"
-						class="checkbox"
-						bind:checked={isDefault}
-					/>
+				<label class="flex min-h-10 items-center gap-2 text-sm">
+					<input type="checkbox" class="checkbox" bind:checked={isDefault} />
 					Default for its genre
 				</label>
 			</div>
-		</div>
+		</AdminFieldset>
 
 		<!-- ── the bindings: the genre's event slots, filled ─────────── -->
-		<section id="bindings" class="panel-card flex flex-col gap-3">
-			<div>
-				<h3 class="text-sm font-semibold">Event bindings</h3>
-				<p class="text-surface-600-400 text-xs">
-					For each event the genre declares: which pipeline answers,
-					with which configuration. Only pipelines whose declared lock
-					matches the slot are offered — the same rule the authoring
-					kit enforces.
-				</p>
-			</div>
-
+		<AdminFieldset
+			id="bindings"
+			title="Event bindings"
+			description="For each event the genre declares: which pipeline answers, with which configuration. Only pipelines whose declared lock matches the slot are offered — the same rule the authoring kit enforces."
+		>
 			{#if !bindableSlots.length}
 				<p class="text-surface-600-400 text-sm italic">
 					Waiting for the genre's event surface…
@@ -568,19 +638,14 @@
 					Duplicate it to change them.
 				</p>
 			{/if}
-		</section>
+		</AdminFieldset>
 
 		<!-- ── the creation pre-fill ────────────────────────────────── -->
-		<section class="panel-card flex flex-col gap-3">
-			<div>
-				<h3 class="text-sm font-semibold">Creation defaults</h3>
-				<p class="text-surface-600-400 text-xs">
-					What the new-session form is pre-filled with when somebody
-					starts from this preset. Every field is optional, and each
-					is only a starting point — whoever creates the session can
-					change it before creating.
-				</p>
-			</div>
+		<AdminFieldset
+			title="Creation defaults"
+			description="What the new-session form is pre-filled with when somebody starts from this preset. Every field is optional, and each is only a starting point."
+			collapsible
+		>
 			<div class="field-row">
 				<label class="flex flex-col gap-1 text-sm">
 					<span class="font-medium">Session name</span>
@@ -620,7 +685,7 @@
 					, which this screen does not edit and leaves untouched.
 				</p>
 			{/if}
-		</section>
+		</AdminFieldset>
 
 		{#if enabled && missingRequired.length}
 			<div
@@ -640,25 +705,7 @@
 			</div>
 		{/if}
 
-		<div class="flex flex-wrap items-center gap-2">
-			<button
-				class="btn btn-sm preset-filled-primary-500"
-				disabled={!dirty}
-				onclick={save}
-			>
-				<Icons.Save size={14} /> Save
-			</button>
-			<div class="flex-1"></div>
-			<button class="btn btn-sm preset-tonal-surface" onclick={duplicate}>
-				<Icons.Copy size={14} /> Duplicate
-			</button>
-			{#if !readonly}
-				<button class="btn btn-sm preset-tonal-error" onclick={remove}>
-					<Icons.Trash2 size={14} /> Delete
-				</button>
-			{/if}
-		</div>
-	</div>
+	</AdminChangeForm>
 {/if}
 
 <style>

@@ -33,9 +33,6 @@
  * seed line's `id === -2` is what omits the closing delimiter.
  */
 export const SHIPPED_CONTEXT_TEMPLATE_LIQUID = `{%- systemBlock -%}
-{%- if currentDate -%}
-{{ currentDate }}
-{%- endif -%}
 
 {%- if instructions -%}
 {{ instructions }}
@@ -47,6 +44,9 @@ export const SHIPPED_CONTEXT_TEMPLATE_LIQUID = `{%- systemBlock -%}
 
 {%- if personas -%}
 {{ personas }}
+{%- endif -%}
+{%- if characterLore -%}
+{{ characterLore }}
 {%- endif -%}
 
 {%- if scenario -%}
@@ -67,11 +67,29 @@ export const SHIPPED_CONTEXT_TEMPLATE_LIQUID = `{%- systemBlock -%}
 {%- if relationshipsKnown -%}
 {{ relationshipsKnown }}
 {%- endif -%}
+{%- if currentDate -%}
+{{ currentDate }}
+{%- endif -%}
 
 {%- endsystemBlock -%}
 
 {%- for sessionMessage in sessionMessages -%}
 {%- assign msgIndex = forloop.index0 -%}
+{%- if authorsNote and msgIndex == authorsNote.targetIndex and authorsNote.hasContent -%}
+{%- if authorsNote.role == "user" -%}
+{%- userBlock -%}
+{{ authorsNote.text }}
+{%- enduserBlock -%}
+{%- elsif authorsNote.role == "assistant" -%}
+{%- assistantBlock -%}
+{{ authorsNote.text }}
+{%- endassistantBlock -%}
+{%- else -%}
+{%- systemBlock -%}
+{{ authorsNote.text }}
+{%- endsystemBlock -%}
+{%- endif -%}
+{%- endif -%}
 {%- for injection in injectionsByIndex[msgIndex] -%}
 {%- if injection.role == "assistant" -%}
 {%- assistantBlock -%}
@@ -111,12 +129,12 @@ Example dialogue:
 {%- endif -%}
 {%- if sessionMessage.role == "assistant" -%}
 {%- assistantBlock id: sessionMessage.id -%}
-{{ sessionMessage.name }}: {{ sessionMessage.message }}
+{{ sessionMessage.name }}: {{ sessionMessage.message }}{{ sessionMessage.attachments }}
 {%- endassistantBlock -%}
 {%- endif -%}
 {%- if sessionMessage.role == "user" -%}
 {%- userBlock -%}
-{{ sessionMessage.name }}: {{ sessionMessage.message }}
+{{ sessionMessage.name }}: {{ sessionMessage.message }}{{ sessionMessage.attachments }}
 {%- enduserBlock -%}
 {%- endif -%}
 {%- endfor -%}`
@@ -218,8 +236,8 @@ Example dialogue:
  * The shipped variable layouts, in Liquid — keyed `<variable>/<variant>`.
  *
  * These are where the helper set is actually exercised: `json`, `jsonValue` and
- * `pad` all live here rather than in the context template. Five generator
- * shapes produce all fourteen shipped rows (`variableLayouts.ts`), and every
+ * `pad` all live here rather than in the context template. Six generator
+ * shapes produce every shipped row (`variableLayouts.ts`), and every
  * one of them is represented below.
  */
 export const LIQUID_LAYOUTS: Record<string, string> = {
@@ -234,13 +252,20 @@ export const LIQUID_LAYOUTS: Record<string, string> = {
 		'{% if character.nickname != nil %},\n    "nickname": {{ character.nickname | jsonValue }}{% endif %}' +
 		'{% if character.description != nil %},\n    "description": {{ character.description | jsonValue }}{% endif %}' +
 		'{% if character.personality != nil %},\n    "personality": {{ character.personality | jsonValue }}{% endif %}' +
-		'{% if character["extra lore"] != nil %},\n    "extra lore": {{ character["extra lore"] | jsonValue: 4 }}{% endif %}' +
 		"\n  }{% unless forloop.last %},{% endunless %}\n{% endfor %}]{% else %}[]{% endif %}",
 
 	"personas/content":
 		'{% if personas.size %}[\n{% for persona in personas %}  {\n    "name": {{ persona.name | jsonValue }}' +
 		'{% if persona.description != nil %},\n    "description": {{ persona.description | jsonValue }}{% endif %}' +
 		"\n  }{% unless forloop.last %},{% endunless %}\n{% endfor %}]{% else %}[]{% endif %}",
+
+	// `anchoredEntries`: one object per admitted entry, minified, the cast
+	// member guarded like `objectList`'s optional keys.
+	"characterLore/content":
+		'{% if characterLore.size %}[{% for entry in characterLore %}{"title":{{ entry.title | jsonValue: indent: 0 }}' +
+		'{% if entry.castMember != nil %},"castMember":{{ entry.castMember | jsonValue: indent: 0 }}{% endif %}' +
+		',"content":{{ entry.content | jsonValue: indent: 0 }}}{% unless forloop.last %},{% endunless %}{% endfor %}]' +
+		"{% else %}[]{% endif %}",
 
 	// `recordEntries`: keys come from the data. `{%- for` eats the space that
 	// separates the literal brace from the tag, and `endfor -%}` eats the one

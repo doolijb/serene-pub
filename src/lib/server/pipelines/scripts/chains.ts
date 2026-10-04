@@ -268,7 +268,7 @@ export function makeScriptApplier(
 					record({
 						...base,
 						result: "skip",
-						reason: "extensions are disabled on this instance"
+						reason: "extensions are disabled on this pub"
 					})
 					continue
 				}

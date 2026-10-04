@@ -38,7 +38,7 @@ import {
  * ⚠ `result.content` is the WHOLE generation, reasoning included — the SDK
  * documents `reasoningContent` and `nonReasoningContent` as the two halves of
  * it, not as extras beside it. Returning `content` verbatim while also reporting
- * `thinkingContent` would show the reader the model's scratchpad twice, once
+ * `reasoningContent` would show the reader the model's scratchpad twice, once
  * as prose with its `<think>` markup still around it.
  *
  * Substituted ONLY when there is reasoning to split off, so a plain reply — and
@@ -49,7 +49,7 @@ function splitReasoning(result: {
 	content: string
 	reasoningContent?: string
 	nonReasoningContent?: string
-}): { content: string; thinkingContent: string | undefined } {
+}): { content: string; reasoningContent: string | undefined } {
 	const reasoning = result.reasoningContent
 	if (typeof reasoning === "string" && reasoning) {
 		return {
@@ -57,10 +57,10 @@ function splitReasoning(result: {
 				typeof result.nonReasoningContent === "string"
 					? result.nonReasoningContent
 					: result.content || "",
-			thinkingContent: reasoning
+			reasoningContent: reasoning
 		}
 	}
-	return { content: result.content || "", thinkingContent: undefined }
+	return { content: result.content || "", reasoningContent: undefined }
 }
 
 /** What the model wrote, as this SDK's prediction stats count it. */
@@ -72,6 +72,54 @@ function completionTokensFrom(result: unknown): { tokensCompletion?: number } {
 }
 
 class LMStudioAdapter extends BaseConnectionAdapter {
+	/**
+	 * 🚧 Yes, on the chat wire (PLAN-composer-attachments §3.6): `.respond()`
+	 * takes `images` per message as file handles, which `client.files.
+	 * prepareImageBase64` makes (`@lmstudio/sdk` 1.5, verified against its
+	 * declarations). `.complete()` takes none. A fact about the CODE, not a
+	 * capability claim — see the base class. Constant, because the conformance
+	 * pin reads it off the prototype; a completion-wire request with files is
+	 * refused in `dispatch.ts` from the manifest's `sendsAttachments.completion`.
+	 */
+	override get consumesAttachments(): boolean {
+		return true
+	}
+
+	/**
+	 * Each turn's files as LM Studio image handles, on `images` beside the
+	 * turn's text. Images only; anything else is refused naming the file.
+	 */
+	private async withImageHandles(messages: any[]): Promise<any[]> {
+		const files = await this.filesByMessage(messages, { transport: "raw" })
+		const client = this.getClient()
+		let n = 0
+		const out: any[] = []
+		for (const [i, msg] of messages.entries()) {
+			const own = files[i] ?? []
+			if (!own.length) {
+				out.push(msg)
+				continue
+			}
+			const images = []
+			for (const file of own) {
+				n++
+				if (file.kind !== "image")
+					throw new Error(
+						`${file.filename ?? `attachment ${n}`} is ${file.mime}, and LM Studio reads only images ` +
+							`alongside a prompt. It is not sent rather than sent as something it is not.`
+					)
+				images.push(
+					await client.files.prepareImageBase64(
+						file.filename ?? `attachment-${n}.${file.ext}`,
+						file.bytes.toString("base64")
+					)
+				)
+			}
+			out.push({ ...msg, images })
+		}
+		return out
+	}
+
 	private _client?: LMStudioClient
 	private _modelClient?: LLM
 	private prediction?: OngoingPrediction<unknown>
@@ -80,16 +128,14 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 	constructor({
 		connection,
 		sampling,
-		contextConfig,
-		promptConfig,
+		systemPrompt,
 		session,
 		currentCharacterId,
 		generatingMessageMetadata
 	}: {
 		connection: SelectConnection
 		sampling: ResolvedSampling
-		contextConfig: SelectContextConfig
-		promptConfig: SelectPromptConfig
+		systemPrompt?: string
 		session: BasePromptSession
 		currentCharacterId: number | null
 		generatingMessageMetadata?: any
@@ -97,8 +143,7 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 		super({
 			connection,
 			sampling,
-			contextConfig,
-			promptConfig,
+			systemPrompt,
 			session,
 			currentCharacterId,
 			tokenCounter: new TokenCounters(
@@ -267,6 +312,9 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 						"slot is wired to the sending Provider (slot.connectionOf)."
 				)
 			messages = compiledPrompt.messages
+			// 🚧 The files, each on its own turn (PLAN-composer-attachments §3.6).
+			if (this.carriesAttachments)
+				messages = await this.withImageHandles(messages!)
 		} else {
 			// See `promptTextFor`: `compiledPrompt.prompt!` asserted a string
 			// that a chat-shaped payload does not carry.
@@ -320,7 +368,7 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 			return {
 				completionResult: async (
 					contentCb: (chunk: string) => void,
-					thinkingCb?: (chunk: string) => void
+					reasoningCb?: (chunk: string) => void
 				) => {
 					let idleTimedOut = false
 					const idle = createIdleWatchdog(LLM_IDLE_TIMEOUT_MS, () => {
@@ -334,7 +382,7 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 						if (!part?.content) return
 						switch (part.reasoningType) {
 							case "reasoning":
-								thinkingCb?.(part.content)
+								reasoningCb?.(part.content)
 								return
 							// The literal <think>/</think> tokens. Structure, not
 							// prose — the reasoning is already on its own channel,
@@ -393,7 +441,7 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 				isAborted: this.isAborting
 			}
 		} else {
-			const { content, thinkingContent } = await (async () => {
+			const { content, reasoningContent } = await (async () => {
 				// No intermediate chunks to reset an idle timer against for a
 				// non-streaming response — a genuine, documented exception to
 				// the idle-based design used in the streaming branch above: a
@@ -449,7 +497,7 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 						)
 					}
 					if (this.isAborting)
-						return { content: "", thinkingContent: undefined }
+						return { content: "", reasoningContent: undefined }
 					throw e
 				} finally {
 					clearTimeout(idleTimer)
@@ -459,7 +507,7 @@ class LMStudioAdapter extends BaseConnectionAdapter {
 				completionResult: content ?? "",
 				compiledPrompt,
 				isAborted: this.isAborting,
-				thinkingContent
+				reasoningContent
 			}
 		}
 	}

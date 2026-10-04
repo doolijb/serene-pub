@@ -1,1 +1,0 @@
-ALTER TABLE "session_characters" DROP COLUMN "visibility";

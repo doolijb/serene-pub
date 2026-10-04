@@ -68,6 +68,53 @@ export type PostHistoryTemplateContext = {
 }
 
 /**
+ * 🚧 The session's **author's note** as a template reads it (2026-10-02, AN1).
+ *
+ * Not the post-history block: that is the pipeline's and the card's "how to
+ * respond", gated by a token trigger; this is the person's own note, placed
+ * at its own depth on every `interval`-th reply with no trigger. At one index
+ * the template renders the note first, then inject scripts, then the
+ * post-history block.
+ *
+ * The context builder carries the stored value (`text`, `depth`, `interval`,
+ * `role`, the session's `replyCount`) with `targetIndex` a placeholder and
+ * `gatedBy: "assemble"`; Assemble places it and decides the interval, and
+ * hands the template `{ targetIndex, text, role, hasContent }`.
+ */
+export type AuthorsNoteTemplateContext = {
+	targetIndex: number
+	/** The note's text, interpolated; absent when it does not render. */
+	text?: string
+	/** `system`, `user` or `assistant` — the block it renders as. */
+	role: "system" | "user" | "assistant"
+	hasContent: boolean
+	/** Builder's copy only: messages before the reply it is placed. */
+	depth?: number
+	/** Builder's copy only: added on every `interval`-th reply. */
+	interval?: number
+	/** Builder's copy only: the session's AI replies before this one. */
+	replyCount?: number
+	/** Present on the builder's copy: the node that decides. */
+	gatedBy?: "assemble"
+}
+
+/**
+ * What the author's note decision was, and the numbers that made it — on the
+ * assemble node's output beside `PostHistoryDiag`, so the receipt (and the
+ * Author's note widget) can say whether the newest reply carried it.
+ */
+export type AuthorsNoteDiag = {
+	included: boolean
+	reason: "included" | "empty" | "interval"
+	depth: number
+	interval: number
+	/** The session's AI replies before this one — what `interval` divides. */
+	replyCount: number
+	targetIndex: number
+	role: "system" | "user" | "assistant"
+}
+
+/**
  * What `core:query/session-state@1` publishes, as a template sees it — the
  * projection `templateState` makes (typed templates P6): tracked slots only,
  * members and places by slug, no id indexes.
@@ -95,6 +142,8 @@ export type TemplateContext = {
 	exampleDialogue?: string
 	postHistoryInstructions?: string
 	postHistory?: PostHistoryTemplateContext
+	/** 🚧 The session's author's note (AN1) — absent unless the genre declares one. */
+	authorsNote?: AuthorsNoteTemplateContext
 	sessionMessages: any[]
 	char: string
 	character: string
@@ -105,7 +154,8 @@ export type TemplateContext = {
 	/** "A, B, and C" — every persona's display name. */
 	personaNames: string
 	worldLore?: string
-	characterLore?: LorebookEntry<typeof CHARACTER_LORE_TYPE_ID>[]
+	/** Lore bound to a cast member that fit the budget, laid out (`core:var/character-lore@1`). */
+	characterLore?: string
 	history?: string
 	currentDate?: string
 	narrativeGraph?: string

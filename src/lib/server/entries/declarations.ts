@@ -20,10 +20,12 @@
  * to rows and the callers do not change.
  *
  * ⚠ Declaring an entry type *registers* it, so the catalog import below is
- * load-bearing — it is what puts core's three in `allEntryTypes()`. The package
- * marks `./dist/entries.js` as its one side-effectful module for exactly this
- * reason, and `assertEntryDeclarations()` is what notices if a bundler ever
- * drops it anyway.
+ * load-bearing — it is what puts core's entry types in `allEntryTypes()`. The
+ * package's `sideEffects` names its entry and every registering module for
+ * exactly this reason (a pure entry once let a release build drop this
+ * import); `scripts/coreCatalogRegistrations.int.test.ts` builds the shape for
+ * real, and `assertEntryDeclarations()` is what notices at boot if a bundler
+ * ever drops it anyway.
  */
 
 import "@serene-pub/core-catalog"
@@ -116,6 +118,19 @@ export const declaresPriority = (typeId: string): boolean =>
 	BY_TYPE_ID.get(typeId)?.roles.priority !== undefined
 
 /**
+ * Whether a type's entries may be filed under another entry (Part of) — it
+ * declares the `parent` field role (places plan B2, 2026-09-29).
+ *
+ * ⚠ The one question every writer of `anchor_entry_id` asks before filing a
+ * row: the re-parent (`assertAnchorEntry`, which a dated re-parent goes
+ * through too) and the import. A place declares no parent — places join by
+ * relationships — so it is refused because its declaration says so, never
+ * because a handler names its type. Unknown types: no.
+ */
+export const declaresParent = (typeId: string): boolean =>
+	BY_TYPE_ID.get(typeId)?.roles.parent !== undefined
+
+/**
  * The declared default of one field, or `null`.
  *
  * `null` and not `undefined`: the three wire rows this replaces emitted the
@@ -150,9 +165,13 @@ export const declaredFields = (typeId: string): string[] =>
  * default, or to `null` when it has none, which is the same answer an absent
  * key gets.
  *
- * Only the four scalar kinds are checked. Anything else passes through, because
- * an unchecked kind is a kind this app has no opinion about yet and inventing
- * one here would be the mapper deciding a schema question.
+ * The four scalar kinds and `enum` are checked, each against what it declares:
+ * an `integer` must be whole, a number must sit inside a declared `min`/`max`,
+ * and an `enum` must be one of its `of` — an item's `supply: "bottomless"`
+ * would otherwise land in the column and read as nothing any reader knows.
+ * Anything else passes through, because an unchecked kind is a kind this app
+ * has no opinion about yet and inventing one here would be the mapper deciding
+ * a schema question.
  */
 export function coerceDeclaredField(
 	typeId: string,
@@ -161,14 +180,25 @@ export function coerceDeclaredField(
 ): unknown {
 	const decl = BY_TYPE_ID.get(typeId)?.fields[field]
 	if (!decl) return value ?? null
+	const inRange = (n: number) =>
+		Number.isFinite(n) &&
+		(decl.min === undefined || n >= decl.min) &&
+		(decl.max === undefined || n <= decl.max)
 	const ok =
 		decl.type === "string"
 			? typeof value === "string"
 			: decl.type === "boolean"
 				? typeof value === "boolean"
-				: decl.type === "integer" || decl.type === "number"
-					? typeof value === "number"
-					: value !== undefined && value !== null
+				: decl.type === "integer"
+					? typeof value === "number" &&
+						Number.isInteger(value) &&
+						inRange(value)
+					: decl.type === "number"
+						? typeof value === "number" && inRange(value)
+						: decl.type === "enum"
+							? typeof value === "string" &&
+								(decl.of ?? []).includes(value)
+							: value !== undefined && value !== null
 	return ok ? value : (decl.default ?? null)
 }
 
@@ -229,8 +259,9 @@ export function assertEntryDeclarations(
 			findings.push(
 				`entry type '${typeId}' is declared by no module in this build. ` +
 					`Declaring one registers it, so this means ` +
-					`'@serene-pub/core-catalog' (or its entries module, which the ` +
-					`package lists as its one side-effectful export) did not load. ` +
+					`'@serene-pub/core-catalog' (or its entries module) did not load ` +
+					`before this reader — check that the package's \`sideEffects\` ` +
+					`still names its entry and its entries module. ` +
 					`Every field role is unanswered and every declared default is lost.`
 			)
 

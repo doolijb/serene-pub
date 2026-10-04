@@ -20,11 +20,17 @@
 	 *
 	 * On an instance with no compiler the source is read-only: saving and
 	 * previewing both need the compiler. The switch and the scope review
-	 * still work there.
+	 * still save there.
 	 *
-	 * Keys: Ctrl/Cmd+S saves, Ctrl/Cmd+Enter previews.
+	 * The change form (Django admin, STYLE-GUIDE §6.11): **Offered to
+	 * layouts** and the **scope review** are unsaved edits like the source
+	 * (owner ruling 2026-10-02, "levers wait for Save"): the save row sends
+	 * the review, then the switch, then the source (`saveInSequence`), each
+	 * waiting for its answer, and says which landed.
+	 *
+	 * Keys: Ctrl/Cmd+S saves and continues editing, Ctrl/Cmd+Enter previews.
 	 */
-	import { getContext, onMount } from "svelte"
+	import { getContext, onMount, untrack } from "svelte"
 	import { adminGoto as goto, adminUnsavedEdits } from "$lib/client/admin/adminRouter.svelte"
 	import { adminPage as page } from "$lib/client/admin/adminRouter.svelte"
 	import * as Icons from "@lucide/svelte"
@@ -37,6 +43,17 @@
 	import { toaster } from "$lib/client/utils/toaster"
 	import { desktop } from "$lib/client/utils/breakpoint.svelte"
 	import AdminPageHeader from "$lib/client/components/admin/AdminPageHeader.svelte"
+	import AdminChangeForm, {
+		type AdminSaveIntent
+	} from "$lib/client/components/admin/AdminChangeForm.svelte"
+	import { UnsavedEdits } from "$lib/client/forms/unsavedEdits.svelte"
+	import { awaitReply } from "$lib/client/utils/awaitReply"
+	import {
+		saveErrors,
+		saveInSequence,
+		saveSummary,
+		type SaveStep
+	} from "$lib/client/admin/sequentialSave"
 	import PanelTabStrip, { type PanelTab } from "$lib/client/components/panels/PanelTabStrip.svelte"
 	import CodeEditor from "$lib/client/components/componentEditor/CodeEditor.svelte"
 	import CoreDiff from "$lib/client/components/componentEditor/CoreDiff.svelte"
@@ -117,7 +134,27 @@
 			: null
 	)
 	let widgetDirty = $derived(!!component && !!widgetAsSaved && !sameWidgetDraft(widgetAsSaved, draftOf(component)))
-	let dirty = $derived(filesDirty || widgetDirty)
+
+	/**
+	 * The switch and the scope review (a checked scope is granted, an
+	 * unchecked one denied) — unsaved edits of the same form. Each push of
+	 * the component moves the saved snapshot; a clean form follows it.
+	 */
+	type Consent = { enabled: boolean; review: Record<string, boolean> }
+	const consentOf = (c: Detail): Consent => ({
+		enabled: c.enabled,
+		review: Object.fromEntries(c.scopes.map((x) => [x.key, x.pending ? true : x.granted]))
+	})
+	let consent = $state<Consent>({ enabled: false, review: {} })
+	const consentEdits = new UnsavedEdits(() => consent)
+	$effect(() => {
+		if (!component) return
+		const next = consentOf(component)
+		untrack(() => consentEdits.adoptSaved(next, (c) => (consent = structuredClone(c))))
+	})
+
+	let sourceDirty = $derived(filesDirty || widgetDirty)
+	let dirty = $derived(sourceDirty || consentEdits.dirty)
 	adminUnsavedEdits(() => dirty)
 	let readOnly = $derived(!compilerAvailable)
 
@@ -146,7 +183,6 @@
 	 * `updatedAt` this page will send, or a stale save would pass.
 	 */
 	let awaitingGet = false
-	let awaitingDetail = 0
 	/** An export asked for here — another tab's export must not download in this one. */
 	let exporting = $state(false)
 
@@ -190,20 +226,6 @@
 	function handleList(res: Sockets.Components.List.Response) {
 		compilerAvailable = res.compiler.available
 	}
-	function handleSave(res: Sockets.Components.Save.Response) {
-		if (res.component.id !== id || !saving) return
-		saving = false
-		component = res.component
-		compile = res.compile
-		const notice = saveNotice(res)
-		if (notice.tone === "success") {
-			toaster.success({ title: notice.title })
-			preview()
-		} else {
-			toaster.warning({ title: notice.title, description: notice.description })
-			side = "problems"
-		}
-	}
 	function handleRevertDraft(res: Sockets.Components.RevertDraft.Response) {
 		if (res.component.id !== id || !reverting) return
 		reverting = false
@@ -218,13 +240,6 @@
 	function handleRevertDraftError(res: Sockets.ErrorResponse) {
 		if (!reverting) return
 		reverting = false
-		ownWrites = Math.max(0, ownWrites - 1)
-		if (isSaveConflict(res.error)) conflict = true
-		else if (res.error) toaster.error({ title: res.error })
-	}
-	function handleSaveError(res: Sockets.ErrorResponse) {
-		if (!saving) return
-		saving = false
 		ownWrites = Math.max(0, ownWrites - 1)
 		if (isSaveConflict(res.error)) conflict = true
 		else if (res.error) toaster.error({ title: res.error })
@@ -259,17 +274,6 @@
 		exporting = false
 		if (res.error) toaster.error({ title: res.error })
 	}
-	function handleDetail(res: { component: Detail }) {
-		if (res.component.id !== id || awaitingDetail === 0) return
-		awaitingDetail--
-		component = res.component
-	}
-	function handleWriteError(res: Sockets.ErrorResponse) {
-		if (awaitingDetail === 0) return
-		awaitingDetail--
-		ownWrites = Math.max(0, ownWrites - 1)
-		if (res.error) toaster.error({ title: res.error })
-	}
 	function handleCoreSource(res: Sockets.Components.CoreSource.Response) {
 		if (res.slug !== component?.basedOn?.component) return
 		core = res
@@ -291,16 +295,10 @@
 		if (!userCtx.user?.isAdmin) return
 		const releases = [
 			interest.declareInterest<"components:get:error">("components:get:error", handleGetError),
-			interest.declareInterest<"components:save">("components:save", handleSave),
-			interest.declareInterest<"components:save:error">("components:save:error", handleSaveError),
 			interest.declareInterest<"components:revertDraft">("components:revertDraft", handleRevertDraft),
 			interest.declareInterest<"components:revertDraft:error">("components:revertDraft:error", handleRevertDraftError),
 			interest.declareInterest<"components:preview">("components:preview", handlePreview),
 			interest.declareInterest<"components:preview:error">("components:preview:error", handlePreviewError),
-			interest.declareInterest<"components:setEnabled">("components:setEnabled", handleDetail),
-			interest.declareInterest<"components:setEnabled:error">("components:setEnabled:error", handleWriteError),
-			interest.declareInterest<"components:reviewScopes">("components:reviewScopes", handleDetail),
-			interest.declareInterest<"components:reviewScopes:error">("components:reviewScopes:error", handleWriteError),
 			interest.declareInterest<"components:export">("components:export", handleExport),
 			interest.declareInterest<"components:export:error">("components:export:error", handleExportError),
 			interest.declareInterest<"components:coreSource">("components:coreSource", handleCoreSource),
@@ -335,25 +333,130 @@
 
 	/* ── actions ──────────────────────────────────────────────────────── */
 
-	function save() {
-		if (!component || saving || readOnly || !dirty) return
-		saving = true
-		ownWrites++
+	let formErrors = $state<string[]>([])
+
+	/**
+	 * The save row: the scope review and the switch first (neither moves
+	 * `updatedAt`, so the source save after them still names the stamp this
+	 * page read), then the source. One write at a time, each waiting for its
+	 * answer; a refusal is named in the error summary.
+	 */
+	async function save(intent: AdminSaveIntent = "continue") {
+		if (!component || saving) return
+		formErrors = []
+		if (!dirty) return land(intent)
 		const c = component
-		socket.emit("components:save", {
-			id: c.id,
-			expectedUpdatedAt: c.updatedAt,
-			files: $state.snapshot(files),
-			entry,
-			label: withEnglish(c.label, widget.label.trim() || englishOf(c.label)),
-			widget: {
-				...(c.widget as Sockets.Components.Widget),
-				title: withEnglish(c.widget.title, widget.title.trim() || englishOf(c.widget.title)),
-				icon: widget.icon.trim() || undefined,
-				scopes: [...widget.scopes],
-				reads: [...widget.reads]
+		const cid = c.id
+		const want = $state.snapshot(consent) as Consent
+		const saved = consentOf(c)
+		const steps: SaveStep[] = []
+		const mine = <T,>(p: Promise<T>) => {
+			ownWrites++
+			return p.catch((e) => {
+				ownWrites = Math.max(0, ownWrites - 1)
+				throw e
+			})
+		}
+
+		const denied = Object.entries(want.review)
+			.filter(([, granted]) => !granted)
+			.map(([key]) => key)
+		if (c.scopes.length && !sameReview(want.review, saved.review))
+			steps.push({
+				label: "Scope review",
+				run: () =>
+					mine(
+						awaitReply({
+							socket,
+							event: "components:reviewScopes",
+							errorEvent: "components:reviewScopes:error",
+							params: { id: cid, denied },
+							match: (r) => r.component?.id === cid
+						})
+					).then((r) => (component = r.component))
+			})
+		if (want.enabled !== saved.enabled)
+			steps.push({
+				label: want.enabled ? "Offer to layouts" : "Stop offering to layouts",
+				run: () =>
+					mine(
+						awaitReply({
+							socket,
+							event: "components:setEnabled",
+							errorEvent: "components:setEnabled:error",
+							params: { id: cid, enabled: want.enabled },
+							match: (r) => r.component?.id === cid
+						})
+					).then((r) => (component = r.component))
+			})
+		if (sourceDirty && !readOnly) {
+			const params = {
+				id: cid,
+				expectedUpdatedAt: c.updatedAt,
+				files: $state.snapshot(files),
+				entry,
+				label: withEnglish(c.label, widget.label.trim() || englishOf(c.label)),
+				widget: {
+					...(c.widget as Sockets.Components.Widget),
+					title: withEnglish(c.widget.title, widget.title.trim() || englishOf(c.widget.title)),
+					icon: widget.icon.trim() || undefined,
+					scopes: [...widget.scopes],
+					reads: [...widget.reads]
+				}
 			}
-		})
+			steps.push({
+				label: "Source",
+				run: () =>
+					// Someone saved in between: never write over their work.
+					conflict
+						? Promise.reject(new Error(SAVE_CONFLICT_TEXT))
+						: mine(
+						awaitReply({
+							socket,
+							event: "components:save",
+							errorEvent: "components:save:error",
+							params,
+							match: (r) => r.component?.id === cid
+						})
+					).then(
+						(res) => {
+							component = res.component
+							compile = res.compile
+							const notice = saveNotice(res)
+							if (notice.tone === "success") preview()
+							else {
+								toaster.warning({ title: notice.title, description: notice.description })
+								side = "problems"
+							}
+						},
+						(e: unknown) => {
+							if (e instanceof Error && isSaveConflict(e.message)) {
+								conflict = true
+								throw new Error(SAVE_CONFLICT_TEXT)
+							}
+							throw e
+						}
+					)
+			})
+		}
+
+		saving = true
+		const outcome = await saveInSequence(steps)
+		saving = false
+		const name = text(component?.label) || "the component"
+		if (outcome.refused.length || outcome.skipped.length) {
+			formErrors = saveErrors(outcome)
+			toaster.warning({ title: saveSummary(outcome, name) })
+			return
+		}
+		toaster.success({ title: saveSummary(outcome, name) })
+		land(intent)
+	}
+	const sameReview = (a: Record<string, boolean>, b: Record<string, boolean>) =>
+		Object.keys({ ...a, ...b }).every((k) => !!a[k] === !!b[k])
+	function land(intent: AdminSaveIntent) {
+		if (intent === "save") void goto("/admin/components")
+		else if (intent === "another") void goto("/admin/components/new")
 	}
 
 	/** Discard the component draft — and any unsaved edits — and go back to what sessions run. */
@@ -386,13 +489,6 @@
 		socket.emit("components:export", { id: component.id })
 	}
 
-	function setEnabled(enabled: boolean) {
-		if (!component) return
-		ownWrites++
-		awaitingDetail++
-		socket.emit("components:setEnabled", { id: component.id, enabled })
-	}
-
 	function onRuntimeError(e: { message: string; stack?: string }) {
 		runtime = [...runtime, e].slice(-20)
 	}
@@ -404,10 +500,8 @@
 
 	function onKey(e: KeyboardEvent) {
 		if (!(e.ctrlKey || e.metaKey)) return
-		if (e.key === "s") {
-			e.preventDefault()
-			save()
-		} else if (e.key === "Enter") {
+		// Ctrl/Cmd+S is the change form's own (Save and continue editing).
+		if (e.key === "Enter") {
 			e.preventDefault()
 			preview()
 		}
@@ -428,76 +522,67 @@
 		widget[list] = cur.includes(key) ? cur.filter((k) => k !== key) : [...cur, key]
 	}
 
-	/** Scope review: a checked scope is granted, an unchecked one denied. */
-	let reviewDraft = $state<Record<string, boolean>>({})
-	$effect(() => {
-		const next: Record<string, boolean> = {}
-		for (const s of component?.scopes ?? []) next[s.key] = s.pending ? true : s.granted
-		reviewDraft = next
-	})
-	function saveReview() {
-		if (!component) return
-		ownWrites++
-		awaitingDetail++
-		const denied = Object.entries(reviewDraft)
-			.filter(([, granted]) => !granted)
-			.map(([key]) => key)
-		socket.emit("components:reviewScopes", { id: component.id, denied })
-	}
-
 	const text = (v: unknown) => i18nTextIn(v) ?? ""
 </script>
 
 <svelte:window onkeydown={onKey} />
 
-<a
-	class="text-surface-600-400 hover:text-surface-800-200 mb-3 inline-flex items-center gap-1 text-[13px]"
-	href="/admin/components"
->
-	<Icons.ChevronLeft size={14} /> Back to components
-</a>
-
-<AdminPageHeader
-	title={component ? text(component.label) : "Component"}
+{#if loadError}
+	<AdminPageHeader title="Component" />
+	<div class="panel-card text-sm" role="alert">
+		<p class="text-error-700-300">{loadError}</p>
+		<a class="underline" href="/admin/components">All components</a>
+	</div>
+{:else if !component}
+	<AdminPageHeader title="Component" />
+	<p class="text-surface-600-400 flex items-center gap-2 text-sm" role="status">
+		<Icons.LoaderCircle size={14} class="animate-spin" /> Loading the component…
+	</p>
+{:else}
+<AdminChangeForm
+	mode="change"
+	title={text(component.label)}
 	purpose="Edit its files, preview them against sample data, and save to change what sessions run."
+	noun="component"
+	changelistHref="/admin/components"
+	changelistLabel="Components"
+	{dirty}
+	{saving}
+	canSave={dirty && !saving}
+	errors={formErrors}
+	onSave={save}
 >
-	{#snippet actions()}
-		<div class="header-actions">
-			{#if component}
-				<button
-					type="button"
-					class="btn btn-sm preset-tonal-surface"
-					onclick={exportSaved}
-					disabled={exporting}
-				>
-					{#if exporting}<Icons.LoaderCircle size={14} class="animate-spin" />{:else}<Icons.Download size={14} />{/if}
-					Export
-				</button>
-				{#if !readOnly}
-					<button type="button" class="btn btn-sm preset-tonal-surface" onclick={preview} disabled={previewing} title="Ctrl+Enter">
-						{#if previewing}<Icons.LoaderCircle size={14} class="animate-spin" />{:else}<Icons.Play size={14} />{/if}
-						Preview
-					</button>
-					<button type="button" class="btn btn-sm preset-filled-primary-500" onclick={save} disabled={!dirty || saving || conflict} title="Ctrl+S">
-						{#if saving}<Icons.LoaderCircle size={14} class="animate-spin" />{:else}<Icons.Save size={14} />{/if}
-						Save
-					</button>
-				{/if}
-			{/if}
-		</div>
+	{#snippet headerActions()}
+		<button
+			type="button"
+			class="btn btn-sm preset-tonal-surface"
+			onclick={exportSaved}
+			disabled={exporting}
+		>
+			{#if exporting}<Icons.LoaderCircle size={14} class="animate-spin" />{:else}<Icons.Download size={14} />{/if}
+			Export
+		</button>
+		{#if !readOnly}
+			<button type="button" class="btn btn-sm preset-tonal-surface" onclick={preview} disabled={previewing} title="Ctrl+Enter">
+				{#if previewing}<Icons.LoaderCircle size={14} class="animate-spin" />{:else}<Icons.Play size={14} />{/if}
+				Preview
+			</button>
+		{/if}
 	{/snippet}
-	{#if component}
+	{#snippet headerExtra()}
 		<div class="flex flex-wrap items-center gap-x-4 gap-y-2">
 			<p class="text-surface-600-400 flex min-w-0 flex-wrap items-center gap-2 text-xs">
-				<span class="truncate font-mono">{component.widgetId} · {component.framework}</span>
-				{#if component.basedOn}
-					<span class="preset-tonal-surface rounded-full px-2 py-0.5">Clone of {component.basedOn.component}</span>
-				{/if}
-				{#if dirty}
-					<span class="preset-tonal-warning rounded-full px-2 py-0.5">Unsaved</span>
+				<span class="truncate font-mono">{component!.widgetId} · {component!.framework}</span>
+				{#if component!.basedOn}
+					<span class="preset-tonal-surface rounded-full px-2 py-0.5">Clone of {component!.basedOn.component}</span>
 				{/if}
 			</p>
-			<Switch checked={component.enabled} onCheckedChange={(e) => setEnabled(e.checked)} class="ml-auto flex items-center gap-2">
+			<!-- An unsaved edit like the source: the save row sends it. -->
+			<Switch
+				checked={consent.enabled}
+				onCheckedChange={(e) => (consent.enabled = e.checked)}
+				class="ml-auto flex items-center gap-2"
+			>
 				<Switch.Label class="text-sm">Offered to layouts</Switch.Label>
 				<Switch.Control class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500">
 					<Switch.Thumb />
@@ -515,19 +600,8 @@
 				</button>
 			</p>
 		{/if}
-	{/if}
-</AdminPageHeader>
+	{/snippet}
 
-{#if loadError}
-	<div class="panel-card text-sm" role="alert">
-		<p class="text-error-700-300">{loadError}</p>
-		<a class="underline" href="/admin/components">Back to components</a>
-	</div>
-{:else if !component}
-	<p class="text-surface-600-400 flex items-center gap-2 text-sm" role="status">
-		<Icons.LoaderCircle size={14} class="animate-spin" /> Loading the component…
-	</p>
-{:else}
 	<div class="mb-3 flex flex-col gap-2">
 		{#if conflict}
 			<div class="banner banner-error" role="alert">
@@ -570,7 +644,7 @@
 		{#if readOnly}
 			<div class="banner banner-warning" role="status">
 				<Icons.Info size={16} class="shrink-0" />
-				<p class="flex-1">This instance has no component compiler, so the source is read only here. You can still switch it on or off and review its scopes.</p>
+				<p class="flex-1">This pub has no component compiler, so the source is read only here. You can still switch it on or off and review its scopes.</p>
 			</div>
 		{/if}
 		{#if component.lastError && !compile}
@@ -696,10 +770,10 @@
 
 				{#if component.scopes.length}
 					<fieldset class="flex flex-col gap-1.5">
-						<legend class="text-surface-600-400 mb-1 text-xs">Scope review — what this instance grants it (as saved)</legend>
+						<legend class="text-surface-600-400 mb-1 text-xs">Scope review — what this pub grants it (as saved)</legend>
 						{#each component.scopes as s (s.key)}
 							<label class="flex items-center gap-2 text-sm">
-								<input type="checkbox" class="checkbox" bind:checked={reviewDraft[s.key]} />
+								<input type="checkbox" class="checkbox" bind:checked={consent.review[s.key]} />
 								<span class="flex-1">{s.label}</span>
 								{#if s.pending}
 									<span class="preset-tonal-warning rounded-full px-2 py-0.5 text-xs">Waiting for review</span>
@@ -708,11 +782,7 @@
 								{/if}
 							</label>
 						{/each}
-						<div>
-							<button type="button" class="btn btn-sm preset-filled-primary-500" onclick={saveReview}>
-								<Icons.ShieldCheck size={14} /> Save review
-							</button>
-						</div>
+						<p class="text-surface-600-400 text-xs">Saved with the save row, before the source.</p>
 					</fieldset>
 				{/if}
 			</div>
@@ -740,25 +810,10 @@
 			{/if}
 		</div>
 	</div>
+</AdminChangeForm>
 {/if}
 
 <style>
-	/*
-	 * The header's actions sit beside the title where there is room. In the
-	 * 400px dock they take their own row, so the title and its sentence keep
-	 * the full width instead of wrapping a word to a line.
-	 */
-	.header-actions {
-		display: flex;
-		flex-wrap: wrap;
-		align-items: center;
-		gap: 8px;
-	}
-	@container content (max-width: 559px) {
-		.header-actions {
-			width: 100cqi;
-		}
-	}
 	.editor-grid {
 		display: grid;
 		gap: 12px;

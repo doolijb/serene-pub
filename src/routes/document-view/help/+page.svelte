@@ -137,7 +137,7 @@
 						href: "/document-view/settings/system",
 						label: "System settings",
 						description:
-							"Instance-wide settings: managers, accounts, summarization, and more.",
+							"Settings for the whole pub: managers, accounts, summarization, and more.",
 						show: isAdmin
 					},
 					{

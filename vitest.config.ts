@@ -34,12 +34,14 @@ const domTests = ["src/**/*.dom.test.ts", "src/**/*.dom.test.svelte.ts"]
  * `core:query/vector-search@1` declares a 3s `timeoutMs` (see the SDK
  * contract) enforced by the real host + `run()` engine — not a vitest
  * setting, so raising `testTimeout` cannot buy it headroom. A file that
- * drives that node for real (`createHost` + `run`, `vector-search.maxEntries`
- * above 0) pays that budget in wall-clock time, and a full parallel sweep
+ * drives that node for real (`createHost` + `run`, the mechanism switched on —
+ * `query-windows.searchByMeaning`, since 2026-09-29) pays that budget in
+ * wall-clock time, and a full parallel sweep
  * steals enough of it that the node comes back `err: timeout` — passing
  * alone, flaking in the suite. `measure/` is entirely this shape;
  * `parity/harness.rag.int.test.ts` drives the same real node the same way
- * (the rest of `parity/` leaves `maxEntries` at the shipped 0 and never
+ * (the rest of `parity/` leaves the switch at its shipped Automatic, which
+ * searches nothing there — no embedding connection is starred — and never
  * reaches the timeout). Pulled into their own sequential project rather than
  * budgeted per-file, because the contention is the suite's, not any one
  * file's to fix.

@@ -75,13 +75,6 @@ vi.mock("$lib/server/sockets/utils/broadcastHelpers", () => ({
 }))
 // The legacy configuration read dispatch still performs (a context template
 // row it never uses on this road); mocked as `replyRoad.int.test.ts` mocks it.
-vi.mock("$lib/server/utils/getUserConfigurations", () => ({
-	getUserConfigurations: async () => ({
-		contextConfig: { id: 1, template: "{{instructions}}" },
-		promptConfig: { id: 1, systemPrompt: "Be brief." },
-		narratorPromptConfig: null
-	})
-}))
 
 /** Every compiled prompt the adapter was handed — the wire's side. */
 const compiledPrompts: any[] = []
@@ -296,13 +289,14 @@ describe("seating", () => {
 			expect.objectContaining({
 				slug: "mascot",
 				origin: "genre",
-				name: "Guide",
+				name: "Serene",
 				speaks: "in-turn",
 				default: true,
 				seated: true
 			})
 		])
-		expect(view.envoys[0].image).toMatch(/^data:image\/svg\+xml/)
+		// Serene's face is the mascot, as a raster the conversation box takes.
+		expect(view.envoys[0].image).toMatch(/^data:image\/webp;base64,/)
 		expect(typeof view.envoys[0].description).toBe("string")
 	})
 
@@ -346,6 +340,41 @@ describe("seating", () => {
 			emit
 		)
 		expect(bad.error).toMatch(/not one this session's genre declares/)
+	})
+})
+
+describe("Serene's greeting", () => {
+	it("a new guide session opens with one row: Serene's greeting, on main, under her name and face, and no model was called", async () => {
+		compiledPrompts.length = 0
+		const sessionId = await createGuideSession("greeting")
+		const rows = await messagesOf(sessionId)
+		expect(rows).toHaveLength(1)
+		const [greeting] = rows
+		expect(greeting!.role).toBe("assistant")
+		expect(greeting!.channel).toBe("main")
+		expect(greeting!.characterId).toBeNull()
+		expect((greeting!.metadata as any)?.speaker).toBe("envoy:mascot")
+		expect(greeting!.content).toBe(
+			"Hi, I'm Serene, your guide to Serene Pub. What would you like to talk about? How can I help you?"
+		)
+		expect(compiledPrompts).toHaveLength(0)
+
+		// The line is shown under Serene, with the mascot as her face.
+		const { sessionsViewHandler } = await import(
+			"$lib/server/sockets/sessions"
+		)
+		const view: any = await sessionsViewHandler.handler(
+			fakeSocket(userId),
+			{ sessionId },
+			emit
+		)
+		const serene = view.envoys.find((e: any) => e.slug === "mascot")
+		expect(serene.name).toBe("Serene")
+		expect(serene.image).toMatch(/^data:image\/webp;base64,/)
+		expect(serene.image).toBe(
+			(await import("@serene-pub/core-catalog")).guideGenre.envoys?.[0]
+				?.image
+		)
 	})
 })
 
@@ -474,7 +503,7 @@ describe("a guide reply", () => {
 		expect((input.output as any).characterId).toBeNull()
 		// The genre's speaker text reached the context builder.
 		const context = receipt.nodes.find((n) => n.nodeKey === "context")!
-		expect((context.output as any).seedName).toBe("Guide")
+		expect((context.output as any).seedName).toBe("Serene")
 		// Pinned once at run start (R-21 (4)).
 		expect(receipt.portrayals?.["envoy:mascot"]).toEqual({ by: "ai" })
 		// The docs are the guide's knowledge: the search ran, published its
@@ -534,18 +563,13 @@ describe("a guide reply", () => {
 		const viewer = { userId, isAdmin: true }
 		const view = await namespaceView(db, secret, GUIDE_RESPOND, viewer)
 		expect(view).not.toBeNull()
-		// The panel lists the envoy by its name, in the trailing "Also
-		// configured here" group rather than among the numbered steps — it is
-		// not a step of anything that runs — with the genre's text as the
-		// author default and nothing changed yet.
-		expect(view!.steps.some((s) => s.kind === "envoy")).toBe(false)
-		const step = view!.alsoConfigured.find(
-			(s) => s.label === "Envoy · Guide"
-		)!
-		expect(step, "an Envoy step").toBeDefined()
-		expect(step.kind).toBe("envoy")
-		const option = step.options.find((o) => o.label === "System prompt")!
+		// The envoy's texts are the prompt on the front of the group that
+		// reads them (owner rulings 2026-09-30) — no step or group of its own —
+		// with the genre's text as the author default and nothing changed yet.
+		const front = view!.groups.flatMap((g) => g.front)
+		const option = front.find((o) => o.label === "System prompt")!
 		expect(option).toBeDefined()
+		expect(option.step.heading).toBe("Envoy · Serene")
 		expect(option.control).toBe("text")
 		expect(option.decl?.["text@1"]?.multiline).toBe(true)
 		expect(option.authorDefault).toBe(MASCOT_PROMPT)
@@ -555,12 +579,7 @@ describe("a guide reply", () => {
 		expect(option.writable).toBe(true)
 		// The context step no longer offers a prompt picker of its own: the
 		// envoy owns the text (the three-System-boxes rule).
-		const contextStep = view!.steps.find(
-			(s) => s.label === "Build template context"
-		)
-		expect(
-			contextStep?.options.some((o) => o.control === "prompts-ref")
-		).toBe(false)
+		expect(front.some((o) => o.control === "prompts-ref")).toBe(false)
 
 		// The shipped configuration stays as written; the edit lands on a
 		// copy the instance selects — the panel's own gesture, by hand.
@@ -576,14 +595,14 @@ describe("a guide reply", () => {
 			.select({ id: schema.pipelineSpecs.id })
 			.from(schema.pipelineSpecs)
 			.where(eq(schema.pipelineSpecs.slug, GUIDE_RESPOND))
-		await selectConfig(db, spec!.id, "instance", 0, copy.id, userId)
+		await selectConfig(db, spec!.id, "pub", 0, copy.id, userId)
 
 		const TUNED = "You are a terse librarian. Answer in one sentence."
 		await writeOption(db, secret, GUIDE_RESPOND, viewer, option.id, TUNED)
 		const after = await namespaceView(db, secret, GUIDE_RESPOND, viewer)
-		const tunedOption = after!.alsoConfigured
-			.find((s) => s.label === "Envoy · Guide")!
-			.options.find((o) => o.label === "System prompt")!
+		const tunedOption = after!.groups
+			.flatMap((g) => g.front)
+			.find((o) => o.id === option.id)!
 		expect(tunedOption.value).toBe(TUNED)
 		expect(tunedOption.source).toBe("config")
 		expect(tunedOption.changed).toBe(true)
@@ -652,7 +671,8 @@ describe("a guide reply", () => {
 		expect(nothing.error).toBe(
 			"This session's genre ('Guide') does not offer Continue — send a line to move the story on."
 		)
-		expect((await messagesOf(sessionId)).length).toBe(1)
+		// Serene's greeting and the question, nothing more.
+		expect((await messagesOf(sessionId)).length).toBe(2)
 
 		// …which is how an order-less session is still playable (§4.7): the
 		// owner's press is the pick, firing the seated envoy by entry.
@@ -835,7 +855,8 @@ describe("the fired turn's explicit pick (U5g review, W1) and an answerless sess
 		expect(beyond.error).toBe(
 			"This session's genre ('Guide') does not offer Continue — send a line to move the story on."
 		)
-		expect((await messagesOf(sessionId)).length).toBe(1)
+		// Serene's greeting and the question, nothing more.
+		expect((await messagesOf(sessionId)).length).toBe(2)
 
 		// The owner fires the seated envoy: the answer lands.
 		events.length = 0
@@ -845,7 +866,7 @@ describe("the fired turn's explicit pick (U5g review, W1) and an answerless sess
 			emit
 		)
 		expect(answered?.error, answered?.error).toBeUndefined()
-		expect((await messagesOf(sessionId)).length).toBe(2)
+		expect((await messagesOf(sessionId)).length).toBe(3)
 
 		// Firing is over prepared turns: the press dispatching the entry reads
 		// no seat, so unseating does not unmake the fired reply — what says
@@ -863,7 +884,7 @@ describe("the fired turn's explicit pick (U5g review, W1) and an answerless sess
 		)
 		expect(unseated.error, unseated.error).toBeUndefined()
 		const rows = await messagesOf(sessionId)
-		expect(rows.length).toBe(3)
+		expect(rows.length).toBe(4)
 		expect((rows.at(-1)!.metadata as any).speaker).toBe("envoy:mascot")
 		expect(rows.at(-1)!.content).toBe(CHUNKS.join(""))
 	})
@@ -1090,10 +1111,12 @@ describe("a branch keeps the seat (U5g review, C2); the shape facts count no cha
 		expect(await seats(branchId)).toEqual([
 			{ characterId: null, envoySlug: "mascot", removedAt: null }
 		])
-		// The copy's history, each row keeping its reference.
+		// The copy's history — greeting, question, answer — each row keeping
+		// its reference.
 		const copied = await messagesOf(branchId)
-		expect(copied.length).toBe(2)
-		expect((copied[1]!.metadata as any).speaker).toBe("envoy:mascot")
+		expect(copied.length).toBe(3)
+		expect((copied[0]!.metadata as any).speaker).toBe("envoy:mascot")
+		expect((copied[2]!.metadata as any).speaker).toBe("envoy:mascot")
 
 		await ask(branchId, "and now?")
 		const res: any = await sessionsFireTurnHandler.handler(
@@ -1106,7 +1129,7 @@ describe("a branch keeps the seat (U5g review, C2); the shape facts count no cha
 		)
 		expect(res?.error, res?.error).toBeUndefined()
 		const rows = await messagesOf(branchId)
-		expect(rows.length).toBe(4)
+		expect(rows.length).toBe(5)
 		expect((rows.at(-1)!.metadata as any).speaker).toBe("envoy:mascot")
 		expect(rows.at(-1)!.content).toBe(CHUNKS.join(""))
 		// A departed seat is not copied: unseat in the source, branch again.

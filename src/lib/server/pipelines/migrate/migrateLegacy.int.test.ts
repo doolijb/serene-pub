@@ -17,9 +17,11 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest"
 import fs from "fs/promises"
 import os from "os"
 import path from "path"
-import { and, eq } from "drizzle-orm"
+import { eq } from "drizzle-orm"
 import type { TestDb } from "$lib/server/utils/testDb"
 import * as schema from "$lib/server/db/schema"
+import * as attic from "$lib/server/attic/tables"
+import { buildTestAttic, WIRING_TABLES } from "$lib/server/attic/testAttic"
 
 let db: TestDb
 let dataDir: string
@@ -47,6 +49,10 @@ beforeAll(async () => {
 	const dbModule = await import("$lib/server/db")
 	db = dbModule.db as unknown as TestDb
 	await (await import("$lib/server/db/defaults")).sync()
+	// The legacy rows are 0.5.3's, and the migration reads them from the
+	// attic the upgrade stashed them in.
+	await buildTestAttic(db, WIRING_TABLES)
+	await db.insert(attic.systemSettings).values({})
 
 	const [user] = await db
 		.insert(schema.users)
@@ -57,7 +63,7 @@ beforeAll(async () => {
 	// The situation this exists for: a person with their own prompt config,
 	// their own numeric tuning, and it selected on a session.
 	const [mine] = await db
-		.insert(schema.promptConfigs)
+		.insert(attic.promptConfigs)
 		.values({
 			name: "My Questions-Only Config",
 			systemPrompt: MY_SYSTEM,
@@ -69,7 +75,7 @@ beforeAll(async () => {
 	mineId = mine.id
 
 	const [narratorMine] = await db
-		.insert(schema.narratorPromptConfigs)
+		.insert(attic.narratorPromptConfigs)
 		.values({
 			name: "My Narrator",
 			systemPrompt: "Describe the room, never the people.",
@@ -84,7 +90,7 @@ beforeAll(async () => {
 	// the pool they must become one row per step, or three of the four steps
 	// refuse the configuration the migration just wrote for them.
 	const [sceneMine] = await db
-		.insert(schema.sceneSummarizeConfigs)
+		.insert(attic.sceneSummarizeConfigs)
 		.values({
 			name: "My Scene Summarizer",
 			batchSystemPrompt: "Draft it my way.",
@@ -95,25 +101,29 @@ beforeAll(async () => {
 		.returning()
 	sceneMineId = sceneMine.id
 
-	const [session] = await db
-		.insert(schema.sessions)
-		.values({ userId, isGroup: false, promptConfigId: mine.id })
-		.returning()
-	sessionId = session.id
+	sessionId = await chatWithPrompt(mine.id)
 
 	await db
-		.insert(schema.userSettings)
+		.insert(attic.userSettings)
 		.values({ userId, activePromptConfigId: mine.id })
-		.onConflictDoUpdate({
-			target: schema.userSettings.userId,
-			set: { activePromptConfigId: mine.id }
-		})
 
 	const { bootstrapPipelines } = await import(
 		"$lib/server/pipelines/boot/bootstrap"
 	)
 	await bootstrapPipelines(db)
 }, 180_000)
+
+/** A session, and the 0.5.3 chat it was — same id — selecting a prompt config. */
+async function chatWithPrompt(promptConfigId: number): Promise<number> {
+	const [session] = await db
+		.insert(schema.sessions)
+		.values({ userId, isGroup: false })
+		.returning()
+	await db
+		.insert(attic.chats)
+		.values({ id: session.id, userId, isGroup: false, promptConfigId })
+	return session.id
+}
 
 afterAll(async () => {
 	await fs.rm(dataDir, { recursive: true, force: true })
@@ -299,6 +309,31 @@ describe("a user's own config comes across", () => {
 		const mine: any = prompts.find((p: any) => p.name === "My Narrator")
 		expect(mine.fields.narratorName).toBe("The Room")
 	})
+
+	it("sends a narration's direction with a narrator prompt somebody wrote, as 0.5.3 did", async () => {
+		// 0.5.3 appended what a person typed in the Narrator modal to the
+		// prompt in code (`promptBuilder.compilePrompt`), whatever the config
+		// said. In 0.6 the prompt row says it, so a carried row has to.
+		const narrateId = await specIdOf("core:spec/narrate")
+		const prompts = await db
+			.select()
+			.from(schema.pipelinePrompts)
+			.where(eq(schema.pipelinePrompts.createdForSpecId, narrateId))
+		const mine: any = prompts.find((p: any) => p.name === "My Narrator")
+		const { default: Handlebars } = await import("handlebars")
+		const render = (text: string, turnDirection: string) =>
+			Handlebars.compile(text, { noEscape: true })({ turnDirection })
+
+		expect(render(mine.fields.systemPrompt, "The storm breaks.")).toBe(
+			"Describe the room, never the people.\n\nAdditional focus for this response: The storm breaks."
+		)
+		expect(render(mine.fields.postHistoryInstructions, "The storm breaks.")).toBe(
+			"Additional focus for this response: The storm breaks."
+		)
+		// Undirected, the text is exactly what the person wrote.
+		expect(render(mine.fields.systemPrompt, "")).toBe("Describe the room, never the people.")
+		expect(render(mine.fields.postHistoryInstructions, "")).toBe("")
+	})
 })
 
 describe("selections follow", () => {
@@ -325,74 +360,49 @@ describe("selections follow", () => {
 			selections.find(
 				(s: any) => s.scopeKind === kind && s.scopeId === id
 			)
-		// The user layer no longer migrates (ruled 2026-08-24) — a person's
-		// legacy pick has no global home, so only the session's selection lands.
+		// There is no user layer (ruled 2026-08-24): a person's legacy pick
+		// lands on every session they own (owner ruling B1, 2026-10-01) —
+		// here because it is the user's ACTIVE pick, not because the chat
+		// named it: 0.5.3 never read a chat's own prompt config (M5).
 		expect(at("user", userId)).toBeUndefined()
 		expect(at("session", sessionId)?.configId).toBe(config.id)
 	})
 })
 
-describe("the numbers stop travelling with the prompt", () => {
-	it("migrates a touched param as an override at the scope that selected it", async () => {
-		// `post_history_depth` was a column on `prompt_configs` — six unrelated
-		// decisions in one row. It is a param now, so it lands as one.
-		const specId = await specIdOf("core:spec/respond")
-		const rows = await db
+describe("prompt text only (owner ruling, 2026-10-01)", () => {
+	it("carries no post-history numbers — not on the config, not as an override", async () => {
+		// `post_history_depth` was a column on `prompt_configs`; the upgrade
+		// carries a config's prompt text and nothing else, so the pipeline's
+		// own numbers stand and the restore notes the loss.
+		const [config] = await db
 			.select()
-			.from(schema.pipelineNodeOverrides)
-			.where(
-				and(
-					eq(schema.pipelineNodeOverrides.specId, specId),
-					eq(schema.pipelineNodeOverrides.slot, "params")
-				)
+			.from(schema.pipelineConfigs)
+			.where(eq(schema.pipelineConfigs.seedKey, `migrated:core:spec/respond:${mineId}`))
+		const postHistory = async (configId: number) =>
+			(
+				await db
+					.select()
+					.from(schema.pipelineConfigValues)
+					.where(eq(schema.pipelineConfigValues.configId, configId))
 			)
-
-		const depth = rows.filter((r: any) => r.path === "postHistoryDepth")
-		expect(depth.length).toBeGreaterThan(0)
-		expect(depth[0].value).toBe(3)
-
-		const trigger = rows.filter(
-			(r: any) => r.path === "postHistoryTokenTrigger"
-		)
-		expect(trigger[0].value).toBe(500)
-	})
-
-	it("writes nothing for a field left at its default", async () => {
-		// The property that keeps inheritance alive. A migrated value stops
-		// tracking the default; an unwritten one does not, so an admin moving an
-		// instance value later still reaches this user.
-		const specId = await specIdOf("core:spec/respond")
-		const [untouched] = await db
-			.insert(schema.promptConfigs)
-			.values({
-				name: "Defaults Everywhere",
-				systemPrompt: "plain",
-				postHistoryDepth: 0,
-				postHistoryTokenTrigger: 0
-			})
-			.returning()
-
-		const [session] = await db
-			.insert(schema.sessions)
-			.values({ userId, isGroup: false, promptConfigId: untouched.id })
-			.returning()
-
-		const { migrateLegacyParams } = await import(
-			"$lib/server/pipelines/migrate/migrateLegacy"
-		)
-		await migrateLegacyParams(db)
-
-		const rows = await db
+				.filter((v: any) => v.slot === "params" && v.path.startsWith("postHistory"))
+				.map((v: any) => [v.nodeKey, v.path, v.value])
+				.sort()
+		const [shipped] = await db
 			.select()
-			.from(schema.pipelineNodeOverrides)
-			.where(
-				and(
-					eq(schema.pipelineNodeOverrides.specId, specId),
-					eq(schema.pipelineNodeOverrides.scopeKind, "session"),
-					eq(schema.pipelineNodeOverrides.scopeId, session.id)
-				)
-			)
-		expect(rows).toHaveLength(0)
+			.from(schema.pipelineConfigs)
+			.where(eq(schema.pipelineConfigs.seedKey, "pipeline-default:core:spec/respond"))
+		// The shipped default's numbers, whatever they are — never the 3 and
+		// 500 this person's 0.5.3 config held.
+		expect(await postHistory(config.id)).toEqual(await postHistory(shipped.id))
+		expect((await postHistory(config.id)).map((r) => r[2])).not.toContain(500)
+		const overrides = (
+			await db
+				.select()
+				.from(schema.pipelineNodeOverrides)
+				.where(eq(schema.pipelineNodeOverrides.slot, "params"))
+		).filter((r: any) => r.path.startsWith("postHistory"))
+		expect(overrides).toEqual([])
 	})
 })
 
@@ -420,14 +430,13 @@ describe("running it again", () => {
 		expect(names(after)).toBe(names(before))
 	})
 
-	it("leaves the legacy tables completely alone", async () => {
-		// They stay readable behind the read-only sidebar until 0.8.0 removes
-		// them. A migration that consumed its source could not be re-run, and
-		// could not be checked afterwards by the person it happened to.
+	it("leaves the attic's legacy rows alone", async () => {
+		// A migration that consumed its source could not be re-run by a boot
+		// that resumes an interrupted upgrade.
 		const [row] = await db
 			.select()
-			.from(schema.promptConfigs)
-			.where(eq(schema.promptConfigs.id, mineId))
+			.from(attic.promptConfigs)
+			.where(eq(attic.promptConfigs.id, mineId))
 		expect(row.systemPrompt).toBe(MY_SYSTEM)
 		expect(row.postHistoryDepth).toBe(3)
 	})

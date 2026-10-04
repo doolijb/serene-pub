@@ -251,6 +251,23 @@ import { server, host, path, port } from "./adapter-entry.js"
 
 globalThis.__SERENE_PUB_HTTP_SERVER__ = server.server
 
+// The launcher's runtime file (src/lib/server/launcher/runtimeFile.ts) is
+// written once this server listens. hooks.server.ts leaves the callback here
+// while adapter-node initialises, which is before the listen call.
+const onListening = globalThis.__SERENE_PUB_ON_LISTENING__
+if (typeof onListening === "function") {
+	const httpServer = server.server
+	const publish = () => {
+		try {
+			onListening(httpServer, host)
+		} catch (err) {
+			console.warn("[launcher] Could not write the runtime file:", err)
+		}
+	}
+	if (httpServer.listening) publish()
+	else httpServer.once("listening", publish)
+}
+
 export { server, host, path, port }
 `
 )

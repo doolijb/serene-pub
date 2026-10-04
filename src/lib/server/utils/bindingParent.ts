@@ -1,7 +1,7 @@
 /**
  * The one rule for a cast member's `parentNodeId` (an alias filed under the
  * person it names), shared by every writer — `lorebooks:updateBinding`,
- * `lorebooks:createBinding` and `narrativeGraph:updateNode`.
+ * `lorebooks:createBinding` and `lorebooks:updateBinding`.
  *
  * `lorebook_bindings.parent_node_id` has no constraint of its own, and the
  * graph reads it as a TWO-level tree: a person, and the aliases under them. So
@@ -36,7 +36,9 @@ export async function assertValidParentNode(
 		.from(schema.lorebookBindings)
 		.where(eq(schema.lorebookBindings.id, parentNodeId))
 	if (!parent || parent.lorebookId !== lorebookId)
-		throw new Error("Parent node not found.")
+		throw new Error(
+			"The cast member to file this one under is not in this lorebook."
+		)
 	if (parent.parentNodeId !== null)
 		throw new Error(
 			"That cast member is already filed under someone else; file this one under them directly."

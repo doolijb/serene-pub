@@ -19,13 +19,13 @@
  * thousand tokens. The declared `batchTokens` is a quality knob an admin turns;
  * the window is only ever a ceiling on it.
  *
- * ## One implementation, two callers
+ * ## One implementation
  *
- * `core:task/batch-messages@1` (the live path) and `summarizer/index.ts`'s
- * legacy `batchMessages` both compute the same budget, and each carried its own
- * copy of `Math.max(tokenLimit - 1500, 500)` against a limit neither of them
- * clamped. Two copies of one arithmetic is how they came to disagree about what
- * the number meant in the first place.
+ * `core:task/batch-messages@1` computes this budget. A legacy batcher in
+ * `summarizer/index.ts` once carried its own copy of
+ * `Math.max(tokenLimit - 1500, 500)` against a limit neither clamped — two
+ * copies of one arithmetic is how they came to disagree about what the number
+ * meant. That batcher is gone; keep it to one.
  */
 
 /**

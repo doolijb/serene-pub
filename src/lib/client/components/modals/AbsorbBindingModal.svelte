@@ -1,8 +1,13 @@
 <script lang="ts">
 	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
 	import * as Icons from "@lucide/svelte"
+	import { onDestroy } from "svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
-	import { useInterest } from "$lib/client/sockets/interest.svelte"
+	import { toaster } from "$lib/client/utils/toaster"
+	import {
+		absorbCastMember,
+		notAbsorbedTitle
+	} from "$lib/client/lorebooks/cast/castSave"
 
 	const socket = useTypedSocket()
 
@@ -66,14 +71,43 @@
 		selectedTarget = n
 	}
 
+	/** The merge this window is showing, while it waits; `null` when none. */
+	let merging: object | null = null
+	let gone = false
+	onDestroy(() => {
+		gone = true
+	})
+
+	/**
+	 * A refused merge is said once (Layout leaves
+	 * `narrativeGraph:mergeNode:error` to the surface that asked): here, in
+	 * place, while this window still shows it; as a toast when the window was
+	 * closed while it waited. Only this window's own refusal — the one naming
+	 * its pair (`absorbCastMember`) — never the duplicates list's.
+	 */
 	function confirm() {
 		if (!selectedTarget || isMerging) return
 		mergeError = null
 		isMerging = true
-		socket.emit("narrativeGraph:mergeNode", {
+		const ask = {}
+		merging = ask
+		const name = node.name
+		absorbCastMember(socket, {
 			nodeId: node.id,
 			parentNodeId: selectedTarget.id
-		} satisfies Sockets.NarrativeGraph.MergeNode.Params)
+		}).catch((err: unknown) => {
+			const sentence =
+				err instanceof Error && err.message
+					? err.message
+					: "The two cast members could not be merged."
+			if (gone || merging !== ask) {
+				toaster.error({ title: notAbsorbedTitle(name), description: sentence })
+				return
+			}
+			merging = null
+			isMerging = false
+			mergeError = sentence
+		})
 		onMerged?.()
 	}
 
@@ -82,31 +116,12 @@
 		selectedTarget = null
 		isMerging = false
 		mergeError = null
+		merging = null
 	}
 
 	$effect(() => {
 		if (!open) reset()
 	})
-
-	// A rejected merge (eg. tripping a server-side guard) otherwise left
-	// isMerging stuck true forever — nothing was listening for the generic
-	// `{event}:error` the shared register() wrapper emits on any thrown
-	// error.
-	function handleMergeNodeError(msg: { error?: string }) {
-		isMerging = false
-		mergeError = msg?.error || "Failed to merge — please try again."
-	}
-
-	/**
-	 * BARE, and standing for the modal's life: `narrativeGraph:mergeNode:error`
-	 * has no entry in `SCOPED_EVENTS`, so a `#<id>` key would match no payload
-	 * at all. Errors are never gated (plan ruling 2) — the registry is simply
-	 * the only listener path now.
-	 */
-	useInterest<"narrativeGraph:mergeNode:error">(
-		"narrativeGraph:mergeNode:error",
-		handleMergeNodeError
-	)
 
 	const NODE_STATE_COLOR: Record<string, string> = {
 		active: "preset-tonal-primary",

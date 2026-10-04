@@ -18,8 +18,7 @@
  *    nothing for one to say.
  *  - **A moved default is safe.** A config with no row inherits whatever the
  *    current declaration says, which is what makes correcting a shipped number
- *    a code change rather than a hand-written sweep of every install's rows —
- *    `drizzle/0102`, `0110` and `0111` each ended with one of those.
+ *    a code change rather than a hand-written sweep of every install's rows.
  *  - **"Back to defaults" is a delete.** `clearOption` has deleted since F20;
  *    what kept re-materializing what it deleted was the seeding half.
  *
@@ -97,4 +96,34 @@ export function isDeviation(
 ): boolean {
 	if (decl.authorDefault === undefined) return true
 	return !sameConfiguredValue(value, decl.authorDefault)
+}
+
+/**
+ * Whether a config holds a row for `value`, given what it would otherwise
+ * inherit at that address.
+ *
+ * `inherited` is the shipped config's value there — what the boot reconcile
+ * back-fills into a config that has no row. A run never reads the shipped
+ * config through a user's copy; it reads the declaration. So a row is needed
+ * in two cases, and only these:
+ *
+ *  - the value departs from the declaration, which is what a run would read
+ *    without it (`isDeviation`);
+ *  - the value IS the declaration but the shipped config says something
+ *    else. Without the row the next reconcile back-fills the shipped value
+ *    over it, and "set back to the declared value" would quietly become
+ *    "never set". The respond preset's post-history trigger (3000 shipped,
+ *    0 declared) is the case this exists for.
+ *
+ * `undefined` means nothing is inherited beyond the declaration — the shipped
+ * config itself, or an address the shipped config holds no row for — and the
+ * answer is `isDeviation`'s alone.
+ */
+export function holdsRow(
+	decl: Pick<Decl, "authorDefault">,
+	value: unknown,
+	inherited: unknown
+): boolean {
+	if (isDeviation(decl, value)) return true
+	return inherited !== undefined && isDeviation(decl, inherited)
 }

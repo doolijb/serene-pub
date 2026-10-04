@@ -146,14 +146,26 @@ async function buildSessionGenres(): Promise<Sockets.SessionAdmin.Genres.Respons
 	const off = await disabledPlugins(db)
 	const presets = await db
 		.select({
+			id: schema.sessionPresets.id,
 			genreId: schema.sessionPresets.genreId,
-			ownerPluginId: schema.sessionPresets.ownerPluginId
+			ownerPluginId: schema.sessionPresets.ownerPluginId,
+			isDefault: schema.sessionPresets.isDefault
 		})
 		.from(schema.sessionPresets)
 	const countBy = new Map<string, number>()
+	/**
+	 * A genre's default preset is the preset row marked `is_default` — ONE
+	 * source of truth, the one the start form reads and `sessionPresets:update`
+	 * keeps to one per genre (owner note 27, 2026-10-02). The old second
+	 * answer, `session_genre_settings.default_preset_id`, was dropped (pre-squash 0103,
+	 * archived in `ARCHIVE-drizzle-migrations-0094-0111-pr1`).
+	 */
+	const defaultBy = new Map<string, number>()
 	for (const p of presets)
-		if (!off.owns(p.ownerPluginId))
+		if (!off.owns(p.ownerPluginId)) {
 			countBy.set(p.genreId, (countBy.get(p.genreId) ?? 0) + 1)
+			if (p.isDefault) defaultBy.set(p.genreId, p.id)
+		}
 	const settingBy = new Map((settings as any[]).map((s) => [s.genreId, s]))
 	// A genre's create pipeline (24 §3), for the workspace link — via the
 	// input lock: the spec whose active version answers session-created
@@ -190,7 +202,7 @@ async function buildSessionGenres(): Promise<Sockets.SessionAdmin.Genres.Respons
 				description: m.description ?? "",
 				family: (m as any).family ?? "",
 				enabled: st ? !!st.enabled : true,
-				defaultPresetId: st?.defaultPresetId ?? null,
+				defaultPresetId: defaultBy.get(m.genreId) ?? null,
 				presetCount: countBy.get(m.genreId) ?? 0,
 				createSpecSlug: createSpecByGenre.get(m.genreId) ?? null
 			}
@@ -221,8 +233,8 @@ export const sessionGenresUpdate: Handler<
 		adminOnly(socket)
 		const patch: Record<string, unknown> = {}
 		if (params.enabled !== undefined) patch.enabled = params.enabled
-		if (params.defaultPresetId !== undefined)
-			patch.defaultPresetId = params.defaultPresetId
+		// A genre's default preset is not set here (note 27, 2026-10-02): it
+		// is the preset row's `is_default`, set by `sessionPresets:update`.
 		await db
 			.insert(schema.sessionGenreSettings)
 			.values({ genreId: params.slug, ...patch })
@@ -413,7 +425,9 @@ async function buildGenreDetail(
 			shape: (genre.shape ?? {}) as Record<string, unknown>,
 			createSpecSlug,
 			enabled: setting ? !!setting.enabled : true,
-			defaultPresetId: setting?.defaultPresetId ?? null
+			// The preset row marked default (note 27) — see `buildSessionGenres`.
+			defaultPresetId:
+				(presetRows as any[]).find((p) => p.isDefault)?.id ?? null
 		},
 		swaps: await genreSwapContributions(
 			new Map(active.map((r) => [r.slug as string, (r.name ?? r.slug) as string]))
@@ -703,7 +717,7 @@ async function validateBindings(
 			return `'${event}' is an open slot — actions bind through the included list, not an event binding.`
 		const spec = active.find((r) => r.slug === b.spec)
 		if (!spec)
-			return `'${b.spec}' is not published on this instance, so it cannot answer '${event}'.`
+			return `'${b.spec}' is not published on this pub, so it cannot answer '${event}'.`
 		if (spec.inputGenre !== genreId || !answersEvent(spec, event))
 			return `'${b.spec}' answers '${[spec.inputEvent, ...(spec.inputEvents ?? [])].filter(Boolean).join("', '") || "nothing"}' for '${spec.inputGenre ?? "no genre"}' — it cannot bind to '${event}' of '${genreId}' (24 §4).`
 		if (b.config != null) {

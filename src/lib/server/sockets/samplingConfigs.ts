@@ -1,5 +1,6 @@
 import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
+import { isUniqueViolation } from "$lib/server/db/errors"
 import { eq, notInArray } from "drizzle-orm"
 import { user } from "./users"
 import { buildSystemSettingsGet } from "./systemSettings"
@@ -130,15 +131,13 @@ async function nameConflict(
  * The unique index firing, as opposed to any other database error.
  *
  * The race the check above cannot close lands here, and it must not reach the
- * client as a constraint name. Matched on the index name because that is what
- * the driver puts in the message; anything else re-throws untouched, since
- * swallowing unrelated failures into "pick a different name" would be worse
- * than the raw error.
+ * client as a constraint name. Matched on the driver's `constraint` field
+ * (Postgres reports a unique index's name there), read under drizzle's
+ * wrapper; anything else re-throws untouched, since swallowing unrelated
+ * failures into "pick a different name" would be worse than the raw error.
  */
 const isNameTakenViolation = (e: unknown): boolean =>
-	String((e as { message?: unknown } | null)?.message ?? "").includes(
-		"sampling_configs_modality_name_unique"
-	)
+	isUniqueViolation(e, "sampling_configs_modality_name_unique")
 
 // Legacy functions for compatibility
 export async function samplingConfigsList(

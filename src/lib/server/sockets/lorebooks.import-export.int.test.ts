@@ -184,7 +184,7 @@ describe("lorebooks import/export (PGlite integration)", () => {
 
 		const reimported = await lorebookImportHandler.handler(
 			fakeSocket(user.id),
-			{ lorebookData: exportedData },
+			{ lorebookJson: JSON.stringify(exportedData) },
 			noopEmit
 		)
 
@@ -270,7 +270,7 @@ describe("lorebooks import/export (PGlite integration)", () => {
 
 		const restored = await lorebookImportHandler.handler(
 			fakeSocket(recipient.id),
-			{ lorebookData: exportedData },
+			{ lorebookJson: JSON.stringify(exportedData) },
 			noopEmit
 		)
 		expect(restored.status).toBe("created")
@@ -322,7 +322,7 @@ describe("lorebooks import/export (PGlite integration)", () => {
 		// for byte what was written — the new condition keys included.
 		const reimported = await lorebookImportHandler.handler(
 			fakeSocket(author.id),
-			{ lorebookData: exportedData },
+			{ lorebookJson: JSON.stringify(exportedData) },
 			noopEmit
 		)
 		expect(reimported.status).toBe("unchanged")
@@ -352,7 +352,7 @@ describe("lorebooks import/export (PGlite integration)", () => {
 
 		const resB = await lorebookImportHandler.handler(
 			fakeSocket(userB.id),
-			{ lorebookData: exportedData },
+			{ lorebookJson: JSON.stringify(exportedData) },
 			noopEmit
 		)
 		expect(resB.status).toBe("created")
@@ -366,7 +366,7 @@ describe("lorebooks import/export (PGlite integration)", () => {
 		]
 		const conflictForB = await lorebookImportHandler.handler(
 			fakeSocket(userB.id),
-			{ lorebookData: exportedData },
+			{ lorebookJson: JSON.stringify(exportedData) },
 			noopEmit
 		)
 		expect(conflictForB.status).toBe("conflict")
@@ -409,7 +409,7 @@ describe("lorebooks import/export (PGlite integration)", () => {
 
 		const conflictRes = await lorebookImportHandler.handler(
 			fakeSocket(user.id),
-			{ lorebookData: exportedData },
+			{ lorebookJson: JSON.stringify(exportedData) },
 			noopEmit
 		)
 		expect(conflictRes.status).toBe("conflict")
@@ -418,7 +418,7 @@ describe("lorebooks import/export (PGlite integration)", () => {
 		const overwritten = await lorebookImportResolveHandler.handler(
 			fakeSocket(user.id),
 			{
-				lorebookData: exportedData,
+				heldImportId: conflictRes.conflict!.heldImportId,
 				action: "overwrite",
 				existingId: lorebook.id
 			},
@@ -432,9 +432,22 @@ describe("lorebooks import/export (PGlite integration)", () => {
 			)[0].content
 		).toBe("Edited lore")
 
+		// A held import is settled once; answering again takes a new
+		// conflict (the file is edited once more so it still differs).
+		exportedData.entries[0].content = "Edited again"
+		const secondConflict = await lorebookImportHandler.handler(
+			fakeSocket(user.id),
+			{ lorebookJson: JSON.stringify(exportedData) },
+			noopEmit
+		)
+		expect(secondConflict.status).toBe("conflict")
 		const asNew = await lorebookImportResolveHandler.handler(
 			fakeSocket(user.id),
-			{ lorebookData: exportedData, action: "createNew", existingId: -1 },
+			{
+				heldImportId: secondConflict.conflict!.heldImportId,
+				action: "createNew",
+				existingId: -1
+			},
 			noopEmit
 		)
 		expect(asNew.lorebook.id).not.toBe(lorebook.id)
@@ -513,7 +526,7 @@ describe("lorebooks import/export (PGlite integration)", () => {
 
 		const imported = await lorebookImportHandler.handler(
 			fakeSocket(user.id),
-			{ lorebookData: exportedData },
+			{ lorebookJson: JSON.stringify(exportedData) },
 			noopEmit
 		)
 		expect(imported.status).toBe("created")
@@ -615,7 +628,7 @@ describe("lorebooks import/export (PGlite integration)", () => {
 
 		const imported = await lorebookImportHandler.handler(
 			fakeSocket(user.id),
-			{ lorebookData: exportedData },
+			{ lorebookJson: JSON.stringify(exportedData) },
 			noopEmit
 		)
 		const newBindings = await testDb.query.lorebookBindings.findMany({
@@ -658,7 +671,7 @@ describe("lorebooks import/export (PGlite integration)", () => {
 
 		const imported = await lorebookImportHandler.handler(
 			fakeSocket(user.id),
-			{ lorebookData: exportedData },
+			{ lorebookJson: JSON.stringify(exportedData) },
 			noopEmit
 		)
 		expect(imported.status).toBe("created")
@@ -722,7 +735,7 @@ describe("lorebooks import/export (PGlite integration)", () => {
 
 		const imported = await lorebookImportHandler.handler(
 			fakeSocket(user.id),
-			{ lorebookData: exportedData },
+			{ lorebookJson: JSON.stringify(exportedData) },
 			noopEmit
 		)
 		expect(imported.status).toBe("created")
@@ -804,7 +817,7 @@ describe("lorebooks import/export (PGlite integration)", () => {
 
 		const imported = await lorebookImportHandler.handler(
 			fakeSocket(user.id),
-			{ lorebookData: exportedData },
+			{ lorebookJson: JSON.stringify(exportedData) },
 			noopEmit
 		)
 		expect(imported.status).toBe("created")
@@ -837,7 +850,7 @@ describe("lorebooks import/export (PGlite integration)", () => {
 
 		const res = await lorebookImportHandler.handler(
 			fakeSocket(user.id),
-			{ lorebookData: legacyPayload },
+			{ lorebookJson: JSON.stringify(legacyPayload) },
 			noopEmit
 		)
 		expect(res.status).toBe("created")
@@ -868,7 +881,7 @@ describe("lorebooks import/export (PGlite integration)", () => {
 		await expect(
 			lorebookImportHandler.handler(
 				fakeSocket(user.id),
-				{ lorebookData: oversizedPayload },
+				{ lorebookJson: JSON.stringify(oversizedPayload) },
 				noopEmit
 			)
 		).rejects.toThrow(/too many entries/i)
@@ -957,7 +970,7 @@ describe("lorebooks import/export (PGlite integration)", () => {
 
 		const res = await lorebookImportHandler.handler(
 			fakeSocket(user.id),
-			{ lorebookData: graphPayload },
+			{ lorebookJson: JSON.stringify(graphPayload) },
 			noopEmit
 		)
 		expect(res.status).toBe("created")
@@ -984,12 +997,15 @@ describe("lorebooks import/export (PGlite integration)", () => {
 	// unwrapped statements — a failure partway through the rebuild left the
 	// lorebook's old content already gone with only some/none of the new
 	// content in its place. Now wrapped in a single db.transaction. These
-	// tests force a genuine mid-rebuild failure (two serenepub.bindings
-	// entries resolving to the same real characterId, which violates
-	// lorebook_bindings_character_unique — (lorebookId, characterId) where
-	// characterId is not null — on the second insert inside
-	// restoreBoundEntities) and assert nothing was
+	// tests force a genuine mid-rebuild failure (an entry carrying
+	// MID_REBUILD_FAILURE_MARKER, which the mocked mapper throws on inside
+	// insertLorebookEntries, after the deletes) and assert nothing was
 	// partially committed.
+	//
+	// ⚠ Not two bindings of one card any more: that used to be the failure
+	// (lorebook_bindings_character_unique refused the second insert and the
+	// whole import died), and a 0.5 book doing it now imports cleanly as one
+	// member (A16) — pinned in lorebooks.import05.int.test.ts.
 	describe("import restore is transactional (Round-10 audit fix)", () => {
 		test("overwrite: a mid-rebuild failure leaves the original content untouched", async () => {
 			const {
@@ -1043,7 +1059,7 @@ describe("lorebooks import/export (PGlite integration)", () => {
 
 			const conflictRes = await lorebookImportHandler.handler(
 				fakeSocket(user.id),
-				{ lorebookData: exportedData },
+				{ lorebookJson: JSON.stringify(exportedData) },
 				noopEmit
 			)
 			expect(conflictRes.status).toBe("conflict")
@@ -1052,7 +1068,7 @@ describe("lorebooks import/export (PGlite integration)", () => {
 				lorebookImportResolveHandler.handler(
 					fakeSocket(user.id),
 					{
-						lorebookData: exportedData,
+						heldImportId: conflictRes.conflict!.heldImportId,
 						action: "overwrite",
 						existingId: lorebook.id
 					},
@@ -1125,7 +1141,7 @@ describe("lorebooks import/export (PGlite integration)", () => {
 			await expect(
 				lorebookImportHandler.handler(
 					fakeSocket(user.id),
-					{ lorebookData: exportedData },
+					{ lorebookJson: JSON.stringify(exportedData) },
 					noopEmit
 				)
 			).rejects.toThrow()

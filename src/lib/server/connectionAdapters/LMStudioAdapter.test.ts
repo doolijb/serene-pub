@@ -22,6 +22,10 @@ const getLMStudioVersionMock = vi.fn()
 // A loaded model, for the one test that actually generates. The rest of this
 // file never reaches `llm.model`, so answering it costs them nothing.
 const respondMock = vi.fn(async (..._args: any[]) => ({ content: "hi" }))
+const prepareImageMock = vi.fn(async (...args: any[]) => ({
+	handle: `h:${args[0]}`,
+	b64: args[1]
+}))
 const completeMock = vi.fn(async (..._args: any[]) => ({ content: "hi" }))
 vi.mock("@lmstudio/sdk", () => ({
 	LMStudioClient: class {
@@ -37,6 +41,9 @@ vi.mock("@lmstudio/sdk", () => ({
 				respond: (...args: any[]) => respondMock(...args),
 				complete: (...args: any[]) => completeMock(...args)
 			}))
+		}
+		files = {
+			prepareImageBase64: (...args: any[]) => prepareImageMock(...args)
 		}
 		constructor(...args: any[]) {
 			lmStudioConstructorMock(...args)
@@ -86,8 +93,7 @@ function makeAdapter(
 	return new exportsDefault.Adapter({
 		connection: makeConnection(connectionOverrides),
 		sampling: sampling as any,
-		contextConfig: {} as any,
-		promptConfig: { systemPrompt: "Test system prompt." } as any,
+		systemPrompt: "Test system prompt.",
 		session: makeSession(),
 		currentCharacterId: null,
 		tokenCounter: { countTokens: async () => 1 } as any,
@@ -323,20 +329,20 @@ describe("LMStudioAdapter — native reasoning readback", () => {
 
 	async function drain(result: any) {
 		let content = ""
-		let thinking = ""
+		let reasoning = ""
 		expect(typeof result.completionResult).toBe("function")
 		await result.completionResult(
 			(chunk: string) => {
 				content += chunk
 			},
 			(chunk: string) => {
-				thinking += chunk
+				reasoning += chunk
 			}
 		)
-		return { content, thinking }
+		return { content, reasoning }
 	}
 
-	test("streaming: routes reasoningType fragments to thinkingCb and drops the tag fragments", async () => {
+	test("streaming: routes reasoningType fragments to reasoningCb and drops the tag fragments", async () => {
 		listDownloadedModelsMock.mockResolvedValue([{ modelKey: "some-model" }])
 		respondMock.mockReturnValueOnce(
 			fragmentStream([
@@ -355,8 +361,8 @@ describe("LMStudioAdapter — native reasoning readback", () => {
 		})
 		mockCompilePrompt(adapter)
 
-		const { content, thinking } = await drain(await adapter.generateText())
-		expect(thinking).toBe("Pondering deeply.")
+		const { content, reasoning } = await drain(await adapter.generateText())
+		expect(reasoning).toBe("Pondering deeply.")
 		// The tags are structure, not prose — the reasoning arrives on its own
 		// channel, so leaving them in the reply would show the user raw markup.
 		expect(content).toBe("Hello there.")
@@ -377,16 +383,16 @@ describe("LMStudioAdapter — native reasoning readback", () => {
 		})
 		mockCompilePrompt(adapter)
 
-		const { content, thinking } = await drain(await adapter.generateText())
+		const { content, reasoning } = await drain(await adapter.generateText())
 		expect(content).toBe("Hello there.")
-		expect(thinking).toBe("")
+		expect(reasoning).toBe("")
 	})
 
-	test("non-streaming: thinkingContent comes from reasoningContent, and the reply drops the reasoning", async () => {
+	test("non-streaming: reasoningContent comes from reasoningContent, and the reply drops the reasoning", async () => {
 		listDownloadedModelsMock.mockResolvedValue([{ modelKey: "some-model" }])
 		respondMock.mockResolvedValueOnce({
 			// `content` is the WHOLE generation, reasoning included — returning
-			// it verbatim while also reporting thinkingContent would show the
+			// it verbatim while also reporting reasoningContent would show the
 			// scratchpad twice.
 			content: "<think>Pondering deeply.</think>Hello there.",
 			reasoningContent: "Pondering deeply.",
@@ -400,11 +406,11 @@ describe("LMStudioAdapter — native reasoning readback", () => {
 		mockCompilePrompt(adapter)
 
 		const result = await adapter.generateText()
-		expect(result.thinkingContent).toBe("Pondering deeply.")
+		expect(result.reasoningContent).toBe("Pondering deeply.")
 		expect(result.completionResult).toBe("Hello there.")
 	})
 
-	test("non-streaming: with no reasoning, content and thinkingContent are untouched", async () => {
+	test("non-streaming: with no reasoning, content and reasoningContent are untouched", async () => {
 		listDownloadedModelsMock.mockResolvedValue([{ modelKey: "some-model" }])
 		completeMock.mockResolvedValueOnce({
 			content: "Hello there.",
@@ -420,7 +426,7 @@ describe("LMStudioAdapter — native reasoning readback", () => {
 
 		const result = await adapter.generateText()
 		expect(result.completionResult).toBe("Hello there.")
-		expect(result.thinkingContent).toBeUndefined()
+		expect(result.reasoningContent).toBeUndefined()
 	})
 
 	// Both wire modes, asserted rather than assumed. `.respond()` and
@@ -442,8 +448,8 @@ describe("LMStudioAdapter — native reasoning readback", () => {
 		})
 		mockCompilePrompt(adapter)
 
-		const { content, thinking } = await drain(await adapter.generateText())
-		expect(thinking).toBe("Pondering deeply.")
+		const { content, reasoning } = await drain(await adapter.generateText())
+		expect(reasoning).toBe("Pondering deeply.")
 		expect(content).toBe("Hello there.")
 	})
 
@@ -462,7 +468,7 @@ describe("LMStudioAdapter — native reasoning readback", () => {
 		mockCompilePrompt(adapter)
 
 		const result = await adapter.generateText()
-		expect(result.thinkingContent).toBe("Pondering deeply.")
+		expect(result.reasoningContent).toBe("Pondering deeply.")
 		expect(result.completionResult).toBe("Hello there.")
 	})
 
@@ -480,7 +486,7 @@ describe("LMStudioAdapter — native reasoning readback", () => {
 
 		const result = await adapter.generateText()
 		expect(result.completionResult).toBe("Hello there.")
-		expect(result.thinkingContent).toBeUndefined()
+		expect(result.reasoningContent).toBeUndefined()
 	})
 })
 
@@ -581,5 +587,38 @@ describe("LMStudioAdapter — reasoning on the wire", () => {
 		expect(opts.reasoning_effort).toBe("low")
 		expect(opts).not.toHaveProperty("reasoningBudget")
 		expect(adapter.ignoredSamplers).toEqual(["reasoningBudget"])
+	})
+})
+
+// ── Images per message (PLAN-composer-attachments §3.6) ─────────────────────
+describe("LMStudioAdapter — images on the chat wire", () => {
+	test("declares that it sends them", () => {
+		expect(makeAdapter().consumesAttachments).toBe(true)
+	})
+
+	test("a turn's image becomes a prepared file handle on that message's images", async () => {
+		respondMock.mockClear()
+		prepareImageMock.mockClear()
+		listDownloadedModelsMock.mockResolvedValue([{ modelKey: "some-model" }])
+		const png = Buffer.from("png bytes of a tree")
+		const adapter = makeAdapter({ wireMode: "chat", model: "some-model", extraJson: { stream: false } })
+		adapter.withCompiledPrompt({
+			prompt: undefined,
+			messages: [
+				{ role: "user", content: "Ash: a tree" },
+				{ role: "assistant", content: "Mara:" }
+			],
+			meta: {} as any
+		} as any)
+		adapter.withMessageAttachments([[{ bytes: png, mime: "image/png", filename: "tree.png" }], []])
+		await adapter.generateText()
+		expect(prepareImageMock).toHaveBeenCalledWith("tree.png", png.toString("base64"))
+		const messages = (respondMock.mock.calls[0] as any[])[0]
+		expect(messages[0]).toEqual({
+			role: "user",
+			content: "Ash: a tree",
+			images: [{ handle: "h:tree.png", b64: png.toString("base64") }]
+		})
+		expect(messages[1]).toEqual({ role: "assistant", content: "Mara:" })
 	})
 })

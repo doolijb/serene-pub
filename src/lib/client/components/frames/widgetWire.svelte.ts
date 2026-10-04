@@ -56,7 +56,6 @@ import {
 } from "$lib/shared/widgets/context"
 import type { ActionDispatch } from "$lib/shared/widgets/invokeAction"
 import { buildEventMessage, buildLayoutMessage } from "./framePlacement"
-import { buildStyleMessage } from "./frameStyle"
 import type { FrameInvokeVerdict } from "./frameActivation"
 import {
 	buildPageMessage,
@@ -94,7 +93,6 @@ export interface WireInputs {
 	channels?: string[]
 	props?: Record<string, unknown>
 	settings?: Record<string, unknown>
-	skin?: { css: string; vars: Record<string, string> }
 	placement?: PlacementInput
 	actions?: ActionsV1
 	source?: WidgetEventSource
@@ -293,8 +291,6 @@ export function createWidgetWire(opts: WidgetWireOptions): WidgetWire {
 		const nested = !!i.onInvoke
 		if (reads.has("annex") && annexCtx && !nested)
 			postChanged("annex", { t: "annex", annex: JSON.parse(JSON.stringify(annexCtx.current)) })
-		// An EMPTY skin is still posted: taking a style off has to arrive too.
-		if (i.skin !== undefined) postChanged("style", buildStyleMessage(i.skin))
 		if (reads.has("layout") && i.placement !== undefined) postChanged("layout", buildLayoutMessage(i.placement))
 		if (theme) postChanged("theme", { t: "theme", theme: theme.theme, mode: theme.mode })
 		if (reads.has("locale")) postChanged("locale", { t: "locale", locale: localeCtx?.current ?? "en" })
@@ -492,7 +488,6 @@ export function createWidgetWire(opts: WidgetWireOptions): WidgetWire {
 		void i.channels
 		void i.props
 		void i.settings
-		void i.skin
 		void i.placement
 		void i.actions
 		void theme

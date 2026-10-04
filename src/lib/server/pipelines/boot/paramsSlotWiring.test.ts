@@ -63,10 +63,9 @@
  * The catalog is **not** clean today. The first run of this walk found 17
  * declared-and-unwired slots across the shipped specs, in three distinct
  * shapes, and fixing them is spec work rather than test work. Eleven of them are
- * now closed — every instance of shapes 1 and 2, eight by `drizzle/0111` and the
- * last three by `drizzle/0115`, which carries the catalog's
- * `params: slot.params()` on the three reply specs' `generate` node to an
- * install. So the ledger stands at **six**, and every one of them is shape 3: a
+ * now closed — every instance of shapes 1 and 2, the last three by the
+ * catalog's `params: slot.params()` on the three reply specs' `generate`
+ * node. So the ledger stands at **ten**, and every one of them is shape 3: a
  * slot whose fix is a reader or a deleted declaration, not a `slot.*()`. They
  * are written down in
  * `LEDGER` below, one line each, with what a person setting that control is
@@ -236,7 +235,7 @@ const shipped = (): WalkableDoc[] =>
  * a slot a definition is allowed to declare unread is, on every shipped node of
  * that definition, a slot the spec is correctly not naming. One reason, written
  * once, read by both guards; the day a handler reads `embed-text.connection`
- * the allow-list line goes and these six entries go with it.
+ * the allow-list line goes and these ten entries go with it.
  *
  * Three distinct shapes were in here. **Shapes 1 and 2 are closed** — eleven
  * entries, deleted rather than annotated, because a ledger that outlives its
@@ -244,14 +243,14 @@ const shipped = (): WalkableDoc[] =>
  *
  *  1. **`params` on the two relationship queries** — `respond`'s
  *     `gather.relationshipsPerspectives.read` and `gather.relationshipsKnown.read`
- *     wire `params: slot.params()` as of `drizzle/0111`. `bindings.ts` reads
+ *     wire `params: slot.params()`. `bindings.ts` reads
  *     `input?.params?.maxEntries` on both, and neither spec named the slot, so
  *     `capRelationships` was always called with `undefined` — which it reads as
  *     *no ceiling* and returns the section whole. Behaviour-preserving to close:
  *     `maxEntries` carries no declared default now (uncapped is not a number
  *     `min: 0` can hold), so an untouched install still resolves `undefined`.
  *  2. **`connection`/`sampling` on `generate`** — all three reply specs name
- *     both as of `drizzle/0111`. `host.ts` forwards
+ *     both. `host.ts` forwards
  *     `connectionId: refId(p.connection)` and `samplingId: refId(p.sampling)`,
  *     and its own comment says omitting that forwarding "was why the panel's
  *     Connection and Sampling pickers on the reply step did nothing"; the host
@@ -261,7 +260,7 @@ const shipped = (): WalkableDoc[] =>
  *     `contextBudget` and `prompt` — which read the same slots by reference —
  *     followed the pick. `runtime/samplingSlotDispatch.int.test.ts` is where
  *     that is asserted end to end.
- *  3. **Slots with no reader at all** — the six that remain, and the only shape
+ *  3. **Slots with no reader at all** — the ten that remain, and the only shape
  *     naming the slot does not fix. `core:oracle/embed-text@1`'s `connection`
  *     is never consulted — `host.ts` embeds through the local model
  *     (`embeddingApi()`), which is what the "embedding models become
@@ -282,8 +281,8 @@ const shipped = (): WalkableDoc[] =>
  * which is not in this repo: the three reply specs live in
  * `@serene-pub/core-catalog` and called `C.generateText.v1({…})` with no
  * `params: slot.params()`, so `resolveInput` never formed the key and the reader
- * saw `undefined` on every turn. They name it now, and `drizzle/0115` is what
- * carries the rewritten documents to an install that has already booted — see
+ * saw `undefined` on every turn. They name it now (content addressing carries
+ * the rewritten documents to an install that has already booted) — see
  * the wired-side assertion below, which is what tells a fix apart from a
  * deleted ledger line.
  */
@@ -352,8 +351,8 @@ describe("the walk is capable of the measurement it is used for", () => {
 					'core:spec/respond node "gather.history.read" slot "params"'
 			),
 			"`respond`'s history node must show up as wired. Either the " +
-				"matcher stopped recognising the SlotRef shape, or migration " +
-				"0110's fix has regressed and the node is genuinely unwired — " +
+				"matcher stopped recognising the SlotRef shape, or the history " +
+				"node's params wiring has regressed and it is genuinely unwired — " +
 				"the failure below says which."
 		).toBe(true)
 		expect(
@@ -416,33 +415,40 @@ describe("every declared slot is named by the spec that uses it", () => {
 	 * and it is the assertion that made closing shapes 1 and 2 a visible event
 	 * rather than eight quiet deletions.
 	 *
-	 * ⚠ **6, and every one of them is shape 3.** 17 → 9 as of `drizzle/0111`,
-	 * 9 → 6 as of `drizzle/0115`. The number may only go DOWN without a ruling:
+	 * ⚠ **10, and every one of them is shape 3.** The number may only go DOWN without a ruling:
 	 * a shape-3 entry is a slot with no reader anywhere in the app, so adding
 	 * one means shipping a control that is inert by construction.
+	 *
+	 * 10 = `embed-text.connection` on the two retrieval arms (`semantic.arm.embed`,
+	 * `names.arm.embed`) of each of the five specs that retrieve: respond,
+	 * adventure, lair, narrate, narrate-character. Lorebooks wave 8 (2026-10-02)
+	 * gave narrate and narrate-character the two arms, under the SAME
+	 * allow-list ruling (awaiting embeddings-as-connections), and that slot is
+	 * held at the star (`isUnreadSlot`): the panel offers no pick for it, so no
+	 * new inert control reaches a person. A reader for the slot closes all ten.
 	 *
 	 * Derived now, so the two ways it can move are both visible: a new
 	 * allow-list SLOT line in `declaredReads.ts` (a ruling), or a spec gaining
 	 * or losing a node of an allow-listed definition (a spec edit).
 	 */
-	it("stands at six open entries", () => {
+	it("stands at ten open entries", () => {
 		expect(
 			LEDGER.size,
 			"the ledger's size moved. Down is a fix — say which shape closed in " +
 				"the header. Up is a new inert control, and needs the ruling that " +
 				"decided to ship one."
-		).toBe(6)
+		).toBe(10)
 		const kindOf = new Map(result.findings.map((f) => [f.key, f.slotKind]))
-		// One member and no second: `embed-text.connection`, six of them, one
+		// One member and no second: `embed-text.connection`, ten of them, one
 		// per arm per spec. Spelled out so a regression cannot be absorbed by a
 		// line that merely looks plausible — and `parameters` is asserted at
 		// ZERO rather than left unmentioned, because that is the group
-		// `drizzle/0115` emptied and an entry creeping back into it is exactly
+		// the reply specs' wiring emptied and an entry creeping back into it is exactly
 		// what this pair exists to catch.
 		expect(
 			[...LEDGER.keys()].filter((k) => kindOf.get(k) === "connection")
 				.length
-		).toBe(6)
+		).toBe(10)
 		expect(
 			[...LEDGER.keys()].filter((k) => kindOf.get(k) === "parameters")
 				.length
@@ -450,7 +456,7 @@ describe("every declared slot is named by the spec that uses it", () => {
 	})
 
 	/**
-	 * The half that proves 0111 and 0115 landed in the documents rather than
+	 * The half that proves the wiring landed in the documents rather than
 	 * only in the ledger. A deleted ledger line and a wired slot look identical
 	 * to the two assertions above — both leave `findings` short — so the nine
 	 * slots shapes 1 and 2 closed on this node are named here on the WIRED side.

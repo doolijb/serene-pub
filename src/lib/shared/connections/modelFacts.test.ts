@@ -95,6 +95,25 @@ describe("readModelFacts — Ollama", () => {
 	it("does not invent a price for a model that is free by construction", () => {
 		expect(readModelFacts(entry)?.pricing).toBeUndefined()
 	})
+
+	it("reads /api/show's capabilities as input modalities for a text model", () => {
+		expect(
+			readModelFacts({ ...entry, capabilities: ["completion", "vision"] })
+				?.inputModalities
+		).toEqual(["text", "image"])
+		expect(
+			readModelFacts({ ...entry, capabilities: ["completion", "tools"] })
+				?.inputModalities
+		).toEqual(["text"])
+	})
+
+	it("says nothing about input for an embedding model or an Ollama without the list", () => {
+		expect(
+			readModelFacts({ ...entry, capabilities: ["embedding"] })
+				?.inputModalities
+		).toBeUndefined()
+		expect(readModelFacts(entry)?.inputModalities).toBeUndefined()
+	})
 })
 
 describe("readModelFacts — LM Studio", () => {

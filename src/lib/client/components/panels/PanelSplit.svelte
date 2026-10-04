@@ -100,12 +100,14 @@
 		class="grid min-h-0 flex-1"
 		style="grid-template-columns: {columns};"
 	>
-		<div
-			class="{paneClass} border-surface-200 dark:border-surface-800 border-r"
-		>
+		<!-- Each pane is a named inline-size container (`list`, `detail`;
+		     STYLE-GUIDE §5.3), so what is inside it answers the room IT has —
+		     the `view` container is the whole view, list and detail together,
+		     and a detail asking it would grow columns into the list's width. -->
+		<div class="{paneClass} panel-edge @container/list border-r">
 			{@render list()}
 		</div>
-		<div class={paneClass}>
+		<div class="{paneClass} @container/detail">
 			{#if hasDetail}
 				<!-- A reading width, centred in whatever room is left: at 4K
 				     the detail pane is ~3400px, and a description set across
@@ -124,7 +126,11 @@
 		</div>
 	</div>
 {:else}
-	<div class="{paneClass} flex-1">
+	<div
+		class="{paneClass} flex-1 {hasDetail
+			? '@container/detail'
+			: '@container/list'}"
+	>
 		{#if hasDetail}
 			{@render detail()}
 		{:else}

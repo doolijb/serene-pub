@@ -2,12 +2,9 @@
  * 0128: connections have no default model — every selection names an explicit
  * (endpoint, model) pair.
  *
- * This file replaces the 0114 backfill pinning this file used to hold. The
- * `connections.model` column and `connection_models.is_default` are gone
- * (drizzle/0128_organic_wild_child.sql), so there is no backfill left to
- * replay: `SELECT model FROM connections` and `INSERT ... is_default` both
- * fail against the current schema. What survives of the old safety argument
- * is the explicit-pair equivalent:
+ * There is no `connections.model` column and no `connection_models.is_default`:
+ * a model is always named as a pair. What this file pins is the explicit-pair
+ * safety argument:
  *
  * - `ensureConnectionModel` creates exactly one row for an identifier, copying
  *   nothing else, so the merged pair resolves byte-identically to the endpoint

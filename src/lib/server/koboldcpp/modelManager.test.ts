@@ -170,6 +170,37 @@ describe("ensureModelLoaded", () => {
 		expect(fetchMock).not.toHaveBeenCalled()
 	})
 
+	test("a vision projector added to the same model is a reload, and its path is written into the .kcpps", async () => {
+		const { ensureModelLoaded, buildConfigContent } = await freshImport()
+		textHappyPath()
+		await settle(ensureModelLoaded(baseOpts()))
+		fetchMock.mockClear()
+
+		const MMPROJ = "/models/llm/mmproj-some-model-f16.gguf"
+		await settle(
+			ensureModelLoaded(
+				baseOpts(
+					textRequest({
+						mmproj: "mmproj-some-model-f16.gguf",
+						mmprojPath: MMPROJ
+					})
+				)
+			)
+		)
+		expect(fetchMock).toHaveBeenCalledWith(
+			"http://localhost:5001/api/admin/reload_config",
+			expect.objectContaining({ method: "POST" })
+		)
+
+		// `--mmproj` is a plain string, written on every load (reload_config
+		// resets every unprotected arg to its default first).
+		const config = buildConfigContent({
+			text: textRequest({ mmproj: "x.gguf", mmprojPath: MMPROJ })
+		})
+		expect(config.mmproj).toBe(MMPROJ)
+		expect("mmproj" in buildConfigContent({ text: textRequest() })).toBe(false)
+	})
+
 	// Regression: a busy koboldcpp (mid-load, or holding its single worker for
 	// a long generation) cannot answer /api/v1/model. Reading that silence as
 	// "the wrong model is loaded" made us reload, which aborted the in-flight

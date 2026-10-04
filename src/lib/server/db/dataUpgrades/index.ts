@@ -11,7 +11,7 @@ import { rawRows } from "../rawRows"
  * real JavaScript (parsing, re-encoding, calling app code). Each one is pinned
  * to the migration it must follow, because ordering against schema changes is
  * the whole reason it can't just live in a startup task: an upgrade that reads
- * a column added by `0160` and rewrites it before `0161` makes it NOT NULL has
+ * a column added by one migration and rewrites it before the next makes it NOT NULL has
  * exactly one valid position in the sequence.
  *
  * **Atomic with its anchor.** The anchor migration's SQL, the upgrade, and
@@ -41,7 +41,27 @@ export interface DataUpgrade {
 	 * not reach for the schema-typed table objects that drift out from under
 	 * it.
 	 */
-	load: () => Promise<{ run: (tx: MigrationTx) => Promise<void> }>
+	load: () => Promise<{
+		/**
+		 * Runs inside the anchor's transaction BEFORE the anchor's SQL, so it
+		 * sees the schema of the migration just below the anchor. For content
+		 * the anchor's DDL would otherwise destroy: move it aside here, put it
+		 * back once the new shape exists.
+		 */
+		before?: (tx: MigrationTx, ctx: DataUpgradeContext) => Promise<void>
+		/** Runs inside the same transaction AFTER the anchor's SQL. */
+		run: (tx: MigrationTx, ctx: DataUpgradeContext) => Promise<void>
+	}>
+}
+
+/** What the runner knows that an upgrade cannot read for itself. */
+export interface DataUpgradeContext {
+	/**
+	 * The sha256 of every migration file in the chain this build ships — the
+	 * hashes drizzle writes to its ledger. The 0.5.3 upgrade prunes ledger
+	 * rows that match none of them.
+	 */
+	shippedHashes: ReadonlySet<string>
 }
 
 /**
@@ -57,12 +77,14 @@ export interface DataUpgrade {
  * queries drift with the schema. Raw SQL through `tx` ages far better.
  */
 export const DATA_UPGRADES: DataUpgrade[] = [
-	// Empty, and deliberately so. Every 0.6-cycle migration was squashed into
-	// `0094_baseline_0_6` (2026-09-06), which took `0166_media` and its anchored
-	// upgrade with it — an anchor naming a tag that is no longer in the journal
-	// makes `runMigrationsWithUpgrades` throw on every boot, fresh installs
-	// included. The runner itself is kept: the data-upgrade pass for 0.6 is
-	// still to be written, against real installs, before the first PR/RC.
+	// The 0.5.3 → 0.6.0 upgrade. `before` moves every 0.5.3 table into the
+	// `attic_0_5_3` schema and empties `public`, so the generated schema
+	// migration only ever alters empty tables; the `attic` startup task puts
+	// the rows back in the 0.6 shape. See ./0095_schema_0_6_0.ts.
+	{
+		afterMigration: "0095_schema_0_6_0",
+		load: () => import("./0095_schema_0_6_0")
+	}
 ]
 
 function tagsInJournalOrder(migrationsFolder: string): string[] {
@@ -153,6 +175,9 @@ export async function runMigrationsWithUpgrades(
 	}
 
 	const byTag = new Map(upgrades.map((u) => [u.afterMigration, u]))
+	const ctx: DataUpgradeContext = {
+		shippedHashes: new Set(files.map((f) => f.hash))
+	}
 	for (const tag of byTag.keys()) {
 		if (!tags.includes(tag)) {
 			// A typo here would otherwise mean an upgrade that silently never
@@ -207,14 +232,15 @@ export async function runMigrationsWithUpgrades(
 		const meta = files[i]
 		if ((await highWaterMark()) >= meta.folderMillis) continue // already applied
 
+		const mod = await upgrade.load()
 		await db.transaction(async (tx) => {
+			if (mod.before) await mod.before(tx, ctx)
 			for (const stmt of meta.sql) await tx.execute(sql.raw(stmt))
 			await tx.execute(
 				sql.raw(`insert into "${MIGRATIONS_SCHEMA}"."${MIGRATIONS_TABLE}"
 					("hash", "created_at") values ('${meta.hash}', ${meta.folderMillis})`)
 			)
-			const mod = await upgrade.load()
-			await mod.run(tx)
+			await mod.run(tx, ctx)
 		})
 		applied.push(tag)
 		upgradesRun.push(tag)

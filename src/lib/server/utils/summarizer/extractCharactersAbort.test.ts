@@ -55,8 +55,6 @@ function baseParams(signal?: AbortSignal) {
 		content: "Aria and Bram argued in the market.",
 		connection: { name: "test-conn", type: "ollama" } as any,
 		sampling: { name: "test-sampling" } as any,
-		contextConfig: {} as any,
-		promptConfig: {} as any,
 		signal
 	}
 }

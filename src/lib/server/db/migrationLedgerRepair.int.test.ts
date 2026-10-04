@@ -1,28 +1,27 @@
 /**
- * The ledger repair, against the exact database state that broke a real install.
+ * The ledger repair, against the database state that strands a real install.
  *
- * ## What went wrong out there
+ * ## The failure
  *
- * `0100_narration_split_reprojection` shipped for a while stamped
- * `when: 1788910000000` — a round number roughly a day ahead of the clock,
- * picked by hand rather than by `drizzle-kit generate`. Databases that migrated
- * during that window recorded that number as the row's `created_at`, and
- * drizzle applies only files whose journal `when` exceeds the *highest*
- * recorded `created_at`. Correcting the journal to `1788827887780` fixed new
- * installs and did nothing at all for those databases: every migration
- * generated since is stamped honestly, so every one of them falls under a
- * floor that will not lift until wall time passes it. 0101 through 0107 are
- * skipped on every boot, silently, forever — the reported symptom being
- * `column "notes" does not exist` from `connections:list`.
+ * drizzle applies only the files whose journal `when` exceeds the highest
+ * `created_at` in the ledger. A migration that once shipped stamped ahead of
+ * the clock — a round number picked by hand rather than by
+ * `drizzle-kit generate` — leaves that stamp in the ledger of every database
+ * that applied it, and correcting the journal afterwards fixes new installs
+ * only: every honestly-stamped migration after it falls under a floor that
+ * will not lift until wall time passes it, and is skipped on every boot,
+ * silently. `repairMigrationLedger` moves such a row back to its file's `when`.
  *
  * ## Why the reproduction copies the real folder
  *
- * The database here is not a hand-built approximation: it is the real
- * migrations 0000–0100, applied by drizzle's own migrator out of a folder whose
- * only difference from `drizzle/` is that it stops at 0100 and carries 0100's
- * original stamp. Same files, same hashes, same ledger. A test that instead
- * dropped columns to simulate the shape would prove that its own DDL is
- * reversible and nothing about whether the repair reaches a real install.
+ * The database here is built by drizzle's own migrator from the real 0.5.3
+ * migrations, out of a folder whose only difference from `drizzle/` is where
+ * it stops and the stamp on its last file. Same files, same hashes, same
+ * ledger. A test that dropped columns to simulate the shape would prove that
+ * its own DDL is reversible and nothing about whether the repair reaches a real
+ * install. It stops at 0.5.3's last migration rather than at the head of the
+ * chain so that what it measures is the ledger and not whichever migration
+ * comes next.
  */
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
@@ -36,92 +35,49 @@ import { readMigrationFiles } from "drizzle-orm/migrator"
 import { sql, type SQL } from "drizzle-orm"
 import { rawRows } from "./rawRows"
 import { repairMigrationLedger } from "./migrationLedgerRepair"
+import { migrationsFolderThrough } from "$lib/server/utils/testDb"
 
 /**
  * The handle these cases build for themselves: `drizzle(client)` with no
  * schema, which is what a real migration run holds.
- *
- * Spelled as drizzle's own return type rather than `MigrationDb` because
- * `migrate()` from the pglite migrator asks for the driver's database
- * specifically — and this satisfies `MigrationDb` too, so the raw-SQL helpers
- * below still take the narrow parameter.
  */
 type LedgerDb = ReturnType<typeof drizzle>
 
-const REAL_FOLDER = path.resolve(process.cwd(), "drizzle")
+/** The last migration 0.5.3 shipped; the shipped folder here stops at it. */
+const SHIPPED_THROUGH = "0093_green_bushwacker"
+/** The migration whose row carries the bad stamp. */
+const POISONED_TAG = "0090_illegal_payback"
+/** A hand-picked stamp ahead of everything after it. */
+const POISONED_WHEN = 1786600000000
+/** What its journal entry says. */
+const CORRECTED_WHEN = 1786337830337
 
-/** The last migration the broken installs got. */
-const POISONED_TAG = "0100_narration_split_reprojection"
-/** What its journal entry said when they applied it. */
-const POISONED_WHEN = 1788910000000
-/** What its journal entry says now. */
-const CORRECTED_WHEN = 1788827887780
-
-/** Everything that has been inert on those databases since. */
+/** Everything the poisoned floor buries. */
 const SKIPPED_TAGS = [
-	"0101_connection_notes",
-	"0102_summarize_batch_budget",
-	"0103_curvy_cannonball",
-	"0104_ice_scene_cast_extraction",
-	"0105_llamacpp_service_type",
-	"0106_continuation_prefill_reprojection",
-	"0107_pipeline_run_artifacts"
+	"0091_nifty_whirlwind",
+	"0092_worthless_sabretooth",
+	"0093_green_bushwacker"
 ]
 
-interface JournalEntry {
-	idx: number
-	version: string
-	when: number
-	tag: string
-	breakpoints: boolean
-}
+const disposers: Array<() => Promise<void>> = []
 
-const tempDirs: string[] = []
-
-/**
- * A real migrations folder truncated at `tag`, optionally re-stamping entries.
- *
- * The `.sql` files are copied byte for byte, so the hashes drizzle writes into
- * the ledger are the same hashes the shipped folder produces — which is the
- * whole point: the repair matches rows to files by hash.
- */
-function folderThrough(
+async function folderThrough(
 	tag: string,
 	restamp: Record<string, number> = {}
-): string {
-	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sp-ledger-mig-"))
-	tempDirs.push(dir)
-	const journal = JSON.parse(
-		fs.readFileSync(path.join(REAL_FOLDER, "meta/_journal.json"), "utf8")
-	) as { entries: JournalEntry[] }
-	const cut = journal.entries.findIndex((e) => e.tag === tag)
-	if (cut < 0) throw new Error(`No journal entry for "${tag}"`)
-	const entries = journal.entries
-		.slice(0, cut + 1)
-		.map((e) => ({ ...e, when: restamp[e.tag] ?? e.when }))
-	for (const e of entries) {
-		fs.copyFileSync(
-			path.join(REAL_FOLDER, `${e.tag}.sql`),
-			path.join(dir, `${e.tag}.sql`)
-		)
-	}
-	fs.mkdirSync(path.join(dir, "meta"), { recursive: true })
-	fs.writeFileSync(
-		path.join(dir, "meta/_journal.json"),
-		JSON.stringify({ ...journal, entries })
-	)
-	return dir
+): Promise<string> {
+	const { folder, dispose } = await migrationsFolderThrough(tag, { restamp })
+	disposers.push(dispose)
+	return folder
 }
 
-/** A migration-time handle: `drizzle(client)`, no schema, raw SQL only. */
 async function rows<T extends Record<string, unknown>>(
-	db: MigrationDb,
+	db: LedgerDb,
 	query: SQL
 ): Promise<T[]> {
 	return rawRows<T>(await db.execute(query))
 }
 
-async function hasColumn(db: MigrationDb, table: string, column: string) {
+async function hasColumn(db: LedgerDb, table: string, column: string) {
 	const found = await rows(
 		db,
 		sql`select 1 from information_schema.columns
@@ -131,7 +87,7 @@ async function hasColumn(db: MigrationDb, table: string, column: string) {
 	return found.length > 0
 }
 
-async function hasTable(db: MigrationDb, table: string) {
+async function hasTable(db: LedgerDb, table: string) {
 	const found = await rows(
 		db,
 		sql`select 1 from information_schema.tables
@@ -140,7 +96,7 @@ async function hasTable(db: MigrationDb, table: string) {
 	return found.length > 0
 }
 
-async function ledger(db: MigrationDb) {
+async function ledger(db: LedgerDb) {
 	return rows<{ id: number; hash: string; created_at: string | number }>(
 		db,
 		sql`select id, hash, created_at from drizzle.__drizzle_migrations
@@ -152,7 +108,7 @@ async function ledger(db: MigrationDb) {
 function tagsFor(ledgerRows: any[], folder: string): Set<string> {
 	const journal = JSON.parse(
 		fs.readFileSync(path.join(folder, "meta/_journal.json"), "utf8")
-	) as { entries: JournalEntry[] }
+	) as { entries: Array<{ tag: string }> }
 	const files = readMigrationFiles({ migrationsFolder: folder })
 	const byHash = new Map(
 		journal.entries.map((e, i) => [files[i].hash, e.tag] as const)
@@ -164,77 +120,60 @@ function tagsFor(ledgerRows: any[], folder: string): Set<string> {
 	)
 }
 
-afterAll(() => {
-	for (const dir of tempDirs) fs.rmSync(dir, { recursive: true, force: true })
+afterAll(async () => {
+	for (const dispose of disposers) await dispose()
 })
 
 describe("a ledger poisoned by a future stamp", () => {
 	let client: PGlite
 	let db: LedgerDb
+	let shipped: string
 
 	beforeAll(async () => {
-		const folder = folderThrough(POISONED_TAG, {
-			[POISONED_TAG]: POISONED_WHEN
-		})
+		shipped = await folderThrough(SHIPPED_THROUGH)
 		client = new PGlite()
 		db = drizzle(client)
-		await migrate(db, { migrationsFolder: folder })
+		await migrate(db, {
+			migrationsFolder: await folderThrough(POISONED_TAG, {
+				[POISONED_TAG]: POISONED_WHEN
+			})
+		})
 	}, 60_000)
 
 	afterAll(async () => {
 		await client?.close()
 	})
 
-	it("reproduces the stuck install: migrate() alone leaves the seven unapplied", async () => {
-		// ⚠ ITS OWN DATABASE, not the shared one, and the assertions below are
-		// about the SEVEN rather than about a ledger count. Both because this is
-		// the only case that calls migrate() WITHOUT repairing first, and what
-		// that does has changed with the calendar.
-		//
-		// 0100's poisoned stamp is 2026-09-08T23:26:40Z. Wall time passed it,
-		// so a migration generated from now on is stamped honestly AND above the
-		// floor, and drizzle correctly applies it here — which raises this
-		// ledger's high-water mark above 0101-0108 and buries them for every
-		// case after this one, including the repair's. That is not the defect
-		// under test and it is not reachable in production either: `db/index.ts`
-		// runs `repairMigrationLedger` BEFORE any migrate(), so a real poisoned
-		// install has its ledger corrected before a newer migration can land on
-		// it out of order.
+	it("reproduces the stuck install: migrate() alone leaves the three unapplied", async () => {
+		// Its own database: the only case that calls migrate() WITHOUT
+		// repairing first. `db/index.ts` runs the repair before any migrate().
 		const isolatedClient = new PGlite()
 		const isolatedDb = drizzle(isolatedClient)
 		try {
 			await migrate(isolatedDb, {
-				migrationsFolder: folderThrough(POISONED_TAG, {
+				migrationsFolder: await folderThrough(POISONED_TAG, {
 					[POISONED_TAG]: POISONED_WHEN
 				})
 			})
 
 			// Precondition — this is what such a database looks like.
-			expect(await hasColumn(isolatedDb, "connections", "notes")).toBe(
+			expect(await hasTable(isolatedDb, "scene_characters")).toBe(false)
+			expect(await hasColumn(isolatedDb, "prompt_configs", "seed_key")).toBe(
 				false
 			)
-			expect(await hasTable(isolatedDb, "pipeline_run_artifacts")).toBe(
-				false
-			)
-			expect(
-				await hasColumn(isolatedDb, "pipeline_runs", "message_id")
-			).toBe(true)
-
 			const before = await ledger(isolatedDb)
-			expect(before).toHaveLength(101)
+			expect(before).toHaveLength(91)
 			expect(Math.max(...before.map((r) => Number(r.created_at)))).toBe(
 				POISONED_WHEN
 			)
 
-			// The defect itself: the real folder has seven migrations stamped
+			// The defect itself: the shipped folder has three migrations stamped
 			// under the poisoned floor and drizzle applies none of them, without
 			// error.
-			await migrate(isolatedDb, { migrationsFolder: REAL_FOLDER })
+			await migrate(isolatedDb, { migrationsFolder: shipped })
 
-			expect(await hasColumn(isolatedDb, "connections", "notes")).toBe(
-				false
-			)
-			const tags = tagsFor(await ledger(isolatedDb), REAL_FOLDER)
+			expect(await hasTable(isolatedDb, "scene_characters")).toBe(false)
+			const tags = tagsFor(await ledger(isolatedDb), shipped)
 			for (const tag of SKIPPED_TAGS) expect(tags.has(tag)).toBe(false)
 		} finally {
 			await isolatedClient.close()
@@ -243,7 +182,7 @@ describe("a ledger poisoned by a future stamp", () => {
 
 	it("repairs exactly the one row whose created_at disagrees with the journal", async () => {
 		const result = await repairMigrationLedger(db, {
-			migrationsFolder: REAL_FOLDER
+			migrationsFolder: shipped
 		})
 
 		expect(result.repaired).toEqual([
@@ -257,33 +196,24 @@ describe("a ledger poisoned by a future stamp", () => {
 		expect(row).toBeDefined()
 	}, 60_000)
 
-	it("lets the seven skipped migrations apply", async () => {
-		await migrate(db, { migrationsFolder: REAL_FOLDER })
+	it("lets the three skipped migrations apply", async () => {
+		await migrate(db, { migrationsFolder: shipped })
 
-		expect(await hasColumn(db, "connections", "notes")).toBe(true)
-		expect(await hasTable(db, "pipeline_run_artifacts")).toBe(true)
-		expect(await hasColumn(db, "pipeline_runs", "message_id")).toBe(false)
+		expect(await hasTable(db, "scene_characters")).toBe(true)
+		expect(await hasColumn(db, "prompt_configs", "seed_key")).toBe(true)
+		expect(
+			await hasColumn(db, "graph_build_configs", "node_description_system_prompt")
+		).toBe(true)
 
 		const after = await ledger(db)
-		// Every journal entry, whatever the folder holds today — a literal here
-		// would break on the next migration for a reason that has nothing to do
-		// with the repair.
-		const journalLength = (
-			JSON.parse(
-				fs.readFileSync(
-					path.join(REAL_FOLDER, "meta/_journal.json"),
-					"utf8"
-				)
-			) as { entries: unknown[] }
-		).entries.length
-		expect(after).toHaveLength(journalLength)
-		const tags = tagsFor(after, REAL_FOLDER)
+		expect(after).toHaveLength(94)
+		const tags = tagsFor(after, shipped)
 		for (const tag of SKIPPED_TAGS) expect(tags.has(tag)).toBe(true)
 	}, 60_000)
 
 	it("repairs nothing on a second pass", async () => {
 		const again = await repairMigrationLedger(db, {
-			migrationsFolder: REAL_FOLDER
+			migrationsFolder: shipped
 		})
 		expect(again.repaired).toEqual([])
 		expect(again.unrecognised).toEqual([])
@@ -291,7 +221,7 @@ describe("a ledger poisoned by a future stamp", () => {
 })
 
 /**
- * The narrow cases, on a two-file synthetic folder rather than the shipped 108
+ * The narrow cases, on a one-file synthetic folder rather than the shipped chain
  * — the behaviour under test is about a single row, and paying a full migrate
  * for it would buy nothing.
  */
@@ -301,8 +231,7 @@ describe("what the repair refuses to touch", () => {
 	let db: LedgerDb
 
 	beforeAll(async () => {
-		dir = fs.mkdtempSync(path.join(os.tmpdir(), "sp-ledger-synth-"))
-		tempDirs.push(dir)
+		dir = fs.mkdtempSync(path.join(os.tmpdir(), "serene-pub-vitest-ledger-synth-"))
 		fs.writeFileSync(
 			path.join(dir, "0000_first.sql"),
 			`CREATE TABLE "widget" ("id" integer PRIMARY KEY GENERATED BY DEFAULT AS IDENTITY);`
@@ -330,6 +259,7 @@ describe("what the repair refuses to touch", () => {
 
 	afterAll(async () => {
 		await client?.close()
+		fs.rmSync(dir, { recursive: true, force: true })
 	})
 
 	it("a database with no ledger at all — nothing to disagree with", async () => {

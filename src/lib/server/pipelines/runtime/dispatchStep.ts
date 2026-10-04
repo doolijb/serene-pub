@@ -207,12 +207,7 @@ export async function dispatchStep(
 	const adapter = new AdapterClass.Adapter({
 		connection,
 		sampling: { ...values, maxTokens },
-		// Cast rather than filled in: the adapter's types want whole rows, and a
-		// step has neither a context config nor a prompt config — it has one
-		// system prompt. The summarizer passes real rows here only because it
-		// happens to have them; nothing in this call path reads any other field.
-		contextConfig: {} as any,
-		promptConfig: { systemPrompt: call.systemPrompt } as any,
+		systemPrompt: call.systemPrompt,
 		session: minimalSession(call.userPrompt),
 		currentCharacterId: null,
 		tokenCounter,

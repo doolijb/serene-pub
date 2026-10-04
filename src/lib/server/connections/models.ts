@@ -49,6 +49,10 @@ import {
 	resolveConnectionCapabilities,
 	type StoredCapabilities
 } from "./resolve"
+import {
+	hostDeclaredCapabilities,
+	type HostDeclaredCapabilities
+} from "$lib/shared/connections/hostCapabilities"
 
 /**
  * A connection row with its model's answers merged in.
@@ -85,6 +89,13 @@ export type ResolvedConnectionPair = SelectConnection & {
 	 * transform of another modality — see `modelModalityAllows`.
 	 */
 	connectionModelModality: string | null
+	/**
+	 * What the model's own HOST declared, as capability switches — the layer
+	 * between the preset and the probe (`hostDeclaredCapabilities`). Null when
+	 * no model was merged or its host said nothing. Carried on the pair so every
+	 * re-resolution of it (`resolveWireMode`, the cache rebuilt below) sees it.
+	 */
+	hostCapabilities: HostDeclaredCapabilities | null
 }
 
 /**
@@ -205,7 +216,8 @@ export function mergeEndpointModel(
 			connectionModelId: null,
 			connectionModelName: null,
 			contextWindow: null,
-			connectionModelModality: null
+			connectionModelModality: null,
+			hostCapabilities: null
 		}
 	const capabilities = layerCapabilities(endpoint, model)
 	const merged: ResolvedConnectionPair = {
@@ -239,7 +251,15 @@ export function mergeEndpointModel(
 		connectionModelId: model.id,
 		connectionModelName: model.name,
 		contextWindow: model.contextWindow ?? null,
-		connectionModelModality: model.modality ?? null
+		connectionModelModality: model.modality ?? null,
+		// The model's facts and launch options, read as switches. Resolved
+		// live like the rest of the pair, so a host that starts or stops
+		// listing `image` moves the answer on its next sync, with no cache.
+		hostCapabilities:
+			hostDeclaredCapabilities({
+				facts: model.facts as Record<string, unknown> | null,
+				extraJson: model.extraJson
+			}) ?? null
 	}
 	// The cache, rebuilt from the LAYERED durable halves — see
 	// `layerCapabilities`. Written onto the merged object only; neither stored

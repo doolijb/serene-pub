@@ -6,8 +6,21 @@
 // moved into bootstrapEnv so the ordering is expressed in one place instead of
 // depending on import order between two unrelated concerns.
 import "$lib/server/config/bootstrapEnv"
-import { dev } from "$app/environment"
+import { building, dev } from "$app/environment"
 import { appVersion } from "$lib/shared/constants/version"
+import {
+	handleControlRequest,
+	isControlPath
+} from "$lib/server/launcher/controlRoutes"
+import { inAppUpdateGate } from "$lib/server/launcher/launcherEnv"
+import { publishRuntimeFile } from "$lib/server/launcher/runtimeFile"
+import {
+	installEarlySignalHandlers,
+	noteStartupRequested
+} from "$lib/server/launcher/stop"
+import { cleanupStagingAtBoot } from "$lib/server/updater/markers"
+import { getAppDataDir } from "$lib/server/utils/appDataDir"
+import { isPrereleaseVersion } from "$lib/shared/utils/releaseChannel"
 import {
 	getUpdateState,
 	maybeCheckForUpdates
@@ -69,7 +82,54 @@ const SECURITY_HEADERS: Record<string, string> = {
 	"X-Frame-Options": "DENY"
 }
 
+// The runtime file (CONTRACT §C2) is written once the HTTP server listens,
+// by the production server only. This module is evaluated during adapter-node's
+// `server.init()`, before it listens, so it leaves a callback that the build
+// wrapper (`scripts/customize-build.js`) calls with the listening server. Never
+// under `vite dev`, a build's prerender pass, or Vitest.
+if (!dev && !building && !process.env.VITEST) {
+	;(globalThis as Record<string, unknown>).__SERENE_PUB_ON_LISTENING__ = (
+		server: { address(): { port: number } | string | null },
+		host: string | undefined
+	) => {
+		// A signal must stop this process at any point in its boot, including
+		// before the services task installs its own handlers (launcher/stop.ts).
+		installEarlySignalHandlers()
+		publishRuntimeFile({
+			address: server.address(),
+			host,
+			version: String(appVersion),
+			isPrerelease: isPrereleaseVersion(String(appVersion)),
+			dataDir: getAppDataDir()
+		})
+		// Leftovers of an update that was being prepared when the last run
+		// ended (§C5 boot cleanup). Only where in-app updates are allowed —
+		// anywhere else the update folder is not this process's to touch.
+		const gate = inAppUpdateGate({ version: String(appVersion) })
+		if (gate.allowed) {
+			try {
+				const removed = cleanupStagingAtBoot(gate.env.updateDir)
+				if (removed.length)
+					console.log(`[updater] Removed an unfinished update download: ${removed.join(", ")}`)
+			} catch (err) {
+				console.warn("[updater] Could not tidy the update folder:", err)
+			}
+		}
+	}
+}
+
 export const handle: Handle = async ({ event, resolve }) => {
+	// The launcher's control routes (CONTRACT §C3), first of all: they answer
+	// before `appReady` and in the recovery state, and anything under the
+	// prefix that fails a check is a bare 404 rather than a page.
+	if (isControlPath(event.url.pathname)) {
+		const response = handleControlRequest(event, String(appVersion))
+		for (const [name, value] of Object.entries(SECURITY_HEADERS)) {
+			response.headers.set(name, value)
+		}
+		return response
+	}
+
 	if (
 		event.url.pathname.startsWith(
 			"/.well-known/appspecific/com.chrome.devtools"
@@ -85,6 +145,7 @@ export const handle: Handle = async ({ event, resolve }) => {
 	// load them before bootstrapEnv's console patching has run, losing the
 	// formatting on their own startup logs. Resolved after the first request,
 	// so this costs a microtask thereafter.
+	noteStartupRequested()
 	const { appReady, getDatabaseState } = await import("$lib/server/startup")
 	await appReady
 

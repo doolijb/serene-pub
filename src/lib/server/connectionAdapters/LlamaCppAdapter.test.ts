@@ -28,10 +28,9 @@ const exportsDefault = (await import("./LlamaCppAdapter")).default
 function makeConnection(overrides: Record<string, any> = {}): any {
 	return {
 		id: 1,
-		// The SERVICE id. It was `llamacpp_completion` — the one type id that
-		// encoded a wire mode — until the ruling that a type names a service and
-		// the wire is a capability; `drizzle/0105_llamacpp_service_type.sql`
-		// carries existing rows over.
+		// The SERVICE id: a type names a service and the wire is a capability.
+		// A 0.5.3 `llamacpp_completion` row is carried over as this by the
+		// 0.5.3 upgrade (`attic/etl/connections.ts`).
 		//
 		// ⚠ No `wireMode` here on purpose, so these cases exercise the FALLBACK:
 		// `wireModeFor` reads the type's declaration and answers `completion`,
@@ -105,8 +104,7 @@ describe("LlamaCppAdapter.mapSamplingConfig()", () => {
 		const adapter = new exportsDefault.Adapter({
 			connection: makeConnection(),
 			sampling: { temperature: 0.7 } as any,
-			contextConfig: {} as any,
-			promptConfig: { systemPrompt: "Test" } as any,
+			systemPrompt: "Test",
 			session: {
 				id: 1,
 				userId: 1,
@@ -152,7 +150,7 @@ describe("LlamaCppAdapter module exports", () => {
  * A CHARACTERIZATION test, not a red-green one: nothing changed in the adapter,
  * and these cases passed before the reasoning work as they do after it. They
  * exist to pin the fact behind that — so the next person to look for the
- * missing `thinkingContent` finds the reason here instead of adding a
+ * missing `reasoningContent` finds the reason here instead of adding a
  * plausible-looking key that no llama.cpp build ever sends.
  *
  * The route is the whole of it. In COMPLETION wire mode this adapter posts
@@ -201,8 +199,7 @@ function makeAdapter(
 	const adapter = new exportsDefault.Adapter({
 		connection: makeConnection(connectionOverrides),
 		sampling: sampling as any,
-		contextConfig: {} as any,
-		promptConfig: { systemPrompt: "Test system prompt." } as any,
+		systemPrompt: "Test system prompt.",
 		session: makeSession(),
 		currentCharacterId: null,
 		tokenCounter: { countTokens: async () => 1 } as any,
@@ -221,7 +218,7 @@ function makeAdapter(
 }
 
 describe("LlamaCppAdapter — reasoning arrives inline, with no field to read", () => {
-	test("non-streaming: posts /completion — the route with no reasoning field — and reports no thinkingContent", async () => {
+	test("non-streaming: posts /completion — the route with no reasoning field — and reports no reasoningContent", async () => {
 		vi.mocked(axios.post).mockResolvedValueOnce({
 			// Everything `/completion` actually returns for a thinking model:
 			// the tags stay in `content`, and there is no sibling field.
@@ -236,10 +233,10 @@ describe("LlamaCppAdapter — reasoning arrives inline, with no field to read", 
 		expect(result.completionResult).toBe(
 			"<think>Pondering.</think>Hello there."
 		)
-		expect(result.thinkingContent).toBeUndefined()
+		expect(result.reasoningContent).toBeUndefined()
 	})
 
-	test("streaming: the SSE chunks carry content only, and thinkingCb is never called", async () => {
+	test("streaming: the SSE chunks carry content only, and reasoningCb is never called", async () => {
 		vi.mocked(axios.post).mockResolvedValueOnce({
 			data: [
 				'data: {"content":"<think>Pondering.</think>"}\n',
@@ -250,17 +247,17 @@ describe("LlamaCppAdapter — reasoning arrives inline, with no field to read", 
 
 		const result = await adapter.generateText()
 		let content = ""
-		const thinkingCb = vi.fn()
+		const reasoningCb = vi.fn()
 		expect(typeof result.completionResult).toBe("function")
 		await (result.completionResult as any)((chunk: string) => {
 			content += chunk
-		}, thinkingCb)
+		}, reasoningCb)
 
 		expect(vi.mocked(axios.post).mock.calls.at(-1)?.[0]).toBe(
 			"http://localhost:8080/completion"
 		)
 		expect(content).toBe("<think>Pondering.</think>Hello there.")
-		expect(thinkingCb).not.toHaveBeenCalled()
+		expect(reasoningCb).not.toHaveBeenCalled()
 	})
 })
 
@@ -324,7 +321,7 @@ describe("LlamaCppAdapter — chat wire mode", () => {
 
 		const result = await adapter.generateText()
 		expect(result.completionResult).toBe("Hello there.")
-		expect(result.thinkingContent).toBe("Pondering.")
+		expect(result.reasoningContent).toBe("Pondering.")
 	})
 
 	test("streaming: reads the OpenAI delta envelope and its sibling reasoning field", async () => {
@@ -347,20 +344,20 @@ describe("LlamaCppAdapter — chat wire mode", () => {
 
 		const result = await adapter.generateText()
 		let content = ""
-		let thinking = ""
+		let reasoning = ""
 		await (result.completionResult as any)(
 			(chunk: string) => {
 				content += chunk
 			},
 			(chunk: string) => {
-				thinking += chunk
+				reasoning += chunk
 			}
 		)
 		expect(vi.mocked(axios.post).mock.calls.at(-1)?.[0]).toBe(
 			"http://localhost:8080/v1/chat/completions"
 		)
 		expect(content).toBe("Hello there.")
-		expect(thinking).toBe("Pondering.")
+		expect(reasoning).toBe("Pondering.")
 	})
 
 	test("does not put the completion template's stop strings on the chat leg", async () => {
@@ -601,6 +598,39 @@ describe("LlamaCppAdapter — reasoning on the wire", () => {
 		expect(adapter.ignoredSamplers).toEqual([
 			"reasoning",
 			"reasoningBudget"
+		])
+	})
+})
+
+// ── Images per message (PLAN-composer-attachments §3.6) ─────────────────────
+describe("LlamaCppAdapter — images on the chat wire", () => {
+	test("declares that it sends them", () => {
+		expect(makeAdapter().consumesAttachments).toBe(true)
+	})
+
+	test("a turn's image rides /v1/chat/completions as an OpenAI image_url part", async () => {
+		vi.mocked(axios.post).mockResolvedValueOnce({
+			data: { choices: [{ message: { content: "ok" } }] }
+		})
+		const png = Buffer.from("png bytes of a sketch")
+		const adapter = makeAdapter({ wireMode: "chat", extraJson: { stream: false } })
+		adapter.withCompiledPrompt({
+			prompt: undefined,
+			messages: [{ role: "user", content: "Ash: what is this?" }],
+			meta: {} as any
+		} as any)
+		adapter.withMessageAttachments([[{ bytes: png, mime: "image/png" }]])
+		await adapter.generateText()
+		const [url, body] = vi.mocked(axios.post).mock.calls.at(-1)! as any[]
+		expect(url).toBe("http://localhost:8080/v1/chat/completions")
+		expect(body.messages).toEqual([
+			{
+				role: "user",
+				content: [
+					{ type: "image_url", image_url: { url: `data:image/png;base64,${png.toString("base64")}` } },
+					{ type: "text", text: "Ash: what is this?" }
+				]
+			}
 		])
 	})
 })

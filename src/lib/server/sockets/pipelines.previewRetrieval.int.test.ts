@@ -139,7 +139,7 @@ describe("pipelines:previewRetrieval — permission and preconditions", () => {
 		// Not "nothing fires" — a question that cannot be asked, said in
 		// words. An absence with no reason attached is the failure this whole
 		// surface exists to remove.
-		expect(res.error).toContain("no lorebook attached")
+		expect(res.error).toContain("reads no lorebook")
 		expect(res.explanation).toBeUndefined()
 	}, 60_000)
 

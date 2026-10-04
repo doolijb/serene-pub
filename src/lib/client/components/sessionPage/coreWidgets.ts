@@ -67,6 +67,18 @@ export const CORE_WIDGET_ROWS: readonly CoreWidgetRow[] = Object.freeze([
 		icon: "BookOpen",
 		layout: { span: { ideal: 1 }, minInline: 260 },
 		defaultActive: false
+	},
+	/**
+	 * 🚧 The author's note (AN1): Chat's alone among core's genres (the
+	 * others omit it), offered and never on — Chat's default layout is the
+	 * conversation on its own, so a person adds it in the layout editor.
+	 */
+	{
+		id: "authors-note",
+		title: "Author's note",
+		icon: "NotebookPen",
+		layout: { span: { ideal: 1 }, minInline: 240 },
+		defaultActive: false
 	}
 ])
 

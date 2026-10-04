@@ -35,12 +35,8 @@ function getDbDataDir() {
 
 export const dataDir = getDbDataDir()
 export const dbPath = `${dataDir}/serene-pub.db`
-export const baseUrl = process.env.DATABASE_URL || `localhost`
-export const port: number = parseInt(process.env.DATABASE_PORT || "3002")
 export const migrationsDir = "./drizzle"
 export const schemaDir = "./src/lib/server/db/schema.ts"
-export const user = process.env.POSTGRES_USER || "postgres"
-export const password = process.env.POSTGRES_PASSWORD || "password"
 // PGlite uses a file path instead of a connection URL
 export const postgresUrl = dbPath
 

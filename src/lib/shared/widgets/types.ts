@@ -3,7 +3,7 @@
  *
  * The widget DECLARATION contract (`WidgetDecl`, `WidgetScope`,
  * `WidgetStylePreset`, `WidgetDependency`, `systemStyleSlug`) and the shipped
- * `CORE_WIDGETS` now live in `@serene-pub/core-catalog` (`ui/sessions/widgets`) —
+ * `CORE_WIDGETS` now live in `@serene-pub/core-catalog/core-widgets` —
  * part of core's announcement, seeded the same way as the shipped pipelines and
  * presets. They're re-exported here so existing app imports keep resolving
  * through one module. What stays app-side is RUNTIME-only: the width tier and
@@ -22,14 +22,17 @@
  * them the same way (`sockets/sessions.ts`).
  */
 import { i18nText, type WidgetDecl as DeclaredWidget } from "@serene-pub/sdk"
-import { CORE_WIDGETS as DECLARED_CORE_WIDGETS } from "@serene-pub/core-catalog"
+// The narrow subpath, never the package root: this module is client-reachable,
+// and the root brings every genre, pipeline, prompt and preset core ships into
+// the client bundle (~300 kB) to read one list.
+import { CORE_WIDGETS as DECLARED_CORE_WIDGETS } from "@serene-pub/core-catalog/core-widgets"
 
 export {
 	systemStyleSlug,
 	type WidgetDependency,
 	type WidgetScope,
 	type WidgetStylePreset
-} from "@serene-pub/core-catalog"
+} from "@serene-pub/core-catalog/core-widgets"
 
 /** A widget declaration as the app reads it: the SDK's, with `title` resolved to text. */
 export type WidgetDecl = Omit<DeclaredWidget, "title"> & { title: string }

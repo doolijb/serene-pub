@@ -3,8 +3,8 @@
  * state, and the two replies they produce — with no DOM in them.
  *
  * `PluginFrame.svelte` owns the iframe, the `MessageChannel` and the chrome;
- * what it *decides* lives out here, for the same reason `frameStyle.ts` and
- * `framePlacement.ts` do: a `.svelte` file cannot be imported as data, so a
+ * what it *decides* lives out here, for the same reason `framePlacement.ts`
+ * does: a `.svelte` file cannot be imported as data, so a
  * rule that only existed inside one could only be checked by driving a
  * browser, which is the same as not being checked.
  *

@@ -229,7 +229,7 @@ describe("save", () => {
 			[h.componentsPreview, { files: c.files, entry: c.entry, framework: "svelte" }]
 		] as const) {
 			const res = await call<any>(handler, params)
-			expect(res.error).toBe("This instance has no component compiler: components are not compiled on Android.")
+			expect(res.error).toBe("This pub has no component compiler: components are not compiled on Android.")
 		}
 		expect(await rowCount()).toBe(before)
 		expect((await call<Sockets.Components.Get.Response>(h.componentsGet, { id: c.id })).component.label).toBe(c.label)
@@ -458,7 +458,7 @@ describe("sharing: the component@1 file", () => {
 		expect(t.error).toMatch(/does not match the hash it names/)
 		const bare = { ...envelope, artifact: undefined }
 		const b = await call<any>(h.componentsImport, { envelope: bare })
-		expect(b.error).toMatch(/^This instance has no component compiler: .*carries no compiled module/)
+		expect(b.error).toMatch(/^This pub has no component compiler: .*carries no compiled module/)
 		expect(await rowCount()).toBe(before)
 
 		const pre = await call<Sockets.Components.ImportPreview.Response>(h.componentsImportPreview, { envelope })

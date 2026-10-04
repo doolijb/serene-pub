@@ -18,14 +18,15 @@ import {
 	makeRoom,
 	MIN_CARD_ROWS,
 	reexpress,
+	seatCard,
 	seedPositions,
 	showZonePin,
 	unitPinned,
 	withGeometry,
-	withPins,
-	type Arranged
+	withPins
 } from "./arrangedGeometry"
-import type { GsItem, GsLayout, GsPos } from "./GridStackZone.svelte"
+import type { ArrangedGridV1, ArrangedItem, ArrangedZone } from "@serene-pub/sdk"
+import type { GsItem } from "./gsItem"
 
 const pos = (
 	id: string,
@@ -33,7 +34,7 @@ const pos = (
 	y: number,
 	w: number,
 	h: number
-): GsPos => ({
+): ArrangedItem => ({
 	id,
 	x,
 	y,
@@ -41,8 +42,8 @@ const pos = (
 	h
 })
 /** Rows a placed item occupies, as a closed range — the overlap test's unit. */
-const rowsOf = (p: GsPos) => [p.y, p.y + p.h - 1]
-function overlaps(a: GsPos, b: GsPos): boolean {
+const rowsOf = (p: ArrangedItem) => [p.y, p.y + p.h - 1]
+function overlaps(a: ArrangedItem, b: ArrangedItem): boolean {
 	return (
 		a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y
 	)
@@ -157,7 +158,7 @@ describe("withGeometry — the saved cells laid over the editor's items", () => 
 })
 
 describe("frameCovers — is this zone a RESTORE or an edit?", () => {
-	const frame: GsLayout = {
+	const frame: ArrangedZone = {
 		cols: 9,
 		rows: 37,
 		items: [pos("map", 0, 8, 9, 3), pos("notes", 0, 12, 9, 3)]
@@ -228,7 +229,7 @@ describe("seedPositions — default placement (nothing saved yet)", () => {
 describe("seedPositions — a saved arrangement drawn in a SMALLER zone", () => {
 	// The real numbers from the running app: a middle zone arranged in an
 	// 1838×1889 window (18 × 34 cells) reopened in a 1400×1000 one (14 × 15).
-	const frame: GsLayout = {
+	const frame: ArrangedZone = {
 		cols: 18,
 		rows: 34,
 		items: [pos("messages", 0, 0, 18, 31), pos("world-state", 0, 31, 18, 3)]
@@ -270,7 +271,7 @@ describe("seedPositions — a saved arrangement drawn in a SMALLER zone", () => 
 	it("spreads back out when the window returns to the size it was arranged at", () => {
 		// A side zone with a card parked low: squeezed into a short zone and
 		// then given the room back, it lands where it started.
-		const side: GsLayout = {
+		const side: ArrangedZone = {
 			cols: 9,
 			rows: 37,
 			items: [pos("map", 0, 24, 9, 6)]
@@ -311,7 +312,7 @@ describe("reexpress — a zone RE-MEASURED, not re-seeded", () => {
 	// full-width one. Deliberately odd numbers — an even grid halves and
 	// doubles exactly, which would hide the lossiness the reference exists to
 	// avoid.
-	const wide: GsLayout = {
+	const wide: ArrangedZone = {
 		cols: 9,
 		rows: 12,
 		items: [
@@ -348,7 +349,7 @@ describe("reexpress — a zone RE-MEASURED, not re-seeded", () => {
 		// Re-expressing from what the narrow zone drew (gridstack's own
 		// re-column, or a reference updated by the re-measure itself) rounds
 		// the arrangement away: this is the layout-destroying path, pinned.
-		const clamp: GsLayout = { cols: 3, rows: 6, items: squeezed }
+		const clamp: ArrangedZone = { cols: 3, rows: 6, items: squeezed }
 		const back = reexpress(clamp, 9, 12)
 		expect(back).not.toEqual(wide.items)
 		expect(back[0]).toEqual(pos("map", 0, 0, 6, 4))
@@ -387,7 +388,7 @@ describe("reexpress — a zone RE-MEASURED, not re-seeded", () => {
  * unpinned.
  */
 describe("the persisted per-group pin", () => {
-	const zone = (items: GsPos[]): GsLayout => ({ cols: 9, rows: 12, items })
+	const zone = (items: ArrangedItem[]): ArrangedZone => ({ cols: 9, rows: 12, items })
 	/** Through the wire the blob actually takes: a json column. */
 	const roundTrip = (a: unknown) =>
 		loadArranged(JSON.parse(JSON.stringify(a)))
@@ -468,7 +469,7 @@ describe("the persisted per-group pin", () => {
 })
 
 describe("showZonePin — the zone-wide pin only means something un-arranged", () => {
-	const zone = (items: GsPos[]): GsLayout => ({ cols: 9, rows: 12, items })
+	const zone = (items: ArrangedItem[]): ArrangedZone => ({ cols: 9, rows: 12, items })
 
 	it("shows on a side with no saved arrangement (governs the rail vs icons)", () => {
 		expect(showZonePin(undefined)).toBe(true)
@@ -491,10 +492,10 @@ describe("showZonePin — the zone-wide pin only means something un-arranged", (
  * fixed at the seam; this is the net that says so if it ever tears again.
  */
 describe("dedupeArranged — a widget id lives in exactly one zone", () => {
-	const zone = (...items: GsPos[]): GsLayout => ({ cols: 7, rows: 12, items })
+	const zone = (...items: ArrangedItem[]): ArrangedZone => ({ cols: 7, rows: 12, items })
 
 	it("leaves a clean arrangement alone, object identity included", () => {
-		const a: Arranged = {
+		const a: ArrangedGridV1 = {
 			left: zone(pos("stats", 0, 0, 7, 3)),
 			right: zone(pos("portraits", 0, 0, 7, 3))
 		}
@@ -504,7 +505,7 @@ describe("dedupeArranged — a widget id lives in exactly one zone", () => {
 	})
 
 	it("keeps the zone the last drop named and drops the rest", () => {
-		const a: Arranged = {
+		const a: ArrangedGridV1 = {
 			left: zone(pos("stats", 0, 0, 7, 3), pos("portraits", 0, 5, 7, 3)),
 			right: zone(pos("portraits", 0, 0, 7, 3))
 		}
@@ -520,7 +521,7 @@ describe("dedupeArranged — a widget id lives in exactly one zone", () => {
 	})
 
 	it("honours a drop that named the OTHER zone", () => {
-		const a: Arranged = {
+		const a: ArrangedGridV1 = {
 			left: zone(pos("portraits", 0, 0, 7, 3)),
 			right: zone(pos("portraits", 0, 0, 7, 3))
 		}
@@ -532,7 +533,7 @@ describe("dedupeArranged — a widget id lives in exactly one zone", () => {
 	})
 
 	it("falls back to left → middle → right with no drop to go on", () => {
-		const a: Arranged = {
+		const a: ArrangedGridV1 = {
 			middle: zone(pos("notes", 0, 0, 7, 3)),
 			right: zone(pos("notes", 0, 0, 7, 3))
 		}
@@ -543,7 +544,7 @@ describe("dedupeArranged — a widget id lives in exactly one zone", () => {
 	})
 
 	it("ignores a drop hint naming a zone the widget is not in", () => {
-		const a: Arranged = {
+		const a: ArrangedGridV1 = {
 			left: zone(pos("notes", 0, 0, 7, 3)),
 			right: zone(pos("notes", 0, 0, 7, 3))
 		}
@@ -552,7 +553,7 @@ describe("dedupeArranged — a widget id lives in exactly one zone", () => {
 	})
 
 	it("resolves a widget that somehow reached all three zones", () => {
-		const a: Arranged = {
+		const a: ArrangedGridV1 = {
 			left: zone(pos("notes", 0, 0, 7, 3)),
 			middle: zone(pos("notes", 0, 0, 7, 3)),
 			right: zone(pos("notes", 0, 0, 7, 3))
@@ -567,7 +568,7 @@ describe("dedupeArranged — a widget id lives in exactly one zone", () => {
 	})
 
 	it("keeps each zone's cell grid while pruning its items", () => {
-		const a: Arranged = {
+		const a: ArrangedGridV1 = {
 			left: { cols: 5, rows: 9, items: [pos("notes", 0, 0, 5, 3)] },
 			right: { cols: 7, rows: 12, items: [pos("notes", 0, 0, 7, 3)] }
 		}
@@ -602,7 +603,7 @@ describe("re-measure reference — an empty frame is not one", () => {
 	it("re-expressing from the seeded positions survives narrow → wide", () => {
 		const seeded = seedPositions(stats, 7, 14)
 		expect(seeded).toEqual([{ id: "stats", x: 0, y: 0, w: 7, h: 3 }])
-		const ref: GsLayout = { cols: 7, rows: 14, items: seeded }
+		const ref: ArrangedZone = { cols: 7, rows: 14, items: seeded }
 		expect(reexpress(ref, 2, 14)[0]).toMatchObject({ w: 2 })
 		expect(reexpress(ref, 7, 14)[0]).toMatchObject({ w: 7 })
 	})
@@ -656,12 +657,12 @@ describe("clampPos — a saved cell belongs to the frame that describes it", () 
 	it("returns the SAME object when the cell already fits", () => {
 		const p = pos("map", 0, 0, 7, 3)
 		expect(clampPos(p, 7, 12)).toBe(p)
-		const frame: GsLayout = { cols: 7, rows: 12, items: [p] }
+		const frame: ArrangedZone = { cols: 7, rows: 12, items: [p] }
 		expect(clampFrame(frame)).toBe(frame)
 	})
 
 	it("keeps the anchor / group / pin riding on the item", () => {
-		const p: GsPos = {
+		const p: ArrangedItem = {
 			...pos("map", 9, 0, 3, 3),
 			anchor: { top: true },
 			group: "g:a+b",
@@ -694,7 +695,7 @@ describe("clampPos — a saved cell belongs to the frame that describes it", () 
 
 describe("firstSlot / fits / makeRoom", () => {
 	/** A frame at `cols`×`rows` holding these cells. */
-	const frame = (cols: number, rows: number, items: GsPos[]): GsLayout => ({
+	const frame = (cols: number, rows: number, items: ArrangedItem[]): ArrangedZone => ({
 		cols,
 		rows,
 		items
@@ -814,7 +815,7 @@ describe("firstSlot / fits / makeRoom", () => {
 		const roomy = makeRoom(full, need)
 		const slot = firstSlot(roomy, need)
 		expect(slot).toEqual({ x: 0, y: 7 })
-		const seated: GsLayout = {
+		const seated: ArrangedZone = {
 			...roomy,
 			items: [...roomy.items, pos("map", slot!.x, slot!.y, need.w, need.h)]
 		}
@@ -835,7 +836,7 @@ describe("firstSlot / fits / makeRoom", () => {
 
 describe("arrangedIds — what the editor counts as placed", () => {
 	it("gathers every zone's ids, and an absent zone contributes none", () => {
-		const a: Arranged = {
+		const a: ArrangedGridV1 = {
 			left: { cols: 4, rows: 8, items: [pos("stats", 0, 0, 4, 3)] },
 			middle: { cols: 9, rows: 8, items: [pos("messages", 0, 0, 9, 8)] }
 		}
@@ -847,10 +848,56 @@ describe("arrangedIds — what the editor counts as placed", () => {
 		// `map` has left the middle's frame for the right's. Committed
 		// membership has caught up with neither, so this is the only list that
 		// still knows the widget is placed.
-		const a: Arranged = {
+		const a: ArrangedGridV1 = {
 			middle: { cols: 9, rows: 8, items: [pos("messages", 0, 0, 9, 8)] },
 			right: { cols: 4, rows: 8, items: [pos("map", 0, 0, 4, 3)] }
 		}
 		expect(arrangedIds(a).has("map")).toBe(true)
+	})
+})
+
+/**
+ * `seatCard` — the tray's add and Duplicate, seating one more card in a zone's
+ * working frame (brief 7b and its review). Before the review a zone with no
+ * room left seated nothing but the page placed the widget anyway, so it was
+ * seeded on top of the bottom card; a third such card sent gridstack's
+ * `_fixCollisions` into unbounded recursion.
+ */
+describe("seatCard — room made, the newcomer written, or null when there is none", () => {
+	const frame = (cols: number, rows: number, items: ArrangedItem[]): ArrangedZone => ({ cols, rows, items })
+	const noOverlap = (z: ArrangedZone) => {
+		for (const a of z.items) for (const b of z.items) if (a !== b) expect(overlaps(a, b)).toBe(false)
+	}
+
+	it("a full middle: the big card gives up rows and the newcomer is written into them", () => {
+		const full = frame(15, 16, [pos("messages", 0, 0, 15, 16)])
+		const out = seatCard(full, "stats", [{ w: 15, h: 3 }])!
+		expect(out.items).toEqual([pos("messages", 0, 0, 15, 13), pos("stats", 0, 13, 15, 3)])
+		noOverlap(out)
+	})
+
+	it("a Duplicate asks for its source's size first, then falls back to a new card's footprint", () => {
+		// The source is 8 rows tall; the zone can free 3 rows, never 8.
+		const tight = frame(6, 12, [pos("a", 0, 0, 6, 5), pos("b", 0, 5, 6, 7)])
+		const out = seatCard(tight, "b#2", [{ w: 6, h: 8 }, { w: 6, h: 3 }])!
+		const added = out.items.find((i) => i.id === "b#2")!
+		expect(added.h).toBe(3)
+		noOverlap(out)
+		// With room for the source's size, it takes it.
+		const roomy = frame(6, 20, [pos("b", 0, 0, 6, 8)])
+		expect(seatCard(roomy, "b#2", [{ w: 6, h: 8 }, { w: 6, h: 3 }])!.items[1]).toEqual(pos("b#2", 0, 8, 6, 8))
+	})
+
+	it("a size wider than the zone is the zone's width", () => {
+		const out = seatCard(frame(4, 10, []), "x", [{ w: 9, h: 3 }])!
+		expect(out.items).toEqual([pos("x", 0, 0, 4, 3)])
+	})
+
+	it("NO ROOM: every card at the floor and no slot left answers null — the add must be refused", () => {
+		// A side zone 14 rows tall of 2-row cards: seven of them, and no eighth.
+		const packed = frame(4, 14, Array.from({ length: 7 }, (_, n) => pos(`w${n}`, 0, n * 2, 4, MIN_CARD_ROWS)))
+		expect(seatCard(packed, "w7", [{ w: 4, h: 3 }])).toBeNull()
+		// …the source's size and the fallback alike.
+		expect(seatCard(packed, "w0#2", [{ w: 4, h: 2 }, { w: 4, h: 3 }])).toBeNull()
 	})
 })

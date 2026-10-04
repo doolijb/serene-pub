@@ -836,3 +836,46 @@ describe("readMedia — the culled-original fallback", () => {
 		expect(err!.message).not.toContain("isn't a PNG")
 	})
 })
+
+describe("the fitted variant (composer attachments §4.2)", () => {
+	test("is the whole picture with its long edge capped, stored reduced and cullable", async () => {
+		const { createMedia, ensureVariant } = await import("./index")
+		const { FITTED_MAX_EDGE } = await import("./thumbnail")
+		const user = await createTestUser(db, "media-fitted-user")
+		const created = await createMedia(db, {
+			userId: user.id,
+			bytes: bigPng(2400, 1200, 77)
+		})
+		const resolved = await ensureVariant(db, created.file, MediaVariant.FITTED)
+		expect(resolved?.variant).toBe(MediaVariant.FITTED)
+		// Uncropped: the 2:1 aspect survives, unlike the square thumbnail.
+		expect([resolved!.width, resolved!.height]).toEqual([
+			FITTED_MAX_EDGE,
+			FITTED_MAX_EDGE / 2
+		])
+		const row = (await variantsOf(created.file.id)).find(
+			(v) => v.variant === MediaVariant.FITTED
+		)
+		expect(row).toBeDefined()
+		expect(row!.fidelity).toBe(MediaFidelity.REDUCED)
+		expect(row!.cache).toBe(true)
+		expect(row!.isOriginal).toBe(false)
+		// A second request reads the stored row instead of encoding again.
+		const again = await ensureVariant(db, created.file, MediaVariant.FITTED)
+		expect(again?.row?.id).toBe(row!.id)
+	})
+
+	test("an image that already fits is its own fitted form — nothing is stored", async () => {
+		const { createMedia, ensureVariant } = await import("./index")
+		const user = await createTestUser(db, "media-fitted-small-user")
+		const created = await createMedia(db, {
+			userId: user.id,
+			bytes: png(91)
+		})
+		const resolved = await ensureVariant(db, created.file, MediaVariant.FITTED)
+		expect(resolved?.variant).toBe(MediaVariant.ORIGINAL)
+		expect(
+			(await variantsOf(created.file.id)).map((v) => v.variant)
+		).toEqual([MediaVariant.ORIGINAL])
+	})
+})

@@ -15,7 +15,8 @@ import fs from "fs/promises"
 import os from "os"
 import path from "path"
 import * as schema from "$lib/server/db/schema"
-import { eq } from "drizzle-orm"
+import { and, eq, inArray } from "drizzle-orm"
+import { getTableConfig } from "drizzle-orm/pg-core"
 import {
 	historyValues,
 	worldLoreValues
@@ -327,6 +328,8 @@ async function seedRichBook(ownerId: number, strangerId: number) {
 			fromEntryId: sword.id,
 			toEntryId: tavern.id,
 			relationshipType: "kept in",
+			reverseRelationshipType: "holds",
+			title: "the strongbox",
 			description: "entry to entry"
 		}
 	])
@@ -421,7 +424,71 @@ async function seedRichBook(ownerId: number, strangerId: number) {
 		bindingIdB: wanderer.id
 	})
 
-	return { ...base, foreignCard, wanderer, alias, northRoad, ambush, branchOnly }
+	// Rows a table registry (plan B1) iterates that the fields above leave
+	// empty: one in each, so a table the copy skips shows up in the counts.
+	await testDb
+		.insert(schema.attributeSheets)
+		.values({ id: "test:sheet/duplicate@1", props: {} })
+		.onConflictDoNothing()
+	await testDb.insert(schema.ownerSheets).values([
+		{ ownerKind: "cast_member", ownerId: wanderer.id, sheetId: "test:sheet/duplicate@1" },
+		{ ownerKind: "location", ownerId: tavern.id, sheetId: "test:sheet/duplicate@1", position: 1 }
+	])
+	await testDb.insert(schema.lorebookEntryVectors).values({
+		entryId: tavern.id,
+		vectorName: "core:vec/default@1",
+		dims: 2,
+		vector: [0.5, 0.5]
+	} as any)
+	await testDb.insert(schema.entryAnnotations).values([
+		{
+			entryId: sword.id,
+			entityKey: `entry:${tavern.id}`,
+			surface: "Tavern",
+			normalized: "tavern",
+			tier: "gazetteer",
+			refEntryId: tavern.id,
+			extractorVersion: "test",
+			sourceHash: "h",
+			gazetteerHash: "g"
+		},
+		{
+			entryId: sword.id,
+			entityKey: `character:${foreignCard.id}`,
+			surface: "Wanderer",
+			normalized: "wanderer",
+			tier: "gazetteer",
+			characterId: foreignCard.id,
+			extractorVersion: "test",
+			sourceHash: "h",
+			gazetteerHash: "g"
+		}
+	] as any)
+	await testDb.insert(schema.bindingSuggestions).values({
+		lorebookId: bookId,
+		entityKey: "open:the ferryman",
+		surface: "the Ferryman",
+		exampleSourceKind: "entry",
+		exampleSourceId: tavern.id
+	})
+	await testDb.insert(schema.bindingMergeLogs).values({
+		lorebookId: bookId,
+		userId: ownerId,
+		survivorId: base.keeper.id,
+		absorbedSnapshot: { name: "Gone" }
+	} as any)
+
+	return {
+		...base,
+		foreignCard,
+		wanderer,
+		alias,
+		northRoad,
+		ambush,
+		branchOnly,
+		tavern,
+		sword
+	}
 }
 
 /**
@@ -574,8 +641,12 @@ async function snapshot(bookId: number) {
 			}))
 		),
 		tags: (await inBook(schema.lorebookTags)).map((t: any) => t.tagId).sort(),
-		dismissed: (await inBook(schema.dismissedDuplicatePairs)).map(
-			(d: any) => [L(bindingL, d.bindingIdA), L(bindingL, d.bindingIdB)]
+		// A pair is unordered: each is stored smaller id first, and a copy
+		// may number the two the other way round.
+		dismissed: sortBy(
+			(await inBook(schema.dismissedDuplicatePairs)).map((d: any) =>
+				[L(bindingL, d.bindingIdA), L(bindingL, d.bindingIdB)].sort()
+			)
 		),
 		attributeValues: await attributes(schema.attributeValues),
 		attributeConfigs: await attributes(schema.attributeConfigs)
@@ -834,6 +905,34 @@ describe("lorebooks:duplicate (PGlite integration)", () => {
 		expect(copy.name).toBe("Second Draft")
 	}, 60_000)
 
+	test("carries a relationship's name and reverse relationship type (plan B1)", async () => {
+		// The copy writes each row with `...row`, so the two B1 columns ride
+		// along with no code of their own — this pins that it stays so.
+		const { lorebooksDuplicateHandler } = await import("./lorebooks")
+		const user = await makeUser("lb-dup-way-words")
+		const source = await seedBook(user.id, "Two-way Source")
+		await testDb
+			.update(schema.narrativeRelationships)
+			.set({ title: "the old stair", reverseRelationshipType: "connects to" })
+			.where(eq(schema.narrativeRelationships.fromEntryId, source.district.id))
+
+		const { lorebook: copy } = await lorebooksDuplicateHandler.handler(
+			fakeSocket(user.id),
+			{ lorebookId: source.lorebook.id },
+			noopEmit
+		)
+		const copied = await testDb.query.narrativeRelationships.findMany({
+			where: (r, { eq }) => eq(r.lorebookId, copy.id)
+		})
+		const way = copied.find((r) => r.relationshipType === "connects to")
+		expect(way).toMatchObject({
+			title: "the old stair",
+			reverseRelationshipType: "connects to"
+		})
+		const tie = copied.find((r) => r.relationshipType === "keeper of")
+		expect(tie).toMatchObject({ title: "", reverseRelationshipType: null })
+	}, 60_000)
+
 	test("refuses a book the caller does not own", async () => {
 		const { lorebooksDuplicateHandler } = await import("./lorebooks")
 		const owner = await makeUser("lb-dup-other-owner")
@@ -852,5 +951,194 @@ describe("lorebooks:duplicate (PGlite integration)", () => {
 			where: (l, { eq }) => eq(l.userId, stranger.id)
 		})
 		expect(strangerBooks).toHaveLength(0)
+	}, 60_000)
+})
+
+describe("lorebooks:duplicate — dismissed duplicate pairs (plan A8)", () => {
+	test("each pair is copied once, smaller id first, whatever order the cast is copied in", async () => {
+		const { lorebooksCreateHandler, lorebooksDuplicateHandler } =
+			await import("./lorebooks")
+		const user = await makeUser("lb-dup-dismissed")
+		const { lorebook } = await lorebooksCreateHandler.handler(
+			fakeSocket(user.id),
+			{ name: "Pairs" },
+			noopEmit
+		)
+		const member = async (n: number, name: string) =>
+			(
+				await testDb
+					.insert(schema.lorebookBindings)
+					.values({ lorebookId: lorebook.id, binding: `{{char:${n}}}`, name })
+					.returning()
+			)[0]
+		const ada = await member(1, "Ada")
+		const bea = await member(2, "Bea")
+		const cy = await member(3, "Cy")
+		// Retagged after the others (a new index entry, not an in-place
+		// update), Ada is read back after them by a plain select, so the copy
+		// numbers her last: her pair with Bea flips.
+		await testDb
+			.update(schema.lorebookBindings)
+			.set({ binding: "{{char:9}}" })
+			.where(eq(schema.lorebookBindings.id, ada.id))
+		const read = await testDb
+			.select({ id: schema.lorebookBindings.id })
+			.from(schema.lorebookBindings)
+			.where(eq(schema.lorebookBindings.lorebookId, lorebook.id))
+		expect(read.at(-1)!.id).toBe(ada.id)
+		await testDb.insert(schema.dismissedDuplicatePairs).values([
+			{ lorebookId: lorebook.id, bindingIdA: ada.id, bindingIdB: bea.id },
+			// Both orders of one pair: the unique index cannot tell them apart.
+			{ lorebookId: lorebook.id, bindingIdA: bea.id, bindingIdB: cy.id },
+			{ lorebookId: lorebook.id, bindingIdA: cy.id, bindingIdB: bea.id }
+		])
+
+		const { lorebook: copy } = await lorebooksDuplicateHandler.handler(
+			fakeSocket(user.id),
+			{ lorebookId: lorebook.id },
+			noopEmit
+		)
+
+		const names = new Map(
+			(
+				await testDb
+					.select({
+						id: schema.lorebookBindings.id,
+						name: schema.lorebookBindings.name
+					})
+					.from(schema.lorebookBindings)
+					.where(eq(schema.lorebookBindings.lorebookId, copy.id))
+			).map((b) => [b.id, b.name])
+		)
+		const pairs = await testDb
+			.select()
+			.from(schema.dismissedDuplicatePairs)
+			.where(eq(schema.dismissedDuplicatePairs.lorebookId, copy.id))
+		expect(pairs.every((p) => p.bindingIdA < p.bindingIdB)).toBe(true)
+		expect(
+			pairs
+				.map((p) => [names.get(p.bindingIdA), names.get(p.bindingIdB)].sort().join("+"))
+				.sort()
+		).toEqual(["Ada+Bea", "Bea+Cy"])
+	}, 60_000)
+})
+
+describe("lorebooks:duplicate and delete — the table registry (plan B1)", () => {
+	test("every registered table is copied row for row, the deliberate exclusion empty", async () => {
+		const { lorebooksDuplicateHandler } = await import("./lorebooks")
+		const { LOREBOOK_TABLES } = await import("$lib/server/lorebooks/tableRegistry")
+		const owner = await makeUser("lb-dup-registry-owner")
+		const stranger = await makeUser("lb-dup-registry-stranger")
+		const source = await seedRichBook(owner.id, stranger.id)
+
+		const { lorebook: copy } = await lorebooksDuplicateHandler.handler(
+			fakeSocket(owner.id),
+			{ lorebookId: source.lorebook.id },
+			noopEmit
+		)
+
+		const counts: Record<string, [number, number]> = {}
+		for (const spec of LOREBOOK_TABLES)
+			counts[getTableConfig(spec.table).name] = [
+				await spec.count(testDb as any, source.lorebook.id),
+				await spec.count(testDb as any, copy.id)
+			]
+		for (const spec of LOREBOOK_TABLES) {
+			const name = getTableConfig(spec.table).name
+			const [from, to] = counts[name]
+			// The fixture holds a row in every table, so a table the copy
+			// skips cannot pass by being empty on both sides.
+			expect([name, from > 0]).toEqual([name, true])
+			expect([name, to]).toEqual([name, spec.notCopied ? 0 : from])
+		}
+	}, 60_000)
+
+	test("an annotation naming an entry names the copy's entry; a card stays the card", async () => {
+		const { lorebooksDuplicateHandler } = await import("./lorebooks")
+		const owner = await makeUser("lb-dup-annotation-owner")
+		const stranger = await makeUser("lb-dup-annotation-stranger")
+		const source = await seedRichBook(owner.id, stranger.id)
+
+		const { lorebook: copy } = await lorebooksDuplicateHandler.handler(
+			fakeSocket(owner.id),
+			{ lorebookId: source.lorebook.id },
+			noopEmit
+		)
+		const copied = await testDb.query.lorebookEntries.findMany({
+			where: (e, { eq }) => eq(e.lorebookId, copy.id)
+		})
+		const tavern = copied.find((e) => e.typeId === LOCATION_TYPE_ID)!
+		const sword = copied.find((e) => e.typeId === ITEM_TYPE_ID)!
+		const keys = (
+			await testDb
+				.select()
+				.from(schema.entryAnnotations)
+				.where(eq(schema.entryAnnotations.entryId, sword.id))
+		)
+			.map((a) => `${a.entityKey}|${a.refEntryId}`)
+			.sort()
+		expect(keys).toEqual(
+			[`character:${source.foreignCard.id}|null`, `entry:${tavern.id}|${tavern.id}`].sort()
+		)
+		const sheets = await testDb
+			.select()
+			.from(schema.ownerSheets)
+			.where(eq(schema.ownerSheets.ownerId, tavern.id))
+		expect(sheets.map((s) => [s.ownerKind, s.sheetId])).toEqual([
+			["location", "test:sheet/duplicate@1"]
+		])
+	}, 60_000)
+
+	test("book delete leaves no row behind in any registered table", async () => {
+		const { lorebooksDeleteHandler } = await import("./lorebooks")
+		const { LOREBOOK_TABLES, bookStatOwners } = await import(
+			"$lib/server/lorebooks/tableRegistry"
+		)
+		const owner = await makeUser("lb-delete-registry-owner")
+		const stranger = await makeUser("lb-delete-registry-stranger")
+		const source = await seedRichBook(owner.id, stranger.id)
+		const owners = await bookStatOwners(testDb as any, source.lorebook.id)
+		const entryIds = (
+			await testDb
+				.select({ id: schema.lorebookEntries.id })
+				.from(schema.lorebookEntries)
+				.where(eq(schema.lorebookEntries.lorebookId, source.lorebook.id))
+		).map((e) => e.id)
+
+		await lorebooksDeleteHandler.handler(
+			fakeSocket(owner.id),
+			{ id: source.lorebook.id },
+			noopEmit
+		)
+
+		for (const spec of LOREBOOK_TABLES) {
+			const t = spec.table as any
+			let left: unknown[]
+			if (typeof spec.scope === "object")
+				left = (
+					await Promise.all(
+						owners
+							.filter(([, ids]) => ids.length > 0)
+							.map(([kinds, ids]) =>
+								testDb
+									.select()
+									.from(t)
+									.where(and(inArray(t.ownerKind, kinds), inArray(t.ownerId, ids)))
+							)
+					)
+				).flat()
+			else if (spec.scope === "entry")
+				left = await testDb.select().from(t).where(inArray(t.entryId, entryIds))
+			else if (spec.scope === "scene")
+				left = await testDb
+					.select()
+					.from(t)
+					.where(inArray(t.sceneId, [source.scene.id]))
+			else left = await testDb.select().from(t).where(eq(t.lorebookId, source.lorebook.id))
+			expect([getTableConfig(spec.table).name, left.length]).toEqual([
+				getTableConfig(spec.table).name,
+				0
+			])
+		}
 	}, 60_000)
 })

@@ -4,13 +4,14 @@
  *
  * R8 retired the B5 **Plan** fold: the beats go to the Sanctum, as the BODY
  * of the Castellan's beats row (a markdown list), and no row carries a Plan
- * section any more. The lead delver's row carries its own line and the
- * reasoning of ITS call (the turn's first prose call — nothing is written in
+ * section any more. Each delver's row carries its own line and the
+ * reasoning of ITS call — their character turn's (Brannoc's, the first prose
+ * call: nothing is written in
  * prose before it); the knock carries its question and no fold at all.
  *
  * The faked model answers a JSON request with the planner's (and keeper's)
  * document, and every prose request with prose plus a reasoning trace on the
- * adapter's thinking channel, numbered by call.
+ * adapter's reasoning channel, numbered by call.
  */
 
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest"
@@ -87,16 +88,16 @@ class FakeAdapter implements FakeTextAdapter {
 			isAborted: false,
 			completionResult: async (
 				onContent: (c: string) => void,
-				onThinking?: (c: string) => void
+				onReasoning?: (c: string) => void
 			) => {
 				if (json) {
 					jsonPrompts.push(JSON.stringify(this.injected ?? ""))
 					// The planner reasons too — and that must NOT reach the row.
-					onThinking?.("The planner weighs the beats.")
+					onReasoning?.("The planner weighs the beats.")
 					onContent(JSON.stringify(document))
 					return
 				}
-				onThinking?.(`Reasoning of prose call ${call}.`)
+				onReasoning?.(`Reasoning of prose call ${call}.`)
 				for (const chunk of PROSE) onContent(chunk)
 			}
 		}
@@ -135,13 +136,6 @@ vi.mock("$lib/server/connections/capabilityTarget", async (importOriginal) => {
 		}
 	}
 })
-vi.mock("$lib/server/utils/getUserConfigurations", () => ({
-	getUserConfigurations: async () => ({
-		sampling: { id: 1 },
-		contextConfig: { id: 1 },
-		promptConfig: { id: 1, systemPrompt: "Stay in character." }
-	})
-}))
 vi.mock("$lib/server/embedding", () => ({
 	isModelReady: () => false,
 	getLoadedModelId: () => null,
@@ -311,7 +305,6 @@ async function runsOf(sessionId: number) {
 		.where(eq(schema.pipelineRuns.sessionId, sessionId))
 }
 
-
 /** A row's shown revision's parts, in order. */
 async function partsOf(messageId: number) {
 	const { getMessage } = await import("$lib/server/messages/store")
@@ -338,7 +331,7 @@ async function turnRows(sessionId: number) {
 }
 
 describe("R8 · what the Lair's rows fold", () => {
-	test("the beats are the Sanctum row's body; the lead's row folds its own Thinking; no Plan anywhere", async () => {
+	test("the beats are the Sanctum row's body; Brannoc's row folds his own Reasoning; no Plan anywhere", async () => {
 		document = PLAN
 		proseCalls = 0
 		jsonPrompts.length = 0
@@ -359,13 +352,13 @@ describe("R8 · what the Lair's rows fold", () => {
 		const beatsParts = await partsOf(beats.id)
 		expect(beatsParts.map((p) => p.type)).toEqual(["core:markdown"])
 
-		const lead = rows.find((r) => r.characterId === w.brannoc)!
-		const leadParts = await partsOf(lead.id)
-		expect(leadParts.map((p) => p.type)).toEqual(["core:thinking", "core:markdown"])
-		// The lead's reasoning — the turn's first prose call — never the
+		const brannoc = rows.find((r) => r.characterId === w.brannoc)!
+		const brannocParts = await partsOf(brannoc.id)
+		expect(brannocParts.map((p) => p.type)).toEqual(["core:reasoning", "core:markdown"])
+		// His character turn's reasoning — the first prose call — never the
 		// planner's.
-		expect(leadParts[0]!.content).toBe("Reasoning of prose call 1.")
-		const body = String(lead.content)
+		expect(brannocParts[0]!.content).toBe("Reasoning of prose call 1.")
+		const body = String(brannoc.content)
 		expect(body).not.toContain("{")
 		expect(body).not.toContain("planner")
 		expect(body).not.toContain("Reasoning")
@@ -378,7 +371,7 @@ describe("R8 · what the Lair's rows fold", () => {
 		).toBe(true)
 	})
 
-	test("the knock is the question alone: no fold, no Thinking, no beats — nothing was played", async () => {
+	test("the knock is the question alone: no fold, no Reasoning, no beats — nothing was played", async () => {
 		document = KNOCK
 		proseCalls = 0
 		const w = await session("core:genre/lair", {})
@@ -393,6 +386,6 @@ describe("R8 · what the Lair's rows fold", () => {
 		expect(String(rows[0]!.content)).toBe(KNOCK.knockQuestion)
 		const types = (await partsOf(rows[0]!.id)).map((p) => p.type)
 		expect(types).not.toContain("core:section")
-		expect(types).not.toContain("core:thinking")
+		expect(types).not.toContain("core:reasoning")
 	})
 })

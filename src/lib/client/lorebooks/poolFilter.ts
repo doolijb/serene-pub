@@ -9,8 +9,17 @@
  * a browser.
  */
 
+import { compareDates, type StoryDate } from "$lib/shared/lorebooks/storyDate"
+import { isFileableEntryType } from "$lib/shared/entries/types"
+
 /** The kind a scene's rows are filed under; every other kind is a type id. */
 export const SCENE_KIND = "scene"
+
+/**
+ * The kind a cast member's row is filed under when All lists the people
+ * (note 12), and the key the count of cast members is filed under.
+ */
+export const CAST_KIND = "cast"
 
 /**
  * One row of the pool, whatever table it came from.
@@ -48,7 +57,13 @@ export interface PoolItem {
 	 * that owns it. Optional so a row built elsewhere reads as shared.
 	 */
 	branchId?: number | null
-	/** The `order` role's value — History's date. Its position elsewhere. */
+	/**
+	 * The `order` role's value when it is a DATE — History's. Story order
+	 * compares it with `compareDates`, never packed into a number: a day can
+	 * pass 99, and a packed date then sorts after the next month's.
+	 */
+	date?: StoryDate | null
+	/** The order of a row with no `date`: its position, or a scene's id. */
 	order: number
 	position: number
 	/** 0 for a kind that declares no priority, which earns no bonus. */
@@ -70,8 +85,12 @@ export interface PoolFilters {
 	machineWritten: boolean
 	/** What the attached session's newest run read into the prompt. */
 	readIn: boolean
-	/** No keywords and never read in: nothing can reach it. */
-	looseEnds: boolean
+	/**
+	 * The "Needs keywords" chore: a row that takes keywords, is in play, and
+	 * has none (`needsKeywords`). Distinct from `keywords: "none"`, which is
+	 * the plain fact and also holds pinned rows and scenes.
+	 */
+	needsKeywords: boolean
 	keywords: KeywordFilter
 }
 
@@ -84,7 +103,7 @@ export function emptyFilters(): PoolFilters {
 		archived: false,
 		machineWritten: false,
 		readIn: false,
-		looseEnds: false,
+		needsKeywords: false,
 		keywords: "any"
 	}
 }
@@ -98,13 +117,31 @@ export function activeFilterCount(filters: PoolFilters): number {
 	if (filters.archived) n++
 	if (filters.machineWritten) n++
 	if (filters.readIn) n++
-	if (filters.looseEnds) n++
+	if (filters.needsKeywords) n++
 	if (filters.keywords !== "any") n++
 	return n
 }
 
 export const hasKeywords = (item: PoolItem) =>
 	item.keys.some((k) => k.trim().length > 0)
+
+/**
+ * Whether a row is a "Needs keywords" chore — the one rule the rail's
+ * figure, the chip's figure and the list all ask (note 6, 2026-10-02).
+ *
+ * Only a row keywords would do something for: archived and off rows are out
+ * of play on purpose, a pinned row is in every prompt whatever it matches,
+ * and a scene is never matched by keyword (it is reached through its history
+ * entry), nor is a cast member (reached by name and alias). Counting any of
+ * those made the badge disagree with the work.
+ */
+export const needsKeywords = (item: PoolItem) =>
+	!item.archived &&
+	!item.off &&
+	!item.pinned &&
+	item.kind !== SCENE_KIND &&
+	item.kind !== CAST_KIND &&
+	!hasKeywords(item)
 
 /**
  * The pool, narrowed.
@@ -128,11 +165,7 @@ export function filterPool(
 		if (filters.off && !item.off) return false
 		if (filters.machineWritten && !item.machineWritten) return false
 		if (filters.readIn && !readInKeys.has(item.key)) return false
-		if (
-			filters.looseEnds &&
-			(hasKeywords(item) || readInKeys.has(item.key))
-		)
-			return false
+		if (filters.needsKeywords && !needsKeywords(item)) return false
 		if (filters.keywords === "has" && !hasKeywords(item)) return false
 		if (filters.keywords === "none" && hasKeywords(item)) return false
 		if (!needle) return true
@@ -152,11 +185,23 @@ export function filterPool(
  * is lying; the date and position orderings say nothing about importance and
  * so do not reorder for it. The two date orderings read the `order` role,
  * which is what makes them mean anything for History and nothing elsewhere.
+ *
+ * Story order: dated rows by `compareDates`, undated rows by `order`, and an
+ * undated row before a dated one — where they always sat, since a position
+ * packed smaller than any date did.
  */
 export function comparePoolBy(
 	orderBy: string
 ): (a: PoolItem, b: PoolItem) => number {
 	const pinned = (i: PoolItem) => (i.pinned ? 1 : 0)
+	const story = (a: PoolItem, b: PoolItem) =>
+		a.date && b.date
+			? compareDates(a.date, b.date)
+			: a.date
+				? 1
+				: b.date
+					? -1
+					: a.order - b.order
 	return (a, b) => {
 		switch (orderBy) {
 			case "position-asc":
@@ -178,9 +223,9 @@ export function comparePoolBy(
 			case "updated-asc":
 				return a.updatedAt - b.updatedAt
 			case "entry-date-desc":
-				return b.order - a.order
+				return story(b, a)
 			case "entry-date-asc":
-				return a.order - b.order
+				return story(a, b)
 			default:
 				return 0
 		}
@@ -191,6 +236,15 @@ export interface PoolTreeNode {
 	item: PoolItem
 	children: PoolTreeNode[]
 }
+
+/**
+ * Whether a row may be drawn under its anchor: a scene under its history
+ * entry, or an entry whose type declares the `parent` role. A history entry
+ * or a place is a root whatever an old anchor says (note 1, 2026-10-02):
+ * history is always top level relative to other lore.
+ */
+const nestable = (item: PoolItem) =>
+	item.kind === SCENE_KIND || isFileableEntryType(item.kind)
 
 /**
  * The pool as a forest, nested by each row's anchor.
@@ -205,7 +259,7 @@ export function buildTree(items: readonly PoolItem[]): PoolTreeNode[] {
 	for (const item of items) byKey.set(item.key, item)
 
 	const parentOf = (item: PoolItem): PoolItem | null => {
-		if (!item.parentKey) return null
+		if (!item.parentKey || !nestable(item)) return null
 		const parent = byKey.get(item.parentKey)
 		if (!parent || parent.key === item.key) return null
 		// Walk up from the candidate parent; meeting this row again means the
@@ -236,7 +290,9 @@ export function buildTree(items: readonly PoolItem[]): PoolTreeNode[] {
 /** Whether the tree view has anything to show that the list does not. */
 export function hasNesting(items: readonly PoolItem[]): boolean {
 	const keys = new Set(items.map((i) => i.key))
-	return items.some((i) => i.parentKey && keys.has(i.parentKey))
+	return items.some(
+		(i) => i.parentKey && nestable(i) && keys.has(i.parentKey)
+	)
 }
 
 export interface PoolTreeRow {

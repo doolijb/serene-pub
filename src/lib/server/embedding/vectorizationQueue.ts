@@ -38,18 +38,19 @@ import {
 	eq,
 	inArray,
 	isNull,
-	isNotNull,
 	asc,
 	desc,
 	ne,
 	or,
-	gt,
-	sql
+	sql,
+	type SQL
 } from "drizzle-orm"
+import type { PgColumn } from "drizzle-orm/pg-core"
 import * as schema from "$lib/server/db/schema"
-import { castEdgeOnly, isCastEdge } from "$lib/server/utils/narrativeEdges"
+import { castEdgeOnly } from "$lib/server/utils/narrativeEdges"
 import { DEFAULT_VECTOR_NAME } from "$lib/server/utils/lorebookEntries"
 import {
+	EMBEDDABLE_ENTRY_TYPES,
 	ENTRY_INDEX_SOURCES,
 	embeddableEntryType,
 	entryTypesOfSource,
@@ -78,14 +79,15 @@ import {
 	type PromotionReport
 } from "$lib/server/indexing/lane"
 import { channelWhere } from "$lib/server/messages/channels"
-import type { SessionRagContext } from "./ragContext"
+import { messageHasText } from "./messageText"
+import { RECENT_MESSAGES_IN_PROMPT, type SessionRagContext } from "./ragContext"
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
 export type VectorizationProgressEvent = {
-	status: "idle" | "running" | "paused"
+	status: "idle" | "running"
 	currentItem?: {
 		type:
 			| "message"
@@ -173,6 +175,9 @@ function queueItem(args: {
 		process: args.process
 	}
 }
+
+/** The event an embedded item is announced on — to its owner (`tellItemOwner`). */
+const VECTORIZATION_ITEM_EVENT = "vectorization:itemUpdated"
 
 export type VectorizationItemUpdatedEvent = {
 	type: NonNullable<VectorizationProgressEvent["currentItem"]>["type"]
@@ -369,7 +374,7 @@ export const embeddingLane = registerLane(
 		autostart: async () => true,
 		progressEvent: "vectorization:progress",
 		itemEvent: {
-			name: "vectorization:itemUpdated",
+			name: VECTORIZATION_ITEM_EVENT,
 			/**
 			 * Per-item DB rows get their embedding/vectorizedAt updated inside
 			 * process(), but nothing otherwise tells connected clients which
@@ -391,21 +396,109 @@ export const embeddingLane = registerLane(
 // Public control API
 // ---------------------------------------------------------------------------
 
+/**
+ * The administrators' listeners: the lane's progress, never its items — an
+ * item goes to its owner alone (`tellItemOwner`), administrators included.
+ */
+const progressListeners = new Map<EmitFn, EmitFn>()
+
 export function registerProgressEmitter(fn: EmitFn) {
-	embeddingLane.registerEmitter(fn)
+	if (progressListeners.has(fn)) return
+	const progressOnly: EmitFn = (event, data) => {
+		if (event !== VECTORIZATION_ITEM_EVENT) fn(event, data)
+	}
+	progressListeners.set(fn, progressOnly)
+	embeddingLane.registerEmitter(progressOnly)
 }
 
 export function unregisterProgressEmitter(fn: EmitFn) {
-	embeddingLane.unregisterEmitter(fn)
+	const progressOnly = progressListeners.get(fn)
+	if (!progressOnly) return
+	progressListeners.delete(fn)
+	embeddingLane.unregisterEmitter(progressOnly)
 }
 
-export function pauseVectorization() {
-	embeddingLane.pause()
+/**
+ * Who hears `vectorization:itemUpdated` (plan A7): the item's OWNER — the
+ * user whose book, card or session it is — admin or not, and nobody else.
+ * Progress telemetry (`vectorization:progress`) spans every user's content
+ * and stays with administrators (`registerProgressEmitter`); an item's badge
+ * refresh names one row of one person's, and is theirs.
+ *
+ * One `emitToUser` per user is enough: it reaches every tab of theirs, and
+ * the interest gate narrows it to the tabs that asked (scoped by the item's
+ * `lorebookId`, bare for a card's). Each connected socket registers its own,
+ * so a closed tab's goes with it and the user's other tabs still hear.
+ */
+const ownerEmitters = new Map<number, Set<EmitFn>>()
+
+export function registerOwnerEmitter(userId: number, fn: EmitFn) {
+	const mine = ownerEmitters.get(userId) ?? new Set<EmitFn>()
+	mine.add(fn)
+	ownerEmitters.set(userId, mine)
 }
 
-export function resumeVectorization() {
-	embeddingLane.resume()
+export function unregisterOwnerEmitter(userId: number, fn: EmitFn) {
+	const mine = ownerEmitters.get(userId)
+	if (!mine) return
+	mine.delete(fn)
+	if (!mine.size) ownerEmitters.delete(userId)
 }
+
+/** The user an embedded item belongs to, or null when its row is gone. */
+async function ownerOfItem(
+	payload: VectorizationItemUpdatedEvent
+): Promise<number | null> {
+	if (payload.lorebookId != null) {
+		const [book] = await db
+			.select({ userId: schema.lorebooks.userId })
+			.from(schema.lorebooks)
+			.where(eq(schema.lorebooks.id, payload.lorebookId))
+			.limit(1)
+		return book?.userId ?? null
+	}
+	if (payload.type === "character") {
+		const [card] = await db
+			.select({ userId: schema.characters.userId })
+			.from(schema.characters)
+			.where(eq(schema.characters.id, payload.id))
+			.limit(1)
+		return card?.userId ?? null
+	}
+	if (payload.type === "message") {
+		const [session] = await db
+			.select({ userId: schema.sessions.userId })
+			.from(schema.sessionMessages)
+			.innerJoin(
+				schema.sessions,
+				eq(schema.sessions.id, schema.sessionMessages.sessionId)
+			)
+			.where(eq(schema.sessionMessages.id, payload.id))
+			.limit(1)
+		return session?.userId ?? null
+	}
+	return null
+}
+
+/**
+ * The lane's item listener: hands `vectorization:itemUpdated` to its owner's
+ * tabs (plan A7). Any other event is not an item's and goes nowhere from here.
+ * Asks who owns the row only while somebody is connected to hear it.
+ */
+export async function tellItemOwner(event: string, payload: unknown) {
+	if (event !== VECTORIZATION_ITEM_EVENT || !ownerEmitters.size) return
+	const item = payload as VectorizationItemUpdatedEvent
+	const userId = await ownerOfItem(item)
+	if (userId == null) return
+	const [emit] = ownerEmitters.get(userId) ?? []
+	emit?.(event, item)
+}
+
+embeddingLane.registerEmitter((event, payload) => {
+	tellItemOwner(event, payload).catch((err) =>
+		console.error("[embedding] could not tell an item's owner:", err)
+	)
+})
 
 export function stopVectorization() {
 	embeddingLane.stop()
@@ -426,7 +519,17 @@ export function clearVectorizationFailureTracking() {
 export async function startVectorizationQueue(opts?: {
 	startFromBeginning?: boolean
 }) {
-	if (embeddingLane.isRunning()) return
+	if (embeddingLane.isRunning()) {
+		// ⚠ Re-arm it, never just return. `stopVectorization()` does not wait,
+		// so a run with an `embed()` in flight is still running when the
+		// embedding star's consequence asks for the start that follows its
+		// stop; a bare return leaves the stop standing, the loop leaves after
+		// that item, and nothing indexes until the 15-minute sweep.
+		// `lane.start()` clears the stop and wakes the loop. The run keeps its
+		// count and its backoff state: the sweep asks for a start every tick.
+		embeddingLane.start()
+		return
+	}
 	if (opts?.startFromBeginning) embeddingLane.resetCompleted()
 	embeddingLane.clearFailureTracking()
 	embeddingLane.start()
@@ -556,7 +659,7 @@ export async function enqueueSessionGroup(
 
 	// Force-start, as an explicit operation rather than a side effect of
 	// enqueueing (constraint 4). The lane's own guard makes it idempotent.
-	if (!embeddingLane.isPaused()) embeddingLane.start()
+	embeddingLane.start()
 
 	return group
 }
@@ -584,7 +687,7 @@ export function enqueueLorebookGroup(
 			g.characterIds.length === 0
 	)
 
-	if (!embeddingLane.isPaused()) embeddingLane.start()
+	embeddingLane.start()
 	return group
 }
 
@@ -618,7 +721,7 @@ export async function enqueueCharacterGroup(
 		(g) => g.characterIds.includes(characterId) && !g.sessionId
 	)
 
-	if (!embeddingLane.isPaused()) embeddingLane.start()
+	embeddingLane.start()
 	return group
 }
 
@@ -641,31 +744,160 @@ export function removeQueueGroup(groupId: string): void {
 // ---------------------------------------------------------------------------
 
 /**
- * A row needs (re-)embedding if:
- *   - embedding IS NULL  (never embedded), OR
- *   - embeddingModel != currentModel  (stale from a previous model), OR
- *   - vectorizedAt IS NOT NULL AND updatedAt > vectorizedAt  (content changed since last embedding)
+ * sha-256 of a text's UTF-8, first 16 hex characters — the digest every
+ * `source_hash`, `embedding_source_hash` and `embed_text_hash` in the index
+ * records, and the one `entry_annotations.source_hash` uses
+ * (`annotations/index.ts` `contentHash`).
  *
- * The third condition is only applied when both timestamp columns are provided.
- * Rows that pre-date the vectorizedAt column (vectorizedAt IS NULL but embedding IS NOT NULL)
- * are treated as current — we rely on explicit embedding clearing in update handlers for those.
+ * Over the whole text rather than the `MAX_EMBED_INPUT_LENGTH` slice the model
+ * is handed: an edit past the cut re-embeds, which is still an edit to the
+ * content.
  */
-function needsEmbedding(
-	embeddingCol: any,
-	modelCol: any,
-	currentModel: string,
-	updatedAtCol?: any,
-	vectorizedAtCol?: any
-) {
-	const base = or(isNull(embeddingCol), ne(modelCol, currentModel))
-	if (updatedAtCol && vectorizedAtCol) {
-		// Re-embed if content changed after the last vectorization (both timestamps must be set)
-		return or(
-			base,
-			and(isNotNull(vectorizedAtCol), gt(updatedAtCol, vectorizedAtCol))
+const textDigest = (text: SQL) =>
+	sql<string>`left(encode(sha256(convert_to(${text}, 'UTF8')), 'hex'), 16)`
+
+/**
+ * What a session message embeds: its content.
+ *
+ * `session_messages.embed_text_hash` (GENERATED) spells the same recipe in the
+ * schema; `columnStoreEmbedTextHash.int.test.ts` pins the two equal.
+ */
+export const messageEmbedText = sql<string>`${schema.sessionMessages.content}`
+
+/**
+ * What a character (a persona is a character) embeds: its name, a newline and
+ * its description. Nothing else on the card — so a folder move, an avatar, the
+ * persona flags and a soft delete change nothing here.
+ */
+export const characterEmbedText = sql<string>`(${schema.characters.name} || chr(10) || ${schema.characters.description})`
+
+/**
+ * What a cast member (`lorebook_bindings`) embeds: its name, and its summary
+ * under it when there is one. Aliases are not embedded, so an alias edit and
+ * the character sync's rewrite of an unchanged name change nothing here.
+ */
+export const bindingEmbedText = sql<string>`(CASE WHEN coalesce(${schema.lorebookBindings.summary}, '') <> '' THEN ${schema.lorebookBindings.name} || chr(10) || ${schema.lorebookBindings.summary} ELSE ${schema.lorebookBindings.name} END)`
+
+/** One end of a cast edge, by the member's name (its id when the row is gone). */
+const relationshipEndName = (end: PgColumn) =>
+	sql<string>`coalesce((SELECT "b"."name" FROM "lorebook_bindings" AS "b" WHERE "b"."id" = ${end}), ${end}::text)`
+
+/**
+ * What a relationship embeds: both members' names either side of its type,
+ * then its description and its reason — `Alder ally Birch: Old friends. An
+ * oath`. Cast edges only (`castEdgeOnly`): an edge with an entry end has no
+ * second name, and its text is NULL here.
+ *
+ * ⚠ **The names are another table's**, so this cannot be a generated column:
+ * renaming a member moves the text of every relationship that names it, and
+ * that is exactly the change the hash has to see. So the relationship store's
+ * current hash is this expression, hashed where it is read
+ * (`RELATIONSHIP_STORE`) — two primary-key lookups and one short digest per
+ * row, over a store of tens to hundreds of edges per book.
+ */
+export const relationshipEmbedText = sql<string>`(${relationshipEndName(schema.narrativeRelationships.fromNodeId)} || ' ' || ${schema.narrativeRelationships.relationshipType} || ' ' || ${relationshipEndName(schema.narrativeRelationships.toNodeId)} || CASE WHEN ${schema.narrativeRelationships.description} <> '' THEN ': ' || ${schema.narrativeRelationships.description} ELSE '' END || CASE WHEN coalesce(${schema.narrativeRelationships.reason}, '') <> '' THEN '. ' || ${schema.narrativeRelationships.reason} ELSE '' END)`
+
+/** The four tables that keep their vector on the row itself. */
+type ColumnStoreTable =
+	| typeof schema.sessionMessages
+	| typeof schema.characters
+	| typeof schema.lorebookBindings
+	| typeof schema.narrativeRelationships
+
+/**
+ * A store whose vector is three columns of the row it describes —
+ * `embedding`, `embedding_model`, `embedding_source_hash` — rather than a row
+ * of its own, as an entry's is.
+ *
+ * `embedText` is what the row embeds, as SQL, so the text handed to the model
+ * is read in the same statement as its hash and what is hashed IS what was
+ * embedded. `embedTextHash` is that text's digest as it stands now: the row's
+ * own GENERATED `embed_text_hash` where the text is the row's alone, and the
+ * digest computed on read for relationships, whose text names other rows.
+ */
+interface ColumnStore {
+	table: ColumnStoreTable
+	embedText: SQL<string>
+	embedTextHash: SQL<string> | PgColumn
+	/**
+	 * The rows whose text is final, where a store has rows whose text is not;
+	 * absent, every row. Only such a row is embedded or counted as waiting.
+	 */
+	settled?: SQL
+	/**
+	 * The rows with any text to embed, where a store has rows with none;
+	 * absent, every row. A row with none is never embedded, nor counted as
+	 * waiting.
+	 */
+	hasText?: SQL
+}
+
+const MESSAGE_STORE: ColumnStore = {
+	table: schema.sessionMessages,
+	embedText: messageEmbedText,
+	embedTextHash: schema.sessionMessages.embedTextHash,
+	/**
+	 * A reply still generating is not embedded. Its text moves with every
+	 * chunk the stream persists, so an embed of it would be written by no
+	 * one — the freshness guard refuses a vector over text that has moved —
+	 * and the picker would take the same row again at once: a paid call per
+	 * chunk, none of them kept. The row is embedded once, when the finishing
+	 * write settles it (`settledMessage`), or by the next sweep.
+	 */
+	settled: eq(schema.sessionMessages.isGenerating, false),
+	hasText: messageHasText
+}
+const CHARACTER_STORE: ColumnStore = {
+	table: schema.characters,
+	embedText: characterEmbedText,
+	embedTextHash: schema.characters.embedTextHash
+}
+const BINDING_STORE: ColumnStore = {
+	table: schema.lorebookBindings,
+	embedText: bindingEmbedText,
+	embedTextHash: schema.lorebookBindings.embedTextHash
+}
+const RELATIONSHIP_STORE: ColumnStore = {
+	table: schema.narrativeRelationships,
+	embedText: relationshipEmbedText,
+	embedTextHash: textDigest(relationshipEmbedText)
+}
+
+/**
+ * Whether a column-store row needs a vector — judged by the **text**, never by
+ * `updated_at` (the rule entries follow, `entryNeedsEmbedding`).
+ *
+ * A row needs one when it has none, when its vector came from another model,
+ * or when the hash of the text it embeds now differs from the
+ * `embedding_source_hash` its vector was computed over. Nothing else: a
+ * folder move, an avatar, the persona flags, a soft delete, a hidden message,
+ * an alias edit, the character sync rewriting an unchanged name and a
+ * relationship's status all move `updated_at` and none of them changes the
+ * text, so none of them costs a call to a paid embedding API. A content write
+ * that pins `updated_at` is caught all the same. A row whose text is not final
+ * yet — a reply still streaming (`ColumnStore.settled`) — needs nothing until
+ * it is, and a row with no text at all (`ColumnStore.hasText`) never does.
+ *
+ * A vector with no `embedding_source_hash` is stale. Every write stores one;
+ * the backfill migration (`*_column_store_embedding_source_hash`) hashed every
+ * vector the timestamp rule called fresh, so what is left without one is
+ * exactly what that rule would have re-embedded anyway.
+ *
+ * ⚠ A vector with a NULL `embedding_model` is not picked up by the model arm:
+ * `NULL <> 'x'` is NULL, not true — the same as `entryNeedsEmbedding`.
+ */
+function columnStoreNeedsEmbedding(store: ColumnStore, currentModel: string) {
+	const t = store.table
+	return and(
+		store.settled,
+		store.hasText,
+		or(
+			isNull(t.embedding),
+			ne(t.embeddingModel, currentModel),
+			isNull(t.embeddingSourceHash),
+			sql`${t.embeddingSourceHash} <> ${store.embedTextHash}`
 		)
-	}
-	return base
+	)
 }
 
 /**
@@ -682,48 +914,104 @@ const defaultVectorJoin = and(
 )!
 
 /**
- * `needsEmbedding`, read across the join instead of down a row.
+ * The entry types whose `embedText` role names the title — `[title, content]`
+ * — as opposed to history's `[content]`. Derived from the declarations, never
+ * listed by hand (`entrySources.ts`).
+ */
+const TITLED_ENTRY_TYPE_IDS = EMBEDDABLE_ENTRY_TYPES.filter(
+	(t) => t.withTitle
+).map((t) => t.typeId)
+
+/**
+ * What the default space embeds for an entry — its type's `embedText` role —
+ * as SQL over `lorebook_entries`.
  *
- * Clause for clause the same predicate: no vector at all replaces
- * `embedding IS NULL`, the vector's model replaces the row's, and the
- * timestamp comparison is the entry's `updated_at` against the *vector's*
- * `vectorized_at`.
+ * `title ? title + "\n" + content : content` for the titled types, `content`
+ * for history, which is dated and has no title to prepend. Over the **base
+ * row**: an amendment never reaches the content vector (lorebooks ruling R1,
+ * "content vectors stay base-text"), so an amendment costs no embed either.
  *
- * ⚠ A vector with a NULL `model` is deliberately **not** picked up, which is
- * what `ne(model, current)` already did: `NULL <> 'x'` is NULL, not true. The
- * backfill carried such vectors from rows whose `embedding_model` was NULL, and
- * they were unpickable before this table existed for exactly the same reason.
+ * ⚠ **SQL and not JS, and that is the point.** The text the picker embeds is
+ * read in the same statement as the entry's `embed_text_hash`, so what is
+ * hashed IS what was embedded.
+ *
+ * ⚠ That column (`lorebook_entries.embed_text_hash`, GENERATED) spells this
+ * recipe a second time, in the schema, with the titled types frozen as of its
+ * migration — a generated column cannot read the declarations. The two are
+ * pinned equal for every embeddable type by `entryEmbedTextHash.int.test.ts`.
+ */
+export const entryEmbedText = sql<string>`(CASE WHEN ${schema.lorebookEntries.typeId} IN (${sql.join(
+	TITLED_ENTRY_TYPE_IDS.map((id) => sql`${id}`),
+	sql`, `
+)}) AND coalesce(${schema.lorebookEntries.title}, '') <> '' THEN ${schema.lorebookEntries.title} || chr(10) || ${schema.lorebookEntries.content} ELSE ${schema.lorebookEntries.content} END)`
+
+/**
+ * The entry's `source_hash` — `entryEmbedText`, hashed, as the entry row
+ * stores it (`lorebook_entries.embed_text_hash`).
+ *
+ * The same digest `entry_annotations.source_hash` uses (sha-256, first 16 hex
+ * characters; `annotations/index.ts` `contentHash`). Over the whole text rather
+ * than the `MAX_EMBED_INPUT_LENGTH` slice the model is handed: an edit past the
+ * cut re-embeds, which is still an edit to the content.
+ *
+ * ⚠ Read from the column, never computed here. The picker's `LIMIT 1` scan
+ * re-reads every up-to-date entry on each pick, and each reply's scoped count
+ * reads them too; hashing whole texts inside that predicate would make the
+ * check cost many times the comparison it is.
+ */
+const entryEmbedTextHash = schema.lorebookEntries.embedTextHash
+
+/**
+ * `columnStoreNeedsEmbedding`, read across the join instead of down a row —
+ * judged by the **text**, not by `updated_at` (plan A9).
+ *
+ * A row needs a vector when it has none, when its vector came from another
+ * model, or when the entry's `embed_text_hash` differs from the
+ * `source_hash` its vector was computed over. Nothing else: a mark, an
+ * archive, a drag reorder, a keys or `fields` edit, the siblings
+ * `iterateNext` shifts, and a graph build's `graphed` flag all move
+ * `updated_at` and none of them changes the text, so none of them costs a
+ * call to a paid embedding API. A content write that pins `updated_at` is
+ * caught all the same.
+ *
+ * A vector with no `source_hash` is stale. Every write stores one; the only
+ * vectors without one are those an install left from before content hashes,
+ * and the backfill migration (`*_entry_vector_source_hash`) hashed every one
+ * the old timestamp rule called fresh — so what is left without a hash is
+ * exactly what that rule would have re-embedded anyway.
+ *
+ * ⚠ A vector with a NULL `model` is deliberately **not** picked up by the
+ * model arm, which is what `ne(model, current)` already did: `NULL <> 'x'` is
+ * NULL, not true. The backfill carried such vectors from rows whose
+ * `embedding_model` was NULL, and they were unpickable before this table
+ * existed for exactly the same reason.
  */
 const entryNeedsEmbedding = (currentModel: string) =>
 	or(
 		isNull(schema.lorebookEntryVectors.entryId),
 		ne(schema.lorebookEntryVectors.model, currentModel),
-		and(
-			isNotNull(schema.lorebookEntryVectors.vectorizedAt),
-			gt(
-				schema.lorebookEntries.updatedAt,
-				schema.lorebookEntryVectors.vectorizedAt
-			)
-		)
+		isNull(schema.lorebookEntryVectors.sourceHash),
+		ne(schema.lorebookEntryVectors.sourceHash, entryEmbedTextHash)
 	)
 
 /**
  * `writeEmbeddingIfFresh` for an entry, whose vector is a row of its own.
  *
- * The optimistic-concurrency guard is unchanged in meaning — the entry's
- * `updated_at`, compared as text for the precision reason above — and it moves
- * into the `INSERT … SELECT`'s `WHERE`, so an entry edited while `embed()` was
- * in flight selects nothing and writes nothing.
+ * The optimistic-concurrency guard is the **text**: the write lands only while
+ * the entry still hashes to what was embedded, so an entry whose title or
+ * content moved while `embed()` was in flight selects nothing and writes
+ * nothing (and is picked again, by `entryNeedsEmbedding`). A mark or a reorder
+ * landing in that window changes no text, so the finished embed is kept.
  *
  * ⚠ The self-pinned `updatedAt` that `writeEmbeddingIfFresh`
  * needs has no counterpart here, and needs none: this statement does not touch
  * the entry row at all, so drizzle's `$onUpdate` never fires and vectorizing
- * can no longer be mistaken for an edit. That is the circular-staleness bug the
- * separate vector table exists to close.
+ * is never mistaken for an edit — the circular staleness the separate vector
+ * table exists to prevent.
  */
 export async function writeEntryVectorIfFresh(
 	id: number,
-	capturedUpdatedAtRaw: string,
+	capturedSourceHash: string,
 	currentModel: string,
 	vector: number[]
 ): Promise<void> {
@@ -734,20 +1022,22 @@ export async function writeEntryVectorIfFresh(
 	// construction (an embedding), so `{…}` needs no quoting; a non-finite one
 	// would be a broken embedding rather than a value to store.
 	const literal = `{${vector.map((n) => (Number.isFinite(n) ? n : 0)).join(",")}}`
+	// No table alias: `entryEmbedTextHash` names its columns by table.
 	await db.execute(sql`
 		INSERT INTO "lorebook_entry_vectors"
-			("entry_id", "vector_name", "chunk_index", "model", "dims", "vector", "vectorized_at")
-		SELECT e."id", ${DEFAULT_VECTOR_NAME}, 0, ${currentModel},
-		       ${vector.length}, ${literal}::real[], now()
-		FROM "lorebook_entries" e
-		WHERE e."id" = ${id} AND e."updated_at"::text = ${capturedUpdatedAtRaw}
+			("entry_id", "vector_name", "chunk_index", "model", "dims", "vector", "source_hash", "vectorized_at")
+		SELECT ${schema.lorebookEntries.id}, ${DEFAULT_VECTOR_NAME}, 0, ${currentModel},
+		       ${vector.length}, ${literal}::real[], ${capturedSourceHash}, now()
+		FROM ${schema.lorebookEntries}
+		WHERE ${schema.lorebookEntries.id} = ${id}
+		  AND ${entryEmbedTextHash} = ${capturedSourceHash}
 		ON CONFLICT ("entry_id", "vector_name", "chunk_index") DO UPDATE SET
 			"model" = EXCLUDED."model",
 			"model_version" = NULL,
 			"normalization" = NULL,
 			"dims" = EXCLUDED."dims",
 			"vector" = EXCLUDED."vector",
-			"source_hash" = NULL,
+			"source_hash" = EXCLUDED."source_hash",
 			"vectorized_at" = EXCLUDED."vectorized_at"
 	`)
 }
@@ -836,69 +1126,49 @@ async function pickGlobalNextItem(
 // ---------------------------------------------------------------------------
 
 /**
- * Optimistic-concurrency + model-freshness guarded write, shared by every
- * pick* function's process() closure below. Two races this closes:
- *  - Edit-during-embed: if the row changed after it was read (compared via
- *    updatedAtRaw, captured as text — see the precision note below), the
- *    write is silently dropped; needsEmbedding()'s existing staleness check
- *    already ensures the row gets correctly re-picked next iteration.
- *  - Backend-switch mid-flight: if the active embedding model changed while
- *    embed() was in flight, skip the write entirely — otherwise a vector
- *    computed under the new model gets mislabeled as belonging to the old
- *    one.
+ * The freshness-guarded write for a column store, shared by every column-store
+ * picker's `process()` closure and by `ensureSessionMessageEmbedded`. Two races
+ * this closes:
+ *  - **Edit during embed.** The write lands only while the row still hashes to
+ *    what was embedded (`capturedSourceHash`, read in the picker's own
+ *    statement). A row whose embedded text moved while `embed()` was in flight
+ *    writes nothing and is picked again by `columnStoreNeedsEmbedding`; a write
+ *    that moved no embedded text (a folder move, a hidden message) keeps the
+ *    finished embed. For a relationship the guard is its names too, so a
+ *    member renamed mid-flight drops the vector of the old name.
+ *  - **Backend switch mid-flight.** When the active embedding model changed
+ *    while `embed()` was in flight, nothing is written — otherwise a vector
+ *    computed under one model is labelled as another's.
  *
- * updatedAt is compared as text, not as a JS Date, on purpose: these
- * timestamp columns have no explicit precision, so Postgres stores them at
- * microsecond resolution, but Drizzle's default "date" mode reads them back
- * as a millisecond-precision JS Date — round-tripping the captured value
- * through that would silently truncate it, so a row that was inserted via
- * defaultNow() and never since edited would never match on comparison,
- * permanently blocking its embedding from persisting.
+ * `updated_at` is pinned to itself: every one of these tables declares
+ * `updatedAt: ...$onUpdate(() => new Date())`, which drizzle applies to any
+ * update on the row unless the statement sets the column itself. Computing an
+ * embedding is not a modification of the content, and `updated_at` is read as
+ * a content timestamp elsewhere (the recency signals in
+ * `pipelines/ranking/weights.ts` among them).
  */
 export async function writeEmbeddingIfFresh(
-	table: any,
-	idCol: any,
-	updatedAtCol: any,
+	store: ColumnStore,
 	id: number,
-	capturedUpdatedAtRaw: string,
+	capturedSourceHash: string,
 	currentModel: string,
 	vector: number[]
 ): Promise<void> {
 	if (getLoadedModelId() !== currentModel) return
+	const t = store.table
 	await db
-		.update(table)
+		.update(t)
 		.set({
 			embedding: vector,
 			embeddingModel: currentModel,
+			embeddingSourceHash: capturedSourceHash,
 			vectorizedAt: new Date(),
-			/**
-			 * Pinned to itself so this write does not count as an edit.
-			 *
-			 * Every one of these tables declares
-			 * `updatedAt: ...$onUpdate(() => new Date())`, which drizzle applies
-			 * to *any* update on the row — including this one. That made
-			 * vectorizing bump `updatedAt`, and the bump is a second, separate
-			 * `new Date()` from the `vectorizedAt` above: whenever the two
-			 * straddle a millisecond boundary the row lands with
-			 * `updated_at > vectorized_at`, which is exactly `needsEmbedding`'s
-			 * "content changed since we vectorized" condition. The queue then
-			 * picks the row straight back up and embeds it again — measured at
-			 * roughly 1% of writes, and on a paid embedding API that is a silent
-			 * double charge on one row in a hundred.
-			 *
-			 * Self-assignment keeps the stored value exactly, and an explicit
-			 * value in `.set()` is what stops drizzle substituting `$onUpdate`'s.
-			 * Semantically it is also the correct answer on its own: computing an
-			 * embedding is not a modification of the content, and `updatedAt` is
-			 * read as a content timestamp elsewhere (the recency signals in
-			 * `pipelines/ranking/weights.ts` among them).
-			 */
-			updatedAt: sql`${updatedAtCol}`
+			updatedAt: sql`${t.updatedAt}`
 		})
 		.where(
 			and(
-				eq(idCol, id),
-				sql`${updatedAtCol}::text = ${capturedUpdatedAtRaw}`
+				eq(t.id, id),
+				sql`${store.embedTextHash} = ${capturedSourceHash}`
 			)
 		)
 }
@@ -908,24 +1178,17 @@ async function pickSessionMessage(
 	sessionId?: number,
 	onlyId?: number
 ): Promise<QueueItem | null> {
-	const staleness = needsEmbedding(
-		schema.sessionMessages.embedding,
-		schema.sessionMessages.embeddingModel,
-		currentModel,
-		schema.sessionMessages.updatedAt,
-		schema.sessionMessages.vectorizedAt
-	)
 	const where = and(
 		sessionId ? eq(schema.sessionMessages.sessionId, sessionId) : undefined,
 		onlyId ? eq(schema.sessionMessages.id, onlyId) : undefined,
-		staleness
+		columnStoreNeedsEmbedding(MESSAGE_STORE, currentModel)
 	)
 
 	const rows = await db
 		.select({
 			id: schema.sessionMessages.id,
-			content: schema.sessionMessages.content,
-			updatedAtRaw: sql<string>`${schema.sessionMessages.updatedAt}::text`
+			text: MESSAGE_STORE.embedText,
+			sourceHash: sql<string>`${MESSAGE_STORE.embedTextHash}`
 		})
 		.from(schema.sessionMessages)
 		.where(where)
@@ -936,20 +1199,18 @@ async function pickSessionMessage(
 		.limit(1)
 
 	if (!rows.length) return null
-	const { id, content, updatedAtRaw } = rows[0]
+	const { id, text, sourceHash } = rows[0]
 	return queueItem({
 		type: "message",
 		label: `Session message #${id}`,
 		id,
 		currentModel,
 		process: async () => {
-			const vector = await embed(truncateForEmbedding(content))
+			const vector = await embed(truncateForEmbedding(text))
 			await writeEmbeddingIfFresh(
-				schema.sessionMessages,
-				schema.sessionMessages.id,
-				schema.sessionMessages.updatedAt,
+				MESSAGE_STORE,
 				id,
-				updatedAtRaw,
+				sourceHash,
 				currentModel,
 				vector
 			)
@@ -1026,8 +1287,8 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
  * can find it as a candidate instead of only the background queue
  * eventually getting to it.
  *
- * Reuses the exact staleness predicate (needsEmbedding) and safe write
- * (writeEmbeddingIfFresh) the background queue itself uses for this row, so
+ * Reuses the exact staleness predicate (`columnStoreNeedsEmbedding`) and safe
+ * write (`writeEmbeddingIfFresh`) the background queue itself uses for this row, so
  * this is safe to call even while the queue is concurrently running: if the
  * queue's pickSessionMessage() happens to grab the same row at nearly the same
  * time, both compute the same vector for the same content and both writes
@@ -1049,31 +1310,28 @@ export async function ensureSessionMessageEmbedded(
 	// own model-freshness guard is a second, independent backstop regardless.
 	const currentModel = getLoadedModelId()!
 
-	const staleness = needsEmbedding(
-		schema.sessionMessages.embedding,
-		schema.sessionMessages.embeddingModel,
-		currentModel,
-		schema.sessionMessages.updatedAt,
-		schema.sessionMessages.vectorizedAt
-	)
-
 	const rows = await db
 		.select({
 			id: schema.sessionMessages.id,
-			content: schema.sessionMessages.content,
-			updatedAtRaw: sql<string>`${schema.sessionMessages.updatedAt}::text`
+			text: MESSAGE_STORE.embedText,
+			sourceHash: sql<string>`${MESSAGE_STORE.embedTextHash}`
 		})
 		.from(schema.sessionMessages)
-		.where(and(eq(schema.sessionMessages.id, messageId), staleness))
+		.where(
+			and(
+				eq(schema.sessionMessages.id, messageId),
+				columnStoreNeedsEmbedding(MESSAGE_STORE, currentModel)
+			)
+		)
 		.limit(1)
 
 	if (!rows.length) return // already fresh (or row gone) — nothing to do
-	const { id, content, updatedAtRaw } = rows[0]
+	const { id, text, sourceHash } = rows[0]
 
 	let vector: number[]
 	try {
 		vector = await withTimeout(
-			embed(truncateForEmbedding(content)),
+			embed(truncateForEmbedding(text)),
 			INLINE_EMBED_TIMEOUT_MS
 		)
 	} catch (err) {
@@ -1084,11 +1342,9 @@ export async function ensureSessionMessageEmbedded(
 	}
 
 	await writeEmbeddingIfFresh(
-		schema.sessionMessages,
-		schema.sessionMessages.id,
-		schema.sessionMessages.updatedAt,
+		MESSAGE_STORE,
 		id,
-		updatedAtRaw,
+		sourceHash,
 		currentModel,
 		vector
 	)
@@ -1127,10 +1383,13 @@ async function pickEntry(
 		.select({
 			id: schema.lorebookEntries.id,
 			typeId: schema.lorebookEntries.typeId,
-			content: schema.lorebookEntries.content,
 			title: schema.lorebookEntries.title,
 			lorebookId: schema.lorebookEntries.lorebookId,
-			updatedAtRaw: sql<string>`${schema.lorebookEntries.updatedAt}::text`
+			// The text and its hash from the one SQL recipe the staleness
+			// predicate and the write guard read, so what is embedded is what
+			// is hashed.
+			text: entryEmbedText,
+			sourceHash: entryEmbedTextHash
 		})
 		.from(schema.lorebookEntries)
 		.leftJoin(schema.lorebookEntryVectors, defaultVectorJoin)
@@ -1141,16 +1400,12 @@ async function pickEntry(
 	const {
 		id,
 		typeId,
-		content,
 		title,
 		lorebookId: rowLorebookId,
-		updatedAtRaw
+		text,
+		sourceHash
 	} = rows[0]
 	const kind = embeddableEntryType(typeId)
-	// `title ? title + "\n" + content : content` — the type's `embedText` role
-	// spelled out: `[title, content]` for the named shapes, `[content]` for
-	// history, which has no title to prepend.
-	const text = kind?.withTitle && title ? `${title}\n${content}` : content
 	const noun = kind?.noun ?? typeId
 	return queueItem({
 		type: labelType,
@@ -1162,7 +1417,7 @@ async function pickEntry(
 			const vector = await embed(truncateForEmbedding(text))
 			await writeEntryVectorIfFresh(
 				id,
-				updatedAtRaw,
+				sourceHash,
 				currentModel,
 				vector
 			)
@@ -1194,42 +1449,28 @@ async function pickNarrativeNode(
 	lorebookId?: number,
 	onlyId?: number
 ): Promise<QueueItem | null> {
-	const staleness = needsEmbedding(
-		schema.lorebookBindings.embedding,
-		schema.lorebookBindings.embeddingModel,
-		currentModel,
-		schema.lorebookBindings.updatedAt,
-		schema.lorebookBindings.vectorizedAt
-	)
 	const where = and(
 		lorebookId
 			? eq(schema.lorebookBindings.lorebookId, lorebookId)
 			: undefined,
 		onlyId ? eq(schema.lorebookBindings.id, onlyId) : undefined,
-		staleness
+		columnStoreNeedsEmbedding(BINDING_STORE, currentModel)
 	)
 
 	const rows = await db
 		.select({
 			id: schema.lorebookBindings.id,
 			name: schema.lorebookBindings.name,
-			summary: schema.lorebookBindings.summary,
 			lorebookId: schema.lorebookBindings.lorebookId,
-			updatedAtRaw: sql<string>`${schema.lorebookBindings.updatedAt}::text`
+			text: BINDING_STORE.embedText,
+			sourceHash: sql<string>`${BINDING_STORE.embedTextHash}`
 		})
 		.from(schema.lorebookBindings)
 		.where(where)
 		.limit(1)
 
 	if (!rows.length) return null
-	const {
-		id,
-		name,
-		summary,
-		lorebookId: rowLorebookId,
-		updatedAtRaw
-	} = rows[0]
-	const text = summary ? `${name}\n${summary}` : name
+	const { id, name, lorebookId: rowLorebookId, text, sourceHash } = rows[0]
 	return queueItem({
 		type: "narrativeNode",
 		label: `Narrative node: ${name}`,
@@ -1239,11 +1480,9 @@ async function pickNarrativeNode(
 		process: async () => {
 			const vector = await embed(truncateForEmbedding(text))
 			await writeEmbeddingIfFresh(
-				schema.lorebookBindings,
-				schema.lorebookBindings.id,
-				schema.lorebookBindings.updatedAt,
+				BINDING_STORE,
 				id,
-				updatedAtRaw,
+				sourceHash,
 				currentModel,
 				vector
 			)
@@ -1256,73 +1495,42 @@ async function pickNarrativeRelationship(
 	lorebookId?: number,
 	onlyId?: number
 ): Promise<QueueItem | null> {
-	const staleness = needsEmbedding(
-		schema.narrativeRelationships.embedding,
-		schema.narrativeRelationships.embeddingModel,
-		currentModel,
-		schema.narrativeRelationships.updatedAt,
-		schema.narrativeRelationships.vectorizedAt
-	)
 	const where = and(
 		lorebookId
 			? eq(schema.narrativeRelationships.lorebookId, lorebookId)
 			: undefined,
 		onlyId ? eq(schema.narrativeRelationships.id, onlyId) : undefined,
-		// Cast edges only: the text embedded here is two binding names either
+		// Cast edges only: the text embedded here is two member names either
 		// side of a type, which an edge with an entry end has no second name
 		// for. Entry edges reach retrieval through the link hop instead.
 		castEdgeOnly,
-		staleness
+		columnStoreNeedsEmbedding(RELATIONSHIP_STORE, currentModel)
 	)
 
 	const rows = await db
 		.select({
 			id: schema.narrativeRelationships.id,
-			fromNodeId: schema.narrativeRelationships.fromNodeId,
-			toNodeId: schema.narrativeRelationships.toNodeId,
-			relationshipType: schema.narrativeRelationships.relationshipType,
-			description: schema.narrativeRelationships.description,
-			reason: schema.narrativeRelationships.reason,
+			fromName: relationshipEndName(
+				schema.narrativeRelationships.fromNodeId
+			),
+			toName: relationshipEndName(schema.narrativeRelationships.toNodeId),
 			lorebookId: schema.narrativeRelationships.lorebookId,
-			updatedAtRaw: sql<string>`${schema.narrativeRelationships.updatedAt}::text`
+			text: RELATIONSHIP_STORE.embedText,
+			sourceHash: sql<string>`${RELATIONSHIP_STORE.embedTextHash}`
 		})
 		.from(schema.narrativeRelationships)
 		.where(where)
 		.limit(1)
 
 	if (!rows.length) return null
-	// `castEdgeOnly` above already excluded the entry-endpoint rows; this is the
-	// same rule at the type level, so the two ids below are ids.
-	if (!isCastEdge(rows[0])) return null
 	const {
 		id,
-		fromNodeId,
-		toNodeId,
-		relationshipType,
-		description,
-		reason,
+		fromName,
+		toName,
 		lorebookId: rowLorebookId,
-		updatedAtRaw
+		text,
+		sourceHash
 	} = rows[0]
-
-	// Fetch node names for richer embedding text
-	const [fromNode, toNode] = await Promise.all([
-		db.query.lorebookBindings.findFirst({
-			where: eq(schema.lorebookBindings.id, fromNodeId),
-			columns: { name: true }
-		}),
-		db.query.lorebookBindings.findFirst({
-			where: eq(schema.lorebookBindings.id, toNodeId),
-			columns: { name: true }
-		})
-	])
-
-	const fromName = fromNode?.name ?? String(fromNodeId)
-	const toName = toNode?.name ?? String(toNodeId)
-	let text = `${fromName} ${relationshipType} ${toName}`
-	if (description) text += `: ${description}`
-	if (reason) text += `. ${reason}`
-
 	return queueItem({
 		type: "narrativeRelationship",
 		label: `Narrative relationship: ${fromName} → ${toName}`,
@@ -1332,11 +1540,9 @@ async function pickNarrativeRelationship(
 		process: async () => {
 			const vector = await embed(truncateForEmbedding(text))
 			await writeEmbeddingIfFresh(
-				schema.narrativeRelationships,
-				schema.narrativeRelationships.id,
-				schema.narrativeRelationships.updatedAt,
+				RELATIONSHIP_STORE,
 				id,
-				updatedAtRaw,
+				sourceHash,
 				currentModel,
 				vector
 			)
@@ -1351,35 +1557,27 @@ async function pickCharacter(
 ): Promise<QueueItem | null> {
 	if (characterIds !== undefined && characterIds.length === 0) return null
 
-	const staleness = needsEmbedding(
-		schema.characters.embedding,
-		schema.characters.embeddingModel,
-		currentModel,
-		schema.characters.updatedAt,
-		schema.characters.vectorizedAt
-	)
 	const where = and(
 		characterIds && characterIds.length > 0
 			? inArray(schema.characters.id, characterIds)
 			: undefined,
 		onlyId ? eq(schema.characters.id, onlyId) : undefined,
-		staleness
+		columnStoreNeedsEmbedding(CHARACTER_STORE, currentModel)
 	)
 
 	const rows = await db
 		.select({
 			id: schema.characters.id,
 			name: schema.characters.name,
-			description: schema.characters.description,
-			updatedAtRaw: sql<string>`${schema.characters.updatedAt}::text`
+			text: CHARACTER_STORE.embedText,
+			sourceHash: sql<string>`${CHARACTER_STORE.embedTextHash}`
 		})
 		.from(schema.characters)
 		.where(where)
 		.limit(1)
 
 	if (!rows.length) return null
-	const { id, name, description, updatedAtRaw } = rows[0]
-	const text = `${name}\n${description}`
+	const { id, name, text, sourceHash } = rows[0]
 	return queueItem({
 		type: "character",
 		label: `Character: ${name}`,
@@ -1388,11 +1586,9 @@ async function pickCharacter(
 		process: async () => {
 			const vector = await embed(truncateForEmbedding(text))
 			await writeEmbeddingIfFresh(
-				schema.characters,
-				schema.characters.id,
-				schema.characters.updatedAt,
+				CHARACTER_STORE,
 				id,
-				updatedAtRaw,
+				sourceHash,
 				currentModel,
 				vector
 			)
@@ -1405,48 +1601,31 @@ async function pickCharacter(
 // ---------------------------------------------------------------------------
 
 /**
- * Count how many items still need embedding (null or wrong model) across all tables.
- * Pass the current model ID to also count stale rows from previous models.
+ * Count how many items still need embedding, across every store.
+ *
+ * With the current model's id, what the queue would pick: no vector, another
+ * model's, or a text that moved since (`columnStoreNeedsEmbedding`,
+ * `entryNeedsEmbedding`). Without one, only the rows with no vector at all.
+ * Relationships count their cast edges only — the edges the picker embeds.
  */
 export async function countUnembedded(currentModel?: string): Promise<number> {
-	const condition = (embeddingCol: any, modelCol: any) =>
+	const condition = (store: ColumnStore) =>
 		currentModel
-			? needsEmbedding(embeddingCol, modelCol, currentModel)
-			: isNull(embeddingCol)
+			? columnStoreNeedsEmbedding(store, currentModel)
+			: and(store.settled, store.hasText, isNull(store.table.embedding))
 
 	const counts = await Promise.all([
-		db.$count(
-			schema.sessionMessages,
-			condition(
-				schema.sessionMessages.embedding,
-				schema.sessionMessages.embeddingModel
-			)
-		),
+		db.$count(schema.sessionMessages, condition(MESSAGE_STORE)),
 		// One count for all three entry types, because they are one table. The
 		// no-current-model arm is `isNull(embedding)`'s equivalent: an entry
 		// with no default-space vector at all.
 		countUnembeddedEntries(currentModel),
-		db.$count(
-			schema.lorebookBindings,
-			condition(
-				schema.lorebookBindings.embedding,
-				schema.lorebookBindings.embeddingModel
-			)
-		),
+		db.$count(schema.lorebookBindings, condition(BINDING_STORE)),
 		db.$count(
 			schema.narrativeRelationships,
-			condition(
-				schema.narrativeRelationships.embedding,
-				schema.narrativeRelationships.embeddingModel
-			)
+			and(castEdgeOnly, condition(RELATIONSHIP_STORE))
 		),
-		db.$count(
-			schema.characters,
-			condition(
-				schema.characters.embedding,
-				schema.characters.embeddingModel
-			)
-		)
+		db.$count(schema.characters, condition(CHARACTER_STORE))
 	])
 	return counts.reduce((sum, n) => sum + Number(n), 0)
 }
@@ -1485,9 +1664,9 @@ export const PROMOTION_SCAN_CAP = 60
  * **The same scope and the same staleness identities the arm itself uses** —
  * `fetchScopedCandidates`'s filters (in-scope lorebooks, `enabled`, the
  * session's own channel, the recent window excluded) crossed with this file's
- * `needsEmbedding` / `entryNeedsEmbedding`. That is what makes the answer
+ * `columnStoreNeedsEmbedding` / `entryNeedsEmbedding`. That is what makes the answer
  * *"missing from what this query will look at"* rather than *"unembedded
- * somewhere"*: `sourceHash`-equivalent staleness distinguishes a stale vector
+ * somewhere"*: hash staleness distinguishes a stale vector
  * from an absent one, and both are equally invisible to a search keyed on the
  * loaded model.
  *
@@ -1503,6 +1682,11 @@ export async function scopedMissingVectors(
 	currentModel: string,
 	opts: {
 		limit?: number
+		/**
+		 * The index sources the search will fetch — `fetchScopedCandidates`'
+		 * own `sources`, in the index's vocabulary. Absent is every source.
+		 */
+		sources?: readonly string[]
 		excludeRecentMessages?: number
 		channel?: string
 	} = {}
@@ -1511,6 +1695,8 @@ export async function scopedMissingVectors(
 	if (limit === 0) return []
 	const refs: LaneItemRef[] = []
 	const room = () => limit - refs.length
+	const searched = (source: string) =>
+		!opts.sources || opts.sources.includes(source)
 
 	const push = (source: string, rows: Array<{ id: number }>) => {
 		for (const row of rows) refs.push({ source, id: row.id })
@@ -1533,6 +1719,7 @@ export async function scopedMissingVectors(
 		for (const source of ENTRY_INDEX_SOURCES) {
 			const typeIds = entryTypesOfSource(source)
 			if (room() <= 0) break
+			if (!searched(source)) continue
 			push(
 				source,
 				await db
@@ -1555,7 +1742,7 @@ export async function scopedMissingVectors(
 			)
 		}
 
-		if (room() > 0)
+		if (room() > 0 && searched("narrativeNode"))
 			push(
 				"narrativeNode",
 				await db
@@ -1567,20 +1754,14 @@ export async function scopedMissingVectors(
 								schema.lorebookBindings.lorebookId,
 								lorebookIds
 							),
-							needsEmbedding(
-								schema.lorebookBindings.embedding,
-								schema.lorebookBindings.embeddingModel,
-								currentModel,
-								schema.lorebookBindings.updatedAt,
-								schema.lorebookBindings.vectorizedAt
-							)
+							columnStoreNeedsEmbedding(BINDING_STORE, currentModel)
 						)
 					)
 					.orderBy(desc(schema.lorebookBindings.id))
 					.limit(room())
 			)
 
-		if (room() > 0)
+		if (room() > 0 && searched("narrativeRelationship"))
 			push(
 				"narrativeRelationship",
 				await db
@@ -1592,12 +1773,13 @@ export async function scopedMissingVectors(
 								schema.narrativeRelationships.lorebookId,
 								lorebookIds
 							),
-							needsEmbedding(
-								schema.narrativeRelationships.embedding,
-								schema.narrativeRelationships.embeddingModel,
-								currentModel,
-								schema.narrativeRelationships.updatedAt,
-								schema.narrativeRelationships.vectorizedAt
+							// The picker embeds cast edges only; naming an
+							// entry edge would spend a promotion slot on a row
+							// it answers null for.
+							castEdgeOnly,
+							columnStoreNeedsEmbedding(
+								RELATIONSHIP_STORE,
+								currentModel
 							)
 						)
 					)
@@ -1606,7 +1788,7 @@ export async function scopedMissingVectors(
 			)
 	}
 
-	if (room() > 0 && characterIds.length > 0)
+	if (room() > 0 && characterIds.length > 0 && searched("character"))
 		push(
 			"character",
 			await db
@@ -1615,13 +1797,7 @@ export async function scopedMissingVectors(
 				.where(
 					and(
 						inArray(schema.characters.id, characterIds),
-						needsEmbedding(
-							schema.characters.embedding,
-							schema.characters.embeddingModel,
-							currentModel,
-							schema.characters.updatedAt,
-							schema.characters.vectorizedAt
-						)
+						columnStoreNeedsEmbedding(CHARACTER_STORE, currentModel)
 					)
 				)
 				.limit(room())
@@ -1630,7 +1806,7 @@ export async function scopedMissingVectors(
 	// The voiced characters, under the SAME source as the cast: one table, one
 	// picker, one item kind. A row in both lists is pushed twice and picked
 	// once — the second pick fails the staleness filter and answers null.
-	if (room() > 0 && personaIds.length > 0)
+	if (room() > 0 && personaIds.length > 0 && searched("persona"))
 		push(
 			"character",
 			await db
@@ -1639,24 +1815,19 @@ export async function scopedMissingVectors(
 				.where(
 					and(
 						inArray(schema.characters.id, personaIds),
-						needsEmbedding(
-							schema.characters.embedding,
-							schema.characters.embeddingModel,
-							currentModel,
-							schema.characters.updatedAt,
-							schema.characters.vectorizedAt
-						)
+						columnStoreNeedsEmbedding(CHARACTER_STORE, currentModel)
 					)
 				)
 				.limit(room())
 		)
 
-	if (room() > 0 && sessionId !== undefined) {
+	if (room() > 0 && sessionId !== undefined && searched("message")) {
 		const messageChannel = channelWhere(
 			schema.sessionMessages.channel,
 			opts.channel
 		)
-		const excludeRecent = opts.excludeRecentMessages ?? 10
+		const excludeRecent =
+			opts.excludeRecentMessages ?? RECENT_MESSAGES_IN_PROMPT
 		let floorId = 0
 		if (excludeRecent > 0) {
 			// The recent window is already in the prompt verbatim, so a vector
@@ -1688,13 +1859,7 @@ export async function scopedMissingVectors(
 						floorId > 0
 							? sql`${schema.sessionMessages.id} < ${floorId}`
 							: undefined,
-						needsEmbedding(
-							schema.sessionMessages.embedding,
-							schema.sessionMessages.embeddingModel,
-							currentModel,
-							schema.sessionMessages.updatedAt,
-							schema.sessionMessages.vectorizedAt
-						)
+						columnStoreNeedsEmbedding(MESSAGE_STORE, currentModel)
 					)
 				)
 				.orderBy(desc(schema.sessionMessages.id))
@@ -1721,6 +1886,8 @@ export async function promoteScopedVectors(
 		scanLimit?: number
 		maxItems?: number
 		timeoutMs?: number
+		/** The sources the search will fetch; see `scopedMissingVectors`. */
+		sources?: readonly string[]
 		excludeRecentMessages?: number
 		channel?: string
 	} = {}
@@ -1729,6 +1896,7 @@ export async function promoteScopedVectors(
 	try {
 		refs = await scopedMissingVectors(context, currentModel, {
 			limit: opts.scanLimit,
+			sources: opts.sources,
 			excludeRecentMessages: opts.excludeRecentMessages,
 			channel: opts.channel
 		})

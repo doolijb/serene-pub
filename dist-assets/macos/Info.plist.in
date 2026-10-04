@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  TEMPLATE: scripts/create-executables.js renders this into
+  dist/generated/<target>/Info.plist, and scripts/bundle-dist.js places it at
+  "Serene Pub.app/Contents/Info.plist". Edit this file, never the rendered copy.
+
+  CFBundleExecutable is the Go launcher (launcher/, built by launcher/build.mjs).
+  LSUIElement keeps it out of the Dock: the launcher lives in the menu bar and
+  the window helper (Contents/Resources/app/serene-pub-window) is a separate
+  process. CFBundleVersion and CFBundleShortVersionString must be dotted
+  integers, so they carry the base version; the full version, suffix included,
+  is SerenePubVersion.
+-->
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleDisplayName</key>
+	<string>Serene Pub</string>
+	<key>CFBundleExecutable</key>
+	<string>@BUNDLE_EXECUTABLE@</string>
+	<key>CFBundleIconFile</key>
+	<string>@ICON_FILE@</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.doolijb.serene-pub</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>Serene Pub</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>@BASE_VERSION@</string>
+	<key>CFBundleVersion</key>
+	<string>@BASE_VERSION@</string>
+	<key>SerenePubVersion</key>
+	<string>@VERSION@</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>13.5</string>
+	<key>LSUIElement</key>
+	<true/>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+</dict>
+</plist>

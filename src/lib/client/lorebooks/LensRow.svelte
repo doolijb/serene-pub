@@ -1,10 +1,11 @@
 <script lang="ts">
-	import * as Icons from "@lucide/svelte"
-	import { LENS_LABELS, LORE_LENSES, type LoreLens } from "$lib/shared/lorebooks/loreRoute"
-	import { lensReason } from "./graphs"
+	import type { LoreLens } from "$lib/shared/lorebooks/loreRoute"
+	import { LORE_LENS_REGISTRY, shortcutLabel } from "./lenses/registry"
 
 	/**
-	 * How the set is drawn — the second of the workspace's three controls.
+	 * How the set is drawn — the second of the workspace's three controls,
+	 * drawn from the lens registry (`lenses/registry.ts`): a lens declared
+	 * there is a button here, with its label, icon and shortcut.
 	 *
 	 * Every lens stands in every book and for every scope, because any scope
 	 * can be drawn through any lens. A lens with nothing to draw shows its own
@@ -19,15 +20,10 @@
 
 	let { lens, compact = false, onLens }: Props = $props()
 
-	const ICONS: Record<LoreLens, any> = {
-		list: Icons.List,
-		cards: Icons.LayoutGrid,
-		tree: Icons.ListTree,
-		graph: Icons.Network,
-		time: Icons.History,
-		lives: Icons.Footprints,
-		places: Icons.Map
-	}
+	/** Wrong answers cost a wrong glyph in a hint, never behaviour. */
+	const mac =
+		typeof navigator !== "undefined" &&
+		/mac|iphone|ipad|ipod/i.test(navigator.platform || "")
 </script>
 
 <!-- A FIXED grid in the rail — 4x2 since Lives joined, seven filled and one
@@ -41,28 +37,29 @@
 	aria-label="Lens"
 	data-lore-lens-row
 >
-	{#each LORE_LENSES as id (id)}
-		{@const Icon = ICONS[id]}
-		{@const reason = lensReason(id)}
+	{#each LORE_LENS_REGISTRY as d (d.id)}
+		{@const Icon = d.icon}
+		{@const reason = d.reason?.() ?? null}
 		<button
 			type="button"
-			class="btn btn-sm min-w-0 {lens === id
+			class="btn btn-sm min-w-0 {lens === d.id
 				? 'preset-tonal-primary'
 				: 'preset-tonal-surface'} {compact
 				? 'gap-1'
 				: 'h-auto flex-col gap-0.5 px-1 py-1.5'}"
 			disabled={!!reason}
-			title={reason ?? LENS_LABELS[id]}
-			aria-pressed={lens === id}
-			data-lore-lens={id}
-			onclick={() => onLens(id)}
+			title={reason ?? `${d.label} (${shortcutLabel(d.shortcut, mac)})`}
+			aria-pressed={lens === d.id}
+			aria-keyshortcuts={d.shortcut}
+			data-lore-lens={d.id}
+			onclick={() => onLens(d.id)}
 		>
 			<Icon size={14} aria-hidden="true" />
 			{#if compact}
-				<span class="sr-only">{LENS_LABELS[id]}</span>
+				<span class="sr-only">{d.label}</span>
 			{:else}
 				<span class="w-full truncate text-[11px] leading-tight">
-					{LENS_LABELS[id]}
+					{d.label}
 				</span>
 			{/if}
 		</button>

@@ -32,6 +32,20 @@ import {
 	LLM_IDLE_TIMEOUT_MS,
 	LLM_NONSTREAMING_TIMEOUT_MS
 } from "./idleTimeout"
+import { modelServerFetch } from "./modelServerFetch"
+
+/**
+ * The connection's KoboldCPP request switches (`extraJson` key) and the request
+ * field koboldcpp.py's `generate()` reads for each. Logprobs is not here: the
+ * response's logprobs would have nowhere to go.
+ */
+const KOBOLDCPP_REQUEST_SWITCHES = [
+	["trimStop", "trim_stop"],
+	["renderSpecial", "render_special"],
+	["bypassEos", "bypass_eos"],
+	["grammarRetainState", "grammar_retain_state"],
+	["replaceInstructPlaceholders", "replace_instruct_placeholders"]
+] as const
 
 // Plain/"dumb" KoboldCPP connection: the user runs and configures their own
 // koboldcpp instance entirely themselves. No admin API is assumed, so there's
@@ -48,6 +62,19 @@ function completionTokensFrom(usage: unknown): { tokensCompletion?: number } {
 }
 
 export class KoboldCppAdapter extends BaseConnectionAdapter {
+	/**
+	 * 🚧 Yes, on the chat wire (PLAN-composer-attachments §3.6): images ride each turn of
+	 * `/v1/chat/completions` as OpenAI `image_url` parts; the model needs its
+	 * vision projector (mmproj) loaded. KCPP-managed inherits this.
+	 * A fact about the CODE, not a capability claim — see the base class.
+	 * Constant, because the conformance pin reads it off the prototype; a
+	 * completion-wire request with files is refused in `dispatch.ts` from the
+	 * manifest's `sendsAttachments.completion`.
+	 */
+	override get consumesAttachments(): boolean {
+		return true
+	}
+
 	private _tokenCounter?: TokenCounters
 	private abortController?: AbortController
 	// KoboldCPP does not treat a dropped client connection as a cancel signal —
@@ -61,16 +88,14 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 	constructor({
 		connection,
 		sampling,
-		contextConfig,
-		promptConfig,
+		systemPrompt,
 		session,
 		currentCharacterId,
 		generatingMessageMetadata
 	}: {
 		connection: SelectConnection
 		sampling: ResolvedSampling
-		contextConfig: SelectContextConfig
-		promptConfig: SelectPromptConfig
+		systemPrompt?: string
 		session: BasePromptSession
 		currentCharacterId: number | null
 		generatingMessageMetadata?: any
@@ -78,8 +103,7 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 		super({
 			connection,
 			sampling,
-			contextConfig,
-			promptConfig,
+			systemPrompt,
 			session,
 			currentCharacterId,
 			tokenCounter: new TokenCounters(
@@ -222,6 +246,17 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 		// null = Auto (omit from request), true/false = explicit override
 		const enableThinking: boolean | null =
 			this.enableThinkingFor(useChat)
+		/**
+		 * The template was asked to reason, and koboldcpp hands its text back
+		 * INLINE on the content channel whenever its own think-tag scan does
+		 * not lift it (`encapsulate_thinking` only sees a block the model
+		 * opened). Qwen3's Thinking models and Qwen 3.5 open the block in the
+		 * template itself, so the model writes `reasoning…</think>reply` with
+		 * no opener — and until the close lands the buffer alone cannot say the
+		 * first token was reasoning. This is the fact that lets the live split
+		 * route it from that first token (`splitReasoningStream`).
+		 */
+		this.reasoningRequestedInline = useChat && enableThinking === true
 
 		// The stop sequences this request will send — composed by
 		// `connections/stops.ts` and handed over at construction, never built
@@ -252,6 +287,16 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 							: JSON_OBJECT_GBNF
 					}
 				: {}
+
+		// The connection form's request switches. KoboldCPP's `generate()` reads
+		// each from the request on every endpoint, the OpenAI-compatible one
+		// included, so both bodies carry them. A switch never set is left out
+		// and KoboldCPP's own default applies.
+		const extra = this.connection.extraJson ?? {}
+		const switchParams: Record<string, boolean> = {}
+		for (const [key, field] of KOBOLDCPP_REQUEST_SWITCHES) {
+			if (typeof extra[key] === "boolean") switchParams[field] = extra[key]
+		}
 
 		// Prepare the request body according to KoboldCPP API
 		let requestBody: Record<string, any>
@@ -315,15 +360,23 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 							}
 						}
 					: {}),
+				...switchParams,
 				...formatParams
 			}
+			// 🚧 The files, each on its own turn (PLAN-composer-attachments
+			// §3.6), measured against the body as it stands without them.
+			if (this.carriesAttachments)
+				requestBody.messages = await this.openAIChatMessagesWithFiles(
+					requestBody.messages,
+					requestBody
+				)
 		} else {
 			// Use text completion format. enable_thinking is deliberately
 			// omitted here — it's a session-template (Jinja) variable, only
 			// meaningful to the OpenAI-chat-completions code path a model's
 			// template can reference; the raw completion endpoints don't run
 			// the session-template pipeline at all, so including it here was a
-			// silent no-op regardless of the Thinking/Reasoning setting.
+			// silent no-op regardless of the reasoning setting.
 			requestBody = {
 				// `promptTextFor`, not `compiledPrompt.prompt`: a payload built
 				// for a chat endpoint carries `messages` and no prompt string,
@@ -337,6 +390,7 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 				stop_sequence,
 				genkey: this.genKey,
 				...samplingParams,
+				...switchParams,
 				...formatParams
 			}
 
@@ -351,7 +405,7 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 			return {
 				completionResult: async (
 					contentCb: (chunk: string) => void,
-					thinkingCb?: (chunk: string) => void
+					reasoningCb?: (chunk: string) => void
 				) => {
 					const abortController = new AbortController()
 					this.abortController = abortController
@@ -360,6 +414,11 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 					const idle = createIdleWatchdog(LLM_IDLE_TIMEOUT_MS, () => {
 						idleTimedOut = true
 						abortController.abort()
+						// Dropping the connection does not stop KoboldCPP: a
+						// stalled generation would hold its slot and queue the
+						// next request behind it, exactly as an abandoned one
+						// would (see `abort`).
+						this.tellKoboldToStop()
 					})
 
 					try {
@@ -375,7 +434,10 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 							body: requestBody
 						})
 
-						const response = await fetch(endpoint, {
+						// `modelServerFetch`: undici's own five-minute body
+						// timeout would otherwise end a long prompt-processing
+						// silence before the idle watchdog above could judge it.
+						const response = await modelServerFetch(endpoint, {
 							method: "POST",
 							headers: {
 								"Content-Type": "application/json"
@@ -454,14 +516,23 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 										// true, never overridden by this app).
 										// Only actually appears when the loaded
 										// model emits thinking output at all.
-										if (
+										//
+										// Both OpenAI-compatible spellings, first
+										// match wins (see `reasoningTextFrom` in
+										// OpenAIChatAdapter for why reading both is
+										// not summing them): `reasoning_content` is
+										// what koboldcpp has always sent, `reasoning`
+										// is the spelling vLLM and OpenRouter moved
+										// to and a newer build may follow.
+										const reasoning =
 											data.choices?.[0]?.delta
-												?.reasoning_content
+												?.reasoning_content ||
+											data.choices?.[0]?.delta?.reasoning
+										if (
+											typeof reasoning === "string" &&
+											reasoning
 										) {
-											thinkingCb?.(
-												data.choices[0].delta
-													.reasoning_content
-											)
+											reasoningCb?.(reasoning)
 										}
 										if (data.choices?.[0]?.delta?.content) {
 											const chunk =
@@ -526,7 +597,10 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 				// exception to the idle-based design used elsewhere in this
 				// file: a flat bound, sized generously to cover a full slow
 				// generation end-to-end.
-				const response = await fetch(endpoint, {
+				// `modelServerFetch`: undici's own five-minute headers timeout
+				// would otherwise end every reply longer than that, well inside
+				// this bound.
+				const response = await modelServerFetch(endpoint, {
 					method: "POST",
 					headers: {
 						"Content-Type": "application/json"
@@ -574,19 +648,20 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 				}
 
 				let content: string
-				let thinkingContent: string | undefined
+				let reasoningContent: string | undefined
 				if (useChat) {
 					// OpenAI chat format response
 					content = data.choices?.[0]?.message?.content || ""
 					// See the streaming branch's identical read above for why
 					// this is only ever populated in chat mode.
-					thinkingContent =
+					reasoningContent =
 						data.choices?.[0]?.message?.reasoning_content ||
+						data.choices?.[0]?.message?.reasoning ||
 						undefined
 				} else {
 					// KoboldCPP text format response.
 					//
-					// ⚠ No `thinkingContent` here, and that is NOT "completion
+					// ⚠ No `reasoningContent` here, and that is NOT "completion
 					// mode cannot reason". `/api/v1/generate` is koboldcpp's
 					// native API (api_format 2), whose reply is this one text
 					// field — its serializer emits a fixed key set with no
@@ -603,7 +678,7 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 					completionResult: content,
 					compiledPrompt,
 					isAborted: false,
-					thinkingContent,
+					reasoningContent,
 					// Only the OpenAI-compatible route carries a `usage` block;
 					// the native one answers with the text alone, so absent
 					// stays absent there (see `TextGenResult.tokensCompletion`).
@@ -627,10 +702,16 @@ export class KoboldCppAdapter extends BaseConnectionAdapter {
 		if (this.abortController) {
 			this.abortController.abort()
 		}
-		// Tell KoboldCPP itself to stop — without this it keeps computing the
-		// abandoned generation after we drop the connection, which in managed
-		// mode (a single generation slot) blocks every subsequent request until
-		// the zombie generation finishes on its own.
+		this.tellKoboldToStop()
+	}
+
+	/**
+	 * Tell KoboldCPP itself to stop — without this it keeps computing the
+	 * abandoned generation after we drop the connection, which in managed
+	 * mode (a single generation slot) blocks every subsequent request until
+	 * the zombie generation finishes on its own.
+	 */
+	private tellKoboldToStop() {
 		if (this.genKey) {
 			const baseUrl =
 				normalizeBaseUrl(this.connection.baseUrl) ||

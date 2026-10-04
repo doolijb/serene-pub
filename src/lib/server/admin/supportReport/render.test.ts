@@ -101,7 +101,7 @@ const HEADINGS = [
 	"## Needs you",
 	"## Versions",
 	"## Runtime",
-	"## Instance settings",
+	"## Pub settings",
 	"## Environment",
 	"## Database and backups",
 	"## Counts",

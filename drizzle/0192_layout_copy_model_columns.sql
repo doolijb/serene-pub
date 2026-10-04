@@ -1,2 +1,0 @@
-ALTER TABLE "session_layout_presets" ADD COLUMN "layout_updated_at" timestamp DEFAULT now() NOT NULL;--> statement-breakpoint
-ALTER TABLE "session_panel_layouts" ADD COLUMN "layout_copied_at" timestamp;

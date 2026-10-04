@@ -6,11 +6,26 @@
  * activation + placement is the user's, and lives here + on the server.
  *
  * Three layers stay separate, exactly as the plan insists:
- *   available   — every declared panel (this.instances, active or not)
+ *   available   — every declared panel (this.decls, active or not)
  *   active      — instance.active (seeded from decl + layout row + intents)
  *   placed      — pack(tier, active) — derived, never stored
+ *
+ * **Declarations and instances** (brief 7b, layout plan §M.3.7). `decls` is
+ * one entry per declared widget — what the tray offers, what an intent and a
+ * channel's traffic address — and each is also its widget's OWN instance,
+ * the bare id. `copies` is one entry per copy the layout names
+ * (`<widget id>#<instance name>`), cloned from its widget's declaration under
+ * its own id, so a copy of ANY widget draws, not only of Messages.
+ * `instances` is both, and everything that keys by a placed id — `#find`,
+ * close, collapse, the blob's `active[]` — keys by the instance id.
  */
-import { CONVERSATION_WIDGET_ID } from "@serene-pub/sdk"
+import {
+	CONVERSATION_WIDGET_ID,
+	drawnWidgetIds,
+	layoutWidgetIds,
+	widgetOfInstance,
+	type SessionLayoutV1
+} from "@serene-pub/sdk"
 import { formatChannel, parseChannel } from "@serene-pub/sdk"
 import type {
 	WidgetEvent,
@@ -18,6 +33,7 @@ import type {
 } from "$lib/shared/widgets/context"
 import { pack } from "./pack"
 import {
+	instanceTitle,
 	normalizeLayout,
 	tierFor,
 	type LayoutBlob,
@@ -70,6 +86,8 @@ function toInstance(p: ModePanel, layout?: LayoutBlob): PanelInstance {
 				: !!p.defaultActive
 	return {
 		id: p.id,
+		widgetId: p.id,
+		...(p.maxInstances ? { maxInstances: p.maxInstances } : {}),
 		title: p.title,
 		icon: p.icon,
 		role,
@@ -91,8 +109,53 @@ function toInstance(p: ModePanel, layout?: LayoutBlob): PanelInstance {
 	}
 }
 
+/**
+ * A copy of a declared widget, under its own instance id (brief 7b): the
+ * declaration's surface, module, settings and grants, its own title
+ * (_World state · 2_), and its own sticky state — from the blob's `active[]`
+ * when the layout it was seeded from saved some, else the defaults. Always
+ * active: a copy exists only while the layout places it.
+ */
+function toCopy(
+	decl: ModePanel,
+	instanceId: string,
+	layout?: LayoutBlob
+): PanelInstance {
+	const inst = toInstance(
+		{ ...decl, id: instanceId, title: instanceTitle(decl.title, instanceId) },
+		layout
+	)
+	return { ...inst, widgetId: decl.id, active: true }
+}
+
+/**
+ * Every copy id the three stored slots name (zone lists, the middle grid, the
+ * arrangement), each once, in READING order — what the layout draws first
+ * (the SDK's `drawnWidgetIds`: middle, left, right, strips), then what it
+ * names without drawing (`layoutWidgetIds`). The order matters only past a
+ * widget's `maxInstances`, where the copies read first are the ones kept
+ * (plan M.3.6; brief 7b review). The manager is the slots' courier and still
+ * never interprets them: this only asks which ids they NAME.
+ */
+function namedCopyIds(slots: SessionLayoutV1): string[] {
+	return [...new Set([...drawnWidgetIds(slots), ...layoutWidgetIds(slots)])].filter(
+		(id) => widgetOfInstance(id) !== id
+	)
+}
+
 export class SurfaceManager implements WidgetEventSource {
-	instances = $state<PanelInstance[]>([])
+	/**
+	 * One per declared widget (brief 7b): the tray, the intents and channel
+	 * activation read these. Each is also its widget's own instance — the bare
+	 * id, active or not.
+	 */
+	decls = $state<PanelInstance[]>([])
+	/** One per copy the layout names (`<widget id>#<name>`), cloned from its declaration. */
+	copies = $state<PanelInstance[]>([])
+	/** Every instance: each declared widget's own, then every copy. */
+	get instances(): PanelInstance[] {
+		return [...this.decls, ...this.copies]
+	}
 	/** The widgets this session's genre withholds (R71), core's included. */
 	omitted = $state<ReadonlySet<string>>(new Set())
 	tier = $state<Tier>("roomy")
@@ -105,7 +168,9 @@ export class SurfaceManager implements WidgetEventSource {
 	#save: (blob: LayoutBlob) => void = () => {}
 	#saveTimer: ReturnType<typeof setTimeout> | null = null
 	/** The merged declarations, kept so "reset to default" can re-seed. */
-	#decls: ModePanel[] = []
+	#declared: ModePanel[] = []
+	/** Copies already warned about as past their cap — said once, not on every write. */
+	#overCap = new Set<string>()
 
 	/** Placement for the current tier — the pure packer's output. */
 	placement = $derived(pack(this.tier, this.instances))
@@ -137,20 +202,28 @@ export class SurfaceManager implements WidgetEventSource {
 
 	/** Inactive-but-declared panels — the "+ add panel" menu. */
 	get addable(): PanelInstance[] {
-		return this.instances.filter((p) => !p.active && p.role !== "primary")
+		return this.decls.filter((p) => !p.active && p.role !== "primary")
 	}
 
 	/**
-	 * (Re)seed from the mode's declared panels + this user's saved layout.
-	 * A declared primary replaces the synthetic one; otherwise the default log
-	 * is prepended so the grid always has its anchor.
+	 * How many times `init` has seeded this manager. Reactive, so a view that
+	 * keeps its own working copy of the layout (the layout editor) can tell
+	 * that the layout under it was REPLACED — a copy landed from the server
+	 * (Start from, Reset, Start from scratch) — and re-read it.
+	 */
+	seedCount = $state(0)
+
+	/**
+	 * (Re)seed from the mode's declared panels + this user's session layout —
+	 * the whole of it: under the copy model the row IS the layout, and nothing
+	 * sits under it. A declared primary replaces the synthetic one; otherwise
+	 * the default log is prepended so the grid always has its anchor.
 	 */
 	init(
 		sessionId: number | null,
 		modePanels: ModePanel[],
 		layout: LayoutBlob | undefined,
 		save: (blob: LayoutBlob) => void,
-		baseLayout?: Record<string, unknown>,
 		omit: ReadonlySet<string> = new Set()
 	) {
 		this.sessionId = sessionId
@@ -162,20 +235,104 @@ export class SurfaceManager implements WidgetEventSource {
 		const decls = hasPrimary || omit.has(CONVERSATION_WIDGET_ID)
 			? modePanels
 			: [DEFAULT_PRIMARY, ...modePanels]
-		this.#decls = decls
-		this.instances = decls.map((p) => toInstance(p, layout))
+		this.#declared = decls
+		this.decls = decls.map((p) => toInstance(p, layout))
+		this.copies = []
 		this.colFr = layout?.tierSizeOverrides
 			? { ...layout.tierSizeOverrides }
 			: {}
 		this.zoneLayout = layout?.zoneLayout
 		this.widgetGrid = layout?.widgetGrid
 		this.arrangedGrid = layout?.arrangedGrid
-		this.baseLayout = baseLayout
+		// A copy seeded here keeps the sticky state the blob saved for it; one
+		// placed later starts at the defaults, never a removed copy's.
+		this.#syncCopies(layout)
+		this.seedCount++
+	}
+
+	/**
+	 * Bring `copies` in line with the ids the three slots name: a copy named
+	 * and not yet made is cloned from its widget's declaration; a copy no
+	 * longer named is dropped (and so leaves the blob's `active[]`). Run on
+	 * every write to a slot — `init` and the three setters are the only ways
+	 * one changes — so it needs no effect.
+	 *
+	 * A copy of a widget nobody declares (a plugin since disabled) or of the
+	 * conversation (never a panel instance) gets none, and draws nothing. A
+	 * copy past its widget's `maxInstances` gets none either, in the order the
+	 * slots name them, and says so — the validator's warning, at the reader.
+	 */
+	#syncCopies(seed?: LayoutBlob) {
+		const named = namedCopyIds({
+			zoneLayout: this.zoneLayout,
+			widgetGrid: this.widgetGrid,
+			arrangedGrid: this.arrangedGrid
+		} as SessionLayoutV1)
+		const have = new Map(this.copies.map((c) => [c.id, c]))
+		const placedBare = new Set(
+			layoutWidgetIds({
+				zoneLayout: this.zoneLayout,
+				widgetGrid: this.widgetGrid,
+				arrangedGrid: this.arrangedGrid
+			} as SessionLayoutV1).filter((id) => widgetOfInstance(id) === id)
+		)
+		const counts = new Map<string, number>()
+		const next: PanelInstance[] = []
+		for (const id of named) {
+			const widget = widgetOfInstance(id)
+			const decl = this.#declared.find((d) => d.id === widget)
+			if (!decl) continue
+			const count = (counts.get(widget) ?? (placedBare.has(widget) ? 1 : 0)) + 1
+			counts.set(widget, count)
+			if (decl.maxInstances && count > decl.maxInstances) {
+				if (!this.#overCap.has(id)) {
+					this.#overCap.add(id)
+					console.warn(
+						`[session layout] "${id}" is placed past "${widget}"'s maxInstances (${decl.maxInstances}) — not drawn`
+					)
+				}
+				continue
+			}
+			next.push(have.get(id) ?? toCopy(decl, id, seed))
+		}
+		const same =
+			next.length === this.copies.length &&
+			next.every((c, i) => c === this.copies[i])
+		if (!same) this.copies = next
+	}
+
+	/**
+	 * Drop a debounced save that has not gone out yet, WITHOUT sending it.
+	 * For the moment the layout is about to be replaced by a copy from the
+	 * server: a stale blob posted after the copy was asked for could land
+	 * after it and write the old layout back over the new one. Answers
+	 * whether one was dropped, so a refused copy can send it after all
+	 * (`persistNow`).
+	 */
+	cancelPendingSave(): boolean {
+		if (!this.#saveTimer) return false
+		clearTimeout(this.#saveTimer)
+		this.#saveTimer = null
+		return true
+	}
+
+	/**
+	 * Save the layout as it stands, now, in place of any debounced save still
+	 * waiting. For a copy that was refused after `cancelPendingSave` dropped
+	 * the save of an edit made just before it: the layout was never replaced,
+	 * so that edit is still this session's.
+	 */
+	persistNow() {
+		if (this.#saveTimer) clearTimeout(this.#saveTimer)
+		this.#saveTimer = null
+		this.#save(this.toBlob())
 	}
 
 	/** Restore the mode's default layout — activation, order, sizes, all of it. */
 	resetLayout() {
-		this.instances = this.#decls.map((p) => toInstance(p, {}))
+		this.decls = this.#declared.map((p) => toInstance(p, {}))
+		this.copies = []
+		this.#syncCopies()
 		this.colFr = {}
 		this.drawerOpenId = null
 		this.#schedulePersist()
@@ -199,7 +356,7 @@ export class SurfaceManager implements WidgetEventSource {
 
 	/** Every secondary panel the mode declares — the layout menu's toggle list. */
 	get secondaryPanels(): PanelInstance[] {
-		return this.instances.filter((p) => p.role !== "primary")
+		return this.decls.filter((p) => p.role !== "primary")
 	}
 
 	/** Column fr weights for the current tier (defaults to equal columns). */
@@ -297,7 +454,18 @@ export class SurfaceManager implements WidgetEventSource {
 	applyOpenIntent(panelId: string) {
 		const p = this.#find(panelId)
 		if (!p) return
-		if (!p.active) this.activate(panelId)
+		// An intent addresses a WIDGET (brief 7b): with an instance of it
+		// already placed and open — its own or a copy — there is nothing to
+		// surface; else its own instance is.
+		if (this.#openInstanceOf(p.widgetId ?? p.id)) return
+		this.activate(panelId)
+	}
+
+	/** Is any instance of this widget open — its own, or a copy? */
+	#openInstanceOf(widgetId: string): boolean {
+		return this.instances.some(
+			(p) => p.active && (p.widgetId ?? widgetOfInstance(p.id)) === widgetId
+		)
 	}
 
 	applyCloseIntent(panelId: string) {
@@ -321,9 +489,9 @@ export class SurfaceManager implements WidgetEventSource {
 		const ref = parseChannel(channel)
 		if (ref.slug === "main") return
 		let surfaced = false
-		for (const p of this.instances)
+		for (const p of this.decls)
 			if (
-				!p.active &&
+				!this.#openInstanceOf(p.id) &&
 				p.role !== "primary" &&
 				p.channels.some((c) => parseChannel(c).slug === ref.slug)
 			) {
@@ -365,8 +533,9 @@ export class SurfaceManager implements WidgetEventSource {
 	}
 
 	/**
-	 * 🚧 A lore entry's marks changed — the viewer's own `entries:setMarks`
-	 * reply, from any tab or widget: every subscriber hears `lore:marked`,
+	 * 🚧 A lore entry of the session's book changed — any `entries:update` the
+	 * viewer's own saves send, from any tab, widget or editor (its marks set
+	 * through `entries:setMarks` included): every subscriber hears `lore:marked`,
 	 * scoped as `lore:ranked` is, and a lore reader showing that entry asks
 	 * again.
 	 */
@@ -374,9 +543,20 @@ export class SurfaceManager implements WidgetEventSource {
 		this.#emit({ kind: "lore:marked", entryId })
 	}
 
+	/**
+	 * 🚧 The session's stored genre fields moved — the server's
+	 * `sessions:genreFieldsChanged` push for this session (Edit Session's
+	 * save, the Author's note's own write, in any of the owner's tabs):
+	 * every subscriber hears `genreFields:changed`, and a widget showing a
+	 * field's value (the Author's note) asks again. Carries nothing.
+	 */
+	announceGenreFieldsChanged() {
+		this.#emit({ kind: "genreFields:changed" })
+	}
+
 	/* ── the session-level widget event source (PLAN 25) ──────────────────
-	 * Every widget's wire (`ComponentMount` for a remote one, `PluginFrame` for
-	 * a frame) fans out from here and filters to its declared channels. The
+	 * Every widget's wire (`ComponentMount`), and a session-view frame's
+	 * (`PluginFrame`), fans out from here and filters to its declared channels. The
 	 * manager is where these are born because it is already the one thing that
 	 * sees session-wide activity — the page hands it every arriving channel —
 	 * so nothing has to open a second subscription to the same facts.
@@ -510,6 +690,7 @@ export class SurfaceManager implements WidgetEventSource {
 
 	setZoneLayout(layout: unknown) {
 		this.zoneLayout = layout
+		this.#syncCopies()
 		this.#schedulePersist()
 	}
 
@@ -522,6 +703,7 @@ export class SurfaceManager implements WidgetEventSource {
 
 	setWidgetGrid(grid: unknown) {
 		this.widgetGrid = grid
+		this.#syncCopies()
 		this.#schedulePersist()
 	}
 
@@ -533,56 +715,7 @@ export class SurfaceManager implements WidgetEventSource {
 
 	setArrangedGrid(grid: unknown) {
 		this.arrangedGrid = grid
-		this.#schedulePersist()
-	}
-
-	/**
-	 * The layout preset this session is on, already composed with the user's
-	 * own `layoutSettings` (PLAN 25 redesign). A READ-ONLY floor the three
-	 * courier slots above fall through to when the user has set none.
-	 *
-	 * It is deliberately NOT one of them, and `toBlob` deliberately cannot see
-	 * it. Were the preset merged into the slots, the very next persist would
-	 * copy its content into this user's own `layout` column — turning a
-	 * reference into a snapshot, so later edits to the preset would stop
-	 * reaching them and `toBlob`'s omit-unset-slots property (the thing that
-	 * keeps a never-customised session from writing a row at all) would break.
-	 *
-	 * The same one-way reading is what makes this whole feature compatible: a
-	 * session that already has an arrangement has its own slots set, `??`
-	 * short-circuits, and the preset is never consulted.
-	 */
-	baseLayout = $state<Record<string, unknown> | undefined>(undefined)
-
-	setBaseLayout(base: Record<string, unknown> | undefined) {
-		this.baseLayout = base
-	}
-
-	/** The zone template in force: this user's, else the preset's. */
-	get effectiveZoneLayout(): unknown {
-		return this.zoneLayout ?? this.baseLayout?.zoneLayout
-	}
-
-	/** The chat widget grid in force: this user's, else the preset's. */
-	get effectiveWidgetGrid(): unknown {
-		return this.widgetGrid ?? this.baseLayout?.widgetGrid
-	}
-
-	/** The captured per-zone geometry in force: this user's, else the preset's. */
-	get effectiveArrangedGrid(): unknown {
-		return this.arrangedGrid ?? this.baseLayout?.arrangedGrid
-	}
-
-	/**
-	 * Drop this user's own arrangement so the active preset shows through —
-	 * what "reset to default" and "apply a preset" both mean. The slots go back
-	 * to `undefined`, which `toBlob` omits, so the row stops asserting an
-	 * arrangement rather than storing a copy of the preset's.
-	 */
-	clearArrangement() {
-		this.zoneLayout = undefined
-		this.widgetGrid = undefined
-		this.arrangedGrid = undefined
+		this.#syncCopies()
 		this.#schedulePersist()
 	}
 

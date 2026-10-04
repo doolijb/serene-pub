@@ -2,7 +2,7 @@
  * `entryChannel` — each door hears only its own kind.
  *
  * The regression: `entries:delete` names the book and the row but not the
- * type, so every door open on a book toasted every delete ("All entries"
+ * type, so every door open on a book toasted every delete ("Everything"
  * showed four wrong-kind toasts for one row).
  */
 import { beforeEach, describe, expect, test, vi } from "vitest"
@@ -46,6 +46,29 @@ function door(typeId: string) {
 beforeEach(() => {
 	handlersByKey.clear()
 	socket.emit.mockClear()
+})
+
+describe("entryChannel vectorization badges (A7)", () => {
+	test("hears the vectorizer at its book's scope", () => {
+		const onVectorized = vi.fn()
+		const channel = entryChannel(socket, {
+			lorebookId: 7,
+			typeId: "core:entry/world-lore" as any,
+			vectorSource: "worldLore",
+			handlers: { onList: () => {}, onVectorized }
+		})
+		channel.open()
+		fire("vectorization:itemUpdated#7", {
+			type: "worldLore",
+			id: 3,
+			lorebookId: 7,
+			embeddingModel: "m",
+			vectorizedAt: "now"
+		})
+		expect(onVectorized).toHaveBeenCalledWith(3, "m")
+		expect(handlersByKey.get("vectorization:itemUpdated") ?? []).toHaveLength(0)
+		channel.close()
+	})
 })
 
 describe("entryChannel delete and reorder replies", () => {
@@ -105,8 +128,65 @@ describe("entryChannel delete and reorder replies", () => {
 		const world = door("core:entry/world-lore")
 		const history = door("core:entry/history")
 		world.channel.reorder([{ id: 1, position: 1 }])
-		fire("entries:updatePositions", { success: "ok" })
+		history.channel.reorder([{ id: 2, position: 1 }])
+		fire("entries:updatePositions#7", {
+			success: "ok",
+			lorebookId: 7,
+			typeId: "core:entry/world-lore"
+		})
 		expect(world.onReordered).toHaveBeenCalledTimes(1)
+		// History asked too, but this reply is World lore's.
 		expect(history.onReordered).not.toHaveBeenCalled()
+	})
+
+	test("the reorder reply is heard at its book's scope, never bare", () => {
+		const world = door("core:entry/world-lore")
+		expect(handlersByKey.get("entries:updatePositions") ?? []).toHaveLength(0)
+		expect(handlersByKey.get("entries:updatePositions#7")).toHaveLength(1)
+		world.channel.reorder([{ id: 1, position: 1 }])
+		// Another book's reply, delivered to a scope this door holds (a
+		// server bug or a bare fan-out), is still not this door's.
+		fire("entries:updatePositions#7", {
+			success: "ok",
+			lorebookId: 8,
+			typeId: "core:entry/world-lore"
+		})
+		expect(world.onReordered).not.toHaveBeenCalled()
+	})
+})
+
+describe("entryChannel — a refused reorder stops counting (Phase D leftover)", () => {
+	test("the refusal counts the door's reorder off, so a later reply from another tab is not taken for it", () => {
+		const world = door("core:entry/world-lore")
+		world.channel.reorder([{ id: 1, position: 1 }])
+		// Refused: answered only on the `:error` twin, bare.
+		fire("entries:updatePositions:error", {
+			error: "Access denied to some entries.",
+			lorebookId: 7,
+			typeId: "core:entry/world-lore"
+		})
+		// Another tab's reorder of the same book and kind.
+		fire("entries:updatePositions#7", {
+			success: "ok",
+			lorebookId: 7,
+			typeId: "core:entry/world-lore"
+		})
+		expect(world.onReordered).not.toHaveBeenCalled()
+	})
+
+	test("another door's refusal leaves this door's reorder waiting", () => {
+		const world = door("core:entry/world-lore")
+		world.channel.reorder([{ id: 1, position: 1 }])
+		fire("entries:updatePositions:error", {
+			error: "x",
+			lorebookId: 7,
+			typeId: "core:entry/history"
+		})
+		fire("entries:updatePositions#7", {
+			success: "ok",
+			lorebookId: 7,
+			typeId: "core:entry/world-lore"
+		})
+		expect(world.onReordered).toHaveBeenCalledTimes(1)
 	})
 })

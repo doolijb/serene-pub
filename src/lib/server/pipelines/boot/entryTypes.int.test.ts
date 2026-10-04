@@ -106,9 +106,7 @@ describe("core's entry types reach the registry", () => {
 			column: "anchorBindingId",
 			policy: "core:policy/binding-visibility@1"
 		})
-		expect(characterLore.entryShape.render).toEqual({
-			into: "character-card"
-		})
+		expect(characterLore.entryShape.render).toBe("core:var/character-lore@1")
 	})
 
 	it("round-trips through the reader with the hash it was written with", async () => {

@@ -524,9 +524,9 @@ describe("CHARX containers", () => {
 		expect(parsed.avatarBuffer?.equals(png)).toBe(true)
 	})
 
-	test("falls back to the first icon when none is named main", () => {
+	test("falls back to the first icon when none is named main", async () => {
 		const png = makeTestPngBuffer()
-		const { avatarBuffer } = readCharxContainer(
+		const { avatarBuffer } = await readCharxContainer(
 			makeCharx(v3Card([{ type: "icon", uri: "embeded://a.png", name: "x", ext: "png" }]), {
 				"a.png": png
 			})
@@ -534,9 +534,9 @@ describe("CHARX containers", () => {
 		expect(avatarBuffer?.equals(png)).toBe(true)
 	})
 
-	test("tolerates the correctly spelled embedded:// scheme", () => {
+	test("tolerates the correctly spelled embedded:// scheme", async () => {
 		const png = makeTestPngBuffer()
-		const { avatarBuffer } = readCharxContainer(
+		const { avatarBuffer } = await readCharxContainer(
 			makeCharx(v3Card([{ type: "icon", uri: "embedded://a.png", name: "main", ext: "png" }]), {
 				"a.png": png
 			})
@@ -544,18 +544,18 @@ describe("CHARX containers", () => {
 		expect(avatarBuffer?.equals(png)).toBe(true)
 	})
 
-	test("reads a data: URI icon", () => {
+	test("reads a data: URI icon", async () => {
 		const png = makeTestPngBuffer()
 		const uri = `data:image/png;base64,${png.toString("base64")}`
-		const { avatarBuffer } = readCharxContainer(
+		const { avatarBuffer } = await readCharxContainer(
 			makeCharx(v3Card([{ type: "icon", uri, name: "main", ext: "png" }]))
 		)
 		expect(avatarBuffer?.equals(png)).toBe(true)
 	})
 
-	test("never fetches a remote icon, and ccdefault: yields no avatar", () => {
+	test("never fetches a remote icon, and ccdefault: yields no avatar", async () => {
 		for (const uri of ["https://example.com/a.png", "ccdefault:"]) {
-			const { raw, avatarBuffer } = readCharxContainer(
+			const { raw, avatarBuffer } = await readCharxContainer(
 				makeCharx(v3Card([{ type: "icon", uri, name: "main", ext: "png" }]))
 			)
 			expect(raw.data.name).toBe("Charx Character")
@@ -563,8 +563,8 @@ describe("CHARX containers", () => {
 		}
 	})
 
-	test("an icon the card names but the zip lacks is simply absent", () => {
-		const { avatarBuffer } = readCharxContainer(
+	test("an icon the card names but the zip lacks is simply absent", async () => {
+		const { avatarBuffer } = await readCharxContainer(
 			makeCharx(v3Card([{ type: "icon", uri: "embeded://missing.png", name: "main", ext: "png" }]))
 		)
 		expect(avatarBuffer).toBeUndefined()
@@ -585,31 +585,31 @@ describe("CHARX containers", () => {
 		await expect(parseCharacterCard(buffer)).rejects.toThrow(/no card\.json/)
 	})
 
-	test("card.json that is not JSON is refused", () => {
+	test("card.json that is not JSON is refused", async () => {
 		const buffer = Buffer.from(zipSync({ "card.json": strToU8("{nope") }))
-		expect(() => readCharxContainer(buffer)).toThrow(/not valid JSON/)
+		await expect(readCharxContainer(buffer)).rejects.toThrow(/not valid JSON/)
 	})
 
-	test("a byte-order mark on card.json is tolerated", () => {
+	test("a byte-order mark on card.json is tolerated", async () => {
 		const buffer = Buffer.from(
 			zipSync({ "card.json": strToU8("\uFEFF" + JSON.stringify(v3Card())) })
 		)
-		expect(readCharxContainer(buffer).raw.data.name).toBe("Charx Character")
+		expect((await readCharxContainer(buffer)).raw.data.name).toBe("Charx Character")
 	})
 
-	test("an entry declaring more than the ceiling is refused before inflating", () => {
+	test("an entry declaring more than the ceiling is refused before inflating", async () => {
 		const prior = CHARX_LIMITS.cardJsonBytes
 		CHARX_LIMITS.cardJsonBytes = 10
 		try {
-			expect(() => readCharxContainer(makeCharx(v3Card()))).toThrow(/larger than/)
+			await expect(readCharxContainer(makeCharx(v3Card()))).rejects.toThrow(/larger than/)
 		} finally {
 			CHARX_LIMITS.cardJsonBytes = prior
 		}
 	})
 
-	test("a truncated zip is refused as unreadable", () => {
+	test("a truncated zip is refused as unreadable", async () => {
 		const buffer = makeCharx(v3Card()).subarray(0, 30)
-		expect(() => readCharxContainer(buffer)).toThrow(/could not be read/)
+		await expect(readCharxContainer(buffer)).rejects.toThrow(/could not be read/)
 	})
 })
 

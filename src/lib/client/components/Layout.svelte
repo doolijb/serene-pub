@@ -1,6 +1,7 @@
 <script lang="ts">
 	import Header from "./Header.svelte"
 	import PanelHeader from "./panels/PanelHeader.svelte"
+	import Avatar from "./Avatar.svelte"
 	import "../../../app.css"
 	import * as Icons from "@lucide/svelte"
 	import { fly, fade } from "svelte/transition"
@@ -35,6 +36,7 @@
 		setLanguage
 	} from "$lib/client/i18n/state.svelte"
 	import { toaster } from "$lib/client/utils/toaster"
+	import { sayUnshownSceneRunFailure } from "$lib/client/components/modals/sceneRunShown"
 	import { KeyboardNavigationManager } from "$lib/client/utils/keyboardNavigation"
 	import SettingsSidebar from "$lib/client/components/sidebars/SettingsSidebar.svelte"
 	import ActivitySidebar from "$lib/client/components/sidebars/ActivitySidebar.svelte"
@@ -57,6 +59,7 @@
 	import { shellPrefs } from "$lib/client/shell/shellPrefs.svelte"
 	import { adminHealth } from "$lib/client/admin/adminHealth.svelte"
 	import { createJumpCtx, JUMP_CONTEXT } from "$lib/client/shell/jump.svelte"
+	import { createGraphBuildsCtx } from "$lib/client/stores/graphBuilds.svelte"
 	// While a session's DESKTOP layout editor is open its toolbar owns the top
 	// band, so the session header and the Jump pill step out of it.
 	import { layoutEditor } from "$lib/client/sessionLayout/layoutEditor.svelte"
@@ -99,6 +102,9 @@
 		"characters:uploadGalleryImage:error",
 		"sessions:list:error",
 		"sessions:summarize:error",
+		// The session page toasts it under the action's name (_Narrate_),
+		// and only on the session it was pressed on (C2 follow-up).
+		"sessions:fireNarratorResponse:error",
 		"connections:list:error",
 		// Toasted once already, as the bare `error` event with the server's
 		// own sentence; this sibling only stops the wrapper's generic
@@ -111,7 +117,7 @@
 		"customThemes:delete:error",
 		"customThemes:list:error",
 		"customThemes:save:error",
-		"customThemes:setInstanceTheme:error",
+		"customThemes:setPubTheme:error",
 		"koboldcpp:checkManagedBinaryUpdate:error",
 		"koboldcpp:connectModel:error",
 		"koboldcpp:deleteModel:error",
@@ -131,6 +137,33 @@
 		// same refusal twice, and in every other tab too.
 		"lorebooks:import:error",
 		"lorebooks:importResolve:error",
+		// A place's Stats section says each refusal under the stat it came
+		// from, and a failed read in the section (places plan L4); a toast was
+		// the same sentence twice, and in every other tab of the user too.
+		"lorebookState:get:error",
+		"lorebookState:set:error",
+		// The session page's lore widgets ask for these, and each refusal is
+		// the asking widget's own error (R77) — its pending ask settles with
+		// the sentence — so a toast as well was the same sentence twice.
+		"entries:sessionEntries:error",
+		"entries:setMarks:error",
+		// An entry create's refusal is said by the surface that asked — the
+		// Summarize modal and a new place's field in place, the editors and
+		// the day-one composer as their own toast under the action's name; a
+		// toast here as well was the same sentence twice.
+		"entries:create:error",
+		// The absorb window says a refused merge in place (as its own toast
+		// once closed), the duplicates list as its own toast (and reads the
+		// list again); each only the refusal naming its pair.
+		"narrativeGraph:mergeNode:error",
+		// A link's refusal ("Nothing can be linked to itself.") is said where
+		// the link was drawn, edited or deleted — the canvas's form, a place's
+		// Links row — and the delete check under the member being deleted; a
+		// toast as well was the same sentence twice.
+		"narrativeGraph:createRelationship:error",
+		"narrativeGraph:updateRelationship:error",
+		"narrativeGraph:deleteRelationship:error",
+		"narrativeGraph:checkNodeMergeReferences:error",
 		"ollama:pullModel:error",
 		// The pipeline panel shows every one of these itself, and the server
 		// writes them for a person — "'Prose' is still in use, point that
@@ -152,6 +185,10 @@
 		"pipelines:cloneVariableTemplate:error",
 		"pipelines:updateVariableTemplate:error",
 		"pipelines:deleteVariableTemplate:error",
+		// Both panels that ask it — an entry's Test and the composer's "What
+		// would fire now" — say its refusal in place, each only its own press
+		// (`requestId`, plan B8).
+		"pipelines:previewRetrieval:error",
 		// The sampling sidebar puts both of these under the field that has to
 		// change — the clone modal's name input, or the config's Name — because
 		// a name is unique per modality now and "that one is taken" is answered
@@ -160,6 +197,8 @@
 		"samplingConfigs:create:error",
 		"samplingConfigs:update:error",
 		"scenes:compile:error",
+		// Said once: by the Process scene window showing the run, or else by
+		// this component's own `sayUnshownSceneRunFailure`, with a title.
 		"scenes:process:error",
 		"systemSettings:updateAccountsEnabled:error",
 		"tags:list:error",
@@ -208,7 +247,9 @@
 	// uses the real `onAny` API to inspect every event and toast on any
 	// "*:error" event that isn't already handled by a more specific listener
 	// (see HANDLED_ERROR_EVENTS above), so an action that fails with neither a
-	// toast nor a UI change still surfaces its error.
+	// toast nor a UI change still surfaces its error. The server sends a
+	// request's refusal to the tab that asked and no other (`answerAsker` in
+	// `server/sockets/index.ts`), so this toasts in that tab alone.
 	function handleAnyEvent(event: string, payload: any) {
 		if (event === "error" || !event.endsWith(":error")) return
 		if (HANDLED_ERROR_EVENTS.has(event)) return
@@ -272,6 +313,15 @@
 	let dragWidth = $state<number | null>(null)
 	/** Half is a remembered dock width, not a mode of its own. */
 	let halfWidth = $derived(shellPrefs.dockWidth === "half")
+	/**
+	 * A session with its header furled (note 29) gives the session the whole
+	 * top band: the Jump pill steps out with the bar, so it never floats over
+	 * the session's own top edge, and the header's one way back takes the
+	 * pill's corner. Ctrl-K still opens Jump.
+	 */
+	let sessionHeaderFurled = $derived(
+		shellPrefs.headerFurled && page.url.pathname.startsWith("/sessions/") && !layoutEditor.open
+	)
 
 	// The Admin view's address is the section on screen, and it writes that
 	// address itself while it is the view in Focus.
@@ -548,29 +598,10 @@
 		isOwner: false,
 		isGenerating: false
 	})
-	let graphBuildsCtx: GraphBuildsCtx = $state({
-		activeBuild: null,
-		reopenLorebookId: null,
-		startBuild: (params) => {
-			graphBuildsCtx.activeBuild = {
-				lorebookId: params.lorebookId,
-				lorebookLabel: params.lorebookLabel,
-				mode: params.mode,
-				status: "building",
-				phase: "loading",
-				sceneIndex: 0,
-				totalScenes: 0,
-				nodesFound: 0,
-				relsFound: 0,
-				startedAt: new Date().toISOString()
-			}
-		},
-		clearBuild: (how?: "acted") => {
-			const id = graphBuildsCtx.activeBuild?.activityId
-			if (id) socket.emit("activity:dismiss", how ? { id, how } : { id })
-			graphBuildsCtx.activeBuild = null
-			graphBuildsCtx.reopenLorebookId = null
-		}
+	// Every graph build, one per book — never a single slot (plan B8): see
+	// `stores/graphBuilds.svelte.ts`.
+	const graphBuildsCtx = createGraphBuildsCtx({
+		dismiss: (id) => socket.emit("activity:dismiss", { id })
 	})
 	let sceneSummarizesCtx: SceneSummarizesCtx = $state({
 		activities: [],
@@ -602,15 +633,15 @@
 	})
 	let compileEntriesCtx: CompileEntriesCtx = $state({
 		activities: [],
-		reviewHistoryEntryId: null,
+		reviewActivityId: null,
 		dismiss: (activityId: string) => {
 			socket.emit("activity:dismiss", { id: activityId })
 			compileEntriesCtx.activities = compileEntriesCtx.activities.filter(
 				(a) => a.activityId !== activityId
 			)
 		},
-		setReviewHistoryEntryId: (id: number | null) => {
-			compileEntriesCtx.reviewHistoryEntryId = id
+		setReviewActivityId: (id: string | null) => {
+			compileEntriesCtx.reviewActivityId = id
 		}
 	})
 
@@ -1774,7 +1805,7 @@
 	// The hazard that replaces is a bare `socket.off("customThemes:list")`,
 	// which removes EVERY listener for that event across the whole app.
 	function handleCustomThemesList(msg: Sockets.CustomThemes.List.Response) {
-		const allMeta = [...msg.myThemes, ...msg.instanceThemes]
+		const allMeta = [...msg.myThemes, ...msg.pubThemes]
 		const customNames = new Set(allMeta.map((t) => t.name))
 		const builtinNames = new Set(Theme.options.map(([v]) => v))
 
@@ -2080,52 +2111,12 @@
 		data: SocketEventMap["activity:update"]["response"]
 	) {
 		const activities = data.activities ?? []
-		const graphActivities = activities.filter(
-			(a: any) => a.kind === "graph_build"
-		)
 		const sceneActivities = activities.filter(
 			(a: any) => a.kind === "scene_summarize"
 		)
 
-		// Graph build: take the most recent one
-		const latestGraph = [...graphActivities].sort(
-			(a: any, b: any) =>
-				new Date(b.startedAt).getTime() -
-				new Date(a.startedAt).getTime()
-		)[0] as any
-		if (!latestGraph) {
-			graphBuildsCtx.activeBuild = null
-		} else {
-			const prevTrace =
-				graphBuildsCtx.activeBuild?.activityId === latestGraph.id
-					? graphBuildsCtx.activeBuild?.trace
-					: undefined
-			graphBuildsCtx.activeBuild = {
-				activityId: latestGraph.id,
-				userId: latestGraph.userId,
-				lorebookId: latestGraph.lorebookId,
-				lorebookLabel: latestGraph.lorebookLabel,
-				mode: latestGraph.mode,
-				status: latestGraph.status,
-				phase: latestGraph.phase,
-				sceneIndex: latestGraph.sceneIndex,
-				totalScenes: latestGraph.totalScenes,
-				nodesFound: latestGraph.nodesFound,
-				relsFound: latestGraph.relsFound,
-				currentPair: latestGraph.currentPair,
-				currentSceneLabel: latestGraph.currentSceneLabel,
-				proposal: latestGraph.proposal,
-				sceneLabels: latestGraph.sceneLabels,
-				seedTempIdMap: latestGraph.seedTempIdMap,
-				seedNodeNames: latestGraph.seedNodeNames,
-				relationshipDiagnostics: latestGraph.relationshipDiagnostics,
-				filteredWorldLoreNames: latestGraph.filteredWorldLoreNames,
-				errorMessage: latestGraph.errorMessage,
-				errorRaw: latestGraph.errorRaw,
-				startedAt: latestGraph.startedAt,
-				trace: prevTrace
-			}
-		}
+		// Graph builds: every one, one per book (plan B8).
+		graphBuildsCtx.receive(activities)
 
 		// Scene summarizations: keep all
 		sceneSummarizesCtx.activities = sceneActivities.map((a: any) => ({
@@ -2179,6 +2170,8 @@
 			historyEntryDate: a.historyEntryDate,
 			lorebookId: a.lorebookId,
 			lorebookLabel: a.lorebookLabel,
+			branchId: a.branchId ?? null,
+			moment: a.moment ?? null,
 			status: a.status,
 			phase: a.phase,
 			batch: a.batch,
@@ -2192,11 +2185,7 @@
 	function handleNarrativeGraphBuildLog(
 		entry: SocketEventMap["narrativeGraph:buildLog"]["response"]
 	) {
-		if (!graphBuildsCtx.activeBuild) return
-		graphBuildsCtx.activeBuild.trace = [
-			...(graphBuildsCtx.activeBuild.trace ?? []),
-			entry
-		]
+		graphBuildsCtx.appendTrace(entry)
 	}
 
 	/**
@@ -2228,6 +2217,12 @@
 	useInterest<"narrativeGraph:buildLog">(
 		"narrativeGraph:buildLog",
 		handleNarrativeGraphBuildLog
+	)
+	// The tab's one fallback for a failed scene summarize: said here only when
+	// no Process scene window is showing that run (`sceneRunShown.ts`).
+	useInterest<"scenes:process:error">(
+		"scenes:process:error",
+		sayUnshownSceneRunFailure
 	)
 
 	let unregisterLanguageSocket: (() => void) | undefined
@@ -2392,7 +2387,7 @@
 			     you get instead. -->
 			<nav
 				bind:this={railRef}
-				class="border-surface-200-800 hidden shrink-0 flex-col overflow-y-auto border-r py-3 transition-[width] duration-150 {!stageOnly
+				class="panel-edge hidden shrink-0 flex-col overflow-y-auto border-r py-3 transition-[width] duration-150 {!stageOnly
 					? 'lg:flex'
 					: railPeek
 						? 'lg:fixed lg:inset-y-0 lg:left-0 lg:z-30 lg:flex lg:shadow-2xl'
@@ -2676,7 +2671,7 @@
 			<div
 				bind:this={sidebarRef}
 				data-shell-sidebar
-				class="bg-surface-50-950 border-surface-200-800 fixed inset-0 z-[45] flex flex-col overflow-hidden lg:static lg:z-auto lg:border-r {dragWidth !==
+				class="bg-surface-50-950 panel-edge fixed inset-0 z-[45] flex flex-col overflow-hidden lg:static lg:z-auto lg:border-r {dragWidth !==
 				null
 					? 'lg:flex-none'
 					: fullPageView || halfWidth
@@ -2697,7 +2692,7 @@
 				<!-- Mobile chrome: the panel header this shell has always used
 				     for a full-screen view. No expand button — the sheet is
 				     already the whole screen. -->
-				<div class="border-surface-200-800 shrink-0 border-b lg:hidden">
+				<div class="panel-edge shrink-0 border-b lg:hidden">
 					{#if openSessionCtx.sessionId !== null && page.url.pathname.startsWith("/sessions/")}
 						<!-- The way back to the story under this sheet: the spine,
 						     laid sideways for a phone. -->
@@ -2748,7 +2743,7 @@
 				     the way in while one covers its corner), so the row keeps
 				     its own padding and reserves nothing. -->
 				<div
-					class="border-surface-200-800 hidden h-14 shrink-0 items-center gap-1.5 border-b pr-2.5 pl-4 lg:flex"
+					class="panel-edge hidden h-14 shrink-0 items-center gap-1.5 border-b pr-2.5 pl-4 lg:flex"
 				>
 					{#if fullPageView !== null && viewForPath(page.url.pathname) !== null}
 						<!-- Focused from its own address: the trail starts at
@@ -2914,7 +2909,7 @@
 			     view focused from its own address has nothing underneath. -->
 			{#if fullPageView !== null && desktop.matches && !stageOnly && (page.state as App.PageState).focus !== undefined && openSessionCtx.sessionId !== null}
 				<aside
-					class="bg-surface-100-900 border-surface-200-800 order-last hidden w-14 shrink-0 flex-col items-center gap-3 border-l py-3 lg:flex"
+					class="bg-surface-100-900 panel-edge order-last hidden w-14 shrink-0 flex-col items-center gap-3 border-l py-3 lg:flex"
 					aria-label="Underneath: {openSessionCtx.sessionName ??
 						'the session'}"
 				>
@@ -2937,21 +2932,20 @@
 							.filter((m) => !m.isPersona)
 							.slice(0, 4) as member, i (member.key)}
 							<span
-								class="bg-surface-300-700 text-surface-950-50 ring-surface-100-900 flex size-[30px] items-center justify-center overflow-hidden rounded-full text-xs font-semibold ring-2 {i >
-								0
-									? '-mt-1.5'
-									: ''}"
+								class="relative flex {i > 0 ? '-mt-[13px]' : ''}"
+								style="z-index: {4 - i}"
 								title={member.name}
 							>
-								{#if member.avatarSrc}
-									<img
-										src={member.avatarSrc}
-										alt=""
-										class="size-full object-cover"
-									/>
-								{:else}
-									{member.name.charAt(0).toUpperCase()}
-								{/if}
+								<!-- The app's one avatar (STYLE-GUIDE §6.4): sm,
+								     round, ringed in the rail's ground. -->
+								<Avatar
+									src={member.avatarSrc ?? undefined}
+									name={member.name}
+									size="sm"
+									fallback="initial"
+									decorative
+									class="ring-surface-100-900 ring-2"
+								/>
 							</span>
 						{/each}
 					</div>
@@ -3030,7 +3024,7 @@
 			     Four destinations and Views (the open views, then everything
 			     else), replacing the hamburger. -->
 			<nav
-				class="bg-surface-50-950 border-surface-200-800 flex shrink-0 items-center justify-around border-t px-1 pt-2 pb-3 lg:hidden"
+				class="bg-surface-50-950 panel-edge flex shrink-0 items-center justify-around border-t px-1 pt-2 pb-3 lg:hidden"
 				aria-label="Primary navigation"
 			>
 				{#each bottomBarEntries as entry (entry.key)}
@@ -3127,7 +3121,7 @@
 				role="presentation"
 				onpointerenter={() => (railPeek = true)}
 			></div>
-		{:else if !layoutEditor.open && fullPageView === null && !panelsCtx.isMobileMenuOpen && (desktop.matches || activeView === null)}
+		{:else if !layoutEditor.open && fullPageView === null && !panelsCtx.isMobileMenuOpen && (desktop.matches || activeView === null) && !sessionHeaderFurled}
 			<JumpPill {jumpCtx} />
 		{/if}
 		{#if jumpCtx.isOpen}
@@ -3153,7 +3147,7 @@
 				}}
 			>
 				<div
-					class="border-border flex items-center justify-between border-b p-4"
+					class="panel-edge flex items-center justify-between border-b p-4"
 				>
 					<span
 						class="text-foreground [font-family:var(--typo-heading--font-family)] text-xl font-semibold whitespace-nowrap"

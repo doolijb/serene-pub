@@ -18,7 +18,9 @@ function declaredEvents(): Set<string> {
 	for (const f of fs.readdirSync(SOCKETS)) {
 		if (!f.endsWith(".ts") || f.includes(".test.")) continue
 		const src = fs.readFileSync(path.join(SOCKETS, f), "utf8")
-		for (const m of src.matchAll(/event:\s*"([^"]+)"/g)) out.add(m[1])
+		// `{ event: "…", handler }`, or `refusable("…", …)` — the wrapper
+		// declares its handler's event as its first argument.
+		for (const m of src.matchAll(/(?:event:\s*|refusable(?:<[^>]*>)?\(\s*)"([^"]+)"/g)) out.add(m[1])
 	}
 	return out
 }

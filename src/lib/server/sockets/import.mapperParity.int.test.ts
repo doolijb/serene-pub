@@ -240,7 +240,7 @@ async function runSingleBookImport(userId: number, book: any) {
 	const { lorebookImportHandler } = await import("./lorebooks")
 	const res = await lorebookImportHandler.handler(
 		{ user: { id: userId } } as any,
-		{ lorebookData: book },
+		{ lorebookJson: JSON.stringify(book) },
 		noopEmit
 	)
 	expect(res.status).toBe("created")

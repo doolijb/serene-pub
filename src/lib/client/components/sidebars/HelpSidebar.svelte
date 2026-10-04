@@ -36,6 +36,7 @@
 	import PanelFilterInput from "$lib/client/components/panels/PanelFilterInput.svelte"
 	import PanelNavHeader from "$lib/client/components/panels/PanelNavHeader.svelte"
 	import PanelSplit from "$lib/client/components/panels/PanelSplit.svelte"
+	import ViewToolbar from "$lib/client/components/panels/ViewToolbar.svelte"
 	import { ViewModeTracker } from "$lib/client/shell/viewMode.svelte"
 	import {
 		docsSearch,
@@ -54,7 +55,11 @@
 		docsPlayground,
 		documentTheme
 	} from "$lib/client/components/docs/docsPlayground"
-	import { helpAnchorId, resolveInViewLink } from "./helpLinks"
+	import {
+		helpAnchorId,
+		openExternalLinksInNewWindow,
+		resolveInViewLink
+	} from "./helpLinks"
 
 	/**
 	 * The dock/desk switch every list-with-detail view shares: one pane at
@@ -78,8 +83,12 @@
 		for (const group of docsManifest.nav) {
 			const at = group.pages.indexOf(slug)
 			if (at === -1) continue
-			const meta = (s: string | undefined) => (s ? getDocMeta(s) ?? null : null)
-			return { prev: meta(group.pages[at - 1]), next: meta(group.pages[at + 1]) }
+			const meta = (s: string | undefined) =>
+				s ? (getDocMeta(s) ?? null) : null
+			return {
+				prev: meta(group.pages[at - 1]),
+				next: meta(group.pages[at + 1])
+			}
 		}
 		return { prev: null, next: null }
 	})
@@ -179,6 +188,7 @@
 			const anchor = (link.getAttribute("href") ?? "").slice(1)
 			if (anchor) link.setAttribute("href", `#${helpAnchorId(anchor)}`)
 		}
+		openExternalLinksInNewWindow(article, window.location.origin)
 	}
 
 	/** Show a page (or the index), landing where the link pointed. */
@@ -240,9 +250,7 @@
 	const IN_VIEW_HITS = 40
 
 	/** Below Jump's minimum a query is not a search yet, and the index stays. */
-	let searching = $derived(
-		searchQuery.trim().length >= JUMP_MIN_QUERY_LENGTH
-	)
+	let searching = $derived(searchQuery.trim().length >= JUMP_MIN_QUERY_LENGTH)
 
 	/**
 	 * The matching sections, kept in view state because `getHits` is
@@ -288,7 +296,9 @@
 	 */
 	let resultsEl = $state<HTMLElement | null>(null)
 	function rows(): HTMLElement[] {
-		return [...(resultsEl?.querySelectorAll<HTMLElement>("[data-result]") ?? [])]
+		return [
+			...(resultsEl?.querySelectorAll<HTMLElement>("[data-result]") ?? [])
+		]
 	}
 	function onSearchKeydown(event: KeyboardEvent) {
 		if (event.key !== "ArrowDown") return
@@ -393,14 +403,19 @@
 			message="The documentation has not been built for this copy of Serene Pub."
 		/>
 	{:else}
-		<div class="mb-4">
-			<PanelFilterInput
-				bind:value={searchQuery}
-				placeholder="Search the documentation"
-				data-help-search
-				onkeydown={onSearchKeydown}
-			/>
-		</div>
+		<!-- The view toolbar (STYLE-GUIDE §6.3; notes 25): reading makes
+		     nothing, so Help has no action row — only the find row, whose box
+		     searches the pages' text rather than filtering a list. -->
+		<ViewToolbar label="Help" class="mb-4">
+			{#snippet filter()}
+				<PanelFilterInput
+					bind:value={searchQuery}
+					placeholder="Search the documentation"
+					data-help-search
+					onkeydown={onSearchKeydown}
+				/>
+			{/snippet}
+		</ViewToolbar>
 		{#if searching}
 			{@render resultsList()}
 		{:else}
@@ -440,7 +455,9 @@
 
 {#snippet marked(text: string)}
 	{#each highlightParts(text, words) as part, i (i)}
-		{#if part.match}<mark class="search-mark">{part.text}</mark>{:else}{part.text}{/if}
+		{#if part.match}<mark class="search-mark">
+				{part.text}
+			</mark>{:else}{part.text}{/if}
 	{/each}
 {/snippet}
 
@@ -462,16 +479,28 @@
 					: ''}"
 				onclick={() => show(String(hit.id), hit.anchor ?? "")}
 			>
-				<span class="flex min-w-0 items-center gap-1.5 text-[15px] font-medium">
+				<span
+					class="flex min-w-0 items-center gap-1.5 text-[15px] font-medium"
+				>
 					{#if pageLevel}
-						<Icons.FileText size={14} class="text-surface-600-400 shrink-0" aria-hidden="true" />
+						<Icons.FileText
+							size={14}
+							class="text-surface-600-400 shrink-0"
+							aria-hidden="true"
+						/>
 					{:else}
-						<Icons.Hash size={14} class="text-surface-600-400 shrink-0" aria-hidden="true" />
+						<Icons.Hash
+							size={14}
+							class="text-surface-600-400 shrink-0"
+							aria-hidden="true"
+						/>
 					{/if}
 					<span class="truncate">{@render marked(hit.title)}</span>
 				</span>
 				{#if !pageLevel}
-					<span class="text-surface-600-400 truncate text-xs">{hit.subtitle}</span>
+					<span class="text-surface-600-400 truncate text-xs">
+						{hit.subtitle}
+					</span>
 				{/if}
 				{#if snippet}
 					<span class="text-surface-700-300 line-clamp-2 text-xs">
@@ -484,74 +513,72 @@
 {/snippet}
 
 {#snippet pageIndex()}
-		<div class="flex flex-col gap-5">
-			<!-- Keyed by source AND group: the guides are one source that fills
+	<div class="flex flex-col gap-5">
+		<!-- Keyed by source AND group: the guides are one source that fills
 			     several groups (Start here, Guides, How-to, …), so a source
 			     alone repeats. The headings stay the §3.3 section heading —
 			     no eyebrow, no numbering (STYLE-GUIDE §1.8). -->
-			{#each groups as group (group.source + ":" + group.group)}
-				<section class="flex flex-col gap-2">
-					<div class="flex items-center gap-2">
-						<h3 class="text-sm font-semibold">{group.group}</h3>
-						{#if group.source !== "app"}
-							<!-- Reference pages are rendered from the SDK's own
+		{#each groups as group (group.source + ":" + group.group)}
+			<section class="flex flex-col gap-2">
+				<div class="flex items-center gap-2">
+					<h3 class="text-sm font-semibold">{group.group}</h3>
+					{#if group.source !== "app"}
+						<!-- Reference pages are rendered from the SDK's own
 							     declarations rather than written by anyone.
 							     Marking the group says so before a reader opens
 							     one and wonders why it reads like a spec. -->
-							<span
-								class="badge preset-tonal-tertiary text-[11px]"
-							>
-								Reference
-							</span>
-						{/if}
-					</div>
-					{#if group.meta?.banner}
-						<!-- Once, above the group. The compiler also prepends it
+						<span class="badge preset-tonal-tertiary text-[11px]">
+							Reference
+						</span>
+					{/if}
+				</div>
+				{#if group.meta?.banner}
+					<!-- Once, above the group. The compiler also prepends it
 						     to every page of the source, so a reader meets it
 						     whichever way in they come. -->
-						<p class="doc-banner">{group.meta.banner}</p>
-					{/if}
-					<div role="list" class="flex flex-col gap-1">
-						{#each group.pages as doc (doc.slug)}
-							<SidebarListItem
-								itemType="Documentation page"
-								contentTitle={doc.title}
-								showIndex={false}
-								active={doc.slug === slug}
-								onclick={() => show(doc.slug)}
-							>
-								{#snippet content()}
+					<p class="doc-banner">{group.meta.banner}</p>
+				{/if}
+				<div role="list" class="flex flex-col gap-1">
+					{#each group.pages as doc (doc.slug)}
+						<SidebarListItem
+							itemType="Documentation page"
+							contentTitle={doc.title}
+							showIndex={false}
+							active={doc.slug === slug}
+							onclick={() => show(doc.slug)}
+						>
+							{#snippet content()}
+								<span
+									class="bg-surface-200-800 text-surface-600-400 grid size-10 shrink-0 place-items-center rounded-[9px]"
+								>
+									<Icons.FileText
+										size={18}
+										aria-hidden="true"
+									/>
+								</span>
+								<span
+									class="flex min-w-0 flex-1 flex-col text-left"
+								>
 									<span
-										class="bg-surface-200-800 text-surface-600-400 grid size-10 shrink-0 place-items-center rounded-[9px]"
+										class="truncate text-[15px] font-medium"
 									>
-										<Icons.FileText
-											size={18}
-											aria-hidden="true"
-										/>
+										{doc.title}
 									</span>
-									<span
-										class="flex min-w-0 flex-1 flex-col text-left"
-									>
+									{#if doc.description}
 										<span
-											class="truncate text-[15px] font-medium"
+											class="text-surface-600-400 line-clamp-2 text-xs"
 										>
-											{doc.title}
+											{doc.description}
 										</span>
-										{#if doc.description}
-											<span
-												class="text-surface-600-400 line-clamp-2 text-xs"
-											>
-												{doc.description}
-											</span>
-										{/if}
-									</span>
-								{/snippet}
-							</SidebarListItem>
-						{/each}
-					</div>
-				</section>
-			{/each}
-		</div>
+									{/if}
+								</span>
+							{/snippet}
+						</SidebarListItem>
+					{/each}
+				</div>
+			</section>
+		{/each}
+	</div>
 {/snippet}
 
 {#snippet pagePane()}
@@ -559,7 +586,9 @@
 	     a 400px dock, shown once this
 	     view has the page to itself (STYLE-GUIDE §5.3 — the column, never the
 	     window). -->
-	<div class="@container/docs flex min-h-0 flex-col">
+	<!-- pb-16: room below the last line and the Previous/Next row, so the
+	     page never ends flush against the bottom of the view. -->
+	<div class="@container/docs flex min-h-0 flex-col pb-16">
 		<div class="mb-3">
 			<PanelNavHeader
 				title={meta?.title ?? "Documentation"}
@@ -617,10 +646,15 @@
 							class="hover:bg-surface-200-800 flex flex-col items-start gap-0.5 rounded-lg p-3 text-left"
 							onclick={() => show(prev.slug)}
 						>
-							<span class="text-surface-600-400 flex items-center gap-1 text-xs">
-								<Icons.ArrowLeft size={12} aria-hidden="true" /> Previous
+							<span
+								class="text-surface-600-400 flex items-center gap-1 text-xs"
+							>
+								<Icons.ArrowLeft size={12} aria-hidden="true" />
+								Previous
 							</span>
-							<span class="text-sm font-medium">{prev.title}</span>
+							<span class="text-sm font-medium">
+								{prev.title}
+							</span>
 						</button>
 					{:else}
 						<span></span>
@@ -632,10 +666,17 @@
 							class="hover:bg-surface-200-800 flex flex-col items-end gap-0.5 rounded-lg p-3 text-right"
 							onclick={() => show(next.slug)}
 						>
-							<span class="text-surface-600-400 flex items-center gap-1 text-xs">
-								Next <Icons.ArrowRight size={12} aria-hidden="true" />
+							<span
+								class="text-surface-600-400 flex items-center gap-1 text-xs"
+							>
+								Next <Icons.ArrowRight
+									size={12}
+									aria-hidden="true"
+								/>
 							</span>
-							<span class="text-sm font-medium">{next.title}</span>
+							<span class="text-sm font-medium">
+								{next.title}
+							</span>
 						</button>
 					{/if}
 				</nav>
@@ -653,7 +694,11 @@
 	/* The matched words: a tint behind the text, never a colour change of
 	   the text itself, so contrast is whatever the row already had. */
 	.search-mark {
-		background: color-mix(in oklab, var(--color-primary-500) 28%, transparent);
+		background: color-mix(
+			in oklab,
+			var(--color-primary-500) 28%,
+			transparent
+		);
 		color: inherit;
 		border-radius: 3px;
 		padding: 0 1px;

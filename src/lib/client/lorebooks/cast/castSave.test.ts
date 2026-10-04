@@ -168,6 +168,7 @@ describe("castMaskedWarning — a base save an amendment still overrides (#113)"
 
 describe("deleteMemberCopy — ruling 4: the dialog asks", () => {
 	const check = (open: number, archived = 0, referenced = false) => ({
+		lorebookId: 9,
 		nodeId: 1,
 		referencedByMergeLog: referenced,
 		privateLoreCount: open,
@@ -183,6 +184,8 @@ describe("deleteMemberCopy — ruling 4: the dialog asks", () => {
 		})
 		expect(copy.message).not.toMatch(/\blore\b/)
 		expect(copy.message).toMatch(/all 2 relationships/)
+		// A16: their tags become their name.
+		expect(copy.message).toMatch(/their name stays as plain text/)
 		expect(copy.message).toMatch(/character card is not touched/)
 		expect(copy.lore).toBeNull()
 	})
@@ -250,7 +253,9 @@ describe("undoMergeToast — what an undo could not put back", () => {
 		const t = undoMergeToast({
 			restoredNode,
 			unrestoredLinkCount: 0,
-			unrestoredStoryCount: 0
+			unrestoredMovedLinkCount: 0,
+			unrestoredStoryCount: 0,
+			unrestoredTextCount: 0
 		})
 		expect(t.kind).toBe("success")
 		expect(t.description).toBe('"Maren" restored.')
@@ -260,12 +265,60 @@ describe("undoMergeToast — what an undo could not put back", () => {
 		const t = undoMergeToast({
 			restoredNode,
 			unrestoredLinkCount: 2,
-			unrestoredStoryCount: 1
+			unrestoredMovedLinkCount: 0,
+			unrestoredStoryCount: 1,
+			unrestoredTextCount: 0
 		})
 		expect(t.kind).toBe("warning")
 		expect(t.description).toMatch(/2 relationships could not be put back/)
 		expect(t.description).toMatch(
-			/1 dated change, placement or attribute of theirs could not be put back/
+			/1 dated change, placement, stat or stat sheet of theirs could not be put back: the line, session or sheet it belonged to has been deleted since/
+		)
+	})
+
+	test("a moved link that could not go back says it stays with the member kept", () => {
+		const one = undoMergeToast({
+			restoredNode,
+			unrestoredLinkCount: 1,
+			unrestoredMovedLinkCount: 1,
+			unrestoredStoryCount: 0,
+			unrestoredTextCount: 0
+		})
+		expect(one.kind).toBe("warning")
+		expect(one.description).toBe(
+			'"Maren" restored. 1 relationship could not be put back: one end, or the line it was on, has been deleted since, or a relationship made since already says the same. It is still on the member "Maren" was merged into.'
+		)
+		const some = undoMergeToast({
+			restoredNode,
+			unrestoredLinkCount: 3,
+			unrestoredMovedLinkCount: 2,
+			unrestoredStoryCount: 0,
+			unrestoredTextCount: 0
+		})
+		expect(some.description).toMatch(
+			/3 relationships could not be put back: .*\. 2 of them are still on the member "Maren" was merged into\.$/
+		)
+		const deleted = undoMergeToast({
+			restoredNode,
+			unrestoredLinkCount: 2,
+			unrestoredMovedLinkCount: 0,
+			unrestoredStoryCount: 0,
+			unrestoredTextCount: 0
+		})
+		expect(deleted.description).not.toMatch(/still on the member/)
+	})
+
+	test("lore edited since the merge keeps the survivor's tag, and says so (A16)", () => {
+		const t = undoMergeToast({
+			restoredNode,
+			unrestoredLinkCount: 0,
+			unrestoredMovedLinkCount: 0,
+			unrestoredStoryCount: 0,
+			unrestoredTextCount: 2
+		})
+		expect(t.kind).toBe("warning")
+		expect(t.description).toMatch(
+			/2 pieces of lore edited since the merge still name the member they were merged into/
 		)
 	})
 })

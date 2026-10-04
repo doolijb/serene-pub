@@ -31,7 +31,7 @@ import {
 } from "$lib/shared/constants/MediaVisibility"
 import { resolveMediaPath, variantRelPath } from "./paths"
 import type { FileRow, VariantRow } from "./index"
-import { makeThumbnail, WEB_SAFE_IMAGE_MIMES } from "./thumbnail"
+import { makeFitted, makeThumbnail, WEB_SAFE_IMAGE_MIMES } from "./thumbnail"
 import { convertMedia, MediaDowngradeError, refusalToError } from "./convert"
 
 /*
@@ -461,46 +461,74 @@ async function deriveThumb(
 	// Already small enough to be its own thumbnail. Serving the source is the
 	// long-standing behaviour and the reason `thumbUrl` can be unconditional.
 	if (!thumb) return source
+	return storeReduced(db, file, MediaVariant.THUMB, thumb)
+}
 
+/**
+ * The FITTED form: the whole picture, long edge capped (composer attachments
+ * plan §4.2). What a message's media strip previews a single image at, and
+ * what a model payload reads.
+ *
+ * Reduced fidelity for the same reason as THUMB: it never competes for the
+ * display pointer and the derived-form sweep may take it. NOT cut from
+ * `files.frame` — a frame is the crop for a square cell, and the point of this
+ * form is that nothing is cropped — so changing a frame leaves it alone.
+ */
+async function deriveFitted(
+	db: Db,
+	file: FileRow,
+	source: ResolvedVariant
+): Promise<ResolvedVariant | null> {
+	const fitted = await makeFitted(source.bytes, source.mime)
+	// Already fits and already web-safe: the source IS the fitted form, and a
+	// second copy would only cost disk.
+	if (!fitted) return source
+	return storeReduced(db, file, MediaVariant.FITTED, fitted)
+}
+
+/**
+ * Write one REDUCED-fidelity derivative (THUMB or FITTED) and return it —
+ * or, when the admin has switched the derived-form cache off, return the bytes
+ * for this one request and keep nothing. The display form never comes through
+ * here: it is not a cache entry.
+ */
+async function storeReduced(
+	db: Db,
+	file: FileRow,
+	variant: MediaVariantName,
+	made: { bytes: Buffer; width: number; height: number; mime: string; ext: string }
+): Promise<ResolvedVariant | null> {
 	if (!(await cacheEnabled(db, file))) {
-		// The admin turned the derived-form cache off: encode per request and
-		// keep nothing. The display form is untouched by this setting — it is
-		// not a cache entry.
 		return {
 			row: null,
-			variant: MediaVariant.THUMB,
-			mime: thumb.mime,
-			bytes: thumb.bytes,
-			hash: sha256(thumb.bytes),
-			width: thumb.width,
-			height: thumb.height
+			variant,
+			mime: made.mime,
+			bytes: made.bytes,
+			hash: sha256(made.bytes),
+			width: made.width,
+			height: made.height
 		}
 	}
 
-	const relPath = await writeVariantFile(
-		file,
-		MediaVariant.THUMB,
-		thumb.ext,
-		thumb.bytes
-	)
+	const relPath = await writeVariantFile(file, variant, made.ext, made.bytes)
 	const [row] = await db
 		.insert(schema.variants)
 		.values({
 			fileId: file.id,
-			variant: MediaVariant.THUMB,
-			mime: thumb.mime,
-			bytes: thumb.bytes.byteLength,
+			variant,
+			mime: made.mime,
+			bytes: made.bytes.byteLength,
 			path: relPath,
-			hash: sha256(thumb.bytes),
-			width: thumb.width,
-			height: thumb.height,
+			hash: sha256(made.bytes),
+			width: made.width,
+			height: made.height,
 			isOriginal: false,
 			cache: true,
 			fidelity: MediaFidelity.REDUCED
 		})
 		.onConflictDoNothing()
 		.returning()
-	const stored = row ?? (await getVariant(db, file.id, MediaVariant.THUMB))
+	const stored = row ?? (await getVariant(db, file.id, variant))
 	return stored ? readVariant(stored) : null
 }
 
@@ -545,9 +573,14 @@ export async function ensureVariant(
 			const source = await loadSource(db, file)
 			if (!source) return null
 
-			return variant === MediaVariant.DISPLAY
-				? await deriveDisplay(db, file, source)
-				: await deriveThumb(db, file, source)
+			switch (variant) {
+				case MediaVariant.DISPLAY:
+					return await deriveDisplay(db, file, source)
+				case MediaVariant.FITTED:
+					return await deriveFitted(db, file, source)
+				default:
+					return await deriveThumb(db, file, source)
+			}
 		} catch (err) {
 			// A refused downgrade is a decision, not a fault: log it at the
 			// same level but say which it was, so "why is my GIF not a WebP"

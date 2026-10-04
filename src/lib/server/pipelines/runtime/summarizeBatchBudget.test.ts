@@ -271,3 +271,95 @@ describe("the minimum batch size means what it says", () => {
 			).toEqual([1, 1, 1, 1])
 	})
 })
+
+/**
+ * Attachments in the summarize transcript (owner ruling 2026-10-03): a
+ * message's files are named after its text — `[image: cat.png — a grey cat]`,
+ * `[file: notes.txt]` — and the names are counted in the cut. A message that
+ * is only a picture summarizes as that picture's name, never as empty text.
+ */
+describe("the batch transcript names each message's files", () => {
+	const file = (over: Record<string, unknown>) => ({
+		uuid: "u-1",
+		kind: "image",
+		mime: "image/png",
+		bytes: 10,
+		attachmentKind: "image",
+		...over
+	})
+
+	it("names an attachment-only message's image, with its description", async () => {
+		const messages = [
+			{ id: 1, senderName: "Mira", content: "Look at the gate." },
+			{ id: 2, senderName: "Mira", content: "" }
+		]
+		const batches = await batchesOf({
+			messages,
+			attachments: {
+				"2": [file({ filename: "gate.png", text: "a rusted iron gate" })]
+			},
+			sampling: { contextTokens: 32768 }
+		})
+		const flat = batches.flat()
+		expect(flat[0]).toBe(messages[0])
+		expect(flat[1].content).toBe("[image: gate.png — a rusted iron gate]")
+	})
+
+	it("puts the names after the text, and names a text file rather than inlining it", async () => {
+		const batches = await batchesOf({
+			messages: [{ id: 7, senderName: "Mira", content: "Notes attached." }],
+			attachments: {
+				"7": [
+					file({ uuid: "u-2", filename: "map.webp" }),
+					file({
+						uuid: "u-3",
+						kind: "document",
+						mime: "text/plain",
+						attachmentKind: "text",
+						filename: "notes.txt",
+						body: "the whole body of the notes"
+					})
+				]
+			},
+			sampling: { contextTokens: 32768 }
+		})
+		expect(batches.flat()[0].content).toBe(
+			"Notes attached.\n[image: map.webp]\n[file: notes.txt]"
+		)
+		expect(batches.flat()[0].content).not.toContain("the whole body")
+	})
+
+	it("counts the names in the cut", async () => {
+		// Two messages that fit one batch as text alone, and do not once a long
+		// description is named on the first.
+		const messages = [
+			{ id: 1, senderName: "Mira", content: "a" },
+			{ id: 2, senderName: "Mira", content: "b" }
+		]
+		const plain = await batchesOf({
+			messages,
+			params: { batchTokens: 512 },
+			sampling: { contextTokens: 32768 }
+		})
+		expect(plain).toHaveLength(1)
+		const named = await batchesOf({
+			messages,
+			attachments: { "1": [file({ filename: "x.png", text: "word ".repeat(500) })] },
+			params: { batchTokens: 512 },
+			sampling: { contextTokens: 32768 }
+		})
+		expect(named).toHaveLength(2)
+	})
+
+	it("parity: no attachments, and the batches are the very objects they were", async () => {
+		const messages = lines(30).map((m, i) => ({ ...m, id: i + 1 }))
+		const before = await batchesOf({ messages, sampling: { contextTokens: 8192 } })
+		const after = await batchesOf({
+			messages,
+			attachments: {},
+			sampling: { contextTokens: 8192 }
+		})
+		expect(after.map((b) => b.length)).toEqual(before.map((b) => b.length))
+		after.flat().forEach((m, i) => expect(m).toBe(messages[i]))
+	})
+})

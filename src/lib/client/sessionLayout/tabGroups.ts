@@ -11,12 +11,12 @@
  * the cost of not reclaiming the members' scattered space. Adjacent groups (the
  * common case) keep their tight bounding box.
  */
-import type { GsPos } from "./GridStackZone.svelte"
+import type { ArrangedItem } from "@serene-pub/sdk"
 
 export type RenderUnit = {
 	key: string
 	box: { x: number; y: number; w: number; h: number }
-	members: GsPos[]
+	members: ArrangedItem[]
 }
 
 type Box = { x: number; y: number; w: number; h: number }
@@ -30,8 +30,8 @@ function boxesOverlap(a: Box, b: Box): boolean {
 	)
 }
 
-export function unitsOf(items: GsPos[]): RenderUnit[] {
-	const groups = new Map<string, GsPos[]>()
+export function unitsOf(items: ArrangedItem[]): RenderUnit[] {
+	const groups = new Map<string, ArrangedItem[]>()
 	const units: RenderUnit[] = []
 	for (const it of items) {
 		if (it.group) {

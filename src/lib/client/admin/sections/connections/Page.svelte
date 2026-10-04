@@ -16,7 +16,6 @@
 	import { useInterest } from "$lib/client/sockets/interest.svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 	import { timeAgo } from "$lib/client/utils/timeAgo"
-	import AdminPageHeader from "$lib/client/components/admin/AdminPageHeader.svelte"
 	import AdminChangelist from "$lib/client/components/admin/AdminChangelist.svelte"
 	import type {
 		AdminBulkAction,
@@ -178,19 +177,9 @@
 	}
 </script>
 
-<AdminPageHeader
+<AdminChangelist
 	title="Connections"
 	purpose="The backends and services Serene Pub talks to, and the models each one serves. A connection does nothing until Defaults gives it a job."
->
-	{#snippet actions()}
-		<button type="button" class="btn btn-sm preset-tonal-surface" onclick={openView}>
-			<Icons.Cable size={16} aria-hidden="true" />
-			Open Connections view
-		</button>
-	{/snippet}
-</AdminPageHeader>
-
-<AdminChangelist
 	{rows}
 	rowKey={(r) => r.id}
 	{columns}
@@ -206,6 +195,12 @@
 	emptyIcon={Icons.Cable}
 	emptyMessage="No connections yet. Add one to give Serene Pub a model to talk to."
 >
+	{#snippet headerActions()}
+		<button type="button" class="btn btn-sm preset-tonal-surface" onclick={openView}>
+			<Icons.Cable size={16} aria-hidden="true" />
+			Open Connections view
+		</button>
+	{/snippet}
 	{#snippet cell(row, col)}
 		{#if col.key === "defaults"}
 			{@const held = defaultsHeldBy(row, defaults)}

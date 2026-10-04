@@ -1,1 +1,0 @@
-ALTER TABLE "system_settings" DROP COLUMN "legacy_prompt_configs_visible";

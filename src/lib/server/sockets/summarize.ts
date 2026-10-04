@@ -2,25 +2,19 @@ import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
 import { and, eq, inArray } from "drizzle-orm"
 import type { Handler } from "$lib/shared/events"
-import { resolveOrCreateBinding } from "$lib/server/utils/characterBindingSync"
-import {
-	buildSceneCastList,
-	reconcileParticipantsAndMentioned,
-	reconcileSuggestedNames,
-	resolveCharacterRefs
-} from "$lib/server/utils/summarizer/availableSceneCast"
-import { relistBindings } from "./lorebooks"
+import { refusable } from "./refusable"
 import { withSessionGenerationLock } from "$lib/server/utils/sessionGenerationLock"
 import { checkSessionAccess } from "$lib/server/utils/sessionAccess"
 import { DEFAULT_CHANNEL, channelWhere } from "$lib/server/messages/channels"
 import { activityError, activityStore } from "$lib/server/utils/activityStore"
 import {
 	loreWriteRefusal,
-	sceneWriteRefusal
+	loreWritesOffRefusal
 } from "$lib/server/messages/writes"
 import { sessionEvents } from "@serene-pub/sdk"
 import { broadcastToSessionUsers } from "./utils/broadcastHelpers"
 import { broadcastSessionRow } from "$lib/server/sessions/rowPush"
+import { assertOwnedBook } from "$lib/server/utils/ownedBook"
 
 /** The columns that say where a session reads its book, as one row has them. */
 type SessionLine = {
@@ -126,6 +120,13 @@ export const sessionsSummarizeHandler: Handler<
 		if (topic && topic.length > 300) {
 			throw new Error("Topic must be 300 characters or fewer.")
 		}
+		// World or character lore only. A scene summary goes through
+		// `scenes:create` + `scenes:process` (the modal routes it there), and
+		// the scene/history branches this handler once had were unreachable
+		// (Phase D) — so a raw emit asking for one is refused, not half-run.
+		if (loreType !== "world" && loreType !== "character") {
+			throw new Error("Only world or character lore can be summarized here.")
+		}
 
 		// Verify the user owns the session — shared helper, not an ad-hoc
 		// reimplementation (see sessionAccess.ts's own comment: a local
@@ -145,8 +146,7 @@ export const sessionsSummarizeHandler: Handler<
 
 		/**
 		 * Declared writes (R-B): a summary IS a lore entry, so a genre whose
-		 * lorebook is a reference does not produce one — and the scene
-		 * summary opens a scene besides, which is its own declaration.
+		 * lorebook is a reference does not produce one.
 		 *
 		 * Before the activity is registered, so a refused request leaves no
 		 * card behind, and thrown rather than emitted as a
@@ -157,16 +157,16 @@ export const sessionsSummarizeHandler: Handler<
 		 */
 		const noLore = await loreWriteRefusal(db, sessionId)
 		if (noLore) throw new Error(noLore)
-		if (loreType === "scene") {
-			const noScenes = await sceneWriteRefusal(db, sessionId)
-			if (noScenes) throw new Error(noScenes)
-		}
+		// The book owner's lore write mode Off: nothing a summary makes could
+		// be saved, so none is made (plan A22). The modal says so on open.
+		const off = await loreWritesOffRefusal(db, sessionId)
+		if (off) throw new Error(off)
 
 		// Guard: session must have a lorebook attached
 		if (!session.lorebookId) {
 			emitToUser("sessions:summarize:error", {
 				reason: "no_lorebook",
-				error: "This session has no lorebook attached. Please attach or create one first."
+				error: "This session reads no lorebook. Read one into this session, or create one, first."
 			})
 			return null as any
 		}
@@ -184,7 +184,7 @@ export const sessionsSummarizeHandler: Handler<
 				userId,
 				sessionId,
 				sessionLabel: session.name ?? undefined,
-				loreType: loreType as "world" | "character",
+				loreType,
 				lorebookId: session.lorebookId!,
 				topic: topic || undefined
 			},
@@ -211,8 +211,8 @@ export const sessionsSummarizeHandler: Handler<
 			try {
 				// Snapshot inside the lock, LLM outside it.
 				//
-				// This read is the only session-state-dependent step —
-				// generateSummary performs no DB access at all — so holding the
+				// This read is the only session-state-dependent step — the
+				// pipeline run below reads its own source — so holding the
 				// lock across the whole pipeline (as this handler used to)
 				// would queue the user's next message behind minutes of LLM
 				// calls. That is exactly the trap a minimize-first flow must
@@ -257,47 +257,10 @@ export const sessionsSummarizeHandler: Handler<
 					return failRun("No messages found to summarize.")
 				}
 
-				// Distinct senders, for the scene participant guarantee below.
-				// Sender-name resolution itself moved into the pipeline's
-				// `summarize_source` read — one place, same mapping.
-				const charIds = [
-					...new Set(
-						rawMessages
-							.filter((m) => m.characterId)
-							.map((m) => m.characterId!)
-					)
-				]
-				const personaIds = [
-					...new Set(
-						rawMessages
-							.filter((m) => m.personaId)
-							.map((m) => m.personaId!)
-					)
-				]
-
-				// For a fresh scene draft, build the lorebook's known cast *before*
-				// generation — no sceneId exists yet (scenes:create hasn't run), so
-				// the cast list is built untimelined (see buildSceneCastList's
-				// null-sceneId handling). This must reach the extraction prompt
-				// itself (via the request the pipeline carries to its cast step),
-				// not just the post-hoc resolve step — otherwise the model has no
-				// [id: N] list to reference and the resolve step silently drops
-				// every castId it hallucinates in response to the output
-				// contract's example.
-				const knownCast =
-					loreType === "scene"
-						? await buildSceneCastList(
-								null,
-								session.lorebookId!,
-								sessionId
-							)
-						: undefined
-
 				/**
 				 * The summarize pipeline for this lore type — its own namespace,
 				 * with its own prompts, connections and sampling per step, all
-				 * resolved through the pipeline config layer rather than the
-				 * legacy `*_summarize_configs` tables.
+				 * resolved through the pipeline config layer.
 				 *
 				 * The run stops **before** its `save` consumer, deliberately:
 				 * this handler has never written the entry. What it produces is
@@ -314,11 +277,7 @@ export const sessionsSummarizeHandler: Handler<
 				const specId =
 					loreType === "world"
 						? specsModule.SUMMARIZE_WORLD_SPEC_ID
-						: loreType === "character"
-							? specsModule.SUMMARIZE_CHARACTER_SPEC_ID
-							: loreType === "scene"
-								? specsModule.SUMMARIZE_SCENE_SPEC_ID
-								: specsModule.SUMMARIZE_HISTORY_SPEC_ID
+						: specsModule.SUMMARIZE_CHARACTER_SPEC_ID
 
 				// Coarse progress from step labels. The pipeline owns batching,
 				// so the total is not known up front; the count ticking upward
@@ -327,8 +286,11 @@ export const sessionsSummarizeHandler: Handler<
 				/** The last frame sent, so a status change re-sends its phase. */
 				let lastFrame: Sockets.Sessions.Summarize.Progress | undefined
 				const progress = (
-					data: Sockets.Sessions.Summarize.Progress
+					frame: Omit<Sockets.Sessions.Summarize.Progress, "sessionId">
 				) => {
+					// The scope key (`SCOPED_EVENTS`): a tab on another
+					// session neither hears nor is sent this run's frames.
+					const data = { sessionId, ...frame }
 					lastFrame = data
 					activityStore.updateSessionSummarize(activityId, {
 						phase: data.phase,
@@ -354,8 +316,7 @@ export const sessionsSummarizeHandler: Handler<
 						request: {
 							topic: topic || undefined,
 							messageIds:
-								messageIds === "all" ? undefined : messageIds,
-							knownCast
+								messageIds === "all" ? undefined : messageIds
 						}
 					},
 					signal: abortController.signal,
@@ -371,7 +332,6 @@ export const sessionsSummarizeHandler: Handler<
 						)
 							progress({
 								phase: "drafting",
-								partial: {},
 								batch: ++batchesSeen,
 								totalBatches: batchesSeen
 							})
@@ -380,7 +340,6 @@ export const sessionsSummarizeHandler: Handler<
 						)
 							progress({
 								phase: "synthesizing",
-								partial: {},
 								batch: 1,
 								totalBatches: 1
 							})
@@ -389,7 +348,6 @@ export const sessionsSummarizeHandler: Handler<
 						)
 							progress({
 								phase: "naming",
-								partial: {},
 								batch: 1,
 								totalBatches: 1
 							})
@@ -398,7 +356,6 @@ export const sessionsSummarizeHandler: Handler<
 						)
 							progress({
 								phase: "extracting",
-								partial: {},
 								batch: 1,
 								totalBatches: 1
 							})
@@ -417,7 +374,6 @@ export const sessionsSummarizeHandler: Handler<
 							Number.isFinite(n) && Number.isFinite(total) && total > 0
 						progress({
 							phase: lastFrame?.phase ?? "drafting",
-							partial: {},
 							batch: counted ? n : (lastFrame?.batch ?? 0),
 							totalBatches: counted
 								? total
@@ -432,7 +388,6 @@ export const sessionsSummarizeHandler: Handler<
 						?.output
 				const content: string | undefined = nodeOut("synth")?.content
 				const entryName: string | undefined = nodeOut("naming")?.name
-				const castOut = nodeOut("cast")?.cast
 
 				if (!content) {
 					const why =
@@ -445,119 +400,28 @@ export const sessionsSummarizeHandler: Handler<
 					)
 				}
 
-				const result = {
+				// Character lore names the character it is about; the book's
+				// cast member for them is found or added by the SAVE, in the
+				// entry's own write (`entries:create` with
+				// `lorebookBindingCharacterId`), never here — a review
+				// discarded or a save refused leaves the book as it was.
+				const bindCharacterId =
+					loreType === "character" && lorebookBindingCharacterId
+						? lorebookBindingCharacterId
+						: null
+
+				const response: Sockets.Sessions.Summarize.Response = {
+					sessionId,
 					content,
 					name: entryName,
 					raw: content,
+					lorebookId: session.lorebookId!,
 					batchCount: receipt.nodes.filter((n: any) =>
 						String(n.typeId ?? "").startsWith(
 							"core:oracle/summarize-batch"
 						)
 					).length,
-					participantCharacters: castOut?.participants as
-						| any[]
-						| undefined,
-					// ⚠ ICED (plan §1/§6), read but never resolved below.
-					// `mentioned` is derived from `message_annotations` now —
-					// exactly (scene text × vocabulary), invalidated by the
-					// freshness triple — so a second copy at scene granularity
-					// is duplication with weaker invalidation. Kept on the
-					// object so reviving the extraction is one line, not a
-					// re-derivation.
-					mentionedCharacters: castOut?.mentioned as any[] | undefined
-				}
-
-				// For character lore, resolve or create the lorebook binding
-				let lorebookBindingId: number | null = null
-				if (loreType === "character" && lorebookBindingCharacterId) {
-					// One column — a voiced character resolves to the same
-					// binding kind as a cast member.
-					lorebookBindingId = await resolveOrCreateBinding({
-						lorebookId: session.lorebookId!,
-						characterId: lorebookBindingCharacterId
-					})
-				}
-
-				let participantCharacters: number[] | undefined
-				let mentionedCharacters: number[] | undefined
-				let suggestedParticipantCharacters: string[] | undefined
-				let suggestedMentionedCharacters: string[] | undefined
-				if (loreType === "scene") {
-					const participants = resolveCharacterRefs(
-						result.participantCharacters ?? [],
-						knownCast!
-					)
-					participantCharacters = participants.ids
-					// ⚠ ICED — the extraction's mentioned list is deliberately
-					// not resolved. Deriving it (utils/sceneMentions.ts) is the
-					// answer now, and it is internal: §6 ruled that `mentioned`
-					// is not surfaced to the user, so nothing on the Review &
-					// Save screen may write a stored copy back.
-					mentionedCharacters = []
-					;({
-						participants: suggestedParticipantCharacters,
-						mentioned: suggestedMentionedCharacters
-					} = reconcileSuggestedNames(
-						participants.suggestedNames,
-						[]
-					))
-
-					// Guarantee: whoever actually sent a message in this range is a
-					// participant, regardless of what the extraction LLM decided —
-					// charIds/personaIds (every distinct sender) were already
-					// computed above for building sender names.
-					const senderBindingIds = new Set<number>()
-					for (const characterId of charIds) {
-						senderBindingIds.add(
-							await resolveOrCreateBinding({
-								lorebookId: session.lorebookId!,
-								characterId
-							})
-						)
-					}
-					for (const personaId of personaIds) {
-						senderBindingIds.add(
-							await resolveOrCreateBinding({
-								lorebookId: session.lorebookId!,
-								characterId: personaId
-							})
-						)
-					}
-
-					;({
-						participants: participantCharacters,
-						mentioned: mentionedCharacters
-					} = reconcileParticipantsAndMentioned(
-						participantCharacters,
-						mentionedCharacters,
-						senderBindingIds
-					))
-				}
-
-				// A new unbound "background" binding can still be minted above via
-				// resolveOrCreateBinding for a message sender's first appearance in
-				// this lorebook (unrelated to extraction — extracted-but-unmatched
-				// names are now deferred suggestions, not eager rows) — push a fresh
-				// list to the client now, before sessions:summarize:complete, so the
-				// modal's dropdown/chip names are warm.
-				if (emitToUser)
-					await relistBindings(
-						socket,
-						session.lorebookId!,
-						emitToUser
-					)
-
-				const response: Sockets.Sessions.Summarize.Response = {
-					content: result.content ?? result.raw,
-					name: result.name,
-					raw: result.raw,
-					lorebookId: session.lorebookId!,
-					batchCount: result.batchCount,
-					lorebookBindingId,
-					participantCharacters,
-					mentionedCharacters,
-					suggestedParticipantCharacters,
-					suggestedMentionedCharacters
+					lorebookBindingCharacterId: bindCharacterId
 				}
 
 				// A cooperating abort can let the call above resolve normally with
@@ -574,7 +438,7 @@ export const sessionsSummarizeHandler: Handler<
 						content: response.content,
 						name: response.name,
 						raw: response.raw,
-						lorebookBindingId
+						lorebookBindingCharacterId: bindCharacterId
 					}
 				})
 
@@ -606,9 +470,9 @@ export const sessionsSummarizeHandler: Handler<
 export const sessionsSetLorebookHandler: Handler<
 	Sockets.Sessions.SetLorebook.Params,
 	Sockets.Sessions.SetLorebook.Response
-> = {
-	event: "sessions:setLorebook",
-	handler: async (socket, params, emitToUser) => {
+> = refusable(
+	"sessions:setLorebook",
+	async (socket, params: Sockets.Sessions.SetLorebook.Params, emitToUser) => {
 		const userId = socket.user!.id
 		const { sessionId, lorebookId } = params
 
@@ -627,31 +491,31 @@ export const sessionsSetLorebookHandler: Handler<
 
 		// If attaching a lorebook, verify the user owns it
 		if (lorebookId !== null) {
-			const lorebook = await db.query.lorebooks.findFirst({
-				where: (l, { and, eq }) =>
-					and(eq(l.id, lorebookId), eq(l.userId, userId))
-			})
-			if (!lorebook) {
-				throw new Error("Lorebook not found or access denied.")
-			}
+			await assertOwnedBook(db, userId, lorebookId)
 		}
 
 		// A new book starts at its most recently used line, the session's
 		// clock at that line's present (ruling 15, story-time P3) — the one
-		// rule `sessionLinePatch` keeps for every path.
+		// rule `sessionLinePatch` keeps for every path. The session's
+		// story-time stats come with it, checked against the new book's
+		// calendar and written in one transaction under its lock.
 		const { sessionLinePatch } = await import("./sessions")
-		const linePatch = await sessionLinePatch({
-			before: {
-				lorebookId: session.lorebookId ?? null,
-				lorebookBranchId: session.lorebookBranchId ?? null
-			},
-			lorebookId
+		const updated = await db.transaction(async (tx) => {
+			const linePatch = await sessionLinePatch(tx, {
+				before: {
+					lorebookId: session.lorebookId ?? null,
+					lorebookBranchId: session.lorebookBranchId ?? null
+				},
+				session: { id: session.id, name: session.name },
+				lorebookId
+			})
+			const [row] = await tx
+				.update(schema.sessions)
+				.set({ lorebookId, ...linePatch })
+				.where(eq(schema.sessions.id, sessionId))
+				.returning()
+			return row
 		})
-		const [updated] = await db
-			.update(schema.sessions)
-			.set({ lorebookId, ...linePatch })
-			.where(eq(schema.sessions.id, sessionId))
-			.returning()
 
 		// Attaching a book to a session is one of the two ways the two meet,
 		// and the cast arrives on its own from either (ruling 2026-09-12).
@@ -681,8 +545,9 @@ export const sessionsSetLorebookHandler: Handler<
 		}
 		emitToUser("sessions:setLorebook", response)
 		return response
-	}
-}
+	},
+	"The session's lorebook could not be changed."
+)
 
 export function registerSummarizeHandlers(
 	socket: any,

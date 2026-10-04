@@ -14,6 +14,16 @@
  *        cause, until the order empties or reaches a person's entry
  * ```
  *
+ * 🚧 **A planned turn** (`via: 'plan'`, Lair character turns, owner ruling
+ * 2026-09-30) is the rest of a turn already taken: the run that planned it
+ * is the turn the send (or the press) asked for, and its delvers' turns are
+ * that turn going on. So under `next` and `round` alike a planned head fires
+ * on ANY run's own cause — auto or pressed — and never on an edit, a
+ * settings save or a system recompute. A Stop ends the plan in the strategy
+ * itself (a stopped row ends it, R34), so a stopped run's finalisation finds
+ * nothing planned. It fires under the session's generation lock, so a turn
+ * a pressed run planned waits for that run to finish.
+ *
  * ## Why it keys on the cause
  *
  * Every event recomputes the order (R1) — an edit, a hide, a settings save,
@@ -129,9 +139,26 @@ async function decideAndFire(
 	// read, so a session switched to `off` mid-round still resets.
 	if (kind === "user") fired.delete(opts.sessionId)
 
-	// Only two causes may ever fire (§4.6): a person's, and an auto run's.
+	const order = opts.turnOrder
+		? readTurnOrder({ turnOrder: opts.turnOrder }).order
+		: (
+				await (async () => {
+					const { headTurnEntry } = await import(
+						"$lib/server/sessions/fireTurn"
+					)
+					const head = await headTurnEntry(db, opts.sessionId)
+					return head ? [head] : []
+				})()
+			)
+	const head = order[0]
+	/** The rest of a turn already taken — see the header. */
+	const planned = head?.via === "plan"
+
+	// Only these causes may ever fire (§4.6): a person's, an auto run's, and
+	// any run's for a planned turn.
 	const mayFire =
-		kind === "user" || (kind === "run" && cause?.auto === true)
+		kind === "user" ||
+		(kind === "run" && (cause?.auto === true || planned))
 	if (!mayFire) return { fired: false, mode: "off", reason: "cause" }
 
 	let mode: AutoAdvanceMode = "next"
@@ -150,22 +177,11 @@ async function decideAndFire(
 	}
 
 	if (mode === "off") return { fired: false, mode, reason: "off" }
-	// `next` fires once per send, and only on the send itself.
-	if (mode === "next" && kind !== "user")
+	// `next` fires once per send, and only on the send itself — or on the
+	// planned turns that send's turn goes on with.
+	if (mode === "next" && kind !== "user" && !planned)
 		return { fired: false, mode, reason: "cause" }
 
-	const order = opts.turnOrder
-		? readTurnOrder({ turnOrder: opts.turnOrder }).order
-		: (
-				await (async () => {
-					const { headTurnEntry } = await import(
-						"$lib/server/sessions/fireTurn"
-					)
-					const head = await headTurnEntry(db, opts.sessionId)
-					return head ? [head] : []
-				})()
-			)
-	const head = order[0]
 	if (!head) return { fired: false, mode, reason: "empty" }
 
 	const spent = fired.get(opts.sessionId) ?? 0
@@ -181,16 +197,24 @@ async function decideAndFire(
 	fired.set(opts.sessionId, spent + 1)
 	await say(true)
 	try {
-		const result = await fireTurnEntry(db, {
-			sessionId: opts.sessionId,
-			userId: opts.userId,
-			entry: head,
-			// The fire's own cause: a run, started automatically. Every write
-			// the run makes carries it, so the recompute that follows can tell
-			// this apart from a person's press and continue the round.
-			cause: { kind: "run", auto: true, userId: opts.userId },
-			io: opts.io
-		})
+		const fire = () =>
+			fireTurnEntry(db, {
+				sessionId: opts.sessionId,
+				userId: opts.userId,
+				entry: head,
+				// The fire's own cause: a run, started automatically. Every write
+				// the run makes carries it, so the recompute that follows can tell
+				// this apart from a person's press and continue the round.
+				cause: { kind: "run", auto: true, userId: opts.userId },
+				io: opts.io
+			})
+		// A planned turn waits for the run that planned it (a pressed run
+		// holds the generation lock until it ends).
+		const result = planned
+			? await (
+					await import("$lib/server/utils/sessionGenerationLock")
+				).withSessionGenerationLock(opts.sessionId, fire)
+			: await fire()
 		if (!result.fired) {
 			// A person's entry ends the round: it is their turn, and the
 			// budget goes back so their next press starts fresh.

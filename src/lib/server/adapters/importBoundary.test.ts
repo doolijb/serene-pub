@@ -354,11 +354,6 @@ describe("the eager load stays in one place", () => {
 	test("registry consumers are enumerated", () => {
 		const CONSUMERS = [
 			"src/lib/server/connectionAdapters/manifest.conformance.test.ts",
-			// Awaits NOTHING. It asserts that 0105's rename gives a llama.cpp
-			// row back an adapter the old type id no longer has — a key lookup
-			// and a `typeof thunk`, never a call — and it runs only in a Node
-			// test process. The question this list exists to force, answered.
-			"src/lib/server/connections/llamaCppTypeMigration.int.test.ts",
 			// Awaits ONE thunk, its own family's, to prove the loader routes
 			// through this map rather than a switch of its own. A key lookup and
 			// a single `import()` of a module that speaks `fetch`, in a Node

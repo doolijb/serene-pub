@@ -100,6 +100,7 @@ beforeAll(async () => {
 	await fsPromises.mkdir(textDir)
 	await fsPromises.mkdir(imageDir)
 	await fsPromises.writeFile(path.join(textDir, "llama-3.gguf"), "x")
+	await fsPromises.writeFile(path.join(textDir, "mmproj-llama-3-f16.gguf"), "x")
 	await fsPromises.writeFile(path.join(imageDir, "sdxl.safetensors"), "x")
 	// An image model downloaded before there were two directories.
 	await fsPromises.writeFile(path.join(textDir, "legacy-sd.gguf"), "x")
@@ -272,6 +273,36 @@ describe("ensureManagedReady — the text path", () => {
 		expect(loadOpts.request.path).toBe("llama-3.gguf")
 	})
 
+	it("resolves a vision projector against the TEXT directory, beside its model", async () => {
+		const ensureManagedReady = await loadReady()
+
+		await ensureManagedReady(textSpec({ mmproj: "mmproj-llama-3-f16.gguf" }), {
+			connectionId: 3
+		})
+
+		expect(loadOpts.request.mmproj).toBe("mmproj-llama-3-f16.gguf")
+		expect(loadOpts.request.mmprojPath).toBe(
+			path.join(textDir, "mmproj-llama-3-f16.gguf")
+		)
+	})
+
+	it("refuses a vision projector that is not there, naming it and the fix", async () => {
+		const ensureManagedReady = await loadReady()
+
+		await expect(
+			ensureManagedReady(textSpec({ mmproj: "gone.gguf" }), { connectionId: 3 })
+		).rejects.toThrow(/vision projector "gone.gguf".*clear Vision projector/)
+		expect(loadOpts).toBeNull()
+	})
+
+	it("loads no projector for a model that has none", async () => {
+		const ensureManagedReady = await loadReady()
+
+		await ensureManagedReady(textSpec(), { connectionId: 3 })
+
+		expect(loadOpts.request.mmprojPath).toBeUndefined()
+	})
+
 	it("refuses an empty model name before doing anything else", async () => {
 		const ensureManagedReady = await loadReady()
 
@@ -298,8 +329,7 @@ describe("KoboldCppManagedAdapter.preflight — Ruling 1 at the adapter", () => 
 		return new Adapter({
 			connection: { ...connection, extraJson },
 			sampling: { contextTokens: 8192 },
-			contextConfig: {} as any,
-			promptConfig: { systemPrompt: "system" } as any,
+			systemPrompt: "system",
 			session: {
 				id: 1,
 				userId: 1,
@@ -349,6 +379,24 @@ describe("KoboldCppManagedAdapter.preflight — Ruling 1 at the adapter", () => 
 			flashAttention: true,
 			batchSize: 256,
 			contextSize: 8192
+		})
+	})
+
+	it("hands the model's vision projector (the pair's extraJson.mmproj) to the load", async () => {
+		const { default: exportsDefault } = await import(
+			"./KoboldCppManagedAdapter"
+		)
+		const adapter = makeAdapter(exportsDefault.Adapter, {
+			mmproj: "mmproj-llama-3-f16.gguf"
+		})
+
+		await adapter.preflight()
+
+		expect(loadOpts.request).toMatchObject({
+			kind: "text",
+			file: "llama-3.gguf",
+			mmproj: "mmproj-llama-3-f16.gguf",
+			mmprojPath: path.join(textDir, "mmproj-llama-3-f16.gguf")
 		})
 	})
 

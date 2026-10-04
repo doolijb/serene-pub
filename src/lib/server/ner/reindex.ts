@@ -30,23 +30,31 @@
  * ## Unstarring does not destroy the corpus
  *
  * Turning the model off is not a decision to throw work away: unstarring stops
- * the model and leaves every row where it is, so re-starring the same connection
- * costs nothing. The rows keep their model-tier entities, which remain true
- * statements about the text; they are replaced by lexical ones the next time
- * their content or vocabulary moves. The clear happens only when there is a NEW
- * model whose identity differs.
+ * the model and leaves every row where it is. The rows keep their model-tier
+ * entities, which remain true statements about the text; they are replaced by
+ * lexical ones the next time their content or vocabulary moves.
+ *
+ * ⚠ **Compared against the rows, not against the star before the write** (the
+ * embedding star's A10 rule). After an unstar the star before is nothing, so
+ * "did the star's model change?" answers yes to a re-star of the very model the
+ * corpus was built with. Every row records the model whose spans it holds
+ * (`entity_model`, NULL for a lexical pass), so a star move clears exactly the
+ * rows the newly starred model did not write: none on a re-star of the same
+ * model, the lexical rows written while it was off, and everything another
+ * model wrote.
  */
 
-import { sql } from "drizzle-orm"
+import { isNull, ne, or, sql } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import { resolveNerTarget } from "./target"
 import { unloadNerModel } from "./index"
 import { forgetNerLoadFailure } from "./broker"
 
 export interface NerStarChange {
-	/** True when the model identity moved and the annotations were dropped. */
+	/** True when annotations the new model did not write were dropped. */
 	reannotated: boolean
-	/** How many annotated rows were cleared. Zero on an unstar, and on a no-op. */
+	/** How many annotated rows were cleared. Zero on an unstar, on a no-op,
+	 *  and on a re-star of the model the rows were annotated with. */
 	cleared: number
 	/** The identity now in force, or null with no star. */
 	modelId: string | null
@@ -70,23 +78,49 @@ export async function currentNerModelId(db: Db): Promise<string | null> {
  * rows underneath are several times that number and describe nothing anybody can
  * point at.
  *
+ * With `keepModel` — the model about to be starred — only the rows it did not
+ * write, which are the rows `applyNerStarChange` clears. Without it, every
+ * annotated row.
+ *
  * ⚠ No time estimate accompanies it, deliberately. Nothing in the lane measures
  * throughput, and a made-up "roughly N minutes" on a screen whose whole job is
  * to state the cost accurately would be the one number on it that was invented.
  */
-export async function nerReannotateCost(db: Db): Promise<{ rows: number }> {
+export async function nerReannotateCost(
+	db: Db,
+	opts: { keepModel?: string | null } = {}
+): Promise<{ rows: number }> {
+	const keep = opts.keepModel ?? null
 	const [entries] = await db
 		.select({
 			n: sql<number>`count(distinct ${schema.entryAnnotations.entryId})`
 		})
 		.from(schema.entryAnnotations)
+		.where(
+			keep == null
+				? undefined
+				: notWrittenBy(schema.entryAnnotations.entityModel, keep)
+		)
 	const [messages] = await db
 		.select({
 			n: sql<number>`count(distinct ${schema.messageAnnotations.messageId})`
 		})
 		.from(schema.messageAnnotations)
+		.where(
+			keep == null
+				? undefined
+				: notWrittenBy(schema.messageAnnotations.entityModel, keep)
+		)
 	return { rows: Number(entries?.n ?? 0) + Number(messages?.n ?? 0) }
 }
+
+/** An annotation the model `keep` did not write — a lexical one included. */
+const notWrittenBy = (
+	column:
+		| typeof schema.entryAnnotations.entityModel
+		| typeof schema.messageAnnotations.entityModel,
+	keep: string
+) => or(isNull(column), ne(column, keep))
 
 /**
  * Apply the consequence of the entity star having just moved.
@@ -125,12 +159,17 @@ export async function applyNerStarChange(
 		return { reannotated: false, cleared: 0, modelId: null }
 	}
 
-	const cost = await nerReannotateCost(db)
-	// Both tables, because both are annotated by the same lane under the same
-	// extractor and a half-cleared corpus is one where two rows disagree about
-	// what a name is.
-	await db.delete(schema.entryAnnotations)
-	await db.delete(schema.messageAnnotations)
+	// Only what the model now starred did not write: a re-star of the model
+	// the corpus was built with clears nothing. Both tables, because both are
+	// annotated by the same lane under the same extractor and a half-cleared
+	// corpus is one where two rows disagree about what a name is.
+	const cost = await nerReannotateCost(db, { keepModel: after })
+	await db
+		.delete(schema.entryAnnotations)
+		.where(notWrittenBy(schema.entryAnnotations.entityModel, after))
+	await db
+		.delete(schema.messageAnnotations)
+		.where(notWrittenBy(schema.messageAnnotations.entityModel, after))
 	annotationLane.start()
-	return { reannotated: true, cleared: cost.rows, modelId: after }
+	return { reannotated: cost.rows > 0, cleared: cost.rows, modelId: after }
 }

@@ -6,8 +6,9 @@
  * irrelevant context from completely unrelated sessions, characters, or lorebooks.
  *
  * Use `getSessionRagContext` to resolve a session's linked content IDs, then pass
- * those IDs to `scopedRankBySimilarity` (or filter manually) to ensure all
- * RAG results are relevant to the active conversation.
+ * those IDs to `fetchScopedCandidates` and rank the result with
+ * `rankScopedCandidates` (fetch once per turn, rank per query embedding) to
+ * ensure all RAG results are relevant to the active conversation.
  */
 
 import { db } from "$lib/server/db"
@@ -37,6 +38,7 @@ import {
 } from "$lib/server/state/entriesOnReading"
 import { onLineSql } from "$lib/server/state/lineSql"
 import { cosineSimilarity } from "./index"
+import { messageHasText } from "./messageText"
 import { channelWhere } from "$lib/server/messages/channels"
 
 // ---------------------------------------------------------------------------
@@ -285,8 +287,7 @@ async function noteTruncation(
  * **Do not reconcile them by renaming.** `historyEntry` here and `history`
  * there is deliberate, documented at `bindings.ts` (`VECTOR_SOURCE_ALIASES`),
  * and renaming either side would change the semantic arm's budget caps and
- * force a registry re-projection that `drizzle/0146` says must not become a
- * pattern. They are reconciled **at boundaries** — `BUDGET_GROUP_ALIASES` on
+ * force a registry re-projection, which must not become a pattern. They are reconciled **at boundaries** — `BUDGET_GROUP_ALIASES` on
  * the way into `core:task/rank-hybrid@1`, and `select()`'s
  * `excluded_unknown_source` receipt for what still has no group. This constant
  * is the request-side boundary, and `assertIndexSources` below is its guard.
@@ -318,11 +319,10 @@ export type RagIndexSource = (typeof RAG_INDEX_SOURCES)[number]
  * fetch that looks exactly like a session with no indexed history. Silent, and
  * wrong in the direction that reads as "retrieval found nothing".
  *
- * **Latent today, and this keeps it that way.** No shipped spec sets `sources`
- * at all — `core:query/vector-search@1` declares no such param — so `sources`
- * is always `undefined` here and every source is fetched. Whoever adds that
- * param is the person this is written for, and they get a sentence naming both
- * vocabularies instead of an empty list.
+ * The shipped caller is the `vector-search` binding, which names its sources
+ * itself (`SEMANTIC_SEARCH_SOURCES`, the lorebook's entries); the definition
+ * declares no `sources` param, so no spec can. Whoever adds one gets a
+ * sentence naming both vocabularies instead of an empty list.
  */
 export function assertIndexSources(sources: readonly string[]): void {
 	const unknown = sources.filter(
@@ -340,6 +340,18 @@ export function assertIndexSources(sources: readonly string[]): void {
 	)
 }
 
+/**
+ * How many of a session's newest messages a search leaves out, because the
+ * prompt carries them verbatim: the transcript window
+ * `core:query/session-history@1` reads by default (its `limit`, 100). A
+ * message hit inside it would say again what the prompt already says.
+ *
+ * ⚠ A reply's read is sized by the context window since 2026-10-03 (its
+ * `budget` port), so the prompt may carry more than 100 or fewer; this stays
+ * the count until a retrieval decision moves it.
+ */
+export const RECENT_MESSAGES_IN_PROMPT = 100
+
 export type ScopedRagOptions = {
 	topK?: number
 	/**
@@ -353,8 +365,8 @@ export type ScopedRagOptions = {
 	/** Active embedding model — items from other models are excluded */
 	modelId: string
 	/**
-	 * For messages: exclude the N most recent (they're already in the context window).
-	 * Defaults to 10.
+	 * For messages: exclude the N most recent, which the prompt already
+	 * carries verbatim. Defaults to `RECENT_MESSAGES_IN_PROMPT`.
 	 */
 	excludeRecentMessages?: number
 	/**
@@ -392,7 +404,11 @@ export async function fetchScopedCandidates(
 	context: SessionRagContext,
 	opts: Omit<ScopedRagOptions, "topK">
 ): Promise<ScopedRagFetch> {
-	const { modelId, sources, excludeRecentMessages = 10 } = opts
+	const {
+		modelId,
+		sources,
+		excludeRecentMessages = RECENT_MESSAGES_IN_PROMPT
+	} = opts
 	const messageChannel = channelWhere(
 		schema.sessionMessages.channel,
 		opts.channel
@@ -438,6 +454,7 @@ export async function fetchScopedCandidates(
 			eq(schema.sessionMessages.isHidden, false),
 			isNotNull(schema.sessionMessages.embedding),
 			eq(schema.sessionMessages.embeddingModel, modelId),
+			messageHasText,
 			messageChannel
 		)
 		const messages = await db
@@ -498,6 +515,14 @@ export async function fetchScopedCandidates(
 		 * amendments before its text or its Off mark is trusted. `enabled` and
 		 * `archived` stay in SQL unless one of the line's amendments sets
 		 * them — then they are asked of the resolved row.
+		 *
+		 * ⚠ **The vector is the BASE text's** (owner ruling R1, "hybrid",
+		 * 2026-09-30). An entry is embedded once, from its stored text, and
+		 * an amendment that rewrites its content does not re-embed it: the
+		 * score is the base text's, the content rendered is the amended
+		 * one. Names are the other half of the ruling and do read amended
+		 * (`annotations/loadVocabulary`, plan C1); content vectors stay as
+		 * they are. `docs/lorebook-time.md` says so to users.
 		 */
 		const reading: EntryReading = context.reading ?? MAIN_HEAD
 		const overlays = new Map<number, Map<number, any[]>>()
@@ -849,26 +874,4 @@ export function rankScopedCandidates(
 	)
 	scored.sort((a, b) => b.score - a.score)
 	return topK ? scored.slice(0, topK) : scored
-}
-
-/**
- * Run a similarity search over all content associated with the given session context.
- * Results are scoped to only include content linked to this session, filtered to the
- * active embedding model, and sorted by cosine similarity descending.
- *
- * Thin wrapper around fetchScopedCandidates()+rankScopedCandidates() for
- * single-query callers — a caller scoring multiple query embeddings
- * against the same session context in one turn should call those two
- * directly instead, fetching once and reusing the candidate set.
- *
- * Returning ranked items only, this drops the fetch's `truncated` report. A
- * caller that shows its retrieval to the user wants the pair, not this.
- */
-export async function scopedRankBySimilarity(
-	queryEmbedding: number[],
-	context: SessionRagContext,
-	opts: ScopedRagOptions
-): Promise<ScopedRagItem[]> {
-	const { candidates } = await fetchScopedCandidates(context, opts)
-	return rankScopedCandidates(candidates, queryEmbedding, opts.topK)
 }

@@ -491,7 +491,7 @@ export async function projectPluginPackage(
 			.limit(1)
 		if (!spec) {
 			report.refused.push(
-				`config '${slug}': no spec '${specSlug}' on this instance. A config over a ` +
+				`config '${slug}': no spec '${specSlug}' on this pub. A config over a ` +
 					`spec the package does not ship is a requirement, and this one is not met.`
 			)
 			continue
@@ -679,8 +679,24 @@ export async function installPluginPackage(
 	if (missing.length)
 		throw new Error(
 			`'${pluginId}' requires ${missing.join(", ")} — not installed on this ` +
-				`instance. Install what it builds on first.`
+				`pub. Install what it builds on first.`
 		)
+
+	// A custom pipeline must include a default preset (owner ruling
+	// 2026-10-02): a genre the package declares with no preset for it has
+	// pipelines nobody can start a session on, and the Pipelines view lists a
+	// genre's pipelines only under its presets. The SDK refuses this at
+	// packaging; a manifest built before that rule is refused here, in the
+	// same sentence.
+	{
+		const { genrePresetFindings } = await import("@serene-pub/sdk")
+		const problems = genrePresetFindings(
+			((pkg.manifest as any)?.genres ?? []) as any[],
+			((pkg.manifest as any)?.presets ?? []) as any[]
+		)
+		if (problems.length)
+			throw new Error(`'${pluginId}' cannot install: ${problems.join("; ")}`)
+	}
 
 	// Swap contributions (R29): the target node and the fit are this
 	// instance's to check, before anything is written.

@@ -37,6 +37,13 @@ export type ManagedModelRequest =
 			flashAttention: boolean
 			batchSize: number
 			contextSize: number
+			/**
+			 * The vision projector's bare filename (`visionProjector.ts`), or
+			 * absent for a model that reads no images.
+			 */
+			mmproj?: string
+			/** Its absolute path, resolved and contained like `path`. */
+			mmprojPath?: string
 	  }
 	| {
 			kind: "image"
@@ -220,6 +227,9 @@ function residencyMatches(current: Residency, plan: Residency): boolean {
 			have.gpuLayers !== plan.text.gpuLayers ||
 			have.flashAttention !== plan.text.flashAttention ||
 			have.batchSize !== plan.text.batchSize ||
+			// A projector added, removed or swapped is a different launch: the
+			// running process cannot grow or drop one without a reload.
+			(have.mmprojPath ?? null) !== (plan.text.mmprojPath ?? null) ||
 			// >=, not ===: a model already loaded with a bigger context window
 			// serves a smaller request without a reload.
 			have.contextSize < plan.text.contextSize
@@ -432,7 +442,14 @@ export function buildConfigContent(plan: Residency): Record<string, unknown> {
 					gpulayers: plan.text.gpuLayers,
 					contextsize: plan.text.contextSize,
 					flashattention: plan.text.flashAttention,
-					batchsize: plan.text.batchSize
+					batchsize: plan.text.batchSize,
+					// `--mmproj [filename]`, a plain string (default ''), and not
+					// in reload_config's protected args — so it is written here
+					// on every load or the reload resets it to none (verified
+					// against koboldcpp.py, 2026-10-02).
+					...(plan.text.mmprojPath
+						? { mmproj: plan.text.mmprojPath }
+						: {})
 				}
 			: {
 					// No `model`, no `model_param`, and none of the text knobs —

@@ -157,6 +157,21 @@ export function previewRequestHandler(note: (n: PreviewRequestNote) => void): Wi
 				offset
 			}
 		}
+		if (kind === "authors-note" || kind === "set-authors-note") {
+			// 🚧 The author's note (AN1): a preview's note, and a save that
+			// answers with what was sent — nothing is stored.
+			note({ kind, answered: "fixture", at: Date.now() })
+			const sent = (params as { note?: unknown } | undefined)?.note
+			return {
+				offered: true,
+				canEdit: true,
+				note:
+					kind === "set-authors-note" && sent
+						? sent
+						: { text: "The fog is lifting over the moor.", depth: 4, interval: 1, role: "system" },
+				lastReply: { included: true, reason: "included", depth: 4, targetIndex: 6 }
+			}
+		}
 		note({ kind, answered: "stub", at: Date.now() })
 		return undefined
 	}

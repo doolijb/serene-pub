@@ -2,7 +2,6 @@
 	import { getContext, onDestroy, onMount, untrack } from "svelte"
 	import { SvelteMap } from "svelte/reactivity"
 	import * as Icons from "@lucide/svelte"
-	import { Popover, Portal } from "@skeletonlabs/skeleton-svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import {
 		declareInterest,
@@ -10,19 +9,23 @@
 	} from "$lib/client/sockets/interest.svelte"
 	import { interestKey } from "$lib/shared/sockets/interest"
 	import { toaster } from "$lib/client/utils/toaster"
+	import { warnBeforeUnload } from "$lib/client/forms/unsavedEdits.svelte"
 	import EmptyState from "$lib/client/components/EmptyState.svelte"
 	import LorebookListItem from "$lib/client/components/listItems/LorebookListItem.svelte"
 	import PanelFilterInput from "$lib/client/components/panels/PanelFilterInput.svelte"
+	import ViewToolbar from "$lib/client/components/panels/ViewToolbar.svelte"
+	import { toolbarButtonClass } from "$lib/client/components/panels/toolbarButton"
 	import LorebookUnsavedChangesModal from "$lib/client/components/modals/LorebookUnsavedChangesModal.svelte"
-	import { HISTORY_TYPE_ID } from "$lib/shared/entries/types"
+	import {
+		CHARACTER_LORE_TYPE_ID,
+		HISTORY_TYPE_ID
+	} from "$lib/shared/entries/types"
 	import { attachLorebookToSession } from "$lib/client/utils/attachLorebookToSession"
-	import BookMenu from "./BookMenu.svelte"
+	import RowMenu from "$lib/client/components/menus/RowMenu.svelte"
+	import { LOREBOOK_EXPORT_PAUSED } from "$lib/shared/lorebooks/exportPaused"
 	import DetailHero from "$lib/client/components/panels/DetailHero.svelte"
 	import BookSettings from "./BookSettings.svelte"
-	import CastWorkspace from "./CastWorkspace.svelte"
 	import DayOne from "./DayOne.svelte"
-	import EntryWorkspace from "./EntryWorkspace.svelte"
-	import GraphsWorkspace from "./GraphsWorkspace.svelte"
 	import LensRow from "./LensRow.svelte"
 	import LorebookActions from "./LorebookActions.svelte"
 	import LoreRail from "./LoreRail.svelte"
@@ -31,16 +34,38 @@
 	import MomentBanner from "./time/MomentBanner.svelte"
 	import MomentBar from "./time/MomentBar.svelte"
 	import CompareLines from "./time/CompareLines.svelte"
-	import LivesLens from "./time/LivesLens.svelte"
 	import WorldBar from "./time/WorldBar.svelte"
 	import { worldRoster } from "./time/worldRoster"
 	import { appearancesOf } from "$lib/shared/lorebooks/presence"
-	import TimeLens from "./time/TimeLens.svelte"
 	import { refLinksFrom, type RefLink } from "./editor/refs"
-	import { drawingForLens } from "./graphs"
+	import { whenBookOpens } from "./bookOpens.svelte"
+	import { setBookData } from "./bookData.svelte"
+	import {
+		castSignature,
+		dropDeletedEntry,
+		patchEmbedding,
+		patchScene
+	} from "./bookPatches"
+	import { lensDescriptor, lensForKey, QUEUE_LENS } from "./lenses/registry"
+	import { mountFor } from "./lenses/mounts"
+	import type { LensBench } from "./lenses/types"
 	import { edgesOnLine } from "./graphs/asOf"
+	import { endpointKey } from "./graphs/graphModel"
+	import {
+		looseEnds,
+		liveQueue,
+		membersWithLore,
+		nextLooseEnd,
+		choreOf,
+		type ChoreField,
+		type LooseEnd
+	} from "./looseEnds"
 	import { layoutModeFor } from "./layoutMode"
 	import { loreRoute } from "./loreRoute.svelte"
+	import {
+		BookRelationships,
+		setBookRelationships
+	} from "./relationships.svelte"
 	import { JUMP_CONTEXT, type JumpCtx } from "$lib/client/shell/jump.svelte"
 	import {
 		DEFAULT_LENS,
@@ -48,7 +73,6 @@
 		emptyRoute,
 		reduce,
 		routeFromDigest,
-		SCOPE_LABELS,
 		type LoreLens,
 		type LoreScope
 	} from "$lib/shared/lorebooks/loreRoute"
@@ -66,18 +90,19 @@
 		matchSessionRoute,
 		mergeCastCount,
 		railScopes,
+		READ_INTO_SESSION,
 		SAVED_SCOPES,
 		savedScopeCount,
 		savedScopeFilters,
-		timeLensEntries,
+		savedScopePool,
+		savedScopeRoute,
+		scopeRoute,
+		STOP_READING,
 		type SavedScopeId
 	} from "./scopes"
-	import {
-		bookPoolItems,
-		descriptorFor,
-		descriptorForKind,
-		SECTION_DESCRIPTORS
-	} from "./sections"
+	import { bookPoolItems, descriptorForKind } from "./sections"
+	import { castPoolItem } from "./castPool"
+	import { avatarSrc } from "$lib/client/utils/media"
 	import type { EntryDecisions } from "./markers"
 	import type { PoolSource } from "./sections/types"
 	import { timelineCursor } from "./timelineCursor.svelte"
@@ -95,14 +120,13 @@
 		castAsOf,
 		compareLines,
 		entryAsOf,
-		groupAmendments,
-		rowsOnLine
+		groupAmendments
 	} from "$lib/shared/lorebooks/amendments"
 	import {
 		amendmentsOnLine,
-		forkDateOf,
 		lineOf,
-		rowsReadingOnLine
+		rowsReadingOnLine,
+		survivingLineOf
 	} from "$lib/shared/lorebooks/lineReading"
 	import {
 		storyItems,
@@ -120,6 +144,17 @@
 	 * the same room, and must land in the same place.
 	 */
 	const socket = useTypedSocket()
+	/**
+	 * The open book's relationships, and the cast rows they name — ONE copy,
+	 * which the graph lens reads too (plan places-graph B3). Turned to the
+	 * book in the book-scoped interest effect below.
+	 */
+	const relationships = new BookRelationships(socket)
+	setBookRelationships(relationships)
+	/**
+	 * The open book's data, read by every lens (plan B4) — the shell's own
+	 * state, through getters. Set below, once the state it reads exists.
+	 */
 	const panelsCtx: PanelsCtx = getContext("panelsCtx")
 	const openSessionCtx: OpenSessionCtx = getContext("openSessionCtx")
 
@@ -128,6 +163,8 @@
 	/** The search over the list of books, which is a different list. */
 	let bookSearch: string = $state("")
 	let widthPx: number = $state(0)
+	/** The workspace's own element: a lens shortcut is heard only inside it. */
+	let workspaceEl: HTMLDivElement | undefined = $state()
 	let menuOpen: boolean = $state(false)
 	let tabHasUnsavedChanges: boolean = $state(false)
 
@@ -151,22 +188,17 @@
 	let castAmendments = $state<Sockets.Amendments.CastRow[]>([])
 	/** Where each member stands in their own life, and when. */
 	let presences = $state<Sockets.Amendments.Presence[]>([])
-	/** The book's cast members, for the comparison. The Cast board keeps its own. */
+	/**
+	 * The book's cast, as the server lists it — every lens's copy (plan B4:
+	 * the Cast board, Entries and the Time lens each kept one of their own).
+	 */
 	let castRows = $state<any[]>([])
+	/** Whether the cast and the scenes have arrived for the open book. */
+	let castLoaded = $state(false)
+	let scenesLoaded = $state(false)
 	/** The book's lines. `main` is implicit and never in here. */
 	let branches = $state<Sockets.Amendments.Branch[]>([])
 	let sceneRows = $state<PoolSource[]>([])
-	/**
-	 * The book's typed edges, and the cast rows they name.
-	 *
-	 * ⚠ Read here rather than in the graph lens: an edge is what the Refs
-	 * board calls a direct reference, and the editor must not have to have
-	 * the canvas open to know a road exists.
-	 */
-	let graphNodes = $state<Sockets.NarrativeGraph.NarrativeNode[]>([])
-	let graphRelationships = $state<
-		Sockets.NarrativeGraph.NarrativeRelationship[]
-	>([])
 	let decisions = $state<EntryDecisions | null>(null)
 	/** What the same run did with the graph, for the graph lens's ceiling. */
 	let runRelationships = $state<
@@ -180,10 +212,18 @@
 	let saved: SavedScopeId | null = $state(null)
 
 	let route = $derived(loreRoute.route)
+	/**
+	 * The open book's id, as a primitive: it passes on only when the book
+	 * changes. `route` is a new object on every navigation, so an effect that
+	 * reads `route.lorebookId` re-runs on a node click; one keyed on this does
+	 * not.
+	 */
+	let openBookId = $derived(route.lorebookId)
 	let mode = $derived(layoutModeFor(widthPx))
 	let book = $derived(lorebookList.find((l) => l.id === route.lorebookId))
 	let lens = $derived<LoreLens>(route.lens ?? DEFAULT_LENS)
-	let drawing = $derived(drawingForLens(lens))
+	/** The lens's descriptor — what draws it, and how it treats day one. */
+	let activeLens = $derived(lensDescriptor(lens))
 
 	// Guests can view a shared session but can't reconfigure it — the server
 	// rejects sessions:setLorebook for non-owners anyway, this just avoids
@@ -309,12 +349,14 @@
 			// would be counted by anything reading the length. A shared row
 			// dated after the fork is CUT from the branch, as the server's
 			// counts and readings cut it.
-			rowsReadingOnLine(rows as any[], onLine, rowDate).map((row: any) => {
-				const overlays = byEntry.get(row.id)
-				return overlays
-					? (entryAsOf(row, overlays as any, at) as PoolSource)
-					: (row as PoolSource)
-			})
+			rowsReadingOnLine(rows as any[], onLine, rowDate).map(
+				(row: any) => {
+					const overlays = byEntry.get(row.id)
+					return overlays
+						? (entryAsOf(row, overlays as any, at) as PoolSource)
+						: (row as PoolSource)
+				}
+			)
 	})
 
 	/**
@@ -330,18 +372,9 @@
 	 *
 	 * ⚠ A fork off another fork reads THROUGH its parent (ruling 5): the
 	 * parent's amendments up to this line's fork date, the grandparent's up
-	 * to the earlier of the two cuts — `line` carries the whole chain, and
-	 * the resolvers read it rather than `forkedAt` (kept for display).
+	 * to the earlier of the two cuts — `line` carries the whole chain.
 	 */
-	let amendmentsAt = $derived.by(() => {
-		const branchId = route.branch ?? null
-		return {
-			moment: parseMoment(route.moment),
-			branchId,
-			forkedAt: forkDateOf(branches.find((b) => b.id === branchId)),
-			line
-		}
-	})
+	let amendmentsAt = $derived({ moment: parseMoment(route.moment), line })
 
 	/**
 	 * A cast member as they read at this moment, on this line.
@@ -427,7 +460,7 @@
 			moment: amendmentsAt.moment,
 			line
 		}
-		const onThisLine = rowsOnLine(castRows, line) as any[]
+		const onThisLine = rowsReadingOnLine(castRows, line) as any[]
 		const byMember = groupAmendments(castAmendments, "castId")
 		// ⚠ Each member becomes one row PER APPEARANCE. A member the book has
 		// never placed has exactly one, which is every member in every book
@@ -436,18 +469,24 @@
 		//
 		// ⚠ And each appearance resolves at ITS point of her life: a change
 		// dated against her life reaches only appearances at or past it
-		// (`amendmentsForAppearance`, the filter `castMemberAsOf` uses on the
+		// (`amendmentsForAppearance`, the filter `cardMemberAt` uses on the
 		// server), so the thirty-four-year-old is not handed the scar the
 		// fifty-year-old got at forty.
 		const expanded = onThisLine.flatMap((row) => {
 			const here = appearancesOf(row.id, presences as any, at)
 			const overlays = byMember.get(row.id) ?? []
 			return here.map((a) => {
-				const appearance = { ...row, personalPosition: a.personalPosition }
+				const appearance = {
+					...row,
+					personalPosition: a.personalPosition
+				}
 				return overlays.length
 					? castAsOf(
 							appearance,
-							amendmentsForAppearance(overlays, a.personalPosition) as any,
+							amendmentsForAppearance(
+								overlays,
+								a.personalPosition
+							) as any,
 							amendmentsAt
 						)
 					: appearance
@@ -465,15 +504,13 @@
 	 * is, which is the exact failure the one-resolver rule exists to stop.
 	 */
 	let livesMembers = $derived(
-		(resolveCast(rowsOnLine(castRows, line)) as any[]).map(
-			(r) => ({
-				id: r.id,
-				name:
-					(r.characterId != null
-						? (cardNames.get(r.characterId) ?? r.name)
-						: r.name) || "Unnamed"
-			})
-		)
+		(resolveCast(rowsReadingOnLine(castRows, line)) as any[]).map((r) => ({
+			id: r.id,
+			name:
+				(r.characterId != null
+					? (cardNames.get(r.characterId) ?? r.name)
+					: r.name) || "Unnamed"
+		}))
 	)
 
 	/** The reader's words for a column, where a column has one. */
@@ -502,14 +539,13 @@
 	 * ⚠ Computed from the UNRESOLVED rows on purpose — `compareLines` resolves
 	 * each one twice itself, once per line, which is the only way to have both
 	 * readings at the same time. `resolvedRows` holds one of them.
+	 *
+	 * ⚠ Entries are handed their date (`rowDate`): a history entry past this
+	 * line's fork cut never happened here, so it is not a difference.
 	 */
 	let lineDifferences = $derived.by(() => {
-		const branchId = route.branch ?? null
-		if (branchId === null) return []
-		const at = {
-			moment: amendmentsAt.moment,
-			line
-		}
+		if (line.branchId === null) return []
+		const at = amendmentsAt
 		const byEntry = groupAmendments(entryAmendments, "entryId")
 		const byMember = groupAmendments(castAmendments, "castId")
 		// ⚠ The key is what tells the two apart downstream: an entry and a
@@ -517,8 +553,8 @@
 		const entries = compareLines(
 			Object.values(bookRows).flat() as any[],
 			(id) => (byEntry.get(id) ?? []) as any,
-			branchId,
-			at
+			at,
+			rowDate
 		).map((d) => ({
 			...d,
 			key: `entry#${d.id}`,
@@ -527,7 +563,6 @@
 		const cast = compareLines(
 			castRows as any[],
 			(id) => (byMember.get(id) ?? []) as any,
-			branchId,
 			at
 		).map((d) => ({ ...d, key: `cast#${d.id}`, subject: "cast" as const }))
 		return [...entries, ...cast]
@@ -551,15 +586,90 @@
 	 * The book's scenes on the line being read. A fork's scenes are not
 	 * main's (the server's counts filter them the same way).
 	 */
-	let lineScenes = $derived(rowsOnLine(sceneRows as any[], line) as PoolSource[])
+	let lineScenes = $derived(
+		rowsReadingOnLine(sceneRows as any[], line) as PoolSource[]
+	)
 
 	/** Every row in the book, as the pool reads them. */
 	let bookPool = $derived(bookPoolItems(resolvedRows, lineScenes))
 
+	/**
+	 * The book, for every lens (plan B4) — read through getters, so a lens's
+	 * effects and deriveds follow the shell's state. The verbs are the
+	 * shell's own requests, answered on the keys it already holds.
+	 */
+	setBookData({
+		get lorebookId() {
+			return openBookId
+		},
+		get rows() {
+			return resolvedRows
+		},
+		get rawRows() {
+			return bookRows
+		},
+		get cast() {
+			return castRows
+		},
+		resolveCast: (rows) => resolveCast(rows),
+		get scenes() {
+			return lineScenes
+		},
+		get allScenes() {
+			return sceneRows
+		},
+		get suggestions() {
+			return castSuggestions
+		},
+		get duplicates() {
+			return castDuplicates
+		},
+		loaded(what) {
+			if (what === "cast") return castLoaded
+			if (what === "scenes") return scenesLoaded
+			return bookRows[what] !== undefined
+		},
+		refreshScenes() {
+			const id = route.lorebookId
+			if (id !== null) socket.emit("scenes:listByLorebook", { lorebookId: id })
+		},
+		refreshCast() {
+			const id = route.lorebookId
+			if (id !== null)
+				socket.emit("lorebooks:bindingList", {
+					lorebookId: id
+				} satisfies Sockets.Lorebooks.BindingList.Params)
+		},
+		refreshRows(typeId) {
+			const id = route.lorebookId
+			if (id !== null)
+				socket.emit("entries:list", { lorebookId: id, typeId: typeId as any })
+		}
+	})
+
+	/**
+	 * The cast on this line, as Everything lists them (note 12): each
+	 * member as they read at the moment, named by the card they read as.
+	 * The face is the joined card's while the member still reads as it.
+	 */
+	let castItems = $derived(
+		(resolveCast(rowsReadingOnLine(castRows, line)) as any[]).map((r) =>
+			castPoolItem(
+				r,
+				r.characterId != null
+					? cardNames.get(r.characterId)
+					: undefined,
+				r.character && r.character.id === r.characterId
+					? avatarSrc(r.character)
+					: undefined
+			)
+		)
+	)
+
 	/** The links the line being read draws, for Book settings' readout. */
 	let lineRelationshipCount = $derived(
 		edgesOnLine(
-			graphRelationships as any[],
+			relationships.all,
 			line,
 			Object.values(bookRows).flat() as any[]
 		).length
@@ -570,10 +680,26 @@
 
 	/** What a cast endpoint is called, so an edge can name who it names. */
 	let castNames = $derived(
-		new Map(graphNodes.map((node) => [node.id, node.name]))
+		new Map(relationships.nodes.map((node) => [node.id, node.name]))
 	)
+	/**
+	 * ⚠ Read from the store rather than only in the graph lens: an edge is
+	 * what the Refs board calls a direct reference, and the editor must not
+	 * have to have the canvas open to know a road exists — nor miss one drawn
+	 * there a moment ago.
+	 *
+	 * The links the line being read draws (`edgesOnLine`, the canvas's own
+	 * filter): a sibling line's link is no reference here (places plan B5).
+	 */
 	let bookLinks = $derived<RefLink[]>(
-		refLinksFrom(graphRelationships, castNames)
+		refLinksFrom(
+			edgesOnLine(
+				relationships.all,
+				line,
+				(bookRows[HISTORY_TYPE_ID] ?? []) as any[]
+			),
+			castNames
+		)
 	)
 
 	let pinnedItems = $derived(
@@ -584,11 +710,6 @@
 	let lineEntries = $derived(
 		Object.values(resolvedRows).flat() as TimeEntryRow[]
 	)
-	/**
-	 * The Time lens's rows: the scope's, as every other lens draws (#88).
-	 * Its title names the scope, so its line must be the scope's too.
-	 */
-	let timeEntries = $derived(timeLensEntries(lineEntries, route.scope))
 	/**
 	 * The session reading this book, for the rail's block.
 	 *
@@ -684,22 +805,222 @@
 		return { notYet, total: counts?.[CAST_KIND] ?? arrivals.size }
 	})
 
-	let savedCounts = $derived(
-		Object.fromEntries(
-			SAVED_SCOPES.map((s) => [
-				s.id,
-				savedScopeCount(s.id, bookPool, readInKeys ?? new Set())
-			])
+	/**
+	 * Each saved scope's figure over the list choosing it opens — the scope
+	 * being read, or the whole book from All and Cast — so badge = list
+	 * length (note 6). The whole book while the list showed one kind was the
+	 * figure that never matched.
+	 */
+	let savedCounts = $derived.by(() => {
+		const pool = savedScopePool(bookPool, route.scope)
+		return Object.fromEntries(
+			SAVED_SCOPES.map((s) => [s.id, savedScopeCount(s.id, pool)])
 		) as Record<SavedScopeId, number>
+	})
+
+	/**
+	 * Turns a saved scope on or off. On the Cast board or a lens that draws
+	 * no list, it opens Everything / List first: a saved scope narrows a
+	 * list and there was none to narrow.
+	 */
+	function chooseSaved(next: SavedScopeId | null) {
+		if (next) leaveQueue()
+		if (next) {
+			const target = savedScopeRoute(route)
+			if (target !== route) {
+				menuOpen = false
+				settingsOpen = false
+				void loreRoute.navigateTo(target)
+			}
+		}
+		saved = next
+	}
+
+	// ── Loose ends (note 5, built 2026-10-02) ────────────────────────────
+	// One queue of the book's chores, replacing the saved scopes "Needs
+	// keywords" and "Loose ends". Rows leave only when fixed — no per-row
+	// dismissal (owner, 2026-10-02).
+
+	/** The cast's pending suggestions and possible duplicates, for the queue. */
+	let castSuggestions = $state<Sockets.BindingSuggestions.Suggestion[]>([])
+	let castDuplicates = $state<
+		Sockets.NarrativeGraph.DuplicateCandidates.Response["candidates"]
+	>([])
+
+	function handleCastSuggestions(
+		msg: Sockets.BindingSuggestions.List.Response
+	) {
+		if (msg.lorebookId !== route.lorebookId) return
+		castSuggestions = msg.suggestions
+	}
+
+	function handleCastDuplicates(
+		msg: Sockets.NarrativeGraph.DuplicateCandidates.Response
+	) {
+		if (msg.lorebookId !== route.lorebookId) return
+		castDuplicates = msg.candidates
+	}
+
+	/** Every pool key a link on the line being read touches. */
+	let linkedKeys = $derived.by(() => {
+		const keys = new Set<string>()
+		for (const edge of edgesOnLine(
+			relationships.all,
+			line,
+			(bookRows[HISTORY_TYPE_ID] ?? []) as any[]
+		)) {
+			keys.add(endpointKey(edge.from as any))
+			keys.add(endpointKey(edge.to as any))
+		}
+		return keys
+	})
+
+	/** Every loose end in the book now — what the rail's figure counts. */
+	let liveLooseEnds = $derived(
+		looseEnds({
+			items: bookPool,
+			members: castItems.map((m) => ({
+				id: m.id,
+				name: m.name,
+				castKind: m.castKind,
+				updatedAt: m.updatedAt
+			})),
+			linkedKeys,
+			membersWithLore: membersWithLore(
+				(resolvedRows[CHARACTER_LORE_TYPE_ID] ?? []) as any[]
+			),
+			suggestions: castSuggestions
+				.filter((s) => s.status === "pending")
+				.map((s) => ({ id: s.id, name: s.surface || s.name })),
+			duplicates: castDuplicates
+		})
+	)
+
+	/**
+	 * The queue as it was when it opened, or null while it is closed.
+	 * Snapshotted on open and dropped on leave, so nothing reshuffles under
+	 * the reader; a fixed row leaves (`liveQueue`).
+	 */
+	let queueSnapshot = $state<LooseEnd[] | null>(null)
+	/** The row the reader is on. */
+	let queueCurrent = $state<string | null>(null)
+	let queueRows = $derived(
+		queueSnapshot ? liveQueue(queueSnapshot, liveLooseEnds) : []
+	)
+	/** Ask the entry editor to focus a field, or the cast to open Suggestions. */
+	let focusRequest = $state<{
+		entryId: number
+		field: ChoreField
+		n: number
+	} | null>(null)
+	let suggestionsRequest = $state<{
+		tab: "suggestions" | "duplicates"
+		n: number
+	} | null>(null)
+	let requestCount = 0
+
+	/** Opens the queue at Everything, on the lens its rows are drawn on. */
+	function openQueue() {
+		saved = null
+		menuOpen = false
+		settingsOpen = false
+		queueSnapshot = [...liveLooseEnds]
+		queueCurrent = null
+		let target = reduce(route, { type: "openScope", scope: "all" })
+		if ((route.lens ?? DEFAULT_LENS) !== QUEUE_LENS)
+			target = reduce(target, { type: "setLens", lens: QUEUE_LENS })
+		void loreRoute.navigateTo(target)
+	}
+
+	/** Leaves the queue; the next open takes it afresh. */
+	function leaveQueue() {
+		queueSnapshot = null
+		queueCurrent = null
+	}
+
+	/** Opens what one row is about, with its fixing field asked for. */
+	async function openLooseEnd(row: LooseEnd) {
+		const was = queueCurrent
+		queueCurrent = row.id
+		const target = row.target
+		if (target.kind === "entry") {
+			let next = reduce(route, {
+				type: "openEntry",
+				entryId: target.entryId,
+				scope: "all"
+			})
+			if ((next.lens ?? DEFAULT_LENS) !== QUEUE_LENS)
+				next = reduce(next, { type: "setLens", lens: QUEUE_LENS })
+			const field = choreOf(row.chore).field
+			if (field)
+				focusRequest = {
+					entryId: target.entryId,
+					field,
+					n: ++requestCount
+				}
+			await loreRoute.navigateTo(next)
+			// Kept by the unsaved-changes guard: the row was not opened.
+			if (loreRoute.route.entryId !== target.entryId) {
+				queueCurrent = was
+				focusRequest = null
+			}
+		} else if (target.kind === "member") {
+			await loreRoute.navigate({
+				type: "openCastMember",
+				scope: "cast",
+				castId: target.castId
+			})
+		} else {
+			await loreRoute.navigate({ type: "openScope", scope: "cast" })
+			suggestionsRequest = { tab: target.tab, n: ++requestCount }
+		}
+	}
+
+	/** "Next loose end": the row after the current one, wrapping. */
+	function nextInQueue() {
+		if (!queueSnapshot) return
+		const next = nextLooseEnd(queueSnapshot, liveLooseEnds, queueCurrent)
+		if (!next) {
+			toaster.success({ title: "No loose ends left in this book" })
+			return
+		}
+		void openLooseEnd(next)
+	}
+
+	/** Save in the entry editor, while the queue is open: on to the next. */
+	function savedInQueue(entryId: number) {
+		const current = queueSnapshot?.find((r) => r.id === queueCurrent)
+		if (
+			current?.target.kind === "entry" &&
+			current.target.entryId === entryId
+		)
+			nextInQueue()
+	}
+
+	/** Back to the queue's list from the Cast board. */
+	function backToQueue() {
+		void loreRoute.navigateTo(
+			reduce(route, { type: "openScope", scope: "all" })
+		)
+	}
+
+	/** What the entry list draws instead of the pool while the queue is open. */
+	let queueProps = $derived(
+		queueSnapshot
+			? {
+					rows: queueRows,
+					currentId: queueCurrent,
+					onOpen: (row: LooseEnd) => void openLooseEnd(row),
+					onNext: nextInQueue,
+					onLeave: leaveQueue
+				}
+			: null
 	)
 
 	/** The address said out loud, which is what the book chip's hover says. */
 	let crumbs = $derived(describeRoute(route, { book: book?.name }))
 
 	let scopes = $derived(railScopes(counts))
-	let descriptor = $derived(descriptorFor(route.scope))
-	/** Every door the pool draws, which is what "All entries" holds. */
-	let doors = $derived(SECTION_DESCRIPTORS.filter((d) => d.id !== "all"))
 
 	/**
 	 * A book with nothing in it at all, which is the one book day one is for.
@@ -712,12 +1033,13 @@
 	/**
 	 * The reader chose somewhere day one does not stand in front of (#82):
 	 * the Cast board, where a member can be added by hand, or a lens that
-	 * draws something other than the pool (Time, Lives, Graph, Places). Each
-	 * of those draws its own empty state. The default landing — All entries,
-	 * List — still meets day one.
+	 * draws something other than the pool (its descriptor's
+	 * `bypassesDayOne`: Time, Lives, Graph, Places). Each of those draws its
+	 * own empty state. The default landing — Everything, List — still meets
+	 * day one.
 	 */
 	let explicitlyElsewhere = $derived(
-		route.scope === "cast" || lens === "time" || lens === "lives" || !!drawing
+		route.scope === "cast" || activeLens.bypassesDayOne
 	)
 
 	/**
@@ -758,12 +1080,6 @@
 		return parts.join(" · ")
 	})
 
-	let bookChoices = $derived(
-		[...lorebookList]
-			.sort((a, b) => a.id - b.id)
-			.map((l) => ({ id: l.id, name: l.name, count: bookCount(l) }))
-	)
-
 	let filteredLorebooks = $derived.by(() => {
 		let list = [...lorebookList]
 		list.sort((a, b) => a.id - b.id)
@@ -801,15 +1117,19 @@
 	function openScope(scope: LoreScope) {
 		menuOpen = false
 		settingsOpen = false
+		leaveQueue()
 		// The kind chips narrow one scope's pool; carrying them into another
 		// one would empty a list the reader had not narrowed.
 		poolFacets = { ...poolFacets, kinds: [] }
-		void loreRoute.navigate({ type: "openScope", scope })
+		// Under a lens that draws its own set whatever the scope (Places,
+		// Lives), the scope opens in the default lens (`scopeRoute`).
+		void loreRoute.navigateTo(scopeRoute(route, scope))
 	}
 
 	function openLens(next: LoreLens) {
 		menuOpen = false
 		settingsOpen = false
+		leaveQueue()
 		void loreRoute.navigate({ type: "setLens", lens: next })
 	}
 
@@ -836,11 +1156,15 @@
 	}
 
 	/**
-	 * Reads the book as of a date.
+	 * Reads the book as of a date — from the moment bar AND the World bar
+	 * (plan B7: one path, so the same move never asks in one place and not
+	 * the other).
 	 *
 	 * Set rather than navigated: a moment is a way of reading the screen that
 	 * is open rather than a screen being left, so there is no draft to ask
-	 * about — the same rule the inspector's tabs follow.
+	 * about — the same rule the inspector's tabs follow. A draft being typed
+	 * keeps the moment it was opened at, and its save files there (the
+	 * editors snapshot it: `draftMoment`).
 	 */
 	function setMoment(next?: string) {
 		loreRoute.set(reduce(route, { type: "setMoment", moment: next }))
@@ -850,6 +1174,109 @@
 		poolFacets = { ...next }
 		search = next.search
 		saved = null
+	}
+
+	/**
+	 * The lens bench (`lenses/types.ts`): what every lens is drawn with that
+	 * is not the book — one stable object of getters, so a lens reading
+	 * `bench.filters` follows the filters and nothing else. The workspace
+	 * mounts the lens's descriptor's mount with it (`mountFor`); no lens is
+	 * wired here by hand.
+	 */
+	const bench: LensBench = {
+		get route() {
+			return route
+		},
+		get mode() {
+			return mode
+		},
+		get line() {
+			return line
+		},
+		get moment() {
+			return amendmentsAt.moment
+		},
+		get branchName() {
+			return route.branch
+				? (branches.find((b) => b.id === route.branch)?.name ?? null)
+				: null
+		},
+		get bookPool() {
+			return bookPool
+		},
+		get castItems() {
+			return castItems
+		},
+		get bookLinks() {
+			return bookLinks
+		},
+		get filters() {
+			return filters
+		},
+		get readInKeys() {
+			return readInKeys
+		},
+		get decisions() {
+			return decisions
+		},
+		get runRelationships() {
+			return runRelationships
+		},
+		get timeSession() {
+			return timeSession
+		},
+		get presences() {
+			return presences
+		},
+		get livesMembers() {
+			return livesMembers
+		},
+		get queue() {
+			return queueProps
+		},
+		get focusField() {
+			return focusRequest
+		},
+		get suggestionsRequest() {
+			return suggestionsRequest
+		},
+		get onSaved() {
+			return queueSnapshot ? savedInQueue : undefined
+		},
+		// The functions themselves, not wrappers: a lens re-reads when the
+		// resolver is rebuilt (a new moment, line or overlay), as it did
+		// when they were props.
+		get resolveRows() {
+			return resolveRows
+		},
+		get resolveCast() {
+			return resolveCast
+		},
+		get amendmentsFor() {
+			return amendmentsFor
+		},
+		get castAmendmentsFor() {
+			return castAmendmentsFor
+		},
+		openLens,
+		openMember,
+		applyFilters,
+		leaveQueue
+	}
+
+	/**
+	 * A lens's shortcut (its descriptor's, `Alt+Shift+1`…), heard while focus
+	 * is inside the workspace and not in a field — never app-wide, so a
+	 * session beside the book keeps its keys. The same as pressing the lens's
+	 * button: through the guard, leaving the queue and Book settings.
+	 */
+	function onWorkspaceKey(event: KeyboardEvent) {
+		if (route.lorebookId === null) return
+		if (!workspaceEl?.contains(event.target as Node | null)) return
+		const next = lensForKey(event)
+		if (!next) return
+		event.preventDefault()
+		openLens(next)
 	}
 
 	/**
@@ -923,10 +1350,18 @@
 	 *
 	 * The counts are the server's, so switching line has to ask again — the
 	 * pool filters itself, but a figure computed elsewhere cannot.
+	 *
+	 * ⚠ Keyed on the book and the line as primitives, and the read untracked
+	 * (`whenBookOpens`' two halves): `route` is a new object on every
+	 * navigation, so reading `route.branch` here — or letting `refreshCounts`
+	 * read the route under this effect — re-asked on every click inside a
+	 * book (places-graph B5 review).
 	 */
+	let openBranch = $derived(route.branch ?? null)
 	$effect(() => {
-		void route.branch
-		refreshCounts()
+		void openBookId
+		void openBranch
+		untrack(refreshCounts)
 	})
 
 	/**
@@ -990,7 +1425,7 @@
 		for (const typeId of BOOK_ENTRY_TYPES)
 			socket.emit("entries:list", { lorebookId: id, typeId })
 		socket.emit("scenes:listByLorebook", { lorebookId: id })
-		socket.emit("narrativeGraph:list", { lorebookId: id })
+		relationships.load()
 		socket.emit("amendments:list", { lorebookId: id })
 		openBookTime.open(id)
 		socket.emit("lorebooks:storyTime", { lorebookId: id })
@@ -1000,6 +1435,9 @@
 		socket.emit("lorebooks:bindingList", {
 			lorebookId: id
 		} satisfies Sockets.Lorebooks.BindingList.Params)
+		// The cast's suggestions and possible duplicates are Loose ends rows.
+		socket.emit("bindingSuggestions:list", { lorebookId: id })
+		socket.emit("narrativeGraph:duplicateCandidates", { lorebookId: id })
 		refreshCounts()
 	}
 
@@ -1030,6 +1468,7 @@
 	 */
 	function handleAmendmentsList(msg: Sockets.Amendments.List.Response) {
 		if (msg.lorebookId !== route.lorebookId) return
+		const before = branches
 		entryAmendments = msg.entries
 		castAmendments = msg.cast
 		presences = msg.presences ?? []
@@ -1037,15 +1476,16 @@
 		// Shared with the screens that draw amendments without being handed
 		// the branch list (AmendmentList labels each row's line).
 		openBookTime.setBranches(msg.lorebookId, msg.branches)
-		// A deleted line takes its sessions back to main (the column is
-		// `ON DELETE SET NULL`); the open session's copy follows here rather
-		// than holding a dead id until a reload (#136).
-		if (
-			openSessionCtx.lorebookId === msg.lorebookId &&
-			openSessionCtx.lorebookBranchId != null &&
-			!msg.branches.some((b) => b.id === openSessionCtx.lorebookBranchId)
-		)
-			openSessionCtx.lorebookBranchId = null
+		// A deleted line moves its sessions to the line it left
+		// (`amendments:deleteBranch`); the open session's copy follows here,
+		// found the way the server found it, rather than holding a dead id
+		// until a reload (#136).
+		if (openSessionCtx.lorebookId === msg.lorebookId)
+			openSessionCtx.lorebookBranchId = survivingLineOf(
+				openSessionCtx.lorebookBranchId,
+				before,
+				msg.branches
+			)
 	}
 
 	/**
@@ -1080,24 +1520,74 @@
 		}
 	}
 
-	// A delete answers with neither the row nor its type, so which list lost a
-	// row is the server's to say again.
-	function handleEntryDeleted() {
-		refreshBook()
-	}
-
-	// One book is open at a time, and the interest key already names it, so
-	// there is nothing left here to filter on.
-	function handleGraphList(msg: Sockets.NarrativeGraph.List.Response) {
-		// The scope the gate reads; checked here too, so a stale book's
-		// reply arriving after a switch cannot paint this one.
-		if (msg.lorebookId !== route.lorebookId) return
-		graphNodes = msg.nodes
-		graphRelationships = msg.relationships
+	/**
+	 * A row this book lost, dropped from the rail's copy — patched, like a
+	 * create or an update (plan B5). The reply names the book, the row and
+	 * its type (`Entries.Delete.Response`), so the rail patches that row
+	 * rather than re-reading the whole book. The figures are the server's,
+	 * so they are asked for again.
+	 */
+	function handleEntryDeleted(msg: Sockets.Entries.Delete.Response) {
+		if (!msg || msg.lorebookId !== route.lorebookId || !msg.success) return
+		bookRows = dropDeletedEntry(bookRows, msg)
+		refreshCounts()
 	}
 
 	function handleScenesList(msg: Sockets.Scenes.ListByLorebook.Response) {
+		if (msg.lorebookId !== undefined && msg.lorebookId !== route.lorebookId)
+			return
 		sceneRows = msg.sceneList as PoolSource[]
+		scenesLoaded = true
+	}
+
+	/**
+	 * A scene of this book saved — patched into the rows every lens reads
+	 * (plan B4). BARE (`scenes:update` is not in `SCOPED_EVENTS`), so another
+	 * book's save is dropped by the book it names.
+	 */
+	function handleSceneUpdated(msg: Sockets.Scenes.Update.Response) {
+		const scene = msg?.scene
+		if (!scene || scene.lorebookId !== route.lorebookId) return
+		sceneRows = patchScene(sceneRows, scene as any)
+	}
+
+	/**
+	 * The vectorizer writes `embeddingModel` straight to the row, so without
+	 * this a row's embedding badge only moves on its next write. Scoped to the
+	 * book; the source kind it reports in is a door's `vectorSource`. The
+	 * relationship store takes its own (a cast node's badge).
+	 */
+	function handleVectorized(msg: Sockets.Vectorization.ItemUpdated.Response) {
+		relationships.embedded(msg)
+		if (msg.lorebookId !== route.lorebookId) return
+		const patched = patchEmbedding(bookRows, msg, (typeId) => {
+			const door = descriptorForKind(typeId)
+			return door ? (door.vectorSource ?? typeId) : undefined
+		})
+		if (patched) bookRows = patched
+	}
+
+	/**
+	 * A member deleted, absorbed or put back in THIS book: the cast, the
+	 * links and the lore anchored to them move, and the server re-sends only
+	 * the lore whose tags it rewrote — so the cast and the relationships are
+	 * asked for here, once, for every lens (plan B4: the Cast board and the
+	 * graph lens each asked for themselves). A deleted member's private lore
+	 * went with them, so character lore is asked for too.
+	 */
+	function handleCastRemoved(bookId: number | undefined, loreWent = false) {
+		const id = route.lorebookId
+		if (id === null || bookId !== id) return
+		socket.emit("lorebooks:bindingList", {
+			lorebookId: id
+		} satisfies Sockets.Lorebooks.BindingList.Params)
+		relationships.load()
+		if (loreWent)
+			socket.emit("entries:list", {
+				lorebookId: id,
+				typeId: CHARACTER_LORE_TYPE_ID
+			})
+		refreshCounts()
 	}
 
 	function handleSceneWritten(
@@ -1129,16 +1619,23 @@
 	function handleBindingList(msg: Sockets.Lorebooks.BindingList.Response) {
 		const id = route.lorebookId
 		if (id === null || msg.lorebookId !== id) return
-		// Kept, not just counted: comparing two lines needs the cast rows as
-		// well as the entries, and this list is already on the wire.
+		const before = castSignature(castRows)
+		// Kept, not just counted: every lens reads the cast from here.
 		castRows = msg.lorebookBindingList as any[]
+		castLoaded = true
 		const merged = mergeCastCount(counts, msg.lorebookBindingList)
 		// A figure that has not arrived cannot be merged into, and the answer
 		// on its way was counted before these rows existed.
 		if (merged) counts = merged
 		else refreshCounts()
-		socket.emit("narrativeGraph:list", { lorebookId: id })
+		// ⚠ The graph is read again only when the CAST moved (plan B5): every
+		// entry save cascades this list, and re-reading the graph on each one
+		// ran `narrativeGraph:list` per save. A member added, renamed,
+		// re-carded or re-stated is a change the graph's names follow.
+		if (castSignature(castRows) !== before) relationships.load()
 	}
+
+
 
 	function handleRecentDecisions(
 		msg: Sockets.Entries.RecentDecisions.Response
@@ -1275,6 +1772,13 @@
 	})
 
 	/**
+	 * Reload and closing the tab ask too (plan B7): the guard covers every
+	 * move inside the workspace, and the browser's own leave is the one exit
+	 * it could not see.
+	 */
+	warnBeforeUnload(() => guardedChanges)
+
+	/**
 	 * Everything this workspace reads about the OPEN BOOK, scoped to it.
 	 *
 	 * One effect rather than nine, because all nine keys share one scope and
@@ -1291,9 +1795,13 @@
 	 * (`payload.entry.lorebookId`), which is the id their handlers already
 	 * refuse anything else on; `entries:delete` answers with neither the row
 	 * nor its type, so the server names the book beside it.
+	 *
+	 * ⚠ Keyed on `openBookId`, never `route.lorebookId`: every navigation is a
+	 * new route, and re-running here re-declares nine keys and re-opens the
+	 * relationship store on the same book (review round, places-graph B3).
 	 */
 	$effect(() => {
-		const id = route.lorebookId
+		const id = openBookId
 		if (id === null) return
 		const releases = [
 			declareInterest<"entries:list">(
@@ -1332,10 +1840,23 @@
 				interestKey("scenes:listByLorebook", id),
 				handleScenesList
 			),
-			declareInterest<"narrativeGraph:list">(
-				interestKey("narrativeGraph:list", id),
-				handleGraphList
+			declareInterest<"bindingSuggestions:list">(
+				interestKey("bindingSuggestions:list", id),
+				handleCastSuggestions
 			),
+			declareInterest<"narrativeGraph:duplicateCandidates">(
+				interestKey("narrativeGraph:duplicateCandidates", id),
+				handleCastDuplicates
+			),
+			// The embedding badge on every row and node (plan B4: each lens
+			// heard it for its own copy).
+			declareInterest<"vectorization:itemUpdated">(
+				interestKey("vectorization:itemUpdated", id),
+				handleVectorized
+			),
+			// The graph's list and its three relationship writes: the store's
+			// read, turned to this book (and off the last one) here.
+			relationships.open(id),
 			// The book's calendar and clocks: every reply of the family is
 			// the whole of it, so one handler takes all four.
 			...(
@@ -1356,18 +1877,25 @@
 		}
 	})
 
-	// The whole book, re-read whenever the book changes: the rail reports on
-	// every row rather than on the scope that happens to be open.
-	$effect(() => {
-		const id = route.lorebookId
-		bookRows = {}
-		sceneRows = []
-		graphNodes = []
-		graphRelationships = []
-		counts = null
-		if (id === null) return
-		refreshBook()
-	})
+	// The whole book, re-read whenever the BOOK changes — never on a
+	// navigation inside it (see `whenBookOpens`): the rail reports on every
+	// row rather than on the scope that happens to be open.
+	whenBookOpens(
+		() => openBookId,
+		(id) => {
+			bookRows = {}
+			sceneRows = []
+			castRows = []
+			castLoaded = false
+			scenesLoaded = false
+			counts = null
+			castSuggestions = []
+			castDuplicates = []
+			leaveQueue()
+			if (id === null) return
+			refreshBook()
+		}
+	)
 
 	/**
 	 * ⚠ Emitted from an effect, and answered on a key the book-scoped effect
@@ -1437,12 +1965,32 @@
 	)
 	useInterest<"scenes:create">("scenes:create", handleSceneWritten)
 	useInterest<"scenes:delete">("scenes:delete", handleSceneWritten)
+	/**
+	 * Four more BARE writes the shell hears for the lenses' one copy
+	 * (plan B4): a scene saved, and a member deleted, absorbed or put back.
+	 * None is in `SCOPED_EVENTS`; each handler drops another book's by the
+	 * book its reply names.
+	 */
+	useInterest<"scenes:update">("scenes:update", handleSceneUpdated)
+	useInterest<"narrativeGraph:deleteNode">("narrativeGraph:deleteNode", (msg) =>
+		handleCastRemoved(msg.lorebookId, (msg.deletedLoreCount ?? 0) > 0)
+	)
+	useInterest<"narrativeGraph:mergeNode">("narrativeGraph:mergeNode", (msg) =>
+		handleCastRemoved(msg.survivorNode?.lorebookId)
+	)
+	useInterest<"narrativeGraph:undoMerge">("narrativeGraph:undoMerge", (msg) =>
+		handleCastRemoved(msg.lorebookId)
+	)
 
 	onMount(() => {
 		socket.emit("lorebooks:list", {})
 		const detachHash = loreRoute.attachHash()
+		// ⚠ Both read, so a lens that has JUST dropped its draft (written
+		// to the bound flag synchronously, as `discardDraft` does) is not
+		// asked about again by the transition on its very next line — the
+		// mirror above runs only after the effects flush (plan B7).
 		const unregister = loreRoute.registerUnsavedChanges(
-			() => guardedChanges
+			() => guardedChanges && tabHasUnsavedChanges
 		)
 		return () => {
 			detachHash()
@@ -1464,65 +2012,91 @@
 </script>
 
 {#snippet bookChip()}
-	<Popover
-		open={menuOpen}
-		onOpenChange={(e) => (menuOpen = e.open)}
-		positioning={{ placement: "bottom-start" }}
+	<!-- Everything about the book, in the open (note 10): Settings and
+	     reading are labelled buttons, the rest one ⋯ away. Opening another
+	     book, New and Import live on the Lorebooks list, one press back. -->
+	<div
+		class="flex shrink-0 flex-wrap items-center gap-1"
+		data-lore-book-actions
 	>
-		<!-- The hero above names the book; this button names what it opens. -->
-		<Popover.Trigger
-			class="btn btn-sm preset-tonal-surface gap-1 {menuOpen
-				? 'bg-surface-200-800'
-				: ''}"
-			title={crumbs.join(" › ")}
-			aria-label="Manage this lorebook"
+		<button
+			type="button"
+			class="btn btn-sm preset-tonal-surface gap-1"
+			title="What this book holds, its calendar and its clock"
+			data-lore-book-settings
+			onclick={() => {
+				menuOpen = false
+				settingsOpen = true
+			}}
 		>
-			<span>Manage</span>
-			<Icons.ChevronDown size={14} aria-hidden="true" />
-		</Popover.Trigger>
-		<Portal>
-			<Popover.Positioner class="z-[1000]!">
-				<Popover.Content
-					class="bg-surface-50-950 border-surface-200-800 flex w-[min(90vw,300px)] flex-col rounded-[12px] border p-1 shadow-xl"
-				>
-					<BookMenu
-						books={bookChoices}
-						openId={route.lorebookId}
-						{readingInto}
-						canChangeReading={hasOpenSession}
-						readsOtherBook={otherReadBook}
-						onOpen={(id) => {
-							menuOpen = false
-							openBook(id, route.scope)
-						}}
-						onNew={() => {
-							menuOpen = false
-							creating = true
-						}}
-						onImport={() => {
-							menuOpen = false
-							importing = true
-						}}
-						onSettings={() => {
-							menuOpen = false
-							settingsOpen = true
-						}}
-						onDuplicate={() => {
-							menuOpen = false
-							duplicating = book
-								? { id: book.id, name: book.name }
-								: null
-						}}
-						onChangeReading={changeReading}
-						onDelete={() => {
-							menuOpen = false
-							deletingId = book?.id ?? null
-						}}
-					/>
-				</Popover.Content>
-			</Popover.Positioner>
-		</Portal>
-	</Popover>
+			<Icons.SlidersHorizontal size={14} aria-hidden="true" />
+			<span>Settings</span>
+		</button>
+		{#if hasOpenSession}
+			<button
+				type="button"
+				class="btn btn-sm preset-tonal-surface gap-1"
+				title={readingInto
+					? `Stop reading this book into ${readingInto}`
+					: otherReadBook
+						? `This session reads ${otherReadBook}; reading this book replaces it`
+						: "Read this book into the open session"}
+				data-lore-book-reading
+				onclick={changeReading}
+			>
+				{#if readingInto}
+					<Icons.BookX size={14} aria-hidden="true" />
+					<span>{STOP_READING}</span>
+				{:else}
+					<Icons.BookOpen size={14} aria-hidden="true" />
+					<span>{READ_INTO_SESSION}</span>
+				{/if}
+			</button>
+		{/if}
+		<RowMenu
+			label="More for {book?.name ?? 'this lorebook'}"
+			triggerLabel="More for this lorebook"
+			triggerTitle="More"
+			triggerClass="btn btn-sm preset-tonal-surface px-2"
+			open={menuOpen}
+			onOpenChange={(open) => (menuOpen = open)}
+			items={[
+				{
+					label: "Duplicate",
+					icon: Icons.Copy,
+					title: "Copy this book, entries, cast and all",
+					onSelect: () => {
+						menuOpen = false
+						duplicating = book
+							? { id: book.id, name: book.name }
+							: null
+					}
+				},
+				{
+					label: "Export… (paused)",
+					icon: Icons.Download,
+					disabled: true,
+					title: LOREBOOK_EXPORT_PAUSED
+				},
+				!hasOpenSession && {
+					label: READ_INTO_SESSION,
+					icon: Icons.BookOpen,
+					disabled: true,
+					title: "Open a session you own to read this book into it"
+				},
+				{ separator: true },
+				{
+					label: "Delete this lorebook",
+					icon: Icons.Trash2,
+					destructive: true,
+					onSelect: () => {
+						menuOpen = false
+						deletingId = book?.id ?? null
+					}
+				}
+			]}
+		/>
+	</div>
 {/snippet}
 
 {#snippet bookHero()}
@@ -1556,6 +2130,20 @@
 				{/if}
 			</button>
 		{/each}
+		<!-- The Loose ends queue, which the desk opens from the rail. -->
+		<button
+			type="button"
+			class="chip gap-1 {queueSnapshot
+				? 'preset-tonal-primary'
+				: 'preset-tonal-surface'}"
+			class:opacity-60={liveLooseEnds.length === 0 && !queueSnapshot}
+			aria-pressed={queueSnapshot !== null}
+			data-lore-loose-ends
+			onclick={() => (queueSnapshot ? leaveQueue() : openQueue())}
+		>
+			<span>Loose ends</span>
+			<span class="text-xs opacity-80">{liveLooseEnds.length}</span>
+		</button>
 	</div>
 {/snippet}
 
@@ -1572,8 +2160,7 @@
 			comparing={!!route.compare}
 			onBranch={(next) =>
 				loreRoute.navigate({ type: "setBranch", branch: next })}
-			onMoment={(next) =>
-				loreRoute.navigate({ type: "setMoment", moment: next })}
+			onMoment={setMoment}
 			onCompare={() =>
 				loreRoute.navigate({ type: "setCompare", compare: true })}
 			onOpenMember={openMember}
@@ -1581,10 +2168,45 @@
 	{/if}
 {/snippet}
 
+{#snippet queueBar()}
+	<!-- The queue stays open while one of its rows has taken the reader to
+	     the Cast board: the way on, and the way back to its list. -->
+	<div
+		class="panel-inset mb-2 flex flex-wrap items-center gap-2 px-3 py-2"
+		data-loose-ends-bar
+	>
+		<span class="text-sm font-semibold">Loose ends</span>
+		<span class="text-surface-600-400 text-xs">{queueRows.length} left</span>
+		<span class="flex-1"></span>
+		<button
+			type="button"
+			class="btn btn-sm preset-tonal-surface"
+			onclick={backToQueue}
+		>
+			Back to the list
+		</button>
+		<button
+			type="button"
+			class="btn btn-sm preset-tonal-primary gap-1"
+			disabled={queueRows.length === 0}
+			onclick={nextInQueue}
+		>
+			<span>Next loose end</span>
+			<Icons.ArrowRight size={14} aria-hidden="true" />
+		</button>
+	</div>
+{/snippet}
+
 {#snippet workspace()}
+	{#if queueSnapshot && route.scope === "cast"}
+		{@render queueBar()}
+	{/if}
 	{#if !book}
 		<div class="flex items-center justify-center py-8">
-			<Icons.Loader2 size={20} class="text-surface-600-400 animate-spin" />
+			<Icons.Loader2
+				size={20}
+				class="text-surface-600-400 animate-spin"
+			/>
 		</div>
 	{:else if route.compare && route.branch != null}
 		<!-- Drawn in place of the pool, not beside it: comparing is a different
@@ -1622,7 +2244,8 @@
 				bookName={book.name}
 				branchId={route.branch ?? null}
 				branchName={route.branch != null
-					? (branches.find((b) => b.id === route.branch)?.name ?? null)
+					? (branches.find((b) => b.id === route.branch)?.name ??
+						null)
 					: null}
 				branches={lineNames}
 				present={storyPresent}
@@ -1646,154 +2269,68 @@
 		{#key book.id}
 			<DayOne lorebookId={book.id} onImport={() => (importing = true)} />
 		{/key}
-	{:else if lens === "lives"}
-		<!-- Who was in the world, and when. Time draws what happened; this
-		     draws who was there for it. -->
-		{#key book.id}
-			<LivesLens
-				members={livesMembers}
-				presences={presences as any}
-				pins={(resolvedRows[HISTORY_TYPE_ID] ?? []) as any}
-				moment={amendmentsAt.moment}
-				{line}
-				onOpenMember={openMember}
-			/>
-		{/key}
-	{:else if lens === "time"}
-		<!-- The line is its own drawing: the graph canvas draws relationships,
-		     and a timeline is not one. -->
-		{#key book.id}
-			<TimeLens
-				lorebookId={book.id}
-				{mode}
-				scopeTitle={SCOPE_LABELS[route.scope]}
-				entries={timeEntries}
-				scenes={lineScenes as TimeSceneRow[]}
-				session={timeSession}
-				{decisions}
-				bind:hasUnsavedChanges={tabHasUnsavedChanges}
-			/>
-		{/key}
-	{:else if drawing}
-		{#key book.id}
-			<GraphsWorkspace
-				lorebookId={book.id}
-				{mode}
-				{drawing}
-				relationships={runRelationships}
-				bind:hasUnsavedChanges={tabHasUnsavedChanges}
-				onEditMember={(castId) =>
-					loreRoute.navigate({
-						type: "openCastMember",
-						scope: "cast",
-						castId
-					})}
-			/>
-		{/key}
-	{:else if route.scope === "cast"}
-		{#key book.id}
-			<CastWorkspace
-				lorebookId={book.id}
-				{mode}
-				{decisions}
-				{resolveCast}
-				{castAmendmentsFor}
-				moment={route.moment}
-				presences={presences as any}
-				branchId={route.branch ?? null}
-				branchName={route.branch
-					? (branches.find((b) => b.id === route.branch)?.name ?? null)
-					: null}
-				bind:hasUnsavedChanges={tabHasUnsavedChanges}
-				onViewRelationships={async (castId) => {
-					await loreRoute.navigate({
-						type: "openCastMember",
-						castId
-					})
-					openLens("graph")
-				}}
-			/>
-		{/key}
-	{:else if descriptor}
-		<!-- One pool, narrowed by the scope the route is at. `#key` rebuilds
-		     the socket conversation when the book or the scope changes, so one
-		     scope never renders another one's rows. -->
-		{#key `${book.id}:${descriptor.id}`}
-			<EntryWorkspace
-				lorebookId={book.id}
-				{descriptor}
-				{doors}
-				{bookPool}
-				{bookLinks}
-				resolve={resolveRows}
-				{amendmentsFor}
-				{mode}
-				{lens}
-				{filters}
-				{readInKeys}
-				{decisions}
-				scopeTitle={SCOPE_LABELS[route.scope]}
-				bind:hasUnsavedChanges={tabHasUnsavedChanges}
-				onFilters={applyFilters}
-				onNavigateToGraph={() => openLens("graph")}
-			/>
-		{/key}
 	{:else}
-		<!-- Places draws no list of its own: a place is a Location entry, and
-		     Location entries are drawn on the Places map, not in the pool. -->
-		{#if (counts?.places ?? 0) > 0}
-			<EmptyState
-				icon={Icons.Map}
-				message="Places are drawn on a map, not listed. {counts?.places} {counts?.places ===
-				1
-					? 'place is'
-					: 'places are'} on this line."
-				ctaLabel="Open the Places map"
-				onCta={() => openLens("places")}
+		<!-- The lens, from its descriptor (`lenses/registry.ts`): its mount
+		     draws it with the bench. Lenses that share a mount (List, Cards
+		     and Tree; Graph and Places) keep the screen when switched
+		     between; another lens, or another book, mounts afresh. -->
+		{@const LensMount = mountFor(activeLens)}
+		{#key book.id}
+			<LensMount
+				lens={activeLens}
+				lorebookId={book.id}
+				{bench}
+				bind:hasUnsavedChanges={tabHasUnsavedChanges}
 			/>
-		{:else}
-			<EmptyState
-				icon={Icons.Map}
-				message="No places on this line yet. A place is a Location entry; once the book has one, the Places map draws it."
-			/>
-		{/if}
+		{/key}
 	{/if}
 {/snippet}
 
 <!-- `bind:clientWidth` is a ResizeObserver on this element, so the layout
      follows the container it is actually given rather than the viewport. -->
+<svelte:window onkeydown={onWorkspaceKey} />
+
 <div
 	class="flex h-full min-h-0 flex-col p-4"
 	bind:clientWidth={widthPx}
+	bind:this={workspaceEl}
 	data-lore-layout={mode}
 >
 	{#if route.lorebookId === null}
-		<div class="mb-2 flex gap-2">
-			<button
-				class="btn btn-sm preset-filled-primary-500"
-				onclick={() => (creating = true)}
-				title="Create new lorebook"
-			>
-				<Icons.Plus size={16} />
-				New
-			</button>
-			<button
-				class="btn btn-sm preset-tonal-primary"
-				title="Import lorebook"
-				onclick={() => (importing = true)}
-			>
-				<Icons.Upload size={16} />
-				Import
-			</button>
-		</div>
-		<div class="mb-4">
-			<PanelFilterInput
-				bind:value={bookSearch}
-				placeholder="lorebooks"
-				count={lorebookList.length}
-				aria-label="Search lorebooks"
-			/>
-		</div>
+		<!-- The view toolbar (STYLE-GUIDE §6.3): New is the primary, Import
+		     a secondary icon button, the filter box on its own row. -->
+		<ViewToolbar label="Lorebooks" class="mb-4">
+			{#snippet primary()}
+				<button
+					type="button"
+					class="btn btn-sm preset-filled-primary-500 shrink-0"
+					onclick={() => (creating = true)}
+					title="Create new lorebook"
+				>
+					<Icons.Plus size={16} aria-hidden="true" />
+					New
+				</button>
+			{/snippet}
+			{#snippet actions()}
+				<button
+					type="button"
+					class={toolbarButtonClass()}
+					title="Import a lorebook"
+					aria-label="Import a lorebook"
+					onclick={() => (importing = true)}
+				>
+					<Icons.Upload size={16} aria-hidden="true" />
+				</button>
+			{/snippet}
+			{#snippet filter()}
+				<PanelFilterInput
+					bind:value={bookSearch}
+					placeholder="lorebooks"
+					count={lorebookList.length}
+					aria-label="Search lorebooks"
+				/>
+			{/snippet}
+		</ViewToolbar>
 		<div class="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto">
 			{#if isLoading}
 				<div class="flex items-center justify-center py-8">
@@ -1830,7 +2367,20 @@
 			{/if}
 		</div>
 	{:else if mode === "desk"}
-		<div class="mb-3">
+		<div class="mb-3 flex min-w-0 items-start gap-2">
+			<!-- The way back to every book, where New and Import live
+			     (note 10) — the desk had none but the old Manage menu. -->
+			<button
+				type="button"
+				class="btn btn-sm preset-tonal-surface shrink-0 gap-1"
+				title="All lorebooks"
+				data-lore-all-books
+				onclick={() =>
+					loreRoute.navigate({ type: "openBook", lorebookId: null })}
+			>
+				<Icons.ChevronLeft size={14} aria-hidden="true" />
+				<span>Lorebooks</span>
+			</button>
 			{@render bookHero()}
 		</div>
 		<div class="mb-3">
@@ -1849,12 +2399,16 @@
 				{search}
 				{savedCounts}
 				{saved}
+				looseEndsCount={liveLooseEnds.length}
+				looseEndsOpen={queueSnapshot !== null}
+				onLooseEnds={() =>
+					queueSnapshot ? leaveQueue() : openQueue()}
 				pinned={pinnedItems}
 				{readingInto}
 				reached={readInKeys ? readInKeys.size : null}
 				onScope={openScope}
 				onLens={openLens}
-				onSaved={(next) => (saved = next)}
+				onSaved={chooseSaved}
 				onSearch={(next) => (search = next)}
 				onOpenEntry={(item) => openEntry(item.id)}
 			/>
@@ -1949,7 +2503,7 @@
 			/>
 		</div>
 		<!-- The lens row moves to the bottom, where a thumb reaches it. -->
-		<div class="border-border mt-2 border-t pt-2">
+		<div class="mt-2">
 			<LensRow {lens} compact onLens={openLens} />
 		</div>
 	{/if}

@@ -30,6 +30,11 @@ import {
 	type LorebookEntry,
 	type NewLorebookEntry
 } from "$lib/shared/entries/types"
+import {
+	readsAsRegex,
+	runawayPatternOf,
+	runawayRefusal
+} from "$lib/shared/entries/runawayPattern"
 
 export type SelectLorebookEntry = typeof schema.lorebookEntries.$inferSelect
 export type InsertLorebookEntry = typeof schema.lorebookEntries.$inferInsert
@@ -78,6 +83,20 @@ export const DEFAULT_VECTOR_NAME = "core:vec/default@1"
  * which is what keeps a declaration from being code.
  */
 export const BINDING_VISIBILITY_POLICY = "core:policy/binding-visibility@1"
+
+/**
+ * Whether a type's rows are **private lore** — it declares the policy above,
+ * so a row is a character's own knowledge and shown only to whom
+ * `isCharacterLoreEntryVisible` lets see it (character lore, today).
+ *
+ * Asked where a row would reach everybody in a session at once: a session's
+ * stats are one state every player and every voice reads, so they never hold
+ * private lore (`state/write.ts assertLoreRefsInSession`), never name what
+ * they already hold of it (`resolve.ts nameLoreRefs`, session sight), and a
+ * refusal there never quotes its title. Unknown types: no.
+ */
+export const declaresPrivateLore = (typeId: string): boolean =>
+	entryDeclaration(typeId)?.roles.anchor?.policy === BINDING_VISIBILITY_POLICY
 
 /** `WHERE type_id = …` — spelled once so a caller cannot forget the filter. */
 export const ofType = (typeId: string): SQL =>
@@ -337,7 +356,13 @@ export type EntryInsertInput<T = NewLorebookEntry> = T extends unknown
  * `nextPosition` — and never the client's.
  */
 export function entryInsert(
-	data: EntryInsertInput & { position: number }
+	data: EntryInsertInput & { position: number },
+	/**
+	 * Who wrote the row, when it was not a person — the SERVER's answer, a
+	 * separate argument so no payload spread into `data` can claim it. Absent
+	 * leaves the column's `human`.
+	 */
+	written: { provenance?: EntryProvenance } = {}
 ): InsertLorebookEntry {
 	const typeId = data.typeId
 	const decl = entryDeclaration(typeId)
@@ -379,9 +404,26 @@ export function entryInsert(
 		constant: data.constant ?? false,
 		enabled: data.enabled ?? true,
 		archived: data.archived ?? false,
-		extraJson: data.extraJson ?? {}
+		extraJson: data.extraJson ?? {},
+		...(written.provenance ? { provenance: written.provenance } : {})
 	}
 }
+
+/**
+ * Who wrote an entry row (`lorebook_entries.provenance`): a person, or one of
+ * the machine writers — the summarize review, the graph build, or a pipeline
+ * outlet (`core:outlet/create-lore-entry`, `pipeline`). Anything but `human`
+ * reads as machine-written. The one list: the import reads a file's claim
+ * against it.
+ */
+export const ENTRY_PROVENANCES = [
+	"human",
+	"summarizer",
+	"graph-builder",
+	"pipeline"
+] as const
+
+export type EntryProvenance = (typeof ENTRY_PROVENANCES)[number]
 
 /**
  * Refuse a payload whose declared fields are the wrong type.
@@ -422,6 +464,125 @@ export function assertDeclaredFields(
 			)
 	}
 }
+
+/** The four columns that decide whether, and which, keys are patterns. */
+export interface PatternColumns {
+	keys?: KeyList
+	secondaryKeys?: KeyList
+	matchMode?: string | null
+	useRegex?: boolean | null
+}
+
+/**
+ * Every key that some reading of an entry could run as a pattern — null when
+ * no reading runs any.
+ *
+ * `layers` is the row first, then its dated overlays' `fields`. An overlay
+ * sets only what it names, and at its date the row reads the latest overlay's
+ * value for each column, so the mode and the keys a date reads can come from
+ * different layers: one overlay stores keys while the entry is plain text, a
+ * later one switches only the mode. Every pairing is taken as possible —
+ * across dates and branches alike — which can only judge more keys, never
+ * fewer.
+ */
+function patternReach(layers: readonly PatternColumns[]): Set<string> | null {
+	const [row, ...overlays] = layers
+	if (!row) return null
+	const has = (layer: PatternColumns, k: keyof PatternColumns) =>
+		Object.prototype.hasOwnProperty.call(layer, k)
+	const modes = [row.matchMode, ...overlays.filter((o) => has(o, "matchMode")).map((o) => o.matchMode)]
+	const regexFlags = [row.useRegex, ...overlays.filter((o) => has(o, "useRegex")).map((o) => o.useRegex)]
+	if (!modes.some((matchMode) => regexFlags.some((useRegex) => readsAsRegex({ matchMode, useRegex }))))
+		return null
+	const keys = new Set<string>()
+	for (const layer of layers)
+		for (const key of [...splitKeys(layer.keys), ...splitKeys(layer.secondaryKeys)]) keys.add(key)
+	return keys
+}
+
+/**
+ * Refuse a write that would bring in a runaway pattern (plan S3) — a regex
+ * key that can take unbounded time to match (`shared/entries/runawayPattern`).
+ *
+ * `data` is the payload; `stored` is the row it lands on (an update's current
+ * row, an amendment's entry), or null for a new entry. `overlays` is the
+ * entry's dated amendments as stored, and `overlay` says `data` is one more of
+ * them rather than the row (`replaces`: the version an amendment update
+ * overwrites). Judged on every reading of the entry AFTER the write, across
+ * the row and all its amendments (`patternReach`): a payload that only
+ * switches Use regex on is judging the keys every layer stores, and one that
+ * only adds a key is judging that key against every layer's mode.
+ *
+ * ⚠ **Only what this write introduces.** A key some reading already ran as a
+ * pattern is not re-judged, so an entry written before the check existed can
+ * still have its content edited — the read side skips that key with a receipt
+ * note (`ranking/boundedPattern.ts`), and the first save that touches the key
+ * is refused. Refusing every save of such an entry would lock its author out
+ * of fixing anything else in it.
+ *
+ * Called by `entries:create`, `entries:update`, and the entry-amendment write
+ * path. Imports refuse differently — a runaway key is not read as a pattern
+ * at all (`parseDelimitedRegexKey`) — because an import cannot stop to ask.
+ */
+export function assertNoRunawayPatterns(
+	data: PatternColumns,
+	stored: PatternColumns | null,
+	layers: {
+		overlays?: readonly PatternColumns[]
+		overlay?: { replaces: PatternColumns | null }
+	} = {}
+): void {
+	const overlays = layers.overlays ?? []
+	const before = stored
+		? [stored, ...overlays, ...(layers.overlay?.replaces ? [layers.overlay.replaces] : [])]
+		: []
+	let after: PatternColumns[]
+	if (layers.overlay) after = [stored ?? {}, ...overlays, data]
+	else {
+		const row: PatternColumns = { ...stored }
+		for (const k of ["keys", "secondaryKeys", "matchMode", "useRegex"] as const)
+			if (Object.prototype.hasOwnProperty.call(data, k)) (row as Record<string, unknown>)[k] = data[k]
+		after = [row, ...overlays]
+	}
+	const reach = patternReach(after)
+	if (!reach) return
+	const held = patternReach(before) ?? new Set<string>()
+	for (const key of reach) {
+		if (held.has(key)) continue
+		const found = runawayPatternOf(key)
+		if (found) throw new Error(runawayRefusal(key, found))
+	}
+}
+
+/**
+ * The pattern columns of an entry's dated amendments, by amendment id — the
+ * `overlays` `assertNoRunawayPatterns` judges a write against. Read only when
+ * the write names a pattern column, so an ordinary save pays nothing for it.
+ */
+export async function amendmentPatternLayers(
+	handle: Db,
+	entryId: number
+): Promise<Map<number, PatternColumns>> {
+	const rows = await handle
+		.select({ id: schema.entryAmendments.id, fields: schema.entryAmendments.fields })
+		.from(schema.entryAmendments)
+		.where(eq(schema.entryAmendments.entryId, entryId))
+	const out = new Map<number, PatternColumns>()
+	for (const row of rows) {
+		const fields = (row.fields ?? {}) as Record<string, unknown>
+		const layer: Record<string, unknown> = {}
+		for (const k of ["keys", "secondaryKeys", "matchMode", "useRegex"])
+			if (Object.prototype.hasOwnProperty.call(fields, k)) layer[k] = fields[k]
+		out.set(row.id, layer as PatternColumns)
+	}
+	return out
+}
+
+/** Does this payload name a column that decides which keys are patterns? */
+export const touchesPatterns = (data: object): boolean =>
+	["keys", "secondaryKeys", "matchMode", "useRegex"].some((k) =>
+		Object.prototype.hasOwnProperty.call(data, k)
+	)
 
 /**
  * A partial wire payload, split into the column half and the `fields` half.
@@ -547,6 +708,67 @@ export async function parkingFloor(
 			: [Number(lowest), ...finals]
 	return (bounds.length ? Math.min(...bounds) : 0) - 1
 }
+
+/**
+ * The entries and every entry filed under them, however deep — the rows the
+ * `anchor_entry_id` cascade deletes with them. Read before the delete: after
+ * it there is no tree left to walk. A stored cycle ends the walk rather than
+ * looping (each id is visited once).
+ */
+export async function withEverythingFiledUnder(
+	tx: Db,
+	entryIds: readonly number[]
+): Promise<number[]> {
+	const seen = new Set<number>(entryIds)
+	let frontier = [...seen]
+	while (frontier.length) {
+		const children = await tx
+			.select({ id: schema.lorebookEntries.id })
+			.from(schema.lorebookEntries)
+			.where(inArray(schema.lorebookEntries.anchorEntryId, frontier))
+		frontier = children.map((c) => c.id).filter((id) => !seen.has(id))
+		for (const id of frontier) seen.add(id)
+	}
+	return [...seen]
+}
+
+/**
+ * The ranking evidence about deleted lore entries, swept with them.
+ *
+ * `ranking_decisions` and `ranking_subject_stats` name their subject by a text
+ * id with no foreign key (a subject is a lore entry or a package's own kind,
+ * so no one table could be referenced), and nothing else removes a deleted
+ * entry's rows: the usage panel went on listing it as `#id`, and a decision
+ * outlived the row it explains. Call it on the delete's transaction with
+ * every id the delete takes — the row and everything filed under it
+ * (`withEverythingFiledUnder`).
+ */
+export async function sweepLoreEntryRankings(
+	tx: Db,
+	entryIds: readonly number[]
+): Promise<void> {
+	if (!entryIds.length) return
+	const subjectIds = entryIds.map(String)
+	await tx
+		.delete(schema.rankingDecisions)
+		.where(
+			and(
+				eq(schema.rankingDecisions.subjectKind, LORE_ENTRY_SUBJECT),
+				inArray(schema.rankingDecisions.subjectId, subjectIds)
+			)
+		)
+	await tx
+		.delete(schema.rankingSubjectStats)
+		.where(
+			and(
+				eq(schema.rankingSubjectStats.subjectKind, LORE_ENTRY_SUBJECT),
+				inArray(schema.rankingSubjectStats.subjectId, subjectIds)
+			)
+		)
+}
+
+/** The ranking subject kind a lore entry is judged under. */
+const LORE_ENTRY_SUBJECT = "lore-entry"
 
 /**
  * A lorebook's entries, in the wire shape.

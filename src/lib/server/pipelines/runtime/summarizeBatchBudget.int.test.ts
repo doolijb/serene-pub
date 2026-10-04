@@ -73,7 +73,7 @@ vi.mock("$lib/server/embedding", () => ({
  * the `text->text` default — and **nothing chosen in the pipeline panel**, which
  * is the whole point.
  */
-async function instanceWithWindow(contextTokens: number, messages: number) {
+async function pubWithWindow(contextTokens: number, messages: number) {
 	const db: TestDb = await createTestDb()
 	const { bootstrapPipelines } = await import(
 		"$lib/server/pipelines/boot/bootstrap"
@@ -164,14 +164,14 @@ describe("the instance default's window reaches the cut", () => {
 		// the declared size, and the narrow one then sent every batch into a
 		// window that could not hold it.
 		calls.length = 0
-		const narrow = await instanceWithWindow(3000, 60)
+		const narrow = await pubWithWindow(3000, 60)
 		expect((await summarize(narrow)).haltNodeKey).toBe("save")
 		const narrowDrafts = calls.filter((c) =>
 			c.userPrompt.includes("old iron")
 		)
 
 		calls.length = 0
-		const wide = await instanceWithWindow(32768, 60)
+		const wide = await pubWithWindow(32768, 60)
 		expect((await summarize(wide)).haltNodeKey).toBe("save")
 		const wideDrafts = calls.filter((c) => c.userPrompt.includes("old iron"))
 
@@ -201,7 +201,7 @@ describe("the instance default's window reaches the cut", () => {
 		// Before the clamp this sent batch after batch of ~2596 tokens of chat
 		// plus a template into a 1024-token window.
 		calls.length = 0
-		const ctx = await instanceWithWindow(1024, 20)
+		const ctx = await pubWithWindow(1024, 20)
 		const receipt = await summarize(ctx)
 
 		expect(receipt.haltNodeKey).toBe("batches")

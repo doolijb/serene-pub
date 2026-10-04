@@ -5,7 +5,10 @@
  * should do next with the rows it holds, and which element answers it.
  *
  * The DOM hooks: a message row is `#message-<id>` (core's conversation keeps
- * its unprefixed ids — `ComponentMount`; Document View's list items carry the
+ * its unprefixed ids in the mounts the layout names `pageIds` — the story's
+ * log and each copy showing channels no earlier one shows, so every drawn row
+ * has exactly one: `ComponentMount`, `channelClaims` `pageIdsHolders`; a
+ * second view of one channel is prefixed; Document View's list items carry the
  * same), and a declared block inside it is `[data-block-id="<blockId>"]`
  * (core's `MessageBlocksView`).
  */
@@ -73,8 +76,9 @@ export function landingSelectors(landing: MessageLanding): { message: string; bl
 
 /**
  * The element to land on, once it is drawn: the named block inside the
- * message when there is one, else the message. A layout may draw the log
- * twice (a view that is not showing): the one on screen wins.
+ * message when there is one, else the message. The layout draws each row
+ * under the page's id once (a second view of it is prefixed); should two
+ * elements still carry one id, the one on screen wins.
  */
 export function landingTarget(
 	root: ParentNode,

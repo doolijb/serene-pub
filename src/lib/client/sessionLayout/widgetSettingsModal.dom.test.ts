@@ -15,6 +15,7 @@ import {
 	widgetSettingsTitle
 } from "./widgetSettingsModal.svelte"
 import { setWidgetStyleMode } from "$lib/client/stores/widgetStyles.svelte"
+import { setWidgetDuplicator } from "./widgetDuplicate.svelte"
 
 describe("widgetSettingsModal store", () => {
 	afterEach(() => {
@@ -187,5 +188,64 @@ describe("the gear opens the modal", () => {
 		)
 		await settle()
 		expect(widgetSettingsModal().current).toBeNull()
+	})
+})
+
+/**
+ * Duplicate beside the gear (brief 7b; QD) follows what the page registers
+ * (`./widgetDuplicate`): nothing registered — the editor shut, or QD's "tray
+ * only" — no Duplicate; a widget at its cap (review round) says why where the
+ * button would be, as its card and the Add menu do, and offers no button.
+ */
+describe("the overlay's Duplicate", () => {
+	let app: ReturnType<typeof mount> | null = null
+	let box: HTMLElement
+
+	beforeEach(() => {
+		setWidgetStyleMode(true)
+		box = document.createElement("section")
+		document.body.append(box)
+	})
+
+	afterEach(() => {
+		if (app) unmount(app)
+		app = null
+		setWidgetDuplicator(null)
+		setWidgetStyleMode(false)
+		document.body.innerHTML = ""
+	})
+
+	const open = () => {
+		app = mount(WidgetStyleOverlay, { target: box, props: { widgetId: "acme:jukebox#2", label: "Jukebox · 2" } })
+		flushSync()
+	}
+	const button = () => box.querySelector<HTMLButtonElement>('button[aria-label="Duplicate Jukebox · 2"]')
+
+	test("none registered: no Duplicate", () => {
+		open()
+		expect(button()).toBeNull()
+		expect(box.querySelector('[role="note"]')).toBeNull()
+	})
+
+	test("registered and under the cap: the button duplicates this instance", () => {
+		const asked: string[] = []
+		setWidgetDuplicator({ duplicate: (id) => (asked.push(id), `${id}-copy`), refusal: () => null })
+		open()
+		button()!.click()
+		expect(asked).toEqual(["acme:jukebox#2"])
+	})
+
+	test("at the cap: the reason, not the button — and it follows the page as copies come and go", () => {
+		let full: string | null = "Only 2 per layout"
+		const dup = { duplicate: () => null, refusal: () => full }
+		setWidgetDuplicator(dup)
+		open()
+		expect(button()).toBeNull()
+		expect(box.querySelector('[role="note"]')?.textContent?.trim()).toBe("Only 2 per layout")
+		// A copy removed elsewhere: the page registers again, the button is back.
+		full = null
+		setWidgetDuplicator({ ...dup })
+		flushSync()
+		expect(button()).not.toBeNull()
 	})
 })

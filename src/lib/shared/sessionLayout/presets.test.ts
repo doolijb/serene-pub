@@ -1,19 +1,17 @@
 /**
- * The two rules both halves of the preset system agree on: the seed key a
- * shipped default is matched by, and how a preset composes into the read-only
- * base the surface manager reads through.
- *
- * The `undefined`-for-empty property is the compatibility guarantee in
- * miniature — the shipped default carries `layout: {}`, so a user who has
- * never picked a preset gets no base at all and the manager's slots stay
- * exactly as they were before presets existed.
+ * What the server and the client agree on about session layout presets
+ * without a database: the seed keys core's shipped rows are matched by, and
+ * which genres core seeds. There is no composition rule to test any more —
+ * under the copy model nothing is layered over a session's layout (brief 3 of
+ * `PLAN-layout-one-format-2026-09-28`).
  */
 import { describe, expect, it } from "vitest"
+import * as presets from "./presets"
 import {
 	DEFAULT_PRESET_NAME,
-	layoutPresetSeedKey,
-	presetBase,
-	presetWidgetSettings
+	coreLayoutSeedKey,
+	isCoreGenre,
+	layoutPresetSeedKey
 } from "./presets"
 
 describe("layoutPresetSeedKey", () => {
@@ -37,97 +35,30 @@ describe("layoutPresetSeedKey", () => {
 	})
 })
 
-describe("presetBase", () => {
-	it("returns undefined for the shipped default's empty layout", () => {
-		expect(presetBase({})).toBeUndefined()
-		expect(presetBase({}, {})).toBeUndefined()
+describe("coreLayoutSeedKey", () => {
+	it("keeps the genre default layout's key for `default`", () => {
+		expect(coreLayoutSeedKey("core:genre/adventure", "default")).toBe(
+			layoutPresetSeedKey("core:genre/adventure")
+		)
 	})
 
-	it("returns undefined when nothing is supplied at all", () => {
-		expect(presetBase(undefined)).toBeUndefined()
-		expect(presetBase(null, null)).toBeUndefined()
-	})
-
-	it("treats a non-object blob as absent rather than throwing", () => {
-		expect(presetBase("nope" as unknown)).toBeUndefined()
-		expect(presetBase([1, 2, 3] as unknown)).toBeUndefined()
-		expect(presetBase(7 as unknown, "x" as unknown)).toBeUndefined()
-	})
-
-	it("passes a real preset layout through", () => {
-		const layout = { zoneLayout: { version: 1 }, widgetGrid: { version: 1 } }
-		expect(presetBase(layout)).toEqual(layout)
-	})
-
-	it("merges layoutSettings OVER the preset (the user's own wins)", () => {
-		expect(
-			presetBase({ zoneLayout: "preset", a: 1 }, { zoneLayout: "mine" })
-		).toEqual({ zoneLayout: "mine", a: 1 })
-	})
-
-	it("keeps a settings-only base when the preset is empty", () => {
-		expect(presetBase({}, { "scene-portraits": { bg: "x" } })).toEqual({
-			"scene-portraits": { bg: "x" }
-		})
-	})
-
-	it("does not mutate either input", () => {
-		const preset = { a: 1 }
-		const settings = { b: 2 }
-		presetBase(preset, settings)
-		expect(preset).toEqual({ a: 1 })
-		expect(settings).toEqual({ b: 2 })
+	it("namespaces every other slug under core", () => {
+		expect(coreLayoutSeedKey("core:genre/adventure", "cinematic")).toBe(
+			"layout:core:genre/adventure:core/cinematic"
+		)
 	})
 })
 
-describe("presetWidgetSettings", () => {
-	it("reads the settings the preset pins", () => {
-		expect(
-			presetWidgetSettings(
-				{ widgetSettings: { "scene-portraits": { source: "scene" } } },
-				{}
-			)
-		).toEqual({ "scene-portraits": { source: "scene" } })
+describe("isCoreGenre", () => {
+	it("is core's own namespace only", () => {
+		expect(isCoreGenre("core:genre/chat")).toBe(true)
+		expect(isCoreGenre("showcase.battleship:genre/battleship")).toBe(false)
 	})
+})
 
-	it("puts the user's own value over the preset's, field by field", () => {
-		expect(
-			presetWidgetSettings(
-				{
-					widgetSettings: {
-						"scene-portraits": { source: "scene", bars: true }
-					}
-				},
-				{ "scene-portraits": { bars: false } }
-			)
-		).toEqual({ "scene-portraits": { source: "scene", bars: false } })
-	})
-
-	it("keeps a widget only the user has settings for", () => {
-		expect(
-			presetWidgetSettings(
-				{ widgetSettings: { stats: { density: "compact" } } },
-				{ inventory: { groupBy: "item" } }
-			)
-		).toEqual({
-			stats: { density: "compact" },
-			inventory: { groupBy: "item" }
-		})
-	})
-
-	it("treats a non-object blob on either side as absent", () => {
-		expect(presetWidgetSettings(undefined, undefined)).toEqual({})
-		expect(presetWidgetSettings({ widgetSettings: 7 }, "no")).toEqual({})
-		expect(
-			presetWidgetSettings({ widgetSettings: { stats: 3 } }, null)
-		).toEqual({})
-	})
-
-	it("does not mutate either input", () => {
-		const preset = { widgetSettings: { stats: { density: "full" } } }
-		const user = { stats: { density: "compact" } }
-		presetWidgetSettings(preset, user)
-		expect(preset.widgetSettings.stats).toEqual({ density: "full" })
-		expect(user.stats).toEqual({ density: "compact" })
+describe("the copy model", () => {
+	it("leaves no layering helper behind", () => {
+		expect("presetBase" in presets).toBe(false)
+		expect("presetWidgetSettings" in presets).toBe(false)
 	})
 })

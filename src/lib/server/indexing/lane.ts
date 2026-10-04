@@ -64,9 +64,20 @@
  * model never resident, bound exceeded — resolves to a report saying so. It
  * never rejects, never throws into the turn, and never blocks it. The caller
  * puts the report on the receipt and carries on with whatever is indexed.
+ *
+ * ## Turns before background work
+ *
+ * A lane is background work sharing one thread — PGlite's — with every turn.
+ * So the loop goes once round the event loop between items (a chain of PGlite
+ * awaits otherwise never lets a timer or a socket in; see `turnHold.ts`), and
+ * while a **turn hold** is active it picks no background item at all: it parks
+ * until the turns are quiet, waking only for a promotion or a stop. Promoted
+ * items are never held back — a turn is waiting on them. A long background pick
+ * gives way the same way, between steps (`LanePickContext`).
  */
 
 import { randomUUID } from "crypto"
+import { isTurnHoldActive, whenTurnsQuiet, yieldToEventLoop } from "./turnHold"
 
 // ---------------------------------------------------------------------------
 // Model seam
@@ -196,6 +207,21 @@ export interface PriorityGroup {
 export type CompletedGroup = PriorityGroup & { completedAt: string }
 
 /**
+ * Handed to a work source's background pickers so a long pick can give way.
+ *
+ * A picker that walks many books (the annotation lane's sweep builds each
+ * book's vocabulary to ask it one question) calls `giveWay()` between steps.
+ * It goes once round the event loop and answers `true` when the picker should
+ * return `null` at once — a turn hold is active, a promotion is waiting, or the
+ * lane is stopping. The lane remembers that it asked, so that `null` is read as
+ * *interrupted* and never as *nothing left*: a group is not retired and the run
+ * does not end on it.
+ */
+export interface LanePickContext {
+	giveWay(): Promise<boolean>
+}
+
+/**
  * Where a lane's work comes from. The lane owns ordering, fairness, bounds and
  * the model; this owns what a unit of work *is*.
  */
@@ -203,10 +229,14 @@ export interface LaneWorkSource {
 	/** One item from this group, or `null` when the group has nothing left. */
 	fromGroup(
 		group: PriorityGroup,
-		modelId: string | null
+		modelId: string | null,
+		pick?: LanePickContext
 	): Promise<LaneItem | null>
 	/** One item from anywhere, in the lane's own order. */
-	global(modelId: string | null): Promise<LaneItem | null>
+	global(
+		modelId: string | null,
+		pick?: LanePickContext
+	): Promise<LaneItem | null>
 	/**
 	 * One specific item, or `null` when it needs no work.
 	 *
@@ -269,7 +299,7 @@ interface Ticket {
 // The lane
 // ---------------------------------------------------------------------------
 
-export type LaneStatus = "idle" | "running" | "paused"
+export type LaneStatus = "idle" | "running"
 
 export type LaneEmit = (event: string, data: any) => void
 
@@ -352,8 +382,32 @@ export class IndexingLane {
 
 	private running = false
 	private stopping = false
-	private paused = false
 	private completed = 0
+	/**
+	 * A `start()` that arrived while a run was in flight. The run may already
+	 * have picked past the content that call was about, so it owes one more
+	 * pass: the flag is cleared as each pass begins picking, and a run that
+	 * finds nothing while it is set picks again instead of ending.
+	 */
+	private startedAgain = false
+
+	/**
+	 * Set when a background pick gave way (`LanePickContext`), so the `null` it
+	 * returned reads as *interrupted* rather than *nothing left*. Cleared as each
+	 * pick begins.
+	 */
+	private pickInterrupted = false
+
+	private readonly pickContext: LanePickContext = {
+		giveWay: async () => {
+			await yieldToEventLoop()
+			if (this.stopping || this.tickets.length > 0 || isTurnHoldActive()) {
+				this.pickInterrupted = true
+				return true
+			}
+			return false
+		}
+	}
 
 	private groups: PriorityGroup[] = []
 	private history: CompletedGroup[] = []
@@ -423,25 +477,8 @@ export class IndexingLane {
 		return this.running
 	}
 
-	isPaused() {
-		return this.paused
-	}
-
-	pause() {
-		this.paused = true
-		this.broadcast("paused")
-	}
-
-	resume() {
-		this.paused = false
-		this.wakeLoop()
-		if (!this.running) void this.run()
-		else this.broadcast("running")
-	}
-
 	stop() {
 		this.stopping = true
-		this.paused = false
 		this.wakeLoop()
 	}
 
@@ -476,6 +513,7 @@ export class IndexingLane {
 	start(): void {
 		this.stopping = false
 		if (this.running) {
+			this.startedAgain = true
 			this.wakeLoop()
 			return
 		}
@@ -702,14 +740,21 @@ export class IndexingLane {
 		 * item. Without it one large group (a freshly bulk-imported lorebook,
 		 * say) starves every other user's until it finishes.
 		 */
+		this.pickInterrupted = false
 		const groupCount = this.groups.length
 		for (let i = 0; i < groupCount; i++) {
 			const group = this.groups[0]!
-			const item = await this.def.work.fromGroup(group, modelId)
+			const item = await this.def.work.fromGroup(
+				group,
+				modelId,
+				this.pickContext
+			)
 			if (item) {
 				this.groups.push(this.groups.shift()!)
 				return item
 			}
+			// Gave way part-through: the group is not finished, only paused.
+			if (this.pickInterrupted) return null
 			this.groups.shift()
 			this.history.unshift({
 				...group,
@@ -717,8 +762,39 @@ export class IndexingLane {
 			})
 			if (this.history.length > this.limits.historyMax) this.history.pop()
 			this.broadcast("running")
+			if (await this.pickContext.giveWay()) return null
 		}
-		return this.def.work.global(modelId)
+		return this.def.work.global(modelId, this.pickContext)
+	}
+
+	/**
+	 * Park while a turn hold is active, before a background pick.
+	 *
+	 * Wakes for a promotion (its ticket is served first — a turn is waiting on
+	 * it, so it is never held back) and for `stop()`. Answers whether it parked
+	 * at all, so the loop starts its iteration again rather than picking on a
+	 * stale peek.
+	 */
+	private async yieldToTurns(): Promise<boolean> {
+		if (!isTurnHoldActive()) return false
+		while (!this.stopping && !this.tickets.length && isTurnHoldActive())
+			await this.park(whenTurnsQuiet())
+		return true
+	}
+
+	/** Resolves on `until`, or early on `wakeLoop()` — the promotion's way in. */
+	private park(until: Promise<void>): Promise<void> {
+		return new Promise<void>((resolve) => {
+			let done = false
+			const finish = () => {
+				if (done) return
+				done = true
+				if (this.wake === finish) this.wake = null
+				resolve()
+			}
+			this.wake = finish
+			until.then(finish, finish)
+		})
 	}
 
 	private async requestModel(wait: boolean): Promise<ModelLease> {
@@ -747,6 +823,11 @@ export class IndexingLane {
 
 		try {
 			while (!this.stopping) {
+				// Once round the event loop per item: a chain of PGlite awaits
+				// is otherwise one microtask run that starves every timer and
+				// socket on the server until the lane is done (turnHold.ts).
+				await yieldToEventLoop()
+				if (this.stopping) break
 				/**
 				 * The peek, and the anti-pattern this replaces.
 				 *
@@ -769,15 +850,16 @@ export class IndexingLane {
 				const peekedModel =
 					peek.kind === "configured" ? peek.modelId : null
 
+				// Every start() before this point is answered by this pick.
+				this.startedAgain = false
 				// Promotions come first — this is what "front of the queue" is.
 				let item = await this.nextPromoted(peekedModel)
 				const promoted = item !== null
 
 				if (!item) {
-					if (this.paused) {
-						await this.sleep(500)
-						continue
-					}
+					// Turns before background work: a turn hold parks the
+					// sweep (never a promotion — that was served just above).
+					if (await this.yieldToTurns()) continue
 					item = await this.pickNext(peekedModel)
 				}
 
@@ -785,6 +867,10 @@ export class IndexingLane {
 					// A ticket can land between the pick and here; the finally
 					// below restarts the loop rather than settling it as missed.
 					if (this.tickets.length) continue
+					// A start() during the pick names content it may have missed.
+					if (this.startedAgain) continue
+					// A pick that gave way did not find the queue empty.
+					if (this.pickInterrupted && !this.stopping) continue
 					break
 				}
 
@@ -849,8 +935,9 @@ export class IndexingLane {
 			 */
 			const restart =
 				!this.stopping &&
-				this.tickets.length > 0 &&
-				this.completed > completedAtStart
+				((this.tickets.length > 0 && this.completed > completedAtStart) ||
+					this.startedAgain)
+			this.startedAgain = false
 			this.stopping = false
 			this.broadcast("idle")
 			if (restart) void this.run()

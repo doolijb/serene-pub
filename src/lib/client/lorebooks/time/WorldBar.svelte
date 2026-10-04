@@ -57,7 +57,7 @@
 </script>
 
 <div
-	class="border-border bg-surface-50-950 flex flex-wrap items-center gap-2 rounded-[10px] border px-3 py-2"
+	class="panel-edge bg-surface-50-950 flex flex-wrap items-center gap-2 rounded-[10px] border px-3 py-2"
 	data-lore-worldbar
 >
 	<Icons.Globe2

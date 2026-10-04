@@ -16,12 +16,14 @@ import {
 	nodeRows,
 	outputView,
 	postHistoryView,
+	authorsNoteView,
 	promptView,
 	refusedCount,
 	refusedOf,
 	verdict,
 	lastStatusOf,
 	portrayalsLine,
+	timedOutNotice,
 	wireView,
 	type InspectedRun,
 	type NodeRow,
@@ -157,7 +159,7 @@ describe("where a node's values and definition came from", () => {
 		expect(rowOf(rows, "strategy").layers).toEqual([
 			{ slot: "prompts", path: "system", layer: "session", label: "session override" },
 			{ slot: "sampling", path: "temperature", layer: "config", label: "selected config" },
-			{ slot: "sampling", path: "top_p", layer: "defaults", label: "instance defaults" },
+			{ slot: "sampling", path: "top_p", layer: "defaults", label: "pub defaults" },
 			{ slot: "params", path: "maxTokens", layer: "author", label: "node default" }
 		])
 	})
@@ -784,6 +786,42 @@ describe("outputView", () => {
 	})
 })
 
+describe("authorsNoteView (AN1)", () => {
+	const decided = (authorsNote: Record<string, unknown>): ReceiptNode => ({
+		nodeKey: "prompt",
+		seq: 0,
+		kind: "task",
+		definitionId: "core:task/assemble@2",
+		result: "ok",
+		output: { authorsNote }
+	})
+	const base = { depth: 4, interval: 3, replyCount: 0, targetIndex: 8, role: "system" }
+
+	it("says where an included note landed, how deep and as what", () => {
+		expect(authorsNoteView(decided({ ...base, included: true, reason: "included" }))).toEqual({
+			included: true,
+			line: "Author's note: included at message 8 (4 from the end, as system)"
+		})
+	})
+
+	it("says which reply an interval skipped", () => {
+		expect(
+			authorsNoteView(decided({ ...base, replyCount: 1, included: false, reason: "interval" }))
+		).toEqual({
+			included: false,
+			line: "Author's note: skipped, reply 2 is not one of every 3"
+		})
+	})
+
+	it("says an empty note added nothing, and reads no decision as none", () => {
+		expect(authorsNoteView(decided({ ...base, included: false, reason: "empty" }))?.line).toBe(
+			"Author's note: empty, nothing to add"
+		)
+		expect(authorsNoteView({ output: {} } as ReceiptNode)).toBeNull()
+		expect(authorsNoteView(null)).toBeNull()
+	})
+})
+
 describe("postHistoryView", () => {
 	/** An assemble node with the decision its binding recorded. */
 	const decided = (postHistory: Record<string, unknown>): ReceiptNode => ({
@@ -956,5 +994,66 @@ describe("refusals on an output that finished ok", () => {
 		expect(refusedCount({ refused: [] })).toBe(0)
 		expect(refusedCount({ refused: "no" })).toBe(0)
 		expect(refusedOf({ applied: [1] })).toEqual([])
+	})
+})
+
+/**
+ * A lore read that ran out of time is recovered as empty and the run carries
+ * on, so before 2026-10-03 its lore went missing from the reply with nothing
+ * said outside that step's own detail. The run now says so at the top.
+ */
+describe("steps that ran out of time", () => {
+	const node = (over: Record<string, unknown>) => ({
+		seq: 1,
+		nodeKey: "lore",
+		definitionId: "core:query/world-lore@1",
+		kind: "query",
+		result: "ok",
+		...over
+	})
+
+	it("reads timedOut onto the row", () => {
+		const [row] = nodeRows({
+			nodes: [node({ result: "err", timedOut: true, recoveredAsEmpty: true })]
+		})
+		expect(row!.timedOut).toBe(true)
+		expect(nodeRows({ nodes: [node({})] })[0]!.timedOut).toBe(false)
+	})
+
+	it("names each late step with the limit it had, and says it added nothing", () => {
+		const rows = nodeRows({
+			nodes: [
+				node({
+					result: "err",
+					timedOut: true,
+					recoveredAsEmpty: true,
+					timeoutMsApplied: 2000,
+					reason: "timeout after 2000ms"
+				}),
+				node({ seq: 2, nodeKey: "history" }),
+				node({
+					seq: 3,
+					nodeKey: "entities",
+					result: "err",
+					timedOut: true,
+					recoveredAsEmpty: true,
+					timeoutMsApplied: 250
+				})
+			]
+		})
+		expect(timedOutNotice(rows)).toBe(
+			"2 steps ran out of time and added nothing to this run: lore (2 s), entities (250 ms)."
+		)
+	})
+
+	it("does not claim nothing was added when a late step was not recovered", () => {
+		const rows = nodeRows({
+			nodes: [node({ result: "err", timedOut: true, timeoutMsApplied: 2000 })]
+		})
+		expect(timedOutNotice(rows)).toBe("1 step ran out of time: lore (2 s).")
+	})
+
+	it("says nothing when every step finished in time", () => {
+		expect(timedOutNotice(nodeRows({ nodes: [node({})] }))).toBeNull()
 	})
 })

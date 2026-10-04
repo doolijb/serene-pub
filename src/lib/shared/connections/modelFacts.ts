@@ -87,10 +87,11 @@ export interface ModelFacts {
 	/**
 	 * What the model accepts, in the host's own words ("text", "image", "file").
 	 *
-	 * ⚠ **Not a capability claim.** The app's capability layer
-	 * (`connection_models.capabilities`) is graded and probed and is what the
-	 * resolver reads; this is a label a host printed, good enough to show in a
-	 * "Can do" column and not good enough to route on.
+	 * Read as a capability claim by exactly one reader: the HOST-DECLARED layer
+	 * (`hostCapabilities.ts`), which sits between the preset and the probe — a
+	 * list with `image` turns Vision on for this model, a list without it turns
+	 * it off, and a probe or a person's switch still outranks it. Nothing else
+	 * routes on it; the graded set the resolver produces is what is read.
 	 */
 	inputModalities?: string[]
 	/** Vector width, for an embedding model. */
@@ -204,15 +205,29 @@ function readOpenAiCompatible(e: Record<string, unknown>): ModelFacts {
 	})
 }
 
-/** Ollama's `/api/tags`: the sizes are bytes and `details` holds the rest. */
+/**
+ * Ollama's `/api/tags`: the sizes are bytes and `details` holds the rest.
+ *
+ * `capabilities` is `/api/show`'s per-model list (`completion`, `vision`,
+ * `embedding`, `tools`, …), which the adapter's listing copies onto each entry.
+ * A text model's list is a claim about its input either way — `vision` means it
+ * reads images, its absence means it does not. An embedding model, or an Ollama
+ * too old to send the list, says nothing.
+ */
 function readOllama(e: Record<string, unknown>): ModelFacts {
 	const details = e.details as Record<string, unknown> | undefined
+	const caps = strList(e.capabilities)?.map((c) => c.toLowerCase())
 	return compact({
 		parameters: str(details?.parameter_size),
 		quantization: str(details?.quantization_level),
 		family: str(details?.family),
 		sizeBytes: num(e.size),
 		released: str(e.modified_at),
+		inputModalities: caps?.includes("completion")
+			? caps.includes("vision")
+				? ["text", "image"]
+				: ["text"]
+			: undefined,
 		source: "host"
 	})
 }

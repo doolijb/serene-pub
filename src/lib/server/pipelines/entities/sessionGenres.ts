@@ -622,19 +622,20 @@ export interface GenreAction {
 	/** Who contributed it — the spec whose active version declares it. */
 	specSlug: string
 	/**
-	 * Companion or attachment, decided by namespace (§3).
+	 * Companion or foreign, decided by namespace (§3).
 	 *
 	 * A contribution from the mode owner's own namespace is a **companion** —
-	 * shipped alongside the mode by the same author, so present by default. A
-	 * foreign one is an **attachment**: somebody else's spec reaching into
-	 * these sessions, so opt-in.
+	 * shipped alongside the mode by the same author, so present by default.
+	 * One from any other namespace is **foreign**: somebody else's spec
+	 * reaching into these sessions, so opt-in. (Called an *attachment* until
+	 * 2026-10-02 — R1: that is the message-part word.)
 	 *
 	 * Mechanical on purpose. §3's phrasing is "no lists to keep; the namespace
 	 * comparison is the rule" — the alternative is a registry of who is
 	 * trusted, which is a thing to maintain and a thing to get wrong.
 	 */
-	origin: "companion" | "attachment"
-	/** What `origin` implies: companions on, attachments off. */
+	origin: "companion" | "foreign"
+	/** What `origin` implies: companions on, foreign actions off. */
 	enabledByDefault: boolean
 }
 
@@ -692,7 +693,7 @@ export async function listGenreActions(
 				const origin =
 					namespaceOf(s.slug) === namespaceOf(genreId)
 						? "companion"
-						: "attachment"
+						: "foreign"
 				out.push({
 					key: a.key,
 					venues: a.venue,
@@ -746,10 +747,10 @@ export async function listGenreActions(
  * When several serve, **the binding selects**, in this order (R-6, ruled
  * 2026-09-15): the **session's own** row in `pipeline_bindings`, then — for
  * an event subject — the session's **preset** (its event binding), then the
- * **instance's** row, then the companion rule. A session is a work, not a
+ * **pub's** row, then the companion rule. A session is a work, not a
  * preference (12 §2): what a person chose for *this* session beats what an
  * administrator chose for every session born on the preset, and the preset
- * in turn beats the instance-wide default.
+ * in turn beats the pub-wide default.
  *
  * Every binding is only ever a choice *among the eligible* — a binding whose
  * spec left the bucket (retired, republished elsewhere, deleted) falls
@@ -950,9 +951,9 @@ export async function resolveSubjectVerdict(
 		 * 2. The session's preset (24 §1), through the same reader
 		 *    `resolveSessionEventSpec` uses — two doors onto one fact, so a
 		 *    reply and a dispatched event agree on the session and preset
-		 *    layers. ⚠ Only those: this resolver also reads the instance
+		 *    layers. ⚠ Only those: this resolver also reads the pub
 		 *    binding (layer 3) and the companion rule, and the dispatcher
-		 *    reads neither, so an instance-scope binding of a turn-order event
+		 *    reads neither, so a pub-scope binding of a turn-order event
 		 *    is stored and never dispatched (A7r review; owed). An event
 		 *    subject only: a preset binds events, never actions.
 		 *
@@ -977,12 +978,12 @@ export async function resolveSubjectVerdict(
 		if (!candidates.length)
 			return { spec: null, ...(fallback ? { fallback } : {}) }
 
-		// 3. The instance's binding — an administrator's default for every
+		// 3. The pub's binding — an administrator's default for every
 		//    session of the genre that neither chose for itself nor was born
 		//    on a preset that did.
-		const instanceWide = boundAt("instance", 0)
-		if (instanceWide)
-			return { spec: instanceWide, ...(fallback ? { fallback } : {}) }
+		const pubWide = boundAt("pub", 0)
+		if (pubWide)
+			return { spec: pubWide, ...(fallback ? { fallback } : {}) }
 
 		// 4. The companion rule.
 		const companion = candidates.find((c) => c.namespace === genreNamespace)
@@ -1030,7 +1031,7 @@ export interface SessionFunction extends GenreAction {
 	 * The permission line runs here (ruled 2026-08-24): a non-admin may toggle
 	 * an **included** action off and back on; turning on something the preset
 	 * does not include is an admin's call, because it gives the session a
-	 * capability the instance owner did not put in the list.
+	 * capability the pub owner did not put in the list.
 	 */
 	included: boolean
 	/** Which layer decided, for the control surface to explain itself. */
@@ -1185,7 +1186,7 @@ export async function presetActionsFor(
  * 2026-09-16). The rule the reader (`presetIncludes`), both writers
  * (`normalizeIncludedActions`, `promoteIncludedActions`), migration 0137 and
  * the boot's binding re-projection (V2) share, stated once: a key several
- * actions carry names none of them, and an attachment that is the sole
+ * actions carry names none of them, and a foreign action that is the sole
  * declarer IS what the key means — an admin who included it did so when it
  * was valid, and losing it silently would be worse than keeping it.
  */
@@ -1312,7 +1313,7 @@ export async function listSessionFunctions(
 			name: (f.decl.label !== undefined ? en(f.decl.label) : "") || f.decl.key,
 			...(f.decl.description !== undefined ? { description: en(f.decl.description) } : {}),
 			specSlug,
-			origin: namespaceOf(genreId) === f.owner ? "companion" : "attachment",
+			origin: namespaceOf(genreId) === f.owner ? "companion" : "foreign",
 			enabledByDefault: true,
 			included: true,
 			source: own !== undefined ? "session" : "default",

@@ -20,6 +20,7 @@ import {
 	CHARACTER_LORE_TYPE_ID,
 	ENTRY_EXPORT_KEY,
 	ENTRY_TYPE_IDS,
+	FILEABLE_ENTRY_TYPE_IDS,
 	HISTORY_TYPE_ID,
 	LOCATION_TYPE_ID,
 	ITEM_TYPE_ID,
@@ -28,6 +29,7 @@ import {
 	entryTypeIdOfExportKey,
 	isEntryOfType,
 	isEntryTypeId,
+	isFileableEntryType,
 	type LorebookEntry
 } from "./types"
 import { entryDeclarations } from "$lib/server/entries/declarations"
@@ -66,28 +68,42 @@ describe("the shared shapes mirror the declarations", () => {
 		// reach one.
 		for (const [typeId, decl] of declared())
 			expect(ENTRY_EXPORT_KEY[typeId]).toBe(decl.exportKey)
+		// Every core type has its own (plan A26, E-8): a place or an item
+		// written as world lore reads back as world lore, its links and its
+		// stats with nothing left to hold them.
 		expect(Object.values(ENTRY_EXPORT_KEY).sort()).toEqual([
 			"character",
 			"history",
+			"item",
+			"location",
 			"world"
 		])
+	})
+
+	it("files exactly the types that declare a `parent` field role (places plan B2)", () => {
+		// The client's Part of asks this mirror; the server asks the
+		// declaration. A place declares no parent (2026-09-29) and neither
+		// does history (2026-10-02) — and if the catalog moves, this fails
+		// first. (Needs `npm run sdk:build` to see the catalog's own change.)
+		const declaring = [...declared()]
+			.filter(([, decl]) => decl.roles.parent !== undefined)
+			.map(([typeId]) => typeId)
+		expect([...FILEABLE_ENTRY_TYPE_IDS].sort()).toEqual(declaring.sort())
+		expect(isFileableEntryType(LOCATION_TYPE_ID)).toBe(false)
+		expect(isFileableEntryType(HISTORY_TYPE_ID)).toBe(false)
+		expect(isFileableEntryType(WORLD_LORE_TYPE_ID)).toBe(true)
+		expect(isFileableEntryType("core:entry/spell")).toBe(false)
 	})
 })
 
 describe("export keys translate in both directions", () => {
-	it("round-trips every type that has a marker", () => {
-		// Every type that HAS one: the table is partial on purpose (L3), and a
-		// type with no wire name has nothing to round-trip — it is exported as
-		// world lore and read back as world lore, which is the degrade
-		// `entryTypeIdOfExportKey` already performs for a foreign marker.
-		for (const typeId of ENTRY_TYPE_IDS) {
-			const key = ENTRY_EXPORT_KEY[typeId]
-			if (!key) continue
-			expect(entryTypeIdOfExportKey(key)).toBe(typeId)
-		}
-		expect(
-			ENTRY_TYPE_IDS.filter((t) => !ENTRY_EXPORT_KEY[t])
-		).toEqual([LOCATION_TYPE_ID, ITEM_TYPE_ID])
+	it("round-trips every core type, a place and an item included", () => {
+		// A place read back as world lore loses its links' meaning, the rooms
+		// listing and its stats; an item loses its supply (plan A26).
+		for (const typeId of ENTRY_TYPE_IDS)
+			expect(entryTypeIdOfExportKey(ENTRY_EXPORT_KEY[typeId])).toBe(typeId)
+		expect(entryTypeIdOfExportKey("location")).toBe(LOCATION_TYPE_ID)
+		expect(entryTypeIdOfExportKey("item")).toBe(ITEM_TYPE_ID)
 	})
 
 	it("falls back to world lore for a foreign or future marker", () => {

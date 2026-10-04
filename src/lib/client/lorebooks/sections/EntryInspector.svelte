@@ -1,6 +1,5 @@
 <script lang="ts">
 	import EntryFireTest from "$lib/client/components/lorebookForms/EntryFireTest.svelte"
-	import type { EntryTypeId } from "$lib/shared/entries/types"
 	import { loreRoute } from "../loreRoute.svelte"
 	import { containedBy } from "../editor/partOf"
 	import { entryRefs, type RefLink } from "../editor/refs"
@@ -165,7 +164,6 @@
 					{#key source.id}
 						<EntryFireTest
 							entryId={source.id}
-							typeId={source.typeId as EntryTypeId}
 							{lorebookId}
 							enabled={source.enabled !== false}
 							constant={!!source.constant}

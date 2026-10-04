@@ -1,9 +1,12 @@
 /**
  * One table of line-reading cases, shared by the pure test
- * (`lineReading.test.ts`) and the SQL agreement test
- * (`$lib/server/state/lineSql.int.test.ts`) — the client and server forms of
- * the rule are checked against the SAME rows, so they cannot drift apart
- * without one of the two suites saying so.
+ * (`lineReading.test.ts`), the reader conformance tests
+ * (`$lib/client/lorebooks/lineConformance.test.ts`: the shared readers;
+ * `lineConformance.screens.dom.test.ts`: the screens it mounts) and the SQL
+ * agreement test (`$lib/server/state/lineSql.int.test.ts`: the SQL form and
+ * the server readers it names) — the client and server forms of the rule are
+ * checked against the SAME rows, so they cannot drift apart without one of
+ * the suites saying so.
  *
  * Test-only: nothing in the app imports this.
  */

@@ -17,7 +17,6 @@ import {
 	MAX_BINDINGS_FOR_SCENE_CAST,
 	reconcileParticipantsAndMentioned,
 	reconcileSuggestedNames,
-	resolveCharacterNamesToBindingIds,
 	resolveCharacterRefs,
 	resolveOrCreateBindingByName,
 	type CastEntry
@@ -77,6 +76,12 @@ async function makeScene(
 	return scene
 }
 
+/**
+ * A tag of its own for each seeded member: one member per tag per book
+ * (`lorebook_bindings_binding_unique`). Not a number, so it is never a cast
+ * tag and never moves a book's counter.
+ */
+let seedTag = 0
 async function makeBinding(
 	lorebookId: number,
 	overrides: Partial<typeof schema.lorebookBindings.$inferInsert> = {}
@@ -85,186 +90,12 @@ async function makeBinding(
 		.insert(schema.lorebookBindings)
 		.values({
 			lorebookId,
-			binding: "",
+			binding: `{{char:seed-${++seedTag}}}`,
 			...overrides
 		})
 		.returning()
 	return binding
 }
-
-describe("resolveCharacterNamesToBindingIds", () => {
-	test("a name matching an existing cast entry resolves to that entry's id — no duplicate binding created", async () => {
-		const user = await createTestUser(testDb, "resolve-known-user")
-		const lorebook = await makeLorebook(user.id)
-		const binding = await makeBinding(lorebook.id, {
-			name: "Aria Vance",
-			binding: "{{char:1}}"
-		})
-		const castEntries: CastEntry[] = [
-			{ name: "Aria Vance", aliases: [], id: binding.id }
-		]
-
-		const beforeCount = (
-			await testDb
-				.select()
-				.from(schema.lorebookBindings)
-				.where(eq(schema.lorebookBindings.lorebookId, lorebook.id))
-		).length
-
-		const ids = await resolveCharacterNamesToBindingIds(
-			[{ name: "Aria" }], // fuzzy word-subset match against "Aria Vance"
-			lorebook.id,
-			castEntries,
-			testDb
-		)
-
-		expect(ids).toEqual([binding.id])
-
-		const afterCount = (
-			await testDb
-				.select()
-				.from(schema.lorebookBindings)
-				.where(eq(schema.lorebookBindings.lorebookId, lorebook.id))
-		).length
-		expect(afterCount).toBe(beforeCount)
-	})
-
-	test("an unrecognized name mints exactly one new unbound binding, with a token derived from its own id", async () => {
-		const user = await createTestUser(testDb, "resolve-unknown-user")
-		const lorebook = await makeLorebook(user.id)
-		const castEntries: CastEntry[] = []
-
-		const ids = await resolveCharacterNamesToBindingIds(
-			[{ name: "Bram the Blacksmith" }],
-			lorebook.id,
-			castEntries,
-			testDb
-		)
-
-		expect(ids).toHaveLength(1)
-		const created = await testDb.query.lorebookBindings.findFirst({
-			where: eq(schema.lorebookBindings.id, ids[0])
-		})
-		expect(created?.name).toBe("Bram the Blacksmith")
-		// `personaId` is gone (0133): `characterId` null is now the whole
-		// story for an unbound row.
-		expect(created?.characterId).toBeNull()
-		// Token comes from the lorebook's own per-lorebook counter, not the
-		// row's own global id — a fresh lorebook's first binding is always
-		// {{char:1}}.
-		expect(created?.binding).toBe("{{char:1}}")
-		// castEntries is mutated in place so a repeated name later in the same
-		// call resolves to the same row rather than minting a second one.
-		expect(castEntries).toContainEqual({
-			name: "Bram the Blacksmith",
-			aliases: [],
-			id: ids[0]
-		})
-	})
-
-	test("the same unrecognized name repeated across participants+mentioned resolves to one row, not two", async () => {
-		const user = await createTestUser(testDb, "resolve-repeat-user")
-		const lorebook = await makeLorebook(user.id)
-		const castEntries: CastEntry[] = []
-
-		const firstCallIds = await resolveCharacterNamesToBindingIds(
-			[{ name: "Mysterious Stranger" }],
-			lorebook.id,
-			castEntries,
-			testDb
-		)
-		const secondCallIds = await resolveCharacterNamesToBindingIds(
-			[{ name: "Mysterious Stranger" }],
-			lorebook.id,
-			castEntries,
-			testDb
-		)
-
-		expect(secondCallIds).toEqual(firstCallIds)
-	})
-
-	test("a castId reference resolves directly against the known cast — no fuzzy matching, no duplicate", async () => {
-		const user = await createTestUser(testDb, "resolve-castid-user")
-		const lorebook = await makeLorebook(user.id)
-		const binding = await makeBinding(lorebook.id, {
-			name: "Aria Vance",
-			binding: "{{char:1}}"
-		})
-		const castEntries: CastEntry[] = [
-			{ name: "Aria Vance", aliases: [], id: binding.id }
-		]
-
-		const beforeCount = (
-			await testDb
-				.select()
-				.from(schema.lorebookBindings)
-				.where(eq(schema.lorebookBindings.lorebookId, lorebook.id))
-		).length
-
-		const ids = await resolveCharacterNamesToBindingIds(
-			[{ castId: binding.id }],
-			lorebook.id,
-			castEntries,
-			testDb
-		)
-
-		expect(ids).toEqual([binding.id])
-		const afterCount = (
-			await testDb
-				.select()
-				.from(schema.lorebookBindings)
-				.where(eq(schema.lorebookBindings.lorebookId, lorebook.id))
-		).length
-		expect(afterCount).toBe(beforeCount)
-	})
-
-	test("a castId that doesn't resolve against the known cast (hallucinated/stale) is skipped, not fabricated", async () => {
-		const user = await createTestUser(testDb, "resolve-badcastid-user")
-		const lorebook = await makeLorebook(user.id)
-		const castEntries: CastEntry[] = []
-
-		const ids = await resolveCharacterNamesToBindingIds(
-			[{ castId: 999999 }],
-			lorebook.id,
-			castEntries,
-			testDb
-		)
-
-		expect(ids).toEqual([])
-		const remaining = await testDb
-			.select()
-			.from(schema.lorebookBindings)
-			.where(eq(schema.lorebookBindings.lorebookId, lorebook.id))
-		expect(remaining).toHaveLength(0)
-	})
-
-	test("a mix of castId and name references in one call resolves both correctly", async () => {
-		const user = await createTestUser(testDb, "resolve-mixed-user")
-		const lorebook = await makeLorebook(user.id)
-		const binding = await makeBinding(lorebook.id, {
-			name: "Kestrel",
-			binding: "{{char:1}}"
-		})
-		const castEntries: CastEntry[] = [
-			{ name: "Kestrel", aliases: [], id: binding.id }
-		]
-
-		const ids = await resolveCharacterNamesToBindingIds(
-			[{ castId: binding.id }, { name: "Brand New NPC" }],
-			lorebook.id,
-			castEntries,
-			testDb
-		)
-
-		expect(ids).toHaveLength(2)
-		expect(ids).toContain(binding.id)
-		const newId = ids.find((id) => id !== binding.id)!
-		const created = await testDb.query.lorebookBindings.findFirst({
-			where: eq(schema.lorebookBindings.id, newId)
-		})
-		expect(created?.name).toBe("Brand New NPC")
-	})
-})
 
 describe("resolveCharacterRefs", () => {
 	test("a name matching an existing cast entry resolves to that entry's id — no suggestion", () => {

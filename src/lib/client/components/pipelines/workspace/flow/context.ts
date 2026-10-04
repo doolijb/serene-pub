@@ -4,11 +4,13 @@
  * so a click or an edit re-renders the cards without rebuilding the laid-out
  * graph.
  */
+import type { BuilderStep } from "$lib/client/components/pipelines/settingsGroups"
+
 export const MAP_CONTEXT_KEY = "serene-pub:pipeline-map"
 
 export interface PipelineMapContext {
 	readonly activeKey: string | null
-	stepFor(stepKey: string | null): Sockets.Pipelines.Step | undefined
+	stepFor(stepKey: string | null): BuilderStep | undefined
 	pendingFor(stepKey: string): number
 	onSelect(stepKey: string): void
 }
@@ -53,9 +55,9 @@ export const CLAUSE_ACCENT: Record<string, string> = {
 	junction: "border-secondary-500/60"
 }
 
-export const countsFor = (step: Sockets.Pipelines.Step | undefined) => {
+export const countsFor = (step: BuilderStep | undefined) => {
 	if (!step) return null
-	const all = [...step.options, ...step.advanced]
+	const all = step.options
 	return {
 		total: all.length,
 		overridden: all.filter((o) => o.overriddenHere).length

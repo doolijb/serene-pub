@@ -269,6 +269,10 @@ export interface CreatedMedia {
 	 *  the upload was already web-safe, which is every format the instance can
 	 *  currently accept. */
 	original: VariantRow
+	/** True when THIS call wrote the file; false on a per-user dedupe hit,
+	 *  which returned somebody's existing row (an avatar, an earlier
+	 *  attachment). The tray sweep may only ever delete a file it created. */
+	created: boolean
 }
 
 function sha256(bytes: Buffer): string {
@@ -321,7 +325,8 @@ export async function createMedia(
 	if (existing) {
 		return {
 			file: existing,
-			original: await restoreOriginal(db, existing, buf, sniffed.mime)
+			original: await restoreOriginal(db, existing, buf, sniffed.mime),
+			created: false
 		}
 	}
 
@@ -382,7 +387,7 @@ export async function createMedia(
 		.returning()
 
 	if (!isServableAsGiven(sniffed.kind, sniffed.mime))
-		return { file, original }
+		return { file, original, created: true }
 
 	// The original IS the display form. One statement, so the pointer and the
 	// mime/bytes denormalised from it can never disagree; no `rev` bump,
@@ -396,7 +401,7 @@ export async function createMedia(
 		})
 		.where(eq(schema.files.id, file.id))
 		.returning()
-	return { file: pointed ?? file, original }
+	return { file: pointed ?? file, original, created: true }
 }
 
 /**

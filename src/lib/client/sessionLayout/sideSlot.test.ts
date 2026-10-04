@@ -1,3 +1,4 @@
+import type { LayoutZoneRule } from "@serene-pub/sdk"
 import { describe, it, expect } from "vitest"
 import {
 	sideSlot,
@@ -363,14 +364,14 @@ import {
 	type EmptyColumnInput
 } from "./sideSlot"
 import { RAIL_PX } from "./sideRail"
-import { resolveZone, type ZoneRule } from "./schema"
+import { resolveZone } from "./schema"
 import { sidesTucked } from "./tuckedSides"
 
 /** One side zone, empty, as the ladder resolves it at a container width. */
 function emptyZoneAt(
 	side: "left" | "right",
 	width: number,
-	o: { pinned?: boolean; rules?: ZoneRule[] } = {}
+	o: { pinned?: boolean; rules?: LayoutZoneRule[] } = {}
 ) {
 	return resolveZone(side, { kind: "side", side, widgets: [], ...o }, width)
 }
@@ -379,7 +380,7 @@ function emptyZoneAt(
 function askOf(
 	side: "left" | "right",
 	width: number,
-	o: Partial<EmptyColumnInput> & { pinned?: boolean; rules?: ZoneRule[] } = {}
+	o: Partial<EmptyColumnInput> & { pinned?: boolean; rules?: LayoutZoneRule[] } = {}
 ): number {
 	const { pinned, rules, ...rest } = o
 	return emptyColumnPx({
@@ -444,7 +445,7 @@ describe("emptyColumnPx — an empty side asks for the width its first widget wi
 	})
 
 	it("a HIDDEN side still asks for nothing — only an empty one changed", () => {
-		const rules: ZoneRule[] = [{ min: 0, mode: "hidden", width: 264 }]
+		const rules: LayoutZoneRule[] = [{ min: 0, mode: "hidden", width: 264 }]
 		expect(emptyZoneAt("left", 1376, { rules }).mode).toBe("hidden")
 		expect(askOf("left", 1376, { rules })).toBe(0)
 	})

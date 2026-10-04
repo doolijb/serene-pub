@@ -12,16 +12,19 @@
  * core-catalog's own copy no longer carries the widget, and a user's row does.
  */
 import { describe, expect, test } from "vitest"
-import { fromLegacy, resolve, type Unit } from "@serene-pub/sdk"
+import {
+	drawnWidgetIds,
+	RETIRED_WIDGET_IDS,
+	validateSessionLayout
+} from "@serene-pub/sdk"
 import { CORE_WIDGETS } from "@serene-pub/core-catalog"
 import { coreDefaultWidgets } from "$lib/client/components/sessionPage/coreWidgets"
 import { SurfaceManager } from "$lib/client/surfaces/panelManager.svelte"
-import { presetBase } from "$lib/shared/sessionLayout/presets"
 import { loadArranged } from "./arrangedGeometry"
 import { previewOf } from "./presetPreview"
 import { normalizeZoneLayout, placedWidgetIds } from "./schema"
 import { unitsOf } from "./tabGroups"
-import { RETIRED_WIDGET_IDS, isRetiredWidget, loadChatLayout, widgetsInZone } from "./widgetGrid"
+import { isRetiredWidget, loadChatLayout, widgetsInZone } from "./widgetGrid"
 
 /** A stored layout from before R79: every slot names the widget somewhere. */
 const STORED = {
@@ -80,10 +83,6 @@ const STORED_PANELS = {
 
 const ids = (xs: readonly { id: string }[] | undefined) => (xs ?? []).map((x) => x.id)
 
-/** Every widget a v2 unit places: itself, or each member of its tab group. */
-const widgetsOfUnit = (u: Unit): string[] =>
-	u.kind === "widget" ? [u.widget] : u.kind === "group" ? u.members.map((m) => m.widget) : []
-
 describe("core no longer has an Inventory widget (R79)", () => {
 	test("not declared, not offered — and its id is retired", () => {
 		expect(ids(CORE_WIDGETS)).not.toContain("inventory")
@@ -100,8 +99,7 @@ describe("a stored placement of 'inventory' is ignored on every layout path", ()
 			1,
 			coreDefaultWidgets(),
 			{ ...STORED_PANELS, ...STORED } as never,
-			() => {},
-			presetBase(STORED)
+			() => {}
 		)
 		expect(ids(m.instances)).not.toContain("inventory")
 		expect(ids(m.addable)).not.toContain("inventory")
@@ -147,15 +145,9 @@ describe("a stored placement of 'inventory' is ignored on every layout path", ()
 		expect(ids(lists.left.cells)).toEqual([])
 	})
 
-	test("the v2 document read from it has no unit for it, and no row track left for one", () => {
-		const doc = fromLegacy(STORED)!.layout
-		const placed = Object.values(doc.zones).flatMap((z) => (z?.units ?? []).flatMap(widgetsOfUnit))
-		expect(placed).not.toContain("inventory")
-		expect(doc.zones.right?.units.map((u) => u.key)).toEqual(["scene-portraits", "stats"])
-		expect(doc.zones.right?.rows).toHaveLength(2)
-		const r = resolve(doc, { width: 1600, height: 900 })
-		expect(r.zones.right?.units.map((u) => u.key)).toEqual(["scene-portraits", "stats"])
-		// Its stored settings do not ride into the document either.
-		expect(Object.keys(fromLegacy(STORED)?.widgetSettings ?? {})).toEqual(["stats"])
+	test("the SDK's readers never draw it, and the validator says why", () => {
+		expect(drawnWidgetIds(STORED as never)).not.toContain("inventory")
+		const verdict = validateSessionLayout(STORED)
+		expect(verdict.warnings).toContain("'inventory' names a retired widget — no reader draws it")
 	})
 })

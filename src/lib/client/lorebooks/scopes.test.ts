@@ -5,12 +5,16 @@ import {
 	facetCounts,
 	mergeCastCount,
 	nothingMatchesLine,
+	POOL_KINDS,
 	poolSummary,
 	railScopes,
 	readingLine,
 	SAVED_SCOPES,
 	savedScopeCount,
 	savedScopeFilters,
+	savedScopePool,
+	savedScopeRoute,
+	scopeRoute,
 	readingIntoSentence,
 	scopeKinds,
 	BOOK_ENTRY_TYPES,
@@ -23,7 +27,12 @@ import {
 	timeLensKinds
 } from "./scopes"
 import { emptyRoute, type LoreRoute } from "$lib/shared/lorebooks/loreRoute"
-import { emptyFilters, SCENE_KIND, type PoolItem } from "./poolFilter"
+import {
+	emptyFilters,
+	filterPool,
+	SCENE_KIND,
+	type PoolItem
+} from "./poolFilter"
 
 const WORLD = "core:entry/world-lore"
 const CHARACTER = "core:entry/character-lore"
@@ -60,9 +69,10 @@ const COUNTS = {
 }
 
 describe("railScopes — the kind facets, with their figures", () => {
-	it("counts the whole pool as every kind the pool draws", () => {
+	it("counts the whole pool as every kind the pool draws, the cast too (note 12)", () => {
 		const scopes = railScopes(COUNTS)
-		expect(scopes.find((s) => s.id === "all")?.count).toBe(30)
+		// 30 entries and scenes, and the 7 people All now lists.
+		expect(scopes.find((s) => s.id === "all")?.count).toBe(37)
 	})
 
 	it("counts each scope from the figure the server sent", () => {
@@ -70,7 +80,7 @@ describe("railScopes — the kind facets, with their figures", () => {
 			railScopes(COUNTS).map((s) => [s.id, s.count])
 		)
 		expect(by).toEqual({
-			all: 30,
+			all: 37,
 			cast: 7,
 			world: 12,
 			history: 9,
@@ -128,9 +138,12 @@ describe("railScopes — the kind facets, with their figures", () => {
 
 	it("counts items as a scope of their own, and in the whole pool (phase 3c)", () => {
 		const by = Object.fromEntries(
-			railScopes({ ...COUNTS, "core:entry/item": 4 }).map((s) => [s.id, s.count])
+			railScopes({ ...COUNTS, "core:entry/item": 4 }).map((s) => [
+				s.id,
+				s.count
+			])
 		)
-		expect(by).toMatchObject({ all: 34, items: 4, world: 12 })
+		expect(by).toMatchObject({ all: 41, items: 4, world: 12 })
 	})
 })
 
@@ -242,42 +255,122 @@ describe("saved scopes", () => {
 	]
 	const readIn = new Set(["entry#2"])
 
-	it("offers the three the rail names", () => {
-		expect(SAVED_SCOPES.map((s) => s.id)).toEqual([
-			"needs-keywords",
-			"loose-ends",
-			"pinned"
-		])
+	it("offers Pinned alone — the Loose ends queue replaced the keyword two (note 5)", () => {
+		expect(SAVED_SCOPES.map((s) => s.id)).toEqual(["pinned"])
 	})
 
-	it("counts entries with no keywords as needing them", () => {
-		expect(savedScopeCount("needs-keywords", pool, readIn)).toBe(3)
+	it("counts entries with no keywords as needing them, pinned ones aside", () => {
+		// 2 and 3; 4 is pinned (in every prompt anyway), 5 archived.
+		expect(facetCounts(pool, readIn).needsKeywords).toBe(2)
 	})
 
-	it("counts a loose end as no keywords and never read in", () => {
-		expect(savedScopeCount("loose-ends", pool, readIn)).toBe(2)
+	/** Note 6: the badge counted rows keywords would never do anything for. */
+	it("leaves off entries and scenes out of the keyword chore", () => {
+		const more = [
+			item({ id: 6, keys: [], off: true }),
+			item({ id: 7, kind: SCENE_KIND, key: "scene#7", keys: [] })
+		]
+		expect(facetCounts(more, new Set()).needsKeywords).toBe(0)
+	})
+
+	it("lists exactly what it counts, so chip = list length", () => {
+		const mixed = [
+			...pool,
+			item({ id: 6, keys: [], off: true }),
+			item({ id: 7, kind: SCENE_KIND, key: "scene#7", keys: [] })
+		]
+		const keywordless = filterPool(
+			mixed,
+			{ ...emptyFilters(), needsKeywords: true },
+			readIn
+		)
+		expect(keywordless.length).toBe(facetCounts(mixed, readIn).needsKeywords)
+		const pinned = filterPool(
+			mixed,
+			{ ...emptyFilters(), ...savedScopeFilters("pinned") },
+			readIn
+		)
+		expect(pinned.length).toBe(savedScopeCount("pinned", mixed))
+	})
+
+	it("counts over the scope being read, the whole book from All and Cast", () => {
+		const book = [
+			item({ id: 1, kind: WORLD, keys: [] }),
+			item({ id: 2, kind: HISTORY, keys: [] })
+		]
+		expect(savedScopePool(book, "all").length).toBe(2)
+		expect(savedScopePool(book, "cast").length).toBe(2)
+		expect(savedScopePool(book, "world").map((i) => i.id)).toEqual([1])
+		expect(savedScopePool(book, "history").map((i) => i.id)).toEqual([2])
+	})
+
+	it("takes the reader to a list when the lens or board has none", () => {
+		const onCast: LoreRoute = {
+			...emptyRoute(),
+			lorebookId: 1,
+			scope: "cast",
+			lens: "time"
+		}
+		const next = savedScopeRoute(onCast)
+		expect(next.scope).toBe("all")
+		expect(next.lens).toBe("list")
+		const onWorld: LoreRoute = {
+			...emptyRoute(),
+			lorebookId: 1,
+			scope: "world",
+			lens: "cards"
+		}
+		expect(savedScopeRoute(onWorld)).toBe(onWorld)
 	})
 
 	it("counts what is pinned", () => {
-		expect(savedScopeCount("pinned", pool, readIn)).toBe(1)
+		expect(savedScopeCount("pinned", pool)).toBe(1)
 	})
 
 	it("narrows the pool the same way the count did", () => {
-		expect(savedScopeFilters("needs-keywords")).toMatchObject({
-			keywords: "none"
-		})
-		expect(savedScopeFilters("loose-ends")).toMatchObject({
-			looseEnds: true
-		})
 		expect(savedScopeFilters("pinned")).toMatchObject({ pinned: true })
 	})
 
 	it("narrows nothing when no saved scope is chosen", () => {
 		expect(savedScopeFilters(null)).toEqual({
 			keywords: emptyFilters().keywords,
-			looseEnds: false,
+			needsKeywords: false,
 			pinned: false
 		})
+	})
+})
+
+describe("scopeRoute — a scope chosen is a scope shown (design §2, Cast × Places)", () => {
+	const at = (lens?: LoreRoute["lens"]): LoreRoute => ({
+		...emptyRoute(),
+		lorebookId: 1,
+		scope: "world",
+		entryId: 7,
+		...(lens ? { lens } : {})
+	})
+
+	it("keeps the lens when it draws the scope", () => {
+		for (const lens of ["list", "cards", "tree", "graph", "time"] as const) {
+			const next = scopeRoute(at(lens), "history")
+			expect(next.scope).toBe("history")
+			expect(next.lens, lens).toBe(lens)
+		}
+	})
+
+	it("opens the scope in the default lens under Places and Lives, which draw their own set", () => {
+		for (const lens of ["places", "lives"] as const) {
+			const next = scopeRoute(at(lens), "cast")
+			expect(next.scope).toBe("cast")
+			expect(next.lens, lens).toBe("list")
+		}
+	})
+
+	it("leaves the entry behind, as choosing a scope always has", () => {
+		expect(scopeRoute(at("list"), "history").entryId).toBeUndefined()
+	})
+
+	it("reads an absent lens as the default, which draws every scope", () => {
+		expect(scopeRoute(at(), "places").lens).toBeUndefined()
 	})
 })
 
@@ -309,11 +402,10 @@ describe("facetCounts — what the chips under the pool header say", () => {
 		expect(counts.total).toBe(5)
 	})
 
-	it("counts the saved scopes by the rail's own rule (archived answers none)", () => {
+	it("counts Needs keywords by the queue's own rule (archived answers none)", () => {
 		const counts = facetCounts(pool, readIn)
-		// No keywords: 1 and 2 were read in; 3 is live; 4 is archived; 5 a scene.
-		expect(counts.needsKeywords).toBe(4)
-		expect(counts.looseEnds).toBe(2)
+		// Only 1 needs keywords: 2 is pinned, 3 off, 4 archived, 5 a scene.
+		expect(counts.needsKeywords).toBe(1)
 	})
 
 	it("counts a kind the pool does not hold as absent rather than as zero", () => {
@@ -391,7 +483,11 @@ describe("reading verbs (NOMENCLATURE §8)", () => {
 	})
 
 	it("the replace confirmation names both books and says nothing changes in them", () => {
-		const sentence = replaceReadingSentence("The Open Door", "Old Book", "New Book")
+		const sentence = replaceReadingSentence(
+			"The Open Door",
+			"Old Book",
+			"New Book"
+		)
 		expect(sentence).toContain("The Open Door reads Old Book")
 		expect(sentence).toContain("stops reading Old Book")
 		expect(sentence).toContain("nothing in either book changes")
@@ -422,6 +518,21 @@ describe("book entry types and figures (#85, #89)", () => {
 	it("a place is a location entry — the Places scope narrows to them", () => {
 		expect(scopeKinds("places")).toEqual(["core:entry/location"])
 	})
+
+	/**
+	 * Places plan B5: places are pool entries. The pool draws them, so All
+	 * counts them and a book holding only places is not an empty book.
+	 */
+	it("draws places in the pool, so All counts them", () => {
+		expect(POOL_KINDS).toContain("core:entry/location")
+		expect(
+			BOOK_ENTRY_TYPES.filter((t) => t === "core:entry/location")
+		).toHaveLength(1)
+		const counts = { "core:entry/location": 3, places: 3, cast: 0 }
+		expect(railScopes(counts).find((s) => s.id === "all")?.count).toBe(3)
+		expect(railScopes(counts).find((s) => s.id === "places")?.count).toBe(3)
+		expect(bookIsEmpty(counts)).toBe(false)
+	})
 })
 
 describe("timeLensEntries — the Time lens honours the scope (#88)", () => {
@@ -438,8 +549,10 @@ describe("timeLensEntries — the Time lens honours the scope (#88)", () => {
 		expect(timeLensEntries(rows, "cast").map((r) => r.id)).toEqual([4])
 	})
 
-	it("all is every pool kind; scenes keeps History, where scenes sit", () => {
-		expect(timeLensEntries(rows, "all").map((r) => r.id)).toEqual([1, 2, 4])
+	it("all is every pool kind, places included (B5); scenes keeps History, where scenes sit", () => {
+		expect(timeLensEntries(rows, "all").map((r) => r.id)).toEqual([
+			1, 2, 3, 4
+		])
 		expect(timeLensKinds("scenes")).toEqual([HISTORY])
 	})
 })

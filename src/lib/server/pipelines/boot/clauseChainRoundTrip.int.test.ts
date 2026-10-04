@@ -54,13 +54,19 @@ describe("nested clauses round-trip through the store", () => {
 		expect(nested(want)).toEqual(
 			expect.arrayContaining([
 				// R8 (2026-09-28): `via` routes Narrate first; the knock or
-				// the play is the `door`; the voices are an `each` in the play
-				// branch, after the lead; the keeper is on the spine.
+				// the play is the `door`, after who speaks (`pick`); the play
+				// runs the session's party speech (owner ruling 2026-09-30):
+				// each delver's character turn (with its own propose-or-apply
+				// inside it) or the Castellan for the party; the Castellan's
+				// keeper is on the spine.
 				["via.turn.channel", "via", "turn"],
 				["via.turn.channel.story.pick", "via.turn.channel", "story"],
-				["via.turn.channel.story.pick.planned.door", "via.turn.channel.story.pick", "planned"],
-				["via.turn.channel.story.pick.planned.door.play.voices", "via.turn.channel.story.pick.planned.door", "play"],
-				["via.turn.channel.story.pick.planned.door.play.lead", "via.turn.channel.story.pick.planned.door", "play"],
+				["via.turn.channel.story.door", "via.turn.channel", "story"],
+				["via.turn.channel.story.door.play.speech", "via.turn.channel.story.door", "play"],
+				["via.turn.channel.story.door.play.speech.each.character", "via.turn.channel.story.door.play.speech", "each"],
+				["via.turn.channel.story.door.play.speech.each.character.turn.commit", "via.turn.channel.story.door.play.speech.each.character", "turn"],
+				["via.turn.channel.story.door.play.speech.castellan.party", "via.turn.channel.story.door.play.speech", "castellan"],
+				["via.turn.channel.story.door.play.speech.castellan.party.speaks.row", "via.turn.channel.story.door.play.speech.castellan.party", "speaks"],
 				["keep.played.commit", "keep", "played"]
 			])
 		)

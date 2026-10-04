@@ -57,11 +57,21 @@ export const ROOK_VALUES = { hp: 14, mood: "wary" } as const
 /**
  * The session's stored layout: Lore entries docked down the left, as the
  * layout editor stores a side a person arranged. Adventure's own right column
- * is restated, since a stored zone layout and arrangement replace the
- * genre's whole.
+ * and middle (World State over the conversation) are restated: under the copy
+ * model a session's row IS its whole layout, so a slot the fixture left out
+ * would no longer fall through to the genre default layout's — it would draw
+ * the floor (brief 3 of `PLAN-layout-one-format-2026-09-28`).
  */
 export const FIXTURE_LAYOUT = {
 	active: [{ id: "lore-entries", on: true }],
+	widgetGrid: {
+		version: 1,
+		cell: 44,
+		widgets: [
+			{ id: "world-state", zone: "middle", order: 0, size: { w: "grow", h: "fixed" }, anchor: { top: true, left: true, right: true } },
+			{ id: "messages", zone: "middle", order: 1, size: { w: "grow", h: "grow" }, anchor: { top: true, bottom: true, left: true, right: true } }
+		]
+	},
 	zoneLayout: {
 		version: 1,
 		zones: {

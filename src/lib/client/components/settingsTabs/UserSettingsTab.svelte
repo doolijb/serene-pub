@@ -16,12 +16,22 @@
 	} from "$lib/client/accessibility/state.svelte"
 	import { z } from "zod"
 	import {
+		displayNameSchema,
+		DISPLAY_NAME_MAX_LENGTH
+	} from "$lib/shared/validation/displayName"
+	import {
 		passphraseSchema,
 		PASSPHRASE_RULE_HINT
 	} from "$lib/shared/validation/passphrase"
 	import * as Icons from "@lucide/svelte"
 	import LanguagePicker from "$lib/client/components/inputs/LanguagePicker.svelte"
 	import { languageDefinition } from "$lib/shared/i18n/languages"
+	import LoreWriteModePicker from "$lib/client/components/inputs/LoreWriteModePicker.svelte"
+	import {
+		LORE_WRITE_MODE_CHOICES,
+		effectiveLoreWriteMode,
+		type LoreWriteMode
+	} from "$lib/shared/lorebooks/loreWriteMode"
 	// See the note at the `t()` import in `src/routes/+page.svelte`: the English
 	// source is the key, and wrapping a string is the whole cost of translating
 	// it. This card is wrapped because it is the one a user reaches *to change
@@ -87,8 +97,12 @@
 		isUpdatingDisplayName = false
 		if (message.success) {
 			toaster.success({
-				title: "Display name updated",
-				description: `Updated to "${message.displayName}"`
+				title: message.displayName
+					? "Display name updated"
+					: "Display name cleared",
+				description: message.displayName
+					? `Updated to "${message.displayName}"`
+					: `You'll go by your username, "${userCtx.user?.username ?? ""}".`
 			})
 			displayNameError = ""
 		} else {
@@ -210,13 +224,6 @@
 		hasUnsavedChanges = false
 	})
 
-	// Display name validation schema
-	const displayNameSchema = z
-		.string()
-		.min(3, "Display name must be at least 3 characters long")
-		.max(50, "Display name must not exceed 50 characters")
-		.trim()
-
 	let userSettingsCtx: UserSettingsCtx = $state(getContext("userSettingsCtx"))
 	let userCtx: UserCtx = $state(getContext("userCtx"))
 	let systemSettingsCtx: SystemSettingsCtx = $state(
@@ -229,7 +236,7 @@
 	// system settings row every client already receives, admin or not.
 	let serverDefaultOptionLabel = $derived.by(() => {
 		const code = systemSettingsCtx.settings?.defaultLanguage
-		return `${t("Server default")} (${languageDefinition(code).name})`
+		return `${t("Pub default")} (${languageDefinition(code).name})`
 	})
 
 	function onLanguageChange(value: string) {
@@ -239,6 +246,23 @@
 		socket.emit("userSettings:updateLanguage", {
 			language: value === "" ? null : value
 		})
+	}
+
+	// ── Lorebook writes from sessions (plan A22) ─────────────────────────────
+	// As the language: the inherit choice names what it gives today, and is
+	// stored as NULL so an admin moving the instance's moves this person too.
+	let pubLoreWriteMode = $derived(
+		effectiveLoreWriteMode(
+			null,
+			systemSettingsCtx.settings?.loreWriteModeDefault
+		)
+	)
+	let loreWriteInheritLabel = $derived(
+		`Use the pub default (${LORE_WRITE_MODE_CHOICES[pubLoreWriteMode].label})`
+	)
+
+	function onLoreWriteModeChange(mode: LoreWriteMode | null) {
+		socket.emit("userSettings:updateLoreWriteMode", { mode })
 	}
 
 	// Profile modal state
@@ -264,13 +288,13 @@
 	// A successful save updates userCtx.user.displayName (see the server's
 	// updateDisplayName handler, which re-runs the users:current handler),
 	// which the effect above re-syncs displayName from — so this doesn't
-	// need its own explicit reset after a save. Empty is "unsaveable," not
-	// "unsaved" — an emptied field shouldn't prompt a discard-confirmation
-	// for a value that was never going to be saved anyway.
+	// need its own explicit reset after a save. Empty is a value too: saving
+	// it clears the name back to the username.
+	let displayNameChanged = $derived(
+		(displayName.trim() || null) !== (userCtx.user?.displayName ?? null)
+	)
 	$effect(() => {
-		hasUnsavedChanges =
-			displayName.trim() !== "" &&
-			displayName !== (userCtx.user?.displayName ?? "")
+		hasUnsavedChanges = displayNameChanged
 	})
 
 	async function onShowAllCharacterFieldsClick(event: { checked: boolean }) {
@@ -287,19 +311,11 @@
 
 	// Profile functions
 	async function updateDisplayName() {
-		if (!displayName.trim()) {
-			displayNameError = "Display name cannot be empty"
+		const parsed = displayNameSchema.safeParse(displayName)
+		if (!parsed.success) {
+			displayNameError =
+				parsed.error.errors[0]?.message || "Invalid display name"
 			return
-		}
-
-		try {
-			displayNameSchema.parse(displayName.trim())
-		} catch (error) {
-			if (error instanceof z.ZodError) {
-				displayNameError =
-					error.errors[0]?.message || "Invalid display name"
-				return
-			}
 		}
 
 		displayNameError = ""
@@ -422,7 +438,7 @@
 		<h3 class="mb-2 text-sm font-medium">{t("Language")}</h3>
 		<p class="text-surface-700-300 mb-3 text-sm">
 			{t(
-				"The language this interface is drawn in. Leave it on the server default to follow whatever an administrator has set for everyone."
+				"The language this interface is drawn in. Leave it on the pub default to follow whatever an administrator has set for everyone."
 			)}
 		</p>
 		<LanguagePicker
@@ -437,6 +453,27 @@
 				"Translations are produced automatically and are only as good as the translation service; text a translation has not reached yet stays in English. Your language also decides which retrieval features apply — see the Languages documentation page."
 			)}
 		</p>
+	</div>
+
+	<!-- Lorebook writes from sessions (plan A22) -->
+	<div class="card preset-filled-surface-100-900 p-4">
+		<h3 class="mb-2 text-sm font-medium">Lorebook writes from sessions</h3>
+		<p
+			id="user-lore-write-mode-note"
+			class="text-surface-700-300 mb-3 text-sm"
+		>
+			How your sessions may change the lorebooks you own: the stats they
+			record, a summary, a compiled history, a graph.
+		</p>
+		<LoreWriteModePicker
+			legend="Lorebook writes from sessions"
+			name="user-lore-write-mode"
+			value={userSettingsCtx.settings?.loreWriteMode ?? null}
+			inheritLabel={loreWriteInheritLabel}
+			inheritDescription="Follow whatever an administrator has set for everyone."
+			describedBy="user-lore-write-mode-note"
+			onValueChange={onLoreWriteModeChange}
+		/>
 	</div>
 
 	<div
@@ -467,7 +504,7 @@
 
 		<div class="flex flex-col gap-2 pt-4">
 			<p class="text-surface-600-400 text-sm">
-				Writing a character — or a persona — from the Characters panel's
+				Writing a character — or a persona — from the Characters view's
 				"New" menu opens a quick, simplified creator instead of the full
 				character form. Turn off to always go straight to the full form.
 			</p>
@@ -536,26 +573,31 @@
 				Import your characters, personas, sessions, and lorebooks from
 				other applications.
 			</p>
-			<a
-				href="/import"
+			<!-- Opens this view's own Import section (owner note 23,
+			     2026-10-02; it was the /import page). -->
+			<button
+				type="button"
 				class="btn preset-filled-primary-500 w-fit max-w-full whitespace-normal"
-				aria-label="Import from SillyTavern"
+				onclick={() => (panelsCtx.digest.settingsSection = "import")}
 			>
 				<Icons.Download size={16} />
 				Import from SillyTavern
-			</a>
+			</button>
 		</div>
 	{/if}
 
-	<!-- User Profile Section - Only show when accounts are enabled -->
-	{#if systemSettingsCtx.settings?.isAccountsEnabled && userCtx.user}
-		<TotpSettings />
+	<!-- User profile: the display name is everyone's, in every mode; the
+	     sign-in pieces (two-step, passphrase, logout) need accounts on. -->
+	{#if userCtx.user}
+		{#if systemSettingsCtx.settings?.isAccountsEnabled}
+			<TotpSettings />
+		{/if}
 
 		<div class="card preset-filled-surface-100-900 p-4">
 			<h3 class="mb-4 text-sm font-medium">User profile</h3>
 
 			<!-- Display Name -->
-			<div class="mb-4 flex flex-col gap-2">
+			<div class="flex flex-col gap-2">
 				<label for="display-name" class="font-semibold">
 					Display name
 				</label>
@@ -563,18 +605,18 @@
 					<input
 						id="display-name"
 						type="text"
-						class="input flex-1"
+						class="input min-w-0 flex-1"
 						bind:value={displayName}
-						placeholder="Enter your display name"
+						placeholder={userCtx.user.username}
+						maxlength={DISPLAY_NAME_MAX_LENGTH}
+						aria-describedby="display-name-help"
 						disabled={isUpdatingDisplayName}
 					/>
 					<button
 						type="button"
 						class="btn preset-filled-primary-500"
 						onclick={updateDisplayName}
-						disabled={isUpdatingDisplayName ||
-							!displayName.trim() ||
-							displayName === userCtx.user?.displayName}
+						disabled={isUpdatingDisplayName || !displayNameChanged}
 					>
 						{#if isUpdatingDisplayName}
 							<Icons.Loader2 size={16} class="animate-spin" />
@@ -584,37 +626,43 @@
 						{/if}
 					</button>
 				</div>
+				<p id="display-name-help" class="text-surface-600-400 text-sm">
+					What the app and the characters call you. Leave it empty to
+					go by your username.
+				</p>
 				{#if displayNameError}
 					<p class="text-error-500 text-sm">{displayNameError}</p>
 				{/if}
 			</div>
 
-			<!-- Profile Actions -->
-			<div class="flex flex-col gap-2">
-				<button
-					type="button"
-					class="btn preset-tonal-surface mx-auto w-fit"
-					onclick={openChangePasswordModal}
-				>
-					<Icons.Key size={16} />
-					Change passphrase
-				</button>
+			{#if systemSettingsCtx.settings?.isAccountsEnabled}
+				<!-- Profile Actions -->
+				<div class="mt-4 flex flex-col gap-2">
+					<button
+						type="button"
+						class="btn preset-tonal-surface mx-auto w-fit"
+						onclick={openChangePasswordModal}
+					>
+						<Icons.Key size={16} />
+						Change passphrase
+					</button>
 
-				<button
-					type="button"
-					class="btn preset-tonal-error mx-auto w-fit"
-					onclick={logout}
-					disabled={isLoggingOut}
-				>
-					{#if isLoggingOut}
-						<Icons.Loader2 size={16} class="animate-spin" />
-						Logging out…
-					{:else}
-						<Icons.LogOut size={16} />
-						Logout
-					{/if}
-				</button>
-			</div>
+					<button
+						type="button"
+						class="btn preset-tonal-error mx-auto w-fit"
+						onclick={logout}
+						disabled={isLoggingOut}
+					>
+						{#if isLoggingOut}
+							<Icons.Loader2 size={16} class="animate-spin" />
+							Logging out…
+						{:else}
+							<Icons.LogOut size={16} />
+							Logout
+						{/if}
+					</button>
+				</div>
+			{/if}
 		</div>
 	{/if}
 </div>

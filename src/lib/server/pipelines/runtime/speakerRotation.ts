@@ -72,7 +72,20 @@ export interface RotationPersona {
  * the row's `channel` (lair re-plan R5), which only the narrator rule reads:
  * its entry spans channels. Absent is `main`.
  */
-export type RotationMessage = TurnHistoryMessage & { channel?: string | null }
+export type RotationMessage = TurnHistoryMessage & {
+	channel?: string | null
+	/** The history row's id, when the read carries it. */
+	id?: number
+	/**
+	 * 🚧 The **turn plan** a planner's row carries (Lair character turns,
+	 * `create-message@1`'s `turnPlan`, stored as `metadata.turnPlan`): the
+	 * participant references it plans a character turn for, in order. Only
+	 * on such a row.
+	 */
+	turnPlan?: { turns?: unknown } | null
+	/** The row was stopped while it was written (`generationOutcome: 'stopped'`). Only when it was. */
+	stopped?: boolean
+}
 
 /** Who voiced a row, by reference: the projected `speaker`, else the raw `metadata.speaker`. */
 const speakerRefOf = (m: RotationMessage): unknown =>
@@ -364,12 +377,91 @@ export function spokenRefsSince(
 	return sdkSpokenRefsSince(messages)
 }
 
+/** Whether a row is a person's line on `main` (a row with no channel, or a `main` lane, is `main`'s). */
+const isPersonsMainLine = (row: RotationMessage): boolean =>
+	row.role === "user" &&
+	parseChannel(row.channel ?? DEFAULT_CHANNEL).slug === DEFAULT_CHANNEL
+
+/** A row's turn plan's references, or null when the row plans nothing. */
+const plannedRefsOf = (row: RotationMessage): ParticipantRef[] | null => {
+	const plan = row.turnPlan
+	if (!plan || typeof plan !== "object") return null
+	const turns = Array.isArray(plan.turns) ? plan.turns : []
+	return turns.filter((t): t is ParticipantRef => typeof t === "string" && t.length > 0)
+}
+
+/**
+ * 🚧 **The standing turn plan** (Lair character turns, owner ruling
+ * 2026-09-30): the newest visible row that carries a turn plan, unless a
+ * person's line on `main` is newer than it — a person speaking after a plan
+ * has moved the story past it. `before`, a row id: only rows older than it
+ * count (a regenerate or swipe re-voicing that row reads the plan it was
+ * played from). Null when no plan stands. `index` is the plan row's place in
+ * `messages`.
+ *
+ * The one reading of "which plan stands": the narrator strategy prepares the
+ * plan's turns from it, and `core:query/turn-plan@1` hands a character turn
+ * its plan from it.
+ */
+export function standingTurnPlan(
+	messages: readonly RotationMessage[],
+	before?: number
+): { index: number; turns: ParticipantRef[]; row: RotationMessage } | null {
+	for (let i = messages.length - 1; i >= 0; i--) {
+		const row = messages[i]
+		if (!row || row.isHidden) continue
+		if (before !== undefined && typeof row.id === "number" && row.id >= before) continue
+		if (isPersonsMainLine(row)) return null
+		const turns = plannedRefsOf(row)
+		if (turns) return { index: i, turns, row }
+	}
+	return null
+}
+
+/**
+ * 🚧 **The planned turns** still to be taken: the standing plan's references,
+ * in its order, less every one whose character has a visible row on `main`
+ * after the plan row — each `{ ref, via: 'plan' }`. A row after the plan
+ * that was stopped ends the plan (R34, "a Stop ends the round"): nothing is
+ * left to take. A reference named twice is one turn. `planned` is whether a
+ * plan stands at all — one naming nobody still answered the person's line.
+ */
+function plannedTurns(messages: readonly RotationMessage[]): {
+	planned: boolean
+	entries: TurnEntry[]
+} {
+	const standing = standingTurnPlan(messages)
+	if (!standing) return { planned: false, entries: [] }
+	const spoken = new Set<string>()
+	for (const row of messages.slice(standing.index + 1)) {
+		if (!row || row.isHidden) continue
+		if (row.stopped === true) return { planned: true, entries: [] }
+		if (parseChannel(row.channel ?? DEFAULT_CHANNEL).slug !== DEFAULT_CHANNEL) continue
+		if (typeof row.characterId === "number") spoken.add(`character:${row.characterId}`)
+	}
+	const seen = new Set<string>()
+	const entries: TurnEntry[] = []
+	for (const ref of standing.turns) {
+		if (seen.has(ref) || spoken.has(ref)) continue
+		seen.add(ref)
+		entries.push({ ref, via: "plan" })
+	}
+	return { planned: true, entries }
+}
+
 /**
  * The narrator strategy's entries (§4.4; lair re-plan R5): the pipeline's
  * own voice (`ref: null`) is due on every channel whose **newest visible
  * row** is a person's — one entry per such channel, **newest line first**,
  * so a line on a side channel (the Lair's Sanctum) puts its entry at the
  * head and auto-advance answers it.
+ *
+ * 🚧 **Then the planned turns** (Lair character turns, owner ruling
+ * 2026-09-30): while a turn plan stands (`standingTurnPlan`), each turn it
+ * names that is not yet taken, in its order, `via: 'plan'`. A standing plan
+ * has answered the person's line on `main`, so `main` prepares no own-voice
+ * entry beside it — the Castellan's turn is being taken, by its delvers. A
+ * history with no plan row reads exactly as it did.
  *
  * "The newest row", not the newest turn in the rotation: the voice's own
  * reply is exactly what this strategy produced, so it has to count as the
@@ -394,14 +486,17 @@ export function narratorEntries(
 			row
 		})
 	})
-	return [...newest]
+	const plan = plannedTurns(messages)
+	const voices: TurnEntry[] = [...newest]
 		.filter(([, { row }]) => row.role === "user")
+		.filter(([channel]) => !(plan.planned && channel === DEFAULT_CHANNEL))
 		.sort(([, a], [, b]) => b.index - a.index)
 		.map(([channel]) =>
 			channel === DEFAULT_CHANNEL
 				? { ref: null, via: "voice" }
 				: { ref: null, via: "voice", channel }
 		)
+	return [...voices, ...plan.entries]
 }
 
 /**

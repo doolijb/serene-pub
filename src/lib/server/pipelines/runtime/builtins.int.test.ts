@@ -62,13 +62,6 @@ vi.mock("$lib/server/embedding/vectorizationQueue", () => ({
 	ensureSessionMessageEmbedded: async () => {},
 	autoEnqueueSession: async () => {}
 }))
-vi.mock("$lib/server/utils/getUserConfigurations", () => ({
-	getUserConfigurations: async () => ({
-		contextConfig: { id: 1, template: "{{instructions}}" },
-		promptConfig: { id: 1, systemPrompt: "Be brief." },
-		narratorPromptConfig: null
-	})
-}))
 
 /** Every session broadcast the host made, in order. */
 const broadcasts: Array<{ sessionId: number; event: string; payload: any }> = []
@@ -407,7 +400,7 @@ describe("each built-in is a receipted run that emits what changed", () => {
 					swipes: {
 						currentIdx: 0,
 						history: ["first", "second"],
-						thinkingHistory: [null, null]
+						reasoningHistory: [null, null]
 					}
 				}
 			})
@@ -921,7 +914,7 @@ describe("a stop belongs to the alternative that was streaming (W2)", () => {
 					swipes: {
 						currentIdx: 1,
 						history: ["first", "second, cut short"],
-						thinkingHistory: [null, null]
+						reasoningHistory: [null, null]
 					}
 				}
 			})

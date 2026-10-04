@@ -38,6 +38,15 @@
 		CORE_TEMPLATE_ENGINE
 	} from "$lib/shared/pipelines/templateEngines"
 	import type { TemplateScope } from "@serene-pub/sdk"
+	import {
+		filterShelvedTree,
+		insertionFor,
+		shelveScopeTree,
+		usedScopeRoots
+	} from "$lib/shared/utils/templateVariableShelves"
+	import PanelFilterInput from "$lib/client/components/panels/PanelFilterInput.svelte"
+	import DocPeek from "$lib/client/components/docs/DocPeek.svelte"
+	import { docsHref } from "$lib/shared/utils/docsHref"
 	import ScopeTree from "./ScopeTree.svelte"
 
 	interface Props {
@@ -143,6 +152,23 @@
 	const wantsTree = $derived(
 		(showTree ?? true) && treeNodes.length > 0
 	)
+
+	/**
+	 * The roots on their shelves, each marked when the template already uses
+	 * it. Unused is unmarked, never a finding.
+	 */
+	let filter = $state("")
+	let tree = $state<{ focusFirst: () => void } | null>(null)
+	const usedRoots = $derived(
+		usedScopeRoots(
+			value,
+			treeNodes.map((n) => n.label)
+		)
+	)
+	const shelved = $derived(
+		shelveScopeTree(treeNodes, { declarers, used: usedRoots, engine })
+	)
+	const filtered = $derived(filterShelvedTree(shelved, filter))
 
 	const open = $derived(items.length > 0)
 	const active = $derived(items[Math.min(selected, items.length - 1)])
@@ -335,14 +361,13 @@
 		const at = el?.selectionStart ?? caret
 		const to = el?.selectionEnd ?? at
 		if (insideTag(at)) return replace(at, to, node.path)
-		if (node.type === "list") {
-			const snippet = isLiquid
-				? `{% for item in ${node.path} %}\n\n{% endfor %}`
-				: `{{#each ${node.path}}}\n\n{{/each}}`
-			const body = snippet.indexOf("\n") + 1
-			return replace(at, to, snippet, { start: body, end: body })
-		}
-		replace(at, to, isLiquid ? `{{ ${node.path} }}` : `{{{${node.path}}}}`)
+		const { text, caret: inside } = insertionFor(node, engine)
+		replace(
+			at,
+			to,
+			text,
+			inside === undefined ? undefined : { start: inside, end: inside }
+		)
 	}
 </script>
 
@@ -463,36 +488,68 @@
 
 		{#if wantsTree}
 			<section
-				class="border-surface-200-800 flex min-w-0 flex-col gap-1 rounded border p-2 {treeOpen
-					? '@min-[40rem]/tpl:max-h-[32rem] @min-[40rem]/tpl:overflow-auto'
-					: ''}"
+				class="border-surface-200-800 flex min-w-0 flex-col gap-1 rounded border p-2"
 				aria-labelledby="{uid}-tree-h"
 			>
-				<button
-					type="button"
-					id="{uid}-tree-h"
-					class="flex items-center gap-1 text-left text-xs font-medium"
-					aria-expanded={treeOpen}
-					aria-controls="{uid}-tree"
-					onclick={() => (treeOpen = !treeOpen)}
-				>
-					<Icons.ChevronRight
-						size={12}
-						class="transition-transform {treeOpen ? 'rotate-90' : ''}"
-						aria-hidden="true"
+				<div class="flex items-center gap-1">
+					<button
+						type="button"
+						id="{uid}-tree-h"
+						class="flex flex-1 items-center gap-1 text-left text-xs font-medium"
+						aria-expanded={treeOpen}
+						aria-controls="{uid}-tree"
+						onclick={() => (treeOpen = !treeOpen)}
+					>
+						<Icons.ChevronRight
+							size={12}
+							class="transition-transform {treeOpen ? 'rotate-90' : ''}"
+							aria-hidden="true"
+						/>
+						Variables available here
+					</button>
+					<DocPeek
+						href={docsHref("context-templates", "finding-the-variables-a-template-can-use")}
+						topic="Finding variables"
 					/>
-					Variables available here
-				</button>
+				</div>
 				{#if treeOpen}
-					<div id="{uid}-tree" class="flex flex-col gap-1">
+					<div id="{uid}-tree" class="flex min-h-0 flex-col gap-1">
 						{#if scopeNote}
 							<p class="text-surface-600-400 text-xs">{scopeNote}</p>
 						{/if}
-						<ScopeTree
-							nodes={treeNodes}
-							insertable={!readonly}
-							oninsert={insertNode}
+						<PanelFilterInput
+							bind:value={filter}
+							placeholder="variables"
+							singular="variable"
+							count={treeNodes.length}
+							onkeydown={(e) => {
+								if (e.key !== "ArrowDown") return
+								e.preventDefault()
+								tree?.focusFirst()
+							}}
 						/>
+						<p class="sr-only" aria-live="polite">
+							{#if filter.trim()}
+								{filtered.matched === 1
+									? "1 variable matches"
+									: `${filtered.matched} variables match`}
+							{/if}
+						</p>
+						{#if filtered.nodes.length}
+							<div class="max-h-[28rem] overflow-auto">
+								<ScopeTree
+									bind:this={tree}
+									nodes={filtered.nodes}
+									reveal={filtered.reveal}
+									insertable={!readonly}
+									oninsert={insertNode}
+								/>
+							</div>
+						{:else}
+							<p class="text-surface-600-400 text-xs">
+								Nothing here matches “{filter.trim()}”.
+							</p>
+						{/if}
 					</div>
 				{/if}
 			</section>

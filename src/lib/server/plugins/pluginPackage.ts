@@ -157,17 +157,21 @@ async function walk(root: string, prefix = ""): Promise<string[]> {
 	return out
 }
 
-/** Every surface entry a manifest declares, tolerant of the json being anything. */
+/**
+ * Every frame document a manifest's `surfaces` declare (session view, page),
+ * tolerant of the json being anything. A widget is never a frame: a document
+ * inside one is its component's `sp-frame`.
+ */
 export function declaredSurfaceEntries(manifest: unknown): string[] {
-	const raw = (manifest as any)?.surfaces
-	if (!raw || typeof raw !== "object") return []
 	const out: string[] = []
 	const take = (v: any) => {
 		if (v && typeof v.entry === "string") out.push(v.entry)
 	}
-	take(raw["session-view"])
-	take(raw.page)
-	if (Array.isArray(raw.panels)) for (const p of raw.panels) take(p)
+	const raw = (manifest as any)?.surfaces
+	if (raw && typeof raw === "object") {
+		take(raw["session-view"])
+		take(raw.page)
+	}
 	return out
 }
 
@@ -365,8 +369,8 @@ export async function readPluginPackage(dir: string): Promise<PluginPackage> {
 		}
 		if (!(await exists(join(root, entry)))) {
 			findings.push(
-				`${what} '${entry}' does not exist in the package. A surface an ` +
-					`instance offers and cannot serve is a blank frame.`
+				`${what} '${entry}' does not exist in the package. A surface a ` +
+					`pub offers and cannot serve is a blank frame.`
 			)
 			continue
 		}

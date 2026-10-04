@@ -11,7 +11,9 @@
 
 import {
 	linkPairingOf,
-	type LinkPairing
+	relationshipSentence,
+	type LinkPairing,
+	type RelationshipEndRef
 } from "$lib/shared/lorebooks/linkVocabulary"
 
 /** Which of the two things a node is. */
@@ -29,6 +31,17 @@ export interface GraphNode {
 	 */
 	state: string
 	visibility: string
+	/**
+	 * An entry node's entry type, when it is known (`core:entry/location` is a
+	 * place). Absent for a cast node, and for an entry nothing said the type
+	 * of.
+	 */
+	typeId?: string
+	/**
+	 * A place's category ("a floor, a district, a wing"), which tints it on
+	 * the Places lens. Null or absent is none.
+	 */
+	category?: string | null
 }
 
 /** Where an edge came from, which is a different fact from when. */
@@ -45,8 +58,25 @@ export interface GraphEdge {
 	id: number
 	fromKey: string
 	toKey: string
-	/** The relationship type, as the line is labelled. */
+	/**
+	 * What the line is labelled: the relationship's name ("the rusted iron
+	 * door"), else its relationship type (plan places-graph §6.2).
+	 */
 	label: string
+	/** The relationship's own name; empty is unnamed. */
+	name: string
+	/** Read from the `from` end ("leads north to"). */
+	relationshipType: string
+	/** Read from the `to` end; null is one way. */
+	reverseRelationshipType: string | null
+	/**
+	 * It reads from both ends — a reverse relationship type is set — so the
+	 * line carries an arrowhead at each end. One way keeps a single arrow.
+	 */
+	bothWays: boolean
+	/** The two ends as the row holds them, so a panel can say it from either. */
+	from: EndpointLike
+	to: EndpointLike
 	status: string
 	description: string
 	provenance: EdgeProvenance
@@ -70,6 +100,10 @@ export interface RelationshipLike {
 	from: EndpointLike
 	to: EndpointLike
 	relationshipType: string
+	/** Read from the `to` end; null or blank is one way. */
+	reverseRelationshipType?: string | null
+	/** The relationship's own name; empty is unnamed. */
+	name?: string | null
 	status: string
 	description?: string | null
 	historyEntryId: number | null
@@ -89,6 +123,16 @@ export interface CastNodeLike {
 export interface ScopeEntryLike {
 	id: number
 	name: string
+}
+
+/**
+ * An entry drawn whether or not anything joins it — every place on the
+ * Places lens. The row is the resolved one, so its name wins over the copy of
+ * the base name an edge carries.
+ */
+export interface AlwaysEntryLike extends ScopeEntryLike {
+	typeId?: string
+	category?: string | null
 }
 
 export const castKey = (id: number): string => `cast#${id}`
@@ -139,11 +183,19 @@ export function toGraphEdge(
 	rel: RelationshipLike,
 	newIds?: ReadonlySet<number>
 ): GraphEdge {
+	const name = (rel.name ?? "").trim()
+	const reverse = rel.reverseRelationshipType?.trim() || null
 	return {
 		id: rel.id,
 		fromKey: endpointKey(rel.from),
 		toKey: endpointKey(rel.to),
-		label: edgeLabel(rel.relationshipType),
+		label: name || edgeLabel(rel.relationshipType),
+		name,
+		relationshipType: rel.relationshipType,
+		reverseRelationshipType: reverse,
+		bothWays: reverse !== null,
+		from: rel.from,
+		to: rel.to,
 		status: rel.status,
 		description: rel.description ?? "",
 		provenance: provenanceOf(rel, newIds),
@@ -158,6 +210,11 @@ export interface GraphNodesInput {
 	relationships: readonly RelationshipLike[]
 	/** The entries the scope holds, which is what a selection may reach. */
 	scopeEntries: readonly ScopeEntryLike[]
+	/**
+	 * Entries that are nodes whether or not anything joins them — every place
+	 * on the Places lens, so two places nothing joins yet can be joined.
+	 */
+	alwaysEntries?: readonly AlwaysEntryLike[]
 	selectedKey?: string | null
 }
 
@@ -171,6 +228,8 @@ export interface GraphNodesInput {
  *
  * ⚠ An entry endpoint carries its own name over the wire, so an edge can put
  * an entry on the canvas without that entry being in the scope on screen.
+ * ⚠ `alwaysEntries` are pushed before the edges' ends, so their (resolved)
+ * names win over the base name an edge carries.
  */
 export function graphNodes(input: GraphNodesInput): GraphNode[] {
 	const nodes: GraphNode[] = []
@@ -191,6 +250,18 @@ export function graphNodes(input: GraphNodesInput): GraphNode[] {
 			visibility: row.nodeVisibility || "normal"
 		})
 
+	for (const row of input.alwaysEntries ?? [])
+		push({
+			key: entryKey(row.id),
+			kind: "entry",
+			id: row.id,
+			name: row.name.trim() || `#${row.id}`,
+			state: "active",
+			visibility: "normal",
+			...(row.typeId ? { typeId: row.typeId } : {}),
+			...(row.category ? { category: row.category } : {})
+		})
+
 	for (const rel of input.relationships)
 		for (const endpoint of [rel.from, rel.to]) {
 			if (endpoint.kind !== "entry") continue
@@ -200,7 +271,8 @@ export function graphNodes(input: GraphNodesInput): GraphNode[] {
 				id: endpoint.entryId,
 				name: (endpoint.name ?? "").trim() || `#${endpoint.entryId}`,
 				state: "active",
-				visibility: "normal"
+				visibility: "normal",
+				...(endpoint.typeId ? { typeId: endpoint.typeId } : {})
 			})
 		}
 
@@ -251,6 +323,13 @@ export interface PanelEdge {
 	cut: boolean
 	/** The status, said beside the edge when it is not `active`; else null. */
 	statusWord: string | null
+	/**
+	 * The relationship said from the open node through the one sentence
+	 * builder ("The rusted iron door leads south to the Guardroom."), when an
+	 * entry is at an end. Null for a tie between two cast members: its other
+	 * side is its own perspective row, so its type and arrow say it.
+	 */
+	sentence: string | null
 }
 
 export function panelEdges(
@@ -259,6 +338,11 @@ export function panelEdges(
 	names: ReadonlyMap<string, string>
 ): PanelEdge[] {
 	if (!selectedKey) return []
+	const subject = parseGraphKey(selectedKey)
+	const nameOf = (end: RelationshipEndRef) => {
+		const key = end.kind === "cast" ? castKey(end.id) : entryKey(end.id)
+		return names.get(key) ?? key
+	}
 	const rows: PanelEdge[] = []
 	for (const edge of edges) {
 		const out = edge.fromKey === selectedKey
@@ -274,7 +358,12 @@ export function panelEdges(
 			provenanceWord: PROVENANCE_WORDS[edge.provenance],
 			cut: edge.status === "broken",
 			statusWord:
-				edge.status && edge.status !== "active" ? edge.status : null
+				edge.status && edge.status !== "active" ? edge.status : null,
+			sentence:
+				subject &&
+				(edge.from.kind === "entry" || edge.to.kind === "entry")
+					? relationshipSentence(edge, subject, nameOf)
+					: null
 		})
 	}
 	return rows
@@ -372,11 +461,23 @@ export function ceilingLine(facts: CeilingFacts): string | null {
 	return parts.join(" · ")
 }
 
-/** What a Rebuild would delete, counted by the kinds of ends a link joins. */
+/**
+ * What a Rebuild would delete: the cast ties, and nothing else — a link with
+ * an entry at either end is never in its reach (places plan L1).
+ */
 export interface LinkCounts {
-	total: number
-	entryToEntry: number
-	castToEntry: number
+	castToCast: number
+}
+
+/** Both ends are cast members: the one kind of link a Rebuild deletes. */
+const isCastTie = (rel: Pick<RelationshipLike, "from" | "to">): boolean =>
+	rel.from.kind === "cast" && rel.to.kind === "cast"
+
+/** The counts of a whole list, for a list reply that carries none. */
+export function linkCountsOf(
+	rels: readonly Pick<RelationshipLike, "from" | "to">[]
+): LinkCounts {
+	return { castToCast: rels.filter(isCastTie).length }
 }
 
 /**
@@ -388,12 +489,33 @@ export function bumpLinkCounts(
 	rel: Pick<RelationshipLike, "from" | "to">,
 	by: 1 | -1
 ): LinkCounts {
-	const entries =
-		(rel.from.kind === "entry" ? 1 : 0) + (rel.to.kind === "entry" ? 1 : 0)
-	const clamp = (n: number) => Math.max(0, n)
-	return {
-		total: clamp(counts.total + by),
-		entryToEntry: clamp(counts.entryToEntry + (entries === 2 ? by : 0)),
-		castToEntry: clamp(counts.castToEntry + (entries === 1 ? by : 0))
-	}
+	if (!isCastTie(rel)) return counts
+	return { castToCast: Math.max(0, counts.castToCast + by) }
+}
+
+/** What the column beside the canvas shows. */
+export type SideColumnView = "link" | "relationship" | "node" | "list" | null
+
+/**
+ * What the column beside the canvas shows, first match wins: a link being
+ * drawn, then the relationship picked, then the node picked. With nothing
+ * picked the Graph lens lists its nodes there, and the Places lens shows no
+ * column, so the map keeps the width (#122).
+ *
+ * ⚠ **The relationship before the node.** Picking a link never lets go of
+ * the node it was picked from (a row of a place's panel, or a line on the
+ * canvas while a place is selected), so a node checked first would hide the
+ * link's form for as long as the place stayed selected. Closing the link
+ * falls back to the node's panel.
+ */
+export function sideColumnView(state: {
+	drawing: "relationships" | "places"
+	linking: boolean
+	relationshipOpen: boolean
+	nodeOpen: boolean
+}): SideColumnView {
+	if (state.linking) return "link"
+	if (state.relationshipOpen) return "relationship"
+	if (state.nodeOpen) return "node"
+	return state.drawing === "relationships" ? "list" : null
 }

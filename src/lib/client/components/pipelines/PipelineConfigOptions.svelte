@@ -6,25 +6,27 @@
 	 *
 	 * Everything here arrives from the server as declarations — label,
 	 * control, range, options, current value, which layer it came from — and
-	 * this file renders whatever arrives. Options come grouped by step, in
-	 * run order, one card per step, with the tuning parameters split into a
-	 * collapsed "Advanced" block; the grouping is the server's, this file
-	 * never derives it. A non-admin receives only what is theirs to touch
-	 * (prompts), so the same render serves both audiences without a role
-	 * check anywhere in this file.
+	 * this file renders whatever arrives, in the server's **settings groups**
+	 * (owner rulings 2026-09-30): one tonal block per model call — its switch
+	 * in the header, its purpose line, its Prompt, Model and Sampling, then one
+	 * Advanced fold with a fieldset per step — and *Whole pipeline* last. The
+	 * grouping is derived from the graph on the server; this file never
+	 * derives it. A non-admin receives only what is theirs to touch (prompts)
+	 * and the model by name, so the same render serves both audiences.
 	 *
 	 * Writes carry no scope (the layer simplification, 2026-08-24): inside a
 	 * session they land at the session's override, and globally they land in the
 	 * selected configuration itself — the server resolves which, and refuses
 	 * a shipped configuration with the duplicate suggestion.
 	 *
-	 * Socket events are shared channels, so every listener filters by slug:
-	 * two of these panels showing different pipelines must not clobber each
+	 * Socket events are shared channels, so every listener filters by slug
+	 * AND scope: two of these panels — different pipelines, or one pipeline at
+	 * a session's scope and at its configuration's — must not clobber each
 	 * other's responses.
 	 */
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { useInterest } from "$lib/client/sockets/interest.svelte"
-	import { onMount } from "svelte"
+	import { getContext, onMount } from "svelte"
 	import * as Icons from "@lucide/svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 	import Select from "$lib/client/components/inputs/Select.svelte"
@@ -50,13 +52,37 @@
 		SelectControl,
 		TextControl
 	} from "@serene-pub/controls"
+	import {
+		advancedSummary,
+		builderStepsOf,
+		drawnGroups,
+		optionsOf,
+		rowLabelOf,
+		type PanelMode
+	} from "$lib/client/components/pipelines/settingsGroups"
+	import { SvelteSet } from "svelte/reactivity"
+	import DocPeek from "$lib/client/components/docs/DocPeek.svelte"
+	import { docsHref } from "$lib/shared/utils/docsHref"
 
 	interface Props {
 		slug: string
 		/** Set when hosted inside a session — writes land at session scope. */
 		sessionId?: number
-		/** Announce where edits land ("Changes here apply to you"). */
-		showScopeNote?: boolean
+		/**
+		 * Which surface this is (see `PanelMode`): the Pipelines view and the
+		 * graph panel (`config`, the default), a session's settings
+		 * (`session`), or the admin builder (`builder`).
+		 */
+		mode?: PanelMode
+		/** A session card's title — the pipeline's or the action's name. */
+		title?: string
+		/** A session card that starts closed, with its model in the summary. */
+		collapsed?: boolean
+		/**
+		 * Opened from inside a session that does not run this pipeline (owner
+		 * Q7): the view is the configuration's, and the scope note says so.
+		 */
+		sessionDoesNotRun?: boolean
 		/** Called whenever a fresh view arrives, e.g. to title a header. */
 		onLoaded?: (detail: Sockets.Pipelines.NamespaceDetail) => void
 		/**
@@ -69,18 +95,6 @@
 		 */
 		stepKey?: string
 		/**
-		 * Fold the tuning options in with everything else instead of hiding
-		 * them behind a door.
-		 *
-		 * The sidebar's job is to be simple for someone who does not know what
-		 * a pipeline is, so it leads with the prompt and puts the rest away.
-		 * The builder is the opposite surface — granular on purpose — and a
-		 * collapsed drawer there is just an extra click before the work.
-		 */
-		granular?: boolean
-		/** The builder brings its own, with save/duplicate/rename/delete. */
-		showConfigPicker?: boolean
-		/**
 		 * Edit the configuration itself instead of overriding it.
 		 *
 		 * Set by the builder, which authors configurations; unset in the
@@ -92,14 +106,6 @@
 		 * everywhere instead.
 		 */
 		editsConfigId?: number
-		/**
-		 * Show only the reference/enum *selectors* — connection, sampling,
-		 * prompt, template, mode enums — and drop the advanced tuning block and
-		 * the inline prompt/template edit fields. For a surface that lets
-		 * someone pick which prompt or connection a chat uses without exposing
-		 * the wording or the weights: "just the selectors."
-		 */
-		selectorsOnly?: boolean
 		/**
 		 * Draft mode (22 §2.1): value edits go to the host's pending map
 		 * instead of the database — every `set`/`clear` becomes a callback,
@@ -119,13 +125,13 @@
 	let {
 		slug,
 		sessionId,
-		showScopeNote = true,
+		mode = "config",
+		title,
+		collapsed = false,
+		sessionDoesNotRun = false,
 		onLoaded,
 		stepKey,
-		granular = false,
-		showConfigPicker = true,
 		editsConfigId,
-		selectorsOnly = false,
 		onDraftSet,
 		onDraftClear,
 		pending,
@@ -135,19 +141,17 @@
 	/** Draft mode is simply "the host gave us somewhere to put edits". */
 	const draftMode = $derived(!!onDraftSet)
 
-	/** The controls that are pure selectors — what `selectorsOnly` keeps. */
-	const SELECTOR_CONTROLS = new Set([
-		"enum",
-		"prompts-ref",
-		"context-template-ref",
-		"variable-template-ref",
-		"connection-ref",
-		"sampling-ref"
-	])
-
 	const socket = useTypedSocket()
 
 	let detail = $state<Sockets.Pipelines.NamespaceDetail | null>(null)
+	const userCtx: UserCtx | undefined = getContext("userCtx")
+	const isAdmin = $derived(!!userCtx?.user?.isAdmin)
+	/**
+	 * The inline editors (prompt, template and layout wording, create and
+	 * duplicate) belong to the Pipelines view and the builder. A session's
+	 * settings choose among rows; the wording is edited where it lives.
+	 */
+	const editors = $derived(mode !== "session")
 
 	/**
 	 * The value being edited, keyed by option id. Text areas commit on blur;
@@ -208,24 +212,45 @@
 	let cloningLayoutFor: string | null = null
 	let cloningTemplateFor: string | null = null
 
-	const scopeLabel = $derived(
-		detail?.writeScope === "session" ? "this session" : "everyone"
-	)
+	/**
+	 * Where this panel's edits land, in one sentence (owner Q7): the session
+	 * inside a session that runs this pipeline; otherwise the configuration —
+	 * an administrator's to change, read-only for everyone else.
+	 */
+	const scopeNote = $derived.by(() => {
+		if (!detail) return ""
+		if (detail.scope.kind === "session")
+			return (
+				detail.scope.readOnlyBecause ??
+				"Changes here apply to this session only, and save as you make them."
+			)
+		const lead = sessionDoesNotRun ? "This session does not run this pipeline. " : ""
+		const config = detail.selectedConfig
+			? `everyone using the “${detail.selectedConfig.name}” configuration`
+			: "everyone"
+		if (isAdmin)
+			return `${lead}Changes here apply to ${config}.`
+		return `${lead}Only an administrator can change it.`
+	})
 
 	/**
-	 * What the provenance badge says. Only shown when it is not this scope.
-	 *
-	 * Keyed by the union rather than by `string`, so a sixth scope fails to
-	 * compile here instead of reaching a user as the raw id. These are the
-	 * viewer's relationship to a value — "your value", "set by an admin" — not
-	 * domain vocabulary a plugin owns, so they belong in the panel; what did not
-	 * belong was the absence of any check that they were complete.
+	 * Why this session's values here are read-only, when they are — its
+	 * creation pipeline once it is created (owner ruling 2026-09-30).
 	 */
-	const SOURCE_LABEL: Record<Sockets.Pipelines.Option["source"], string> = {
-		session: "from this session",
-		config: "from the selected configuration",
-		author: "default"
-	}
+	const readOnlyBecause = $derived(
+		detail?.scope.kind === "session" ? detail.scope.readOnlyBecause : undefined
+	)
+
+	/** The scope a view must carry for this panel to take it. */
+	const takesView = (v: Sockets.Pipelines.NamespaceDetail) =>
+		v.slug === slug &&
+		(v.scope.kind === "session"
+			? v.scope.sessionId === sessionId
+			: // A panel asking at a session's scope may be answered at the
+				// configuration's: the server gives session scope only for a
+				// session its asker owns and runs this pipeline in. That
+				// answer is taken until a session-scoped one has been.
+				sessionId == null || detail?.scope.kind !== "session")
 
 	/**
 	 * Where this edit belongs. Authoring a named configuration and letting the
@@ -810,8 +835,9 @@
 			toaster.error({ title: res.error })
 			return
 		}
-		// A shared channel: another panel's pipeline is not this one's.
-		if (!res.pipeline || res.pipeline.slug !== slug) return
+		// A shared channel: another panel's pipeline, or this pipeline at
+		// another scope, is not this one's.
+		if (!res.pipeline || !takesView(res.pipeline)) return
 		detail = res.pipeline
 		drafts = {}
 		onLoaded?.(res.pipeline)
@@ -828,9 +854,9 @@
 		const optionId = cloningFor
 		cloningFor = null
 		if (!optionId || res.promptId == null) return
-		const opt = res.pipeline.steps
-			.flatMap((s) => [...s.options, ...s.advanced])
-			.find((o) => o.id === optionId)
+		const opt = optionsOf(res.pipeline.groups).find(
+			(o) => o.id === optionId
+		)
 		if (opt) set(opt, res.promptId)
 		// No draft is seeded: the copy's text is the original's, the editor is
 		// always on screen, and the refreshed view carries the copy's row —
@@ -847,9 +873,9 @@
 		const optionId = cloningLayoutFor
 		cloningLayoutFor = null
 		if (!optionId || res.templateId == null) return
-		const opt = res.pipeline.steps
-			.flatMap((s) => [...s.options, ...s.advanced])
-			.find((o) => o.id === optionId)
+		const opt = optionsOf(res.pipeline.groups).find(
+			(o) => o.id === optionId
+		)
 		if (opt) set(opt, res.templateId)
 		delete layoutDrafts[optionId]
 	}
@@ -865,9 +891,9 @@
 		const optionId = cloningTemplateFor
 		cloningTemplateFor = null
 		if (!optionId || res.templateId == null) return
-		const opt = res.pipeline.steps
-			.flatMap((s) => [...s.options, ...s.advanced])
-			.find((o) => o.id === optionId)
+		const opt = optionsOf(res.pipeline.groups).find(
+			(o) => o.id === optionId
+		)
 		if (opt) set(opt, res.templateId)
 		delete templateDrafts[optionId]
 	}
@@ -983,54 +1009,10 @@
 	})
 
 	/**
-	 * What the sidebar shows, and in what order.
-	 *
-	 * Grouped by **facet** rather than by step. The panel used to render one
-	 * numbered card per node — "Build template context", "Rank hybrid",
-	 * "Assemble" — which is the order the machine works in and not a thing
-	 * anybody came here to think about. Worse, it split settings that belong
-	 * together: the twelve layout pickers live on two different nodes purely
-	 * because assembly lays out lore *after* budgeting decided what fit, so
-	 * they appeared under two separate headings for a reason no user has.
-	 *
-	 * A facet says what kind of setting something is, and it is already on the
-	 * declaration. Grouping on it also keeps 05 §0a's boundary intact — a facet
-	 * names a kind, never a node key, a count, or an order.
-	 */
-	/**
-	 * ⚠ This was a hardcoded list here, and it was not a fallback — it was the
-	 * *filter*. Options were matched into it, so a facet the client had never
-	 * heard of matched no group and rendered **nowhere**: a plugin's settings
-	 * could exist, be writable, and be invisible. The headings, their order and
-	 * which of them lead the panel are declared now, and an undeclared facet
-	 * still gets a group rather than disappearing.
-	 *
-	 * Two facets that resolve to the same heading are one group — that is how
-	 * `connection` and `sampling` become "Model" without the client pairing
-	 * them.
-	 */
-	const FACET_GROUPS = $derived.by<
-		Array<{ facets: string[]; label: string }>
-	>(() => {
-		const byLabel = new Map<string, { facets: string[]; label: string }>()
-		for (const f of detail?.facets ?? []) {
-			const g = byLabel.get(f.label)
-			if (g) g.facets.push(f.id)
-			else byLabel.set(f.label, { facets: [f.id], label: f.label })
-		}
-		return [...byLabel.values()]
-	})
-
-	/** The sidebar leads with these and puts the rest behind one door. */
-	const SIMPLE_FACETS = $derived(
-		(detail?.facets ?? []).filter((f) => f.simple).map((f) => f.id)
-	)
-
-	/**
 	 * The draft overlaid onto what renders (22 §2.1): a pending value shows as
 	 * the value, a pending reset shows as the inherited default. The overlay
-	 * lives at this one derivation so every read downstream — rows, groups,
-	 * controls — sees the draft without knowing it exists.
+	 * lives at this one derivation so every read downstream sees the draft
+	 * without knowing it exists.
 	 */
 	const overlay = (o: Sockets.Pipelines.Option): Sockets.Pipelines.Option => {
 		if (!draftMode) return o
@@ -1059,280 +1041,145 @@
 	const isPending = (id: string) =>
 		!!(pending && id in pending) || !!pendingClears?.includes(id)
 
-	/** One step in the builder's inspector; all of them in the sidebar. */
-	const visibleSteps = $derived.by(() => {
+	/** The server's groups, with the draft overlaid, shaped for this surface. */
+	const groups = $derived.by(() => {
 		if (!detail) return []
-		const steps =
-			stepKey != null
-				? detail.steps.filter((s) => s.key === stepKey)
-				: detail.steps
-		if (!draftMode) return steps
-		return steps.map((s) => ({
-			...s,
-			options: s.options.map(overlay),
-			advanced: s.advanced.map(overlay)
-		}))
-	})
-
-	/**
-	 * Options paired with the step they came from.
-	 *
-	 * The step name rides alongside rather than on the option itself: it is only
-	 * needed to tell two same-named options apart, and adding it to the payload
-	 * would mean exempting a new field from the node-key scan in
-	 * `panel/index.int.test.ts` — a guard worth keeping narrow. The step is
-	 * already in hand here.
-	 */
-	type Row = { option: Sockets.Pipelines.Option; step: string }
-
-	const rowsOf = (
-		pick: (s: Sockets.Pipelines.Step) => Sockets.Pipelines.Option[]
-	) =>
-		visibleSteps.flatMap((s) =>
-			pick(s).map((option) => ({ option, step: s.label }))
-		)
-
-	/** Everything the step declares, once the door is gone. */
-	const allOf = (s: Sockets.Pipelines.Step) => [...s.options, ...s.advanced]
-
-	/**
-	 * Grouped by the step that consumes the setting, then by facet inside it.
-	 *
-	 * Facet alone was wrong the moment a pipeline had more than one LLM step.
-	 * The graph builder has five, each with its own prompt, connection and
-	 * sampling — so a pure facet grouping produced one "Prompt" heading with
-	 * five near-identical rows under it, every one needing its step name
-	 * prefixed back on to be told apart. That is the step heading, reinvented
-	 * as a prefix and worse.
-	 *
-	 * The step is the consumer, and the consumer is what someone is actually
-	 * choosing between ("which prompt does the *pre-filter* use"). Facets
-	 * subdivide it.
-	 */
-	/**
-	 * Show the rest of a step's settings.
-	 *
-	 * Per step, not global: opening the tuning on one node says nothing about
-	 * whether you want it on the next, and a single flag would keep re-opening
-	 * panels you had put away.
-	 */
-	let showAll = $state<Record<string, boolean>>({})
-
-	/**
-	 * One step's settings, grouped into facet rows. Shared by the numbered
-	 * spine list (`stepGroups`) and the trailing, unnumbered "Also
-	 * configured here" group (`alsoConfiguredGroups`) — an envoy's settings
-	 * are laid out exactly like a step's, they are simply not counted as one.
-	 */
-	const groupsOf = (steps: Sockets.Pipelines.Step[]) =>
-		steps
-			.map((step) => {
-				const base = granular ? allOf(step) : step.options
-				// Selectors-only drops everything but the reference/enum
-				// pickers, and with them the quick/rest disclosure — a handful
-				// of dropdowns needs no door. The review gate is a selector by
-				// control but is not a "which model/prompt" choice, so it is
-				// excluded here too.
-				const all = selectorsOnly
-					? base.filter(
-							(o) =>
-								SELECTOR_CONTROLS.has(o.control) &&
-								o.facet !== "review"
-						)
-					: base
-				// The author's answer to "which of these does anyone change",
-				// not a guess from control kind or position. A step whose
-				// settings are *all* quick, or none, gets no disclosure — a
-				// "show 0 more" is worse than no affordance at all.
-				const quick = all.filter((o) => o.quick)
-				const rest = all.filter((o) => !o.quick)
-				const open = showAll[step.key] ?? false
-				const pool =
-					!selectorsOnly && quick.length && rest.length && !open
-						? quick
-						: all
-				const facets = FACET_GROUPS.filter(
-					(g) =>
-						granular ||
-						g.facets.some((f) => SIMPLE_FACETS.includes(f))
-				)
-					.map((g) => ({
-						label: g.label,
-						rows: pool
-							.filter((o) => g.facets.includes(o.facet))
-							.map((option) => ({ option, step: step.label }))
+		const overlaid = draftMode
+			? detail.groups.map((g) => ({
+					...g,
+					...(g.enabled ? { enabled: overlay(g.enabled) } : {}),
+					front: g.front.map(overlay),
+					advanced: g.advanced.map((st) => ({
+						...st,
+						options: st.options.map(overlay)
 					}))
-					.filter((g) => g.rows.length)
-				return {
-					key: step.key,
-					label: step.label,
-					facets,
-					hidden:
-						!selectorsOnly && quick.length && rest.length && !open
-							? rest.length
-							: 0,
-					canCollapse:
-						!selectorsOnly &&
-						!!(quick.length && rest.length && open),
-					count: facets.reduce((n, f) => n + f.rows.length, 0)
-				}
-			})
-			.filter((g) => g.count > 0)
-
-	const stepGroups = $derived(groupsOf(visibleSteps))
-
-	/**
-	 * An envoy's settings (plans/29 R-18 (2); U5g review follow-up): not a
-	 * step of anything that runs, so it is excluded from the builder's
-	 * single-step inspector (`stepKey` set) the same way `visibleSteps`
-	 * excludes every other step but the one named.
-	 */
-	const visibleAlsoConfigured = $derived.by(() => {
-		if (!detail || stepKey != null) return []
-		if (!draftMode) return detail.alsoConfigured
-		return detail.alsoConfigured.map((s) => ({
-			...s,
-			options: s.options.map(overlay),
-			advanced: s.advanced.map(overlay)
-		}))
+				}))
+			: detail.groups
+		return drawnGroups(overlaid, mode)
 	})
-	const alsoConfiguredGroups = $derived(groupsOf(visibleAlsoConfigured))
 
-	/**
-	 * A sub-heading earns its place only when the step has more than one kind
-	 * of setting. A lone "Prompt" caption under a step that declares nothing
-	 * else is a line of furniture between the reader and the one control.
-	 */
-	const showFacetHeadings = (g: { facets: unknown[] }) => g.facets.length > 1
-
-	/**
-	 * Everything else, behind one door instead of seven.
-	 *
-	 * These are per-step tuning — weights, budgets, thresholds, raw templates,
-	 * layouts. They belong in the pipeline builder, where settings are granular
-	 * and per-pipeline on purpose; this panel is for people who do not need to
-	 * know what a pipeline is. They stay reachable here until the builder can
-	 * host them, because moving them out first would take away settings with
-	 * nowhere to go.
-	 */
-	const tuning = $derived(
-		granular || selectorsOnly ? [] : rowsOf((s) => s.advanced)
+	/** The builder's one step: every row it owns, front and Advanced alike. */
+	const builderStep = $derived(
+		mode === "builder" && stepKey != null
+			? (builderStepsOf(groups).find((st) => st.key === stepKey) ?? null)
+			: null
 	)
 
 	/**
-	 * Once the step headings are gone, two options can arrive under one heading
-	 * with the same name — the reply pipeline has two "Review" gates, and
-	 * `weights` alone carries two "Budget", two "Weight" and two "Min Include".
-	 * The step name is what tells them apart, so put it back, but only on the
-	 * ones that actually collide: prefixing every row would be noise for the
-	 * ones that read fine on their own.
+	 * Which Advanced folds are open, by group key, for as long as this panel
+	 * is mounted — a fresh view after a save must not close the fold the
+	 * person was working in.
 	 */
-	const qualify = (row: Row, pool: Row[]) =>
-		pool.filter((r) => r.option.label === row.option.label).length > 1
-			? `${row.step} — ${row.option.label}`
-			: row.option.label
+	const openFolds = new SvelteSet<string>()
+
+	/**
+	 * The block to move focus to for a Model row that is another group's
+	 * pointer, and the id each block's heading carries for it.
+	 */
+	const headingId = (groupKey: string) => `grp-${slug}-${groupKey}`.replace(/[^\w-]/g, "-")
+
+	/**
+	 * A row's provenance line: the server's for a Model or Sampling row;
+	 * for any other row, said only once a value was set somewhere.
+	 */
+	function provenanceOf(o: Sockets.Pipelines.Option): string | undefined {
+		if (o.provenance) return o.provenance.label
+		if (o.source === "session") return "Set for this session"
+		if (o.source === "config")
+			return detail?.scope.kind === "session"
+				? `From the “${detail.selectedConfig?.name ?? "selected"}” configuration`
+				: "Set in this configuration"
+		return undefined
+	}
+
+	/** What a readonly row shows: the value's NAME, never an id. */
+	function readonlyValue(o: Sockets.Pipelines.Option): string {
+		if (o.valueLabel) return o.valueLabel
+		if (o.value == null)
+			return (
+				o.inherits?.label ??
+				(o.control === "connection-ref" ? "No model set" : "—")
+			)
+		if (typeof o.value === "boolean") return o.value ? "On" : "Off"
+		if (Array.isArray(o.value)) return o.value.join(", ") || "—"
+		if (typeof o.value === "object") return "Set"
+		return String(o.value)
+	}
+
+	/** The model-call choices every group fronts under fixed labels. */
+	const FRONT_CHOICES = new Set(["prompts-ref", "connection-ref", "sampling-ref"])
+
+	/** A session card's summary line: its first model's name. */
+	const cardSummary = $derived.by(() => {
+		const model = groups
+			.flatMap((g) => g.front)
+			.find((o) => o.control === "connection-ref")
+		return model ? readonlyValue(model) : ""
+	})
+
+	/**
+	 * Model and Sampling sit side by side on a wide view, so the front is
+	 * split into runs: the pair picker and its sampling as one run, every
+	 * other row on its own.
+	 */
+	const frontRuns = (front: Sockets.Pipelines.Option[]) => {
+		const runs: Sockets.Pipelines.Option[][] = []
+		for (const o of front) {
+			const last = runs.at(-1)
+			if (
+				o.control === "sampling-ref" &&
+				last?.length === 1 &&
+				last[0]!.control === "connection-ref"
+			)
+				last.push(o)
+			else runs.push([o])
+		}
+		return runs
+	}
 </script>
 
 {#snippet optionRow(
 	option: Sockets.Pipelines.Option,
-	/** Overrides the label where two options in one group share a name. */
+	/** A label other than the row's own — the builder's source switches. */
 	labelOverride?: string
 )}
+	{@const label = labelOverride ?? rowLabelOf(option)}
 	<!-- The wrapper carries the option's address so a host's search or diff
 	     view can scroll to it (22 §2.3/§2.6). -->
-	<div class="flex flex-col gap-1" data-option-id={option.id}>
-		<div class="flex items-center justify-between gap-2">
+	<div
+		class="flex min-w-0 flex-col gap-1"
+		data-option-id={option.id}
+		data-option-row={option.control}
+	>
+		<div class="flex items-center gap-2">
 			<label
-				class="min-w-0 flex-1 truncate text-sm font-medium"
+				class="text-surface-700-300 min-w-0 flex-1 text-xs font-medium break-words"
 				for="opt-{option.id}"
+				data-row-label
 			>
-				{labelOverride ?? option.label}
+				{label}
 			</label>
-
+			{#if option.control === "connection-ref" && mode !== "builder"}
+				<DocPeek
+					href={docsHref("pipelines", "model-and-sampling")}
+					topic="choosing a model"
+				/>
+			{/if}
 			{#if draftMode && isPending(option.id)}
 				<span
 					class="preset-tonal-warning shrink-0 rounded-full px-1.5 py-0.5 text-[11px] font-semibold"
-					title="Unsaved — lands with Save all"
+					title="Unsaved — lands with Save"
 				>
 					pending
 				</span>
 			{/if}
-
-			<!--
-				The changed marker (ruled 2026-09-10).
-
-				A configuration stores **deviations**: it holds a row only where
-				somebody departed from the shipped default, so `changed` is that
-				row's existence and this dot is the whole of what provenance
-				means now. It is worth a mark precisely because it is rare — the
-				old model materialized every declared value into every config,
-				so a "this was set" mark would have been on every field in the
-				panel, which is the same as being on none.
-
-				Beside the Reset button rather than instead of it: outside a
-				session the two coincide and the pair reads as "changed, and
-				here is the undo", while INSIDE one they are different facts —
-				Reset clears your session's own value and this says the
-				configuration underneath it was tuned for everyone.
-			-->
-			{#if option.changed}
-				<span
-					class="bg-primary-500 mt-1.5 size-1.5 shrink-0 rounded-full"
-					title="Changed — this configuration departs from the shipped default here."
-				></span>
-			{/if}
-
-			<!-- Provenance, but only when it is worth a word.
-			     "your value" on every field is noise; "set by an
-			     admin" on the one field that is not doing what
-			     you expect is the whole answer. -->
-			{#if option.overriddenHere}
-				<button
-					type="button"
-					class="btn btn-sm preset-tonal-surface shrink-0 text-xs"
-					onclick={() => clear(option)}
-					title="Remove this value and go back to what it inherits"
-				>
-					<Icons.RotateCcw size={12} /> Reset
-				</button>
-			{:else if option.source !== "author" && !option.changed}
-				<!--
-					A dot, not a sentence.
-
-					"from the selected config" on every row is a hundred-odd
-					pixels of the same words repeated down the panel — at rail
-					width it crowds out the control it annotates. The wording
-					moves to the tooltip, where it is available and not in the
-					way.
-
-					⚠ `&& !option.changed` because the two used to be the same
-					mark. A value whose source is `preset` is a value the
-					configuration holds a row for, which is now exactly what the
-					changed dot above says — so without the guard every
-					deviation would carry two dots meaning one thing. What is
-					left here is the case they do not share: a value inherited
-					from somewhere that is neither this configuration nor the
-					declaration.
-				-->
-				<span
-					class="bg-secondary-500 mt-1.5 size-1.5 shrink-0 rounded-full"
-					title="{SOURCE_LABEL[option.source] ??
-						option.source} — changing it here overrides that."
-				></span>
-			{/if}
 		</div>
 
-		{#if option.description}
-			<!--
-				A hint, kept but not shouted.
-				
-				Four settings with two-line descriptions is most of a 400px
-				rail, and the descriptions are read once and then never again —
-				whereas the controls are read every time. Smaller and dimmer
-				keeps them available for the first read without spending the
-				panel on them forever. `title` carries the full text for anyone
-				who needs it at any size.
-			-->
+		{#if option.description && !FRONT_CHOICES.has(option.control)}
+			<!-- A hint, kept but not shouted: read once, then the control is
+			     what is read. `title` carries the full text at any size. The
+			     three model-call choices read alike in every group and are
+			     explained once, by the Model row's peek. -->
 			<p
 				class="text-surface-600-400 text-[11px] leading-snug"
 				title={option.description}
@@ -1342,10 +1189,32 @@
 		{/if}
 
 		{#if !option.writable}
-			<p class="text-surface-600-400 text-xs italic">
-				{option.value ? String(option.value) : "—"}
-				<span class="not-italic">(admin only)</span>
-			</p>
+			<!-- A readonly value, never a disabled input (STYLE-GUIDE §6.11):
+			     the value's NAME, where it came from, and who changes it. A
+			     session names no model (ruled 2026-09-30), so there an
+			     administrator's Model row is this; nobody else is sent one. -->
+			<div class="flex flex-col gap-0.5" id="opt-{option.id}">
+				<p class="text-sm break-words">{readonlyValue(option)}</p>
+				<p
+					class="text-surface-600-400 flex flex-wrap gap-x-2 text-xs"
+				>
+					{#if option.provenance && option.provenance.label !== readonlyValue(option)}
+						<span>{option.provenance.label}</span>
+					{/if}
+					{#if readOnlyBecause}
+						<!-- The card's one note says why; nobody changes it now. -->
+					{:else if isAdmin}
+						<a
+							class="underline"
+							href="/admin/pipelines/{encodeURIComponent(slug)}"
+						>
+							Change in Pipelines
+						</a>
+					{:else}
+						<span>Set by an administrator</span>
+					{/if}
+				</p>
+			</div>
 		{:else if option.control === "template"}
 			<!-- An empty template is not an empty setting: it means the step
 			     renders with its built-in wording. Saying so is the difference
@@ -1477,21 +1346,20 @@
 			     text nobody can see is half a control. A shipped prompt shows
 			     the same boxes, read-only, with Duplicate as the way in.
 
-			     Grouped exactly the way the context-template picker below is,
-			     and for the same reason: prompts are pooled by the STEP that
-			     consumes them rather than by pipeline, so a row written while
-			     configuring one pipeline is genuinely offered in another that
-			     reuses the step. The grouping is ordering, never permission —
-			     the entire reason a prompt is not spec-scoped is that a row
-			     from elsewhere works here. -->
+			     Prompts are pooled by the STEP that consumes them, but the
+			     server offers only this pipeline's share of the pool (owner
+			     note 37, 2026-10-02, `promptsForPipeline`): rows written for
+			     it, rows shipped for no pipeline in particular, and rows
+			     written for none. A row written for another pipeline is not
+			     offered unless it is the one selected. -->
 			{@const promptGroups = [
 				{ key: "usedHere", label: "Used in this pipeline" },
 				{ key: "shipped", label: "Serene Pub ships" },
-				{ key: "alsoFits", label: "Also fits (from other pipelines)" }
+				{ key: "alsoFits", label: "Also fits" }
 			]}
 			<div class="flex items-center gap-1">
 				<Select
-					label={labelOverride ?? option.label}
+					label={labelOverride ?? rowLabelOf(option)}
 					labelHidden
 					class="min-w-0 flex-1"
 					options={[
@@ -1517,7 +1385,7 @@
 						set(option, Number(raw))
 					}}
 				/>
-				{#if !selectorsOnly}
+				{#if editors}
 					<button
 						type="button"
 						class="btn btn-sm preset-tonal-surface shrink-0"
@@ -1532,7 +1400,7 @@
 						<Icons.Plus size={14} />
 					</button>
 				{/if}
-				{#if option.prompt && !selectorsOnly}
+				{#if option.prompt && editors}
 					<button
 						type="button"
 						class="btn btn-sm preset-tonal-surface shrink-0"
@@ -1556,7 +1424,7 @@
 				{/if}
 			</div>
 
-			{#if option.prompt && !selectorsOnly}
+			{#if option.prompt && editors}
 				{@const readOnly = option.prompt.readOnly}
 				<div class="bg-surface-50-950 mt-1 space-y-3 rounded-[10px] p-3">
 					{#if readOnly}
@@ -1715,7 +1583,7 @@
 				     read as data loss, and "why isn't mine in the list" would be
 				     unanswerable on the screen that raised the question. -->
 				<Select
-					label={labelOverride ?? option.label}
+					label={labelOverride ?? rowLabelOf(option)}
 					labelHidden
 					class="min-w-0 flex-1"
 					options={[
@@ -1768,7 +1636,7 @@
 						<Icons.Plus size={14} />
 					</button>
 				{/if}
-				{#if option.contextTemplate && !selectorsOnly}
+				{#if option.contextTemplate && editors}
 					<button
 						type="button"
 						class="btn btn-sm preset-tonal-surface shrink-0"
@@ -1792,7 +1660,7 @@
 				{/if}
 			</div>
 
-			{#if option.contextTemplate && !selectorsOnly}
+			{#if option.contextTemplate && editors}
 				{@const readOnly = option.contextTemplate.readOnly}
 				<div class="bg-surface-50-950 mt-1 space-y-3 rounded-[10px] p-3">
 					{#if readOnly}
@@ -1890,7 +1758,7 @@
 			     same value is rendered, which is why the copy says so. -->
 			<div class="flex items-center gap-1">
 				<Select
-					label={labelOverride ?? option.label}
+					label={labelOverride ?? rowLabelOf(option)}
 					labelHidden
 					class="min-w-0 flex-1"
 					options={[
@@ -1909,7 +1777,7 @@
 						set(option, Number(raw))
 					}}
 				/>
-				{#if option.variableTemplate && !selectorsOnly}
+				{#if option.variableTemplate && editors}
 					<button
 						type="button"
 						class="btn btn-sm preset-tonal-surface shrink-0"
@@ -1933,7 +1801,7 @@
 				{/if}
 			</div>
 
-			{#if option.variableTemplate && !selectorsOnly}
+			{#if option.variableTemplate && editors}
 				{@const readOnly = option.variableTemplate.readOnly}
 				<div class="bg-surface-50-950 mt-1 space-y-3 rounded-[10px] p-3">
 					{#if readOnly}
@@ -2175,54 +2043,113 @@
 					</a>
 				{/if}
 			</div>
+		{:else if option.control === "connection-ref" && option.choices}
+			<!-- The Model: ONE grouped list (owner rulings 2026-09-30) —
+			     connections are the groups, their models the rows, and one
+			     pick writes both halves of the pair (0114). Connections have no
+			     default model, so a legacy bare endpoint matches no row and the
+			     control asks for one until somebody picks.
+
+			     A connection that cannot do this call is LISTED and greyed with
+			     its reason, and so are a disabled or no-longer-listed model: a
+			     slot pointed at one has to still show what it points at, and
+			     why it will refuse. -->
+			{@const chosenId = slotConnectionId(option.value)}
+			{@const chosenModelId = slotModelId(option.value)}
+			{@const chosenModel =
+				option.choices
+					.find((c) => c.id === chosenId)
+					?.models?.find((m) => m.id === chosenModelId) ?? null}
+			<Select
+				label={labelOverride ?? rowLabelOf(option)}
+				labelHidden
+				class="w-full"
+				placeholder="Choose a model"
+				options={[
+					// The first choice names what "unset" resolves to, from
+					// where this viewer stands; choosing it is Reset.
+					{
+						value: "",
+						label: option.inherits?.label ?? "Pub default"
+					},
+					...option.choices.flatMap((c) =>
+						c.models?.length
+							? c.models.map((m) => ({
+									value: `${c.id}:${m.id}`,
+									label: m.name,
+									group: c.label,
+									disabled:
+										!!c.disabled ||
+										!m.enabled ||
+										m.missingSince != null,
+									hint: c.disabled
+										? c.reason
+										: m.missingSince
+											? "No longer listed by its host"
+											: !m.enabled
+												? "Switched off"
+												: c.reason || undefined
+								}))
+							: [
+									{
+										value: `${c.id}:`,
+										label: c.label,
+										group: c.label,
+										disabled: !!c.disabled,
+										hint: c.reason || undefined
+									}
+								]
+					)
+				]}
+				value={chosenId == null
+					? ""
+					: `${chosenId}:${chosenModelId ?? ""}`}
+				onValueChange={(raw) => {
+					if (raw === "") return clear(option)
+					const [connectionId, modelId] = raw.split(":")
+					set(
+						option,
+						connectionSlotValue(
+							Number(connectionId),
+							modelId ? Number(modelId) : null
+						)
+					)
+				}}
+			/>
+			{#if chosenModel?.missingSince}
+				<p class="text-warning-700-300 flex items-center gap-1 text-xs">
+					<Icons.TriangleAlert size={12} aria-hidden="true" />
+					This model is no longer listed by its host, so this call will
+					refuse to run. Pick another, or refresh the connection once
+					the host serves it again.
+				</p>
+			{:else if chosenModel && !chosenModel.enabled}
+				<p class="text-warning-700-300 flex items-center gap-1 text-xs">
+					<Icons.TriangleAlert size={12} aria-hidden="true" />
+					This model is switched off, so this call will refuse to run.
+				</p>
+			{/if}
 		{:else if option.choices}
-			<!-- A reference: connections, sampling configs. The server sends
+			<!-- A reference: sampling configs and the like. The server sends
 			     what this option may point at, already narrowed to the
 			     namespace and the declared shape — so this renders the list
 			     and never decides what belongs in it. -->
-			{@const isConnection = option.control === "connection-ref"}
-			<!-- A connection slot's value is a PAIR since 0114, and both halves
-			     are required: connections have no default model, so the two
-			     legacy spellings (a bare id, `{ref}`) are INCOMPLETE choices
-			     that resolve as unconfigured until a model is picked.
-			     `slotConnectionId` reads all of them, which is why nothing
-			     stored needed migrating; `String(option.value)` alone would
-			     render `[object Object]` for a pair and select nothing. -->
-			{@const chosenId = isConnection
-				? slotConnectionId(option.value)
-				: null}
-			{@const chosenModelId = isConnection
-				? slotModelId(option.value)
-				: null}
-			{@const chosenModels = isConnection
-				? (option.choices.find((c) => c.id === chosenId)?.models ?? [])
-				: []}
-			{@const chosenModel =
-				chosenModels.find((m) => m.id === chosenModelId) ?? null}
-			<!-- `disabled` and `reason` are why a connection that cannot do
-			     this step's job is SHOWN rather than hidden. "Why isn't my
-			     connection in the list" has no answer when it is simply absent;
-			     greyed out with "Can't do Image generation." under it answers it
-			     in place. `reason` also arrives WITHOUT `disabled` for a
-			     connection nobody has tested yet — a caveat on a choice that is
-			     still selectable. -->
 			<Select
-				label={labelOverride ?? option.label}
+				label={labelOverride ?? rowLabelOf(option)}
 				labelHidden
 				class="w-full"
 				options={[
-					// Unset is not "nothing". A connection or sampling slot with no
-					// value here falls through the chain to the instance's default —
-					// which is what the step actually runs with.
+					// The first choice names what "unset" resolves to; choosing
+					// it is Reset.
 					{
 						value: "",
 						label:
-							option.control === "connection-ref" ||
-							option.control === "sampling-ref"
-								? "Global default"
-								: "None"
+							option.inherits?.label ??
+							(option.control === "sampling-ref"
+								? "Pub default"
+								: "None")
 					},
-					...(option.choices ?? []).map((choice) => ({
+					...option.choices.map((choice) => ({
 						value: String(choice.id),
 						label: `${choice.label}${
 							choice.description ? ` · ${choice.description}` : ""
@@ -2231,94 +2158,12 @@
 						hint: choice.reason || undefined
 					}))
 				]}
-				value={isConnection
-					? chosenId == null
-						? ""
-						: String(chosenId)
-					: option.value == null
-						? ""
-						: String(option.value)}
+				value={option.value == null ? "" : String(option.value)}
 				onValueChange={(raw) => {
 					if (raw === "") return clear(option)
-					// ⚠ Changing the ENDPOINT drops the model, deliberately. A
-					// `connection_models` row belongs to one connection, so
-					// carrying the old model across would write a pair whose two
-					// halves name different endpoints — which the resolver
-					// refuses at dispatch, about a choice nobody made. The new
-					// endpoint's first switched-on model is pinned at once:
-					// connections have no default model, so leaving the pair
-					// half-written would resolve as unconfigured.
-					const nextModels =
-						option.choices?.find((c) => c.id === Number(raw))
-							?.models ?? []
-					const nextModel =
-						nextModels.find((m) => m.enabled && !m.missingSince) ??
-						null
-					set(
-						option,
-						isConnection
-							? connectionSlotValue(
-									Number(raw),
-									nextModel ? nextModel.id : null
-								)
-							: Number(raw)
-					)
+					set(option, Number(raw))
 				}}
 			/>
-			{#if isConnection && chosenModels.length}
-				<!-- The second half of the pair (0114). Rendered only where the
-				     chosen endpoint HAS models, because a picker over an empty
-				     list is a control with no choice in it.
-
-				     Every option names a model — connections have no default
-				     model, so there is no "its default" resting option. A slot
-				     authored before the split (a bare endpoint) lands on the
-				     placeholder until somebody picks: the resolver refuses it
-				     with the fix attached rather than guessing a row. -->
-				<!-- Disabled and MISSING models are LISTED and greyed, the same
-				     rule the connection list above follows: a slot pointed at one
-				     before somebody switched it off, or before its host stopped
-				     listing it, has to still show what it is pointed at — and why
-				     it will refuse. -->
-				<Select
-					label="Model"
-					labelHidden
-					class="mt-1 w-full"
-					placeholder="Choose a model"
-					options={chosenModels.map((m) => ({
-						value: String(m.id),
-						label: m.name,
-						disabled: !m.enabled || m.missingSince != null,
-						hint: m.missingSince
-							? "No longer listed by its host"
-							: m.enabled
-								? undefined
-								: "Switched off"
-					}))}
-					value={chosenModelId == null ? "" : String(chosenModelId)}
-					onValueChange={(raw) => {
-						if (raw === "") return
-						set(option, connectionSlotValue(chosenId, Number(raw)))
-					}}
-				/>
-				{#if chosenModel?.missingSince}
-					<p
-						class="text-warning-500 mt-1 flex items-center gap-1 text-xs"
-					>
-						<Icons.TriangleAlert size={12} aria-hidden="true" />
-						This model is no longer listed by its host, so this step
-						will refuse to run. Pick another, or refresh the connection
-						once the host serves it again.
-					</p>
-				{:else if chosenModel && !chosenModel.enabled}
-					<p
-						class="text-warning-500 mt-1 flex items-center gap-1 text-xs"
-					>
-						<Icons.TriangleAlert size={12} aria-hidden="true" />
-						This model is switched off, so this step will refuse to run.
-					</p>
-				{/if}
-			{/if}
 		{:else if option.control === "list"}
 			<!-- An ordered list of rows, rendered from the ELEMENT's own
 			     declaration. Nothing here knows what a prompt block is: the
@@ -2508,197 +2353,381 @@
 				onchange={(e) => set(option, e.currentTarget.value)}
 			/>
 		{/if}
+		{#if option.writable}
+			{@render provenanceLine(option)}
+		{/if}
 	</div>
 {/snippet}
 
-{#snippet stepCard(group: (typeof stepGroups)[number])}
-	<!-- Shared by the numbered spine list and the trailing, unnumbered
-	     "Also configured here" group — an envoy's card looks exactly like a
-	     step's; it is simply not counted as one. -->
-	<section class="panel-card space-y-3 !p-3">
-		{#if stepKey == null}
-			<!-- The sidebar shows every step, so each card needs its
-			     name. The builder shows one — its host already titles
-			     it ("Chat · step 1 of 7"), and repeating it inside the
-			     card said everything twice. -->
-			<h3 class="text-sm font-semibold">{group.label}</h3>
-		{/if}
-		{#each group.facets as facet (facet.label)}
-			{#if showFacetHeadings(group)}
-				<p
-					class="text-surface-600-400 text-xs font-semibold"
-				>
-					{facet.label}
-				</p>
+{#snippet provenanceLine(option: Sockets.Pipelines.Option)}
+	<!-- Where the value in force came from, in one muted line under the
+	     control (owner rulings 2026-09-30): the server says it for a Model or
+	     Sampling row; any other row says it only once somebody set it. The
+	     changed dot is the configuration's deviation (ruled 2026-09-10), and
+	     Reset removes the row at the scope this panel writes. -->
+	{@const line = provenanceOf(option)}
+	{#if line || option.changed || option.overriddenHere}
+		<p
+			class="text-surface-600-400 flex flex-wrap items-center gap-x-2 text-xs"
+			data-provenance
+		>
+			{#if option.changed}
+				<span
+					class="bg-primary-500 size-1.5 shrink-0 rounded-full"
+					title="Changed — this configuration departs from the pipeline's default here."
+					data-changed-dot
+					aria-hidden="true"
+				></span>
+				<span class="sr-only">Changed.</span>
 			{/if}
-			{#each facet.rows as row (row.option.id)}
-				{@render optionRow(row.option, row.option.label)}
-			{/each}
-		{/each}
+			{#if line}
+				<span>{line}</span>
+			{/if}
+			{#if option.overriddenHere}
+				<button
+					type="button"
+					class="btn btn-sm preset-tonal-surface min-h-11 text-xs pointer-fine:min-h-0"
+					onclick={() => clear(option)}
+					title="Remove this value and go back to what it inherits"
+				>
+					<Icons.RotateCcw size={12} aria-hidden="true" /> Reset
+				</button>
+			{/if}
+		</p>
+	{/if}
+{/snippet}
 
-		{#if group.hidden || group.canCollapse}
-			<button
-				type="button"
-				class="btn btn-sm preset-tonal-surface w-full"
-				onclick={() =>
-					(showAll[group.key] = !(showAll[group.key] ?? false))}
-			>
-				{#if group.hidden}
-					<Icons.ChevronDown size={14} />
-					{group.hidden} more
-					{group.hidden === 1 ? "setting" : "settings"}
-				{:else}
-					<Icons.ChevronUp size={14} /> Fewer settings
+{#snippet groupSwitch(
+	group: Sockets.Pipelines.SettingsGroup,
+	enabled: Sockets.Pipelines.Option
+)}
+	{@const on = enabled.value !== false}
+	<!-- The model call's own switch, in the block's header: named by the
+	     block, with its state in words beside it (never colour alone). -->
+	<label
+		class="ml-auto flex min-h-11 shrink-0 cursor-pointer items-center gap-2 text-xs pointer-fine:min-h-0"
+		data-option-id={enabled.id}
+	>
+		<span aria-hidden="true">{on ? "On" : "Off"}</span>
+		<input
+			type="checkbox"
+			role="switch"
+			class="group-switch"
+			aria-label={group.heading ?? detail?.name ?? "Enabled"}
+			checked={on}
+			disabled={!enabled.writable}
+			onchange={(e) => set(enabled, e.currentTarget.checked)}
+		/>
+	</label>
+{/snippet}
+
+{#snippet groupBlock(group: Sockets.Pipelines.SettingsGroup)}
+	{@const headed = !!group.heading}
+	<!-- One model call and what serves it — or the whole pipeline — as a
+	     tonal inset: a card boundary, never a smaller font (§3.3). -->
+	<section
+		class="flex min-w-0 flex-col gap-3 {headed
+			? 'bg-surface-50-950 rounded-[10px] p-3'
+			: ''}"
+		data-settings-group={group.kind}
+		aria-labelledby={headed ? headingId(group.key) : undefined}
+	>
+		{#if headed || group.enabled}
+			<header class="flex flex-wrap items-center gap-x-3 gap-y-1">
+				{#if headed}
+					<h4
+						id={headingId(group.key)}
+						class="min-w-0 text-sm font-medium break-words"
+						data-group-heading
+					>
+						{group.heading}
+					</h4>
 				{/if}
-			</button>
+				{#if group.enabled}
+					{@render groupSwitch(group, group.enabled)}
+				{/if}
+			</header>
+		{/if}
+		{#if group.purpose}
+			<p class="text-surface-600-400 text-[13px]" data-group-purpose>
+				{group.purpose}
+			</p>
+		{/if}
+		{#if group.enabled?.value === false}
+			<p class="text-surface-600-400 text-xs">
+				Off: this part does not run.
+			</p>
+		{/if}
+		{#if group.front.length}
+			<div class="flex flex-col gap-3" data-group-front>
+				{#each frontRuns(group.front) as run (run[0]!.id)}
+					{#if run.length > 1}
+						<!-- Model and Sampling side by side on a wide view. -->
+						<div class="grid gap-3 @lg/view:grid-cols-2">
+							{#each run as o (o.id)}
+								{@render optionRow(o)}
+							{/each}
+						</div>
+					{:else}
+						{@render optionRow(run[0]!)}
+					{/if}
+				{/each}
+			</div>
+		{/if}
+		{#if group.advanced.length}
+			<!-- Everything that is not a front choice, one fieldset per step,
+			     in spine order. The summary always counts what changed, so a
+			     deviation is never hidden by the fold. -->
+			<details
+				class="advanced-fold"
+				open={openFolds.has(group.key)}
+				ontoggle={(e) => {
+					if (e.currentTarget.open) openFolds.add(group.key)
+					else openFolds.delete(group.key)
+				}}
+			>
+				<summary
+					class="text-surface-700-300 flex min-h-11 cursor-pointer items-center gap-1.5 text-xs font-medium select-none pointer-fine:min-h-8"
+				>
+					<Icons.ChevronRight
+						size={14}
+						class="fold-chevron shrink-0 transition-transform"
+						aria-hidden="true"
+					/>
+					{advancedSummary(group)}
+				</summary>
+				<div class="mt-2 flex flex-col gap-3">
+					{#each group.advanced as st (st.key)}
+						<fieldset
+							class="border-surface-200-800 flex min-w-0 flex-col gap-3 rounded-[10px] border p-3"
+						>
+							<legend class="px-1 text-xs font-medium">
+								{st.heading}
+							</legend>
+							{#each st.options as o (o.id)}
+								{@render optionRow(o)}
+							{/each}
+						</fieldset>
+					{/each}
+				</div>
+			</details>
 		{/if}
 	</section>
 {/snippet}
 
+{#snippet groupList()}
+	<div class="flex flex-col gap-3">
+		{#each groups as group (group.key)}
+			{@render groupBlock(group)}
+		{/each}
+	</div>
+{/snippet}
+
 {#if !detail}
-	<p class="text-surface-600-400 p-4 text-sm">Loading…</p>
-{:else}
-	{#if showScopeNote}
-		<p class="text-surface-600-400 mb-3 text-xs">
-			Changes here apply to <strong>{scopeLabel}</strong>
-			.
-		</p>
+	{#if mode !== "session"}
+		<p class="text-surface-600-400 p-4 text-sm">Loading…</p>
 	{/if}
-
-	{#if showConfigPicker && detail.configs.length}
-		<div class="panel-card mb-3 space-y-2 !p-3">
-			<p class="text-sm font-semibold" aria-hidden="true">Configuration</p>
-			{#if detail.canSelectConfig}
-				<Select
-					label="Configuration"
-					labelHidden
-					class="w-full"
-					options={detail.configs.map((c) => ({
-						value: String(c.id),
-						label: `${c.isDefault ? "★ " : ""}${c.name}${
-							c.enabled ? "" : " (withdrawn)"
-						}`
-					}))}
-					value={detail.selectedConfig
-						? String(detail.selectedConfig.id)
-						: ""}
-					onValueChange={(v) => {
-						if (v) chooseConfig(v)
-					}}
-				/>
-			{:else}
-				<!-- Not a disabled control: outside a session the selection is
-				     the instance's, and that one is the administrator's. A
-				     picker here was live, and every use of it ended in a
-				     refusal toast. What is left is the answer to the only
-				     question a reader has — which one is running. -->
-				<p class="text-sm">
-					{detail.selectedConfig?.name ?? "—"}
-				</p>
-				<p class="text-surface-600-400 text-xs">
-					Chosen for this instance by an administrator. Open a session
-					to choose a different one there.
-				</p>
-			{/if}
-		</div>
+{:else if mode === "session"}
+	<!-- A session's settings: one card per pipeline, drawn only when it has
+	     something a session sets (owner rulings 2026-09-30). -->
+	{#if groups.length}
+		<!-- Closed to start with when asked, and always once the session's
+		     values here are read-only (its creation pipeline, created). -->
+		{#if collapsed || readOnlyBecause}
+			<details class="advanced-fold panel-card" data-pipeline-card>
+				<summary
+					class="flex min-h-11 cursor-pointer flex-wrap items-center gap-x-2 select-none"
+				>
+					<Icons.ChevronRight
+						size={16}
+						class="fold-chevron shrink-0 transition-transform"
+						aria-hidden="true"
+					/>
+					<span class="text-sm font-medium" data-card-title>
+						{title ?? detail.name}
+					</span>
+					{#if cardSummary}
+						<span class="text-surface-600-400 min-w-0 truncate text-xs">
+							{cardSummary}
+						</span>
+					{/if}
+				</summary>
+				<div class="mt-3 flex flex-col gap-3">
+					{@render readOnlyNote()}
+					{@render groupList()}
+					{@render moreInPipelines()}
+				</div>
+			</details>
+		{:else}
+			<section class="panel-card flex flex-col gap-3" data-pipeline-card>
+				<h4 class="text-sm font-medium" data-card-title>
+					{title ?? detail.name}
+				</h4>
+				{@render readOnlyNote()}
+				{@render groupList()}
+				{@render moreInPipelines()}
+			</section>
+		{/if}
 	{/if}
-
-	{#if selectorsOnly}
-		<!-- One flat list of selectors — no per-step cards, no step or facet
-		     headings — so the host can wrap the whole pipeline in one card. -->
-		<div class="flex flex-col gap-2">
-			{#each stepGroups as group (group.key)}
-				{#each group.facets as facet (facet.label)}
-					{#each facet.rows as row (row.option.id)}
-						{@render optionRow(row.option, row.option.label)}
-					{/each}
+{:else if mode === "builder" && stepKey != null}
+	<!-- The builder shows one step at a time; its host titles it. -->
+	{#if builderStep}
+		<div class="inspector-pane">
+			<section
+				class="option-rows panel-card flex flex-col gap-3 !p-3"
+				data-settings-step
+			>
+				{#each builderStep.options as o (o.id)}
+					{@render optionRow(
+						o,
+						o.control === "boolean" && o.label === o.step.heading
+							? o.label
+							: undefined
+					)}
 				{/each}
-			{/each}
-			{#each alsoConfiguredGroups as group (group.key)}
-				{#each group.facets as facet (facet.label)}
-					{#each facet.rows as row (row.option.id)}
-						{@render optionRow(row.option, row.option.label)}
-					{/each}
-				{/each}
-			{/each}
+			</section>
 		</div>
 	{:else}
-		<!-- Grouped by what a setting *is*, not by which step computes it. A group
-	     with nothing visible to this viewer is skipped rather than shown
-	     empty — for a non-admin that usually leaves just the prompt. -->
-		<!-- The wrapper measures the host this panel actually has — the builder's
-	     full-width inspector, its 25rem map rail, or the session sidebar —
-	     and the groups flow two columns only when that host is wide (22
-	     §2.5). A container query on its OWN box, because the pane's width
-	     says nothing about the rail's. -->
-		<div class="inspector-pane">
-			<div class="option-groups space-y-3">
-				{#each stepGroups as group (group.key)}
-					{@render stepCard(group)}
-				{/each}
+		<p class="text-surface-600-400 p-4 text-sm">
+			This step has nothing to configure.
+		</p>
+	{/if}
+{:else}
+	{#if mode === "config"}
+		<p class="text-surface-600-400 mb-3 text-xs" data-scope-note>
+			{scopeNote}
+		</p>
 
-				{#if alsoConfiguredGroups.length}
-					<!-- An envoy is nobody's step (plans/29 R-18 (2); U5g review
-					     follow-up) — set apart under its own small heading,
-					     after the numbered list rather than inside it. -->
-					<p
-						class="text-surface-600-400 mt-1 text-xs font-semibold"
-					>
-						Also configured here
+		{#if detail.configs.length}
+			<div class="panel-card mb-3 space-y-2 !p-3">
+				<p class="text-sm font-medium" aria-hidden="true">Configuration</p>
+				{#if detail.canSelectConfig}
+					<Select
+						label="Configuration"
+						labelHidden
+						class="w-full"
+						options={detail.configs.map((c) => ({
+							value: String(c.id),
+							label: `${c.isDefault ? "★ " : ""}${c.name}${
+								c.enabled ? "" : " (withdrawn)"
+							}`
+						}))}
+						value={detail.selectedConfig
+							? String(detail.selectedConfig.id)
+							: ""}
+						onValueChange={(v) => {
+							if (v) chooseConfig(v)
+						}}
+					/>
+				{:else if readOnlyBecause}
+					<!-- The session's choice, no longer changeable: the scope
+					     note above says why. -->
+					<p class="text-sm">
+						{detail.selectedConfig?.name ?? "—"}
 					</p>
-					{#each alsoConfiguredGroups as group (group.key)}
-						{@render stepCard(group)}
-					{/each}
-				{/if}
-
-				{#if tuning.length}
-					<details class="panel-card !p-3">
-						<summary
-							class="text-surface-600-400 flex cursor-pointer items-center gap-1 text-xs font-medium select-none"
-						>
-							<Icons.SlidersHorizontal size={12} />
-							Advanced — per-step tuning ({tuning.length})
-						</summary>
-						<div
-							class="border-surface-300-700 mt-3 flex flex-col gap-3 border-l-2 pl-3"
-						>
-							{#each tuning as row (row.option.id)}
-								{@render optionRow(
-									row.option,
-									qualify(row, tuning)
-								)}
-							{/each}
-						</div>
-					</details>
+				{:else}
+					<!-- Not a disabled control: outside a session the selection is
+					     the instance's, and that one is the administrator's. -->
+					<p class="text-sm">
+						{detail.selectedConfig?.name ?? "—"}
+					</p>
+					<p class="text-surface-600-400 text-xs">
+						Chosen for this pub by an administrator. Open a session
+						to choose a different one there.
+					</p>
 				{/if}
 			</div>
-		</div>
+		{/if}
 	{/if}
+
+	{@render groupList()}
 {/if}
+
+{#snippet readOnlyNote()}
+	{#if readOnlyBecause}
+		<p class="text-surface-600-400 text-xs" data-scope-note>
+			{readOnlyBecause}
+		</p>
+	{/if}
+{/snippet}
+
+{#snippet moreInPipelines()}
+	{#if isAdmin}
+		<a
+			class="text-primary-700-300 inline-flex min-h-11 items-center gap-1 self-start text-xs underline pointer-fine:min-h-0"
+			href="/admin/pipelines/{encodeURIComponent(slug)}"
+		>
+			More settings in Pipelines
+			<Icons.ArrowRight size={12} aria-hidden="true" />
+		</a>
+	{/if}
+{/snippet}
 
 <style>
 	.inspector-pane {
 		container-type: inline-size;
 	}
-	/* Two columns only when this panel's own host is wide — the builder's
-	   list-mode inspector. The 25rem map rail and the session sidebar never
-	   reach the floor, so they stay a single column untouched.
-
-	   The columns run INSIDE each step's card, over its option rows — the
-	   builder shows one step at a time, so one card is usually all there is
-	   and splitting the card list would just halve it. Headings and the
-	   show-more button span both columns; a row never splits. */
+	/* The builder's one step flows two columns only when this panel's own
+	   host is wide; a row never splits. */
 	@container (min-width: 66rem) {
-		.option-groups :global(section.panel-card) {
+		.option-rows {
+			display: block;
 			columns: 2;
 			column-gap: 1.5rem;
 		}
-		.option-groups :global(section.panel-card > h3),
-		.option-groups :global(section.panel-card > button) {
-			column-span: all;
-		}
-		.option-groups :global(section.panel-card > *) {
+		.option-rows > :global(*) {
 			break-inside: avoid;
+			margin-bottom: 0.75rem;
 		}
+	}
+
+	details[open] > summary :global(.fold-chevron) {
+		transform: rotate(90deg);
+	}
+	.advanced-fold > summary {
+		list-style: none;
+	}
+	.advanced-fold > summary::-webkit-details-marker {
+		display: none;
+	}
+
+	/* The block header's switch: a track and a thumb, the Skeleton Switch's
+	   look (filled primary when on, §2.4) on a native checkbox so its role
+	   and name are the platform's. */
+	.group-switch {
+		appearance: none;
+		position: relative;
+		inline-size: 2.25rem;
+		block-size: 1.25rem;
+		flex-shrink: 0;
+		border-radius: 9999px;
+		background: var(--color-surface-500);
+		cursor: pointer;
+		transition: background-color 150ms;
+	}
+	.group-switch::after {
+		content: "";
+		position: absolute;
+		inset-block-start: 2px;
+		inset-inline-start: 2px;
+		inline-size: 1rem;
+		block-size: 1rem;
+		border-radius: 9999px;
+		background: var(--color-surface-50);
+		transition: transform 150ms;
+	}
+	.group-switch:checked {
+		background: var(--color-primary-500);
+	}
+	.group-switch:checked::after {
+		transform: translateX(1rem);
+	}
+	.group-switch:disabled {
+		cursor: default;
+		opacity: 0.6;
+	}
+	.group-switch:focus-visible {
+		outline: 2px solid var(--color-primary-500);
+		outline-offset: 2px;
 	}
 </style>

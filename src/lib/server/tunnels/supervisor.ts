@@ -632,7 +632,7 @@ export async function reconcileOnBoot(): Promise<void> {
 				enabled: false,
 				status: TunnelStatuses.STOPPED,
 				lastError:
-					"Auto-start skipped: user accounts are disabled on this instance."
+					"Auto-start skipped: user accounts are disabled on this pub."
 			}).catch(() => {})
 			console.warn(
 				"[tunnel] auto-start skipped — user accounts are disabled"

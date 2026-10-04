@@ -21,6 +21,14 @@ export interface Viewer {
 	userId: number
 	isAdmin: boolean
 	sessionId?: number
+	/**
+	 * Set when this session's own values for the pipeline are read-only — its
+	 * creation pipeline, once the session is created (owner ruling
+	 * 2026-09-30): the sentence saying why. The view stays the session's
+	 * (`scope` says so), every row reads as read-only, and a session-scope
+	 * write is refused with this sentence.
+	 */
+	readOnlyBecause?: string
 }
 
 /** Where a value won. `author` means nothing overrode the declared default. */
@@ -44,22 +52,12 @@ export interface ConfigOption {
 	id: string
 	label: string
 	/**
-	 * What *kind* of setting this is — `prompts`, `variables`, `weights`,
-	 * `review`, and so on — as the descriptor's slot declared it.
-	 *
-	 * Deliberately not the node. The panel groups by this because a facet is
-	 * what a person is looking for ("where do I change how lore is laid out")
-	 * while a node is where the machine happens to compute it: the twelve
-	 * `variables` options live on two different nodes purely because assembly
-	 * lays out lore *after* budgeting decided what fit, and grouping by node
-	 * split them across two headings for a reason no user has.
-	 *
-	 * It also stays inside 05 §0a's boundary — a facet names a kind, never a
-	 * node key, a count, or an order.
+	 * The step this option belongs to: its opaque handle (`stepKeyFor`, never
+	 * the node key) and its heading (its step label, else its definition's
+	 * name — never a counter). What the builder lists a step by, and how a
+	 * front row in a settings group is traced back to the step that owns it.
 	 */
-	facet: string
-	/** One of the few settings people reach for — see `Decl.quick`. */
-	quick?: boolean
+	step: { key: string; heading: string }
 	description?: string
 	control: string
 	/** The value declaration (24 T6c) — single-key, for value-decl controls. */
@@ -323,29 +321,80 @@ export interface ConfigOption {
 	 * at, so inside a session it describes the session's own override instead.
 	 */
 	changed: boolean
+	/**
+	 * For a `connection-ref` or `sampling-ref`: what this option resolves to
+	 * when nothing is stored at the scope this viewer writes — the first
+	 * choice a picker offers, and what Reset lands on (owner rulings
+	 * 2026-09-30). `from` says whose it is; `label` is the whole line, value
+	 * NAMED (*As configured — Nemo 12B · KoboldCpp*, *Pipeline default —
+	 * Background*, *Instance default — …*, *No model set*).
+	 */
+	inherits?: OptionInherits
+	/**
+	 * For a `connection-ref` or `sampling-ref`: where the value in force came
+	 * from, as the one muted line under the control (*Set for this session*,
+	 * *From the “Adventure” configuration*, *Pipeline default*, *Instance
+	 * default*).
+	 */
+	provenance?: OptionProvenance
+	/**
+	 * For a `*-ref` option: the NAME of the value in force — what a read-only
+	 * row shows, never an id. For an unset model or sampling slot, the
+	 * pub default that runs in its place.
+	 */
+	valueLabel?: string
+}
+
+/** See `ConfigOption.inherits`. */
+export interface OptionInherits {
+	from: "config" | "pipeline" | "pub" | "none"
+	label: string
+}
+
+/** See `ConfigOption.provenance`. */
+export interface OptionProvenance {
+	source: "session" | "config" | "author" | "pub" | "none"
+	label: string
 }
 
 /**
- * One node's worth of settings, in pipeline order.
- *
- * The panel groups by step because that is how a person thinks about a
- * pipeline — "the summarizing step's prompt", not "the prompts facet's third
- * box". This deliberately reveals the step count and order, which 05 §0a
- * originally withheld; the user ratified the trade for 0.6 (see DECOMPOSITION
- * §26). The `key` is still opaque — an index, never the node key — so the
- * payload names no addressable topology.
- *
- * `advanced` carries the tuning parameters (weights, budgets, thresholds):
- * present, but collapsed by default, because the person who came to change a
- * prompt should not have to scroll past nine numbers to find it.
+ * One step's rows inside a settings group's Advanced, headed by the step's
+ * heading (its step label, else its definition's name — never a counter).
+ * `key` is the step's opaque handle (`stepKeyFor`), the same one each of its
+ * options carries in `step.key`.
  */
-export interface ConfigStep {
+export interface SettingsGroupStep {
 	key: string
-	label: string
-	/** `query` | `task` | `provider` | `consumer` — what this step does. */
-	kind: string
+	heading: string
 	options: ConfigOption[]
-	advanced: ConfigOption[]
+}
+
+/**
+ * A **settings group** (owner rulings 2026-09-30, Q5): one model call and
+ * what exists only to serve it — derived from the graph (`groups.ts`), never
+ * declared. What the settings show as an **agent** (Q3): the display word;
+ * this is the payload's. `kind: "pipeline"` is the *Whole pipeline* group —
+ * everything no model call claims.
+ *
+ * `front` is the group's face, in a fixed order: its prompt (a prompts-ref,
+ * or an envoy's texts), its connection, its sampling, then each source's
+ * switch (a query step's `enabled`, labelled by its step heading); `enabled`
+ * is the model call's own on/off switch when it has one. Everything else is
+ * `advanced`, one entry per step in spine order.
+ *
+ * `heading` is absent on the one group of a spec with a single model call
+ * (or none), and whenever only one group has anything to show this viewer.
+ */
+export interface SettingsGroup {
+	key: string
+	kind: "model-call" | "pipeline"
+	heading?: string
+	purpose?: string
+	enabled?: ConfigOption
+	front: ConfigOption[]
+	advanced: SettingsGroupStep[]
+	/** How many Advanced options the configuration changed — the fold's "2 changed". */
+	changedInAdvanced: number
 }
 
 /**
@@ -387,24 +436,7 @@ export interface NamespaceSummary {
 	taxonomy: { zone?: string; role?: string; mode?: string } | null
 }
 
-/**
- * One kind of setting, as the panel needs to render it.
- *
- * Sent with the view rather than known by the client, for the same reason a
- * share's bands are: the client used to hold this as a hardcoded list, and that
- * list was not a fallback but a *filter* — an option whose facet was not in it
- * matched no group and rendered nowhere at all.
- */
-export interface FacetView {
-	id: string
-	label: string
-	order: number
-	simple: boolean
-}
-
 export interface NamespaceView extends NamespaceSummary {
-	/** The kinds of setting this view contains, in render order. */
-	facets: FacetView[]
 	configs: NamedConfigSummary[]
 	/**
 	 * Every action this pipeline's mode is offered (19 §3) — the checklist the
@@ -420,27 +452,40 @@ export interface NamespaceView extends NamespaceSummary {
 		key: string
 		name: string
 		specSlug: string
-		origin: "companion" | "attachment"
+		origin: "companion" | "foreign"
 	}[]
 	selectedConfig: { id: number; name: string; source: string } | null
 	/**
 	 * Whether this viewer may change the selection from here (R8).
 	 *
 	 * False for a non-admin outside a session: the selection they would be
-	 * making is the instance's, and that one is the administrator's. The panel
+	 * making is the pub's, and that one is the administrator's. The panel
 	 * shows what is selected instead of offering a control that is refused.
 	 */
 	canSelectConfig: boolean
-	steps: ConfigStep[]
 	/**
-	 * An envoy's settings (plans/29 R-18 (2); U5g) — genuine steps in nothing
-	 * that runs, so they are not counted or numbered among `steps`. Rendered
-	 * after them, under their own small heading ("Also configured here"),
-	 * same `ConfigStep` shape as the rest.
+	 * The settings, grouped by model call (owner rulings 2026-09-30) — what
+	 * every surface renders. See `SettingsGroup`.
 	 */
-	alsoConfigured: ConfigStep[]
-	writeScope: WriteScope
+	groups: SettingsGroup[]
+	/**
+	 * Where this view's edits land: the session's own override, or the
+	 * selected configuration. A panel keys the view by its slug AND this, so
+	 * two panels on one pipeline at different scopes never take each other's
+	 * answers.
+	 */
+	scope: ViewScope
 }
+
+/** See `NamespaceView.scope`. */
+export type ViewScope =
+	| {
+			kind: "session"
+			sessionId: number
+			/** Set when the session's values here are read-only: why (`Viewer.readOnlyBecause`). */
+			readOnlyBecause?: string
+	  }
+	| { kind: "config" }
 
 /** The id named nothing here — a stale handle, or one minted on another install. */
 export class OptionNotFoundError extends Error {}
@@ -641,4 +686,10 @@ export interface Decl {
 	accepts?: string[]
 	/** The type this came from — used only to disambiguate a repeated label. */
 	typeLabel: string
+	/**
+	 * The step's heading: its step label (`expose.label`) when the spec gave
+	 * one, else `typeLabel`. Set by `declarations()` for every decl; never
+	 * numbered.
+	 */
+	stepHeading?: string
 }

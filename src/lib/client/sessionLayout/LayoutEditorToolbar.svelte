@@ -1,6 +1,6 @@
 <script lang="ts">
 	/**
-	 * The layout editor's DESKTOP toolbar (tabbed: Presets · Settings · Move),
+	 * The layout editor's DESKTOP toolbar (tabbed: Layouts · Settings · Move),
 	 * split out of SessionLayout.
 	 *
 	 * It survives a previewed phone width — the tier buttons and the grid escape
@@ -9,14 +9,44 @@
 	 * `{#if editing && !isNarrow}` that decides all of that stays in
 	 * SessionLayout, and so does everything the toolbar only ASKS for: the
 	 * presets themselves, the palette, the simulator's state. What lives here is
-	 * the pane's own UI state — which tab, and the one-at-a-time rename and
-	 * delete of a layout you saved.
+	 * the pane's own UI state — which tab, the one-at-a-time rename of a layout
+	 * you saved, and the questions asked before a verb replaces this session's
+	 * layout or deletes one of yours (brief 4: the words are `./startFrom`'s,
+	 * shared with the phone's layouts sheet). Brief 6b adds each card's `⋯`
+	 * menu (`LayoutCardMenu`: new-session layout, make a copy, share, rename,
+	 * delete) and **Save changes to "*Name*"**.
 	 */
 	import type { Snippet } from "svelte"
 	import * as Icons from "@lucide/svelte"
-	import type { PanelInstance } from "$lib/client/surfaces/types"
+	import { tick } from "svelte"
+	import type { TrayWidget } from "./widgetInstances"
 	// The Move tab's screen-size simulator: the width presets the picker offers.
 	import { SIM_OPTIONS, type SimTier } from "./simulator"
+	import LayoutConfirmDialog from "./LayoutConfirmDialog.svelte"
+	import SaveAsNewLayoutDialog from "./SaveAsNewLayoutDialog.svelte"
+	import LayoutCardMenu from "./LayoutCardMenu.svelte"
+	import {
+		canManageLayout,
+		copyConfirm,
+		copyTarget,
+		deleteConfirm,
+		groupLayoutPresets,
+		newSessionChoice,
+		newSessionLayoutOf,
+		newSessionMark,
+		provenanceLine,
+		quoted,
+		reCopyAsk,
+		reCopyLabel,
+		saveChangesConfirm,
+		sharedMark,
+		unshareAsks,
+		unshareConfirm,
+		updatedSentence,
+		type CardMenuAction,
+		type CopyAsk,
+		type LayoutPresetUsage
+	} from "./startFrom"
 
 	interface Props {
 		/** Which pane is showing. Bound: SessionLayout derives `placing` from it. */
@@ -33,39 +63,81 @@
 		 * exactly that much room above the live view and the simulator's stage.
 		 */
 		height: number
-		/** The layouts this user may pick, and the one in force. */
-		presets: Sockets.Sessions.LayoutPreset[]
-		activePreset: Sockets.Sessions.LayoutPreset | null
-		applyPreset: (presetId: number) => void
 		/**
-		 * The name box for "save this arrangement as a preset". Bound because
-		 * SessionLayout's Done reads it — `finishEditing` calls `savePreset`.
+		 * The session layout presets this person may start from, and the one
+		 * this session's layout started from (provenance, never a base).
 		 */
-		presetName: string
-		savePreset: () => void
+		presets: Sockets.Sessions.LayoutPreset[]
+		startedFrom: Sockets.Sessions.LayoutPreset | null
+		/** The layout it started from changed since the copy. */
+		startedFromUpdated?: boolean
+		/** What **Start again from "X"** re-copies; null hides the button. */
+		startAgainFrom: Sockets.Sessions.LayoutPreset | null
+		/**
+		 * Copy a preset in (`null`: Start from scratch). Called only once the
+		 * person has said yes: every copy replaces this session's layout.
+		 */
+		startFrom: (presetId: number | null) => void
+		/**
+		 * **Save as new layout** with a name and an optional description.
+		 * Returns whether it was sent (false: the arrangement was refused).
+		 */
+		savePreset: (name: string, description: string) => boolean
+		/** **Reset to genre default layout**, once confirmed. */
 		resetLayout: () => void
 		/**
+		 * What Start from scratch keeps in the middle, by name — the
+		 * conversation's widget, or the genre's own main widget — so the
+		 * confirmation can say it.
+		 */
+		mainWidgetTitle?: string
+		/**
 		 * Managing a preset you saved. Only ever asked for a card this user
-		 * authored; the page owns the round trips and pushes the refreshed list
-		 * back down through `presets`.
+		 * may manage (`mine`); the page owns the round trips and pushes the
+		 * refreshed list back down through `presets`.
 		 */
 		onRenamePreset?: (presetId: number, name: string) => void
 		onDeletePreset?: (presetId: number) => void
 		onPresetUsage?: (presetId: number) => void
-		/** The answer to the last `onPresetUsage` ask, or null while in flight. */
-		presetUsage?: { id: number; sessions: number } | null
+		/**
+		 * The answer to the last `onPresetUsage` ask, or null while in flight;
+		 * `unknown` when the ask failed.
+		 */
+		presetUsage?: LayoutPresetUsage | null
 		/** A preset's picture — SessionLayout's snippet, drawn by both editors. */
 		presetPicture: Snippet<[unknown]>
+		/**
+		 * **Save changes to "*Name*"** into the layout of yours this session
+		 * started from; `overwriteUpdated` once the person was told it changed
+		 * since the copy and said save over it. Returns whether it was sent.
+		 */
+		saveChanges?: (presetId: number, overwriteUpdated: boolean) => boolean
+		/** The genre's name, for _Use for new *Genre* sessions_. */
+		genreName?: string | null
+		/** A guest in this session: no share control is drawn. */
+		isGuest?: boolean
+		/** An admin manages someone else's shared layout too. */
+		isAdmin?: boolean
+		/** The card menu's verbs (brief 6b); the page owns the round trips. */
+		onShareLayout?: (presetId: number, visibility: "shared" | "private") => void
+		onCloneLayout?: (presetId: number) => void
+		onSetNewSessionLayout?: (presetId: number | null) => void
 		/** Every widget on screen; the Settings tab only counts them. */
 		styleableWidgets: { id: string; label: string }[]
-		/** The Move tab's tray: everything not yet placed. */
-		paletteWidgets: PanelInstance[]
-		iconOf: (p: PanelInstance) => any
+		/**
+		 * The Move tab's tray (brief 7b): every widget kind, every time — a
+		 * placed one with its count, one at its `maxInstances` disabled with
+		 * the reason. A chip carries its WIDGET id; landing it mints the
+		 * instance (`SessionLayout`'s `addWidget`).
+		 */
+		trayWidgets: TrayWidget[]
+		trayIcon: (t: TrayWidget) => any
 		/** Tap-to-place: the palette chip currently armed. */
 		armedId: string | null
 		/** The zone currently under a drag (highlight); the tray is `__palette__`. */
 		dragOverZone: string | null
-		onChipDragStart: (e: DragEvent, id: string) => void
+		/** A chip's drag: its widget id, under the tray's own drag type. */
+		onTrayDragStart: (e: DragEvent, widgetId: string) => void
 		draggedId: (e: DragEvent) => string | null
 		/** The tray's own drop: a card dragged back out of the layout. */
 		removeWidget: (widgetId: string) => void
@@ -85,22 +157,31 @@
 		insetStart,
 		height = $bindable(),
 		presets,
-		activePreset,
-		applyPreset,
-		presetName = $bindable(),
+		startedFrom,
+		startedFromUpdated = false,
+		startAgainFrom,
+		startFrom,
 		savePreset,
 		resetLayout,
+		mainWidgetTitle = "Messages",
 		onRenamePreset,
 		onDeletePreset,
 		onPresetUsage,
 		presetUsage = null,
 		presetPicture,
+		saveChanges,
+		genreName = null,
+		isGuest = false,
+		isAdmin = false,
+		onShareLayout,
+		onCloneLayout,
+		onSetNewSessionLayout,
 		styleableWidgets,
-		paletteWidgets,
-		iconOf,
+		trayWidgets,
+		trayIcon,
 		armedId = $bindable(),
 		dragOverZone = $bindable(),
-		onChipDragStart,
+		onTrayDragStart,
 		draggedId,
 		removeWidget,
 		simTier,
@@ -113,9 +194,10 @@
 	}: Props = $props()
 
 	/* ── managing a layout you saved ────────────────────────────────────
-	 * Rename and delete are offered on your OWN cards only; the shipped default
-	 * gets no actions. Both are one-at-a-time by construction — a single id of
-	 * state each — so the row can never show two open editors or two pending
+	 * Rename and delete are in the card menu of a layout you manage (yours;
+	 * for an admin, someone's shared one); the shipped ones offer neither.
+	 * Both are one-at-a-time by construction — a single id of state each —
+	 * so the row can never show two open editors or two pending
 	 * confirmations, and starting one closes the other. */
 	/** The card whose name is being edited inline, if any. */
 	let renamingId = $state<number | null>(null)
@@ -127,17 +209,32 @@
 	let deletingPreset = $derived(
 		presets.find((p) => p.id === deleteAskId) ?? null
 	)
-	/** Its session count, or null while the answer is still in flight. */
+	/** What deleting it touches, or null while the answer is still in flight. */
 	let deleteUsage = $derived(
-		presetUsage && presetUsage.id === deleteAskId
-			? presetUsage.sessions
-			: null
+		presetUsage && presetUsage.id === deleteAskId ? presetUsage : null
 	)
 
 	function startRename(p: Sockets.Sessions.LayoutPreset) {
 		deleteAskId = null
+		copyAsk = null
+		saveChangesAsk = null
+		unshareAsk = null
 		renamingId = p.id
 		renameValue = p.name
+	}
+	/** The editor's own box: where a card's `⋯` trigger is looked up again. */
+	let editorEl = $state<HTMLElement | null>(null)
+	/**
+	 * A rename ended from the keyboard: the field took the place of the card's
+	 * `⋯` trigger (menus hand focus back to their trigger, STYLE-GUIDE §6.6),
+	 * so focus goes to the new trigger once it is drawn — never the page.
+	 * Not on a blur: focus is already wherever the person put it.
+	 */
+	async function focusCardMenu(id: number) {
+		await tick()
+		editorEl
+			?.querySelector<HTMLElement>(`[data-card-menu="${id}"] button`)
+			?.focus()
 	}
 	/**
 	 * Commit the inline rename. Enter and blur both land here, and so does the
@@ -171,30 +268,163 @@
 	})
 
 	/**
-	 * Step one of the delete: ask how many sessions are on it. The confirmation
-	 * cannot be answered until that count lands, which is the whole point — the
-	 * FK drops every session using this preset back to the genre default, and
-	 * that is worth knowing before, not after.
+	 * Step one of the delete: ask what it touches. The confirmation cannot be
+	 * answered until that lands: no session's layout changes (each holds its
+	 * own copy), but a person using it for new sessions gets the genre default
+	 * layout instead, and that is worth knowing before, not after.
 	 */
 	function askDelete(p: Sockets.Sessions.LayoutPreset) {
 		renamingId = null
+		copyAsk = null
+		saveChangesAsk = null
+		unshareAsk = null
 		deleteAskId = p.id
 		onPresetUsage?.(p.id)
 	}
-	/** Step two. The refreshed list arrives on the reply and redraws the row. */
-	function confirmDelete(id: number) {
-		deleteAskId = null
-		onDeletePreset?.(id)
+
+	/* ── the Start from pane (brief 4) ──────────────────────────────────
+	 * Cards grouped by who brought them, a status line read off the
+	 * provenance, the Updated offer, and a question before anything replaces
+	 * this session's layout. */
+	let groups = $derived(groupLayoutPresets(presets))
+	let provenance = $derived(provenanceLine(startedFrom))
+	let genreDefault = $derived(presets.find((p) => p.isGenreDefault) ?? null)
+	/**
+	 * The source, when it changed since this session copied it. The offer
+	 * under the status line then carries its re-copy verb, so the row of
+	 * verbs does not repeat it.
+	 */
+	let updatedSource = $derived(startedFromUpdated ? startedFrom : null)
+	/** The copy waiting on a yes, if any. One question at a time. */
+	let copyAsk = $state<CopyAsk | null>(null)
+	let saveAsOpen = $state(false)
+
+	/* ── the card menu and Save changes to (brief 6b) ───────────────────── */
+	/** What new sessions of this genre start from: the card with the star. */
+	let newSessionLayout = $derived(newSessionLayoutOf(presets))
+	let menuContext = $derived({
+		genreName,
+		isGuest,
+		isAdmin,
+		newSessionLayoutId: newSessionLayout?.id ?? null
+	})
+	/**
+	 * **Save changes to "*Name*"** is offered when this session started from
+	 * a layout of YOURS (authorship, `mine`): a shipped or shared one is
+	 * someone else's to change — make a copy instead.
+	 */
+	let saveChangesTarget = $derived(startedFrom?.mine ? startedFrom : null)
+	/**
+	 * Save changes to, waiting on a yes. `updated`: this session reads the
+	 * layout as Updated, so saving would replace changes saved into it since
+	 * the copy — the question warns and offers Start again instead.
+	 */
+	let saveChangesAsk = $state<{
+		preset: Sockets.Sessions.LayoutPreset
+		updated: boolean
+	} | null>(null)
+
+	/**
+	 * An admin's _Stop sharing_ on someone else's layout, waiting on a yes:
+	 * it leaves the admin's list and only its author can share it again.
+	 */
+	let unshareAsk = $state<Sockets.Sessions.LayoutPreset | null>(null)
+
+	function onCardAction(action: CardMenuAction, p: Sockets.Sessions.LayoutPreset) {
+		if (action === "new-session") onSetNewSessionLayout?.(newSessionChoice(p))
+		else if (action === "stop-new-session") onSetNewSessionLayout?.(null)
+		else if (action === "copy") onCloneLayout?.(p.id)
+		else if (action === "share") onShareLayout?.(p.id, "shared")
+		else if (action === "unshare") {
+			if (unshareAsks(p)) askUnshare(p)
+			else onShareLayout?.(p.id, "private")
+		} else if (action === "rename") startRename(p)
+		else if (action === "delete") askDelete(p)
 	}
-	function cancelDelete() {
+	function askUnshare(p: Sockets.Sessions.LayoutPreset) {
+		renamingId = null
+		deleteAskId = null
+		copyAsk = null
+		saveChangesAsk = null
+		unshareAsk = p
+	}
+	function askSaveChanges(p: Sockets.Sessions.LayoutPreset) {
+		renamingId = null
+		deleteAskId = null
+		copyAsk = null
+		unshareAsk = null
+		saveChangesAsk = { preset: p, updated: startedFromUpdated && startedFrom?.id === p.id }
+	}
+
+	/** What the one dialog asks: a copy, Save changes to, Stop sharing, else a pending delete. */
+	let confirm = $derived(
+		copyAsk
+			? copyConfirm(copyAsk, mainWidgetTitle)
+			: saveChangesAsk
+				? saveChangesConfirm(saveChangesAsk.preset, saveChangesAsk.updated)
+				: unshareAsk
+					? unshareConfirm(unshareAsk)
+					: deletingPreset
+						? deleteConfirm(deletingPreset, deleteUsage)
+						: null
+	)
+	const pid = $props.id()
+
+	function askCopy(ask: CopyAsk) {
+		renamingId = null
+		deleteAskId = null
+		saveChangesAsk = null
+		unshareAsk = null
+		copyAsk = ask
+	}
+	/** Yes: the copy, the save, Stop sharing, or the delete goes ahead. */
+	function confirmYes() {
+		const ask = copyAsk
+		if (ask) {
+			copyAsk = null
+			if (ask.kind === "reset") resetLayout()
+			else startFrom(copyTarget(ask))
+			return
+		}
+		const save = saveChangesAsk
+		if (save) {
+			saveChangesAsk = null
+			saveChanges?.(save.preset.id, save.updated)
+			return
+		}
+		const unshare = unshareAsk
+		if (unshare) {
+			unshareAsk = null
+			onShareLayout?.(unshare.id, "private")
+			return
+		}
+		const doomed = deletingPreset
+		deleteAskId = null
+		// The refreshed list arrives on the reply and redraws the group.
+		if (doomed) onDeletePreset?.(doomed.id)
+	}
+	/**
+	 * The question's other way out: Save changes to over an Updated layout
+	 * offers Start again from it, which asks its own question in the same
+	 * dialog (it replaces this session's layout).
+	 */
+	function confirmAlternative() {
+		const save = saveChangesAsk
+		if (!save) return
+		askCopy({ kind: "again", preset: save.preset })
+	}
+	function confirmNo() {
+		copyAsk = null
+		saveChangesAsk = null
+		unshareAsk = null
 		deleteAskId = null
 	}
 </script>
 
-<!-- The layout editor: a tabbed toolbar over the chat. Presets picks a
-     saved layout (and saves the current one); Style picks the message
-     packs (live preview); Move places and arranges widgets in the
-     zones. -->
+<!-- The layout editor: a tabbed toolbar over the chat. Layouts starts
+     this session's layout again from a copy (and saves it as a new named
+     layout); Style picks the message packs (live preview); Move places and
+     arranges widgets in the zones. -->
 <!-- The band stops at the session's own left edge unless the Move tab's
      scrim is covering the nav rail — see `.editor`'s rule. `insetStart` is
      the root's measured offset from the window, and since the one-rail
@@ -202,6 +432,7 @@
 <div
 	class="editor"
 	data-pop-keep
+	bind:this={editorEl}
 	bind:clientHeight={height}
 	style:inset-inline-start="{insetStart}px"
 >
@@ -219,7 +450,15 @@
 				onclick={() => (editTab = "presets")}
 			>
 				<Icons.LayoutTemplate size={16} />
-				Presets
+				<!-- "Layouts", never "Presets" on screen: that is the session
+				     preset's word (NOMENCLATURE §9, session layout preset). -->
+				Layouts
+				<!-- The layout this session started from changed since the
+				     copy: the Layouts tab has an offer waiting. -->
+				{#if startedFromUpdated}
+					<span class="tab-dot" data-updated-dot aria-hidden="true"></span>
+					<span class="sr-only">(updated)</span>
+				{/if}
 			</button>
 			<button
 				class="editor-tab"
@@ -259,147 +498,230 @@
 
 	<div class="editor-panel">
 		{#if editTab === "presets"}
-			<div class="presets-row" role="group" aria-label="Layouts">
-				{#each presets as p (p.id)}
-					<div class="preset-item">
+			<!-- The pane's head: where this session's layout started from,
+			     then the three verbs that REPLACE it with a copy, then the
+			     one that writes a new named layout from it. Done saves the
+			     edits to this session only. Every copy asks first. -->
+			<div class="sf-head">
+				<p class="sf-status" data-layout-provenance>
+					{provenance.lead}{#if provenance.name}<strong
+							>{provenance.name}</strong
+						>{/if}{provenance.tail}
+				</p>
+				<span class="flex-1"></span>
+				<div
+					class="sf-verbs"
+					role="group"
+					aria-label="Replace this session's layout"
+				>
+					{#if !updatedSource?.isGenreDefault}
 						<button
-							class="preset-card"
-							class:active={activePreset?.id === p.id}
-							aria-pressed={activePreset?.id === p.id}
-							onclick={() => applyPreset(p.id)}
-							title={p.isDefault
-								? "The layout this genre ships with"
-								: `Apply "${p.name}"`}
+							class="tool-btn"
+							data-copy-verb="reset"
+							onclick={() =>
+								askCopy({ kind: "reset", preset: genreDefault })}
+							title="Copy the genre default layout back into this session"
 						>
-							{@render presetPicture(p.layout)}
-							<span class="preset-name">
-								{#if p.isDefault}
-									<Icons.RotateCcw size={11} />
-								{/if}
-								{p.name}
-							</span>
+							<Icons.RotateCcw size={14} />
+							<span>Reset to genre default layout</span>
 						</button>
-						<!-- Only the layouts THIS user saved can be
-						     renamed or deleted, so the shipped default
-						     is simply offered nothing — a button that
-						     only ever explains why it refuses is worse
-						     than no button. -->
-						{#if !p.isDefault}
-							{#if renamingId === p.id}
-								<input
-									class="preset-input preset-rename"
-									type="text"
-									bind:this={renameField}
-									bind:value={renameValue}
-									maxlength="80"
-									aria-label={`New name for "${p.name}"`}
-									onkeydown={(e) => {
-										if (e.key === "Enter")
-											commitRename(p.id)
-										else if (e.key === "Escape")
-											cancelRename()
-									}}
-									onblur={() => commitRename(p.id)}
-								/>
-							{:else}
-								<div class="preset-actions">
-									<button
-										class="preset-action"
-										onclick={() => startRename(p)}
-										title={`Rename "${p.name}"`}
-										aria-label={`Rename "${p.name}"`}
-									>
-										<Icons.Pencil size={12} />
-									</button>
-									<button
-										class="preset-action"
-										class:armed={deleteAskId === p.id}
-										onclick={() => askDelete(p)}
-										title={`Delete "${p.name}"`}
-										aria-label={`Delete "${p.name}"`}
-									>
-										<Icons.Trash2 size={12} />
-									</button>
-								</div>
-							{/if}
-						{/if}
-					</div>
-				{:else}
-					<span class="advanced-note">
-						No saved layouts for this session type yet.
-					</span>
-				{/each}
-			</div>
-			<!-- The delete confirmation. One at a time, and its own row
-			     rather than something crammed into a 6.5rem card: it has
-			     a sentence to say, and what it says is what deleting
-			     actually does to other sessions. -->
-			{#if deletingPreset}
-				{@const dp = deletingPreset}
-				<div class="presets-row preset-confirm" role="alert">
-					<span class="preset-confirm-text">
-						{#if deleteUsage === null}
-							Checking where “{dp.name}” is used…
-						{:else if deleteUsage > 0}
-							“{dp.name}” is used by {deleteUsage}
-							session{deleteUsage === 1 ? "" : "s"}, which
-							will go back to the default layout. Delete
-							it?
-						{:else}
-							Delete “{dp.name}”?
-						{/if}
-					</span>
+					{/if}
+					{#if startAgainFrom && updatedSource?.id !== startAgainFrom.id}
+						{@const again = startAgainFrom}
+						<button
+							class="tool-btn"
+							data-copy-verb="again"
+							onclick={() => askCopy({ kind: "again", preset: again })}
+							title={`Copy ${quoted(again.name)} into this session again`}
+						>
+							<Icons.RotateCcw size={14} />
+							<span>Start again from {quoted(again.name)}</span>
+						</button>
+					{/if}
 					<button
-						class="tool-btn preset-danger"
-						onclick={() => confirmDelete(dp.id)}
-						disabled={deleteUsage === null}
-						title={deleteUsage === null
-							? "Still counting the sessions on this layout"
-							: `Delete "${dp.name}"`}
+						class="tool-btn"
+						data-copy-verb="scratch"
+						onclick={() => askCopy({ kind: "scratch" })}
+						title="The conversation and this genre's panels, each at its defaults"
 					>
-						<Icons.Trash2 size={14} />
-						<span>Delete</span>
+						<Icons.RotateCcw size={14} />
+						<span>Start from scratch</span>
 					</button>
-					<button class="tool-btn" onclick={cancelDelete}>
-						<Icons.X size={14} />
-						<span>Cancel</span>
+				</div>
+				<span class="sf-rule" aria-hidden="true"></span>
+				<!-- Writing back into the layout of yours this session started
+				     from (brief 6b): asks first, and warns when changes were
+				     saved into it from elsewhere since the copy. -->
+				{#if saveChangesTarget}
+					{@const target = saveChangesTarget}
+					<button
+						class="tool-btn"
+						aria-haspopup="dialog"
+						data-save-changes
+						onclick={() => askSaveChanges(target)}
+						title={`Save this session's layout into ${quoted(target.name)}`}
+					>
+						<Icons.Save size={14} />
+						<span>Save changes to {quoted(target.name)}</span>
+					</button>
+				{/if}
+				<button
+					class="tool-btn"
+					aria-haspopup="dialog"
+					onclick={() => (saveAsOpen = true)}
+					title="Save this session's layout as a new layout every session of this genre can start from"
+				>
+					<Icons.Save size={14} />
+					<span>Save as new layout</span>
+				</button>
+			</div>
+			<!-- The source changed since the copy. Inside the editor only: the
+			     stage never shows it, and nothing moves until they say so. -->
+			{#if updatedSource}
+				{@const src = updatedSource}
+				<div class="sf-updated" role="status" data-layout-updated>
+					<span class="sf-chip">Updated</span>
+					<span class="sf-updated-text">{updatedSentence(src)}</span>
+					<button
+						class="tool-btn"
+						data-copy-verb={src.isGenreDefault ? "reset" : "again"}
+						onclick={() => askCopy(reCopyAsk(src))}
+					>
+						<Icons.RotateCcw size={14} />
+						<span>{reCopyLabel(src)}</span>
 					</button>
 				</div>
 			{/if}
-			<div class="presets-row">
-				<label class="preset-save">
-					<span class="sr-only">Name this layout</span>
-					<input
-						class="preset-input"
-						type="text"
-						bind:value={presetName}
-						placeholder="Name this layout…"
-						maxlength="80"
-						onkeydown={(e) => {
-							if (e.key === "Enter") savePreset()
-						}}
-					/>
-				</label>
-				<button
-					class="tool-btn"
-					onclick={savePreset}
-					disabled={!presetName.trim()}
-					title="Save the current arrangement as a new layout"
-				>
-					<Icons.Save size={14} />
-					<span>Save preset</span>
-				</button>
-				<button
-					class="tool-btn"
-					onclick={resetLayout}
-					title="Drop your own changes and show the selected layout"
-				>
-					<Icons.RotateCcw size={14} />
-					<span>Reset to default</span>
-				</button>
-				<span class="advanced-note">
-					Saving also happens on Done while a name is typed.
-				</span>
+			<!-- Start from: the cards, grouped by who brought them. Choosing
+			     one asks, then COPIES it into this session; the card with the
+			     ring is the one it started from. -->
+			<div class="sf-groups">
+				{#each groups as g, gi (g.key)}
+					<section
+						class="sf-group"
+						data-preset-group={g.key}
+						aria-labelledby="{pid}-g{gi}"
+					>
+						<h3
+							class="sf-group-label"
+							id="{pid}-g{gi}"
+							data-preset-group-label
+						>
+							{g.label}
+						</h3>
+						<div class="presets-row">
+							{#each g.presets as p (p.id)}
+								{@const current = startedFrom?.id === p.id}
+								{@const forNewSessions = newSessionLayout?.id === p.id}
+								<div class="preset-item">
+									<button
+										class="preset-card"
+										class:current
+										aria-current={current ? "true" : undefined}
+										data-preset-card={p.id}
+										onclick={() => askCopy({ kind: "card", preset: p })}
+										title={p.description ??
+											(p.isGenreDefault
+												? "Start from the genre default layout"
+												: `Start from ${quoted(p.name)}`)}
+									>
+										<span class="preset-pic">
+											{@render presetPicture(p.layout)}
+											<!-- What new sessions of this genre start
+											     from: the star of "set as default"
+											     (NOMENCLATURE §22), on one card. -->
+											{#if forNewSessions}
+												<span
+													class="preset-star"
+													data-new-session-layout
+													title={newSessionMark(genreName)}
+													aria-hidden="true"
+												>
+													<Icons.Star size={11} aria-hidden="true" />
+												</span>
+											{/if}
+											{#if current && startedFromUpdated}
+												<span class="sf-chip preset-updated" aria-hidden="true"
+													>Updated</span
+												>
+											{/if}
+										</span>
+										<!-- The card is named by its name first; the marks
+										     drawn on the picture are said after it. -->
+										<span class="preset-name">{p.name}</span>
+										{#if current && startedFromUpdated}
+											<span class="sr-only">{", updated"}</span>
+										{/if}
+										{#if forNewSessions}
+											<span class="sr-only" data-new-session-words
+												>{`, ${newSessionMark(genreName)}`}</span
+											>
+										{/if}
+										<!-- Someone else's, shared on this server: whose.
+										     Yours, shared: that it is. -->
+										{#if !p.mine && p.origin === "user" && p.authorName}
+											<span class="preset-by">by {p.authorName}</span>
+										{:else if sharedMark(p)}
+											<span
+												class="preset-by"
+												data-shared-mark
+												title="Shared with everyone on this pub">{sharedMark(p)}</span
+											>
+										{/if}
+									</button>
+									<!-- Every card's menu (brief 6b): the new-session
+									     layout and Make a copy for any; share, rename
+									     and delete only where this person manages it —
+									     a shipped layout is offered nothing it would
+									     only refuse. -->
+									{#if renamingId === p.id && canManageLayout(p, isAdmin)}
+										<input
+											class="preset-input preset-rename"
+											type="text"
+											bind:this={renameField}
+											bind:value={renameValue}
+											maxlength="80"
+											aria-label={`New name for "${p.name}"`}
+											onkeydown={(e) => {
+												if (e.key === "Enter") {
+													// Else the key's own activation lands on
+													// the trigger focus moves to, and opens it.
+													e.preventDefault()
+													commitRename(p.id)
+													focusCardMenu(p.id)
+												} else if (e.key === "Escape") {
+													cancelRename()
+													focusCardMenu(p.id)
+												}
+											}}
+											onblur={() => commitRename(p.id)}
+										/>
+									{:else}
+										<div
+											class="preset-actions"
+											class:armed={deleteAskId === p.id ||
+												unshareAsk?.id === p.id}
+										>
+											<!-- 24px tall at least (WCAG 2.5.8), 44px on a
+											     coarse pointer (STYLE-GUIDE §9). -->
+											<LayoutCardMenu
+												preset={p}
+												context={menuContext}
+												onAction={onCardAction}
+												placement="bottom-start"
+												triggerClass="text-surface-600-400 hover:bg-surface-200-800 flex min-h-6 min-w-8 items-center justify-center rounded-[0.35rem] px-2 py-0.5 pointer-coarse:min-h-11 pointer-coarse:min-w-11"
+											/>
+										</div>
+									{/if}
+								</div>
+							{/each}
+						</div>
+					</section>
+				{:else}
+					<span class="advanced-note">
+						No layouts for this genre yet.
+					</span>
+				{/each}
 			</div>
 		{:else if editTab === "settings"}
 			<!-- One line, because the controls are on the widgets: every
@@ -437,30 +759,41 @@
 					Add
 				</span>
 				<div class="palette-tray">
-					{#each paletteWidgets as p (p.id)}
-						{@const IconCmp = iconOf(p)}
+					<!-- Every kind, every time (brief 7b): adding a placed
+					     one is how a second copy is made. The count says how
+					     many are placed; a kind at its cap is disabled and
+					     says why. -->
+					{#each trayWidgets as t (t.id)}
+						{@const IconCmp = trayIcon(t)}
 						<button
 							class="widget-card"
-							class:armed={armedId === p.id}
-							draggable="true"
-							ondragstart={(e) =>
-								onChipDragStart(e, p.id)}
+							class:armed={armedId === t.id}
+							data-tray-widget={t.id}
+							disabled={!!t.full}
+							draggable={!t.full}
+							ondragstart={(e) => onTrayDragStart(e, t.id)}
 							onclick={() =>
-								(armedId =
-									armedId === p.id ? null : p.id)}
-							title={armedId === p.id
-								? "Tap a zone to place"
-								: "Drag to a zone, or tap to arm"}
+								(armedId = armedId === t.id ? null : t.id)}
+							title={t.full ??
+								(armedId === t.id
+									? "Tap a zone to place"
+									: "Drag to a zone, or tap to arm")}
 						>
 							<IconCmp size={18} />
-							<span class="widget-card-label">
-								{p.title}
-							</span>
+							<span class="widget-card-label">{t.title}</span>
+							{#if t.placed}
+								<span class="widget-card-count"
+									><span class="sr-only">{" · "}</span>{t.placed} placed</span
+								>
+							{/if}
+							<!-- Not every browser shows a disabled button's title:
+							     the cap's reason is said on the card too. -->
+							{#if t.full}
+								<span class="widget-card-count"
+									><span class="sr-only">{" · "}</span>{t.full}</span
+								>
+							{/if}
 						</button>
-					{:else}
-						<span class="palette-empty">
-							All widgets are placed.
-						</span>
 					{/each}
 				</div>
 				{#if armedId}
@@ -579,9 +912,18 @@
 	</div>
 </div>
 
+<!-- Portalled to the body (STYLE-GUIDE §6.6): the pane's one question, and
+     Save as new layout's name and description. -->
+<LayoutConfirmDialog
+	{confirm}
+	onConfirm={confirmYes}
+	onCancel={confirmNo}
+	onAlternative={confirmAlternative}
+/>
+<SaveAsNewLayoutDialog bind:open={saveAsOpen} onSave={savePreset} />
 
 <style>
-	/* ── Layout editor toolbar (tabbed: Presets · Settings · Move) ─────
+	/* ── Layout editor toolbar (tabbed: Layouts · Settings · Move) ─────
 	   While the editor is open this bar OWNS the header's band: the shell takes
 	   the session header and the Jump pill out of it for the duration (see
 	   layoutEditor.svelte.ts), so the bar wears the header's own ground and
@@ -719,6 +1061,108 @@
 		flex-wrap: wrap;
 	}
 
+	/* ── the Start from pane's head (brief 4) ───────────────────────────
+	   One line: where the layout started from, the verbs that replace it,
+	   and Save as new layout set off by a hairline. It wraps rather than
+	   scrolls: the band's height is measured and reserved above the page. */
+	.sf-head {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 0.4rem 0.6rem;
+		inline-size: 100%;
+	}
+	.sf-status {
+		margin: 0;
+		font-size: 13px;
+		color: var(--color-surface-700);
+	}
+	:global([data-mode="dark"]) .sf-status {
+		color: var(--color-surface-300);
+	}
+	.sf-status strong {
+		font-weight: 600;
+		color: var(--color-surface-950);
+	}
+	:global([data-mode="dark"]) .sf-status strong {
+		color: var(--color-surface-50);
+	}
+	.sf-verbs {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.4rem;
+	}
+	.sf-rule {
+		inline-size: 1px;
+		block-size: 1.5rem;
+		background: color-mix(in oklab, var(--color-surface-400) 45%, transparent);
+	}
+	/* The Updated offer: a tonal line (STYLE-GUIDE §2.4, never filled), the
+	   chip, the sentence, and the one button that re-copies the source. */
+	.sf-updated {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 0.4rem 0.6rem;
+		inline-size: 100%;
+		padding: 0.35rem 0.5rem;
+		border-radius: 0.5rem;
+		background: color-mix(in oklab, var(--color-primary-500) 10%, transparent);
+	}
+	.sf-updated-text {
+		font-size: 13px;
+		color: var(--color-surface-800);
+	}
+	:global([data-mode="dark"]) .sf-updated-text {
+		color: var(--color-surface-200);
+	}
+	/* The chip: `preset-tonal-primary`'s recipe, spelled out because this
+	   sheet is scoped. */
+	.sf-chip {
+		display: inline-flex;
+		align-items: center;
+		padding: 0.05rem 0.4rem;
+		border-radius: 999px;
+		font-size: 11px;
+		font-weight: 600;
+		line-height: 1.5;
+		background: color-mix(in oklab, var(--color-primary-500) 22%, transparent);
+		color: var(--color-primary-800);
+	}
+	:global([data-mode="dark"]) .sf-chip {
+		color: var(--color-primary-200);
+	}
+	/* The groups sit side by side, each a muted label over its cards. */
+	.sf-groups {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: flex-start;
+		gap: 0.5rem 1.25rem;
+		inline-size: 100%;
+	}
+	.sf-group {
+		display: flex;
+		flex-direction: column;
+		gap: 0.3rem;
+	}
+	.sf-group-label {
+		margin: 0;
+		font-size: 12px;
+		font-weight: 500;
+		color: var(--color-surface-600);
+	}
+	:global([data-mode="dark"]) .sf-group-label {
+		color: var(--color-surface-400);
+	}
+	.tab-dot {
+		inline-size: 6px;
+		block-size: 6px;
+		border-radius: 999px;
+		background: var(--color-primary-500);
+		align-self: flex-start;
+		margin-block-start: 0.7rem;
+	}
+
 	/* ── preset cards + their pictures ──────────────────────────────── */
 	/* The card and its manage row are one column: the card stays the apply
 	   control it always was (a button, which is why the actions cannot live
@@ -733,64 +1177,45 @@
 		   up with every other. */
 		align-self: flex-start;
 	}
+	/* The card's `⋯` menu trigger, centred under it (brief 6b). */
 	.preset-actions {
 		display: flex;
 		justify-content: center;
-		gap: 0.15rem;
+		align-self: center;
 	}
-	.preset-action {
-		display: flex;
+	/* The card whose delete is being asked about, so the dialog and the menu
+	   it came from are visibly the same thing. */
+	.preset-actions.armed {
+		border-radius: 0.35rem;
+		background: color-mix(in oklab, var(--color-error-500) 20%, transparent);
+	}
+	/* The new-session layout's star: the Updated chip's recipe in the other
+	   corner, so the two never cover each other. */
+	.preset-star {
+		position: absolute;
+		inset-block-start: 0.2rem;
+		inset-inline-start: 0.2rem;
+		display: inline-flex;
 		align-items: center;
 		justify-content: center;
-		padding: 0.15rem 0.3rem;
-		border-radius: 0.35rem;
-		color: var(--color-surface-600);
+		inline-size: 1.1rem;
+		block-size: 1.1rem;
+		border-radius: 999px;
+		background: var(--color-surface-50);
+		box-shadow: inset 0 0 0 1px var(--color-primary-500);
+		color: var(--color-primary-700);
 	}
-	:global([data-mode="dark"]) .preset-action {
-		color: var(--color-surface-400);
+	.preset-star :global(svg) {
+		fill: currentColor;
 	}
-	.preset-action:hover {
-		background: color-mix(
-			in oklab,
-			var(--color-primary-500) 20%,
-			transparent
-		);
-	}
-	/* The card whose confirmation is open below, so the sentence and the bin it
-	   came from are visibly the same thing. */
-	.preset-action.armed {
-		background: color-mix(in oklab, var(--color-error-500) 20%, transparent);
-		color: var(--color-error-700, var(--color-error-500));
+	:global([data-mode="dark"]) .preset-star {
+		background: var(--color-surface-950);
+		color: var(--color-primary-300);
 	}
 	/* Both classes on purpose: `.preset-input`'s own width is declared further
 	   down this sheet, so matching its specificity would lose on source order. */
 	.preset-input.preset-rename {
 		width: 6.5rem;
-	}
-	.preset-confirm {
-		padding: 0.3rem 0.45rem;
-		border-radius: 0.5rem;
-		background: color-mix(in oklab, var(--color-error-500) 10%, transparent);
-	}
-	.preset-confirm-text {
-		flex: 1 1 12rem;
-		font-size: 13px;
-		line-height: 1.4;
-		color: var(--color-surface-700);
-	}
-	:global([data-mode="dark"]) .preset-confirm-text {
-		color: var(--color-surface-200);
-	}
-	/* `.tool-btn:hover` is declared later in this sheet and would otherwise
-	   repaint the destructive button in the primary tint on hover, so the hover
-	   state is claimed here rather than left to source order. */
-	.tool-btn.preset-danger,
-	.tool-btn.preset-danger:hover {
-		background: var(--color-error-500);
-		color: var(--color-error-contrast-500, white);
-	}
-	.tool-btn.preset-danger:hover:not(:disabled) {
-		background: var(--color-error-600, var(--color-error-500));
 	}
 	.preset-card {
 		display: flex;
@@ -807,22 +1232,44 @@
 			transparent
 		);
 	}
+	/* Dark: a step above the band's ground, so the name keeps its contrast
+	   (the light card left a pale name on a pale ground). */
+	:global([data-mode="dark"]) .preset-card {
+		border-color: color-mix(in oklab, var(--color-surface-600) 55%, transparent);
+		background: color-mix(in oklab, var(--color-surface-800) 70%, transparent);
+	}
 	.preset-card:hover {
 		border-color: var(--color-primary-500);
 	}
-	.preset-card.active {
-		border-color: var(--color-primary-500);
-		background: color-mix(
-			in oklab,
-			var(--color-primary-500) 16%,
-			transparent
-		);
+	/* The card this session started from: the selected card's ring (STYLE-GUIDE
+	   §2.4), offset by the band's own ground — never a filled primary. */
+	.preset-card.current {
+		box-shadow:
+			0 0 0 2px var(--color-surface-100),
+			0 0 0 4px var(--color-primary-500);
+	}
+	:global([data-mode="dark"]) .preset-card.current {
+		box-shadow:
+			0 0 0 2px var(--color-surface-900),
+			0 0 0 4px var(--color-primary-500);
+	}
+	.preset-pic {
+		position: relative;
+		display: block;
+	}
+	.preset-updated {
+		position: absolute;
+		inset-block-start: 0.2rem;
+		inset-inline-end: 0.2rem;
+		background: var(--color-surface-50);
+		box-shadow: inset 0 0 0 1px var(--color-primary-500);
+	}
+	:global([data-mode="dark"]) .preset-updated {
+		background: var(--color-surface-950);
 	}
 	.preset-name {
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		gap: 0.2rem;
+		display: block;
+		text-align: center;
 		font-size: 13px;
 		font-weight: 500;
 		color: var(--color-surface-700);
@@ -834,11 +1281,21 @@
 	:global([data-mode="dark"]) .preset-name {
 		color: var(--color-surface-200);
 	}
-
-	/* The "name this layout" box. */
-	.preset-save {
-		display: flex;
+	.preset-by {
+		display: block;
+		max-width: 6.5rem;
+		margin-block-start: -0.2rem;
+		text-align: center;
+		font-size: 11px;
+		color: var(--color-surface-600);
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
 	}
+	:global([data-mode="dark"]) .preset-by {
+		color: var(--color-surface-400);
+	}
+
 	.preset-input {
 		padding: 0.28rem 0.5rem;
 		border-radius: 0.5rem;
@@ -981,6 +1438,20 @@
 			transparent
 		);
 	}
+	.widget-card:disabled {
+		cursor: not-allowed;
+		opacity: 0.55;
+		transform: none;
+	}
+	/* How many are placed: a second, quieter line under the name. */
+	.widget-card-count {
+		font-size: 11px;
+		font-weight: 400;
+		color: var(--color-surface-600);
+	}
+	:global([data-mode="dark"]) .widget-card-count {
+		color: var(--color-surface-400);
+	}
 	.widget-card-label {
 		inline-size: 100%;
 		overflow: hidden;
@@ -1008,7 +1479,6 @@
 			transparent
 		);
 	}
-	.palette-empty,
 	.palette-hint {
 		font-size: 12px;
 		color: var(--color-surface-500);

@@ -167,12 +167,10 @@ const scanned = (doc: any, specId: string) =>
 /**
  * The config a run on this session actually resolves to.
  *
- * ⚠ Not the `pipeline-default:` row. `migrateContextTemplates` duplicates the
- * shipped config into a mutable "Default (customized)" and selects that at
- * instance scope, so on every install that has context templates the live values
- * are the copy's. A fixture that wrote to the immutable original would change
- * nothing and prove nothing — which is exactly the shape of the bug this file is
- * about, so it is worth stating rather than discovering twice.
+ * ⚠ Not the `pipeline-default:` row. A run resolves through the session's
+ * selection chain, which may name a mutable configuration rather than the
+ * shipped one, so a fixture writing to the immutable original could change
+ * nothing and prove nothing.
  */
 /** The address the `scanDepth` case tunes — one lane, so the others stay declared. */
 const SCAN_DEPTH_AT = {

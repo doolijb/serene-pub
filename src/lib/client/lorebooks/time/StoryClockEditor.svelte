@@ -75,21 +75,12 @@
 				}
 	)
 
-	let problem = $derived.by(() => {
-		if (!draftClock) return "The clock needs a year."
-		if (draftClock.day != null && draftClock.month == null)
-			return "A day needs a month."
-		const p = dateProblem(draftClock as StoryDate, calendar)
-		if (p) return p
-		if (draftClock.hour != null && (draftClock.hour < 0 || draftClock.hour > 23))
-			return "An hour is 0 to 23."
-		if (
-			draftClock.minute != null &&
-			(draftClock.minute < 0 || draftClock.minute > 59)
-		)
-			return "A minute is 0 to 59."
-		return null
-	})
+	// The one story-time rule (`storyTimeProblem`: every part's range, the
+	// time of day included, then the book's calendar) — the same check the
+	// server answers `lorebooks:setClock` with, so the two cannot disagree.
+	let problem = $derived(
+		draftClock ? dateProblem(draftClock, calendar) : "The clock needs a year."
+	)
 
 	function save() {
 		if (!draftClock || problem) return

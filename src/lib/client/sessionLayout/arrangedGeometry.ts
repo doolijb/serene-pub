@@ -25,13 +25,23 @@
  * They were extracted from SessionLayout.svelte / GridStackZone.svelte so the
  * round trip can be tested without a browser, a gridstack, or a window size.
  */
-import type { GsItem, GsLayout, GsPos } from "./GridStackZone.svelte"
+import {
+	ZONE_IDS,
+	type ArrangedGridV1,
+	type ArrangedItem,
+	type ArrangedZone,
+	type ZoneId
+} from "@serene-pub/sdk"
+import type { GsItem } from "./gsItem"
 import { isRetiredWidget } from "./widgetGrid"
 
-/** The three editor zones' captured arrangements — the persisted blob's shape. */
-export type Arranged = { left?: GsLayout; middle?: GsLayout; right?: GsLayout }
+/*
+ * The three zones' arrangements are the session layout's `arrangedGrid` slot,
+ * typed by the SDK (`ArrangedGridV1`; each zone an `ArrangedZone`) and
+ * imported from `@serene-pub/sdk` wherever they are used.
+ */
 
-export function isGsPos(i: unknown): i is GsPos {
+export function isArrangedItem(i: unknown): i is ArrangedItem {
 	return (
 		!!i &&
 		typeof i === "object" &&
@@ -40,7 +50,7 @@ export function isGsPos(i: unknown): i is GsPos {
 	)
 }
 
-export function isGsLayout(z: unknown): z is GsLayout {
+export function isArrangedZone(z: unknown): z is ArrangedZone {
 	return (
 		!!z &&
 		typeof z === "object" &&
@@ -69,7 +79,7 @@ const isLivePos = (pos: { id: string }): boolean => !isRetiredWidget(pos.id)
  *
  * So the clamp belongs where every reader passes, not in one renderer.
  */
-export function clampPos(pos: GsPos, cols: number, rows: number): GsPos {
+export function clampPos(pos: ArrangedItem, cols: number, rows: number): ArrangedItem {
 	const maxCols = Math.max(1, Math.floor(cols))
 	const maxRows = Math.max(1, Math.floor(rows))
 	const w = Math.min(Math.max(1, pos.w), maxCols)
@@ -82,7 +92,7 @@ export function clampPos(pos: GsPos, cols: number, rows: number): GsPos {
 }
 
 /** Every cell in a zone, back inside that zone. */
-export function clampFrame(zone: GsLayout): GsLayout {
+export function clampFrame(zone: ArrangedZone): ArrangedZone {
 	const items = zone.items.map((i) => clampPos(i, zone.cols, zone.rows))
 	return items.every((i, n) => i === zone.items[n]) ? zone : { ...zone, items }
 }
@@ -100,16 +110,16 @@ export function clampFrame(zone: GsLayout): GsLayout {
  * that reported a cross-zone drop before this clamp existed — must draw as the
  * arrangement it describes rather than shredding the zone it lands in.
  */
-export function loadArranged(saved: unknown): Arranged {
+export function loadArranged(saved: unknown): ArrangedGridV1 {
 	if (!saved || typeof saved !== "object") return {}
-	const out: Arranged = {}
+	const out: ArrangedGridV1 = {}
 	for (const key of ["left", "middle", "right"] as const) {
 		const z = (saved as any)[key]
-		if (isGsLayout(z))
+		if (isArrangedZone(z))
 			out[key] = clampFrame({
 				cols: z.cols,
 				rows: z.rows,
-				items: z.items.filter(isGsPos).filter(isLivePos)
+				items: z.items.filter(isArrangedItem).filter(isLivePos)
 			})
 	}
 	return out
@@ -119,21 +129,18 @@ export function loadArranged(saved: unknown): Arranged {
  * Does this arrangement place no widget anywhere?
  *
  * The predicate `commitArrangement` decides Done with. An editor that never had
- * a widget to report leaves `{}` behind, and `{}` is TRUTHY — written to the
- * manager it would satisfy `effectiveArrangedGrid`'s `??` and mask the preset
- * base for good. An arrangement of nothing is not an arrangement, so the seam
- * clears instead of storing one. A zone that reported its cell dims and an empty
- * item list counts as nothing too: that is the same editor, one repaint later.
+ * a widget to report leaves `{}` behind, and `{}` is TRUTHY — stored, it would
+ * read as "this layout has an arrangement" to every reader that asks whether
+ * the slot is set. An arrangement of nothing is not an arrangement, so the seam
+ * stores none instead. A zone that reported its cell dims and an empty item
+ * list counts as nothing too: that is the same editor, one repaint later.
  */
-export function arrangementIsEmpty(a: Arranged): boolean {
-	return !(["left", "middle", "right"] as const).some(
+export function arrangementIsEmpty(a: ArrangedGridV1): boolean {
+	return !ZONE_IDS.some(
 		(key) => (a[key]?.items?.length ?? 0) > 0
 	)
 }
 
-/** The three arranged zones, in the order a tie is broken without a hint. */
-export const ZONE_KEYS = ["left", "middle", "right"] as const
-export type ZoneKey = (typeof ZONE_KEYS)[number]
 
 /**
  * The middle editor panel's place target. The middle has no zone id — its
@@ -155,9 +162,9 @@ export const MIDDLE_TARGET = "__middle__"
  * done. A card dragged from one zone into another is reported by both zones'
  * frames long before anything is committed.
  */
-export function arrangedIds(a: Arranged): Set<string> {
+export function arrangedIds(a: ArrangedGridV1): Set<string> {
 	const ids = new Set<string>()
-	for (const key of ZONE_KEYS)
+	for (const key of ZONE_IDS)
 		for (const item of a[key]?.items ?? []) ids.add(item.id)
 	return ids
 }
@@ -166,13 +173,13 @@ export function arrangedIds(a: Arranged): Set<string> {
 export interface ArrangedDuplicate {
 	id: string
 	/** The zone it was left in. */
-	kept: ZoneKey
+	kept: ZoneId
 	/** The zones it was taken out of. */
-	dropped: ZoneKey[]
+	dropped: ZoneId[]
 }
 
 export interface DedupedArrangement {
-	arranged: Arranged
+	arranged: ArrangedGridV1
 	duplicates: ArrangedDuplicate[]
 }
 
@@ -188,22 +195,22 @@ export interface DedupedArrangement {
  * `preferred` is the last cross-zone drop: the one event that names a widget
  * AND the zone that now holds it, so it is the honest answer to "which copy is
  * the one the user made". Without it (or for any other duplicate) the first
- * zone in `ZONE_KEYS` order wins — deterministic, and not a judgement.
+ * zone in `ZONE_IDS` order wins — deterministic, and not a judgement.
  *
  * Pure: it returns a new arrangement and the duplicates it resolved, and says
  * nothing. The caller logs.
  */
 export function dedupeArranged(
-	a: Arranged,
-	preferred?: { id: string; zone: ZoneKey } | null
+	a: ArrangedGridV1,
+	preferred?: { id: string; zone: ZoneId } | null
 ): DedupedArrangement {
-	const seen = new Map<string, ZoneKey[]>()
-	for (const key of ZONE_KEYS)
+	const seen = new Map<string, ZoneId[]>()
+	for (const key of ZONE_IDS)
 		for (const item of a[key]?.items ?? [])
 			seen.set(item.id, [...(seen.get(item.id) ?? []), key])
 
 	const duplicates: ArrangedDuplicate[] = []
-	const keeper = new Map<string, ZoneKey>()
+	const keeper = new Map<string, ZoneId>()
 	for (const [id, zones] of seen) {
 		if (zones.length < 2) continue
 		const kept =
@@ -215,8 +222,8 @@ export function dedupeArranged(
 	}
 	if (!duplicates.length) return { arranged: a, duplicates }
 
-	const arranged: Arranged = {}
-	for (const key of ZONE_KEYS) {
+	const arranged: ArrangedGridV1 = {}
+	for (const key of ZONE_IDS) {
 		const zone = a[key]
 		if (!zone) continue
 		arranged[key] = {
@@ -239,7 +246,7 @@ export function dedupeArranged(
  */
 export function withGeometry(
 	items: GsItem[],
-	zone: GsLayout | undefined
+	zone: ArrangedZone | undefined
 ): GsItem[] {
 	if (!zone) return items
 	const pos = new Map(zone.items.map((i) => [i.id, i]))
@@ -305,10 +312,10 @@ export function unitPinned(members: readonly { pinned?: boolean }[]): boolean {
  * existed. Items not named are returned by reference, untouched.
  */
 export function withPins(
-	zone: GsLayout,
+	zone: ArrangedZone,
 	ids: Iterable<string>,
 	pinned: boolean
-): GsLayout {
+): ArrangedZone {
 	const set = new Set(ids)
 	return {
 		...zone,
@@ -331,11 +338,11 @@ export function withPins(
  * zone's pin at all. Showing the button there would be a control with no
  * visible effect, so it hides instead of being left to do nothing.
  *
- * `frame` is the same per-side slice of `Arranged` the live view keys its own
+ * `frame` is the same per-side slice of `ArrangedGridV1` the live view keys its own
  * arranged/unarranged branch on, so this mirrors that branch rather than
  * inventing a second definition of "arranged".
  */
-export function showZonePin(frame: GsLayout | undefined): boolean {
+export function showZonePin(frame: ArrangedZone | undefined): boolean {
 	return !frame
 }
 
@@ -350,7 +357,7 @@ export function showZonePin(frame: GsLayout | undefined): boolean {
  */
 export function frameCovers(
 	items: GsItem[],
-	frame: GsLayout | undefined
+	frame: ArrangedZone | undefined
 ): boolean {
 	if (!frame) return false
 	const ids = new Set(items.map((i) => i.id))
@@ -383,7 +390,7 @@ function resolveExplicit(
 	rows: number,
 	scaleX: number,
 	scaleY: number
-): GsPos {
+): ArrangedItem {
 	let x = it.x ?? 0
 	let y = it.y ?? 0
 	let w = it.w ?? cols
@@ -428,7 +435,7 @@ export function seedPositions(
 	cols: number,
 	rows: number,
 	frame?: { cols: number; rows: number }
-): GsPos[] {
+): ArrangedItem[] {
 	const scaleX = frame && frame.cols > 0 ? cols / frame.cols : 1
 	const scaleY = frame && frame.rows > 0 ? rows / frame.rows : 1
 	const bottomReserve = items
@@ -444,7 +451,7 @@ export function seedPositions(
 		return p.x === 0 ? Math.max(max, p.y + p.h) : max
 	}, 0)
 	let bottomY = rows
-	const out: GsPos[] = []
+	const out: ArrangedItem[] = []
 	for (const it of items) {
 		const fullW = it.w ?? cols
 		let x = it.x ?? 0
@@ -495,7 +502,7 @@ export function seedPositions(
  * Re-express a whole captured arrangement in a zone measured at `cols` × `rows`.
  *
  * The same proportional maths `seedPositions` does, entered from a captured
- * `GsLayout` rather than the editor's item list — the RE-MEASURE path, where
+ * `ArrangedZone` rather than the editor's item list — the RE-MEASURE path, where
  * what is being re-expressed is an arrangement and not a fresh set of cards.
  *
  * It is a pure function of `ref`, which is the whole point: a zone re-drawn at
@@ -504,7 +511,7 @@ export function seedPositions(
  * instead — which is what gridstack's `column()` does to the live nodes — keeps
  * only what survived the squeeze, and the arrangement is gone.
  */
-export function reexpress(ref: GsLayout, cols: number, rows: number): GsPos[] {
+export function reexpress(ref: ArrangedZone, cols: number, rows: number): ArrangedItem[] {
 	return seedPositions(
 		// `seedPositions` reads cells, not labels; the title is the GsItem shape
 		// asking for something a captured position has no need of.
@@ -543,7 +550,7 @@ export const MIN_CARD_ROWS = 2
 
 /** Does the box at `x,y,w,h` share a cell with this item? */
 function hits(
-	i: GsPos,
+	i: ArrangedItem,
 	x: number,
 	y: number,
 	w: number,
@@ -572,7 +579,7 @@ function hits(
  * asks about the card the zone would actually draw.
  */
 export function firstSlot(
-	frame: GsLayout,
+	frame: ArrangedZone,
 	need: { w: number; h: number }
 ): { x: number; y: number } | null {
 	const w = Math.max(1, Math.min(Math.floor(need.w), frame.cols))
@@ -584,7 +591,7 @@ export function firstSlot(
 }
 
 /** Is there anywhere in `frame` a card of `need` cells could go? */
-export function fits(frame: GsLayout, need: { w: number; h: number }): boolean {
+export function fits(frame: ArrangedZone, need: { w: number; h: number }): boolean {
 	return firstSlot(frame, need) !== null
 }
 
@@ -602,9 +609,9 @@ export function fits(frame: GsLayout, need: { w: number; h: number }): boolean {
  * ends either at a slot or at the frame it was given.
  */
 export function makeRoom(
-	frame: GsLayout,
+	frame: ArrangedZone,
 	need: { w: number; h: number }
-): GsLayout {
+): ArrangedZone {
 	if (fits(frame, need)) return frame
 	const want = Math.max(1, Math.floor(need.h))
 	let items = frame.items
@@ -632,4 +639,50 @@ export function makeRoom(
 		const next = { ...frame, items }
 		if (fits(next, need)) return next
 	}
+}
+
+/**
+ * Seat one more card, `id`, in a zone's working frame — the layout editor's
+ * tray add and Duplicate (brief 7b): make room, then WRITE the newcomer's
+ * cells at the slot that opens. `sizes` are tried in order, and the first
+ * that fits once room is made wins: a Duplicate asks for its source's size,
+ * then the newcomer's footprint.
+ *
+ * Both halves are needed. `makeRoom` frees rows under the biggest card, which
+ * is not where `seedPositions` puts a card with no saved cells (the foot of
+ * the x = 0 stack, clamped back onto whatever holds the bottom rows), so the
+ * slot is written onto the newcomer rather than hoped for — and the frame then
+ * accounts for exactly the cards on screen, so the re-seeded zone draws them.
+ *
+ * **Null when no size fits**, even after `makeRoom`: every card is down to
+ * `MIN_CARD_ROWS`, or the rows the cards gave up are scattered between them
+ * (each keeps its top edge, so no gap closes) and none is tall enough. The
+ * caller must then refuse the add.
+ * Seating the card anyway lands it on top of the bottom card, and a third
+ * overlapping card sends gridstack's `_fixCollisions` into unbounded
+ * recursion (`RangeError`, found in the brief 7b walk) — so a truly full zone
+ * says so instead (brief 7b review).
+ */
+export function seatCard(
+	frame: ArrangedZone,
+	id: string,
+	sizes: readonly { w: number; h: number }[]
+): ArrangedZone | null {
+	for (const size of sizes) {
+		const need = { w: Math.min(size.w, frame.cols), h: size.h }
+		const roomy = makeRoom(frame, need)
+		const slot = firstSlot(roomy, need)
+		if (!slot) continue
+		return {
+			...roomy,
+			// `clampPos` rather than the raw size: it is the clamp `firstSlot`
+			// measured the slot with and the one `seedPositions` ends on, so
+			// the card written here is the card the zone draws.
+			items: [
+				...roomy.items,
+				clampPos({ id, x: slot.x, y: slot.y, ...need }, roomy.cols, roomy.rows)
+			]
+		}
+	}
+	return null
 }

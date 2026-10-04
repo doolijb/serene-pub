@@ -5,9 +5,11 @@
  *   summarized scene as graphed whenever the book had a cast member and no
  *   scene was graphed yet — so a book with a cast and no graph at all had
  *   nothing left for Extend to read.
- * - **The list counts what a Rebuild would delete** (owner ruling 6): replace
- *   wipes every link, entry endpoints included, and the confirmation warns
- *   with these counts first.
+ * - **The list counts what a Rebuild would delete**: replace deletes the cast
+ *   ties only — a link with an entry at either end is out of its reach (owner
+ *   ruling 2026-09-29, Q1; places plan L1) — and the confirmation warns with
+ *   that count first. `narrativeGraph.rebuildLeavesPlaces.int.test.ts` pins
+ *   the places half in both modes.
  * - **Apply stamps what the build READ**, not everything ungraphed at apply
  *   time — a scene summarized mid-build stays for the next Extend.
  * - **Extend never rewrites an old dated version** of a link; a proposal at a
@@ -21,6 +23,7 @@ import os from "os"
 import path from "path"
 import { eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
+import { applyAtReview, buildAtReview } from "./fixtures/graphReview"
 import {
 	historyValues,
 	worldLoreValues
@@ -116,7 +119,7 @@ describe("narrativeGraph:list", () => {
 		expect(after.graphed).toBe(false)
 	}, 60_000)
 
-	test("counts the links a Rebuild would delete, and replace deletes entry links too (ruling 6)", async () => {
+	test("counts the links a Rebuild would delete, and replace deletes the cast ties only (L1)", async () => {
 		const { narrativeGraphListHandler, narrativeGraphApplyProposalHandler } =
 			await import("./narrativeGraph")
 		const b = await makeBook()
@@ -153,26 +156,26 @@ describe("narrativeGraph:list", () => {
 			{ lorebookId: b.lorebook.id },
 			noopEmit
 		)
-		expect(listed.relationshipCounts).toEqual({
-			total: 3,
-			entryToEntry: 1,
-			castToEntry: 1
-		})
+		expect(listed.relationshipCounts).toEqual({ castToCast: 1 })
 
 		await narrativeGraphApplyProposalHandler.handler(
 			fakeSocket(b.user.id),
-			{
+			applyAtReview(b.user.id, {
 				lorebookId: b.lorebook.id,
 				mode: "replace",
 				proposal: { nodes: [], relationships: [] }
-			},
+			}),
 			noopEmit
 		)
 		const left = await testDb
 			.select()
 			.from(schema.narrativeRelationships)
 			.where(eq(schema.narrativeRelationships.lorebookId, b.lorebook.id))
-		expect(left).toHaveLength(0)
+		// The road and the keeper stay; the tie went.
+		expect(left.map((r) => r.relationshipType).sort()).toEqual([
+			"keeps",
+			"leads to"
+		])
 	}, 60_000)
 })
 
@@ -199,29 +202,25 @@ describe("narrativeGraph:applyProposal — what gets marked graphed", () => {
 				}
 			])
 			.returning()
-		const activityId = activityStore.start({
+		const activityId = buildAtReview({
 			userId: b.user.id,
 			lorebookId: b.lorebook.id,
-			lorebookLabel: b.lorebook.name,
-			mode: "extend"
-		})
-		activityStore.update(activityId, {
-			status: "review",
-			processedSceneIds: [read.id],
-			processedHistoryEntryIds: []
+			mode: "extend",
+			proposal: { nodes: [], relationships: [] },
+			processedSceneIds: [read.id]
 		})
 
 		await narrativeGraphApplyProposalHandler.handler(
 			fakeSocket(b.user.id),
 			{
 				lorebookId: b.lorebook.id,
-				mode: "extend",
 				proposal: { nodes: [], relationships: [] },
 				activityId
 			},
 			noopEmit
 		)
-		activityStore.remove(activityId)
+		// The apply consumed the build.
+		expect(activityStore.getById(activityId)).toBeUndefined()
 
 		const rows = await testDb
 			.select({ id: schema.scenes.id, graphed: schema.scenes.graphed })
@@ -257,7 +256,7 @@ describe("narrativeGraph:applyProposal — Extend and dated versions", () => {
 		const propose = (historyEntryId: number, description: string) =>
 			narrativeGraphApplyProposalHandler.handler(
 				fakeSocket(b.user.id),
-				{
+				applyAtReview(b.user.id, {
 					lorebookId: b.lorebook.id,
 					mode: "extend",
 					proposal: {
@@ -274,7 +273,7 @@ describe("narrativeGraph:applyProposal — Extend and dated versions", () => {
 							}
 						]
 					}
-				},
+				}),
 				noopEmit
 			)
 

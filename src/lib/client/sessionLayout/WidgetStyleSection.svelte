@@ -29,7 +29,7 @@
 	import { getContext, onDestroy } from "svelte"
 	import * as Icons from "@lucide/svelte"
 	import Select from "$lib/client/components/inputs/Select.svelte"
-	import { widgetOfInstance } from "$lib/shared/widgets/instanceId"
+	import { widgetOfInstance } from "@serene-pub/sdk"
 	import {
 		VAR_KEY_RE,
 		canManageStyle,
@@ -335,7 +335,7 @@
 					<button
 						class="ws-seg-btn"
 						class:active={draft.visibility === "shared"}
-						title="Everyone on this instance can use this style"
+						title="Everyone on this pub can use this style"
 						onclick={() => draft && (draft.visibility = "shared")}
 					>
 						Everyone

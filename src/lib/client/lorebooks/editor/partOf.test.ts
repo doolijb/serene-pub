@@ -200,3 +200,60 @@ describe("canFileUnder — never under another line's own entry", () => {
 		expect(anchorCandidates(null, lines, null).map((i) => i.id)).toEqual([10])
 	})
 })
+
+describe("canFileUnder — only a type that declares a parent is filed (places plan B2)", () => {
+	// `core:entry/location@1` declares no `parent` field role (owner ruling
+	// 2026-09-29: places join by relationships, never by nesting). The picker
+	// asks the role map, as the server does, never a type id of its own.
+	const keep = item({ id: 20, name: "The Keep", kind: "core:entry/location" })
+	const cellar = item({ id: 21, name: "The Cellar", kind: "core:entry/location" })
+	const reach = item({ id: 22, name: "The Reach" })
+	const altar = item({ id: 23, name: "The Altar" })
+	const map = [keep, cellar, reach, altar]
+
+	it("refuses a place filed under a place, or under world lore", () => {
+		expect(canFileUnder("entry#21", "entry#20", map)).toBe(false)
+		expect(canFileUnder("entry#21", "entry#22", map)).toBe(false)
+		expect(anchorCandidates("entry#21", map)).toEqual([])
+	})
+
+	it("still lets a place be moved to the top level", () => {
+		expect(canFileUnder("entry#21", null, map)).toBe(true)
+	})
+
+	it("leaves world lore filing as it was", () => {
+		expect(canFileUnder("entry#23", "entry#22", map)).toBe(true)
+	})
+
+	// Q2 (a), the plan's default until the owner answers: a place is never a
+	// child, but lore may sit under a place (the altar in the Chapel).
+	it("still lets lore be filed under a place", () => {
+		expect(canFileUnder("entry#23", "entry#20", map)).toBe(true)
+		expect(anchorCandidates("entry#23", map).map((i) => i.id)).toEqual([
+			20, 21, 22
+		])
+	})
+})
+
+/** Note 1 (owner, 2026-10-02): history is always top level. */
+describe("history is never filed", () => {
+	const HISTORY = "core:entry/history"
+	const pool = [
+		item({ id: 1 }),
+		item({ id: 2, kind: HISTORY }),
+		item({ id: 3 })
+	]
+
+	it("refuses filing a history entry under anything", () => {
+		expect(canFileUnder("entry#2", "entry#1", pool)).toBe(false)
+		expect(anchorCandidates("entry#2", pool)).toEqual([])
+	})
+
+	it("still lets other lore be filed under a history entry", () => {
+		expect(canFileUnder("entry#3", "entry#2", pool)).toBe(true)
+	})
+
+	it("always lets a history entry go back to the top level", () => {
+		expect(canFileUnder("entry#2", null, pool)).toBe(true)
+	})
+})

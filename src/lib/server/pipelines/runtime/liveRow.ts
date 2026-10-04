@@ -8,7 +8,16 @@
  *
  *  · **streaming** (R-21 (2)) — the oracle publishes its stream and stays blind
  *    to messages; this is where core routes it. The buffer is core's, which is
- *    why Stop can leave the partial text behind: no node holds it.
+ *    why Stop can leave the partial text behind: no node holds it. Every frame
+ *    is split by `replyView` with the facts the dispatch handed over before the
+ *    first token — the same reading the stored reply gets — so reasoning goes
+ *    into the row's reasoning fold AS IT ARRIVES and the body starts with the
+ *    first token after it, never the other way round and never corrected
+ *    after the fact.
+ *  · **the phase** — whether the reply is still reasoning or already writing,
+ *    off the same split, handed to whoever asked (`onPhase`): the status relay
+ *    says *{speaker} is reasoning* through the one and *is typing* through the
+ *    other.
  *  · **the queue item and the status** — what the client's Stop cancels by,
  *    and the status the row shows while it waits (R-19): *{speaker} is
  *    typing*, *loading the model* — whatever the run's status relay says
@@ -36,7 +45,7 @@
  */
 
 import { randomUUID } from "node:crypto"
-import { and, eq } from "drizzle-orm"
+import { and, eq, sql } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import { updateLegacyWhere } from "$lib/server/messages/store"
 import { broadcastToSessionUsers } from "$lib/server/sockets/utils/broadcastHelpers"
@@ -46,7 +55,8 @@ import {
 } from "$lib/server/utils/generationStatus"
 import { ComposedError } from "$lib/server/connections/visibility"
 import { isParticipantRef, type ParticipantRef, type StatusText } from "@serene-pub/sdk"
-import { resolveThinking } from "$lib/shared/utils/thinkingDelimiters"
+import type { ReplyPhase } from "$lib/shared/utils/reasoningDelimiters"
+import { replyView, type ReplyFacts } from "$lib/server/messages/replyView"
 import { joinContinuation } from "$lib/server/messages/continuation"
 import type { AuthenticatedSocket } from "$lib/server/sockets/auth"
 import { setLiveRow } from "$lib/server/pipelines/runtime/runRegistry"
@@ -89,7 +99,10 @@ export interface LiveRowOptions {
 /** The callbacks an oracle's dispatch streams into, when this call streams. */
 export interface LiveStream {
 	onChunk: (chunk: string) => void
-	onThinking: (chunk: string) => void
+	/** The service's NATIVE reasoning trace, a chunk at a time. */
+	onReasoning: (chunk: string) => void
+	/** What the request said about the reply — before the first chunk. */
+	onReplyFacts: (facts: ReplyFacts) => void
 }
 
 export interface LiveRow {
@@ -145,7 +158,15 @@ export interface LiveRow {
 	 */
 	attach(
 		row: number | string | undefined,
-		nodeKey: string
+		nodeKey: string,
+		opts?: {
+			/**
+			 * The reply's phase changed — `reasoning` while its trace streams,
+			 * `writing` from the first body token. Called on change only, off
+			 * the persisted frames, so it moves at the stream's cadence.
+			 */
+			onPhase?: (phase: ReplyPhase) => void
+		}
 	): LiveStream | undefined
 	/** Flush what the throttle held back, once the stream has drained. */
 	flush(): Promise<void>
@@ -178,16 +199,31 @@ export function createLiveRow(opts: LiveRowOptions): LiveRow {
 	let placeholder = false
 	let queueItemId: string | null = null
 	let streamed = ""
-	let nativeThinking = ""
+	let nativeReasoning = ""
+	let facts: ReplyFacts | undefined
+	let onPhase: ((phase: ReplyPhase) => void) | undefined
+	let phase: ReplyPhase = "waiting"
 	let lastPersistedAt = 0
 	let pending: Promise<void> | null = null
 	let lastError: unknown
 
-	/** The row as the reader should see it right now: stripped, joined. */
-	const display = () => {
-		const resolved = resolveThinking(streamed.trim(), nativeThinking)
-		return joinContinuation(prefill, resolved.content)
+	/**
+	 * The reply as the reader should see it right now — the body stripped of
+	 * reasoning and of the speaker's own label, joined onto an extend's prefill,
+	 * and the reasoning beside it. The stored reply is this same reading with
+	 * `final` (`dispatch.ts`).
+	 */
+	const view = () => {
+		const live = replyView(streamed, nativeReasoning, facts, {
+			final: false
+		})
+		return {
+			content: joinContinuation(prefill, live.content.trim()),
+			reasoning: live.reasoning,
+			phase: live.phase
+		}
 	}
+	const display = () => view().content
 
 	const fence = (row: number) =>
 		and(
@@ -224,11 +260,52 @@ export function createLiveRow(opts: LiveRowOptions): LiveRow {
 		return announcing
 	}
 
+	/** The row's metadata with `reasoning` on its shown swipe (`reasoningMetadata`). */
+	const settledReasoning = async (
+		row: number,
+		partial: { content: string; reasoning: string | undefined }
+	) => {
+		const [current] = await db
+			.select({ metadata: schema.sessionMessages.metadata })
+			.from(schema.sessionMessages)
+			.where(eq(schema.sessionMessages.id, row))
+			.limit(1)
+		const { buildReasoningMetadata } = await import(
+			"$lib/server/messages/reasoningMetadata"
+		)
+		return (
+			buildReasoningMetadata(
+				current?.metadata,
+				partial.content,
+				partial.reasoning,
+				false
+			) ?? current?.metadata
+		)
+	}
+
 	const persist = async () => {
 		if (id === undefined) return
+		const now = view()
+		if (now.phase !== phase && now.phase !== "waiting") {
+			phase = now.phase
+			try {
+				onPhase?.(phase)
+			} catch {
+				// A status display must never take a stream down.
+			}
+		}
 		const [updated] = await updateLegacyWhere(db, fence(id), {
-			content: display(),
-			isGenerating: true
+			content: now.content,
+			isGenerating: true,
+			// The reasoning so far, into the row's fold while it streams —
+			// merged into the stored metadata rather than written over it, so
+			// nothing else the row carries is replaced by a frame. The final
+			// save writes it again with its swipe slot (reasoningMetadata.ts).
+			...(now.reasoning !== undefined
+				? {
+						metadata: sql`jsonb_set(coalesce(${schema.sessionMessages.metadata}::jsonb, '{}'::jsonb), '{reasoning}', to_jsonb(${now.reasoning}::text))::json` as unknown as typeof schema.sessionMessages.$inferInsert.metadata
+					}
+				: {})
 		})
 		if (updated) await announce(updated)
 	}
@@ -279,10 +356,11 @@ export function createLiveRow(opts: LiveRowOptions): LiveRow {
 				queueItemId ?? undefined
 			)
 		},
-		attach(row, nodeKey) {
+		attach(row, nodeKey, attachOpts) {
 			if (typeof row !== "number" || !opts.streamingNodes?.has(nodeKey))
 				return undefined
 			if (id === undefined) id = row
+			onPhase = attachOpts?.onPhase
 			return {
 				onChunk: (chunk) => {
 					streamed += chunk
@@ -293,14 +371,25 @@ export function createLiveRow(opts: LiveRowOptions): LiveRow {
 					// Fire and forget, fenced — see the header.
 					pending = persist().catch(() => {})
 				},
-				onThinking: (chunk) => {
-					nativeThinking += chunk
+				onReasoning: (chunk) => {
+					nativeReasoning += chunk
+					// A native trace streams on its own channel, often for a
+					// long while before the first body token: it is a frame
+					// worth showing too, on the same throttle.
+					const now = Date.now()
+					if (now - lastPersistedAt < STREAM_PERSIST_THROTTLE_MS)
+						return
+					lastPersistedAt = now
+					pending = persist().catch(() => {})
+				},
+				onReplyFacts: (given) => {
+					facts = given
 				}
 			}
 		},
 		async flush() {
 			await pending
-			if (streamed) await persist()
+			if (streamed || nativeReasoning) await persist()
 		},
 		failedWith(err) {
 			lastError = err
@@ -344,8 +433,15 @@ export function createLiveRow(opts: LiveRowOptions): LiveRow {
 			// releases first when it lands first, records it instead and this
 			// write is the no-op the fence makes it.
 			const stopped = end.kind === "cancelled"
+			const partial = view()
 			const [released] = await updateLegacyWhere(db, fence(row), {
-				content: display(),
+				content: partial.content,
+				// The partial's reasoning onto its swipe slot as well as the
+				// fold — the frames merged only `metadata.reasoning`, and a
+				// settled row is drawn from its parts, which read the slot.
+				...(partial.reasoning !== undefined
+					? { metadata: await settledReasoning(row, partial) }
+					: {}),
 				isGenerating: false,
 				generationStatus: null,
 				queueItemId: null,

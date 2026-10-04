@@ -15,10 +15,12 @@
  * ## The lever is about what a SESSION does
  *
  * Only the session-scoped write paths are gated. `narrativeGraph:applyProposal`
- * and `entries:create` are lorebook-scoped — a person at a book, with no
+ * and a bare `entries:create` are lorebook-scoped — a person at a book, with no
  * session in the request — and are deliberately **not** gated here: a genre
  * that declares `writes.lore: false` is saying its own machinery does not write
- * to the book, not that the book is read-only to its owner.
+ * to the book, not that the book is read-only to its owner. An
+ * `entries:create` that names the session it writes from (`sessionId`, a
+ * summarize's save) IS a session write, and asks `sessionLoreWrite` below.
  *
  * ## Absent is on, and a failed read refuses nothing
  *
@@ -35,6 +37,14 @@
 
 import { eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
+import { sessionReadingOf } from "$lib/server/state/reading"
+import { sessionLoreWriteMode } from "$lib/server/state/loreWriteMode"
+import { LORE_WRITES_OFF } from "$lib/shared/lorebooks/loreWriteMode"
+import {
+	nextStoryDate,
+	type StoryCalendar
+} from "$lib/shared/lorebooks/storyDate"
+import type { StoryNow } from "$lib/server/state/storyTime"
 
 /** Availability of every switchable session write. */
 export interface SessionWritePolicy {
@@ -119,4 +129,111 @@ export async function sceneWriteRefusal(
 	} catch {
 		return null
 	}
+}
+
+/** A session write refused, as a sentence a person can read. */
+export class SessionWriteRefusal extends Error {}
+
+/**
+ * The refusal sentence when the book owner's lore write mode is **Off** for
+ * this session's book (plan A22), else `null` — asked beside
+ * `loreWriteRefusal` by every session write that saves into the book.
+ */
+export async function loreWritesOffRefusal(db: Db, sessionId: number): Promise<string | null> {
+	return (await sessionLoreWriteMode(db, sessionId)) === "off" ? LORE_WRITES_OFF : null
+}
+
+/**
+ * Where a session's write into its lorebook lands, once it may write at all.
+ */
+export interface SessionLoreWrite {
+	sessionId: number
+	lorebookId: number
+	/** The session's line: a branch session writes its branch. Null is main. */
+	branchId: number | null
+	/**
+	 * Where the session's story stands (`sessionStoryNowOf`): its own clock,
+	 * else its line's present. Null when nothing on its line is dated.
+	 */
+	storyNow: StoryNow | null
+}
+
+/**
+ * 🚧 **A session write into its lorebook**: may this session write the book,
+ * and where does the row land (plan A12). Every session-originated book write
+ * that names its session asks here first — today a summarize's saved lore and
+ * the history entry it files a scene under (`entries:create` with
+ * `sessionId`).
+ *
+ * Refused, in a sentence (`SessionWriteRefusal`), when the session is not the
+ * writer's own — a guest does not write the host's book — when it does not
+ * read this book, when its genre keeps its book as reference
+ * (`loreWriteRefusal`), and when the book owner's **lore write mode** is Off
+ * (plan A22). Full and Review changes both save: these writes come from a
+ * review screen, and the screen IS the review.
+ *
+ * The row lands where the session reads: on its line — never main for a
+ * branch session, which would leak the branch's story onto every line — and,
+ * when it is dated, at the session's story now (`historyDateOfSessionWrite`).
+ */
+export async function sessionLoreWrite(
+	db: Db,
+	{
+		sessionId,
+		userId,
+		lorebookId
+	}: { sessionId: number; userId: number; lorebookId: number }
+): Promise<SessionLoreWrite> {
+	const [session] = await db
+		.select({
+			userId: schema.sessions.userId,
+			lorebookId: schema.sessions.lorebookId
+		})
+		.from(schema.sessions)
+		.where(eq(schema.sessions.id, sessionId))
+		.limit(1)
+	if (!session) throw new SessionWriteRefusal("That session no longer exists.")
+	if (session.userId !== userId)
+		throw new SessionWriteRefusal(
+			"Only the session's owner can save lore from it."
+		)
+	if (session.lorebookId !== lorebookId)
+		throw new SessionWriteRefusal("That session does not read this lorebook.")
+	const noLore = await loreWriteRefusal(db, sessionId)
+	if (noLore) throw new SessionWriteRefusal(noLore)
+	const offRefusal = await loreWritesOffRefusal(db, sessionId)
+	if (offRefusal) throw new SessionWriteRefusal(offRefusal)
+
+	// Lazily, like `sessionGenre` above: the story-time reader reaches the
+	// book's calendar and clocks, and this module is imported by the host.
+	const { sessionStoryNowOf } = await import("$lib/server/state/storyTime")
+	const reading = await sessionReadingOf(db, sessionId)
+	return {
+		sessionId,
+		lorebookId,
+		branchId: reading?.branchId ?? null,
+		storyNow: await sessionStoryNowOf(db, sessionId)
+	}
+}
+
+/**
+ * The date a history entry filed by a session write is given: the session's
+ * story now — its own clock, or its line's stored clock, time of day dropped
+ * because entries are dated by day. When the line's present is only its
+ * newest history entry, the new one is the step after it (`nextStoryDate`,
+ * rolled over by the book's calendar); a line with no dates at all starts at
+ * Year 1, Month 1, Day 1.
+ */
+export function historyDateOfSessionWrite(
+	write: Pick<SessionLoreWrite, "storyNow">,
+	calendar?: StoryCalendar | null
+): { year: number; month: number | null; day: number | null } {
+	const now = write.storyNow
+	if (!now) return { year: 1, month: 1, day: 1 }
+	const date = {
+		year: now.year,
+		month: now.month ?? null,
+		day: now.month != null ? (now.day ?? null) : null
+	}
+	return now.from === "history" ? nextStoryDate(date, calendar) : date
 }

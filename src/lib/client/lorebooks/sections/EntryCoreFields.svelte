@@ -5,6 +5,7 @@
 	import KeywordChips from "../editor/KeywordChips.svelte"
 	import PartOfField from "../editor/PartOfField.svelte"
 	import { getLorePoolCtx } from "./poolContext"
+	import { readsAsRegex } from "$lib/shared/entries/runawayPattern"
 
 	/**
 	 * Level one of the editor: the fields every entry door asks for, in the
@@ -62,7 +63,9 @@
 	</div>
 {/if}
 
-<div class="flex flex-col gap-1">
+<!-- `data-lore-field` names the fields a Loose ends row opens focused
+     (`looseEnds.ts`): content, keywords, and History's date. -->
+<div class="flex flex-col gap-1" data-lore-field="content">
 	<!-- A span, not a label: the editor is a contenteditable div, which a
 	     label cannot target. It names the editor through aria-labelledby. -->
 	<span
@@ -83,12 +86,14 @@
 	/>
 </div>
 
-<KeywordChips
-	bind:keys={draft.keys}
-	{idPrefix}
-	regex={!!draft.useRegex || draft.matchMode === "regex"}
-	semantic={vectorizationEnabled}
-/>
+<div class="contents" data-lore-field="keywords">
+	<KeywordChips
+		bind:keys={draft.keys}
+		{idPrefix}
+		regex={readsAsRegex(draft)}
+		semantic={vectorizationEnabled}
+	/>
+</div>
 
 <PartOfField
 	bind:draft

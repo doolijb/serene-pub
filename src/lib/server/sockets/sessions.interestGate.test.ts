@@ -126,6 +126,20 @@ const seam = vi.hoisted(() => {
 						return { id: 2, isDeleted: false }
 					}
 				},
+				// The removed-participant reads a narration's session snapshot
+				// makes (`getPromptSessionFromDb`) — nobody removed here.
+				sessionCharacters: {
+					findMany: async () => {
+						queries.push("sessionCharacters.findMany")
+						return []
+					}
+				},
+				sessionPersonas: {
+					findMany: async () => {
+						queries.push("sessionPersonas.findMany")
+						return []
+					}
+				},
 				// The voiced character behind `sessions:userTyping` — a
 				// `characters` read, named for the role it answers for.
 				characters: {
@@ -138,7 +152,12 @@ const seam = vi.hoisted(() => {
 			select: () => chain("select"),
 			update: () => chain("update"),
 			insert: () => chain("insert"),
-			delete: () => chain("delete")
+			delete: () => chain("delete"),
+			// A write that checks and writes in one transaction
+			// (`sessions:update`'s row) runs on this same handle.
+			transaction(callback: (tx: any) => Promise<unknown>) {
+				return callback(this)
+			}
 		}
 	}
 })
@@ -185,6 +204,12 @@ vi.mock("$lib/server/db", async () => {
 vi.mock("$lib/server/pipelines/entities/sessionGenres", () => ({
 	listSessionGenres: async () => [],
 	STANDARD_GENRE_ID: "core:genre/chat"
+}))
+
+// The narration a `sessions:fireNarratorResponse` press runs: what is pinned
+// below is the answer's road back, not the run.
+vi.mock("$lib/server/utils/runReply", () => ({
+	runReply: vi.fn(async () => ({ ok: true }))
 }))
 
 import { connectSockets } from "./index"
@@ -523,5 +548,80 @@ describe("sessions:get — the not-found reply still has a scope", () => {
 		).resolves.toBeDefined()
 
 		expect(events(h)).toEqual([])
+	})
+})
+
+/**
+ * `sessions:fireNarratorResponse` — how a narration went, and why one was
+ * refused (genre uplift C2 and its follow-up, 2026-09-29). The outcome is a
+ * gated push: it spends a `/narrate <text>` draft on the session page, which
+ * declares the bare key (`useInterest`), so it reaches that tab and no other.
+ * A refusal before the run also pushes its sentence on `:error`, which is
+ * never gated — it reaches the user's room whether or not a key is held.
+ */
+describe("sessions:fireNarratorResponse — the answer the page's draft waits on", () => {
+	test("the outcome of a run reaches the tab that declared the page's key, and only it", async () => {
+		const h = fresh()
+		const page = h.connect("s1", OWNER)
+		const elsewhere = h.connect("s2", SECOND_TAB)
+		await page.declare("sessions:fireNarratorResponse")
+
+		await page.fire("sessions:fireNarratorResponse", {
+			sessionId: 1,
+			instructions: "The storm breaks."
+		})
+
+		expect(
+			h.emits.filter((e) => e.event === "sessions:fireNarratorResponse")
+		).toEqual([
+			{
+				target: "s1",
+				event: "sessions:fireNarratorResponse",
+				data: { sessionId: 1, success: true }
+			}
+		])
+		expect(events(h)).not.toContain("sessions:fireNarratorResponse:error")
+		void elsewhere
+	})
+
+	test("a refusal before the run: the outcome through the gate, the sentence past it", async () => {
+		const h = fresh()
+		const page = h.connect("s1", OWNER)
+		await page.declare("sessions:fireNarratorResponse")
+
+		await page.fire("sessions:fireNarratorResponse", {
+			sessionId: 1,
+			instructions: "x".repeat(301)
+		})
+
+		expect(h.emits).toEqual([
+			{
+				target: "s1",
+				event: "sessions:fireNarratorResponse",
+				data: { sessionId: 1, success: false }
+			},
+			{
+				// The refusal answers the tab that asked (A24), never gated.
+				target: "s1",
+				event: "sessions:fireNarratorResponse:error",
+				data: {
+					sessionId: 1,
+					error: "Narrator instructions too long (max 300 characters)."
+				}
+			}
+		])
+	})
+
+	test("with no tab holding the key the outcome is skipped, and the refusal is still said", async () => {
+		const h = fresh()
+		h.connect("s1", OWNER)
+		const page = h.connect("s2", SECOND_TAB)
+
+		await page.fire("sessions:fireNarratorResponse", {
+			sessionId: 1,
+			instructions: "x".repeat(301)
+		})
+
+		expect(events(h)).toEqual(["sessions:fireNarratorResponse:error"])
 	})
 })

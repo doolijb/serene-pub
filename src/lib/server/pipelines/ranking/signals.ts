@@ -17,6 +17,14 @@
  */
 
 import type { MatchMode } from "$lib/server/pipelines/ranking/weights"
+import {
+	PATTERN_INVALID,
+	patternBudget,
+	patternIndex,
+	primePatterns,
+	type PatternBudget,
+	type PatternRequest
+} from "$lib/server/pipelines/ranking/boundedPattern"
 
 /**
  * A key list as a matcher is handed one.
@@ -158,36 +166,36 @@ export function matchIndexOf(
 	const k = sensitive ? key : key.toLowerCase()
 
 	switch (modeOf(entry)) {
-		case "regex":
-			try {
-				/**
-				 * ⚠ `key`, not `k`. Case-insensitivity is the `i` flag's job
-				 * and never the pattern text's.
-				 *
-				 * Lowercasing a *pattern* corrupts it: the inverse character
-				 * classes are spelled with capitals, so `\Bing` became
-				 * `\bing`, `\Wking` became `\wking`, `\Sfoo` became
-				 * `\sfoo` and `\Dx` became `\dx` — each one the exact
-				 * opposite assertion, silently, with the entry still firing on
-				 * something. It reached real books: SillyTavern exports
-				 * `case_sensitive: null`, which lands here as `false`, and key
-				 * shape is now what decides that a key is a regex at all, so
-				 * this is the path genuinely-regex keys arrive on.
-				 *
-				 * The lowercased `k` stays below. The fallback is substring,
-				 * where lowercasing *both* sides is the whole mechanism.
-				 */
-				return (
-					new RegExp(key, sensitive ? "" : "i").exec(text)?.index ??
-					-1
-				)
-			} catch {
-				// Silent fallback, preserved from `:1583`. A user with a broken
-				// regex gets substring behaviour rather than an entry that never
-				// fires — changing this to an error is a diagnostics improvement
-				// for after parity, not a scoring change.
-				return text.indexOf(k)
-			}
+		case "regex": {
+			/**
+			 * ⚠ `key`, not `k`. Case-insensitivity is the `i` flag's job
+			 * and never the pattern text's.
+			 *
+			 * Lowercasing a *pattern* corrupts it: the inverse character
+			 * classes are spelled with capitals, so `\Bing` became
+			 * `\bing`, `\Wking` became `\wking`, `\Sfoo` became
+			 * `\sfoo` and `\Dx` became `\dx` — each one the exact
+			 * opposite assertion, silently, with the entry still firing on
+			 * something. It reached real books: SillyTavern exports
+			 * `case_sensitive: null`, which lands here as `false`, and key
+			 * shape is now what decides that a key is a regex at all, so
+			 * this is the path genuinely-regex keys arrive on.
+			 *
+			 * ⚠ **Never `new RegExp(key).exec(text)` here** (plan S3). A
+			 * pattern like `(a+)+$` backtracks exponentially and this runs on
+			 * the main thread every turn; `patternIndex` runs it under a time
+			 * bound, and a key it does not run — a runaway pattern, a key that
+			 * tripped the bound — does not match, and the scan's receipt says
+			 * why (`patternsNotRun`).
+			 */
+			const at = patternIndex(window, key, sensitive)
+			// Silent fallback, preserved from `:1583`. A user with a broken
+			// regex gets substring behaviour rather than an entry that never
+			// fires. The lowercased `k` is right here: in substring,
+			// lowercasing *both* sides is the whole mechanism.
+			if (at === PATTERN_INVALID) return text.indexOf(k)
+			return typeof at === "number" ? at : -1
+		}
 		case "word": {
 			const escaped = k.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
 			return (
@@ -200,6 +208,27 @@ export function matchIndexOf(
 		default:
 			return text.indexOf(k)
 	}
+}
+
+/**
+ * The regex keys of some entries, as `primePatterns` takes them.
+ *
+ * One list — `keys` or `secondaryKeys` — because a scan reads the two against
+ * different windows (a condition key against the conversation plus the pass,
+ * see `keywordQuery`). Only entries that read as regex contribute; the other
+ * modes never compile the key as written.
+ */
+export function patternRequestsOf(
+	entries: Iterable<KeyedEntry>,
+	list: "keys" | "secondaryKeys"
+): PatternRequest[] {
+	const out: PatternRequest[] = []
+	for (const entry of entries) {
+		if (modeOf(entry) !== "regex") continue
+		const sensitive = !!entry.caseSensitive
+		for (const pattern of splitKeys(entry[list])) out.push({ pattern, sensitive })
+	}
+	return out
 }
 
 /**
@@ -1069,16 +1098,23 @@ export const densitySignal = (length: number, averageLength: number): number =>
  */
 export function buildLastRefMap(
 	messages: ReadonlyArray<{ content?: string | null }>,
-	entries: ReadonlyArray<KeyedEntry & { id: number }>
+	entries: ReadonlyArray<KeyedEntry & { id: number }>,
+	/** The scan's time for regex keys, when this is part of one. */
+	patterns: PatternBudget = patternBudget()
 ): Map<number, number> {
 	const out = new Map<number, number>()
 	const withKeys = entries.filter((e) => splitKeys(e.keys).length > 0)
 
+	const windows: ScanWindow[] = messages.map((m) => ({
+		raw: m.content ?? "",
+		lower: (m.content ?? "").toLowerCase()
+	}))
+	// Every regex key against every message in ONE bounded batch: a window
+	// per message would start a watchdog per message (see boundedPattern.ts).
+	primePatterns(windows, patternRequestsOf(withKeys, "keys"), patterns)
+
 	for (let i = 0; i < messages.length; i++) {
-		const window: ScanWindow = {
-			raw: messages[i]!.content ?? "",
-			lower: (messages[i]!.content ?? "").toLowerCase()
-		}
+		const window = windows[i]!
 		for (const entry of withKeys)
 			for (const key of splitKeys(entry.keys))
 				if (matchesKey(key, entry, window)) {

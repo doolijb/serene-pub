@@ -146,8 +146,7 @@ describe("reasoning is absent unless a config switched it on", () => {
 				extraJson: { stream: false, think: true }
 			} as any,
 			sampling: resolveSampling(row),
-			contextConfig: {} as any,
-			promptConfig: { systemPrompt: "Test system prompt." } as any,
+			systemPrompt: "Test system prompt.",
 			session: {
 				id: 1,
 				userId: 1,

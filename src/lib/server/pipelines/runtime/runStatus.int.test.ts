@@ -23,7 +23,7 @@
  *     each clause's true total, then *merging the drafts*, *naming the entry*.
  *  5. **A preview emits no status.** The token estimate performs no writes and
  *     nobody is watching it type.
- *  6. **`{speaker}` is the host's.** An envoy's turn says *Guide is typing*.
+ *  6. **`{speaker}` is the host's.** An envoy's turn says *Serene is typing*.
  */
 
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest"
@@ -54,13 +54,6 @@ vi.mock("$lib/server/embedding", () => ({
 vi.mock("$lib/server/embedding/vectorizationQueue", () => ({
 	ensureSessionMessageEmbedded: async () => {},
 	autoEnqueueSession: async () => {}
-}))
-vi.mock("$lib/server/utils/getUserConfigurations", () => ({
-	getUserConfigurations: async () => ({
-		contextConfig: { id: 1, template: "{{instructions}}" },
-		promptConfig: { id: 1, systemPrompt: "Be brief." },
-		narratorPromptConfig: null
-	})
 }))
 
 /** Every session broadcast the host, the live row and the relay made, in order. */
@@ -685,7 +678,7 @@ describe("a preview", () => {
 })
 
 describe("an envoy's turn", () => {
-	it("resolves {speaker} to the envoy's name — Guide is typing", async () => {
+	it("resolves {speaker} to the envoy's name — Serene is typing", async () => {
 		const { sessionsCreateHandler } = await import(
 			"$lib/server/sockets/sessions"
 		)
@@ -724,12 +717,12 @@ describe("an envoy's turn", () => {
 		// before they land: the hold is what lets the status reach the row.
 		await expect
 			.poll(() => rowStatuses(sessionId).map(rendered), { timeout: 5000 })
-			.toContain("Guide is typing")
+			.toContain("Serene is typing")
 		releaseStream!()
 		const res: any = await running
 		expect(res?.error, res?.error).toBeUndefined()
 		const statuses = rowStatuses(sessionId).map(rendered)
-		expect(statuses).toContain("Guide is typing")
+		expect(statuses).toContain("Serene is typing")
 		expect(statuses.every((s) => !s!.includes("{speaker}"))).toBe(true)
 	})
 })

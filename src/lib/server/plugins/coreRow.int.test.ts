@@ -28,23 +28,20 @@ vi.mock("$lib/server/db", async () => {
 
 const TWIN = "acme.twin"
 
-/** One layout document that validates: the conversation, alone. */
+/** One session layout that validates: the conversation, alone. */
 const LAYOUT = {
-	version: 2,
-	zones: {
-		middle: {
-			rows: ["grow"],
-			cols: ["grow"],
-			units: [
-				{
-					kind: "widget",
-					key: "only",
-					widget: "messages",
-					row: { start: 1, span: 1 },
-					col: { start: 1, span: 1 }
-				}
-			]
-		}
+	widgetGrid: {
+		version: 1,
+		cell: 44,
+		widgets: [
+			{
+				id: "messages",
+				zone: "middle",
+				order: 0,
+				size: { w: "grow", h: "grow" },
+				anchor: { top: true, bottom: true, left: true, right: true }
+			}
+		]
 	}
 }
 
@@ -68,14 +65,15 @@ const manifest = (pluginId: string, slug: string) => ({
 			genreId: "core:genre/chat",
 			slug,
 			name: "Wide",
-			preset: { layout: LAYOUT }
+			preset: LAYOUT
 		}
 	],
 	surfaces: {
-		panels: [{ id: "panel", entry: "ui/panel.html", title: "Panel" }],
 		page: { entry: "ui/panel.html", title: "Page" }
 	},
-	widgets: [{ id: "widget", component: "widget", title: "Widget" }],
+	widgets: [
+		{ id: "widget", component: "widget", title: "Widget" }
+	],
 	components: [{ slug: "widget", entry: "ui/widget.mjs" }],
 	permissions: [`event:${EVENT}`],
 	eventHooks: [{ event: EVENT, hook: "onCompleted" }],
@@ -192,7 +190,7 @@ describe("a stored 'core' plugin row", () => {
 	test("offers no widget, frame or page", async () => {
 		const { enabledPluginWidgetIds } = await import("./frameHost")
 		const ids = [...(await enabledPluginWidgetIds(testDb as never))]
-		expect(ids).toContain(`${TWIN}:panel`)
+		expect(ids).toContain(`${TWIN}:widget`)
 		expect(ids.some((id) => id.startsWith("core:"))).toBe(false)
 
 		const { sessionsViewHandler } = await import("$lib/server/sockets/sessions")
@@ -202,12 +200,10 @@ describe("a stored 'core' plugin row", () => {
 		const res = await sessionsViewHandler.handler(socket, { sessionId } as any, () => {}).finally(() =>
 			vi.unstubAllEnvs()
 		)
-		const srcs = [...res.panels.map((p) => p.src), ...res.modePanels.map((p) => p.src ?? "")]
-		// Both of the twin's: its frame widget, and its remote one.
-		expect(srcs).toContain(`/plugin-ui/${TWIN}/ui/panel.html`)
+		const srcs = res.modePanels.map((p) => p.src ?? "")
+		// The twin's remote widget.
 		expect(srcs).toContain(`/plugin-ui/${TWIN}/ui/widget.mjs`)
 		expect(srcs.some((s) => s.startsWith("/plugin-ui/core/"))).toBe(false)
-		expect(res.panels.some((p) => p.pluginId === "core")).toBe(false)
 		expect(
 			res.modePanels.some((p) => (p.surface as { owner?: string; pluginId?: string }).owner === "core" ||
 				(p.surface as { pluginId?: string }).pluginId === "core")

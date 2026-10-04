@@ -14,8 +14,8 @@
  *     and each voice (`build-side-character-context@1`).
  *
  * Then the Lair over the REAL reply road: Brannoc holds a whisper, and it is
- * in Brannoc's voice prompt (a planned turn's cast `each`, and Pick) and in no
- * other — not Vell's, not the planner's, the scene's or the keeper's.
+ * in Brannoc's voice prompt (his character turn, planned or picked) and in no
+ * other — not Vell's, not the planner's, the scene's or any keeper's.
  *
  * The faked model answers every JSON request (planner, keeper) with one
  * document naming both delvers as speakers, and every prose request by whose
@@ -138,13 +138,6 @@ vi.mock("$lib/server/connections/capabilityTarget", async (importOriginal) => {
 		}
 	}
 })
-vi.mock("$lib/server/utils/getUserConfigurations", () => ({
-	getUserConfigurations: async () => ({
-		sampling: { id: 1 },
-		contextConfig: { id: 1 },
-		promptConfig: { id: 1, systemPrompt: "Stay in character." }
-	})
-}))
 vi.mock("$lib/server/embedding", () => ({
 	isModelReady: () => false,
 	getLoadedModelId: () => null,
@@ -462,7 +455,9 @@ describe("the Lair road · a whisper reaches its holder's voice and no other pro
 		const planner = jsonPrompts.filter((p) => p.includes("You plan the PARTY only"))
 		const keeper = jsonPrompts.filter((p) => p.includes("You keep the record of a delve"))
 		expect(planner).toHaveLength(1)
-		expect(keeper).toHaveLength(1)
+		// The Castellan's keeper (the world's books), then each planned
+		// character turn's own (owner ruling 2026-09-30).
+		expect(keeper).toHaveLength(3)
 		expect(voicePrompts("Brannoc")).toHaveLength(1)
 		expect(voicePrompts("Vell")).toHaveLength(1)
 

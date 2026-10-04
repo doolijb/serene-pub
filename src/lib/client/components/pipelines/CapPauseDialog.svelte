@@ -20,6 +20,7 @@
 	} from "$lib/client/sockets/interest.svelte"
 	import * as Icons from "@lucide/svelte"
 	import { toaster } from "$lib/client/utils/toaster"
+	import { queueAfterThis } from "./reviewQueue"
 
 	const socket = useTypedSocket()
 
@@ -107,8 +108,8 @@
 								? `${current.waiting} runs wait`
 								: "The next one waits"} for you, and waiting costs
 							nothing.
-							{#if queue.length > 1}
-								{queue.length - 1} more waiting.
+							{#if queueAfterThis(queue.length)}
+								{queueAfterThis(queue.length)}.
 							{/if}
 						</p>
 					</header>

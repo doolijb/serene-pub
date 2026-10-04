@@ -39,50 +39,6 @@
    message's parts). Dark mode is [data-mode="dark"] on <html>.
    ============================================================================ */
 
-/* ── the mode-aware skin palette ─────────────────────────────────────────
-   A widget style is injected SCOPED to the widget's own box, so its selectors
-   can only ever reach that box and its descendants. `WidgetHost` mirrors
-   `data-mode` onto that scope wrapper, and `scopeWidgetCss` folds a leading
-   `[data-mode="dark"]` onto the container, so a skin CAN write
-   `[data-mode="dark"] .card { … }` and have it work.
-
-   The shipped styles below don't, though: every value that differs by mode
-   is published here as a custom property and read by name from the style
-   instead — tokens follow a clone across modes automatically, unlike a
-   hand-written `[data-mode="dark"]` rule, which every clone would have
-   to carry forward itself. Anyone writing a style from scratch has these
-   to reach for — or it may use `light-dark()` directly, since Skeleton's
-   globals set `color-scheme`.
-
-   Defined unconditionally rather than per style: an unread custom property
-   costs nothing, and defining them all here is what lets a CLONE of any style
-   keep its colours. */
-:root {
-	/* Cameo — a mild, borderless surface card. */
-	--sp-cameo-card: color-mix(
-		in oklab,
-		var(--color-surface-500) 12%,
-		transparent
-	);
-	--sp-cameo-glow: color-mix(
-		in oklab,
-		var(--color-surface-950) 20%,
-		transparent
-	);
-}
-[data-mode="dark"] {
-	--sp-cameo-card: color-mix(
-		in oklab,
-		var(--color-surface-400) 14%,
-		transparent
-	);
-	--sp-cameo-glow: color-mix(
-		in oklab,
-		var(--color-surface-950) 40%,
-		transparent
-	);
-}
-
 /* ── the row a message sits in ──────────────────────────────────────────
    One <li> per message. `--sp-scene` is set on it only while the message is
    in a scene, and the pack draws the scene's edge from it. No `display` here
@@ -137,6 +93,15 @@
 	grid-area: content;
 	min-width: 0;
 }
+/* The media strip (note 40, 2026-10-03): a fifth cell, in content's columns
+   on the row AFTER content's — below the card a pack draws on the content,
+   the body or the message, never inside it. Placed by content's own lines, so
+   a pack that rearranges its areas carries the strip along; a pack whose card
+   is the whole message (Dreamlit Cameo) ends its card at `content-end`. */
+[data-widget-part~="messages.message"] > [data-widget-part~="messages.media-strip"] {
+	grid-column: content;
+	grid-row: content-end / span 1;
+}
 
 /* Avatar: rendered directly, sized entirely by --sp-av (+ optional radius). */
 [data-widget-part~="messages.message-avatar-button"] {
@@ -154,6 +119,8 @@
 	width: 100%;
 	height: 100%;
 	object-fit: cover;
+	/* Cropped from the top, as every avatar is (STYLE-GUIDE §6.4). */
+	object-position: top;
 	border-radius: var(--sp-av-radius, 9999px);
 }
 /* The disc a speaker with no picture gets: their initial, in the heading face.

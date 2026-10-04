@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { helpAnchorId, resolveInViewLink } from "./helpLinks"
+import { helpAnchorId, isExternalDocLink, resolveInViewLink } from "./helpLinks"
 
 /**
  * The Help view's link rule.
@@ -97,5 +97,18 @@ describe("helpAnchorId", () => {
 	// The top of the page, which is not an element and must not become one.
 	it("leaves an empty anchor empty", () => {
 		expect(helpAnchorId("")).toBe("")
+	})
+})
+
+describe("isExternalDocLink", () => {
+	const origin = "http://localhost:5173"
+	it("is true only for http(s) URLs on another origin", () => {
+		expect(isExternalDocLink("https://github.com/x", origin)).toBe(true)
+		expect(isExternalDocLink("HTTP://example.com", origin)).toBe(true)
+		expect(isExternalDocLink("http://localhost:5173/docs/sessions", origin)).toBe(false)
+		expect(isExternalDocLink("/docs/sessions#a", origin)).toBe(false)
+		expect(isExternalDocLink("#top", origin)).toBe(false)
+		expect(isExternalDocLink("./install.md", origin)).toBe(false)
+		expect(isExternalDocLink("mailto:a@b.c", origin)).toBe(false)
 	})
 })

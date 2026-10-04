@@ -135,7 +135,7 @@ export interface SessionAction {
 	venue: ListedVenueKind
 	/** The channel this listing is for, when the venue named one. */
 	channel?: string
-	origin: "core" | "companion" | "attachment"
+	origin: "core" | "companion" | "foreign"
 	/** A floor — stop · branch · edit — present in every genre. */
 	floor: boolean
 	/** The viewer holds a reference in `audience.act`, or the action is item-gated. */

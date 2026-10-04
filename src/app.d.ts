@@ -17,6 +17,16 @@ declare global {
 	 */
 	const __APP_VERSION__: string
 
+	/**
+	 * The migration set (`drizzle/`) this build was made with, injected by
+	 * Vite's `define` at build time. Absent under vitest, which has no define.
+	 * Boot compares it with the `drizzle/` it finds on disk
+	 * (`db/migrationSet.ts`).
+	 */
+	const __MIGRATION_SET__:
+		| { fingerprint: string; count: number; latestTag: string | null }
+		| undefined
+
 	namespace App {
 		// interface Error {}
 		interface Locals {
@@ -222,6 +232,13 @@ declare global {
 			 * Choose an LLM step is the caller; the sidebar consumes it.
 			 */
 			connectionsDoor?: "setup-chat" | "service" | "local" | "chat"
+			/**
+			 * Open the Settings view at one of its sections — the SillyTavern
+			 * import's "Import from SillyTavern" buttons name `import`. The
+			 * sidebar consumes it (an effect, so it lands whether Settings was
+			 * already open or not).
+			 */
+			settingsSection?: "user" | "media" | "data" | "themes" | "import" | "about"
 		}
 		leftNavOrder: string[]
 		rightNavOrder: string[]
@@ -290,7 +307,7 @@ declare global {
 	}
 
 	interface VectorizationCtx {
-		status: "idle" | "running" | "paused"
+		status: "idle" | "running"
 		currentItem?: { type: string; label: string }
 		queued: number
 		completed: number
@@ -383,8 +400,14 @@ declare global {
 		trace?: Sockets.NarrativeGraph.TraceEntry[]
 	}
 
+	/** The shell's graph builds (`stores/graphBuilds.svelte.ts`). */
 	interface GraphBuildsCtx {
-		activeBuild: GraphBuildState | null
+		/** Every graph build of this user, newest first; at most one per book. */
+		readonly builds: GraphBuildState[]
+		/** The newest build — the activity sidebar's one card. */
+		readonly activeBuild: GraphBuildState | null
+		/** A book's build, whichever is newest — what a book's surfaces show. */
+		buildFor: (lorebookId: number) => GraphBuildState | null
 		/** Set by notification dropdown to trigger a GraphManager to reopen its build modal */
 		reopenLorebookId: number | null
 		startBuild: (params: {
@@ -392,8 +415,17 @@ declare global {
 			mode: "replace" | "extend"
 			lorebookLabel?: string
 		}) => void
-		/** `"acted"` when the build was applied; absent is a dismiss. */
-		clearBuild: (how?: "acted") => void
+		/**
+		 * Dismiss a book's build on the server, and forget it here. No book:
+		 * the newest build (the sidebar's card).
+		 */
+		clearBuild: (lorebookId?: number) => void
+		/**
+		 * Forget the build `activityId` here — only that one, and nothing is
+		 * dismissed: for a build the server already took away, as an apply
+		 * consumes the build it applies.
+		 */
+		forgetBuild: (activityId: string) => void
 	}
 
 	interface SceneSummarizeState {
@@ -446,7 +478,8 @@ declare global {
 			content: string
 			name?: string
 			raw: string
-			lorebookBindingId?: number | null
+			/** The character to bind at Save (character lore); nothing is bound before. */
+			lorebookBindingCharacterId?: number | null
 		}
 		startedAt: string
 	}
@@ -471,6 +504,10 @@ declare global {
 		historyEntryDate: string
 		lorebookId: number
 		lorebookLabel: string
+		/** The line the compile read and its review saves on; null is main. */
+		branchId: number | null
+		/** The moment it was asked at and its review saves at; null is now. */
+		moment: import("$lib/shared/lorebooks/storyDate").StoryDate | null
 		status: "running" | "review" | "error"
 		phase?: "drafting" | "synthesizing"
 		batch?: number
@@ -482,10 +519,14 @@ declare global {
 
 	interface CompileEntriesCtx {
 		activities: CompileEntryState[]
-		/** Set by the activity sidebar so the lorebook workspace opens the compile modal */
-		reviewHistoryEntryId: number | null
+		/**
+		 * Set by the activity sidebar so the lorebook workspace opens the
+		 * compile modal on THAT compile: one entry can be compiled on several
+		 * lines, so the entry alone does not say which review to open.
+		 */
+		reviewActivityId: string | null
 		dismiss: (activityId: string) => void
-		setReviewHistoryEntryId: (id: number | null) => void
+		setReviewActivityId: (id: string | null) => void
 	}
 
 	export interface CharaImportMetadata {

@@ -14,6 +14,7 @@ import {
 } from "./scripts/build-docs.js"
 import { createSingleFlight } from "./scripts/singleFlight.js"
 import { keepViteClientOutOfUiWorker } from "./scripts/viteClientOutOfUiWorker.js"
+import { readMigrationSet } from "./src/lib/server/db/migrationSet"
 
 /**
  * Hand Vite's own HTTP server to the app so Socket.IO can attach to it.
@@ -173,6 +174,14 @@ export default defineConfig({
 	],
 	define: {
 		__APP_VERSION__: JSON.stringify(pkg.version),
+		// The `drizzle/` this build is made with. drizzle/ is read at runtime,
+		// so a production boot compares it with the one beside the build and
+		// refuses to migrate on a mismatch (src/lib/server/db/migrationSet.ts).
+		__MIGRATION_SET__: JSON.stringify(
+			readMigrationSet(
+				fileURLToPath(new URL("./drizzle", import.meta.url))
+			)
+		),
 		// Shown to users in Settings, the admin shell and the About page, so it
 		// states the version and nothing else. It used to append "-alpha" to any
 		// version without a suffix, which meant a formal release displayed as

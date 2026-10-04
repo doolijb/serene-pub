@@ -22,8 +22,14 @@ import * as schema from "$lib/server/db/schema"
  * cannot bootstrap must not stop the app from serving sessions. That was
  * already the trade each of these made individually; stating it once as
  * `critical` makes it a property of the list rather than a convention four
- * `try`/`catch` blocks happen to share. A task marked critical would reject
- * `appReady` — none currently is, and adding one is a deliberate act.
+ * `try`/`catch` blocks happen to share. A task marked critical rejects
+ * `appReady` — only `attic` is, and adding one is a deliberate act.
+ *
+ * Between the two sits `failsHealth`: the app keeps serving, but an instance
+ * without this task is not one the launcher may call healthy — its health
+ * route reports `failed` (`launcher/controlRoutes.ts`), so an update that
+ * breaks it is rolled back instead of committed. Only `pipelines` is: without
+ * it nothing can generate, create a session or run an action.
  *
  * **Ordering is real, not incidental.** They run sequentially in array order:
  * the one-shot data migrations must land before anything reads the tables they
@@ -34,10 +40,37 @@ export interface StartupTask {
 	name: string
 	/** When true, a failure rejects `appReady` instead of being logged. */
 	critical?: boolean
+	/**
+	 * When true, a failure is logged and the app keeps serving, but the
+	 * launcher's health reports `failed` (see `getStartupFailures`).
+	 */
+	failsHealth?: boolean
 	run: () => Promise<void>
 }
 
 export const startupTasks: StartupTask[] = [
+	{
+		/**
+		 * The 0.5.3 upgrade's restore (`$lib/server/attic`): every row the
+		 * migration stashed in the attic goes back in the 0.6 shape, in one
+		 * transaction. First, before env-account recovery can touch a user in
+		 * the emptied `users` table. **Critical**: a failure rolls the restore
+		 * back and stops the boot rather than serving an empty app over
+		 * somebody's data — the attic is still there, and the next start tries
+		 * again. With no attic (every install but an upgrading 0.5.3) it is one
+		 * catalog query.
+		 */
+		name: "attic",
+		critical: true,
+		run: async () => {
+			const { restoreFromAttic } = await import("$lib/server/attic/restore")
+			const report = await restoreFromAttic(db)
+			if (report && !report.alreadyRestored)
+				console.log(
+					`[attic] 0.5.3 data restored in the 0.6 shape; its upgrade notes are in Admin → History once the configurations are wired`
+				)
+		}
+	},
 	{
 		/**
 		 * Account recovery from the environment (26 §10, tier 3). First in the
@@ -65,6 +98,27 @@ export const startupTasks: StartupTask[] = [
 			const { migrated } = await migrateMessages(db)
 			if (migrated)
 				console.log(`[messages] migrated ${migrated} legacy message(s)`)
+		}
+	},
+	{
+		/**
+		 * A reply generating when the server stopped has no run left to finish
+		 * or fail it: it would say "generating" until someone pressed Stop,
+		 * refuse every Regenerate in its session, and never be embedded.
+		 * Settled with the text that arrived, and handed to the embedding
+		 * queue (`sessions/derelictReplies.ts`). Rows this process is
+		 * generating are never taken, so a re-run on a live instance is safe.
+		 */
+		name: "replies",
+		run: async () => {
+			const { reconcileDerelictReplies } = await import(
+				"$lib/server/sessions/derelictReplies"
+			)
+			const settled = await reconcileDerelictReplies({ db })
+			if (settled)
+				console.log(
+					`[replies] settled ${settled} reply(s) left generating when the server stopped`
+				)
 		}
 	},
 	{
@@ -113,11 +167,21 @@ export const startupTasks: StartupTask[] = [
 		 * being able to correlate an incident with.
 		 */
 		name: "pipelines",
+		failsHealth: true,
 		run: async () => {
 			const { bootstrapPipelines } = await import(
 				"$lib/server/pipelines/boot/bootstrap"
 			)
 			const report = await bootstrapPipelines(db)
+			// The 0.5.3 upgrade's last step, once the configurations it wires
+			// have somewhere to go; it drops the attic. A no-op on every other
+			// install.
+			const { finishAtticUpgrade } = await import("$lib/server/attic/finish")
+			const wired = await finishAtticUpgrade(db)
+			if (wired)
+				console.log(
+					`[attic] 0.5.3 upgrade finished: configurations wired, ${wired.rebinds} turn order(s) set; the attic is gone`
+				)
 			if (report.types.republished.length)
 				console.info(
 					"[pipelines] these slugs now resolve to a new declaration: " +
@@ -188,25 +252,22 @@ export const startupTasks: StartupTask[] = [
 	},
 	{
 		/**
-		 * A default layout preset per genre (PLAN 25 redesign).
+		 * The layouts core's genres ship (`GenreDecl.layouts`), one row each;
+		 * a plugin genre's are its owner's (`syncPluginLayouts`, run by the
+		 * `plugins` task and on every install, enable and disable).
 		 *
 		 * HERE, and not beside the other seeds in `db/index.ts`, because a
 		 * genre is a ROW: `listSessionGenres` reads published create specs, and
-		 * those are written by the `pipelines` task above and by plugin specs
-		 * the `plugins` task publishes. Seeding from db/index.ts would run
-		 * before either and see nothing but the standard floor — the reconciler
-		 * would appear to work while quietly seeding one genre forever.
+		 * those are written by the `pipelines` task above. Seeding from
+		 * db/index.ts would run before it and see nothing but the standard
+		 * floor — the reconciler would appear to work while quietly seeding
+		 * one genre forever.
 		 *
 		 * The standard genre is unioned in regardless, so the floor gets its
 		 * default even on a build where pipelines bootstrap failed. The
-		 * reconciler is idempotent, and its prune is scoped to the genres it is
-		 * handed, so a genre missing from this pass keeps the default it has.
-		 *
-		 * Known gap: a plugin installed while the server is RUNNING registers
-		 * its genre after this task, so that genre has no default preset until
-		 * the next boot. Harmless — an absent default resolves to `{}`, which
-		 * is the built-in arrangement — but it is why the presets list can be
-		 * empty for a freshly installed genre.
+		 * reconciler is idempotent and writes only what changed, and its prune
+		 * of a core genre's rows is scoped to the genres it is handed, so a
+		 * genre missing from this pass keeps the rows it has.
 		 */
 		name: "layout-presets",
 		run: async () => {
@@ -216,31 +277,47 @@ export const startupTasks: StartupTask[] = [
 			const { listSessionGenres, STANDARD_GENRE_ID } = await import(
 				"$lib/server/pipelines/entities/sessionGenres"
 			)
-			const { CORE_LAYOUT_PRESETS } = await import(
-				"@serene-pub/core-catalog"
-			)
 			const genres = await listSessionGenres(db)
-			// The shipped arrangements go LAST: `syncLayoutPresets` keys on the
-			// genre id and takes the last entry for each, so a genre that
-			// appears both as a bare id above and as a furnished entry here gets
-			// the arrangement its package declares. A genre with no shipped
-			// layout keeps the empty default, which is the built-in surface.
 			// Provenance for the rows this pass writes (`seeded_by_version`),
 			// the same stamp `syncWidgetStyles` takes. Deferred like every
 			// other import in this task.
 			const { appVersion } = await import(
 				"$lib/shared/constants/version"
 			)
-			await syncLayoutPresets(
-				[
-					{ genreId: STANDARD_GENRE_ID },
-					...genres.map((g) => ({ genreId: g.genreId })),
-					...CORE_LAYOUT_PRESETS.filter((l) =>
-						genres.some((g) => g.genreId === l.genreId)
-					)
-				],
-				{ version: appVersion || "0.0.0" }
+			// Every genre the instance has: the reconciler seeds the core ones'
+			// declared layouts and leaves a plugin genre's to its owner
+			// (`syncPluginLayouts`). A layout it moves reaches no session (each
+			// holds its copy) — only the **Updated** label, pushed to any tab
+			// already connected (brief 6b; at a cold boot, none is).
+			const { afterLayoutReconcile } = await import(
+				"$lib/server/sessions/startedFromPush"
 			)
+			await afterLayoutReconcile(() =>
+				syncLayoutPresets(
+					[STANDARD_GENRE_ID, ...genres.map((g) => g.genreId)],
+					{ version: appVersion || "0.0.0" }
+				)
+			)
+		}
+	},
+	{
+		/**
+		 * ⏳ The copy model's one-shot step (brief 3 of
+		 * `PLAN-layout-one-format-2026-09-28`; delete it at the pre-release
+		 * migrations squash): every session layout row written before the copy
+		 * model is made whole with exactly what the screen drew — its own slots
+		 * over the preset it was drawn over. After BOTH reconcilers (`plugins`
+		 * above runs `syncPluginLayouts`; `layout-presets` just ran), because
+		 * that preset is one of their rows, and before sockets accept (they
+		 * await `appReady`), because the handlers now read the row alone.
+		 * Idempotent: a finished row is never selected again.
+		 */
+		name: "session-layouts",
+		run: async () => {
+			const { completeSessionLayouts } = await import(
+				"$lib/server/db/sessionLayoutBackfill"
+			)
+			await completeSessionLayouts()
 		}
 	},
 	{
@@ -321,7 +398,22 @@ export function getDatabaseState(): DatabaseState {
 	return databaseState
 }
 
+/**
+ * The `critical` and `failsHealth` tasks that failed in the latest run of the
+ * startup tasks.
+ *
+ * Read by the launcher's health route without awaiting anything, so it is
+ * meaningful once `appReady` has settled; a recovery restart re-runs the tasks
+ * and starts the list over.
+ */
+let startupFailures: string[] = []
+
+export function getStartupFailures(): readonly string[] {
+	return startupFailures
+}
+
 async function runStartupTasks(): Promise<void> {
+	startupFailures = []
 	if (building) return
 	try {
 		await dbReady
@@ -338,6 +430,7 @@ async function runStartupTasks(): Promise<void> {
 		try {
 			await task.run()
 		} catch (err) {
+			if (task.critical || task.failsHealth) startupFailures.push(task.name)
 			if (task.critical) throw err
 			console.warn(`[${task.name}] startup task failed:`, err)
 		}
@@ -360,6 +453,35 @@ async function runStartupTasks(): Promise<void> {
  * request — so a replacement is seen by the next request rather than by nobody.
  */
 export let appReady: Promise<void> = runStartupTasks()
+
+/**
+ * Attach the socket server the moment startup finishes, not at the first page
+ * render.
+ *
+ * The root layout's load attaches it too (`src/routes/+layout.server.ts`), and
+ * for years that was the only place — so after a restart, a tab that was
+ * already open reconnected to a server with no Socket.IO on it, got a 404 on
+ * the WebSocket upgrade ("websocket error"), and only got in on a later retry
+ * after some page render had attached it. The launcher's health poll loads
+ * this module on a launcher-spawned server, so the socket server is up before
+ * anyone asks. A recovery boot attaches from `restartAfterRecovery()` instead.
+ */
+async function attachSocketsAfterStartup(): Promise<void> {
+	if (!databaseState.ok) return
+	const httpServer = (globalThis as { __SERENE_PUB_HTTP_SERVER__?: unknown })
+		.__SERENE_PUB_HTTP_SERVER__
+	if (!httpServer) return
+	try {
+		const { attachSocketServer } = await import(
+			"$lib/server/sockets/loadSockets.server"
+		)
+		await attachSocketServer(httpServer as Parameters<typeof attachSocketServer>[0])
+	} catch (err) {
+		// The layout load tries again on the first page render.
+		console.warn("[sockets] Could not attach the socket server at startup:", err)
+	}
+}
+appReady.then(attachSocketsAfterStartup, () => {})
 
 /**
  * Whether the instance came up, and what stopped it if not.

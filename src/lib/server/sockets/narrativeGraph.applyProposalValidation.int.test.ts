@@ -15,6 +15,7 @@ import os from "os"
 import path from "path"
 import { and, eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
+import { applyAtReview } from "./fixtures/graphReview"
 import type { TestDb } from "$lib/server/utils/testDb"
 
 let testDb: TestDb
@@ -67,7 +68,7 @@ describe("narrativeGraphApplyProposalHandler — proposal length caps + enum val
 
 		await narrativeGraphApplyProposalHandler.handler(
 			fakeSocket(user.id),
-			{
+			applyAtReview(user.id, {
 				lorebookId: lorebook.id,
 				proposal: {
 					nodes: [
@@ -81,7 +82,7 @@ describe("narrativeGraphApplyProposalHandler — proposal length caps + enum val
 					relationships: []
 				} as any,
 				mode: "replace"
-			},
+			}),
 			noopEmit
 		)
 
@@ -113,7 +114,7 @@ describe("narrativeGraphApplyProposalHandler — proposal length caps + enum val
 
 		await narrativeGraphApplyProposalHandler.handler(
 			fakeSocket(user.id),
-			{
+			applyAtReview(user.id, {
 				lorebookId: lorebook.id,
 				proposal: {
 					nodes: [
@@ -143,7 +144,7 @@ describe("narrativeGraphApplyProposalHandler — proposal length caps + enum val
 					]
 				} as any,
 				mode: "replace"
-			},
+			}),
 			noopEmit
 		)
 
@@ -174,7 +175,7 @@ describe("narrativeGraphApplyProposalHandler — proposal length caps + enum val
 
 		await narrativeGraphApplyProposalHandler.handler(
 			fakeSocket(user.id),
-			{
+			applyAtReview(user.id, {
 				lorebookId: lorebook.id,
 				proposal: {
 					nodes: [
@@ -204,7 +205,7 @@ describe("narrativeGraphApplyProposalHandler — proposal length caps + enum val
 					]
 				} as any,
 				mode: "replace"
-			},
+			}),
 			noopEmit
 		)
 

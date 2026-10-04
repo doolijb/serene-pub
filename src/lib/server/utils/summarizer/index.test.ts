@@ -1,6 +1,6 @@
 /**
  * extractCharactersFromContent() regression — this used to be a private
- * closure inside generateSummary(), reachable only for freshly-drafted
+ * closure inside the (since removed) generateSummary(), reachable only for freshly-drafted
  * scene summaries. It's now standalone specifically so
  * narrativeGraphBuildHandler can run the same extraction against
  * already-final history entry content for scene-less (direct) entries,
@@ -37,8 +37,6 @@ const fakeConnection = {
 	type: "openai_session"
 } as any
 const fakeSampling = { id: 1, name: "test-sampling" } as any
-const fakeContextConfig = { id: 1 } as any
-const fakePromptConfig = { id: 1 } as any
 
 afterEach(() => {
 	runQueuedLLMCallMock.mockReset()
@@ -55,9 +53,7 @@ describe("extractCharactersFromContent", () => {
 			content:
 				"Aria walked into the tavern. Bram was mentioned in passing.",
 			connection: fakeConnection,
-			sampling: fakeSampling,
-			contextConfig: fakeContextConfig,
-			promptConfig: fakePromptConfig
+			sampling: fakeSampling
 		})
 
 		// Legacy bare-string output is normalized to {name: ...} entries —
@@ -77,9 +73,7 @@ describe("extractCharactersFromContent", () => {
 		const result = await extractCharactersFromContent({
 			content: "Kestrel arrived.",
 			connection: fakeConnection,
-			sampling: fakeSampling,
-			contextConfig: fakeContextConfig,
-			promptConfig: fakePromptConfig
+			sampling: fakeSampling
 		})
 
 		expect(result.participantCharacters).toEqual([{ name: "Kestrel" }])
@@ -94,9 +88,7 @@ describe("extractCharactersFromContent", () => {
 		const result = await extractCharactersFromContent({
 			content: "Bram nodded to the new guard.",
 			connection: fakeConnection,
-			sampling: fakeSampling,
-			contextConfig: fakeContextConfig,
-			promptConfig: fakePromptConfig
+			sampling: fakeSampling
 		})
 
 		expect(result.participantCharacters).toEqual([
@@ -115,9 +107,7 @@ describe("extractCharactersFromContent", () => {
 		const result = await extractCharactersFromContent({
 			content: "Some text.",
 			connection: fakeConnection,
-			sampling: fakeSampling,
-			contextConfig: fakeContextConfig,
-			promptConfig: fakePromptConfig
+			sampling: fakeSampling
 		})
 
 		expect(result.participantCharacters).toEqual([{ castId: 5 }])
@@ -133,9 +123,7 @@ describe("extractCharactersFromContent", () => {
 		const result = await extractCharactersFromContent({
 			content: "Some ambiguous text.",
 			connection: fakeConnection,
-			sampling: fakeSampling,
-			contextConfig: fakeContextConfig,
-			promptConfig: fakePromptConfig
+			sampling: fakeSampling
 		})
 
 		expect(result).toEqual({
@@ -153,9 +141,7 @@ describe("extractCharactersFromContent", () => {
 		const result = await extractCharactersFromContent({
 			content: "Some text.",
 			connection: fakeConnection,
-			sampling: fakeSampling,
-			contextConfig: fakeContextConfig,
-			promptConfig: fakePromptConfig
+			sampling: fakeSampling
 		})
 
 		expect(result.participantCharacters).toEqual([{ name: "Aria" }])

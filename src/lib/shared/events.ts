@@ -4,7 +4,9 @@ export type Handler<P = any, A = any> = {
 		socket: any,
 		params: P,
 		/**
-		 * Emit to the caller's own user room.
+		 * Emit to the caller's own user room — every tab of theirs. The one
+		 * exception is the request's own refusal, `<event>:error`, which
+		 * `register()` sends to the socket that asked (`answerAsker`).
 		 *
 		 * A FUNCTION is a thunk: it is evaluated once, and only when a gated
 		 * event has a socket that declared interest in it (see

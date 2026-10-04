@@ -81,6 +81,52 @@
 		)
 	)
 
+	/**
+	 * A message's attachments — its `core:image` / `core:file` parts on the
+	 * active revision of each step — named for a link (composer attachments
+	 * §3.4). Document View lists them; it never draws an image inline.
+	 */
+	function attachmentsOf(msg: SelectSessionMessage): {
+		partId: number
+		assetId: number
+		kind: "image" | "file"
+		name: string | null
+	}[] {
+		const m = msg as SelectSessionMessage & {
+			parts?: {
+				id: number
+				step: number
+				revision: number
+				ordinal: number
+				type: string
+				data: Record<string, unknown> | null
+			}[]
+			activeRevisions?: Record<string, number>
+		}
+		const active = m.activeRevisions ?? {}
+		return (m.parts ?? [])
+			.filter(
+				(p) =>
+					(p.type === "core:image" || p.type === "core:file") &&
+					p.revision === (active[String(p.step)] ?? 0) &&
+					typeof p.data?.assetId === "number"
+			)
+			.sort((a, b) => a.step - b.step || a.ordinal - b.ordinal)
+			.map((p) => {
+				const d = p.data ?? {}
+				const name =
+					[d.alt, d.filename, d.name].find(
+						(v): v is string => typeof v === "string" && v.trim() !== ""
+					) ?? null
+				return {
+					partId: p.id,
+					assetId: d.assetId as number,
+					kind: p.type === "core:image" ? "image" : "file",
+					name
+				}
+			})
+	}
+
 	function speakerName(msg: SelectSessionMessage): string {
 		if (msg.isNarratorResponse) return "Narrator"
 		if (msg.characterId) {
@@ -642,6 +688,20 @@
 				{/if}
 				{#if msg.content}
 					<p>{msg.content}</p>
+				{/if}
+				{#if attachmentsOf(msg).length}
+					<!-- Attachments as links, never inline images: the AAA
+					     promise (composer attachments §3.4). -->
+					<ul aria-label="Attachments">
+						{#each attachmentsOf(msg) as file (file.partId)}
+							<li>
+								<a href="/media/{file.assetId}?download=1" download={file.name ?? undefined}>
+									{file.name ?? (file.kind === "image" ? "Image" : "File")}
+								</a>
+								<span class="a11y-hint">({file.kind})</span>
+							</li>
+						{/each}
+					</ul>
 				{/if}
 				{#if msg.error}
 					<div class="a11y-status a11y-status-error" role="alert">

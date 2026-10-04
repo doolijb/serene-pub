@@ -119,13 +119,6 @@ vi.mock("$lib/server/connections/capabilityTarget", async (importOriginal) => {
 		}
 	}
 })
-vi.mock("$lib/server/utils/getUserConfigurations", () => ({
-	getUserConfigurations: async () => ({
-		sampling: { id: 1 },
-		contextConfig: { id: 1 },
-		promptConfig: { id: 1, systemPrompt: "Stay in character." }
-	})
-}))
 vi.mock("$lib/server/embedding", () => ({
 	isModelReady: () => false,
 	getLoadedModelId: () => null,
@@ -257,7 +250,6 @@ function recordingIo(userId: number, sessionId: number) {
 	}
 	return { io: io as any, emitted }
 }
-
 
 async function press(
 	w: Awaited<ReturnType<typeof session>>,

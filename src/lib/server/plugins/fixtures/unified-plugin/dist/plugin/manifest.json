@@ -57,7 +57,14 @@
       "demo.unified:task/tally@1": "tallyHandler"
     }
   },
-  "components": [],
+  "components": [
+    {
+      "slug": "tally",
+      "label": "Tally",
+      "entry": "dist/plugin/components/tally.js",
+      "framework": "vanilla"
+    }
+  ],
   "pipelines": [
     {
       "id": "demo.unified:spec/create-session",
@@ -115,18 +122,16 @@
       }
     }
   ],
-  "surfaces": {
-    "panels": [
-      {
-        "id": "tally",
-        "entry": "ui/tally.html",
-        "title": "Tally",
-        "channels": [
-          "main"
-        ]
-      }
-    ]
-  },
+  "widgets": [
+    {
+      "id": "tally",
+      "title": "Tally",
+      "component": "tally",
+      "channels": [
+        "main"
+      ]
+    }
+  ],
   "presets": [
     {
       "slug": "tally",

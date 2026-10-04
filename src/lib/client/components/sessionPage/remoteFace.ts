@@ -7,7 +7,7 @@
  * media, an `https:` URL, or an inline RASTER image
  * (`data:image/(png|jpeg|gif|webp);base64,…`). An envoy's image may be any
  * `http(s)` URL or `data:image/…` URI (`ENVOY_IMAGE`), and core's own envoys
- * — the Guide's mascot, the Writing Room's scribe — are
+ * — the Guide's mascot, the Lair's Castellan — are
  * `data:image/svg+xml`, which Remote DOM's receiver refuses outright (its
  * script-URL floor): no rule may ever let one into a box.
  *
@@ -50,20 +50,17 @@ export type FaceRasterizer = (src: string, drawing: Readonly<FaceDrawing>) => Pr
 
 /**
  * The box a remote face is drawn for, in CSS pixels: the widest avatar a
- * core message skin draws — Dreamlit Cameo's portrait, `--sp-portrait`, at
- * most 13rem (a large, unframed portrait since P3h; Stage's is 2.5rem,
- * Bubbles' 2rem, Compact's 1.75rem).
+ * core message skin draws — Dreamlit Cameo's portrait column, `--sp-portrait`,
+ * at most 9.5rem (Stage's is 2.5rem, Bubbles' 2rem, Compact's 1.75rem).
  */
-export const REMOTE_FACE_PX = 208
+export const REMOTE_FACE_PX = 152
 /** Drawn at twice that, for a high-density screen. */
 const REMOTE_FACE_DENSITY = 2
 
 /**
  * The drawing every refused face gets. The drawn face is copied into each
- * line of the dossier an envoy speaks, so its size is paid per line: the
- * Guide's mascot as this WebP is 6.3k characters where the 128px PNG before
- * it was 10.8k (and a PNG at this side 16.6k), and it stays sharp in the
- * widest box.
+ * line of the dossier an envoy speaks, so its size is paid per line: WebP
+ * at twice the widest box stays sharp there and is far smaller than a PNG.
  */
 export const REMOTE_FACE_DRAWING: Readonly<FaceDrawing> = Object.freeze({
 	side: REMOTE_FACE_PX * REMOTE_FACE_DENSITY,

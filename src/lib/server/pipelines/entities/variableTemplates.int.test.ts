@@ -37,6 +37,7 @@ import {
 	SHIPPED_VARIABLE_TEMPLATES,
 	shippedByKey
 } from "$lib/server/pipelines/entities/variableLayouts"
+import { groupOptions } from "$lib/server/pipelines/config/panel/groups"
 
 const SECRET = "variable-template-secret"
 const CHARACTERS = "core:var/characters@1"
@@ -79,7 +80,7 @@ beforeAll(async () => {
 			shipped!.configId,
 			"Layout host"
 		)
-		await selectConfig(db, spec.id, "instance", 0, copy.id, adminId)
+		await selectConfig(db, spec.id, "pub", 0, copy.id, adminId)
 	}
 }, 60_000)
 
@@ -91,8 +92,10 @@ const view = (slug: string): Promise<NamespaceView> =>
 
 /** Layout options live under Advanced — they are presentation, not a decision. */
 const layoutOptions = (v: NamespaceView): ConfigOption[] =>
-	v.steps.flatMap((s) =>
-		s.advanced.filter((o) => o.control === "variable-template-ref")
+	v.groups.flatMap((g) =>
+		g.advanced.flatMap((s) =>
+			s.options.filter((o) => o.control === "variable-template-ref")
+		)
 	)
 
 const charactersOption = async (slug: string) => {
@@ -149,13 +152,15 @@ describe("what ships", () => {
 		// that what a layout receives is what actually fit.
 		const v = await view(RESPOND_SPEC_ID)
 		const stepOf = (label: string) =>
-			v.steps.find((s) =>
-				s.advanced.some(
-					(o) =>
-						o.control === "variable-template-ref" &&
-						o.label === label
-				)
-			)?.label
+			v.groups
+				.flatMap((g) => g.advanced)
+				.find((s) =>
+					s.options.some(
+						(o) =>
+							o.control === "variable-template-ref" &&
+							o.label === label
+					)
+				)?.heading
 
 		expect(stepOf("World lore")).toBe("Assemble")
 		expect(stepOf("History entries")).toBe("Assemble")
@@ -474,8 +479,7 @@ describe("the mutation gate", () => {
 
 	it("refuses an option that does not choose a layout", async () => {
 		const v = await view(RESPOND_SPEC_ID)
-		const other = v.steps
-			.flatMap((s) => [...s.options, ...s.advanced])
+		const other = groupOptions(v.groups)
 			.find((o) => o.control === "prompts-ref")!
 		await expect(
 			gate({ userId: adminId, isAdmin: true }, other.id)

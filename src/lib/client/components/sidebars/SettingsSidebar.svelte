@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { Tabs } from "@skeletonlabs/skeleton-svelte"
 	import type { ValueChangeDetails } from "@zag-js/tabs"
-	import { onMount } from "svelte"
+	import { getContext, onMount, untrack } from "svelte"
 	import {
 		appVersion,
 		appVersionDisplay
@@ -14,6 +14,7 @@
 	import DataSettingsTab from "../settingsTabs/DataSettingsTab.svelte"
 	import MediaManagerTab from "../media/MediaManagerTab.svelte"
 	import CustomThemeManager from "../CustomThemeManager.svelte"
+	import ImportSettingsTab from "../settingsTabs/ImportSettingsTab.svelte"
 	import SettingsUnsavedChangesModal from "../modals/SettingsUnsavedChangesModal.svelte"
 	import { ViewModeTracker } from "$lib/client/shell/viewMode.svelte"
 
@@ -25,11 +26,28 @@
 	// State
 	//
 	// There is deliberately no System tab. Instance-wide settings live in
-	// Admin › Instance (/admin/general, /admin/network, /admin/data,
+	// Admin › Pub (/admin/general, /admin/network, /admin/data,
 	// /admin/diagnostics). This panel is entirely per-user: your settings,
 	// your media, your theme.
-	let activeTab = $state<"user" | "media" | "data" | "themes" | "about">(
-		"user"
+	type SettingsSection = NonNullable<PanelsCtx["digest"]["settingsSection"]>
+	let activeTab = $state<SettingsSection>("user")
+
+	const panelsCtx: PanelsCtx = getContext("panelsCtx")
+	const userCtx: UserCtx = getContext("userCtx")
+	const systemSettingsCtx: SystemSettingsCtx = getContext("systemSettingsCtx")
+	/**
+	 * Import (the SillyTavern import, once the standalone /import page — owner
+	 * note 23, 2026-10-02) is an admin's section, and the Android wrapper has
+	 * no folder to pick, so the tab is drawn under the same condition the old
+	 * entry-point buttons were.
+	 */
+	let importOpened = $state(false)
+	$effect(() => {
+		if (activeTab === "import") importOpened = true
+	})
+	const canImport = $derived(
+		!!userCtx?.user?.isAdmin &&
+			!systemSettingsCtx?.settings?.isAndroidWrapper
 	)
 
 	/**
@@ -51,6 +69,7 @@
 		media: "Media",
 		data: "Data",
 		themes: "Themes",
+		import: "Import",
 		about: "About"
 	}
 	let sectionLabel = $derived(SECTION_LABELS[activeTab] ?? "")
@@ -59,14 +78,13 @@
 	// shared flag rather than folded into UserSettingsTab because the guard is
 	// on tab *switching* — same pattern as LorebooksSidebar.
 	let tabHasUnsavedChanges = $state(false)
-	let nextTab: "user" | "media" | "data" | "themes" | "about" | undefined =
-		$state()
+	let nextTab: SettingsSection | undefined = $state()
 	let showUnsavedChangesModal = $state(false)
 	let confirmCloseSidebarResolve: ((v: boolean) => void) | null = null
 
 	// Handle tab switching
 	function handleTabChange(e: ValueChangeDetails): void {
-		const target = e.value as "user" | "media" | "data" | "themes" | "about"
+		const target = e.value as SettingsSection
 		if (!tabHasUnsavedChanges) {
 			activeTab = target
 		} else {
@@ -118,6 +136,23 @@
 	onMount(() => {
 		onclose = handleOnClose
 	})
+
+	/**
+	 * A section named from outside (`digest.settingsSection`) — the "Import
+	 * from SillyTavern" buttons. An effect, so a press lands whether this view
+	 * was already open or not; through `handleTabChange`, so unsaved User
+	 * fields still ask first. Consumed on read: the digest is one shared slot.
+	 */
+	$effect(() => {
+		const section = panelsCtx?.digest?.settingsSection
+		if (!section) return
+		untrack(() => {
+			panelsCtx.digest.settingsSection = undefined
+			if (section === "import" && !canImport) return
+			if (section !== activeTab)
+				handleTabChange({ value: section } as ValueChangeDetails)
+		})
+	})
 </script>
 
 <div class="flex h-full flex-col p-4" use:viewMode.observe>
@@ -134,6 +169,9 @@
 				<PanelTab value="media" label="Media" icon={Icons.Images} />
 				<PanelTab value="data" label="Data" icon={Icons.Database} />
 				<PanelTab value="themes" label="Themes" icon={Icons.Palette} />
+				{#if canImport}
+					<PanelTab value="import" label="Import" icon={Icons.Download} />
+				{/if}
 				<PanelTab value="about" label="About" icon={Icons.Info} />
 			</PanelTabList>
 			<!-- Title and panels share one box because the rail form lays the
@@ -164,6 +202,16 @@
 						<CustomThemeManager />
 					{/if}
 				</Tabs.Content>
+				{#if canImport}
+					<Tabs.Content value="import">
+						<!-- Kept mounted once opened, unlike its siblings: a
+						     scan or import in flight answers on this section's
+						     interest, and a tab switch must not drop the reply. -->
+						{#if activeTab === "import" || importOpened}
+							<ImportSettingsTab />
+						{/if}
+					</Tabs.Content>
+				{/if}
 				<Tabs.Content value="about">
 					{#if activeTab === "about"}
 						<div class="flex flex-col gap-4">

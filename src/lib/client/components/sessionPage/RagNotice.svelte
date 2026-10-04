@@ -21,6 +21,16 @@
 
 	let { sessionId, totalMessages }: Props = $props()
 
+	/**
+	 * The two props as primitives, which the status effect reads. The session
+	 * page replaces its whole `session` object per streamed chunk, and a prop
+	 * handed down as `{session.id}` is a getter over it: an effect reading the
+	 * prop directly would re-ask `checkRagStatus` per token (B8). A `$derived`
+	 * moves only when the value does.
+	 */
+	const id = $derived(sessionId)
+	const messageCount = $derived(totalMessages)
+
 	type RagStatus = Sockets.Vectorization.CheckRagStatus.Response
 	let ragStatus: RagStatus | null = $state(null)
 	let prioritizing = $state(false)
@@ -54,7 +64,7 @@
 		oneShot((done) =>
 			requestWithInterest(
 				"vectorization:checkRagStatus",
-				{ sessionId },
+				{ sessionId: id },
 				(res) => {
 					ragStatus = res
 					done()
@@ -64,9 +74,9 @@
 	}
 
 	$effect(() => {
-		// Re-fetch whenever sessionId or message count changes
-		sessionId
-		totalMessages
+		// Re-fetch whenever the session or its message count changes
+		id
+		messageCount
 		fetchStatus()
 	})
 
@@ -99,92 +109,72 @@
 		)
 	}
 
+	/** Releases the hide request in flight, whichever way it is answered. */
+	let settleIgnoring: (() => void) | null = null
+
 	function handleSetRagIgnored(ignored: boolean) {
 		ignoring = true
-		oneShot((done) =>
-			requestWithInterest(
+		oneShot((done) => {
+			settleIgnoring = () => {
+				settleIgnoring = null
+				done()
+				ignoring = false
+			}
+			return requestWithInterest(
 				"vectorization:setSessionRagIgnored",
 				{ sessionId, ignored },
 				(res) => {
-					done()
 					if (ragStatus)
 						ragStatus = { ...ragStatus, ragIgnored: res.ragIgnored }
-					ignoring = false
+					settleIgnoring?.()
 				}
 			)
-		)
+		})
 	}
 
-	/** Aggregate counts across all content types */
-	let totals = $derived.by(() => {
-		if (!ragStatus) return null
-		const { messages, characters, personas, lorebook } = ragStatus
-		const lb = lorebook ?? {
-			total: 0,
-			nullCount: 0,
-			staleCount: 0,
-			readyCount: 0
-		}
-		return {
-			total:
-				messages.total + characters.total + personas.total + lb.total,
-			nullCount:
-				messages.nullCount +
-				characters.nullCount +
-				personas.nullCount +
-				lb.nullCount,
-			staleCount:
-				messages.staleCount +
-				characters.staleCount +
-				personas.staleCount +
-				lb.staleCount,
-			readyCount:
-				messages.readyCount +
-				characters.readyCount +
-				personas.readyCount +
-				lb.readyCount
-		}
-	})
+	// A refusal (the session changed hands under this view) is toasted by
+	// Layout in the server's words; here it only frees the button.
+	useInterest<"vectorization:setSessionRagIgnored:error">(
+		"vectorization:setSessionRagIgnored:error",
+		() => settleIgnoring?.()
+	)
 
 	/**
-	 * Derive the notice variant:
+	 * What Search by meaning searches: the session lorebook's entries, and
+	 * only them. The queue embeds messages and the cast too, but nothing ever
+	 * finds those by meaning, so they are not RAG's to wait on.
+	 */
+	let totals = $derived.by(() => ragStatus?.lorebook ?? null)
+
+	/**
+	 * What the lorebook's indexing has to say, hidden or not:
 	 *   "none"       — nothing has been embedded
 	 *   "stale"      — all embedded content uses a stale model
 	 *   "processing" — partially indexed (mix of ready + pending)
+	 *   null         — every entry is ready; nothing to say
 	 */
-	let variant = $derived.by((): "none" | "stale" | "processing" | null => {
-		if (!ragStatus?.applicable || ragStatus.ragIgnored || !totals)
-			return null
-		const { total, nullCount, staleCount, readyCount } = totals
-		if (total === 0) return null
-		if (readyCount === total) return null // all good
-		if (staleCount > 0 && nullCount === 0) return "stale"
-		if (nullCount === total) return "none"
-		return "processing"
-	})
+	let pendingVariant = $derived.by(
+		(): "none" | "stale" | "processing" | null => {
+			if (!ragStatus?.applicable || !totals) return null
+			const { total, nullCount, staleCount, readyCount } = totals
+			if (total === 0) return null
+			if (readyCount === total) return null // all good
+			if (staleCount > 0 && nullCount === 0) return "stale"
+			if (nullCount === total) return "none"
+			return "processing"
+		}
+	)
 
-	/** Build a human-readable summary of what needs work */
-	let needsSummary = $derived.by(() => {
-		if (!ragStatus || !totals) return ""
-		const parts: string[] = []
-		if (ragStatus.messages.nullCount + ragStatus.messages.staleCount > 0)
-			parts.push("messages")
-		if (
-			ragStatus.characters.nullCount + ragStatus.characters.staleCount >
-			0
-		)
-			parts.push("characters")
-		if (ragStatus.personas.nullCount + ragStatus.personas.staleCount > 0)
-			parts.push("personas")
-		if (
-			ragStatus.lorebook &&
-			ragStatus.lorebook.nullCount + ragStatus.lorebook.staleCount > 0
-		)
-			parts.push("lorebook entries")
-		if (parts.length === 0) return ""
-		if (parts.length === 1) return parts[0]
-		return parts.slice(0, -1).join(", ") + " and " + parts[parts.length - 1]
-	})
+	/** The notice as shown: nothing once its owner hid it for the session. */
+	let variant = $derived.by(() =>
+		ragStatus?.ragIgnored ? null : pendingVariant
+	)
+
+	/**
+	 * Only the session's owner may hide the notice or show it again; a guest
+	 * sees the notice, and nothing once it is hidden.
+	 */
+	let canHide = $derived.by(() => ragStatus?.canHide === true)
 </script>
 
 <!-- One quiet line, sized and placed by whatever hosts it: the composer sets
@@ -211,15 +201,17 @@
 
 		<span class="text-surface-600 dark:text-surface-400 min-w-0">
 			{#if variant === "none"}
-				Older {needsSummary} aren't embedded yet, so RAG can't surface them.
+				Lorebook entries aren't indexed yet, so Search by meaning can't
+				find them.
 			{:else if variant === "stale"}
-				{needsSummary} were embedded with a different model and need re-indexing
-				with {ragStatus.activeModelName}.
+				Lorebook entries were embedded with a different model and need
+				re-indexing with {ragStatus.activeModelName}.
 			{:else if variant === "processing"}
-				Indexing {totals?.readyCount} of {totals?.total}, {needsSummary}
-				pending.
-				{#if !ragStatus.queueRunning}
-					Queue paused.
+				{#if ragStatus.queueRunning}
+					Indexing {totals?.readyCount} of {totals?.total} lorebook entries.
+				{:else}
+					{totals?.readyCount} of {totals?.total} lorebook entries are indexed.
+					The rest are waiting in the embedding queue.
 				{/if}
 			{/if}
 		</span>
@@ -234,28 +226,38 @@
 			Prioritize in queue
 		</button>
 
-		<button
-			type="button"
-			class="rag-notice-link"
-			onclick={() => handleSetRagIgnored(true)}
-			disabled={ignoring}
-			title="Ignore RAG for this session and hide this notice"
-		>
-			Ignore for this session
-		</button>
+		<!-- Hides this notice and nothing else: `ragIgnored` is read by the
+		     notice alone, so Search by meaning keeps searching the lorebook. -->
+		{#if canHide}
+			<button
+				type="button"
+				class="rag-notice-link"
+				onclick={() => handleSetRagIgnored(true)}
+				disabled={ignoring}
+				title="Hide this notice for this session. Search by meaning still runs."
+			>
+				Hide for this session
+			</button>
+		{/if}
 	</div>
-{:else if ragStatus?.ragIgnored && ragStatus.applicable}
+{:else if canHide && ragStatus?.ragIgnored && pendingVariant}
+	<!-- Only while the hidden notice would have something to say: over a
+	     fully indexed book there is nothing hidden to show again. -->
 	<div
 		class="text-surface-500 flex flex-wrap items-center justify-end gap-x-2 gap-y-1 text-xs"
 	>
-		<Icons.SearchX size={12} class="shrink-0" aria-hidden="true" />
-		<span>RAG is off for this session.</span>
+		<Icons.EyeOff size={12} class="shrink-0" aria-hidden="true" />
+		<span>
+			Notice hidden for this session. Search by meaning still runs.
+		</span>
 		<button
 			type="button"
 			class="rag-notice-link"
 			onclick={() => handleSetRagIgnored(false)}
+			disabled={ignoring}
+			title="Show the indexing notice again for this session"
 		>
-			Re-enable
+			Show again
 		</button>
 	</div>
 {/if}

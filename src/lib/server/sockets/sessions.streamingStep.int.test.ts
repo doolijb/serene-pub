@@ -127,13 +127,6 @@ vi.mock("$lib/server/connections/capabilityTarget", async (importOriginal) => {
 		}
 	}
 })
-vi.mock("$lib/server/utils/getUserConfigurations", () => ({
-	getUserConfigurations: async () => ({
-		sampling: { id: 1 },
-		contextConfig: { id: 1 },
-		promptConfig: { id: 1, systemPrompt: "Stay in character." }
-	})
-}))
 vi.mock("$lib/server/embedding", () => ({
 	isModelReady: () => false,
 	getLoadedModelId: () => null,
@@ -341,7 +334,7 @@ const humanized = (key: string) =>
 		.toLowerCase()
 
 describe("the streaming step over sessions:fireTurn", () => {
-	test("the Lair streams only its lead delver's line — never the planner's JSON (R8)", async () => {
+	test("the Lair streams only its first speaking delver's line — never the planner's JSON (R8)", async () => {
 		const w = await session("core:genre/lair", {})
 		const { res, emitted } = await reply(w, "the lair road")
 		expect((res as any)?.error).toBeUndefined()
@@ -355,7 +348,24 @@ describe("the streaming step over sessions:fireTurn", () => {
 			expect(text).not.toContain("{")
 			expect(text).not.toContain("beats")
 		}
-		// …and the lead delver's line arrived while the row was still open.
+		// …and the first speaking delver's line arrived while the row was still open.
+		expect(frames.some((t) => t.startsWith("The torch gutters."))).toBe(true)
+	})
+
+	// The party speech (owner ruling 2026-09-30): the Castellan speaking for
+	// the party streams its one call's lines, and nothing else.
+	test("the Lair, with the Castellan speaking for the party, streams its lines for the party — never the planner's JSON", async () => {
+		const w = await session("core:genre/lair", { partySpeech: "castellan" })
+		const { res, emitted } = await reply(w, "the lair party road")
+		expect((res as any)?.error).toBeUndefined()
+		expect((await runsOf(w.session.id)).map((r) => `${r.specSlug}:${r.outcome}`)).toContain(
+			"core:spec/lair-respond:ok"
+		)
+		const frames = streamedFrames(emitted)
+		for (const text of frames) {
+			expect(text).not.toContain("{")
+			expect(text).not.toContain("beats")
+		}
 		expect(frames.some((t) => t.startsWith("The torch gutters."))).toBe(true)
 	})
 
@@ -368,38 +378,6 @@ describe("the streaming step over sessions:fireTurn", () => {
 		expect((res as any)?.error).toBeUndefined()
 		const frames = streamedFrames(emitted)
 		for (const text of frames) expect(text).not.toContain("{")
-		expect(frames.some((t) => t.startsWith("The torch gutters."))).toBe(true)
-	})
-
-	/**
-	 * W2: the Writing Room's prose is written by one of two oracles in the
-	 * mutually exclusive branches of its `turn` junction. Under "one per spec"
-	 * it streamed nothing; now each branch's step is declared and the one
-	 * that runs streams.
-	 */
-	test("the Writing Room streams its manuscript chunk — the manuscript branch", async () => {
-		const w = await session("core:genre/writing-room", {})
-		const { res, emitted } = await reply(w, "the manuscript road", {
-			ref: null,
-			via: "pick",
-			channel: "manuscript"
-		})
-		expect((res as any)?.error).toBeUndefined()
-		expect((await runsOf(w.session.id)).map((r) => `${r.specSlug}:${r.outcome}`)).toContain(
-			"core:spec/writing-room-respond:ok"
-		)
-		const frames = streamedFrames(emitted)
-		expect(frames.some((t) => t.startsWith("The torch gutters."))).toBe(true)
-	})
-
-	test("the Writing Room streams its companion's reply — the talk branch", async () => {
-		const w = await session("core:genre/writing-room", {})
-		const { res, emitted } = await reply(w, "the talk road", { ref: null, via: "pick" })
-		expect((res as any)?.error).toBeUndefined()
-		expect((await runsOf(w.session.id)).map((r) => `${r.specSlug}:${r.outcome}`)).toContain(
-			"core:spec/writing-room-respond:ok"
-		)
-		const frames = streamedFrames(emitted)
 		expect(frames.some((t) => t.startsWith("The torch gutters."))).toBe(true)
 	})
 

@@ -66,7 +66,7 @@ const seam = vi.hoisted(() => {
 	 * A drizzle-ish builder: every method chains, awaiting it records the
 	 * statement against the table it named.
 	 */
-	function chain(kind: string, table: any, result: () => any) {
+	function chain(kind: string, table: any, result: (label: string) => any) {
 		let label = `${kind}(${nameOf(table)})`
 		const self: any = {
 			from: (t: any) => {
@@ -84,7 +84,7 @@ const seam = vi.hoisted(() => {
 			returning: () => self,
 			then: (ok: any, err: any) => {
 				queries.push(label)
-				return Promise.resolve(result()).then(ok, err)
+				return Promise.resolve(result(label)).then(ok, err)
 			}
 		}
 		return self
@@ -132,11 +132,13 @@ const seam = vi.hoisted(() => {
 		// `select()` with no projection is the whole row, which is what a LIST
 		// read is; a projection is a lookup. Told apart because both touch
 		// `lorebook_entries` and only one of them is a cascade's cost.
+		// The ownership check (`findOwnedBook`, plan B3) is a projected
+		// select on `lorebooks`: it answers with the book when there is one.
 		select: (cols?: any) =>
 			chain(
 				cols === undefined ? "selectAll" : "select",
 				undefined,
-				() => []
+				(label) => (label === "select(lorebooks)" && rows.book ? [rows.book] : [])
 			),
 		update: (table: any) => chain("update", table, () => []),
 		insert: (table: any) => chain("insert", table, () => [rows.inserted]),
@@ -443,7 +445,7 @@ describe("lorebooks:createBinding — the cast cascade", () => {
 		expect(events(h)).toEqual(["lorebooks:createBinding"])
 		// The ownership read still ran; the three-way join behind the cast
 		// did not.
-		expect(count("lorebooks.findFirst(columns)")).toBe(1)
+		expect(count("select(lorebooks)")).toBe(1)
 		expect(count("lorebooks.findFirst(bindings)")).toBe(0)
 	})
 

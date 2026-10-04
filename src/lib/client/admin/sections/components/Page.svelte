@@ -4,12 +4,15 @@
 	 * widgets an admin writes or clones here, kept on this instance, each its
 	 * own owner (`authored.<id>`) with its own UI worker and enable switch.
 	 *
-	 * Two lists. Core's components, whose source can be read and — all but
-	 * the conversation (`messages`, view-only: it runs on core's own trust) —
-	 * cloned into a new widget; a clone never replaces core's. Then this
-	 * instance's authored components: switch one on or off, see whether its
-	 * scopes wait for review or its last compile failed, open it in the
-	 * editor, export it, delete it.
+	 * The changelist (note 37, Django admin) of this instance's authored
+	 * components: status, review, compile state, framework; bulk Turn on /
+	 * Turn off / Delete (a confirmation page: layouts that place one show it
+	 * as missing). A row opens its editor — the change view — at
+	 * `/admin/components/<id>`; "Add component" opens the add form (`/new`,
+	 * blank or a clone of core's). Below, **Core's components** (Django's
+	 * related read-only list): their source can be read and — all but the
+	 * conversation (`messages`, view-only: it runs on core's own trust) —
+	 * cloned into a new widget; a clone never replaces core's.
 	 *
 	 * An instance with no compiler (Android) cannot write, clone or preview:
 	 * the page says so and keeps what still works there — the list, the
@@ -30,7 +33,14 @@
 	import { toaster } from "$lib/client/utils/toaster"
 	import CodeEditor from "$lib/client/components/componentEditor/CodeEditor.svelte"
 	import { adminRedirect } from "$lib/client/components/componentEditor/editorState"
-	import AdminPageHeader from "$lib/client/components/admin/AdminPageHeader.svelte"
+	import AdminChangelist from "$lib/client/components/admin/AdminChangelist.svelte"
+	import AdminFieldset from "$lib/client/components/admin/AdminFieldset.svelte"
+	import {
+		deletionFor,
+		type AdminBulkAction,
+		type AdminChangelistColumn,
+		type AdminChangelistFilter
+	} from "$lib/client/components/admin/changelist"
 	import ImportComponentDialog from "$lib/client/components/componentEditor/ImportComponentDialog.svelte"
 	import { downloadShareFile } from "$lib/client/components/componentEditor/componentShare"
 
@@ -46,7 +56,6 @@
 	let compiler = $state<{ available: boolean; reason?: string }>({ available: true })
 	let loading = $state(true)
 	let refusal = $state<string | null>(null)
-	let framework = $state<Sockets.Components.Framework>("svelte")
 	/** A clone or create in flight, so a second press does not make two. */
 	let making = $state<string | null>(null)
 	let importOpen = $state(false)
@@ -96,7 +105,8 @@
 	}
 	function handleExport(res: Sockets.Components.Export.Response) {
 		if (!exporting) return
-		exporting = false
+		exportsLeft = Math.max(0, exportsLeft - 1)
+		if (!exportsLeft) exporting = false
 		downloadShareFile(res)
 	}
 	/** Anything announced — another tab's save, an import — re-reads the list. */
@@ -156,22 +166,130 @@
 		making = `clone:${slug}`
 		socket.emit("components:clone", { slug })
 	}
-	function create() {
-		if (making) return
-		making = "create"
-		socket.emit("components:create", { framework })
-	}
 	function setEnabled(c: Summary, enabled: boolean) {
 		pending++
 		socket.emit("components:setEnabled", { id: c.id, enabled })
 	}
-	function remove(c: Summary) {
-		if (!confirm(`Delete "${text(c.label)}"? Layouts that place ${c.widgetId} show it as missing.`)) return
-		pending++
-		socket.emit("components:delete", { id: c.id, expectedUpdatedAt: c.updatedAt })
+	const noun = { singular: "component", plural: "components" }
+	type Status = "draft" | "failed" | "refused" | "waiting" | "on" | "off"
+	const STATUS_ORDER: Status[] = ["failed", "refused", "draft", "waiting", "on", "off"]
+	function statusOf(c: Summary): Status {
+		if (c.lastError) return "failed"
+		if (c.refusal) return "refused"
+		if (c.hasComponentDraft) return "draft"
+		if (c.enabled && !c.src) return "waiting"
+		return c.enabled ? "on" : "off"
 	}
+	const STATUS_WORD: Record<Status, string> = {
+		failed: "Last compile failed",
+		refused: "Not offered",
+		draft: "Draft waiting",
+		waiting: "On — not compiled yet",
+		on: "On",
+		off: "Off"
+	}
+	const STATUS_DOT: Record<Status, string> = {
+		failed: "bg-error-500",
+		refused: "bg-error-500",
+		draft: "bg-warning-500",
+		waiting: "bg-warning-500",
+		on: "bg-success-500",
+		off: "bg-surface-400-600"
+	}
+	const columns: AdminChangelistColumn<Summary>[] = [
+		{ key: "label", label: "Name", primary: true, text: (c) => text(c.label), sortValue: (c) => text(c.label) },
+		{
+			key: "status",
+			label: "Status",
+			custom: true,
+			text: (c) => STATUS_WORD[statusOf(c)],
+			sortValue: (c) => STATUS_ORDER.indexOf(statusOf(c))
+		},
+		{
+			key: "review",
+			label: "Scopes",
+			text: (c) => (c.needsReview ? "Needs review" : "Reviewed"),
+			sortValue: (c) => (c.needsReview ? 0 : 1)
+		},
+		{
+			key: "basedOn",
+			label: "Based on",
+			text: (c) => (c.basedOn ? `Clone of ${c.basedOn.component}` : "Blank"),
+			sortValue: (c) => c.basedOn?.component ?? null
+		},
+		{
+			key: "widget",
+			label: "Widget",
+			text: (c) => `${c.widgetId} · ${c.framework}`,
+			sortValue: (c) => c.widgetId,
+			class: "font-mono text-xs",
+			hideWhenStacked: true
+		}
+	]
+	const filters: AdminChangelistFilter<Summary>[] = [
+		{
+			key: "status",
+			label: "Status",
+			values: statusOf,
+			optionLabel: (v) => STATUS_WORD[v as Status] ?? v,
+			order: STATUS_ORDER
+		},
+		{
+			key: "review",
+			label: "Scopes",
+			values: (c) => (c.needsReview ? "pending" : "reviewed"),
+			optionLabel: (v) => (v === "pending" ? "Needs review" : "Reviewed"),
+			order: ["pending", "reviewed"]
+		},
+		{
+			key: "framework",
+			label: "Framework",
+			values: (c) => c.framework,
+			optionLabel: (v) => (v === "svelte" ? "Svelte" : v === "vanilla" ? "Vanilla" : v)
+		}
+	]
+	const bulkActions: AdminBulkAction<Summary>[] = [
+		{
+			key: "on",
+			label: "Turn selected components on",
+			icon: Icons.Power,
+			run: (s) => s.filter((c) => !c.enabled).forEach((c) => setEnabled(c, true))
+		},
+		{
+			key: "off",
+			label: "Turn selected components off",
+			icon: Icons.PowerOff,
+			run: (s) => s.filter((c) => c.enabled).forEach((c) => setEnabled(c, false))
+		},
+		{
+			key: "export",
+			label: "Export selected components",
+			icon: Icons.Download,
+			run: (s) => s.forEach((c) => exportOne(c))
+		},
+		{
+			key: "delete",
+			label: "Delete selected components…",
+			icon: Icons.Trash2,
+			destructive: true,
+			confirm: (s) =>
+				deletionFor(s, {
+					noun,
+					label: (c) => text(c.label),
+					related: (c) => [{ label: "Layouts that place it show", items: [`${c.widgetId} as missing`] }]
+				}),
+			run: (s) => {
+				for (const c of s) {
+					pending++
+					socket.emit("components:delete", { id: c.id, expectedUpdatedAt: c.updatedAt })
+				}
+			}
+		}
+	]
+	let exportsLeft = 0
 	function exportOne(c: Summary) {
 		exporting = true
+		exportsLeft++
 		socket.emit("components:export", { id: c.id })
 	}
 	function viewSource(slug: string) {
@@ -186,158 +304,71 @@
 
 <ImportComponentDialog bind:open={importOpen} coreComponents={core} />
 
-<div class="components-page flex flex-col gap-3">
-	<AdminPageHeader
+<div class="flex min-w-0 flex-col gap-4">
+	<AdminChangelist
 		title="Components"
-		purpose="Widgets written on this instance: clone one of core's to change how it looks, or start from blank, and switch it on for layouts to place."
+		purpose="Widgets written on this pub: clone one of core's to change how it looks, or start from blank, and switch it on for layouts to place. Each runs apart from the page, under its own owner."
+		rows={authored}
+		rowKey={(c) => c.id}
+		{columns}
+		{filters}
+		{bulkActions}
+		{loading}
+		{noun}
+		searchText={(c) => `${text(c.label)} ${c.widgetId} ${c.framework} ${c.basedOn?.component ?? ""}`}
+		rowHref={(c) => `/admin/components/${c.id}`}
+		addHref={compiler.available ? "/admin/components/new" : undefined}
+		defaultSort="label"
+		emptyIcon={Icons.Blocks}
+		emptyMessage={compiler.available
+			? "No components yet. Add one, or clone one of core's below."
+			: "No components yet. Import a share file that carries its compiled module."}
 	>
-		{#snippet actions()}
-			<div class="header-actions">
-				<button
-					type="button"
-					class="btn btn-sm preset-tonal-surface"
-					onclick={() => (importOpen = true)}
-					aria-haspopup="dialog"
-				>
-					<Icons.Upload size={14} /> Import
-				</button>
-				{#if compiler.available}
-					<label class="sr-only" for="new-framework">Framework</label>
-					<select id="new-framework" class="select w-auto text-sm" bind:value={framework}>
-						<option value="svelte">Svelte</option>
-						<option value="vanilla">Vanilla</option>
-					</select>
-					<button type="button" class="btn btn-sm preset-filled-primary-500" onclick={create} disabled={!!making}>
-						<Icons.Plus size={14} /> New component
-					</button>
-				{/if}
-			</div>
+		{#snippet headerActions()}
+			<button
+				type="button"
+				class="btn btn-sm preset-tonal-surface"
+				onclick={() => (importOpen = true)}
+				aria-haspopup="dialog"
+			>
+				<Icons.Upload size={14} aria-hidden="true" /> Import
+			</button>
 		{/snippet}
-	</AdminPageHeader>
-
-	{#if !compiler.available}
-		<div class="panel-card flex items-start gap-3" role="status">
-			<Icons.Info size={18} class="text-warning-500 mt-0.5 shrink-0" />
-			<div class="text-sm">
-				<p class="font-medium">Authoring is not available on this instance</p>
-				<p class="text-surface-600-400">
-					It has no component compiler{compiler.reason ? ` (${compiler.reason})` : ""}. You can still switch components on and off, review their scopes, export and delete them, and import share files that carry their compiled module.
+		{#snippet headerExtra()}
+			{#if !compiler.available}
+				<p class="text-surface-700-300 flex items-start gap-2 text-sm" role="status">
+					<span class="bg-warning-500 mt-1.5 size-2 shrink-0 rounded-full" aria-hidden="true"></span>
+					<span>
+						Authoring is not available on this pub: it has no component compiler{compiler.reason
+							? ` (${compiler.reason})`
+							: ""}. You can still switch components on and off, review their scopes, export and delete
+						them, and import share files that carry their compiled module.
+					</span>
 				</p>
-			</div>
-		</div>
-	{/if}
+			{/if}
+			{#if refusal}
+				<p class="text-error-700-300 text-sm" role="alert">{refusal}</p>
+			{/if}
+		{/snippet}
+		{#snippet cell(row, col)}
+			{#if col.key === "status"}
+				{@const st = statusOf(row)}
+				<span
+					class="inline-flex items-center gap-1.5"
+					title={row.lastError ?? (row.refusal ? `Its compiled module was ${row.refusal}` : undefined)}
+				>
+					<span class="size-2 shrink-0 rounded-full {STATUS_DOT[st]}" aria-hidden="true"></span>
+					{STATUS_WORD[st]}
+				</span>
+			{/if}
+		{/snippet}
+	</AdminChangelist>
 
-	{#if refusal}
-		<div class="panel-card text-error-700-300 text-sm" role="alert">{refusal}</div>
-	{/if}
-
-	<section class="panel-card flex flex-col gap-3" aria-labelledby="authored-heading">
-		<div>
-			<h2 id="authored-heading" class="text-sm font-medium">Your components</h2>
-			<p class="text-surface-600-400 text-xs">
-				Each runs apart from the page, under its own owner. Layouts can place one once it is on.
-			</p>
-		</div>
-
-		{#if loading}
-			<p class="text-surface-600-400 flex items-center gap-2 text-sm" role="status">
-				<Icons.LoaderCircle size={14} class="animate-spin" /> Loading components…
-			</p>
-		{:else if !authored.length}
-			<p class="text-surface-600-400 text-sm">
-				{compiler.available
-					? "Clone one of core's components below, or start a new one."
-					: "Import a share file that carries its compiled module."}
-			</p>
-		{:else}
-			<ul class="flex flex-col gap-1">
-				{#each authored as c (c.id)}
-					<li class="component-row">
-						<div class="row-main">
-							<p class="flex flex-wrap items-center gap-2">
-								<a class="truncate text-[15px] font-medium hover:underline" href="/admin/components/{c.id}">{text(c.label)}</a>
-								{#if c.needsReview}
-									<a
-										href="/admin/components/{c.id}?tab=widget"
-										class="preset-tonal-warning rounded-full px-2 py-0.5 text-xs"
-										title="A scope it asks for waits for an admin's decision, and is refused until then"
-									>Needs review</a>
-								{/if}
-								{#if c.basedOn}
-									<span class="preset-tonal-surface rounded-full px-2 py-0.5 text-xs">Clone of {c.basedOn.component}</span>
-								{/if}
-								{#if c.hasComponentDraft}
-									<a
-										href="/admin/components/{c.id}"
-										class="preset-tonal-warning rounded-full px-2 py-0.5 text-xs"
-										title="The latest save doesn't compile; sessions keep running the last save"
-									>Draft</a>
-								{/if}
-							</p>
-							<p class="text-surface-600-400 truncate font-mono text-xs">{c.widgetId} · {c.framework}</p>
-							{#if c.lastError}
-								<p class="text-error-700-300 mt-0.5 line-clamp-2 text-xs">
-									<Icons.CircleAlert size={12} class="inline" aria-hidden="true" /> Last compile failed: {c.lastError}
-								</p>
-							{:else if c.refusal}
-								<p class="text-error-700-300 mt-0.5 text-xs">
-									<Icons.CircleAlert size={12} class="inline" aria-hidden="true" /> Not offered — its compiled module was {c.refusal}.
-								</p>
-							{:else if c.enabled && !c.src}
-								<p class="text-surface-600-400 mt-0.5 text-xs">On, but not offered yet — it has not compiled.</p>
-							{/if}
-						</div>
-						<div class="row-controls">
-							<Switch
-								checked={c.enabled}
-								onCheckedChange={(e) => setEnabled(c, e.checked)}
-								class="flex items-center gap-2"
-							>
-								<Switch.Label class="text-surface-600-400 text-xs"
-									><span class="sr-only">Offer {text(c.label)} to layouts: </span>{c.enabled ? "On" : "Off"}</Switch.Label
-								>
-								<Switch.Control class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500">
-									<Switch.Thumb />
-								</Switch.Control>
-								<Switch.HiddenInput />
-							</Switch>
-							<div class="flex items-center gap-1">
-								<a class="btn btn-sm preset-tonal-surface" href="/admin/components/{c.id}">
-									<Icons.SquarePen size={14} /> {compiler.available ? "Edit" : "Open"}
-								</a>
-								<button
-									type="button"
-									class="btn-icon btn-icon-sm preset-tonal-surface"
-									aria-label="Export {text(c.label)}"
-									title="Export"
-									onclick={() => exportOne(c)}
-								>
-									<Icons.Download size={14} />
-								</button>
-								<button
-									type="button"
-									class="btn-icon btn-icon-sm preset-tonal-error"
-									aria-label="Delete {text(c.label)}"
-									title="Delete"
-									onclick={() => remove(c)}
-								>
-									<Icons.Trash2 size={14} />
-								</button>
-							</div>
-						</div>
-					</li>
-				{/each}
-			</ul>
-		{/if}
-	</section>
-
-	<section class="panel-card flex flex-col gap-3" aria-labelledby="core-heading">
-		<div>
-			<h2 id="core-heading" class="text-sm font-medium">Core's components</h2>
-			<p class="text-surface-600-400 text-xs">
-				A clone is a new widget beside core's, never in its place. The conversation can be read but not cloned.
-			</p>
-		</div>
+	<AdminFieldset
+		id="core-components"
+		title="Core's components"
+		description="A clone is a new widget beside core's, never in its place. The conversation can be read but not cloned."
+	>
 		<ul class="flex flex-col gap-1">
 			{#each core as c (c.slug)}
 				<li class="component-row">
@@ -393,29 +424,10 @@
 				{/key}
 			</div>
 		{/if}
-	</section>
+	</AdminFieldset>
 </div>
 
 <style>
-	/*
-	 * The header's actions sit beside the title where there is room. In the
-	 * 400px dock they take their own row, so the title and its sentence keep
-	 * the full width instead of wrapping a word to a line.
-	 */
-	.header-actions {
-		display: flex;
-		flex-wrap: wrap;
-		align-items: center;
-		gap: 8px;
-	}
-	@container content (max-width: 559px) {
-		.header-actions {
-			width: 100cqi;
-		}
-	}
-	.components-page {
-		max-width: 72rem;
-	}
 	/*
 	 * A row is the name and its facts, then the controls. Where the section
 	 * is wide (Focus) they share a line; in the 400px dock the controls drop

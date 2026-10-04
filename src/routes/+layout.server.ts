@@ -1,5 +1,6 @@
 import { appVersion } from "$lib/shared/constants/version"
 import { isPrereleaseVersion } from "$lib/shared/utils/releaseChannel"
+import { inAppUpdateGate } from "$lib/server/launcher/launcherEnv"
 import type { LayoutServerLoad } from "./$types"
 
 /**
@@ -26,23 +27,33 @@ import type { LayoutServerLoad } from "./$types"
  * how the old `/api/sockets-endpoint` route imported this same function. The
  * root layout load runs on every page render, so the socket server is always
  * attached before the browser that triggered it can try to connect.
+ *
+ * Startup attaches it too, as soon as `appReady` resolves
+ * (`$lib/server/startup`), so a tab left open across a restart reconnects
+ * without waiting for some page to render. Whichever comes first does the
+ * attach; the other awaits the same one.
  */
-let socketsAttached = false
-async function attachSocketsOnce() {
-	if (socketsAttached) return
+let socketsAttached: Promise<void> | null = null
+function attachSocketsOnce(): Promise<void> {
+	if (socketsAttached) return socketsAttached
 	const httpServer = (globalThis as any).__SERENE_PUB_HTTP_SERVER__
-	if (!httpServer) return
-	socketsAttached = true
-	try {
-		const { attachSocketServer } = await import(
-			"$lib/server/sockets/loadSockets.server"
-		)
-		await attachSocketServer(httpServer)
-	} catch (err) {
-		// The flag stays set: a failed attach is not something retrying on
-		// every page load will fix, and the log would repeat forever.
-		console.error("[sockets] Failed to attach socket server:", err)
-	}
+	if (!httpServer) return Promise.resolve()
+	// The promise, not a flag: a second page rendered while the first attach
+	// is still in flight waits for it too, rather than serving a page that
+	// hydrates against no socket server.
+	socketsAttached = (async () => {
+		try {
+			const { attachSocketServer } = await import(
+				"$lib/server/sockets/loadSockets.server"
+			)
+			await attachSocketServer(httpServer)
+		} catch (err) {
+			// Kept settled: a failed attach is not something retrying on
+			// every page load will fix, and the log would repeat forever.
+			console.error("[sockets] Failed to attach socket server:", err)
+		}
+	})()
+	return socketsAttached
 }
 
 export const load: LayoutServerLoad = async (event) => {
@@ -73,6 +84,13 @@ export const load: LayoutServerLoad = async (event) => {
 			: event.locals.isNewerReleaseAvailable,
 		latestReleaseTag: isPrerelease
 			? undefined
-			: event.locals.latestReleaseTag
+			: event.locals.latestReleaseTag,
+		// Whether the launcher can apply an update to this install (§C11 of
+		// the desktop-distribution contract). The Admin Overview offers
+		// "Update to <tag>" when it can and the releases-page link when not.
+		canUpdateInApp:
+			!isPrerelease &&
+			typeof appVersion === "string" &&
+			inAppUpdateGate({ version: appVersion }).allowed
 	}
 }

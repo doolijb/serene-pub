@@ -45,21 +45,23 @@ describe("which step streams — declared (lair pass B3, D6)", () => {
 			expect(streamingKeys(doc(slug)), slug).toEqual(["generate"])
 	})
 
-	it("is Adventure's and Whodunit's narrator, not the planner that fed it", () => {
+	it("is Adventure's narrator, not the planner that fed it", () => {
 		expect(streamingKeys(doc("core:spec/adventure-respond"))).toEqual(["scene"])
-		expect(streamingKeys(doc("core:spec/whodunit-respond"))).toEqual(["scene"])
 	})
 
 	// Changed 2026-09-27 (lair pass B15, owner D2a): a pick is the picked
 	// delver's own turn and streams their line — the other branch of `pick`.
 	// And 2026-09-28 (lair re-plan R6): the Castellan's Sanctum reply, on the
-	// `channel` junction's other arm.
-	it("is the Lair's narrator, a picked delver or the Castellan — never the planner (F3)", () => {
+	// `channel` junction's other arm. And 2026-09-30 (party speech, owner
+	// ruling: "they are character turns"): a character turn's line, or the
+	// Castellan's lines for the party — the two arms of the play's `speech`
+	// junction.
+	it("is the Lair's narration, its Sanctum talk, the party's lines or a character turn — never the planner (F3)", () => {
 		expect(streamingKeys(doc("core:spec/lair-respond"))).toEqual([
 			"via.narrate.say",
 			"via.turn.channel.sanctum.say",
-			"via.turn.channel.story.pick.picked.say",
-			"via.turn.channel.story.pick.planned.door.play.lead.speaks.say"
+			"via.turn.channel.story.door.play.speech.castellan.party.speaks.say",
+			"via.turn.channel.story.door.play.speech.each.character.turn.say"
 		])
 	})
 
@@ -80,13 +82,6 @@ describe("which step streams — declared (lair pass B3, D6)", () => {
 				expect(node.definitionId, s.slug).not.toBe("core:oracle/generate-json")
 			}
 		}
-	})
-
-	it("is both of the Writing Room's branch steps — only one branch ever runs (W2)", () => {
-		expect(streamingKeys(doc("core:spec/writing-room-respond"))).toEqual([
-			"turn.manuscript.write",
-			"turn.talk.say"
-		])
 	})
 })
 

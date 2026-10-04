@@ -12,6 +12,7 @@ import { beforeAll, describe, expect, it, vi } from "vitest"
 import { eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import type { TestDb } from "$lib/server/utils/testDb"
+import { groupOptions } from "$lib/server/pipelines/config/panel/groups"
 
 let testDb: TestDb
 
@@ -20,7 +21,7 @@ vi.mock("$lib/server/db", async () => {
 	const db = await createTestDb()
 	return {
 		db,
-		// `instanceSecret()` reads the crypto key through the same module.
+		// `pubSecret()` reads the crypto key through the same module.
 		getCryptoSecretKey: () => "workspace-test-secret"
 	}
 })
@@ -120,7 +121,7 @@ async function twoNumericOptionIds(): Promise<string[]> {
 		{ userId: adminId, isAdmin: true }
 	)
 	expect(view).toBeTruthy()
-	const all = view!.steps.flatMap((s: any) => [...s.options, ...s.advanced])
+	const all = groupOptions(view!.groups)
 	const nums = all.filter(
 		(o: any) =>
 			(o.control === "integer" || o.control === "number") && o.writable
@@ -160,11 +161,21 @@ describe("pipelines:setOptions — the batch save", () => {
 			set.emit
 		)
 		expect(res.error).toBeUndefined()
-		const after = (set.last("pipelines:get").pipeline.steps as any[])
-			.flatMap((s) => [...s.options, ...s.advanced])
+		const after = groupOptions(set.last("pipelines:get").pipeline.groups)
 			.filter((o) => o.id === a || o.id === b)
 		expect(after.find((o) => o.id === a)!.value).toBe(7)
 		expect(after.find((o) => o.id === b)!.value).toBe(9)
+		// The batch answers on its own event too, after the view — what a
+		// form waiting on its Save settles on (owner ruling 2026-10-02).
+		expect(set.last("pipelines:setOptions")).toEqual({
+			slug: RESPOND,
+			configId,
+			applied: 2
+		})
+		const order = set.sent.map((e) => e.event)
+		expect(order.lastIndexOf("pipelines:setOptions")).toBeGreaterThan(
+			order.lastIndexOf("pipelines:get")
+		)
 
 		// And the clear half: reset both through the same event.
 		const cleared = collecting()
@@ -174,8 +185,7 @@ describe("pipelines:setOptions — the batch save", () => {
 			cleared.emit
 		)
 		expect(clearedRes.error).toBeUndefined()
-		const rows = (cleared.last("pipelines:get").pipeline.steps as any[])
-			.flatMap((s) => [...s.options, ...s.advanced])
+		const rows = groupOptions(cleared.last("pipelines:get").pipeline.groups)
 			.filter((o) => o.id === a || o.id === b)
 		for (const o of rows) expect(o.overriddenHere).toBe(false)
 	})

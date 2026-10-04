@@ -30,14 +30,12 @@ const specs: Record<string, number> = {}
 const SPECS = [
 	"core:spec/respond",
 	"core:spec/guide-respond",
-	"core:spec/writing-room-respond",
 	// Retired by the modder pass; an A5/A6 boot may have left rows on them.
 	"core:spec/turn-order",
 	"core:spec/turn-order-narrator",
 	// Every genre's own (R27).
 	"core:spec/chat-turn-order",
 	"core:spec/guide-turn-order",
-	"core:spec/writing-room-turn-order",
 	"core:spec/adventure-turn-order"
 ]
 
@@ -155,26 +153,18 @@ describe("moveSpeakerRebinds", () => {
 		expect((await rebindsOf(sessionId)).length).toBe(1)
 	})
 
-	it("a guide or writing-room row is dropped — their turn order offers no control (R42)", async () => {
+	it("a guide row is dropped — its turn order offers no control (R42)", async () => {
 		const guide = await makeSession("core:genre/guide")
-		const writingRoom = await makeSession("core:genre/writing-room")
 		await rebind({
 			spec: "core:spec/guide-respond",
 			sessionId: guide,
 			nodeKey: "speaker",
 			definitionId: "core:task/turn-random@1"
 		})
-		await rebind({
-			spec: "core:spec/writing-room-respond",
-			sessionId: writingRoom,
-			nodeKey: "speaker",
-			definitionId: "core:task/turn-scripted@1"
-		})
 
 		// Moved, it would run with no control to see or clear it.
-		expect(await moveSpeakerRebinds(db)).toMatchObject({ moved: 0, dropped: 2 })
+		expect(await moveSpeakerRebinds(db)).toMatchObject({ moved: 0, dropped: 1 })
 		expect(await rebindsOf(guide)).toEqual([])
-		expect(await rebindsOf(writingRoom)).toEqual([])
 	})
 
 	it("a row an earlier boot moved onto a retired shared slug moves again, where it can", async () => {
@@ -273,7 +263,7 @@ describe("moveSpeakerRebinds", () => {
 		})
 		await db.insert(schema.pipelineNodeRebinds).values({
 			specId: specs["core:spec/respond"]!,
-			scopeKind: "instance",
+			scopeKind: "pub",
 			scopeId: 0,
 			nodeKey: "speaker",
 			definitionId: "core:task/turn-random@1",
@@ -289,11 +279,11 @@ describe("moveSpeakerRebinds", () => {
 				updatedBy: userId
 			}
 		])
-		const [instanceRow] = await db
+		const [pubRow] = await db
 			.select({ nodeKey: schema.pipelineNodeRebinds.nodeKey })
 			.from(schema.pipelineNodeRebinds)
-			.where(eq(schema.pipelineNodeRebinds.scopeKind, "instance"))
-		expect(instanceRow!.nodeKey).toBe("speaker")
+			.where(eq(schema.pipelineNodeRebinds.scopeKind, "pub"))
+		expect(pubRow!.nodeKey).toBe("speaker")
 	})
 
 	it("leaves a row in place until its genre's spec exists, then moves it", async () => {

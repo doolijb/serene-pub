@@ -120,6 +120,8 @@ const METHOD_FOR = Object.fromEntries(
  * cannot time out, and means the migration runs once rather than nine times.
  */
 const IMPLEMENTED = new Map<string, Set<ActionName>>()
+/** Each type's text adapter's own `consumesAttachments`, read off its prototype. */
+const CONSUMES_ATTACHMENTS = new Map<string, boolean>()
 
 /** Generous on purpose: a cold PGlite migration under a loaded CI box is slow. */
 const LOAD_TIMEOUT_MS = 60_000
@@ -133,12 +135,15 @@ beforeAll(async () => {
 		// counts as real capability (it extends KoboldCppAdapter and genuinely
 		// generates text) while an `abstract` or `declare`d base member — both of
 		// which emit nothing — never does.
-		if (modules?.text)
-			for (const a of actionsOf(
-				(await modules.text()).Adapter,
-				BaseConnectionAdapter
-			))
-				found.add(a)
+		if (modules?.text) {
+			const { Adapter } = await modules.text()
+			for (const a of actionsOf(Adapter, BaseConnectionAdapter)) found.add(a)
+			// A constant getter, so reading it off the prototype is reading it.
+			CONSUMES_ATTACHMENTS.set(
+				type,
+				!!Reflect.get((Adapter as any).prototype, "consumesAttachments")
+			)
+		}
 		if (modules?.image)
 			for (const a of actionsOf(
 				(await modules.image()).Adapter,
@@ -343,6 +348,18 @@ describe("the manifest is a checked cache of what the adapters implement", () =>
 				).toBe(true)
 		})
 
+		test(`${type}'s sendsAttachments.chat is its adapter's consumesAttachments`, () => {
+			// The reading rule (`attachments/readers.ts`) judges a pair off the
+			// manifest's static twin, never an adapter module; the two must not
+			// drift, or the composer offers images the adapter drops (or
+			// refuses images it would send).
+			if (!CONSUMES_ATTACHMENTS.has(type)) return
+			expect(
+				!!ADAPTER_MANIFEST[type]?.sendsAttachments?.chat,
+				`${type}: ADAPTER_MANIFEST.sendsAttachments.chat disagrees with the adapter's consumesAttachments.`
+			).toBe(CONSUMES_ATTACHMENTS.get(type))
+		})
+
 		test(`${type}'s declared grades are sayable on their own scales`, () => {
 			// `gradeOf` is pure, total and clamping — it has to be, because it runs
 			// during resolution at boot and throwing there would take the server
@@ -488,7 +505,7 @@ describe("the base classes stay empty of action bodies", () => {
 			}
 		}
 		const image = new ImageProbe({} as any)
-		const text = new TextProbe({ session: {}, promptConfig: {} } as any)
+		const text = new TextProbe({ session: {} } as any)
 
 		for (const name of ACTION_NAMES) {
 			const own = (o: object) =>

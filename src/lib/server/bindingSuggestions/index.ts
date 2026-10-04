@@ -23,9 +23,9 @@
  * A stale annotation is not evidence — §13.3's rule, and the reason every row
  * carries `(extractorVersion, sourceHash, gazetteerHash)`. Rather than invent a
  * third freshness policy, each side here mirrors the reader that already owns
- * it: the version and the gazetteer hash on both, plus the source hash, recomputed
- * through the **exported** recipes (`entrySourceHash`, `contentHash`) so there is
- * still exactly one spelling of *"did this text move"*.
+ * it: the version and the gazetteer hash on both, plus the source hash, compared
+ * with the column the lane's picker compares it with (`annotationTextHash`) so
+ * there is still exactly one spelling of *"did this text move"*.
  *
  * ## "Nothing found" and "not looked yet" are different answers
  *
@@ -46,9 +46,9 @@
 import { and, eq, sql } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import {
-	contentHash,
+	annotationTextHash,
 	entryAnnotationText,
-	entrySourceHash,
+	amendedNamesOf,
 	loadVocabulary,
 	MAX_ANNOTATED_LENGTH,
 	type AnnotationVocabulary
@@ -276,7 +276,8 @@ export async function scanCandidates(
 			createdAt: schema.lorebookEntries.createdAt,
 			title: schema.lorebookEntries.title,
 			keys: schema.lorebookEntries.keys,
-			content: schema.lorebookEntries.content
+			content: schema.lorebookEntries.content,
+			currentHash: annotationTextHash.entry
 		})
 		.from(schema.lorebookEntries)
 		.where(eq(schema.lorebookEntries.lorebookId, lorebookId))
@@ -311,8 +312,8 @@ export async function scanCandidates(
 		if (row.gazetteerHash !== vocabulary.hash) continue
 		const entry = entryById.get(row.entryId)
 		if (!entry) continue
+		if (row.sourceHash !== entry.currentHash) continue
 		const text = entryAnnotationText(entry)
-		if (row.sourceHash !== entrySourceHash(entry)) continue
 		// Counted before the tier filter: a source that was examined and named
 		// nothing has been examined, and the sentinel is how it says so.
 		freshEntries.add(row.entryId)
@@ -338,8 +339,8 @@ export async function scanCandidates(
 	//
 	// Scoped through `sessions.lorebookId`, which is not a preference: it is the
 	// column `annotations/queue.ts` reads to decide which vocabulary a session's
-	// messages were annotated against. Widening this to `session_lorebooks`
-	// would sweep in rows whose `gazetteerHash` was computed from a *different*
+	// messages were annotated against. Widening it to any other book would
+	// sweep in rows whose `gazetteerHash` was computed from a *different*
 	// book, and every one of them would then fail the freshness check anyway —
 	// silently, and after the work of fetching them.
 	//
@@ -352,7 +353,8 @@ export async function scanCandidates(
 			id: schema.messages.id,
 			createdAt: schema.messages.createdAt,
 			content: schema.sessionMessages.content,
-			isHidden: schema.sessionMessages.isHidden
+			isHidden: schema.sessionMessages.isHidden,
+			currentHash: annotationTextHash.message
 		})
 		.from(schema.messages)
 		.innerJoin(
@@ -397,8 +399,8 @@ export async function scanCandidates(
 		if (row.gazetteerHash !== vocabulary.hash) continue
 		const message = messageById.get(row.messageId)
 		if (!message) continue
+		if (row.sourceHash !== message.currentHash) continue
 		const text = (message.content ?? "").slice(0, MAX_ANNOTATED_LENGTH)
-		if (row.sourceHash !== contentHash(text)) continue
 		freshMessages.add(row.messageId)
 		// A hidden message is not part of the conversation the prompt path
 		// reads (`searchMessageAnnotations` excludes it for that reason), so a
@@ -639,7 +641,8 @@ export async function findOwnedSuggestion(
  * binding already answers to. The union is `bindingNames`' — name ∪ aliases ∪
  * absorbedAliases — read through the schema rather than re-spelled, because two
  * spellings of *"what names refer to this character"* is exactly the drift
- * `bindingNames` exists to prevent.
+ * `bindingNames` exists to prevent. A name a cast amendment gives a member
+ * is theirs too, on any line (plan C1 — the vocabulary's own rule).
  */
 export async function takenNames(
 	db: Db,
@@ -654,8 +657,10 @@ export async function takenNames(
 		.from(schema.lorebookBindings)
 		.where(eq(schema.lorebookBindings.lorebookId, lorebookId))
 	const out = new Set<string>()
-	for (const row of rows)
-		for (const name of bindingNames(row))
-			out.add(name.toLowerCase().replace(/\s+/g, " ").trim())
+	const taken = (name: string) =>
+		out.add(name.toLowerCase().replace(/\s+/g, " ").trim())
+	for (const row of rows) for (const name of bindingNames(row)) taken(name)
+	for (const names of (await amendedNamesOf(db, lorebookId)).cast.values())
+		for (const name of names) taken(name)
 	return out
 }

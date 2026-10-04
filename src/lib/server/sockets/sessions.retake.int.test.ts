@@ -2,11 +2,14 @@
  * Retake — Regenerate the last turn, as a whole (lair pass R2, owner
  * 2026-09-28), over the REAL reply road.
  *
- *  - **The yield goes, the turn comes back.** A Lair cast turn writes the
- *    narrator's row and one row per delver; `sessions:retakeTurn` deletes
- *    every row that turn's run created (its **turn yield**, on every channel),
- *    with the state and proposals anchored to them, emits `message-deleted`
- *    for each, and fires the same entry again. The master's own line stays.
+ *  - **The yield goes, the turn comes back.** A Lair turn writes the
+ *    Castellan's beats row, and each delver it plans then takes a character
+ *    turn of their own (owner ruling 2026-09-30) — rows of the planning turn
+ *    (`metadata.planRowId`). `sessions:retakeTurn` deletes every row that
+ *    turn's run created and every row its planned turns wrote (its **turn
+ *    yield**, on every channel), with the state and proposals anchored to
+ *    them, emits `message-deleted` for each, and fires the same entry again.
+ *    The master's own line stays.
  *  - **`preview` writes nothing.** It names the rows the dialog lists.
  *  - **Each refusal is a sentence**: a genre that does not offer retake, the
  *    person's own line newest, the newest row an action's, a guest.
@@ -141,13 +144,6 @@ vi.mock("$lib/server/connections/capabilityTarget", async (importOriginal) => {
 		}
 	}
 })
-vi.mock("$lib/server/utils/getUserConfigurations", () => ({
-	getUserConfigurations: async () => ({
-		sampling: { id: 1 },
-		contextConfig: { id: 1 },
-		promptConfig: { id: 1, systemPrompt: "Stay in character." }
-	})
-}))
 vi.mock("$lib/server/embedding", () => ({
 	isModelReady: () => false,
 	getLoadedModelId: () => null,
@@ -440,7 +436,9 @@ describe("R2 · retake deletes the turn's yield and takes the turn again", () =>
 			w.vell
 		])
 		for (const r of fresh) expect(r.id).toBeGreaterThan(Math.max(...oldIds))
-		expect(await respondRuns(w.session.id)).toBe(2)
+		// Each turn is the Castellan's run and one character turn per named
+		// delver (owner ruling 2026-09-30): three runs, taken twice.
+		expect(await respondRuns(w.session.id)).toBe(6)
 
 		// Every proposal the old turn made cascaded off its rows.
 		const oldProposals = await testDb
@@ -504,7 +502,8 @@ describe("R2 · retake deletes the turn's yield and takes the turn again", () =>
 			"Vell"
 		])
 		expect(await allRows(w.session.id)).toEqual(before)
-		expect(await respondRuns(w.session.id)).toBe(1)
+		// The turn's three runs — the Castellan's and two character turns — and no more.
+		expect(await respondRuns(w.session.id)).toBe(3)
 	})
 })
 

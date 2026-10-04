@@ -87,7 +87,7 @@ export const CONNECTION_SECTIONS: readonly ConnectionSection[] = [
 		modality: "embeddings",
 		label: "Embeddings",
 		description:
-			"Turns lore, characters and past messages into vectors so retrieval can find them.",
+			"Turns lore, characters and messages into vectors, so retrieval can find lorebook entries by meaning.",
 		// `Zap` is the embedding kind's icon — the same mark an entry shows when
 		// its vectors are current (EmbeddingStatusIcon) and the Embeddings group
 		// wears in admin/defaults. `Network` is the narrative graph's (NOMENCLATURE §22).

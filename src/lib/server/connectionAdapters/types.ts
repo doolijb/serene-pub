@@ -25,6 +25,12 @@
  */
 export type CompiledPrompt = {
 	prompt: string | undefined
+	/**
+	 * `{role, content}` per turn. 🚧 A message the prompt parser lifted media
+	 * markers onto also carries `attachments?: MediaRef[]` (`{uuid}` at
+	 * least; PLAN-composer-attachments §3.5.5) — removed by `dispatch.ts`
+	 * (`liftMessageAttachments`) before an adapter sees the payload.
+	 */
 	messages: any[] | undefined
 	meta: {
 		promptFormat: string

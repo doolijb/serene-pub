@@ -566,6 +566,7 @@
 											src={characterData._avatar ||
 												avatarSrc(characterData)}
 											char={characterData}
+											size="xl"
 										/>
 									</div>
 

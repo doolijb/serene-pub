@@ -471,6 +471,7 @@ export async function fireAction(
 				kind: block.kind,
 				question: block.question ?? null,
 				...(typeof block.referent === "string" ? { referent: block.referent } : {}),
+				...(typeof block.vantage === "string" ? { vantage: block.vantage } : {}),
 				addressee: block.addressee ?? null,
 				characterId: null,
 				...(match?.choice !== undefined ? { choice: match.choice, label: match.label } : {})
@@ -494,6 +495,7 @@ export async function fireAction(
 				kind: block.kind,
 				question: block.question ?? null,
 				...(typeof block.referent === "string" ? { referent: block.referent } : {}),
+				...(typeof block.vantage === "string" ? { vantage: block.vantage } : {}),
 				addressee: block.addressee ?? null,
 				characterId: null
 			}

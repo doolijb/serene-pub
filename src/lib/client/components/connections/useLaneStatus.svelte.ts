@@ -116,6 +116,9 @@ export function useLaneStatus(
 		cost = { rows: msg.annotatedRows }
 	}
 	const applyCost = (msg: Sockets.Vectorization.ReindexCost.Response) => {
+		// A targeted answer prices one staged star for the sidebar's
+		// confirmation; this card shows everything stored.
+		if (msg.target) return
 		cost = {
 			rows: msg.rows,
 			...(msg.lorebooks != null ? { lorebooks: msg.lorebooks } : {}),

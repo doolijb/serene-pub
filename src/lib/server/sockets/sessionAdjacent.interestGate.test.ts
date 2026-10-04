@@ -6,8 +6,8 @@
  *
  *   1. **Cascades.** `scenes:create` re-sends the session's scene list and its
  *      scened message ids; `narrativeGraph:applyProposal` re-sends the whole
- *      graph list. Every one of those is a query — a scene scan, six counting
- *      scans — paid until now whether or not any view was open to receive it.
+ *      graph list. Every one of those is a query — a scene scan, the graph
+ *      list's counting reads — paid until now whether or not any view was open to receive it.
  *      They are the thunk form now, so these tests assert on the QUERIES
  *      rather than on the emits: skipping the emit alone would save nothing.
  *   2. **The two bypasses.** `taskQueue:update` and `activity:update` leave
@@ -51,8 +51,16 @@ const seam = vi.hoisted(() => {
 	 * fragment of one query, not a query.
 	 */
 	function chain(label: string, result: any = []) {
+		let read = label
 		const self: any = {
-			from: () => self,
+			// A select names its table (`select:scenes`), so a test can count
+			// one kind of scan — the graph list's per-line counts read scenes
+			// and history entries this way — without counting every select.
+			from: (table: any) => {
+				const name = table?.[Symbol.for("drizzle:Name")]
+				if (typeof name === "string") read = `${label}:${name}`
+				return self
+			},
 			innerJoin: () => self,
 			leftJoin: () => self,
 			where: () => self,
@@ -65,7 +73,7 @@ const seam = vi.hoisted(() => {
 			onConflictDoUpdate: () => self,
 			returning: () => self,
 			then: (ok: any, err: any) => {
-				queries.push(label)
+				queries.push(read)
 				return Promise.resolve(result).then(ok, err)
 			}
 		}
@@ -134,6 +142,10 @@ const seam = vi.hoisted(() => {
 		insert: () =>
 			chain("insert", [{ id: 10, sessionId: 1, lorebookId: 1 }]),
 		delete: () => chain("delete"),
+		execute: async () => {
+			queries.push("execute")
+			return { rows: [] }
+		},
 		transaction: async (fn: any) => fn(db)
 	}
 
@@ -203,21 +215,6 @@ vi.mock("$lib/server/utils/summarizer", async (importOriginal) => {
 			opts.onProgress(compileSeam.progress)
 			return { content: "a compiled summary", raw: "raw" }
 		}
-	}
-})
-
-vi.mock("$lib/server/utils/getUserConfigurations", async (importOriginal) => {
-	const actual =
-		await importOriginal<
-			typeof import("$lib/server/utils/getUserConfigurations")
-		>()
-	return {
-		...actual,
-		getUserConfigurations: async () => ({
-			contextConfig: { id: 1 },
-			promptConfig: { id: 1 },
-			narratorPromptConfig: null
-		})
 	}
 })
 
@@ -427,6 +424,8 @@ afterEach(() => {
 /** The one read that says a scene list or an id list was actually built. */
 const sceneScans = () =>
 	seam.queries.filter((q) => q === "scenes.findMany").length
+/** How many times one labelled read ran (`select:scenes`, `update`, …). */
+const reads = (label: string) => seam.queries.filter((q) => q === label).length
 const events = (h: { emits: Array<{ event: string }> }) =>
 	h.emits.map((e) => e.event)
 
@@ -566,24 +565,41 @@ describe("scenes:listByLorebook — the reply a lorebook view asks for", () => {
 })
 
 describe("narrativeGraph:applyProposal — the graph list cascade", () => {
-	const EMPTY_PROPOSAL = {
-		lorebookId: 1,
-		mode: "extend",
-		proposal: { nodes: [], relationships: [] }
-	} as any
+	/** An empty build parked at review, and the apply that answers it. */
+	const EMPTY_PROPOSAL = () => {
+		const proposal = { nodes: [], relationships: [] }
+		const activityId = activityStore.start({
+			userId: ADMIN.id,
+			lorebookId: 1,
+			lorebookLabel: "Ambervale",
+			mode: "extend"
+		})
+		startedActivities.push(activityId)
+		activityStore.update(activityId, {
+			status: "review",
+			proposal,
+			// One scene read, so the apply stamps it graphed — an update.
+			processedSceneIds: [1],
+			processedHistoryEntryIds: []
+		})
+		return { lorebookId: 1, activityId, proposal } as any
+	}
 
 	test("does not re-count the book when nobody wants the list", async () => {
 		const h = fresh()
 		const owner = h.connect("s1", ADMIN)
 		await owner.declare("narrativeGraph:applyProposal")
 
-		await owner.fire("narrativeGraph:applyProposal", EMPTY_PROPOSAL)
+		await owner.fire("narrativeGraph:applyProposal", EMPTY_PROPOSAL())
 
 		// The apply itself ran, and its own reply — an ungated event in this
 		// slice — went out as the room emit it has always been.
 		expect(seam.queries).toContain("update")
 		expect(events(h)).toContain("narrativeGraph:applyProposal")
-		// The six counting scans behind the list did not happen at all.
+		// The counting reads behind the list did not happen at all: no scene
+		// read, and only the apply's own world-lore screen read entries.
+		expect(reads("select:scenes")).toBe(0)
+		expect(reads("select:lorebook_entries")).toBe(1)
 		expect(sceneScans()).toBe(0)
 		expect(events(h)).not.toContain("narrativeGraph:list")
 	})
@@ -596,10 +612,13 @@ describe("narrativeGraph:applyProposal — the graph list cascade", () => {
 			"narrativeGraph:applyProposal"
 		)
 
-		await owner.fire("narrativeGraph:applyProposal", EMPTY_PROPOSAL)
+		await owner.fire("narrativeGraph:applyProposal", EMPTY_PROPOSAL())
 
-		// Three ungraphed/summarized scans plus the cast re-derivation.
-		expect(sceneScans()).toBe(4)
+		// The list's two counting reads, once each — every scene's line and
+		// flags, and every line's direct history entries (`buildGraphList`,
+		// per-line counts) — beside the apply's own world-lore screen.
+		expect(reads("select:scenes")).toBe(1)
+		expect(reads("select:lorebook_entries")).toBe(2)
 		const list = h.emits.find((e) => e.event === "narrativeGraph:list")!
 		expect(list.target).toBe("s1")
 		expect(list.data.nodes).toEqual([])
@@ -754,6 +773,10 @@ describe("the scope fields the gate reads", () => {
 		expect(compileSeam.progress).not.toHaveProperty("historyEntryId")
 		expect(frame.data).toEqual({
 			historyEntryId: 42,
+			// The reading it was asked at (main, now): one entry compiled on
+			// two lines is two runs, and a modal hears only its own.
+			branchId: null,
+			moment: null,
 			phase: "drafting",
 			batch: 1,
 			totalBatches: 3,

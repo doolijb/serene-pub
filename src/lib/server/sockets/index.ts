@@ -28,6 +28,7 @@ import { registerCompletionTemplateHandlers } from "./completionTemplates"
 import { registerCharacterHandlers } from "./characters"
 import { registerCharacterFolderHandlers } from "./characterFolders"
 import { registerSpriteHandlers } from "./sprites"
+import { registerAuthorsNoteHandlers } from "./authorsNote"
 import { registerSessionHandlers } from "./sessions"
 import { registerUserHandlers } from "./users"
 import { registerUserSettingsHandlers } from "./userSettings"
@@ -54,12 +55,14 @@ import { registerActivityHandlers } from "./activity"
 import { registerCustomThemeHandlers } from "./customThemes"
 import { registerWidgetStyleHandlers } from "./widgetStyles"
 import { registerStateHandlers } from "./state"
+import { registerLorebookStateHandlers } from "./lorebookState"
 import { registerCardSourceHandlers } from "./cardSources"
 import { registerPipelineHandlers } from "./pipelines"
 import { registerSessionAdminHandlers } from "./sessionAdmin"
 import { registerTunnelHandlers } from "./tunnels"
 import { registerAllowedHostHandlers } from "./allowedHosts"
 import { registerBackupHandlers } from "./backups"
+import { registerUpdateHandlers } from "./updates"
 import { registerAdminOverviewHandlers } from "./adminOverview"
 import { registerAdminLogbookHandlers } from "./adminLogbook"
 import {
@@ -71,10 +74,12 @@ import { registerTotpHandlers } from "./totp"
 import { registerAccountHandlers } from "./account"
 import { registerInviteHandlers } from "./invites"
 import { registerJumpHandlers } from "./jump"
+import { registerAttachmentHandlers } from "./attachments"
 import { registerNotificationHandlers } from "./notifications"
 import { installUserPush, pushToUser } from "./utils/userPush"
 import { installAdminOverviewStale } from "$lib/server/admin/overviewStale"
 import { installViewingIo } from "$lib/server/notifications/viewing"
+import { installStartedFromPush } from "$lib/server/sessions/startedFromPush"
 import { isBlockedDuringSetup } from "$lib/server/auth/setupGate"
 import { redactConnections } from "$lib/server/connections/visibility"
 import { isGatedEvent, scopeOfPayload } from "$lib/shared/sockets/interest"
@@ -101,6 +106,9 @@ export function connectSockets(io: {
 	installAdminOverviewStale(io, pushToUser)
 	// What each tab is looking at, read when a notification is raised.
 	installViewingIo(io)
+	// **Updated**, live: a reconcile that moves a layout tells the sessions
+	// that started from it (brief 6b; `sessions/startedFromPush.ts`).
+	installStartedFromPush(io)
 
 	io.on("connect", (socket) => {
 		// authMiddleware (registered via io.use before connectSockets runs)
@@ -158,6 +166,11 @@ export function connectSockets(io: {
 		// makes this return a promise, and a thunk that rejects is caught and
 		// logged here rather than escaping as an unhandled rejection — the call
 		// sites do not await this.
+		//
+		// A caught `e.message` forwarded here may be a failed query's SQL and
+		// values (drizzle-orm 0.44+). It is not cleaned here: every packet
+		// the server sends, on this road or any other, passes the encoder
+		// guard installed with the server (`queryTextGuard.ts`).
 		function emitToUser(
 			event: string,
 			data: any | (() => any | Promise<any>)
@@ -268,6 +281,7 @@ export function connectSockets(io: {
 		registerCharacterHandlers(socket, emitToUser, register)
 		registerCharacterFolderHandlers(socket, emitToUser, register)
 		registerSpriteHandlers(socket, emitToUser, register)
+		registerAuthorsNoteHandlers(socket, emitToUser, register)
 		registerCardSourceHandlers(socket, emitToUser, register)
 		registerSessionHandlers(socket, emitToUser, register)
 		registerLorebookHandlers(socket, emitToUser, register)
@@ -289,17 +303,20 @@ export function connectSockets(io: {
 		registerCustomThemeHandlers(socket, emitToUser, register)
 		registerWidgetStyleHandlers(socket, emitToUser, register)
 		registerStateHandlers(socket, emitToUser, register)
+		registerLorebookStateHandlers(socket, emitToUser, register)
 		registerPipelineHandlers(socket, emitToUser, register)
 		registerSessionAdminHandlers(socket, emitToUser, register)
 		registerTunnelHandlers(socket, emitToUser, register)
 		registerAllowedHostHandlers(socket, emitToUser, register)
 		registerBackupHandlers(socket, emitToUser, register)
+		registerUpdateHandlers(socket, emitToUser, register)
 		registerAdminOverviewHandlers(socket, emitToUser, register)
 		registerAdminLogbookHandlers(socket, emitToUser, register)
 		registerTotpHandlers(socket, emitToUser, register)
 		registerAccountHandlers(socket, emitToUser, register)
 		registerInviteHandlers(socket, emitToUser, register)
 		registerJumpHandlers(socket, emitToUser, register)
+		registerAttachmentHandlers(socket, emitToUser, register)
 		registerNotificationHandlers(socket, emitToUser, register)
 		console.log(`Socket connected: ${socket.id} for user ${userId}`)
 	})
@@ -376,7 +393,7 @@ function register(
 			socket.pendingSetup?.length &&
 			isBlockedDuringSetup(handler.event)
 		) {
-			emitToUser(`${handler.event}:error`, {
+			answerAsker(socket, `${handler.event}:error`, {
 				error:
 					socket.pendingSetup[0] === "password"
 						? "Set a new password to continue."
@@ -403,7 +420,11 @@ function register(
 			: null
 		let emitted: unknown = undefined
 		const trackedEmitToUser = (event: string, data: any) => {
-			if (event === `${handler.event}:error`) specificErrorEmitted = true
+			// The request's own refusal answers the tab that asked (A24).
+			if (event === `${handler.event}:error`) {
+				specificErrorEmitted = true
+				return answerAsker(socket, event, data)
+			}
 			if (logbook && event === handler.event && typeof data !== "function")
 				emitted = data
 			// Forwarded, not discarded: a handler that passes a thunk gets back
@@ -417,20 +438,45 @@ function register(
 		} catch (error) {
 			console.error(`Error handling event ${handler.event}:`, error)
 			if (specificErrorEmitted) return
-			const userId = socket.user?.id
-			if (userId) {
-				// ⚠ Deliberately the raw room emit rather than `emitToUser`, so
-				// the interest gate can never reach it (plan ruling 2: gate
-				// outputs, never failures). A client that declared interest in
-				// an event declared interest in being TOLD IT FAILED; a gate
-				// here would turn a request the client is waiting on into
-				// silence, which is the one failure mode a fire-and-forget
-				// command cannot recover from. The sentence is a constant and
-				// names nothing, so it needs no redaction either.
-				socket.io.to("user_" + userId).emit(`${handler.event}:error`, {
-					error: "An error occurred while processing your request."
-				})
-			}
+			// A handler that words no refusal of its own gets this sentence;
+			// `refusable()` is how a handler words its own.
+			answerAsker(socket, `${handler.event}:error`, {
+				error: "An error occurred while processing your request."
+			})
 		}
+	})
+}
+
+/**
+ * Send a request's refusal to the socket that asked, and to no other tab.
+ *
+ * The user's other tabs did not ask: in the whole room, every tab's Layout
+ * toasts the refusal and every tab's `awaitReply` of the same event settles
+ * on it. A refusal about THIS request is this socket's alone.
+ *
+ * ⚠ Never gated (plan ruling 2: gate outputs, never failures). A client that
+ * declared interest in an event declared interest in being TOLD IT FAILED; a
+ * gate here would turn a request the client is waiting on into silence.
+ *
+ * A socket that has gone — its tab reloaded while a long request was out —
+ * hands the refusal to the user's room, so the failure still reaches a tab.
+ * Redacted for the recipient, like every other emit on this road.
+ */
+function answerAsker(
+	socket: any,
+	event: string,
+	data: any | (() => any | Promise<any>)
+): void | Promise<void> {
+	const userId = socket.user?.id
+	if (!userId) return
+	const target = socket.disconnected ? "user_" + userId : socket.id
+	const send = (value: any) =>
+		socket.io.to(target).emit(event, redactConnections(value, socket.user))
+	if (typeof data !== "function") {
+		send(data)
+		return
+	}
+	return evaluate(event, data).then((box) => {
+		if (box) send(box.value)
 	})
 }

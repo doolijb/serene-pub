@@ -44,6 +44,7 @@ import {
 } from "$lib/server/pipelines/config/panel"
 import { buildWorld } from "$lib/server/pipelines/config/world"
 import { RESPOND_SPEC_ID } from "$lib/server/pipelines/boot/bootstrap"
+import { groupOptions } from "$lib/server/pipelines/config/panel/groups"
 
 const SECRET = "slot-address-secret"
 
@@ -123,13 +124,13 @@ beforeAll(async () => {
 			)
 		)
 	const copy = await duplicateConfig(db, shipped.id, "Slot address copy")
-	await selectConfig(db, spec.id, "instance", 0, copy.id, adminId)
+	await selectConfig(db, spec.id, "pub", 0, copy.id, adminId)
 }, 60_000)
 
 const viewer = () => ({ userId: adminId, isAdmin: true })
 
 const allOptions = (v: NamespaceView): ConfigOption[] =>
-	v.steps.flatMap((s) => [...s.options, ...s.advanced])
+	groupOptions(v.groups)
 
 const connectionOption = async (): Promise<ConfigOption> => {
 	const v = (await namespaceView(

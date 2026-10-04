@@ -1,78 +1,94 @@
 # Importing from SillyTavern
 
-Serene Pub can import [characters](./characters.md) (with their expression sprites), [personas](./personas.md), chats (including group chats), and lorebooks directly from a local SillyTavern install. Each SillyTavern chat becomes a Serene Pub [session](./sessions.md). The whole process runs in your browser — you pick the folder, your browser reads and uploads the relevant files, and nothing is read from the server's filesystem.
+Bring your SillyTavern characters, personas, chats and lorebooks into Serene Pub in one go, straight from your SillyTavern folder.
 
-## Overview
+:::note You'll need
+- An admin account. The importer isn't offered to other accounts, or in the [Android app](./android.md).
+- Your SillyTavern folder on the computer you're browsing from.
+- A Chromium-based browser (Chrome, Edge, Brave…) or a recent Firefox, which can open a whole folder.
+:::
 
-The importer lives at the **Import from SillyTavern** button in **Settings → User**, and opens the dedicated `/import` page; the setup wizard's **Import your characters and personas** link opens the same page. This page is **admin-only**: a non-admin account is sent straight back to the home page. It isn't offered on the [Android app](./android.md).
+New to Serene Pub as well? [Coming from SillyTavern](./coming-from-sillytavern.md) maps SillyTavern's words and habits onto this app.
 
-The flow has four steps: pick your SillyTavern folder, scan it, review and select what to bring in, and run the import. A confirmation screen with next-step options appears when it's done.
+Your browser reads the folder and uploads only the files the import needs. Nothing is read from the server's own disk, and your SillyTavern folder isn't changed.
 
-An in-app notice on the import page lays out the scope up front:
+## What comes across
 
-- **Imported:** characters and their expression sprites, personas and their avatars, chats (including group chats), and lorebooks (SillyTavern's World Info).
-- **Not imported:** the links between chat branches and checkpoints (each branch file imports as its own session), a group's earlier chats (only its current one imports), chat backgrounds, and extensions data.
-- Both individual and group chats become sessions in Serene Pub's one [session](./sessions.md) system.
-- Alternative message variations ("swipes") are preserved in each message's metadata.
+| From SillyTavern | Becomes in Serene Pub |
+| --- | --- |
+| Characters, with their expression sprites | [Characters](./characters.md), with [sprites](./characters.md#sprites) |
+| Personas, with their avatars | Characters marked as [personas](./personas.md) |
+| Chats and group chats | [Sessions](./sessions.md), with every message and its swipes |
+| World Info files | [Lorebooks](./lorebooks.md) |
 
-## Picking a Folder
+Not imported: the links between a chat's branches and checkpoints (each branch file becomes its own session), a group's earlier chats (only its current one comes in), chat backgrounds, and extension data.
 
-Click **Choose SillyTavern Folder** to open your browser's native folder picker (this uses `webkitdirectory`, so it requires a Chromium-based browser or a recent version of Firefox). Select your SillyTavern root folder — or a SillyTavern-Launcher folder, a `data` folder, or a `data/default-user` folder; the importer doesn't care what the folder is named.
+## Import your folder
 
-Instead, it looks for one of SillyTavern's landmark subdirectories — `characters/`, `chats/`, `groups/`, or `worlds/` — or a `settings.json` file, and treats whichever directory contains one of those as the data root. If none of these are found anywhere in the picked folder, you'll see a "No SillyTavern data found" error and need to pick a different folder.
+1. Open **Settings › Import**. **Import from SillyTavern** in **Settings › User**, and the setup wizard's **Import your characters and personas**, open the same section.
+2. Press **Choose SillyTavern Folder** and pick your SillyTavern folder. Its main folder, a SillyTavern-Launcher folder, its `data` folder or `data/default-user` all work.
+3. Press **Process data**. The page uploads the character, group, world and settings files and lists what it found under **Scan results**.
+4. Untick anything you don't want. Everything starts ticked, and each group has **Toggle all**.
+5. Turn on **I understand this will import the selected data into Serene Pub**, then press **Import selected data**.
 
-Once a folder resolves successfully, the page shows how many relevant files it found, split into files staged for scanning right away versus chat history files that are only uploaded later for whatever you actually choose to import. Everything else in the folder (extensions data, background images, caches, etc.) is skipped entirely and never uploaded.
+:::tip You should see
+**Import complete** with a summary such as *Imported 3 characters, 42 sprites, 1 persona, 5 sessions, 2 lorebooks.* Your characters are in the Characters view and the chats are in Sessions.
+:::
 
-### What Counts as a Relevant File
+:::warning If this didn't work
+- **"No SillyTavern data found"**: the folder has none of SillyTavern's `characters`, `chats`, `groups` or `worlds` folders, or its `settings.json`. Pick the folder that contains them.
+- **"Nothing found"**: the folder was read but held nothing to import. Check you picked your real SillyTavern folder.
+- **A session is greyed out with *Missing character(s)***: you unticked a character it needs. Tick the character again.
+- **Import finished with errors**: everything else came in. The list under the summary says what didn't, and why.
+:::
 
-Within the resolved data root, only these paths are picked up: `settings.json`, and anything under `characters/`, `chats/`, `groups/`, `group chats/`, `worlds/`, or `User Avatars/`. This keeps the upload small even if your SillyTavern folder also contains large amounts of unrelated data (backgrounds, extension caches, etc.).
+## What the scan finds
 
-## Scanning & Reviewing Results
+- **Characters**: each `.png` or `.json` card in `characters/`. A PNG made by an image generator, which keeps its generation settings in the file too, is still read.
+- **Personas**: from SillyTavern's `settings.json`, with the avatar from `User Avatars/`.
+- **Individual sessions**: one per chat file in `chats/<character name>/`.
+- **Group sessions**: one per group in `groups/`, with the group's current chat from `group chats/`. A group with no chat yet comes in empty.
+- **Lorebooks**: one per World Info file in `worlds/`.
 
-Click **Process Data** to upload the metadata-bearing files (characters, `settings.json`, groups, worlds) to the server and scan them. A progress bar tracks the upload in batches; the scan itself times out and shows an error if the server doesn't respond within 30 seconds.
+Each session lists the characters it needs. Untick one of them and the session is disabled until you tick it again.
 
-When the scan finishes, a **Scan results** panel lists everything found, broken into five categories:
+## How things come across
 
-- **Characters** — parsed from `.png` or `.json` character cards in `characters/`.
-- **Personas** — read from `settings.json`, where SillyTavern keys each persona by its avatar file: `power_user.personas` gives the name you know it by, and `power_user.persona_descriptions` its description. That avatar (`User Avatars/<file>`) is copied over as the persona's avatar. Each one is created as a character with the **Persona** flag set, so it shows under the **Personas** filter of the Characters view.
-- **Individual sessions** — one per SillyTavern chat, a `.jsonl` file under `chats/<character name>/`.
-- **Group sessions** — one per SillyTavern group, a `.json` file in `groups/`, each listing its member character names. Its history is the group's current chat, `group chats/<chat_id>.jsonl`.
-- **Lorebooks** — one per `.json` "World Info" file in `worlds/`. Every entry lands as World lore, and each key in the file becomes one keyword, so a regex key with a comma in it (`\w{2,4}`) stays whole.
+- **Chats** keep every message, in order, with its swipes. The characters and persona are seated by name. A chat file with a damaged line isn't imported, and the error names the line (*Line 3 of the chat file is not valid JSON*) so you can fix it and import again. An empty chat file isn't imported either.
+- **A chat's Author's Note** becomes the session's [author's note](./sessions.md#authors-note), with its depth, interval and role. A note SillyTavern placed outside the chat (before or after the story string) is placed by its depth instead, and the import summary says so.
+- **Lorebooks**: every World Info entry becomes world lore, and each of its keys becomes one keyword. A book's scan depth, token budget and recursive scanning come with it.
+- **A session that reads a lorebook** (its chat's World Info, or its character's own book) seats its characters and persona in that book's cast, as reading a book into a session does.
+- **Sprites**: SillyTavern keeps them in a folder named after the character. The images at the top of that folder go into the character's default [sprite set](./characters.md#sprite-sets), and each subfolder becomes a set of the same name. A `backgrounds` subfolder is skipped.
+- Each thing is made whole or not at all: a session with all its messages, a lorebook with all its entries. Nothing is left half-imported.
 
-Each category shows a live `selected/total` count and a header toast summarizes totals ("Found N characters, N personas, N sessions, N lorebooks"). If the scan completes but finds nothing importable, a "Nothing found" warning suggests double-checking that you pointed it at the actual SillyTavern root.
+## After the import
 
-## Selecting What to Import
+The summary's heading says how it went: **Import complete**, **Import finished with errors** (some items didn't come in), **Import stopped early**, or **Nothing was imported**. Under it:
 
-Every item in the Scan results panel is a checkbox, individually toggleable, with a **Toggle all** button per category to select or deselect an entire category at once. Everything is selected by default after a scan.
+- each item that failed, with the reason;
+- **Imported, with … left unfinished**: things that came in with a part missing, such as a character whose card's lorebook was left out because you already had one of that name;
+- if it stopped partway, why.
 
-Individual and group sessions each list the character names they depend on. If you deselect a character that one of them needs, that session is automatically disabled (its checkbox becomes unchecked and unclickable) and shows a "Missing character(s): ..." reason inline. Re-selecting the required character(s) re-enables it. This check re-runs any time you toggle a character or a session, so the selection panel always reflects what can actually be imported.
+A server problem reads *Something went wrong on the server. The server log has the details.*
 
-## Running the Import
+**Import another folder** starts again in the same section.
 
-Before importing, check the box labeled **"I understand this will import the selected data into Serene Pub"** — the **Import Selected Data** button stays disabled until it's checked.
+### Importing the same folder twice
 
-Clicking it triggers a second, smaller upload pass: only now does the browser upload the actual chat/group-chat history files — specifically, the `.jsonl` files for the individual chats you selected, plus the entire `group chats/` folder if any group session is selected (matching a selected group to its exact history file requires re-parsing its JSON, so the whole small folder is sent instead of trying to pick out one file). A progress bar again tracks staged/total files.
+- **Lorebooks** are matched by name: one you already have is reused as it is, not duplicated, and the summary says so.
+- **Characters and personas** are always added fresh, so importing the same folder twice gives you two of each.
 
-Once uploaded, the server executes the import: inserting characters, personas, lorebooks, and finally the individual and group sessions with their message history in that order, linking characters and personas to each session where they can be resolved by name. This phase times out after 5 minutes if the server doesn't respond.
+## Large folders
 
-A character's **expression sprites** come along with it. SillyTavern keeps them in a folder named after the character file, labelled by file name (`joy.png`, `joy-2.png`), and each sprite-folder override is a subfolder; Serene Pub imports the top-level images into the character's default [sprite set](./characters.md#sprites) and each subfolder as a set of the same name. A `backgrounds` subfolder is not a sprite set and is skipped.
+- Files upload in batches, and chat histories only upload for the sessions you tick, so a big folder can take a while. Watch the progress bar.
+- One import can stage up to 4 GB, and stops if the server would be left with less than 1 GB free.
+- If you leave partway (close the tab after the scan, say), the uploaded files are cleared after 30 minutes. Finished or failed imports clear theirs straight away.
+- Limits per file: a character card over 64 MB (or with more than 16 MB of character data) and a World Info file over 32 MB aren't read; they're listed with the reason. For sprites, an image over 16 MB, or past 512 images or 256 MB for one character, is left behind.
+- A lorebook must also fit the limits of a lorebook imported on its own (see [Lorebooks](./lorebooks.md#creating-importing-duplicating-and-deleting)); the message names the limit and the entry.
 
-## After Import Completes
+## Related
 
-A completion screen replaces the wizard with an **Import complete** message summarizing what was created, e.g. "Imported 3 characters, 42 sprites, 1 persona, 5 sessions, 2 lorebooks." If any individual items failed, the count and a list of specific error messages (one per failed item) are shown below the summary, while everything else still imports successfully.
-
-From here you have two options:
-
-- **Back to Settings** — returns to the home page.
-- **Import Another Folder** — clears the wizard's state (picked folder, scan results, and the confirmation checkbox) so you can immediately pick a different folder and repeat the process, without leaving the page.
-
-### Duplicate Handling and Re-Importing
-
-Running an import twice against the same data is not fully idempotent for every category:
-
-- **Lorebooks** are matched by name — importing a lorebook (or a character's embedded lore) that already exists under your account reuses the existing record instead of creating a duplicate.
-- **Characters and personas** are always inserted fresh. Re-importing the same folder, or importing overlapping folders, will create duplicate character and persona records rather than updating existing ones.
-
-### Large Folders and Cleanup
-
-Uploads are batched (up to 20 files or roughly 8MB per batch) and sent sequentially, so very large character or chat collections may take a while to upload — watch the progress bar rather than the button state. Files are staged into a temporary import area on the server tied to your account; if you abandon the import partway through (close the tab after scanning, for example), that area and its files are automatically cleaned up after 30 minutes of inactivity. Completed or failed imports clean theirs up immediately.
+- [Coming from SillyTavern](./coming-from-sillytavern.md): where your SillyTavern habits live in Serene Pub, and what works differently.
+- [Characters](./characters.md#importing-a-card): importing single card files.
+- [Lorebooks](./lorebooks.md)
+- [Personas](./personas.md)

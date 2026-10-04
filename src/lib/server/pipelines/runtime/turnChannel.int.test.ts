@@ -100,23 +100,9 @@ beforeAll(async () => {
 
 	// The story string, layered the way `runTurn.int.test.ts` does it — a
 	// template simple enough that a byte comparison below is readable.
-	const [contextConfig] = await db
-		.insert(schema.contextConfigs)
-		.values({
-			name: "Channel Context",
-			template:
-				"{{{instructions}}}\n{{#each sessionMessages}}{{this.name}}: {{this.message}}\n{{/each}}"
-		})
-		.returning()
-	const [promptConfig] = await db
-		.insert(schema.promptConfigs)
-		.values({ name: "Channel Prompt", systemPrompt: "You are {{char}}." })
-		.returning()
-	await db.insert(schema.systemSettings).values({
-		id: 1,
-		defaultContextConfigId: contextConfig.id,
-		defaultPromptConfigId: promptConfig.id
-	})
+	await db.insert(schema.systemSettings).values({ id: 1 })
+	const channelTemplate =
+		"{{{instructions}}}\n{{#each sessionMessages}}{{this.name}}: {{this.message}}\n{{/each}}"
 
 	const { createContextTemplate } = await import(
 		"$lib/server/pipelines/entities/contextTemplates"
@@ -128,7 +114,7 @@ beforeAll(async () => {
 	const template = await createContextTemplate(db, {
 		nodeDefinitionId: CONTEXT_TEMPLATE_NODE_TYPE,
 		name: "Channel Template",
-		source: contextConfig.template!
+		source: channelTemplate
 	})
 	const [respondSpec] = await db
 		.select()
@@ -149,7 +135,7 @@ beforeAll(async () => {
 		{}
 	)
 	const copy = await duplicateConfig(db, shipped!.configId, "Channel host")
-	await selectConfig(db, respondSpec.id, "instance", 0, copy.id)
+	await selectConfig(db, respondSpec.id, "pub", 0, copy.id)
 	await db
 		.insert(schema.pipelineConfigValues)
 		.values({

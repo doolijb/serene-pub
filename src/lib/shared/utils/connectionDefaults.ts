@@ -57,17 +57,15 @@ export const CONNECTION_DEFAULTS = {
 			useMemory: false,
 			memory: "",
 			// Must match KoboldCppForm.svelte's own extraJsonToExtraFields
-			// defaults exactly — these 6 fields are invented by the form
-			// (not read anywhere by KoboldCppAdapter.ts today), and any
-			// mismatch here makes a freshly-opened connection look dirty
-			// before the user has touched anything (the form's mount effect
-			// writes them into `connection`, while the server-sourced
-			// `originalConnection` baseline never had them).
+			// defaults exactly — any mismatch makes a freshly-opened
+			// connection look dirty before the user has touched anything (the
+			// form's mount effect writes them into `connection`, while the
+			// server-sourced `originalConnection` baseline never had them).
+			// KoboldCppAdapter.ts sends each as its KoboldCPP request field.
 			trimStop: true,
 			renderSpecial: false,
 			bypassEos: false,
 			grammarRetainState: false,
-			logprobs: false,
 			replaceInstructPlaceholders: false
 		}
 	},
@@ -88,7 +86,6 @@ export const CONNECTION_DEFAULTS = {
 			renderSpecial: false,
 			bypassEos: false,
 			grammarRetainState: false,
-			logprobs: false,
 			replaceInstructPlaceholders: false,
 			// No sdModelFile here, deliberately — image models are this
 			// endpoint's own `connection_models` rows (modality `image-gen`),

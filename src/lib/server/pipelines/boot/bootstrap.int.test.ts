@@ -70,7 +70,8 @@ describe("bootstrapping the pipeline tables", () => {
 			"$lib/server/pipelines/runtime/sessionEvents"
 		)
 		const { TURN_ORDER_BY_GENRE } = await import("@serene-pub/core-catalog")
-		expect(TURN_ORDER_BY_GENRE.length).toBe(6)
+		// Chat, Adventure, Guide and the Lair.
+		expect(TURN_ORDER_BY_GENRE.length).toBe(4)
 		for (const { genre, spec, events } of TURN_ORDER_BY_GENRE)
 			for (const event of events)
 				expect(

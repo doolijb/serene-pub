@@ -131,7 +131,7 @@ export function registerPluginGenres(
 			// slot under another owner is referenced, not declared, here.
 			if (!own(id) || typeof (s as { type?: unknown }).type !== "string") {
 				if (!getAttributeSlot(id) && !own(id))
-					refused.push(`genre '${genreId}' names '${id}', which nothing on this install declares`)
+					refused.push(`genre '${genreId}' names '${id}', which nothing on this pub declares`)
 				continue
 			}
 			if (mine.slots.has(id)) continue

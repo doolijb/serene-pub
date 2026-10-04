@@ -136,6 +136,13 @@ export interface ExtractedSprites {
  * bytes in this container. `resolve` returns null for a URI it cannot serve
  * (a remote URL, a missing entry, an oversize image) and that sprite is left
  * behind — counted by `unimportedAssets`, never fetched.
+ *
+ * Each URI is resolved ONCE, and every sprite naming it shares those bytes: a
+ * card may name one image for many labels, and a fresh decode or copy per
+ * listing lets an 18 KB CHARX naming one 16 MB entry 512 times hold 268 MB
+ * (S4 review). Nothing past the count ceiling is resolved at all. The
+ * total ceiling still counts every listing, shared or not: the import hashes
+ * each one (`createMedia`), so it bounds that work as well as the memory.
  */
 export function extractCardSprites(
 	raw: any,
@@ -143,8 +150,13 @@ export function extractCardSprites(
 ): ExtractedSprites {
 	const out: ExtractedSprites = { sprites: [], used: new Set(), legacyUsed: 0 }
 	let total = 0
+	const resolved = new Map<string, Buffer | null>()
+	const read = (key: string, load: () => Buffer | null): Buffer | null => {
+		if (!resolved.has(key)) resolved.set(key, load())
+		return resolved.get(key)!
+	}
+	const full = () => out.sprites.length >= CARD_SPRITE_LIMITS.count
 	const take = (s: CardSprite): boolean => {
-		if (out.sprites.length >= CARD_SPRITE_LIMITS.count) return false
 		if (s.bytes.length > CARD_SPRITE_LIMITS.eachBytes) return false
 		if (total + s.bytes.length > CARD_SPRITE_LIMITS.totalBytes) return false
 		total += s.bytes.length
@@ -153,7 +165,8 @@ export function extractCardSprites(
 	}
 
 	for (const a of spriteAssetsOf(raw)) {
-		const bytes = resolve(a.uri)
+		if (full()) break
+		const bytes = read(a.uri, () => resolve(a.uri))
 		if (!bytes) continue
 		const path = embeddedPathOf(a.uri)
 		if (
@@ -168,13 +181,16 @@ export function extractCardSprites(
 	}
 
 	for (const [rawLabel, value] of legacyRisuEmotionsOf(raw)) {
+		if (full()) break
 		const label = normalizeSpriteName(rawLabel)
 		if (!label) continue
-		const bytes = value.startsWith("__asset:")
-			? resolve(value)
-			: value.startsWith("data:")
-				? bytesOfDataUri(value, CARD_SPRITE_LIMITS.eachBytes)
-				: decodeBase64Capped(value, CARD_SPRITE_LIMITS.eachBytes)
+		const bytes = read(value, () =>
+			value.startsWith("__asset:")
+				? resolve(value)
+				: value.startsWith("data:")
+					? bytesOfDataUri(value, CARD_SPRITE_LIMITS.eachBytes)
+					: decodeBase64Capped(value, CARD_SPRITE_LIMITS.eachBytes)
+		)
 		if (bytes && take({ label, bytes })) out.legacyUsed++
 	}
 	return out

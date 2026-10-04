@@ -18,7 +18,6 @@ import { describe, it, expect } from "vitest"
 import { wrapFor } from "$lib/server/pipelines/entities/variableLayouts"
 import { buildTemplateContext } from "$lib/server/pipelines/prompt/templateContext"
 import { InterpolationEngine } from "$lib/server/utils/interpolation/InterpolationEngine"
-import { attachCharacterLoreToCharacters } from "$lib/server/pipelines/prompt/characterLore"
 import { joinWithAnd } from "$lib/shared/utils/joinWithAnd"
 
 /**
@@ -37,8 +36,7 @@ function legacyBlobs({
 	personaNames,
 	charName,
 	personaName,
-	narratorName,
-	session
+	narratorName
 }: any) {
 	const engine = new InterpolationEngine()
 	const ctx = engine.createInterpolationContext({
@@ -62,16 +60,8 @@ function legacyBlobs({
 		engine.interpolateObject(p, ctx, ["name", "description"])
 	)
 	return {
-		characters: JSON.stringify(
-			attachCharacterLoreToCharacters(interpolatedChars, [], session),
-			null,
-			2
-		),
-		personas: JSON.stringify(
-			attachCharacterLoreToCharacters(interpolatedPersonas, [], session),
-			null,
-			2
-		)
+		characters: JSON.stringify(interpolatedChars, null, 2),
+		personas: JSON.stringify(interpolatedPersonas, null, 2)
 	}
 }
 
@@ -83,13 +73,6 @@ const alice = {
 }
 const cara = { id: 2, name: "Cara", description: "A scout." }
 const bob = { id: 1, name: "Bob", description: "A traveller." }
-
-/** The shape `attachCharacterLoreToCharacters` reads: cast plus lorebook. */
-const session = () => ({
-	sessionCharacters: [{ character: { ...alice } }],
-	sessionPersonas: [{ persona: { ...bob } }],
-	lorebook: undefined
-})
 
 const base = () => ({
 	characters: [alice],
@@ -104,9 +87,8 @@ describe("template context", () => {
 	it("produces the same character and persona blobs as the legacy path", async () => {
 		// Byte-identical, because the default templates render these as raw
 		// JSON: a difference in indentation is a difference in the prompt.
-		const c = session()
-		const expected = legacyBlobs({ ...base(), session: c })
-		const built = await buildTemplateContext({ ...base(), session: c })
+		const expected = legacyBlobs(base())
+		const built = await buildTemplateContext(base())
 
 		// Wrapped, because 0.6 moved the heading and fence off the template and
 		// onto the value. The legacy builder still emits the bare blob, so the
@@ -279,42 +261,12 @@ describe("template context", () => {
 		expect(built.instructions).toBe("")
 	})
 
-	it("refuses lore it cannot bind rather than dropping it", async () => {
-		// The bindings live on the session's lorebook. Without a session the entries
-		// would attach to nobody and the prompt would come out short with
-		// nothing to show for it.
-		await expect(
-			buildTemplateContext({
-				...base(),
-				characterLore: [{ id: 1, name: "x", content: "y" } as any]
-			})
-		).rejects.toThrow(/without a session/)
-	})
-
-	it("attaches bound character lore to the card that owns it", async () => {
-		const c = {
-			sessionCharacters: [{ character: { ...alice } }],
-			sessionPersonas: [{ persona: { ...bob } }],
-			lorebook: {
-				id: 7,
-				lorebookBindings: [{ id: 3, characterId: 1 }]
-			}
-		}
-		const built = await buildTemplateContext({
-			...base(),
-			session: c,
-			characterLore: [
-				{
-					id: 1,
-					name: "Oath",
-					content: "Sworn at the gate.",
-					lorebookId: 7,
-					lorebookBindingId: 3
-				} as any
-			]
-		})
-		expect(built.characters).toContain("extra lore")
-		expect(built.characters).toContain("Sworn at the gate.")
+	it("a card is the character as written: no lore is folded into it", async () => {
+		// Lore bound to a cast member is Assemble's `characterLore`, placed by
+		// the template; the builder takes no lore at all.
+		const built = await buildTemplateContext(base())
+		expect(built.characters).not.toContain("extra lore")
+		expect("characterLore" in built).toBe(false)
 	})
 })
 

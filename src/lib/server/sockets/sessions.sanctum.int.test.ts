@@ -60,13 +60,6 @@ vi.mock("$lib/server/embedding/vectorizationQueue", () => ({
 vi.mock("$lib/server/sockets/utils/broadcastHelpers", () => ({
 	broadcastToSessionUsers: async () => {}
 }))
-vi.mock("$lib/server/utils/getUserConfigurations", () => ({
-	getUserConfigurations: async () => ({
-		contextConfig: { id: 1, template: "{{instructions}}" },
-		promptConfig: { id: 1, systemPrompt: "Be brief." },
-		narratorPromptConfig: null
-	})
-}))
 
 /** What the planner and the keeper answer: one delver speaks. */
 const PLAN = {

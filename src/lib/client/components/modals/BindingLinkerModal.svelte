@@ -98,7 +98,7 @@
 					</button>
 
 					<div
-						class="text-surface-700-300 border-t pt-2 text-right text-xs"
+						class="text-surface-700-300 panel-edge border-t pt-2 text-right text-xs"
 					>
 						Member {currentIndex + 1} of {orphanedBindings.length}
 					</div>

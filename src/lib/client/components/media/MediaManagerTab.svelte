@@ -1,8 +1,8 @@
 <!--
 	Media management (28) — every blob this user owns, in one place.
 
-	Media is per-user, so it lives in the Settings sidebar; instance-wide
-	settings live in Admin › Instance (General, Network, Data and backups,
+	Media is per-user, so it lives in the Settings sidebar; pub-wide
+	settings live in Admin › Pub (General, Network, Data and backups,
 	Diagnostics).
 
 	Responsive by construction rather than by breakpoint: the grid is

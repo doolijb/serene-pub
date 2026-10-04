@@ -11,6 +11,13 @@
  * a row's position: the same reading answers for any genre whose turn writes
  * more than one row.
  *
+ * **A planned turn's rows are the planning turn's** (🚧 Lair character
+ * turns, owner ruling 2026-09-30): a character turn fired off a standing
+ * turn plan (`via: 'plan'`) is the rest of the turn that planned it, and
+ * the rows it writes carry that plan row as `metadata.planRowId`. So the
+ * plan row's run yields them too (`turnYieldOf`), and the newest planned
+ * row's turn is the planning run's (`turnRunOf`).
+ *
  * What is NOT in it:
  *  - **a person's line** (`role: 'user'`), even one the run wrote for them —
  *    a retake never deletes what somebody said;
@@ -23,7 +30,7 @@
  * (layout `span`).
  */
 
-import { and, asc, desc, eq, inArray, ne } from "drizzle-orm"
+import { and, asc, desc, eq, inArray, ne, sql } from "drizzle-orm"
 import { actionsOf, envoySlugOfRef, i18nText, type I18n } from "@serene-pub/sdk"
 import { ownVoiceName } from "$lib/shared/sessions/ownVoiceName"
 import * as schema from "$lib/server/db/schema"
@@ -50,6 +57,12 @@ export interface TurnYield {
 	runUuid: string
 	specSlug: string
 	rows: TurnYieldRow[]
+	/**
+	 * 🚧 Every run whose rows the yield holds — the turn's own run first,
+	 * then each planned turn's (Lair character turns): their writes are the
+	 * turn's own work, and a retake takes them with it.
+	 */
+	runs: Array<{ runId: number; runUuid: string }>
 	/**
 	 * The entry the turn was fired with, read back off the run's inlet: the
 	 * speaker it was fired for (`character:<id>`, an envoy's reference, or
@@ -93,8 +106,28 @@ export async function creatingRunOf(
 }
 
 /**
+ * 🚧 The run whose **turn** a message belongs to: the run that created its
+ * plan row, for a planned turn's row (`metadata.planRowId`), else the run
+ * that created the row itself (`creatingRunOf`).
+ */
+export async function turnRunOf(
+	db: Db,
+	messageId: number
+): Promise<typeof schema.pipelineRuns.$inferSelect | null> {
+	const [row] = await db
+		.select({ metadata: schema.sessionMessages.metadata })
+		.from(schema.sessionMessages)
+		.where(eq(schema.sessionMessages.id, messageId))
+		.limit(1)
+	const planRowId = (row?.metadata as { planRowId?: unknown } | null)?.planRowId
+	return creatingRunOf(db, typeof planRowId === "number" ? planRowId : messageId)
+}
+
+/**
  * **`turnYieldOf`** — every message row this run created that still exists,
- * on every channel, oldest first, excluding every `role: 'user'` row.
+ * on every channel, oldest first, excluding every `role: 'user'` row — and
+ * every row a turn it planned wrote (`metadata.planRowId` naming one of
+ * them).
  */
 export async function turnYieldOf(db: Db, runId: number): Promise<TurnYieldRow[]> {
 	const artifacts = await db
@@ -107,8 +140,18 @@ export async function turnYieldOf(db: Db, runId: number): Promise<TurnYieldRow[]
 				eq(schema.pipelineRunArtifacts.action, "created")
 			)
 		)
-	const ids = [...new Set(artifacts.map((a) => a.entityId))]
-	if (!ids.length) return []
+	const created = [...new Set(artifacts.map((a) => a.entityId))]
+	if (!created.length) return []
+	const planned = await db
+		.select({ id: schema.sessionMessages.id })
+		.from(schema.sessionMessages)
+		.where(
+			inArray(
+				sql<string>`${schema.sessionMessages.metadata}->>'planRowId'`,
+				created.map(String)
+			)
+		)
+	const ids = [...new Set([...created, ...planned.map((r) => r.id)])]
 	const rows = await db
 		.select({
 			id: schema.sessionMessages.id,
@@ -235,13 +278,14 @@ function entryOf(receipt: unknown): TurnYield["entry"] {
  * to retake (R2):
  *
  * 1. the newest row on the channel is the person's own → nothing to retake;
- * 2. else the newest row that is not the person's, and the run that created
- *    it;
+ * 2. else the newest row that is not the person's, and the run whose turn
+ *    it is (`turnRunOf`: a planned turn's row is its planning run's);
  * 3. that run must be a **reply run** — a fired turn. A run whose spec
  *    contributes an action (Trigger trap, Reveal, a room answer) is refused
  *    by the action's name; a run that is neither (a greeting's create run, a
  *    row no run recorded) is no turn;
- * 4. the yield: every row that run created, on every channel.
+ * 4. the yield: every row that run created, on every channel, and every
+ *    row the turns it planned wrote.
  */
 export async function lastTurnOf(
 	db: Db,
@@ -271,7 +315,7 @@ export async function lastTurnOf(
 			reason: "own-line",
 			refusal: "Your line is the newest. Press Continue."
 		}
-	const run = await creatingRunOf(db, newest.id)
+	const run = await turnRunOf(db, newest.id)
 	const notATurn = {
 		ok: false as const,
 		reason: "not-a-turn" as const,
@@ -292,13 +336,20 @@ export async function lastTurnOf(
 	}
 	const role = ((doc as { taxonomy?: { role?: unknown } }).taxonomy ?? {}).role
 	if (role === "create") return notATurn
+	const rows = await turnYieldOf(db, run.id)
+	const runs = new Map([[run.id, run.runId]])
+	for (const row of rows) {
+		const by = await creatingRunOf(db, row.messageId)
+		if (by && !runs.has(by.id)) runs.set(by.id, by.runId)
+	}
 	return {
 		ok: true,
 		yield: {
 			runId: run.id,
 			runUuid: run.runId,
 			specSlug: run.specSlug,
-			rows: await turnYieldOf(db, run.id),
+			rows,
+			runs: [...runs].map(([runId, runUuid]) => ({ runId, runUuid })),
 			entry: entryOf(run.receipt)
 		}
 	}

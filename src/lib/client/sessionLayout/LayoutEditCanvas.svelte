@@ -12,28 +12,30 @@
 	 */
 	import type { Snippet } from "svelte"
 	import * as Icons from "@lucide/svelte"
-	import type { ZoneLayout } from "./schema"
+	import type {
+		ArrangedGridV1,
+		ArrangedZone,
+		ZoneId,
+		ZoneLayoutV1
+	} from "@serene-pub/sdk"
 	// Says out loud what a zone with no free cell does to a drop (see the
 	// module): gridstack snaps the card back, and silence reads as a bug.
 	import { zoneIsFull } from "./zoneFull"
+	// QD (./widgetInstances): under "tray only" no card offers Duplicate.
+	import { duplicateOffered } from "./widgetInstances"
 	// The editor's grid is gridstack (free 2D drag / resize / snap). See
 	// GridStackZone — gridstack owns its DOM, Svelte owns only the host.
-	import GridStackZone, {
-		type GsItem,
-		type GsLayout
-	} from "./GridStackZone.svelte"
+	import GridStackZone, { type GsItem } from "./GridStackZone.svelte"
 	import {
 		MIDDLE_TARGET,
-		showZonePin,
-		type Arranged,
-		type ZoneKey
+		showZonePin
 	} from "./arrangedGeometry"
 	import type { RenderUnit } from "./tabGroups"
 	import type { CellState, ColumnLayout } from "./sideRail"
 	import type { SimGeometry } from "./simulator"
 
 	/** One side's previewed column, as SessionLayout's `previewColumn` returns it. */
-	type PreviewColumn = { frame: GsLayout; units: RenderUnit[] }
+	type PreviewColumn = { frame: ArrangedZone; units: RenderUnit[] }
 
 	interface Props {
 		/** The editor's ¼ | ½ | ¼ split, for the real width or a simulated tier. */
@@ -46,10 +48,16 @@
 		middleGsItems: GsItem[]
 		rightGsItems: GsItem[]
 		/**
+		 * What each zone RE-SEEDS on (./editorSeed `editorSeedKey`): its
+		 * committed members and the card the primary floor keeps — never the
+		 * cards themselves, which a cross-zone drag changes.
+		 */
+		seedKeys: Record<ZoneId, string>
+		/**
 		 * The editor's working arrangement. Bound: each zone reports its frame
 		 * back through `onChange`, and `editZonePanel` restores from it.
 		 */
-		editArranged: Arranged
+		editArranged: ArrangedGridV1
 		/** Draw the side columns as rails instead of the editor's grids. */
 		railPreview: boolean
 		/** The zone currently under a drag (highlight). */
@@ -62,11 +70,16 @@
 		/** The Move tab is up, which is the only tab that draws this. */
 		placing: boolean
 		/** The zone template, read for one thing: a zone's own pin. */
-		layout: ZoneLayout
+		layout: ZoneLayoutV1
 		toggleZonePin: (zoneId: string | null) => void
 		removeWidget: (widgetId: string) => void
+		/**
+		 * A card's Duplicate (brief 7b; QD): SessionLayout mints the copy,
+		 * copies its settings and style, and seats it beside the source.
+		 */
+		duplicateWidget: (widgetId: string) => string | null
 		/** A card landed in a zone. SessionLayout keeps `lastDropped`. */
-		onDropped: (id: string, zoneKey: ZoneKey) => void
+		onDropped: (id: string, zoneKey: ZoneId) => void
 		pinOnDrop: (zoneId: string | null) => void
 		markSimDirty: () => void
 		/** The Rails lens: the previewed columns and the model resolved over them. */
@@ -104,6 +117,7 @@
 		leftGsItems,
 		middleGsItems,
 		rightGsItems,
+		seedKeys,
 		editArranged = $bindable(),
 		railPreview,
 		dragOverZone = $bindable(),
@@ -115,6 +129,7 @@
 		layout,
 		toggleZonePin,
 		removeWidget,
+		duplicateWidget,
 		onDropped,
 		pinOnDrop,
 		markSimDirty,
@@ -134,13 +149,6 @@
 		groupRail
 	}: Props = $props()
 
-	// The floor's note is part of the key: removing one of two Messages cards
-	// makes the other the last, and its × has to go — gridstack builds a
-	// card's HTML once, at seed, so the zone re-seeds (from its working frame,
-	// so nothing arranged is lost).
-	function gsKey(items: GsItem[]): string {
-		return items.map((i) => (i.floorNote ? `${i.id}!` : i.id)).join(",")
-	}
 </script>
 
 <!-- One zone drawn as its real widget grid + a square-cell guide overlay. -->
@@ -150,13 +158,13 @@
 	HeadIcon: any,
 	gsItems: GsItem[],
 	isMiddle: boolean,
-	onChange?: (layout: GsLayout) => void
+	onChange?: (layout: ArrangedZone) => void
 )}
 	<!-- Which of the three arranged zones this panel IS. One expression, spent
 	     on the frame below and on naming the zone a cross-zone drop landed in. -->
 	{@const zoneKey = (
 		isMiddle ? "middle" : zoneId === leftZoneId ? "left" : "right"
-	) as ZoneKey}
+	) as ZoneId}
 	<!-- The frame these cards were restored from, so the zone can re-express a
 	     saved arrangement in the grid it is being drawn in — and can tell that
 	     it is a restore, with nothing of its own to report yet. -->
@@ -201,18 +209,24 @@
 			<!-- Only on Move, and only when it is true: a zone whose cells are
 			     all taken snaps a DRAGGED card back, and without this the drop
 			     just fails. The tray is the exception — `place` makes room for
-			     what it lands (see `seatInFrame`), in all three zones now.
+			     what it lands (./arrangedGeometry `seatCard`), in all three
+			     zones, while its cards can still give rows up; after that the
+			     add is refused and says so (brief 7b review).
 			     `frame` is this zone's arrangement, resolved above. -->
 			{#if placing && zoneIsFull(frame)}
 				<span class="flex-1"></span>
 				<span class="zgrid-note">
 					Full · a dragged card snaps back; adding from the tray makes
-					room
+					room if it can
 				</span>
 			{/if}
 		</header>
 		<div class="zgrid-body">
-			{#key gsKey(gsItems)}
+			<!-- Re-seeded when the zone's committed members change, or the card
+			     the floor keeps does (its × is built once, at seed) — from the
+			     working frame, which holds every card dragged in, so nothing
+			     arranged is lost. Never on a drag (./editorSeed). -->
+			{#key seedKeys[zoneKey]}
 				<GridStackZone
 					items={gsItems}
 					{frame}
@@ -224,6 +238,9 @@
 						: undefined}
 					{onChange}
 					onRemove={(id) => removeWidget(id)}
+					onDuplicate={duplicateOffered()
+						? (id) => duplicateWidget(id)
+						: undefined}
 					onDropped={(id) => {
 						onDropped(id, zoneKey)
 						pinOnDrop(zoneId)

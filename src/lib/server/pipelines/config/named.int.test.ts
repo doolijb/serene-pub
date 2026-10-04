@@ -351,11 +351,11 @@ describe("which config a scope has selected", () => {
 	it("prefers the nearer scope, session over instance — the whole chain now", async () => {
 		// The user step is gone (ruled 2026-08-24): a person's choice of
 		// config is made per session, or it is the instance's.
-		await selectConfig(db, specId, "instance", 0, mine, userId)
+		await selectConfig(db, specId, "pub", 0, mine, userId)
 		expect(
 			(await resolveSelectedConfig(db, specId, RESPOND_SPEC_ID, {}))!
 				.source
-		).toBe("instance")
+		).toBe("pub")
 
 		await selectConfig(db, specId, "session", sessionId, mine, userId)
 		expect(

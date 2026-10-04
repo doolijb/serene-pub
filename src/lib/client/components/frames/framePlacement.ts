@@ -1,13 +1,10 @@
 /**
- * The frame half of PLACEMENT and EVENTS (PLAN 25, ruled 2026-08-30) — the
- * sibling of `frameStyle.ts`, and built on the same reasoning.
+ * PLACEMENT and EVENTS over the widget wire (PLAN 25, ruled 2026-08-30).
  *
- * A frame widget is a remote widget plus the iframe: it gets the same
- * `layout.v1` and the same events, and the only thing that differs is the
- * delivery — a remote's worker port or a frame's document port, each
- * receiving `{ t: "layout" }` and `{ t: "event" }`.
+ * `{ t: "layout" }` goes to a remote component only (no frame is a widget);
+ * `{ t: "event" }` to a component and to a session-view frame alike.
  *
- * Both are PUSHED, never negotiated, exactly as `style` is: a frame that has
+ * Both are PUSHED, never negotiated: a receiver that has
  * never heard of them falls through its own switch and ignores them, which is
  * the whole of the compatibility story. Nothing waits for an ack, so an old
  * frame costs one dropped message and no error.

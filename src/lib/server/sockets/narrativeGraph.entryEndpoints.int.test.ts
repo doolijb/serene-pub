@@ -56,10 +56,16 @@ async function makeLorebook(userId: number, name = "Roads") {
 	return lorebook
 }
 
+/**
+ * A tag of its own for each seeded member: one member per tag per book
+ * (`lorebook_bindings_binding_unique`). Not a number, so it is never a cast
+ * tag and never moves a book's counter.
+ */
+let seedTag = 0
 async function makeBinding(lorebookId: number, name: string) {
 	const [binding] = await testDb
 		.insert(schema.lorebookBindings)
-		.values({ lorebookId, binding: "", name })
+		.values({ lorebookId, binding: `{{char:seed-${++seedTag}}}`, name })
 		.returning()
 	return binding
 }
@@ -193,7 +199,7 @@ describe("createRelationship with entry endpoints", () => {
 				relationshipType: "connects to",
 				status: "active"
 			})
-		).rejects.toThrow(/To-entry not found/)
+		).rejects.toThrow(/second end of this link is not an entry in this lorebook/)
 	}, 60_000)
 
 	test("refuses a side that names nothing", async () => {
@@ -278,7 +284,7 @@ describe("updateRelationship", () => {
 				} as any,
 				noopEmit
 			)
-		).rejects.toThrow(/To-entry not found/)
+		).rejects.toThrow(/second end of this link is not an entry in this lorebook/)
 	}, 60_000)
 })
 

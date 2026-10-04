@@ -50,7 +50,7 @@ let sessionColumnId: number
 /** What the pipeline panel's session-scope override points at. */
 let panelPickId: number
 /** The instance's registered `text->text` default, under both of them. */
-let instanceDefaultId: number
+let pubDefaultId: number
 
 vi.mock("$lib/server/db", async () => {
 	const { createTestDb } = await import("$lib/server/utils/testDb")
@@ -85,7 +85,7 @@ beforeAll(async () => {
 	// can only be satisfied by the tier it names. Pointing two of them at one
 	// row would make this file green under any ordering — the same trap
 	// `slotAddress.int.test.ts` documents about the instance default.
-	instanceDefaultId = await make("The instance default")
+	pubDefaultId = await make("The instance default")
 	sessionColumnId = await make("sessions.sampling_config_id")
 	panelPickId = await make("The panel's pick")
 
@@ -102,7 +102,7 @@ beforeAll(async () => {
 	)
 	await setCapabilityDefault(db, "text->text", {
 		connectionId: connection.id,
-		samplingConfigId: instanceDefaultId
+		samplingConfigId: pubDefaultId
 	})
 
 	const [user] = await db
@@ -192,7 +192,7 @@ describe("two session-scope candidates for one sampling slot", () => {
 			.where(eq(schema.sessions.id, sessionId))
 
 		const at = await resolvedSampling()
-		expect(at?.value).toBe(String(instanceDefaultId))
+		expect(at?.value).toBe(String(pubDefaultId))
 		expect(at?.scopeKind).toBe("defaults")
 	})
 })

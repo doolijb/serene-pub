@@ -1,6 +1,7 @@
 <script lang="ts">
 	import * as Icons from "@lucide/svelte"
 	import LensRow from "./LensRow.svelte"
+	import PanelFilterInput from "$lib/client/components/panels/PanelFilterInput.svelte"
 	import ReadingInto from "./ReadingInto.svelte"
 	import { readingLine, type ScopeFacet, type SavedScopeId } from "./scopes"
 	import { SAVED_SCOPES } from "./scopes"
@@ -35,7 +36,11 @@
 			name: string
 			branchId: number | null
 			/** Its story clock; null follows the line's present (now). */
-			clock: { year: number; month?: number | null; day?: number | null } | null
+			clock: {
+				year: number
+				month?: number | null
+				day?: number | null
+			} | null
 		} | null
 		/** Put the reader on the session's line, at its clock. */
 		onMatchSession: () => void
@@ -45,6 +50,12 @@
 		search: string
 		savedCounts: Record<SavedScopeId, number>
 		saved: SavedScopeId | null
+		/** How many loose ends the book has now (note 5). */
+		looseEndsCount: number
+		/** Whether the Loose ends queue is open. */
+		looseEndsOpen: boolean
+		/** Opens the queue, or leaves it when it is open. */
+		onLooseEnds: () => void
 		pinned: PoolItem[]
 		/** What the open session is called, when one reads this book. */
 		readingInto: string | null
@@ -69,6 +80,9 @@
 		search,
 		savedCounts,
 		saved,
+		looseEndsCount,
+		looseEndsOpen,
+		onLooseEnds,
 		pinned,
 		readingInto,
 		reached,
@@ -81,7 +95,7 @@
 </script>
 
 <nav
-	class="border-border flex w-64 shrink-0 flex-col gap-3 overflow-y-auto border-r pr-4"
+	class="flex w-64 shrink-0 flex-col gap-3 overflow-y-auto pr-1"
 	aria-label="Lorebook"
 	data-lore-rail
 >
@@ -105,22 +119,21 @@
 		/>
 	{/if}
 
-	<input
-		class="input input-sm"
-		type="search"
+	<!-- The app's one filter box (note 13): the same component and words
+	     as every other view's, and no shortcut of its own — Jump (Ctrl K /
+	     ⌘K, the pill at the top right) is scoped to this view and fills
+	     this box as you type. -->
+	<PanelFilterInput
+		bind:value={() => search, (next) => onSearch(next)}
 		data-lore-search
-		placeholder="Search this book ⌘K"
+		placeholder="Search this book"
 		aria-label="Search this book"
-		value={search}
-		oninput={(e) => onSearch(e.currentTarget.value)}
 	/>
 
 	<LensRow {lens} onLens={(next) => onLens(next)} />
 
 	<div class="flex flex-col gap-1">
-		<span class="text-surface-600-400 text-xs">
-			Views
-		</span>
+		<span class="text-surface-600-400 text-xs">Views</span>
 		<ul class="flex flex-col gap-1">
 			{#each scopes as facet (facet.id)}
 				<li>
@@ -150,10 +163,28 @@
 	</div>
 
 	<div class="flex flex-col gap-1">
-		<span class="text-surface-600-400 text-xs">
-			Saved
-		</span>
+		<span class="text-surface-600-400 text-xs">Saved</span>
 		<ul class="flex flex-col gap-1">
+			<!-- Not a saved scope: a queue of the book's chores (note 5),
+			     which replaced Needs keywords and the old Loose ends. -->
+			<li>
+				<button
+					type="button"
+					class="btn btn-sm w-full justify-start gap-2 {looseEndsOpen
+						? 'sidebar-row-active'
+						: 'hover:preset-tonal-surface'}"
+					class:opacity-60={looseEndsCount === 0 && !looseEndsOpen}
+					title="What is left to finish in this book, one fix at a time"
+					aria-pressed={looseEndsOpen}
+					data-lore-loose-ends
+					onclick={onLooseEnds}
+				>
+					<span class="flex-1 truncate text-left">Loose ends</span>
+					<span class="badge preset-tonal-surface shrink-0">
+						{looseEndsCount}
+					</span>
+				</button>
+			</li>
 			{#each SAVED_SCOPES as s (s.id)}
 				{@const count = savedCounts[s.id]}
 				<li>
@@ -193,9 +224,7 @@
 							class="text-warning-500 shrink-0"
 							aria-hidden="true"
 						/>
-						<span
-							class="text-surface-600-400 shrink-0 text-xs"
-						>
+						<span class="text-surface-600-400 shrink-0 text-xs">
 							{kindLabel(item.kind)}
 						</span>
 						<span class="min-w-0 flex-1 truncate text-left">

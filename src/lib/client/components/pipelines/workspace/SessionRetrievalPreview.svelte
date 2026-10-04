@@ -22,6 +22,7 @@
 	import * as Icons from "@lucide/svelte"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { useInterest } from "$lib/client/sockets/interest.svelte"
+	import { v4 as uuid } from "uuid"
 	import RetrievalExplanation from "./RetrievalExplanation.svelte"
 
 	interface Props {
@@ -60,8 +61,13 @@
 	let refusal = $state<string | null>(null)
 	/** The draft the answer on screen is about — see `stale` below. */
 	let answeredFor = $state<string | null>(null)
+	/** The last press's id; only its answer is this panel's (plan B8). */
+	let askedId: string | null = null
 
 	const onPreview = (res: Sockets.Pipelines.PreviewRetrieval.Response) => {
+		// Only this panel's own press: the entry's Test asks the same event
+		// in this tab, and the answer goes to every tab (plan B8).
+		if (res.requestId !== askedId) return
 		loading = false
 		if (res.error) {
 			refusal = res.error
@@ -77,7 +83,8 @@
 	}
 
 	/** The read failed in a way the handler did not compose a sentence for. */
-	const showRefusal = (res: { error?: string }) => {
+	const showRefusal = (res: { error?: string; requestId?: string }) => {
+		if (res?.requestId !== askedId) return
 		loading = false
 		if (res?.error) refusal = res.error
 	}
@@ -85,8 +92,9 @@
 	/**
 	 * Both keys BARE and STANDING: the request is a button press (`ask` below),
 	 * not a mount, so the interest is held for the panel's life and the emit
-	 * stays where the press is. Neither event is in `SCOPED_EVENTS`, so
-	 * `onPreview`'s own `res.sessionId !== sessionId` check stays the filter.
+	 * stays where the press is. Neither event is in `SCOPED_EVENTS`; the
+	 * filter is the press's own `requestId` (echoed on the answer and the
+	 * refusal), with `res.sessionId !== sessionId` still guarding a switch.
 	 */
 	useInterest<"pipelines:previewRetrieval">(
 		"pipelines:previewRetrieval",
@@ -102,8 +110,14 @@
 	// A different conversation is a different question. Nothing on screen is
 	// true of it, and an answer left standing under a new heading would be a
 	// confident lie.
+	//
+	// Keyed on a `$derived` copy of the id, not the prop: the session page
+	// replaces its whole `session` object per streamed chunk, and a prop
+	// handed down as `{session.id}` is a getter over it — reading that here
+	// would wipe the answer on every token of a reply (B8).
+	const askedAbout = $derived(sessionId)
 	$effect(() => {
-		void sessionId
+		void askedAbout
 		explanation = null
 		refusal = null
 		answeredFor = null
@@ -125,10 +139,12 @@
 		loading = true
 		refusal = null
 		answeredFor = content ?? ""
+		askedId = uuid()
 		socket.emit("pipelines:previewRetrieval", {
 			sessionId,
 			content: content ?? "",
-			personaId: personaId ?? null
+			personaId: personaId ?? null,
+			requestId: askedId
 		})
 	}
 </script>

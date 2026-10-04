@@ -1,13 +1,12 @@
 <script lang="ts">
 	import * as Icons from "@lucide/svelte"
+	import ResizableSplit from "$lib/client/components/panels/ResizableSplit.svelte"
+	import { LORE_SPLIT_KEY } from "./layoutMode"
 	import { onDestroy, onMount } from "svelte"
 	import { SvelteSet } from "svelte/reactivity"
 	import { Popover, Portal } from "@skeletonlabs/skeleton-svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
-	import {
-		declareInterest,
-		useInterest
-	} from "$lib/client/sockets/interest.svelte"
+	import { useInterest } from "$lib/client/sockets/interest.svelte"
 	import { interestKey } from "$lib/shared/sockets/interest"
 	import { toaster } from "$lib/client/utils/toaster"
 	import EmptyState from "$lib/client/components/EmptyState.svelte"
@@ -21,7 +20,15 @@
 		CHARACTER_LORE_TYPE_ID,
 		HISTORY_TYPE_ID
 	} from "$lib/shared/entries/types"
-	import { castPool, type CastMember, type CastRow } from "./castPool"
+	import {
+		castPool,
+		toCastMember,
+		type CastFace,
+		type CastMember,
+		type CastRow
+	} from "./castPool"
+	import CastAvatar from "./cast/CastAvatar.svelte"
+	import { avatarSrc } from "$lib/client/utils/media"
 	import CastDuplicatesPanel from "./cast/CastDuplicatesPanel.svelte"
 	import DeleteCastMemberModal from "./cast/DeleteCastMemberModal.svelte"
 	import {
@@ -36,6 +43,8 @@
 		maskingAmendment
 	} from "./editor/entrySave"
 	import { awaitReply, isReplyTimeout } from "$lib/client/utils/awaitReply"
+	import { v4 as uuid } from "uuid"
+	import { toastUnsaved } from "$lib/client/utils/toastUnsaved"
 	import CastMemberForm from "./cast/CastMemberForm.svelte"
 	import PresencesPanel from "./cast/PresencesPanel.svelte"
 	import CastRelationships from "./cast/CastRelationships.svelte"
@@ -46,11 +55,18 @@
 		reviewLine
 	} from "./cast/castRelationships"
 	import { stateBadge, visibilityBadge } from "./cast/castVocabulary"
+	import { offeredCards } from "./cast/offeredCards"
 	import { changedFields } from "$lib/shared/lorebooks/amendments"
+	import {
+		rowsReadingOnLine,
+		type Line
+	} from "$lib/shared/lorebooks/lineReading"
 	import { formatDate } from "./sections/historyDates"
 	import { parseMoment } from "./time/moment"
+	import type { StoryDate } from "$lib/shared/lorebooks/storyDate"
 	import AmendmentList from "./time/AmendmentList.svelte"
 	import {
+		edgesOnLine,
 		laterLabel as laterLabelOf,
 		splitByMoment,
 		type DatedEntryLike
@@ -64,6 +80,9 @@
 		type GraphEdge
 	} from "./graphs/graphModel"
 	import { loreRoute } from "./loreRoute.svelte"
+	import type { LoreLens } from "$lib/shared/lorebooks/loreRoute"
+	import { getBookRelationships } from "./relationships.svelte"
+	import { getBookData } from "./bookData.svelte"
 	import type { EntryDecisions } from "./markers"
 	import { CHARACTER_LORE_DOOR } from "./sections"
 	import type { PoolSource } from "./sections/types"
@@ -80,6 +99,11 @@
 	interface Props {
 		lorebookId: number
 		mode: "desk" | "compact"
+		/**
+		 * The lens the board is drawn through: Cards is the portrait grid
+		 * (note 11), every other drawing lens the roster.
+		 */
+		lens?: LoreLens
 		hasUnsavedChanges: boolean
 		/** What the newest run of the attached session read in, by entry id. */
 		decisions?: EntryDecisions | null
@@ -105,41 +129,85 @@
 		 * read from. A second, narrower copy is a second source of truth.
 		 */
 		presences?: readonly Sockets.Amendments.Presence[]
-		/** The line being read, for a placement written on it. NULL = main. */
-		branchId?: number | null
+		/**
+		 * The line being read (`lineOf`, the shell's), with its ancestor
+		 * chain: what the member page reads, and the line a placement or a
+		 * lore entry is written on. Required: a mount that forgot it would
+		 * read main while the reader is on a branch.
+		 */
+		line: Line
 		/** That line's name, for the sentence that says where it lands. */
 		branchName?: string | null
+		/**
+		 * Opens the Suggestions panel on a tab — a Loose ends row for a cast
+		 * suggestion (note 5). `n` makes a second press a new request.
+		 */
+		suggestionsRequest?: {
+			tab: "suggestions" | "duplicates"
+			n: number
+		} | null
 	}
 
 	let {
 		lorebookId,
 		mode,
+		lens = "list",
 		hasUnsavedChanges = $bindable(false),
 		decisions = null,
 		onViewRelationships,
+		suggestionsRequest = null,
 		resolveCast,
 		castAmendmentsFor,
 		moment,
 		presences = [],
-		branchId = null,
+		line,
 		branchName = null
 	}: Props = $props()
 
+	/** The line a write lands on. NULL = main. */
+	let branchId = $derived(line.branchId)
+
 	const socket = useTypedSocket()
 
-	/** A character lore row as the wire sends it, which always has an id. */
-	type LoreRow = PoolSource & { id: number }
+	/** A character lore row as the wire sends it: an id, and the line it is on. */
+	type LoreRow = PoolSource & { id: number; branchId?: number | null }
 
-	let castRows = $state<CastRow[]>([])
-	let relationships = $state<Sockets.NarrativeGraph.NarrativeRelationship[]>(
-		[]
+	/**
+	 * The book, as the workspace holds it (plan B4): the board asks for none
+	 * of it on mount and keeps no copy — the cast, the history that dates a
+	 * link, the suggestions, the possible duplicates and the character lore
+	 * are the workspace's, which already asked when the book opened and
+	 * hears every cascade (a member deleted or absorbed included).
+	 */
+	const book = getBookData()
+	let castRows = $derived(book.cast as unknown as CastRow[])
+	/**
+	 * The book's relationships and cast rows: the workspace's ONE copy (plan
+	 * places-graph B3, review round), never a read of this panel's own. The
+	 * store hears the three relationship pushes for the open book, so a tie
+	 * drawn anywhere shows here without a re-read.
+	 */
+	const rels = getBookRelationships()
+	let graphRows = $derived(rels.nodes)
+	/** Every history entry the book holds, on every line — what dates a link. */
+	let historyEntries = $derived(
+		(book.rawRows[HISTORY_TYPE_ID] ?? []) as unknown as DatedEntryLike[]
 	)
-	let graphRows = $state<Sockets.NarrativeGraph.NarrativeNode[]>([])
-	let historyEntries = $state<DatedEntryLike[]>([])
-	let suggestions = $state<Sockets.BindingSuggestions.Suggestion[]>([])
-	let duplicates = $state<
-		Sockets.NarrativeGraph.DuplicateCandidates.Candidate[]
-	>([])
+	/**
+	 * The links the line being read draws (`edgesOnLine`, the graph lens's
+	 * own filter): its own, each ancestor's up to its fork cut, never a
+	 * sibling's. The member list's counts, the Relationships panel and its
+	 * moment sentence all read these, so this page and the graph lens agree
+	 * about who is tied to whom.
+	 */
+	let relationships = $derived(edgesOnLine(rels.all, line, historyEntries))
+	/**
+	 * How many links each member is an end of on EVERY line: what deleting
+	 * them takes, since a delete removes their links from every line.
+	 */
+	let bookEdgeCounts = $derived(edgeCountsOf(rels.all))
+	let suggestions = $derived(book.suggestions)
+	let duplicates = $derived(book.duplicates)
 	/**
 	 * Edges this session made, by id.
 	 *
@@ -149,8 +217,11 @@
 	const newEdgeIds = new SvelteSet<number>()
 	let characterList: Sockets.Characters.List.Response["characterList"] =
 		$state([])
-	let loreEntries = $state<LoreRow[]>([])
-	let loading = $state(true)
+	let loreEntries = $derived(
+		(book.rawRows[CHARACTER_LORE_TYPE_ID] ?? []) as LoreRow[]
+	)
+	/** Until the cast has arrived, an empty list is "not yet", not "nobody". */
+	let loading = $derived(!book.loaded("cast"))
 
 	let search = $state("")
 	let newMenuOpen = $state(false)
@@ -184,6 +255,20 @@
 	let awaitingSave = $state<string | null>(null)
 
 	let inspectorTab = $state<"suggestions" | "duplicates">("suggestions")
+	/**
+	 * Whether the book's review panel — suggested members and possible
+	 * duplicates — is open. One place per book, opened from the roster's
+	 * header (note 8), never repeated under every member's page.
+	 */
+	let reviewOpen = $state(false)
+	let suggestionsRequestSeen = 0
+	$effect(() => {
+		const want = suggestionsRequest
+		if (!want || want.n === suggestionsRequestSeen) return
+		suggestionsRequestSeen = want.n
+		reviewOpen = true
+		inspectorTab = want.tab
+	})
 
 	let route = $derived(loreRoute.route)
 	/**
@@ -209,8 +294,15 @@
 			return { ...row, character: (card ?? null) as any }
 		})
 	})
-	let pool = $derived(castPool(resolvedCast, loreEntries, search))
-	let allMembers = $derived(castPool(resolvedCast, loreEntries).members)
+	/**
+	 * The character lore on the line being read. `entries:list` answers with
+	 * every line's rows (its reply reaches every view of the book), so the
+	 * member page keeps to its line as the pool does — a sibling line's lore
+	 * is somebody else's story.
+	 */
+	let loreOnLine = $derived(rowsReadingOnLine(loreEntries, line))
+	let pool = $derived(castPool(resolvedCast, loreOnLine, search))
+	let allMembers = $derived(castPool(resolvedCast, loreOnLine).members)
 	let selectedMember = $derived(
 		route.castId != null
 			? (allMembers.find((m) => m.id === route.castId) ?? null)
@@ -251,10 +343,12 @@
 	let names = $derived(nodeNames(graph))
 	let inStoryIds = $derived(new Set(momentSplit.inStory.map((r) => r.id)))
 
-	/** How many edges each member is an end of, for their row. */
-	let edgeCounts = $derived.by(() => {
+	/** How many edges each member is an end of. */
+	function edgeCountsOf(
+		edges: readonly (typeof rels.all)[number][]
+	): Map<number, number> {
 		const counts = new Map<number, number>()
-		for (const rel of relationships) {
+		for (const rel of edges) {
 			// An edge from someone to themselves is one relationship, not two.
 			const ends = new Set<number>()
 			if (rel.from.kind === "cast") ends.add(rel.from.bindingId)
@@ -262,7 +356,36 @@
 			for (const id of ends) counts.set(id, (counts.get(id) ?? 0) + 1)
 		}
 		return counts
-	})
+	}
+
+	/** How many links each member is an end of on this line, for their row. */
+	let edgeCounts = $derived(edgeCountsOf(relationships))
+
+	/**
+	 * Each member's face as they read at the moment — name, kind and the
+	 * linked card's avatar — by id and by graph key, for the list's rows and
+	 * cards (note 7, 11) and the far end of a relationship (note 9).
+	 */
+	let faces = $derived(
+		new Map<number, CastFace>(
+			resolvedCast.map((row) => {
+				const member = toCastMember(row)
+				return [
+					row.id,
+					{
+						id: row.id,
+						name: member.name,
+						kind: member.kind,
+						src: avatarSrc(row.character as any)
+					}
+				]
+			})
+		)
+	)
+	function faceOfKey(key: string): CastFace | undefined {
+		const match = /^cast#(\d+)$/.exec(key)
+		return match ? faces.get(Number(match[1])) : undefined
+	}
 
 	let selectedEdges = $derived(
 		selectedMember
@@ -300,6 +423,16 @@
 			duplicates: duplicates.length
 		})
 	)
+
+	/** What the review panel holds, which the roster's Suggestions button counts. */
+	let reviewCount = $derived(pendingSuggestions.length + duplicates.length)
+
+	function toggleReview() {
+		reviewOpen = !reviewOpen
+		// Land on the tab that has something in it.
+		if (reviewOpen && pendingSuggestions.length === 0 && duplicates.length)
+			inspectorTab = "duplicates"
+	}
 
 	let outstanding = $derived(
 		reviewLine({
@@ -454,7 +587,7 @@
 			} catch (err) {
 				loreSaving = false
 				if (awaitingSave === "new") awaitingSave = null
-				reportUnanswered(err, "Character lore was not created")
+				toastUnsaved(err, "Character lore was not created")
 				return
 			}
 			loreSaving = false
@@ -484,7 +617,11 @@
 				socket,
 				event: "entries:update",
 				params: {
-					entry: { ...fields, id, typeId: CHARACTER_LORE_TYPE_ID } as any
+					entry: {
+						...fields,
+						id,
+						typeId: CHARACTER_LORE_TYPE_ID
+					} as any
 				},
 				replyKey: interestKey("entries:update", lorebookId),
 				errorEvent: "entries:update:error",
@@ -510,6 +647,18 @@
 	 * applies, so "from now on" and "change the member" are one sentence.
 	 */
 	let momentDate = $derived(parseMoment(moment))
+
+	/**
+	 * The moment the member's form is being typed at, which is where its
+	 * "Save as of" files (plan B7): it follows the bar while the form is
+	 * clean, and keeps the moment the typing began at once it is not — a
+	 * change typed at A and saved after the bar moved to B files at A.
+	 */
+	let memberMoment = $state<StoryDate | null>(null)
+	$effect(() => {
+		const at = momentDate
+		if (!memberDirty) memberMoment = at
+	})
 
 	/** Every overlay id this board has seen for a member, for `isOurCastAmendment`. */
 	function knownCastAmendmentIds(castId: number): number[] {
@@ -540,7 +689,7 @@
 					field,
 					resolved[field],
 					overlays,
-					branchId,
+					line,
 					momentDate
 				)
 			}))
@@ -585,10 +734,11 @@
 	async function writeAmendment(
 		castId: number,
 		fields: Record<string, unknown>,
-		what: string
+		what: string,
+		at: StoryDate | null = momentDate
 	): Promise<boolean> {
-		if (!momentDate) return false
-		const date = momentDate
+		if (!at) return false
+		const date = at
 		let reply: Sockets.Amendments.List.Response
 		try {
 			reply = await fileCastAmendment(
@@ -601,9 +751,9 @@
 			reportUnanswered(err, "The amendment was not saved")
 			return false
 		}
-		const line = lineName(reply, branchId)
+		const where = lineName(reply, branchId)
 		toaster.success({
-			title: `${what} as of ${formatDate(date)}${line ? ` on ${line}` : ""}`
+			title: `${what} as of ${formatDate(date)}${where ? ` on ${where}` : ""}`
 		})
 		return true
 	}
@@ -645,10 +795,10 @@
 		patch: Record<string, unknown>,
 		pristine: Record<string, unknown>
 	): Promise<boolean> {
-		if (!selectedMember || !momentDate) return false
+		if (!selectedMember || !memberMoment) return false
 		const fields = memberDiff(patch, pristine)
 		if (!fields) return false
-		return writeAmendment(selectedMember.id, fields, "Amended")
+		return writeAmendment(selectedMember.id, fields, "Amended", memberMoment)
 	}
 
 	/**
@@ -716,21 +866,54 @@
 			void loreRoute.navigate({ type: "openCastMember", castId: null })
 	}
 
+	/**
+	 * Add a member, and say how it went — only for the add asked HERE (plan
+	 * B8): the reply goes to every tab of the user, and a session or another
+	 * tab adding someone is not this board's news. Claimed by `requestId`,
+	 * which the server echoes on the reply and the refusal (Layout toasts a
+	 * refusal). The fresh cast arrives on the book's own list, which the
+	 * server re-sends after every binding write.
+	 */
+	async function addMember(
+		lorebookBinding: Sockets.Lorebooks.CreateBinding.Params["lorebookBinding"]
+	) {
+		const requestId = uuid()
+		let res: Sockets.Lorebooks.CreateBinding.Response
+		try {
+			res = await awaitReply({
+				socket,
+				event: "lorebooks:createBinding",
+				params: { lorebookBinding, requestId },
+				errorEvent: "lorebooks:createBinding:error",
+				matchError: (data) =>
+					(data as { requestId?: string })?.requestId === requestId,
+				fallbackError: "Failed to add that cast member.",
+				match: (data) => data.requestId === requestId
+			})
+		} catch (err) {
+			reportUnanswered(err, "The cast member was not added")
+			return
+		}
+		toaster.success({
+			title: res.existing
+				? "That cast member is already in this book"
+				: "Cast member added"
+		})
+	}
+
 	function addBackground() {
 		const name = backgroundName.trim()
 		if (!name) return
 		addingBackground = false
 		backgroundName = ""
-		socket.emit("lorebooks:createBinding", {
-			lorebookBinding: {
-				lorebookId,
-				characterId: null,
-				// The server derives the real tag from the new row's own id;
-				// this placeholder is ignored.
-				binding: "",
-				name
-			}
-		} satisfies Sockets.Lorebooks.CreateBinding.Params)
+		void addMember({
+			lorebookId,
+			characterId: null,
+			// The server derives the real tag from the new row's own id;
+			// this placeholder is ignored.
+			binding: "",
+			name
+		})
 	}
 
 	/**
@@ -744,13 +927,11 @@
 		linkTargetId = null
 		linkHow = "base"
 		if (target == null) {
-			socket.emit("lorebooks:createBinding", {
-				lorebookBinding: {
-					lorebookId,
-					characterId: character.id,
-					binding: ""
-				}
-			} satisfies Sockets.Lorebooks.CreateBinding.Params)
+			await addMember({
+				lorebookId,
+				characterId: character.id,
+				binding: ""
+			})
 			return
 		}
 		const fields = { characterId: character.id }
@@ -780,26 +961,20 @@
 	}
 
 	/**
-	 * Cards the picker offers: none another member is stored with (the base
-	 * allows one member per card) and none a member already READS as at this
-	 * moment, so the member's own current card is not offered back.
+	 * Cards the picker offers: none another member has, linked or dated (a
+	 * card draws one member, plan A25), and none a member already READS as at
+	 * this moment, so the member's own current card is not offered back.
 	 */
 	let unlinkedCharacters = $derived(
-		characterList.filter(
-			(c) =>
-				!castRows.some((r) => r.characterId === c.id) &&
-				!resolvedCast.some((r) => r.characterId === c.id)
-		)
+		offeredCards({
+			characters: characterList,
+			members: castRows,
+			resolved: resolvedCast,
+			amendmentsOf: (id) => castAmendmentsFor?.(id) ?? [],
+			target: linkTargetId
+		})
 	)
 	let channel: ReturnType<typeof entryChannel> | null = null
-
-	// Named so `off` can name them too: a bare off() removes every listener for
-	// the event, including any other open lorebooks UI.
-	function handleBindingList(msg: Sockets.Lorebooks.BindingList.Response) {
-		if (msg.lorebookId !== lorebookId) return
-		castRows = msg.lorebookBindingList as CastRow[]
-		loading = false
-	}
 
 	function handleCharactersList(msg: Sockets.Characters.List.Response) {
 		characterList = msg.characterList || []
@@ -816,156 +991,12 @@
 	 */
 	useInterest<"characters:list">("characters:list", handleCharactersList)
 
-	function handleCreateBinding(
-		msg: Sockets.Lorebooks.CreateBinding.Response
-	) {
-		toaster.success({
-			title: msg.existing
-				? "That cast member is already in this book"
-				: "Cast member added"
-		})
-		socket.emit("lorebooks:bindingList", { lorebookId })
-	}
-
 	/**
-	 * No toast: the write that asked says how it went (`writeBase`), and a
-	 * write from another tab or lens is not this board's news.
+	 * A member deleted, absorbed or put back — from here, the graph lens or
+	 * another tab — is re-read by the workspace for every lens (plan B4); the
+	 * cast, the ties and the lore anchored to them all arrive through it.
+	 * This board listens to no list or write of its own.
 	 */
-	function handleUpdateBinding() {
-		socket.emit("lorebooks:bindingList", { lorebookId })
-	}
-
-	/**
-	 * A member went — from here or from the graph lens. Their lore went with
-	 * them or is now anchored to nobody, so the lore list is re-read too.
-	 */
-	function handleDeleteNode(msg: Sockets.NarrativeGraph.DeleteNode.Response) {
-		if (msg.lorebookId != null && msg.lorebookId !== lorebookId) return
-		socket.emit("lorebooks:bindingList", { lorebookId })
-		channel?.list()
-	}
-
-	function handleMergeWrite() {
-		socket.emit("lorebooks:bindingList", { lorebookId })
-		refreshGraph()
-	}
-
-	function handleGraphList(msg: Sockets.NarrativeGraph.List.Response) {
-		// The scope the gate reads; checked here too, so a stale book's
-		// reply arriving after a switch cannot paint this one.
-		if (msg.lorebookId !== lorebookId) return
-		graphRows = msg.nodes
-		relationships = msg.relationships
-	}
-
-	function handleRelationshipWrite() {
-		refreshGraph()
-	}
-
-	function handleEntriesList(msg: Sockets.Entries.List.Response) {
-		// One namespace, so the character lore channel's own list arrives here
-		// too; the filter is what makes that harmless.
-		if (msg.lorebookId !== lorebookId || msg.typeId !== HISTORY_TYPE_ID)
-			return
-		historyEntries = msg.entryList as unknown as DatedEntryLike[]
-	}
-
-	function handleSuggestions(msg: Sockets.BindingSuggestions.List.Response) {
-		if (msg.lorebookId !== lorebookId) return
-		suggestions = msg.suggestions
-	}
-
-	function handleDuplicates(
-		msg: Sockets.NarrativeGraph.DuplicateCandidates.Response
-	) {
-		if (msg.lorebookId !== lorebookId) return
-		duplicates = msg.candidates
-	}
-
-	function refreshGraph() {
-		socket.emit("narrativeGraph:list", { lorebookId })
-	}
-
-	/**
-	 * The five reads that name this book, SCOPED to it. `lorebooks:bindingList`
-	 * is a STANDING key rather than a one-shot: it is a cascade target — every
-	 * binding write in this workspace answers with a fresh list — so it is held
-	 * for as long as the workspace is open, not just across the first request.
-	 *
-	 * Effects rather than `useInterest` because a key built from a prop is a
-	 * key that can move, and `useInterest` keeps the one it was first given.
-	 * Declared above `onMount` so all of them exist before the reads go out
-	 * (effects run in creation order, and `onMount` is one of them).
-	 */
-	$effect(() =>
-		declareInterest<"lorebooks:bindingList">(
-			interestKey("lorebooks:bindingList", lorebookId),
-			handleBindingList
-		)
-	)
-	$effect(() =>
-		declareInterest<"entries:list">(
-			interestKey("entries:list", lorebookId),
-			handleEntriesList
-		)
-	)
-	$effect(() =>
-		declareInterest<"bindingSuggestions:list">(
-			interestKey("bindingSuggestions:list", lorebookId),
-			handleSuggestions
-		)
-	)
-	$effect(() =>
-		declareInterest<"narrativeGraph:list">(
-			interestKey("narrativeGraph:list", lorebookId),
-			handleGraphList
-		)
-	)
-	$effect(() =>
-		declareInterest<"narrativeGraph:duplicateCandidates">(
-			interestKey("narrativeGraph:duplicateCandidates", lorebookId),
-			handleDuplicates
-		)
-	)
-
-	/**
-	 * The writes answer with the binding, node or edge alone and name no book,
-	 * so every one of them is BARE — none has an entry in `SCOPED_EVENTS`, and
-	 * a scoped key for an unscoped event matches nothing at all. Each answers
-	 * by re-reading through one of the scoped keys above.
-	 */
-	useInterest<"lorebooks:createBinding">(
-		"lorebooks:createBinding",
-		handleCreateBinding
-	)
-	useInterest<"lorebooks:updateBinding">(
-		"lorebooks:updateBinding",
-		handleUpdateBinding
-	)
-	useInterest<"narrativeGraph:deleteNode">(
-		"narrativeGraph:deleteNode",
-		handleDeleteNode
-	)
-	useInterest<"narrativeGraph:mergeNode">(
-		"narrativeGraph:mergeNode",
-		handleMergeWrite
-	)
-	useInterest<"narrativeGraph:undoMerge">(
-		"narrativeGraph:undoMerge",
-		handleMergeWrite
-	)
-	useInterest<"narrativeGraph:createRelationship">(
-		"narrativeGraph:createRelationship",
-		handleRelationshipWrite
-	)
-	useInterest<"narrativeGraph:updateRelationship">(
-		"narrativeGraph:updateRelationship",
-		handleRelationshipWrite
-	)
-	useInterest<"narrativeGraph:deleteRelationship">(
-		"narrativeGraph:deleteRelationship",
-		handleRelationshipWrite
-	)
 
 	onMount(() => {
 		channel = entryChannel(socket, {
@@ -973,14 +1004,9 @@
 			typeId: CHARACTER_LORE_TYPE_ID,
 			vectorSource: "characterLore",
 			handlers: {
-				onList(entries) {
-					loreEntries = entries as LoreRow[]
-				},
-				onVectorized(id, embeddingModel) {
-					loreEntries = loreEntries.map((e) =>
-						e.id === id ? { ...e, embeddingModel } : e
-					)
-				},
+				// The rows (and their badges) are the workspace's (plan B4);
+				// the channel is this board's lore WRITES.
+				onList() {},
 				// No create/update toasts here: `saveLore` says how its own
 				// write went, and an echo of another tab's is not news.
 				onUpdated(entry) {
@@ -1000,13 +1026,8 @@
 				}
 			}
 		})
-		channel.open()
+		channel.open({ read: false })
 		socket.emit("characters:list", {})
-		socket.emit("lorebooks:bindingList", { lorebookId })
-		socket.emit("entries:list", { lorebookId, typeId: HISTORY_TYPE_ID })
-		socket.emit("narrativeGraph:duplicateCandidates", { lorebookId })
-		socket.emit("bindingSuggestions:list", { lorebookId })
-		refreshGraph()
 	})
 
 	onDestroy(() => {
@@ -1071,21 +1092,44 @@
 		<p class="text-surface-700-300 text-sm" data-cast-headline>
 			{headerLine}
 		</p>
-		<div class="flex gap-2">
+		<div class="flex flex-wrap gap-2">
 			<input
-				class="input input-sm min-w-0 flex-1"
+				class="input input-sm min-w-[12rem] flex-1"
 				type="text"
 				placeholder="Search the cast…"
 				aria-label="Search the cast"
 				bind:value={search}
 			/>
+			<button
+				type="button"
+				class="btn btn-sm shrink-0 gap-1 {reviewOpen
+					? 'preset-tonal-primary'
+					: 'preset-tonal-surface'}"
+				aria-pressed={reviewOpen}
+				aria-controls="castReviewPanel"
+				title="Suggested members and possible duplicates in this book"
+				data-cast-review-toggle
+				onclick={toggleReview}
+			>
+				<Icons.UserPlus size={14} aria-hidden="true" />
+				<span>Suggestions</span>
+				{#if reviewCount > 0}
+					<span class="badge preset-filled-primary-500 text-[11px]">
+						{reviewCount}
+					</span>
+				{/if}
+			</button>
 			{@render newMenu()}
 		</div>
 
+		{#if reviewOpen}
+			<div class="flex max-h-[50%] shrink-0 flex-col overflow-y-auto">
+				{@render inspector()}
+			</div>
+		{/if}
+
 		{#if addingBackground}
-			<div
-				class="border-border flex flex-col gap-2 rounded-lg border p-3"
-			>
+			<div class="panel-edge flex flex-col gap-2 rounded-lg border p-3">
 				<label class="text-sm font-semibold" for="newBackgroundName">
 					Background character name
 				</label>
@@ -1135,6 +1179,95 @@
 						? `Nobody in the cast matches "${search}".`
 						: "Nobody is in the cast yet. Add a character or a background character, and the lore about them lives on their page."}
 				/>
+			{:else if lens === "cards"}
+				<!-- The card view (note 11): portrait-first, the character
+					     library's own tile, on the same auto-fill grid. -->
+				<div
+					class="grid grid-cols-[repeat(auto-fill,minmax(160px,1fr))] gap-3"
+					data-cast-cards
+				>
+					{#each pool.members as member (member.id)}
+						{@const face = faces.get(member.id)}
+						<button
+							type="button"
+							data-cast-row
+							data-cast-id={member.id}
+							aria-current={route.castId === member.id
+								? "true"
+								: undefined}
+							class="group focus-visible:ring-primary-500 relative aspect-[3/4] w-full cursor-pointer overflow-hidden rounded-xl text-left shadow-md transition-shadow hover:shadow-xl focus-visible:ring-2 focus-visible:outline-none {route.castId ===
+							member.id
+								? 'ring-primary-500 ring-2'
+								: ''}"
+							onclick={() => selectMember(member.id)}
+						>
+							{#if face?.src}
+								<img
+									src={face.src}
+									alt=""
+									loading="lazy"
+									class="absolute inset-0 h-full w-full object-cover object-top"
+									data-cast-avatar="image"
+								/>
+							{:else}
+								<span
+									class="bg-surface-300-700 text-surface-700-300 absolute inset-0 grid place-items-center text-4xl font-semibold"
+									aria-hidden="true"
+								>
+									{#if member.kind === "background"}
+										{(
+											member.name.trim()[0] ?? "?"
+										).toUpperCase()}
+									{:else if member.kind === "persona"}
+										<Icons.UserRound class="h-16 w-16" />
+									{:else}
+										<Icons.UsersRound class="h-16 w-16" />
+									{/if}
+								</span>
+							{/if}
+							<span
+								class="absolute inset-x-0 bottom-0 flex flex-col gap-0.5 bg-gradient-to-t from-black/90 via-black/50 to-transparent p-3 pt-10"
+							>
+								<span
+									class="truncate text-sm font-bold text-white drop-shadow-sm"
+								>
+									{member.name}
+								</span>
+								{#if member.summary}
+									<span
+										class="line-clamp-2 text-xs leading-snug text-white/80"
+									>
+										{member.summary}
+									</span>
+								{/if}
+							</span>
+							{#if member.state !== "active" || member.visibility !== "normal"}
+								<span
+									class="absolute top-2 left-2 flex flex-wrap gap-1"
+								>
+									{#if member.state !== "active"}
+										<span
+											class="badge {stateBadge(
+												member.state
+											).color} text-[11px]"
+										>
+											{member.state}
+										</span>
+									{/if}
+									{#if member.visibility !== "normal"}
+										<span
+											class="badge {visibilityBadge(
+												member.visibility
+											)} text-[11px]"
+										>
+											{member.visibility}
+										</span>
+									{/if}
+								</span>
+							{/if}
+						</button>
+					{/each}
+				</div>
 			{:else}
 				{#each pool.members as member (member.id)}
 					{@const lore = pool.lore.get(member.id) ?? []}
@@ -1146,6 +1279,7 @@
 						relationshipCount: edgeCounts.get(member.id) ?? 0,
 						readIn: readInFor(member.id)
 					})}
+					{@const face = faces.get(member.id)}
 					<button
 						type="button"
 						data-cast-row
@@ -1153,54 +1287,61 @@
 						aria-current={route.castId === member.id
 							? "true"
 							: undefined}
-						class="preset-filled-surface-100-900 hover:bg-surface-200-800 flex w-full flex-col gap-1 rounded-lg p-3 text-left transition-colors"
+						class="preset-filled-surface-100-900 hover:bg-surface-200-800 focus-visible:ring-primary-500 flex w-full cursor-pointer items-center gap-3 rounded-lg p-3 text-left transition-colors focus-visible:ring-2 focus-visible:outline-none"
 						class:preset-tonal-primary={route.castId === member.id}
 						onclick={() => selectMember(member.id)}
 					>
-						<span
-							class="flex flex-wrap items-center gap-x-2 gap-y-0.5"
-						>
+						<CastAvatar
+							name={member.name}
+							kind={member.kind}
+							src={face?.src}
+						/>
+						<span class="flex min-w-0 flex-1 flex-col gap-1">
 							<span
-								class="min-w-[8ch] flex-1 truncate text-sm font-semibold"
+								class="flex flex-wrap items-center gap-x-2 gap-y-0.5"
 							>
-								{member.name}
+								<span
+									class="min-w-[8ch] flex-1 truncate text-sm font-semibold"
+								>
+									{member.name}
+								</span>
+								{#if member.state !== "active"}
+									<span
+										class="badge {stateBadge(member.state)
+											.color} shrink-0 text-[11px]"
+									>
+										{member.state}
+									</span>
+								{/if}
+								{#if member.visibility !== "normal"}
+									<span
+										class="badge {visibilityBadge(
+											member.visibility
+										)} shrink-0 text-[11px]"
+									>
+										{member.visibility}
+									</span>
+								{/if}
 							</span>
-							{#if member.state !== "active"}
+							<!-- The macro trails the sentence because it is
+							     what an author pastes into content, not what they
+							     read the row by. -->
+							<span class="flex items-baseline gap-2">
 								<span
-									class="badge {stateBadge(member.state)
-										.color} shrink-0 text-[11px]"
+									class="text-surface-700-300 min-w-0 flex-1 truncate text-[11px]"
+									data-cast-sentence
 								>
-									{member.state}
+									{sentence}
 								</span>
-							{/if}
-							{#if member.visibility !== "normal"}
-								<span
-									class="badge {visibilityBadge(
-										member.visibility
-									)} shrink-0 text-[11px]"
-								>
-									{member.visibility}
-								</span>
-							{/if}
-						</span>
-						<!-- The macro trails the sentence because it is
-						     what an author pastes into content, not what they
-						     read the row by. -->
-						<span class="flex items-baseline gap-2">
-							<span
-								class="text-surface-700-300 min-w-0 flex-1 truncate text-[11px]"
-								data-cast-sentence
-							>
-								{sentence}
+								{#if member.tag}
+									<span
+										class="text-surface-600-400 shrink-0 font-mono text-[11px]"
+										data-cast-tag
+									>
+										{member.tag}
+									</span>
+								{/if}
 							</span>
-							{#if member.tag}
-								<span
-									class="text-surface-600-400 shrink-0 font-mono text-[11px]"
-									data-cast-tag
-								>
-									{member.tag}
-								</span>
-							{/if}
 						</span>
 					</button>
 				{/each}
@@ -1218,7 +1359,7 @@
 					</p>
 					<p class="text-surface-700-300 mt-1">
 						Lore with no member is private to nobody and reaches no
-						prompt. Open it from All entries and pick who it belongs
+						prompt. Open it from Everything and pick who it belongs
 						to.
 					</p>
 				</div>
@@ -1252,10 +1393,8 @@
 					class="btn btn-sm preset-filled-primary-500 shrink-0"
 					type="button"
 					onclick={saveLore}
-					disabled={loreSaving || !CHARACTER_LORE_DOOR.validate(
-						loreDraft,
-						loreEntries
-					)}
+					disabled={loreSaving ||
+						!CHARACTER_LORE_DOOR.validate(loreDraft, loreEntries)}
 				>
 					<Icons.Save size={16} aria-hidden="true" />
 					<span>{creatingLore ? "Create" : "Save"}</span>
@@ -1299,8 +1438,8 @@
 				row={selectedRow}
 				bind:hasUnsavedChanges={memberDirty}
 				onSave={saveMember}
-				onAmend={momentDate ? amendMember : undefined}
-				momentLabel={momentDate ? formatDate(momentDate) : null}
+				onAmend={memberMoment ? amendMember : undefined}
+				momentLabel={memberMoment ? formatDate(memberMoment) : null}
 				onDelete={() => void requestDelete(selectedMember!)}
 				onUnlink={(how) => void unlink(selectedMember!.id, how)}
 				onLinkCharacter={(how) => {
@@ -1315,7 +1454,7 @@
 				castId={selectedMember.id}
 				memberName={selectedMember.name}
 				{presences}
-				{branchId}
+				{line}
 				{branchName}
 				{moment}
 			/>
@@ -1336,9 +1475,11 @@
 				isNew={(edge) => newEdgeIds.has(edge.id)}
 				onKeep={(edge) => newEdgeIds.delete(edge.id)}
 				onSeeInGraph={() => onViewRelationships?.(selectedMember!.id)}
+				faceOf={faceOfKey}
+				onOpenMember={selectMember}
 			/>
 
-			<div class="border-border flex flex-col gap-2 border-t pt-3">
+			<div class="panel-inset flex flex-col gap-2">
 				<div class="flex items-center gap-2">
 					<h4 class="flex-1 text-sm font-semibold">
 						Lore about {selectedMember.name}
@@ -1403,13 +1544,25 @@
 {/snippet}
 
 {#snippet inspector()}
-	<div class="border-border border-t pt-3" data-cast-inspector>
+	<div class="panel-inset" id="castReviewPanel" data-cast-inspector>
+		<div class="mb-2 flex items-center gap-2">
+			<h3 class="flex-1 text-sm font-semibold">Suggestions</h3>
+			<button
+				type="button"
+				class="btn btn-sm preset-tonal-surface p-1"
+				aria-label="Close the suggestions"
+				title="Close"
+				onclick={() => (reviewOpen = false)}
+			>
+				<Icons.X size={14} aria-hidden="true" />
+			</button>
+		</div>
 		{#if outstanding}
 			<p class="text-surface-700-300 mb-2 text-xs" data-cast-review>
 				{outstanding}
 			</p>
 		{/if}
-		<div class="flex gap-1" role="group" aria-label="Cast inspector">
+		<div class="flex gap-1" role="group" aria-label="Kind of suggestion">
 			<button
 				type="button"
 				class="btn btn-sm {inspectorTab === 'suggestions'
@@ -1418,7 +1571,7 @@
 				aria-pressed={inspectorTab === "suggestions"}
 				onclick={() => (inspectorTab = "suggestions")}
 			>
-				Suggestions
+				New members
 			</button>
 			<button
 				type="button"
@@ -1443,22 +1596,24 @@
 
 <div class="flex min-h-0 flex-1 flex-col" data-lore-section="cast">
 	{#if mode === "desk"}
-		<div class="flex min-h-0 flex-1 gap-4">
-			<div class="flex min-h-0 min-w-0 flex-1 flex-col">
+		<!-- The same divider and the same remembered share as Entries. -->
+		<ResizableSplit storageKey={LORE_SPLIT_KEY} firstId="loreSplitCast">
+			{#snippet first()}
 				{@render castList()}
-			</div>
-			<div
-				class="border-border flex min-h-0 w-[420px] shrink-0 flex-col gap-4 overflow-y-auto border-l pl-4"
-				data-cast-editor
-			>
-				{#if loreDraft}
-					{@render loreEditor()}
-				{:else}
-					{@render memberPage()}
-				{/if}
-				{@render inspector()}
-			</div>
-		</div>
+			{/snippet}
+			{#snippet second()}
+				<div
+					class="panel-card flex min-h-0 min-w-0 flex-1 flex-col gap-4 overflow-y-auto p-3"
+					data-cast-editor
+				>
+					{#if loreDraft}
+						{@render loreEditor()}
+					{:else}
+						{@render memberPage()}
+					{/if}
+				</div>
+			{/snippet}
+		</ResizableSplit>
 	{:else if editorOpen}
 		<div
 			class="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto"
@@ -1473,14 +1628,9 @@
 			{/if}
 		</div>
 	{:else}
-		<!-- Compact: suggestions and duplicates listed under the roster, so
-		     reviewing them never means opening an unrelated member (#112). -->
-		<div class="flex min-h-0 flex-1 flex-col gap-3">
-			{@render castList()}
-			<div class="flex max-h-[45%] shrink-0 flex-col overflow-y-auto">
-				{@render inspector()}
-			</div>
-		</div>
+		<!-- The review panel opens from the roster's own header, at every
+		     width (note 8). -->
+		{@render castList()}
 	{/if}
 </div>
 
@@ -1489,7 +1639,7 @@
 	name={deleteTarget?.name ?? ""}
 	linked={deleteTarget?.linked ?? false}
 	relationshipCount={deleteTarget
-		? (edgeCounts.get(deleteTarget.id) ?? 0)
+		? (bookEdgeCounts.get(deleteTarget.id) ?? 0)
 		: 0}
 	check={deleteCheck}
 	checkError={deleteCheckError}

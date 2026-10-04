@@ -16,7 +16,12 @@
  *     its cell (ruled 2026-09-27; `sessionLayout/hostCard`). Offered to every
  *     widget. Not `card`, which is a character file.
  *
- * All three are reserved: a widget declaring one is ignored for that key.
+ *   • `backingMode` — on a widget message styles skin (`messages`), in place
+ *     of `hostCard`: the Card setting is Auto / On / Off over the message
+ *     backing its style declares (note 18; `./messageBacking`). A stored
+ *     `hostCard` boolean on such a widget is read as `on` / `off`.
+ *
+ * All four are reserved: a widget declaring one is ignored for that key.
  *
  * ## Three uses, one function
  *
@@ -38,9 +43,19 @@ import {
 	type FieldDecl,
 	type SettingsSchema
 } from "@serene-pub/sdk"
+import {
+	BACKING_MODE_KEY,
+	isBackedWidget,
+	withLegacyBackingMode
+} from "./messageBacking"
 
 /** Keys core owns on every widget. A widget declaring one is ignored for it. */
-export const CORE_SETTING_KEYS = ["title", "lane", "hostCard"] as const
+export const CORE_SETTING_KEYS = [
+	"title",
+	"lane",
+	"hostCard",
+	BACKING_MODE_KEY
+] as const
 
 /** `FieldDecl.group` that puts a declared field behind the advanced disclosure. */
 export const BEHAVIOUR_GROUP = "behaviour"
@@ -107,14 +122,31 @@ export function coreSettingsSchema(decl: WidgetSettingsDecl): SettingsSchema {
 			min: 1,
 			default: DEFAULT_LANE
 		}
-	schema.hostCard = {
-		type: "boolean",
-		label: "Card",
-		description:
-			"Draw this widget in a card, with a border and a title bar. " +
-			"A widget opened over the session always has one.",
-		default: false
-	}
+	if (isBackedWidget(decl.id))
+		schema[BACKING_MODE_KEY] = {
+			type: "enum",
+			label: "Card",
+			description:
+				"Auto follows the message style (a card behind it when you " +
+				"have an app background and the style asks for nothing); On " +
+				"always backs the messages; Off never does.",
+			of: ["auto", "on", "off"],
+			members: [
+				{ key: "auto", label: "Auto" },
+				{ key: "on", label: "On" },
+				{ key: "off", label: "Off" }
+			],
+			default: "auto"
+		}
+	else
+		schema.hostCard = {
+			type: "boolean",
+			label: "Card",
+			description:
+				"Draw this widget in a card, with a border and a title bar. " +
+				"A widget opened over the session always has one.",
+			default: false
+		}
 	return schema
 }
 
@@ -277,7 +309,13 @@ export function pruneWidgetSettings(
 ): PruneResult {
 	const out: PruneResult = { values: {}, dropped: [] }
 	if (!isPlainObject(raw)) return out
-	for (const [key, value] of Object.entries(raw)) {
+	// A backed widget's Card was a boolean before it was a mode: read it as
+	// one, so the next write (or the boot reconcile) stores the mode.
+	const read =
+		schema[BACKING_MODE_KEY] && !schema.hostCard
+			? (withLegacyBackingMode(raw) as Record<string, unknown>)
+			: raw
+	for (const [key, value] of Object.entries(read)) {
 		const decl = schema[key]
 		if (!decl) {
 			out.dropped.push({ key, reason: "undeclared" })

@@ -32,6 +32,7 @@ import {
 	CORE_LIQUID_ENGINE,
 	CORE_TEMPLATE_ENGINE
 } from "$lib/shared/pipelines/templateEngines"
+import { groupOptions } from "$lib/server/pipelines/config/panel/groups"
 
 const SECRET = "test-instance-secret"
 const NODE_TYPE = "core:task/assemble"
@@ -184,7 +185,7 @@ describe("the picker the panel renders", () => {
 			RESPOND_SPEC_ID,
 			admin()
 		)) as NamespaceView
-		const all = v.steps.flatMap((s) => [...s.options, ...s.advanced])
+		const all = groupOptions(v.groups)
 		return all.find((o) => o.id === templateOption())!
 	}
 

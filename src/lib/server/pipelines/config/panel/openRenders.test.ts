@@ -83,13 +83,14 @@ describe("openRenders (typed templates P2)", () => {
 		const opened = await openRenders(async () => doc, "speakPrompt", slot, rows)
 		expect(opened.renders).toEqual({
 			worldLore: "core:var/world-lore@1",
+			characterLore: "core:var/character-lore@1",
 			history: "core:var/history@1",
 			currentDate: "core:var/current-date@1",
 			secretEntry: "showcase.twenty-questions:var/secret-entry@1",
 			briefing: "showcase.twenty-questions:var/briefing@1"
 		})
-		// Only the declared bands are flagged — the node's own keys are not,
-		// and `characterLore` is `raw` so it is not a setting at all.
+		// Only the declared bands are flagged — the node's own keys, core's
+		// three lore bands among them, are not.
 		expect(opened.bandKeys.sort()).toEqual(["briefing", "secretEntry"])
 	})
 

@@ -49,19 +49,50 @@ import {
 	sql
 } from "drizzle-orm"
 import type { Handler } from "$lib/shared/events"
-import { relistBindings, syncLorebookBindings } from "./lorebooks"
+import { askerOf, refusable } from "./refusable"
+import {
+	relistBindings,
+	syncLorebookBindings,
+	verifyBindingTargetAccess
+} from "./lorebooks"
+import {
+	findOrInsertBinding,
+	syncLorebookBindingsForCharacter
+} from "$lib/server/utils/characterBindingSync"
 import { autoEnqueueLorebook } from "$lib/server/embedding/vectorizationQueue"
 import { enqueueLorebookAnnotation } from "$lib/server/annotations/queue"
 import { entryDeclaration } from "$lib/server/entries/declarations"
 // Imported, never copied: session access is owner-OR-guest and every handler
 // that decided that for itself got it wrong in one direction or the other.
 import { checkSessionAccess } from "$lib/server/utils/sessionAccess"
-import { nextStoryDate } from "$lib/shared/lorebooks/storyDate"
+import {
+	historyDateOfSessionWrite,
+	sessionLoreWrite
+} from "$lib/server/messages/writes"
+// Shared with a dated re-parent (`amendments:*`), which must refuse the same
+// parents this does.
+import { assertAnchorEntry, assertAnchorInBook } from "$lib/server/utils/anchorEntry"
+import { foldRelationshipsUndatedBy } from "$lib/server/utils/relationshipGuards"
+import { assertRedateKeepsLines } from "$lib/server/utils/forkHistory"
+import { formatDate, nextStoryDate, type StoryDate } from "$lib/shared/lorebooks/storyDate"
+import { ENTRY_DATE_PARTS } from "$lib/shared/lorebooks/amendments"
 import { MAIN_LINE, type Line } from "$lib/shared/lorebooks/lineReading"
 import { LOCATION_TYPE_ID } from "$lib/shared/entries/types"
-import { assertDateLands, bookCalendarOf } from "$lib/server/state/storyTime"
+import {
+	assertDateLands,
+	bookCalendarOf,
+	lockBookCalendar
+} from "$lib/server/state/storyTime"
 import { BranchRefusal, lineOfBook, sessionReadingOf } from "$lib/server/state/reading"
-import { MAIN_HEAD, entryAt, entryOverlaysFor } from "$lib/server/state/entriesOnReading"
+import { activityStore } from "$lib/server/utils/activityStore"
+import {
+	MAIN_HEAD,
+	amendedFieldNames,
+	amendmentDeciding,
+	entryAt,
+	entryOverlaysFor,
+	type EntryReading
+} from "$lib/server/state/entriesOnReading"
 import { splitKeys, type KeyList } from "$lib/server/pipelines/ranking/signals"
 import {
 	historyDateColumns,
@@ -73,6 +104,9 @@ import {
 	ENTRY_TYPE_IDS,
 	HISTORY_TYPE_ID,
 	assertDeclaredFields,
+	amendmentPatternLayers,
+	assertNoRunawayPatterns,
+	touchesPatterns,
 	entryInsert,
 	inBookOfType,
 	isEntryTypeId,
@@ -82,9 +116,18 @@ import {
 	parkingFloor,
 	splitUpdate,
 	toEntryRow,
+	withEverythingFiledUnder,
+	sweepLoreEntryRankings,
+	type EntryProvenance,
 	type EntryTypeId,
 	type LorebookEntry
 } from "$lib/server/utils/lorebookEntries"
+import { deletePlaceStats } from "$lib/server/state/lorebookState"
+import {
+	LOREBOOK_NOT_FOUND,
+	assertOwnedBook,
+	findOwnedBook
+} from "$lib/server/utils/ownedBook"
 
 /**
  * A payload's `typeId`, refused if it is not one this build declares.
@@ -184,13 +227,24 @@ async function clearEntryVectors(entryId: number) {
 }
 
 /**
- * Whether an update's column half touches what the default space embeds.
+ * Whether an update CHANGED what the default space embeds.
  *
  * The vectorizer embeds `[title, content]` (history: `[content]`) —
- * `pickEntry` in `vectorizationQueue.ts`. Nothing in `fields` is embedded.
+ * `entryEmbedText` in `vectorizationQueue.ts`. Nothing in `fields` is embedded.
+ *
+ * ⚠ Compared, not merely named. The editor's save re-sends the whole form, so
+ * "the payload names `content`" is true of a save that only moved a key — and
+ * dropping the vector for that took the entry out of vector retrieval and paid
+ * for a second, identical embedding.
  */
-export function touchesEmbeddedText(columns: Record<string, unknown>): boolean {
-	return "title" in columns || "content" in columns
+export function changesEmbeddedText(
+	before: { title?: string | null; content?: string | null },
+	after: { title?: string | null; content?: string | null }
+): boolean {
+	return (
+		(before.title ?? "") !== (after.title ?? "") ||
+		(before.content ?? "") !== (after.content ?? "")
+	)
 }
 
 /** The entry plus its lorebook's name and owner, for the ownership checks. */
@@ -210,56 +264,6 @@ async function findOwnedEntry(id: number, typeId: string) {
 	return row
 }
 
-/** The lorebook, if this user owns it. */
-async function findOwnedBook(lorebookId: number, userId: number) {
-	return db.query.lorebooks.findFirst({
-		where: (l, { and, eq }) =>
-			and(eq(l.id, lorebookId), eq(l.userId, userId)),
-		columns: { id: true, name: true, userId: true }
-	})
-}
-
-/**
- * A client-supplied anchor must name a binding in the *same* lorebook.
- *
- * Without this an entry could be linked to a binding row from another lorebook
- * (including another user's), permanently pinning that foreign binding as "in
- * use" for `syncLorebookBindings`' auto-create tracking.
- */
-async function assertAnchorInBook(
-	bindingId: number | null | undefined,
-	lorebookId: number
-) {
-	if (bindingId == null) return
-	const binding = await db.query.lorebookBindings.findFirst({
-		where: eq(schema.lorebookBindings.id, bindingId),
-		columns: { lorebookId: true }
-	})
-	if (!binding || binding.lorebookId !== lorebookId)
-		throw new Error("Lorebook binding not found.")
-}
-
-/**
- * How far a re-parent walks before it calls the chain a loop.
- *
- * A tree that deep is not a tree anybody is reading, and an unbounded walk over
- * a chain that already contains a cycle never returns. Refusing at the ceiling
- * is the same answer as refusing a cycle: this parent cannot be set.
- */
-const MAX_ANCHOR_DEPTH = 32
-
-/**
- * A client-supplied parent entry, checked before it is written.
- *
- * Four refusals, and each names a different broken tree: a parent in another
- * lorebook (an entry filed under something its book does not contain), a parent
- * that does not exist, the entry itself, and a parent whose own chain of
- * parents leads back to the entry being moved. The last is the one that cannot
- * be checked locally — hence the walk.
- *
- * `entryId` is absent on a create: a row that does not exist yet cannot be its
- * own ancestor, so only the first two refusals can fire.
- */
 /**
  * The branch an entry is being written on must be a line of ITS book.
  *
@@ -278,53 +282,6 @@ async function assertEntryBranch(
 		columns: { id: true }
 	})
 	if (!branch) throw new Error("That branch is not a line of this lorebook.")
-}
-
-async function assertAnchorEntry(
-	anchorEntryId: number | null | undefined,
-	lorebookId: number,
-	entryId: number | undefined,
-	/** The line the CHILD is on (null = shared). */
-	childBranchId: number | null,
-	dbOrTx: Db = db
-) {
-	if (anchorEntryId == null) return
-	if (entryId != null && anchorEntryId === entryId)
-		throw new Error("An entry cannot be filed under itself.")
-
-	let cursor: number | null = anchorEntryId
-	for (let depth = 0; depth < MAX_ANCHOR_DEPTH; depth++) {
-		if (cursor == null) return
-		const row:
-			| {
-					lorebookId: number
-					anchorEntryId: number | null
-					branchId: number | null
-			  }
-			| undefined = await dbOrTx.query.lorebookEntries.findFirst({
-			where: eq(schema.lorebookEntries.id, cursor),
-			columns: { lorebookId: true, anchorEntryId: true, branchId: true }
-		})
-		if (!row) throw new Error("Parent entry not found.")
-		if (row.lorebookId !== lorebookId)
-			throw new Error("Parent entry not found.")
-		// ⚠ The direct parent only: a parent that passes is itself under the
-		// same rule. `anchor_entry_id` cascades, so a shared (or other-line)
-		// entry filed under a line's own entry would be deleted with that
-		// line — the child must be on the parent's line, or the parent shared.
-		if (depth === 0 && row.branchId != null && row.branchId !== childBranchId)
-			throw new Error(
-				childBranchId == null
-					? "An entry on main cannot be filed under one that exists only on a branch."
-					: "An entry cannot be filed under one that exists only on another line."
-			)
-		if (entryId != null && row.anchorEntryId === entryId)
-			throw new Error(
-				"That would file the entry under one of its own children."
-			)
-		cursor = row.anchorEntryId
-	}
-	throw new Error(`Entries may be nested ${MAX_ANCHOR_DEPTH} deep at most.`)
 }
 
 /**
@@ -434,8 +391,7 @@ async function buildEntriesList(
 	lorebookId: number,
 	typeId: EntryTypeId
 ): Promise<Sockets.Entries.List.Response> {
-	const book = await findOwnedBook(lorebookId, userId)
-	if (!book) throw new Error("Lorebook not found.")
+	const book = await assertOwnedBook(db, userId, lorebookId)
 
 	return {
 		lorebookId,
@@ -448,13 +404,14 @@ async function buildEntriesList(
  * The list, re-sent to the caller after a write that changed it.
  *
  * The lazy counterpart of the handler below, and the ONE spelling of this
- * event name for every cascade.
+ * event name for every cascade — exported for the cast merge and delete,
+ * which rewrite entries' cast tags (`narrativeGraph.ts`).
  *
  * ⚠ A build that THROWS is logged by `emitToUser` and emits nothing — right
  * for a push the caller's own reply does not depend on, and reachable here
  * only if the book vanished between the write and this refresh.
  */
-function relistEntries(
+export function relistEntries(
 	socket: any,
 	lorebookId: number,
 	typeId: EntryTypeId,
@@ -468,9 +425,9 @@ function relistEntries(
 export const entryListHandler: Handler<
 	Sockets.Entries.List.Params,
 	Sockets.Entries.List.Response
-> = {
-	event: "entries:list",
-	handler: async (socket, params, emitToUser) => {
+> = refusable(
+	"entries:list",
+	async (socket, params: Sockets.Entries.List.Params, emitToUser) => {
 		const res = await buildEntriesList(
 			socket.user!.id,
 			params.lorebookId,
@@ -478,15 +435,40 @@ export const entryListHandler: Handler<
 		)
 		emitToUser("entries:list", res)
 		return res
-	}
+	},
+	"The entries could not be listed."
+)
+
+/**
+ * Whether an `entries:create` is a summarize review being saved — the one
+ * client-sent create that is machine-written (`provenance: "summarizer"`).
+ *
+ * Decided from the server's own record, never from the payload: the save
+ * names its review (`activityId`), and only a `session_summarize` activity of
+ * this writer, for this book, still in review counts. Anything else — no id,
+ * a stranger's, a finished or a different book's — is a person's row.
+ */
+function summarizerSave(
+	params: Sockets.Entries.Create.Params,
+	userId: number,
+	lorebookId: number
+): { provenance?: EntryProvenance } {
+	if (typeof params.activityId !== "string") return {}
+	const activity = activityStore.getById(params.activityId)
+	return activity?.kind === "session_summarize" &&
+		activity.userId === userId &&
+		activity.lorebookId === lorebookId &&
+		activity.status === "review"
+		? { provenance: "summarizer" }
+		: {}
 }
 
 export const createEntryHandler: Handler<
 	Sockets.Entries.Create.Params,
 	Sockets.Entries.Create.Response
-> = {
-	event: "entries:create",
-	handler: async (socket, params, emitToUser) => {
+> = refusable(
+	"entries:create",
+	async (socket, params: Sockets.Entries.Create.Params, emitToUser) => {
 		const userId = socket.user!.id
 		const typeId = assertTypeId(params.entry?.typeId)
 
@@ -510,11 +492,48 @@ export const createEntryHandler: Handler<
 		data.content =
 			typeof data.content === "string" ? data.content.trim() : ""
 
-		const book = await findOwnedBook(data.lorebookId, userId)
-		if (!book)
-			throw new Error(
-				"Lorebook not found or you do not have permission to create an entry."
+		const book = await assertOwnedBook(db, userId, data.lorebookId)
+
+		// A session write (plan A12): the row lands where the session reads —
+		// its line, decided here and never by the request — and a dated row
+		// that brings no date is dated at the session's story now.
+		if (params.sessionId != null) {
+			const write = await sessionLoreWrite(db, {
+				sessionId: params.sessionId,
+				userId,
+				lorebookId: data.lorebookId
+			})
+			data.branchId = write.branchId
+			if (entryDeclaration(typeId)?.roles.order && data.year == null)
+				Object.assign(
+					data,
+					historyDateOfSessionWrite(
+						write,
+						await bookCalendarOf(db, data.lorebookId)
+					)
+				)
+		}
+
+		// Character lore that names its character (a summarize's save): the
+		// cast member it is private to is found, or added, inside the entry's
+		// own write below, so a refused write adds no one.
+		const castCharacterId = params.lorebookBindingCharacterId ?? null
+		if (castCharacterId != null) {
+			if (!entryDeclaration(typeId)?.roles.anchor)
+				throw new Error(
+					"Only character lore is kept for one cast member."
+				)
+			if (
+				!(await verifyBindingTargetAccess(
+					{ characterId: castCharacterId },
+					userId
+				))
 			)
+				throw new Error(
+					"You can't add that character to this book's cast."
+				)
+			delete data.lorebookBindingId
+		}
 
 		await assertAnchorInBook(data.lorebookBindingId, data.lorebookId)
 		await assertEntryBranch((data as any).branchId, data.lorebookId)
@@ -522,43 +541,70 @@ export const createEntryHandler: Handler<
 			data.anchorEntryId,
 			data.lorebookId,
 			undefined,
-			(data as any).branchId ?? null
+			(data as any).branchId ?? null,
+			typeId
 		)
 		// Declared fields are typed; a wrong-typed value is refused here,
 		// never stored in jsonb where no column type could refuse it.
 		assertDeclaredFields(typeId, data)
-		// A dated entry's date must land in the book's calendar, once it
-		// declares one (DESIGN-story-time §0: validated at entry, so the
-		// preflight list can never refill).
-		if (entryDeclaration(typeId)?.roles.order && data.year != null)
-			await assertDateLands(db, data.lorebookId, {
-				year: Number(data.year),
-				month: data.month ?? null,
-				day: data.day ?? null
-			})
-
+		// A regex key that could take unbounded time to match is refused
+		// before it can run on anyone's turn (plan S3).
+		assertNoRunawayPatterns(data as any, null)
 		// Advisory lock scoped to lorebookId — without it, two concurrent
 		// creates read the same free position and the second one raises a
 		// unique violation, since `position` is unique per (lorebook, type).
-		// Same fix, same reason, as resolveOrCreateBinding's already-fixed race.
-		const [newEntry] = await db.transaction(async (tx) => {
-			await tx.execute(
-				sql`select pg_advisory_xact_lock(${data.lorebookId})`
-			)
-			return tx
+		// Same fix, same reason, as resolveOrCreateBinding's already-fixed race
+		// — and the same lock, so the cast member a character-lore entry adds
+		// is found or inserted under it and commits with the entry.
+		const provenance = summarizerSave(params, userId, data.lorebookId)
+		const { newEntry, member } = await db.transaction(async (tx) => {
+			await lockBookCalendar(tx, data.lorebookId)
+			// A dated entry's date must land in the book's calendar, once it
+			// declares one (DESIGN-story-time §0: validated at entry, so the
+			// preflight list can never refill) — under the lock, so a calendar
+			// is never declared between this check and the row (A18(d)).
+			if (entryDeclaration(typeId)?.roles.order && data.year != null)
+				await assertDateLands(tx, data.lorebookId, {
+					year: Number(data.year),
+					month: data.month ?? null,
+					day: data.day ?? null
+				})
+			const member =
+				castCharacterId != null
+					? await findOrInsertBinding(
+							tx,
+							data.lorebookId,
+							castCharacterId
+						)
+					: null
+			// Only a card deleted since the access check above answers null.
+			if (castCharacterId != null && !member)
+				throw new Error("You can't add that character to this book's cast.")
+			const [newEntry] = await tx
 				.insert(schema.lorebookEntries)
 				.values(
 					entryInsert({
 						...(data as any),
+						...(member ? { lorebookBindingId: member.row.id } : {}),
 						position: await allocatePosition(
 							tx,
 							data.lorebookId,
 							typeId
 						)
-					})
+					}, provenance)
 				)
 				.returning()
+			return { newEntry, member }
 		})
+		// A member added here is named from the card, and the cast list
+		// re-sent, as `lorebooks:createBinding` does for one added there.
+		if (member?.created) {
+			await syncLorebookBindingsForCharacter(castCharacterId!, db, {
+				lorebookId: newEntry.lorebookId
+			})
+			if (emitToUser)
+				await relistBindings(socket, newEntry.lorebookId, emitToUser)
+		}
 
 		const entry = toEntryRow(newEntry)
 		if (emitToUser) emitToUser("entries:create", { entry })
@@ -571,8 +617,9 @@ export const createEntryHandler: Handler<
 		)
 
 		return { entry }
-	}
-}
+	},
+	"That entry could not be saved."
+)
 
 /**
  * Where a new row of this type lands.
@@ -603,9 +650,9 @@ async function allocatePosition(
 export const updateEntryHandler: Handler<
 	Sockets.Entries.Update.Params,
 	Sockets.Entries.Update.Response
-> = {
-	event: "entries:update",
-	handler: async (socket, params, emitToUser) => {
+> = refusable(
+	"entries:update",
+	async (socket, params: Sockets.Entries.Update.Params, emitToUser) => {
 		const userId = socket.user!.id
 		const typeId = assertTypeId(params.entry?.typeId)
 
@@ -633,10 +680,20 @@ export const updateEntryHandler: Handler<
 			...updateData
 		} = params.entry as Record<string, any>
 
-		if (typeof updateData.name === "string")
-			updateData.name = updateData.name.trim()
-		if (typeof updateData.content === "string")
-			updateData.content = updateData.content.trim()
+		// Trimmed — unless trimming is the only change, and then the stored
+		// text stays exactly as it is. An import keeps a card's text verbatim,
+		// edge whitespace included, and the editor trims what it sends back: a
+		// save that only added a key would otherwise rewrite the title and the
+		// content, change the embedded text, and pay for an embedding.
+		for (const [key, stored] of [
+			["name", existing.entry.title],
+			["content", existing.entry.content]
+		] as const) {
+			if (typeof updateData[key] !== "string") continue
+			const trimmed = updateData[key].trim()
+			if (trimmed === (stored ?? "").trim()) delete updateData[key]
+			else updateData[key] = trimmed
+		}
 
 		// Client-supplied, and this path can also *change* which binding an
 		// entry is anchored to — so the same cross-lorebook check as on create.
@@ -652,6 +709,15 @@ export const updateEntryHandler: Handler<
 			)
 
 		assertDeclaredFields(typeId, updateData)
+		// Judged against the stored row and its amendments: only a pattern
+		// this save brings into some reading of the entry is refused (plan
+		// S3; see `assertNoRunawayPatterns`).
+		if (touchesPatterns(updateData))
+			assertNoRunawayPatterns(updateData, existing.entry, {
+				overlays: [
+					...(await amendmentPatternLayers(db, existing.entry.id)).values()
+				]
+			})
 		const reparents = Object.prototype.hasOwnProperty.call(
 			updateData,
 			"anchorEntryId"
@@ -659,9 +725,10 @@ export const updateEntryHandler: Handler<
 
 		// A moved date must land in the book's calendar (see create). The
 		// parts not being changed are the stored ones.
+		let movedDate: StoryDate | null = null
 		if (
 			entryDeclaration(typeId)?.roles.order &&
-			["year", "month", "day"].some((k) =>
+			ENTRY_DATE_PARTS.some((k) =>
 				Object.prototype.hasOwnProperty.call(updateData, k)
 			)
 		) {
@@ -671,11 +738,11 @@ export const updateEntryHandler: Handler<
 					? updateData[k]
 					: was[k]
 			if (pick("year") != null)
-				await assertDateLands(db, existing.entry.lorebookId, {
+				movedDate = {
 					year: Number(pick("year")),
 					month: pick("month") ?? null,
 					day: pick("day") ?? null
-				})
+				}
 		}
 
 		// ⚠ `fields` is merged, never replaced: `graphed` and `isCompleted` are
@@ -688,19 +755,27 @@ export const updateEntryHandler: Handler<
 		// rather than trusted, because the tree the workspace draws is this
 		// column and nothing else. Serialised with the book's other writes
 		// (the create's advisory lock): two concurrent re-parents each
-		// passing the walk alone could otherwise close a cycle together.
-		const [updatedRow] = reparents
+		// passing the walk alone could otherwise close a cycle together. A
+		// moved date is checked under the same lock, so a calendar is never
+		// declared between its check and the row (A18(d)), nor re-dated past
+		// where a line whose rows use it reads it (`assertRedateKeepsLines`).
+		const locked = reparents || movedDate !== null
+		const [updatedRow] = locked
 			? await db.transaction(async (tx) => {
-					await tx.execute(
-						sql`select pg_advisory_xact_lock(${existing.entry.lorebookId})`
-					)
-					await assertAnchorEntry(
-						updateData.anchorEntryId,
-						existing.entry.lorebookId,
-						params.entry.id,
-						existing.entry.branchId ?? null,
-						tx
-					)
+					await lockBookCalendar(tx, existing.entry.lorebookId)
+					if (movedDate) {
+						await assertDateLands(tx, existing.entry.lorebookId, movedDate)
+						await assertRedateKeepsLines(tx, params.entry.id, movedDate)
+					}
+					if (reparents)
+						await assertAnchorEntry(
+							updateData.anchorEntryId,
+							existing.entry.lorebookId,
+							params.entry.id,
+							existing.entry.branchId ?? null,
+							existing.entry.typeId,
+							tx
+						)
 					return applyEntryUpdate(
 						params.entry.id,
 						typeId,
@@ -713,9 +788,11 @@ export const updateEntryHandler: Handler<
 		// The content vector goes stale only when what it embeds changed —
 		// the title and the content (the type's `embedText` role). An
 		// archive toggle, a re-parent, a date or a mark embeds nothing new,
-		// and dropping the vector for one took the entry out of vector
-		// retrieval until the queue caught up.
-		if (touchesEmbeddedText(columns))
+		// and dropping the vector for one would take the entry out of vector
+		// retrieval until the queue caught up. The queue judges the same
+		// thing by hash (`entryNeedsEmbedding`); this only stops retrieval
+		// matching the replaced text in the meantime.
+		if (updatedRow && changesEmbeddedText(existing.entry, updatedRow))
 			await clearEntryVectors(params.entry.id)
 
 		const entry = toEntryRow(updatedRow)
@@ -729,8 +806,9 @@ export const updateEntryHandler: Handler<
 		)
 
 		return { entry }
-	}
-}
+	},
+	"That entry could not be saved."
+)
 
 /**
  * An entry's two marks — **Off** (`enabled`) and **Pin** (`constant`) — and
@@ -740,14 +818,29 @@ export const updateEntryHandler: Handler<
  * the title or the content changed). Writes the base row only (undated, on
  * main); a dated or per-branch mark is an entry amendment (see
  * `offWindowAmendments`).
+ *
+ * Answers with the marks as the asking session reads the entry (plan A14):
+ * a dated amendment that sets a mark decides it from its date on, so a
+ * base write it overrides changes nothing there — and the reply says which
+ * amendment wins (`heldBy`), as the entry editor's base save does. Because
+ * the answer depends on who asked, every answer — the reply and the
+ * refusal — carries the ask's `request` token back: the reply reaches every
+ * tab of the person, and only the token tells an ask its own answer.
  */
 export const entrySetMarksHandler: Handler<
 	Sockets.Entries.SetMarks.Params,
 	Sockets.Entries.SetMarks.Response
-> = {
-	event: "entries:setMarks",
-	handler: async (socket, params, emitToUser) => {
+> = refusable(
+	"entries:setMarks",
+	async (socket, params: Sockets.Entries.SetMarks.Params, emitToUser) => {
 		const userId = socket.user!.id
+		// The ask's token rides on every answer, so the ask it settles is its own.
+		const token = typeof params.request === "string" ? { request: params.request } : {}
+		const refuse = (error: string) => {
+			const res = { entryId: params.entryId, ...token, error }
+			if (emitToUser) emitToUser("entries:setMarks:error", res)
+			return res
+		}
 		const [found] = await db
 			.select({
 				entry: schema.lorebookEntries,
@@ -760,18 +853,20 @@ export const entrySetMarksHandler: Handler<
 			)
 			.where(eq(schema.lorebookEntries.id, params.entryId))
 			.limit(1)
-		if (!found || (found.lorebookUserId !== userId && !socket.user?.isAdmin)) {
-			const res = { entryId: params.entryId, error: "Entry not found or access denied." }
-			if (emitToUser) emitToUser("entries:setMarks:error", res)
-			return res
-		}
-		const patch: Record<string, boolean> = {}
+		if (!found || (found.lorebookUserId !== userId && !socket.user?.isAdmin))
+			return refuse("Entry not found or access denied.")
+		const patch: { enabled?: boolean; constant?: boolean } = {}
 		if (typeof params.off === "boolean") patch.enabled = !params.off
 		if (typeof params.pinned === "boolean") patch.constant = params.pinned
-		if (!Object.keys(patch).length) {
-			const res = { entryId: params.entryId, error: "Say which mark: off, pinned or both." }
-			if (emitToUser) emitToUser("entries:setMarks:error", res)
-			return res
+		if (!Object.keys(patch).length) return refuse("Say which mark: off, pinned or both.")
+		// Where the reply reads the entry: the asking session's line at its
+		// clock, else main at its head (every main amendment has happened).
+		let reading: EntryReading = MAIN_HEAD
+		if (params.sessionId != null) {
+			const access = await checkSessionAccess(params.sessionId, userId)
+			if (!access.hasAccess && !socket.user?.isAdmin) return refuse("Session not found.")
+			const read = await sessionReadingOf(db, params.sessionId)
+			if (read?.lorebookId === found.entry.lorebookId) reading = read
 		}
 		const [updated] = await db
 			.update(schema.lorebookEntries)
@@ -781,18 +876,47 @@ export const entrySetMarksHandler: Handler<
 		const entry = toEntryRow(updated)
 		// The row everybody already listens for, so an open list updates.
 		if (emitToUser) emitToUser("entries:update", { entry })
-		const res = {
+		const overlays = await entryOverlaysFor(db, updated.lorebookId, reading, [updated.id])
+		const seen = entryAt(
+			{ id: updated.id, enabled: updated.enabled, constant: updated.constant },
+			overlays,
+			reading
+		)
+		let heldBy: Sockets.Entries.SetMarks.Response["heldBy"]
+		for (const field of ["enabled", "constant"] as const) {
+			if (heldBy || patch[field] === undefined || seen[field] === patch[field]) continue
+			const wins = amendmentDeciding(overlays, updated.id, field, reading)
+			if (!wins) continue
+			const date = { year: wins.year, month: wins.month ?? null, day: wins.day ?? null }
+			heldBy = {
+				field,
+				date,
+				label: formatDate(date, await bookCalendarOf(db, updated.lorebookId)),
+				amendmentId: wins.id
+			}
+		}
+		const res: Sockets.Entries.SetMarks.Response = {
 			entryId: params.entryId,
 			// Whose book: a page tells its widgets of a mark only in its own
 			// session's book (`hearLoreMarked`).
 			lorebookId: updated.lorebookId,
-			off: updated.enabled === false,
-			pinned: updated.constant === true
+			off: seen.enabled === false,
+			pinned: seen.constant === true,
+			...(heldBy ? { heldBy } : {}),
+			...token
 		}
 		if (emitToUser) emitToUser("entries:setMarks", res)
 		return res
+	},
+	"The entry's marks could not be saved.",
+	undefined,
+	// The refusal names the entry and the ask's token, as the ones it words
+	// itself above do.
+	(params) => {
+		const p = params as { entryId?: unknown; request?: unknown } | null
+		return { entryId: p?.entryId, ...(typeof p?.request === "string" ? { request: p.request } : {}) }
 	}
-}
+)
 
 /**
  * The entry-management widget's one read (L1, R58): the session's book's
@@ -805,9 +929,9 @@ export const entrySetMarksHandler: Handler<
 export const entrySessionEntriesHandler: Handler<
 	Sockets.Entries.SessionEntries.Params,
 	Sockets.Entries.SessionEntries.Response
-> = {
-	event: "entries:sessionEntries",
-	handler: async (socket, params, emitToUser) => {
+> = refusable(
+	"entries:sessionEntries",
+	async (socket, params: Sockets.Entries.SessionEntries.Params, emitToUser) => {
 		const userId = socket.user!.id
 		const answer = (part: Sockets.Entries.SessionEntries.Response) => {
 			const res = params.request ? { ...part, request: params.request } : part
@@ -835,8 +959,9 @@ export const entrySessionEntriesHandler: Handler<
 
 		const limit = Math.min(Math.max(params.limit ?? 50, 1), 200)
 		let offset = Math.max(params.offset ?? 0, 0)
+		const words = (params.query ?? "").trim()
 		// A search is a substring, never a pattern: `%` and `_` are literal.
-		const q = (params.query ?? "").trim().replace(/[\\%_]/g, (c) => `\\${c}`)
+		const q = words.replace(/[\\%_]/g, (c) => `\\${c}`)
 		const e = schema.lorebookEntries
 		const st = schema.rankingSubjectStats
 		const stats = and(
@@ -850,9 +975,42 @@ export const entrySessionEntriesHandler: Handler<
 		// has not happened yet in this session. The same rule retrieval
 		// applies (`onLineAtSql`), so what is listed is what can fire.
 		const reading = await sessionReadingOf(db, params.sessionId)
+		const at = reading ?? MAIN_HEAD
+		/**
+		 * Each entry as the session reads it (plan A14): its name, keys and
+		 * marks with the line's amendments applied by the session's clock —
+		 * what the widget shows, and so what it searches, filters and sorts
+		 * by. A narrowing an amendment can move (archived: in or out; the
+		 * search: the name and the keys; Pinned: the pin; Off: on and off;
+		 * the name sort) is asked of the resolved entry once one of the
+		 * line's amendments sets its field, and the paging then counts what
+		 * survived; otherwise it stays in SQL, and so does the paging.
+		 */
+		// 🚧 One entry's reading (Teach it's buttons): only these entries, and
+		// only their amendments.
+		const entryIds = Array.isArray(params.entryIds)
+			? params.entryIds.filter((id): id is number => Number.isInteger(id))
+			: []
+		const overlays = await entryOverlaysFor(
+			db,
+			session.lorebookId,
+			at,
+			entryIds.length ? entryIds : undefined
+		)
+		const amended = amendedFieldNames(overlays)
+		const byName = !["lastRead", "timesRead", "rank"].includes(params.sort ?? "")
+		const moved = {
+			archived: amended.has("archived"),
+			search: !!words && (amended.has("name") || amended.has("keys")),
+			pinned: params.filter === "pinned" && amended.has("constant"),
+			off: params.filter === "off" && amended.has("enabled"),
+			byName: byName && amended.has("name")
+		}
+		const resolvedPaging =
+			moved.archived || moved.search || moved.pinned || moved.off || moved.byName
 		const wheres = [
 			eq(e.lorebookId, session.lorebookId),
-			eq(e.archived, false),
+			moved.archived ? undefined : eq(e.archived, false),
 			onLineAtSql(
 				e.branchId,
 				historyDateColumns(e.fields),
@@ -860,18 +1018,19 @@ export const entrySessionEntriesHandler: Handler<
 				reading?.moment ?? null
 			)
 		]
-		if (q)
+		if (q && !moved.search)
 			wheres.push(
 				sql`(coalesce(${e.title}, '') ILIKE ${"%" + q + "%"} OR array_to_string(${e.keys}, ' ') ILIKE ${"%" + q + "%"})`
 			)
 		if (params.filter === "fired") wheres.push(eq(st.lastIncluded, true))
-		if (params.filter === "pinned") wheres.push(eq(e.constant, true))
-		if (params.filter === "off") wheres.push(eq(e.enabled, false))
+		if (params.filter === "pinned" && !moved.pinned) wheres.push(eq(e.constant, true))
+		if (params.filter === "off" && !moved.off) wheres.push(eq(e.enabled, false))
 		// 🚧 A state widget's item picker asks for item entries first (phase 3c).
 		const typeIds = Array.isArray(params.typeIds)
 			? params.typeIds.filter((t): t is string => typeof t === "string" && t.length > 0)
 			: []
 		if (typeIds.length) wheres.push(inArray(e.typeId, typeIds))
+		if (entryIds.length) wheres.push(inArray(e.id, entryIds))
 		const order =
 			params.sort === "lastRead"
 				? [sql`${st.lastJudgedAt} DESC NULLS LAST`, asc(e.id)]
@@ -880,55 +1039,45 @@ export const entrySessionEntriesHandler: Handler<
 					: params.sort === "rank"
 						? [sql`${st.lastRank} ASC NULLS LAST`, asc(e.id)]
 						: [sql`lower(coalesce(${e.title}, '')) ASC`, asc(e.id)]
-		const page = (at: number) => db
-			.select({
-				id: e.id,
-				typeId: e.typeId,
-				title: e.title,
-				keys: e.keys,
-				enabled: e.enabled,
-				constant: e.constant,
-				timesJudged: st.timesJudged,
-				timesIncluded: st.timesIncluded,
-				lastJudgedAt: st.lastJudgedAt,
-				lastIncluded: st.lastIncluded,
-				lastReason: st.lastReason,
-				lastRank: st.lastRank,
-				total: sql<number>`count(*) OVER ()`.mapWith(Number)
-			})
-			.from(e)
-			.leftJoin(st, stats)
-			.where(and(...wheres))
-			.orderBy(...order)
-			.limit(limit)
-			.offset(at)
-		let rows = await page(offset)
-		// A page past the end (the last row on the last page just left the
-		// filter) is the last real page, never "no entries".
-		if (!rows.length && offset > 0) {
-			const [{ n }] = await db
-				.select({ n: sql<number>`count(*)::int` })
-				.from(e)
-				.leftJoin(st, stats)
-				.where(and(...wheres))
-			offset = n ? Math.floor((n - 1) / limit) * limit : 0
-			if (n) rows = await page(offset)
+		const columns = {
+			id: e.id,
+			typeId: e.typeId,
+			title: e.title,
+			keys: e.keys,
+			enabled: e.enabled,
+			constant: e.constant,
+			archived: e.archived,
+			timesJudged: st.timesJudged,
+			timesIncluded: st.timesIncluded,
+			lastJudgedAt: st.lastJudgedAt,
+			lastIncluded: st.lastIncluded,
+			lastReason: st.lastReason,
+			lastRank: st.lastRank
 		}
-		// Each listed row as the session reads it: its title, keys and marks
-		// with the line's amendments applied by the session's clock, so the
-		// widget names an entry what the prompt calls it. (The search, the
-		// filters and the sort still read the stored columns.)
-		const overlays = await entryOverlaysFor(
-			db,
-			session.lorebookId,
-			reading ?? MAIN_HEAD,
-			rows.map((r) => r.id)
-		)
-		rows = rows.map((r) => {
+		/** One listed row as the session reads it. */
+		const asRead = <
+			R extends {
+				id: number
+				title: string | null
+				keys: string[] | null
+				enabled: boolean
+				constant: boolean
+				archived: boolean
+			}
+		>(
+			r: R
+		) => {
 			const seen = entryAt(
-				{ id: r.id, name: r.title, keys: r.keys, enabled: r.enabled, constant: r.constant },
+				{
+					id: r.id,
+					name: r.title,
+					keys: r.keys,
+					enabled: r.enabled,
+					constant: r.constant,
+					archived: r.archived
+				},
 				overlays,
-				reading ?? MAIN_HEAD
+				at
 			)
 			return {
 				...r,
@@ -936,15 +1085,75 @@ export const entrySessionEntriesHandler: Handler<
 				// An amendment saved from the editor writes the comma string.
 				keys: splitKeys(seen.keys as KeyList),
 				enabled: seen.enabled as boolean,
-				constant: seen.constant as boolean
+				constant: seen.constant as boolean,
+				archived: seen.archived === true
 			}
-		})
+		}
+		/** A page in SQL, and the count beside it. */
+		const inSql = async () => {
+			const page = (from: number) =>
+				db
+					.select({ ...columns, total: sql<number>`count(*) OVER ()`.mapWith(Number) })
+					.from(e)
+					.leftJoin(st, stats)
+					.where(and(...wheres))
+					.orderBy(...order)
+					.limit(limit)
+					.offset(from)
+			let found = await page(offset)
+			// A page past the end (the last row on the last page just left the
+			// filter) is the last real page, never "no entries".
+			if (!found.length && offset > 0) {
+				const [{ n }] = await db
+					.select({ n: sql<number>`count(*)::int` })
+					.from(e)
+					.leftJoin(st, stats)
+					.where(and(...wheres))
+				offset = n ? Math.floor((n - 1) / limit) * limit : 0
+				if (n) found = await page(offset)
+			}
+			return { rows: found.map(asRead), total: found[0]?.total ?? 0 }
+		}
+		/** Every candidate resolved, the moved narrowings asked of it, then paged. */
+		const resolved = async () => {
+			const needle = words.toLowerCase()
+			const has = (text: string | null | undefined) =>
+				(text ?? "").toLowerCase().includes(needle)
+			let kept = (
+				await db
+					.select(columns)
+					.from(e)
+					.leftJoin(st, stats)
+					.where(and(...wheres))
+					.orderBy(...order)
+			)
+				.map(asRead)
+				.filter(
+					(r) =>
+						// Archived is out, as it is out of retrieval.
+						(!moved.archived || !r.archived) &&
+						(!moved.search || has(r.title) || has(r.keys.join(" "))) &&
+						(!moved.pinned || r.constant === true) &&
+						(!moved.off || r.enabled === false)
+				)
+			// The SQL name order, over the names the rows have now.
+			if (moved.byName) {
+				const nameOf = (r: { title: string | null }) => (r.title ?? "").toLowerCase()
+				kept = kept.sort((a, b) =>
+					nameOf(a) < nameOf(b) ? -1 : nameOf(a) > nameOf(b) ? 1 : a.id - b.id
+				)
+			}
+			if (offset > 0 && offset >= kept.length)
+				offset = kept.length ? Math.floor((kept.length - 1) / limit) * limit : 0
+			return { rows: kept.slice(offset, offset + limit), total: kept.length }
+		}
+		const { rows, total } = resolvedPaging ? await resolved() : await inSql()
 		return answer({
 			sessionId: params.sessionId,
 			lorebookId: session.lorebookId,
 			bookName: book.name,
 			offset,
-			total: rows[0]?.total ?? 0,
+			total,
 			rows: rows.map((r) => ({
 				id: r.id,
 				typeId: r.typeId,
@@ -960,15 +1169,24 @@ export const entrySessionEntriesHandler: Handler<
 				lastRank: r.lastRank ?? null
 			}))
 		})
+	},
+	"The session's lore could not be read.",
+	undefined,
+	// The refusal names the session and the ask's token, as the reply does,
+	// so the one ask waiting on it settles with the sentence (the page's
+	// pending asks, `sessionPage/requests/sessionEntries.ts`).
+	(params) => {
+		const p = params as { sessionId?: unknown; request?: unknown } | null
+		return { sessionId: p?.sessionId, request: p?.request }
 	}
-}
+)
 
 export const deleteEntryHandler: Handler<
 	Sockets.Entries.Delete.Params,
 	Sockets.Entries.Delete.Response
-> = {
-	event: "entries:delete",
-	handler: async (socket, params, emitToUser) => {
+> = refusable(
+	"entries:delete",
+	async (socket, params: Sockets.Entries.Delete.Params, emitToUser) => {
 		const userId = socket.user!.id
 		const typeId = assertTypeId(params.typeId)
 
@@ -976,9 +1194,23 @@ export const deleteEntryHandler: Handler<
 		if (!existing || existing.lorebookUserId !== userId)
 			throw new Error("Entry not found or access denied.")
 
-		await db
-			.delete(schema.lorebookEntries)
-			.where(entryOfType(params.id, typeId))
+		// A place's stats go with it, and with every entry the delete cascades
+		// to (plan B0): collected before the delete, when there is still a
+		// tree to walk, and deleted in the same transaction as the row.
+		// The links a history entry dated are un-dated by the delete (`set
+		// null`); any that would then stand twice fold first, in the same
+		// transaction, or the delete would fail on the entry-pair index.
+		// The ranking evidence about every row it takes goes the same way
+		// (`sweepLoreEntryRankings`): its subject id has no foreign key.
+		await db.transaction(async (tx) => {
+			const gone = await withEverythingFiledUnder(tx, [params.id])
+			await deletePlaceStats(tx, gone)
+			await sweepLoreEntryRankings(tx, gone)
+			await foldRelationshipsUndatedBy(tx, entryOfType(params.id, typeId)!)
+			await tx
+				.delete(schema.lorebookEntries)
+				.where(entryOfType(params.id, typeId))
+		})
 
 		// `lorebookId`/`entryId` are present so the interest scope can be
 		// derived: `{ success }` on its own named neither the row nor its
@@ -1002,20 +1234,20 @@ export const deleteEntryHandler: Handler<
 		)
 
 		return res
-	}
-}
+	},
+	"The entry could not be deleted."
+)
 
 export const updateEntryPositionsHandler: Handler<
 	Sockets.Entries.UpdatePositions.Params,
 	Sockets.Entries.UpdatePositions.Response
-> = {
-	event: "entries:updatePositions",
-	handler: async (socket, params, emitToUser) => {
+> = refusable(
+	"entries:updatePositions",
+	async (socket, params: Sockets.Entries.UpdatePositions.Params, emitToUser) => {
 		const userId = socket.user!.id
 		const typeId = assertTypeId(params.typeId)
 
-		const book = await findOwnedBook(params.lorebookId, userId)
-		if (!book) throw new Error("Lorebook not found or access denied.")
+		await assertOwnedBook(db, userId, params.lorebookId)
 
 		// Every id in the request must belong to THIS lorebook and THIS type —
 		// without it, owning any lorebook was enough to reposition (and thus
@@ -1052,8 +1284,13 @@ export const updateEntryPositionsHandler: Handler<
 		}
 
 		return res
-	}
-}
+	},
+	"The new order could not be saved.",
+	undefined,
+	// The door that asked counts its reorders in flight: the refusal names
+	// the book and type so it can stop waiting (`entryChannel`).
+	(params: any) => ({ lorebookId: params?.lorebookId, typeId: params?.typeId })
+)
 
 /**
  * Renumber a set of entries, in one transaction, in two passes.
@@ -1101,6 +1338,16 @@ export async function reorderEntries(
 				)
 			)
 		if (!groups.length) return
+		// The book's lock (`lockBookCalendar`), the one `entries:create` and
+		// `entries:iterateNext` take before they allocate a position: read
+		// apart from it, a create's free slot and this renumber's parking
+		// range are measured against a group the other is rewriting, and the
+		// unique constraint refuses whichever lands second. Ascending, so two
+		// renumbers spanning the same books cannot deadlock on the order.
+		for (const lorebookId of [...new Set(groups.map((g) => g.lorebookId))].sort(
+			(a, b) => a - b
+		))
+			await lockBookCalendar(tx, lorebookId)
 
 		const floor = await parkingFloor(
 			tx,
@@ -1136,9 +1383,9 @@ export async function reorderEntries(
 export const iterateNextEntryHandler: Handler<
 	Sockets.Entries.IterateNext.Params,
 	Sockets.Entries.IterateNext.Response
-> = {
-	event: "entries:iterateNext",
-	handler: async (socket, params, emitToUser) => {
+> = refusable(
+	"entries:iterateNext",
+	async (socket, params: Sockets.Entries.IterateNext.Params, emitToUser) => {
 		const userId = socket.user!.id
 		const typeId = assertTypeId(params.typeId)
 
@@ -1164,12 +1411,6 @@ export const iterateNextEntryHandler: Handler<
 		const from = toEntryRow(existing.entry) as LorebookEntry<
 			typeof HISTORY_TYPE_ID
 		>
-		// Rolled over by the book's calendar when it declares one; free-form
-		// (the default) never rolls over.
-		const { year, month, day } = nextStoryDate(
-			from,
-			await bookCalendarOf(db, existing.entry.lorebookId)
-		)
 		const position = existing.entry.position + 1
 
 		// Shift every entry already at or past the target position forward by
@@ -1185,6 +1426,19 @@ export const iterateNextEntryHandler: Handler<
 		// placed at its finals — two `C - position` reflections, each injective
 		// and each landing in a range nothing else occupies.
 		const [newRow] = await db.transaction(async (tx) => {
+			// The next date is stepped through the calendar, checked and
+			// written under the book's lock, as every dated write is
+			// (`lockBookCalendar`, A18(d)): read apart from the row, a
+			// calendar declared in between would not place it. Rolled over by
+			// the book's calendar when it declares one; free-form (the
+			// default) never rolls over.
+			await lockBookCalendar(tx, existing.entry.lorebookId)
+			const next = nextStoryDate(
+				from,
+				await bookCalendarOf(tx, existing.entry.lorebookId)
+			)
+			await assertDateLands(tx, existing.entry.lorebookId, next)
+			const { year, month, day } = next
 			const inBook = inBookOfType(existing.entry.lorebookId, typeId)
 			// Every final is ≥ `position`, and `position` is one past a row that
 			// is itself in this group, so the finals are all above the floor and
@@ -1242,8 +1496,10 @@ export const iterateNextEntryHandler: Handler<
 		})
 
 		const entry = toEntryRow(newRow)
+		// The asker's id rides the broadcast: every tab of the user hears it,
+		// and only the button that asked opens the new entry (plan B8).
 		if (emitToUser) {
-			emitToUser("entries:iterateNext", { entry })
+			emitToUser("entries:iterateNext", { entry, ...askerOf(params) })
 			await relistEntries(
 				socket,
 				existing.entry.lorebookId,
@@ -1252,9 +1508,12 @@ export const iterateNextEntryHandler: Handler<
 			)
 		}
 
-		return { entry }
-	}
-}
+		return { entry, ...askerOf(params) }
+	},
+	"The next entry could not be made.",
+	undefined,
+	askerOf
+)
 
 /**
  * The two doors whose rows are not entries, under the names the wire uses.
@@ -1280,12 +1539,11 @@ const PLACE_KIND = "places"
 export const entryCountsHandler: Handler<
 	Sockets.Entries.Counts.Params,
 	Sockets.Entries.Counts.Response
-> = {
-	event: "entries:counts",
-	handler: async (socket, params, emitToUser) => {
+> = refusable(
+	"entries:counts",
+	async (socket, params: Sockets.Entries.Counts.Params, emitToUser) => {
 		const userId = socket.user!.id
-		const book = await findOwnedBook(params.lorebookId, userId)
-		if (!book) throw new Error("Lorebook not found.")
+		const book = await assertOwnedBook(db, userId, params.lorebookId)
 
 		// The line being read, with its ancestor chain and fork cuts (ruling
 		// 5). A branch of another book is refused, never counted as main.
@@ -1353,16 +1611,17 @@ export const entryCountsHandler: Handler<
 		const res = { lorebookId: params.lorebookId, counts }
 		emitToUser("entries:counts", res)
 		return res
-	}
-}
+	},
+	"The entry counts could not be read."
+)
 
 
 export const entryRecentDecisionsHandler: Handler<
 	Sockets.Entries.RecentDecisions.Params,
 	Sockets.Entries.RecentDecisions.Response
-> = {
-	event: "entries:recentDecisions",
-	handler: async (socket, params, emitToUser) => {
+> = refusable(
+	"entries:recentDecisions",
+	async (socket, params: Sockets.Entries.RecentDecisions.Params, emitToUser) => {
 		const userId = socket.user!.id
 
 		/**
@@ -1374,14 +1633,14 @@ export const entryRecentDecisionsHandler: Handler<
 		// The book's owner — decisions on guests' turns in their sessions
 		// included — and admins (R58). A guest gets nothing.
 		const book =
-			(await findOwnedBook(params.lorebookId, userId)) ??
+			(await findOwnedBook(db, userId, params.lorebookId)) ??
 			(socket.user?.isAdmin
 				? await db.query.lorebooks.findFirst({
 						where: (l, { eq }) => eq(l.id, params.lorebookId),
 						columns: { id: true, name: true, userId: true }
 					})
 				: undefined)
-		if (!book) throw new Error("Lorebook not found.")
+		if (!book) throw new Error(LOREBOOK_NOT_FOUND)
 
 		// An admin reads without being in the session (R58); the session must
 		// still read THIS book, which the check below enforces for everyone.
@@ -1534,8 +1793,9 @@ export const entryRecentDecisionsHandler: Handler<
 			facts,
 			...(relationships ? { relationships } : {})
 		})
-	}
-}
+	},
+	"What the recent turns read could not be listed."
+)
 
 export function registerEntryHandlers(
 	socket: any,

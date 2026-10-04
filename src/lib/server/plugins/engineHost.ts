@@ -109,7 +109,7 @@ export function engineDeclarationError(
 		return (
 			`'${engineId}' is not in this extension's namespace. '${pluginId}' ` +
 			`declares engines under '${ns}:' — an engine two parties could claim ` +
-			`is one where every template on the instance renders differently ` +
+			`is one where every template on the pub renders differently ` +
 			`depending on install order.`
 		)
 	return null

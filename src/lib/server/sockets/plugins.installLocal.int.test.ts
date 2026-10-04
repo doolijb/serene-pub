@@ -200,7 +200,7 @@ describe("plugins:installLocal — the projection", () => {
 		// The fixture's create spec carries no `meta.genre`, so the install
 		// supplied the declaration from the manifest.
 		expect(res.genres).toEqual([GENRE])
-		expect(res.files).toBe(3)
+		expect(res.files).toBe(4)
 
 		// The plugin row, disabled on arrival like any fresh install.
 		const [plugin] = await db
@@ -209,9 +209,7 @@ describe("plugins:installLocal — the projection", () => {
 			.where(eq(schema.plugins.pluginId, SLUG))
 		expect(plugin).toMatchObject({ pluginId: SLUG, enabled: false })
 		// Stored verbatim — every reader the app has reads the manifest.
-		expect((plugin.manifest as any).surfaces.panels[0].entry).toBe(
-			"ui/tally.html"
-		)
+		expect((plugin.manifest as any).widgets[0].component).toBe("tally")
 		// The code half: the package ships a sandbox bundle, so nothing warns
 		// that its handlers cannot dispatch (D-6b).
 		expect(plugin.bundleSource.length).toBeGreaterThan(0)
@@ -308,7 +306,7 @@ describe("plugins:installLocal — the projection", () => {
 
 		const after = await counts()
 		expect(after.specs).toBe(before.specs + 2)
-		expect(after.files).toBe(before.files + 3)
+		expect(after.files).toBe(before.files + 4)
 	})
 
 	it("projects the preset and the prompt once the plugin is enabled", async () => {

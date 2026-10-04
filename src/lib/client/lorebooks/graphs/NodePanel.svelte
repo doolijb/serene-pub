@@ -1,6 +1,8 @@
 <script lang="ts">
 	import * as Icons from "@lucide/svelte"
+	import Select from "$lib/client/components/inputs/Select.svelte"
 	import type { GraphEdge, GraphNode, PanelEdge } from "./graphModel"
+	import { NEW_PLACE_OPTION, otherEndOptions } from "./linkDraft"
 
 	/**
 	 * One node, and everything the graph knows about it.
@@ -10,6 +12,12 @@
 	 * an edge they cannot judge. What is **not** drawn sits under the same
 	 * heading: two people who shared a room and nothing was written down is a
 	 * gap in the book, not an absence of one.
+	 *
+	 * Each edge with an entry at an end is said from this node through the one
+	 * sentence builder ("The rusted iron door leads south to the Guardroom.");
+	 * a tie between two cast members keeps its type and arrow. **Link to…** is
+	 * a searchable picker over every place on the line and the canvas, plus
+	 * **New place…** (plan places-graph B4).
 	 *
 	 * ⚠ These are the edges the canvas draws, which at a moment other than now
 	 * is the web as it stood then. An edge established later is not listed here
@@ -30,10 +38,18 @@
 		ceiling: string | null
 		/** Edge ids this session's build made, still to be kept or cut. */
 		isNew: (edge: GraphEdge) => boolean
-		/** There has to be something else on the canvas to join this to. */
-		canAdd: boolean
+		/**
+		 * What this node may be linked to: the canvas's nodes and every place
+		 * on the line. This node itself is left out here.
+		 */
+		candidates: GraphNode[]
+		/** Offer New place… in Link to…. */
+		canCreatePlace?: boolean
 		onOpen: () => void
-		onAdd: () => void
+		/** Link to… picked a far end: open the link form on it. */
+		onLinkTo: (other: GraphNode) => void
+		/** Link to… picked New place…, with whatever had been typed. */
+		onNewPlace?: (typed: string) => void
 		onKeep: (edge: GraphEdge) => void
 		onEdgeClick: (edge: GraphEdge) => void
 		onDeleteEdge: (edge: GraphEdge) => void
@@ -53,9 +69,11 @@
 		notDrawn,
 		ceiling,
 		isNew,
-		canAdd,
+		candidates,
+		canCreatePlace = false,
 		onOpen,
-		onAdd,
+		onLinkTo,
+		onNewPlace,
 		onKeep,
 		onEdgeClick,
 		onDeleteEdge,
@@ -85,6 +103,12 @@
 	let openLabel = $derived(
 		node.kind === "entry" ? "Open entry" : "Open cast member"
 	)
+
+	let others = $derived(candidates.filter((n) => n.key !== node.key))
+	let linkOptions = $derived(
+		otherEndOptions(candidates, node.key, canCreatePlace && !!onNewPlace)
+	)
+	let canLink = $derived(linkOptions.length > 0)
 </script>
 
 <div
@@ -114,27 +138,36 @@
 		</button>
 	</div>
 
-	<div class="border-border flex items-center gap-2 border-t pt-2">
-		<p class="flex-1 text-xs font-semibold">
-			Relationships {edges.length}
-		</p>
-		<button
-			class="btn btn-sm preset-filled-primary-500 shrink-0"
-			type="button"
-			disabled={!canAdd}
-			title={canAdd
-				? "Name a relationship from here"
-				: "There is nothing else on the canvas to join this to"}
-			onclick={onAdd}
-		>
-			<Icons.Plus size={13} aria-hidden="true" /> Add
-		</button>
+	<div class="panel-inset flex flex-col gap-2">
+		<p class="text-xs font-semibold">Relationships {edges.length}</p>
+		<div data-node-link-to>
+			<Select
+				label="Link to"
+				labelHidden
+				class="text-sm"
+				placeholder={canLink
+					? "Link to…"
+					: "There is nothing else to link this to"}
+				emptyMessage="No place or node by that name."
+				disabled={!canLink}
+				options={linkOptions}
+				value=""
+				onValueChange={(v, typed) => {
+					if (v === NEW_PLACE_OPTION) {
+						onNewPlace?.(typed)
+						return
+					}
+					const other = others.find((n) => n.key === v)
+					if (other) onLinkTo(other)
+				}}
+			/>
+		</div>
 	</div>
 
 	{#if edges.length === 0}
 		<p class="text-surface-600-400 text-xs italic">
-			Nothing joins this to anything yet. ⌥-drag from it on the canvas, or
-			press Add.
+			Nothing joins this to anything yet. Alt-drag (⌥ on a Mac) from it on
+			the canvas, or pick something under Link to….
 		</p>
 	{/if}
 
@@ -142,18 +175,23 @@
 		{#each edges as row (row.edge.id)}
 			{@const locked = lockedReason(row.edge)}
 			<li
-				class="bg-surface-100-900 border-border flex flex-col gap-1 rounded-lg border p-2.5"
+				class="bg-surface-100-900 panel-edge flex flex-col gap-1 rounded-lg border p-2.5"
 				data-node-edge={row.edge.id}
 			>
 				<div class="flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
 					<button
 						type="button"
-						class="min-w-0 flex-1 truncate text-left text-xs font-semibold"
+						class="min-w-0 flex-1 text-left text-xs font-semibold"
+						class:truncate={!row.sentence}
 						onclick={() => onEdgeClick(row.edge)}
 					>
-						{row.edge.label}
-						<span class="text-surface-600-400">{row.arrow}</span>
-						{row.otherName}
+						{#if row.sentence}
+							<span data-node-edge-sentence>{row.sentence}</span>
+						{:else}
+							{row.edge.label}
+							<span class="text-surface-600-400">{row.arrow}</span>
+							{row.otherName}
+						{/if}
 					</button>
 					<span class="text-surface-600-400 shrink-0 text-[11px]">
 						{row.provenanceWord}
@@ -236,7 +274,7 @@
 	{/if}
 
 	{#if notDrawn.length > 0}
-		<div class="border-border flex flex-col gap-2 border-t pt-2">
+		<div class="panel-inset flex flex-col gap-2">
 			<p class="text-xs font-semibold">Not drawn</p>
 			{#each notDrawn as row (row.otherId)}
 				<button

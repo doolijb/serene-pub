@@ -2,6 +2,7 @@
  * The widget-grid model (PLAN 25 MVP): the normal chat falls out of the
  * widget model, and each widget's constraints map to the expected CSS Grid.
  */
+import type { GridWidget } from "@serene-pub/sdk"
 import { describe, expect, it } from "vitest"
 import {
 	DEFAULT_CELL,
@@ -17,15 +18,14 @@ import {
 	withGridMembership,
 	withGridWidget,
 	withoutGridWidget,
-	zoneGridStyle,
-	type WidgetConfig
+	zoneGridStyle
 } from "./widgetGrid"
 import { ADVENTURE_LAYOUT } from "@serene-pub/core-catalog"
 import { loadArranged, unitPinned } from "./arrangedGeometry"
 import { resolveRailColumn } from "./sideRail"
 import { unitsOf } from "./tabGroups"
 
-const wid = (over: Partial<WidgetConfig> = {}): WidgetConfig => ({
+const wid = (over: Partial<GridWidget> = {}): GridWidget => ({
 	id: "w",
 	zone: "middle",
 	order: 0,
@@ -319,7 +319,7 @@ describe("preset → effective middle zone", () => {
 
 describe("anchoring → self-alignment (fixed/bounded widgets only)", () => {
 	// GROW always stretches (see above); the anchor positions a FIXED widget.
-	const fixed = (anchor: WidgetConfig["anchor"]) =>
+	const fixed = (anchor: GridWidget["anchor"]) =>
 		widgetItemStyle(wid({ size: { w: "fixed", h: "fixed" }, anchor }), 44)
 
 	it("both edges → stretch, one edge → start/end, none → stretch", () => {

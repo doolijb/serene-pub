@@ -143,13 +143,13 @@ export function importSummaryView(
 	const a = summary.artifact
 	let runs: ImportSummaryView["runs"]
 	if (summary.runs === "recompiled")
-		runs = { tone: "ok", text: "Recompiled here from its source. This instance has a compiler, so it never runs a module built elsewhere." }
+		runs = { tone: "ok", text: "Recompiled here from its source. This pub has a compiler, so it never runs a module built elsewhere." }
 	else if (summary.runs === "carried-artifact")
-		runs = { tone: "ok", text: "Runs the compiled module the file carries. This instance has no compiler to rebuild it." }
+		runs = { tone: "ok", text: "Runs the compiled module the file carries. This pub has no compiler to rebuild it." }
 	else if (!a.carried)
 		runs = {
 			tone: "error",
-			text: "Cannot run here. This instance has no compiler, and the file carries no compiled module."
+			text: "Cannot run here. This pub has no compiler, and the file carries no compiled module."
 		}
 	else
 		runs = {
@@ -189,7 +189,7 @@ export function importSummaryView(
 					? ` Core's ${b.component} here is the one it was cloned from.`
 					: core
 						? ""
-						: ` This instance has no core ${b.component}.`
+						: ` This pub has no core ${b.component}.`
 		basedOn = { text: `Clone of core's ${b.component} (${b.version}).${tail}`, drift }
 	}
 

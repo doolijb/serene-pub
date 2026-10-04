@@ -51,12 +51,12 @@
 import { and, eq, inArray } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import {
-	contentHash,
+	annotationTextHash,
 	loadVocabulary,
-	MAX_ANNOTATED_LENGTH,
 	type AnnotationVocabulary
 } from "$lib/server/annotations"
 import { EXTRACTOR_VERSION } from "$lib/server/pipelines/ranking/entities"
+import { castMemberCards } from "$lib/server/utils/castMemberCards"
 
 // db is the global Db — see db/types.d.ts
 
@@ -126,10 +126,26 @@ export async function deriveSceneMentions(
 	const out = new Map<number, SceneMentions>()
 	if (scenes.length === 0) return out
 
-	const messageIds = [
+	const spanIds = [
 		...new Set(scenes.flatMap((s) => s.selectedMessageIds ?? []))
 	]
 	const sceneIds = scenes.map((s) => s.id)
+
+	/**
+	 * The span's messages that still exist (plan A23). A deleted message can
+	 * never be annotated, so counting it would keep its scene `pending` for
+	 * ever; it is no text for the lane to fall behind on. A delete leaves the
+	 * id in the span, where it is the scene's place in play (`inPlayOrder`).
+	 */
+	const messageIds = spanIds.length
+		? (
+				await db
+					.select({ id: schema.sessionMessages.id })
+					.from(schema.sessionMessages)
+					.where(inArray(schema.sessionMessages.id, spanIds))
+			).map((r) => r.id)
+		: []
+	const existing = new Set(messageIds)
 
 	// A scene with no span names nobody, and that is a complete answer rather
 	// than an unread one — there is no text for the lane to fall behind on.
@@ -143,14 +159,20 @@ export async function deriveSceneMentions(
 
 	/**
 	 * Driven from `message_annotations`, joined to `session_messages` for the
-	 * text — the same shape `searchMessageAnnotations` and `scanCandidates`
-	 * read, so there is one spelling of *"is this annotation still true"*.
+	 * text's current hash — the same shape `searchMessageAnnotations` and
+	 * `scanCandidates` read, so there is one spelling of *"is this annotation
+	 * still true"*.
 	 *
 	 * `messages` is joined because the annotation's foreign key points there:
 	 * a legacy row the store never mirrored has nothing to hang an annotation
 	 * on, so it can never be annotated and this scene stays `pending`. That is
 	 * the honest answer — the mirror is what makes a message part of the model
-	 * — and it is why `total` counts the span rather than the mirrored subset.
+	 * — and it is why `total` counts the span's existing messages rather than
+	 * the mirrored subset.
+	 *
+	 * Fresh when the annotation was written from the text the message holds
+	 * now: its `source_hash` equals the message's `embed_text_hash`
+	 * (`annotationTextHash.message`), the comparison the lane's picker makes.
 	 */
 	const annotationRows = await db
 		.select({
@@ -160,7 +182,7 @@ export async function deriveSceneMentions(
 			extractorVersion: schema.messageAnnotations.extractorVersion,
 			sourceHash: schema.messageAnnotations.sourceHash,
 			gazetteerHash: schema.messageAnnotations.gazetteerHash,
-			content: schema.sessionMessages.content
+			currentHash: annotationTextHash.message
 		})
 		.from(schema.messageAnnotations)
 		.innerJoin(
@@ -180,8 +202,7 @@ export async function deriveSceneMentions(
 	for (const row of annotationRows) {
 		if (row.extractorVersion !== EXTRACTOR_VERSION) continue
 		if (row.gazetteerHash !== vocabulary.hash) continue
-		const text = (row.content ?? "").slice(0, MAX_ANNOTATED_LENGTH)
-		if (row.sourceHash !== contentHash(text)) continue
+		if (row.sourceHash !== row.currentHash) continue
 		// Counted before anything is read off the row: the empty-extraction
 		// sentinel means "examined, named nobody", which is coverage, not a hit.
 		freshMessages.add(row.messageId)
@@ -195,23 +216,13 @@ export async function deriveSceneMentions(
 	}
 
 	/**
-	 * character → the binding that IS them in this lorebook.
+	 * character → the binding that IS them in this lorebook, by any card of
+	 * theirs: linked, or one a dated change draws them with (plan A25).
 	 *
 	 * Scoped to the lorebook because the cast is: a character bound in two
 	 * books has a row in each, and a scene's cast names the one in its own.
 	 */
-	const bindingRows = await db
-		.select({
-			id: schema.lorebookBindings.id,
-			characterId: schema.lorebookBindings.characterId
-		})
-		.from(schema.lorebookBindings)
-		.where(eq(schema.lorebookBindings.lorebookId, lorebookId))
-	const bindingByCharacter = new Map<number, number>()
-	for (const row of bindingRows) {
-		if (row.characterId != null)
-			bindingByCharacter.set(row.characterId, row.id)
-	}
+	const bindingByCharacter = (await castMemberCards(db, lorebookId)).memberOf
 
 	// Present beats mentioned — the stored half of the cast, which this file
 	// does not derive and must not contradict.
@@ -235,7 +246,9 @@ export async function deriveSceneMentions(
 	}
 
 	for (const scene of scenes) {
-		const span = scene.selectedMessageIds ?? []
+		const span = (scene.selectedMessageIds ?? []).filter((id) =>
+			existing.has(id)
+		)
 		const present = participantsByScene.get(scene.id)
 		const ids = new Set<number>()
 		let annotated = 0

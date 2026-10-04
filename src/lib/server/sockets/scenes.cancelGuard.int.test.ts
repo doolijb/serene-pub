@@ -1,5 +1,5 @@
 /**
- * scenes.ts's catch-block guard around generateSummary()/compileScenesForEntry()
+ * scenes.ts's catch-block guard around the summarize-scene run/compileScenesForEntry()
  * is deliberately narrower than checking `isQueueCancellation(err) ||
  * err.name === "AbortError"` — it checks abortController.signal.aborted
  * alone. activityStore.cancel() aborts that controller synchronously, so
@@ -94,37 +94,12 @@ describe("sceneCompileHandler — narrowed cancel guard (PGlite integration)", (
 				.values({ name: "test-sampling" })
 				.returning()
 		)[0]
-		const contextConfig = (
-			await testDb
-				.insert(schema.contextConfigs)
-				.values({ name: "test-context", template: "{{instructions}}" })
-				.returning()
-		)[0]
-		const promptConfig = (
-			await testDb
-				.insert(schema.promptConfigs)
-				.values({ name: "test-prompt", systemPrompt: "" })
-				.returning()
-		)[0]
-
-		// Context and prompt still live on `system_settings` — they point at the
-		// 0.5 archive tables. Connection and sampling do not: since 0181 they
-		// are a `connection_defaults` row keyed by capability, registered below.
+		// Connection and sampling are a `connection_defaults` row keyed by
+		// capability (0181), registered below; the settings row only has to
+		// exist.
 		const existingSettings = await testDb.query.systemSettings.findFirst()
-		if (existingSettings) {
-			await testDb
-				.update(schema.systemSettings)
-				.set({
-					defaultContextConfigId: contextConfig.id,
-					defaultPromptConfigId: promptConfig.id
-				})
-				.where(eq(schema.systemSettings.id, existingSettings.id))
-		} else {
-			await testDb.insert(schema.systemSettings).values({
-				defaultContextConfigId: contextConfig.id,
-				defaultPromptConfigId: promptConfig.id
-			} as any)
-		}
+		if (!existingSettings)
+			await testDb.insert(schema.systemSettings).values({} as any)
 		// The MODEL half: a registration names a pair, and an endpoint on its
 		// own is incomplete — the summarize would refuse before it ever reached
 		// the cancellation this test is about.
@@ -172,7 +147,7 @@ describe("sceneCompileHandler — narrowed cancel guard (PGlite integration)", (
 		await expect(
 			sceneCompileHandler.handler(
 				fakeSocket(owner.id),
-				{ historyEntryId: historyEntry.id },
+				{ historyEntryId: historyEntry.id, branchId: null, moment: null },
 				noopEmit
 			)
 		).rejects.toThrow(/cancelled/i)

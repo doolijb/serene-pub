@@ -47,13 +47,6 @@ vi.mock("$lib/server/embedding/vectorizationQueue", () => ({
 	ensureSessionMessageEmbedded: async () => {},
 	autoEnqueueSession: async () => {}
 }))
-vi.mock("$lib/server/utils/getUserConfigurations", () => ({
-	getUserConfigurations: async () => ({
-		contextConfig: { id: 1, template: "{{instructions}}" },
-		promptConfig: { id: 1, systemPrompt: "Be brief." },
-		narratorPromptConfig: null
-	})
-}))
 vi.mock("$lib/server/sockets/utils/broadcastHelpers", () => ({
 	broadcastToSessionUsers: async () => {}
 }))
@@ -528,18 +521,18 @@ describe("cause at every emitter", () => {
 		expect(rows.length).toBe(1)
 	})
 
-	it("toggling a character's active flag yields cast-changed { ref, change: 'enabled', value }, cause settings", async () => {
+	it("switching a cast seat off yields cast-changed { ref, change: 'enabled', value }, cause settings", async () => {
 		const s = await makeSession("toggle-active")
-		const { toggleSessionCharacterActiveHandler } = await import(
+		const { sessionsSetCastSeatEnabledHandler } = await import(
 			"$lib/server/sockets/sessions"
 		)
-		const res: any = await toggleSessionCharacterActiveHandler.handler(
+		const res: any = await sessionsSetCastSeatEnabledHandler.handler(
 			fakeSocket(userId),
-			{ sessionId: s.sessionId, characterId },
+			{ sessionId: s.sessionId, characterId, enabled: false },
 			emit
 		)
 		expect(res.error).toBeUndefined()
-		expect(res.isActive).toBe(false)
+		expect(res.enabled).toBe(false)
 		const rows = await ofEvent(s.sessionId, sessionEvents.castChanged)
 		expect(rows.length).toBe(1)
 		expect(rows[0]!.payload).toMatchObject({

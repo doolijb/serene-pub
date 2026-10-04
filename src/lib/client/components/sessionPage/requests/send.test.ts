@@ -17,7 +17,7 @@ function page(sends = true) {
 			channels: ["main", "ooc"],
 			setChannel: (c: string) => did.push(`channel ${c}`),
 			switchPersona: (id: number) => did.push(`persona ${id}`),
-			send: () => (did.push("send"), sends)
+			send: (ids: string[]) => (did.push(ids.length ? `send ${ids.join(",")}` : "send"), sends)
 		}
 	}
 }
@@ -27,6 +27,12 @@ describe("answerSend", () => {
 		const { did, deps } = page()
 		answerSend({ content: "hi", channel: "ooc", personaId: 4 }, deps)
 		expect(did).toEqual(["draft hi", "channel ooc", "persona 4", "send"])
+	})
+
+	test("tray items ride with the line, de-duplicated; anything not an id is dropped", () => {
+		const { did, deps } = page()
+		answerSend({ content: "", trayItemIds: ["a", "b", "a", 7, ""] }, deps)
+		expect(did).toEqual(["draft ", "send a,b"])
 	})
 
 	test("a channel the session lacks and a persona that is not a number are ignored", () => {

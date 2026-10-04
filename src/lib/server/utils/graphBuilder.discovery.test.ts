@@ -5,8 +5,8 @@
  * was `[]` (everything predating cast extraction) resolved nobody, so the
  * description pass, state detection, and perspective extraction were all
  * skipped and the build returned an empty proposal *as a success*. Meanwhile
- * the direct-entry path called resolveCharacterNamesToBindingIds, which
- * CREATES a binding row per unmatched name mid-build — so cancelling or
+ * the direct-entry path called a name resolver (since deleted) that
+ * created a binding row per unmatched name mid-build — so cancelling or
  * discarding still left new characters behind.
  *
  * Pass 1 now applies one uniform rule (ids → lookup, names → resolve, nothing
@@ -51,8 +51,6 @@ const sampling = {
 	values: {},
 	enabled: []
 } as any
-const contextConfig = { id: 1 } as any
-const promptConfig = { id: 1 } as any
 
 /** Routes canned responses by the label graphBuilder passes to each call. */
 function respondByLabel(map: Record<string, string>, fallback = "{}") {
@@ -107,8 +105,6 @@ describe("buildGraphFromScenes — in-memory character discovery", () => {
 			scenes: [scene(1, "Aria and Cassia met.")] as any,
 			connection: conn,
 			sampling,
-			contextConfig,
-			promptConfig,
 			seedNodes: [seedAria]
 		})
 
@@ -144,8 +140,6 @@ describe("buildGraphFromScenes — in-memory character discovery", () => {
 			] as any,
 			connection: conn,
 			sampling,
-			contextConfig,
-			promptConfig,
 			seedNodes: [seedAria]
 		})
 
@@ -179,8 +173,6 @@ describe("buildGraphFromScenes — in-memory character discovery", () => {
 			scenes: [scene(1, "one"), scene(2, "two")] as any,
 			connection: conn,
 			sampling,
-			contextConfig,
-			promptConfig,
 			seedNodes: [seedAria]
 		})
 
@@ -199,8 +191,6 @@ describe("buildGraphFromScenes — in-memory character discovery", () => {
 			] as any,
 			connection: conn,
 			sampling,
-			contextConfig,
-			promptConfig,
 			seedNodes: [seedAria]
 		})
 
@@ -221,8 +211,6 @@ describe("buildGraphFromScenes — in-memory character discovery", () => {
 			] as any,
 			connection: conn,
 			sampling,
-			contextConfig,
-			promptConfig,
 			seedNodes: [seedAria]
 		})
 
@@ -252,8 +240,6 @@ describe("buildGraphFromScenes — in-memory character discovery", () => {
 			] as any,
 			connection: conn,
 			sampling,
-			contextConfig,
-			promptConfig,
 			seedNodes: [seedAria]
 		})
 
@@ -271,8 +257,6 @@ describe("buildGraphFromScenes — in-memory character discovery", () => {
 				scenes: [scene(1, "An empty room.")] as any,
 				connection: conn,
 				sampling,
-				contextConfig,
-				promptConfig,
 				seedNodes: [seedAria]
 			})
 		).rejects.toThrow(/Nothing could be extracted/)

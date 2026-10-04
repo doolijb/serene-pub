@@ -177,7 +177,7 @@
 					</h1>
 					<p class="text-surface-600-400 text-sm">
 						{twoFactorRequired
-							? "This instance requires a second factor on every account."
+							? "This pub requires a second factor on every account."
 							: "Recommended. You can set this up later from settings."}
 					</p>
 				</div>

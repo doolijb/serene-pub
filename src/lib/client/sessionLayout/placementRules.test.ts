@@ -13,6 +13,7 @@ import {
 	REFUSE_EMPTY_MIDDLE,
 	STAGE_FOLLOWS_CONVERSATION,
 	emptyMiddleRefusal,
+	primaryLogPick,
 	stageOf
 } from "./placementRules"
 
@@ -82,5 +83,19 @@ describe("QF — Done refuses an empty middle (recommended (1))", () => {
 	test("any widget in the middle lets Done through — it need not be the conversation", () => {
 		expect(emptyMiddleRefusal(["world-state"])).toBeNull()
 		expect(emptyMiddleRefusal(["messages"])).toBeNull()
+	})
+})
+
+describe("primaryLogPick — where the log IS, whatever QE draws", () => {
+	test("in a side, it names that side (the desktop keeps that side docked)", () => {
+		expect(
+			primaryLogPick({ middle: ["world-state"], left: [], right: ["stats", "messages"], claims: noClaims, primaryId: "messages" })
+		).toEqual({ id: "messages", zone: "right" })
+	})
+
+	test("a claiming copy is passed over for the unclaimed log", () => {
+		expect(
+			primaryLogPick({ middle: ["messages#sanctum"], left: ["messages"], right: [], claims: lairClaims, primaryId: "messages" })
+		).toEqual({ id: "messages", zone: "left" })
 	})
 })

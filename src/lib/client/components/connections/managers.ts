@@ -21,6 +21,7 @@
  */
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 import { CONNECTION_DEFAULTS } from "$lib/shared/utils/connectionDefaults"
+import { uniqueName } from "$lib/shared/connections/connectionName"
 import type { TypedSocket } from "$lib/client/sockets/typedSocket"
 
 export type ManagerKind = "koboldcpp" | "ollama"
@@ -77,17 +78,10 @@ const MANAGERS: Record<
  * The server refuses a duplicate connection name, and "KoboldCPP" is exactly
  * the name somebody who already added one by hand is likely to have used — so
  * the one press that is supposed to just work would fail with a toast about a
- * name the person never typed. Numbered from 2, the way a person would.
+ * name the person never typed. Numbered from 2, the way a person would; the
+ * rule is shared with the 0.5.3 upgrade, which names connections the same way.
  */
-export function uniqueName(base: string, taken: readonly string[]): string {
-	const used = new Set(taken.map((n) => n.trim().toLowerCase()))
-	if (!used.has(base.toLowerCase())) return base
-	for (let n = 2; n < 1000; n++) {
-		const candidate = `${base} ${n}`
-		if (!used.has(candidate.toLowerCase())) return candidate
-	}
-	return `${base} ${Date.now()}`
-}
+export { uniqueName }
 
 export function managerPlan(
 	kind: ManagerKind,

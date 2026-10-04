@@ -47,16 +47,10 @@ export interface FixtureScope {
 	/** The last user message, which is what a turn is triggered by. */
 	text: string
 	/**
-	 * A prompt config this fixture seeded for itself.
-	 *
-	 * Both sides must read the *same row*, so the harness points the instance
-	 * default at it before running rather than handing the legacy builder one
-	 * object and letting the pipeline resolve another. Two configs that happen
-	 * to agree is not the same test.
+	 * The prompt this fixture renders with, in place of the corpus default —
+	 * the words 0.5 read from its prompt config when the golden was captured.
 	 */
-	promptConfigId?: number
-	/** A context config this fixture seeded for itself. Same rule as above. */
-	contextConfigId?: number
+	prompts?: ParityPrompts
 	/**
 	 * The story string the *pipeline* renders, when it differs from the legacy
 	 * one.
@@ -64,12 +58,9 @@ export interface FixtureScope {
 	 * The one place the two sides are deliberately not handed the same string,
 	 * and the exception proves the rule rather than breaking it. What this
 	 * corpus asserts is that 0.6's pipeline emits the bytes 0.5 emitted, and the
-	 * two releases keep their templates in different tables on purpose:
-	 * `context_configs` still holds 0.5's, headings and fences included, and
-	 * `pipeline_context_templates` holds 0.6's, which has neither because they
-	 * moved into the variable layouts. Handing the legacy builder 0.6's template
-	 * would compare the pipeline against a builder that never learned where the
-	 * headings went, and report the release's whole point as a defect.
+	 * two releases' templates differ on purpose: 0.5's carried headings and
+	 * fences, and 0.6's (`pipeline_context_templates`) has neither because they
+	 * moved into the variable layouts. The goldens were rendered through 0.5's.
 	 *
 	 * Supplied as a literal rather than as a seeded row because
 	 * `parityPipeline()` is compiled here and published nowhere — it has no spec
@@ -95,11 +86,54 @@ export interface ParityFixture {
 	seed(db: Db): Promise<FixtureScope>
 }
 
+/**
+ * A 0.5 prompt config's fields, as the parity pipeline's slots take them: the
+ * text on the `context` node's `prompts` slot, the two post-history numbers on
+ * the `prompt` (assemble) node's `params`.
+ */
+export interface ParityPrompts {
+	systemPrompt?: string
+	postHistoryInstructions?: string
+	postHistoryDepth?: number
+	postHistoryTokenTrigger?: number
+}
+
 export interface RenderConfigs {
 	connection: any
 	sampling: any
-	contextConfig: any
-	promptConfig: any
+	/** The corpus default prompt, for every fixture that names none. */
+	prompts: ParityPrompts
+}
+
+/**
+ * Layer a fixture's prompt into a parity world at `defaults`.
+ *
+ * The parity specs are compiled here and published nowhere, so they have no
+ * config layer to select a prompt row through; the words go in as values, the
+ * same way `pipelinePreview` layers the story string. The post-history numbers
+ * are written even when unset, as 0 — what 0.5's columns held by default.
+ */
+export function layerParityPrompts(
+	world: { overrides: unknown[] },
+	prompts: ParityPrompts
+): void {
+	for (const path of ["systemPrompt", "postHistoryInstructions"] as const)
+		if (prompts[path] != null)
+			world.overrides.push({
+				nodeKey: "context",
+				slot: "prompts",
+				path,
+				value: prompts[path],
+				scopeKind: "defaults"
+			})
+	for (const path of ["postHistoryDepth", "postHistoryTokenTrigger"] as const)
+		world.overrides.push({
+			nodeKey: "prompt",
+			slot: "params",
+			path,
+			value: prompts[path] ?? 0,
+			scopeKind: "defaults"
+		})
 }
 
 /** The pipeline document the parity corpus renders through. */
@@ -306,13 +340,17 @@ export const parityPipeline = () =>
  * `preview: true` halts at the Provider with the payload built — so this is the
  * real thing, not a reconstruction of it.
  */
-export async function pipelinePreview(db: Db, scope: FixtureScope) {
+export async function pipelinePreview(
+	db: Db,
+	scope: FixtureScope,
+	prompts: ParityPrompts
+) {
 	const world = await buildWorld(db, {
 		sessionId: scope.sessionId
 	})
+	layerParityPrompts(world, scope.prompts ?? prompts)
 
-	// Layered here rather than projected by `buildWorld`, which no longer reads
-	// `context_configs` at all — the story string is a
+	// Layered here rather than projected by `buildWorld`: the story string is a
 	// `pipeline_context_templates` reference resolved through the config layer,
 	// and this ad-hoc spec has no config layer to resolve it through. At
 	// `defaults`, so a fixture that writes its own override still wins.
@@ -377,12 +415,7 @@ export const goldenPathFor = (name: string): string =>
  * fallback — a fixture without one would otherwise pass by comparing the
  * pipeline against itself.
  */
-async function resolveGolden(
-	db: Db,
-	fixture: ParityFixture,
-	scope: FixtureScope,
-	effective: RenderConfigs
-): Promise<string> {
+async function resolveGolden(fixture: ParityFixture): Promise<string> {
 	const { readFileSync, existsSync } = await import("node:fs")
 	const path = goldenPathFor(fixture.name)
 
@@ -402,47 +435,6 @@ export async function runFixture(
 	configs: RenderConfigs
 ): Promise<ParityResult> {
 	const scope = await fixture.seed(db)
-
-	// One row, both paths. The instance default is what `buildWorld` resolves,
-	// and the same row is handed to the legacy builder.
-	// **Every instance default is set on every fixture**, including back to the
-	// corpus default when the fixture did not ask for one.
-	//
-	// Setting them only when a fixture asks leaves the *previous* fixture's
-	// choice in place for every fixture after it. That has now caused two
-	// separate false divergences — a system prompt nobody chose, then a context
-	// template nobody chose — each of which reads exactly like a pipeline bug
-	// and is a harness bug. Shared mutable state across fixtures is the failure
-	// mode a corpus is most likely to produce; resetting unconditionally is
-	// cheap and removes the whole class.
-	const { eq } = await import("drizzle-orm")
-	const schema = await import("$lib/server/db/schema")
-
-	const promptId = scope.promptConfigId ?? configs.promptConfig.id
-	const contextId = scope.contextConfigId ?? configs.contextConfig.id
-	await db
-		.update(schema.systemSettings)
-		.set({
-			defaultPromptConfigId: promptId,
-			defaultContextConfigId: contextId
-		})
-		.where(eq(schema.systemSettings.id, 1))
-
-	const [promptRow] = await db
-		.select()
-		.from(schema.promptConfigs)
-		.where(eq(schema.promptConfigs.id, promptId))
-		.limit(1)
-	const [contextRow] = await db
-		.select()
-		.from(schema.contextConfigs)
-		.where(eq(schema.contextConfigs.id, contextId))
-		.limit(1)
-	const effective = {
-		...configs,
-		promptConfig: promptRow,
-		contextConfig: contextRow
-	}
 
 	// The legacy side is a **frozen golden**, not a live render.
 	//
@@ -466,8 +458,8 @@ export async function runFixture(
 	// which is the point, since anything regenerated from this tree would be
 	// the pipeline grading its own homework.
 	const [legacy, preview] = await Promise.all([
-		resolveGolden(db, fixture, scope, effective),
-		pipelinePreview(db, scope)
+		resolveGolden(fixture),
+		pipelinePreview(db, scope, configs.prompts)
 	])
 	// A run that stopped early has no preview, and `checkParity`'s message for
 	// that case blames the caller for forgetting `preview: true` — which is the
@@ -543,14 +535,18 @@ export const ragParityPipeline = () =>
 									vectors: $.gather.current.embed
 										.vectors,
 									// ⚠ Wired, and it was not. The mechanism's cap
-									// (`maxEntries`) ships at 0 — off — so a
-									// node whose params slot never resolves
-									// would run this corpus against a mechanism
-									// returning nothing. The 1.16.0 lesson, on
-									// the one spec where it would have shown as
-									// four empty prompts rather than an error.
-									// The fixture pushes a cap high enough not
-									// to truncate; see `harness.rag.int.test`.
+									// (`maxEntries`) ships at 5, so a node whose
+									// params slot never resolves would run this
+									// corpus truncated to five. The 1.16.0
+									// lesson, on the one spec where it would
+									// have shown as short prompts rather than an
+									// error. The fixture pushes a cap high
+									// enough not to truncate, and turns the
+									// mechanism on at its switch,
+									// `queries.searchByMeaning` (Automatic by
+									// default, which searches nothing here: this
+									// spec wires no connection to `queries`);
+									// see `harness.rag.int.test`.
 									params: slot.params()
 								})
 							)

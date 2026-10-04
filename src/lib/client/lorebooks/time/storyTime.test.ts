@@ -11,6 +11,7 @@ import {
 	readInLine,
 	storyItems,
 	timeHeaderLine,
+	timeListGroups,
 	undatedEntries,
 	undatedLine
 } from "./storyTime"
@@ -277,5 +278,35 @@ describe("castArrivals — the first dated thing naming each member", () => {
 			session: { id: 8, name: "The Open Door" }
 		})
 		expect(castArrivals(items).has(8)).toBe(false)
+	})
+})
+
+/** Note 4: a history entry's scenes are nested under it, never interleaved. */
+describe("timeListGroups", () => {
+	it("files each scene under its history entry, in story order", () => {
+		const groups = timeListGroups(storyItems({ entries, scenes }))
+		expect(groups.map((g) => g.item.key)).toEqual(["entry#1", "entry#2"])
+		expect(groups[1].children.map((c) => c.key)).toEqual([
+			"scene#4",
+			"scene#5"
+		])
+		expect(groups[0].children).toEqual([])
+	})
+
+	it("keeps a scene whose entry is not on the list as a row of its own", () => {
+		const items = storyItems({ entries, scenes }).filter(
+			(i) => i.key !== "entry#2"
+		)
+		const groups = timeListGroups(items)
+		expect(groups.map((g) => g.item.key)).toEqual([
+			"entry#1",
+			"scene#4",
+			"scene#5"
+		])
+	})
+
+	it("never files a history entry under anything", () => {
+		for (const item of storyItems({ entries, scenes }))
+			if (item.kind === "history") expect(item.parentKey).toBeUndefined()
 	})
 })

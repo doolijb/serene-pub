@@ -135,6 +135,8 @@ export interface FormFacts {
 	question: string | null
 	/** What the question was about, by name — the block's `referent` (lair pass B12). */
 	referent?: string
+	/** Where the question was asked from, by name — the block's `vantage` (plan A27). */
+	vantage?: string
 	addressee: string | null
 	characterId: number | null
 	/** `choices` only: the option key the press answered with, and its label. */

@@ -55,6 +55,8 @@ const fullContext = (): Record<string, unknown> => ({
 	personas:
 		'User Characters (player-controlled):\n```json\n[\n  {\n    "name": "Rell"\n  }\n]\n```',
 	scenario: 'Scenario:\n"""\nA storm over the moor.\n"""',
+	characterLore:
+		'Character lore:\n```json\n[{"title":"Oath","castMember":"Brannoc","content":"Never."}]\n```',
 	worldLore: 'World lore: \n```json\n{"Moor":"wet"}\n```',
 	history: 'Story history:\n```json\n{"412-02":"the fire"}\n```',
 	relationshipsPerspectives:
@@ -84,6 +86,7 @@ const sparseContext = (): Record<string, unknown> => ({
 	instructions: "",
 	characters: "",
 	personas: "",
+	characterLore: "",
 	scenario: "",
 	worldLore: "",
 	history: "",
@@ -258,6 +261,44 @@ describe("the shipped context template renders identically in both engines", () 
 		expect(hbs).toContain("a system note")
 		expect(hbs).toContain("an assistant note")
 	})
+
+	it("places the author's note first at its index, in all three roles (AN1)", async () => {
+		for (const role of ["system", "user", "assistant"]) {
+			const variables = fullContext()
+			variables.injectionsByIndex = {
+				2: [{ role: "system", content: "an injected note" }]
+			}
+			variables.authorsNote = {
+				targetIndex: 2,
+				hasContent: true,
+				text: "It is raining hard.",
+				role
+			}
+			const [hbs, liquid] = await both(
+				SHIPPED_CONTEXT_TEMPLATE,
+				SHIPPED_CONTEXT_TEMPLATE_LIQUID,
+				variables
+			)
+			expect(liquid, role).toBe(hbs)
+			// Note, then injections, then the post-history reminder.
+			const note = hbs.indexOf("It is raining hard.")
+			expect(note, role).toBeGreaterThan(hbs.indexOf("I am."))
+			expect(note, role).toBeLessThan(hbs.indexOf("an injected note"))
+			expect(hbs.indexOf("an injected note"), role).toBeLessThan(
+				hbs.indexOf("Response reminder")
+			)
+		}
+	})
+
+	it("renders nothing for an author's note that does not apply, or is absent", async () => {
+		const absent = fullContext()
+		const skipped = fullContext()
+		skipped.authorsNote = { targetIndex: 2, hasContent: false, role: "system" }
+		const [a] = await both(SHIPPED_CONTEXT_TEMPLATE, SHIPPED_CONTEXT_TEMPLATE_LIQUID, absent)
+		const [b, bl] = await both(SHIPPED_CONTEXT_TEMPLATE, SHIPPED_CONTEXT_TEMPLATE_LIQUID, skipped)
+		expect(bl).toBe(b)
+		expect(b).toBe(a)
+	})
 })
 
 describe("the frozen 0.5 context template renders identically in both engines", () => {
@@ -309,8 +350,7 @@ describe("the shipped variable layouts render identically in both engines", () =
 						name: "Brannoc",
 						nickname: "Bran",
 						description: "A ferryman.",
-						personality: "Terse.",
-						"extra lore": { Moor: "wet" }
+						personality: "Terse."
 					},
 					{ name: "Rell" }
 				]
@@ -322,6 +362,17 @@ describe("the shipped variable layouts render identically in both engines", () =
 			"personas/content",
 			{ personas: [{ name: "Rell", description: "A traveller." }] }
 		],
+		[
+			"characterLore/content",
+			{
+				characterLore: [
+					{ title: "Brannoc's oath", castMember: "Brannoc", content: 'Swore "never".' },
+					{ title: "A note", content: "Forged." }
+				]
+			}
+		],
+		["characterLore/content", { characterLore: [] }],
+		["characterLore/content", {}],
 		[
 			"worldLore/content",
 			{ worldLore: { Moor: "wet", Ferry: { owner: "Brannoc" } } }

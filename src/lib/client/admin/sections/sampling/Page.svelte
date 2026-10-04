@@ -19,7 +19,6 @@
 	import { requestWithInterest, useInterest } from "$lib/client/sockets/interest.svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 	import { docsHref } from "$lib/shared/utils/docsHref"
-	import AdminPageHeader from "$lib/client/components/admin/AdminPageHeader.svelte"
 	import AdminChangelist from "$lib/client/components/admin/AdminChangelist.svelte"
 	import type {
 		AdminBulkAction,
@@ -175,20 +174,10 @@
 	}
 </script>
 
-<AdminPageHeader
+<AdminChangelist
 	title="Sampling"
 	doc={docsHref("connections", "sampling-configs")}
 	purpose="Named sets of generation settings, one modality each. Defaults and pipelines point at them."
->
-	{#snippet actions()}
-		<button type="button" class="btn btn-sm preset-tonal-surface" onclick={openView}>
-			<Icons.SlidersHorizontal size={16} aria-hidden="true" />
-			Open Sampling view
-		</button>
-	{/snippet}
-</AdminPageHeader>
-
-<AdminChangelist
 	{rows}
 	rowKey={(r) => r.id}
 	{columns}
@@ -206,6 +195,12 @@
 	emptyIcon={Icons.SlidersHorizontal}
 	emptyMessage="No sampling configs yet. Add one to decide how replies and images are generated."
 >
+	{#snippet headerActions()}
+		<button type="button" class="btn btn-sm preset-tonal-surface" onclick={openView}>
+			<Icons.SlidersHorizontal size={16} aria-hidden="true" />
+			Open Sampling view
+		</button>
+	{/snippet}
 	{#snippet cell(row, col)}
 		{#if col.key === "usedBy"}
 			{@const held = samplingDefaultsFor(row.id, defaults)}

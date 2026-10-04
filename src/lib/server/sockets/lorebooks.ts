@@ -1,26 +1,44 @@
 import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
-import { and, eq, inArray, isNull, sql } from "drizzle-orm"
+import { and, eq, inArray, isNotNull, isNull, or, sql } from "drizzle-orm"
 import {
 	resolveOrCreateBindingRow,
 	syncLorebookBindingsForCharacter
 } from "$lib/server/utils/characterBindingSync"
 import { canViewCharacter } from "$lib/server/utils/sessionAccess"
+import { cardTakenBy } from "$lib/server/utils/castMemberCards"
 import {
 	mapImportedEntry,
 	entryTypeIdOf,
 	normalizeLegacyLorebookData,
 	normalizeNativeWorldInfoEntry,
 	importedKeyColumns,
+	importedStatRows,
+	lorebookFileFormatOf,
 	parseImportedLorebook,
 	resolveAnchorEntryLinks,
 	resolveParentNodeLinks,
+	secondaryKeysOf,
+	unfileable,
 	type ParsedImportedLorebook
 } from "$lib/server/utils/lorebookImportMapper"
+import { lorebookFileTooLarge } from "$lib/shared/imports/fileCaps"
+import { holdImport, takeHeldImport } from "$lib/server/imports/heldImports"
+import { withImportLimit } from "$lib/server/imports/importLimit"
+import { assertImportJsonShape } from "$lib/server/imports/jsonShape"
 import { buildLorebookExportData } from "$lib/server/utils/lorebookExportBuilder"
 import { duplicateLorebookRows } from "$lib/server/utils/lorebookDuplicate"
 import { LOREBOOK_EXPORT_PAUSED } from "$lib/shared/lorebooks/exportPaused"
 import { deriveNextBindingToken } from "$lib/server/utils/lorebookBindingToken"
+import {
+	MAX_TYPED_MEMBER_NUMBER,
+	castTag,
+	castTagNumber,
+	castTagsIn,
+	importedCastTagNumber,
+	rewriteImportedCastTagsDeep,
+	type CastTagReplacer
+} from "$lib/server/utils/castTags"
 import { resolveOrCreateBindingByName } from "$lib/server/utils/summarizer/availableSceneCast"
 import { hashCanonicalJson } from "$lib/server/utils/contentHash"
 import { isValidUuid } from "$lib/server/utils/uuid"
@@ -40,7 +58,10 @@ import {
 } from "$lib/server/utils/personaCard"
 import { writeSceneCast } from "$lib/server/utils/sceneCast"
 import { assertValidParentNode } from "$lib/server/utils/bindingParent"
-import { isUniqueViolation, refusable } from "./refusable"
+import { askerOf, refusable } from "./refusable"
+import { bookLoreWriteMode } from "$lib/server/state/loreWriteMode"
+import { LORE_WRITES_OFF } from "$lib/shared/lorebooks/loreWriteMode"
+import { isUniqueViolation } from "$lib/server/db/errors"
 import {
 	CHARACTER_LORE_TYPE_ID,
 	ENTRY_TYPE_IDS,
@@ -51,8 +72,35 @@ import {
 	type EntryTypeId
 } from "$lib/server/utils/lorebookEntries"
 import type { Handler } from "$lib/shared/events"
-import { readStoryCalendar, type StoryClock } from "$lib/shared/lorebooks/storyDate"
-import { clockColumns, clockProblem } from "$lib/server/state/storyTime"
+import {
+	datesThatDoNotLand,
+	readStoryCalendar,
+	type StoryClock
+} from "$lib/shared/lorebooks/storyDate"
+import { clockColumns, clockProblem, datedRowsOf } from "$lib/server/state/storyTime"
+import {
+	bookStatOwners,
+	purgeLorebook
+} from "$lib/server/lorebooks/tableRegistry"
+import {
+	countSessionLoreRefs,
+	dropSessionLoreRefs
+} from "$lib/server/state/sessionLoreRefs"
+import { autoEnqueueLorebook } from "$lib/server/embedding/vectorizationQueue"
+import { enqueueLorebookAnnotation } from "$lib/server/annotations/queue"
+import { serverFailureAs } from "$lib/server/imports/importFailure"
+import { getAttributeSlot, resolveSlotConfig } from "@serene-pub/sdk"
+import { findLinkedThatWay } from "$lib/server/utils/relationshipGuards"
+import { sanitizeRelationshipVisibility } from "$lib/server/utils/relationshipVisibility"
+import {
+	RELATIONSHIP_STATUSES,
+	RELATIONSHIP_TEXT_LIMITS
+} from "$lib/shared/lorebooks/linkVocabulary"
+import {
+	ITEM_TYPE_ID,
+	LOCATION_TYPE_ID
+} from "$lib/shared/entries/types"
+import { assertOwnedBook, findOwnedBook } from "$lib/server/utils/ownedBook"
 // SelectTag/SelectLorebookTag/InsertHistoryEntry are declared globally in
 // $lib/server/db/types.d.ts (ambient `export global {}` block, same pattern
 // as the Sockets namespace) — no import needed/available for them.
@@ -62,10 +110,10 @@ import { clockColumns, clockProblem } from "$lib/server/state/storyTime"
 // the field isn't enough on its own, since the value could still point at
 // another tenant's row (eg. another user's lorebookBindings id as
 // parentNodeId), creating a cross-tenant reference the graph-context builder
-// could later join through into prompt content. Same re-fetch-and-compare
-// shape (and error copy) as narrativeGraphUpdateNodeHandler
-// (narrativeGraph.ts), which already guards this exact pattern for the same
-// table's same columns via a different entry point.
+// could later join through into prompt content. The ONE check for a cast
+// row's references: `lorebooks:updateBinding` is the only door that writes
+// them after create (plan B2 — the graph's `narrativeGraph:updateNode`, which
+// repeated these checks, is gone).
 async function validateBindingCrossRefs(
 	fields: {
 		parentNodeId?: number | null
@@ -77,8 +125,8 @@ async function validateBindingCrossRefs(
 	bindingId: number | null
 ) {
 	if (fields.parentNodeId != null) {
-		// Same book, not itself, and the two-level rule (finding #22) — one
-		// shared guard, so narrativeGraph:updateNode cannot drift from it.
+		// Same book, not itself, and the two-level rule (finding #22) — the
+		// shared guard create and update both use.
 		await assertValidParentNode(
 			db,
 			bindingId,
@@ -243,21 +291,22 @@ function relistLorebooks(
 export const lorebooksListHandler: Handler<
 	Sockets.Lorebooks.List.Params,
 	Sockets.Lorebooks.List.Response
-> = {
-	event: "lorebooks:list",
-	async handler(socket, params, emitToUser) {
+> = refusable(
+	"lorebooks:list",
+	async (socket, params: Sockets.Lorebooks.List.Params, emitToUser) => {
 		const res = await buildLorebooksList(socket.user!.id)
 		emitToUser("lorebooks:list", res)
 		return res
-	}
-}
+	},
+	"Your lorebooks could not be listed."
+)
 
 export const lorebooksCreateHandler: Handler<
 	Sockets.Lorebooks.Create.Params,
 	Sockets.Lorebooks.Create.Response
-> = {
-	event: "lorebooks:create",
-	async handler(socket, params, emitToUser) {
+> = refusable(
+	"lorebooks:create",
+	async (socket, params: Sockets.Lorebooks.Create.Params, emitToUser) => {
 		try {
 			const userId = socket.user!.id
 
@@ -272,31 +321,37 @@ export const lorebooksCreateHandler: Handler<
 				// `emitToUser("lorebooks:list", …)` beside this call puts the same
 				// payload on the wire twice. One stood here; it is gone.
 				await relistLorebooks(socket, emitToUser)
-				emitToUser("lorebooks:create", { lorebook })
+				emitToUser("lorebooks:create", { lorebook, ...askerOf(params) })
 			}
 
-			return { lorebook }
+			return { lorebook, ...askerOf(params) }
 		} catch (error) {
 			console.error("Error creating lorebook:", error)
 			throw error
 		}
-	}
-}
+	},
+	"The lorebook could not be created.",
+	undefined,
+	askerOf
+)
 
 export const lorebooksGetHandler: Handler<
 	Sockets.Lorebooks.Get.Params,
 	Sockets.Lorebooks.Get.Response
-> = {
-	event: "lorebooks:get",
-	handler: async (socket, params, emitToUser) => {
+> = refusable(
+	"lorebooks:get",
+	async (socket, params: Sockets.Lorebooks.Get.Params, emitToUser) => {
 		try {
 			const userId = socket.user!.id
 
+			// The book's own row and its tags — what Book settings edits. Its
+			// entries and cast have their own reads (`entries:list`,
+			// `lorebooks:bindingList`); this reply carried both whole for a
+			// form that reads neither (Phase D).
 			const book = await db.query.lorebooks.findFirst({
 				where: (l, { and, eq }) =>
 					and(eq(l.id, params.id), eq(l.userId, userId)),
 				with: {
-					lorebookBindings: true,
 					lorebookTags: {
 						with: {
 							tag: true
@@ -313,7 +368,6 @@ export const lorebooksGetHandler: Handler<
 				// receive it — a key that matches every OTHER book's reply too.
 				const res: Sockets.Lorebooks.Get.Response = {
 					lorebook: null,
-					entries: [],
 					lorebookId: params.id
 				}
 				emitToUser("lorebooks:get", res)
@@ -329,27 +383,24 @@ export const lorebooksGetHandler: Handler<
 
 			const res: Sockets.Lorebooks.Get.Response = {
 				lorebook: bookWithTags,
-				entries: await loadBookEntries(db, params.id),
 				lorebookId: params.id
 			}
 			emitToUser("lorebooks:get", res)
 			return res
 		} catch (error: any) {
 			console.error("Error fetching lorebook:", error)
-			emitToUser("lorebooks:get:error", {
-				error: "Failed to fetch lorebook"
-			})
 			throw error
 		}
-	}
-}
+	},
+	"The lorebook could not be opened."
+)
 
 export const lorebooksUpdateHandler: Handler<
 	Sockets.Lorebooks.Update.Params,
 	Sockets.Lorebooks.Update.Response
-> = {
-	event: "lorebooks:update",
-	handler: async (socket, params, emitToUser) => {
+> = refusable(
+	"lorebooks:update",
+	async (socket, params: Sockets.Lorebooks.Update.Params, emitToUser) => {
 		try {
 			const userId = socket.user!.id
 
@@ -406,65 +457,77 @@ export const lorebooksUpdateHandler: Handler<
 			})
 
 			const res: Sockets.Lorebooks.Update.Response = {
-				lorebook: updated
+				lorebook: updated,
+				...askerOf(params)
 			}
 			emitToUser("lorebooks:update", res)
 			await relistLorebooks(socket, emitToUser) // Refresh list
 			return res
 		} catch (error: any) {
 			console.error("Error updating lorebook:", error)
-			emitToUser("lorebooks:update:error", {
-				error: error?.message || "Failed to update lorebook."
-			})
 			throw error
 		}
-	}
-}
+	},
+	"The lorebook could not be saved.",
+	undefined,
+	askerOf
+)
 
 export const lorebooksDeleteHandler: Handler<
 	Sockets.Lorebooks.Delete.Params,
 	Sockets.Lorebooks.Delete.Response
-> = {
-	event: "lorebooks:delete",
-	handler: async (socket, params, emitToUser) => {
+> = refusable(
+	"lorebooks:delete",
+	async (socket, params: Sockets.Lorebooks.Delete.Params, emitToUser) => {
 		try {
 			const userId = socket.user!.id
 
 			// Scoped by owner in the same statement; a book that is not
 			// this caller's (or is already gone) deletes nothing, and that is
-			// a refusal, not a success (finding #20).
-			const deleted = await db
-				.delete(schema.lorebooks)
-				.where(
-					and(
-						eq(schema.lorebooks.id, params.id),
-						eq(schema.lorebooks.userId, userId)
-					)
+			// a refusal, not a success (finding #20). Everything it holds goes
+			// with it, in the same transaction, by the one deletion rule an
+			// overwrite uses (`purgeLorebook`): stat owner ids carry no
+			// foreign key, so a row on main would outlive the book.
+			const deleted = await db.transaction(async (tx) => {
+				const mine = and(
+					eq(schema.lorebooks.id, params.id),
+					eq(schema.lorebooks.userId, userId)
 				)
-				.returning({ id: schema.lorebooks.id })
+				const [book] = await tx
+					.select({ id: schema.lorebooks.id })
+					.from(schema.lorebooks)
+					.where(mine)
+					.limit(1)
+				if (!book) return []
+				await purgeLorebook(tx, book.id)
+				return await tx
+					.delete(schema.lorebooks)
+					.where(mine)
+					.returning({ id: schema.lorebooks.id })
+			})
 			if (deleted.length === 0) throw new Error("Lorebook not found.")
 
 			const res: Sockets.Lorebooks.Delete.Response = {
 				success: "Lorebook deleted successfully",
-				id: params.id
+				id: params.id,
+				// The book, under the name every other lorebook reply uses,
+				// so client filtering is uniform (plan B5).
+				lorebookId: params.id
 			}
 			emitToUser("lorebooks:delete", res)
 			await relistLorebooks(socket, emitToUser) // Refresh list
 			return res
 		} catch (error: any) {
 			console.error("Error deleting lorebook:", error)
-			const res: Sockets.Lorebooks.Delete.Response = {
-				error: error?.message || "Failed to delete lorebook."
-			}
-			emitToUser("lorebooks:delete:error", res)
 			throw error
 		}
-	}
-}
+	},
+	"The lorebook could not be deleted."
+)
 
 /**
- * Auto-creates a lorebookBindings row for any {{char:N}}-style token found
- * in stored content that doesn't already have one. Never deletes a row —
+ * Mints a cast member for a cast tag an entry names that no member holds —
+ * a tag typed by hand, or pasted from another book. Never deletes a row —
  * a prior "delete any binding whose token isn't literally present in
  * content anymore" heuristic here was removed (same false-positive class
  * removed from the graph-rebuild path this session): bindingMergeLogs
@@ -474,6 +537,26 @@ export const lorebooksDeleteHandler: Handler<
  * routine lore edits. Manual per-node deletion via
  * narrativeGraph:deleteNode remains the only way to remove an unwanted
  * node.
+ *
+ * ⚠ **Only a number the book has never issued is minted (A16).** A tag
+ * below `next_binding_number` names a member this book numbered and has
+ * since lost — absorbed by a merge, or deleted. Minting it again brought that
+ * member back as a blank row, and an undoMerge then put the real one back
+ * beside it: two members on one tag. The merge and the delete rewrite the
+ * tags they leave behind (`rewriteBookCastTags`), so such a tag reaches here
+ * only from text written before they did — an editor's unsaved draft, an
+ * older copy — and it stays what it is, a tag with no member, which the
+ * editor shows as one. Numbers are never reused within a book; this is the
+ * entry save keeping that rule.
+ *
+ * ⚠ **Only the `char` prefix is a tag.** `{{roll:20}}` is a dice macro: the
+ * old `{{word:N}}` scan minted a member for it and moved the counter to 21.
+ * And only the `{{char:N}}` spelling: 0.5's `{char:N}` is prose here, as it
+ * is to the prompt and the editor (`castTags.ts`).
+ *
+ * ⚠ **Nothing past `MAX_TYPED_MEMBER_NUMBER`.** A ledger number typed as a
+ * tag would move the counter to the edge of its range, and every member
+ * added after it would fail.
  */
 export async function syncLorebookBindings({
 	lorebookId
@@ -482,62 +565,62 @@ export async function syncLorebookBindings({
 }) {
 	// One transaction under the book's advisory lock — the same key every
 	// other cast writer takes (resolveOrCreateBindingRow,
-	// resolveOrCreateBindingByName) — so two concurrent entry writes naming
-	// the same new token cannot both see it missing and both insert it
-	// (finding #24). Reads and writes run one after another, on `tx` only.
+	// resolveOrCreateBindingByName, the merge and the delete) — so two
+	// concurrent entry writes naming the same new tag cannot both see it
+	// missing and both insert it (finding #24). Reads and writes run one after
+	// another, on `tx` only.
 	await db.transaction(async (tx) => {
 		await tx.execute(sql`select pg_advisory_xact_lock(${lorebookId})`)
-		const existingBindings = await tx
+		const [book] = await tx
+			.select({ next: schema.lorebooks.nextBindingNumber })
+			.from(schema.lorebooks)
+			.where(eq(schema.lorebooks.id, lorebookId))
+		if (!book) return
+		const held = new Set<number>()
+		for (const row of await tx
 			.select({ binding: schema.lorebookBindings.binding })
 			.from(schema.lorebookBindings)
-			.where(eq(schema.lorebookBindings.lorebookId, lorebookId))
-		// Every entry of the lorebook, of every type — one scan, because the
-		// binding scan never cared which shape the content came out of.
+			.where(eq(schema.lorebookBindings.lorebookId, lorebookId))) {
+			const n = castTagNumber(row.binding)
+			if (n !== null) held.add(n)
+		}
+		// Every entry of the lorebook that names a tag at all, of every type —
+		// the scan never cared which shape the content came out of.
 		const entries = await tx
 			.select({ content: schema.lorebookEntries.content })
 			.from(schema.lorebookEntries)
-			.where(eq(schema.lorebookEntries.lorebookId, lorebookId))
-
-		// Every unique {{char:N}} / {char:N} (deprecated) token in the content,
-		// in the preferred {{…}} spelling.
-		const foundBindings: string[] = []
-		for (const entry of entries) {
-			const rgx: RegExp = /\{\{?(\w+):(\d+)\}?\}/g
-			let match: RegExpExecArray | null
-			while ((match = rgx.exec(entry.content)) !== null) {
-				const binding = `{{${match[1]}:${match[2]}}}`
-				if (!foundBindings.includes(binding)) foundBindings.push(binding)
-			}
-		}
-
-		for (const fb of foundBindings) {
-			// Either spelling of the token counts as already present.
-			const legacyBinding = fb.replace(/\{\{(\w+):(\d+)\}\}/, "{$1:$2}")
-			if (
-				existingBindings.some(
-					(eb) => eb.binding === fb || eb.binding === legacyBinding
+			.where(
+				and(
+					eq(schema.lorebookEntries.lorebookId, lorebookId),
+					sql`${schema.lorebookEntries.content} LIKE ${"%char:%"}`
 				)
 			)
-				continue
-			await tx.insert(schema.lorebookBindings).values({
+
+		const unissued = new Set<number>()
+		for (const entry of entries)
+			for (const n of castTagsIn(entry.content))
+				if (
+					!held.has(n) &&
+					n >= book.next &&
+					n <= MAX_TYPED_MEMBER_NUMBER
+				)
+					unissued.add(n)
+		if (unissued.size === 0) return
+
+		const numbers = [...unissued].sort((a, b) => a - b)
+		await tx.insert(schema.lorebookBindings).values(
+			numbers.map((n) => ({
 				lorebookId,
-				binding: fb,
+				binding: castTag(n),
 				characterId: null
-			})
-			// This token was not minted by deriveNextBindingToken's counter —
-			// it came straight from content text (pasted export, typed by
-			// hand, a stale reference). `binding` has no uniqueness
-			// constraint, so if the counter later reached this number it
-			// would issue it again. Advance the counter past it now.
-			const parsedNumber = Number(fb.match(/:(\d+)\}\}$/)?.[1])
-			if (Number.isInteger(parsedNumber))
-				await tx
-					.update(schema.lorebooks)
-					.set({
-						nextBindingNumber: sql`GREATEST(${schema.lorebooks.nextBindingNumber}, ${parsedNumber + 1})`
-					})
-					.where(eq(schema.lorebooks.id, lorebookId))
-		}
+			}))
+		)
+		// These numbers came from text, not from deriveNextBindingToken's
+		// counter; move the counter past them so it never issues one again.
+		await tx
+			.update(schema.lorebooks)
+			.set({ nextBindingNumber: numbers[numbers.length - 1] + 1 })
+			.where(eq(schema.lorebooks.id, lorebookId))
 	})
 }
 
@@ -612,9 +695,9 @@ export function relistBindings(
 export const lorebookBindingListHandler: Handler<
 	Sockets.Lorebooks.BindingList.Params,
 	Sockets.Lorebooks.BindingList.Response
-> = {
-	event: "lorebooks:bindingList",
-	handler: async (socket, params, emitToUser) => {
+> = refusable(
+	"lorebooks:bindingList",
+	async (socket, params: Sockets.Lorebooks.BindingList.Params, emitToUser) => {
 		const res = await buildLorebookBindingList(
 			socket.user!.id,
 			params.lorebookId
@@ -625,8 +708,9 @@ export const lorebookBindingListHandler: Handler<
 		}
 
 		return res
-	}
-}
+	},
+	"The book's cast could not be listed."
+)
 
 /**
  * Lorebooks bound to a given character — the candidate list for
@@ -638,9 +722,9 @@ export const lorebookBindingListHandler: Handler<
 export const lorebookBindingsForCharacterHandler: Handler<
 	Sockets.Lorebooks.BindingsForCharacter.Params,
 	Sockets.Lorebooks.BindingsForCharacter.Response
-> = {
-	event: "lorebooks:bindingsForCharacter",
-	handler: async (socket, params, emitToUser) => {
+> = refusable(
+	"lorebooks:bindingsForCharacter",
+	async (socket, params: Sockets.Lorebooks.BindingsForCharacter.Params, emitToUser) => {
 		try {
 			const userId = socket.user!.id
 
@@ -694,14 +778,11 @@ export const lorebookBindingsForCharacterHandler: Handler<
 				"Error fetching lorebook bindings for character:",
 				error
 			)
-			emitToUser("lorebooks:bindingsForCharacter:error", {
-				error:
-					error.message || "Failed to fetch lorebooks for character."
-			})
 			throw error
 		}
-	}
-}
+	},
+	"This character's lorebooks could not be listed."
+)
 
 /**
  * Type-safe handler for creating lorebook binding
@@ -711,6 +792,10 @@ export const lorebookBindingsForCharacterHandler: Handler<
 // supplied regardless of who it belongs to, and the bound entity's
 // name/aliases/summary would later be disclosed through the binding (and
 // copied into narrative-graph nodes derived from it).
+//
+// A deleted card is gone as far as a lorebook is concerned (plan A25): the
+// delete is soft so old messages keep their speaker's name, and nothing in a
+// book may link it again.
 export async function verifyBindingTargetAccess(
 	binding: { characterId?: number | null },
 	userId: number
@@ -718,9 +803,9 @@ export async function verifyBindingTargetAccess(
 	if (binding.characterId) {
 		const character = await db.query.characters.findFirst({
 			where: eq(schema.characters.id, binding.characterId),
-			columns: { userId: true }
+			columns: { userId: true, isDeleted: true }
 		})
-		if (!character) return false
+		if (!character || character.isDeleted) return false
 		if (character.userId === userId) return true
 		// Checks BOTH member tables, so a character somebody else voices in a
 		// session the caller is in is bindable too.
@@ -756,18 +841,14 @@ export const createLorebookBindingHandler: Handler<
 	Sockets.Lorebooks.CreateBinding.Response
 > = refusable(
 	"lorebooks:createBinding",
-	async (socket, params: Sockets.Lorebooks.CreateBinding.Params, emitToUser) => {
+	async (
+		socket,
+		params: Sockets.Lorebooks.CreateBinding.Params,
+		emitToUser
+	) => {
 		const userId = socket.user!.id
 
-		const book = await db.query.lorebooks.findFirst({
-			where: (l, { and, eq }) =>
-				and(
-					eq(l.id, params.lorebookBinding.lorebookId),
-					eq(l.userId, userId)
-				)
-		})
-
-		if (!book) throw new Error("Lorebook not found.")
+		const book = await assertOwnedBook(db, userId, params.lorebookBinding.lorebookId)
 
 		if (
 			!(await verifyBindingTargetAccess(params.lorebookBinding, userId))
@@ -785,7 +866,7 @@ export const createLorebookBindingHandler: Handler<
 		// never a direct write (decision 2). An unbound/background row has
 		// no entity to sync from, so its name is exactly what the client
 		// supplies here — the only way to name a background character.
-		// embedding/embeddingModel/vectorizedAt/absorbedAliases/createdAt/
+		// The vector and its bookkeeping, absorbedAliases, createdAt and
 		// updatedAt are never client-writable either — all server-derived
 		// or pipeline-owned.
 		const isBound = !!params.lorebookBinding.characterId
@@ -796,6 +877,7 @@ export const createLorebookBindingHandler: Handler<
 			binding: _ignoredBinding,
 			embedding: _ignoredEmbedding,
 			embeddingModel: _ignoredEmbeddingModel,
+			embeddingSourceHash: _ignoredEmbeddingSourceHash,
 			vectorizedAt: _ignoredVectorizedAt,
 			absorbedAliases: _ignoredAbsorbedAliases,
 			createdAt: _ignoredCreatedAt,
@@ -830,13 +912,16 @@ export const createLorebookBindingHandler: Handler<
 		let binding: typeof schema.lorebookBindings.$inferSelect
 		let existing = false
 		if (isBound) {
-			const { id, created } = await resolveOrCreateBindingRow(
+			const found = await resolveOrCreateBindingRow(
 				{
 					lorebookId: params.lorebookBinding.lorebookId,
 					characterId: params.lorebookBinding.characterId ?? null
 				},
 				db
 			)
+			// Only a card deleted since the access check above answers null.
+			if (!found) throw new Error("That card has been deleted.")
+			const { id, created } = found
 			existing = !created
 			// Any other column the client supplied belongs to the row this
 			// call meant to create, so it is written only when this call
@@ -887,7 +972,8 @@ export const createLorebookBindingHandler: Handler<
 
 		const res: Sockets.Lorebooks.CreateBinding.Response = {
 			lorebookBinding: binding,
-			existing
+			existing,
+			...askerOf(params)
 		}
 
 		if (emitToUser) {
@@ -896,7 +982,9 @@ export const createLorebookBindingHandler: Handler<
 
 		return res
 	},
-	"Failed to add that cast member."
+	"Failed to add that cast member.",
+	undefined,
+	askerOf
 )
 
 /**
@@ -907,7 +995,11 @@ export const updateLorebookBindingHandler: Handler<
 	Sockets.Lorebooks.UpdateBinding.Response
 > = refusable(
 	"lorebooks:updateBinding",
-	async (socket, params: Sockets.Lorebooks.UpdateBinding.Params, emitToUser) => {
+	async (
+		socket,
+		params: Sockets.Lorebooks.UpdateBinding.Params,
+		emitToUser
+	) => {
 		const userId = socket.user!.id
 
 		// Check if binding exists and user owns the lorebook
@@ -916,16 +1008,10 @@ export const updateLorebookBindingHandler: Handler<
 		})
 
 		if (!existingBinding) {
-			throw new Error("Lorebook binding not found.")
+			throw new Error("That cast member is not in this lorebook.")
 		}
 
-		const lorebookOwner = await db.query.lorebooks.findFirst({
-			where: and(
-				eq(schema.lorebooks.id, existingBinding.lorebookId),
-				eq(schema.lorebooks.userId, userId)
-			),
-			columns: { id: true }
-		})
+		const lorebookOwner = await findOwnedBook(db, userId, existingBinding.lorebookId)
 
 		if (!lorebookOwner) {
 			throw new Error("Access denied.")
@@ -961,7 +1047,7 @@ export const updateLorebookBindingHandler: Handler<
 		// client-supplied replacement value here would let a user relocate
 		// their own binding (and any bound character) into a
 		// lorebook they don't own with no re-validation.
-		// embedding/embeddingModel/vectorizedAt/absorbedAliases/createdAt/
+		// The vector and its bookkeeping, absorbedAliases, createdAt and
 		// updatedAt are never client-writable either — all server-derived
 		// or pipeline-owned.
 		const {
@@ -969,6 +1055,9 @@ export const updateLorebookBindingHandler: Handler<
 			lorebookId: _ignoredLorebookId,
 			embedding: _ignoredEmbedding,
 			embeddingModel: _ignoredEmbeddingModel,
+			embeddingSourceHash: _ignoredEmbeddingSourceHash,
+			// GENERATED from the name and summary; Postgres refuses a write.
+			embedTextHash: _ignoredEmbedTextHash,
 			vectorizedAt: _ignoredVectorizedAt,
 			absorbedAliases: _ignoredAbsorbedAliases,
 			createdAt: _ignoredCreatedAt,
@@ -1017,19 +1106,64 @@ export const updateLorebookBindingHandler: Handler<
 				([, v]) => v !== undefined
 			)
 		)
-		let [updatedBinding] = await db
-			.update(schema.lorebookBindings)
-			.set(Object.keys(set).length > 0 ? set : { updatedAt: new Date() })
-			.where(eq(schema.lorebookBindings.id, params.lorebookBinding.id!))
-			.returning()
+		// A card is one member's (plan A25): linking one another member has —
+		// linked, or drawn with from a date — would make one seat two people.
+		// Asked and written under the book's lock, the one every cast writer
+		// takes (`resolveOrCreateBindingRow`, a dated change's write), so two
+		// tabs cannot both give one card away.
+		const linking = params.lorebookBinding.characterId
+		let [updatedBinding] = await db.transaction(async (tx) => {
+			await tx.execute(
+				sql`select pg_advisory_xact_lock(${existingBinding.lorebookId})`
+			)
+			if (linking != null) {
+				const holder = await cardTakenBy(
+					tx,
+					existingBinding.lorebookId,
+					linking,
+					existingBinding.id
+				)
+				if (holder)
+					throw new Error(
+						`${holder.name} already has that card in this lorebook, and a card draws one cast member.`
+					)
+			}
+			return tx
+				.update(schema.lorebookBindings)
+				.set(Object.keys(set).length > 0 ? set : { updatedAt: new Date() })
+				.where(eq(schema.lorebookBindings.id, params.lorebookBinding.id!))
+				.returning()
+		})
 
 		// Attach-time sync: a fresh characterId attachment should
 		// pull in that entity's name/aliases immediately, not wait for an
 		// unrelated future edit to that entity. Re-fetch afterward so the
 		// response/emitted row reflects the synced name/aliases rather than
 		// the pre-sync values captured by the UPDATE's own .returning().
-		if (updatedBinding.characterId) {
-			await syncLorebookBindingsForCharacter(updatedBinding.characterId)
+		//
+		// ⚠ On any other edit only the book owner's OWN card re-names the
+		// member (plan A25): a guest's persona in this book keeps the name
+		// it arrived with, so the host editing its summary does not pull in
+		// the guest's rename.
+		const attaching =
+			updatedBinding.characterId != null &&
+			updatedBinding.characterId !== existingBinding.characterId
+		const ownCard =
+			updatedBinding.characterId != null &&
+			!attaching &&
+			!!(await db.query.characters.findFirst({
+				where: and(
+					eq(schema.characters.id, updatedBinding.characterId),
+					eq(schema.characters.userId, userId)
+				),
+				columns: { id: true }
+			}))
+		if (updatedBinding.characterId && (attaching || ownCard)) {
+			await syncLorebookBindingsForCharacter(
+				updatedBinding.characterId,
+				undefined,
+				{ lorebookId: updatedBinding.lorebookId }
+			)
 			;[updatedBinding] = await db
 				.select()
 				.from(schema.lorebookBindings)
@@ -1088,16 +1222,17 @@ function unionAliases(
 export const resolveOrCreateBindingByNameHandler: Handler<
 	Sockets.Lorebooks.ResolveOrCreateBindingByName.Params,
 	Sockets.Lorebooks.ResolveOrCreateBindingByName.Response
-> = {
-	event: "lorebooks:resolveOrCreateBindingByName",
-	handler: async (socket, params, emitToUser) => {
+> = refusable(
+	"lorebooks:resolveOrCreateBindingByName",
+	async (socket, params: Sockets.Lorebooks.ResolveOrCreateBindingByName.Params, emitToUser) => {
 		const userId = socket.user!.id
 
-		const book = await db.query.lorebooks.findFirst({
-			where: (l, { and, eq }) =>
-				and(eq(l.id, params.lorebookId), eq(l.userId, userId))
-		})
-		if (!book) throw new Error("Lorebook not found.")
+		await assertOwnedBook(db, userId, params.lorebookId)
+
+		// From a session's summarize: Off refuses here, before a member is
+		// added, as the scene's own save would be refused after (plan A22).
+		if (params.sessionId != null && (await bookLoreWriteMode(db, params.lorebookId)) === "off")
+			throw new Error(LORE_WRITES_OFF)
 
 		const { id, created } = await resolveOrCreateBindingByName(
 			params.lorebookId,
@@ -1114,6 +1249,8 @@ export const resolveOrCreateBindingByNameHandler: Handler<
 			await relistBindings(socket, params.lorebookId, emitToUser)
 
 		const res: Sockets.Lorebooks.ResolveOrCreateBindingByName.Response = {
+			// Top level, so every listener filters the same way (plan B5).
+			lorebookId: params.lorebookId,
 			lorebookBindingId: id,
 			created,
 			requestId: params.requestId
@@ -1124,8 +1261,9 @@ export const resolveOrCreateBindingByNameHandler: Handler<
 		}
 
 		return res
-	}
-}
+	},
+	"The cast member could not be added."
+)
 
 /**
  * ====================================================================
@@ -1142,13 +1280,13 @@ export const resolveOrCreateBindingByNameHandler: Handler<
 export const lorebookExportHandler: Handler<
 	Sockets.Lorebooks.Export.Params,
 	Sockets.Lorebooks.Export.Response
-> = {
-	event: "lorebooks:export",
-	handler: async (_socket, _params, emitToUser) => {
-		emitToUser("lorebooks:export:error", { error: LOREBOOK_EXPORT_PAUSED })
+> = refusable(
+	"lorebooks:export",
+	async (_socket, _params: Sockets.Lorebooks.Export.Params, emitToUser) => {
 		throw new Error(LOREBOOK_EXPORT_PAUSED)
-	}
-}
+	},
+	"Export is turned off for now."
+)
 
 // Reads scan_depth/token_budget/recursive_scanning from the RAW import
 // payload rather than from the parsed book. The card reader this import used
@@ -1158,32 +1296,56 @@ export const lorebookExportHandler: Handler<
 // future re-export/hash-comparison with fabricated values. Reading raw is
 // still the rule now that parseImportedLorebook does not carry them at all:
 // absent in the file means absent from the row, which is the only reading
-// that survives a round trip.
-function extractLorebookLevelExtraJson(rawData: any): Record<string, any> {
+// that survives a round trip. Every door that makes a book from a file reads
+// them, the SillyTavern folder import included (plan A13). Each is kept only
+// as what it is — a finite number, a true/false switch — and anything else a
+// file puts there is dropped: nothing reads these at runtime, and every
+// lorebook list sends the column whole, so a file must not park a string or
+// an object of any size in it.
+export function extractLorebookLevelExtraJson(rawData: any): Record<string, any> {
+	const number = (v: unknown): v is number =>
+		typeof v === "number" && Number.isFinite(v)
 	return {
-		...(rawData?.scan_depth !== undefined
-			? { scanDepth: rawData.scan_depth }
-			: {}),
-		...(rawData?.token_budget !== undefined
+		...(number(rawData?.scan_depth) ? { scanDepth: rawData.scan_depth } : {}),
+		...(number(rawData?.token_budget)
 			? { tokenBudget: rawData.token_budget }
 			: {}),
-		...(rawData?.recursive_scanning !== undefined
+		...(typeof rawData?.recursive_scanning === "boolean"
 			? { recursiveScanning: rawData.recursive_scanning }
 			: {})
 	}
 }
 
-// Generous-but-bounded caps on a single lorebook import's item counts —
-// below Socket.IO's blanket 100MB maxHttpBufferSize, this is the only thing
-// stopping a crafted payload (tens of thousands of entries, or embedded
-// characters each triggering a full character-creation flow) from hammering
-// the DB well within that transport-level ceiling.
-const LOREBOOK_IMPORT_LIMITS = {
+// Generous-but-bounded caps on what one lorebook import may carry, checked
+// before any DB work. The file's own size is `IMPORT_FILE_CAPS.lorebookBytes`
+// (checked before it is parsed); these bound what fits inside it — tens of
+// thousands of entries, embedded characters each triggering a full
+// character-creation flow, or one row or key large enough to cost every turn
+// that reads it (plan S4). Each is far past anything a real book holds.
+export const LOREBOOK_IMPORT_LIMITS = {
 	maxEntries: 5000,
 	maxCharacters: 200,
 	maxPersonas: 200,
 	maxNarrativeNodes: 5000,
-	maxNarrativeRelationships: 5000
+	maxNarrativeRelationships: 5000,
+	/** Primary keys, and condition keys, each — per entry. */
+	maxKeysPerEntry: 1000,
+	/** One key, in characters. */
+	maxKeyChars: 2000,
+	/** An entry's content, a scene's summary, the book's description. */
+	maxTextChars: 200_000,
+	/** An entry's name or comment, a scene's name, the book's name. */
+	maxNameChars: 10_000,
+	/** An entry's foreign `extensions` bag, as the JSON its extraJson stores. */
+	maxExtraJsonBytes: 64 * 1024,
+	/** Scenes nested under one history entry. */
+	maxScenesPerHistoryEntry: 1000,
+	/** Characters one scene names, participants and mentions together. */
+	maxCastPerScene: 500,
+	/** Stat rows — configurations and values together — in `serenepub.stats`. */
+	maxStatRows: 20_000,
+	/** One stat row's configuration or value, as the JSON it is stored as. */
+	maxStatJsonBytes: 64 * 1024
 } as const
 
 /**
@@ -1193,18 +1355,55 @@ const LOREBOOK_IMPORT_LIMITS = {
  * key there (finding #77), which an overwrite changes on every row, so a file
  * re-imported after an overwrite from that very file could never read as
  * "unchanged". The id carries no content, so ignoring it on both sides is the
- * whole fix. Nothing else is touched.
+ * whole fix.
+ *
+ * ⚠ **So is the container's format marker** (`serenepub.formatVersion`, and
+ * the `version: 1` a format-1 file states). It says how to read the file, not
+ * what the book holds, and every format-2 key is written only when it holds
+ * something — so an older file of a book it can fully describe reads as
+ * "unchanged", and one it cannot describe reads as a conflict on the content
+ * itself, whose losses name what it cannot carry (`overwriteLosses`).
  */
 function comparableLorebookData(data: any): any {
 	if (!data || typeof data !== "object" || !Array.isArray(data.entries))
 		return data
+	const serenepub = data.extensions?.serenepub
+	const {
+		formatVersion: _formatVersion,
+		version: _version,
+		...content
+	} = serenepub && typeof serenepub === "object" ? serenepub : ({} as any)
 	return {
 		...data,
+		...(serenepub && typeof serenepub === "object"
+			? { extensions: { ...data.extensions, serenepub: content } }
+			: {}),
 		entries: data.entries.map((entry: any) => {
 			if (!entry || typeof entry !== "object") return entry
 			const { id: _id, ...rest } = entry
 			return rest
 		})
+	}
+}
+
+/**
+ * A book's own name and description against `LOREBOOK_IMPORT_LIMITS`, in the
+ * sentences a person reads — every door that makes a book from a file: a
+ * lorebook file, and a SillyTavern card's book or World Info file.
+ */
+export function assertBookWithinImportLimits(name: unknown, description: unknown): void {
+	const L = LOREBOOK_IMPORT_LIMITS
+	const tooLong = (v: unknown, max: number): v is string =>
+		typeof v === "string" && v.length > max
+	if (tooLong(name, L.maxNameChars)) {
+		throw new Error(
+			`This lorebook's name is ${fmtCount(name.length)} characters; Serene Pub reads up to ${fmtCount(L.maxNameChars)}.`
+		)
+	}
+	if (tooLong(description, L.maxTextChars)) {
+		throw new Error(
+			`This lorebook's description is ${fmtCount(description.length)} characters; Serene Pub reads up to ${fmtCount(L.maxTextChars)}.`
+		)
 	}
 }
 
@@ -1252,6 +1451,249 @@ function assertLorebookImportWithinLimits(
 			`Lorebook's narrative graph has too many relationships (${relationshipCount}); the maximum supported is ${LOREBOOK_IMPORT_LIMITS.maxNarrativeRelationships}.`
 		)
 	}
+
+	assertBookWithinImportLimits(card.name, card.description)
+	card.entries.forEach((entry: any, i: number) => {
+		if (!entry || typeof entry !== "object") return
+		assertEntryWithinImportLimits(entry, i)
+	})
+	assertStatsWithinImportLimits(serenepub?.stats)
+}
+
+/**
+ * The file's stats (format 2) — how many rows, and how big each one is.
+ *
+ * ⚠ Each row is measured by what the importer STORES from it: a
+ * configuration's `config`, a value's `value`. Whatever else a row carries is
+ * never stored, so it can neither pass a row nor stand in for its payload.
+ */
+function assertStatsWithinImportLimits(stats: unknown) {
+	if (!stats || typeof stats !== "object") return
+	const L = LOREBOOK_IMPORT_LIMITS
+	const listOf = (key: "configs" | "values"): any[] =>
+		Array.isArray((stats as any)[key]) ? (stats as any)[key] : []
+	const rows = [
+		...listOf("configs").map((row) => ({ row, payload: row?.config })),
+		...listOf("values").map((row) => ({ row, payload: row?.value }))
+	]
+	if (rows.length > L.maxStatRows)
+		throw new Error(
+			`This lorebook file holds ${fmtCount(rows.length)} stats; Serene Pub reads up to ${fmtCount(L.maxStatRows)}.`
+		)
+	for (const { row, payload } of rows) {
+		if (payload === undefined) continue
+		const bytes = Buffer.byteLength(JSON.stringify(payload))
+		if (bytes > L.maxStatJsonBytes)
+			throw new Error(
+				`One of this lorebook's stats${typeof row?.slotId === "string" ? ` (${row.slotId.slice(0, 80)})` : ""} is ${fmtCount(bytes)} bytes; Serene Pub reads up to ${fmtCount(L.maxStatJsonBytes)}.`
+			)
+	}
+}
+
+/** A count or length as a sentence writes it: "1,001". */
+const fmtCount = (v: number) => v.toLocaleString("en")
+
+/** "Entry 3 (“Dragon”)" — the entry's place in the file, and its title if it has one. */
+function importEntryLabel(entry: any, i: number): string {
+	const title = [entry?.name, entry?.comment].find(
+		(v): v is string => typeof v === "string" && v.trim().length > 0
+	)
+	if (!title) return `Entry ${i + 1}`
+	const t = title.trim()
+	return `Entry ${i + 1} (“${t.length > 40 ? `${t.slice(0, 39)}…` : t}”)`
+}
+
+/**
+ * One entry of a lorebook file against `LOREBOOK_IMPORT_LIMITS` (plan S4):
+ * its keys, its text, its foreign extra data and its nested scenes. Throws the
+ * sentence naming the entry and what is over. The SillyTavern folder import
+ * holds its books' entries to the same (`sockets/import.ts`).
+ */
+export function assertEntryWithinImportLimits(entry: any, i: number): void {
+	if (!entry || typeof entry !== "object") return
+	const L = LOREBOOK_IMPORT_LIMITS
+	for (const field of ["name", "comment"] as const) {
+		const v = entry[field]
+		if (typeof v === "string" && v.length > L.maxNameChars) {
+			throw new Error(
+				`Entry ${i + 1}'s name is ${fmtCount(v.length)} characters; Serene Pub reads up to ${fmtCount(L.maxNameChars)}.`
+			)
+		}
+	}
+	const label = importEntryLabel(entry, i)
+	const primary: unknown[] = Array.isArray(entry.keys)
+		? entry.keys
+		: Array.isArray(entry.key)
+			? entry.key
+			: []
+	const condition: unknown[] = secondaryKeysOf(entry)
+	for (const [keys, what] of [
+		[primary, "keys"],
+		[condition, "condition keys"]
+	] as const) {
+		if (keys.length > L.maxKeysPerEntry) {
+			throw new Error(
+				`${label} has ${fmtCount(keys.length)} ${what}; Serene Pub reads up to ${fmtCount(L.maxKeysPerEntry)} per entry.`
+			)
+		}
+		const long = keys.find(
+			(k): k is string =>
+				typeof k === "string" && k.length > L.maxKeyChars
+		)
+		if (long !== undefined) {
+			throw new Error(
+				`${label} has a key ${fmtCount(long.length)} characters long; Serene Pub reads keys up to ${fmtCount(L.maxKeyChars)} characters.`
+			)
+		}
+	}
+	if (
+		typeof entry.content === "string" &&
+		entry.content.length > L.maxTextChars
+	) {
+		throw new Error(
+			`${label}'s content is ${fmtCount(entry.content.length)} characters; Serene Pub reads up to ${fmtCount(L.maxTextChars)}.`
+		)
+	}
+	const ext = entry.extensions
+	if (ext && typeof ext === "object") {
+		const { serenepub, ...foreign } = ext
+		// The entry's declared fields are read out of this bag by name
+		// (`mapImportedEntry`), checked for type but not length — a category
+		// of 3,000,000 characters imported (S4 review). Every text in it is a
+		// label (the entry kind, a category, a local id), held to a name's
+		// ceiling.
+		if (
+			serenepub &&
+			typeof serenepub === "object" &&
+			!Array.isArray(serenepub)
+		) {
+			for (const [key, v] of Object.entries(serenepub)) {
+				if (typeof v === "string" && v.length > L.maxNameChars) {
+					throw new Error(
+						`${label}'s ${key} is ${fmtCount(v.length)} characters; Serene Pub reads up to ${fmtCount(L.maxNameChars)}.`
+					)
+				}
+			}
+		}
+		const bytes = Buffer.byteLength(JSON.stringify(foreign))
+		if (bytes > L.maxExtraJsonBytes) {
+			throw new Error(
+				`${label} carries ${fmtCount(Math.ceil(bytes / 1024))} KB of extra data; Serene Pub reads up to ${fmtCount(L.maxExtraJsonBytes / 1024)} KB per entry.`
+			)
+		}
+		const scenes = serenepub?.scenes
+		if (Array.isArray(scenes)) {
+			if (scenes.length > L.maxScenesPerHistoryEntry) {
+				throw new Error(
+					`Entry ${i + 1} has ${fmtCount(scenes.length)} scenes; Serene Pub reads up to ${fmtCount(L.maxScenesPerHistoryEntry)} per history entry.`
+				)
+			}
+			scenes.forEach((scene: any, j: number) => {
+				const where = `Scene ${j + 1} of entry ${i + 1}`
+				// Stored as text; anything else failed inside the database and
+				// reached the person as "Failed to import lorebook." (S4 review).
+				for (const field of ["name", "summary"] as const) {
+					const v = scene?.[field]
+					if (
+						v !== undefined &&
+						v !== null &&
+						typeof v !== "string"
+					) {
+						throw new Error(
+							`${where}'s ${field} isn't text, so Serene Pub can't read it.`
+						)
+					}
+				}
+				if (
+					typeof scene?.name === "string" &&
+					scene.name.length > L.maxNameChars
+				) {
+					throw new Error(
+						`${where}'s name is ${fmtCount(scene.name.length)} characters; Serene Pub reads up to ${fmtCount(L.maxNameChars)}.`
+					)
+				}
+				if (
+					typeof scene?.summary === "string" &&
+					scene.summary.length > L.maxTextChars
+				) {
+					throw new Error(
+						`${where}'s summary is ${fmtCount(scene.summary.length)} characters; Serene Pub reads up to ${fmtCount(L.maxTextChars)}.`
+					)
+				}
+				const cast =
+					(Array.isArray(scene?.participantCharacters)
+						? scene.participantCharacters.length
+						: 0) +
+					(Array.isArray(scene?.mentionedCharacters)
+						? scene.mentionedCharacters.length
+						: 0)
+				if (cast > L.maxCastPerScene) {
+					throw new Error(
+						`${where} names ${fmtCount(cast)} characters; Serene Pub reads up to ${fmtCount(L.maxCastPerScene)} per scene.`
+					)
+				}
+			})
+		}
+	}
+}
+
+/**
+ * A lorebook file as the import reads it (plan S4): measured before it is
+ * parsed, parsed with a sentence for a file that isn't JSON, normalized from
+ * every legacy shape, named as the person named it in the import dialog, and
+ * held to `LOREBOOK_IMPORT_LIMITS` — all before any DB work.
+ */
+function readLorebookImport(
+	lorebookJson: unknown,
+	name?: unknown
+): {
+	lorebookData: any
+	card: ParsedImportedLorebook
+	/**
+	 * The dialog's name as the book took it — trimmed and within its ceiling
+	 * — or undefined when none was given. A conflict holds THIS, never the
+	 * name as sent (S4 review: 90 million spaces were held).
+	 */
+	name?: string
+} {
+	if (typeof lorebookJson !== "string") {
+		throw new Error("No lorebook file was sent.")
+	}
+	const tooLarge = lorebookFileTooLarge(Buffer.byteLength(lorebookJson))
+	if (tooLarge) throw new Error(tooLarge)
+	// What the parse may build, measured first: the byte ceiling alone let
+	// 32 MiB of `{}`s parse to +753 MB of heap (S4 review).
+	assertImportJsonShape(lorebookJson, "This lorebook file")
+	let raw: unknown
+	try {
+		raw = JSON.parse(lorebookJson.replace(/^\uFEFF/, ""))
+	} catch {
+		throw new Error(
+			"This lorebook file isn't valid JSON, so Serene Pub can't read it."
+		)
+	}
+	// Normalizes legacy shapes (object-keyed entries, singular
+	// key/keysecondary fields) that parseImportedLorebook() on its own would
+	// silently turn into an empty book rather than error on.
+	let lorebookData = normalizeLegacyLorebookData(raw)
+	// Reads the payload's own fields rather than handing it to
+	// @lenml/char-card-reader, whose book constructor splits every key on
+	// `[,|;，；]` — which shredded a regex key (`/foo|bar/i` → `/foo` +
+	// `bar/i`) on this door alone, while the bulk import path read the same
+	// file's keys intact. See parseImportedLorebook for what the reader
+	// backfilled and how each of those is supplied.
+	const card = parseImportedLorebook(lorebookData)
+	const rename = typeof name === "string" ? name.trim() : ""
+	if (rename) {
+		card.name = rename
+		// Where a Serene Pub file keeps its name, so a renamed re-import
+		// compares as the change it is.
+		if (!Array.isArray(lorebookData)) {
+			lorebookData = { ...lorebookData, name: rename }
+		}
+	}
+	assertLorebookImportWithinLimits(card, lorebookData)
+	return { lorebookData, card, ...(rename ? { name: rename } : {}) }
 }
 
 /**
@@ -1271,16 +1713,33 @@ function assertLorebookImportWithinLimits(
  * plus the sets of character/persona ids that got bound — name/alias sync
  * for those (see below) is deliberately deferred to the caller rather than
  * done here.
+ *
+ * Also returns `retag`: what each cast tag the file's text writes becomes in
+ * this book (A16). Every member is stored as `{{char:N}}`, and the file's
+ * text follows its members through `retagImportedBook`:
+ *  - **one card bound twice** (0.5 had no rule against it) is ONE member —
+ *    the second binding folds into the first, and its lore, its scene
+ *    appearances and its tags follow. The one-member-per-card index refused
+ *    the second insert and failed the whole import.
+ *  - **both spellings of one number** (`{char:3}` and `{{char:3}}`, two
+ *    members in 0.5, whose sync matched each spelling to its own binding):
+ *    the `{{…}}` member keeps the number, the other takes a fresh one, and
+ *    the text spelled its way follows it.
+ *  - a number stated twice in one spelling keeps the first, as before.
+ *  - a fresh tag starts past every number the file's text names, too — the
+ *    text can name a number no binding holds, and a member renumbered onto
+ *    it would suddenly be the one that text means.
  */
 async function restoreBoundEntities(
 	lorebookId: number,
-	serenepub: any,
+	card: ParsedImportedLorebook,
 	userId: number,
 	dbOrTx: Db = db
 ): Promise<{
 	bindingLocalIdToRealId: Map<number, number>
 	syncCharacterIds: Set<number>
 	boundEntityByRealId: Map<number, { characterId: number | null }>
+	retag: CastTagReplacer
 }> {
 	const bindingLocalIdToRealId = new Map<number, number>()
 	const syncCharacterIds = new Set<number>()
@@ -1288,12 +1747,37 @@ async function restoreBoundEntities(
 		number,
 		{ characterId: number | null }
 	>()
+	const serenepub: any = card.extensions?.serenepub
 	const rawBindings = serenepub?.bindings
+
+	// Stated tags travel verbatim, so the book's counter has to be past every
+	// one of them BEFORE anything is minted — or the next new cast member (and
+	// restoreNarrativeGraph's unbound-node mint) reissues {{char:1}} (finding
+	// #13). Past every number the file's lore text names as well (the text
+	// `retagImportedBook` rewrites), bound or not — up to the largest the entry
+	// save would ever mint from text; a ledger number past it is prose.
+	let maxToken = 0
+	retagImportedBook(card, (n) => {
+		if (n > maxToken && n <= MAX_TYPED_MEMBER_NUMBER) maxToken = n
+		return null
+	})
+	const moveCounterPast = async (top: number) => {
+		if (top > 0)
+			await dbOrTx
+				.update(schema.lorebooks)
+				.set({
+					nextBindingNumber: sql`GREATEST(${schema.lorebooks.nextBindingNumber}, ${top + 1})`
+				})
+				.where(eq(schema.lorebooks.id, lorebookId))
+	}
+
 	if (!Array.isArray(rawBindings)) {
+		await moveCounterPast(maxToken)
 		return {
 			bindingLocalIdToRealId,
 			syncCharacterIds,
-			boundEntityByRealId
+			boundEntityByRealId,
+			retag: (n) => castTag(n)
 		}
 	}
 
@@ -1321,31 +1805,23 @@ async function restoreBoundEntities(
 		personaLocalIdToRealId.set(embedded.localId, persona.id)
 	}
 
-	// {{char:N}} tokens travel verbatim, so the book's counter has to be past
-	// every one of them BEFORE anything is minted — or the next new cast
-	// member (and restoreNarrativeGraph's unbound-node mint) reissues
-	// {{char:1}} (finding #13). A binding with no valid token of its own mints
-	// one, rather than every such row sharing "{{char:1}}".
-	const tokenNumber = (text: unknown): number | null => {
-		const m =
-			typeof text === "string" ? /^\{\{?char:(\d+)\}\}?$/.exec(text) : null
-		const n = m ? Number(m[1]) : NaN
-		return Number.isInteger(n) && n > 0 ? n : null
+	/** One binding of the file, and where it lands. */
+	type Landing = {
+		localId: unknown
+		boundCharacterId: number | null
+		/** The sprite set the file names for this member, by name. */
+		spriteSet: string | null
+		/** The number its tag states, in either spelling; null for none. */
+		n: number | null
+		/** Its tag as the file spells it. */
+		written: string | null
+		/** The earlier binding of the same card this one folds into. */
+		foldInto: Landing | null
+		tag?: string
+		rowId?: number
 	}
-	let maxToken = 0
-	for (const binding of rawBindings) {
-		const n = tokenNumber(binding?.bindingText)
-		if (n !== null && n > maxToken) maxToken = n
-	}
-	if (maxToken > 0)
-		await dbOrTx
-			.update(schema.lorebooks)
-			.set({
-				nextBindingNumber: sql`GREATEST(${schema.lorebooks.nextBindingNumber}, ${maxToken + 1})`
-			})
-			.where(eq(schema.lorebooks.id, lorebookId))
-	const seenTokens = new Set<string>()
-
+	const landings: Landing[] = []
+	const firstForCard = new Map<number, Landing>()
 	for (const binding of rawBindings) {
 		const characterId =
 			binding.characterLocalId != null
@@ -1356,31 +1832,65 @@ async function restoreBoundEntities(
 			binding.personaLocalId != null
 				? (personaLocalIdToRealId.get(binding.personaLocalId) ?? null)
 				: null
-
 		// One column: an embedded persona card restores as a character with
 		// `isPersona`, so both halves of the wire format land on
 		// `character_id`. `characterId` wins when a malformed document names
 		// both.
 		const boundCharacterId = characterId ?? personaId
-		// A token the file states once is kept; a missing, malformed or
-		// repeated one is minted fresh from the (already raised) counter.
-		const stated =
-			tokenNumber(binding?.bindingText) !== null &&
-			!seenTokens.has(binding.bindingText)
-				? (binding.bindingText as string)
-				: null
-		const token = stated ?? (await deriveNextBindingToken(lorebookId, dbOrTx))
-		seenTokens.add(token)
+		const n = importedCastTagNumber(binding?.bindingText)
+		const landing: Landing = {
+			localId: binding?.localId,
+			boundCharacterId,
+			spriteSet:
+				typeof binding?.spriteSet === "string" &&
+				binding.spriteSet.trim() &&
+				binding.spriteSet.length <= LOREBOOK_IMPORT_LIMITS.maxNameChars
+					? binding.spriteSet
+					: null,
+			n,
+			written: n !== null ? (binding.bindingText as string) : null,
+			foldInto:
+				boundCharacterId != null
+					? (firstForCard.get(boundCharacterId) ?? null)
+					: null
+		}
+		if (boundCharacterId != null && !landing.foldInto)
+			firstForCard.set(boundCharacterId, landing)
+		landings.push(landing)
+	}
+	const own = landings.filter((l) => !l.foldInto)
+
+	// Which member keeps each stated number: the `{{…}}` spelling first, then
+	// the file's order. Every other one takes a fresh tag.
+	const keeperOf = new Map<number, Landing>()
+	for (const l of own)
+		if (l.n !== null && l.written === castTag(l.n) && !keeperOf.has(l.n))
+			keeperOf.set(l.n, l)
+	for (const l of own)
+		if (l.n !== null && !keeperOf.has(l.n)) keeperOf.set(l.n, l)
+
+	// A binding with no valid tag of its own mints one past all of that,
+	// rather than every such row sharing "{{char:1}}".
+	for (const l of landings) if (l.n !== null && l.n > maxToken) maxToken = l.n
+	await moveCounterPast(maxToken)
+
+	for (const l of own) {
+		l.tag =
+			l.n !== null && keeperOf.get(l.n) === l
+				? castTag(l.n)
+				: await deriveNextBindingToken(lorebookId, dbOrTx)
 		const [row] = await dbOrTx
 			.insert(schema.lorebookBindings)
 			.values({
 				lorebookId,
-				characterId: boundCharacterId,
-				binding: token
+				characterId: l.boundCharacterId,
+				binding: l.tag,
+				spriteSet: l.spriteSet
 			})
 			.returning()
-		bindingLocalIdToRealId.set(binding.localId, row.id)
-		boundEntityByRealId.set(row.id, { characterId: boundCharacterId })
+		l.rowId = row.id
+		bindingLocalIdToRealId.set(l.localId as number, row.id)
+		boundEntityByRealId.set(row.id, { characterId: l.boundCharacterId })
 
 		// Every other bound-insert site syncs name/aliases from the entity
 		// immediately (see characterBindingSync.ts) — without this, an
@@ -1392,53 +1902,127 @@ async function restoreBoundEntities(
 		// (characterBindingSync.ts) already uses for this exact call: the
 		// sync writes rows this transaction has not committed yet, so they
 		// have to see it landed.
-		if (boundCharacterId) syncCharacterIds.add(boundCharacterId)
+		if (l.boundCharacterId) syncCharacterIds.add(l.boundCharacterId)
 	}
+	for (const l of landings)
+		if (l.foldInto)
+			bindingLocalIdToRealId.set(l.localId as number, l.foldInto.rowId!)
+
+	// What each spelling the file writes becomes: a keeper's own spelling
+	// first, then the other members', then the folded bindings'.
+	const tagFor = new Map<string, string>()
+	const claim = (written: string | null, tag: string | undefined) => {
+		if (written && tag && !tagFor.has(written)) tagFor.set(written, tag)
+	}
+	for (const l of own)
+		if (l.n !== null && keeperOf.get(l.n) === l) claim(l.written, l.tag)
+	for (const l of own) claim(l.written, l.tag)
+	for (const l of landings) if (l.foldInto) claim(l.written, l.foldInto.tag)
+	const retag: CastTagReplacer = (n, written) =>
+		tagFor.get(written) ??
+		tagFor.get(castTag(n)) ??
+		tagFor.get(`{char:${n}}`) ??
+		castTag(n)
 
 	return {
 		bindingLocalIdToRealId,
 		syncCharacterIds,
-		boundEntityByRealId
+		boundEntityByRealId,
+		retag
 	}
 }
 
+/**
+ * An imported book's text with its cast tags as `restoreBoundEntities` landed
+ * them — every entry, and the graph, scenes and links the Serene Pub
+ * extension carries. The embedded cards and the bindings themselves are not
+ * lore text and are left as the file wrote them.
+ */
+function retagImportedBook(
+	card: ParsedImportedLorebook,
+	retag: CastTagReplacer
+) {
+	const serenepub = card.extensions?.serenepub
+	const retaggedExtension =
+		serenepub && typeof serenepub === "object"
+			? Object.fromEntries(
+					Object.entries(serenepub).map(([key, value]) => [
+						key,
+						key === "characters" ||
+						key === "personas" ||
+						key === "bindings"
+							? value
+							: rewriteImportedCastTagsDeep(value, retag)
+					])
+				)
+			: serenepub
+	return {
+		entries: rewriteImportedCastTagsDeep(card.entries, retag),
+		serenepub: retaggedExtension,
+		description:
+			typeof card.description === "string"
+				? rewriteImportedCastTagsDeep(card.description, retag)
+				: card.description
+	}
+}
+
+/**
+ * The card a file's embedded character is, in this user's library: the one
+ * with its uuid, unchanged or overwritten — or a new one. A deleted card with
+ * that uuid is not reused (plan A25): the import makes a new card, under a
+ * fresh uuid (`claimIncomingCharacterUuid`), and the deleted one stays
+ * deleted.
+ */
 async function resolveOrOverwriteEmbeddedCharacter(
 	cardData: any,
 	userId: number,
 	dbOrTx: Db = db
 ) {
-	const incomingUuid = extractCharacterUuid(cardData)
-	if (incomingUuid) {
-		const existing = await dbOrTx.query.characters.findFirst({
-			where: and(
-				eq(schema.characters.uuid, incomingUuid),
-				eq(schema.characters.userId, userId)
-			),
-			columns: { id: true }
-		})
-		if (existing) {
-			const comparison = await buildExistingCharacterComparisonData(
-				existing.id,
-				dbOrTx
-			)
-			if (comparison) {
-				const { character_book, ...incomingForHash } = cardData
-				const existingHash = hashCanonicalJson(
-					comparison.comparisonData
-				)
-				const incomingHash = hashCanonicalJson(incomingForHash)
-				if (existingHash === incomingHash) return comparison.character
-				return overwriteCharacterFromParsedData(
-					existing.id,
-					cardData,
-					undefined,
-					userId,
-					dbOrTx
-				)
-			}
-		}
-	}
+	const match = await matchEmbeddedCharacter(cardData, userId, dbOrTx)
+	if (match?.unchanged) return match.unchanged
+	if (match)
+		return overwriteCharacterFromParsedData(
+			match.id,
+			cardData,
+			undefined,
+			userId,
+			dbOrTx
+		)
 	return createCharacterFromParsedData(cardData, undefined, userId, dbOrTx)
+}
+
+/**
+ * The user's live card a file's embedded character names by uuid, and whether
+ * it is unchanged (`unchanged` is then the card, as it stands) — or null when
+ * the user has none. One reading for the import that rewrites it and the
+ * count the conflict prompt shows first (`overwriteLosses`).
+ */
+async function matchEmbeddedCharacter(
+	cardData: any,
+	userId: number,
+	dbOrTx: Db
+): Promise<{ id: number; unchanged: any | null } | null> {
+	const incomingUuid = extractCharacterUuid(cardData)
+	if (!incomingUuid) return null
+	const existing = await dbOrTx.query.characters.findFirst({
+		where: and(
+			eq(schema.characters.uuid, incomingUuid),
+			eq(schema.characters.userId, userId),
+			eq(schema.characters.isDeleted, false)
+		),
+		columns: { id: true }
+	})
+	if (!existing) return null
+	const comparison = await buildExistingCharacterComparisonData(
+		existing.id,
+		dbOrTx
+	)
+	if (!comparison) return null
+	const { character_book, ...incomingForHash } = cardData
+	return hashCanonicalJson(comparison.comparisonData) ===
+		hashCanonicalJson(incomingForHash)
+		? { id: existing.id, unchanged: comparison.character }
+		: { id: existing.id, unchanged: null }
 }
 
 async function resolveOrOverwriteEmbeddedPersona(
@@ -1446,33 +2030,68 @@ async function resolveOrOverwriteEmbeddedPersona(
 	userId: number,
 	dbOrTx: Db = db
 ) {
-	const incomingUuid = extractPersonaUuid(cardData)
-	if (incomingUuid) {
-		const existing = await dbOrTx.query.characters.findFirst({
-			where: and(
-				eq(schema.characters.uuid, incomingUuid),
-				eq(schema.characters.userId, userId)
-			)
-		})
-		if (existing) {
-			const existingHash = hashCanonicalJson(
-				canonicalPersonaContent(existing)
-			)
-			const incomingHash = hashCanonicalJson(
-				canonicalPersonaContent(
-					personaFieldsFromParsedData(cardData) as any
-				)
-			)
-			if (existingHash === incomingHash) return existing
-			return overwritePersonaFromParsedData(
-				existing.id,
-				cardData,
-				undefined,
-				dbOrTx
-			)
-		}
-	}
+	const match = await matchEmbeddedPersona(cardData, userId, dbOrTx)
+	if (match?.unchanged) return match.unchanged
+	if (match)
+		return overwritePersonaFromParsedData(
+			match.id,
+			cardData,
+			undefined,
+			dbOrTx
+		)
 	return createPersonaFromParsedData(cardData, undefined, userId, dbOrTx)
+}
+
+/** `matchEmbeddedCharacter` for an embedded persona card. */
+async function matchEmbeddedPersona(
+	cardData: any,
+	userId: number,
+	dbOrTx: Db
+): Promise<{ id: number; unchanged: any | null } | null> {
+	const incomingUuid = extractPersonaUuid(cardData)
+	if (!incomingUuid) return null
+	// Never a deleted persona, as for a character above.
+	const existing = await dbOrTx.query.characters.findFirst({
+		where: and(
+			eq(schema.characters.uuid, incomingUuid),
+			eq(schema.characters.userId, userId),
+			eq(schema.characters.isDeleted, false)
+		)
+	})
+	if (!existing) return null
+	const same =
+		hashCanonicalJson(canonicalPersonaContent(existing)) ===
+		hashCanonicalJson(
+			canonicalPersonaContent(personaFieldsFromParsedData(cardData) as any)
+		)
+	return { id: existing.id, unchanged: same ? existing : null }
+}
+
+/**
+ * How many of the user's live characters (personas included) an import of
+ * this file rewrites: each embedded card whose uuid names one of theirs and
+ * whose content differs (`resolveOrOverwriteEmbeddedCharacter`). Counted
+ * once per card, however many times the file embeds it.
+ */
+export async function countCharactersRewritten(
+	serenepub: any,
+	userId: number,
+	dbOrTx: Db = db
+): Promise<number> {
+	const rewritten = new Set<number>()
+	for (const embedded of serenepub?.characters ?? []) {
+		const cardData = embedded?.card?.data
+		if (!cardData) continue
+		const m = await matchEmbeddedCharacter(cardData, userId, dbOrTx)
+		if (m && !m.unchanged) rewritten.add(m.id)
+	}
+	for (const embedded of serenepub?.personas ?? []) {
+		const cardData = embedded?.card
+		if (!cardData) continue
+		const m = await matchEmbeddedPersona(cardData, userId, dbOrTx)
+		if (m && !m.unchanged) rewritten.add(m.id)
+	}
+	return rewritten.size
 }
 
 /**
@@ -1493,6 +2112,13 @@ interface RestoredEntryRefs {
 	entryLocalIdToRealId: Map<number, number>
 }
 
+/**
+ * Entries one INSERT writes on an import (plan A13): far inside Postgres'
+ * 65,535 bound values at the table's width, and a few statements for a book
+ * at the 5,000-entry ceiling rather than one per entry.
+ */
+export const ENTRY_INSERT_BATCH = 200
+
 async function insertLorebookEntries(
 	lorebookId: number,
 	entries: any[],
@@ -1504,20 +2130,25 @@ async function insertLorebookEntries(
 	const positions = new Map<EntryTypeId, number>(
 		ENTRY_TYPE_IDS.map((t) => [t, 0])
 	)
-	const queries: Promise<any>[] = []
+	const rows: Array<{
+		values: typeof schema.lorebookEntries.$inferInsert
+		meta: any
+		typeId: EntryTypeId
+	}> = []
 	const historyEntryLocalIdToRealId = new Map<number, number>()
 	const sceneLocalIdToRealId = new Map<number, number>()
 	const entryLocalIdToRealId = new Map<number, number>()
 	// An entry's parent is written after every entry exists: a district can be
-	// filed before its city is inserted, and these rows go in concurrently.
+	// filed before its city is inserted.
 	const pendingAnchors: Array<{
 		realId: number
 		localId: number | null
 		anchorLocalId: number
+		typeId: string
 	}> = []
 
 	/** What the document points at this row with, once the row has an id. */
-	const recordEntryRefs = (meta: any, realId: number) => {
+	const recordEntryRefs = (meta: any, realId: number, typeId: string) => {
 		const localId =
 			typeof meta?.entryLocalId === "number" ? meta.entryLocalId : null
 		if (localId !== null) entryLocalIdToRealId.set(localId, realId)
@@ -1525,7 +2156,8 @@ async function insertLorebookEntries(
 			pendingAnchors.push({
 				realId,
 				localId,
-				anchorLocalId: meta.anchorEntryLocalId
+				anchorLocalId: meta.anchorEntryLocalId,
+				typeId
 			})
 	}
 
@@ -1558,104 +2190,109 @@ async function insertLorebookEntries(
 			// One file key, one stored key: the joined string `entryInsert`
 			// re-splits on commas would tear a `{1,3}` quantifier or a literal
 			// "Smith, John" in two (finding #146).
-			...importedKeyColumns(normalized)
+			...importedKeyColumns(normalized),
+			// Who wrote the row, as the file records it — one of the writers
+			// this app has (`importedEntryFacts`); `human` otherwise.
+			...(mapped.provenance ? { provenance: mapped.provenance } : {})
 		}
 
-		// Only the dated type carries nested scenes, so only it does more than
-		// record the id it got back. These still run concurrently; what each
-		// one returns is a single id.
-		if (typeId !== HISTORY_TYPE_ID) {
-			queries.push(
-				(async () => {
-					const [row] = await dbOrTx
-						.insert(schema.lorebookEntries)
-						.values(values)
-						.returning({ id: schema.lorebookEntries.id })
-					recordEntryRefs(meta, row.id)
-				})()
-			)
-			continue
-		}
-
-		queries.push(
-			(async () => {
-				const [historyRow] = await dbOrTx
-					.insert(schema.lorebookEntries)
-					.values(values)
-					.returning()
-
-				if (typeof meta.localId === "number") {
-					historyEntryLocalIdToRealId.set(meta.localId, historyRow.id)
-				}
-				recordEntryRefs(meta, historyRow.id)
-
-				// Nested scenes — each still gets its own document-scoped
-				// localId (see mapEntry) so narrativeGraph can reference one.
-				// sessionId/selectedMessageIds were deliberately never exported
-				// — they're session-instance-specific and can't round-trip.
-				// participantCharacters/mentionedCharacters are binding
-				// localIds now (see the merge plan) — resolve back to real ids
-				// via the same map bindingLocalId elsewhere in this format
-				// uses. A legacy export's name-string arrays silently resolve
-				// to nothing here (every entry fails the `=== "number"` check)
-				// rather than erroring — the scene still imports, just without
-				// its old cast list, consistent with this whole function's
-				// best-effort philosophy.
-				const scenes = Array.isArray(meta.scenes) ? meta.scenes : []
-				const resolveBindingIds = (raw: unknown): number[] =>
-					Array.isArray(raw)
-						? raw
-								.filter(
-									(v): v is number => typeof v === "number"
-								)
-								.map((localId) =>
-									bindingLocalIdToRealId.get(localId)
-								)
-								.filter((id): id is number => id !== undefined)
-						: []
-				for (const scene of scenes) {
-					const participantCharacters = resolveBindingIds(
-						scene?.participantCharacters
-					)
-					const mentionedCharacters = resolveBindingIds(
-						scene?.mentionedCharacters
-					)
-					const [sceneRow] = await dbOrTx
-						.insert(schema.scenes)
-						.values({
-							lorebookId,
-							historyEntryId: historyRow.id,
-							sessionId: null,
-							name: scene?.name ?? null,
-							selectedMessageIds: [],
-							summary: scene?.summary ?? null,
-							// The import file recorded a cast, so this scene
-							// counts as resolved even if every entry was
-							// dropped as unresolvable above.
-							castResolvedAt: new Date()
-						})
-						.returning()
-					// Cast lives in scene_characters, so it is written after
-					// the row exists (the FK requires a scene id).
-					await writeSceneCast(
-						sceneRow.id,
-						{ participantCharacters, mentionedCharacters },
-						dbOrTx as any
-					)
-					if (typeof scene?.localId === "number") {
-						sceneLocalIdToRealId.set(scene.localId, sceneRow.id)
-					}
-				}
-			})()
-		)
+		rows.push({ values, meta, typeId })
 	}
 
-	await Promise.all(queries)
+	// Every entry in batches, in the file's order, so ids follow it. A row
+	// comes back by its type and position, which the book holds once
+	// (`lorebook_entries_position_uq`) — never by where it sits in the reply.
+	const idOf = new Map<string, number>()
+	const slot = (typeId: string, position: number | undefined) =>
+		`${typeId}#${position}`
+	for (let i = 0; i < rows.length; i += ENTRY_INSERT_BATCH) {
+		const landed = await dbOrTx
+			.insert(schema.lorebookEntries)
+			.values(rows.slice(i, i + ENTRY_INSERT_BATCH).map((r) => r.values))
+			.returning({
+				id: schema.lorebookEntries.id,
+				typeId: schema.lorebookEntries.typeId,
+				position: schema.lorebookEntries.position
+			})
+		for (const r of landed) idOf.set(slot(r.typeId, r.position), r.id)
+	}
+
+	const resolveBindingIds = (raw: unknown): number[] =>
+		Array.isArray(raw)
+			? raw
+					.filter((v): v is number => typeof v === "number")
+					.map((localId) => bindingLocalIdToRealId.get(localId))
+					.filter((id): id is number => id !== undefined)
+			: []
+	for (const { values, meta, typeId } of rows) {
+		const id = idOf.get(slot(typeId, values.position))!
+		recordEntryRefs(meta, id, typeId)
+		// Only the dated type carries nested scenes, so only it does more than
+		// record the id it got back.
+		if (typeId !== HISTORY_TYPE_ID) continue
+		if (typeof meta.localId === "number")
+			historyEntryLocalIdToRealId.set(meta.localId, id)
+
+		// Nested scenes — each still gets its own document-scoped localId (see
+		// mapEntry) so narrativeGraph can reference one. sessionId/
+		// selectedMessageIds were deliberately never exported — they're
+		// session-instance-specific and can't round-trip.
+		// participantCharacters/mentionedCharacters are binding localIds (see
+		// the merge plan) — resolved back to real ids via the same map
+		// bindingLocalId elsewhere in this format uses. A legacy export's
+		// name-string arrays resolve to nothing here (every entry fails the
+		// `=== "number"` check) rather than erroring — the scene still
+		// imports, just without its old cast list, consistent with this whole
+		// function's best-effort philosophy.
+		const scenes = Array.isArray(meta.scenes) ? meta.scenes : []
+		for (const scene of scenes) {
+			const participantCharacters = resolveBindingIds(
+				scene?.participantCharacters
+			)
+			const mentionedCharacters = resolveBindingIds(
+				scene?.mentionedCharacters
+			)
+			const [sceneRow] = await dbOrTx
+				.insert(schema.scenes)
+				.values({
+					lorebookId,
+					historyEntryId: id,
+					sessionId: null,
+					name: scene?.name ?? null,
+					selectedMessageIds: [],
+					summary: scene?.summary ?? null,
+					// The import file recorded a cast, so this scene counts as
+					// resolved even if every entry was dropped as unresolvable
+					// above.
+					castResolvedAt: new Date()
+				})
+				.returning()
+			// Cast lives in scene_characters, so it is written after the row
+			// exists (the FK requires a scene id).
+			await writeSceneCast(
+				sceneRow.id,
+				{ participantCharacters, mentionedCharacters },
+				dbOrTx as any
+			)
+			if (typeof scene?.localId === "number") {
+				sceneLocalIdToRealId.set(scene.localId, sceneRow.id)
+			}
+		}
+	}
 
 	// The `parent` role, once every row it could name exists. A link the file
-	// states but this import cannot honour (a missing parent, a cycle) leaves
-	// the entry at the top level rather than failing the import, which is this
-	// whole function's rule for a reference it cannot resolve.
+	// states but this import cannot honour (a missing parent, a cycle, a type
+	// that is never filed — a place) leaves the entry at the top level rather
+	// than failing the import, which is this whole function's rule for a
+	// reference it cannot resolve. The never-filed case is noted like the
+	// import's other skips: this door has no receipt to carry it.
+	const unfiled = pendingAnchors.filter(unfileable)
+	if (unfiled.length)
+		console.warn(
+			`[lorebooks] Import left ${unfiled.length} ${unfiled.length === 1 ? "entry" : "entries"} at the top level: ` +
+				"a place or a history entry is never filed inside anything (link it instead).",
+			unfiled.map((p) => p.realId)
+		)
 	for (const { realId, anchorRealId } of resolveAnchorEntryLinks(
 		pendingAnchors,
 		entryLocalIdToRealId
@@ -1671,6 +2308,68 @@ async function insertLorebookEntries(
 		sceneLocalIdToRealId,
 		entryLocalIdToRealId
 	}
+}
+
+/**
+ * The book's stats as the file carries them (format 2, plan A26): the book's
+ * own, its cast members' and its places', each landed on the row the import
+ * just made for its owner (`importedStatRows`). Template layer, on main — a
+ * file carries nothing else. Runs inside the import's transaction on `tx`
+ * alone, after every owner and every entry a value names exists.
+ */
+async function insertImportedStats(
+	tx: Db,
+	lorebookId: number,
+	serenepub: unknown,
+	bindingLocalIdToRealId: Map<number, number>,
+	entryRefs: RestoredEntryRefs
+) {
+	// What each landed entry is, for the rules a place's stats keep.
+	const landed = await tx
+		.select({
+			id: schema.lorebookEntries.id,
+			typeId: schema.lorebookEntries.typeId
+		})
+		.from(schema.lorebookEntries)
+		.where(eq(schema.lorebookEntries.lorebookId, lorebookId))
+	const { configs, values } = importedStatRows(serenepub, {
+		lorebookId,
+		bindingLocalIdToRealId,
+		entryLocalIdToRealId: entryRefs.entryLocalIdToRealId,
+		historyEntryLocalIdToRealId: entryRefs.historyEntryLocalIdToRealId,
+		sceneLocalIdToRealId: entryRefs.sceneLocalIdToRealId,
+		entryTypeIdByRealId: new Map(landed.map((r) => [r.id, r.typeId])),
+		singleRefEntryTypes: singleRefEntryTypesOf
+	})
+	// In the file's order, which is write order on the way out, so the book
+	// this makes exports the same bytes. Chunked to stay inside one
+	// statement's bind limit.
+	const CHUNK = 500
+	for (let i = 0; i < configs.length; i += CHUNK)
+		await tx.insert(schema.attributeConfigs).values(
+			configs.slice(i, i + CHUNK).map(({ value: _v, config, ...row }) => ({
+				...row,
+				config: config ?? {}
+			}))
+		)
+	for (let i = 0; i < values.length; i += CHUNK)
+		await tx.insert(schema.attributeValues).values(
+			values
+				.slice(i, i + CHUNK)
+				.map(({ config: _c, value, ...row }) => ({ ...row, value: value! }))
+		)
+}
+
+/**
+ * The entry types one reference on its own may name in a slot, as
+ * `write.ts assertLoreRefsInSession` reads them: a text slot's
+ * `config.entryTypes`, none for a list or a slot that names none, and
+ * `undefined` for a slot this install does not declare.
+ */
+function singleRefEntryTypesOf(slotId: string): readonly string[] | null | undefined {
+	const decl = getAttributeSlot(slotId)
+	if (!decl) return undefined
+	return decl.type !== "list" ? (resolveSlotConfig(decl).entryTypes ?? null) : null
 }
 
 /**
@@ -1738,29 +2437,47 @@ async function restoreNarrativeGraph(
 	userId: number,
 	bindingLocalIdToRealId: Map<number, number>,
 	entryRefs: RestoredEntryRefs,
-	boundEntityByRealId: Map<
-		number,
-		{ characterId: number | null }
-	>
-) {
+	boundEntityByRealId: Map<number, { characterId: number | null }>
+): Promise<GraphRestoreReport> {
+	const report: GraphRestoreReport = {
+		skippedMembers: 0,
+		skippedLinks: 0,
+		unfiledLinks: 0,
+		failed: false
+	}
 	try {
 		const graph = serenepub?.narrativeGraph
 		// Only version 1 is understood today — a future bump just means this
 		// block is skipped gracefully until the importer catches up
 		// (additive, never breaking).
-		if (!graph || graph.version !== 1) return
+		if (!graph || graph.version !== 1) return report
 
 		const rawNodes = Array.isArray(graph.nodes) ? graph.nodes : []
 		const rawRelationships = Array.isArray(graph.relationships)
 			? graph.relationships
 			: []
-		if (rawNodes.length === 0 && rawRelationships.length === 0) return
+		if (rawNodes.length === 0 && rawRelationships.length === 0) return report
 
 		// Pass 1: resolve every node to a real lorebookBindings row —
 		// update in place if bindingLocalId points at an already-restored
 		// binding, otherwise insert a new unbound row. Track localId -> real
 		// id either way (a parent may be defined later in the array).
 		const nodeLocalIdToRealId = new Map<number, number>()
+		/**
+		 * What the first node for each row wrote. A second node lands on the
+		 * same row when `restoreBoundEntities` folded a card bound twice into
+		 * one member (A16): it fills what the first left empty and adds its
+		 * absorbed names, and never overwrites.
+		 */
+		const landedOn = new Map<
+			number,
+			{
+				summary: string | null
+				absorbedAliases: string[]
+				historyEntryId: number | null
+				sceneId: number | null
+			}
+		>()
 		for (const node of rawNodes) {
 			try {
 				const boundRealId =
@@ -1813,13 +2530,39 @@ async function restoreNarrativeGraph(
 					const boundEntity = boundEntityByRealId.get(boundRealId)
 					const isEntityLinked = !!boundEntity?.characterId
 					const { name, aliases, ...rest } = nodeFields
-					const fieldsToApply = isEntityLinked ? rest : nodeFields
+					const first = landedOn.get(boundRealId)
+					const fieldsToApply: Record<string, unknown> = first
+						? {
+								summary: first.summary ?? nodeFields.summary,
+								absorbedAliases: [
+									...new Set([
+										...first.absorbedAliases,
+										...nodeFields.absorbedAliases
+									])
+								],
+								historyEntryId:
+									first.historyEntryId ??
+									nodeFields.historyEntryId,
+								sceneId: first.sceneId ?? nodeFields.sceneId
+							}
+						: isEntityLinked
+							? rest
+							: nodeFields
 					const [row] = await db
 						.update(schema.lorebookBindings)
 						.set(fieldsToApply)
 						.where(eq(schema.lorebookBindings.id, boundRealId))
-						.returning({ id: schema.lorebookBindings.id })
+						.returning({
+							id: schema.lorebookBindings.id,
+							summary: schema.lorebookBindings.summary,
+							absorbedAliases:
+								schema.lorebookBindings.absorbedAliases,
+							historyEntryId:
+								schema.lorebookBindings.historyEntryId,
+							sceneId: schema.lorebookBindings.sceneId
+						})
 					realId = row.id
+					landedOn.set(row.id, row)
 				} else {
 					const token = await deriveNextBindingToken(lorebookId, db)
 					const [inserted] = await db
@@ -1838,6 +2581,7 @@ async function restoreNarrativeGraph(
 					nodeLocalIdToRealId.set(node.localId, realId)
 				}
 			} catch (e) {
+				report.skippedMembers++
 				console.warn(
 					"[lorebooks] Skipping malformed narrative node on import:",
 					e
@@ -1859,6 +2603,7 @@ async function restoreNarrativeGraph(
 					.set({ parentNodeId: parentRealId })
 					.where(eq(schema.lorebookBindings.id, realId))
 			} catch (e) {
+				report.skippedMembers++
 				console.warn(
 					"[lorebooks] Skipping malformed narrative node parent link on import:",
 					e
@@ -1880,8 +2625,21 @@ async function restoreNarrativeGraph(
 					nodeLocalIdToRealId,
 					entryRefs.entryLocalIdToRealId
 				)
-				// Both endpoints must resolve to a row actually restored above.
-				if (!from || !to) continue
+				// Both endpoints must resolve to a row actually restored above;
+				// a link that cannot is one the file carries and the book does
+				// not get, so it is counted.
+				if (!from || !to) {
+					report.skippedLinks++
+					continue
+				}
+				// An entry linked to itself is nothing a book can hold (plan
+				// B0's guard; B1's CHECK), counted likewise. A cast self-loop
+				// is 0.5.x data and still lands: the cast merge is what clears
+				// those.
+				if (from.entryId != null && from.entryId === to.entryId) {
+					report.skippedLinks++
+					continue
+				}
 				const historyEntryId =
 					typeof rel?.historyEntryLocalId === "number"
 						? (entryRefs.historyEntryLocalIdToRealId.get(
@@ -1895,21 +2653,78 @@ async function restoreNarrativeGraph(
 							) ?? null)
 						: null
 
-				await db.insert(schema.narrativeRelationships).values({
-					lorebookId,
+				const ends = {
 					fromNodeId: from.nodeId,
 					fromEntryId: from.entryId,
 					toNodeId: to.nodeId,
-					toEntryId: to.entryId,
-					relationshipType: rel?.relationshipType || "neutral",
-					description: rel?.description || "",
-					visibility: rel?.visibility || "acknowledged",
-					status: rel?.status || "active",
-					reason: rel?.reason ?? null,
+					toEntryId: to.entryId
+				}
+				// A file's text, cut to `RELATIONSHIP_TEXT_LIMITS` as a
+				// model's is (a file is not a person typing); what is not text
+				// is empty. The words and the name are trimmed as every
+				// writer trims them (plan B1); a description is kept as told.
+				const fileText = (value: unknown, limit: number) =>
+					typeof value === "string" ? value.slice(0, limit) : ""
+				const fileWords = (value: unknown, limit: number) =>
+					typeof value === "string"
+						? value.trim().slice(0, limit).trim()
+						: ""
+				const saying = {
+					lorebookId,
+					branchId: null,
 					historyEntryId,
+					relationshipType:
+						fileWords(
+							rel?.relationshipType,
+							RELATIONSHIP_TEXT_LIMITS.wording
+						) || "neutral",
+					// Plan B1: the name, and the words from the far end — kept
+					// only with an entry at one end (the reverse CHECK); a
+					// file written before either reads unnamed and one way.
+					title: fileWords(rel?.name, RELATIONSHIP_TEXT_LIMITS.name),
+					reverseRelationshipType:
+						from.entryId != null || to.entryId != null
+							? fileWords(
+									rel?.reverseRelationshipType,
+									RELATIONSHIP_TEXT_LIMITS.wording
+								) || null
+							: null
+				}
+				// One row per way (plan B1): a row the file repeats — a
+				// two-way link and its mirror, say — is the row already landed.
+				if ((await findLinkedThatWay(db, ends, saying)) != null) continue
+
+				// A status or visibility the lists do not have reads as the
+				// column's default, as the graph build's apply reads one.
+				await db.insert(schema.narrativeRelationships).values({
+					...ends,
+					...saying,
+					description: fileText(
+						rel?.description,
+						RELATIONSHIP_TEXT_LIMITS.description
+					),
+					visibility: sanitizeRelationshipVisibility(rel?.visibility),
+					status: (RELATIONSHIP_STATUSES as readonly unknown[]).includes(
+						rel?.status
+					)
+						? rel.status
+						: "active",
+					reason:
+						typeof rel?.reason === "string"
+							? fileText(rel.reason, RELATIONSHIP_TEXT_LIMITS.reason)
+							: null,
 					sceneId
 				})
+				// Landed, but without the history entry that dated it or the
+				// scene it was filed under: the file names one it does not
+				// carry.
+				if (
+					(typeof rel?.historyEntryLocalId === "number" && historyEntryId === null) ||
+					(typeof rel?.sceneLocalId === "number" && sceneId === null)
+				)
+					report.unfiledLinks++
 			} catch (e) {
+				report.skippedLinks++
 				console.warn(
 					"[lorebooks] Skipping malformed narrative relationship on import:",
 					e
@@ -1917,11 +2732,50 @@ async function restoreNarrativeGraph(
 			}
 		}
 	} catch (e) {
+		report.failed = true
 		console.warn(
 			"[lorebooks] Narrative graph restoration failed, skipping:",
 			e
 		)
 	}
+	return report
+}
+
+/**
+ * What `restoreNarrativeGraph` could not write back, counted where it skips a
+ * row rather than failing the import: cast members (a node, or its place
+ * under another member), links (one whose write failed, whose ends the file
+ * does not carry, or that links an entry to itself), links that landed
+ * without the date or scene the file gave them (`unfiledLinks`), and whether
+ * the whole graph stopped.
+ */
+interface GraphRestoreReport {
+	skippedMembers: number
+	skippedLinks: number
+	unfiledLinks: number
+	failed: boolean
+}
+
+/** The import's warnings for what the graph could not restore (plan A13). */
+function graphRestoreWarnings(report: GraphRestoreReport): string[] {
+	if (report.failed)
+		return ["Not all of the file's cast members and links could be restored."]
+	const warnings: string[] = []
+	const { skippedMembers: m, skippedLinks: l } = report
+	if (m > 0)
+		warnings.push(
+			`${m} cast ${m === 1 ? "member" : "members"} from the file could not be fully restored.`
+		)
+	if (l > 0)
+		warnings.push(
+			`${l} ${l === 1 ? "link" : "links"} from the file could not be restored.`
+		)
+	const u = report.unfiledLinks
+	if (u > 0)
+		warnings.push(
+			`${u} ${u === 1 ? "link" : "links"} from the file ${u === 1 ? "was" : "were"} restored without ${u === 1 ? "its" : "their"} date or scene, which the file does not carry.`
+		)
+	return warnings
 }
 
 async function fetchCompletedLorebook(lorebookId: number) {
@@ -1977,6 +2831,54 @@ function importedStoryTime(serenepub: any) {
 }
 
 /**
+ * The file's calendar, kept only over dates it can place (plan A18(c)).
+ *
+ * An import writes the calendar with the book, then its entries and stats;
+ * this runs last, in the same transaction, and projects every dated row the
+ * book then holds — the file's history and stats, and on an overwrite the
+ * clocks of the sessions already reading the book — through the calendar, as
+ * `lorebooks:setCalendar`'s preflight does. When one does not land, the book
+ * comes in free-form, with the file's clock if free-form places it, and the
+ * reply names the dates: every date is kept as it is, and the calendar is
+ * still in the file, to declare once they are changed. Refusing the import
+ * would cost the whole book for one date, and the calendar never re-dates a
+ * row.
+ *
+ * A calendar the file carries that cannot be read already came in free-form
+ * (`importedStoryTime`); the reply says so.
+ */
+async function landImportedCalendar(
+	tx: Db,
+	lorebookId: number,
+	serenepub: any
+): Promise<string[]> {
+	const st = serenepub?.storyTime
+	if (!st || typeof st !== "object" || st.calendar == null) return []
+	const calendar = readStoryCalendar(st.calendar)
+	if (!calendar) return ["The file's calendar could not be read, so the book is free-form."]
+	const stranded = datesThatDoNotLand(await datedRowsOf(tx, lorebookId), calendar)
+	if (!stranded.length) return []
+	const c = st.clock
+	const clock =
+		c && Number.isInteger(c.year) && !clockProblem(c, null) ? (c as StoryClock) : null
+	await tx
+		.update(schema.lorebooks)
+		.set({ storyCalendar: null, ...clockColumns(clock) })
+		.where(eq(schema.lorebooks.id, lorebookId))
+	const n = stranded.length
+	return [
+		`The file's calendar was left out: ${n} ${n === 1 ? "date" : "dates"} in the book ` +
+			`${n === 1 ? "doesn't" : "don't"} fit it (` +
+			stranded
+				.slice(0, 5)
+				.map((s) => `${s.label}: ${s.problem}`)
+				.join("; ") +
+			(n > 5 ? "; …" : "") +
+			"). The book is free-form; declare the calendar in its settings once those dates are changed."
+	]
+}
+
+/**
  * The story time an OVERWRITE writes: the file's, or — when the file carries
  * none — free-form with no clock. `importedStoryTime` alone returns `{}` for
  * such a file, which left the old calendar and clock in place, so a file that
@@ -1992,13 +2894,23 @@ function overwrittenStoryTime(serenepub: any) {
 }
 
 /**
- * What an overwrite-import deletes that the file cannot bring back — dated
- * changes, presences, lines (branches) and scenes captured from a session.
- * Shown in the conflict prompt before the user chooses Overwrite.
+ * What an overwrite-import deletes, or changes, that the file cannot bring
+ * back — dated changes, presences, lines (branches) and scenes captured from
+ * a session, which no file carries; and, from a format-1 file
+ * (`lorebookFileFormatOf`), the book's stats and its places and items, which
+ * that format cannot carry: the stats are deleted and the places and items
+ * come back as world lore; and, from any file, what `purgeLorebook` takes
+ * that no file carries (`statsNoFileCarries`), and what sessions hold of the
+ * book's entries, which every new entry leaves naming nothing
+ * (`countSessionLoreRefs`). Shown in the conflict prompt before the user
+ * chooses Overwrite.
  */
 export async function overwriteLosses(
 	lorebookId: number,
-	dbOrTx: Db = db
+	fileFormat: number,
+	dbOrTx: Db = db,
+	/** The file's `extensions.serenepub` and its importer, for `charactersRewritten`. */
+	incoming?: { serenepub: any; userId: number }
 ): Promise<Sockets.Lorebooks.OverwriteLosses> {
 	const countIn = async (table: any, extra?: any) => {
 		const [row] = await dbOrTx
@@ -2013,6 +2925,10 @@ export async function overwriteLosses(
 	}
 	const entryAmendments = await countIn(schema.entryAmendments)
 	const castAmendments = await countIn(schema.castAmendments)
+	const olderFile =
+		fileFormat < 2
+			? await olderFileLosses(lorebookId, dbOrTx)
+			: { stats: 0, places: 0, items: 0 }
 	return {
 		amendments: entryAmendments + castAmendments,
 		presences: await countIn(schema.castPresences),
@@ -2020,8 +2936,115 @@ export async function overwriteLosses(
 		sceneLinks: await countIn(
 			schema.scenes,
 			sql`${schema.scenes.sessionId} IS NOT NULL`
-		)
+		),
+		...olderFile,
+		...(await statsNoFileCarries(lorebookId, dbOrTx)),
+		sessionLoreRefs: await countSessionLoreRefs(dbOrTx, lorebookId),
+		charactersRewritten: incoming
+			? await countCharactersRewritten(
+					incoming.serenepub,
+					incoming.userId,
+					dbOrTx
+				)
+			: 0
 	}
+}
+
+/**
+ * What an overwrite deletes of the book's stats that no file carries, whatever
+ * its format (plan A13): each session's own stats on the book's places — one
+ * per slot on each place in each session, however many dated values or a
+ * configuration it has — and every stat sheet assigned to the book, its cast
+ * members or its places. The owners are `purgeLorebook`'s own
+ * (`bookStatOwners`), so this counts exactly what it deletes.
+ */
+async function statsNoFileCarries(
+	lorebookId: number,
+	dbOrTx: Db
+): Promise<{ sessionStats: number; sheets: number }> {
+	const owners = (await bookStatOwners(dbOrTx, lorebookId)).filter(
+		([, ids]) => ids.length > 0
+	)
+	const ownedBy = (
+		t:
+			| typeof schema.attributeValues
+			| typeof schema.attributeConfigs
+			| typeof schema.ownerSheets
+	) =>
+		or(
+			...owners.map(([kinds, ids]) =>
+				and(inArray(t.ownerKind, kinds), inArray(t.ownerId, ids))
+			)
+		)
+	const v = schema.attributeValues
+	const c = schema.attributeConfigs
+	const held = new Set(
+		[
+			...(await dbOrTx
+				.select({ s: v.sessionId, kind: v.ownerKind, id: v.ownerId, slotId: v.slotId })
+				.from(v)
+				.where(and(ownedBy(v), isNotNull(v.sessionId)))),
+			...(await dbOrTx
+				.select({ s: c.sessionId, kind: c.ownerKind, id: c.ownerId, slotId: c.slotId })
+				.from(c)
+				.where(and(ownedBy(c), isNotNull(c.sessionId))))
+		].map((r) => `${r.s}:${r.kind}:${r.id}:${r.slotId}`)
+	)
+	const [sheets] = await dbOrTx
+		.select({ n: sql<number>`count(*)::int` })
+		.from(schema.ownerSheets)
+		.where(ownedBy(schema.ownerSheets))
+	return { sessionStats: held.size, sheets: Number(sheets?.n ?? 0) }
+}
+
+/**
+ * What a format-1 file cannot carry of a book's main line: its stats before
+ * play — one per slot on each owner (the book, a cast member, a place),
+ * however many dated values or a configuration it has — and its places and
+ * items. A branch's own are the branch's, counted with it.
+ */
+async function olderFileLosses(
+	lorebookId: number,
+	dbOrTx: Db
+): Promise<{ stats: number; places: number; items: number }> {
+	const e = schema.lorebookEntries
+	const entries = await dbOrTx
+		.select({ id: e.id, typeId: e.typeId })
+		.from(e)
+		.where(and(eq(e.lorebookId, lorebookId), isNull(e.branchId)))
+	const placeIds = entries.filter((r) => r.typeId === LOCATION_TYPE_ID).map((r) => r.id)
+	const items = entries.filter((r) => r.typeId === ITEM_TYPE_ID).length
+	const memberIds = (
+		await dbOrTx
+			.select({ id: schema.lorebookBindings.id })
+			.from(schema.lorebookBindings)
+			.where(eq(schema.lorebookBindings.lorebookId, lorebookId))
+	).map((r) => r.id)
+	const owners = (t: typeof schema.attributeValues | typeof schema.attributeConfigs) =>
+		or(
+			and(eq(t.ownerKind, "lorebook"), eq(t.ownerId, lorebookId)),
+			memberIds.length
+				? and(eq(t.ownerKind, "cast_member"), inArray(t.ownerId, memberIds))
+				: undefined,
+			placeIds.length
+				? and(eq(t.ownerKind, "location"), inArray(t.ownerId, placeIds))
+				: undefined
+		)
+	const v = schema.attributeValues
+	const c = schema.attributeConfigs
+	const stats = new Set(
+		[
+			...(await dbOrTx
+				.select({ kind: v.ownerKind, id: v.ownerId, slotId: v.slotId })
+				.from(v)
+				.where(and(owners(v), isNull(v.sessionId), isNull(v.branchId)))),
+			...(await dbOrTx
+				.select({ kind: c.ownerKind, id: c.ownerId, slotId: c.slotId })
+				.from(c)
+				.where(and(owners(c), isNull(c.sessionId))))
+		].map((r) => `${r.kind}:${r.id}:${r.slotId}`)
+	)
+	return { stats: stats.size, places: placeIds.length, items }
 }
 
 async function createLorebookFromParsedCard(
@@ -2048,7 +3071,9 @@ async function createLorebookFromParsedCard(
 		bindingLocalIdToRealId,
 		entryRefs,
 		syncCharacterIds,
-		boundEntityByRealId
+		boundEntityByRealId,
+		serenepub,
+		calendarWarnings
 	} = await db.transaction(async (tx) => {
 		const uuidToStamp = await claimIncomingLorebookUuid(uuid, userId, tx)
 		const [book] = await tx
@@ -2076,40 +3101,55 @@ async function createLorebookFromParsedCard(
 		const {
 			bindingLocalIdToRealId,
 			syncCharacterIds,
-			boundEntityByRealId
-		} = await restoreBoundEntities(
-			book.id,
-			card.extensions?.serenepub,
-			userId,
-			tx
-		)
+			boundEntityByRealId,
+			retag
+		} = await restoreBoundEntities(book.id, card, userId, tx)
+		const retagged = retagImportedBook(card, retag)
+		if (retagged.description !== card.description)
+			await tx
+				.update(schema.lorebooks)
+				.set({ description: retagged.description })
+				.where(eq(schema.lorebooks.id, book.id))
 		const entryRefs = await insertLorebookEntries(
 			book.id,
-			card.entries,
+			retagged.entries,
 			bindingLocalIdToRealId,
 			tx
+		)
+		await insertImportedStats(
+			tx,
+			book.id,
+			retagged.serenepub,
+			bindingLocalIdToRealId,
+			entryRefs
+		)
+		const calendarWarnings = await landImportedCalendar(
+			tx,
+			book.id,
+			card.extensions?.serenepub
 		)
 		return {
 			book,
 			bindingLocalIdToRealId,
 			entryRefs,
 			syncCharacterIds,
-			boundEntityByRealId
+			boundEntityByRealId,
+			serenepub: retagged.serenepub,
+			calendarWarnings
 		}
 	})
 
-	for (const characterId of syncCharacterIds) {
-		await syncLorebookBindingsForCharacter(characterId)
-	}
-	await restoreNarrativeGraph(
-		book.id,
-		card.extensions?.serenepub,
+	const warnings = await afterImportCommit({
+		lorebookId: book.id,
+		lorebookName: book.name,
 		userId,
+		syncCharacterIds,
+		serenepub,
 		bindingLocalIdToRealId,
 		entryRefs,
 		boundEntityByRealId
-	)
-	return fetchCompletedLorebook(book.id)
+	})
+	return { book, warnings: [...calendarWarnings, ...warnings] }
 }
 
 /**
@@ -2132,12 +3172,15 @@ async function overwriteLorebookFromParsedCard(
 	// function's comment for why restoreNarrativeGraph and the bound-entity
 	// sync calls stay outside this transaction.
 	const {
+		book,
 		bindingLocalIdToRealId,
 		entryRefs,
 		syncCharacterIds,
-		boundEntityByRealId
+		boundEntityByRealId,
+		serenepub,
+		calendarWarnings
 	} = await db.transaction(async (tx) => {
-		await tx
+		const [book] = await tx
 			.update(schema.lorebooks)
 			.set({
 				name: card.name || "Imported Lorebook",
@@ -2146,132 +3189,244 @@ async function overwriteLorebookFromParsedCard(
 				...overwrittenStoryTime(card.extensions?.serenepub)
 			})
 			.where(eq(schema.lorebooks.id, existingId))
+			.returning()
 
-		// Attribute rows the book's members own at the template layer have no
-		// foreign key (owner ids are polymorphic), so the cascades below would
-		// orphan them. Read the owner ids before those rows go.
-		const memberIds = (
-			await tx
-				.select({ id: schema.lorebookBindings.id })
-				.from(schema.lorebookBindings)
-				.where(eq(schema.lorebookBindings.lorebookId, existingId))
-		).map((r) => r.id)
-		const placeIds = (
-			await tx
-				.select({ id: schema.lorebookEntries.id })
-				.from(schema.lorebookEntries)
-				.where(eq(schema.lorebookEntries.lorebookId, existingId))
-		).map((r) => r.id)
-		for (const table of [
-			schema.attributeValues,
-			schema.attributeConfigs
-		] as const) {
-			for (const [kind, ids] of [
-				["cast_member", memberIds],
-				["location", placeIds]
-			] as const) {
-				if (ids.length === 0) continue
-				await tx
-					.delete(table as any)
-					.where(
-						and(
-							eq((table as any).ownerKind, kind),
-							inArray((table as any).ownerId, ids as number[]),
-							isNull((table as any).sessionId)
-						)
-					)
-			}
-		}
+		// What sessions hold of the book's entries — an item carried, the
+		// place someone is in — would name nothing once every entry is new:
+		// dropped, as `overwriteLosses` said first (`sessionLoreRefs`).
+		await dropSessionLoreRefs(tx, existingId)
 
-		// One delete where three stood — and it takes the scenes with it, via
-		// the cascade a history entry's scenes have always had.
-		await tx
-			.delete(schema.lorebookEntries)
-			.where(eq(schema.lorebookEntries.lorebookId, existingId))
-		// narrativeRelationships before lorebookBindings — relationships FK
-		// straight to bindings, not lorebookId-cascaded on binding deletion
-		// (deleting bindings first would cascade-delete them anyway via
-		// onDelete: cascade, but explicit ordering keeps this readable). Post-
-		// merge, this single lorebookBindings delete covers what used to be two
-		// separate deletes (bindings + narrativeNodes) — see the merge plan.
-		await tx
-			.delete(schema.narrativeRelationships)
-			.where(eq(schema.narrativeRelationships.lorebookId, existingId))
-		await tx
-			.delete(schema.lorebookBindings)
-			.where(eq(schema.lorebookBindings.lorebookId, existingId))
-		// The lines themselves: nothing is left on them once entries and
-		// bindings are gone, their clocks are stale, and the file carries main
-		// only (finding #16; the conflict prompt showed the counts first).
-		// Sessions played on one fall back to main (`set null`).
-		await tx
-			.delete(schema.lorebookBranches)
-			.where(eq(schema.lorebookBranches.lorebookId, existingId))
+		// Everything the book holds goes, by the one rule book delete uses
+		// (`purgeLorebook`, the lorebook table registry): its lines, entries,
+		// cast, scenes, links, dated changes, presences, binding suggestions,
+		// and every stat the book, its cast members and its places own — each
+		// session's own layer on a place included. Stat owner ids carry no
+		// foreign key, and the file replaces the book: a file that carries no
+		// stats says the book has none, the rule `overwrittenStoryTime` holds
+		// for the clock. `overwriteLosses` names first what no file brings
+		// back. The book row stays, and so do its tags (its labels, like its
+		// name). Sessions played on a line fall back to main (`set null`).
+		await purgeLorebook(tx, existingId)
 
 		const {
 			bindingLocalIdToRealId,
 			syncCharacterIds,
-			boundEntityByRealId
-		} = await restoreBoundEntities(
-			existingId,
-			card.extensions?.serenepub,
-			userId,
-			tx
-		)
+			boundEntityByRealId,
+			retag
+		} = await restoreBoundEntities(existingId, card, userId, tx)
+		const retagged = retagImportedBook(card, retag)
+		if (retagged.description !== card.description)
+			await tx
+				.update(schema.lorebooks)
+				.set({ description: retagged.description })
+				.where(eq(schema.lorebooks.id, existingId))
 		const entryRefs = await insertLorebookEntries(
 			existingId,
-			card.entries,
+			retagged.entries,
 			bindingLocalIdToRealId,
 			tx
 		)
+		await insertImportedStats(
+			tx,
+			existingId,
+			retagged.serenepub,
+			bindingLocalIdToRealId,
+			entryRefs
+		)
+		const calendarWarnings = await landImportedCalendar(
+			tx,
+			existingId,
+			card.extensions?.serenepub
+		)
 		return {
+			book,
 			bindingLocalIdToRealId,
 			entryRefs,
 			syncCharacterIds,
-			boundEntityByRealId
+			boundEntityByRealId,
+			serenepub: retagged.serenepub,
+			calendarWarnings
 		}
 	})
 
-	for (const characterId of syncCharacterIds) {
-		await syncLorebookBindingsForCharacter(characterId)
-	}
-	await restoreNarrativeGraph(
-		existingId,
-		card.extensions?.serenepub,
+	const warnings = await afterImportCommit({
+		lorebookId: existingId,
+		lorebookName: book.name,
 		userId,
+		syncCharacterIds,
+		serenepub,
 		bindingLocalIdToRealId,
 		entryRefs,
 		boundEntityByRealId
-	)
-	return fetchCompletedLorebook(existingId)
+	})
+	return { book, warnings: [...calendarWarnings, ...warnings] }
 }
 
-export const lorebookImportHandler: Handler<
+/**
+ * Everything an import does once its book is committed (plan A13): the cast
+ * members' names from their cards, the graph, and the queues for the book's
+ * vectors and annotations, as an entry save queues them. None of it can undo
+ * the save, so none of it may report the import as failed: a step that does
+ * not finish is logged and named in the reply's `warnings`, and the book
+ * stands. Reported as a failure, the person would retry, and the retry would
+ * meet the saved book as a conflict.
+ */
+async function afterImportCommit(opts: {
+	lorebookId: number
+	lorebookName: string
+	userId: number
+	syncCharacterIds: Set<number>
+	serenepub: any
+	bindingLocalIdToRealId: Map<number, number>
+	entryRefs: RestoredEntryRefs
+	boundEntityByRealId: Map<number, { characterId: number | null }>
+}): Promise<string[]> {
+	const warnings: string[] = []
+	try {
+		// The cards are the importer's own (made or overwritten for them), so
+		// the card-edit sync reaches this book and every other of theirs an
+		// overwritten card is in.
+		for (const characterId of opts.syncCharacterIds)
+			await syncLorebookBindingsForCharacter(characterId)
+	} catch (e) {
+		console.error(
+			`[lorebooks] Import of book ${opts.lorebookId}: the cast's names were not synced:`,
+			e
+		)
+		warnings.push(
+			"The cast members' names were not updated from their character cards."
+		)
+	}
+	warnings.push(
+		...graphRestoreWarnings(
+			await restoreNarrativeGraph(
+				opts.lorebookId,
+				opts.serenepub,
+				opts.userId,
+				opts.bindingLocalIdToRealId,
+				opts.entryRefs,
+				opts.boundEntityByRealId
+			)
+		)
+	)
+	queueImportedBook(opts.lorebookId, opts.lorebookName)
+	return warnings
+}
+
+/**
+ * Queue a book an import wrote for its vectors and its annotations — what an
+ * entry save queues (`entries.ts` `afterWrite`), so retrieval does not wait on
+ * the periodic scan. Background work: it never throws, and a failure is
+ * logged, since the periodic scan picks the book up regardless.
+ */
+export function queueImportedBook(lorebookId: number, lorebookName: string): void {
+	autoEnqueueLorebook(lorebookId, lorebookName, "").catch((e) =>
+		console.error(`[lorebooks] Queueing imported book ${lorebookId} for vectors failed:`, e)
+	)
+	try {
+		enqueueLorebookAnnotation(lorebookId, lorebookName)
+	} catch (e) {
+		console.error(
+			`[lorebooks] Queueing imported book ${lorebookId} for annotations failed:`,
+			e
+		)
+	}
+}
+
+/**
+ * The reply's book once an import is committed: read back whole, or — when
+ * the read fails — the row the import wrote, without its entries and cast, so
+ * a saved book is never reported as a failed import; `warnings` says so.
+ */
+async function importedBookOf(
+	book: typeof schema.lorebooks.$inferSelect,
+	warnings: string[]
+): Promise<Sockets.Lorebooks.WireLorebook> {
+	try {
+		return await fetchCompletedLorebook(book.id)
+	} catch (e) {
+		console.error(`[lorebooks] Imported book ${book.id} could not be read back:`, e)
+		warnings.push("The lorebook was saved, but could not be read back. Reload to see it.")
+		return book
+	}
+}
+
+/**
+ * Seat the cast of every session reading a book an overwrite rewrote, as
+ * reading a book into a session does (`runLorebookBindingCheck`): the file
+ * brings back only its own cast members, so a character who joined a session
+ * after the file was written would otherwise have none until the session's
+ * cast next changed (plan A13).
+ */
+async function seatReadingSessions(
+	socket: any,
+	lorebookId: number,
+	emitToUser: (event: string, data: any) => void
+): Promise<string[]> {
+	try {
+		const { runLorebookBindingCheck } = await import("./sessions")
+		const reading = await db
+			.select({ id: schema.sessions.id })
+			.from(schema.sessions)
+			.where(eq(schema.sessions.lorebookId, lorebookId))
+		// Seated only: the person asked to overwrite a book, not to be asked
+		// about its card-less cast members once per reading session.
+		for (const { id } of reading)
+			await runLorebookBindingCheck(socket, id, lorebookId, emitToUser, {
+				askAboutOrphans: false
+			})
+		return []
+	} catch (e) {
+		console.error(
+			`[lorebooks] Overwrite of book ${lorebookId}: the reading sessions' cast was not seated:`,
+			e
+		)
+		return [
+			"The characters of the sessions reading this book were not all added to its cast. They are added when a session's cast next changes."
+		]
+	}
+}
+
+/**
+ * A lorebook import's refusal when the server failed rather than refused
+ * (`importFailureOf`), and the wrapper's fallback.
+ */
+const IMPORT_FAILED =
+	"The lorebook could not be imported. The server log has the details."
+
+/** The plain sentence for the server's own failures (`serverFailureAs`). */
+const importFailureOf = serverFailureAs(IMPORT_FAILED)
+
+/**
+ * Import a lorebook file (its text; see `readLorebookImport` for every
+ * ceiling it meets first), or a card's book held since its card import.
+ *
+ * A person runs at most `IMPORTS_RUNNING_PER_USER` imports at once however
+ * many sockets they hold (and the server `IMPORTS_RUNNING_ON_SERVER` for
+ * everyone), and a conflict HOLDS the file on the server — the
+ * reply carries a `heldImportId`, never the file (plan S4). Refusals reach the
+ * person as the sentence that says which (`refusable`).
+ */
+export const lorebookImportHandler = refusable<
 	Sockets.Lorebooks.Import.Params,
 	Sockets.Lorebooks.Import.Response
-> = {
-	event: "lorebooks:import",
-	handler: async (socket, params, emitToUser) => {
-		try {
-			const userId = socket.user!.id
-
-			// Normalizes legacy shapes (object-keyed entries, singular
-			// key/keysecondary fields) that parseImportedLorebook() on its
-			// own would silently turn into an empty book rather than error on.
-			const lorebookData = normalizeLegacyLorebookData(
-				params.lorebookData
-			)
-			// Reads the payload's own fields rather than handing it to
-			// @lenml/char-card-reader, whose book constructor splits every key
-			// on `[,|;，；]` — which shredded a regex key (`/foo|bar/i` →
-			// `/foo` + `bar/i`) on this door alone, while the bulk import path
-			// read the same file's keys intact. See parseImportedLorebook for
-			// what the reader backfilled and how each of those is supplied.
-			const card = parseImportedLorebook(lorebookData)
-			if (!card) {
-				throw new Error("No lorebook data provided.")
-			}
-			assertLorebookImportWithinLimits(card, lorebookData)
+>(
+	"lorebooks:import",
+	async (socket, params, emitToUser) => {
+		const userId = socket.user!.id
+		return withImportLimit(userId, async () => {
+			// A file's text, or a card's book held since its card import
+			// (`Characters.HeldCardBook`) — taken once, by its owner only.
+			const lorebookJson =
+				params?.heldImportId !== undefined
+					? takeHeldImport(userId, "lorebook", params.heldImportId)
+							.lorebookJson
+					: params?.lorebookJson
+			const {
+				lorebookData,
+				card,
+				name: rename
+			} = readLorebookImport(lorebookJson, params?.name)
 
 			const rawIncomingUuid = (lorebookData as any)?.extensions?.serenepub
 				?.uuid
@@ -2323,8 +3478,20 @@ export const lorebookImportHandler: Handler<
 						lorebook: null,
 						conflict: {
 							existingLorebook: existing,
-							lorebookData,
-							losses: await overwriteLosses(existing.id)
+							heldImportId: holdImport(userId, "lorebook", {
+								lorebookJson: lorebookJson as string,
+								...(rename ? { name: rename } : {})
+							}),
+							losses: await overwriteLosses(
+								existing.id,
+								lorebookFileFormatOf(lorebookData),
+								db,
+								{
+									serenepub: (card as any).extensions
+										?.serenepub,
+									userId
+								}
+							)
 						}
 					}
 					emitToUser("lorebooks:import", res)
@@ -2332,32 +3499,53 @@ export const lorebookImportHandler: Handler<
 				}
 			}
 
-			const completedBook = await createLorebookFromParsedCard(
+			const { book, warnings } = await createLorebookFromParsedCard(
 				card,
 				lorebookData,
 				userId,
 				incomingUuid
 			)
-
-			// Lazily, and exactly once: `relistLorebooks` emits `lorebooks:list`
-			// itself, so a second emit of its result beside this call is the same
-			// payload twice. One stood here; it is gone.
-			if (emitToUser) await relistLorebooks(socket, emitToUser)
+			// Committed: from here on the reply says the book is in, and names
+			// whatever did not finish.
+			await relistAfterImport(socket, emitToUser, warnings)
 
 			const res: Sockets.Lorebooks.Import.Response = {
 				status: "created",
-				lorebook: completedBook
+				lorebook: await importedBookOf(book, warnings),
+				...(warnings.length ? { warnings } : {})
 			}
 			emitToUser("lorebooks:import", res)
 			return res
-		} catch (error: any) {
-			console.error("Error importing lorebook:", error)
-			emitToUser("lorebooks:import:error", {
-				error: error.message || "Failed to import lorebook."
-			})
-			throw error
+		})
+	},
+	IMPORT_FAILED,
+	importFailureOf
+)
+
+/**
+ * The book list after an import, lazily and exactly once. The book is already
+ * saved, so a list that does not refresh is a warning, never the import's
+ * failure. The catch sits INSIDE the lazy payload, as `refreshCharacterList`
+ * has it: `emitToUser` builds the payload itself and only logs a build that
+ * throws, so a catch around the emit would never see one. A payload no socket
+ * wanted is never built — no list to refresh, nothing to say.
+ */
+async function relistAfterImport(
+	socket: any,
+	emitToUser: (event: string, data: any) => void,
+	warnings: string[]
+): Promise<void> {
+	if (!emitToUser) return
+	await emitToUser("lorebooks:list", async () => {
+		try {
+			return await buildLorebooksList(socket.user!.id)
+		} catch (e) {
+			warnings.push(
+				"The lorebook list could not be refreshed. Reload to see the new book."
+			)
+			throw e
 		}
-	}
+	})
 }
 
 /**
@@ -2375,20 +3563,13 @@ export const lorebookImportHandler: Handler<
 export const lorebooksDuplicateHandler: Handler<
 	Sockets.Lorebooks.Duplicate.Params,
 	Sockets.Lorebooks.Duplicate.Response
-> = {
-	event: "lorebooks:duplicate",
-	handler: async (socket, params, emitToUser) => {
+> = refusable(
+	"lorebooks:duplicate",
+	async (socket, params: Sockets.Lorebooks.Duplicate.Params, emitToUser) => {
 		try {
 			const userId = socket.user!.id
 
-			const source = await db.query.lorebooks.findFirst({
-				where: and(
-					eq(schema.lorebooks.id, params.lorebookId),
-					eq(schema.lorebooks.userId, userId)
-				),
-				columns: { id: true, name: true }
-			})
-			if (!source) throw new Error("Lorebook not found.")
+			const source = await assertOwnedBook(db, userId, params.lorebookId)
 
 			const { id } = await db.transaction((tx) =>
 				duplicateLorebookRows(
@@ -2409,56 +3590,48 @@ export const lorebooksDuplicateHandler: Handler<
 			return res
 		} catch (error: any) {
 			console.error("Error duplicating lorebook:", error)
-			emitToUser("lorebooks:duplicate:error", {
-				error: error.message || "Failed to duplicate lorebook."
-			})
 			throw error
 		}
-	}
-}
+	},
+	"The lorebook could not be duplicated."
+)
 
 /**
  * Carries out the user's choice after lorebooks:import returned a
  * "conflict" status — either overwrite the existing (uuid-matched) lorebook
- * in place, or import the payload as a brand-new lorebook with a fresh uuid.
+ * in place, or import the file as a brand-new lorebook with a fresh uuid.
+ * The file is the HELD import the conflict named, taken out of the store
+ * before anything else: only its owner can take it, and only once.
  */
-export const lorebookImportResolveHandler: Handler<
+export const lorebookImportResolveHandler = refusable<
 	Sockets.Lorebooks.ImportResolve.Params,
 	Sockets.Lorebooks.ImportResolve.Response
-> = {
-	event: "lorebooks:importResolve",
-	handler: async (socket, params, emitToUser) => {
-		try {
-			const userId = socket.user!.id
-
-			const lorebookData = normalizeLegacyLorebookData(
-				params.lorebookData
+>(
+	"lorebooks:importResolve",
+	async (socket, params, emitToUser) => {
+		const userId = socket.user!.id
+		return withImportLimit(userId, async () => {
+			const held = takeHeldImport(
+				userId,
+				"lorebook",
+				params?.heldImportId
 			)
-			// Same bypass as lorebooks:import above — the reader's key
-			// splitting must not reach either door.
-			const card = parseImportedLorebook(lorebookData)
-			if (!card) {
-				throw new Error("No lorebook data provided.")
-			}
-			assertLorebookImportWithinLimits(card, lorebookData)
+			const { lorebookData, card } = readLorebookImport(
+				held.lorebookJson,
+				held.name
+			)
 
-			let completedBook
+			let imported: Awaited<ReturnType<typeof createLorebookFromParsedCard>>
 			if (params.action === "overwrite") {
-				const existing = await db.query.lorebooks.findFirst({
-					where: and(
-						eq(schema.lorebooks.id, params.existingId),
-						eq(schema.lorebooks.userId, userId)
-					),
-					columns: { id: true }
-				})
-				if (!existing) {
-					throw new Error("Lorebook not found.")
-				}
-				completedBook = await overwriteLorebookFromParsedCard(
+				const existing = await assertOwnedBook(db, userId, params.existingId)
+				imported = await overwriteLorebookFromParsedCard(
 					existing.id,
 					card,
 					lorebookData,
 					userId
+				)
+				imported.warnings.push(
+					...(await seatReadingSessions(socket, existing.id, emitToUser))
 				)
 			} else {
 				const rawIncomingUuid = (lorebookData as any)?.extensions
@@ -2466,33 +3639,29 @@ export const lorebookImportResolveHandler: Handler<
 				const incomingUuid = isValidUuid(rawIncomingUuid)
 					? rawIncomingUuid
 					: undefined
-				completedBook = await createLorebookFromParsedCard(
+				imported = await createLorebookFromParsedCard(
 					card,
 					lorebookData,
 					userId,
 					incomingUuid
 				)
 			}
-
-			// Lazily, and exactly once: `relistLorebooks` emits `lorebooks:list`
-			// itself, so a second emit of its result beside this call is the same
-			// payload twice. One stood here; it is gone.
-			if (emitToUser) await relistLorebooks(socket, emitToUser)
+			// Committed: from here on the reply says the book is in, and names
+			// whatever did not finish.
+			const { book, warnings } = imported
+			await relistAfterImport(socket, emitToUser, warnings)
 
 			const res: Sockets.Lorebooks.ImportResolve.Response = {
-				lorebook: completedBook
+				lorebook: await importedBookOf(book, warnings),
+				...(warnings.length ? { warnings } : {})
 			}
 			emitToUser("lorebooks:importResolve", res)
 			return res
-		} catch (error: any) {
-			console.error("Error resolving lorebook import conflict:", error)
-			emitToUser("lorebooks:importResolve:error", {
-				error: error.message || "Failed to resolve lorebook import."
-			})
-			throw error
-		}
-	}
-}
+		})
+	},
+	IMPORT_FAILED,
+	importFailureOf
+)
 
 // Registration function for all lorebook handlers
 export function registerLorebookHandlers(

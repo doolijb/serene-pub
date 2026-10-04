@@ -157,7 +157,7 @@
 			label="Name"
 			required
 			error={nameError}
-			help="What pickers and the Connections view call it. Unique across the instance."
+			help="What pickers and the Connections view call it. Unique across this pub."
 		>
 			<input
 				id="new-connection-name"

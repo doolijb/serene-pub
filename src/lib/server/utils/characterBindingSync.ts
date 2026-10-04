@@ -31,16 +31,26 @@ import {
 	resolveCharacterName
 } from "$lib/shared/utils/resolveCharacterName"
 import { deriveNextBindingToken } from "$lib/server/utils/lorebookBindingToken"
+import { memberOfCard } from "$lib/server/utils/castMemberCards"
 
 async function defaultDb(): Promise<Db> {
 	return (await import("$lib/server/db")).db
 }
 
 /**
- * Syncs every lorebookBindings row bound to this character (across every
- * lorebook it's bound in, not just one) with the character's current
- * name/aliases. Call after any character update that could have changed
- * name, nickname, or aliases — cheap no-op if nothing is bound.
+ * Syncs the lorebookBindings rows bound to this character with the
+ * character's current name/aliases. Call after any character update that
+ * could have changed name, nickname, or aliases — cheap no-op if nothing is
+ * bound.
+ *
+ * ⚠ **Which books a card edit reaches** (plan A25). With no `only`, the edit
+ * reaches the members in books owned by the card's OWNER, across every one of
+ * them. A member in somebody else's book — a guest's persona, cast in the
+ * host's book when the guest joined a session reading it — keeps the name and
+ * aliases the host's book was given: a guest renaming their persona never
+ * rewrites the host's cast. `only.lorebookId` syncs that one book's member
+ * whoever owns it — the attach-time sync, when a card is first linked into a
+ * book whose owner the caller has already checked.
  *
  * ⚠ **The name is the card's; the aliases are the member's** (#114,
  * cast-first, ruled 2026-09-28). `name` is replaced with the card's
@@ -67,7 +77,8 @@ async function defaultDb(): Promise<Db> {
  */
 export async function syncLorebookBindingsForCharacter(
 	characterId: number,
-	dbInstance?: Db
+	dbInstance?: Db,
+	only?: { lorebookId: number }
 ): Promise<void> {
 	const db = dbInstance ?? (await defaultDb())
 	await db.transaction(async (tx) => {
@@ -77,7 +88,7 @@ export async function syncLorebookBindingsForCharacter(
 
 		const character = await tx.query.characters.findFirst({
 			where: eq(schema.characters.id, characterId),
-			columns: { name: true, nickname: true, aliases: true }
+			columns: { name: true, nickname: true, aliases: true, userId: true }
 		})
 		if (!character) return
 
@@ -108,7 +119,18 @@ export async function syncLorebookBindingsForCharacter(
 				aliases: schema.lorebookBindings.aliases
 			})
 			.from(schema.lorebookBindings)
-			.where(eq(schema.lorebookBindings.characterId, characterId))
+			.innerJoin(
+				schema.lorebooks,
+				eq(schema.lorebooks.id, schema.lorebookBindings.lorebookId)
+			)
+			.where(
+				and(
+					eq(schema.lorebookBindings.characterId, characterId),
+					only
+						? eq(schema.lorebookBindings.lorebookId, only.lorebookId)
+						: eq(schema.lorebooks.userId, character.userId)
+				)
+			)
 		for (const row of bound)
 			await tx
 				.update(schema.lorebookBindings)
@@ -155,6 +177,8 @@ export function mergeAliases(
  * scene-summarize/scene-process auto-participant guarantee (both
  * `summarize.ts` and `scenes.ts`) — a single lookup-or-create-plus-sync
  * path so they can't drift.
+ *
+ * Null for a deleted card no member has: see `findOrInsertBinding`.
  */
 export async function resolveOrCreateBinding(
 	args: {
@@ -162,8 +186,8 @@ export async function resolveOrCreateBinding(
 		characterId?: number | null
 	},
 	dbInstance?: Db
-): Promise<number> {
-	return (await resolveOrCreateBindingRow(args, dbInstance)).id
+): Promise<number | null> {
+	return (await resolveOrCreateBindingRow(args, dbInstance))?.id ?? null
 }
 
 /**
@@ -175,6 +199,8 @@ export async function resolveOrCreateBinding(
  * ones that must tell "already bound" from "bound just now" — the
  * `lorebooks:createBinding` ack, and the session cast check's decision to
  * re-broadcast the cast list only when it actually changed.
+ *
+ * Null for a deleted card no member has: see `findOrInsertBinding`.
  */
 export async function resolveOrCreateBindingRow(
 	{
@@ -185,7 +211,7 @@ export async function resolveOrCreateBindingRow(
 		characterId?: number | null
 	},
 	dbInstance?: Db
-): Promise<{ id: number; created: boolean }> {
+): Promise<{ id: number; created: boolean } | null> {
 	const db = dbInstance ?? (await defaultDb())
 	if (!characterId) throw new Error("characterId required")
 
@@ -195,33 +221,74 @@ export async function resolveOrCreateBindingRow(
 	// resolveOrCreateBindingByName (availableSceneCast.ts).
 	const result = await db.transaction(async (tx) => {
 		await tx.execute(sql`select pg_advisory_xact_lock(${lorebookId})`)
-
-		const existing = await tx.query.lorebookBindings.findFirst({
-			where: and(
-				eq(schema.lorebookBindings.lorebookId, lorebookId),
-				eq(schema.lorebookBindings.characterId, characterId)
-			)
-		})
-		if (existing) return { row: existing, created: false }
-
-		const token = await deriveNextBindingToken(lorebookId, tx)
-		const [inserted] = await tx
-			.insert(schema.lorebookBindings)
-			.values({
-				lorebookId,
-				binding: token,
-				characterId
-			})
-			.returning()
-		return { row: inserted, created: true }
+		return findOrInsertBinding(tx, lorebookId, characterId)
 	})
+	if (!result) return null
 
 	// Sync only on a fresh insert — matches the pre-lock behavior, where an
 	// existing row returned before ever reaching the sync call below.
 	if (result.created)
-		await syncLorebookBindingsForCharacter(characterId, db)
+		await syncLorebookBindingsForCharacter(characterId, db, { lorebookId })
 
 	return { id: result.row.id, created: result.created }
+}
+
+/**
+ * The book's cast member for a character, found or inserted on the CALLER's
+ * transaction, so it commits (or rolls back) with whatever the caller writes
+ * beside it — `entries:create` adds the member a character-lore entry is
+ * anchored to in the entry's own write.
+ *
+ * Found by any card of theirs (`memberOfCard`, plan A25): a card a dated
+ * change draws a member with is that member's, so seating it never mints a
+ * second one.
+ *
+ * ⚠ **A deleted card is never given a member** (plan A25): the delete is
+ * soft, so sessions still seat it and old messages still name it as their
+ * sender, and every path that seats, summarises or captures a scene reaches
+ * here with it. A member the card already has is found as before; with none,
+ * this answers null and inserts nothing — so unlinking a deleted card from its
+ * member, then touching the session again, does not mint a second member
+ * linked to it. A card id with no card behind it answers the same.
+ *
+ * ⚠ The caller holds the book's advisory lock
+ * (`pg_advisory_xact_lock(lorebookId)`) before calling, and syncs a new row's
+ * name and aliases from the card after the commit
+ * (`syncLorebookBindingsForCharacter`), as `resolveOrCreateBindingRow` does.
+ */
+export async function findOrInsertBinding(
+	tx: Db,
+	lorebookId: number,
+	characterId: number
+): Promise<{
+	row: typeof schema.lorebookBindings.$inferSelect
+	created: boolean
+} | null> {
+	const memberId = await memberOfCard(tx, lorebookId, characterId)
+	const existing =
+		memberId == null
+			? undefined
+			: await tx.query.lorebookBindings.findFirst({
+					where: eq(schema.lorebookBindings.id, memberId)
+				})
+	if (existing) return { row: existing, created: false }
+
+	const card = await tx.query.characters.findFirst({
+		where: eq(schema.characters.id, characterId),
+		columns: { isDeleted: true }
+	})
+	if (!card || card.isDeleted) return null
+
+	const token = await deriveNextBindingToken(lorebookId, tx)
+	const [inserted] = await tx
+		.insert(schema.lorebookBindings)
+		.values({
+			lorebookId,
+			binding: token,
+			characterId
+		})
+		.returning()
+	return { row: inserted, created: true }
 }
 
 /**
@@ -244,12 +311,14 @@ export async function backfillMissingBindingNames(
 				eq(schema.lorebookBindings.name, "")
 			)
 		),
-		columns: { characterId: true }
+		columns: { characterId: true, lorebookId: true }
 	})
-	const characterIds = new Set<number>()
-	for (const binding of staleBoundBindings)
-		if (binding.characterId) characterIds.add(binding.characterId)
-	for (const characterId of characterIds) {
-		await syncLorebookBindingsForCharacter(characterId, db)
+	// Book by book: a nameless member is filled in wherever it is, including a
+	// host's book holding a guest's card.
+	const seen = new Set<string>()
+	for (const { characterId, lorebookId } of staleBoundBindings) {
+		if (!characterId || seen.has(`${characterId}:${lorebookId}`)) continue
+		seen.add(`${characterId}:${lorebookId}`)
+		await syncLorebookBindingsForCharacter(characterId, db, { lorebookId })
 	}
 }

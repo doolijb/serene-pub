@@ -2,7 +2,8 @@
 	import * as Icons from "@lucide/svelte"
 	import SidebarListItem from "../SidebarListItem.svelte"
 	import RowMenu from "../menus/RowMenu.svelte"
-	import { avatarSrc } from "$lib/client/utils/media"
+	import Avatar from "../Avatar.svelte"
+	import AvatarStack from "../AvatarStack.svelte"
 	import { lastActivityAt, timeAgoShort } from "$lib/client/utils/timeAgo"
 	import { statusText } from "$lib/client/i18n/state.svelte"
 	import type { StatusText } from "@serene-pub/sdk"
@@ -39,7 +40,7 @@
 		/**
 		 * How the row draws its cast. `cover` is the 40px picture with the
 		 * second member badged on; `stack` is the Sessions sidebar's grouped
-		 * list — up to three 26px avatars overlapping, a 14px name and a 12px
+		 * list — up to three 40px faces overlapping, a 14px name and a 12px
 		 * time — where the row is one of many a reader scans by who is in it.
 		 */
 		layout?: "cover" | "stack"
@@ -71,26 +72,14 @@
 			.filter(Boolean)
 	)
 
-	/** The session's cover: its first cast member's picture. */
-	const coverSrc = $derived(avatarSrc(cast[0]))
 	/**
 	 * The second cast member, drawn as a badge on the cover — the one glance
-	 * that separates a group from a two-hander. Only the second: a stack of
-	 * four thumbnails at 40px is four unrecognisable smudges, and the cast is
-	 * named in full on the row's second line anyway.
+	 * that separates a group from a two-hander.
 	 */
 	const isGroup = $derived(cast.length > 1)
-	const badgeSrc = $derived(isGroup ? avatarSrc(cast[1]) : undefined)
 
-	/** The stack's avatars: the first three of the cast, then a count. */
+	/** The stack's faces: the first three of the cast, then a count. */
 	const STACK_MAX = 3
-	const stack = $derived(cast.slice(0, STACK_MAX))
-	const stackOverflow = $derived(Math.max(0, cast.length - STACK_MAX))
-
-	/** The letter a cast member without a picture shows in the stack. */
-	function initialOf(c: (typeof cast)[number]): string {
-		return (c?.nickname || c?.name || "?").trim().charAt(0).toUpperCase()
-	}
 
 	const name = $derived(session.name || "Untitled Session")
 
@@ -134,64 +123,24 @@
 >
 	{#snippet content()}
 		{#if layout === "stack"}
-			<!-- Fixed width, whatever the cast size, so every name in the
-			     list starts at the same x. The ring is the row's own ground,
-			     which is what separates one overlapping face from the next. -->
-			<span
-				class="flex w-12 shrink-0 items-center"
-				title={castNames || undefined}
-			>
-				{#if stack.length === 0}
-					<span
-						class="bg-surface-200-800 grid size-[26px] place-items-center rounded-full"
-					>
-						<Icons.MessageSquare
-							size={14}
-							class="text-surface-600-400"
-							aria-hidden="true"
-						/>
-					</span>
-				{:else}
-					{#each stack as member, i (i)}
-						{@const src = avatarSrc(member)}
-						<span
-							class="ring-surface-200-800 relative block size-[26px] shrink-0 overflow-hidden rounded-full ring-2 {i >
-							0
-								? '-ml-[15px]'
-								: ''}"
-							style="z-index: {STACK_MAX - i}"
-						>
-							{#if src}
-								<img
-									{src}
-									alt=""
-									loading="lazy"
-									class="size-full object-cover object-top"
-								/>
-							{:else}
-								<span
-									class="bg-surface-300-700 text-surface-700-300 grid size-full place-items-center text-[11px] font-medium"
-									aria-hidden="true"
-								>
-									{initialOf(member)}
-								</span>
-							{/if}
-						</span>
-					{/each}
-				{/if}
-				{#if stackOverflow > 0}
-					<span class="sr-only">and {stackOverflow} more</span>
-				{/if}
+			<!-- The avatar scale's row step (STYLE-GUIDE §6.4): 40px faces,
+			     up from 26px (notes 36). Fixed width, whatever the cast size,
+			     so every name in the list starts at the same x. The ring is the
+			     row's own ground, which is what separates one overlapping face
+			     from the next. -->
+			<span class="flex shrink-0" title={castNames || undefined}>
+				<AvatarStack
+					members={cast}
+					size="md"
+					max={STACK_MAX}
+					ring="ring-surface-200-800"
+					fixedWidth
+				/>
 			</span>
 		{:else}
-			<span class="relative block size-10 shrink-0">
-				{#if coverSrc}
-					<img
-						src={coverSrc}
-						alt=""
-						loading="lazy"
-						class="size-10 rounded-[9px] object-cover object-top"
-					/>
+			<span class="relative block shrink-0">
+				{#if cast[0]}
+					<Avatar char={cast[0]} size="md" decorative />
 				{:else}
 					<span
 						class="bg-surface-200-800 grid size-10 place-items-center rounded-[9px]"
@@ -205,26 +154,16 @@
 				{/if}
 				{#if isGroup}
 					<!-- The ring is the row's own ground, so the badge reads as a
-				     notch cut out of the cover rather than a second sticker
-				     sitting on it. -->
-					{#if badgeSrc}
-						<img
-							src={badgeSrc}
-							alt=""
-							loading="lazy"
-							class="ring-surface-200-800 absolute -right-0.5 -bottom-0.5 size-5 rounded-[6px] object-cover object-top ring-2"
+					     notch cut out of the cover rather than a second sticker
+					     sitting on it. -->
+					<span class="absolute -right-1 -bottom-1">
+						<Avatar
+							char={cast[1]}
+							size="xs"
+							decorative
+							class="ring-surface-200-800 ring-2"
 						/>
-					{:else}
-						<span
-							class="bg-surface-300-700 ring-surface-200-800 absolute -right-0.5 -bottom-0.5 grid size-5 place-items-center rounded-[6px] ring-2"
-						>
-							<Icons.UsersRound
-								size={12}
-								class="text-surface-600-400"
-								aria-hidden="true"
-							/>
-						</span>
-					{/if}
+					</span>
 				{/if}
 			</span>
 		{/if}

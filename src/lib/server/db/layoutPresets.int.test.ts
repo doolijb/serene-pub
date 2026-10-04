@@ -1,7 +1,9 @@
 /**
- * The layout-preset reconciler seeds one default per genre by seed key and
- * prunes stale seeded rows — WITHOUT ever touching a user's own preset. These
- * pin, for `session_layout_presets`, the same upgrade-safety invariants
+ * The core layout reconciler seeds every layout a core genre declares by seed
+ * key, writes only what changed, and prunes stale seeded rows — WITHOUT ever
+ * touching a user's own preset, and without seeding anything for a plugin's
+ * genre (that genre's layouts are its owner's). These pin, for
+ * `session_layout_presets`, the same upgrade-safety invariants
  * `widgetStyles.int.test.ts` pins for `widget_styles`.
  *
  * The user-row test is the one that matters: a past bug appended a seeded row
@@ -18,7 +20,11 @@ import os from "os"
 import path from "path"
 import { and, eq, isNull, sql } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
-import { layoutPresetSeedKey } from "$lib/shared/sessionLayout/presets"
+import {
+	coreLayoutSeedKey,
+	layoutPresetSeedKey
+} from "$lib/shared/sessionLayout/presets"
+import { genre, getGenre, layout } from "@serene-pub/sdk"
 import type { TestDb } from "$lib/server/utils/testDb"
 
 let testDb: TestDb
@@ -44,9 +50,7 @@ afterAll(async () => {
 })
 
 const sync = async (genreIds: string[]) =>
-	(await import("./layoutPresets")).syncLayoutPresets(
-		genreIds.map((genreId) => ({ genreId }))
-	)
+	(await import("./layoutPresets")).syncLayoutPresets(genreIds)
 
 /** Every seeded (system) row — author NULL, seed key set. */
 const seededRows = () =>
@@ -61,19 +65,21 @@ const bySeedKey = (key: string) =>
 		.from(schema.sessionLayoutPresets)
 		.where(eq(schema.sessionLayoutPresets.seedKey, key))
 
-describe("a genre that ships an arrangement", () => {
-	test("seeds the layout and the name the genre declared, not the empty floor", async () => {
-		const { CORE_LAYOUT_PRESETS } = await import("@serene-pub/core-catalog")
-		const shipped = CORE_LAYOUT_PRESETS.find(
-			(l) => l.genreId === "core:genre/adventure"
-		)!
-		const { syncLayoutPresets } = await import("./layoutPresets")
-		// The bare id first and the furnished entry after it, exactly as
-		// the boot task unions them.
-		await syncLayoutPresets([{ genreId: shipped.genreId }, shipped])
-		const [row] = await bySeedKey(layoutPresetSeedKey(shipped.genreId))
+/** The layout a core genre declares first — what its default row must hold. */
+const declaredDefault = async (genreId: string) => {
+	await import("@serene-pub/core-catalog")
+	return getGenre(genreId)!.layouts![0]!
+}
+
+describe("a core genre that ships an arrangement", () => {
+	test("seeds the layout it declares, byte for byte, and its name — not the empty floor", async () => {
+		await sync(["core:genre/adventure"])
+		const [row] = await bySeedKey(layoutPresetSeedKey("core:genre/adventure"))
+		const declared = await declaredDefault("core:genre/adventure")
 		expect(row.name).toBe("Adventure")
 		expect(row.authorUserId).toBeNull()
+		// The ONE format: the row holds the genre's declared session layout.
+		expect(JSON.stringify(row.layout)).toBe(JSON.stringify(declared.preset))
 		const layout = row.layout as any
 		// No Inventory: R79 removed that widget for now.
 		expect(layout.zoneLayout.zones.right.widgets).toEqual([
@@ -86,28 +92,163 @@ describe("a genre that ships an arrangement", () => {
 		])
 	}, 60_000)
 
-	test("a genre that ships none still gets the empty floor", async () => {
-		await sync(["plugin:genre/plain"])
-		const [row] = await bySeedKey(layoutPresetSeedKey("plugin:genre/plain"))
+	test("the core genres that declare a layout hold what each declares", async () => {
+		const ids = ["core:genre/adventure", "core:genre/lair", "core:genre/chat"]
+		await sync(ids)
+		for (const genreId of ids) {
+			const [row] = await bySeedKey(layoutPresetSeedKey(genreId))
+			expect(row.layout, genreId).toEqual((await declaredDefault(genreId)).preset)
+		}
+	}, 60_000)
+
+	test("Chat's places the Author's note, unpinned, in the right rail (2026-10-03)", async () => {
+		await sync(["core:genre/chat"])
+		const [row] = await bySeedKey(layoutPresetSeedKey("core:genre/chat"))
+		const layout = row.layout as any
+		expect(row.name).toBe("Chat")
+		expect(layout.zoneLayout.zones.right).toMatchObject({
+			pinned: false,
+			widgets: ["authors-note"]
+		})
+		expect(layout.arrangedGrid.right.items).toEqual([
+			expect.objectContaining({ id: "authors-note", pinned: false })
+		])
+		expect(layout.widgetGrid.widgets.map((w: any) => w.id)).toEqual(["messages"])
+	}, 60_000)
+
+	test("a core genre that declares none still gets the empty floor", async () => {
+		await sync(["core:genre/guide"])
+		const [row] = await bySeedKey(layoutPresetSeedKey("core:genre/guide"))
 		expect(row.name).toBe("Default")
 		expect(row.layout).toEqual({})
+	}, 60_000)
+
+	test("seeds EVERY layout a core genre declares, each under its own key", async () => {
+		const twin = "core:genre/test-two-layouts"
+		const floor = {
+			widgetGrid: {
+				version: 1 as const,
+				cell: 44,
+				widgets: [
+					{
+						id: "messages",
+						zone: "middle" as const,
+						order: 0,
+						size: { w: "grow" as const, h: "grow" as const },
+						anchor: { top: true, bottom: true, left: true, right: true }
+					}
+				]
+			}
+		}
+		const wide = {
+			...floor,
+			zoneLayout: {
+				version: 1 as const,
+				zones: { right: { kind: "side" as const, widgets: ["stats"] } }
+			}
+		}
+		genre(twin, {
+			name: "Two layouts",
+			family: "test",
+			layouts: [
+				layout({ slug: "default", name: "Plain", preset: floor }),
+				layout({ slug: "wide", name: "Wide", description: "With stats", preset: wide })
+			]
+		})
+		await sync([twin])
+		const [def] = await bySeedKey(layoutPresetSeedKey(twin))
+		const [other] = await bySeedKey(coreLayoutSeedKey(twin, "wide"))
+		expect(coreLayoutSeedKey(twin, "wide")).toBe(`layout:${twin}:core/wide`)
+		expect([def.slug, def.name, def.layout]).toEqual(["default", "Plain", floor])
+		expect([other.slug, other.name, other.description, other.layout]).toEqual([
+			"wide",
+			"Wide",
+			"With stats",
+			wide
+		])
+		expect(other.origin).toBe("core")
+	}, 60_000)
+})
+
+describe("a plugin's genre", () => {
+	test("gets no core row — its layouts are its owner's", async () => {
+		await sync(["plugin.one:genre/plain"])
+		expect(await bySeedKey(layoutPresetSeedKey("plugin.one:genre/plain"))).toHaveLength(0)
+	}, 60_000)
+
+	test("loses the empty core row an older reconciler seeded for it, wherever it is", async () => {
+		const stale = "plugin.two:genre/old"
+		await testDb.insert(schema.sessionLayoutPresets).values({
+			seedKey: layoutPresetSeedKey(stale),
+			genreId: stale,
+			origin: "core",
+			authorUserId: null,
+			slug: "default",
+			visibility: "shared",
+			name: "Default",
+			layout: {}
+		})
+		// Pruned even by a sync that does not name the genre.
+		await sync(["core:genre/chat"])
+		expect(await bySeedKey(layoutPresetSeedKey(stale))).toHaveLength(0)
+	}, 60_000)
+})
+
+describe("writing only what changed", () => {
+	test("a second sync writes nothing: updated_at and layout_updated_at stay where they were", async () => {
+		await sync(["core:genre/adventure"])
+		const [before] = await bySeedKey(layoutPresetSeedKey("core:genre/adventure"))
+		await new Promise((r) => setTimeout(r, 15))
+		await sync(["core:genre/adventure"])
+		const [after] = await bySeedKey(layoutPresetSeedKey("core:genre/adventure"))
+		expect(after.updatedAt.getTime()).toBe(before.updatedAt.getTime())
+		expect(after.layoutUpdatedAt.getTime()).toBe(before.layoutUpdatedAt.getTime())
+		expect(after).toEqual(before)
+	}, 60_000)
+
+	test("a changed layout moves layout_updated_at; a changed name or version alone does not", async () => {
+		const genreId = "core:genre/lair"
+		await sync([genreId])
+		const [seeded] = await bySeedKey(layoutPresetSeedKey(genreId))
+		const stamp = new Date("2020-01-01T00:00:00Z")
+
+		// Only the name drifted: re-forced, and the layout's stamp stays.
+		await testDb
+			.update(schema.sessionLayoutPresets)
+			.set({ name: "Drifted", layoutUpdatedAt: stamp })
+			.where(eq(schema.sessionLayoutPresets.id, seeded.id))
+		await (await import("./layoutPresets")).syncLayoutPresets([genreId], { version: "9.9.9" })
+		const [renamed] = await bySeedKey(layoutPresetSeedKey(genreId))
+		expect(renamed.name).toBe("Lair")
+		expect(renamed.seededByVersion).toBe("9.9.9")
+		expect(renamed.layoutUpdatedAt.getTime()).toBe(stamp.getTime())
+
+		// The layout drifted: re-forced, and stamped.
+		await testDb
+			.update(schema.sessionLayoutPresets)
+			.set({ layout: { stale: true } })
+			.where(eq(schema.sessionLayoutPresets.id, seeded.id))
+		await (await import("./layoutPresets")).syncLayoutPresets([genreId], { version: "9.9.9" })
+		const [moved] = await bySeedKey(layoutPresetSeedKey(genreId))
+		expect(moved.layout).toEqual((await declaredDefault(genreId)).preset)
+		expect(moved.layoutUpdatedAt.getTime()).toBeGreaterThan(stamp.getTime())
 	}, 60_000)
 })
 
 describe("syncLayoutPresets", () => {
-	test("seeds a default preset per genre, keyed by layoutPresetSeedKey", async () => {
-		await sync(["core:genre/chat", "plugin:genre/vn"])
+	test("seeds a default preset per core genre, keyed by layoutPresetSeedKey", async () => {
+		await sync(["core:genre/guide", "plugin:genre/vn"])
 		const rows = await seededRows()
 		const keys = rows.map((r) => r.seedKey)
-		expect(keys).toContain(layoutPresetSeedKey("core:genre/chat"))
-		expect(keys).toContain(layoutPresetSeedKey("plugin:genre/vn"))
-		const [chat] = await bySeedKey(layoutPresetSeedKey("core:genre/chat"))
-		expect(chat.genreId).toBe("core:genre/chat")
-		expect(chat.authorUserId).toBeNull()
-		expect(chat.name).toBe("Default")
-		// The shipped default is "no overrides" — that empty layout is what
-		// keeps every existing session rendering exactly as it does today.
-		expect(chat.layout).toEqual({})
+		expect(keys).toContain(layoutPresetSeedKey("core:genre/guide"))
+		expect(keys).not.toContain(layoutPresetSeedKey("plugin:genre/vn"))
+		const [guide] = await bySeedKey(layoutPresetSeedKey("core:genre/guide"))
+		expect(guide.genreId).toBe("core:genre/guide")
+		expect(guide.authorUserId).toBeNull()
+		expect(guide.name).toBe("Default")
+		// A genre that ships none gets "no overrides" — the empty layout
+		// the page draws as the floor (the conversation alone).
+		expect(guide.layout).toEqual({})
 	}, 60_000)
 
 	test("is idempotent — a second sync neither duplicates nor renumbers", async () => {
@@ -120,24 +261,24 @@ describe("syncLayoutPresets", () => {
 	}, 60_000)
 
 	test("de-duplicates a repeated genre id (the unique seed key would collide)", async () => {
-		await sync(["dup:genre/x", "dup:genre/x"])
-		const rows = await bySeedKey(layoutPresetSeedKey("dup:genre/x"))
+		await sync(["core:genre/dup-x", "core:genre/dup-x"])
+		const rows = await bySeedKey(layoutPresetSeedKey("core:genre/dup-x"))
 		expect(rows).toHaveLength(1)
 	}, 60_000)
 
 	test("re-forces an edited seeded row's content", async () => {
-		await sync(["core:genre/chat"])
+		await sync(["core:genre/guide"])
 		await testDb
 			.update(schema.sessionLayoutPresets)
 			.set({ name: "tampered", layout: { hacked: true } })
 			.where(
 				eq(
 					schema.sessionLayoutPresets.seedKey,
-					layoutPresetSeedKey("core:genre/chat")
+					layoutPresetSeedKey("core:genre/guide")
 				)
 			)
-		await sync(["core:genre/chat"])
-		const [r] = await bySeedKey(layoutPresetSeedKey("core:genre/chat"))
+		await sync(["core:genre/guide"])
+		const [r] = await bySeedKey(layoutPresetSeedKey("core:genre/guide"))
 		expect(r.name).toBe("Default")
 		expect(r.layout).toEqual({})
 	}, 60_000)
@@ -160,7 +301,7 @@ describe("syncLayoutPresets", () => {
 		// Both a re-sync of that same genre and a sync that drops it must
 		// spare the user's row.
 		await sync(["core:genre/chat"])
-		await sync(["other:genre/thing"])
+		await sync(["core:genre/other-thing"])
 
 		const [after] = await testDb
 			.select()
@@ -170,19 +311,19 @@ describe("syncLayoutPresets", () => {
 	}, 60_000)
 
 	test("prune is scoped to the synced genre ids — other genres' defaults survive", async () => {
-		await sync(["scoped:genre/a", "scoped:genre/b"])
+		await sync(["core:genre/scoped-a", "core:genre/scoped-b"])
 		// A later sync of ONLY a must not prune b's default.
-		await sync(["scoped:genre/a"])
-		const rows = await bySeedKey(layoutPresetSeedKey("scoped:genre/b"))
+		await sync(["core:genre/scoped-a"])
+		const rows = await bySeedKey(layoutPresetSeedKey("core:genre/scoped-b"))
 		expect(rows).toHaveLength(1)
 	}, 60_000)
 
 	test("prunes a stale seeded row whose key no longer matches its genre", async () => {
-		await sync(["stale:genre/a"])
+		await sync(["core:genre/stale-a"])
 		// A row left behind by an older key scheme, still claiming that genre.
 		await testDb.insert(schema.sessionLayoutPresets).values({
-			seedKey: "layout-v0:stale:genre/a",
-			genreId: "stale:genre/a",
+			seedKey: "layout-v0:core:genre/stale-a",
+			genreId: "core:genre/stale-a",
 			// Seeded rows are `origin: core` since the v2 migration (0141),
 			// and the origin triple is a CHECK — a seed-keyed row cannot be
 			// written as anything else.
@@ -193,15 +334,15 @@ describe("syncLayoutPresets", () => {
 			name: "Old Default",
 			layout: {}
 		})
-		await sync(["stale:genre/a"])
-		expect(await bySeedKey("layout-v0:stale:genre/a")).toHaveLength(0)
+		await sync(["core:genre/stale-a"])
+		expect(await bySeedKey("layout-v0:core:genre/stale-a")).toHaveLength(0)
 		expect(
-			await bySeedKey(layoutPresetSeedKey("stale:genre/a"))
+			await bySeedKey(layoutPresetSeedKey("core:genre/stale-a"))
 		).toHaveLength(1)
 	}, 60_000)
 
-	test("an empty genre list is a no-op, not an unbounded delete", async () => {
-		await sync(["empty:genre/a"])
+	test("an empty genre list prunes no core genre's rows — not an unbounded delete", async () => {
+		await sync(["core:genre/empty-a"])
 		const before = await seededRows()
 		expect(before.length).toBeGreaterThan(0)
 		await sync([])
@@ -220,13 +361,13 @@ describe("syncLayoutPresets", () => {
 			.insert(schema.sessionLayoutPresets)
 			.values({
 				seedKey: null,
-				genreId: "squat:genre/x",
+				genreId: "core:genre/squat-x",
 				authorUserId: user.id,
 				name: "Squatter",
 				layout: { squatter: true }
 			})
 			.returning()
-		await sync(["squat:genre/x", "squat:genre/y", "squat:genre/z"])
+		await sync(["core:genre/squat-x", "core:genre/squat-y", "core:genre/squat-z"])
 		const [after] = await testDb
 			.select()
 			.from(schema.sessionLayoutPresets)
@@ -246,8 +387,8 @@ describe("syncLayoutPresets", () => {
 		const user = await createTestUser(testDb, "layout-preset-hybrid")
 		await expect(
 			testDb.insert(schema.sessionLayoutPresets).values({
-				seedKey: layoutPresetSeedKey("hybrid:genre/x"),
-				genreId: "hybrid:genre/x",
+				seedKey: layoutPresetSeedKey("core:genre/hybrid-x"),
+				genreId: "core:genre/hybrid-x",
 				origin: "user",
 				authorUserId: user.id,
 				slug: "mine",
@@ -256,13 +397,13 @@ describe("syncLayoutPresets", () => {
 			})
 		).rejects.toThrow()
 		// …and the genre still seeds normally afterwards.
-		await expect(sync(["hybrid:genre/x"])).resolves.toBeUndefined()
+		await expect(sync(["core:genre/hybrid-x"])).resolves.toBeUndefined()
 		const seeded = await testDb
 			.select()
 			.from(schema.sessionLayoutPresets)
 			.where(
 				and(
-					eq(schema.sessionLayoutPresets.genreId, "hybrid:genre/x"),
+					eq(schema.sessionLayoutPresets.genreId, "core:genre/hybrid-x"),
 					isNull(schema.sessionLayoutPresets.authorUserId)
 				)
 			)
@@ -275,7 +416,7 @@ describe("syncLayoutPresets", () => {
 
 let n = 0
 /** A genre id nothing else in this file touches. */
-const freshGenre = () => `test:genre/live-${n++}`
+const freshGenre = () => `core:genre/test-live-${n++}`
 
 const presets = () => import("./layoutPresets")
 
@@ -294,7 +435,7 @@ const user = async (label: string) => {
 
 /** A small live-format layout, told apart by the widget it puts on the right. */
 const layoutNaming = (widget: string) => ({
-	zoneLayout: { version: 1, zones: { right: { widgets: [widget] } } },
+	zoneLayout: { version: 1, zones: { right: { kind: "side", widgets: [widget] } } },
 	widgetSettings: { [widget]: { title: widget } }
 })
 
@@ -393,15 +534,11 @@ describe("the storage", () => {
 
 describe("the core reconciler's ownership fields", () => {
 	test("writes origin, slug, visibility and provenance beside the shipped layout", async () => {
-		const { CORE_LAYOUT_PRESETS } = await import("@serene-pub/core-catalog")
-		const shipped = CORE_LAYOUT_PRESETS.find(
-			(l) => l.genreId === "core:genre/adventure"
-		)!
+		const genreId = "core:genre/adventure"
+		const shipped = await declaredDefault(genreId)
 		const { syncLayoutPresets } = await presets()
-		await syncLayoutPresets([{ genreId: shipped.genreId }, shipped], {
-			version: "9.9.9"
-		})
-		const [row] = await bySeedKey(layoutPresetSeedKey(shipped.genreId))
+		await syncLayoutPresets([genreId], { version: "9.9.9" })
+		const [row] = await bySeedKey(layoutPresetSeedKey(genreId))
 		expect(row.origin).toBe("core")
 		expect(row.slug).toBe("default")
 		expect(row.visibility).toBe("shared")
@@ -409,10 +546,10 @@ describe("the core reconciler's ownership fields", () => {
 		expect(row.pluginId).toBeNull()
 		expect(row.seededByVersion).toBe("9.9.9")
 		// The shipped session layout, verbatim — the only thing a row stores.
-		expect(row.layout).toEqual(shipped.layout)
+		expect(row.layout).toEqual(shipped.preset)
 	}, 60_000)
 
-	test("names a core genre's row after its declared layout when the entry carries no name", async () => {
+	test("names a core genre's row after its declared layout", async () => {
 		await sync(["core:genre/adventure"])
 		const [row] = await bySeedKey(layoutPresetSeedKey("core:genre/adventure"))
 		expect(row.name).toBe("Adventure")
@@ -433,7 +570,9 @@ describe("a person's own rows", () => {
 			layout
 		})
 		// The wire is the live shape: a person's row is theirs to manage.
-		expect(saved.isDefault).toBe(false)
+		expect(saved.isGenreDefault).toBe(false)
+		expect(saved.mine).toBe(true)
+		expect(saved.origin).toBe("user")
 		expect(saved.layout).toEqual(layout)
 
 		const row = await rowById(saved.id)
@@ -477,7 +616,7 @@ describe("listing", () => {
 			shareLayoutPreset,
 			listLayoutPresets
 		} = await presets()
-		await syncLayoutPresets([{ genreId }])
+		await syncLayoutPresets([genreId])
 
 		const own = await saveUserLayoutPreset({
 			genreId,
@@ -508,8 +647,8 @@ describe("listing", () => {
 		expect(ids).toContain(own.id)
 		expect(ids).toContain(published.id)
 		expect(ids).not.toContain(secret.id)
-		// Shipped first, then the rest in creation order.
-		expect(listed[0].isDefault).toBe(true)
+		// The genre default layout first, then the rest by group.
+		expect(listed[0].isGenreDefault).toBe(true)
 		expect((await rowById(listed[0].id)).origin).toBe("core")
 		// The published row carries its layout to whoever may see it.
 		expect(listed.find((p) => p.id === published.id)!.layout).toEqual(
@@ -577,7 +716,7 @@ describe("share", () => {
 		})
 		expect(odd.ok).toBe(false)
 
-		await syncLayoutPresets([{ genreId }])
+		await syncLayoutPresets([genreId])
 		const [shipped] = await bySeedKey(layoutPresetSeedKey(genreId))
 		const builtIn = await shareLayoutPreset({
 			presetId: shipped.id,
@@ -615,39 +754,14 @@ describe("share", () => {
 	}, 60_000)
 })
 
-describe("re-capture", () => {
-	test("replaces the whole layout — settings and pins go with the arrangement", async () => {
-		const genreId = freshGenre()
-		const owner = await user("recapture")
-		const { saveUserLayoutPreset, updateUserLayoutPreset } = await presets()
-		const saved = await saveUserLayoutPreset({
-			genreId,
-			userId: owner.id,
-			name: "Before",
-			layout: {
-				...layoutNaming("before"),
-				widgetStyles: { messages: { id: 3, slug: "messages:novel" } }
-			}
-		})
-		const after = { zoneLayout: { version: 1, zones: {} } }
-		const outcome = await updateUserLayoutPreset({
-			presetId: saved.id,
-			userId: owner.id,
-			name: "After",
-			layout: after
-		})
-		expect(outcome.ok).toBe(true)
-		if (!outcome.ok) return
-		expect(outcome.preset.name).toBe("After")
-		expect(outcome.preset.layout).toEqual(after)
-		// One statement: the old settings and pins do not outlive it.
-		expect((await rowById(saved.id)).layout).toEqual(after)
-	}, 60_000)
-
-	test("a rename alone leaves the layout exactly as it was", async () => {
+describe("rename", () => {
+	// Re-capturing a layout is **Save changes to** (`saveChangesToLayout`,
+	// packed from a session); its tests are the socket's, in
+	// `sockets/sessions.layoutPresetVerbs.int.test.ts`.
+	test("a rename leaves the layout exactly as it was", async () => {
 		const genreId = freshGenre()
 		const owner = await user("rename-only")
-		const { saveUserLayoutPreset, updateUserLayoutPreset } = await presets()
+		const { saveUserLayoutPreset, renameUserLayoutPreset } = await presets()
 		const layout = layoutNaming("kept")
 		const saved = await saveUserLayoutPreset({
 			genreId,
@@ -655,50 +769,30 @@ describe("re-capture", () => {
 			name: "Old name",
 			layout
 		})
-		const outcome = await updateUserLayoutPreset({
+		const stamped = (await rowById(saved.id)).layoutUpdatedAt
+		const outcome = await renameUserLayoutPreset({
 			presetId: saved.id,
 			userId: owner.id,
-			name: "New name",
-			description: "now described"
+			name: "New name"
 		})
 		expect(outcome.ok).toBe(true)
 		const row = await rowById(saved.id)
 		expect(row.name).toBe("New name")
-		expect(row.description).toBe("now described")
 		expect(row.layout).toEqual(layout)
-	}, 60_000)
-
-	test("refuses a layout that is not an object", async () => {
-		const genreId = freshGenre()
-		const owner = await user("bad-layout")
-		const { saveUserLayoutPreset, updateUserLayoutPreset } = await presets()
-		const saved = await saveUserLayoutPreset({
-			genreId,
-			userId: owner.id,
-			name: "Solid",
-			layout: layoutNaming("solid")
-		})
-		const outcome = await updateUserLayoutPreset({
-			presetId: saved.id,
-			userId: owner.id,
-			layout: "not a layout" as any
-		})
-		expect(outcome.ok).toBe(false)
-		expect((await rowById(saved.id)).layout).toEqual(layoutNaming("solid"))
+		// A rename is not a layout change: nobody's copy is marked Updated.
+		expect(row.layoutUpdatedAt.getTime()).toBe(stamped.getTime())
 	}, 60_000)
 })
 
 describe("clone", () => {
 	test("is a new private row of the caller's that keeps no reference back", async () => {
-		const genreId = freshGenre()
 		const other = await user("cloner")
-		const { syncLayoutPresets, cloneLayoutPreset, updateUserLayoutPreset } =
-			await presets()
-		const shippedLayout = layoutNaming("genre")
-		await syncLayoutPresets([
-			{ genreId, name: "Genre's", layout: shippedLayout }
-		])
-		const [source] = await bySeedKey(layoutPresetSeedKey(genreId))
+		const { syncLayoutPresets, cloneLayoutPreset } = await presets()
+		// A core genre's shipped layout: Adventure's.
+		const shippedGenre = "core:genre/adventure"
+		const shippedLayout = (await declaredDefault(shippedGenre)).preset
+		await syncLayoutPresets([shippedGenre])
+		const [source] = await bySeedKey(layoutPresetSeedKey(shippedGenre))
 
 		const cloned = await cloneLayoutPreset({
 			presetId: source.id,
@@ -706,8 +800,9 @@ describe("clone", () => {
 		})
 		expect(cloned.ok).toBe(true)
 		if (!cloned.ok) return
-		expect(cloned.preset.name).toBe("Genre's (copy)")
-		expect(cloned.preset.isDefault).toBe(false)
+		expect(cloned.preset.name).toBe("Adventure (copy)")
+		expect(cloned.preset.isGenreDefault).toBe(false)
+		expect(cloned.preset.mine).toBe(true)
 		expect(cloned.preset.layout).toEqual(shippedLayout)
 		const row = await rowById(cloned.preset.id)
 		expect(row.origin).toBe("user")
@@ -716,11 +811,10 @@ describe("clone", () => {
 		expect(row.seedKey).toBeNull()
 
 		// Moving the copy does not move the original.
-		await updateUserLayoutPreset({
-			presetId: cloned.preset.id,
-			userId: other.id,
-			layout: layoutNaming("moved")
-		})
+		await testDb
+			.update(schema.sessionLayoutPresets)
+			.set({ layout: layoutNaming("moved") })
+			.where(eq(schema.sessionLayoutPresets.id, cloned.preset.id))
 		expect((await rowById(source.id)).layout).toEqual(shippedLayout)
 	}, 60_000)
 
@@ -789,14 +883,14 @@ describe("managing", () => {
 		const admin = await user("admin")
 		const {
 			syncLayoutPresets,
-			updateUserLayoutPreset,
+			renameUserLayoutPreset,
 			deleteUserLayoutPreset,
 			LAYOUT_PRESET_BUILT_IN_DELETE
 		} = await presets()
-		await syncLayoutPresets([{ genreId }])
+		await syncLayoutPresets([genreId])
 		const [row] = await bySeedKey(layoutPresetSeedKey(genreId))
 
-		const renamed = await updateUserLayoutPreset({
+		const renamed = await renameUserLayoutPreset({
 			presetId: row.id,
 			userId: admin.id,
 			isAdmin: true,
@@ -820,7 +914,7 @@ describe("managing", () => {
 		const {
 			saveUserLayoutPreset,
 			shareLayoutPreset,
-			updateUserLayoutPreset,
+			renameUserLayoutPreset,
 			LAYOUT_PRESET_UNKNOWN
 		} = await presets()
 
@@ -830,7 +924,7 @@ describe("managing", () => {
 			name: "Secret",
 			layout: layoutNaming("secret")
 		})
-		const nosy = await updateUserLayoutPreset({
+		const nosy = await renameUserLayoutPreset({
 			presetId: secret.id,
 			userId: stranger.id,
 			name: "Taken"
@@ -838,7 +932,7 @@ describe("managing", () => {
 		expect(nosy.ok).toBe(false)
 		if (!nosy.ok) expect(nosy.error).toBe(LAYOUT_PRESET_UNKNOWN)
 		// The same sentence a missing id gets — the id space says nothing.
-		const missing = await updateUserLayoutPreset({
+		const missing = await renameUserLayoutPreset({
 			presetId: 9_999_999,
 			userId: stranger.id,
 			name: "Taken"
@@ -852,19 +946,54 @@ describe("managing", () => {
 			visibility: "shared"
 		})
 		// Now visible: a stranger is told why, an admin may act.
-		const told = await updateUserLayoutPreset({
+		const told = await renameUserLayoutPreset({
 			presetId: secret.id,
 			userId: stranger.id,
 			name: "Taken"
 		})
 		expect(told.ok).toBe(false)
 		if (!told.ok) expect(told.error).toContain("owner or an admin")
-		const byAdmin = await updateUserLayoutPreset({
+		const byAdmin = await renameUserLayoutPreset({
 			presetId: secret.id,
 			userId: admin.id,
 			isAdmin: true,
 			name: "Tidied"
 		})
 		expect(byAdmin.ok).toBe(true)
+	}, 60_000)
+
+	test("an admin's approved write lands only while the row is still shared", async () => {
+		const genreId = freshGenre()
+		const author = await user("racer")
+		const admin = await user("racing-admin")
+		const { saveUserLayoutPreset, shareLayoutPreset, manageWrite } = await presets()
+		const saved = await saveUserLayoutPreset({
+			genreId,
+			userId: author.id,
+			name: "Racy",
+			layout: layoutNaming("racy")
+		})
+		await shareLayoutPreset({ presetId: saved.id, userId: author.id, visibility: "shared" })
+		// What the admin's gate read and approved…
+		const approved = await rowById(saved.id)
+		// …and the author taking it private before the admin's write lands.
+		await testDb
+			.update(schema.sessionLayoutPresets)
+			.set({ visibility: "private" })
+			.where(eq(schema.sessionLayoutPresets.id, saved.id))
+		const byAdmin = await testDb
+			.update(schema.sessionLayoutPresets)
+			.set({ name: "Moderated" })
+			.where(manageWrite(saved.id, approved, admin.id))
+			.returning()
+		expect(byAdmin).toEqual([])
+		// The author's own write needs no visibility at all.
+		const byAuthor = await testDb
+			.update(schema.sessionLayoutPresets)
+			.set({ name: "Still mine" })
+			.where(manageWrite(saved.id, approved, author.id))
+			.returning()
+		expect(byAuthor).toHaveLength(1)
+		expect((await rowById(saved.id)).name).toBe("Still mine")
 	}, 60_000)
 })

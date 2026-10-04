@@ -28,6 +28,7 @@
 			| "enum"
 			| "string[]"
 			| "secret"
+			| "object"
 		label?: string | ({ en: string } & Record<string, string>)
 		description?: string | ({ en: string } & Record<string, string>)
 		min?: number
@@ -44,6 +45,12 @@
 		format?: "json"
 		/** Shown while nothing is stored: the value a run reads (B16x). */
 		default?: unknown
+		/**
+		 * For `object`: its members, drawn as one fieldset under the field's
+		 * label. A member's `group` is a fold inside it (closed until opened),
+		 * so an object can keep its rarely-touched members out of the way.
+		 */
+		fields?: Record<string, FieldDecl>
 	}
 
 	interface Props {
@@ -99,7 +106,132 @@
 
 	const asLines = (v: unknown): string =>
 		Array.isArray(v) ? v.join("\n") : String(v ?? "")
+
+	const isBag = (v: unknown): v is Record<string, unknown> =>
+		!!v && typeof v === "object" && !Array.isArray(v)
+
+	/**
+	 * An `object` field's members, as shown: the stored value's, else the
+	 * field's declared `default`'s, else the member's own `default`.
+	 */
+	function memberShown(key: string, member: string): unknown {
+		const stored = values[key]
+		if (isBag(stored) && stored[member] !== undefined) return stored[member]
+		const fallback = schema[key]?.default
+		if (isBag(fallback) && fallback[member] !== undefined) return fallback[member]
+		return schema[key]?.fields?.[member]?.default
+	}
+
+	/**
+	 * Write one member of an `object` field. The object is written WHOLE —
+	 * every declared member as shown, this one replaced — so a value is
+	 * complete from its first edit, and replacing it (rather than mutating a
+	 * nested proxy that may not exist yet) is what the host's `bind:values`
+	 * sees. A number member's text is read as a number.
+	 */
+	function commitMember(key: string, member: string, value: unknown, committed = true) {
+		const decl = schema[key]
+		const next: Record<string, unknown> = {}
+		for (const m of Object.keys(decl?.fields ?? {})) next[m] = memberShown(key, m)
+		const memberDecl = decl?.fields?.[member]
+		next[member] =
+			(memberDecl?.type === "number" || memberDecl?.type === "integer") &&
+			typeof value === "string"
+				? value.trim() === ""
+					? memberDecl.default
+					: Number(value)
+				: value
+		values[key] = next
+		if (committed) oncommit?.()
+	}
+
+	/** An object's members by fold: the ungrouped first, then each group. */
+	const memberGroups = (decl: FieldDecl) => {
+		const out: Array<{ group: string; members: Array<{ key: string; decl: FieldDecl }> }> = []
+		for (const [key, m] of Object.entries(decl.fields ?? {})) {
+			const name = m.group ?? ""
+			let g = out.find((x) => x.group === name)
+			if (!g) out.push((g = { group: name, members: [] }))
+			g.members.push({ key, decl: m })
+		}
+		return out.sort((a, b) => (a.group ? 1 : 0) - (b.group ? 1 : 0))
+	}
 </script>
+
+<!-- One control, for a top-level field or an object's member: `id` labels it,
+     `value` is what it shows, `set` commits (`live` writes as it is typed). -->
+{#snippet control(
+	id: string,
+	key: string,
+	decl: FieldDecl,
+	value: unknown,
+	set: (v: unknown) => void,
+	live: (v: unknown) => void
+)}
+	<div class="flex flex-col gap-1">
+		{#if decl.type === "enum"}
+			<span class="text-sm font-medium" aria-hidden="true">
+				{text(decl.label, key)}
+			</span>
+		{:else}
+			<label class="text-sm font-medium" for={id}>
+				{text(decl.label, key)}
+			</label>
+		{/if}
+		{#if decl.type === "text"}
+			<textarea
+				{id}
+				class="textarea w-full {decl.format === 'json' ? 'font-mono text-xs' : ''}"
+				rows={decl.format === "json" ? 6 : 5}
+				value={String(value ?? "")}
+				oninput={(e) => live(e.currentTarget.value)}
+				onchange={(e) => set(e.currentTarget.value)}
+			></textarea>
+		{:else if decl.type === "boolean"}
+			<label class="flex items-center gap-2 text-sm">
+				<input
+					{id}
+					type="checkbox"
+					class="checkbox"
+					checked={!!value}
+					onchange={(e) => set(e.currentTarget.checked)}
+				/>
+				<span class="text-surface-600-400">{value ? "On" : "Off"}</span>
+			</label>
+		{:else if decl.type === "enum"}
+			<Select
+				label={text(decl.label, key)}
+				labelHidden
+				class="w-full"
+				options={enumOptions(decl)}
+				value={String(value ?? "")}
+				onValueChange={(v) => set(v)}
+			/>
+		{:else if decl.type === "number" || decl.type === "integer"}
+			<input
+				{id}
+				type="number"
+				class="input w-full"
+				min={decl.min}
+				max={decl.max}
+				step={decl.type === "integer" ? 1 : "any"}
+				value={value == null ? "" : String(value)}
+				onchange={(e) => set(e.currentTarget.value)}
+			/>
+		{:else}
+			<input
+				{id}
+				type="text"
+				class="input w-full"
+				value={String(value ?? "")}
+				onchange={(e) => set(e.currentTarget.value)}
+			/>
+		{/if}
+		{#if decl.description}
+			<p class="text-surface-600-400 text-xs">{text(decl.description, "")}</p>
+		{/if}
+	</div>
+{/snippet}
 
 <div class="flex flex-col gap-3">
 	{#each groups as g (g.group)}
@@ -109,7 +241,48 @@
 			</p>
 		{/if}
 		{#each g.fields as { key, decl } (key)}
-			{#if visible(decl)}
+			{#if visible(decl) && decl.type === "object"}
+				<!-- A fixed-key record: its members under its label, a member
+				     group as a fold. Written whole on each member's commit. -->
+				<fieldset class="border-surface-200-800 rounded-base flex flex-col gap-3 border p-3">
+					<legend class="px-1 text-sm font-medium">{text(decl.label, key)}</legend>
+					{#if decl.description}
+						<p class="text-surface-600-400 text-xs">{text(decl.description, "")}</p>
+					{/if}
+					{#each memberGroups(decl) as mg (mg.group)}
+						{#if mg.group}
+							<details class="flex flex-col gap-3">
+								<summary class="text-surface-600-400 cursor-pointer text-xs font-semibold">
+									{mg.group}
+								</summary>
+								<div class="mt-2 flex flex-col gap-3">
+									{#each mg.members as m (m.key)}
+										{@render control(
+											`sf-${key}-${m.key}`,
+											m.key,
+											m.decl,
+											memberShown(key, m.key),
+											(v) => commitMember(key, m.key, v),
+											(v) => commitMember(key, m.key, v, false)
+										)}
+									{/each}
+								</div>
+							</details>
+						{:else}
+							{#each mg.members as m (m.key)}
+								{@render control(
+									`sf-${key}-${m.key}`,
+									m.key,
+									m.decl,
+									memberShown(key, m.key),
+									(v) => commitMember(key, m.key, v),
+									(v) => commitMember(key, m.key, v, false)
+								)}
+							{/each}
+						{/if}
+					{/each}
+				</fieldset>
+			{:else if visible(decl)}
 				<div class="flex flex-col gap-1">
 					{#if decl.type === "enum"}
 						<!-- Select carries its own (visually hidden) label;

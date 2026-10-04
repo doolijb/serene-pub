@@ -172,7 +172,7 @@ export function registerRenderer(
 		throw new TemplateEngineError(
 			`${engineId} is already rendered by '${existing.owner}'. Publish your engine under ` +
 				`your own id instead — an engine two plugins can define is one where every ` +
-				`template on the instance renders differently depending on load order.`
+				`template on the pub renders differently depending on load order.`
 		)
 	renderers.set(engineId, { render, owner })
 }

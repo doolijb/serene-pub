@@ -300,6 +300,14 @@ describe("a binding that stopped resolving", () => {
 		expect(listed.pipelines.map((p) => p.slug)).toContain(
 			"core:spec/respond"
 		)
+		// The reply's card is titled by its pipeline, never a fixed "Respond".
+		const [replySpec] = await db
+			.select({ name: schema.pipelineSpecs.name })
+			.from(schema.pipelineSpecs)
+			.where(eq(schema.pipelineSpecs.slug, "core:spec/respond"))
+		expect(
+			listed.pipelines.find((p) => p.slug === "core:spec/respond")?.label
+		).toBe(replySpec!.name)
 		expect(listed.presetFallbacks?.[0]).toMatchObject({
 			event: "core:event/message-respond@1",
 			bound: "test:spec/respond-plugin-2"

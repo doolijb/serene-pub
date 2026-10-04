@@ -8,6 +8,8 @@ import {
 	isSafeUiPath,
 	surfacesOf,
 	enabledPluginWidgetIds,
+	pluginWidgetDecls,
+	seatableWidgetIds,
 	frameSrc,
 	frameCsp
 } from "./frameHost"
@@ -74,49 +76,21 @@ describe("file storage", () => {
 })
 
 describe("surface declarations", () => {
-	it("reads session-view, page, and panels tolerantly", () => {
-		const s = surfacesOf(
-			{
-				surfaces: {
-					"session-view": { entry: "ui/s.html", title: "Crawl" },
-					page: { entry: "ui/index.html" },
-					panels: [
-						{
-							id: "map",
-							entry: "ui/map.html",
-							title: "Map",
-							channels: ["map"],
-							settings: { zoom: { type: "number", default: 1 } }
-						},
-						{ id: "BAD ID", entry: "ui/x.html" },
-						{ id: "noentry" }
-					]
-				}
-			},
-			"acme.dice"
-		)
-		expect(s.sessionView).toEqual({ entry: "ui/s.html", title: "Crawl" })
-		expect(s.page).toEqual({ entry: "ui/index.html" })
-		// A panel leaves this module as the ONE widget declaration, with the
-		// channels and the settings schema it declared — those reached no
-		// reader while the projection narrowed a panel to `{entry, title}` —
-		// and under its NAMESPACED id, which is what the session view seats
-		// and what every stored row keys on.
-		expect(s.panels).toEqual([
-			{
-				id: "acme.dice:map",
-				title: "Map",
-				role: "secondary",
-				surface: {
-					kind: "frame",
-					pluginId: "acme.dice",
-					entry: "ui/map.html"
-				},
-				channels: ["map"],
-				settings: { zoom: { type: "number", default: 1 } }
+	it("reads session-view and page tolerantly", () => {
+		const s = surfacesOf({
+			surfaces: {
+				"session-view": { entry: "ui/s.html", title: "Crawl" },
+				page: { entry: "ui/index.html" },
+				// Gone: a frame in a session is a widget now, and this reader
+				// does not answer for the old list.
+				panels: [{ id: "map", entry: "ui/map.html" }]
 			}
-		])
-		expect(surfacesOf(null, "acme.dice")).toEqual({ panels: [] })
+		})
+		expect(s).toEqual({
+			sessionView: { entry: "ui/s.html", title: "Crawl" },
+			page: { entry: "ui/index.html" }
+		})
+		expect(surfacesOf(null)).toEqual({})
 		expect(frameSrc("acme/x", "ui/s.html")).toBe(
 			"/plugin-ui/acme/x/ui/s.html"
 		)
@@ -124,24 +98,23 @@ describe("surface declarations", () => {
 
 	it("an unsafe entry path is dropped, not served", () => {
 		expect(
-			surfacesOf(
-				{ surfaces: { page: { entry: "../escape" } } },
-				"acme.dice"
-			).page
+			surfacesOf({ surfaces: { page: { entry: "../escape" } } }).page
 		).toBeUndefined()
 	})
 
 	/**
-	 * The namespacing (ruled 2026-09-17). A package picks its panel id in
+	 * The namespacing (ruled 2026-09-17). A package picks its widget id in
 	 * private, so two packages declaring `map` declare one id — and a layout
 	 * row outlives the install that could have told them apart.
 	 */
-	it("two packages declaring the same panel id declare two widgets", () => {
+	it("two packages declaring the same widget id declare two widgets", () => {
 		const manifest = {
-			surfaces: { panels: [{ id: "map", entry: "ui/map.html" }] }
+			widgets: [
+				{ id: "map", title: "Map", component: "map" }
+			]
 		}
-		const a = surfacesOf(manifest, "acme.dice").panels[0]
-		const b = surfacesOf(manifest, "rival.pkg").panels[0]
+		const [a] = pluginWidgetDecls(manifest, "acme.dice")
+		const [b] = pluginWidgetDecls(manifest, "rival.pkg")
 		expect(a.id).toBe("acme.dice:map")
 		expect(b.id).toBe("rival.pkg:map")
 		// And neither can be a core or genre widget's id, which are plain.
@@ -152,14 +125,8 @@ describe("surface declarations", () => {
 	})
 
 	it("only an ENABLED plugin's widget ids are answered for", async () => {
-		const manifest = {
-			surfaces: {
-				panels: [
-					{ id: "tray", entry: "ui/tray.html" },
-					{ id: "log", entry: "ui/log.html" }
-				]
-			}
-		}
+		const widget = (id: string) => ({ id, title: id, component: id })
+		const manifest = { widgets: [widget("tray"), widget("log")] }
 		await db.insert(schema.plugins).values([
 			{
 				pluginId: "acme.on",
@@ -186,6 +153,64 @@ describe("surface declarations", () => {
 		expect(ids.has("acme.off:tray")).toBe(false)
 		// The bare id is nobody's widget.
 		expect(ids.has("tray")).toBe(false)
+	})
+
+	/**
+	 * A component widget is what `sessions:view` seats
+	 * (`showcase.battleship:board` from exactly this), so every allow-list
+	 * built on the enabled set must answer for it, and for a DISABLED
+	 * plugin's not at all.
+	 */
+	it("counts an enabled plugin's component widgets, not a disabled one's", async () => {
+		const manifest = {
+			widgets: [
+				{ id: "board", component: "board", role: "primary" },
+				{ id: "ledger", component: "ledger", maxInstances: 2 },
+				{ component: "anonymous" },
+				null,
+				{ id: "chart", component: "chart" }
+			]
+		}
+		await db.insert(schema.plugins).values([
+			{
+				pluginId: "acme.game",
+				name: "Game",
+				bundleSource: "// x",
+				bundleHash: "g1",
+				enabled: true,
+				manifest
+			},
+			{
+				pluginId: "acme.shelved",
+				name: "Shelved",
+				bundleSource: "// x",
+				bundleHash: "g2",
+				enabled: false,
+				manifest
+			}
+		])
+		const ids = await enabledPluginWidgetIds(db)
+		expect(ids.has("acme.game:board")).toBe(true)
+		expect(ids.has("acme.game:ledger")).toBe(true)
+		expect(ids.has("acme.game:chart")).toBe(true)
+		expect(ids.has("acme.shelved:board")).toBe(false)
+		expect(ids.has("acme.shelved:chart")).toBe(false)
+		expect(ids.has("board")).toBe(false)
+
+		// And the per-session allow-list a widget-settings write is held to.
+		const seatable = await seatableWidgetIds(db, "core:genre/chat")
+		expect(seatable.has("acme.game:board")).toBe(true)
+		expect(seatable.has("acme.game:chart")).toBe(true)
+		expect(seatable.has("acme.shelved:board")).toBe(false)
+
+		// The one list both halves read, per manifest, namespaced, in
+		// declaration order — as the layout validator lists them.
+		expect(pluginWidgetDecls(manifest, "acme.game")).toEqual([
+			{ id: "acme.game:board" },
+			{ id: "acme.game:ledger", maxInstances: 2 },
+			{ id: "acme.game:chart" }
+		])
+		expect(pluginWidgetDecls(null, "acme.game")).toEqual([])
 	})
 })
 

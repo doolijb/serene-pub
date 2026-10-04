@@ -137,13 +137,6 @@ vi.mock("$lib/server/connections/capabilityTarget", async (importOriginal) => {
 		}
 	}
 })
-vi.mock("$lib/server/utils/getUserConfigurations", () => ({
-	getUserConfigurations: async () => ({
-		sampling: { id: 1 },
-		contextConfig: { id: 1 },
-		promptConfig: { id: 1, systemPrompt: "Stay in character." }
-	})
-}))
 vi.mock("$lib/server/embedding", () => ({
 	isModelReady: () => false,
 	getLoadedModelId: () => null,
@@ -393,7 +386,8 @@ describe("R10 · only the recipients' own voices ever read it", () => {
 		const planner = jsonPrompts.filter((p) => p.includes("You plan the PARTY only"))
 		const keeper = jsonPrompts.filter((p) => p.includes("You keep the record of a delve"))
 		expect(planner).toHaveLength(1)
-		expect(keeper).toHaveLength(1)
+		// The Castellan's keeper, then each of the three character turns' own.
+		expect(keeper).toHaveLength(4)
 		for (const name of ["Brannoc", "Vell", "Isolde"]) expect(voicePrompts(name)).toHaveLength(1)
 
 		expect(voicePrompts("Brannoc")[0]).toContain(HUSH)

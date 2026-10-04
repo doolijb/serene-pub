@@ -489,6 +489,40 @@ export function useInterest<K extends InterestEvent>(
 export function resyncOnConnect() {
 	for (const event of rawListeners.keys()) attachRawListener(event)
 	syncInterest()
+	for (const ask of [...connectAsks]) {
+		try {
+			ask()
+		} catch (e) {
+			console.warn("[interest] a reconnect ask failed:", e)
+		}
+	}
+}
+
+/** What views ask again on connect (`onConnect`), in the order they asked. */
+const connectAsks = new Set<() => void>()
+
+/**
+ * Ask again after every connect — the first, and each reconnect — and return
+ * the release. Runs right AFTER the connect resync, so the key the answer
+ * needs is on the server before the ask is.
+ *
+ * For a view that holds PUSHED state. A push sent while the socket was down
+ * (a dropped connection, a server restart — whose boot reconcile pushes to
+ * nobody) is gone for good, and the view never learns it missed it. Asking
+ * for the same answer on connect is the whole repair: the session page's
+ * **started from** facts (`sessions:panelLayout:startedFromUpdated`) are the
+ * first user.
+ *
+ * Not a listener (the typed socket has none by design): nothing to remove
+ * app-wide, and the release is idempotent. One ask throwing costs nobody
+ * else theirs.
+ */
+export function onConnect(ask: () => void): () => void {
+	const entry = () => ask()
+	connectAsks.add(entry)
+	return () => {
+		connectAsks.delete(entry)
+	}
 }
 
 /** The three functions the contexts expose. Identical in both of them. */
@@ -535,4 +569,5 @@ export function _resetInterestForTests() {
 	stopSyncTimer()
 	syncQueued = false
 	user = null
+	connectAsks.clear()
 }

@@ -124,6 +124,11 @@ describe("entryRefs — two steps away", () => {
  * An edge is a typed join somebody drew, so it says what the join IS — "keeper
  * of", "connects to" — where a text match can only say a name occurred. Both
  * directions count: a road is drawn once and both places are on it.
+ *
+ * Places plan B5: each is said with the one sentence (`relationshipSentence`),
+ * from the row it is listed under, as that row's other clauses are ("names
+ * The Archive…", "sits inside it") — so a one-way link never reads backwards
+ * from the end it runs into.
  */
 describe("entryRefs — edges", () => {
 	const castEnd = { key: "cast#3", id: 3, kind: "cast", name: "Verity" }
@@ -150,14 +155,16 @@ describe("entryRefs — edges", () => {
 		id: 10,
 		from: castEnd,
 		to: archiveEnd,
-		type: "keeper of"
+		relationshipType: "keeper of",
+		reverseRelationshipType: null,
+		name: ""
 	}
 
 	it("counts a cast member joined to this entry as a direct reference", () => {
 		const rows = entryRefs(archive, pool, [keeps])
 		const row = rows.find((r) => r.item.key === "cast#3")
 		expect(row?.tag).toBeNull()
-		expect(row?.clauses).toContain("keeper of · The Archive")
+		expect(row?.clauses).toContain("Keeper of The Archive.")
 		expect(row?.item.name).toBe("Verity")
 	})
 
@@ -166,12 +173,54 @@ describe("entryRefs — edges", () => {
 			id: 11,
 			from: archiveEnd,
 			to: ferryEnd,
-			type: "connects to"
+			relationshipType: "connects to",
+			reverseRelationshipType: "connects to",
+			name: ""
 		}
 		const rows = entryRefs(archive, pool, [drawn])
 		expect(rows.find((r) => r.item.key === "entry#3")?.clauses).toContain(
-			"connects to · The Archive"
+			"Connects to The Archive."
 		)
+		const back = entryRefs(ferry, pool, [drawn])
+		expect(back.find((r) => r.item.key === "entry#2")?.clauses).toContain(
+			"Connects to Night Ferry."
+		)
+	})
+
+	it("never says a one-way link backwards from the end it runs into", () => {
+		const hallEnd = {
+			key: "entry#8",
+			id: 8,
+			kind: "core:entry/location",
+			name: "The Drowned Hall"
+		}
+		const guardEnd = {
+			key: "entry#9",
+			id: 9,
+			kind: "core:entry/location",
+			name: "The Guardroom"
+		}
+		const door: RefLink = {
+			id: 15,
+			from: guardEnd,
+			to: hallEnd,
+			relationshipType: "leads north to",
+			reverseRelationshipType: null,
+			name: "the rusted iron door"
+		}
+		const subject = { ...archive, key: "entry#9", id: 9, name: "The Guardroom" }
+		const row = entryRefs(subject, pool, [door]).find(
+			(r) => r.item.key === "entry#8"
+		)
+		// Listed under the Drowned Hall, said from it: a way in, not out.
+		expect(row?.clauses).toEqual([
+			"One way, into here from The Guardroom, by the rusted iron door."
+		])
+		const hall = { ...archive, key: "entry#8", id: 8, name: "The Drowned Hall" }
+		expect(
+			entryRefs(hall, pool, [door]).find((r) => r.item.key === "entry#9")
+				?.clauses
+		).toEqual(["The rusted iron door leads north to The Drowned Hall."])
 	})
 
 	it("marks an edge that lands on this entry's parent as indirect", () => {
@@ -179,14 +228,16 @@ describe("entryRefs — edges", () => {
 			id: 12,
 			from: castEnd,
 			to: cityEnd,
-			type: "lives in"
+			relationshipType: "lives in",
+			reverseRelationshipType: null,
+			name: ""
 		}
 		const row = entryRefs(archive, pool, [lives]).find(
 			(r) => r.item.key === "cast#3"
 		)
 		expect(row?.tag).toBe("indirect")
 		expect(row?.clauses).toEqual([
-			"lives in · Umber City, which this entry is inside"
+			"Lives in Umber City, which this entry is inside."
 		])
 	})
 
@@ -195,7 +246,9 @@ describe("entryRefs — edges", () => {
 			id: 13,
 			from: ferryEnd,
 			to: archiveEnd,
-			type: "runs past"
+			relationshipType: "runs past",
+			reverseRelationshipType: null,
+			name: ""
 		}
 		const row = entryRefs(archive, pool, [drawn]).find(
 			(r) => r.item.key === "entry#3"
@@ -208,7 +261,9 @@ describe("entryRefs — edges", () => {
 			id: 14,
 			from: { ...archiveEnd, key: "entry#5", id: 5, name: "Verity" },
 			to: archiveEnd,
-			type: "keeper of"
+			relationshipType: "keeper of",
+			reverseRelationshipType: null,
+			name: ""
 		}
 		const rows = entryRefs(archive, pool, [drawn]).filter(
 			(r) => r.item.key === "entry#5"
@@ -216,7 +271,7 @@ describe("entryRefs — edges", () => {
 		expect(rows).toHaveLength(1)
 		expect(rows[0].clauses).toEqual([
 			"“Keeper of The Archive.”",
-			"keeper of · The Archive"
+			"Keeper of The Archive."
 		])
 	})
 
@@ -280,7 +335,9 @@ describe("refLinksFrom", () => {
 		)
 		expect(link.from.key).toBe("entry#3")
 		expect(link.from.kind).toBe("core:entry/world-lore")
-		expect(link.type).toBe("runs past")
+		expect(link.relationshipType).toBe("runs past")
+		expect(link.reverseRelationshipType).toBeNull()
+		expect(link.name).toBe("")
 	})
 
 	it("names a cast endpoint from the nodes the list carries", () => {

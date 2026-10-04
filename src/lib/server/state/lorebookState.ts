@@ -28,7 +28,7 @@
  *
  * A read stands at a `LineReading` (`state/reading.ts`): a line, a moment and
  * the fork cut. Rows on the line being read: shared (`branch_id IS NULL`) or
- * on that line (`onLine`); on a branch, main's DATED rows only up to the fork
+ * on that line's chain (`isOnLine`); on a branch, main's DATED rows only up to the fork
  * date; at a moment, nothing dated after it. With no session the default
  * line is the book's most recently used one, at the head of its timeline;
  * a pipeline may name another (`branch`, `at`, `forkCut: false`).
@@ -44,7 +44,7 @@ import {
 	type SheetSlotEntry,
 	type SlotValue
 } from "@serene-pub/sdk"
-import { readingOf, rowsOnReading, type LineReading } from "$lib/server/state/reading"
+import { mainCutOf, readingOf, rowsOnReading, type LineReading } from "$lib/server/state/reading"
 import {
 	MAIN_HEAD,
 	castMemberAt,
@@ -53,7 +53,9 @@ import {
 	type EntryReading
 } from "$lib/server/state/entriesOnReading"
 import type { StoryDate } from "$lib/shared/lorebooks/storyDate"
+import { deleteOwnedRows } from "$lib/server/lorebooks/tableRegistry"
 import { castKey, slotKey } from "$lib/server/state/keys"
+import { castMemberCards } from "$lib/server/utils/castMemberCards"
 import type { StateOwner } from "$lib/server/state/owners"
 import {
 	inForce,
@@ -79,25 +81,34 @@ export interface LorebookCastLink {
 export interface LorebookLinks {
 	lorebookId: number
 	cast: LorebookCastLink[]
+	/**
+	 * A **dated card** → the member it draws (plan A25): a card a cast
+	 * amendment draws a member with, on any line and at any date. A seat
+	 * holding one is that member, as a seat holding their linked card
+	 * (`cast[].characterId`) is.
+	 */
+	datedCards: Record<number, number>
 	locations: { entryId: number; name: string }[]
 }
 
 /**
  * The book's owners **as the reading sees them** (finding #41): its places on
- * the reading's line, titled as amended by then, and its cast members named
- * as amended by then. With no reading, main at its head.
+ * the reading's line as the book sees them (plan A27 place sight `"book"`:
+ * archived ones gone, Off ones kept), titled as amended by then, and its cast
+ * members named as amended by then. With no reading, main at its head.
  *
- * ⚠ A member's `characterId` stays their OWN card even when an amendment swaps
- * it: it is the key a session seat holds (`normalizeOwner`'s `session_cast`
- * translation, `castMemberAsOf`), and a swapped card would un-seat them. The
- * swap is how they are drawn, not who they are.
+ * ⚠ A member's `characterId` stays their OWN card even when an amendment draws
+ * them with another: it is the key a session seat holds (`normalizeOwner`'s
+ * `session_cast` translation, `cardMemberAt`), and the dated card is how
+ * they are drawn, not who they are. A seat holding the dated card finds them
+ * through `datedCards`.
  */
 export async function lorebookLinks(
 	db: Db,
 	lorebookId: number,
 	reading: EntryReading = MAIN_HEAD
 ): Promise<LorebookLinks> {
-	const [members, overlays, places] = await Promise.all([
+	const [members, overlays, places, cards] = await Promise.all([
 		db
 			.select({
 				id: schema.lorebookBindings.id,
@@ -108,10 +119,19 @@ export async function lorebookLinks(
 			.where(eq(schema.lorebookBindings.lorebookId, lorebookId))
 			.orderBy(asc(schema.lorebookBindings.id)),
 		castOverlaysFor(db, lorebookId, reading),
-		placesOnReading(db, lorebookId, reading)
+		// The book's own sight (plan A27): a place switched Off is still
+		// the author's to edit; only archived ones are gone.
+		placesOnReading(db, lorebookId, reading, "book"),
+		castMemberCards(db, lorebookId)
 	])
+	const datedCards: Record<number, number> = {}
+	for (const m of members)
+		for (const card of cards.cardsOf.get(m.id) ?? [])
+			if (card !== m.characterId && cards.memberOf.get(card) === m.id)
+				datedCards[card] = m.id
 	return {
 		lorebookId,
+		datedCards,
 		cast: members.map((m) => {
 			const c = castMemberAt(m, overlays, reading, { keepCard: true })
 			return {
@@ -207,7 +227,10 @@ export interface LorebookState {
 	branchId: number | null
 	/** 🚧 The moment read at; null is the head of the timeline. */
 	moment: StoryDate | null
-	/** 🚧 Where main was cut for this branch; null when nothing was. */
+	/**
+	 * 🚧 Where main was cut for this branch — the earliest fork date along
+	 * its parent chain (`mainCutOf`); null when nothing was.
+	 */
 	forkedAt: StoryDate | null
 	/** What the book tracks, after the `slotIds` filter. */
 	slots: TrackedSlot[]
@@ -269,7 +292,10 @@ export async function lorebookStateFor(
 	]
 	const rows = await rowsOnReading(db, await durableRows(db, owners, stored.map((d) => d.id)), reading)
 	const valueFor = (o: StateOwner, slotId: string): SlotValue | undefined => {
-		const row = inForce(rows.filter((r) => r.ownerKind === o.kind && r.ownerId === o.id && r.slotId === slotId))
+		const row = inForce(
+			rows.filter((r) => r.ownerKind === o.kind && r.ownerId === o.id && r.slotId === slotId),
+			reading.dates
+		)
 		const v = row?.value?.v as SlotValue | undefined
 		return v === null ? undefined : v
 	}
@@ -305,12 +331,19 @@ export async function lorebookStateFor(
 	const locations: LorebookState["locations"] = { byId: placesById }
 	for (const entry of Object.values(placesById)) if (!(entry.key in locations)) locations[entry.key] = entry
 
-	await nameLoreRefs(db, [world, ...Object.values(castById), ...Object.values(placesById)])
+	await nameLoreRefs(
+		db,
+		[world, ...Object.values(castById), ...Object.values(placesById)],
+		reading,
+		"book"
+	)
 	return {
 		lorebookId: links.lorebookId,
 		branchId,
 		moment: reading.moment,
-		forkedAt: reading.forkedAt,
+		// The effective cut — the earliest fork along the chain — not the
+		// branch's own fork date, which a fork of a fork can postdate.
+		forkedAt: mainCutOf(reading),
 		slots: vocabulary.slots.filter((s) => decls.some((d) => d.id === s.id)),
 		world,
 		cast,
@@ -364,8 +397,11 @@ export function normalizeOwner(
 			return num === undefined ? null : { kind: "location", id: num }
 		case "session_cast": {
 			const member = links.cast.find((c) => c.characterId === num)
+			// A seat holding a card a dated change draws a member with is them.
+			const id =
+				member?.castMemberId ?? (num === undefined ? undefined : links.datedCards[num])
 			// A character not bound into this book: nobody the book can name.
-			return member ? { kind: "cast_member", id: member.castMemberId } : { kind: "cast_member", id: -1 }
+			return { kind: "cast_member", id: id ?? -1 }
 		}
 		default:
 			return null
@@ -387,3 +423,39 @@ export async function durableRows(db: Db, owners: StateOwner[], slotIds: string[
 			)
 		)
 }
+
+/**
+ * Delete the stats of the owners `ids` under `kinds`: their values,
+ * configurations and sheets — every polymorphic table of the lorebook table
+ * registry (`lorebooks/tableRegistry.ts`, `deleteOwnedRows`) — on every line
+ * and in every session, and the changes to them still waiting in a session's
+ * review (`pendingChangesFor`) — nothing could accept one once its owner is
+ * gone. A decided change stays: it is the record of what was asked and
+ * answered.
+ *
+ * An owner id has no foreign key (it names a different table per kind,
+ * `owners.ts`), so nothing cascades these. Every path that removes an owner
+ * calls this (or `deletePlaceStats`, which does) inside the removal's
+ * transaction, with its `tx`: a place, a line whose places go with it, a cast
+ * member deleted or absorbed. A whole book goes through `purgeLorebook`, which
+ * reaches the same tables through the same registry.
+ */
+export async function deleteOwnerStats(
+	tx: Db,
+	kinds: readonly string[],
+	ids: readonly number[]
+): Promise<void> {
+	await deleteOwnedRows(tx, kinds, ids)
+}
+
+/**
+ * Delete the stats places hold: under both place owner kinds, `location` (the
+ * durable layer) and `session_location` (every session's layer), both by the
+ * entry's id. Any entry id may be passed — only a place owns rows under these
+ * kinds — so a caller hands over every entry its delete removes (the entry
+ * and all filed under it, `withEverythingFiledUnder`) without sorting them.
+ */
+export async function deletePlaceStats(tx: Db, entryIds: readonly number[]): Promise<void> {
+	await deleteOwnerStats(tx, ["location", "session_location"], entryIds)
+}
+

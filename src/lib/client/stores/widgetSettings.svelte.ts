@@ -24,19 +24,16 @@ import {
 	widgetSettingsSchema,
 	type WidgetSettingsDecl
 } from "$lib/shared/widgets/settings"
-import type { SettingsSchema } from "@serene-pub/sdk"
-import { presetWidgetSettings } from "$lib/shared/sessionLayout/presets"
 
 type Values = Record<string, unknown>
 
-let values = $state<Record<string, Values>>({})
 /**
- * The active layout preset's composed base. A preset that docks a widget
- * usually has an opinion about how that widget is configured, and those pins sit
- * UNDER this user's own values — held as the blob rather than as a copy, so a
- * later edit to the preset still reaches every session on it.
+ * This person's values for this session, per widget instance — the ONLY
+ * source. Under the copy model a layout's own `widgetSettings` were copied
+ * into these rows when the session started from it, so nothing sits under
+ * them (brief 3 of `PLAN-layout-one-format-2026-09-28`).
  */
-let baseLayout = $state<unknown>(undefined)
+let values = $state<Record<string, Values>>({})
 let decls = $state<Record<string, WidgetSettingsDecl>>({})
 let writer: ((next: Record<string, Values>) => void) | null = null
 
@@ -58,36 +55,9 @@ export function setWidgetSettingValues(next: unknown): void {
 	values = out
 }
 
-/** Replace the preset base every widget's values sit on (the composed blob). */
-export function setWidgetSettingBase(presetLayout: unknown): void {
-	baseLayout = presetLayout
-}
-
-/** This widget's settings in force: the preset's pins, this user's over them. */
+/** This widget instance's settings in force: this person's own values. */
 export function widgetSettingValues(widgetId: string): Values {
-	return presetWidgetSettings(baseLayout, values)[widgetId] ?? {}
-}
-
-/**
- * The schema a write is measured against: the declaration, with any field the
- * preset pins standing in as that field's default.
- *
- * Storage holds deviations from what the session SHOWS, and a preset pin is
- * part of that. Measured against the declaration alone, a user setting a pinned
- * field back to its declared default stores nothing and the pin reasserts on the
- * next render — the setting would appear to refuse to change.
- */
-function writeSchema(
-	decl: WidgetSettingsDecl,
-	widgetId: string
-): SettingsSchema {
-	const schema = widgetSettingsSchema(decl)
-	const pinned = presetWidgetSettings(baseLayout, {})[widgetId]
-	if (!pinned) return schema
-	const out: SettingsSchema = {}
-	for (const [key, field] of Object.entries(schema))
-		out[key] = key in pinned ? { ...field, default: pinned[key] } : field
-	return out
+	return values[widgetId] ?? {}
 }
 
 /** Replace the declarations the settings panel renders from. */
@@ -128,7 +98,7 @@ export function setWidgetSettingsWriter(
 export function patchWidgetSettings(widgetId: string, patch: Values): void {
 	const decl = decls[widgetId]
 	if (!decl) return
-	const schema = writeSchema(decl, widgetId)
+	const schema = widgetSettingsSchema(decl)
 	const merged: Values = { ...(values[widgetId] ?? {}) }
 	for (const [key, value] of Object.entries(patch)) {
 		const field = schema[key]
@@ -153,4 +123,50 @@ export function resetWidgetSettings(widgetId: string): void {
 /** Has this widget been given any deviation at all? */
 export function hasWidgetSettings(widgetId: string): boolean {
 	return !!values[widgetId]
+}
+
+/**
+ * Every widget instance id holding stored values in this session — what the
+ * layout editor's mint skips, so a new copy never inherits a removed one's
+ * leftovers (brief 7b, plan §M.3.2).
+ */
+export function storedWidgetSettingIds(): string[] {
+	return Object.keys(values)
+}
+
+/** Every instance's stored values, as held — what a Duplicate copies from. */
+export function allWidgetSettingValues(): Readonly<Record<string, Values>> {
+	return values
+}
+
+/**
+ * Clear several instances' stored values in ONE write — the layout editor's
+ * Cancel taking back what its Duplicates wrote (brief 7b review). One write,
+ * not one per id: each write starts from the values as last held, so a second
+ * call made before the first came back would put the first id back.
+ */
+export function dropWidgetSettings(ids: Iterable<string>): void {
+	const out: Record<string, Values> = { ...values }
+	let changed = false
+	for (const id of ids)
+		if (out[id]) {
+			delete out[id]
+			changed = true
+		}
+	if (changed) writer?.(out)
+}
+
+/**
+ * Replace one instance's stored values whole, verbatim — `null` (or an empty
+ * object) clears them. For Duplicate (brief 7b, QD): the copy takes the
+ * source's values as they are, before its own declaration is registered, so
+ * they are not pruned against it here; the next `patchWidgetSettings` prunes
+ * as ever.
+ */
+export function putWidgetSettings(widgetId: string, next: Values | null): void {
+	const out: Record<string, Values> = { ...values }
+	if (next && Object.keys(next).length) out[widgetId] = { ...next }
+	else if (out[widgetId]) delete out[widgetId]
+	else return
+	writer?.(out)
 }

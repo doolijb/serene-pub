@@ -36,7 +36,9 @@ const LOREBOOK_FAMILIES = [
 	"bindingSuggestions:",
 	"bindingCheck:",
 	"scenes:",
-	"narrativeGraph:"
+	"narrativeGraph:",
+	// The summarize modal's run, which writes lore (Phase D).
+	"sessions:summarize:"
 ] as const
 
 /**
@@ -51,6 +53,7 @@ const SCOPE_PATHS = {
 	"lorebooks:checkCalendar": ["lorebookId"],
 	"lorebooks:setCalendar": ["lorebookId"],
 	"lorebooks:setClock": ["lorebookId"],
+	"lorebooks:lines": ["lorebookId"],
 	"entries:list": ["lorebookId"],
 	"entries:counts": ["lorebookId"],
 	"entries:recentDecisions": ["lorebookId"],
@@ -58,6 +61,7 @@ const SCOPE_PATHS = {
 	"entries:create": ["entry", "lorebookId"],
 	"entries:update": ["entry", "lorebookId"],
 	"entries:iterateNext": ["entry", "lorebookId"],
+	"entries:updatePositions": ["lorebookId"],
 	"amendments:list": ["lorebookId"],
 	"bindingSuggestions:list": ["lorebookId"],
 	"bindingCheck:result": ["sessionId"],
@@ -71,7 +75,9 @@ const SCOPE_PATHS = {
 	"scenes:compile:complete": ["historyEntryId"],
 	"narrativeGraph:list": ["lorebookId"],
 	"narrativeGraph:duplicateCandidates": ["lorebookId"],
-	"narrativeGraph:listMergeLogs": ["lorebookId"]
+	"narrativeGraph:listMergeLogs": ["lorebookId"],
+	"sessions:summarize:progress": ["sessionId"],
+	"sessions:summarize:complete": ["sessionId"]
 } as const satisfies Partial<
 	Record<keyof SocketEventMap, readonly [string, ...string[]]>
 >
@@ -149,5 +155,19 @@ describe("lorebook-family SCOPED replies", () => {
 		expect(
 			scopeOfPayload("entries:create", { entry: { lorebookId: 42 } })
 		).toBe("42")
+	})
+
+	test("a summarize frame from another session is another scope", () => {
+		// Two tabs on two sessions each run a summary: each frame names its
+		// own session, so neither modal is fed the other's (Phase D).
+		expect(
+			scopeOfPayload("sessions:summarize:progress", {
+				sessionId: 3,
+				phase: "drafting"
+			})
+		).toBe("3")
+		expect(
+			scopeOfPayload("sessions:summarize:complete", { content: "x" })
+		).toBeNull()
 	})
 })

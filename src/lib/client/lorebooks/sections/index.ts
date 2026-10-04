@@ -4,6 +4,7 @@ import {
 	CHARACTER_LORE_TYPE_ID,
 	HISTORY_TYPE_ID,
 	ITEM_TYPE_ID,
+	LOCATION_TYPE_ID,
 	WORLD_LORE_TYPE_ID
 } from "$lib/shared/entries/types"
 import { LORE_SCOPES, type LoreScope } from "$lib/shared/lorebooks/loreRoute"
@@ -19,6 +20,9 @@ import HistoryRowMenu from "./HistoryRowMenu.svelte"
 import ItemEditor from "./ItemEditor.svelte"
 import ItemRow from "./ItemRow.svelte"
 import { supplyProblem } from "./itemSupply"
+import { namedEntryDraft, placeDraft } from "./entryDrafts"
+import PlaceEditor from "./PlaceEditor.svelte"
+import PlaceRow from "./PlaceRow.svelte"
 import PoolRow from "./PoolRow.svelte"
 import SceneEditor from "./SceneEditor.svelte"
 import SceneRow from "./SceneRow.svelte"
@@ -26,7 +30,6 @@ import WorldLoreEditor from "./WorldLoreEditor.svelte"
 import WorldLoreRow from "./WorldLoreRow.svelte"
 import {
 	compareDates,
-	dateValue,
 	editBounds,
 	formatDate,
 	type StoryDate
@@ -120,22 +123,6 @@ function requireName(draft: Record<string, any>, warn?: boolean): boolean {
 	return false
 }
 
-const namedEntryDraft = (lorebookId: number, typeId: string) => ({
-	typeId,
-	lorebookId,
-	name: "",
-	content: "",
-	keys: [],
-	// The absence of a condition, spelled the way the column stores it: no
-	// keys and no mode. Either one alone is a rule about nothing.
-	secondaryKeys: [],
-	selectiveLogic: null,
-	useRegex: false,
-	caseSensitive: false,
-	constant: false,
-	enabled: true,
-	priority: 1
-})
 
 const world: SectionDescriptor = {
 	id: "world",
@@ -238,7 +225,15 @@ const history: SectionDescriptor = {
 	toPoolItem: (source) => ({
 		...entryPoolItem(source, HISTORY_TYPE_ID),
 		name: formatDate(source as any),
-		order: dateValue(source as any),
+		// Story order reads the DATE (`comparePoolBy`), never a packed value.
+		date:
+			typeof (source as any).year === "number"
+				? {
+						year: (source as any).year,
+						month: (source as any).month ?? null,
+						day: (source as any).day ?? null
+					}
+				: null,
 		// History declares no priority role, and absent means no bonus.
 		priority: 0
 	}),
@@ -280,7 +275,7 @@ const history: SectionDescriptor = {
 /**
  * 🚧 Items (attributes phase 3c): world lore's shape plus a supply. A door
  * of their own, so an item is written as one — its supply asked for — and
- * found as one, rather than read as world lore under All entries.
+ * found as one, rather than read as world lore under Everything.
  */
 const items: SectionDescriptor = {
 	id: "items",
@@ -317,6 +312,43 @@ const items: SectionDescriptor = {
 		if (problem && warn) toaster.error({ title: problem })
 		return !problem
 	}
+}
+
+/**
+ * Places (places plan B5): a place is a pool entry with a door of its own,
+ * so List, Cards and Tree list places, All holds them and search finds them
+ * — the canvas is never the only way to one (ruling 6, the a11y rule).
+ *
+ * World lore's shape plus a **category**, and its **Links**: the
+ * relationships that give it its shape, listed and edited in its editor as
+ * on the Places canvas. ⚠ Never filed under anything: a place declares no
+ * `parent` role, so its editor offers no Part of.
+ */
+const places: SectionDescriptor = {
+	id: "places",
+	label: "Places",
+	icon: Icons.Map,
+	typeId: LOCATION_TYPE_ID,
+	kind: LOCATION_TYPE_ID,
+	store: "entries",
+	// The location type declares `sourceKind: "worldLore"`: it ranks in world lore's band.
+	vectorSource: "worldLore",
+	roles: new Set(["position"]),
+	row: PlaceRow,
+	editor: PlaceEditor,
+	inspector: [FIRES_TAB, REFERENCES_TAB],
+	emptyCopy: {
+		title: "No places yet",
+		body: "A place is somewhere the story can be: a room, a street, a town. Link it to the places it leads to.",
+		action: "New place"
+	},
+	creatable: true,
+	newLabel: "New place",
+	newDraft: (lorebookId) => placeDraft(lorebookId),
+	toPoolItem: (source) => entryPoolItem(source, LOCATION_TYPE_ID),
+	toDraft: entryDraft,
+	title: (source) => source.name ?? "",
+	validate: (draft, _siblings, warn) => requireName(draft, warn)
 }
 
 const scenes: SectionDescriptor = {
@@ -372,7 +404,7 @@ const scenes: SectionDescriptor = {
 
 const all: SectionDescriptor = {
 	id: "all",
-	label: "All entries",
+	label: "Everything",
 	icon: Icons.LayoutList,
 	store: "entries",
 	roles: new Set(),
@@ -399,6 +431,7 @@ export const SECTION_DESCRIPTORS: SectionDescriptor[] = [
 	characters,
 	history,
 	scenes,
+	places,
 	items
 ]
 
@@ -412,7 +445,7 @@ export const SECTION_DESCRIPTORS: SectionDescriptor[] = [
  * row that has children. So the editor is handed this rather than the list it
  * is standing next to.
  *
- * Doors without a kind of their own draw no rows here — "All entries" is every
+ * Doors without a kind of their own draw no rows here — "Everything" is every
  * other door's rows, and counting it would put each row in twice.
  */
 export function bookPoolItems(
@@ -452,7 +485,7 @@ export function descriptorForKind(kind: string): SectionDescriptor | undefined {
 /**
  * The door that owns the row an address names.
  *
- * A narrowed section answers with itself; "All entries" holds several kinds at
+ * A narrowed section answers with itself; "Everything" holds several kinds at
  * once, so the row that is open is what says which editor, inspector and title
  * are drawn. A key the pool does not hold keeps the section's own door, which
  * is where a selection that has not arrived yet belongs.
@@ -509,7 +542,7 @@ export function editorPlaceholder(input: {
 
 /**
  * The kinds a door presets. Empty is every kind in the book, which is what
- * makes "All entries" the same list with nothing narrowed.
+ * makes "Everything" the same list with nothing narrowed.
  */
 export function poolKindsOf(descriptor: SectionDescriptor): string[] {
 	return descriptor.kind ? [descriptor.kind] : []

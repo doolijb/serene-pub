@@ -21,29 +21,40 @@
  * the layout. Once that side has reported a frame here the list is the truth,
  * so the grid's copy of the entry is dropped rather than left to draw twice.
  */
-import type { Arranged } from "./arrangedGeometry"
-import type { ZoneLayout } from "./schema"
 import {
+	type ArrangedGridV1,
+	isInstanceOf,
+	type WidgetGridV1,
+	type ZoneLayoutV1
+} from "@serene-pub/sdk"
+import {
+	defaultChatLayout,
+	updateWidget,
 	widgetsInZone,
 	withGridMembership,
-	withoutGridWidget,
-	type GridLayout
+	withoutGridWidget
 } from "./widgetGrid"
 
 export interface DoneInput {
 	/** The zone template as it stands (side lists). */
-	zones: ZoneLayout
+	zones: ZoneLayoutV1
 	/** The chat widget grid as it stands (the middle's membership). */
-	grid: GridLayout
+	grid: WidgetGridV1
 	/** The editor's arrangement, already deduplicated (`dedupeArranged`). */
-	arrangement: Arranged
+	arrangement: ArrangedGridV1
 	/** The zone template ids the editor's Left and Right zones edit. */
 	sideZoneIds: { left: string | null; right: string | null }
+	/**
+	 * The genre's primary widget (./primaryFloor). An instance of it that JOINS
+	 * the middle's grid takes the floor's shape — grow, anchored on every edge —
+	 * rather than a newcomer's strip, so the grid draws a log that fills.
+	 */
+	primaryId?: string
 }
 
 export interface DonePlacement {
-	zones: ZoneLayout
-	grid: GridLayout
+	zones: ZoneLayoutV1
+	grid: WidgetGridV1
 	/** The middle's membership as committed, in row order — what QF checks. */
 	middle: string[]
 }
@@ -74,11 +85,19 @@ export function placementAtDone(o: DoneInput): DonePlacement {
 		for (const w of widgetsInZone(grid, key)) grid = withoutGridWidget(grid, w.id)
 	}
 	const middleFrame = o.arrangement.middle
+	const before = new Set(widgetsInZone(grid, "middle").map((w) => w.id))
 	grid = withGridMembership(
 		grid,
 		"middle",
 		middleFrame ? rowOrder(middleFrame.items) : null
 	)
+	const primaryId = o.primaryId
+	if (primaryId) {
+		const { size, anchor } = defaultChatLayout(primaryId).widgets[0]
+		for (const w of widgetsInZone(grid, "middle"))
+			if (!before.has(w.id) && isInstanceOf(w.id, primaryId))
+				grid = updateWidget(grid, w.id, { size, anchor: { ...anchor } })
+	}
 	const middle = middleFrame
 		? rowOrder(middleFrame.items)
 		: widgetsInZone(grid, "middle").map((w) => w.id)

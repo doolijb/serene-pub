@@ -25,6 +25,7 @@
 import { and, asc, eq, inArray, isNotNull, max, ne, sql } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import { createMedia, deleteFile } from "$lib/server/media"
+import { isServerFailure } from "$lib/server/imports/importFailure"
 import {
 	DEFAULT_SPRITE_SET_NAME,
 	normalizeSpriteName,
@@ -684,11 +685,27 @@ export async function importSprites(
 			})
 			total += item.bytes.length
 			result.added++
-		} catch (e: any) {
-			result.skipped.push({ label, reason: e?.message || String(e) })
+		} catch (e) {
+			result.skipped.push({ label, reason: spriteSkipReason(e, characterId, label) })
 		}
 	}
 	return result
+}
+
+/**
+ * Why one sprite was left behind, as the import's warning says it: the
+ * refusal's own words (not an image, a corrupt file), or — for the server's
+ * own failure (`isServerFailure`: a query, the disk, a bug) — a plain phrase,
+ * with the whole error in the server log. A card's label reaches the query,
+ * so a card can make the database fail on purpose; its text never reaches
+ * the person.
+ */
+function spriteSkipReason(e: unknown, characterId: number, label: string): string {
+	if (isServerFailure(e) || !(e instanceof Error) || !e.message) {
+		console.error(`[sprites] Character ${characterId}'s sprite "${label}" was not saved:`, e)
+		return "the server could not save it; the server log has the details"
+	}
+	return e.message
 }
 
 /**

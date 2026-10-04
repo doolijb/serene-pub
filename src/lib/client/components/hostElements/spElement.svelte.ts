@@ -99,14 +99,14 @@ export const flag = (v: string | null | undefined): boolean =>
 /**
  * The attributes a portalled panel copies from its element's widget box so
  * it stays inside that box's widget-CSS scope and owner — a popover panel
- * lives under `<body>`, but a skin wrote `[data-widget-instance=…] .x`.
+ * lives under `<body>`, but a skin wrote `[data-skin-scope=…] .x`.
  */
 export function portalScope(host: Element): Record<string, string> {
 	const out: Record<string, string> = {}
 	const scope = host
-		.closest("[data-widget-instance]")
-		?.getAttribute("data-widget-instance")
-	if (scope) out["data-widget-instance"] = scope
+		.closest("[data-skin-scope]")
+		?.getAttribute("data-skin-scope")
+	if (scope) out["data-skin-scope"] = scope
 	const owner = host.closest("[data-sp-owner]")?.getAttribute("data-sp-owner")
 	if (owner) out["data-sp-owner"] = owner
 	return out

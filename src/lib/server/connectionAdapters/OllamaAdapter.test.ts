@@ -23,9 +23,11 @@ const listMock = vi.fn()
 // real generation; the per-instance `vi.fn()`s could not be reached from here.
 const chatMock = vi.fn()
 const generateMock = vi.fn()
+const showMock = vi.fn(async (_request: { model: string }): Promise<unknown> => ({}))
 vi.mock("ollama", () => ({
 	Ollama: class {
 		list = (...args: any[]) => listMock(...args)
+		show = (request: { model: string }) => showMock(request)
 		chat = (...args: any[]) => chatMock(...args)
 		generate = (...args: any[]) => generateMock(...args)
 		abort = vi.fn()
@@ -36,7 +38,9 @@ vi.mock("ollama", () => ({
 }))
 
 const exportsDefault = (await import("./OllamaAdapter")).default
-const { ollamaModelModality } = await import("./OllamaAdapter")
+const { ollamaModelModality, withShowCapabilities } = await import(
+	"./OllamaAdapter"
+)
 
 function makeConnection(overrides: Record<string, any> = {}): any {
 	return {
@@ -83,8 +87,7 @@ function makeAdapter(
 		connection: makeConnection(connectionOverrides),
 		// Empty is what "the context budget is switched off" resolves to now:
 		sampling,
-		contextConfig: {} as any,
-		promptConfig: { systemPrompt: "Test system prompt." } as any,
+		systemPrompt: "Test system prompt.",
 		session: makeSession(),
 		currentCharacterId: null,
 		tokenCounter: { countTokens: async () => 1 } as any,
@@ -201,7 +204,7 @@ describe("OllamaAdapter — generation writes nothing to the server log", () => 
 			const result = await adapter.generateText()
 			// The reasoning still reaches the CALLER — this is about where it
 			// does not go, not about switching it off.
-			expect(result.thinkingContent).toBe("Pondering deeply.")
+			expect(result.reasoningContent).toBe("Pondering deeply.")
 			expect(logSpy).not.toHaveBeenCalled()
 		} finally {
 			logSpy.mockRestore()
@@ -225,17 +228,17 @@ describe("OllamaAdapter — generation writes nothing to the server log", () => 
 
 			const result = await adapter.generateText()
 			let content = ""
-			let thinking = ""
+			let reasoning = ""
 			await (result.completionResult as any)(
 				(chunk: string) => {
 					content += chunk
 				},
 				(chunk: string) => {
-					thinking += chunk
+					reasoning += chunk
 				}
 			)
 			expect(content).toBe("Hello there.")
-			expect(thinking).toBe("Pondering deeply.")
+			expect(reasoning).toBe("Pondering deeply.")
 			expect(logSpy).not.toHaveBeenCalled()
 		} finally {
 			logSpy.mockRestore()
@@ -827,5 +830,95 @@ describe("what a listed Ollama model is for", () => {
 		expect(ollamaModelModality({ capabilities: [] })).toBeUndefined()
 		expect(ollamaModelModality({ name: "llama3" })).toBeUndefined()
 		expect(ollamaModelModality(null)).toBeUndefined()
+	})
+})
+
+// ── Images per message (PLAN-composer-attachments §3.6) ─────────────────────
+describe("OllamaAdapter — images on the chat wire", () => {
+	test("declares that it sends them", () => {
+		expect(makeAdapter({}).consumesAttachments).toBe(true)
+	})
+
+	test("a turn's image rides /api/chat as base64 in that message's images", async () => {
+		chatMock.mockClear()
+		chatMock.mockResolvedValueOnce({ message: { content: "ok" } })
+		const png = Buffer.from("png bytes of a cat")
+		const adapter = makeAdapter({ wireMode: "chat", extraJson: { stream: false } })
+		adapter.withCompiledPrompt({
+			prompt: undefined,
+			messages: [
+				{ role: "user", content: "Ash: my cat" },
+				{ role: "assistant", content: "Mara:" }
+			],
+			meta: {} as any
+		} as any)
+		adapter.withMessageAttachments([[{ bytes: png, mime: "image/png" }], []])
+		await adapter.generateText()
+		const req = chatMock.mock.calls[0][0]
+		expect(req.messages[0]).toEqual({
+			role: "user",
+			content: "Ash: my cat",
+			images: [png.toString("base64")]
+		})
+		expect(req.messages[1]).toEqual({ role: "assistant", content: "Mara:" })
+	})
+})
+
+describe("the listing asks /api/show for each model's capabilities", () => {
+	test("copies `capabilities` onto each entry, so vision and modality reach the sync", async () => {
+		listMock.mockResolvedValue({
+			models: [
+				{ model: "qwen2.5vl:7b", name: "qwen2.5vl:7b", details: {} },
+				{ model: "nomic-embed-text", name: "nomic-embed-text", details: {} }
+			]
+		})
+		showMock.mockImplementation(async ({ model }: any) => ({
+			capabilities:
+				model === "qwen2.5vl:7b" ? ["completion", "vision"] : ["embedding"]
+		}))
+		const { models } = await exportsDefault.listModels(makeConnection())
+		expect(models[0]).toMatchObject({
+			capabilities: ["completion", "vision"],
+			modality: "text-gen"
+		})
+		expect(models[1]).toMatchObject({
+			capabilities: ["embedding"],
+			modality: "embeddings"
+		})
+		showMock.mockReset()
+		showMock.mockImplementation(async (_request: { model: string }) => ({}))
+	})
+
+	test("leaves an entry that already carries the list alone, and a failed show silent", async () => {
+		const show = vi.fn(async ({ model }: any) => {
+			if (model === "broken") throw new Error("model not found")
+			return { capabilities: ["completion"] }
+		})
+		const out = await withShowCapabilities({ show }, [
+			{ model: "a", capabilities: ["completion", "vision"] },
+			{ model: "broken" },
+			{ model: "b" }
+		])
+		expect(show).toHaveBeenCalledTimes(2)
+		expect(out[0].capabilities).toEqual(["completion", "vision"])
+		expect(out[1]).toEqual({ model: "broken" })
+		expect(out[2].capabilities).toEqual(["completion"])
+	})
+
+	test("stops asking once the total budget is spent, so the sync's own timeout is never hit", async () => {
+		let clock = 0
+		const show = vi.fn(async () => {
+			clock += 9_000 // past the 8 s budget on the first answer
+			return { capabilities: ["completion"] }
+		})
+		const out = await withShowCapabilities(
+			{ show },
+			Array.from({ length: 10 }, (_, i) => ({ model: `m${i}` })),
+			() => clock
+		)
+		// The first show spends the budget; no worker starts another after it.
+		expect(show).toHaveBeenCalledTimes(1)
+		expect(out.filter((m) => m.capabilities).length).toBe(1)
+		expect(out).toHaveLength(10)
 	})
 })

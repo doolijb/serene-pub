@@ -119,6 +119,9 @@ describe("plugin presets", () => {
 			row.enabled,
 			"a package must not decide what this instance offers"
 		).toBe(false)
+		// Every genre has a default preset (owner ruling 2026-10-02): the
+		// first projected for a genre with none becomes it.
+		expect(row.isDefault).toBe(true)
 	})
 
 	it("keeps a config slug that resolves to no installed row out of the id column, and says so", async () => {
@@ -307,6 +310,28 @@ describe("plugin presets", () => {
 			warn.mockRestore()
 		}
 	})
+
+	it("a second preset of a genre that has a default does not take it", async () => {
+		const second = {
+			...manifest().presets[0],
+			slug: "board-quick",
+			label: "Quick board"
+		}
+		await install({
+			enabled: true,
+			manifest: { presets: [...manifest().presets, second] }
+		})
+		await syncPluginPresets(db)
+		const rows = (await db
+			.select()
+			.from(schema.sessionPresets)
+			.where(eq(schema.sessionPresets.genreId, "acme.dice:genre/board"))) as any[]
+		expect(rows.filter((r) => r.isDefault).map((r) => r.seedKey)).toEqual([
+			SEED_KEY
+		])
+		await install({ enabled: true, manifest: manifest() })
+		await syncPluginPresets(db)
+	}, 60_000)
 
 	it("withdraws a preset the package stopped declaring", async () => {
 		await install({ enabled: true, manifest: { presets: [] } })

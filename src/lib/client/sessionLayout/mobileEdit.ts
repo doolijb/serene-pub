@@ -11,7 +11,7 @@
  * ## One arrangement, both editors
  *
  * There is no mobile layout blob. Every function here takes a captured
- * `GsLayout` and returns one, so a layout arranged on a phone is the same
+ * `ArrangedZone` and returns one, so a layout arranged on a phone is the same
  * `arrangedGrid` a desktop opens, travels through the same presets, and commits
  * through the same path. Two rules keep that honest:
  *
@@ -37,7 +37,7 @@
  * row. Moving one of them past the row above or below cannot keep it, so that
  * widget takes a row of its own — which is what the phone was already drawing.
  */
-import type { GsAnchor, GsLayout, GsPos } from "./GridStackZone.svelte"
+import type { ArrangedItem, ArrangedZone, WidgetAnchor } from "@serene-pub/sdk"
 import { unitPinned, withPins } from "./arrangedGeometry"
 import { collapsedOrder } from "./sideRail"
 import { unitsOf, type RenderUnit } from "./tabGroups"
@@ -59,7 +59,7 @@ export interface MobileRow {
 }
 
 /** The rank a widget's anchor means in one column — `collapsedOrder`'s ranking. */
-function rankOf(a?: GsAnchor): OrderRank {
+function rankOf(a?: WidgetAnchor): OrderRank {
 	return a?.top ? 0 : a?.bottom ? 2 : 1
 }
 
@@ -69,7 +69,7 @@ function rankOf(a?: GsAnchor): OrderRank {
  * The order is `collapsedOrder`'s, read through the same `unitsOf` the live
  * view uses, so the list is the render rather than a second reading of it.
  */
-export function mobileRows(zone: GsLayout | null | undefined): MobileRow[] {
+export function mobileRows(zone: ArrangedZone | null | undefined): MobileRow[] {
 	if (!zone?.items?.length) return []
 	const units = unitsOf(zone.items)
 	const byKey = new Map(units.map((u) => [u.key, u]))
@@ -93,10 +93,10 @@ export function mobileRows(zone: GsLayout | null | undefined): MobileRow[] {
 
 /** Rewrite the items a mapper changes, keeping the zone itself when none do. */
 function withItems(
-	zone: GsLayout,
-	map: (it: GsPos) => GsPos,
+	zone: ArrangedZone,
+	map: (it: ArrangedItem) => ArrangedItem,
 	rows?: number
-): GsLayout {
+): ArrangedZone {
 	const items = zone.items.map(map)
 	const nextRows = rows ?? zone.rows
 	if (nextRows === zone.rows && items.every((it, i) => it === zone.items[i]))
@@ -137,10 +137,10 @@ function bandsOf(units: RenderUnit[]): RenderUnit[][] {
  * The zone keeps its declared `rows` unless the new stack needs more.
  */
 export function restackZone(
-	zone: GsLayout,
+	zone: ArrangedZone,
 	order?: string[],
 	split?: string
-): GsLayout {
+): ArrangedZone {
 	const units = unitsOf(zone.items)
 	const byKey = new Map(units.map((u) => [u.key, u]))
 	const bandIndex = new Map<string, number>()
@@ -191,10 +191,10 @@ export function restackZone(
  * when their columns interleave, which no exchange of two blocks can express.
  */
 function swapColumns(
-	zone: GsLayout,
+	zone: ArrangedZone,
 	u: MobileRow,
 	v: MobileRow
-): GsLayout | null {
+): ArrangedZone | null {
 	const a = u.box
 	const b = v.box
 	if (!(a.x + a.w <= b.x || b.x + b.w <= a.x)) return null
@@ -215,10 +215,10 @@ function swapColumns(
  * nothing left in it is absent, never `{}`.
  */
 function anchorAt(
-	a: GsAnchor | undefined,
+	a: WidgetAnchor | undefined,
 	rank: OrderRank
-): GsAnchor | undefined {
-	const next: GsAnchor = {}
+): WidgetAnchor | undefined {
+	const next: WidgetAnchor = {}
 	if (rank === 0) next.top = true
 	if (a?.right) next.right = true
 	if (rank === 2) next.bottom = true
@@ -228,10 +228,10 @@ function anchorAt(
 
 /** Put a unit's widgets in `rank`, keeping their left/right edges. */
 function withRank(
-	zone: GsLayout,
+	zone: ArrangedZone,
 	ids: Iterable<string>,
 	rank: OrderRank
-): GsLayout {
+): ArrangedZone {
 	const set = new Set(ids)
 	return withItems(zone, (it) => {
 		if (!set.has(it.id)) return it
@@ -243,7 +243,7 @@ function withRank(
 	})
 }
 
-function overlapCount(zone: GsLayout): number {
+function overlapCount(zone: ArrangedZone): number {
 	const boxes = unitsOf(zone.items).map((u) => u.box)
 	let n = 0
 	for (let i = 0; i < boxes.length; i++)
@@ -261,7 +261,7 @@ function overlapCount(zone: GsLayout): number {
 	return n
 }
 
-function withinGrid(zone: GsLayout): boolean {
+function withinGrid(zone: ArrangedZone): boolean {
 	return zone.items.every(
 		(it) =>
 			it.x >= 0 &&
@@ -272,7 +272,7 @@ function withinGrid(zone: GsLayout): boolean {
 }
 
 /** Is this candidate drawable — no worse than the arrangement it came from? */
-function drawable(next: GsLayout, from: GsLayout): boolean {
+function drawable(next: ArrangedZone, from: ArrangedZone): boolean {
 	return (
 		overlapCount(next) <= overlapCount(from) &&
 		(withinGrid(next) || !withinGrid(from))
@@ -291,7 +291,7 @@ function sameOrder(a: string[], b: string[]): boolean {
  * where the two share a row, and otherwise a re-stack that gives the moved
  * group a row of its own. Nothing else in the zone moves that does not have to.
  */
-export function moveRow(zone: GsLayout, key: string, delta: number): GsLayout {
+export function moveRow(zone: ArrangedZone, key: string, delta: number): ArrangedZone {
 	if (!delta) return zone
 	const rows = mobileRows(zone)
 	const i = rows.findIndex((r) => r.key === key)
@@ -338,10 +338,10 @@ export function moveRow(zone: GsLayout, key: string, delta: number): GsLayout {
  * cannot, and a step that finds no drawable expression stops the drag there.
  */
 export function moveRowTo(
-	zone: GsLayout,
+	zone: ArrangedZone,
 	key: string,
 	index: number
-): GsLayout {
+): ArrangedZone {
 	let cur = zone
 	for (;;) {
 		const rows = mobileRows(cur)
@@ -357,10 +357,10 @@ export function moveRowTo(
 
 /** Pin or unpin one group — the arrangement's own field (see `withPins`). */
 export function setRowPinned(
-	zone: GsLayout,
+	zone: ArrangedZone,
 	key: string,
 	pinned: boolean
-): GsLayout {
+): ArrangedZone {
 	const row = mobileRows(zone).find((r) => r.key === key)
 	if (!row) return zone
 	return withPins(zone, row.members, pinned)
@@ -374,11 +374,11 @@ export function setRowPinned(
  * in the live view, and their cells decide only which tab comes first.
  */
 export function moveMember(
-	zone: GsLayout,
+	zone: ArrangedZone,
 	key: string,
 	id: string,
 	delta: number
-): GsLayout {
+): ArrangedZone {
 	if (!delta) return zone
 	const row = mobileRows(zone).find((r) => r.key === key)
 	if (!row || row.members.length < 2) return zone
@@ -392,7 +392,7 @@ export function moveMember(
 	const a = zone.items.find((it) => it.id === row.members[i])
 	const b = zone.items.find((it) => it.id === row.members[j])
 	if (!a || !b) return zone
-	const cells = new Map<string, GsPos>([
+	const cells = new Map<string, ArrangedItem>([
 		[a.id, b],
 		[b.id, a]
 	])

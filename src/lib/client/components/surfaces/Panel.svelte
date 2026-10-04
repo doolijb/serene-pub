@@ -1,21 +1,15 @@
 <script lang="ts">
 	/**
 	 * The panel chrome wrapper (plan 21 §6): one title bar + body for every
-	 * panel, whether its body is a remote component (core's or a plugin's), a
-	 * plugin frame, or the page-supplied primary. The grid places the *slot* around
+	 * panel, whether its body is a remote component (core's or a plugin's) or
+	 * the page-supplied primary. The grid places the *slot* around
 	 * this; the wrapper itself is placement-agnostic, so a panel dragged between
 	 * grid and drawer never changes parent — the law that keeps frames from
 	 * reloading (21 §4).
 	 */
 	import { getContext, type Snippet } from "svelte"
 	import * as Icons from "@lucide/svelte"
-	import PluginFrame from "$lib/client/components/frames/PluginFrame.svelte"
 	import RemoteWidget from "$lib/client/components/host/RemoteWidget.svelte"
-	import WidgetStyleOverlay from "$lib/client/sessionLayout/WidgetStyleOverlay.svelte"
-	import {
-		effectiveWidgetSkin,
-		widgetStylesStore
-	} from "$lib/client/stores/widgetStyles.svelte"
 	import { widgetSettingValues } from "$lib/client/stores/widgetSettings.svelte"
 	import { resolveWidgetInstance } from "$lib/shared/widgets/settings"
 	import {
@@ -28,8 +22,6 @@
 	} from "$lib/client/sessionLayout/hostCard"
 	import {
 		WIDGET_SCOPED_SECTIONS,
-		projectMessageRow,
-		widgetReads,
 		type WidgetScopedSectionValues,
 		type WidgetSectionScope
 	} from "@serene-pub/sdk"
@@ -74,12 +66,18 @@
 		 * its Card setting says (ruled 2026-09-27; `sessionLayout/hostCard`).
 		 */
 		popover?: boolean
+		/**
+		 * A title the layout gives this panel in place of its own, when
+		 * another placed instance would read the same (a Duplicate copies the
+		 * `title` setting): _World map · 2_ (brief 7b review;
+		 * `sessionLayout/widgetInstances` `distinctTitles`). Absent: its own.
+		 */
+		title?: string
 		/** The primary conversation body, supplied by the session page. */
 		primaryChildren?: Snippet
 		/**
 		 * The session's action venues (`sessions:actions`; U5c review W4),
-		 * handed to BOTH bodies as `actions.v1` — a frame over its port, a
-		 * remote over its wire. Threaded from the page through
+		 * handed to the body as `actions.v1` over the remote's wire. Threaded from the page through
 		 * `SessionLayout`. Absent (a panel outside a session), a body gets no
 		 * venues and its `invoke` refuses everything by name.
 		 */
@@ -105,6 +103,7 @@
 		chrome = "grid",
 		hideHeader = false,
 		popover = false,
+		title,
 		primaryChildren,
 		actions,
 		actionDispatch,
@@ -114,8 +113,7 @@
 	/* This instance's settings (PLAN 25): the declaration and this user's stored
 	   deviations, resolved once into the three things a host threads — the
 	   header's title, the lane the subscription reads, and the settings the
-	   widget is posted. Both bodies below read the same triple, so a frame
-	   is a remote plus the iframe here too. */
+	   widget is posted. */
 	/**
 	 * What this widget was granted beyond the base sections (C5, R21): each
 	 * granted scope's section, read off the page context that supplies it
@@ -142,14 +140,9 @@
 		}
 		return Object.keys(out).length ? (out as Partial<WidgetScopedSectionValues>) : undefined
 	})
-	/**
-	 * Does this widget read the log (`reads`, R75)? One that does not is
-	 * handed none — not snapshotted per token for a frame (F4).
-	 */
-	const readsMessages = $derived(widgetReads(instance).includes("messages"))
 
-	let resolved = $derived(
-		resolveWidgetInstance(
+	let resolved = $derived.by(() => {
+		const r = resolveWidgetInstance(
 			{
 				id: instance.id,
 				title: instance.title,
@@ -158,7 +151,8 @@
 			},
 			widgetSettingValues(instance.id)
 		)
-	)
+		return title ? { ...r, title } : r
+	})
 
 	// Map the declared icon name to a lucide component, with a sensible floor.
 	let IconCmp = $derived(
@@ -200,53 +194,10 @@
 				instance.drawered &&
 				manager.drawerOpenId !== instance.id)
 	)
-	// What crosses into the frame must be (a) minimal — the frame gets what
-	// the host chooses, same posture as the session-view lane — and (b) plain
-	// data: the live session is a Svelte state proxy graph, which
-	// port.postMessage cannot structured-clone (DataCloneError). Rows are
-	// projected (less MESSAGE_HOST_FIELDS) BEFORE the snapshot, so the
-	// per-token clone never walks an embedding vector or a debugMeta prompt.
-	let frameSession = $derived(
-		session
-			? {
-					id: (session as any).id,
-					name: (session as any).name ?? null
-				}
-			: undefined
-	)
-	let frameMessages = $derived(
-		readsMessages
-			? ($state.snapshot(
-					(((session as any)?.sessionMessages ?? []) as unknown[]).map(projectMessageRow)
-				) as unknown[])
-			: undefined
-	)
-
-	/* ── the frame's skin (PLAN 25, ruled 2026-08-30) ────────────────────
-	 * A frame widget is treated identically to a remote one plus the iframe,
-	 * so it resolves its skin through the SAME store `WidgetHost` uses — the
-	 * pinned row, or the unsaved draft while its editor is open. Only the
-	 * injection differs: `PluginFrame` posts it into the frame's own document
-	 * as `{ t: "style" }` instead of writing a scoped `<style>` out here.
-	 *
-	 * Resolved HERE rather than inside `PluginFrame` because a frame surface is
-	 * not always a widget: the page and session-view frames have no widget id to
-	 * resolve against, and they pass no skin at all. */
-	// Called for the subscription, not the value — the same reason WidgetHost
-	// calls it: it is what starts the one fetch, and `effectiveWidgetSkin` reads
-	// the same module state, so the derived below re-runs when the rows or the
-	// pins land. Idempotent, so a panel that is not a frame pays nothing for it
-	// beyond the call.
-	widgetStylesStore()
-	let frameSkin = $derived(
-		instance.surface.kind === "frame"
-			? effectiveWidgetSkin(instance.id)
-			: undefined
-	)
 </script>
 
 <!-- `relative` is the widget-style overlay's containing block (PLAN 25): the
-     overlay is rendered by WidgetHost (a remote's) or beside the frame; WidgetHost's own wrapper is `display: contents`
+     overlay is rendered by WidgetHost (a remote's); WidgetHost's own wrapper is `display: contents`
      and so has no box to position against. It changes nothing on its own — the
      panel card is the box a person points at, which is what the overlay covers. -->
 <section
@@ -333,42 +284,10 @@
 	>
 		{#if isPrimary && primaryChildren}
 			{@render primaryChildren()}
-		{:else if instance.surface.kind === "frame" && instance.src}
-			<PluginFrame
-				src={instance.src}
-				title={resolved.title}
-				surface="panel"
-				session={frameSession}
-				channels={resolved.channels}
-				messages={frameMessages}
-				props={{ panelId: instance.id, title: resolved.title }}
-				settings={resolved.settings}
-				skin={frameSkin}
-				surfaceId={instance.id}
-				reads={instance.reads}
-				placement={told}
-				source={manager}
-				{actions}
-				{actionDispatch}
-				{suspended}
-				onAction={onFrameAction}
-			/>
-			<!-- The style controls for the frame, on the SAME terms a remote
-			     widget gets them (PLAN 25). Outside the iframe by construction,
-			     which is the happy accident here: the skin being edited lands
-			     inside the frame's document and so cannot restyle — or hide — the
-			     controls you would use to take it back off. Renders nothing at all
-			     outside Style mode. -->
-			<WidgetStyleOverlay
-				widgetId={instance.id}
-				label={resolved.title}
-				mount="frame"
-			/>
 		{:else if instance.surface.kind === "remote"}
 			<!-- A remote component — core's or a plugin's — run in its owner's
 			     UI worker and mirrored through the host-element allowlist (§3.5,
-			     R79). Its data is the frame's: a remote is a frame minus the
-			     document. Mounted once the session is here, for its projection —
+			     R79). Mounted once the session is here, for its projection —
 			     a primary at once, any other on first show (unit M). With no
 			     module (an authored component switched off, deleted or saved
 			     broken: C6 P5) `RemoteWidget` draws its own missing floor. -->

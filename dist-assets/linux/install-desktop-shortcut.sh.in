@@ -1,0 +1,61 @@
+#!/bin/bash
+# Adds Serene Pub to your applications menu, pointing at wherever this folder
+# actually is — run this once after extracting the release, and again if you
+# move the folder. Nothing else is installed anywhere on your system.
+#
+# TEMPLATE: scripts/create-executables.js renders this into
+# dist/generated/linux-x64/install-desktop-shortcut.sh, substituting
+# @LAUNCHER_FILE@ and @ICON_PATH@. Edit this file, never the rendered copy.
+set -e
+DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
+
+# The spec-mandated location for a per-user entry. The menu only reads entries
+# from here (or the system-wide /usr/share/applications) — a .desktop file left
+# sitting in the extracted folder is not "installed" in any sense.
+APPS_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
+DESKTOP_FILE="$APPS_DIR/serene-pub.desktop"
+mkdir -p "$APPS_DIR"
+
+# Only Exec= needs the Desktop Entry spec's own quoting rules — it's the one
+# field parsed as a command line (space-separated arguments), so a value
+# containing a space (the common case here — people extract into paths with
+# spaces) must be double-quoted, with any literal backslash/backtick/dollar/
+# double-quote within it escaped with a backslash. Icon= and Path= are plain
+# single string values, not argument lists — confirmed against
+# desktop-file-validate, which flags a quoted Icon/Path as *not* looking
+# like a valid path (the quote characters would become part of the value).
+escape_exec_value() {
+    printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/`/\\`/g' -e 's/\$/\\$/g'
+}
+ESCAPED_DIR="$(escape_exec_value "$DIR")"
+
+# Exec= is the launcher at the top of the folder, never anything inside app/:
+# app/ is the directory an update replaces wholesale, while the launcher's
+# path stays put across updates (it replaces itself in place).
+#
+# Icon= points INTO app/ on purpose: the path is stable (app/ is renamed
+# aside and a new one moved to the same path), and the icon then always
+# matches the installed version. build/client is where SvelteKit copies
+# static/, so this is the same file the web app serves as its icon.
+cat > "$DESKTOP_FILE" <<EOF
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Serene Pub
+Comment=AI Chat Application
+Exec="$ESCAPED_DIR/@LAUNCHER_FILE@"
+Icon=$DIR/@ICON_PATH@
+Terminal=false
+Categories=Network;Chat;
+StartupNotify=false
+Path=$DIR
+EOF
+
+# Some desktops cache the menu; harmless and absent on plenty of systems.
+if command -v update-desktop-database > /dev/null 2>&1; then
+    update-desktop-database "$APPS_DIR" > /dev/null 2>&1 || true
+fi
+
+echo "Serene Pub added to your applications menu."
+echo "Entry: $DESKTOP_FILE"
+echo "Remove it again with: rm \"$DESKTOP_FILE\""

@@ -211,8 +211,7 @@ export async function retakeRowRefusal(
 		 * **A question its turn stopped on** (R9): a one-row turn whose row
 		 * carries a form — the Lair's knock. Re-driving that row re-plans the
 		 * turn, and a turn that now plays would write another voice's line
-		 * into the question's row (the lead delver's, under the Castellan's
-		 * name). The row IS its turn's whole yield, so the composer's
+		 * into the question's row (a delver's, under the Castellan's name). The row IS its turn's whole yield, so the composer's
 		 * Regenerate — the retake — takes that turn again, into rows of its
 		 * own. Keyed on recorded facts: the yield, and a form on the row.
 		 */
@@ -356,7 +355,7 @@ export async function turnControlRefusal(
  * - a `character:` reference is **Pick who speaks** (`pick`);
  * - the null reference in a `voice: 'narrator'` genre is **the narrator's
  *   turn** (`narrate`) — elsewhere the null reference is the pipeline's own
- *   voice (the Writing Room's manuscript), not a narrator.
+ *   voice (a `voice: 'none'` folio channel's), not a narrator.
  */
 export function pressedTurnControl(
 	shape: unknown,
@@ -478,16 +477,14 @@ export async function verbEnablementRefusal(
  *
  * ## The connection is resolved the way the TURN resolves it — nearly
  *
- * Through `resolveTaskConfig`: prompt config → the instance's `text->text`
- * default. A shortcut that read the instance default alone would be right
- * until somebody set a connection on their prompt config, and then would
- * disable a button that works (or, worse, enable one that does not).
+ * Through `resolveTaskConfig`: the session's sampling over the instance's
+ * `text->text` default.
  *
- * ⏳ Since the one road (09-B B4, R-8) the turn itself resolves through the
- * scope data (`config/world.ts`), which also carries the pipeline panel's pick
- * on the generate node; this affordance check does not read that pick, so it
- * can disagree with the run when a per-node connection differs from the prompt
- * config's. An affordance, not a write — the turn's own resolution wins.
+ * ⏳ The turn itself resolves through the scope data (`config/world.ts`, R-8),
+ * which also carries the pipeline panel's pick on the generate node; this
+ * affordance check does not read that pick, so it can disagree with the run
+ * when a per-node connection differs from the instance default. An
+ * affordance, not a write — the turn's own resolution wins.
  *
  * ⚠ A resolution FAILURE is not this function's refusal. "No connection is set"
  * is a different problem with a different sentence, and the reply road writes
@@ -509,19 +506,14 @@ export async function extendVerbRefusal(
 	)
 	if (genre) return genre
 	try {
-		const { getUserConfigurations } = await import(
-			"$lib/server/utils/getUserConfigurations"
-		)
 		const { resolveTaskConfig } = await import(
 			"$lib/server/utils/resolveTaskConfig"
 		)
 		const { resolveContinueRefusal } = await import(
 			"$lib/server/connections/resolve"
 		)
-		const { promptConfig } = await getUserConfigurations(userId)
 		const resolved = await resolveTaskConfig({
 			taskType: "session",
-			promptConfigId: promptConfig?.id,
 			sessionId
 		})
 		if (!resolved.connection) return null

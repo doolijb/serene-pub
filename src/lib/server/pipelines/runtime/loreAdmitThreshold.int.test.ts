@@ -184,9 +184,9 @@ const worldLoreLane = async () => {
 /**
  * The config a run on this session actually resolves to.
  *
- * ⚠ Not the `pipeline-default:` row. `migrateContextTemplates` duplicates the
- * shipped config into a mutable "Default (customized)" and selects that at
- * instance scope, so a fixture writing to the immutable original would change
+ * ⚠ Not the `pipeline-default:` row. A run resolves through the session's
+ * selection chain, which may name a mutable configuration rather than the
+ * shipped one, so a fixture writing to the immutable original could change
  * nothing and prove nothing.
  */
 const selectedConfigId = async () => {

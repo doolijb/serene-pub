@@ -112,7 +112,11 @@
 							"'Fira Mono', 'Cascadia Code', 'JetBrains Mono', monospace"
 					},
 					".cm-content": { padding: "8px 0" },
-					".cm-gutters": { borderRight: "1px solid #2a2a3a" }
+					// The gutter's rule is the app's panel edge, not a
+					// colour of its own (STYLE-GUIDE §2: tokens, never hex).
+					".cm-gutters": {
+						borderRight: "1px solid var(--color-surface-800)"
+					}
 				})
 			]
 		})
@@ -177,9 +181,9 @@
 		socket.emit("customThemes:delete", { id: theme.id })
 	}
 
-	function toggleInstanceTheme(enabled: boolean) {
+	function togglePubTheme(enabled: boolean) {
 		if (!theme?.id) return
-		socket.emit("customThemes:setInstanceTheme", { id: theme.id, enabled })
+		socket.emit("customThemes:setPubTheme", { id: theme.id, enabled })
 	}
 
 	// Declared through the interest registry below, which counts subscribers
@@ -227,11 +231,11 @@
 		})
 	}
 
-	function onSetInstanceTheme() {
-		toaster.success({ title: "Instance theme setting updated" })
+	function onSetPubTheme() {
+		toaster.success({ title: "Pub theme setting updated" })
 	}
 
-	function onSetInstanceThemeError(msg: Sockets.ErrorResponse) {
+	function onSetPubThemeError(msg: Sockets.ErrorResponse) {
 		toaster.error({
 			title: "Failed to update",
 			description: msg?.error
@@ -243,7 +247,7 @@
 	 * `SCOPED_EVENTS` — `onGetCss` filters by name itself, in the handler,
 	 * exactly as it did before, because CSS for every open theme arrives on
 	 * this one event. Standing because this editor stays open across save,
-	 * delete and instance-theme presses, each of which answers on its own key.
+	 * delete and pub-theme presses, each of which answers on its own key.
 	 */
 	useInterest<"customThemes:getCss">("customThemes:getCss", onGetCss)
 	useInterest<"customThemes:save">("customThemes:save", onSave)
@@ -256,13 +260,13 @@
 		"customThemes:delete:error",
 		onDeleteError
 	)
-	useInterest<"customThemes:setInstanceTheme">(
-		"customThemes:setInstanceTheme",
-		onSetInstanceTheme
+	useInterest<"customThemes:setPubTheme">(
+		"customThemes:setPubTheme",
+		onSetPubTheme
 	)
-	useInterest<"customThemes:setInstanceTheme:error">(
-		"customThemes:setInstanceTheme:error",
-		onSetInstanceThemeError
+	useInterest<"customThemes:setPubTheme:error">(
+		"customThemes:setPubTheme:error",
+		onSetPubThemeError
 	)
 
 	onMount(() => {
@@ -280,33 +284,28 @@
 	})
 </script>
 
+<!-- The chrome is the app's own (panel-edge rules, surface grounds,
+     muted text) so it follows the theme being edited; only the code area is
+     CodeMirror's dark editor. -->
 <div
-	class="flex h-full flex-col overflow-hidden rounded-xl border"
-	style="border-color: #2a2a3a; background: #13131f;"
+	class="panel-edge bg-surface-50-950 flex h-full flex-col overflow-hidden rounded-xl border"
 >
 	<!-- Editor toolbar -->
 	<div
-		class="flex items-center gap-2 border-b px-4 py-2"
-		style="border-color: #2a2a3a; background: #1a1a2e;"
+		class="panel-edge bg-surface-100-900 flex items-center gap-2 border-b px-4 py-2"
 	>
 		<div class="flex flex-1 items-center gap-3">
 			<!-- Dot accent -->
 			<span
-				class="h-2.5 w-2.5 rounded-full"
-				style="background: linear-gradient(135deg, #7c6af7, #a855f7);"
+				class="bg-primary-500 h-2.5 w-2.5 rounded-full"
+				aria-hidden="true"
 			></span>
-			<span
-				class="text-xs"
-				style="color: #8b8ba7;"
-			>
-				Custom theme
-			</span>
+			<span class="text-surface-600-400 text-xs">Custom theme</span>
 		</div>
 		<div class="flex items-center gap-1">
 			<!-- Import file -->
 			<label
-				class="btn btn-sm cursor-pointer text-xs"
-				style="color: #8b8ba7; background: transparent;"
+				class="btn btn-sm preset-tonal-surface cursor-pointer text-xs"
 				title="Import CSS/JSON file"
 			>
 				<Icons.Upload size={13} />
@@ -322,22 +321,17 @@
 	</div>
 
 	<!-- Fields row -->
-	<div
-		class="border-b px-4 py-3"
-		style="border-color: #2a2a3a; background: #16162a;"
-	>
+	<div class="panel-edge bg-surface-100-900 border-b px-4 py-3">
 		<label
 			for="theme-label-input"
-			class="mb-1 block text-xs font-medium"
-			style="color: #6b6b8a;"
+			class="text-surface-600-400 mb-1 block text-xs font-medium"
 		>
 			Display name
 		</label>
 		<input
 			id="theme-label-input"
 			type="text"
-			class="w-full rounded border px-2 py-1.5 text-sm transition outline-none focus:ring-1"
-			style="background: #1e1e32; border-color: #2a2a3a; color: #c8c8e8; --tw-ring-color: #7c6af7;"
+			class="input w-full text-sm"
 			bind:value={labelField}
 			placeholder="My Night Theme"
 		/>
@@ -345,15 +339,8 @@
 
 	<!-- Loading overlay for CSS -->
 	{#if isLoadingCss}
-		<div
-			class="flex flex-1 items-center justify-center"
-			style="background: #13131f;"
-		>
-			<Icons.Loader2
-				size={24}
-				class="animate-spin"
-				style="color: #7c6af7;"
-			/>
+		<div class="bg-surface-50-950 flex flex-1 items-center justify-center">
+			<Icons.Loader2 size={24} class="text-primary-500 animate-spin" />
 		</div>
 	{/if}
 
@@ -366,40 +353,38 @@
 
 	<!-- Status bar -->
 	<div
-		class="flex items-center justify-between border-t px-4 py-1.5"
-		style="border-color: #2a2a3a; background: #1a1a2e;"
+		class="panel-edge bg-surface-100-900 flex items-center justify-between border-t px-4 py-1.5"
 	>
-		<div class="flex items-center gap-4 text-xs" style="color: #4a4a6a;">
+		<div class="text-surface-600-400 flex items-center gap-4 text-xs">
 			<span>{lineCount} lines</span>
 			<span>{charCount.toLocaleString()} chars</span>
-			<span style="color: #2a2a3a;">•</span>
-			<span style="color: #5a5a7a;">CSS</span>
+			<span aria-hidden="true">•</span>
+			<span>CSS</span>
 		</div>
 		<div class="flex items-center gap-2">
-			<!-- Admin: instance theme toggle -->
+			<!-- Admin: pub theme toggle -->
 			{#if isAdmin && theme && isAccountsEnabled}
+				<!-- On is tonal primary, the app's "this is on" (§2.4). -->
 				<button
-					class="btn btn-sm text-xs"
-					style="color: {theme.isInstanceTheme
-						? '#a855f7'
-						: '#4a4a6a'}; background: transparent; border: 1px solid {theme.isInstanceTheme
-						? '#7c6af7'
-						: '#2a2a3a'};"
-					onclick={() => toggleInstanceTheme(!theme!.isInstanceTheme)}
-					title={theme.isInstanceTheme
+					class="btn btn-sm text-xs {theme.isPubTheme
+						? 'preset-tonal-primary'
+						: 'preset-tonal-surface'}"
+					aria-pressed={theme.isPubTheme}
+					onclick={() => togglePubTheme(!theme!.isPubTheme)}
+					title={theme.isPubTheme
 						? "Disable for all users"
 						: "Enable for all users"}
 				>
 					<Icons.Globe size={11} />
-					{theme.isInstanceTheme
-						? "Instance theme"
-						: "Make instance theme"}
+					{theme.isPubTheme
+						? "Pub theme"
+						: "Make pub theme"}
 				</button>
 			{/if}
 
 			<!-- Admin: uploader info -->
 			{#if isAdmin && theme?.uploaderName && isAccountsEnabled}
-				<span class="text-xs" style="color: #3a3a5a;">
+				<span class="text-surface-600-400 text-xs">
 					by {theme.uploaderName}
 				</span>
 			{/if}
@@ -419,16 +404,14 @@
 						Confirm delete
 					</button>
 					<button
-						class="btn btn-sm text-xs"
-						style="color: #4a4a6a; background: transparent;"
+						class="btn btn-sm preset-tonal-surface text-xs"
 						onclick={() => (confirmDelete = false)}
 					>
 						Cancel
 					</button>
 				{:else}
 					<button
-						class="btn btn-sm text-xs"
-						style="color: #4a4a6a; background: transparent;"
+						class="btn btn-sm preset-tonal-surface text-xs"
 						onclick={() => (confirmDelete = true)}
 						aria-label="Delete theme"
 						title="Delete theme"
@@ -440,8 +423,7 @@
 
 			{#if onCancel}
 				<button
-					class="btn btn-sm text-xs"
-					style="color: #4a4a6a; background: transparent;"
+					class="btn btn-sm preset-tonal-surface text-xs"
 					onclick={onCancel}
 				>
 					Cancel

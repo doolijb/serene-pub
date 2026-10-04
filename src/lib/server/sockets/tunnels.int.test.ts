@@ -76,7 +76,7 @@ beforeAll(async () => {
 		.insert(schema.servers)
 		.values({
 			slug: LOCAL_SERVER_SLUG,
-			name: "This instance",
+			name: "This pub",
 			isSeeded: true
 		})
 		.returning()

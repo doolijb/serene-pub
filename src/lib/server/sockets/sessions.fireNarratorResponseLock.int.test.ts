@@ -30,15 +30,6 @@ vi.mock("$lib/server/db", async () => {
 	return { db }
 })
 
-// Isolates this test from needing a full sampling/prompt/context config
-// fixture (resolveNarratorPromptConfig -> getUserConfigurations throws
-// "Missing required configuration" against a bare test DB with none of
-// those seeded) — irrelevant to what's under test here, which is purely
-// whether the handler's insert is serialized behind the session lock.
-vi.mock("$lib/server/utils/resolveNarratorPromptConfig", () => ({
-	resolveNarratorPromptConfig: async () => null
-}))
-
 // The reply road is mocked: the pipeline owns its row since 09-B B4, so the
 // handler inserts nothing itself — what it does behind the lock is START the
 // run. The order in which that happens relative to the lock holder is the

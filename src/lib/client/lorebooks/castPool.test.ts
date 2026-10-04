@@ -5,12 +5,14 @@
 import { describe, expect, it } from "vitest"
 import {
 	castPool,
+	castPoolItem,
 	filterCast,
 	loreByMember,
 	toCastMember,
 	unanchoredLore,
 	type CastRow
 } from "./castPool"
+import { CAST_KIND, needsKeywords } from "./poolFilter"
 
 function row(over: Partial<CastRow> & { id: number }): CastRow {
 	return { binding: `{{char:${over.id}}}`, ...over }
@@ -165,5 +167,52 @@ describe("castPool — the list column and what hangs off each row", () => {
 			[...entries, { id: 102, lorebookBindingId: null }]
 		)
 		expect(pool.unanchored.map((e) => e.id)).toEqual([102])
+	})
+})
+
+/** Note 12: Everything lists the people too. */
+describe("castPoolItem", () => {
+	it("lists a member under the cast kind, opening nothing but Cast", () => {
+		const row = castPoolItem(
+			{
+				id: 4,
+				name: "Mara",
+				binding: "{{char:4}}",
+				aliases: ["the ferrywoman"],
+				summary: "Keeps the crossing."
+			},
+			undefined,
+			undefined
+		)
+		expect(row).toMatchObject({
+			key: "cast#4",
+			kind: CAST_KIND,
+			name: "Mara",
+			castKind: "background",
+			pinned: false,
+			off: false,
+			archived: false,
+			parentKey: null,
+			keys: []
+		})
+		// Search reads content, so a member is found by alias too.
+		expect(row.content).toContain("the ferrywoman")
+		// No keywords to need: a member is no keyword chore.
+		expect(needsKeywords(row)).toBe(false)
+	})
+
+	it("names a carded member by the card they read as at the moment", () => {
+		const row = castPoolItem(
+			{
+				id: 5,
+				characterId: 9,
+				character: { name: "Old card" }
+			},
+			"Swapped card",
+			"/avatar.png"
+		)
+		expect(row.name).toBe("Swapped card")
+		expect(row.castKind).toBe("character")
+		expect(row.avatar).toBe("/avatar.png")
 	})
 })

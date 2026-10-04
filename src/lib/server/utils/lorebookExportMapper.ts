@@ -12,10 +12,29 @@
  * `extraJson`) is spread in alongside `serenepub`, not replaced by it.
  *
  * ⚠ **`entryType` is a wire name and never a type id.** `world` / `character` /
- * `history` are what every lorebook Serene Pub has ever written carries, and a
- * file is read by installs whose type registry is not this one. Writing
- * `core:entry/world-lore@1` into a file would make the registry a public
- * contract, versioned, forever.
+ * `history` / `location` / `item` (`ENTRY_EXPORT_KEY`) are what a file
+ * carries, and a file is read by installs whose type registry is not this one.
+ * Writing `core:entry/world-lore@1` into a file would make the registry a
+ * public contract, versioned, forever.
+ *
+ * ## Format 2 (lorebooks plan A26, E-8)
+ *
+ * The container states `serenepub.formatVersion: 2`; a file with none (or the
+ * `version: 1` earlier files wrote) is format 1, and the importer reads both
+ * with one path, since every format-2 key is additive. Format 2 adds: a place
+ * and an item under their own wire names, the per-entry facts every type
+ * carries (`entryFacts`), a cast member's `spriteSet`, and the book's stats
+ * (`serenepub.stats`, see `mapStatRowForExport`).
+ *
+ * ## Export profiles
+ *
+ * `native` (the default, and what card export and the import's comparison
+ * use) writes format 2 and every wire name. `0.5-compat` writes format 1: no
+ * marker, no stats, and only the three wire names a Serene Pub 0.5 reader
+ * knows (`SERENE_PUB_0_5_EXPORT_KEYS`) — everything else as world lore, with
+ * world lore's fields, grouped with world lore as it comes back — so its file
+ * is a fixed point against the book it makes. Nothing ships `0.5-compat` while
+ * lorebook export is paused.
  */
 
 import {
@@ -30,9 +49,37 @@ import {
 	DEFAULT_EXPORT_KEY,
 	ENTRY_EXPORT_KEY,
 	ENTRY_TYPE_IDS,
-	WORLD_LORE_TYPE_ID,
+	SERENE_PUB_0_5_EXPORT_KEYS,
+	entryTypeIdOfExportKey,
+	type EntryExportKey,
 	type EntryTypeId
 } from "$lib/shared/entries/types"
+import { isSlotLoreRef } from "@serene-pub/sdk"
+import { readsAsRegex } from "$lib/shared/entries/runawayPattern"
+
+/**
+ * The container's `serenepub.formatVersion` (E-8). A file without one is
+ * format 1, whatever else it states.
+ */
+export const LOREBOOK_FORMAT_VERSION = 2
+
+/**
+ * Which wire names an export writes — see the header. ⚠ Qualified: a bare
+ * `profile` is already an image-generation profile and a docs profile.
+ */
+export type LorebookExportProfile = "native" | "0.5-compat"
+
+/** The wire name one entry's type is written under, in one profile. */
+export function exportKeyOf(
+	typeId: string,
+	exportProfile: LorebookExportProfile = "native"
+): EntryExportKey {
+	const key = ENTRY_EXPORT_KEY[typeId as EntryTypeId] ?? DEFAULT_EXPORT_KEY
+	return exportProfile === "0.5-compat" &&
+		!SERENE_PUB_0_5_EXPORT_KEYS.includes(key)
+		? DEFAULT_EXPORT_KEY
+		: key
+}
 
 export type SpecV3Entry = {
 	keys: string[]
@@ -79,6 +126,15 @@ export interface ExportableEntry {
 	 */
 	secondaryKeys?: readonly string[] | string | null
 	selectiveLogic?: string | null
+	/**
+	 * The per-entry facts every type carries (`entryFacts`). Optional for the
+	 * reason the condition is: an entry-shaped object in a test may predate
+	 * them, and absent reads as the column's default.
+	 */
+	archived?: boolean | null
+	matchMode?: string | null
+	recursionDepth?: number | null
+	provenance?: string | null
 	/**
 	 * The declared half, read by name.
 	 *
@@ -212,7 +268,7 @@ interface ExportedCondition {
  * `matchesKey`. A bare pattern written bare would be read back as a literal.
  */
 function exportedCondition(entry: ExportableEntry): ExportedCondition {
-	const useRegex = entry.useRegex ?? false
+	const useRegex = readsAsRegex(entry)
 	const keys = splitStoredKeys(entry.secondaryKeys).map((k) =>
 		useRegex ? toDelimitedRegexKey(k, entry.caseSensitive) : k
 	)
@@ -221,12 +277,58 @@ function exportedCondition(entry: ExportableEntry): ExportedCondition {
 	return { keys, logicCode: ST_CODE_BY_SELECTIVE_LOGIC[mode] }
 }
 
+/** The provenance every row starts with; any other is written. */
+const HUMAN_PROVENANCE = "human"
+
+/**
+ * The per-entry facts every type carries, whatever it declares (E-8), as the
+ * `serenepub` bag writes them. Each is written only when it is not the
+ * column's default, so an entry that sets none exports exactly the bytes it
+ * did before format 2 — which, with the format marker left out of the
+ * import's comparison (`comparableLorebookData`), lets an older file of an
+ * unchanged book read as "unchanged".
+ *
+ * ⚠ **`matchMode` is written here only as `regex`.** Word and substring go
+ * out on SillyTavern's own `match_whole_words` alone (`mapEntry`): SillyTavern
+ * keeps an entry's whole `extensions` and writes it back, so a second copy
+ * here would outlive an edit made there and undo it on the next import.
+ *
+ * ⚠ **An archived entry goes out `enabled: false`** on the spec's own field,
+ * because a foreign reader has no archive and would otherwise fire it; its
+ * own switch rides here as `enabled` so it comes back as it was.
+ */
+export function entryFacts(entry: ExportableEntry): Record<string, unknown> {
+	const facts: Record<string, unknown> = {}
+	if (entry.archived) {
+		facts.archived = true
+		facts.enabled = entry.enabled
+	}
+	if (entry.matchMode === "regex") facts.matchMode = entry.matchMode
+	if (entry.recursionDepth != null) facts.recursionDepth = entry.recursionDepth
+	if (entry.provenance && entry.provenance !== HUMAN_PROVENANCE)
+		facts.provenance = entry.provenance
+	return facts
+}
+
+/**
+ * SillyTavern's whole-word flag for each `matchMode` that has one. `regex` and
+ * no opinion have none: ST decides regex by the key's shape, and its
+ * whole-word `null` defers to a global setting the file never carries.
+ */
+const MATCH_WHOLE_WORDS_BY_MODE: Readonly<Record<string, boolean>> = {
+	word: true,
+	substring: false
+}
+
 function baseEntryFields(
 	entry: ExportableEntry,
 	insertionOrder: number,
 	condition: ExportedCondition
 ) {
-	const useRegex = entry.useRegex ?? false
+	// The mode the matcher reads (`matchMode` over the legacy flag), so a
+	// `regex` row with the flag off goes out as patterns and a `word` row with
+	// a stale flag on goes out as words.
+	const useRegex = readsAsRegex(entry)
 	const keys = splitStoredKeys(entry.keys)
 	return {
 		// A regex entry's keys go out delimited so both scanners read them as
@@ -237,7 +339,7 @@ function baseEntryFields(
 			? keys.map((k) => toDelimitedRegexKey(k, entry.caseSensitive))
 			: keys,
 		content: entry.content,
-		enabled: entry.enabled,
+		enabled: entry.enabled && !entry.archived,
 		insertion_order: insertionOrder,
 		case_sensitive: entry.caseSensitive,
 		use_regex: useRegex,
@@ -324,7 +426,8 @@ export interface ExportedScene {
 export function mapEntry(
 	entry: ExportableEntry,
 	insertionOrder: number,
-	refs: EntryExportRefs = {}
+	refs: EntryExportRefs = {},
+	exportProfile: LorebookExportProfile = "native"
 ): SpecV3Entry {
 	const decl = entryDeclaration(entry.typeId)
 	const titleRole = decl?.roles.title
@@ -352,10 +455,32 @@ export function mapEntry(
 			foreign.selectiveLogic = condition.logicCode
 		else delete foreign.selectiveLogic
 	}
+	// ⚠ **The same for `match_whole_words`**, which the importer reads as the
+	// row's `matchMode`: an author who changed the mode in the editor after a
+	// SillyTavern import would otherwise export the file's old flag and have
+	// it read straight back. The row is authoritative — its flag is written,
+	// and a mode with no SillyTavern spelling removes a stale one. A `null`
+	// flag (SillyTavern's "use my global setting") is not an opinion and is
+	// left as the file wrote it.
+	const wholeWords = entry.matchMode
+		? MATCH_WHOLE_WORDS_BY_MODE[entry.matchMode]
+		: undefined
+	if (wholeWords !== undefined) foreign.match_whole_words = wholeWords
+	else if (typeof foreign.match_whole_words === "boolean")
+		delete foreign.match_whole_words
 
+	// Under `0.5-compat` a type written as world lore carries world lore's
+	// fields and no others — the fields its reader reads — so the file is a
+	// fixed point against the book it makes.
+	const entryType = exportKeyOf(entry.typeId, exportProfile)
+	const readAs =
+		exportProfile === "0.5-compat"
+			? new Set(declaredFields(entryTypeIdOfExportKey(entryType)))
+			: null
 	const bag: Record<string, any> = {}
 	for (const field of declaredFields(entry.typeId)) {
 		if (field === priorityRole) continue
+		if (readAs && !readAs.has(field)) continue
 		const value = row[field]
 		if (orderFields.has(field)) bag[field] = value ?? null
 		else if (value !== undefined && value !== null && value !== "")
@@ -374,12 +499,9 @@ export function mapEntry(
 		extensions: {
 			...foreign,
 			serenepub: {
-				// A type with no marker of its own is written as world lore — the
-				// agnostic shape, and what an install that has never heard of it
-				// reads back (L3, 2026-09-17).
-				entryType:
-					ENTRY_EXPORT_KEY[entry.typeId as EntryTypeId] ??
-					DEFAULT_EXPORT_KEY,
+				// The type's own wire name; see `exportKeyOf` for the profile
+				// that flattens to the three a 0.5 reader knows.
+				entryType,
 				...(refs.localId !== undefined
 					? { localId: refs.localId }
 					: {}),
@@ -389,6 +511,7 @@ export function mapEntry(
 				...(refs.anchorEntryLocalId !== undefined
 					? { anchorEntryLocalId: refs.anchorEntryLocalId }
 					: {}),
+				...entryFacts(entry),
 				...bag,
 				...(refs.bindingLocalId != null
 					? { bindingLocalId: refs.bindingLocalId }
@@ -449,12 +572,19 @@ export function assignHistoryEntryLocalIds(
  *
  * The numbering is its own space, deliberately separate from the document
  * counter that numbers bindings, scenes and nodes: an `{ kind: "entry" }`
- * endpoint and an `anchorEntryLocalId` both read this one, and nothing reads
- * both spaces at once.
+ * endpoint, an `anchorEntryLocalId` and a stat's owner or lore reference all
+ * read this one, and nothing reads two spaces at once.
+ *
+ * ⚠ **Numbered in the file's own order** — by type as the file groups them,
+ * then position (`inFileOrder`) — never by this install's ids. The importer
+ * inserts in the file's order, so a numbering by id would make the imported
+ * book's export differ from its file whenever a place is written before the
+ * world lore it sits beside.
  */
 export function assignEntryLocalIds(
 	entries: ExportableEntryWithPosition[],
-	edgeEntryIds: Iterable<number> = []
+	edgeEntryIds: Iterable<number> = [],
+	exportProfile: LorebookExportProfile = "native"
 ): Map<number, number> {
 	const referenced = new Set<number>(edgeEntryIds)
 	for (const entry of entries) {
@@ -464,9 +594,38 @@ export function assignEntryLocalIds(
 
 	const map = new Map<number, number>()
 	let next = 1
-	for (const entry of entries)
+	for (const entry of fileGroups(entries, exportProfile).flat())
 		if (referenced.has(entry.id)) map.set(entry.id, next++)
 	return map
+}
+
+/**
+ * The entries in the order the file writes them, one group per type its
+ * reader imports them as (`ENTRY_TYPE_IDS` order), each by `position` — so
+ * the importer, which numbers a group in file order, gives the book back the
+ * same order. Under `native` that is each entry's own type; under
+ * `0.5-compat` a place and an item join world lore after its own entries,
+ * as they come back. An entry of a type this build does not know is left
+ * out, exactly as `buildSpecV3Lorebook` leaves it out.
+ */
+function fileGroups<T extends ExportableEntryWithPosition>(
+	entries: readonly T[],
+	exportProfile: LorebookExportProfile
+): T[][] {
+	const readAs = (typeId: string) =>
+		exportProfile === "native"
+			? typeId
+			: entryTypeIdOfExportKey(exportKeyOf(typeId, exportProfile))
+	const typeRank = (typeId: string) =>
+		ENTRY_TYPE_IDS.indexOf(typeId as EntryTypeId)
+	return ENTRY_TYPE_IDS.map((typeId) =>
+		entries
+			.filter((e) => typeRank(e.typeId) >= 0 && readAs(e.typeId) === typeId)
+			.sort(
+				(a, b) =>
+					typeRank(a.typeId) - typeRank(b.typeId) || a.position - b.position
+			)
+	)
 }
 
 /**
@@ -499,18 +658,15 @@ export function buildSpecV3Lorebook(
 	bindingLocalIdByRealId: Map<number, number> = new Map(),
 	scenesByEntryId: Map<number, ExportedScene[]> = new Map(),
 	historyEntryLocalIdByRealId: Map<number, number> = new Map(),
-	entryLocalIdByRealId: Map<number, number> = new Map()
+	entryLocalIdByRealId: Map<number, number> = new Map(),
+	exportProfile: LorebookExportProfile = "native"
 ): SpecV3LorebookLike {
 	const specEntries: SpecV3Entry[] = []
 	let insertionOrder = 0
 
-	for (const typeId of ENTRY_TYPE_IDS) {
-		const decl = entryDeclaration(typeId)
-		const group = entries
-			.filter((e) => e.typeId === typeId)
-			.sort((a, b) => a.position - b.position)
-
+	for (const group of fileGroups(entries, exportProfile)) {
 		group.forEach((entry, i) => {
+			const decl = entryDeclaration(entry.typeId)
 			const refs: EntryExportRefs = {}
 			// ⚠ Two cross-references, and each belongs to whoever reads it.
 			// `localId` numbers the dated type alone, for `narrativeGraph`'s
@@ -544,7 +700,9 @@ export function buildSpecV3Lorebook(
 			const scenes = scenesByEntryId.get(entry.id)
 			if (scenes?.length) refs.scenes = scenes
 
-			specEntries.push(mapEntry(entry, insertionOrder++, refs))
+			specEntries.push(
+				mapEntry(entry, insertionOrder++, refs, exportProfile)
+			)
 		})
 	}
 
@@ -554,7 +712,15 @@ export function buildSpecV3Lorebook(
 		scan_depth: lorebook.extraJson?.scanDepth,
 		token_budget: lorebook.extraJson?.tokenBudget,
 		recursive_scanning: lorebook.extraJson?.recursiveScanning,
-		extensions: { serenepub: { version: 1, uuid: lorebook.uuid } },
+		extensions: {
+			serenepub: {
+				// `0.5-compat` writes format 1, which states no marker.
+				...(exportProfile === "native"
+					? { formatVersion: LOREBOOK_FORMAT_VERSION }
+					: {}),
+				uuid: lorebook.uuid
+			}
+		},
 		entries: specEntries
 	}
 }
@@ -575,6 +741,8 @@ export interface ExportedBinding {
 	kind: "character" | "persona"
 	characterLocalId: number | null
 	personaLocalId: number | null
+	/** The cast member's sprite set, by name; written only when set (E-8). */
+	spriteSet?: string
 }
 
 /**
@@ -723,6 +891,13 @@ export interface ExportedNarrativeRelationship {
 	fromLocalId?: number
 	toLocalId?: number
 	relationshipType: string
+	/**
+	 * Read from the `to` end; written only when set (plan B1). A file without
+	 * it — every file written before — reads one way.
+	 */
+	reverseRelationshipType?: string
+	/** The relationship's own name; written only when set (plan B1). */
+	name?: string
 	description: string
 	visibility: string
 	status: string
@@ -737,7 +912,11 @@ interface NarrativeRelationshipLike {
 	fromEntryId: number | null
 	toEntryId: number | null
 	relationshipType: string
-	description: string
+	/** Absent is one way. */
+	reverseRelationshipType?: string | null
+	/** The row's `title`; absent is unnamed. */
+	title?: string
+	description: string | null
 	visibility: string
 	status: string
 	reason: string | null
@@ -792,7 +971,14 @@ export function mapNarrativeRelationship(
 		...(from.kind === "cast" ? { fromLocalId: from.node } : {}),
 		...(to.kind === "cast" ? { toLocalId: to.node } : {}),
 		relationshipType: rel.relationshipType,
-		description: rel.description,
+		...(rel.reverseRelationshipType
+			? { reverseRelationshipType: rel.reverseRelationshipType }
+			: {}),
+		...(rel.title ? { name: rel.title } : {}),
+		// The importer stores a missing description as "", so the file says
+		// "" too: a stored NULL written as null would make the imported
+		// book's export differ from its file.
+		description: rel.description ?? "",
 		visibility: rel.visibility,
 		status: rel.status,
 		reason: rel.reason,
@@ -830,6 +1016,179 @@ export function attachNarrativeGraph(
 				...book.extensions.serenepub,
 				narrativeGraph: { version: 1, nodes, relationships }
 			}
+		}
+	}
+}
+
+/**
+ * The book-owned layers a stat row may belong to — the template layer, as
+ * `lorebookDuplicate.ts` copies it. A session's rows belong to the session
+ * and never travel.
+ */
+export const EXPORTED_STAT_OWNER_KINDS = [
+	"lorebook",
+	"cast_member",
+	"location"
+] as const
+
+export type ExportedStatOwnerKind = (typeof EXPORTED_STAT_OWNER_KINDS)[number]
+
+/**
+ * One stat row — a configuration or a value — as the file carries it (E-8,
+ * plan A26: a place's stats set before play).
+ *
+ * The owner is named in the document's own spaces: a cast member by its
+ * `bindingLocalId`, a place by its `entryLocalId`, the book by nothing. A lore
+ * reference inside a value (`{ entryId, count }`) goes out as
+ * `{ entryLocalId, count }` in the same entry space. The source session and
+ * message ids stay behind: they name rows of this install only.
+ */
+export interface ExportedStatRow {
+	ownerKind: ExportedStatOwnerKind
+	bindingLocalId?: number
+	entryLocalId?: number
+	slotId: string
+	/** A configuration row's deviations. */
+	config?: Record<string, unknown>
+	/** A value row's wrapped value, `{ v }`. */
+	value?: { v: unknown }
+	historyEntryLocalId: number | null
+	sceneLocalId: number | null
+	updatedBy: string
+	note: string | null
+}
+
+/** The book's stats, as `extensions.serenepub.stats` carries them. */
+export interface ExportedStats {
+	configs: ExportedStatRow[]
+	values: ExportedStatRow[]
+}
+
+interface StatRowLike {
+	ownerKind: string
+	ownerId: number
+	slotId: string
+	config?: Record<string, unknown>
+	value?: { v: unknown }
+	historyEntryId: number | null
+	sceneId: number | null
+	updatedBy: string
+	note: string | null
+}
+
+/**
+ * Every entry a stat value names: the entries its lore references point at.
+ * The builder numbers them in the entry space before any row is mapped.
+ */
+export function statValueEntryIds(value: unknown): number[] {
+	const v = (value as { v?: unknown } | null)?.v
+	if (isSlotLoreRef(v)) return [v.entryId]
+	if (!Array.isArray(v)) return []
+	return v.filter(isSlotLoreRef).map((ref) => ref.entryId)
+}
+
+/**
+ * A value's lore references in the file's entry space. A reference to an
+ * entry the export does not carry is dropped from a list; a single reference
+ * that cannot be carried makes the whole value unrepresentable (null).
+ */
+function exportedStatValue(
+	value: { v: unknown },
+	entryLocalIdByRealId: Map<number, number>
+): { v: unknown } | null {
+	const ref = (item: { entryId: number; count?: number }) => {
+		const entryLocalId = entryLocalIdByRealId.get(item.entryId)
+		if (entryLocalId === undefined) return null
+		return item.count === undefined
+			? { entryLocalId }
+			: { entryLocalId, count: item.count }
+	}
+	const v = value?.v
+	if (isSlotLoreRef(v)) {
+		const out = ref(v)
+		return out === null ? null : { v: out }
+	}
+	if (!Array.isArray(v)) return { v }
+	return {
+		v: v.flatMap((item) => {
+			if (!isSlotLoreRef(item)) return [item]
+			const out = ref(item)
+			return out === null ? [] : [out]
+		})
+	}
+}
+
+/**
+ * One stat row as the file carries it, or null when the export has no id for
+ * its owner (a branch's entry, a kind that is not book-owned) or for the one
+ * entry its value names.
+ */
+export function mapStatRowForExport(
+	row: StatRowLike,
+	maps: {
+		lorebookId: number
+		bindingLocalIdByRealId: Map<number, number>
+		entryLocalIdByRealId: Map<number, number>
+		historyEntryLocalIdByRealId: Map<number, number>
+		sceneLocalIdByRealId: Map<number, number>
+	}
+): ExportedStatRow | null {
+	let owner: Pick<
+		ExportedStatRow,
+		"ownerKind" | "bindingLocalId" | "entryLocalId"
+	>
+	if (row.ownerKind === "lorebook") {
+		if (row.ownerId !== maps.lorebookId) return null
+		owner = { ownerKind: "lorebook" }
+	} else if (row.ownerKind === "cast_member") {
+		const bindingLocalId = maps.bindingLocalIdByRealId.get(row.ownerId)
+		if (bindingLocalId === undefined) return null
+		owner = { ownerKind: "cast_member", bindingLocalId }
+	} else if (row.ownerKind === "location") {
+		const entryLocalId = maps.entryLocalIdByRealId.get(row.ownerId)
+		if (entryLocalId === undefined) return null
+		owner = { ownerKind: "location", entryLocalId }
+	} else return null
+
+	let payload: Pick<ExportedStatRow, "config" | "value">
+	if (row.value !== undefined) {
+		const value = exportedStatValue(row.value, maps.entryLocalIdByRealId)
+		if (value === null) return null
+		payload = { value }
+	} else payload = { config: row.config ?? {} }
+
+	return {
+		...owner,
+		slotId: row.slotId,
+		...payload,
+		historyEntryLocalId:
+			row.historyEntryId !== null
+				? (maps.historyEntryLocalIdByRealId.get(row.historyEntryId) ??
+					null)
+				: null,
+		sceneLocalId:
+			row.sceneId !== null
+				? (maps.sceneLocalIdByRealId.get(row.sceneId) ?? null)
+				: null,
+		updatedBy: row.updatedBy,
+		note: row.note
+	}
+}
+
+/**
+ * Layers the book's stats onto a SpecV3Lorebook — omitted entirely when it
+ * has none, so a book without stats exports the bytes it always did.
+ */
+export function attachStats(
+	book: SpecV3LorebookLike,
+	stats: ExportedStats
+): SpecV3LorebookLike {
+	if (stats.configs.length === 0 && stats.values.length === 0) return book
+	return {
+		...book,
+		extensions: {
+			...book.extensions,
+			serenepub: { ...book.extensions.serenepub, stats }
 		}
 	}
 }

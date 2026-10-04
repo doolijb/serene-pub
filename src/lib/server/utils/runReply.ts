@@ -276,6 +276,19 @@ async function routeFor(
 	}
 }
 
+/**
+ * The direction a narration row was pressed with, for a verb re-driving it:
+ * the `narratorInstructions` the placeholder stored beside it and the row
+ * still shows. Empty when it had none — an undirected line stays undirected.
+ */
+function storedNarratorInstructions(
+	row: { metadata?: unknown } | null | undefined
+): string {
+	const stored = (row?.metadata as { narratorInstructions?: unknown } | null)
+		?.narratorInstructions
+	return typeof stored === "string" ? stored : ""
+}
+
 export async function runReply(request: ReplyRequest): Promise<ReplyOutcome> {
 	const { socket, emitToUser, sessionId, userId, turn } = request
 
@@ -312,6 +325,19 @@ export async function runReply(request: ReplyRequest): Promise<ReplyOutcome> {
 				await import("$lib/server/sessions/turnYield")
 			).recordedViaOf(db, existing.id)
 		: request.via
+	/**
+	 * 🚧 A **planned turn**'s plan row (Lair character turns, owner ruling
+	 * 2026-09-30): the row whose standing plan a fresh `via: 'plan'` fire
+	 * takes its turn from. A verb re-driving a planned row keeps the stamp
+	 * the row already carries (the claim leaves its metadata), so nothing is
+	 * looked up again. See `HostScope.planRowId`.
+	 */
+	const planRowId =
+		!existing && via === "plan"
+			? await (
+					await import("$lib/server/sessions/turnPlan")
+				).standingPlanRowId(db, sessionId)
+			: null
 	const refuse = async (reason: string): Promise<ReplyOutcome> => {
 		if (messageId !== undefined)
 			await persistGenerationErrorRow(
@@ -478,17 +504,21 @@ export async function runReply(request: ReplyRequest): Promise<ReplyOutcome> {
 				? { speaker: null }
 				: {}),
 			// A narrator turn's triggering text is the instructions the person
-			// typed; the narrate specs store them beside the row. A reply's
-			// is what the person sent since the last line that was not
-			// theirs (lair pass B11): still a row in history too, but also
-			// this turn's text, for a spec that reads it as something other
-			// than dialogue — the Lair's planner reads it as direction. A
-			// verb re-driving a reply reads the rows before that reply.
+			// typed; the narrate specs store them beside the row. A verb
+			// re-driving a narration re-sends the ones that row still shows
+			// (`metadata.narratorInstructions`, left in place by the claim),
+			// as 0.5.3 did — else the retry is re-rolled undirected beside
+			// the note it claims to follow. A reply's is what the person sent
+			// since the last line that was not theirs (lair pass B11): still
+			// a row in history too, but also this turn's text, for a spec
+			// that reads it as something other than dialogue — the Lair's
+			// planner reads it as direction. A verb re-driving a reply reads
+			// the rows before that reply.
 			text:
 				turn.kind === "narrate" || turn.kind === "narrate-character"
 					? (turn.instructions ?? "")
 					: route.narration
-						? ""
+						? storedNarratorInstructions(existing)
 						: await turnDirectionText(db, sessionId, {
 								channel,
 								before: messageId
@@ -505,6 +535,8 @@ export async function runReply(request: ReplyRequest): Promise<ReplyOutcome> {
 			channel,
 			// How the turn was reached, for the inlet's `via` port (R8).
 			...(via ? { via } : {}),
+			// A planned turn's plan row, stamped on what it writes.
+			...(planRowId !== null ? { planRowId } : {}),
 			// The row a verb re-drives, for the placeholder outlet to claim —
 			// and which verb, so the finishing write's `message-updated`
 			// says so for the next reply's inlet (R-15).

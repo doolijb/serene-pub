@@ -83,17 +83,17 @@ class FakeAdapter implements FakeTextAdapter {
 			isAborted: false,
 			completionResult: async (
 				onContent: (c: string) => void,
-				onThinking?: (c: string) => void
+				onReasoning?: (c: string) => void
 			) => {
 				if (json) {
 					jsonPrompts.push(JSON.stringify(this.injected ?? ""))
 					// The planner reasons too — and that must NOT reach the row.
-					onThinking?.("The planner weighs the beats.")
+					onReasoning?.("The planner weighs the beats.")
 					onContent(JSON.stringify(document))
 					return
 				}
 				prosePrompts.push(JSON.stringify(this.injected ?? ""))
-				onThinking?.(`Reasoning of prose call ${call}.`)
+				onReasoning?.(`Reasoning of prose call ${call}.`)
 				for (const chunk of prose) onContent(chunk)
 			}
 		}
@@ -132,13 +132,6 @@ vi.mock("$lib/server/connections/capabilityTarget", async (importOriginal) => {
 		}
 	}
 })
-vi.mock("$lib/server/utils/getUserConfigurations", () => ({
-	getUserConfigurations: async () => ({
-		sampling: { id: 1 },
-		contextConfig: { id: 1 },
-		promptConfig: { id: 1, systemPrompt: "Stay in character." }
-	})
-}))
 vi.mock("$lib/server/embedding", () => ({
 	isModelReady: () => false,
 	getLoadedModelId: () => null,

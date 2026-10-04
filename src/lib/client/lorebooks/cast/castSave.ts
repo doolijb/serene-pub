@@ -211,10 +211,13 @@ export function deleteMemberCopy(facts: DeleteMemberFacts): DeleteMemberCopy {
 		)
 	else goes.push("every relationship they are in")
 	goes.push("their dated changes", "their places in scenes")
+	// Their cast tags become their name as plain text (A16), so the prose
+	// still reads and no tag is left naming nobody.
 	const message =
 		(linked
 			? `This removes ${name} from this lorebook and deletes ${joinWords(goes)}. Their character card is not touched.`
 			: `This deletes ${name}, with ${joinWords(goes)}.`) +
+		` Where the book mentions ${name}, their name stays as plain text.` +
 		" This cannot be undone."
 
 	const mergeWarning = check?.referencedByMergeLog
@@ -252,6 +255,34 @@ export function deleteMemberCopy(facts: DeleteMemberFacts): DeleteMemberCopy {
 	}
 }
 
+export interface PresenceRemovalFacts {
+	/** The line the presence was placed on, named (`main` or a branch). */
+	placedOn: string
+	/** The line being read, named. */
+	readingOn: string
+	/**
+	 * Every line that reads the presence, named (`presencesOnLine` on each):
+	 * the line it was placed on and the one being read among them.
+	 */
+	readBy: readonly string[]
+}
+
+/**
+ * What removing a presence asks, on the member page.
+ *
+ * A presence belongs to the line it was placed on, and a removal removes it
+ * THERE: one read from main or from an ancestor line comes off that line and
+ * every line that reads it, the one being read included. So the question
+ * names each of them whenever it is more than the line being read.
+ */
+export function presenceRemovalSentence(facts: PresenceRemovalFacts): string {
+	const { placedOn, readingOn, readBy } = facts
+	const elsewhere = readBy.some((name) => name !== readingOn)
+	if (placedOn === readingOn && !elsewhere)
+		return `Remove this presence from ${placedOn}?`
+	return `Remove this presence? It was placed on ${placedOn}, so it comes off ${joinWords(readBy)}.`
+}
+
 /** What a finished delete says. */
 export function deletedMemberToast(
 	name: string,
@@ -267,25 +298,91 @@ export function deletedMemberToast(
  * them. An undo that put everything back is a success; one that could not is
  * a warning that names what is missing.
  */
-export function undoMergeToast(msg: Sockets.NarrativeGraph.UndoMerge.Response): {
+export function undoMergeToast(
+	msg: Omit<Sockets.NarrativeGraph.UndoMerge.Response, "lorebookId" | "mergeLogId">
+): {
 	kind: "success" | "warning"
 	title: string
 	description: string
 } {
 	const links = msg.unrestoredLinkCount ?? 0
+	const moved = Math.min(links, msg.unrestoredMovedLinkCount ?? 0)
 	const story = msg.unrestoredStoryCount ?? 0
-	const parts = [`"${msg.restoredNode.name}" restored.`]
+	const texts = msg.unrestoredTextCount ?? 0
+	const name = msg.restoredNode.name
+	const parts = [`"${name}" restored.`]
 	if (links > 0)
 		parts.push(
-			`${plural(links, "relationship", "relationships")} could not be put back: one end, or the line it was on, has been deleted since.`
+			`${plural(links, "relationship", "relationships")} could not be put back: one end, or the line it was on, has been deleted since, or a relationship made since already says the same.`
+		)
+	// A link the merge moved and the undo could not move back is not gone:
+	// it stays on the member kept.
+	if (moved > 0)
+		parts.push(
+			moved === links
+				? `${moved === 1 ? "It is" : "They are"} still on the member "${name}" was merged into.`
+				: `${moved} of them ${moved === 1 ? "is" : "are"} still on the member "${name}" was merged into.`
 		)
 	if (story > 0)
 		parts.push(
-			`${plural(story, "dated change, placement or attribute", "dated changes, placements or attributes")} of theirs could not be put back: the line or session ${story === 1 ? "it" : "they"} belonged to has been deleted since.`
+			`${plural(story, "dated change, placement, stat or stat sheet", "dated changes, placements, stats or stat sheets")} of theirs could not be put back: the line, session or sheet ${story === 1 ? "it" : "they"} belonged to has been deleted since.`
 		)
+	if (texts > 0)
+		parts.push(
+			`${plural(texts, "piece of lore", "pieces of lore")} edited since the merge still ${texts === 1 ? "names" : "name"} the member they were merged into.`
+		)
+	const partial = links > 0 || story > 0 || texts > 0
 	return {
-		kind: links > 0 || story > 0 ? "warning" : "success",
-		title: links > 0 || story > 0 ? "Merge undone, not all of it" : "Merge undone",
+		kind: partial ? "warning" : "success",
+		title: partial ? "Merge undone, not all of it" : "Merge undone",
 		description: parts.join(" ")
 	}
 }
+
+/**
+ * How long an absorb is waited on. A bound on the wait, not an estimate: the
+ * merge itself takes seconds, and a promise nobody settles would hold its
+ * listeners for the life of the tab.
+ */
+const ABSORB_ANSWER_MS = 120_000
+
+/**
+ * Absorb one cast member into another, and wait for THIS absorb's answer.
+ *
+ * The promise, not the surface that asked, holds the wait: the absorb window
+ * can be closed while its merge is out, and the refusal is still said (by
+ * the caller's `catch`). Its refusal is the one naming its pair — the server
+ * echoes `nodeId` and `parentNodeId` — or one naming none, sent before the
+ * handler ran. Its success is a merge whose survivor is one of the pair: the
+ * server keeps the member played by a character, whichever side was picked.
+ */
+export function absorbCastMember(
+	socket: Pick<TypedSocket, "emit">,
+	ask: Sockets.NarrativeGraph.MergeNode.Params
+): Promise<Sockets.NarrativeGraph.MergeNode.Response> {
+	return awaitReply({
+		socket,
+		event: "narrativeGraph:mergeNode",
+		params: ask,
+		errorEvent: "narrativeGraph:mergeNode:error",
+		match: (res) =>
+			res?.survivorNode?.id === ask.nodeId ||
+			res?.survivorNode?.id === ask.parentNodeId,
+		matchError: (data) => {
+			const named = data as
+				| Sockets.NarrativeGraph.MergeNode.ErrorResponse
+				| undefined
+			if (named?.nodeId === undefined && named?.parentNodeId === undefined)
+				return true
+			return (
+				named.nodeId === ask.nodeId &&
+				named.parentNodeId === ask.parentNodeId
+			)
+		},
+		timeoutMs: ABSORB_ANSWER_MS,
+		fallbackError: "The two cast members could not be merged."
+	})
+}
+
+/** The title a refused absorb is said under, naming who was not absorbed. */
+export const notAbsorbedTitle = (name: string) => `"${name}" was not absorbed`

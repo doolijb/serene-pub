@@ -4,9 +4,11 @@
 	 * (PLAN 25; ruled 2026-09-09, and 2026-09-27 for the modal).
 	 *
 	 * While the tab is open every widget wears this overlay, invisible until
-	 * you hover or focus it: a scrim with ONE button, "Settings", which opens
+	 * you hover or focus it: a scrim with a "Settings" button, which opens
 	 * the widget's settings and style in the app-level modal
-	 * (`WidgetSettingsModal`). The settings themselves are never drawn in here
+	 * (`WidgetSettingsModal`), and — while the layout editor can make one — a
+	 * "Duplicate" button beside it (brief 7b; QD): a copy of this widget
+	 * beside it, its settings and style copied (`./widgetDuplicate`). The settings themselves are never drawn in here
 	 * any more — a card inside the widget's box was clipped by any cell smaller
 	 * than it, and the owner ruled it into a modal.
 	 *
@@ -37,6 +39,7 @@
 		openWidgetSettings,
 		widgetSettingsTitle
 	} from "./widgetSettingsModal.svelte"
+	import { widgetDuplicator } from "./widgetDuplicate.svelte"
 
 	interface Props {
 		/** The widget being configured — the `widget_styles.widgetSlug` too. */
@@ -53,6 +56,11 @@
 	let { widgetId, label, mount = "remote" }: Props = $props()
 
 	const styles = widgetStylesStore()
+	const duplicator = widgetDuplicator()
+	/** At its widget's cap, why no Duplicate (brief 7b review); else null. */
+	let dupRefusal = $derived(
+		duplicator.available ? duplicator.refusal(widgetId) : null
+	)
 
 	let rootEl = $state<HTMLDivElement | null>(null)
 	let hovered = $state(false)
@@ -99,17 +107,38 @@
 		onfocusin={() => (focused = true)}
 		onfocusout={onFocusOut}
 	>
-		<button
-			type="button"
-			class="ws-open"
-			aria-haspopup="dialog"
-			aria-label="Open {widgetSettingsTitle(label)}"
-			title={widgetSettingsTitle(label)}
-			onclick={open}
-		>
-			<Icons.Settings size={15} aria-hidden="true" />
-			<span class="ws-open-label">Settings</span>
-		</button>
+		<div class="ws-actions">
+			<button
+				type="button"
+				class="ws-open"
+				aria-haspopup="dialog"
+				aria-label="Open {widgetSettingsTitle(label)}"
+				title={widgetSettingsTitle(label)}
+				onclick={open}
+			>
+				<Icons.Settings size={15} aria-hidden="true" />
+				<span class="ws-open-label">Settings</span>
+			</button>
+			{#if dupRefusal}
+				<!-- At its widget's cap (a plugin's `maxInstances`), the reason
+				     where Duplicate would be — as its card and the Add menu say. -->
+				<span class="ws-open ws-nocopy" role="note">
+					<Icons.Copy size={15} aria-hidden="true" />
+					<span class="ws-open-label">{dupRefusal}</span>
+				</span>
+			{:else if duplicator.available}
+				<button
+					type="button"
+					class="ws-open"
+					aria-label="Duplicate {label}"
+					title="Duplicate {label}"
+					onclick={() => duplicator.duplicate(widgetId)}
+				>
+					<Icons.Copy size={15} aria-hidden="true" />
+					<span class="ws-open-label">Duplicate</span>
+				</button>
+			{/if}
+		</div>
 	</div>
 {/if}
 
@@ -159,6 +188,14 @@
 			transition: none;
 		}
 	}
+	/* Settings, then Duplicate; they wrap under each other in a narrow cell. */
+	.ws-actions {
+		display: flex;
+		flex-wrap: wrap;
+		justify-content: center;
+		gap: 0.4rem;
+		max-inline-size: 100%;
+	}
 	.ws-open {
 		display: inline-flex;
 		align-items: center;
@@ -198,5 +235,18 @@
 	}
 	.ws-open-label {
 		white-space: nowrap;
+	}
+	/* A note, not a control: no lift, no hover, a dashed edge. */
+	.ws-nocopy {
+		cursor: default;
+		box-shadow: none;
+		border-style: dashed;
+	}
+	.ws-nocopy:hover,
+	:global([data-mode="dark"]) .ws-nocopy:hover {
+		background: var(--color-surface-50);
+	}
+	:global([data-mode="dark"]) .ws-nocopy:hover {
+		background: var(--color-surface-900);
 	}
 </style>

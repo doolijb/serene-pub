@@ -12,15 +12,20 @@
 	 * - **KoboldCPP runtime** — for the managed KoboldCPP: the manager's own
 	 *   settings, binary and server address (`KoboldCppSettingsTab`).
 	 * - **Models** — what the host lists, with Refresh, Add by name, enable
-	 *   switches, Use and, on a local ONNX endpoint, Download / Cancel.
+	 *   switches, Use and, on a local ONNX endpoint, Download / Cancel. The
+	 *   switches and Use are pending changes that wait for Save (owner ruling
+	 *   2026-10-03, `modelEdits.ts`); Refresh, Add by name and Download /
+	 *   Cancel are one-shot acts and still act when pressed.
 	 * - **Defaults** — which capability defaults point here.
 	 * - **Stop scripts**, and under **Advanced**, the capability overrides
 	 *   and the lane panels.
 	 *
 	 * The draft is saved with `connections:update` — the same event, the
-	 * same server rules as the Connections view. What writes on its own
-	 * (capabilities, stop scripts, models, the runtime's settings) is never
-	 * part of the draft, so it is never an unsaved change.
+	 * same server rules as the Connections view — and then the model levers,
+	 * one write at a time (`saveInSequence`), each waiting for its answer.
+	 * What writes on its own (capabilities, stop scripts, the runtime's
+	 * settings, a model sync or download) is never part of the draft, so it
+	 * is never an unsaved change.
 	 *
 	 * Running the runtime (Start, Stop, set-up, finding models to download)
 	 * is operating it, not administering it: those stay in the Connections
@@ -38,6 +43,13 @@
 	import { UnsavedEdits } from "$lib/client/forms/unsavedEdits.svelte"
 	import { toaster } from "$lib/client/utils/toaster"
 	import { timeAgo } from "$lib/client/utils/timeAgo"
+	import { awaitReply } from "$lib/client/utils/awaitReply"
+	import {
+		saveErrors,
+		saveInSequence,
+		saveSummary,
+		type SaveStep
+	} from "$lib/client/admin/sequentialSave"
 	import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 	import { NOTE_MAX_LENGTH, normalizeNote } from "$lib/shared/utils/connectionNotes"
 	import { keyUrlFor, needsCredential } from "$lib/shared/connections/credentials"
@@ -51,6 +63,11 @@
 	import ConnectionTypeForm from "$lib/client/components/connections/ConnectionTypeForm.svelte"
 	import ConnectionStopScripts from "$lib/client/components/connections/ConnectionStopScripts.svelte"
 	import ConnectionCapabilities from "$lib/client/components/connections/ConnectionCapabilities.svelte"
+	import EmbeddingSwitchDialog from "$lib/client/components/connections/EmbeddingSwitchDialog.svelte"
+	import {
+		addressOf,
+		useEmbeddingEditConfirm
+	} from "$lib/client/components/connections/useEmbeddingEditConfirm.svelte"
 	import EmbeddingQueuePanel from "$lib/client/components/connections/EmbeddingQueuePanel.svelte"
 	import NerLanePanel from "$lib/client/components/connections/NerLanePanel.svelte"
 	import ModelTable from "$lib/client/components/connections/ModelTable.svelte"
@@ -75,6 +92,18 @@
 		managerFlagsReleased,
 		modalityWord
 	} from "./connectionsAdmin"
+	import {
+		defaultMarksWithEdits,
+		liveModelEdits,
+		modelEditCount,
+		modelEditPlan,
+		modelsWithEdits,
+		noModelEdits,
+		withDefaultEdit,
+		withEnabledEdit,
+		withoutSteps,
+		type ModelEdits
+	} from "./modelEdits"
 
 	type ListRow = Sockets.Connections.List.Row & { id: number }
 
@@ -129,7 +158,13 @@
 	// ── the draft ───────────────────────────────────────────────────────
 	let connection = $state<any>(undefined)
 	const edits = new UnsavedEdits(() => connection)
-	adminUnsavedEdits(() => edits.dirty)
+	/**
+	 * The Models table's levers — Hide / Show and Use — held until Save
+	 * (`modelEdits.ts`). Kept beside the connection draft rather than in it:
+	 * they are written by other events, one model at a time.
+	 */
+	let modelEdits = $state<ModelEdits>(noModelEdits())
+	adminUnsavedEdits(() => edits.dirty || modelDirty)
 
 	useInterest<"connections:get">("connections:get", (msg) => {
 		// emitToUser: another view loading another connection lands here too.
@@ -149,7 +184,13 @@
 	let formErrors = $state<string[]>([])
 	let nameError = $state<string | null>(null)
 
-	function save(intent: AdminSaveIntent) {
+	/**
+	 * A save that moves the starred embedding connection to another address
+	 * re-embeds the index, so it asks first — the star's own confirmation.
+	 */
+	const embeddingEdits = useEmbeddingEditConfirm()
+
+	async function save(intent: AdminSaveIntent) {
 		if (!connection) return
 		const name = String(connection.name ?? "").trim()
 		nameError = name ? null : "A connection needs a name."
@@ -157,13 +198,31 @@
 		if (nameError) return
 		connection.name = name
 		connection.notes = normalizeNote(connection.notes)
-		if (!edits.dirty) return land(intent)
-		saving = true
-		pendingIntent = intent
+		if (!edits.dirty) {
+			if (modelDirty) return void saveModelEdits(intent)
+			return land(intent)
+		}
 		// `modelsSyncedAt` is the sync's own stamp: it reaches the client as a
 		// string and the update handler writes it back as a timestamp, which
 		// throws (`value.toISOString is not a function`). Not ours to send.
 		const { modelsSyncedAt: _stamp, ...payload } = $state.snapshot(connection)
+		const savedBaseUrl = (edits.saved as { baseUrl?: string | null })?.baseUrl
+		if ((payload.baseUrl ?? "") !== (savedBaseUrl ?? "")) {
+			const star = systemSettingsCtx.capabilityDefaults?.[EMBEDDING_CAPABILITY]
+			const model =
+				payload.models?.find?.(
+					(m: { id: number }) => m.id === star?.connectionModelId
+				)?.name ?? payload.name
+			const ok = await embeddingEdits.confirmEdit({
+				connectionId: payload.id,
+				edit: { baseUrl: payload.baseUrl ?? "" },
+				currentName: `${model} at ${addressOf(savedBaseUrl)}`,
+				nextName: `${model} at ${addressOf(payload.baseUrl)}`
+			})
+			if (!ok) return
+		}
+		saving = true
+		pendingIntent = intent
 		socket.emit("connections:update", { connection: payload })
 	}
 	function land(intent: AdminSaveIntent) {
@@ -183,13 +242,80 @@
 		edits.markSaved()
 		pendingIntent = null
 		saving = false
-		toaster.success({ title: `Saved ${msg.connection.name}` })
 		if (msg.notice)
 			toaster.warning({ title: "Preset not kept", description: msg.notice })
 		// The host or key may have changed; the models follow the save.
 		requestSync(true)
+		// The model levers go next, and their summary is the Save's: one
+		// "Saved" for one press, said only once everything has answered.
+		if (modelDirty) {
+			void saveModelEdits(mine)
+			return
+		}
+		toaster.success({ title: `Saved ${msg.connection.name}` })
 		land(mine)
 	})
+
+	/**
+	 * Send the model levers, one write at a time, each waiting for ITS
+	 * answer (`saveInSequence`): visibility first, then defaults. What landed
+	 * leaves the draft; a refusal is named in the error summary and stays a
+	 * pending change, so Save can be pressed again.
+	 */
+	async function saveModelEdits(intent: AdminSaveIntent) {
+		if (!row) return land(intent)
+		const plan = modelEditPlan(liveEdits, row.models, capabilityWord)
+		if (!plan.length) return land(intent)
+		const steps: SaveStep[] = plan.map((step) =>
+			step.kind === "enabled"
+				? {
+						label: step.label,
+						run: () =>
+							awaitReply({
+								socket,
+								event: "connections:updateModel",
+								errorEvent: "connections:updateModel:error",
+								params: {
+									id,
+									modelId: step.modelId,
+									model: { enabled: step.enabled }
+								},
+								match: (r) => r.connectionId === id
+							})
+					}
+				: {
+						label: step.label,
+						after: step.after,
+						run: () =>
+							awaitReply({
+								socket,
+								event: "connections:setDefault",
+								errorEvent: "connections:setDefault:error",
+								params: {
+									capability: step.capability as any,
+									id,
+									modelId: step.modelId
+								},
+								match: (r) =>
+									r.capability === step.capability &&
+									r.id === id &&
+									r.modelId === step.modelId
+							})
+					}
+		)
+		saving = true
+		formErrors = []
+		const outcome = await saveInSequence(steps)
+		saving = false
+		modelEdits = withoutSteps(modelEdits, plan, outcome.landed)
+		if (outcome.refused.length || outcome.skipped.length) {
+			formErrors = saveErrors(outcome)
+			toaster.warning({ title: saveSummary(outcome, title) })
+			return
+		}
+		toaster.success({ title: saveSummary(outcome, title) })
+		land(intent)
+	}
 	useInterest<"connections:update:error">("connections:update:error", (msg) => {
 		if (!pendingIntent) return
 		pendingIntent = null
@@ -251,6 +377,7 @@
 		untrack(() => {
 			connection = undefined
 			edits.forget()
+			modelEdits = noModelEdits()
 			lastTest = null
 			socket.emit("connections:get", { id: want })
 			// Stale-only: a fresh listing is skipped server-side.
@@ -309,22 +436,32 @@
 	/** The models fieldset's own width decides table or rows. */
 	let modelsWidth = $state(0)
 
-	/** Capability labels per model id, for the table's default marks. */
-	const defaultsByModel = $derived.by(() => {
-		const out: Record<number, string[]> = {}
-		for (const [capability, d] of Object.entries(defaults)) {
-			if (d?.connectionId !== id || d.connectionModelId == null) continue
-			;(out[d.connectionModelId] ??= []).push(capabilityWord(capability))
-		}
-		return out
-	})
+	/** The model levers that still differ from what is saved. */
+	const liveEdits = $derived(
+		row ? liveModelEdits(modelEdits, row.models, defaults, id) : noModelEdits()
+	)
+	const modelDirty = $derived(modelEditCount(liveEdits) > 0)
+	/** What Save would send, in order — also the "Waiting for Save" chips. */
+	const pendingSteps = $derived(
+		row ? modelEditPlan(liveEdits, row.models, capabilityWord) : []
+	)
+	/** The models as drawn: visibility from the draft. */
+	const shownModels = $derived(row ? modelsWithEdits(row.models, liveEdits) : [])
+	/**
+	 * Capability labels per model id, for the table's default marks — the
+	 * saved ones, with every capability a pending Use moves taken from the
+	 * draft.
+	 */
+	const defaultsByModel = $derived(
+		defaultMarksWithEdits(defaults, liveEdits, id, capabilityWord)
+	)
 
 	// ── model presses ───────────────────────────────────────────────────
 	/**
-	 * Use: register the model as a default. Chat where it can serve it, else
-	 * the first thing it can. Moving the embeddings or entities default
-	 * throws stored work away, so that one goes to Admin → Defaults, which
-	 * shows the cost before it asks.
+	 * Use: ask for the model as a default — a pending change, sent on Save.
+	 * Chat where it can serve it, else the first thing it can. Moving the
+	 * embeddings or entities default throws stored work away, so that one
+	 * goes to Admin → Defaults, which shows the cost before it asks.
 	 */
 	function useModel(modelId: number) {
 		const m = row?.models.find((x) => x.id === modelId)
@@ -345,10 +482,16 @@
 			void adminGoto("/admin/defaults")
 			return
 		}
-		socket.emit("connections:setDefault", { capability, id, modelId: m.id })
+		modelEdits = withDefaultEdit(modelEdits, capability, m.id, defaults, id)
 	}
+	/** Hide / Show: a pending change, sent on Save. */
 	function toggleModel(modelId: number, enabled: boolean) {
-		socket.emit("connections:updateModel", { id, modelId, model: { enabled } })
+		const m = row?.models.find((x) => x.id === modelId)
+		if (m) modelEdits = withEnabledEdit(modelEdits, m, enabled)
+	}
+	/** One "Waiting for Save" chip's ×: that lever goes back to what is saved. */
+	function dropPending(label: string) {
+		modelEdits = withoutSteps(modelEdits, pendingSteps, [label])
 	}
 	function modelAction(model: ListRow["models"][number]) {
 		const isDefault = !!defaultsByModel[model.id]?.length
@@ -409,7 +552,7 @@
 		noun="connection"
 		changelistHref="/admin/connections"
 		changelistLabel="Connections"
-		dirty={edits.dirty}
+		dirty={edits.dirty || modelDirty}
 		{saving}
 		errors={formErrors}
 		fieldErrors={{ "connection-admin-name": nameError }}
@@ -502,7 +645,7 @@
 					label="Name"
 					required
 					error={nameError}
-					help="What pickers and the Connections view call it. Unique across the instance."
+					help="What pickers and the Connections view call it. Unique across this pub."
 				>
 					<input
 						id="connection-admin-name"
@@ -577,7 +720,7 @@
 			<AdminFieldset
 				id="models"
 				title="Models"
-				description={modelsHeadline({ modelCount: row.models.length, missingCount })}
+				description={`${modelsHeadline({ modelCount: row.models.length, missingCount })}. Hide, Show and Use wait for Save; Refresh${isOnnx ? ", Download" : ""} and Add by name act at once.`}
 			>
 				{#snippet aside()}
 					<button
@@ -606,7 +749,7 @@
 							{/if}
 						</p>
 					{:else if isOnnx}
-						{#each row.models as m (m.id)}
+						{#each shownModels as m (m.id)}
 							{@const action = rowAction(kind, m, {
 								isDefault: !!defaultsByModel[m.id]?.length
 							})}
@@ -627,7 +770,7 @@
 						{/each}
 					{:else if modelsWidth >= 640}
 						<ModelTable
-							models={row.models}
+							models={shownModels}
 							{defaultsByModel}
 							local={kind !== "api"}
 							onOpen={openInConnections}
@@ -635,16 +778,47 @@
 							onToggleEnabled={toggleModel}
 						/>
 					{:else}
-						{#each row.models as m (m.id)}
+						{#each shownModels as m (m.id)}
 							<ModelRow
 								model={m}
 								defaultFor={defaultsByModel[m.id] ?? []}
 								canUse={!!(m.satisfiableCapabilities ?? []).length &&
+									m.enabled !== false &&
 									!defaultsByModel[m.id]?.length}
 								onOpen={openInConnections}
 								onUse={() => useModel(m.id)}
 							/>
 						{/each}
+					{/if}
+
+					{#if pendingSteps.length}
+						<!-- The levers pressed since the last Save, each said once
+						     with an × that puts it back (§6.3 chips; §6.14: a
+						     Save form holds every edit and says which). -->
+						<div
+							class="flex min-w-0 flex-wrap items-center gap-2"
+							role="group"
+							aria-label="Model changes waiting for Save"
+							data-model-pending
+						>
+							<span class="text-surface-600-400 text-xs">Waiting for Save:</span>
+							{#each pendingSteps as step (step.key)}
+								<span
+									class="bg-surface-200-800 text-surface-700-300 flex min-w-0 items-center gap-1 rounded-full px-2.5 py-1 text-xs"
+								>
+									<span class="min-w-0 truncate">{step.label}</span>
+									<button
+										type="button"
+										class="hover:text-surface-950-50 shrink-0"
+										onclick={() => dropPending(step.label)}
+										title="Put it back"
+										aria-label={`Undo: ${step.label}`}
+									>
+										<Icons.X size={12} aria-hidden="true" />
+									</button>
+								</span>
+							{/each}
+						</div>
 					{/if}
 
 					{#if manualAddAllowed(connection.type)}
@@ -760,3 +934,5 @@
 		</AdminFieldset>
 	</AdminChangeForm>
 {/if}
+
+<EmbeddingSwitchDialog {...embeddingEdits.dialog} />

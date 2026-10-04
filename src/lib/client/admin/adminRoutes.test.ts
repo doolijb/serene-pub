@@ -7,6 +7,11 @@ describe("admin routes", () => {
 		expect(matchAdminRoute("/admin/pipelines/core:spec").params).toEqual({ slug: "core:spec" })
 		expect(matchAdminRoute("/admin/users/new").pattern).toBe("/admin/users/new")
 		expect(matchAdminRoute("/admin/users/5").params).toEqual({ id: "5" })
+		// The event and history change views (Django's change view per row).
+		expect(matchAdminRoute("/admin/pipelines/events/core%3Asession%2Fcreated").params).toEqual({
+			id: "core:session/created"
+		})
+		expect(matchAdminRoute("/admin/history/42").pattern).toBe("/admin/history/:id")
 	})
 
 	it("falls back to the overview for unknown addresses", () => {

@@ -1,348 +1,250 @@
 #!/usr/bin/env node
-
-/**
- * Script to create platform-specific executables with custom icons
- * This script generates clickable applications for Windows, Linux, and macOS
- */
+// scripts/create-executables.js
+//
+// Renders the per-target files a release needs that cannot be checked in as
+// they are, into dist/generated/<target>/ (scripts/dist-layout.js →
+// generatedAssetsDir). It used to write shims (a .bat, a bash "Serene Pub", a
+// macOS stub script) and ICON_SETUP.txt hand-conversion notes INTO
+// dist-assets/, which is how generated files ended up committed. Now:
+//
+//   dist-assets/   templates and hand-written sources only (never written to)
+//   dist/          everything generated (gitignored)
+//
+// The launcher itself is not made here — launcher/build.mjs builds it (Go),
+// and scripts/bundle-dist.js places it. What is left is template
+// substitution and the macOS icon:
+//
+//   macos-*    Info.plist          from dist-assets/macos/Info.plist.in
+//              favicon.icns        from static/icon-x{16,32,256,512,1024}.png
+//   linux-x64  install-desktop-shortcut.sh
+//                                  from dist-assets/linux/install-desktop-shortcut.sh.in
+//   windows-*  nothing: the .exe's icon and version resource are embedded by
+//              launcher/build.mjs (goversioninfo).
+//
+// One version source: package.json.
+//
+// Usage: node scripts/create-executables.js [<target> ...]   (default: all
+// launcher targets)
 
 import fs from "fs"
 import path from "path"
-import { execSync } from "child_process"
-import { fileURLToPath } from "url"
+import { fileURLToPath, pathToFileURL } from "url"
+
+import {
+	generatedAssetsDir,
+	LAUNCHER_TARGETS,
+	launcherFileName,
+	MACOS_BUNDLE_EXECUTABLE,
+	MACOS_ICON_FILE,
+	targetPlatform
+} from "./dist-layout.js"
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
+const repoRoot = path.resolve(__dirname, "..")
 
-const packageJson = JSON.parse(
-	fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf-8")
-)
-// Confirmed stale before this fix: the macOS Info.plist below had "0.4.1"
-// hardcoded while package.json had already moved past it — read live
-// instead of duplicating the version as a literal.
-const appVersion = packageJson.version
+/**
+ * Where the Linux desktop entry's Icon= points, relative to the install root.
+ * build/client is where SvelteKit copies static/, so this is the web app's
+ * own icon, inside the payload (stable path; matches the installed version).
+ */
+export const LINUX_ICON_RELATIVE_PATH = "app/build/client/icon-x256.png"
 
-const platforms = {
-	windows: {
-		name: "Serene Pub.exe",
-		launcher: "Serene Pub.bat",
-		icon: "favicon.ico",
-		template: "serene-pub-launcher.exe"
-	},
-	linux: {
-		name: "Serene Pub",
-		executable: "Serene Pub",
-		icon: "favicon.png",
-		// No .desktop key: an entry can only be written once the install
-		// location is known, so install-desktop-shortcut.sh writes it on the
-		// user's machine instead. See createLinuxExecutable().
-		desktopInstaller: "install-desktop-shortcut.sh"
-	},
-	macos: {
-		name: "Serene Pub.app",
-		icon: "favicon.icns",
-		bundle: "Serene Pub.app"
-	}
-}
-
-async function createExecutables() {
-	console.log("🚀 Creating platform-specific executables...")
-
-	// Ensure output directories exist
-	const distDir = path.join(__dirname, "..", "dist-assets")
-	const staticDir = path.join(__dirname, "..", "static")
-	// Shipped as favicon.png, the name the desktop entry and launchers use.
-	const faviconSource = path.join(staticDir, "icon-x256.png")
-
-	// Check if favicon exists
-	if (!fs.existsSync(faviconSource)) {
-		console.error("❌ icon-x256.png not found in static directory")
-		return
-	}
-
-	for (const [platform, config] of Object.entries(platforms)) {
-		const platformDir = path.join(distDir, platform)
-
-		if (!fs.existsSync(platformDir)) {
-			console.log(`📁 Creating directory: ${platformDir}`)
-			fs.mkdirSync(platformDir, { recursive: true })
+/**
+ * Substitute `@KEY@` placeholders. Throws on a placeholder with no value, so a
+ * template that grows a new one fails the build instead of shipping the
+ * literal text.
+ *
+ * @param {string} text
+ * @param {Record<string, string>} vars
+ */
+export function renderTemplate(text, vars) {
+	const out = text.replace(/@([A-Z][A-Z0-9_]*)@/g, (match, key) => {
+		if (!(key in vars)) {
+			throw new Error(`template placeholder ${match} has no value`)
 		}
+		return vars[key]
+	})
+	return out
+}
 
-		// Copy favicon to platform directory
-		const faviconDest = path.join(platformDir, "favicon.png")
-		fs.copyFileSync(faviconSource, faviconDest)
-		console.log(`📎 Copied favicon to ${platform}`)
+/** Escape a value for an XML text node. */
+function xmlEscape(value) {
+	return String(value)
+		.replace(/&/g, "&amp;")
+		.replace(/</g, "&lt;")
+		.replace(/>/g, "&gt;")
+}
 
-		console.log(`🔧 Processing ${platform}...`)
+/**
+ * "0.6.1-rc-2" → "0.6.1". Bundle versions must be dotted integers.
+ *
+ * @param {string} version
+ */
+export function baseVersion(version) {
+	const m = /^(\d+)\.(\d+)\.(\d+)/.exec(version)
+	if (!m) throw new Error(`not a semver version: ${version}`)
+	return `${m[1]}.${m[2]}.${m[3]}`
+}
 
-		switch (platform) {
-			case "windows":
-				await createWindowsExecutable(platformDir, config)
-				break
-			case "linux":
-				await createLinuxExecutable(platformDir, config)
-				break
-			case "macos":
-				await createMacOSExecutable(platformDir, config)
-				break
+/**
+ * The PNG's pixel size, from its IHDR chunk.
+ *
+ * @param {Buffer} png
+ */
+export function pngSize(png) {
+	const signature = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])
+	if (
+		png.length < 24 ||
+		!png.subarray(0, 8).equals(signature) ||
+		png.toString("ascii", 12, 16) !== "IHDR"
+	) {
+		throw new Error("not a PNG file")
+	}
+	return { width: png.readUInt32BE(16), height: png.readUInt32BE(20) }
+}
+
+/**
+ * ICNS element types that carry PNG data, and the pixel size each requires.
+ * Modern macOS reads PNG payloads for all of these — it is what `iconutil`
+ * itself writes — so no conversion tool is needed and the file is
+ * byte-identical on every build host.
+ */
+const ICNS_SLOTS = [
+	{ type: "icp4", px: 16, source: "icon-x16.png" },
+	{ type: "icp5", px: 32, source: "icon-x32.png" },
+	{ type: "ic11", px: 32, source: "icon-x32.png" }, // 16@2x
+	{ type: "ic08", px: 256, source: "icon-x256.png" },
+	{ type: "ic13", px: 256, source: "icon-x256.png" }, // 128@2x
+	{ type: "ic09", px: 512, source: "icon-x512.png" },
+	{ type: "ic14", px: 512, source: "icon-x512.png" }, // 256@2x
+	{ type: "ic10", px: 1024, source: "icon-x1024.png" } // 512@2x
+]
+
+/**
+ * Build an .icns from the repo's static/icon-x*.png set.
+ *
+ * Format: "icns" + u32be total length, then elements of 4-char type + u32be
+ * element length (header included) + PNG bytes.
+ *
+ * @param {string} staticDir
+ * @returns {Buffer}
+ */
+export function buildIcns(staticDir) {
+	const elements = ICNS_SLOTS.map(({ type, px, source }) => {
+		const png = fs.readFileSync(path.join(staticDir, source))
+		const { width, height } = pngSize(png)
+		if (width !== px || height !== px) {
+			throw new Error(
+				`${source} is ${width}x${height}; the ${type} icon slot needs ${px}x${px}`
+			)
 		}
+		const header = Buffer.alloc(8)
+		header.write(type, 0, 4, "ascii")
+		header.writeUInt32BE(png.length + 8, 4)
+		return Buffer.concat([header, png])
+	})
+	const body = Buffer.concat(elements)
+	const header = Buffer.alloc(8)
+	header.write("icns", 0, 4, "ascii")
+	header.writeUInt32BE(body.length + 8, 4)
+	return Buffer.concat([header, body])
+}
+
+/**
+ * Render one target's generated files. Returns the paths written.
+ *
+ * @param {object} args
+ * @param {string} args.targetName
+ * @param {string} args.version package.json version
+ * @param {string} args.assetsDir dist-assets/
+ * @param {string} args.staticDir static/
+ * @param {string} args.outDir dist/generated/<target>
+ * @returns {string[]}
+ */
+export function generateForTarget({
+	targetName,
+	version,
+	assetsDir,
+	staticDir,
+	outDir
+}) {
+	if (!LAUNCHER_TARGETS.includes(targetName)) {
+		throw new Error(
+			`no launcher is built for ${targetName}; valid: ${LAUNCHER_TARGETS.join(", ")}`
+		)
+	}
+	fs.rmSync(outDir, { recursive: true, force: true })
+	fs.mkdirSync(outDir, { recursive: true })
+	const written = []
+	const platform = targetPlatform(targetName)
+
+	if (platform === "darwin") {
+		const template = fs.readFileSync(
+			path.join(assetsDir, "macos", "Info.plist.in"),
+			"utf8"
+		)
+		const plist = renderTemplate(template, {
+			BUNDLE_EXECUTABLE: xmlEscape(MACOS_BUNDLE_EXECUTABLE),
+			ICON_FILE: xmlEscape(MACOS_ICON_FILE),
+			BASE_VERSION: xmlEscape(baseVersion(version)),
+			VERSION: xmlEscape(version)
+		})
+		const plistPath = path.join(outDir, "Info.plist")
+		fs.writeFileSync(plistPath, plist)
+		written.push(plistPath)
+
+		const icnsPath = path.join(outDir, MACOS_ICON_FILE)
+		fs.writeFileSync(icnsPath, buildIcns(staticDir))
+		written.push(icnsPath)
 	}
 
-	console.log("✅ All executables created successfully!")
-	console.log("")
-	console.log("📋 Next steps:")
-	console.log(
-		'  Windows: Convert "Serene Pub.bat" to "Serene Pub.exe" with custom icon'
+	if (platform === "linux") {
+		const template = fs.readFileSync(
+			path.join(assetsDir, "linux", "install-desktop-shortcut.sh.in"),
+			"utf8"
+		)
+		const script = renderTemplate(template, {
+			LAUNCHER_FILE: launcherFileName(targetName),
+			ICON_PATH: LINUX_ICON_RELATIVE_PATH
+		})
+		const scriptPath = path.join(outDir, "install-desktop-shortcut.sh")
+		fs.writeFileSync(scriptPath, script, { mode: 0o755 })
+		fs.chmodSync(scriptPath, 0o755)
+		written.push(scriptPath)
+	}
+
+	return written
+}
+
+const isMain =
+	!!process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href
+
+if (isMain) {
+	const pkg = JSON.parse(
+		fs.readFileSync(path.join(repoRoot, "package.json"), "utf8")
 	)
-	console.log(
-		'  Linux: Use the "Serene Pub" executable, or run install-desktop-shortcut.sh to add a menu entry'
-	)
-	console.log("  macOS: Convert favicon.png to .icns and place in app bundle")
-}
-
-async function createWindowsExecutable(platformDir, config) {
-	// Create a simple batch wrapper that launches the existing run.cmd script
-	const launcherBat = path.join(platformDir, "Serene Pub.bat")
-	const content = `@echo off
-REM Serene Pub Application Launcher
-REM This launches the main run.cmd script
-cd /d "%~dp0"
-call run.cmd
-`
-	fs.writeFileSync(launcherBat, content)
-
-	// We'll need to use a tool like ResourceHacker or create a proper .exe
-	// For now, create instructions for manual icon setting
-	const iconInstructions = path.join(platformDir, "ICON_SETUP.txt")
-	const instructions = `To set up the application icon:
-
-1. Convert favicon.png to favicon.ico using an online converter
-2. Use Resource Hacker (http://www.angusj.com/resourcehacker/) to:
-   - Open "Serene Pub Launcher.bat"
-   - Add the favicon.ico as the application icon
-   - Save as "Serene Pub.exe"
-
-Or use a batch-to-exe converter that supports custom icons.
-`
-	fs.writeFileSync(iconInstructions, instructions)
-
-	console.log(`   ✓ Windows launcher created: ${launcherBat}`)
-}
-
-async function createLinuxExecutable(platformDir, config) {
-	// A .desktop file's Exec=/Icon=/Path= must be absolute paths to wherever
-	// the user actually extracted the release — a value baked in here, at
-	// build time, only ever reflects the build machine's own path (this repo
-	// shipped exactly that bug: the checked-in .desktop file pointed at a
-	// path that exists on no user's machine, and bundle-dist.js copied it
-	// verbatim into every Linux release). Generate an installer script
-	// instead, shipped at the top of the extracted folder, that a user runs
-	// once — it resolves its own directory at runtime (same pattern already
-	// used by the executable wrapper below) and writes the entry, with the
-	// correct local paths, into the user's own applications directory where
-	// the desktop menu actually reads it from.
-	const installScript = path.join(platformDir, "install-desktop-shortcut.sh")
-	const installScriptContent = `#!/bin/bash
-# Adds Serene Pub to your applications menu, pointing at wherever this folder
-# actually is — run this once after extracting the release, and again if you
-# move the folder. Nothing else is installed anywhere on your system.
-set -e
-DIR="$( cd "$( dirname "\${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
-
-# The spec-mandated location for a per-user entry. The menu only reads entries
-# from here (or the system-wide /usr/share/applications) — a .desktop file left
-# sitting in the extracted folder is not "installed" in any sense, which is
-# what the previous version of this script produced.
-APPS_DIR="\${XDG_DATA_HOME:-$HOME/.local/share}/applications"
-DESKTOP_FILE="$APPS_DIR/serene-pub.desktop"
-mkdir -p "$APPS_DIR"
-
-# Only Exec= needs the Desktop Entry spec's own quoting rules — it's the one
-# field parsed as a command line (space-separated arguments), so a value
-# containing a space (the common case here — people extract into paths with
-# spaces) must be double-quoted, with any literal backslash/backtick/dollar/
-# double-quote within it escaped with a backslash. Icon= and Path= are plain
-# single string values, not argument lists — confirmed against
-# desktop-file-validate, which flags a quoted Icon/Path as *not* looking
-# like a valid path (the quote characters would become part of the value).
-escape_exec_value() {
-    printf '%s' "$1" | sed -e 's/\\\\/\\\\\\\\/g' -e 's/"/\\\\"/g' -e 's/\`/\\\\\`/g' -e 's/\\$/\\\\$/g'
-}
-ESCAPED_DIR="$(escape_exec_value "$DIR")"
-
-# Exec= points at the top-level run.sh forwarder, never straight into app/:
-# app/ is the directory an update replaces wholesale, and a later release
-# swaps this forwarder for a compiled launcher at the same path. Both stay
-# true for an entry written against run.sh.
-cat > "$DESKTOP_FILE" <<EOF
-[Desktop Entry]
-Version=1.0
-Type=Application
-Name=Serene Pub
-Comment=AI Chat Application
-Exec="$ESCAPED_DIR/run.sh"
-Icon=$DIR/favicon.png
-Terminal=false
-Categories=Network;Chat;
-StartupNotify=true
-Path=$DIR
-EOF
-
-# Some desktops cache the menu; harmless and absent on plenty of systems.
-if command -v update-desktop-database > /dev/null 2>&1; then
-    update-desktop-database "$APPS_DIR" > /dev/null 2>&1 || true
-fi
-
-echo "Serene Pub added to your applications menu."
-echo "Entry: $DESKTOP_FILE"
-echo "Remove it again with: rm \\"$DESKTOP_FILE\\""
-`
-
-	fs.writeFileSync(installScript, installScriptContent)
-
+	const requested = process.argv.slice(2)
+	const targets = requested.length ? requested : LAUNCHER_TARGETS
 	try {
-		execSync(`chmod +x "${installScript}"`)
-		console.log(
-			`   ✓ Linux desktop-shortcut installer created: ${installScript}`
-		)
-	} catch (error) {
-		console.log(
-			`   ⚠️  Installer script created but chmod failed: ${installScript}`
-		)
-	}
-
-	// Create a simple executable wrapper that calls the existing run.sh
-	const executableScript = path.join(platformDir, config.executable)
-	const scriptContent = `#!/bin/bash
-# Serene Pub Application Launcher
-# This launches the main run.sh script
-DIR="$( cd "$( dirname "\${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
-cd "$DIR"
-exec ./run.sh
-`
-
-	fs.writeFileSync(executableScript, scriptContent)
-
-	try {
-		execSync(`chmod +x "${executableScript}"`)
-		console.log(`   ✓ Linux executable created: ${executableScript}`)
-	} catch (error) {
-		console.log(
-			`   ⚠️  Executable created but chmod failed: ${executableScript}`
-		)
+		for (const targetName of targets) {
+			const outDir = generatedAssetsDir(
+				path.join(repoRoot, "dist"),
+				targetName
+			)
+			const written = generateForTarget({
+				targetName,
+				version: pkg.version,
+				assetsDir: path.join(repoRoot, "dist-assets"),
+				staticDir: path.join(repoRoot, "static"),
+				outDir
+			})
+			console.log(
+				`${targetName}: ${written.length ? written.map((f) => path.relative(repoRoot, f)).join(", ") : "nothing to generate"}`
+			)
+		}
+	} catch (err) {
+		console.error(`create-executables: ${err.message}`)
+		process.exit(1)
 	}
 }
-
-async function createMacOSExecutable(platformDir, config) {
-	// Create macOS .app bundle structure
-	const appBundle = path.join(platformDir, "Serene Pub.app")
-	const contentsDir = path.join(appBundle, "Contents")
-	const macOSDir = path.join(contentsDir, "MacOS")
-	const resourcesDir = path.join(contentsDir, "Resources")
-
-	// Create directories
-	fs.mkdirSync(appBundle, { recursive: true })
-	fs.mkdirSync(contentsDir, { recursive: true })
-	fs.mkdirSync(macOSDir, { recursive: true })
-	fs.mkdirSync(resourcesDir, { recursive: true })
-
-	// Create Info.plist
-	const infoPlist = path.join(contentsDir, "Info.plist")
-	const plistContent = `<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-	<key>CFBundleExecutable</key>
-	<string>serene-pub</string>
-	<key>CFBundleIdentifier</key>
-	<string>com.doolijb.serene-pub</string>
-	<key>CFBundleName</key>
-	<string>Serene Pub</string>
-	<key>CFBundleVersion</key>
-	<string>${appVersion}</string>
-	<key>CFBundleShortVersionString</key>
-	<string>${appVersion}</string>
-	<key>CFBundleIconFile</key>
-	<string>favicon.icns</string>
-	<key>CFBundlePackageType</key>
-	<string>APPL</string>
-	<key>LSMinimumSystemVersion</key>
-	<string>10.15</string>
-</dict>
-</plist>
-`
-	fs.writeFileSync(infoPlist, plistContent)
-
-	// Create the executable Info.plist names as CFBundleExecutable — the only
-	// thing a Dock or Finder launch runs. It used to cd to the .app directory
-	// and exec ./run.sh there — a path nothing ever wrote a run.sh to, so
-	// double-clicking the bundle could never have worked at all; then it
-	// exec'd the payload's bare entrypoint at Contents/Resources/app/run.sh,
-	// which worked but skipped the launcher, so a double-click got no startup
-	// watch: a database that would not open produced no window, no browser tab
-	// and no log, on the one launch path with no terminal to fall back on.
-	//
-	// It now hands over to the launcher's own copy inside the bundle, which
-	// scripts/bundle-dist.js places at Contents/Resources/run.sh from the one
-	// source text in dist-assets/macos/run.sh. KEEP THIS TEXT IDENTICAL to the
-	// checked-in dist-assets/macos/Serene Pub.app/Contents/MacOS/serene-pub —
-	// this script overwrites that file, and a shipped release carries whichever
-	// of the two was written last.
-	const executableScript = path.join(macOSDir, "serene-pub")
-	const scriptContent = `#!/bin/bash
-# Serene Pub Application Launcher for macOS
-#
-# Info.plist names this file as CFBundleExecutable, so it is the only thing a
-# Dock or Finder launch runs. It hands straight over to the launcher, whose
-# copy inside this bundle scripts/bundle-dist.js places at
-# Contents/Resources/run.sh from the one source text in dist-assets/macos.
-#
-# It used to exec Resources/app/run.sh - the bare entrypoint - directly, which
-# meant a double-click skipped the launcher entirely: no startup watch, so a
-# database that would not open produced no window, no browser tab and no log,
-# on the one launch path that has no terminal to fall back on.
-MACOS_DIR="$( cd "$( dirname "\${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
-RESOURCES_DIR="$( cd "$MACOS_DIR/../Resources" &> /dev/null && pwd )"
-
-# Through /bin/sh rather than on its own shebang, and tested with -r rather
-# than -x, so that a launcher which arrived without its executable bit still
-# runs. The alternative is the fallback below firing on a bundle that HAS a
-# launcher - a Dock launch quietly doing less than it looks like it is doing,
-# which is the whole failure this file exists to end. Both this script and the
-# launcher are POSIX sh; nothing here needs the shebang to pick a shell.
-if [ -r "$RESOURCES_DIR/run.sh" ]; then
-    exec /bin/sh "$RESOURCES_DIR/run.sh" "\$@"
-fi
-
-# The bare entrypoint is the fallback, not the plan: a bundle assembled by hand
-# or by an older build has no launcher beside the payload, and starting the
-# server without a startup watch beats not starting at all.
-exec "$RESOURCES_DIR/app/run.sh" "\$@"
-`
-
-	fs.writeFileSync(executableScript, scriptContent)
-
-	try {
-		execSync(`chmod +x "${executableScript}"`)
-		console.log(`   ✓ macOS app bundle created: ${appBundle}`)
-	} catch (error) {
-		console.log(`   ⚠️  App bundle created but chmod failed: ${appBundle}`)
-	}
-
-	// Create instructions for icon conversion
-	const iconInstructions = path.join(platformDir, "ICON_SETUP.txt")
-	const instructions = `To set up the application icon:
-
-1. Convert favicon.png to favicon.icns using:
-   - sips command: sips -s format icns favicon.png --out Resources/favicon.icns
-   - Or use an online converter
-   - Or use Image2icon app
-
-2. Place the favicon.icns file in: Serene Pub.app/Contents/Resources/
-
-The .app bundle is ready to use after adding the icon.
-`
-	fs.writeFileSync(iconInstructions, instructions)
-}
-
-// Run the script
-createExecutables().catch(console.error)

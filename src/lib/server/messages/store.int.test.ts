@@ -112,9 +112,9 @@ describe("the boot migration (20 §5)", () => {
 						swipes: {
 							currentIdx: 1,
 							history: ["swiped past", "swiped current"],
-							thinkingHistory: [null, "reasoning"]
+							reasoningHistory: [null, "reasoning"]
 						},
-						thinking: "reasoning"
+						reasoning: "reasoning"
 					}
 				},
 				{

@@ -11,8 +11,8 @@ import { CORE_CONVERSATION, coreDefaultWidgets } from "./coreWidgets"
 const byId = (widgets: ReturnType<typeof coreDefaultWidgets>) => new Map(widgets.map((p) => [p.id, p]))
 
 describe("coreDefaultWidgets", () => {
-	// Four, not five: R79 removed the Inventory widget for now.
-	test("the four widgets the page offers, every one core's remote by default — none native (R79)", () => {
+	// Five: R79 removed the Inventory widget for now; the author's note (AN1) joined.
+	test("the five widgets the page offers, every one core's remote by default — none native (R79)", () => {
 		const panels = coreDefaultWidgets()
 		expect(
 			panels.map(({ id, title, icon, role, surface, src, layout, defaultActive }) => ({
@@ -65,6 +65,16 @@ describe("coreDefaultWidgets", () => {
 				src: "/core-ui/lore-entries",
 				layout: { span: { ideal: 1 }, minInline: 260 },
 				defaultActive: false
+			},
+			{
+				id: "authors-note",
+				title: "Author's note",
+				icon: "NotebookPen",
+				role: "secondary",
+				surface: { kind: "remote", owner: "core", component: "authors-note" },
+				src: "/core-ui/authors-note",
+				layout: { span: { ideal: 1 }, minInline: 240 },
+				defaultActive: false
 			}
 		])
 	})
@@ -79,6 +89,9 @@ describe("coreDefaultWidgets", () => {
 		expect(panels.get("stats")!.grants).toEqual(["session:state"])
 		expect(panels.get("scene-portraits")!.grants).toEqual(["characters", "session:state"])
 		expect(panels.get("lore-entries")!.grants).toEqual(["lore"])
+		// The author's note asks for everything: no section, no scope.
+		expect(panels.get("authors-note")!.reads).toEqual([])
+		expect(panels.get("authors-note")!.grants).toBeUndefined()
 	})
 
 	test("the conversation mounts core's own module with the reads it declares (K12)", () => {

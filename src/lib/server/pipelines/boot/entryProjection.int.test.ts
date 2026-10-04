@@ -17,6 +17,7 @@ import { beforeAll, describe, expect, it } from "vitest"
 import { sql, eq, and } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import {
+	asDriverRejection,
 	createTestDb,
 	createTestUser,
 	type TestDb
@@ -138,6 +139,42 @@ describe("what a declaration projects", () => {
 		// `detail` still gets its *type* checked — the T1 half of the same
 		// declaration is unaffected by the T2 half being ignored.
 		expect(expr).toContain(`jsonb_typeof("fields"->'detail') = 'string'`)
+	})
+
+	it("projects whole numbers for an integer, and none for a number", () => {
+		const expr = entryCheckExpression("x:entry/t", 1, {
+			n: { type: "integer" },
+			r: { type: "number" }
+		})!
+		// Guarded by CASE like every cast, so a string is judged by its type
+		// conjunct and never reaches the cast.
+		expect(expr).toContain(
+			`(CASE WHEN jsonb_typeof("fields"->'n') = 'number' THEN ("fields"->'n')::numeric = trunc(("fields"->'n')::numeric) ELSE true END)`
+		)
+		expect(expr).not.toContain(`trunc(("fields"->'r')`)
+	})
+
+	it("projects narrows: a value only beside the value it narrows", () => {
+		const expr = entryCheckExpression("x:entry/t", 1, {
+			month: { type: "integer" },
+			day: { type: "integer", narrows: "month" }
+		} as any)!
+		expect(expr).toContain(
+			`(CASE WHEN ("fields" ? 'day' AND jsonb_typeof("fields"->'day') <> 'null') THEN ("fields" ? 'month' AND jsonb_typeof("fields"->'month') <> 'null') ELSE true END)`
+		)
+		// A narrows naming no declared field, or an unsafe one, projects nothing.
+		for (const narrows of ["mnth", "month'; DROP TABLE x; --"])
+			expect(
+				entryCheckExpression("x:entry/t", 1, {
+					month: { type: "enum", of: ["a"] },
+					day: { type: "string", narrows }
+				} as any)
+			).toBe(
+				entryCheckExpression("x:entry/t", 1, {
+					month: { type: "enum", of: ["a"] },
+					day: { type: "string" }
+				} as any)
+			)
 	})
 
 	it("returns null when a declaration constrains nothing", () => {
@@ -263,29 +300,64 @@ describe("the constraint against a direct write", () => {
 	it("rejects a missing required field on an insert that bypasses every application layer", async () => {
 		// The entire point. No socket handler, no validator — raw SQL.
 		await expect(
-			db.execute(sql`
-				INSERT INTO "lorebook_entries"
-					("lorebook_id","type_id","type_version","position","fields")
-				VALUES (${lorebookId}, ${HISTORY}, 1, 500, '{"graphed": false}'::jsonb)`)
+			asDriverRejection(
+				db.execute(sql`
+					INSERT INTO "lorebook_entries"
+						("lorebook_id","type_id","type_version","position","fields")
+					VALUES (${lorebookId}, ${HISTORY}, 1, 500, '{"graphed": false}'::jsonb)`)
+			)
 		).rejects.toThrow(/entry_fields__core_entry_history__v1/)
 	})
 
 	it("rejects a wrongly-typed field", async () => {
 		await expect(
-			db.execute(sql`
-				INSERT INTO "lorebook_entries"
-					("lorebook_id","type_id","type_version","position","fields")
-				VALUES (${lorebookId}, ${HISTORY}, 1, 501, '{"year": "410"}'::jsonb)`)
+			asDriverRejection(
+				db.execute(sql`
+					INSERT INTO "lorebook_entries"
+						("lorebook_id","type_id","type_version","position","fields")
+					VALUES (${lorebookId}, ${HISTORY}, 1, 501, '{"year": "410"}'::jsonb)`)
+			)
 		).rejects.toThrow(/entry_fields__core_entry_history__v1/)
 	})
 
 	it("rejects an out-of-range value", async () => {
+		// Month 0, not 13: history's range is the story-time rule (A15) — a
+		// floor of 1 and no ceiling, since a book may count thirteen months.
 		await expect(
-			db.execute(sql`
-				INSERT INTO "lorebook_entries"
-					("lorebook_id","type_id","type_version","position","fields")
-				VALUES (${lorebookId}, ${HISTORY}, 1, 502, '{"year": 1, "month": 13}'::jsonb)`)
+			asDriverRejection(
+				db.execute(sql`
+					INSERT INTO "lorebook_entries"
+						("lorebook_id","type_id","type_version","position","fields")
+					VALUES (${lorebookId}, ${HISTORY}, 1, 502, '{"year": 1, "month": 0}'::jsonb)`)
+			)
 		).rejects.toThrow(/entry_fields__core_entry_history__v1/)
+	})
+
+	it("rejects a day with no month — history's day narrows its month", async () => {
+		await expect(
+			asDriverRejection(
+				db.execute(sql`
+					INSERT INTO "lorebook_entries"
+						("lorebook_id","type_id","type_version","position","fields")
+					VALUES (${lorebookId}, ${HISTORY}, 1, 505, '{"year": 1, "day": 5}'::jsonb)`)
+			)
+		).rejects.toThrow(/entry_fields__core_entry_history__v1/)
+	})
+
+	it("rejects a fraction where the type declares a whole number", async () => {
+		for (const [position, typeId, fields] of [
+			[506, HISTORY, '{"year": 1, "month": 2.5}'],
+			[507, HISTORY, '{"year": 1.5}'],
+			[508, WORLD, '{"priority": 1.5}']
+		] as const)
+			await expect(
+				asDriverRejection(
+					db.execute(sql`
+						INSERT INTO "lorebook_entries"
+							("lorebook_id","type_id","type_version","position","fields")
+						VALUES (${lorebookId}, ${typeId}, 1, ${position}, ${fields}::jsonb)`)
+				)
+			).rejects.toThrow(new RegExp(entryConstraintName(typeId, 1)))
 	})
 
 	it("accepts a row that satisfies the declaration", async () => {
@@ -420,10 +492,12 @@ describe("a version bump", () => {
 				("lorebook_id","type_id","type_version","position","fields")
 			VALUES (${lorebookId}, ${SYNTH}, 2, 600, '{"alpha": 1}'::jsonb)`)
 		await expect(
-			db.execute(sql`
-				INSERT INTO "lorebook_entries"
-					("lorebook_id","type_id","type_version","position","fields")
-				VALUES (${lorebookId}, ${SYNTH}, 2, 601, '{"gamma": "x"}'::jsonb)`)
+			asDriverRejection(
+				db.execute(sql`
+					INSERT INTO "lorebook_entries"
+						("lorebook_id","type_id","type_version","position","fields")
+					VALUES (${lorebookId}, ${SYNTH}, 2, 601, '{"gamma": "x"}'::jsonb)`)
+			)
 		).rejects.toThrow(new RegExp(entryConstraintName(SYNTH, 2)))
 
 		// Cleared before the registry rows go, or the type reference blocks
@@ -561,20 +635,22 @@ describe("the position constraint", () => {
 		// (9002, 9003) is perfectly unique; the statement still cannot get
 		// there, because a is written onto b's slot before b vacates it.
 		await expect(
-			db.transaction(async (tx) => {
-				await tx
-					.update(schema.lorebookEntries)
-					.set({
-						position: sql`${schema.lorebookEntries.position} + 1`
-					})
-					.where(
-						and(
-							eq(schema.lorebookEntries.lorebookId, lorebookId),
-							eq(schema.lorebookEntries.typeId, WORLD),
-							sql`${schema.lorebookEntries.position} >= 9001`
+			asDriverRejection(
+				db.transaction(async (tx) => {
+					await tx
+						.update(schema.lorebookEntries)
+						.set({
+							position: sql`${schema.lorebookEntries.position} + 1`
+						})
+						.where(
+							and(
+								eq(schema.lorebookEntries.lorebookId, lorebookId),
+								eq(schema.lorebookEntries.typeId, WORLD),
+								sql`${schema.lorebookEntries.position} >= 9001`
+							)
 						)
-					)
-			})
+				})
+			)
 		).rejects.toThrow(/lorebook_entries_position_uq|duplicate key/i)
 
 		// Unchanged: the transaction rolled back, it did not half-apply.

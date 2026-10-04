@@ -247,7 +247,7 @@
 	const activeSentence = $derived.by(() => {
 		if (isEmbeddings) {
 			const lead =
-				"Every embedding in this install is made by this model."
+				"Every embedding in this pub is made by this model."
 			if (!loaded) return `${lead} Loads when the queue has work.`
 			const ttlClause = ttl
 				? `unloads after ${ttl} min idle, reloads when the queue has work`
@@ -256,7 +256,7 @@
 				? `${lead} Idle ${idle} min — ${ttlClause}.`
 				: `${lead} ${ttlClause[0].toUpperCase()}${ttlClause.slice(1)}.`
 		}
-		const lead = "Every name this install extracts comes from this model."
+		const lead = "Every name this pub extracts comes from this model."
 		return ttl
 			? `${lead} Loads when a message needs it; unloads after ${ttl} min idle.`
 			: `${lead} Loads when a message needs it.`
@@ -341,7 +341,7 @@
 				{#if isActive && section}
 					<span
 						class="preset-tonal-primary inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium"
-						title={`The instance default for ${section.starVerb}`}
+						title={`The pub default for ${section.starVerb}`}
 					>
 						<Icons.Star size={9} aria-hidden="true" />
 						{isEmbeddings ? "embeddings" : "entities"}

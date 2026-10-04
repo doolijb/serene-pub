@@ -126,13 +126,20 @@ for hints and placeholders that can be missed.
 | Selected card          | `ring-2 ring-primary-500 ring-offset-2 ring-offset-surface-950` (an inset bar hides under an image)            |
 | Hover on a row         | `surface-200-800`                                                                                              |
 | Primary button         | `preset-filled-primary-500`                                                                                    |
-| Secondary button       | `preset-tonal` or `preset-tonal-surface`                                                                       |
+| Secondary button       | `preset-tonal-surface` (redeclared in `app.css`: `surface-200-800`, one step off either ground)                |
 | Quiet action           | text in `surface-400`, `hover:text-surface-200`                                                                |
 | Destructive            | text or fill in `error`                                                                                        |
 
 `preset-filled-primary-500` is a button. It is never a selected row, an active tab, or a badge:
 the old convention failed contrast at 3.62:1 and was retired app-wide.
 
+
+**`preset-tonal-surface` is one step off the ground** (notes 25, 2026-10-02). Skeleton fills it
+with `surface-50-950`, which in dark mode is the sidebar's and the popovers' own ground (§2.3), so
+every secondary button and toolbar icon on a view read as text with no button around it. `app.css`
+redeclares the utility after the Skeleton import (a second `@utility` of one name merges, and the
+later declaration wins) to `surface-200-800`, the row-hover stop: visible on the 950 sidebar and the
+900 card alike. Never "fix" one call site with a darker class; the token is the fix.
 
 **Rulings of the 2026-09-26 consistency pass:**
 
@@ -178,6 +185,23 @@ declares dark stops is a bug, even if it looks right today.
   text or an accessible name.
 - No `primary` tint on large areas. Gold is an accent; a gold panel is a bug.
 
+### 2.8 Card and glass
+
+Two surfaces stand behind content that floats over something else, and the **theme** owns both
+looks. Nothing else draws them.
+
+- **Card**: Skeleton's filled surface preset, `preset-filled-surface-100-900` with a
+  `border-surface-200-800` edge and the theme's `--radius-container`. Opaque.
+- **Glass**: `preset-glass-surface` (app.css), built the way Skeleton's Presets guide builds one:
+  the theme tokens `--sp-glass-bg`, `--sp-glass-bd`, `--sp-glass-glow` and `--sp-glass-blur`, a
+  light/dark pair on `:root`. A custom theme restyles every glass surface by overriding the tokens.
+
+The Messages widget's **message backing** (`card | glass | none`, NOMENCLATURE §9) uses these two.
+A message style only declares which backing it prefers (`--sp-backing`), and the person's Card
+setting (Auto / On / Off) decides whether it is drawn. A style that wants glass inside its own
+markup (Dreamlit Cameo's per-line cards) reads the same `--sp-glass-*` tokens, never its own
+colours.
+
 ---
 
 ## 3. Typography
@@ -189,7 +213,7 @@ declares dark stops is a bug, even if it looks right today.
 | **Funnel Display** | Titles, view names, session names, speaker names                                      | 400, 600, 700        | `@fontsource/funnel-display`                       |
 | **Funnel Sans**    | Everything else: controls, labels, lists, body                                        | 400, 500, 600, 700   | `@fontsource/funnel-sans`                          |
 | **Fira Mono**      | Code, receipts, keyboard hints                                                        | 400                  | `@fontsource/fira-mono`                            |
-| **Literata**       | Story prose in a session: the message log, the composer's preview and the Writer skin | 400, 500, 400 italic | `@fontsource/literata`, as `--sp-prose` on `:root` |
+| **Literata**       | Story prose in a session: the message log, the composer's preview and the Writer and Page line skins | 400, 500, 400 italic | `@fontsource/literata`, as `--sp-prose` on `:root` |
 
 Fonts are self-hosted and imported in `src/app.css`; nothing is fetched from the web. The theme
 sets `--typo-heading--font-family` to Funnel Display at weight 600 with letter-spacing `-0.01em`,
@@ -282,6 +306,8 @@ The base unit is 4px. Everything below is a multiple of it, with the two excepti
 | Sidebar header            | 56px                                                        |
 | List pane in Focus        | 340px default, 360–380px for card lists                     |
 | Input, filter box, button | 40px; 32px for the small size                               |
+| Toolbar icon button       | 40 × 40, the filter box's height (§6.3)                     |
+| Avatar                    | xs 24 · sm 32 · md 40 · lg 56 · xl 72 (§6.4, Avatars)       |
 | List row                  | 44px minimum                                                |
 | Tab                       | 40px                                                        |
 | Icon-only rail toggle     | 44 × 44 narrow, 32 × 32 wide                                |
@@ -305,7 +331,7 @@ Fields inside a card: 16px. Cards in a stack: 12px. Rows in a list: 4px. Items i
 
 The window is rail, sidebar, main. The rail is fixed to the left edge and holds Home, the **Play**
 group (Sessions, Characters — personas included — Library, Lorebooks, Tags), the **Tune** group (Connections, Sampling,
-Pipelines, Settings, and whatever the instance enables), then Activity, Admin and the account. The
+Pipelines, Settings, and whatever the pub enables), then Activity, Admin and the account. The
 sidebar shows one view; other opened views stay mounted as tabs and show as a dot on their rail
 item. Main is the page. Below the `lg` breakpoint the rail becomes a five-item bottom bar and a view
 opens as a full-screen sheet.
@@ -356,6 +382,16 @@ view may measure its list pane too (a second `ViewModeTracker`, read by `.width`
 changes form inside its own column: the Library is a single column of rows with its filters in a
 popout under 560px of list, and a portrait grid with its filters in a row from there.
 
+Where the reader should choose how wide the editor is — the lorebook's list beside its editor, on
+Entries, Time and Cast — the desk split is a **`ResizableSplit`** instead: a 16px divider
+(`role="separator"`, focusable, `aria-valuenow` = the list's share in percent) that is dragged,
+stepped with the arrow keys (Shift for 10%, Home/End for the ends) and reset by a double click.
+The share, never a pixel width, is remembered per device in `localStorage` (every touch in
+try/catch) under one key per family of views (`serene-pub:loreSplit` for all three lorebook
+splits, so changing lens never moves it), clamped to 20–80%, with pixel floors (260px list, 320px
+editor) held by the grid's `minmax`. It looks like the shell's edge: a primary hairline and a grip,
+both shown on hover, focus and drag.
+
 ### 5.3 Responsive rules
 
 Inside a view, use container variants on the `view` container:
@@ -364,6 +400,18 @@ Inside a view, use container variants on the `view` container:
 | -------------------- | -------- | -------------------------------------------- |
 | `@lg/view:`          | 512px    | Two-column field rows, side-by-side metrics  |
 | `@min-[900px]/view:` | 900px    | Anything that mirrors the desk switch in CSS |
+
+Inside a `PanelSplit`, each pane is its own named container too (notes 14, 2026-10-02): **`list`**
+and **`detail`**. A detail decides its columns from `@…/detail:` — the `view` container is list and
+detail together, so a detail asking it would grow columns into room the list holds. The session and
+character details go to two columns of cards at `@2xl/detail:` / `@3xl/detail:`; a card keeps its
+own reading measure. A view with no split that would otherwise run a row 1400px wide in Focus
+centres its content at a reading width (Activity: 880px). **Connections** (notes 42, 2026-10-03)
+is the one split view whose list takes the whole view while nothing is open at desk width —
+centred at 1120px, its defaults four across and its cards side by side, because the connections
+are the view's main business rather than an index to a detail. Opening anything splits it: a
+340px list column (rows only) beside the detail. The list is a named `list` container in both,
+so what is inside asks `@…/list:` (the jobs grid goes four across at `@min-[36rem]/list:`).
 
 Never `@sm/view:` for a two-column decision: it fires at 384px, which is narrower than the 399px
 dock, so it would fire in the sidebar. Never a viewport variant (`sm:`, `md:`, `lg:`) inside a view:
@@ -388,9 +436,9 @@ pixel the window adds, and the conversation fills it (or, under Comfortable, the
 measure inside it). Never size a side from the
 window's spare room. **An empty side keeps its column** (ruled 2026-09-29): a declared side that docks
 at this width, pinned or not, and holds nothing is drawn as `.side-empty` at the width its first widget
-will have, so the middle never grows into it. It is a quiet region: a 7% `surface-500` tint (it reads
-the same over either ground), a 12px radius, no border, no text and no drop hint (6.7: hints belong to
-the editor), `aria-hidden` and no tab stop. The column is **soft** (`emptyColumnsPx` in
+will have, so the middle never grows into it. It shows the page's own background — no tint, no
+border, no text and no drop hint (6.7: hints belong to the editor) — so it reads as part of the body;
+`aria-hidden` and no tab stop. The column is **soft** (`emptyColumnsPx` in
 `sessionLayout/sideSlot.ts`): it is never counted in the tuck threshold, it is granted only from room
 beyond the populated sides and the stage's measure, two empty columns go together, and it gives way
 to 0 before any populated side tucks. Tucked, stowed, hidden or on its drawer rung, an empty side draws
@@ -494,14 +542,37 @@ editor's Save while reading as of a date is the pattern (`EntryWorkspace.svelte`
 count ("Filter 14 characters"), a clear control that returns focus to the input, and a primary
 focus ring on the wrapper. It binds the same state the view filters on and Jump drives.
 
-### 6.3 Filter popout and the New menu
+### 6.3 The view toolbar, the filter popout and the New menu
+
+**The view toolbar** (notes 25, 2026-10-02) is the top of every sidebar view's list, and the top of
+an editor that stands in for one (Sampling): **`ViewToolbar`** (`components/panels/ViewToolbar.svelte`).
+One shape, so the same control is in the same place whichever rail item opened the view:
+
+1. **The action row.** The view's one primary first: labelled, `preset-filled-primary-500`
+   `btn-sm` (**New**, **Add**, **Update**, or a New menu's trigger). Then the room. Then the
+   secondary actions as **icon buttons** — `toolbarButtonClass()`
+   (`components/panels/toolbarButton.ts`): 40px square, `preset-tonal-surface`, a `title` and an
+   `aria-label` that say the action (**Import a lorebook**, **Get a model**, **Reset unsaved
+   changes**). Then **`⋯`** last, for everything rarer (Set as default, Delete).
+2. **The find row.** The filter box takes the room (§6.2); the filter popout and the list/card pair
+   (**`ListCardToggle`**) are icon buttons after it.
+3. **The chips row.** Standing picks (Sessions' All / Your turn / Favorites) and every narrowing in
+   force as a dismissible chip.
+
+A row with nothing in it is not drawn. **Never a bare icon button**: without a preset an icon
+button is an icon on the view's ground and nobody can tell it is pressable. An icon button that is
+ON (a filter in force, the chosen view mode, an open panel) is `preset-tonal-primary` with
+`aria-pressed`; filled primary always means "do this", never "this is on". A detail's own actions
+are not this toolbar: they sit under its `DetailHero` — the primary labelled and filled, the next
+one labelled and tonal (the session detail's **Open session** and **Edit**), the rest in the
+`PanelNavHeader`'s `⋯`.
 
 When a view has more filters than one box, they live in a popout: a 40px icon button that opens a
 popover of `role="radio"` rows (single choice) with the checked row in the selected treatment; an
 active choice shows as one dismissible chip under the toolbar and lights the button tonal. A chip
 row that would need to scroll sideways is always a popout instead.
 
-The ways to add something live in one primary **New** button on its own row above the toolbar,
+The ways to add something live in one primary **New** button at the start of the action row,
 opening a `role="menu"` of items with a title and a one-line description, such as Write a character,
 Browse the library, Import a card.
 
@@ -513,11 +584,44 @@ a `+N` for the rest. A favourite is a small filled star after the name; a person
 row's own actions are in a `⋯` `RowMenu` (§6.6). The numeric id column is off (`showIndex={false}`) in
 views that show names.
 
-A **session row** in the Sessions view is the denser variant (2026-09-26): a 48px slot holding up
-to three 26px round cast avatars overlapping (ringed in the row's ground), a 14px medium name, the
+A **session row** in the Sessions view is the denser variant (2026-09-26; faces enlarged by notes 36,
+2026-10-02): a fixed 72px slot holding up to three 40px round cast faces overlapping by 40%
+(`AvatarStack`, ringed in the row's ground), a 14px medium name, the
 relative time at 12px **muted** on the right with a 6px primary dot before it when it is the
 reader's turn, and a 12px muted `Speaker: excerpt` line. The list groups under 12px muted
 sentence-case labels — _Your turn_, _Recent_, _Older_ — with no header row and no rule.
+
+A **session card** (`SessionCardItem`, the Sessions view's card mode, notes 36) is avatar-forward:
+the lead's portrait as a 16:10 cover, a group's faces (`lg`, round) standing on its lower edge,
+then the name at 15px, a muted line with the genre, **Your turn** (primary dot and words) and the
+time, and the last line clamped to two. A card grid is `auto-fill, minmax(150px, 1fr)` (two across the 380px list pane) off the
+list pane's own width; selection is the card's ring (§2.4). **Clicking a session row or card opens
+its detail at every width** (notes 32); going into the session is the detail's primary, and Jump's
+pick, which is "go to", goes straight in.
+
+**Avatars** (notes 36, 2026-10-02). One component, **`Avatar`** (`components/Avatar.svelte`), for
+characters, personas, cast members and every face a session shows, on one fixed scale:
+
+| Step | Size | Used for                                                    |
+| ---- | ---- | ----------------------------------------------------------- |
+| `xs` | 24px | a mention, a chip, a cover's badge, the session header's faces |
+| `sm` | 32px | a one-line chip or relationship line, a detail's cast list  |
+| `md` | 40px | a list or picker row: characters, cast, session faces       |
+| `lg` | 56px | a card's faces, a picker card in a select modal             |
+| `xl` | 72px | a detail's hero tile (`DetailHero` draws its own at 72)     |
+
+**Every avatar is round** (owner ruling 2026-10-02): rows, pickers, cast lists, heroes, stacks, the
+session header. Square — rounded to the step (6 / 8 / 9 / 12 / 14px), `shape="square"` — is only for
+what is explicitly a **thumbnail**: an image list, a gallery, a card's cover picture. Message avatars
+belong to the message style. The picture is cropped from the top (`object-top`).
+With no picture, or one that fails to load, the tile is `surface-200-800` with the kind's glyph —
+`UserRound` for a persona, `UsersRound` for a character — or, for someone with no card (a
+background cast member), the name's initial. A face shown without its name beside it may carry the
+**persona mark** (`personaMark`): a 16px `UserRound` notch on the corner, ringed in the ground. A
+face beside its name is `decorative` (`alt=""`). Stacked faces use **`AvatarStack`**, ringed in the
+ground they stand on. `size` takes a step and nothing else (the pre-scale class-pair form is gone);
+a face drawn outside `Avatar` — the `sp-avatar` host element, the message log's style-pack avatar —
+follows the same rules (round, top-cropped, initial on `surface-200-800`).
 
 A **detail view** opens with **`DetailHero`** (`components/panels/DetailHero.svelte`) under its
 `PanelNavHeader`: a 72px tile at radius 14 (the picture, else an initial, else an icon for things
@@ -531,6 +635,14 @@ on the same ground as the list and separated from the rows below only by its own
 is a `<button aria-expanded>` that collapses the group; the rows inside are indented by the glyph's
 width and nothing else. Ungrouped rows come first with no header. A filter that empties a group
 hides its header rather than showing an empty one.
+
+A **connection card** (`ConnectionCard`, the Connections index's card mode — notes 42, 2026-10-03)
+carries the same facts from the same status module, with the room to show all three things the
+list is for at once: the service chip (same suppression rule), the state chip, and the **model
+count**, which a row has to give up to its action. The body is one button that opens the
+connection; the action is its own button in the card's footer, never nested. Cards grid
+`auto-fill, minmax(220px, 1fr)` off the list pane's width; selection is the ring (§2.4). Beside an
+open detail the list is navigation and shows rows only, without the list/card pair.
 
 A row that stands for a **connection** is the title (the user's words) at 15px, a service chip
 where that chip says something the title has not, and then four fixed slots the row's status
@@ -595,6 +707,17 @@ use it rather than spelling the four classes out again. Section cards carry a 12
 14px medium heading, then content. (It said quiet until 2026-09-25 — see the quiet-is-for-icons rule above: a label is text a reader uses.) Empty sections are not rendered; the card boundary is the
 separator, so there is no rule between cards.
 
+Two siblings carry the same edge (2026-10-02, notes 3/24 — the Settings view's treatment is the
+reference for every sidebar view, Lorebooks first): **`.panel-edge`** is the card's border tone on
+its own, for a bordered strip that is not a section card (a chip bar, a guide line); **`.panel-inset`**
+is a section inside a card, one step back toward the ground, replacing a `border-t` between
+sections. Never write a bare `border` / `border-l` / `border-t`: Tailwind 4's default border colour
+is `currentColor`, which is how white bars ended up between the Lorebooks panes. A pane split (list
+beside editor) is two cards or a list beside a `.panel-card` — never a rule. Since notes 24 (2026-10-02) the
+shell's own edges (rail, sidebar, header row, spine, bottom bar), Admin's outer chrome, `PanelSplit`'s
+list/detail line and the views' structural borders all wear `.panel-edge`; `surface-300-700` is left
+for the outlined chip (a host connection's service chip), never a structural line.
+
 ### 6.5 Tabs
 
 Two strips, deliberately alike:
@@ -608,6 +731,8 @@ Two strips, deliberately alike:
 No segmented controls, no pill tabs, for moving between sections. A control that picks one
 value from a short fixed set is not a tab and may be segmented: the view header's width switch
 (Dock, Half, Focus) and Settings' story text size (ruled with the Full UI build, 2026-09-26).
+A segmented control is a row of its options, whatever surrounds it: it lays out by its own
+`orientation` (`app.css`), never an ancestor's vertical tab rail.
 
 ### 6.6 Popovers, menus and dialogs
 
@@ -615,7 +740,16 @@ Popovers are Skeleton `Popover` in a `Portal`, positioner `z-[1000]!`, content `
 placement `bottom-end`, and they flip when the viewport says so. Menus are `role="menu"` with
 `role="menuitem"` rows and a `tabindex="-1"` container, arrow-key movement, Escape to close, and
 focus returned to the trigger. Dialogs are Skeleton `Dialog` in a `Portal` at `z-50`. Nothing in the
-app renders its own `fixed inset-0` backdrop.
+app renders its own `fixed inset-0` backdrop. A question asked before a verb that replaces or deletes
+something is an `alertdialog` whose words say what goes and what stays; its confirm is the primary
+when the person gets something back (a retake, a layout copied in) and filled `error` when it only
+takes away, per §2: a delete, or **Start from scratch**, which clears every widget's settings and
+style. An `alertdialog` is answered, never dismissed by a click outside (`closeOnInteractOutside` off;
+its buttons and Escape close it), and when a yes removes the control it was asked from, focus goes
+to the nearest control that brings it back, never the page (the layout editor's
+`LayoutConfirmDialog`, 2026-09-29). A question may name a second way out: a tonal button between
+Cancel and the confirm, the dialog one step wider so the three keep one line (**Save changes to**
+over a layout changed elsewhere offers _Start again instead_ beside _Save over them_, 2026-09-30).
 
 An action menu is **`RowMenu`** (`components/menus/RowMenu.svelte`, 2026-09-27), built on
 Skeleton's `Menu`, which owns the roles, the roving highlight, arrows/Home/End/typeahead, Escape
@@ -632,8 +766,9 @@ a `Popover` and buttons.
 
 An empty state is `EmptyState`: an icon, one sentence, and at most one action, phrased as an
 invitation. A drop target shows its hint only while a file is over it, as an overlay with a dashed
-`primary-500/70` border and a short imperative ("Drop to import this card"), never a permanent
-footer. Loading is a spinner in place, never a blank pane.
+`primary-500/70` border and a short imperative ("Drop to import this card"; the composer's is "Drop
+to attach"), never a permanent footer. Loading is a spinner in place, never a blank pane. A file
+waiting to be sent is a **tray tile** (§6.18).
 
 ### 6.8 Jump
 
@@ -651,7 +786,10 @@ where that row leaves it the room. It publishes its measured width as `--jump-pi
 (the label names the scope, so it is 190px over Admin and 247px over Documentation), and any
 surface whose own controls reach the top-right corner reserves that width plus the pill's 1rem
 inset and one `gap-1.5`. Today that is one surface: the session header, whose **Layout** button
-ends before the pill. A sidebar view in **Focus** reserves nothing, because the pill is not
+and quiet **Hide the session header** toggle end before the pill. Furled (a per-device choice,
+`shellPrefs.headerFurled`), the header leaves no band at all: one faint 32px button (44px on
+touch, brighter on hover or focus) stands in the same place, left of the pill, to bring it back,
+and the layout's top strips roll up with it. A sidebar view in **Focus** reserves nothing, because the pill is not
 rendered while one is open (§5.4). While the session layout editor is open its toolbar owns the
 band and the pill is not rendered either. In both cases the Ctrl K overlay still opens.
 
@@ -720,7 +858,7 @@ no `preset-*`, colour, radius or spacing beyond what the behaviour needs — a p
 a progress bar is visible (`currentColor`), a form control uses Skeleton's base `input` / `textarea`
 class so a dark theme never draws page-coloured text on a browser-white field. Everything else is a
 skin's (§2.7 applies to skins as to screens). Popovers, menus and dialogs inside sp elements follow
-§6.6; their portalled panels carry the widget box's `data-widget-instance`, so a skin still reaches them.
+§6.6; their portalled panels carry the widget box's skin scope (`data-skin-scope`), so a skin still reaches them.
 Unstyled-but-correct is the accepted failure mode; broken is not. Core's own skin over the parts —
 the §6.6 dialog, menu and tooltip recipes — is `src/lib/client/styles/hostElements.css`; a
 popover's panel is left bare because its body is the widget's own card.
@@ -729,23 +867,44 @@ popover's panel is left bare because its body is the widget's own card.
 
 Ruled 2026-09-27 (the admin overhaul), and the same day: **admin is purely a view**, never a
 page. The Admin view (`admin/AdminView.svelte`) holds the section list, grouped by the job
-(Overview · Models · People · Play · Pipelines · Writing · Extensions · Instance,
+(Overview · Models · People · Play · Pipelines · Writing · Extensions · Pub,
 `shell/adminNav.ts`), and the section on screen; at desk width the list (240px) sits beside the
 section, below it they take turns. Sections are components (`admin/sections/**`) routed by
 `adminRouter`, addressed under `/admin` only while the view is in Focus; `src/routes/admin/**` is
 an empty catch-all so a link or a reload opens the view at that section. The section pane sits
 on the view's 950 ground, so every admin card is `panel-card`. Every section opens with
-`AdminPageHeader`: a 24px Display title, one sentence saying what the section decides, and at
-most one filled primary among its actions. The group name is never repeated in the title.
+`AdminPageHeader`: the **breadcrumb trail**, a 24px Display title, one sentence saying what the
+section decides, and at most one filled primary among its actions. The group name is never
+repeated in the title; the trail carries it.
 
-Every section is one of three shapes:
+**The pattern is Django admin's** (note 37, owner 2026-10-02: "use django admin as the example").
+Every admin page is one of four shapes:
 
-| Shape            | Built from                                                       | Used by                                                                 |
-| ---------------- | ---------------------------------------------------------------- | ----------------------------------------------------------------------- |
-| Overview cards   | cards that each answer one question and link to the fix          | Overview, Pipelines                                                     |
-| List and detail  | `AdminSplit` + `AdminList compact`; the `[id]` page is the detail | Users, Genres, Presets, Prompts, the three template kinds, Scripts       |
-| Changelist and change form | `AdminChangelist` page; `AdminChangeForm` pages at `/new` and `/:id` | Connections, Sampling                                         |
-| Settings form    | one column of `.panel-card` cards, 820px, one topic per card     | Defaults, General, Network, Data and backups, Diagnostics               |
+| Shape | Address | Built from | Used by |
+| --- | --- | --- | --- |
+| Index | `/admin` | cards that each answer one question and link to the fix | Overview |
+| Changelist | `/admin/<section>` | `AdminChangelist` (`title` given, so it draws the header) | Connections, Sampling, Users, Sessions, Genres, Presets, Pipelines, Events, Configurations, Scripts, Prompts, the three template kinds, Plugins, Components, History |
+| Add / change form | `/admin/<section>/new`, `/admin/<section>/:id` | `AdminChangeForm` + `AdminFieldset` + `AdminField` (+ `AdminInline`) | every changelist's objects, the pipeline workspace and the component editor included (their tools are the form's children; the save row is the form's); Events and History records are read-only change views (`AdminPageHeader` + fieldsets, no save row) |
+| Settings form | `/admin/<section>` | one column of `.panel-card` cards, 820px, one topic per card | Defaults, General, Network, Data and backups, Updates, Diagnostics |
+
+A **non-singleton** section is always changelist → change form → add / delete, each its own
+address, never a list beside a detail (`AdminSplit` is retired). A **singleton** stays a settings
+form with the breadcrumb. Read-only kinds (Sessions) are a changelist with no Add, no row link and
+no bulk actions (Django's view permission); kinds that arrive with code (Genres, Pipelines) have no
+Add and no Delete. **Events** is read-only too: a changelist (filters: family, declared by, genre,
+bound) whose rows open a read-only change view — the event's facts, its genres and the presets that
+bind it as `AdminInline`s with no Add another (a binding is edited on its preset's change form),
+and the event map scoped by Genre / Preset in the view's own query, opening on the event's first
+genre. Objects whose only make-path is a copy (Prompts) still have **Add**: the add form
+asks what to start from.
+
+**Breadcrumbs** (`AdminBreadcrumbs`, drawn by `AdminPageHeader`, worked out in
+`components/admin/breadcrumbs.ts` from the address and `shell/adminNav.ts`): **Admin › <group> ›
+<section> › … › <page>**, 13px muted, the last step in 950 ink with `aria-current="page"`, chevron
+separators. The group is words (it has no page); the section links back to its changelist **as it
+was left** — search, filters, sort and page (`rememberChangelistQuery`), Django's
+`_changelist_filters`. Under 36rem of pane only the last two steps show. Nothing on the Overview.
+Never hand-build a back link or a breadcrumb in a section.
 
 **Admin never nests another view** (owner ruling 2026-09-27: "they need their own django admin
 like management"). A section that manages objects a sidebar view also shows is a Django-style
@@ -759,36 +918,79 @@ has no Delete; a bulk delete names it as kept, and when nothing selected can go 
 offers only **Close**. A link out to the user's view opens it (`panelsCtx`), it does not
 navigate the page.
 
-**`AdminChangelist`** answers its own measured width, never the viewport: under 720px rows are
-**stacked** (the title as a 15px link, then the columns as a 12px muted facts line), from 720px a
-table, and from 960px the **filter rail** (240px `panel-card`, Django's `list_filter`) stands
-beside the table; narrower, filters are a 40px `ListFilter` button opening the §6.3 popout. Each
-facet is a `radiogroup` of "All" plus its values with counts (counted against the other facets);
-an active filter shows as a dismissible tonal chip under the toolbar with **Clear all**. Headers
-sort (`aria-sort`); stacked, a Sort select does. A 40px **action bar** carries select-all (in the
-header cell when tabled), "N of M selected", **Clear selection** and the **Actions** `RowMenu` of
-**bulk actions**; a destructive one asks first through `AdminDeleteConfirm`, which lists each
-object and, under it, what goes or changes with it. The "Add <thing>" filled primary ends the
-toolbar and is dropped while the list is empty, where `EmptyState` carries it. Rows load 50 at a
-time with **Show N more**. Search, filters and sort live in the section's query (`q`, the facet
-keys, `o=-key`), never local state.
+**`AdminChangelist`** answers its own width with container queries (§5.3,
+`@container/changelist`), never the viewport: under 45rem rows are **stacked** (the title as a
+15px link, then the columns as a 12px muted facts line), from 45rem a table, and from 60rem the
+**filter rail** (240px `panel-card`, Django's `list_filter`) stands beside the table; narrower,
+filters are a 40px `ListFilter` button opening the §6.3 popout. Each facet is a `radiogroup` of
+"All" plus its values with counts (counted against the other facets); an active filter shows as a
+dismissible tonal chip under the toolbar with **Clear all**. Headers sort (`aria-sort`); stacked, a
+Sort select does. Given a `title`, the changelist draws the section header with **"Add <thing>"**
+as its one filled primary (dropped while the list is empty, where `EmptyState` carries it). A 40px
+**action bar** carries the page's select-all (in the header cell when tabled), "N of M selected",
+Django's **Select all N <things>** once the whole page is ticked, **Clear selection** and the
+**Actions** `RowMenu` of **bulk actions** ("Delete selected <things>…", Make available / Hide,
+Export…). Rows page 50 at a time through the Skeleton **Pagination** (numbers, ellipses, prev /
+next), with the range ("51–100 of 230") and **Show all**. Search, filters, sort and page live in
+the section's query (`q`, the facet keys, `o=-key`, `p=2`), never local state; a section's own keys
+ride through with `keepQuery`.
 
-**`AdminChangeForm`**: a breadcrumb back to the changelist, `AdminPageHeader` (tonal actions and a
+**Delete asks on a confirmation page, not a dialog** (`AdminDeleteConfirm`, Django's "Are you
+sure?"): the changelist or change form gives its place to it, with the trail "… › <object> ›
+Delete". It lists each object that goes and, under it, what goes or changes with it, and names the
+objects that **stay** and why (built-in, still in use where the server refuses, your own account) —
+the content is `deletionFor` in `changelist.ts`, so every section words it the same way. **No, take
+me back** is focused first; the destructive button names the count ("Delete 3 prompts"); when
+nothing selected can go, only **Back** is offered.
+
+**`AdminChangeForm`**: the trail, `AdminPageHeader` (tonal actions — Duplicate, Export — and a
 **History** link to `/admin/history?type=<noun>&id=<id>`), an error summary (`role="alert"`, each
 field error a button that focuses its field), then **`AdminFieldset`**s — a `panel-card` with a
 14px `h2` and a muted sentence, or a `<details>` for **Advanced** — holding **`AdminField`** rows
 (label, control, 12px help under it, the error above the help; no control means a readonly value,
-never a disabled input). The **save row** is sticky at the foot of the pane on the 950 ground:
-**Delete** (quiet error text) at the start, the unsaved-changes dot, then **Save and add another**,
-**Save and continue editing** (Ctrl+S) and **Save**, the one filled primary. Under 36rem of pane
-the two long saves fold into a §6.1 split button beside Save. Dirty state is `UnsavedEdits` plus
-`adminUnsavedEdits`, so leaving asks first. What saves on its own (capabilities, stop scripts,
-models, a runtime's settings) never joins the draft.
+never a disabled input). Related objects the object **owns** are an editable **`AdminInline`**
+(Django's `TabularInline` formset, owner ruling 2026-10-02): a fieldset holding a small table
+(stacked under 36rem, each column then a labelled control) whose rows are edited in place, with
+**Add another <thing>** appending a row marked _Ready to add_ (an × drops it), a **Delete?** tick
+per saved row (a protected row says why instead: _Built-in_), and a **Change** link to the row's own
+change form where it has one. The rows are part of the parent's unsaved edits
+(`components/admin/inlineRows.ts`: added / changed fields / deleted), committed by the parent's
+Save, Save and continue or Save and add another, and dropped with the form. Relations the object
+does **not** own (the pipelines that pick a prompt, the chains that run a script) stay
+read-and-link: rows link to their own change forms, nothing is edited there. The **save row** is sticky at the foot of the pane on the 950 ground: **Delete**
+(quiet error text) at the start, the unsaved-changes dot, then **Save and add another**, **Save
+and continue editing** (Ctrl+S) and **Save**, the one filled primary. Save lands on the
+changelist, continue stays (an add lands on the new object's change form), another opens the add
+form (pre-filled from this object where the add form reads `?from=`). Under 36rem of pane the two
+long saves fold into a §6.1 split button beside Save; `saveRowExtra` puts tonal **Review** /
+**Discard** beside the unsaved-changes words (the pipeline workspace). Dirty state is
+`UnsavedEdits` plus `adminUnsavedEdits`, so leaving asks first. **Every switch, tick and approval
+on a change form waits for Save** (owner ruling 2026-10-02): a genre's switch, default preset,
+presets and plugin swaps; a configuration's settings and **Offered** tick; a component's **Offered
+to layouts** and scope review; a plugin's permissions, approval and storage quota; a connection's
+model **Hide / Show** and **Use** (2026-10-03, listed under the table as _Waiting for Save_ chips,
+each with an × that puts it back; `admin/sections/connections/modelEdits.ts`). Where the server
+takes one setting per write, Save sends the difference as single writes in order
+(`client/admin/sequentialSave.ts`, each an `awaitReply` on that verb's answer or its `:error`),
+waits for every answer, and only then says _Saved_; a refusal is named in the error summary
+("Offered: Quick start: …") and stays an unsaved edit. Every write a form sends must answer — a
+handler that could return silently emits its `:error`. One-shot acts with their own button
+(Duplicate, Unload, a configuration's New / Rename / Reset all / Delete) still act when pressed.
+What saves on its own on the connection form (capabilities, stop scripts, a runtime's settings,
+and the models' **Refresh**, **Add by name** and **Download / Cancel**, which are one-shot acts)
+never joins the draft, and its fieldset says so. Save sends the connection first, then the model
+levers, visibility before the defaults that need it.
 
-History (`/admin/history`) is a fourth, read-only shape: a **changelist** — a `.panel-card` of
-filters (search, then selects and dates, one column in the dock, two at `@lg/view`, three at 900px)
-over a full-width `AdminList`, and the selected record as a card between them. Its filters live in
-the address (`?type=&id=` is the link a change form's History button uses), never in local state.
+History (`/admin/history`) is the one read-only log: a **changelist** with no Add and no bulk
+actions, whose search and changelist filters — Object, Who, Action and **When** (Django's
+`DateFieldListFilter`: Any date, Today, Past 7 days, This month, This year) — are applied by the
+server from the address (`counted: false` filters list their full option set with no counts; the
+search is sent after a 300ms pause; "Load older changes" under the list fetches the next page).
+Each row opens the record's read-only **change view** (`/admin/history/:id`): the summary as title,
+**Open <object>** and **This object's history** in the header, then a "Change" fieldset of
+readonly fields and a "Changed fields" fieldset, and no save row. `?type=<kind>&id=<id>` is the
+link a change form's History button uses; the one object it narrows to is a dismissible chip under
+the header.
 
 **Links name views, not pages.** Any plain `<a href="/admin/...">` or `/docs/...` anywhere in the
 app opens the Admin or Help view in place (`shell/viewLinks.ts`, caught by the shell), keeping the
@@ -816,13 +1018,20 @@ the accessible surface. Each row is an icon plus the word (_Error_ / _Warning_) 
 completion list is a `role="listbox"` on `bg-surface-50-950` with a `border-surface-200-800` edge,
 with the selected option in `.sidebar-row-active`. **"Variables available here"** is a `role="tree"`
 with roving `tabindex` beside the field, in its own named container (`@container/tpl`, side by side from
-40rem, stacked below). Its rows carry the type and the supplier in `text-surface-600-400`.
+40rem, stacked below). Its roots sit on **variable shelves**: level-one rows in `font-medium` with a
+count, open by default, that open and close but never insert. Above it, a `PanelFilterInput`
+(_Filter N variables_; ↓ enters the tree) with a polite live count; the tree scrolls inside
+`max-h-[28rem]` so the box stays put. A root row carries its shape in plain words (_text_, _list_,
+_keyed list_), the syntax it writes in mono, a _For example_ line, and the supplier, all in
+`text-surface-600-400`. A root the template reads gets a `preset-tonal-primary` **Used** chip
+with a check, a word and never colour alone. An unused root is unmarked. The heading carries a
+`DocPeek`.
 
 ### 6.13 A message's folds
 
 What a reply carries beside its text folds **above** the body, collapsed on load, in one fixed
 order: a narrator's instructions, then its folded sections (a **Plan**, a stage's notes), then
-**Thinking**, then the reply. Each fold is a full-width `<button type="button" aria-expanded
+**Reasoning** (which fills in while it streams), then the reply. Each fold is a full-width `<button type="button" aria-expanded
 aria-controls>` holding a glyph, a sentence-case label and a chevron that turns when open; its
 panel stays mounted (the 0fr → 1fr track) and its contents leave the tab order while closed. A
 section that is a list renders as a list, one item per line, never as JSON. The style packs skin
@@ -848,6 +1057,15 @@ both directions (2026-09-27):
   dirty only while they differ from what is now saved — so the echo of its own save is clean and
   another tab's save never wipes what is being typed. Delete or Create-then-leave calls
   `forget()` first.
+- **A Save form holds every edit, or says which ones it doesn't** (2026-10-02). Adding,
+  removing or switching something inside a form with a Save is a pending change ("Ready to add"
+  on a row not yet saved), counted in dirty, sent on Save, dropped with the form. A control that
+  must write as it moves (a preset, an action toggle, a per-call pipeline setting) carries the
+  words **Applies at once** on its label or help line, and the tab says the rule once at its top.
+  An admin change form has none (2026-10-02): its switches wait for Save, and Save waits for
+  every write it sends (§6.11).
+  A one-shot action with its own button or dialog (Apply, Upgrade, Reassign…) is explicit and
+  needs no marker. Reference: Edit session.
 - **Write-only fields** (a token, a passphrase) have an empty snapshot, are cleared once sent,
   and carry `autocomplete="off"` / `"new-password"` so a password manager's fill is never an edit.
 - **One question, one dialog.** In the Admin view a section registers
@@ -855,7 +1073,14 @@ both directions (2026-09-27):
   replacing the section below desk width all ask through `AdminUnsavedChangesModal` (**Keep
   editing** · **Discard**) via `adminRouter.confirmDiscard()` — never `window.confirm`. Other views
   answer their shell close gate with their own unsaved-changes modal. The tab asks on reload
-  (`warnBeforeUnload`) only while something is unsaved.
+  (`warnBeforeUnload`) only while something is unsaved — the lorebook workspace included.
+- **Ask first, then discard — never the other way round** (lorebooks plan B7, 2026-10-03). A
+  selection change that would close an edit (a canvas pick, a dropped row, the pencil) awaits the
+  guard (`loreRoute.confirmLeave()`), and only on Leave drops the draft and clears the guard flag
+  in the same step, so the transition that follows is not asked about it again. A held value
+  (a date a drop asked for) is held only after the answer, and only for the row it was meant for.
+  A draft that moves with the reading (the moment bar) keeps the moment it was typed at; moving
+  the reading never asks.
 
 ### 6.15 The setup wizard
 
@@ -905,7 +1130,7 @@ style draws them.
   name.
 - **Who styles them, lowest first:** the theme's tokens → the **default widget stylesheet**
   (`src/lib/client/styles/widgets.css`, `@layer sp-widgets`, page-loaded) → a style preset or a
-  person's style (unlayered, scoped to `[data-widget-instance]`, so it always wins). A plugin
+  person's style (unlayered, scoped to its mount's skin scope `[data-skin-scope]`, so it always wins). A plugin
   brings its own stylesheet, and its own classes and Tailwind utilities still work on top. Deferring
   to the parts is encouraged.
 - **Until the markup moves:** `@layer sp-widgets` is ordered **after** `utilities` (`app.css`), so
@@ -921,11 +1146,12 @@ generic tokens, so they name what an element is and draw nothing yet.
 | Stats   | `stats.root` (the box) · `stats.alert` (a refusal or failed read) · `stats.empty empty` (the empty floor) · `stats.card card` · `stats.card-head card-head` · `stats.card-name` · `stats.card-note` (a member with nothing to show) · `stats.card-body list` | `data-density` (`full` · `compact`) on `stats.card-body`; rows are the slot control's (`stat-slot.*`, below) |
 | World State | `world-state.root` (the box) · `world-state.alert` (a refusal or failed read) · `world-state.empty empty` (the empty floor) · `world-state.place` (a location in play, a group rather than a card) · `world-state.place-head` (no generic `card-head`: a place is not a card) · `world-state.place-name` | `data-layout` (`strip` · `list`) on `world-state.root`; rows are the slot control's (`stat-slot.*`, below) |
 | Scene Portraits | `scene-portraits.root` (the box) · `scene-portraits.alert` (a refusal) · `scene-portraits.alert-text` · `scene-portraits.dismiss` (the alert's close) · `scene-portraits.empty empty` (the empty floor) · `scene-portraits.scene` (the faces' row) · `scene-portraits.face` · `scene-portraits.face-img` · `scene-portraits.face-name` · `scene-portraits.set-menu` (the `sp-popover` in a face's corner) · `scene-portraits.set` (the sprite-set pill) · `scene-portraits.set-name` · `scene-portraits.set-panel` (the popover's body) · `scene-portraits.set-title` · `scene-portraits.set-list` · `scene-portraits.set-option` · `scene-portraits.set-note` · `scene-portraits.pins` (the pinned source's two cells) · `scene-portraits.pin` · `scene-portraits.pin-img` · `scene-portraits.pin-clear` · `scene-portraits.pin-placeholder` (an unpinned side); the mini bars: `scene-portraits.bars list` · `scene-portraits.bar row` · `scene-portraits.bar-label label` · `scene-portraits.bar-track meter` · `scene-portraits.bar-fill` | `data-blank` on `scene-portraits.face-img` (a member with no picture); a bar's fill is the inline `--sp-fill` |
-| Lore entries | `lore-entries.root` (the box) · `lore-entries.note` (said instead of the list: the book is its owner's, or there is none) · `lore-entries.search-bar toolbar` · `lore-entries.search` (the field's label box) · `lore-entries.search-label` (screen reader only) · `lore-entries.search-icon` · `lore-entries.search-input` · `lore-entries.refresh` · `lore-entries.filter-bar toolbar` · `lore-entries.filters` (the radio group) · `lore-entries.filter chip` (a pill) · `lore-entries.filter-input` (its radio, unseen over it) · `lore-entries.sort` · `lore-entries.sort-field` (the `sp-combobox`) · `lore-entries.alert` (a refusal or failed read) · `lore-entries.entries list` · `lore-entries.entry row` · `lore-entries.entry-text` · `lore-entries.entry-title label` · `lore-entries.entry-keys` · `lore-entries.entry-read` · `lore-entries.marks` · `lore-entries.pin` · `lore-entries.off` · `lore-entries.empty empty` (the empty floor) · `lore-entries.pager` · `lore-entries.previous` · `lore-entries.page-count` · `lore-entries.next` | `data-off` on `lore-entries.entry` (turned off: its title struck through); a pressed mark is its button's `aria-pressed`, the chosen filter its radio's `:checked` (native state, no widget attribute) |
+| Lore entries | `lore-entries.root` (the box) · `lore-entries.note` (said instead of the list: the book is its owner's, or there is none) · `lore-entries.search-bar toolbar` · `lore-entries.search` (the field's label box) · `lore-entries.search-label` (screen reader only) · `lore-entries.search-icon` · `lore-entries.search-input` · `lore-entries.refresh` · `lore-entries.filter-bar toolbar` · `lore-entries.filters` (the radio group) · `lore-entries.filter chip` (a pill) · `lore-entries.filter-input` (its radio, unseen over it) · `lore-entries.sort` · `lore-entries.sort-field` (the `sp-combobox`) · `lore-entries.alert` (a refusal or failed read) · `lore-entries.held` (a mark saved to the entry that a dated amendment still decides in the session: muted, not the error tone) · `lore-entries.entries list` · `lore-entries.entry row` · `lore-entries.entry-text` · `lore-entries.entry-title label` · `lore-entries.entry-keys` · `lore-entries.entry-read` · `lore-entries.marks` · `lore-entries.pin` · `lore-entries.off` · `lore-entries.empty empty` (the empty floor) · `lore-entries.pager` · `lore-entries.previous` · `lore-entries.page-count` · `lore-entries.next` | `data-off` on `lore-entries.entry` (turned off: its title struck through); a pressed mark is its button's `aria-pressed`, the chosen filter its radio's `:checked` (native state, no widget attribute) |
+| Author's note 🚧 | `authors-note.root` (the box) · `authors-note.note` (said instead of the form, or above it: the genre has none, only the owner may change it) · `authors-note.alert` (a failed read or a refused save) · `authors-note.field` (a label box) · `authors-note.label label` · `authors-note.text` (the note's textarea) · `authors-note.numbers` (depth and interval side by side) · `authors-note.number` · `authors-note.help` · `authors-note.advanced` (the `sp-accordion` fold: Sent as) · `authors-note.role` · `authors-note.role-field` (the `sp-combobox`) · `authors-note.actions toolbar` · `authors-note.unsaved` · `authors-note.discard` · `authors-note.save` · `authors-note.last-reply` (what the newest reply did with the note) | `data-dirty` on `authors-note.root` while the draft differs from what is saved (§6.14); `data-applied` on `authors-note.last-reply` when the newest reply carried the note; a field the viewer may not change is its own `disabled` |
 | Slot control (shared: World State, Stats) | `stat-slot.root row` (one slot) · `stat-slot.label label` · `stat-slot.required` (the `*` a sheet asks for) · `stat-slot.control` (the value's cell); read: `stat-slot.bar` (a bounded number, a button) · `stat-slot.track meter` · `stat-slot.fill` · `stat-slot.bar-value value` · `stat-slot.chip chip` (a choice, or a switch) · `stat-slot.option` (a choice's menu item) · `stat-slot.line value` (text, a list, a story time); edited: `stat-slot.field` (every input, beside which one it is) · `stat-slot.editor` (an open list or story time) · `stat-slot.items list` · `stat-slot.item row` · `stat-slot.item-text label` · `stat-slot.item-less` · `stat-slot.item-more` (a held entry's − and +) · `stat-slot.item-up` · `stat-slot.item-down` · `stat-slot.item-remove` · `stat-slot.items-empty empty` · `stat-slot.add` · `stat-slot.invalid` (what was refused) · `stat-slot.done`; the lorebook picker: `stat-slot.pick-open` · `stat-slot.picker` · `stat-slot.pick-search` · `stat-slot.pick-status` · `stat-slot.pick-heading` · `stat-slot.pick-list list` · `stat-slot.pick-entry row` · `stat-slot.pick-title label` · `stat-slot.pick-held` · `stat-slot.pick-add toolbar` · `stat-slot.pick-count` · `stat-slot.pick-confirm` · `stat-slot.pick-close`; a story time: `stat-slot.year` · `stat-slot.month` · `stat-slot.day` · `stat-slot.clock` · `stat-slot.save` · `stat-slot.cancel` | On `stat-slot.root`: `data-density` (`full` · `compact`), `data-retired`, `data-slot-shape` (`derived` · `story-time` · …); `data-empty` on a chip, line or option with nothing to show; a switch that is on and a chosen picker row are `aria-pressed`, a refusal `role="alert"` |
 | Messages: the selection bar and who is due next (P3f) | the selection bar: `messages.selection-bar toolbar` (selecting lines for a summary; it stands where the composer was) · `messages.selection-count` · `messages.selection-bulk` (Select all, Select none) · `messages.select-all` · `messages.select-none` · `messages.selection-finish` (Cancel, or a summary) · `messages.selection-cancel` · `messages.summarize-scene` · `messages.summarize-world` · `messages.summarize-character` · `messages.selection-button` (every button on the bar, beside which one it is) · `messages.selection-button-label` (its label, gone in a box under 40rem); the read-only banner: `messages.read-only` · `messages.read-only-icon` · `messages.read-only-text` · `messages.read-only-title`; who is due next: `messages.next-up` (its place above the field) · `messages.next-up-waiting` (nobody at the head: waiting, with Pick) · `messages.next-up-head` (someone is due) · `messages.next-up-line` · `messages.next-up-narrator` (the narrator's book, in place of a face) · `messages.next-up-text` · `messages.next-up-controls` · `messages.next-up-pick` (Pick, and Someone else: both open the turn picker) · `messages.next-up-pick-label` · `messages.next-up-continue` · `messages.next-up-after` (who follows, with `nextUp: list`) | A summary button with nothing selected is its `disabled`; the banner is `role="status"`. Which shape who-is-due-next takes is the page's (the order's head, the `nextUp` setting), never a part |
-| Messages: the composer and a line's editor (P3g) | the compose block: `messages.compose` (on the reading column: the page's banners, who is due next and the composer's area) · `messages.compose-area` (the composer, or the selection bar or read-only banner standing in its place); the composer: `messages.composer` (its root) · a guest's offer `messages.join` · `messages.join-text` · `messages.join-icon` · `messages.join-title` · `messages.join-note` · `messages.join-button`; above the card: `messages.composer-disclosure` · `messages.composer-disclosure-bar` · `messages.composer-actions-toggle` · `messages.composer-actions-chevron` · `messages.composer-notice` (the retrieval notice's place) · `messages.composer-actions-row` · `messages.composer-chips` (a row of chips, beside which: `messages.composer-actions`, the genre's, or `messages.composer-turn-controls`) · `messages.composer-more-actions` (the overflow's trigger) · `messages.composer-new-dot` · `messages.composer-overflow-item` · `messages.composer-overflow-slash` · `messages.composer-overflow-note` · `messages.composer-new` (a newcomer's badge, in the overflow and the palette); the card: `messages.composer-card` · `messages.composer-meter` · `messages.composer-meter-fill` · `messages.composer-body` · `messages.composer-pane-head` · `messages.composer-pane-title` · `messages.composer-back` (Back to compose) · `messages.composer-preview` · `messages.composer-palette` · `messages.composer-palette-row` · `messages.composer-palette-button` · `messages.composer-palette-slash` · `messages.composer-palette-label` · `messages.composer-palette-note` · `messages.composer-field` (the `sp-composer-field`; the field itself is its `textarea`); the footer: `messages.composer-footer` · `messages.composer-channels` · `messages.composer-channel` · `messages.composer-persona` (a chip, or a switch) · `messages.composer-persona-name` · `messages.composer-persona-menu` · `messages.composer-persona-menu-title` · `messages.composer-persona-option` · `messages.composer-persona-option-name` · `messages.composer-footer-end` · `messages.composer-icon-button` (Preview and More, beside which: `messages.composer-preview-toggle` or `messages.composer-more`) · `messages.composer-panes` (More's panel) · `messages.composer-panes-title` · `messages.composer-panes-list` · `messages.composer-pane-option` · `messages.composer-send` · `messages.composer-stop`; under it: `messages.composer-warning` · `messages.composer-hint` · `messages.composer-key`; a line's editor (MessageComposer): `messages.edit-tabs` · `messages.edit-tab` · `messages.edit-tab-body` · `messages.edit-tab-label` · `messages.edit-more-tabs` · `messages.edit-more-tabs-button` · `messages.edit-more-tabs-body` · `messages.edit-more-tabs-label` · `messages.edit-more-tabs-icon` · `messages.edit-more-tabs-panel` · `messages.edit-more-tabs-title` · `messages.edit-more-tabs-list` · `messages.edit-more-tabs-option` · `messages.edit-row` · `messages.edit-left` · `messages.edit-panels` · `messages.edit-right` · `messages.edit-field` · `messages.edit-preview` · `messages.edit-preview-body` | `data-composer-skin` (`classic` · `minimal` · `writer`, the widget's `composer` setting) on `messages.composer` and the widget's root; the composer is `hidden` while a line is edited; a highlighted palette row is its option's `aria-selected`, a refused one `aria-disabled`; Actions open is `aria-expanded`; Preview pressed and the chosen channel are `aria-pressed`; the persona written as is `aria-current`; More while a pane holds the field is `data-active`, that pane's row `data-current`; Send while someone is due next is `data-someone-due`; the meter's fill past 90% is `data-high`; an editor tab that folds into More in a narrow box is `data-collapsible`, More's trigger while a folded tab is chosen `data-active`, and its row `data-current` |
-| Messages: the message and the log (P3h) | the box and the log: `messages.root` (the widget's box: its palette, `--sp-measure`, the settings as `data-*`) · a copy pinned to one channel names it (S1, the Lair's Sanctum panel): `messages.channel-head` (one row across the box's top, first whichever end the composer is at) · `messages.channel-icon` · `messages.channel-title` (the channel's declared label) · `messages.log` · `messages.log-body` · `messages.log-scroll` (the `sp-scroll`) · `messages.stage` (the log's rows: as wide as the compose block — the box, or the measure under Line width: Comfortable) · `messages.stage-body` · `messages.message-list list` · `messages.log-item` (a marker's place in the list) · `messages.history-marker` (a history entry's date; beside which `messages.history-start`, Start a new entry) · `messages.scene-title` · `messages.scene-title-state`; said instead of lines: `messages.log-floor` (beside which `messages.log-note`, not granted · `messages.log-loading` · `messages.log-empty empty`) · `messages.log-floor-icon` · `messages.log-loading-icon` · `messages.log-floor-text` · `messages.older-loading` · `messages.older-loading-body` · `messages.older-loading-icon`; a line: `messages.message-row` (its `li`) · `messages.message` (the four-cell grid) · `messages.message-avatar` · `messages.message-avatar-button` · `messages.message-avatar-img` · `messages.message-avatar-glyph` · `messages.message-identity` · `messages.message-name` · `messages.message-badges` · `messages.message-badge` (beside which `messages.message-badge-scene`) · `messages.message-badge-label` (screen reader only) · `messages.message-badge-text` · `messages.message-vectors` · `messages.message-status` · `messages.message-ember` · `messages.message-controls` · `messages.message-time` · `messages.message-swipes` · `messages.message-swipe-previous` · `messages.message-swipe-count` · `messages.message-swipe-next` · `messages.message-actions` (the quick icons, the message venue's primary set) · `messages.message-action` · `messages.message-icon-button` (every icon control on the row, beside which one it is) · `messages.message-menu` (the ⋮ menu's place, where the selection controls stand while selecting) · `messages.message-selection` · `messages.message-selection-button` (beside which `messages.message-select` · `messages.message-select-above` · `messages.message-select-below` · `messages.message-in-scene`) · `messages.message-selection-label` · `messages.message-stop` · `messages.message-cancel` · `messages.message-save` · `messages.message-content` · `messages.message-disclosures` · `messages.message-disclosure` · `messages.message-disclosure-toggle` · `messages.message-disclosure-track` · `messages.message-disclosure-clip` · `messages.message-disclosure-panel` · `messages.fold-list` (a folded section's items) · `messages.message-sizer` · `messages.message-body` · `messages.message-text` · `messages.message-parts` · `messages.message-failure` · `messages.message-partial` · `messages.message-error` · `messages.message-error-line` · `messages.message-error-icon` · `messages.message-error-detail` · `messages.message-retry` · `messages.prose` (every rendered prose: a body, a disclosure's panel, a part's markdown, a block's; set in the two tones); a line being edited: `messages.edit-surface` · `messages.edit-hint` · `messages.edit-key` · `messages.edit-hint-separator` · `messages.edit-unsaved`; the ⋮ menu: `messages.message-options` · `messages.message-options-button` · `messages.message-options-panel` · `messages.message-options-title` · `messages.message-options-list` · `messages.message-option` · `messages.message-option-note` (screen reader only) · `messages.message-option-new` · `messages.message-options-divider`; a reply's typed parts: `messages.part-disclosure` · `messages.part-disclosure-toggle` · `messages.part-disclosure-chevron` · `messages.part-disclosure-track` · `messages.part-disclosure-clip` · `messages.part-disclosure-panel` · `messages.part-step-divider` · `messages.part-markdown` · `messages.part-image` · `messages.part-image-img` · `messages.part-file`; a block tree: `messages.blocks` · `messages.block-markdown` · `messages.block-kv` · `messages.block-kv-label` · `messages.block-table-scroll` · `messages.block-table` · `messages.block-stat` · `messages.block-stat-head` · `messages.block-stat-label` · `messages.block-stat-value` · `messages.block-stat-track meter` · `messages.block-stat-fill` · `messages.block-image` · `messages.block-superseded` · `messages.block-choices` · `messages.block-caption` · `messages.block-answered` · `messages.block-answered-label` · `messages.block-awaiting` · `messages.block-choice-list` · `messages.block-choice` · `messages.block-form` · `messages.block-field` · `messages.block-field-label` · `messages.block-checkbox` · `messages.block-select` · `messages.block-input` · `messages.block-submit` · `messages.block-group`; the state ledger: `messages.ledger` · `messages.ledger-line` · `messages.ledger-owner` · `messages.ledger-separator` · `messages.ledger-change` · `messages.ledger-review` · `messages.ledger-review-panel` · `messages.ledger-review-title` · `messages.ledger-review-note` · `messages.proposal` · `messages.proposal-text` · `messages.proposal-anchor` · `messages.proposal-note` · `messages.proposal-decide` (beside which `messages.proposal-accept` or `messages.proposal-reject`) | On `messages.root`: `data-channel` (the channel a copy is pinned to; absent on the primary log) · `data-order` · `data-composer-position` · `data-composer-skin` · `data-line-width` (`full` · `comfortable`) · `data-show-messages` · `data-show-avatars` · `data-show-timestamps` · `data-show-scene-markers` · `data-backdrop`. On `messages.message`: `data-msg-role` · `data-msg-author` · `data-msg-state` (`normal` · `selected` · `dim` · `editing`) · `data-msg-generating` · `data-msg-hidden` · `data-msg-greeting` · `data-msg-newest`; the row is `hidden` (the attribute) off the current channel and carries `--sp-scene` in a scene, `data-arrive` as it lands; `data-settled` on the sizer; `data-streaming` on `messages.message-text` while text arrives; `data-vectors` (`current` · `stale`); a toggle's `aria-expanded` (the part chevron turns) and its track's `data-expanded`; a line chosen for a summary is its Select button's `aria-pressed`; in the ⋮ menu a core verb's row says which (`data-verb`: Delete and Stop take the error's tone), Hide while hidden is `aria-pressed`, a row the line refuses `aria-disabled`; a block tree's `data-depth`, a group's `data-layout` (`row` · `column`), a choice or form's `data-answered`, a superseded form's or proposal's `data-superseded` |
+| Messages: the composer and a line's editor (P3g) | the compose block: `messages.compose` (on the reading column: the page's banners, who is due next and the composer's area) · `messages.compose-area` (the composer, or the selection bar or read-only banner standing in its place); the composer: `messages.composer` (its root) · a guest's offer `messages.join` · `messages.join-text` · `messages.join-icon` · `messages.join-title` · `messages.join-note` · `messages.join-button`; above the card: `messages.composer-disclosure` · `messages.composer-disclosure-bar` · `messages.composer-actions-toggle` · `messages.composer-actions-chevron` · `messages.composer-notice` (the retrieval notice's place) · `messages.composer-actions-row` · `messages.composer-chips` (the one row of chips, beside which `messages.composer-actions`: the turn controls, the genre's actions, More and the legend, one chip style — note 30) · `messages.composer-more-actions` (the overflow's trigger) · `messages.composer-new-dot` · `messages.composer-overflow-item` · `messages.composer-overflow-slash` · `messages.composer-overflow-note` · `messages.composer-new` (a newcomer's badge, in the overflow and the palette); the card: `messages.composer-card` · `messages.composer-meter` · `messages.composer-meter-fill` · `messages.composer-body` · `messages.composer-pane-head` · `messages.composer-pane-title` · `messages.composer-back` (Back to compose) · `messages.composer-preview` · `messages.composer-palette` · `messages.composer-palette-row` · `messages.composer-palette-button` · `messages.composer-palette-slash` · `messages.composer-palette-label` · `messages.composer-palette-note` · `messages.composer-field` (the `sp-composer-field`; the field itself is its `textarea`); the footer: `messages.composer-footer` · `messages.composer-channels` · `messages.composer-channel` · `messages.composer-persona` (a chip, or a switch) · `messages.composer-persona-name` · `messages.composer-persona-menu` · `messages.composer-persona-menu-title` · `messages.composer-persona-option` · `messages.composer-persona-option-name` · `messages.composer-footer-end` · `messages.composer-icon-button` (Preview and More, beside which: `messages.composer-preview-toggle` or `messages.composer-more`) · `messages.composer-panes` (More's panel) · `messages.composer-panes-title` · `messages.composer-panes-list` · `messages.composer-pane-option` · `messages.composer-send` · `messages.composer-stop`; under it: `messages.composer-warning` · `messages.composer-hint` · `messages.composer-key`; a line's editor (MessageComposer): `messages.edit-tabs` · `messages.edit-tab` · `messages.edit-tab-body` · `messages.edit-tab-label` · `messages.edit-more-tabs` · `messages.edit-more-tabs-button` · `messages.edit-more-tabs-body` · `messages.edit-more-tabs-label` · `messages.edit-more-tabs-icon` · `messages.edit-more-tabs-panel` · `messages.edit-more-tabs-title` · `messages.edit-more-tabs-list` · `messages.edit-more-tabs-option` · `messages.edit-row` · `messages.edit-left` · `messages.edit-panels` · `messages.edit-right` · `messages.edit-field` · `messages.edit-preview` · `messages.edit-preview-body` · attachments: `messages.composer-drop` (the card's `sp-drop-zone`) · `messages.composer-attach` (`sp-file-picker`) · `messages.composer-attach-button` · `messages.composer-tray` · `messages.composer-tray-item` · `messages.composer-tray-thumb` · `messages.composer-tray-icon` · `messages.composer-tray-name` · `messages.composer-tray-progress` · `messages.composer-tray-refusal` · `messages.composer-tray-remove` · `messages.composer-readers-button` (More › What can be attached) · `messages.composer-readers` (that dialog's body) · `messages.composer-readers-line` · `messages.composer-readers-kinds` · `messages.composer-readers-kind` · `messages.composer-readers-reason` · `messages.composer-readers-calls` · `messages.composer-announce` (the live region) | `data-composer-skin` (`classic` · `minimal` — one row, the face, the field, round icons · `writer` · `quill` — no box, the story's prose on a faint `--sp-quill-rule` underline, Send only while there is a draft; the widget's `composer` setting) on `messages.composer` and the widget's root; the composer is `hidden` while a line is edited; a highlighted palette row is its option's `aria-selected`, a refused one `aria-disabled`; Actions open is `aria-expanded`; Preview pressed and the chosen channel are `aria-pressed`; the persona written as is `aria-current`; More while a pane holds the field is `data-active`, that pane's row `data-current`; Send while someone is due next is `data-someone-due`; the meter's fill past 90% is `data-high`; an editor tab that folds into More in a narrow box is `data-collapsible`, More's trigger while a folded tab is chosen `data-active`, and its row `data-current`; a tray tile is `data-status` (`uploading` · `ready` · `refused`) and `data-kind`; a kind that may be attached is `data-allowed`; the readers disclosure open is `aria-expanded` |
+| Messages: the message and the log (P3h) | the box and the log: `messages.root` (the widget's box: its palette, `--sp-measure`, the settings as `data-*`) · a copy pinned to one channel names it (S1, the Lair's Sanctum panel): `messages.channel-head` (one row across the box's top, first whichever end the composer is at) · `messages.channel-icon` · `messages.channel-title` (the channel's declared label) · `messages.log` · `messages.log-body` · `messages.log-scroll` (the `sp-scroll`) · `messages.stage` (the log's rows: as wide as the compose block — the box, or the measure under Line width: Comfortable) · `messages.stage-body` · `messages.message-list list` · `messages.log-item` (a marker's place in the list) · `messages.history-marker` (a history entry's date; beside which `messages.history-start`, Start a new entry) · `messages.scene-title` · `messages.scene-title-state`; said instead of lines: `messages.log-floor` (beside which `messages.log-note`, not granted · `messages.log-loading` · `messages.log-empty empty`) · `messages.log-floor-icon` · `messages.log-loading-icon` · `messages.log-floor-text` · `messages.older-loading` · `messages.older-loading-body` · `messages.older-loading-icon`; a line: `messages.message-row` (its `li`) · `messages.message` (the four-cell grid) · `messages.message-avatar` · `messages.message-avatar-button` · `messages.message-avatar-img` · `messages.message-avatar-glyph` · `messages.message-identity` · `messages.message-name` · `messages.message-badges` · `messages.message-badge` (beside which `messages.message-badge-scene`) · `messages.message-badge-label` (screen reader only) · `messages.message-badge-text` · `messages.message-vectors` · `messages.message-status` · `messages.message-ember` · `messages.message-controls` · `messages.message-time` · `messages.message-swipes` · `messages.message-swipe-previous` · `messages.message-swipe-count` · `messages.message-swipe-next` · `messages.message-actions` (the quick icons, the message venue's primary set) · `messages.message-action` · `messages.message-icon-button` (every icon control on the row, beside which one it is) · `messages.message-menu` (the ⋮ menu's place, where the selection controls stand while selecting) · `messages.message-selection` · `messages.message-selection-button` (beside which `messages.message-select` · `messages.message-select-above` · `messages.message-select-below` · `messages.message-in-scene`) · `messages.message-selection-label` · `messages.message-stop` · `messages.message-cancel` · `messages.message-save` · `messages.message-content` · `messages.message-disclosures` · `messages.message-disclosure` · `messages.message-disclosure-toggle` · `messages.message-disclosure-track` · `messages.message-disclosure-clip` · `messages.message-disclosure-panel` · `messages.fold-list` (a folded section's items) · `messages.message-sizer` · `messages.message-body` · `messages.message-text` · `messages.message-parts` · `messages.message-failure` · `messages.message-partial` · `messages.message-error` · `messages.message-error-line` · `messages.message-error-icon` · `messages.message-error-detail` · `messages.message-retry` · `messages.prose` (every rendered prose: a body, a disclosure's panel, a part's markdown, a block's; set in the two tones); a line being edited: `messages.edit-surface` · `messages.edit-hint` · `messages.edit-key` · `messages.edit-hint-separator` · `messages.edit-unsaved`; the ⋮ menu: `messages.message-options` · `messages.message-options-button` · `messages.message-options-panel` · `messages.message-options-title` · `messages.message-options-list` · `messages.message-option` · `messages.message-option-note` (screen reader only) · `messages.message-option-new` · `messages.message-options-divider`; a reply's typed parts: `messages.part-disclosure` · `messages.part-disclosure-toggle` · `messages.part-disclosure-chevron` · `messages.part-disclosure-track` · `messages.part-disclosure-clip` · `messages.part-disclosure-panel` · `messages.part-step-divider` · `messages.part-markdown`; the media strip (a message's images and files as square tiles below its card, a cell of `messages.message` after the content, in every state; composer attachments §3.4, note 40): `messages.media-strip` · `messages.media-images` · `messages.media-files` · `messages.media-item` · `messages.media-tile` (every image) · `messages.media-tile-img` · `messages.media-more` (the count past six) · `messages.media-missing` · `messages.media-missing-text` · `messages.media-file` (a file's tile, its download link) · `messages.media-file-name` · `messages.media-file-size` · `messages.media-remove` (editing, when the host offers a removal); a block tree: `messages.blocks` · `messages.block-markdown` · `messages.block-kv` · `messages.block-kv-label` · `messages.block-table-scroll` · `messages.block-table` · `messages.block-stat` · `messages.block-stat-head` · `messages.block-stat-label` · `messages.block-stat-value` · `messages.block-stat-track meter` · `messages.block-stat-fill` · `messages.block-image` · `messages.block-superseded` · `messages.block-choices` · `messages.block-caption` · `messages.block-answered` · `messages.block-answered-label` · `messages.block-awaiting` · `messages.block-choice-list` · `messages.block-choice` · `messages.block-form` · `messages.block-field` · `messages.block-field-label` · `messages.block-checkbox` · `messages.block-select` · `messages.block-input` · `messages.block-submit` · `messages.block-group`; the state ledger: `messages.ledger` · `messages.ledger-line` · `messages.ledger-owner` · `messages.ledger-separator` · `messages.ledger-change` · `messages.ledger-review` · `messages.ledger-review-panel` · `messages.ledger-review-title` · `messages.ledger-review-note` · `messages.proposal` · `messages.proposal-text` · `messages.proposal-anchor` · `messages.proposal-note` · `messages.proposal-decide` (beside which `messages.proposal-accept` or `messages.proposal-reject`) | On `messages.root`: `data-channel` (the channel a copy is pinned to; absent on the primary log) · `data-order` · `data-composer-position` · `data-composer-skin` · `data-line-width` (`full` · `comfortable`) · `data-show-messages` · `data-show-avatars` · `data-show-timestamps` · `data-show-scene-markers`. On `messages.message`: `data-msg-role` · `data-msg-author` · `data-msg-state` (`normal` · `selected` · `dim` · `editing`) · `data-msg-generating` · `data-msg-hidden` · `data-msg-greeting` · `data-msg-newest`; the row is `hidden` (the attribute) off the current channel and carries `--sp-scene` in a scene, `data-arrive` as it lands; `data-settled` on the sizer; `data-streaming` on `messages.message-text` while text arrives; `data-vectors` (`current` · `stale`); a toggle's `aria-expanded` (the part chevron turns) and its track's `data-expanded`; a line chosen for a summary is its Select button's `aria-pressed`; in the ⋮ menu a core verb's row says which (`data-verb`: Delete and Stop take the error's tone), Hide while hidden is `aria-pressed`, a row the line refuses `aria-disabled`; the media strip's `data-layout` (`preview` · `tiles`) and `data-editing`; a block tree's `data-depth`, a group's `data-layout` (`row` · `column`), a choice or form's `data-answered`, a superseded form's or proposal's `data-superseded` |
 
 Stats carries no class at all (P3a, 2026-09-28): even `truncate` on the member's name moved into
 the sheet, because cutting a name rather than wrapping it is a look a skin may change.
@@ -1040,6 +1266,83 @@ data values (`--sp-fill`, `--sp-scene`), and one-off shapes that belong to a sin
 State's gaps, the slot grid's columns, the portraits' mini-bar track) — those move with their part
 in P3 and get a token only if a second widget needs the role.
 
+### 6.17 Pipeline settings
+
+One component draws a pipeline's settings everywhere (`PipelineConfigOptions`, `mode`: `config` in the
+Pipelines view and the lorebook graph panel, `session` in a session's settings, `builder` in Admin). It
+draws the server's **settings groups** (NOMENCLATURE, _settings group_; the UI word is _agent_):
+
+- **Pipeline card → agent inset → rows → Advanced.** The card is `panel-card` (its title 14px medium);
+  each agent is a tonal inset (`bg-surface-50-950`, radius 10) with its name at 14px medium, its
+  purpose line at 13px **muted** (never quiet, never truncated), then its rows. _Whole pipeline_ is
+  the same shape, last. A single-call pipeline is one inset-less block. Nesting stops there: a
+  fourth level is a card boundary, never a smaller font (§3.3).
+- **The header switch** is the call's own on/off: a native `role="switch"` checkbox named by the
+  agent, with visible _On_/_Off_ beside it (never colour alone), and _Off: this part does not run._
+  under the header when off.
+- **Front rows**: **Prompt**, **Model**, **Sampling**, then source switches, labels 12px. Model and
+  Sampling sit side by side only at `@lg/view`. **Model is one grouped Listbox** (connections are the
+  groups, models the rows; one pick writes the pair). The **first option** names what unset resolves
+  to (the server's `inherits`); choosing it is Reset.
+- **The provenance line**: one 12px muted line under a control: the §6.14 dot when the
+  configuration changed it, the source in words, and **Reset** (44px on a coarse pointer) when a
+  value is stored at the scope this panel writes.
+- **Read-only** is the value's name plus _Set by an administrator_ (or **Change in Pipelines** for an
+  admin), never a disabled control (§6.11).
+- **Advanced** is one `<details>` per block, summarised _Advanced · N settings · M changed_, holding
+  one `<fieldset>` per step with the step heading as its legend. Its open state lives in a
+  `SvelteSet` per mount. **No counters**: no heading, label or list is ever numbered.
+- **Visibility is by role, not by lock**: the server sends a row only to a role that can normally
+  edit it somewhere (a non-admin gets prompts only, never a Model row); a row the role normally edits
+  but which is locked now is sent read-only. A group, and so a card, exists only when it holds such a
+  row. The client never hides a row the server sent.
+- **In a session**: a card per pipeline the session runs, the reply open and actions closed with
+  their model in the summary (admins); front rows only, no inline editors, **More settings in
+  Pipelines** for admins; a card with nothing to draw is not drawn. The session's creation pipeline comes last: once
+  the session is created its card starts closed, every row read-only, with one muted line saying why
+  (the server's `scope.readOnlyBecause`) and no per-row _Set by an administrator_.
+
+### 6.18 Media strip and tray
+
+Files on a message, and files waiting to go on one. Both are widget parts (§6.16): `messages.media-*`
+under a message, `messages.composer-tray*` in the composer, drawn by the default widget stylesheet.
+
+- **Tray tile** (a file not sent yet): a bordered `surface-50-950` card, 12rem wide (9rem in a
+  narrow box), a 2.5rem thumbnail or kind icon, the name truncated with its full text in `title`, a
+  4px progress bar while it uploads (`role="progressbar"`), and a round ✕ at its top right named
+  "Remove <file>" (44px under a coarse pointer). A refused tile has a dashed `error-500` border and
+  says why in words, in `error-700-300`. Tiles sit in one row under the field that scrolls sideways,
+  never wraps.
+- **What can be attached** (note 41, 2026-10-03): what may be attached is said in words, never
+  only by greying a control — but not in the composer's body. The More (⋮) panel lists **What can
+  be attached** under its panes, in every composer skin, and it opens a dialog (`sp-dialog`): the
+  summary ("This reply can read: images · text files"), every kind with the reason a refused one
+  can't be attached (in `warning-800-200`), and each model call's reading. The paperclip's picker
+  offers only the formats something in the reply reads, and its tooltip repeats the summary. A file
+  refused at the moment of a pick, a drop or a paste still says why on its own tile, and aloud.
+- **Media strip** (a sent message's files, in every state of the row): a row of **square tiles
+  below the message's card, never inside it** (note 40, 2026-10-03) — its own cell of the message
+  grid, in the content's columns on the row after the content, so every pack's card (Stage's
+  persona card, a Bubbles bubble, a Dreamlit Cameo glass) ends above it; a pack aligns it to its
+  card's side (the persona's to the trailing edge in Bubbles and Cameo, narration's centred).
+  **Every image**, one or many, is a square `?v=thumb` **tile** cropped to fill (`object-fit:
+  cover`), one size each (7rem; 5rem in a box under 30rem), and past six the rest fold into a
+  count tile ("+3") that opens the lightbox where the tiles stop. A **file** is a **file tile**
+  of the same size: kind icon, name on up to two lines (full name in `title`), size in
+  `surface-700-300`, a download glyph in its corner; the card is the download link. All of them are
+  thumbnails (§6.4): square, bordered `surface-300-700`, radius 12px (a card's step,
+  §4), `primary-500` border on hover; every target is 44px on touch.
+- **Every tile is a button** named "Open image cat.png, 2 of 3". An image whose file is gone is a
+  dashed tile saying **File no longer available** (`role="img"`), never a broken image, and leaves
+  the lightbox's pages.
+- **Removing** is only while editing a row you control: a round ✕ on each tile, "Remove <file>".
+  Adding goes through a new message, never the edit.
+- **The lightbox** (`MediaLightbox`, the page's answer to `view-image`) is one modal for the
+  session: ←/→, a swipe, or the side buttons page through the message's images, with a counter,
+  **Download** for the app's own files and an **Info** pane (the prompt, seed and model of a
+  generated image; the name, type and size of an upload). It traps focus, closes on Esc and the
+  backdrop, and returns focus to the tile that opened it. ⚠ Not the character gallery's viewer.
+
 ## 7. Iconography
 
 Icons are lucide, stroke 1.6, on the 24px grid: 20px on the rail, 18px in menus and rows, 16px
@@ -1099,6 +1402,11 @@ user-supplied image stays a **background**. The words are kept apart in NOMENCLA
 
 - Every interactive element is a real `button`, `a` or input with an accessible name; icon-only
   buttons carry `aria-label` and, in the narrow rail only, a `title`.
+- **Never an interactive inside an interactive.** A row picked by pressing it (`role="button"`)
+  holds its own controls — a fold toggle, a mark, the `⋯` menu — *beside* the part that picks it,
+  inside the row's box but not inside the button, and its key handler acts only on keys pressed
+  on itself (`event.target === event.currentTarget`), so a control's Enter is the control's
+  (lorebook entry rows, plan B7).
 - The rail, tab strips and menus use roving `tabindex` with arrow keys; `Alt [` focuses the rail,
   `Alt ]` the sidebar, `Alt /` the page; `Ctrl K` opens Jump; `Esc` closes what is open.
 - Selection is announced: `aria-current` on the selected row, `aria-selected` on tabs,
@@ -1117,7 +1425,9 @@ user-supplied image stays a **background**. The words are kept apart in NOMENCLA
 
 - Sentence case everywhere: "Show all fields", "Browse the library", "Pick a character".
 - A button says what happens: Save, Continue, Import a card. Not Submit, not OK.
-- One name per thing, across the whole flow: the thing you open is a session, never a chat.
+- One name per thing, across the whole flow: the thing you open is a session, never a chat;
+  one installation of Serene Pub is a **pub** (_your pub_, _this pub_; capitalised only where a
+  sentence or label starts), never an _instance_ or a _server_ (`NOMENCLATURE.md` §26).
 - Labels are nouns, hints are sentences, empty states are invitations ("Pick a character, or
   create one."), errors say what went wrong and what to do.
 - No filler: a screen with nothing to say says nothing, not "No items found".

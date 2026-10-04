@@ -237,10 +237,10 @@ describe("resolveOrCreateBinding", () => {
 			.values({ userId: user.id, name: "Bram", description: "" })
 			.returning()
 
-		const id = await resolveOrCreateBinding(
+		const id = (await resolveOrCreateBinding(
 			{ lorebookId: lorebook.id, characterId: character.id },
 			testDb
-		)
+		))!
 
 		const created = await testDb.query.lorebookBindings.findFirst({
 			where: eq(schema.lorebookBindings.id, id)
@@ -269,10 +269,10 @@ describe("resolveOrCreateBinding", () => {
 			})
 			.returning()
 
-		const id = await resolveOrCreateBinding(
+		const id = (await resolveOrCreateBinding(
 			{ lorebookId: lorebook.id, characterId: persona.id },
 			testDb
-		)
+		))!
 
 		const created = await testDb.query.lorebookBindings.findFirst({
 			where: eq(schema.lorebookBindings.id, id)

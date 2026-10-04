@@ -122,8 +122,11 @@
 		entry.onSelect?.()
 	}
 
+	// `justify-start`: a label sits beside its icon. Skeleton's menu sheet
+	// (skeleton-common `menu.css`) spaces an item's children apart
+	// (`justify-content: space-between`), which this overrides.
 	const rowClass =
-		"flex h-9 w-full cursor-pointer items-center gap-2 rounded-[8px] px-2.5 text-left text-[13px] outline-none data-[disabled]:cursor-not-allowed data-[disabled]:opacity-50"
+		"flex h-9 w-full cursor-pointer items-center justify-start gap-2 rounded-[8px] px-2.5 text-left text-[13px] outline-none data-[disabled]:cursor-not-allowed data-[disabled]:opacity-50"
 	const neutralRow =
 		"hover:bg-surface-200-800 data-[highlighted]:bg-surface-200-800"
 	const destructiveRow =

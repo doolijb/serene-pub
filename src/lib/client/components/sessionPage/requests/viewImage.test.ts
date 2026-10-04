@@ -48,3 +48,48 @@ describe("answerViewImage", () => {
 		expect(shown).toEqual(["/media/2.png"])
 	})
 })
+
+describe("answerViewImage with a gallery (composer attachments §3.4)", () => {
+	function galleryPage() {
+		const shown: { src: string; gallery?: unknown }[] = []
+		return {
+			shown,
+			deps: { viewImage: (src: string, gallery?: unknown) => shown.push({ src, gallery }) }
+		}
+	}
+
+	test("a message's images ride along, with where the asked one sits", () => {
+		const { shown, deps } = galleryPage()
+		answerViewImage(
+			{ src: "/media/2", gallery: { srcs: ["/media/1", "/media/2"], index: 1, captions: ["a.png", "b.png"] } },
+			core,
+			deps
+		)
+		expect(shown).toEqual([
+			{ src: "/media/2", gallery: { srcs: ["/media/1", "/media/2"], index: 1, captions: ["a.png", "b.png"] } }
+		])
+	})
+
+	test("a plugin's gallery is held to the app's media, address by address", () => {
+		const { shown, deps } = galleryPage()
+		expect(() =>
+			answerViewImage(
+				{ src: "/media/1", gallery: { srcs: ["/media/1", "https://x.test/y.png"], index: 0 } },
+				plugin,
+				deps
+			)
+		).toThrow("view-image shows the app's own images only")
+		expect(shown).toEqual([])
+	})
+
+	test.each([
+		[{ srcs: ["/media/1"], index: 3 }],
+		[{ srcs: ["/media/9"], index: 0 }],
+		[{ srcs: "nope", index: 0 }],
+		[{ srcs: ["/media/1", 4], index: 0 }]
+	])("a gallery that does not hold src at index is refused: %j", (gallery) => {
+		const { shown, deps } = galleryPage()
+		expect(() => answerViewImage({ src: "/media/1", gallery }, core, deps)).toThrow()
+		expect(shown).toEqual([])
+	})
+})

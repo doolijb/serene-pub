@@ -1,8 +1,8 @@
 /**
  * Reading the admin logbook — the query behind Admin → History.
  *
- * Newest first, filtered on the server (object, actor, action, date range,
- * text) and paged by cursor: `before` is the last id the client holds, so a
+ * Newest first, filtered on the server (one record, object, actor, action,
+ * date range, text) and paged by cursor: `before` is the last id the client holds, so a
  * record written while someone is paging never shifts the page under them.
  */
 import * as schema from "$lib/server/db/schema"
@@ -16,6 +16,8 @@ import {
 export const LOGBOOK_PAGE_MAX = 200
 
 export interface LogbookQuery {
+	/** One record by its id (History's change view); the other filters still apply. */
+	recordId?: number | null
 	objectType?: string | null
 	/** With `objectType`: one object's history. `""` is a singleton's (no id). */
 	objectId?: string | null
@@ -71,6 +73,8 @@ export async function listLogbook(
 }> {
 	const t = schema.adminLogbook
 	const where: SQL[] = []
+	if (q.recordId != null && Number.isInteger(q.recordId))
+		where.push(eq(t.id, q.recordId))
 	if (q.objectType) {
 		where.push(eq(t.objectType, q.objectType))
 		if (q.objectId === "") where.push(isNull(t.objectId))

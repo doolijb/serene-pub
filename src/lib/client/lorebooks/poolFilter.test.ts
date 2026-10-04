@@ -140,7 +140,7 @@ describe("filterPool", () => {
 				off: true,
 				machineWritten: true,
 				readIn: true,
-				looseEnds: true
+				needsKeywords: true
 			})
 		).toBe(4)
 	})
@@ -184,21 +184,6 @@ describe("filterPool", () => {
 				(i) => i.id
 			)
 		).toEqual([])
-	})
-
-	it("narrows to loose ends, which are unkeyworded and never read in", () => {
-		const pool = [
-			item({ id: 1, keys: ["umber"] }),
-			item({ id: 2, keys: [] }),
-			item({ id: 3, keys: [] })
-		]
-		expect(
-			filterPool(
-				pool,
-				{ ...emptyFilters(), looseEnds: true },
-				new Set(["entry#3"])
-			).map((i) => i.id)
-		).toEqual([2])
 	})
 })
 
@@ -313,5 +298,45 @@ describe("comparePoolBy", () => {
 		expect(
 			[...pool].sort(comparePoolBy("entry-date-asc")).map((i) => i.id)
 		).toEqual([1, 2])
+	})
+
+	it("story order reads the date, so a day-of-year book past 99 keeps its order", () => {
+		const at = (id: number, day: number, month = 1) =>
+			item({ id, kind: HISTORY, order: 0, date: { year: 3, month, day } })
+		// Mo. 1 Day 150 is before Mo. 2 Day 1; days this large would meet
+		// inside a float once packed (`dateValue`), and stay distinct here.
+		const pool = [
+			at(1, 1, 2),
+			at(2, 10_000_001),
+			at(3, 150),
+			at(4, 10_000_000)
+		]
+		expect(
+			[...pool].sort(comparePoolBy("entry-date-asc")).map((i) => i.id)
+		).toEqual([3, 4, 2, 1])
+		expect(
+			[...pool].sort(comparePoolBy("entry-date-desc")).map((i) => i.id)
+		).toEqual([1, 2, 4, 3])
+	})
+})
+
+/** Note 1: an old anchor on a history entry never nests it. */
+describe("buildTree — history is top level", () => {
+	it("draws a history entry as a root whatever its anchor says", () => {
+		const pool = [
+			item({ id: 1, key: "entry#1" }),
+			item({ id: 2, key: "entry#2", kind: HISTORY, parentKey: "entry#1" }),
+			item({
+				id: 3,
+				key: "scene#3",
+				kind: SCENE,
+				parentKey: "entry#2"
+			})
+		]
+		const roots = buildTree(pool)
+		expect(roots.map((r) => r.item.key)).toEqual(["entry#1", "entry#2"])
+		// Its scenes still hang off it.
+		expect(roots[1].children.map((c) => c.item.key)).toEqual(["scene#3"])
+		expect(hasNesting(pool.slice(0, 2))).toBe(false)
 	})
 })

@@ -1,60 +1,13 @@
 <script module lang="ts">
-	/** Which zone edges a widget sticks to (mirrors widgetGrid's Anchor). */
-	export interface GsAnchor {
-		top?: boolean
-		right?: boolean
-		bottom?: boolean
-		left?: boolean
-	}
-	export interface GsItem {
-		id: string
-		title: string
-		x?: number
-		y?: number
-		w?: number
-		h?: number
-		/**
-		 * Default vertical placement (before the user drags): "top" stacks from
-		 * the top (default), "bottom" docks from the bottom, "fill" takes the
-		 * space left between them. Full-width by default (w = the zone's columns).
-		 */
-		place?: "top" | "bottom" | "fill"
-		/**
-		 * Set on the card the primary floor keeps (./primaryFloor: the last
-		 * placed instance of the genre's primary widget): it offers no remove
-		 * control and shows this note in its place. Movable and resizable like
-		 * any card, into any zone — placement is free (brief 7a).
-		 */
-		floorNote?: string
-		/** Edges the widget anchors to within its cell (toggled in the editor). */
-		anchor?: GsAnchor
-		/** Tab-group membership: cards sharing a group id render as one tab set. */
-		group?: string
-		/**
-		 * Docked in a side column (ruled 2026-09-10). ABSENT MEANS PINNED — the
-		 * only value ever written is the explicit `false`, so an arrangement
-		 * without the field reads as everything pinned. See `itemPinned` /
-		 * `withPins`.
-		 */
-		pinned?: boolean
-	}
-	export interface GsPos {
-		id: string
-		x: number
-		y: number
-		w: number
-		h: number
-		anchor?: GsAnchor
-		group?: string
-		/** See `GsItem.pinned`: absent means pinned, `false` is the only write. */
-		pinned?: boolean
-	}
-	/** A zone's captured arrangement: its cell grid dims + the items' cells. */
-	export interface GsLayout {
-		cols: number
-		rows: number
-		items: GsPos[]
-	}
+	/**
+	 * The stored shapes are the SDK's: a zone's arrangement (`ArrangedZone`,
+	 * its cells and `ArrangedItem`s) and the edges a widget anchors to
+	 * (`WidgetAnchor`) are slots of the session layout (`SessionLayoutV1`).
+	 * `GsItem` is this editor's own card, before it has cells (`./gsItem`).
+	 */
+	import type { ArrangedItem, ArrangedZone, WidgetAnchor } from "@serene-pub/sdk"
+	import type { GsItem } from "./gsItem"
+	export type { GsItem }
 	/**
 	 * The default square cell edge (px). Exported because a caller that has to
 	 * reason about a zone's column count before it is measured — the Move tab's
@@ -98,7 +51,7 @@
 		 * arrangement instead of crushing it, and what tells this zone it has
 		 * nothing of its own to report yet (see `emit`).
 		 */
-		frame?: GsLayout
+		frame?: ArrangedZone
 		/**
 		 * The zone's docked/flyout state, for the card's pin toggle. `undefined`
 		 * (the middle) has no pin at all — it is the session, not a rail.
@@ -106,8 +59,13 @@
 		pinned?: boolean
 		/** Flip that state. Absent = this zone cannot be pinned (the middle). */
 		onTogglePin?: () => void
-		onChange?: (layout: GsLayout) => void
+		onChange?: (layout: ArrangedZone) => void
 		onRemove?: (id: string) => void
+		/**
+		 * A card's Duplicate was pressed (brief 7b). Absent = the cards offer
+		 * none. The copy lands through the layout, which re-seeds the zone.
+		 */
+		onDuplicate?: (id: string) => void
 		/**
 		 * A card was dragged INTO this zone from another one. The only report
 		 * that names a widget AND the zone that now holds it, which is how the
@@ -137,6 +95,7 @@
 		onTogglePin,
 		onChange,
 		onRemove,
+		onDuplicate,
 		onDropped,
 		onGesture
 	}: Props = $props()
@@ -166,7 +125,7 @@
 	let selected = new SvelteSet<string>()
 	let gridMeta: Map<
 		string,
-		{ anchor: GsAnchor; group?: string; pinned?: boolean }
+		{ anchor: WidgetAnchor; group?: string; pinned?: boolean }
 	> | null = null
 	let gridEmit: (() => void) | null = null
 	let selectionHasGroup = $derived(
@@ -248,15 +207,15 @@
 		)
 	}
 	/** The class list that draws a thick accent border on each anchored edge. */
-	function anchorClasses(a: GsAnchor): string {
+	function anchorClasses(a: WidgetAnchor): string {
 		return (["top", "right", "bottom", "left"] as const)
 			.filter((e) => a[e])
 			.map((e) => `anch-${e}`)
 			.join(" ")
 	}
 	/** Four edge-toggle buttons; the pressed ones mark which edges are anchored. */
-	function anchorControls(a: GsAnchor): string {
-		const btn = (edge: keyof GsAnchor, glyph: string) =>
+	function anchorControls(a: WidgetAnchor): string {
+		const btn = (edge: keyof WidgetAnchor, glyph: string) =>
 			`<button class="gsc-btn gsc-anch${a[edge] ? " active" : ""}" data-act="anchor-${edge}" title="Anchor ${edge}" aria-label="Anchor to ${edge}" aria-pressed="${!!a[edge]}">${glyph}</button>`
 		return (
 			`<span class="gsc-anchset" title="Anchor edges">` +
@@ -267,6 +226,13 @@
 			`</span>`
 		)
 	}
+	/** Lucide's `Copy` (NOMENCLATURE §22: duplicate), drawn so it inherits the color. */
+	const COPY_SVG =
+		`<svg viewBox="0 0 24 24" width="11" height="11" aria-hidden="true" ` +
+		`fill="none" stroke="currentColor" stroke-width="2.2" ` +
+		`stroke-linecap="round" stroke-linejoin="round">` +
+		`<rect width="14" height="14" x="8" y="8" rx="2" ry="2"/>` +
+		`<path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>`
 	/** A pushpin, drawn rather than spelled so it inherits the button's color. */
 	const PIN_SVG =
 		`<svg viewBox="0 0 24 24" width="11" height="11" aria-hidden="true" ` +
@@ -307,7 +273,7 @@
 
 	function cardHtml(
 		it: GsItem,
-		a: GsAnchor = it.anchor ?? {},
+		a: WidgetAnchor = it.anchor ?? {},
 		group = it.group,
 		groupPinned = it.pinned
 	): string {
@@ -316,6 +282,13 @@
 		const rm = it.floorNote
 			? `<span class="gsc-floor" role="note" title="${esc(it.floorNote)}" aria-label="${esc(it.floorNote)}"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></span>`
 			: `<button class="gsc-btn gsc-x" data-remove="${esc(it.id)}" title="Remove ${esc(it.title)}" aria-label="Remove ${esc(it.title)}">&times;</button>`
+		// Duplicate (brief 7b): a copy of this widget beside it, its settings
+		// and style copied — or, at its widget's cap, the reason, dimmed.
+		const dup = !onDuplicate
+			? ""
+			: it.copyRefusal
+				? `<span class="gsc-nocopy" role="note" title="${esc(it.copyRefusal)}" aria-label="${esc(it.copyRefusal)}">${COPY_SVG}</span>`
+				: `<button class="gsc-btn gsc-dup" data-duplicate="${esc(it.id)}" title="Duplicate ${esc(it.title)}" aria-label="Duplicate ${esc(it.title)}">${COPY_SVG}</button>`
 		// Position controls — snap the widget to fill/dock without dragging — then
 		// the anchor-edge cluster (toggle which edges the widget sticks to).
 		const ctrls =
@@ -336,7 +309,7 @@
 		// recover it there (see `dropped`). Absent means pinned, so the only
 		// value worth carrying is the explicit `false`.
 		const pdata = groupPinned === false ? ` data-pinned="false"` : ""
-		return `<div class="gsc ${anchorClasses(a)}${gcls}"${gstyle}${gdata}${pdata}><span class="gsc-title">${esc(it.title)}</span><span class="gsc-ctrls">${ctrls}${rm}</span></div>`
+		return `<div class="gsc ${anchorClasses(a)}${gcls}"${gstyle}${gdata}${pdata}><span class="gsc-title">${esc(it.title)}</span><span class="gsc-ctrls">${ctrls}${dup}${rm}</span></div>`
 	}
 
 	// Whole cells that fit a measured length (partials culled, not drawn).
@@ -457,9 +430,9 @@
 		// zone makes would drop it.
 		const meta = new Map<
 			string,
-			{ anchor: GsAnchor; group?: string; pinned?: boolean }
+			{ anchor: WidgetAnchor; group?: string; pinned?: boolean }
 		>()
-		const anyAnchor = (a: GsAnchor) =>
+		const anyAnchor = (a: WidgetAnchor) =>
 			!!(a.top || a.right || a.bottom || a.left)
 		grid!.batchUpdate()
 		// Default placement + the re-expression of a restored arrangement into
@@ -509,7 +482,7 @@
 		 * a narrow preview and the widget is stuck at a fraction of its zone,
 		 * live and saved. The seeded positions are the honest reference there.
 		 */
-		let ref: GsLayout = restoring
+		let ref: ArrangedZone = restoring
 			? seedFrame!
 			: { cols, rows, items: seeded }
 		/**
@@ -542,7 +515,7 @@
 			// collapses the explicit `1fr` ones to 0px, shredding every other
 			// widget in the zone. `loadArranged` clamps on the way back in for
 			// blobs already written; this stops another one being written.
-			const layout: GsLayout = {
+			const layout: ArrangedZone = {
 				cols,
 				rows,
 				items: nodes.map((n) => {
@@ -618,7 +591,7 @@
 			// survive) — otherwise THIS zone's meta wouldn't know the dragged-in id
 			// and its emit would drop the anchor/group.
 			const gsc = node.el.querySelector<HTMLElement>(".gsc")
-			const anchor: GsAnchor = {}
+			const anchor: WidgetAnchor = {}
 			for (const e of ["top", "right", "bottom", "left"] as const)
 				if (gsc?.classList.contains(`anch-${e}`)) anchor[e] = true
 			meta.set(String(node.id), {
@@ -664,7 +637,7 @@
 					// Toggle one anchored edge. Geometry doesn't change, so gridstack
 					// fires nothing — update the meta + DOM (button pressed-state and
 					// the card's edge-highlight class) and emit by hand.
-					const edge = a.slice("anchor-".length) as keyof GsAnchor
+					const edge = a.slice("anchor-".length) as keyof WidgetAnchor
 					const id = String(node.id)
 					const m = meta.get(id) ?? { anchor: {} }
 					const next = !m.anchor[edge]
@@ -676,6 +649,15 @@
 						?.classList.toggle(`anch-${edge}`, next)
 					emit()
 				}
+				return
+			}
+			// Duplicate: the layout mints and seats the copy, and re-seeds this
+			// zone with it — nothing to do to gridstack here.
+			const dupBtn = target?.closest("[data-duplicate]")
+			if (dupBtn) {
+				e.preventDefault()
+				e.stopPropagation()
+				onDuplicate?.(dupBtn.getAttribute("data-duplicate")!)
 				return
 			}
 			// Remove button.
@@ -936,6 +918,22 @@
 	:global(.grid-stack .gsc-x) {
 		opacity: 0.85; /* remove stays visible even without hover */
 		font-size: 1rem;
+	}
+	/* Duplicate (brief 7b) stays visible like the ×: it is how a second copy
+	   of a placed widget is made, so it must be findable without a hover. At
+	   the widget's cap it is a dimmed note that says why. */
+	:global(.grid-stack .gsc-dup) {
+		opacity: 0.85;
+	}
+	:global(.grid-stack .gsc-nocopy) {
+		flex: none;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		inline-size: 1.2rem;
+		block-size: 1.2rem;
+		opacity: 0.4;
+		cursor: help;
 	}
 	/* Where the × would be on the card the primary floor keeps: a lock that
 	   says why (its title and label), visible like the × it stands in for. */

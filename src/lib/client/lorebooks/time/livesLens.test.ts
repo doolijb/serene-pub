@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 import { buildAxis, overlaps, pinMarksOf, ratioOf } from "./livesLens"
 import type { Presence } from "$lib/shared/lorebooks/presence"
 import { lineOf } from "$lib/shared/lorebooks/lineReading"
+import { dateValue } from "$lib/shared/lorebooks/storyDate"
 
 const p = (
 	over: Partial<Presence> & {
@@ -31,7 +32,11 @@ describe("ratioOf", () => {
 })
 
 describe("overlaps", () => {
-	const span = (from: number, to: number) => ({ from, to })
+	const y = (year: number) => ({ year })
+	const span = (from: number, to: number | null) => ({
+		from: y(from),
+		to: to == null ? null : y(to)
+	})
 	it("two spans that share time overlap", () => {
 		expect(overlaps([span(500, 560), span(540, 600)])).toBe(true)
 	})
@@ -44,7 +49,26 @@ describe("overlaps", () => {
 	it("an open-ended span swallows everything after it", () => {
 		// The case the ratio version got wrong: clamped to the axis, an open
 		// run and one starting at the right edge merely touched.
-		expect(overlaps([span(500, Infinity), span(540, Infinity)])).toBe(true)
+		expect(overlaps([span(500, null), span(540, null)])).toBe(true)
+	})
+	it("orders by the date, not the packed placement value (a day-of-year book)", () => {
+		// Days this large meet inside a float once packed by `dateValue`:
+		// the second span starts one day BEFORE the first ends, which the
+		// packed value read as the same instant — a handover, not a meeting.
+		const day = (d: number) => ({ year: 3, month: 1, day: d })
+		expect(dateValue(day(10_000_000))).toBe(dateValue(day(10_000_001)))
+		expect(
+			overlaps([
+				{ from: day(1), to: day(10_000_001) },
+				{ from: day(10_000_000), to: null }
+			])
+		).toBe(true)
+		expect(
+			overlaps([
+				{ from: day(150), to: day(200) },
+				{ from: day(200), to: day(300) }
+			])
+		).toBe(false)
 	})
 })
 
@@ -144,7 +168,7 @@ describe("the axis", () => {
 					})
 				],
 				[{ year: 500 }, { year: 600 }],
-				{ branchId: 7 }
+				{ line: lineOf(7, [{ id: 7 }]) }
 			).lanes[0].runs
 		).toHaveLength(2)
 	})

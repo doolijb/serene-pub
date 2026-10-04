@@ -197,10 +197,10 @@ describe("M4 · the optional model path", () => {
 		expect(out.row("decide.rules.strategy").swap).toBeNull()
 	})
 
-	it("the order names the strategy that ran — an instance-scope swap included (A7r)", async () => {
+	it("the order names the strategy that ran — a pub-scope swap included (A7r)", async () => {
 		const { setNodeRebind } = await import("$lib/server/pipelines/entities/bindings")
 		const set = await setNodeRebind(db as any, {
-			scope: { kind: "instance", id: 0 },
+			scope: { kind: "pub", id: 0 },
 			specSlug: "core:spec/chat-turn-order",
 			nodeKey: "decide.rules.strategy",
 			definitionId: "core:task/turn-random@1",
@@ -214,10 +214,10 @@ describe("M4 · the optional model path", () => {
 			// …and its receipt row names the pin it replaced and whose swap it was.
 			const row = out.row("decide.rules.strategy")
 			expect(row.definitionId).toBe("core:task/turn-random@1")
-			expect(row.swap).toEqual({ pin: "core:task/turn-round-robin@1", by: "instance" })
+			expect(row.swap).toEqual({ pin: "core:task/turn-round-robin@1", by: "pub" })
 		} finally {
 			await setNodeRebind(db as any, {
-				scope: { kind: "instance", id: 0 },
+				scope: { kind: "pub", id: 0 },
 				specSlug: "core:spec/chat-turn-order",
 				nodeKey: "decide.rules.strategy",
 				definitionId: null,

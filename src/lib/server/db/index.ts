@@ -60,10 +60,12 @@ const isFreshInstall = !fs.existsSync(metaPath)
  * gets. Every decision below that reads `isFreshInstall` actually wants to know
  * about the *database*: whether to dump one before migrating it, whether legacy
  * content exists to upgrade, and whether the seed rows have ever been written.
- * On the first boot the two are the same value, which is why this is a separate
- * variable and not a changed meaning for the existing one.
+ * The database folder is asked about on the first boot too: `db:generate` and
+ * the other `db:*` scripts take their lock by writing a `meta.json` into a
+ * data directory that may hold no database yet, and a database created here
+ * must never be mistaken for a 0.5.3 one and sent through the upgrade.
  */
-let treatAsFreshInstall = isFreshInstall
+let treatAsFreshInstall = isFreshInstall || !fs.existsSync(dbConfig.dbPath)
 
 // Ensure meta.json exists
 if (isFreshInstall) {
@@ -528,6 +530,24 @@ async function initialiseDatabase(): Promise<void> {
 
 /** The pass itself. Split out only so the guard above reads as a guard. */
 async function runInitialisation(): Promise<void> {
+	// Before anything else, and before any write: a production build refuses a
+	// `drizzle/` other than the one it was built with (./migrationSet). Dev
+	// reads live source, so its code and migrations always agree.
+	if (!building && !dev) {
+		const { assertBuildMatchesMigrations } = await import("./migrationSet")
+		try {
+			assertBuildMatchesMigrations(
+				typeof __MIGRATION_SET__ === "undefined"
+					? undefined
+					: __MIGRATION_SET__,
+				dbConfig.migrationsDir
+			)
+		} catch (error) {
+			console.error((error as Error).message)
+			throw error
+		}
+	}
+
 	// First, and separately from every query below: the database has to be
 	// open before "what is pending" is even a question. See openDatabase().
 	if (!building) await openDatabase()
@@ -548,6 +568,35 @@ async function runInitialisation(): Promise<void> {
 	// skipped as unnecessary and then seven migrations landed on an unprotected
 	// database — the one situation that module exists to prevent.
 	if (!building) {
+		// ⏳ First of all: a development database migrated by the pre-squash
+		// 0.6 chain is carried onto the squashed one, or refused before any
+		// write (./ledgerSplice). A no-op on every other database. The one
+		// write it can make is backed up first: the pre-migration backup below
+		// would never see it.
+		const { spliceSquashedLedger, LedgerSpliceRefusal } = await import(
+			"./ledgerSplice"
+		)
+		try {
+			await spliceSquashedLedger(db, {
+				migrationsFolder: dbConfig.migrationsDir,
+				dataDir: dbConfig.dataDir,
+				beforeWrite: async () => {
+					const { backupDatabase } = await import("./backup")
+					const backup = await backupDatabase(db, {
+						dataDir: dbConfig.dataDir,
+						label: "pre-squash-0.6"
+					})
+					console.log(
+						`Database backed up before the ledger splice: ${backup.path}`
+					)
+				}
+			})
+		} catch (error) {
+			if (error instanceof LedgerSpliceRefusal)
+				console.error(error.message)
+			throw error
+		}
+
 		// Deferred like its neighbours below; nothing here needs it earlier.
 		const { repairMigrationLedger } = await import(
 			"./migrationLedgerRepair"

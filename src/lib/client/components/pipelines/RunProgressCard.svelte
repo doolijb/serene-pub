@@ -77,17 +77,22 @@
 	 *
 	 * The `$effect` form rather than `useInterest`: the prop can be re-pointed
 	 * at another session, and `useInterest` reads its key ONCE. Declaring here
-	 * releases the old key as it takes the new one.
+	 * releases the old key as it takes the new one — keyed on `scopeId`, a
+	 * `$derived` copy of the prop: a parent that hands the id down as
+	 * `{session.id}` passes a getter over an object the session page replaces
+	 * per streamed chunk, and an effect reading the prop directly would
+	 * re-declare both keys per token (B8).
 	 */
+	const scopeId = $derived(sessionId)
 	$effect(() =>
 		declareInterest<"pipelines:runStarted">(
-			interestKey("pipelines:runStarted", sessionId),
+			interestKey("pipelines:runStarted", scopeId),
 			onRunStarted
 		)
 	)
 	$effect(() =>
 		declareInterest<"pipelines:progress">(
-			interestKey("pipelines:progress", sessionId),
+			interestKey("pipelines:progress", scopeId),
 			onProgress
 		)
 	)

@@ -20,6 +20,7 @@ import { CONNECTION_DEFAULTS } from "$lib/shared/utils/connectionDefaults"
 import { normalizeBaseUrl } from "$lib/shared/utils/normalizeBaseUrl"
 import { decryptApiKeyField } from "$lib/server/utils/tokenCrypto"
 import { ToolUseBlockAccumulator } from "./streamingToolCalls"
+import { modelServerFetchOptions } from "./modelServerFetch"
 
 /**
  * The prompt-cache halves of an Anthropic `usage` block.
@@ -201,44 +202,6 @@ function contentBlockFor(
 }
 
 /**
- * The messages, with the files on the turn they travel with.
- *
- * That turn is the LAST USER message — the current one, which is what the files
- * were attached to and what the reply is about. `buildAnthropicMessages`
- * guarantees one exists and that it is last; the search is by role anyway so
- * this cannot silently attach to an assistant turn if that ever changes.
- *
- * Blocks come BEFORE the text, which is Anthropic's own documented ordering
- * advice for a question about an image, and the text block is omitted entirely
- * when the turn has nothing to say — the API rejects an empty text block, and a
- * bare "here are some files" turn is a legitimate request.
- *
- * A new array rather than a mutation, so the object whose size was measured for
- * the request cap is not the object that changed underneath it.
- */
-function withAttachmentBlocks(
-	messages: readonly Anthropic.MessageParam[],
-	blocks: readonly Anthropic.ContentBlockParam[]
-): Anthropic.MessageParam[] {
-	const target = messages.reduce(
-		(found, msg, index) => (msg.role === "user" ? index : found),
-		-1
-	)
-	if (target < 0) return [...messages, { role: "user", content: [...blocks] }]
-
-	const existing = messages[target]!.content
-	const text = Array.isArray(existing)
-		? existing
-		: typeof existing === "string" && existing.length
-			? [{ type: "text" as const, text: existing }]
-			: []
-
-	return messages.map((msg, index) =>
-		index === target ? { role: "user", content: [...blocks, ...text] } : msg
-	)
-}
-
-/**
  * What a `redacted_thinking` block surfaces as.
  *
  * Anthropic returns one of these when its safety systems flag part of the
@@ -269,8 +232,7 @@ class AnthropicAdapter extends BaseConnectionAdapter {
 	constructor({
 		connection,
 		sampling,
-		contextConfig,
-		promptConfig,
+		systemPrompt,
 		session,
 		currentCharacterId,
 		tokenCounter,
@@ -280,8 +242,7 @@ class AnthropicAdapter extends BaseConnectionAdapter {
 	}: {
 		connection: SelectConnection
 		sampling: ResolvedSampling
-		contextConfig: SelectContextConfig
-		promptConfig: SelectPromptConfig
+		systemPrompt?: string
 		session: BasePromptSession
 		currentCharacterId: number | null
 		tokenCounter?: TokenCounters
@@ -292,8 +253,7 @@ class AnthropicAdapter extends BaseConnectionAdapter {
 		super({
 			connection,
 			sampling,
-			contextConfig,
-			promptConfig,
+			systemPrompt,
 			session,
 			currentCharacterId,
 			tokenCounter:
@@ -320,7 +280,10 @@ class AnthropicAdapter extends BaseConnectionAdapter {
 				normalizeBaseUrl(this.connection.baseUrl) || undefined
 			this._client = new Anthropic({
 				apiKey,
-				...(baseURL ? { baseURL } : {})
+				...(baseURL ? { baseURL } : {}),
+				// undici's five-minute timeouts sit under this client's own;
+				// see `modelServerFetch`.
+				fetchOptions: modelServerFetchOptions()
 			})
 		}
 		return this._client
@@ -376,7 +339,16 @@ class AnthropicAdapter extends BaseConnectionAdapter {
 	 * Anthropic requires: system as a separate top-level param, and
 	 * messages must strictly alternate user/assistant (no consecutive same-role).
 	 */
-	private buildAnthropicMessages(compiledPrompt: CompiledPrompt): {
+	private buildAnthropicMessages(
+		compiledPrompt: CompiledPrompt,
+		/**
+		 * 🚧 The prepared files per compiled message (PLAN-composer-attachments
+		 * §3.5), aligned with `compiledPrompt.messages` — from
+		 * `filesByMessage`, which already moved every file onto a user turn.
+		 * Absent: the text-only request, measured before the files go in.
+		 */
+		files?: readonly (readonly PreparedAttachment[])[]
+	): {
 		system: string
 		messages: Anthropic.MessageParam[]
 	} {
@@ -385,8 +357,10 @@ class AnthropicAdapter extends BaseConnectionAdapter {
 
 		let system = ""
 		const messages: Anthropic.MessageParam[] = []
+		// Each file's position in the whole request, for a refusal's wording.
+		let fileIndex = 0
 
-		for (const msg of rawMessages) {
+		for (const [index, msg] of rawMessages.entries()) {
 			if (msg.role === "system") {
 				system = system ? system + "\n\n" + msg.content : msg.content
 				continue
@@ -394,6 +368,21 @@ class AnthropicAdapter extends BaseConnectionAdapter {
 
 			const role: "user" | "assistant" =
 				msg.role === "assistant" ? "assistant" : "user"
+			// The turn's files as blocks, BEFORE its text — Anthropic's own
+			// ordering advice for a question about an image. The text block is
+			// omitted when the turn has nothing to say: the API rejects an
+			// empty one, and a bare "here is a file" turn is a real request.
+			const blocks = (files?.[index] ?? []).map((file) =>
+				contentBlockFor(file, fileIndex++)
+			)
+			const asBlocks = (
+				content: Anthropic.MessageParam["content"]
+			): Anthropic.ContentBlockParam[] =>
+				Array.isArray(content)
+					? content
+					: content
+						? [{ type: "text" as const, text: content }]
+						: []
 
 			// Merge consecutive same-role messages (Anthropic requirement)
 			if (
@@ -401,9 +390,17 @@ class AnthropicAdapter extends BaseConnectionAdapter {
 				messages[messages.length - 1].role === role
 			) {
 				const last = messages[messages.length - 1]
-				if (typeof last.content === "string") {
+				if (!blocks.length && typeof last.content === "string") {
 					last.content = last.content + "\n\n" + msg.content
+				} else {
+					last.content = [
+						...asBlocks(last.content),
+						...blocks,
+						...asBlocks(msg.content)
+					]
 				}
+			} else if (blocks.length) {
+				messages.push({ role, content: [...blocks, ...asBlocks(msg.content)] })
 			} else {
 				messages.push({ role, content: msg.content })
 			}
@@ -516,20 +513,15 @@ class AnthropicAdapter extends BaseConnectionAdapter {
 	 * carrying that value's sentence unchanged — which names the cap and cites
 	 * where the number came from, so "too many images" is never all a user gets.
 	 */
-	private async attachmentBlocks(
+	private async attachmentFiles(
+		compiledPrompt: CompiledPrompt,
 		requestWithoutFiles: unknown
-	): Promise<Anthropic.ContentBlockParam[]> {
-		if (!this.attachments.length) return []
-
-		const plan = await this.prepareAttachments(this.attachments, {
+	): Promise<PreparedAttachment[][] | null> {
+		if (!this.carriesAttachments) return null
+		return this.filesByMessage(compiledPrompt.messages ?? [], {
 			transport: "base64",
-			overheadBytes: Buffer.byteLength(
-				JSON.stringify(requestWithoutFiles)
-			)
+			overheadBytes: Buffer.byteLength(JSON.stringify(requestWithoutFiles))
 		})
-		if (!plan.ok) throw new Error(plan.reason)
-
-		return plan.files.map((file, index) => contentBlockFor(file, index))
 	}
 
 	async generateText(): Promise<TextGenResult> {
@@ -647,14 +639,17 @@ class AnthropicAdapter extends BaseConnectionAdapter {
 		}
 
 		// The files, if any were handed over. Measured against the request as it
-		// stands without them, then spliced into the turn they belong to — both
-		// paths below send `baseParams`, so streaming and non-streaming carry
-		// the same blocks by construction rather than by two edits agreeing.
-		const attachmentContent = await this.attachmentBlocks(textOnlyParams)
-		const baseParams = attachmentContent.length
+		// stands without them, then each placed on the turn it belongs to (a
+		// history line's own, the request-level ones on the last user turn) —
+		// both paths below send `baseParams`, so streaming and non-streaming
+		// carry the same blocks by construction rather than by two edits
+		// agreeing.
+		const files = await this.attachmentFiles(compiledPrompt, textOnlyParams)
+		const baseParams = files
 			? {
 					...textOnlyParams,
-					messages: withAttachmentBlocks(messages, attachmentContent)
+					messages: this.buildAnthropicMessages(compiledPrompt, files)
+						.messages
 				}
 			: textOnlyParams
 
@@ -689,7 +684,7 @@ class AnthropicAdapter extends BaseConnectionAdapter {
 			return {
 				completionResult: async (
 					contentCb: (chunk: string) => void,
-					thinkingCb?: (chunk: string) => void
+					reasoningCb?: (chunk: string) => void
 				) => {
 					try {
 						if (this.isAborting) return
@@ -752,7 +747,7 @@ class AnthropicAdapter extends BaseConnectionAdapter {
 								(event.content_block as any)?.type ===
 									"redacted_thinking"
 							) {
-								thinkingCb?.(
+								reasoningCb?.(
 									(thoughtSomething ? "\n" : "") +
 										REDACTED_THINKING_NOTICE
 								)
@@ -766,7 +761,7 @@ class AnthropicAdapter extends BaseConnectionAdapter {
 									delta.type === "thinking_delta" &&
 									delta.thinking
 								) {
-									thinkingCb?.(delta.thinking)
+									reasoningCb?.(delta.thinking)
 									thoughtSomething = true
 								} else if (
 									delta.type === "text_delta" &&
@@ -838,7 +833,7 @@ class AnthropicAdapter extends BaseConnectionAdapter {
 					completionResult: content,
 					compiledPrompt,
 					isAborted: this.isAborting,
-					thinkingContent: thinking || undefined,
+					reasoningContent: thinking || undefined,
 					toolCall,
 					// Recorded, never acted on: see `TextGenResult.tokensCached`.
 					...cacheUsageFrom((response as any).usage)

@@ -7,6 +7,10 @@ import type { Handler } from "$lib/shared/events"
 import { isAndroidWrapper } from "$lib/server/utils"
 import { isLocalEmbeddingSupported } from "$lib/server/embedding"
 import { assertSupportedLanguage } from "./language"
+import { refusable } from "./refusable"
+import { isLoreWriteMode } from "$lib/shared/lorebooks/loreWriteMode"
+import { emitToInterested } from "./utils/broadcastHelpers"
+import { socketWants } from "./interest"
 
 /**
  * The whole system-settings view, as one function, so every cascade that
@@ -348,6 +352,42 @@ export const systemSettingsUpdateDefaultLanguage: Handler<
 }
 
 /**
+ * 🚧 The instance's **lore write mode** (plan A22, ruled 2026-09-30) — what
+ * every user who has not chosen one of their own follows: Full, Review
+ * changes or Off. Those users store NULL, so moving this moves them and
+ * nobody who chose.
+ */
+export const systemSettingsUpdateLoreWriteModeDefault: Handler<
+	Sockets.SystemSettings.UpdateLoreWriteModeDefault.Params,
+	Sockets.SystemSettings.UpdateLoreWriteModeDefault.Response
+> = refusable(
+	"systemSettings:updateLoreWriteModeDefault",
+	async (socket, params, emitToUser) => {
+		if (!socket.user?.isAdmin)
+			throw new Error("Only an administrator can change the pub's lorebook writes from sessions.")
+		const mode = params?.mode
+		if (!isLoreWriteMode(mode))
+			throw new Error("Lorebook writes from sessions are Full, Review changes or Off.")
+		await db
+			.update(schema.systemSettings)
+			.set({ loreWriteModeDefault: mode })
+			.where(eq(schema.systemSettings.id, 1))
+		const res: Sockets.SystemSettings.UpdateLoreWriteModeDefault.Response = { success: true, mode }
+		emitToUser("systemSettings:updateLoreWriteModeDefault", res)
+		// Everyone who follows the instance moves with it, so every open tab
+		// showing settings hears it — any user's, not only this admin's: a
+		// review screen reads it to say, before any work, that its save would
+		// be refused. Built only when some tab is listening.
+		const io = socket.io
+		const open = io?.sockets?.sockets
+		if (open && [...open.values()].some((s: any) => socketWants(s, "systemSettings:get")))
+			emitToInterested(io, "systemSettings:get", await buildSystemSettingsGet())
+		return res
+	},
+	"The pub's lorebook writes from sessions could not be changed."
+)
+
+/**
  * Whether the server may call an outside service to fill in UI strings it has
  * no translation for, and which service (R5).
  *
@@ -508,6 +548,7 @@ export function registerSystemSettingsHandlers(
 	register(socket, systemSettingsUpdateAccountsEnabled, emitToUser)
 	register(socket, systemSettingsUpdateRequireTwoFactor, emitToUser)
 	register(socket, systemSettingsUpdateDefaultLanguage, emitToUser)
+	register(socket, systemSettingsUpdateLoreWriteModeDefault, emitToUser)
 	register(socket, systemSettingsUpdateAutoTranslate, emitToUser)
 	register(socket, systemSettingsUpdateBackupSettings, emitToUser)
 }

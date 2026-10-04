@@ -57,6 +57,7 @@ import {
 	capabilityDefaults,
 	setCapabilityDefault
 } from "$lib/server/connections/capabilityDefaults"
+import { withStarConsequences } from "$lib/server/connections/starConsequences"
 import {
 	connectionModelById,
 	mergeEndpointModel
@@ -397,21 +398,35 @@ export const connectionDefaultsSet: Handler<
 		// One half, leaving the other alone. `null` clears — and clearing the
 		// sampling half means "let the backend use its own defaults", which is a
 		// legitimate answer and must not disturb the connection beside it.
-		await setCapabilityDefault(
+		//
+		// ⚠ Inside `withStarConsequences`, like every other door that moves a
+		// star: this screen registers the embedding and entity stars too, and
+		// moving one without its consequence left the old model loaded, the
+		// queue running under it and the old vectors in place.
+		await withStarConsequences(
 			db,
-			params.capability,
-			params.half === "connection"
-				? // Both halves of the pair, together, both required.
-					// `setCapabilityDefault` treats an omitted
-					// `connectionModelId` beside a stated `connectionId` as
-					// NULL, but this handler refuses that shape above — by the
-					// time anything is written, both halves are named.
-					{
-						connectionId: params.id,
-						connectionModelId:
-							params.id == null ? null : (params.modelId ?? null)
-					}
-				: { samplingConfigId: params.id }
+			() =>
+				setCapabilityDefault(
+					db,
+					params.capability,
+					params.half === "connection"
+						? // Both halves of the pair, together, both required.
+							// `setCapabilityDefault` treats an omitted
+							// `connectionModelId` beside a stated `connectionId`
+							// as NULL, but this handler refuses that shape above
+							// — by the time anything is written, both halves are
+							// named.
+							{
+								connectionId: params.id,
+								connectionModelId:
+									params.id == null
+										? null
+										: (params.modelId ?? null)
+							}
+						: { samplingConfigId: params.id }
+				),
+			// The sampling half moves no model.
+			params.half === "connection" ? [params.capability] : []
 		)
 
 		const res: Sockets.ConnectionDefaults.Set.Response = {

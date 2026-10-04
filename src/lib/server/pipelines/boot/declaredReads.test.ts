@@ -200,9 +200,14 @@ describe("the §5f decisions are what the code says", () => {
 		}
 	}
 
-	it("session-history: `budget` culled, `priority` allow-listed and still declared", () => {
+	it("session-history: `budget` declared again WITH a reader (history window, 2026-10-03), `priority` still declared", () => {
+		// Culled 2026-09-16 because nothing read it; back because the read is
+		// now sized by the window, and the handler says it reads it.
 		const d = declared("core:query/session-history@1")
-		expect(d.ports).not.toContain("budget")
+		expect(d.ports).toContain("budget")
+		expect(
+			((coreBindings()["core:query/session-history@1"] as any).requires?.ports ?? [])
+		).toContain("budget")
 		expect(d.params).toContain("priority")
 	})
 
@@ -280,7 +285,9 @@ describe("the §5f decisions are what the code says", () => {
 		expect(declared("core:task/rank-semantic@1").params).not.toContain(
 			"recentWindow"
 		)
+		// …and, since 2026-09-29 (C3), the semantic mechanism's switch.
 		expect(declared("core:task/query-windows@1").params).toEqual([
+			"searchByMeaning",
 			"currentWindow",
 			"recentWindow"
 		])
@@ -322,18 +329,18 @@ describe("the check fails when a declaration goes wrong", () => {
 
 	it("names a read the definition does not supply", () => {
 		const real = coreBindings()
-		// `budget` WAS this node's in-port; the typed helper refuses it at
-		// compile time now, so the untyped SDK primitive is the only way to
-		// forge the declaration — which is what a stale plugin would ship.
+		// `window` is no port of this node; the typed helper refuses it at
+		// compile time, so the untyped SDK primitive is the only way to forge
+		// the declaration — which is what a stale plugin would ship.
 		const forged = Object.assign(async () => ok({ main: [] }), {
-			requires: { ports: ["scope", "budget"], params: ["limit"] }
+			requires: { ports: ["scope", "window"], params: ["limit"] }
 		})
 		const r = checkDeclaredReads({
 			...real,
 			"core:query/session-history@1": forged
 		})
 		expect(r.undeclared).toHaveLength(1)
-		expect(r.undeclared[0]).toMatch(/reads 'budget' off its input/)
+		expect(r.undeclared[0]).toMatch(/reads 'window' off its input/)
 	})
 
 	it("names a handler that declares nothing", () => {

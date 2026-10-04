@@ -26,6 +26,7 @@
 
 import { and, eq, gt, inArray, lt, sql, type SQL } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
+import { STATEMENT_BYTES } from "$lib/server/attic/context"
 import {
 	projectLegacy,
 	type LegacyMessageRow,
@@ -66,8 +67,17 @@ function trimCommittedContent<
 >(values: T): T {
 	if (values.isGenerating === true) return values
 	if (typeof values.content !== "string") return values
-	const content = values.content.trim()
+	const content = committedContent(values.content)
 	return content === values.content ? values : { ...values, content }
+}
+
+/**
+ * The body a committed write of `text` stores — the rule above, for a caller
+ * that has to know what will land before it writes (the edit built-in keeps a
+ * message's vector when the stored words do not move).
+ */
+export function committedContent(text: string): string {
+	return text.trim()
 }
 
 /** Insert one legacy-shaped message; mirrors to the new model. */
@@ -130,7 +140,13 @@ export async function updateLegacyWhere(
 	return rows
 }
 
-/** Delete by predicate, from both worlds. */
+/**
+ * Delete by predicate, from both worlds.
+ *
+ * A scene span that names a deleted message keeps its id: the id is the
+ * scene's place in play (`inPlayOrder`), and the span's readers count only
+ * the messages that exist (`deriveSceneMentions`).
+ */
 export async function deleteLegacyWhere(
 	db: Db,
 	where: SQL | undefined
@@ -149,7 +165,7 @@ export async function deleteLegacyWhere(
 	return rows
 }
 
-/** Delete one message from both worlds. */
+/** Delete one message from both worlds; scene spans keep its id (above). */
 export async function deleteLegacy(db: Db, id: number): Promise<void> {
 	await db
 		.delete(schema.sessionMessages)
@@ -462,29 +478,51 @@ export async function hasNativeSteps(
 export async function migrateMessages(
 	db: Db
 ): Promise<{ migrated: number }> {
-	const legacyIds: Array<{ id: number }> = await db
-		.select({ id: schema.sessionMessages.id })
-		.from(schema.sessionMessages)
-	const haveIds: Array<{ id: number }> = await db
-		.select({ id: schema.messages.id })
-		.from(schema.messages)
-	const have = new Set(haveIds.map((r) => r.id))
-	const missing = legacyIds.map((r) => r.id).filter((id) => !have.has(id))
-	if (!missing.length) return { migrated: 0 }
-
-	// Chunked so a large history neither builds one giant IN() nor holds a
-	// transaction open across the whole table.
+	// Keyset pages of the unmirrored ids with each row's size, then reads of
+	// at most `CHUNK` rows and `STATEMENT_BYTES` each: a legacy row carries its
+	// generation's `debug_meta`, and a read past ~16 MB traps PGlite for good
+	// (`attic/context.ts`). Nothing here is ever one giant IN() or one
+	// transaction across the whole table.
 	const CHUNK = 200
-	for (let i = 0; i < missing.length; i += CHUNK) {
-		const rows: LegacyMessageRow[] = await db
-			.select()
+	const SIZING_PAGE = 5_000
+	const unmirrored = sql`NOT EXISTS (SELECT 1 FROM ${schema.messages} WHERE ${schema.messages.id} = ${schema.sessionMessages.id})`
+	let after = 0
+	let migrated = 0
+	for (;;) {
+		const sized: Array<{ id: number; bytes: number }> = await db
+			.select({
+				id: schema.sessionMessages.id,
+				bytes: sql<number>`octet_length(${schema.sessionMessages}::text)::int`
+			})
 			.from(schema.sessionMessages)
-			.where(
-				inArray(schema.sessionMessages.id, missing.slice(i, i + CHUNK))
-			)
-		for (const row of rows) await mirrorRow(db, row)
+			.where(and(gt(schema.sessionMessages.id, after), unmirrored))
+			.orderBy(schema.sessionMessages.id)
+			.limit(SIZING_PAGE)
+		if (!sized.length) break
+		after = sized[sized.length - 1].id
+		let ids: number[] = []
+		let bytes = 0
+		const read = async () => {
+			const rows: LegacyMessageRow[] = await db
+				.select()
+				.from(schema.sessionMessages)
+				.where(inArray(schema.sessionMessages.id, ids))
+				.orderBy(schema.sessionMessages.id)
+			for (const row of rows) await mirrorRow(db, row)
+			migrated += rows.length
+			ids = []
+			bytes = 0
+		}
+		for (const r of sized) {
+			const b = Number(r.bytes)
+			if (ids.length && (ids.length >= CHUNK || bytes + b > STATEMENT_BYTES))
+				await read()
+			ids.push(r.id)
+			bytes += b
+		}
+		if (ids.length) await read()
 	}
-	return { migrated: missing.length }
+	return { migrated }
 }
 
 /* ── native reads (phase 2 grows the native writes) ─────────────────────── */

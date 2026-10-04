@@ -36,6 +36,7 @@ import {
 	type ScriptPointDecl
 } from "@serene-pub/sdk"
 import { type Decl } from "$lib/server/pipelines/config/panel/types"
+import { isUnreadSlot } from "$lib/server/pipelines/boot/unreadAllowList"
 
 const KIND_TO_MATRIX_SLOT: Record<string, string> = {
 	connection: "connection",
@@ -444,31 +445,6 @@ function disambiguate(decls: Decl[]): Decl[] {
 	)
 }
 
-/**
- * Step headings, disambiguated by occurrence: a pipeline with two
- * `generate-text` nodes shows "Generate text" and "Generate text 2". The
- * counter is order-of-appearance, which is node position — stable for a
- * published version, because the rows are.
- */
-export function stepLabels(
-	nodeKeys: string[],
-	typeLabelOf: Map<string, string>
-): Map<string, string> {
-	const totals = new Map<string, number>()
-	for (const k of nodeKeys) {
-		const t = typeLabelOf.get(k) ?? k
-		totals.set(t, (totals.get(t) ?? 0) + 1)
-	}
-	const seen = new Map<string, number>()
-	const out = new Map<string, string>()
-	for (const k of nodeKeys) {
-		const t = typeLabelOf.get(k) ?? k
-		const n = (seen.get(t) ?? 0) + 1
-		seen.set(t, n)
-		out.set(k, (totals.get(t) ?? 0) > 1 && n > 1 ? `${t} ${n}` : t)
-	}
-	return out
-}
 
 export interface Published {
 	specId: number
@@ -733,6 +709,16 @@ export async function declarations(
 			i18nText(row.i18n?.name) ?? humanizeTypeId(node.definitionId)
 		const slots = (row.slots ?? {}) as Record<string, SlotDecl>
 		for (const [slotName, decl] of Object.entries(slots)) {
+			// A slot no handler reads is not a choice (`isUnreadSlot`): the run
+			// drops a value stored there and resolves the instance default, so
+			// a picker for it would change nothing — today the embed steps'
+			// connection, which the host embeds through the star whatever it
+			// says (review 2026-09-29). Off this list, a stored row at the
+			// address is culled by `reconcileConfigs` as orphaned.
+			if (
+				isUnreadSlot(`${node.definitionId}@${node.definitionVersion}`, slotName)
+			)
+				continue
 			// A slot the spec wired as a *reference to another node's* is not
 			// this node's to configure: the owner's option is the one that
 			// exists, and offering a second box for the same authored text is
@@ -937,6 +923,17 @@ export async function declarations(
 		return positionByNodeKey.get(d.nodeKey) ?? Number.POSITIVE_INFINITY
 	}
 	out.sort((a, b) => spineKey(a) - spineKey(b))
+
+	// Each step's heading: the step label the spec gave the node as placed
+	// (`expose.label`), else what its definition is called. Never a counter
+	// (owner rulings 2026-09-30) — two steps the definition name cannot tell
+	// apart are told apart by a label on the spec, or by the group they sit in.
+	const headingOf = new Map<string, string>()
+	for (const node of nodes as any[]) {
+		const label = i18nText(node.expose?.label)
+		if (label) headingOf.set(node.nodeKey, label)
+	}
+	for (const d of out) d.stepHeading = headingOf.get(d.nodeKey) ?? d.typeLabel
 
 	return disambiguate(out)
 }

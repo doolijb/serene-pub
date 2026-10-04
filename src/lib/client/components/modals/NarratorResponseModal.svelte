@@ -1,7 +1,9 @@
 <script lang="ts">
+	import { untrack } from "svelte"
 	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
 	import * as Icons from "@lucide/svelte"
 	import Select from "$lib/client/components/inputs/Select.svelte"
+	import type { NarratorRequest } from "$lib/client/components/sessionPage/collects"
 
 	/**
 	 * A narrator response's first step (ruling 2026-09-07): **who speaks**.
@@ -27,14 +29,27 @@
 	interface Props {
 		open: boolean
 		onOpenChange: (e: OpenChangeDetails) => void
-		onFire: (request: {
-			instructions: string
-			speaker?: { characterId: number | null; name: string | null }
-		}) => void
+		onFire: (request: NarratorRequest) => void
 		onCancel: () => void
 		narratorName?: string
 		/** This person's characters, minus the cast — the dropdown half. */
 		sideCharacters?: SideCharacterOption[]
+		/**
+		 * What Narrate says it collects (genre uplift C2, 2026-09-29): its
+		 * listing's `collects.text`, so the world narrator's field is worded
+		 * as the palette hint and the action legend word it. Absent, the
+		 * field keeps its general wording. Not `direction`, the Lair's
+		 * standing-note slot (NOMENCLATURE §23).
+		 */
+		collectsText?: { label: string; placeholder?: string; ifEmpty?: string }
+		/**
+		 * The press this modal last fired, when it did not land — refused
+		 * before its run, stopped, or failed (C2 follow-up, 2026-09-29). The
+		 * modal opens with it rather than empty, as a refused `/narrate
+		 * <text>` keeps its draft. Null or absent: it opens empty. Not
+		 * _refused_ (R1): on the session page that is refused before firing.
+		 */
+		unlandedPress?: NarratorRequest | null
 	}
 
 	let {
@@ -43,7 +58,9 @@
 		onFire,
 		onCancel,
 		narratorName = "Narrator",
-		sideCharacters = []
+		sideCharacters = [],
+		collectsText,
+		unlandedPress = null
 	}: Props = $props()
 
 	let instructions = $state("")
@@ -52,16 +69,34 @@
 	let pickedId: string = $state("")
 	let freeName = $state("")
 
+	/** The world narrator's wording when Narrate declares one; a side character's is general. */
+	const field = $derived(
+		mode === "world" && collectsText
+			? collectsText
+			: {
+					label: "Extra instructions (optional)",
+					placeholder:
+						"e.g. Focus on the weather turning stormy, or have the shopkeeper notice the party...",
+					ifEmpty: undefined
+				}
+	)
+
 	$effect(() => {
 		// Cleared each time the modal is (re)opened, so leftover text or a
 		// speaker from a previous turn doesn't silently carry over — the same
 		// reasoning the instructions field has always had, extended to the
-		// speaker because a stale one is far more surprising.
+		// speaker because a stale one is far more surprising. A press that
+		// did not land is not a previous turn: it comes back as it was sent.
 		if (open) {
-			instructions = ""
-			mode = "world"
-			pickedId = ""
-			freeName = ""
+			// Read on opening only: an unlanded press answered while the
+			// modal is open must not overwrite what is being typed.
+			const kept = untrack(() => unlandedPress)
+			const speaker = kept?.speaker
+			instructions = kept?.instructions ?? ""
+			mode = speaker ? "character" : "world"
+			pickedId =
+				speaker?.characterId != null ? String(speaker.characterId) : ""
+			freeName = speaker?.name ?? ""
 		}
 	})
 
@@ -191,15 +226,26 @@
 						class="text-sm font-semibold"
 						for="narrator-instructions"
 					>
-						Extra instructions (optional)
+						{field.label}
 					</label>
 					<textarea
 						id="narrator-instructions"
 						bind:value={instructions}
 						class="textarea w-full"
 						rows="4"
-						placeholder="e.g. Focus on the weather turning stormy, or have the shopkeeper notice the party..."
+						placeholder={field.placeholder}
+						aria-describedby={field.ifEmpty
+							? "narrator-instructions-if-empty"
+							: undefined}
 					></textarea>
+					{#if field.ifEmpty}
+						<p
+							id="narrator-instructions-if-empty"
+							class="text-surface-600-400 text-xs"
+						>
+							Left empty: {field.ifEmpty}
+						</p>
+					{/if}
 				</article>
 
 				<footer class="flex justify-end gap-4">

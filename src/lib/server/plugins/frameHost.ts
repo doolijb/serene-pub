@@ -9,20 +9,16 @@
  *
  *     "surfaces": {
  *       "session-view": { "entry": "ui/session.html", "title": "Crawl view" },
- *       "page":         { "entry": "ui/index.html",   "title": "Dashboard" },
- *       "panels": [ { "id": "map", "entry": "ui/map.html", "title": "Map" } ]
+ *       "page":         { "entry": "ui/index.html",   "title": "Dashboard" }
  *     }
  *
  * Read tolerantly like `templateEngines`/`nodeDefinitions` — the stored manifest is the one
  * source of truth (F6), and a malformed declaration is a missing surface, not
  * a crash.
  *
- * ⏳ `surfaces.panels` is the deprecated spelling of a widget declaration. It
- * is read through the SDK's `panelToWidgetDecl`, so what leaves this module is
- * a `WidgetDecl` and every reader past it sees the one declaration a genre's
- * shape carries — under the **namespaced** id `<pluginId>:<panelId>`
- * (`pluginWidgetId`), because a package's own id is the one thing here nobody
- * else controls. Core's and a genre's widgets keep plain ids.
+ * A frame placed in a session is a WIDGET: a `manifest.widgets` entry whose
+ * `surface` is a frame, seated by `sessions:view` like any package widget,
+ * under the **namespaced** id `<pluginId>:<widgetId>` (`pluginWidgetId`).
  *
  * ## The CSP the frame lives under
  *
@@ -35,11 +31,7 @@
 
 import { eq, and, ne, notLike, type SQL } from "drizzle-orm"
 import { AUTHORED_OWNER_LABEL } from "$lib/shared/widgets/authoredOwner"
-import {
-	panelToWidgetDecl,
-	pluginWidgetId,
-	type WidgetDecl
-} from "@serene-pub/sdk"
+import { pluginWidgetId, type WidgetDecl } from "@serene-pub/sdk"
 import * as schema from "$lib/server/db/schema"
 import {
 	declaredPermissions,
@@ -125,36 +117,15 @@ export interface SurfaceDecl {
 export interface PluginSurfaces {
 	sessionView?: SurfaceDecl
 	page?: SurfaceDecl
-	/**
-	 * The manifest's panels, read as the ONE widget declaration
-	 * (`panelToWidgetDecl`). A panel IS a widget — same channels, same settings
-	 * schema — so this projection hands every reader the shape the host seats
-	 * rather than a second, thinner one they would each have to translate.
-	 *
-	 * ⚠ The `id` is the **namespaced** one (`<pluginId>:<panelId>`, the SDK's
-	 * `pluginWidgetId`), not the bare id the package declared. This is the
-	 * boundary the namespacing happens at, so every reader past it — the
-	 * session view, a saved layout row, `widget_settings`, `widget_styles`, a
-	 * `surface:open` intent — names the same string, and no reader has to know
-	 * that a plugin's widget ids are qualified and core's are not. A reader
-	 * that needs the package's own spelling back uses `parsePluginWidgetId`.
-	 */
-	panels: WidgetDecl[]
 }
 
-/**
- * Read a stored manifest's `surfaces` block.
- *
- * `pluginId` is required because a panel's projection carries it: a
- * `WidgetDecl`'s frame surface names the package whose document it mounts, and
- * a decl without that is not resolvable to a URL.
- */
-export function surfacesOf(manifest: unknown, pluginId: string): PluginSurfaces {
+/** Read a stored manifest's `surfaces` block: its session view and its page. */
+export function surfacesOf(manifest: unknown): PluginSurfaces {
 	const raw =
 		manifest && typeof manifest === "object"
 			? (manifest as any).surfaces
 			: undefined
-	const out: PluginSurfaces = { panels: [] }
+	const out: PluginSurfaces = {}
 	if (!raw || typeof raw !== "object") return out
 	const decl = (v: any): SurfaceDecl | undefined =>
 		v && typeof v.entry === "string" && isSafeUiPath(v.entry)
@@ -167,35 +138,41 @@ export function surfacesOf(manifest: unknown, pluginId: string): PluginSurfaces 
 	if (sv) out.sessionView = sv
 	const pg = decl((raw as any).page)
 	if (pg) out.page = pg
-	if (Array.isArray((raw as any).panels))
-		for (const p of (raw as any).panels) {
-			const d = decl(p)
-			if (!d || typeof p.id !== "string" || !/^[a-z0-9_-]+$/.test(p.id))
-				continue
-			// Read tolerantly like everything else here: `channels` and
-			// `settings` are taken only in the shape they are declared in, and
-			// a malformed one is an absent field rather than a dropped panel.
-			const widget = panelToWidgetDecl(pluginId, {
-				...d,
-				id: p.id,
-				...(Array.isArray(p.channels) &&
-				p.channels.every((c: unknown) => typeof c === "string")
-					? { channels: p.channels }
-					: {}),
-				...(p.settings &&
-				typeof p.settings === "object" &&
-				!Array.isArray(p.settings)
-					? { settings: p.settings }
-					: {})
-			})
-			// The one place a plugin's panel id becomes a widget id. The SDK's
-			// projection is pure and hands back the package's own spelling; the
-			// package chose it in private, so two packages declaring `map`
-			// declare one id — and a layout row outlives the install that would
-			// have told them apart. Qualified here, once, at the boundary where
-			// the owner is still in hand.
-			out.panels.push({ ...widget, id: pluginWidgetId(pluginId, p.id) })
-		}
+	return out
+}
+
+/**
+ * Every widget ONE plugin's stored manifest declares, under the namespaced id
+ * it is seated by (`pluginWidgetId`) — the one definition of "a plugin's
+ * widgets" that every id allow-list and the layout validator read.
+ *
+ * One declaration: `manifest.widgets`, component widgets (the Battleship
+ * board) and frame widgets alike.
+ *
+ * ⚠ The declaration, not the seating: a widget whose module is unbuilt, or
+ * that is built for another host contract, is still listed — its id is real
+ * and a row made for it must survive the rebuild — where `sessions:view`
+ * offers it only once it can mount. `maxInstances` is carried only when it
+ * is a number, which is the only cap the validator honours.
+ */
+export function pluginWidgetDecls(
+	manifest: unknown,
+	pluginId: string
+): Array<Pick<WidgetDecl, "id" | "maxInstances">> {
+	const out: Array<Pick<WidgetDecl, "id" | "maxInstances">> = []
+	const widgets =
+		manifest && typeof manifest === "object"
+			? (manifest as { widgets?: unknown }).widgets
+			: undefined
+	if (Array.isArray(widgets))
+		for (const w of widgets as Array<Partial<WidgetDecl> | null>)
+			if (w && typeof w.id === "string")
+				out.push({
+					id: pluginWidgetId(pluginId, w.id),
+					...(typeof w.maxInstances === "number"
+						? { maxInstances: w.maxInstances }
+						: {})
+				})
 	return out
 }
 
@@ -205,8 +182,8 @@ export function surfacesOf(manifest: unknown, pluginId: string): PluginSurfaces 
  * The one answer to "is this namespaced widget id real?", for the writes that
  * have to refuse an id no widget would ever ask for — a widget style, and
  * anything else keyed on `widget_slug`. Read from the stored manifests through
- * `surfacesOf`, so the set is exactly what `sessions:view` puts on the wire and
- * a validator can never accept an id the session view would not seat.
+ * `pluginWidgetDecls` — component and frame widgets alike — so a validator
+ * never refuses an id the session view seats.
  *
  * A DISABLED plugin's widgets are absent, which is the same answer the session
  * view gives: its rows are not deleted (a re-enable must bring the arrangement
@@ -223,8 +200,7 @@ export async function enabledPluginWidgetIds(db: Db): Promise<Set<string>> {
 		.where(and(eq(schema.plugins.enabled, true), notCoreRow()))
 	const ids = new Set<string>()
 	for (const r of rows)
-		for (const w of surfacesOf(r.manifest, r.pluginId).panels)
-			ids.add(w.id)
+		for (const w of pluginWidgetDecls(r.manifest, r.pluginId)) ids.add(w.id)
 	return ids
 }
 

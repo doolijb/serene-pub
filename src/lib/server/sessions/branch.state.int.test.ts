@@ -245,13 +245,13 @@ describe("branching carries the state", () => {
 			db,
 			{ kind: "session", id: w.session.id },
 			[sheetId],
-			w.session.id
+			{ userId: w.user.id, sessionId: w.session.id }
 		)
 		await setOwnerSheets(
 			db,
 			{ kind: "session_cast", id: w.verity.id },
 			[sheetId],
-			w.session.id
+			{ userId: w.user.id, sessionId: w.session.id }
 		)
 
 		const messages = await db

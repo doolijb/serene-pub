@@ -83,19 +83,19 @@ async function reply(sections: unknown, text = "The goblin bolts.") {
 		id: number
 	}
 	await h.commit!(
-		{ target: made.id, text, thinking: "It is cornered.", sections },
+		{ target: made.id, text, reasoning: "It is cornered.", sections },
 		save as any
 	)
 	return made.id
 }
 
 describe("an outlet write with sections stores them", () => {
-	it("update-message finishing a reply: Plan, thinking, then the body", async () => {
+	it("update-message finishing a reply: Plan, reasoning, then the body", async () => {
 		const id = await reply([plan])
 		const parts = await partsOf(id)
 		expect(parts.map((p) => p.type)).toEqual([
 			"core:section",
-			"core:thinking",
+			"core:reasoning",
 			"core:markdown"
 		])
 		expect(parts[0]!.data).toEqual({
@@ -220,7 +220,7 @@ describe("the row projection carries them to widgets", () => {
 })
 
 describe("the prompt transcript excludes them", () => {
-	it("process-messages reads the body only — no plan, no thinking", async () => {
+	it("process-messages reads the body only — no plan, no reasoning", async () => {
 		const id = await reply([plan])
 		const { processMessages } = await import(
 			"$lib/server/pipelines/prompt/messages"

@@ -1,9 +1,0 @@
-To set up the application icon:
-
-1. Convert favicon.png to favicon.ico using an online converter
-2. Use Resource Hacker (http://www.angusj.com/resourcehacker/) to:
-   - Open "Serene Pub Launcher.bat"
-   - Add the favicon.ico as the application icon
-   - Save as "Serene Pub.exe"
-
-Or use a batch-to-exe converter that supports custom icons.

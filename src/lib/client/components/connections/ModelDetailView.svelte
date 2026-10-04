@@ -61,6 +61,15 @@
 		onOpenManager: (manager: ModelManager) => void
 		/** The model row is gone (removed elsewhere) — leave the view. */
 		onRemoved: () => void
+		/**
+		 * Asked before the identifier is saved; false keeps the old one.
+		 * Renaming the starred embedding model's identifier makes it another
+		 * model, and the owner asks first when that re-embeds the index.
+		 */
+		confirmIdentifier?: (
+			model: ConnectionModelRow,
+			next: string
+		) => Promise<boolean>
 	}
 	let {
 		connectionId,
@@ -72,7 +81,8 @@
 		onSelectDefault,
 		onRefresh,
 		onOpenManager,
-		onRemoved
+		onRemoved,
+		confirmIdentifier
 	}: Props = $props()
 
 	const models = useConnectionModels(() => connectionId)
@@ -98,6 +108,17 @@
 	})
 
 	const satisfiable = $derived(row?.satisfiableCapabilities ?? [])
+
+	/**
+	 * Files on this endpoint that look like vision projectors, offered as
+	 * suggestions — the managed listing shows an mmproj GGUF as a model row
+	 * like any other, and its name is the only hint there is.
+	 */
+	const projectorFiles = $derived(
+		models.rows
+			.map((m) => m.model)
+			.filter((name) => /mmproj|projector/i.test(name))
+	)
 
 	function isCurrent(capability: string): boolean {
 		if (!row) return false
@@ -297,8 +318,15 @@
 						title={canRemove
 							? "What the adapter sends"
 							: "The identifier comes from the host and cannot be edited here"}
-						onchange={(e) =>
-							models.patch(row, { model: e.currentTarget.value })}
+						onchange={async (e) => {
+							const input = e.currentTarget
+							const next = input.value
+							if (confirmIdentifier && !(await confirmIdentifier(row, next))) {
+								input.value = row.model
+								return
+							}
+							models.patch(row, { model: next })
+						}}
 					/>
 					<p class="text-surface-600-400 text-xs">
 						What the service knows it by — the text this connection
@@ -358,6 +386,39 @@
 						models.patch(row, { tokenCounter: v || null })}
 				/>
 
+				{#if row.visionProjector !== undefined && row.modality !== "image-gen"}
+					<!-- The managed KoboldCPP only: the server sends the field
+					     for its rows and no others. -->
+					<div class="flex flex-col gap-1">
+						<label class="text-xs font-semibold" for="model-mmproj">
+							Vision projector
+						</label>
+						<input
+							id="model-mmproj"
+							class="input text-sm"
+							list="model-mmproj-files"
+							placeholder="None"
+							spellcheck="false"
+							autocomplete="off"
+							value={row.visionProjector ?? ""}
+							disabled={models.busy}
+							onchange={(e) =>
+								models.patch(row, {
+									visionProjector: e.currentTarget.value.trim() || null
+								})}
+						/>
+						<datalist id="model-mmproj-files">
+							{#each projectorFiles as file (file)}
+								<option value={file}></option>
+							{/each}
+						</datalist>
+						<p class="text-surface-600-400 text-xs">
+							The model's mmproj file, in the models folder. Set one to
+							let this model read images; it turns Vision on for it.
+						</p>
+					</div>
+				{/if}
+
 				<Switch
 					name="model-enabled"
 					checked={row.enabled}
@@ -379,7 +440,7 @@
 			</div>
 
 			<div class="flex flex-col gap-1.5">
-				<span class="text-xs font-semibold">Instance defaults</span>
+				<span class="text-xs font-semibold">Pub defaults</span>
 				<p class="text-surface-600-400 text-xs">
 					Which system defaults point at this model. "All" writes
 					every transform it can serve.
@@ -392,7 +453,7 @@
 							? "The host no longer lists this model — it cannot be a default until it comes back"
 							: !row.enabled
 								? "Switch the model on first — the star refuses it while it is off"
-								: `Choose which instance defaults point at ${row.name}`}
+								: `Choose which pub defaults point at ${row.name}`}
 					>
 						<Icons.Crown size={14} aria-hidden="true" />
 						Set as default…

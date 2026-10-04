@@ -26,6 +26,7 @@ import os from "os"
 import path from "path"
 import { eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
+import { applyAtReview } from "./fixtures/graphReview"
 import type { TestDb } from "$lib/server/utils/testDb"
 
 let testDb: TestDb
@@ -126,14 +127,14 @@ describe("narrativeGraphApplyProposalHandler — rebuild re-inserts relationship
 
 		await narrativeGraphApplyProposalHandler.handler(
 			fakeSocket(user.id),
-			{
+			applyAtReview(user.id, {
 				lorebookId: lorebook.id,
 				proposal: {
 					nodes: [],
 					relationships: [rel(`existing_${a.id}`, `existing_${b.id}`)]
 				},
 				mode: "replace"
-			} as any,
+			} as any),
 			noopEmit
 		)
 
@@ -169,7 +170,7 @@ describe("narrativeGraphApplyProposalHandler — rebuild re-inserts relationship
 		await expect(
 			narrativeGraphApplyProposalHandler.handler(
 				fakeSocket(user.id),
-				{
+				applyAtReview(user.id, {
 					lorebookId: lorebook.id,
 					proposal: {
 						nodes: [],
@@ -178,10 +179,10 @@ describe("narrativeGraphApplyProposalHandler — rebuild re-inserts relationship
 						]
 					},
 					mode: "replace"
-				} as any,
+				} as any),
 				noopEmit
 			)
-		).rejects.toThrow(/no longer exist/)
+		).rejects.toThrow(/was deleted while it was being reviewed/)
 
 		// The whole point of moving the DELETE inside the transaction: a
 		// failed rebuild must not leave the graph emptied.
@@ -212,17 +213,17 @@ describe("narrativeGraphApplyProposalHandler — rebuild re-inserts relationship
 		await expect(
 			narrativeGraphApplyProposalHandler.handler(
 				fakeSocket(user.id),
-				{
+				applyAtReview(user.id, {
 					lorebookId: lorebook.id,
 					proposal: {
 						nodes: [],
 						relationships: [rel("node_7", `existing_${b.id}`)]
 					},
 					mode: "replace"
-				} as any,
+				} as any),
 				noopEmit
 			)
-		).rejects.toThrow(/unknown node/)
+		).rejects.toThrow(/names a character that is not in it/)
 
 		expect(await relsFor(lorebook.id)).toHaveLength(1)
 	})
@@ -245,7 +246,7 @@ describe("narrativeGraphApplyProposalHandler — rebuild re-inserts relationship
 		await expect(
 			narrativeGraphApplyProposalHandler.handler(
 				fakeSocket(attacker.id),
-				{
+				applyAtReview(attacker.id, {
 					lorebookId: attackerSide.lorebook.id,
 					proposal: {
 						nodes: [],
@@ -257,10 +258,10 @@ describe("narrativeGraphApplyProposalHandler — rebuild re-inserts relationship
 						]
 					},
 					mode: "replace"
-				} as any,
+				} as any),
 				noopEmit
 			)
-		).rejects.toThrow(/Access denied/)
+		).rejects.toThrow(/character from another book/)
 
 		expect(await relsFor(victimSide.lorebook.id)).toHaveLength(0)
 		expect(await relsFor(attackerSide.lorebook.id)).toHaveLength(0)
@@ -278,7 +279,7 @@ describe("narrativeGraphApplyProposalHandler — rebuild re-inserts relationship
 
 		await narrativeGraphApplyProposalHandler.handler(
 			fakeSocket(user.id),
-			{
+			applyAtReview(user.id, {
 				lorebookId: lorebook.id,
 				proposal: {
 					nodes: [],
@@ -289,7 +290,7 @@ describe("narrativeGraphApplyProposalHandler — rebuild re-inserts relationship
 				// passed this happily and attached the relationship to the
 				// wrong character. The field is no longer read at all.
 				seedTempIdMap: { [`existing_${a.id}`]: b.id }
-			} as any,
+			} as any),
 			noopEmit
 		)
 
@@ -319,20 +320,63 @@ describe("narrativeGraphApplyProposalHandler — rebuild re-inserts relationship
 
 		await narrativeGraphApplyProposalHandler.handler(
 			fakeSocket(user.id),
-			{
+			applyAtReview(user.id, {
 				lorebookId: lorebook.id,
 				proposal: {
 					nodes: [],
 					relationships: [rel(`existing_${a.id}`, `existing_${b.id}`)]
 				},
 				mode: "extend"
-			} as any,
+			} as any),
 			noopEmit
 		)
 
 		const rows = await relsFor(lorebook.id)
 		expect(rows).toHaveLength(1)
 		expect(rows[0].description).toBe("forged in the market")
+	})
+
+	test("extend mode re-states a link whose description is empty", async () => {
+		// A re-statement that brings no description of its own must still
+		// apply over a link that has none.
+		const { narrativeGraphApplyProposalHandler } = await import(
+			"./narrativeGraph"
+		)
+		const user = await makeUser("rebuild-extend-null-description")
+		const { lorebook, a, b } = await makeLorebookWithTwoBindings(
+			user.id,
+			"Extend, no description"
+		)
+		const [tie] = await testDb
+			.insert(schema.narrativeRelationships)
+			.values({
+				lorebookId: lorebook.id,
+				fromNodeId: a.id,
+				toNodeId: b.id,
+				relationshipType: "ally",
+				visibility: "acknowledged",
+				status: "active"
+			})
+			.returning()
+		expect(tie!.description).toBe("")
+		const { description: _none, ...restated } = rel(
+			`existing_${a.id}`,
+			`existing_${b.id}`
+		)
+
+		await narrativeGraphApplyProposalHandler.handler(
+			fakeSocket(user.id),
+			applyAtReview(user.id, {
+				lorebookId: lorebook.id,
+				proposal: { nodes: [], relationships: [restated] },
+				mode: "extend"
+			} as any),
+			noopEmit
+		)
+
+		const rows = await relsFor(lorebook.id)
+		expect(rows).toHaveLength(1)
+		expect(rows[0].description).toBe("")
 	})
 })
 
@@ -352,7 +396,7 @@ describe("narrativeGraphApplyProposalHandler — discovered nodes and updates", 
 
 		await narrativeGraphApplyProposalHandler.handler(
 			fakeSocket(user.id),
-			{
+			applyAtReview(user.id, {
 				lorebookId: lorebook.id,
 				proposal: {
 					nodes: [
@@ -366,7 +410,7 @@ describe("narrativeGraphApplyProposalHandler — discovered nodes and updates", 
 					relationships: [rel(`existing_${a.id}`, "new_1")]
 				},
 				mode: "replace"
-			} as any,
+			} as any),
 			noopEmit
 		)
 
@@ -399,7 +443,7 @@ describe("narrativeGraphApplyProposalHandler — discovered nodes and updates", 
 		await expect(
 			narrativeGraphApplyProposalHandler.handler(
 				fakeSocket(user.id),
-				{
+				applyAtReview(user.id, {
 					lorebookId: lorebook.id,
 					proposal: {
 						nodes: [
@@ -413,10 +457,10 @@ describe("narrativeGraphApplyProposalHandler — discovered nodes and updates", 
 						relationships: []
 					},
 					mode: "replace"
-				} as any,
+				} as any),
 				noopEmit
 			)
-		).rejects.toThrow(/must not be inserted/)
+		).rejects.toThrow(/already in the cast/)
 
 		const after = await testDb.query.lorebookBindings.findMany({
 			where: eq(schema.lorebookBindings.lorebookId, lorebook.id)
@@ -439,7 +483,7 @@ describe("narrativeGraphApplyProposalHandler — discovered nodes and updates", 
 
 		await narrativeGraphApplyProposalHandler.handler(
 			fakeSocket(user.id),
-			{
+			applyAtReview(user.id, {
 				lorebookId: lorebook.id,
 				proposal: {
 					nodes: [],
@@ -456,7 +500,7 @@ describe("narrativeGraphApplyProposalHandler — discovered nodes and updates", 
 					]
 				},
 				mode: "replace"
-			} as any,
+			} as any),
 			noopEmit
 		)
 
@@ -493,7 +537,7 @@ describe("narrativeGraphApplyProposalHandler — discovered nodes and updates", 
 
 		await narrativeGraphApplyProposalHandler.handler(
 			fakeSocket(user.id),
-			{
+			applyAtReview(user.id, {
 				lorebookId: lorebook.id,
 				proposal: {
 					nodes: [],
@@ -510,7 +554,7 @@ describe("narrativeGraphApplyProposalHandler — discovered nodes and updates", 
 					]
 				},
 				mode: "replace"
-			} as any,
+			} as any),
 			noopEmit
 		)
 

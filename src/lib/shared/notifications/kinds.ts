@@ -220,6 +220,19 @@ export const UPDATE_AVAILABLE = defineNotificationKind({
 })
 
 /**
+ * A 0.5.3 database finished upgrading (every admin, once). News: what changed
+ * or could not be carried is in the admin History as upgrade notes.
+ */
+export const DATA_UPGRADE_DONE = defineNotificationKind({
+	id: "core:notification/data-upgrade-done@1",
+	level: "info",
+	clearsOn: "view",
+	title: "Your 0.5.3 data was upgraded to 0.6",
+	detail: "{notes} upgrade note(s) to read in History",
+	cta: "Open History"
+})
+
+/**
  * The `regarding` keys, built in one place so a raise and its clear can never
  * spell the same thing two ways.
  */
@@ -229,6 +242,7 @@ export const regardingFor = {
 	/** `source` is `koboldcpp` · `ollama` · `onnx`; `key` names the model. */
 	download: (source: string, key: string) => `download:${source}:${key}`,
 	update: () => `app:update`,
+	dataUpgrade: () => `app:data-upgrade`,
 	move: (sessionId: number) => `session:${sessionId}/move`,
 	form: (sessionId: number, messageId: number, blockId: string) =>
 		`session:${sessionId}/form:${messageId}/${blockId}`,

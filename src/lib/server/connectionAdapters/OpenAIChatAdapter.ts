@@ -22,6 +22,7 @@ import { CONNECTION_DEFAULTS } from "$lib/shared/utils/connectionDefaults"
 import { normalizeBaseUrl } from "$lib/shared/utils/normalizeBaseUrl"
 import { decryptApiKeyField } from "$lib/server/utils/tokenCrypto"
 import { ToolCallDeltaAccumulator } from "./streamingToolCalls"
+import { modelServerFetchOptions } from "./modelServerFetch"
 
 /**
  * What an OpenAI-shaped `usage` block says a call cost.
@@ -110,6 +111,18 @@ function reasoningTextFrom(source: any): string | undefined {
 }
 
 export class OpenAIChatAdapter extends BaseConnectionAdapter {
+	/**
+	 * 🚧 Yes, on the chat wire (PLAN-composer-attachments §3.6): images ride each turn as
+	 * `image_url` content parts (data URLs).
+	 * A fact about the CODE, not a capability claim — see the base class.
+	 * Constant, because the conformance pin reads it off the prototype; a
+	 * completion-wire request with files is refused in `dispatch.ts` from the
+	 * manifest's `sendsAttachments.completion`.
+	 */
+	override get consumesAttachments(): boolean {
+		return true
+	}
+
 	private abortController?: AbortController
 
 	/**
@@ -125,8 +138,7 @@ export class OpenAIChatAdapter extends BaseConnectionAdapter {
 	constructor({
 		connection,
 		sampling,
-		contextConfig,
-		promptConfig,
+		systemPrompt,
 		session,
 		currentCharacterId,
 		tokenCounter,
@@ -136,8 +148,7 @@ export class OpenAIChatAdapter extends BaseConnectionAdapter {
 	}: {
 		connection: SelectConnection
 		sampling: ResolvedSampling
-		contextConfig: SelectContextConfig
-		promptConfig: SelectPromptConfig
+		systemPrompt?: string
 		session: BasePromptSession
 		currentCharacterId?: number | null
 		tokenCounter?: TokenCounters
@@ -148,8 +159,7 @@ export class OpenAIChatAdapter extends BaseConnectionAdapter {
 		super({
 			connection,
 			sampling,
-			contextConfig,
-			promptConfig,
+			systemPrompt,
 			session,
 			currentCharacterId: currentCharacterId ?? null,
 			tokenCounter:
@@ -297,12 +307,24 @@ export class OpenAIChatAdapter extends BaseConnectionAdapter {
 		// shape sent an empty array on chat, which discarded them.
 		params["stop"] = this.stops
 
+		// 🚧 The files, each on its own turn (PLAN-composer-attachments §3.6),
+		// measured against the request as it stands without them. Chat wire
+		// only: `dispatch.ts` refuses files on a completion-wire connection.
+		if (this.carriesAttachments && this.isChatWire)
+			params.messages = await this.openAIChatMessagesWithFiles(
+				messages,
+				params
+			)
+
 		const openaiClient = new OpenAI({
 			apiKey,
 			baseURL: baseURL || undefined,
 			defaultHeaders: {
 				"User-Agent": "Mozilla/5.0 (compatible; SerenePub/1.0)"
-			}
+			},
+			// undici's five-minute timeouts sit under this client's own;
+			// see `modelServerFetch`.
+			fetchOptions: modelServerFetchOptions()
 		})
 
 		this.abortController = new AbortController()
@@ -320,7 +342,7 @@ export class OpenAIChatAdapter extends BaseConnectionAdapter {
 				return {
 					completionResult: async (
 						contentCb: (chunk: string) => void,
-						thinkingCb?: (chunk: string) => void
+						reasoningCb?: (chunk: string) => void
 					) => {
 						const streamResp =
 							await openaiClient.chat.completions.create(
@@ -351,7 +373,7 @@ export class OpenAIChatAdapter extends BaseConnectionAdapter {
 							// See `reasoningTextFrom` for which backend each
 							// name serves and why only one is read.
 							const reasoning = reasoningTextFrom(delta)
-							if (reasoning) thinkingCb?.(reasoning)
+							if (reasoning) reasoningCb?.(reasoning)
 							if (delta.content) {
 								contentCb(delta.content)
 							}
@@ -374,7 +396,7 @@ export class OpenAIChatAdapter extends BaseConnectionAdapter {
 				)
 				wire.received(response)
 				let content = ""
-				let thinkingContent: string | undefined
+				let reasoningContent: string | undefined
 				let toolCall: ReturnType<OpenAIChatAdapter["toolCallFrom"]> =
 					null
 				if (
@@ -386,7 +408,7 @@ export class OpenAIChatAdapter extends BaseConnectionAdapter {
 					content = message.content || ""
 					// The same two names the streaming branch reads, on the
 					// assembled message rather than a delta.
-					thinkingContent = reasoningTextFrom(message) || undefined
+					reasoningContent = reasoningTextFrom(message) || undefined
 					// The first call only — see `TextGenResult.toolCall`.
 					const first = (message as any).tool_calls?.[0]
 					if (first)
@@ -401,7 +423,7 @@ export class OpenAIChatAdapter extends BaseConnectionAdapter {
 					completionResult: content,
 					compiledPrompt,
 					isAborted: this.isAborting,
-					thinkingContent,
+					reasoningContent,
 					toolCall,
 					// Recorded, never acted on: see `TextGenResult.tokensCached`.
 					...cacheUsageFrom((response as any).usage)

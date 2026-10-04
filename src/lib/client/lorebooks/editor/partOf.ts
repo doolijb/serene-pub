@@ -9,6 +9,7 @@
  * reject must never be offered.
  */
 
+import { isFileableEntryType } from "$lib/shared/entries/types"
 import { SCENE_KIND, type PoolItem } from "../poolFilter"
 
 /**
@@ -57,15 +58,19 @@ export function containedBy(
 /**
  * Whether a row may be filed under a target.
  *
- * ⚠ Four refusals and each is its own rule: an entry is not inside itself, a
- * ring is a tree nothing can draw, a scene is not an entry — the column
- * names a `lorebook_entries` row, so a scene could never hold one — and a
- * row is never filed under another LINE's own entry. `anchor_entry_id`
+ * ⚠ Five refusals and each is its own rule: a row whose type declares no
+ * `parent` field role is never filed at all — a place (places plan B2,
+ * 2026-09-29), asked of the role map, never of a type id — an entry is not
+ * inside itself, a ring is a tree nothing can draw, a scene is not an entry —
+ * the column names a `lorebook_entries` row, so a scene could never hold one
+ * — and a row is never filed under another LINE's own entry. `anchor_entry_id`
  * cascades, so a shared entry under a branch-only parent would be deleted
  * with the branch (the server refuses it too: `assertAnchorEntry`).
  *
  * `newRowBranchId` is the line a row being written will land on (a subject
- * of `null`); omitted, that check is left to the server.
+ * of `null`); omitted, that check is left to the server. A row being written
+ * has no pool kind to ask, so its type is the picker's to check
+ * (`PartOfField` is not shown for a type that is never filed).
  */
 export function canFileUnder(
 	subjectKey: string | null,
@@ -82,10 +87,10 @@ export function canFileUnder(
 		return targetLine === (newRowBranchId ?? null)
 	}
 	if (targetKey === subjectKey) return false
-	if (targetLine !== null) {
-		const subject = pool.find((item) => item.key === subjectKey)
-		if (targetLine !== (subject?.branchId ?? null)) return false
-	}
+	const subject = pool.find((item) => item.key === subjectKey)
+	if (subject && !isFileableEntryType(subject.kind)) return false
+	if (targetLine !== null && targetLine !== (subject?.branchId ?? null))
+		return false
 	return !descendantKeys(subjectKey, pool).has(targetKey)
 }
 

@@ -111,6 +111,8 @@ describe("state is the resolver's answer", () => {
 		expect(doc.state.slots).toEqual([])
 		// Chat's own fields, at their declared defaults (B16x) — no world.
 		expect(doc.session.fields).toEqual({
+			// The note goes at the end unless moved (owner ruling 2026-10-03).
+			authorsNote: { text: "", depth: 0, interval: 1, role: "system" },
 			autoAdvance: "round",
 			characterDetail: "full",
 			turnMode: "rules"

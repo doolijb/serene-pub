@@ -13,8 +13,9 @@
  *
  * ## What projects, and what deliberately does not
  *
- * Only the **T1 declarative subset**: `required`, `type`, `min`/`max`, and an
- * `enum`'s options. **T2 predicates — `showIf`, `requiredWhen`, `visibleWhen`,
+ * Only the **T1 declarative subset**: `required`, `type` (an `integer` is also
+ * whole), `min`/`max`, an `enum`'s options, and `narrows` (a day holds a value
+ * only beside a month — a fact about the row itself). **T2 predicates — `showIf`, `requiredWhen`, `visibleWhen`,
  * `enabledWhen` — must not project.** They are UI-level and depend on state the
  * row does not carry: "required when the connection is local" is a fact about a
  * form's other answers, and a CHECK constraint sees one row. A predicate turned
@@ -42,19 +43,23 @@
  *
  * ## Names are addresses
  *
- * `entry_fields__core_entry_history__v1` — prefix, type, version. The version is
- * in the name because a version bump is how a schema changes at all
- * (`config_schema` is inside `definitionContentHash`, so `syncDefinitionRegistry` refuses to
- * republish a changed schema at the same version). A bump therefore appears as a
- * *new* name, and the reconciler below drops the old one because it is no longer
- * in the desired set. Other types' constraints are untouched by construction.
+ * `entry_fields__core_entry_history__v1` — prefix, type, version. A version bump
+ * therefore appears as a *new* name, and the reconciler below drops the old one
+ * because it is no longer in the desired set. Other types' constraints are
+ * untouched by construction.
  *
- * ⚠ **Residue:** a constraint whose name is already correct is left alone. That
- * is safe for a schema change, which cannot happen without a version bump, but
- * it means fixing a bug *in this projector* does not re-derive existing
- * constraints — that needs a hand-written `ALTER TABLE … DROP CONSTRAINT` in a
- * migration, the same residue the config reconciler leaves (precedent: 0175,
- * 0180).
+ * ⚠ **Residue:** a constraint whose name is already correct is left alone —
+ * and a schema CAN change under an unchanged version. The registry is
+ * content-addressed: a changed `config_schema` moves the slug's pointer and
+ * `syncDefinitionRegistry` rewrites the row in place (nothing refuses it), and
+ * the pre-0.7 freeze keeps every core type at `@1`. So an edited declared range,
+ * like a fixed bug *in this projector*, does not re-derive the constraint
+ * already installed: pair it with a generated migration that drops the
+ * constraint by name (`IF EXISTS` — a 0.5.3 install has none yet), and the next
+ * boot projects the new one. Never delete the registry row instead:
+ * `lorebook_entries_type_fk` refuses it while any entry names the type.
+ * Precedents: 0198 (A15, history's date range — one type's CHECK), 0207 (whole
+ * numbers and `narrows` — a projector change, so every `entry_fields__` CHECK).
  *
  * ## Where it runs
  *
@@ -66,6 +71,14 @@
 import { createHash } from "node:crypto"
 import { sql } from "drizzle-orm"
 import { rawRows } from "$lib/server/db/rawRows"
+import { driverReasonOf } from "$lib/server/db/errors"
+
+/**
+ * What Postgres said, for `report.errors`: the driver's reason under drizzle's
+ * wrapper, not the wrapper's `Failed query: <sql>\nparams: …` — a DDL
+ * statement is a screenful, and the reason is the line worth reading.
+ */
+const reasonOf = driverReasonOf
 
 /** The table everything here projects onto. */
 const TABLE = "lorebook_entries"
@@ -144,10 +157,9 @@ export const entryIndexName = (
 /**
  * What `jsonb_typeof` must return for a declared field type.
  *
- * `integer` and `number` share `'number'`: jsonb has one numeric type, and
- * asserting integrality would need a cast whose evaluation order Postgres does
- * not promise outside a `CASE`. Range is projected; whole-ness is not, and that
- * is the honest T1 subset rather than an oversight.
+ * `integer` and `number` share `'number'`: jsonb has one numeric type. What
+ * tells them apart — an integer is whole — is its own conjunct below, inside
+ * a `CASE` like every cast here.
  */
 const JSON_TYPE_OF: Record<string, string> = {
 	string: "string",
@@ -224,6 +236,11 @@ export function entryCheckExpression(
 		if (decl.type === "number" || decl.type === "integer") {
 			const numeric = `(${get})::numeric`
 			const guard = `jsonb_typeof(${get}) = 'number'`
+			// An integer is whole: month 2.5 is no month.
+			if (decl.type === "integer")
+				conjuncts.push(
+					`(CASE WHEN ${guard} THEN ${numeric} = trunc(${numeric}) ELSE true END)`
+				)
 			if (isFiniteNumber(decl.min))
 				conjuncts.push(
 					`(CASE WHEN ${guard} THEN ${numeric} >= ${decl.min} ELSE true END)`
@@ -232,6 +249,23 @@ export function entryCheckExpression(
 				conjuncts.push(
 					`(CASE WHEN ${guard} THEN ${numeric} <= ${decl.max} ELSE true END)`
 				)
+		}
+
+		// `narrows` — a value only beside a value in the field it narrows (a
+		// day needs a month). A fact about the row, so it projects; a name
+		// that is not another declared, safe field projects nothing (the SDK
+		// refuses one at the author's line).
+		const narrowed = decl.narrows
+		if (
+			typeof narrowed === "string" &&
+			narrowed !== field &&
+			SAFE_FIELD.test(narrowed) &&
+			Object.prototype.hasOwnProperty.call(configSchema, narrowed)
+		) {
+			const n = lit(narrowed)
+			conjuncts.push(
+				`(CASE WHEN ${present} THEN ("fields" ? ${n} AND jsonb_typeof("fields"->${n}) <> 'null') ELSE true END)`
+			)
 		}
 
 		if (decl.type === "enum") {
@@ -479,7 +513,7 @@ export async function projectEntryConstraints(
 			return true
 		} catch (err) {
 			report.errors.push(
-				`${label}: ${err instanceof Error ? err.message : String(err)}`
+				`${label}: ${reasonOf(err)}`
 			)
 			return false
 		}
@@ -493,7 +527,7 @@ export async function projectEntryConstraints(
 		types = await readProjectedEntryTypes(db, skipped)
 	} catch (err) {
 		report.errors.push(
-			`read registry: ${err instanceof Error ? err.message : String(err)}`
+			`read registry: ${reasonOf(err)}`
 		)
 		return report
 	}
@@ -526,7 +560,7 @@ export async function projectEntryConstraints(
 			existing.set(String(r.conname), !!r.convalidated)
 	} catch (err) {
 		report.errors.push(
-			`read constraints: ${err instanceof Error ? err.message : String(err)}`
+			`read constraints: ${reasonOf(err)}`
 		)
 		return report
 	}
@@ -590,7 +624,7 @@ export async function projectEntryConstraints(
 		}
 	} catch (err) {
 		report.errors.push(
-			`read indexes: ${err instanceof Error ? err.message : String(err)}`
+			`read indexes: ${reasonOf(err)}`
 		)
 	}
 
@@ -599,7 +633,7 @@ export async function projectEntryConstraints(
 		report.violations = await auditEntryConstraints(db, types)
 	} catch (err) {
 		report.errors.push(
-			`audit: ${err instanceof Error ? err.message : String(err)}`
+			`audit: ${reasonOf(err)}`
 		)
 		return report
 	}
@@ -619,7 +653,7 @@ export async function projectEntryConstraints(
 			unvalidated.add(String(r.conname))
 	} catch (err) {
 		report.errors.push(
-			`read validation state: ${err instanceof Error ? err.message : String(err)}`
+			`read validation state: ${reasonOf(err)}`
 		)
 	}
 
@@ -672,7 +706,7 @@ export async function projectEntryConstraints(
 		}
 	} catch (err) {
 		report.errors.push(
-			`type reference: ${err instanceof Error ? err.message : String(err)}`
+			`type reference: ${reasonOf(err)}`
 		)
 	}
 

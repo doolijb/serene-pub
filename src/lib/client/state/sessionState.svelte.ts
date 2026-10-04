@@ -72,8 +72,9 @@ let readError = $state<string | null>(null)
  * `requestId` each was sent with.
  *
  * Matched by ID, never by order: the server's handlers are async and
- * unserialised, and a reply or refusal reaches every tab of the user — so
- * the next one to arrive may be another write's, or another tab's. The
+ * unserialised, and a reply reaches every tab of the user (a refusal only
+ * the tab that asked) — so the next one to arrive may be another write's, or
+ * another tab's. The
  * server echoes the id on both (`state:set` and `state:set:error`), and a
  * reply settles the one write it names and nothing else. An `ownError` write
  * reports its refusal to its caller alone; any other keeps the store-wide
@@ -212,9 +213,9 @@ function onError(res: Sockets.ErrorResponse) {
 /**
  * A read failed: said store-wide as before, and kept as the read's own.
  *
- * Only a failure of a read of THIS session: the refusal reaches every tab of
- * the user, so one that names another session (another tab's, or a late one
- * for the session this tab just left) is not this one's to show. One that
+ * Only a failure of a read of THIS session: the refusal reaches the tab that
+ * read, so one that names another session (a late one for the session this
+ * tab just left) is not this one's to show. One that
  * names none — a failure the server could not put into words — is taken only
  * while this tab's own read is out.
  */

@@ -111,7 +111,7 @@ import { tokenize } from "$lib/server/pipelines/ranking/signals"
  * `writeAnnotations` upserts on `(parent, entityKey)` and then deletes every
  * key not in the new set, so the junk is removed rather than accumulating
  * beside its replacement. Re-extraction is the cost, and it is bounded — these
- * tables arrived in `0094_baseline_0_6`, so no shipped install has rows in them.
+ * tables are new in 0.6, so no shipped install has rows in them.
  *
  * ⚠ `ALIAS_EXTRACTOR_VERSION` and `MENTION_EXTRACTOR_VERSION` are **untouched**
  * and must stay so. `entityNames.ts` imports nothing at all. `mentions.ts`

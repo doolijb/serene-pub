@@ -525,17 +525,50 @@ describe("objectByRole", () => {
 		)
 		// Newest first, absent parts last — today's assembly sort, stated as
 		// data on the type rather than as arithmetic in this module.
-		expect(Object.keys(out!)).toEqual(["412", "410-03", "410-01-05"])
+		expect(Object.keys(out!)).toEqual(["Year 412", "410-03", "410-01-05"])
 	})
 
-	it("produces exactly what formatHistoryDateKey produced, over every precision", () => {
+	it("keeps a year-only date in its place, newest first (plan A20 b)", () => {
+		// A bare "413" is an integer-like key, and an object lists those
+		// ascending ahead of every other key: the oldest year-only entry led.
+		const out = objectByRole(
+			[
+				allocation({ source: "history", id: 1, content: "old", meta: { year: 3 } }),
+				allocation({ source: "history", id: 2, content: "mid", meta: { year: 7, month: 2 } }),
+				allocation({ source: "history", id: 3, content: "new", meta: { year: 9 } })
+			],
+			historyRoles
+		)
+		expect(Object.values(out!)).toEqual(["new", "mid", "old"])
+		expect(Object.keys(out!)).toEqual(["Year 9", "7-02", "Year 3"])
+	})
+
+	it("keeps every entry sharing a date, each under its own heading (plan A20 a)", () => {
+		const out = objectByRole(
+			[
+				allocation({ source: "history", id: 1, content: "The bridge fell.", meta: { year: 7 } }),
+				allocation({ source: "history", id: 2, content: "The tower burned.", meta: { year: 7 } }),
+				allocation({ source: "history", id: 3, content: "Ice.", meta: { year: 7, month: 2 } }),
+				allocation({ source: "history", id: 4, content: "Snow.", meta: { year: 7, month: 2 } })
+			],
+			historyRoles
+		)
+		expect(out).toEqual({
+			"7-02": "Ice.",
+			"7-02 (2)": "Snow.",
+			"Year 7": "The bridge fell.",
+			"Year 7 (2)": "The tower burned."
+		})
+	})
+
+	it("produces what formatHistoryDateKey produced wherever a month or a day is set", () => {
 		// ⚠ The one thing roles do not buy: core formats the order key, and a
-		// second ordered type wants a named policy rather than a branch. This
-		// is the assertion that the generalisation did not move a byte.
+		// second ordered type wants a named policy rather than a branch. A
+		// year alone is the one departure: it reads "Year 412", never an
+		// integer-like "412" (plan A20 b).
 		const cases = [
 			{ year: 412, month: 3, day: 7 },
 			{ year: 412, month: 3, day: null },
-			{ year: 412, month: null, day: null },
 			// The odd one, preserved deliberately: an absent middle part does
 			// not terminate the key, it is skipped.
 			{ year: 412, month: null, day: 5 },
@@ -548,6 +581,11 @@ describe("objectByRole", () => {
 			)
 			expect(Object.keys(out!)).toEqual([formatHistoryDateKey(meta)])
 		}
+		const yearOnly = objectByRole(
+			[allocation({ source: "history", content: "x", meta: { year: -30 } })],
+			historyRoles
+		)
+		expect(Object.keys(yearOnly!)).toEqual(["Year -30"])
 	})
 
 	it("skips blank-after-trim content for an ordered type, which the titled form does not", () => {

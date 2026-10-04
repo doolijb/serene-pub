@@ -32,6 +32,7 @@
 
 import { and, eq, isNull, notInArray } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
+import { driverReasonOf } from "$lib/server/db/errors"
 import { presetBindingVerdict } from "$lib/server/pipelines/entities/presetBindings"
 
 export interface PresetReconcileReport {
@@ -160,10 +161,10 @@ export async function reconcilePresetBindings(
 				.returning({ id: schema.sessionPresetNotices.id })
 			report.cleared += (gone as unknown[]).length
 		} catch (err) {
+			// The driver's reason, not drizzle's `Failed query: …` and its
+			// values (`driverReasonOf`).
 			report.errors.push(
-				`preset #${preset.id} '${preset.name}': ${
-					err instanceof Error ? err.message : String(err)
-				}`
+				`preset #${preset.id} '${preset.name}': ${driverReasonOf(err)}`
 			)
 		}
 	}

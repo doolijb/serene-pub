@@ -89,7 +89,7 @@
 	{#each groups as g (g.group)}
 		<section class="flex flex-col gap-2">
 			<p
-				class="text-surface-600-400 border-surface-500/20 border-b pb-1 text-xs"
+				class="text-surface-600-400 panel-edge border-b pb-1 text-xs"
 			>
 				{g.group}
 			</p>

@@ -30,13 +30,19 @@ import {
 	isSlotLoreRef,
 	parseParticipantRef,
 	resolveSlotConfig,
-	slotEarshot,
 	slotListItemText,
 	type AttributeSlotDecl,
 	type SlotConfig,
 	type SlotListItem
 } from "@serene-pub/sdk"
 import { castKey, qualifiedSlotKey, slotKey } from "$lib/server/state/resolve"
+import { heardOnly } from "$lib/server/state/earshot"
+import { locationRowOf } from "$lib/shared/lorebooks/describingRow"
+import {
+	relationshipSentence,
+	type RelationshipEndRef,
+	type SayableRelationship
+} from "$lib/shared/lorebooks/linkVocabulary"
 
 /** The shape `core:query/session-state@1` publishes, read defensively. */
 export interface StateLike {
@@ -114,70 +120,105 @@ function valueOf(from: Record<string, unknown>, decl: AttributeSlotDecl) {
  *    voice: the planner, the scene, the state-keeper, a trap or a reveal. No
  *    member keeps one.
  *
- * ⚠ **The one filter, applied where state becomes a prompt, never at the
- * read.** `session-state@1` is one read a whole run shares — every voice of a
- * turn takes the same `state` — so the query cannot know whose prompt it is
+ * ⚠ **Applied where state becomes a prompt, never at the run's read.**
+ * `session-state@1` is one read a whole run shares — every voice of a turn
+ * takes the same `state` — so the query cannot know whose prompt it is
  * feeding. The context builders do; `bindings.ts` calls this at both of the
  * places state reaches a template: the shared builder
  * (`build-template-context@1`, the `{{state}}` a template walks) and the
  * adventure surfaces' `mergeContext` (`{{stateSummary}}`, `{{slots}}`,
  * `{{location}}`).
  *
- * Never mutates: the state it was handed is the run's, and the next voice
- * reads it too. Cast entries are copied, once each, so `cast.byId`, the slug
- * index and the `who` roles still share one object per member as
- * `stateFor` built them. Fails closed: a slot the registry declares
- * `'holder'` is withheld even from a state whose vocabulary rows do not say
- * so, and a contested bare key goes with it (the qualified key of the other
- * slot still carries that one's value).
+ * The filter itself is `heardOnly` (`state/earshot.ts`) — the one a
+ * person's view takes too, with the holder-only value's data audience in
+ * place of the speaker (`stateAsHeard`, every `state:*` reply). It never
+ * mutates and fails closed; see there.
  */
 export function withinEarshot<S>(state: S, speaker: unknown): S {
-	if (!state || typeof state !== "object" || Array.isArray(state)) return state
-	const s = state as StateLike & { who?: unknown }
-	const held = new Set<string>()
-	for (const row of Array.isArray(s.slots) ? s.slots : [])
-		if (row?.earshot === "holder" && typeof row.id === "string") held.add(row.id)
-	for (const decl of attributeSlots())
-		if (slotEarshot(decl) === "holder") held.add(decl.id)
-	if (!held.size || !s.cast || typeof s.cast !== "object") return state
-	const keys = new Set([...held].flatMap((id) => [slotKey(id), qualifiedSlotKey(id)]))
 	const holder = holderOf(speaker)
+	return heardOnly(state, (characterId) => holder !== null && characterId === holder)
+}
 
-	const copies = new Map<object, unknown>()
-	const heard = (entry: unknown): unknown => {
-		if (!entry || typeof entry !== "object" || Array.isArray(entry)) return entry
-		if (copies.has(entry)) return copies.get(entry)
-		const values = entry as Record<string, unknown>
-		let out: Record<string, unknown> = values
-		if (holder === null || String(values.id) !== holder) {
-			out = { ...values }
-			for (const k of keys) delete out[k]
-		}
-		copies.set(entry, out)
-		return out
+/**
+ * The state as a **voice** sees the places — the third looker of place sight
+ * (plan A28; `shared/lorebooks/placeSight.ts`).
+ *
+ * A voice is somebody in the scene speaking for themselves
+ * (`build-side-character-context@1`: a delver, an Adventure cast member, a
+ * suspect). Of the places the session sees (`state.locations`, already the
+ * session's sight), a voice reads the stats of ONE: the place the scene is
+ * at — the world's `location`, else the planner's hint, resolved by the room
+ * rule (`worldValueOrHint` + `locationRowOf`) against the rooms listing when
+ * the voice is handed one (`entries`, so a key finds the room exactly as
+ * `{{locationEntry}}` finds it), else against the places' names. What lies
+ * in a room the party have not reached is the game master's knowledge; a
+ * voice handed it walks straight to the treasure. When the scene's place
+ * names none of them, a voice reads no place's stats.
+ *
+ * Only the stats narrow: the rooms' NAMES (`{{knownLocations}}`, from the
+ * rooms listing) are unchanged, so a voice still knows which rooms exist.
+ * The planner, the scene and the keeper are nobody's voice and read every
+ * place the session sees. Pure; never mutates.
+ */
+export function withinSight<S>(state: S, plan?: PlanLike, entries?: unknown): S {
+	const s = state as StateLike | undefined
+	const byId = bag(bag(s?.locations).byId)
+	const rows = Object.values(byId)
+	if (!rows.length) return state
+	const where = worldValueOrHint(s, plan, "location", "location")
+	const listed = Array.isArray(entries) && entries.length ? entries : rows
+	const here = where !== undefined ? locationRowOf(where, listed) : null
+	const hereId = here ? (here as { id?: unknown }).id : undefined
+	const locations: Record<string, unknown> = {}
+	const kept: Record<string, unknown> = {}
+	for (const [id, entry] of Object.entries(byId)) {
+		if (hereId === undefined || bag(entry).id !== hereId) continue
+		kept[id] = entry
+		const key = bag(entry).key
+		if (typeof key === "string" && key) locations[key] = entry
 	}
+	return { ...(state as object), locations: { ...locations, byId: kept } } as S
+}
 
-	const cast: Record<string, unknown> = {}
-	for (const [key, value] of Object.entries(s.cast))
-		cast[key] =
-			key === "byId"
-				? Object.fromEntries(Object.entries(bag(value)).map(([id, e]) => [id, heard(e)]))
-				: heard(value)
-	const who = bag(s.who)
-	return {
-		...(state as object),
-		cast,
-		...(s.who === undefined
-			? {}
-			: {
-					who: Object.fromEntries(
-						Object.entries(who).map(([role, v]) => [
-							role,
-							Array.isArray(v) ? v.map(heard) : heard(v)
-						])
-					)
-				})
-	} as S
+/**
+ * 🚧 The state as **the party's reach** sees the places (place sight, owner
+ * ruling 2026-09-30): the Lair's Castellan speaking for the party.
+ *
+ * Of the places the session sees, the stats of the place the scene is at —
+ * found exactly as `withinSight` finds it — and of every place one way from
+ * it: the far ends of that room's listed links (`links` on the rooms listing,
+ * the "From here:" ways, already the session's reading of the places graph)
+ * that are places the session sees. No other place's stats; names are
+ * untouched. With no room found, no place's stats. Pure; never mutates.
+ *
+ * ⚠ Wider than a voice's sight (one place) and narrower than the planner's
+ * (every place): the party may know what lies in the next room along, never
+ * the far end of the dungeon.
+ */
+export function withinReach<S>(state: S, plan?: PlanLike, entries?: unknown): S {
+	const s = state as StateLike | undefined
+	const byId = bag(bag(s?.locations).byId)
+	const rows = Object.values(byId)
+	if (!rows.length) return state
+	const where = worldValueOrHint(s, plan, "location", "location")
+	const listed = Array.isArray(entries) && entries.length ? entries : rows
+	const here = where !== undefined ? locationRowOf(where, listed) : null
+	const reached = new Set<unknown>()
+	if (here) {
+		reached.add((here as { id?: unknown }).id)
+		const links = (here as { links?: unknown }).links
+		for (const link of Array.isArray(links) ? links : [])
+			reached.add(bag(bag(link).to).entryId)
+	}
+	const locations: Record<string, unknown> = {}
+	const kept: Record<string, unknown> = {}
+	for (const [id, entry] of Object.entries(byId)) {
+		if (!reached.has(bag(entry).id)) continue
+		kept[id] = entry
+		const key = bag(entry).key
+		if (typeof key === "string" && key) locations[key] = entry
+	}
+	return { ...(state as object), locations: { ...locations, byId: kept } } as S
 }
 
 /** The character id a `character:<id>` reference names; null for any other speaker. */
@@ -363,6 +404,40 @@ export interface SceneAnchor {
 }
 
 /**
+ * The declarations the session keeps on the WORLD: its own vocabulary when
+ * the state carries it; an older shape with no `slots` falls back to the
+ * registry, as `present` does.
+ */
+function onWorld(state: StateLike | undefined): AttributeSlotDecl[] {
+	return Array.isArray(state?.slots)
+		? tracked(state).filter((d) => d.appliesTo.includes("world"))
+		: [...attributeSlots()].filter((d) => d.appliesTo.includes("world"))
+}
+
+/**
+ * One world fact as a prompt reads it — the world's value where the session
+ * keeps that slot on the world, else the planner's hint — raw: words or a
+ * lore reference, `undefined` when neither says anything.
+ *
+ * The ONE answer to "where is the scene" (plan A27): `{{location}}`
+ * (`sceneAnchor`) and the room `{{locationEntry}}` shows (`locationVariables`)
+ * both read it, so a first turn whose location only the planner has named
+ * shows that room's body and ways out under the name the narrator is given.
+ */
+function worldValueOrHint(
+	state: StateLike | undefined,
+	plan: PlanLike | undefined,
+	key: string,
+	hint: string
+): unknown {
+	const decl = onWorld(state).find((d) => slotKey(d.id) === key)
+	const held = decl ? valueOf(bag(state?.world), decl) : undefined
+	if (text(held)) return held
+	const hinted = bag(plan?.worldHints)[hint]
+	return text(hinted) ? hinted : undefined
+}
+
+/**
  * The four facts a narrator has to be given rather than left to infer.
  *
  * The world state answers first and the planner's hint second, which is the
@@ -382,18 +457,8 @@ export function sceneAnchor(
 	state: StateLike | undefined,
 	plan: PlanLike | undefined
 ): SceneAnchor {
-	const world = bag(state?.world)
-	const hints = bag(plan?.worldHints)
-	// The session's own vocabulary when the state carries it; an older shape
-	// with no `slots` falls back to the registry, as `present` does.
-	const onWorld = Array.isArray(state?.slots)
-		? tracked(state).filter((d) => d.appliesTo.includes("world"))
-		: [...attributeSlots()].filter((d) => d.appliesTo.includes("world"))
-	const at = (key: string, hint: string, missing: string) => {
-		const decl = onWorld.find((d) => slotKey(d.id) === key)
-		const held = decl ? text(valueOf(world, decl)) : ""
-		return held || text(hints[hint]) || missing
-	}
+	const at = (key: string, hint: string, missing: string) =>
+		text(worldValueOrHint(state, plan, key, hint)) || missing
 	const beats = (Array.isArray(plan?.beats) ? plan.beats : [])
 		.map((b) => text(b))
 		.filter(Boolean)
@@ -411,16 +476,6 @@ export function sceneAnchor(
 	}
 }
 
-/**
- * A listed name, the way `core:query/lorebook-entries@1`'s own `name`
- * parameter matches one: exact, case ignored, surrounding space trimmed.
- */
-export const sameLocationName = (a: unknown, b: unknown): boolean =>
-	typeof a === "string" &&
-	typeof b === "string" &&
-	a.trim() !== "" &&
-	a.trim().toLowerCase() === b.trim().toLowerCase()
-
 /** The names a listing (rows with a `name`, or plain strings) holds. */
 export function listedNames(entries: unknown): string[] {
 	if (!Array.isArray(entries)) return []
@@ -437,12 +492,60 @@ export function listedNames(entries: unknown): string[] {
 }
 
 /**
+ * A listed room's ways out, one `- ` line each, said FROM the room — the
+ * "From here:" block of `{{locationEntry}}` (places plan B6, §6.3).
+ *
+ * `links` is what `core:query/lorebook-entries@1` puts on a row when asked
+ * `withLinks`: `LoreLinkRow`s already said from the row (its `linkType` is the
+ * wording from here, whichever end the row is), already filtered by the host's
+ * reading — standing, never `secret`, both ends live, the far end one the
+ * wired speaker may see (with none wired, one every voice may), and one way
+ * INTO the room left out. The host is the only place that last rule can be
+ * kept: a `LoreLinkRow` is said from the row, so it always reads out from
+ * here, and nothing on it could tell an inbound one apart. Each is said with
+ * the one sentence every surface says a relationship with
+ * (`relationshipSentence`, shared with the editor and the canvas). A link with
+ * no far end, or a far end with no name, says nothing a prompt could use.
+ */
+export function fromHereLines(row: { id?: unknown; links?: unknown }): string[] {
+	if (typeof row.id !== "number" || !Array.isArray(row.links)) return []
+	const here: RelationshipEndRef = { kind: "entry", id: row.id }
+	const out: string[] = []
+	for (const link of row.links) {
+		if (!link || typeof link !== "object") continue
+		const l = link as {
+			to?: { entryId?: unknown; name?: unknown }
+			linkType?: unknown
+			reverseLinkType?: unknown
+			name?: unknown
+		}
+		const farId = l.to?.entryId
+		const farName = typeof l.to?.name === "string" ? l.to.name.trim() : ""
+		if (typeof farId !== "number" || !farName) continue
+		const rel: SayableRelationship = {
+			from: here,
+			to: { kind: "entry", id: farId },
+			relationshipType: typeof l.linkType === "string" ? l.linkType : "",
+			reverseRelationshipType:
+				typeof l.reverseLinkType === "string" ? l.reverseLinkType : null,
+			name: typeof l.name === "string" ? l.name : null
+		}
+		const sentence = relationshipSentence(rel, here, () => farName)
+		if (sentence) out.push(`- ${sentence}`)
+	}
+	return out
+}
+
+/**
  * The places a planner or narrator is always shown (lair pass B13,
- * 2026-09-27), whatever the retrieval ranking admitted: every location the
- * lorebook holds, by name, as `{{knownLocations}}`; and the entry of the one
- * the party are in — the world's `location` slot — as `{{locationEntry}}`,
- * its body (exits and all) under its name. Each is absent when there is
- * nothing to say, so a template writes `{{#if knownLocations}}`.
+ * 2026-09-27), whatever the retrieval ranking admitted: every place the
+ * session sees (the rooms listing: a session's place sight, plan A27), by
+ * name, as `{{knownLocations}}`; and the entry of the one the party are in —
+ * the world's `location` slot, else the planner's hint, as `{{location}}`
+ * reads it — as `{{locationEntry}}`,
+ * its body under its name and, when the listing carried its links, its ways
+ * out under "From here:" (places plan B6; `fromHereLines`). Each is absent
+ * when there is nothing to say, so a template writes `{{#if knownLocations}}`.
  *
  * The ranker keys off the direction text, so a turn about a torch gutters
  * admitted no rooms at all and the planner — told "the rooms you have been
@@ -450,31 +553,30 @@ export function listedNames(entries: unknown): string[] {
  */
 export function locationVariables(
 	entries: unknown,
-	state: StateLike | undefined
+	state: StateLike | undefined,
+	plan?: PlanLike
 ): { knownLocations?: string; locationEntry?: string } {
 	const names = listedNames(entries)
 	if (!names.length) return {}
 	const out: { knownLocations?: string; locationEntry?: string } = {
 		knownLocations: [...new Set(names)].join(", ")
 	}
-	const world = bag(state?.world)
-	const onWorld = Array.isArray(state?.slots)
-		? tracked(state).filter((d) => d.appliesTo.includes("world"))
-		: [...attributeSlots()].filter((d) => d.appliesTo.includes("world"))
-	const decl = onWorld.find((d) => slotKey(d.id) === "location")
-	const here = decl ? text(valueOf(world, decl)) : ""
-	const row = here
-		? (entries as unknown[]).find(
-				(e) =>
-					!!e &&
-					typeof e === "object" &&
-					sameLocationName((e as { name?: unknown }).name, here)
-			)
-		: undefined
+	// Where the scene is, as `{{location}}` says it: the world's value, else
+	// the planner's hint (`worldValueOrHint`). The Lair's Answer the door finds
+	// the room it links to in the same order and by the same rule
+	// (`locationRowOf`): the world's value, else the knock's `vantage`, which
+	// is the knock turn's own plan rather than one a prompt was built from.
+	const where = worldValueOrHint(state, plan, "location", "location")
+	const row = where !== undefined ? locationRowOf(where, entries) : null
 	if (row && typeof row === "object") {
 		const { name, content } = row as { name?: unknown; content?: unknown }
 		const body = typeof content === "string" ? content.trim() : ""
-		out.locationEntry = body ? `${String(name).trim()}\n${body}` : String(name).trim()
+		const ways = fromHereLines(row as { id?: unknown; links?: unknown })
+		out.locationEntry = [
+			String(name).trim(),
+			...(body ? [body] : []),
+			...(ways.length ? ["From here:", ...ways] : [])
+		].join("\n")
 	}
 	return out
 }

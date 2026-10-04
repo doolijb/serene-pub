@@ -154,7 +154,37 @@ describe("which set a line's speaker is shown in", () => {
 			.set({ spriteSet: "winter" })
 			.where(eq(schema.lorebookBindings.id, bindingId!))
 		const missing = await spriteChoicesFor(testDb as any, { sessionId: session.id, messageId: message.id })
-		expect(missing).toMatchObject({ set: "default", decidedBy: "default", missing: "winter" })
+		expect(missing).toMatchObject({
+			set: "default",
+			decidedBy: "default",
+			missing: "winter",
+			missingAskedBy: "amendment"
+		})
+	}, 60_000)
+
+	test("an override naming a set the card lacks falls back, and the receipt says the override asked (A25)", async () => {
+		const { spriteChoicesFor, setSessionSpriteSet } = await import("$lib/server/sprites/choices")
+		const { session, message, character, bindingId } = await scene("sprites-choices-override-missing", {
+			lorebook: true
+		})
+		// The member asks for a set the card HAS; the session asks for one it lacks.
+		await testDb
+			.update(schema.lorebookBindings)
+			.set({ spriteSet: "armour" })
+			.where(eq(schema.lorebookBindings.id, bindingId!))
+		await setSessionSpriteSet(testDb as any, {
+			sessionId: session.id,
+			characterId: character.id,
+			set: "winter",
+			updatedBy: "user"
+		})
+		const c = await spriteChoicesFor(testDb as any, { sessionId: session.id, messageId: message.id })
+		expect(c).toMatchObject({
+			set: "default",
+			decidedBy: "default",
+			missing: "winter",
+			missingAskedBy: "override"
+		})
 	}, 60_000)
 
 	test("resolves at the session's reading: its fork cut and its story clock (finding #39)", async () => {
@@ -215,6 +245,54 @@ describe("which set a line's speaker is shown in", () => {
 		})
 		const c = await spriteChoicesFor(testDb as any, { sessionId: session.id, messageId: message.id })
 		expect(c).toMatchObject({ characterId: character.id, set: "default", has: true })
+	}, 60_000)
+
+	test("a seat holding the dated card is drawn as the book has her at the session's point (A25)", async () => {
+		const { spriteChoicesFor } = await import("$lib/server/sprites/choices")
+		const { importSprites } = await import("$lib/server/sprites")
+		const { session, message, bindingId, lorebookId, character, user } = await scene(
+			"sprites-choices-dated-seat",
+			{ lorebook: true }
+		)
+		const [keeper] = await testDb
+			.insert(schema.characters)
+			.values({ userId: user.id, name: "The Lamp Keeper", description: "" })
+			.returning()
+		await importSprites(testDb as any, user.id, keeper.id, [{ label: "lamp", bytes: png(seed++) }], "upload")
+		await testDb.insert(schema.castAmendments).values({
+			lorebookId: lorebookId!,
+			lorebookBindingId: bindingId!,
+			branchId: null,
+			year: 20,
+			fields: { characterId: keeper.id }
+		})
+		// The session seats the keeper's card and she speaks with it.
+		await testDb
+			.update(schema.sessionCharacters)
+			.set({ characterId: keeper.id })
+			.where(eq(schema.sessionCharacters.sessionId, session.id))
+		await testDb
+			.update(schema.sessionMessages)
+			.set({ characterId: keeper.id })
+			.where(eq(schema.sessionMessages.id, message.id))
+
+		// Before Y20 the book draws her with the young card, whichever card
+		// the seat holds.
+		await testDb
+			.update(schema.sessions)
+			.set({ storyClockYear: 5 })
+			.where(eq(schema.sessions.id, session.id))
+		const early = await spriteChoicesFor(testDb as any, { sessionId: session.id, messageId: message.id })
+		expect(early).toMatchObject({ characterId: character.id })
+		expect(early.labels).toContain("joy")
+
+		// From Y20, the keeper's.
+		await testDb
+			.update(schema.sessions)
+			.set({ storyClockYear: null })
+			.where(eq(schema.sessions.id, session.id))
+		const head = await spriteChoicesFor(testDb as any, { sessionId: session.id, messageId: message.id })
+		expect(head).toMatchObject({ characterId: keeper.id, labels: ["lamp"] })
 	}, 60_000)
 
 	test("a narrator's line has nothing to choose", async () => {

@@ -20,6 +20,7 @@ import os from "os"
 import path from "path"
 import { and, eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
+import { applyAtReview } from "./fixtures/graphReview"
 import { historyValues } from "$lib/server/pipelines/testing/fixtures"
 import type { TestDb } from "$lib/server/utils/testDb"
 
@@ -108,7 +109,7 @@ async function apply(
 	)
 	return narrativeGraphApplyProposalHandler.handler(
 		fakeSocket(userId),
-		{ lorebookId, proposal, mode } as any,
+		applyAtReview(userId, { lorebookId, proposal, mode } as any),
 		noopEmit
 	)
 }
@@ -347,11 +348,12 @@ describe("an author's widening survives every subsequent scan", () => {
  *
  * The bound above is a ceiling on what an *inference* may claim; it is not a
  * validator, and `narrativeGraph:updateRelationship` is not an inference. So
- * the authoring path sanitises — the column is an enum and the payload is
- * whatever arrived over the socket — and it must do no more than that.
+ * the authoring path judges — the column is an enum and the payload is
+ * whatever arrived over the socket, so a value the enum lacks is refused in
+ * words — and it must do no more than that.
  * Capping here would take `public` away from the only actor allowed to say it.
  */
-describe("the authoring path sanitises, and does not bound", () => {
+describe("the authoring path judges, and does not bound", () => {
 	const update = async (userId: number, relationship: object) => {
 		const { narrativeGraphUpdateRelationshipHandler } = await import(
 			"./narrativeGraph"
@@ -392,9 +394,13 @@ describe("the authoring path sanitises, and does not bound", () => {
 		).toBe("public")
 	}, 60_000)
 
-	test("a value the enum does not have never reaches the column", async () => {
+	test("a value the enum does not have is refused in words, and never reaches the column", async () => {
 		const { user, lorebook, speaker, absent, rel } = await authoredEdge()
-		await update(user.id, { id: rel.id, visibility: "notorious" })
+		await expect(
+			update(user.id, { id: rel.id, visibility: "notorious" })
+		).rejects.toThrow(
+			'"notorious" is not a visibility a relationship can have. Choose secret, acknowledged or public.'
+		)
 		expect(
 			(await relBetween(lorebook.id, speaker.id, absent.id))?.visibility
 		).toBe("acknowledged")

@@ -139,6 +139,28 @@ export interface AdapterManifestEntry {
 	 * could ever grant.
 	 */
 	continuesIn?: readonly WireMode[]
+	/**
+	 * 🚧 Which of this type's wire modes put attachments on the wire
+	 * (PLAN-composer-attachments §5) — the static twin of the adapter class's
+	 * `consumesAttachments`, so the reading rule (`attachments/readers.ts`) can
+	 * judge a pair without importing an adapter module (one of them cannot be
+	 * parsed on Android). `manifest.conformance.test.ts` pins
+	 * `consumesAttachments === sendsAttachments.chat` per class.
+	 *
+	 * ⚠ Absent means NO WIRE CARRIES THEM — a capability saying "vision" is a
+	 * claim about the model; this is a claim about the code.
+	 */
+	sendsAttachments?: { chat: boolean; completion: boolean }
+	/**
+	 * What this type's CHAT wire does with a system message that is not at
+	 * the top of the conversation (AN3, 2026-10-02) — `keep` where the
+	 * protocol honours it in place, `fold` where it hoists or rejects one, so
+	 * the message builder folds depth-placed system text into the nearest user
+	 * message instead (`./midSystem`, `parseSplitChatPrompt`).
+	 *
+	 * ⚠ Absent means `keep` — the request every type sent before this existed.
+	 */
+	midSystem?: "keep" | "fold"
 }
 
 /**
@@ -262,7 +284,26 @@ export const ADAPTER_MANIFEST: Record<string, AdapterManifestEntry> = {
 				"continue_reply"
 			]
 		},
-		continuesIn: ["completion"]
+		continuesIn: ["completion"],
+		/**
+		 * 🚧 Images on the chat wire (PLAN-composer-attachments §3.6), as
+		 * `image_url` data-URL parts. The formats OpenAI's vision guide lists
+		 * (PNG, JPEG, WebP, non-animated GIF); the OpenAI-compatible services
+		 * behind this type take the same parts. No PDF in v1: the `file` part is
+		 * not universal across them. No count or byte cap declared — the
+		 * published limits differ per service behind this one format.
+		 */
+		io: {
+			in: {
+				image: {
+					accepts: ["image/png", "image/jpeg", "image/webp", "image/gif"],
+					prefers: ["image/webp", "image/jpeg", "image/png"]
+				}
+			}
+		},
+		sendsAttachments: { chat: true, completion: false },
+		// AN3 (`./midSystem`): OpenAI's Chat Completions keeps a mid-conversation system message in place.
+		midSystem: "keep"
 	},
 
 	/**
@@ -274,10 +315,11 @@ export const ADAPTER_MANIFEST: Record<string, AdapterManifestEntry> = {
 	 * Declaring the gap turns that silence into a refusal at bind time with a
 	 * sentence naming the capability.
 	 *
-	 * ⚠ The ONE entry with an `io` block, and its loneliness is the point: these
-	 * are the only per-request file and byte limits any of the nine backends
-	 * publishes in a form worth quoting back to a user. See the block itself for
-	 * each number's source, and `./io` for why the other eight declare nothing.
+	 * ⚠ The ONE entry whose `io` block declares CAPS: these are the only
+	 * per-request file and byte limits any of the nine backends publishes in a
+	 * form worth quoting back to a user. See the block itself for each number's
+	 * source, and `./io` for why the others declare none (the text senders that
+	 * gained images in 2026-10 declare formats only).
 	 */
 	[CONNECTION_TYPE.ANTHROPIC]: {
 		id: CONNECTION_TYPE.ANTHROPIC,
@@ -469,10 +511,18 @@ export const ADAPTER_MANIFEST: Record<string, AdapterManifestEntry> = {
 			maxRequestBytes: cap(
 				mib(32),
 				"Anthropic API docs: maximum 32MB total request size"
-			)
+			),
+			// An estimate for the receipt, never a cap: Anthropic's vision
+			// guide gives tokens ≈ (width × height) / 750, which is about 1,600
+			// at the fitted edge the prompt path sends.
+			tokensPerImage: 1600
 			// No `out` block. Anthropic returns text; it renders nothing, so there
 			// is no output file count to cap.
-		}
+		},
+		// The Messages API is chat-only, and `AnthropicAdapter` puts files on it.
+		sendsAttachments: { chat: true, completion: false },
+		// AN3 (`./midSystem`): The Messages API takes system text only as the top-level `system` field — the adapter hoists it.
+		midSystem: "fold"
 	},
 
 	/**
@@ -530,7 +580,26 @@ export const ADAPTER_MANIFEST: Record<string, AdapterManifestEntry> = {
 				"text->embedding"
 			]
 		},
-		continuesIn: ["completion"]
+		continuesIn: ["completion"],
+		/**
+		 * 🚧 Images on the chat wire (PLAN-composer-attachments §3.6). PNG and
+		 * JPEG only — OURS, not a published list: Ollama's vision runners are
+		 * llama.cpp-based and decode with stb_image, which has no WebP, so a WebP (the fitted
+		 * variant's usual format) is converted by `prepareAttachments` rather
+		 * than refused by the server. No count or byte cap: none is published,
+		 * and a guessed one would refuse requests that fit.
+		 */
+		io: {
+			in: {
+				image: {
+					accepts: ["image/png", "image/jpeg"],
+					prefers: ["image/jpeg", "image/png"]
+				}
+			}
+		},
+		sendsAttachments: { chat: true, completion: false },
+		// AN3 (`./midSystem`): Ollama templates collect every system message into `.System`, rendered once at the top.
+		midSystem: "fold"
 	},
 
 	/**
@@ -600,7 +669,26 @@ export const ADAPTER_MANIFEST: Record<string, AdapterManifestEntry> = {
 				"continue_reply"
 			]
 		},
-		continuesIn: ["completion"]
+		continuesIn: ["completion"],
+		/**
+		 * 🚧 Images on the chat wire (PLAN-composer-attachments §3.6). PNG and
+		 * JPEG only — OURS, not a published list: llama.cpp-family servers decode
+		 * images with stb_image, which has no WebP, so a WebP (the fitted
+		 * variant's usual format) is converted by `prepareAttachments` rather
+		 * than refused by the server. No count or byte cap: none is published,
+		 * and a guessed one would refuse requests that fit.
+		 */
+		io: {
+			in: {
+				image: {
+					accepts: ["image/png", "image/jpeg"],
+					prefers: ["image/jpeg", "image/png"]
+				}
+			}
+		},
+		sendsAttachments: { chat: true, completion: false },
+		// AN3 (`./midSystem`): The model's Jinja template decides; Qwen's raises on a system message that is not first.
+		midSystem: "fold"
 	},
 
 	/**
@@ -645,7 +733,26 @@ export const ADAPTER_MANIFEST: Record<string, AdapterManifestEntry> = {
 				"continue_reply"
 			]
 		},
-		continuesIn: ["completion"]
+		continuesIn: ["completion"],
+		/**
+		 * 🚧 Images on the chat wire (PLAN-composer-attachments §3.6). PNG and
+		 * JPEG only — OURS, not a published list: llama.cpp-family servers decode
+		 * images with stb_image, which has no WebP, so a WebP (the fitted
+		 * variant's usual format) is converted by `prepareAttachments` rather
+		 * than refused by the server. No count or byte cap: none is published,
+		 * and a guessed one would refuse requests that fit.
+		 */
+		io: {
+			in: {
+				image: {
+					accepts: ["image/png", "image/jpeg"],
+					prefers: ["image/jpeg", "image/png"]
+				}
+			}
+		},
+		sendsAttachments: { chat: true, completion: false },
+		// AN3 (`./midSystem`): As `koboldcpp`: the model's Jinja template decides, and Qwen's raises.
+		midSystem: "fold"
 	},
 
 	/** llama.cpp's llama-server. Grammar, and text, and no more. */
@@ -678,11 +785,9 @@ export const ADAPTER_MANIFEST: Record<string, AdapterManifestEntry> = {
 				 * declared and not defaulted resolves to 0 until a preset, a
 				 * probe or a person switches it on. Completion is what every
 				 * existing `llamacpp_completion` row was ACTUALLY being called
-				 * by, and the rename in `drizzle/0105_llamacpp_service_type.sql`
-				 * carries those rows over verbatim — so defaulting chat here
-				 * would silently re-tune every install that upgrades, on the
-				 * send path, which is precisely the class of change
-				 * `0098_wire_mode_intent.sql` exists to have prevented.
+				 * by, and the 0.5.3 upgrade carries those rows over verbatim as
+				 * `llamacpp` — so defaulting chat here would silently re-tune
+				 * every install that upgrades, on the send path.
 				 */
 				wire_chat: "native",
 				wire_completion: "native",
@@ -701,7 +806,26 @@ export const ADAPTER_MANIFEST: Record<string, AdapterManifestEntry> = {
 				"continue_reply"
 			]
 		},
-		continuesIn: ["completion"]
+		continuesIn: ["completion"],
+		/**
+		 * 🚧 Images on the chat wire (PLAN-composer-attachments §3.6). PNG and
+		 * JPEG only — OURS, not a published list: llama.cpp-family servers decode
+		 * images with stb_image, which has no WebP, so a WebP (the fitted
+		 * variant's usual format) is converted by `prepareAttachments` rather
+		 * than refused by the server. No count or byte cap: none is published,
+		 * and a guessed one would refuse requests that fit.
+		 */
+		io: {
+			in: {
+				image: {
+					accepts: ["image/png", "image/jpeg"],
+					prefers: ["image/jpeg", "image/png"]
+				}
+			}
+		},
+		sendsAttachments: { chat: true, completion: false },
+		// AN3 (`./midSystem`): llama-server renders the model's Jinja template; Qwen's raises on a late system message.
+		midSystem: "fold"
 	},
 
 	/** The LM Studio SDK. Native structured output, emulated tools. */
@@ -734,7 +858,26 @@ export const ADAPTER_MANIFEST: Record<string, AdapterManifestEntry> = {
 				"continue_reply"
 			]
 		},
-		continuesIn: ["completion"]
+		continuesIn: ["completion"],
+		/**
+		 * 🚧 Images on the chat wire (PLAN-composer-attachments §3.6). PNG and
+		 * JPEG only — OURS, not a published list: LM Studio's llama.cpp engine
+		 * decodes images with stb_image, which has no WebP, so a WebP (the fitted
+		 * variant's usual format) is converted by `prepareAttachments` rather
+		 * than refused by the server. No count or byte cap: none is published,
+		 * and a guessed one would refuse requests that fit.
+		 */
+		io: {
+			in: {
+				image: {
+					accepts: ["image/png", "image/jpeg"],
+					prefers: ["image/jpeg", "image/png"]
+				}
+			}
+		},
+		sendsAttachments: { chat: true, completion: false },
+		// AN3 (`./midSystem`): LM Studio renders the model's Jinja template; Qwen's raises on a late system message.
+		midSystem: "fold"
 	},
 
 	/**
@@ -962,3 +1105,10 @@ export const adapterCapabilities = (
  */
 export const adapterIo = (type: string): AdapterIo | undefined =>
 	ADAPTER_MANIFEST[type]?.io
+
+/**
+ * Whether a connection type puts attachments on the wire in this wire mode —
+ * `sendsAttachments` read, absent as false.
+ */
+export const sendsAttachmentsOn = (type: string, wireMode: WireMode): boolean =>
+	!!ADAPTER_MANIFEST[type]?.sendsAttachments?.[wireMode]

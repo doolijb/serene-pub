@@ -48,13 +48,6 @@ vi.mock("$lib/server/db", async () => {
 // from the resolution chain — which under the no-implicit-pickup ruling means a
 // registered `connection_defaults` row and nothing else. A capable connection
 // merely existing in the table would not do, so `beforeAll` registers one.
-vi.mock("$lib/server/utils/getUserConfigurations", () => ({
-	getUserConfigurations: async () => ({
-		contextConfig: { id: 1 },
-		promptConfig: { id: 1 },
-		narratorPromptConfig: null
-	})
-}))
 
 /**
  * Every GraphBuilderScene[] handed to the builder, in call order. This array is
@@ -147,11 +140,13 @@ async function seedBook(label: string) {
 		binding: "{{char:1}}",
 		name: "Aria"
 	})
+	// Both read this book: Extend from a session reads the session's line
+	// of it, and refuses a session that does not read it (plan A3).
 	const [a, b] = await testDb
 		.insert(schema.sessions)
 		.values([
-			{ userId: user.id, isGroup: false, name: "A" },
-			{ userId: user.id, isGroup: false, name: "B" }
+			{ userId: user.id, isGroup: false, name: "A", lorebookId: lorebook.id },
+			{ userId: user.id, isGroup: false, name: "B", lorebookId: lorebook.id }
 		])
 		.returning()
 	const [historyEntry] = await testDb

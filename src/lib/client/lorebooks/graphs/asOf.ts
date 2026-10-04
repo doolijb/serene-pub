@@ -16,6 +16,10 @@ import {
 	rowsReadingOnLine,
 	type Line
 } from "$lib/shared/lorebooks/lineReading"
+import {
+	nearestTieVersions,
+	type TieVersionLike
+} from "$lib/shared/lorebooks/tieVersions"
 
 /** A history entry, as little of it as a date needs. */
 export interface DatedEntryLike extends StoryDate {
@@ -51,14 +55,17 @@ export function edgeDate(
  * of a fork reads its parent's links too. A link on an ancestor line that is
  * dated after the fork is CUT from the branch — the date is the history entry
  * that dates it; an undated link is never cut. A sibling line's links never
- * show.
+ * show. A branch's own version of a cast tie at a date is drawn in place of
+ * the version it inherited at that date (`nearestTieVersions`, the prompt's
+ * rule too).
  */
-export function edgesOnLine<T extends DatedEdgeLike & { branchId?: number | null }>(
-	edges: readonly T[],
-	line: Line,
-	entries: readonly DatedEntryLike[]
-): T[] {
-	return rowsReadingOnLine(edges, line, (e) => edgeDate(e, entries))
+export function edgesOnLine<
+	T extends DatedEdgeLike & TieVersionLike & { branchId?: number | null }
+>(edges: readonly T[], line: Line, entries: readonly DatedEntryLike[]): T[] {
+	return nearestTieVersions(
+		rowsReadingOnLine(edges, line, (e) => edgeDate(e, entries)),
+		line
+	)
 }
 
 /** The web as it stood at the moment: everything that had happened by then. */

@@ -14,7 +14,7 @@ Never used an AI chat app before? You're in the right place. These first pages a
 
 ## What you can do with it
 
-**Talk to an AI.** Open a plain conversation with the **Guide**, Serene Pub's built-in helper. Ask it questions, think out loud, or ask how to do something in the app. It knows these docs and tells you which page its answer came from.
+**Ask for help.** Open a conversation with the **Guide**, Serene Pub's built-in helper, and ask how to do something in the app. It answers from these docs and tells you which page its answer came from.
 
 **Play with characters.** Pick a character (a detective, a dragon, a shopkeeper in a fantasy town) and step into a scene with them. You write what *you* say and do; the AI writes what the character says and does. You can bring several characters into one scene and let them talk to each other too.
 
@@ -24,7 +24,7 @@ Never used an AI chat app before? You're in the right place. These first pages a
 
 ## How it works, in one paragraph
 
-Serene Pub runs **on your own computer** (or on a phone, or a home server). Your characters, stories and settings are saved there, not on someone else's website, and you don't need an account with us. What Serene Pub doesn't include is the AI's "brain": the **model** that actually writes the replies. You connect one in step 3, and you have two choices:
+Serene Pub runs **on your own computer** (or on a phone, or a home server). Your characters, stories and settings are saved there, not on someone else's website, and you don't need an account with us. What Serene Pub doesn't include is the AI's "brain": the **model** that actually writes the replies. The first time you open Serene Pub, a **setup wizard** walks you through connecting one ([Connect a model](./connect-a-model.md) covers it step by step). You have two choices:
 
 - **Run a model on your own computer.** Free and private: nothing you write leaves your machine. It needs a reasonably powerful computer, ideally one with a graphics card. Serene Pub can download and start one for you in a few clicks.
 - **Use a model someone else runs**, through an online service such as OpenRouter, OpenAI or Anthropic. Works on any computer, including a modest laptop, but the service usually charges a small amount per message, and what you write is sent to it.
@@ -38,7 +38,7 @@ You don't need to memorise these. Each page explains them again when they come u
 | Word | What it means |
 | --- | --- |
 | **pub** | Your copy of Serene Pub: the app running on your computer, with everything saved in it. "Your pub" is where your characters and stories live. |
-| **model** | The AI that writes the replies. Sometimes called an **LLM** (large language model). |
+| **model** | The AI that does the work: mostly writing replies, but some models handle other jobs, like creating images or finding related lore. One that writes text is often called an **LLM** (large language model). |
 | **connection** | How your pub reaches a model: which one, and where it runs. |
 | **character** | Someone the AI plays: a name, a description, a personality, and a picture. |
 | **persona** | *You*, in the story: the name and description the AI knows you by. A persona is simply a character you play. |
@@ -50,26 +50,23 @@ Later on you'll also meet **lorebooks** (notes about your world that characters 
 
 - **It isn't an AI model.** It's the app around one. The replies are only as good as the model you connect, and a small model on a modest computer writes simpler replies than a large one.
 - **It isn't a website you sign up to.** There's no account with us and no subscription. If you use an online model service, that service is separate and has its own sign-up and prices.
-- **It isn't only for roleplay.** Stories and characters are what it's built around, but the Guide is a plain question-and-answer conversation, and nothing stops you using a character as a writing partner or a study buddy.
+- **It isn't only for roleplay.** Stories and characters are what it's built around, but nothing stops you using a character as a writing partner or a study buddy.
 - **It isn't set up for the open internet out of the box.** It's meant for your own computer and home network. Putting it online for others takes a few extra steps; see [Hosting](./hosting.md) when you get there.
 
 ## What you'll need
 
 :::note You'll need
-- A computer running **Windows**, **macOS** or **Linux**, or an **Android** phone (Android 8 or newer).
+- A computer running **Windows**, **macOS** or **Linux**, or a 64-bit **Android** phone (Android 8 or newer).
 - A web browser. Serene Pub opens in the one you already use.
 - An internet connection for the first download.
-- **One** of these, for the model:
-    - a computer with a graphics card that has about **8 GB of memory** or more (a smaller card, or no card at all, still works but replies come more slowly), **or**
-    - an account with an online AI service, and usually a few dollars of credit.
+- A **model** to write the replies, in one of two ways:
+    - **an online AI service:** an account, and usually a few dollars of credit. Any computer will do; **or**
+    - **running a model on your own computer:** a graphics card with about **8 GB of memory** or more works best. A smaller card, or no card at all, still works, but replies come more slowly.
 :::
 
-Not sure which of those you have? Don't worry about it yet. Step 3 helps you choose, and you can change your mind later.
+Not sure which of those you have? Don't worry about it yet. The setup wizard helps you choose when you first open Serene Pub, and you can change your mind later.
 
 ## Coming from SillyTavern?
 
-Serene Pub reads SillyTavern character cards directly, and it can import your whole SillyTavern library, chats included. Install first, then see [Importing from SillyTavern](./importing-from-sillytavern.md). The rest of Start here will still be useful: some things work differently, and the words are a little different too (a SillyTavern "chat" is a Serene Pub **session**).
+Serene Pub reads SillyTavern character cards directly, and on a computer it can import your whole SillyTavern library, chats included. Install first, then see [Importing from SillyTavern](./importing-from-sillytavern.md). The rest of Start here will still be useful: some things work differently, and the words are a little different too (a SillyTavern "chat" is a Serene Pub **session**).
 
-## Next
-
-[Install Serene Pub](./install.md) →

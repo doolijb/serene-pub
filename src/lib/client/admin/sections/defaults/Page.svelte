@@ -63,6 +63,12 @@
 	import { EMBEDDING_CAPABILITY } from "$lib/shared/constants/embeddings"
 	import { NER_CAPABILITY } from "$lib/shared/constants/ner"
 	import AdminPageHeader from "$lib/client/components/admin/AdminPageHeader.svelte"
+	import EmbeddingSwitchDialog from "$lib/client/components/connections/EmbeddingSwitchDialog.svelte"
+	import EntitySwitchDialog from "$lib/client/components/connections/EntitySwitchDialog.svelte"
+	import {
+		useStarConfirm,
+		type StarMove
+	} from "$lib/client/components/connections/useStarConfirm.svelte"
 
 	const socket = useTypedSocket()
 	const interest = getAdminInterestContext()
@@ -75,8 +81,9 @@
 	 * rebuilds the vector index, moving the entity model re-annotates. Those
 	 * consequences live in `connections:setDefault` (the star the Connections
 	 * view presses), so these two rows write through it rather than through
-	 * `connectionDefaults:set`, which stores the pair and nothing more. Same
-	 * table, same judgement; one extra step the index needs.
+	 * `connectionDefaults:set`, which stores the pair and nothing more — and
+	 * they ask first, with the Connections view's own confirmation
+	 * (`useStarConfirm`): the price of re-embedding, the count to re-scan.
 	 */
 	const STAR_WITH_CONSEQUENCE = new Set<string>([
 		EMBEDDING_CAPABILITY,
@@ -89,7 +96,7 @@
 	 */
 	const JOB_NOTES: Record<string, string> = {
 		[EMBEDDING_CAPABILITY]:
-			"Powers retrieval for lore, history and past messages. With none set, retrieval falls back to keyword search. Switching models rebuilds the index.",
+			"Powers retrieval by meaning for lorebook entries, history included. With none set, retrieval falls back to keyword search. Switching models rebuilds the index.",
 		[NER_CAPABILITY]:
 			"Finds the people and places in passages. Switching models re-scans them."
 	}
@@ -265,14 +272,18 @@
 		const modelId =
 			half === "connection" && modelRaw ? Number(modelRaw) : null
 		if (half === "connection" && STAR_WITH_CONSEQUENCE.has(capability)) {
-			socket.emit("connections:setDefault", {
-				capability,
-				id,
-				modelId:
-					id !== null && modelId !== null && !Number.isNaN(modelId)
-						? modelId
-						: null
-			})
+			stars.stage([
+				{
+					capability,
+					connectionId: id,
+					modelId:
+						id !== null &&
+						modelId !== null &&
+						!Number.isNaN(modelId)
+							? modelId
+							: null
+				}
+			])
 			return
 		}
 		socket.emit("connectionDefaults:set", {
@@ -289,6 +300,38 @@
 				: {})
 		})
 	}
+
+	/**
+	 * Bumped when a staged star move ends without a write — "Keep", or a price
+	 * that could not be had. A picker shows what was chosen the moment it is
+	 * chosen, so the row's pickers are rebuilt from the defaults that stand.
+	 */
+	let pickerEpoch = $state(0)
+	/** A starred or staged pair, by name, off this page's own lists. */
+	function modelOf(connectionId: number, modelId: number | null) {
+		for (const rows of Object.values(connectionOptions)) {
+			const model = rows
+				.find((o) => o.id === connectionId)
+				?.models?.find((m) => m.id === modelId)
+			// Whether its files are this install's own is not on this list,
+			// so the dialog leaves out the line that would say so.
+			if (model) return { name: model.name, isLocal: false }
+		}
+		return null
+	}
+	const stars = useStarConfirm({
+		getDefaults: () => defaults,
+		modelOf,
+		commit: (moves: StarMove[]) => {
+			for (const move of moves)
+				socket.emit("connections:setDefault", {
+					capability: move.capability,
+					id: move.connectionId,
+					modelId: move.modelId
+				})
+		},
+		dropped: () => pickerEpoch++
+	})
 
 	function setGroupSampling(rows: ComboRow[], raw: string) {
 		// "mixed" is a label, not a value — selecting it would mean "make them
@@ -496,126 +539,156 @@
 								{status.label}
 							</span>
 
-							{#if options.length}
-								<!-- 3. Connection. Rendered whenever there is
+							{#key pickerEpoch}
+								{#if options.length}
+									<!-- 3. Connection. Rendered whenever there is
 								     anything to render, even when none of it
 								     qualifies: the disabled rows carry the
 								     per-connection reasons, and those are the
 								     only place "why not mine" is answered. -->
-								<div class="flex min-w-0 flex-col gap-1">
-									{@render stackedLabel("Connection")}
-									<Select
-										class="w-full"
-										label={`Connection for ${label}`}
-										labelHidden
-										options={[
-											{ value: "", label: "Not set" },
-											// Every connection, judged and NOT
-											// filtered: an ineligible one is listed
-											// greyed with its reason, then the
-											// user's own note, bounded by
-											// `notePreview`.
-											...options.map((opt) => ({
-												value: String(opt.id),
-												label: opt.name,
-												disabled: !opt.eligible,
-												hint:
-													[opt.reason, notePreview(opt.notes)]
-														.filter(Boolean)
-														.join(" · ") || undefined
-											}))
-										]}
-										value={current == null ? "" : String(current)}
-										onValueChange={(v) => {
-											if (v === "") {
-												setHalf(combo.id, "connection", v)
-												return
-											}
-											// Pin the first switched-on model: the
-											// registration needs both halves and
-											// connections have no default model.
-											const models =
-												(connectionOptions[combo.id] ?? []).find(
-													(o) => o.id === Number(v)
-												)?.models ?? []
-											const first = models.find(
-												(m) => m.enabled && !m.missingSince
-											)
-											setHalf(
-												combo.id,
-												"connection",
-												v,
-												first ? String(first.id) : undefined
-											)
-										}}
-									/>
-								</div>
-
-								<!-- 4. Model: the second half of the pair, only
-								     where the chosen endpoint HAS models.
-								     Disabled models are listed and greyed, never
-								     dropped, so an older registration still
-								     shows as what it is. -->
-								{#if currentModels.length}
 									<div class="flex min-w-0 flex-col gap-1">
-										{@render stackedLabel("Model")}
+										{@render stackedLabel("Connection")}
 										<Select
 											class="w-full"
-											label={`Model for ${label}`}
+											label={`Connection for ${label}`}
 											labelHidden
-											placeholder="Choose a model"
-											options={currentModels.map((m) => ({
-												value: String(m.id),
-												label: m.name,
-												disabled: !m.enabled || m.missingSince != null,
-												hint: m.missingSince
-													? "No longer listed by its host"
-													: m.enabled
-														? undefined
-														: "Switched off"
-											}))}
-											value={currentModel == null
+											options={[
+												{ value: "", label: "Not set" },
+												// Every connection, judged and NOT
+												// filtered: an ineligible one is listed
+												// greyed with its reason, then the
+												// user's own note, bounded by
+												// `notePreview`.
+												...options.map((opt) => ({
+													value: String(opt.id),
+													label: opt.name,
+													disabled: !opt.eligible,
+													hint:
+														[
+															opt.reason,
+															notePreview(
+																opt.notes
+															)
+														]
+															.filter(Boolean)
+															.join(" · ") ||
+														undefined
+												}))
+											]}
+											value={current == null
 												? ""
-												: String(currentModel)}
+												: String(current)}
 											onValueChange={(v) => {
-												if (!v) return
+												if (v === "") {
+													setHalf(
+														combo.id,
+														"connection",
+														v
+													)
+													return
+												}
+												// Pin the first switched-on model: the
+												// registration needs both halves and
+												// connections have no default model.
+												const models =
+													(
+														connectionOptions[
+															combo.id
+														] ?? []
+													).find(
+														(o) =>
+															o.id === Number(v)
+													)?.models ?? []
+												const first = models.find(
+													(m) =>
+														m.enabled &&
+														!m.missingSince
+												)
 												setHalf(
 													combo.id,
 													"connection",
-													String(current),
-													v
+													v,
+													first
+														? String(first.id)
+														: undefined
 												)
 											}}
 										/>
 									</div>
-								{:else}
-									<span
-										class="text-surface-600-400 hidden text-xs @min-[900px]/content:block @min-[900px]/content:pt-2"
-									>
-										{current == null
-											? "—"
-											: "No models listed"}
-									</span>
-								{/if}
-							{:else}
-								<!-- No connections at all: the two picker
-								     columns become the sentence that says so. -->
-								<div
-									class="flex flex-wrap items-center gap-2 text-xs @min-[900px]/content:col-span-2"
-								>
-									{#if !combo.servable}
-										<span class="text-surface-600-400">
-											Nothing in this version of Serene
-											Pub can do this yet.
-										</span>
+
+									<!-- 4. Model: the second half of the pair, only
+								     where the chosen endpoint HAS models.
+								     Disabled models are listed and greyed, never
+								     dropped, so an older registration still
+								     shows as what it is. -->
+									{#if currentModels.length}
+										<div
+											class="flex min-w-0 flex-col gap-1"
+										>
+											{@render stackedLabel("Model")}
+											<Select
+												class="w-full"
+												label={`Model for ${label}`}
+												labelHidden
+												placeholder="Choose a model"
+												options={currentModels.map(
+													(m) => ({
+														value: String(m.id),
+														label: m.name,
+														disabled:
+															!m.enabled ||
+															m.missingSince !=
+																null,
+														hint: m.missingSince
+															? "No longer listed by its host"
+															: m.enabled
+																? undefined
+																: "Switched off"
+													})
+												)}
+												value={currentModel == null
+													? ""
+													: String(currentModel)}
+												onValueChange={(v) => {
+													if (!v) return
+													setHalf(
+														combo.id,
+														"connection",
+														String(current),
+														v
+													)
+												}}
+											/>
+										</div>
 									{:else}
-										<span class="text-surface-600-400">
-											No connection can do this yet.
+										<span
+											class="text-surface-600-400 hidden text-xs @min-[900px]/content:block @min-[900px]/content:pt-2"
+										>
+											{current == null
+												? "—"
+												: "No models listed"}
 										</span>
-										{@render addConnection(combo.id)}
 									{/if}
-								</div>
-							{/if}
+								{:else}
+									<!-- No connections at all: the two picker
+								     columns become the sentence that says so. -->
+									<div
+										class="flex flex-wrap items-center gap-2 text-xs @min-[900px]/content:col-span-2"
+									>
+										{#if !combo.servable}
+											<span class="text-surface-600-400">
+												Nothing in this version of
+												Serene Pub can do this yet.
+											</span>
+										{:else}
+											<span class="text-surface-600-400">
+												No connection can do this yet.
+											</span>
+											{@render addConnection(combo.id)}
+										{/if}
+									</div>
+								{/if}
+							{/key}
 
 							<!-- 5. Sampling for this job. A job with no
 							     sampling vocabulary (embeddings, entities)
@@ -658,7 +731,7 @@
 									class="flex flex-wrap items-center gap-2 text-xs @min-[900px]/content:col-span-5"
 								>
 									<span class="text-surface-600-400">
-										No connection on this instance can do
+										No connection on this pub can do
 										this; the list says why.
 									</span>
 									{@render addConnection(combo.id)}
@@ -718,6 +791,10 @@
 		{/if}
 	{/if}
 </div>
+
+<!-- Moving the embedding or entity star asks first, with the numbers. -->
+<EmbeddingSwitchDialog {...stars.embeddingDialog} />
+<EntitySwitchDialog {...stars.entityDialog} />
 
 <!-- Below the desk switch the row stacks and the columns lose their
      positions, so each picker says what it picks. Hidden from assistive

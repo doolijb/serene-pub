@@ -82,10 +82,12 @@ import "@serene-pub/core-catalog"
  *    commit as the edit, and say in a comment what moved and why it does not
  *    break the pins.
  *
- * ⚠ **Answer 3 used to require a migration and no longer does.** Migrations
- * 0099, 0106 and 0113 each delete registry rows so the next boot could re-project
- * them — the comments below that name one are history, not instructions. Nothing
- * written from now on needs the migration half.
+ * ⚠ **Answer 3 needs no migration.** The next boot re-projects a moved
+ * declaration on its own. Every migration number in the comments below names
+ * a file of the pre-release chain squashed on 2026-10-01 (archived in
+ * `~/.claude/plans/ARCHIVE-drizzle-migrations-0094-0221-v2.tar.gz`), never
+ * today's file of the same number — those notes record why a hash moved, not
+ * a step to repeat.
  *
  * Adding a *new* type is safe and needs nothing — just add its line.
  *
@@ -183,7 +185,14 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// takes a NAME as well as an id so a second run can link what a first
 	// created; `effects: 'write'`, review on the link itself (`linkType`,
 	// `label`) and never on its ends, `causesEvent: lore-link-created`.
-	"core:outlet/link-lore-entries@1": "685d35ac8c432",
+	// Moved 2026-09-29 (places plan B2): the relationship's whole descriptor —
+	// in-ports `name` (new) and `description` (was `label`, renamed with no
+	// alias), param `reverseLinkType` (new, default '' = one way), review fields
+	// `linkType`, `reverseLinkType`, `name`, `description`. The commit became
+	// idempotent (host-side, not hashed). Proven: the snapshot entry with only
+	// those undone (ports `from`/`to`/`label`, no `reverseLinkType`, the old
+	// review fields) hashes back to the old pin. (was "685d35ac8c432")
+	"core:outlet/link-lore-entries@1": "1f418ee9febeaa",
 	// Re-projected by 0174: a `media` in-port, so an image can be posted AS a new
 	// message. `attach-image` could not do it — a message created inside a run is
 	// not a valid target for a later node — which left no path at all from a
@@ -212,7 +221,12 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// Moved (lair pass B4, D5, 2026-09-27): a `sections` in-port
 	// (`folded-sections@1`) — the reply's folded sections, stored per swipe
 	// and projected as `core:section` parts. (was "10759d42019944")
-	"core:outlet/create-message@1": "1a521707874871",
+	// Moved 2026-09-30 (Lair character turns, owner ruling): a `turnPlan`
+	// in-port — the planner's document whose speakers take character turns,
+	// resolved and stored as `metadata.turnPlan`. Additive. Proven: the
+	// contracts source with only this lane's ports reverted hashes back to
+	// the old pin. (was "1a521707874871")
+	"core:outlet/create-message@1": "648433d37fbc8",
 	"core:outlet/graph-proposal@1": "68c1f10a8eb0c",
 	// Moved (09-B B4, 2026-09-15): a `thinking` in-port, so the reply's
 	// reasoning trace lands on the row it fills; the `target` port now takes
@@ -223,7 +237,9 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// lands — see `create-message`. (was "1df0cd729ce38f")
 	// Moved (lair pass B4, 2026-09-27): a `sections` in-port — see
 	// `create-message`. (was "1f7eec771e6f80")
-	"core:outlet/update-message@1": "3359a3cadb39",
+	// Moved 2026-10-03 (owner note 39): the `thinking` in-port is `reasoning`
+	// — one concept, one name (NOMENCLATURE §23). (was "3359a3cadb39")
+	"core:outlet/update-message@1": "fda61fb31de76",
 	"core:inlet/summarize-request@1": "1ffc99d5933e6c",
 	// Gained the `greeting` field on its sessionShape (20, migration 0151) —
 	// the default greeting-on-creation behaviour stated, not changed.
@@ -298,8 +314,13 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// in on make-choices (stamped on the block), out on read-answer (read
 	// back on the press's run). Only that port moved them.
 	// (was "3e585eb0287f8" and "16006e4fcd8b3")
-	"core:task/make-choices@1": "180abbaabc628f",
-	"core:task/read-answer@1": "172eb29516e05d",
+	// Both moved 2026-09-30 (plan A27 P5, the "fall back" default): an additive
+	// `vantage` port (`json@1`) beside `referent` — in on make-choices, out on
+	// read-answer — where a question was asked from. Proven: the registry
+	// snapshot of each with only that port deleted hashes back to the old pin.
+	// (was "180abbaabc628f" and "172eb29516e05d")
+	"core:task/make-choices@1": "b5554f939e8d",
+	"core:task/read-answer@1": "7cd6634557a9a",
 	// NEW (contracts batch 2, 2026-09-17): two values side by side in one
 	// document, under names the spec chose, so a junction's `equalsPath` has
 	// two paths to compare — a junction branches on ONE port, and until this
@@ -337,7 +358,12 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// Moved (enum member labels, 2026-09-29): `unit` gained `members` — a label
 	// and hint per option, so the Pipelines panel stops showing raw values. Display
 	// text inside a slot schema is hashed; nothing pinning it moves. (was "b6e8585367d9")
-	"core:outlet/advance-story-clock@1": "ddc156d7a0cec",
+	// Moved 2026-10-02 (lorebooks Wave 8): declares `causesEvent:
+	// core:event/session-updated@1` (R33): the outlet now emits `session-updated` `{
+	// changed: ['storyClock'] }`, so the event is no longer a declared root
+	// (lorebooks Wave 7 close-out). Edited in place; no migration (the slug's
+	// pointer moves at boot). (was "ddc156d7a0cec")
+	"core:outlet/advance-story-clock@1": "cdff1f3a47f7c",
 	"core:inlet/session-created@1": "1bac3a1f2d1149",
 	// The side-character turn (ruling 2026-09-07). A NEW type — no migration,
 	// just a line: it inserts a row and conflicts with nothing.
@@ -423,7 +449,9 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// Moved (enum member labels, 2026-09-29): `streaming` gained `members` — a label
 	// and hint per option, so the Pipelines panel stops showing raw values. Display
 	// text inside a slot schema is hashed; nothing pinning it moves. (was "1b38509034c053")
-	"core:oracle/generate-text@1": "1ae8e1f7b8300e",
+	// Moved 2026-10-03 (owner note 39): the `thinking` out-port is `reasoning`
+	// — one concept, one name (NOMENCLATURE §23). (was "1ae8e1f7b8300e")
+	"core:oracle/generate-text@1": "160d9dc57f992a",
 	"core:oracle/graph-node-description@1": "338643a12d7a",
 	"core:oracle/graph-node-resolution@1": "144ed35a261c23",
 	"core:oracle/graph-perspective@1": "1507fd50fbe616",
@@ -550,7 +578,11 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// Moved (enum member labels, 2026-09-29): `priority` gained `members` — a label
 	// and hint per option, so the Pipelines panel stops showing raw values. Display
 	// text inside a slot schema is hashed; nothing pinning it moves. (was "c04e4704eba99")
-	"core:query/world-lore@1": "140fe9926f31bc",
+	// Moved 2026-10-02 (lorebooks Wave 8): the keyword lane's new `exclusions` out-
+	// port — the entries its selective logic ruled out, as eligibility verdicts
+	// (lorebooks C2). Edited in place; no migration (the slug's pointer moves at
+	// boot). (was "140fe9926f31bc")
+	"core:query/world-lore@1": "8a660280c2cef",
 	// Moved (W1, 2026-09-17): gained the `speaker` in-port — a participant
 	// reference naming whose private lore this read is for, wired inside a
 	// repeating clause so two voices of one turn read two pools from one
@@ -567,7 +599,10 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// Moved (enum member labels, 2026-09-29): `priority` gained `members` — a label
 	// and hint per option, so the Pipelines panel stops showing raw values. Display
 	// text inside a slot schema is hashed; nothing pinning it moves. (was "13eb24bba7db95")
-	"core:query/character-lore@1": "d57fea94d7a4b",
+	// Moved 2026-10-02 (lorebooks Wave 8): the keyword lane's new `exclusions` out-
+	// port (lorebooks C2). Edited in place; no migration (the slug's pointer moves
+	// at boot). (was "d57fea94d7a4b")
+	"core:query/character-lore@1": "14fab76b8a3b72",
 	// Gained the `channel` param in 0.6-preview (migration 0149, 20 §7);
 	// default 'main' reproduces the legacy read byte-for-byte.
 	//
@@ -605,7 +640,14 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// Moved (enum member labels, 2026-09-29): `priority` gained `members` — a label
 	// and hint per option, so the Pipelines panel stops showing raw values. Display
 	// text inside a slot schema is hashed; nothing pinning it moves. (was "b9dbc930f90c1")
-	"core:query/session-history@1": "1b671cade13c9c",
+	// Moved 2026-10-03 (history window): the `budget` in-port — wired, the
+	// read is the newest rows up to twice the window by a generous estimate
+	// (never more than 2000) and `limit` is not read; `limit`'s description
+	// says so. Every shipped reply wires it. (was "1b671cade13c9c")
+	"core:query/session-history@1": "4d8a07e5d38b0",
+	// Lair character turns (owner ruling 2026-09-30): the standing turn plan
+	// a character turn plays from. A new type: no migration.
+	"core:query/turn-plan@1": "a71a679f5d817",
 	// Moved (U5f, R-15 *Staleness and order*, 2026-09-17): a `version`
 	// out-port — the session's state version, on its own port so a spec can
 	// hand it back as `base`. Additive: the Adventure keeper graphs wire it.
@@ -693,7 +735,12 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// Moved (enum member labels, 2026-09-29): `priority` gained `members` — a label
 	// and hint per option, so the Pipelines panel stops showing raw values. Display
 	// text inside a slot schema is hashed; nothing pinning it moves. (was "15b1b8194c0986")
-	"core:query/relationship-search@1": "11a0d9e6e56a49",
+	// Moved 2026-09-29 (genre plan F6(a)): a `loreLinks` param (boolean,
+	// default true — what every run did) switches the lore-link hop; Adventure's
+	// preset turns it off. The cast-wide read (nobody speaking) is the host read's,
+	// not the descriptor's. Proven: the descriptor with only `loreLinks` deleted
+	// hashes to the old pin. (was "11a0d9e6e56a49")
+	"core:query/relationship-search@1": "14d6e302a08f1f",
 	"core:query/graph-scenes@1": "3d0bc6433032e",
 	// The third gather branch, added in 0.6 after its absence was found: the
 	// split into world and character lore left `history` with no node, so those
@@ -713,7 +760,10 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// Moved (enum member labels, 2026-09-29): `priority` gained `members` — a label
 	// and hint per option, so the Pipelines panel stops showing raw values. Display
 	// text inside a slot schema is hashed; nothing pinning it moves. (was "bd17d58e1976")
-	"core:query/history-entries@1": "e1166297a747a",
+	// Moved 2026-10-02 (lorebooks Wave 8): the keyword lane's new `exclusions` out-
+	// port (lorebooks C2). Edited in place; no migration (the slug's pointer moves
+	// at boot). (was "e1166297a747a")
+	"core:query/history-entries@1": "1403d2cf364be7",
 	// Re-projected by 0186: the same `scanDepth` correction, on this type's own
 	// duplicate declaration of the field. Deliberately still a separate schema
 	// rather than folded into the shared `loreSlots` — the two overlap in that
@@ -781,7 +831,10 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// Moved (enum member labels, 2026-09-29): `priority` gained `members` — a label
 	// and hint per option, so the Pipelines panel stops showing raw values. Display
 	// text inside a slot schema is hashed; nothing pinning it moves. (was "ff1e7cb5db9f2")
-	"core:query/lorebook-triggers@1": "404416a976bd",
+	// Moved 2026-10-02 (lorebooks Wave 8): the new `exclusions` out-port (lorebooks
+	// C2). Edited in place; no migration (the slug's pointer moves at boot). (was
+	// "404416a976bd")
+	"core:query/lorebook-triggers@1": "190c56d8514e39",
 	// A **new** type (2026-09-17), so no migration and no bump — the same
 	// sentence `entry-keys@1` below stands on. It is the **listing** door the
 	// five definitions above are not: no mechanism runs, nothing is scored, and
@@ -806,7 +859,11 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// there only because those keys are absent from `current()` and this one is
 	// not. The recorded value is the source's, computed with this file's own
 	// `definitionContentHash` over the snapshot with the key renamed.
-	"core:query/lorebook-entries@1": "13572f1bddbdd1",
+	// Moved 2026-09-29 (places plan B2): param `withLinks` (boolean, default
+	// false) — each row's lore links, said from the row, on `links`. Additive:
+	// off, a row carries no `links`. Proven: the snapshot entry with only that
+	// param deleted hashes back to the old pin. (was "13572f1bddbdd1")
+	"core:query/lorebook-entries@1": "3763af6fd2ef8",
 	// A **new** type, so no migration and no bump — policy's own sentence,
 	// "adding a new type is safe and needs no migration". Nothing else in this
 	// table moved when it landed, which is the check that says the declaration
@@ -842,7 +899,19 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// forbids. The replacement shapes the contribution (`cos ** falloff`) and
 	// ships at 1 — the raw cosine, which is what ran while the floor sat unread.
 	// (was "132b49d9fcceb4") — `vectors` says `json@1` — a list of query vectors, which is what `embed-text@1` publishes (U5d review, W9).
-	"core:query/vector-search@1": "66b22cb34f028",
+	// (was "66b22cb34f028") — 2026-09-29, genre uplift C3: `maxEntries` stops being
+	// the semantic mechanism's switch and becomes its ceiling — default 0 → 5, no
+	// longer `quick`. The switch moved to `query-windows.searchByMeaning`, the
+	// chain's first node, because this node is its last: the probes were embedded
+	// before `maxEntries = 0` said nothing was wanted.
+	// Moved 2026-10-02 (lorebooks Wave 8): the `speaker` in-port, character-lore's
+	// semantics — the leak guard for an arm inside a per-voice clause (lorebooks C3,
+	// R3). Edited in place; no migration (the slug's pointer moves at boot). (was
+	// "1e4527ac6d1122")
+	"core:query/vector-search@1": "3ecd7d4089af2",
+	// New 2026-10-02 (lorebooks C2/R4, E-2): the cast's presences as the run's
+	// session reads them — its line, and `at` its story clock. A new type.
+	"core:query/cast-presences@1": "68689a20c23d4",
 	// The third retrieval mechanism (design §13.5), added 2026-09-06 — retrieval by
 	// the names a scene is using, over annotations written in the background. A
 	// **new** type id, so the registry inserts it and nothing conflicts: no
@@ -852,7 +921,11 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// (`bandPorts`, contract beside `bands`) — with their share declared as
 	// `recalledLinesShare`. Nothing else moved: with those three removed the
 	// descriptor hashes to the old pin. (was "a62c1e036691f")
-	"core:query/entity-search@1": "1c6d05c53e6a7c",
+	// Moved 2026-10-02 (lorebooks Wave 8): the `speaker` in-port (lorebooks C3), and
+	// `maxEntries` 0→5 / `maxMessages` 0→20: retrieval on by default (R5, A23(b)).
+	// Edited in place; no migration (the slug's pointer moves at boot). (was
+	// "1c6d05c53e6a7c")
+	"core:query/entity-search@1": "1b90356d30b294",
 	// Documentation search (U5g, R-18, 2026-09-16) — the guide genre's one
 	// retrieval mechanism: the compiled docs' sections, scored against the
 	// newest messages, published in the `worldLore` band. A **new** type id.
@@ -877,8 +950,14 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// in-port and returns it enriched, which is what makes "a link is a score
 	// contribution, never an admission" a property of the ports rather than a
 	// promise in a binding.
-	"core:query/mention-spans@1": "1001472b134a3c",
-	"core:query/entity-link@1": "14722f3bd64182",
+	// Moved 2026-10-02 (lorebooks Wave 8): `maxMentions` 0→8: retrieval on by
+	// default (R5, A23(b)). Edited in place; no migration (the slug's pointer moves
+	// at boot). (was "1001472b134a3c")
+	"core:query/mention-spans@1": "122cef04ff82df",
+	// Moved 2026-10-02 (lorebooks Wave 8): the `speaker` in-port (lorebooks C3, R3).
+	// Edited in place; no migration (the slug's pointer moves at boot). (was
+	// "14722f3bd64182")
+	"core:query/entity-link@1": "1ec6b7b641ddd5",
 	// Gained a `variables` slot for its post-budget lore and history in
 	// 0.6-preview. Re-projected by migration 0108, on the same terms as 0107.
 	// Migration 0095 — answer 3.
@@ -967,7 +1046,25 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// the `bands` alias object is gone from the template variables —
 	// bands are top-level names only. Nothing else moved: with the `bands`
 	// field put back the descriptor hashes to the old pin (was "16d010705bfeb2").
-	"core:task/assemble@2": "a16c3e447ae6b",
+	// Moved 2026-09-30 (character lore reaches the prompt, owner ruling): the
+	// `variables` slot renders `characterLore` through `core:var/character-lore@1`
+	// and `rendersBands` loses `raw`; the template scope types `characterLore`
+	// as the laid-out string; the `blocks` param's shipped order lists it under
+	// `personas`. Nothing else moved: with those four put back the descriptor
+	// hashes to the old pin (was "a16c3e447ae6b").
+	// Moved 2026-10-02 (author's note AN1): the template scope types
+	// `authorsNote` (`ASSEMBLE_TEMPLATE_SCOPE`) — the placed note a template
+	// renders with `{{#with ../authorsNote}}`. (was "193232d7172599")
+	// Moved 2026-10-02 (composer attachments phase 4): the template scope's
+	// transcript line gains `attachments` — the placed files a template renders
+	// with `{{{attachments}}}`. (was "c263e71c1772a")
+	// Moved 2026-10-03 (B2 prompt shape): the `blocks` param's shipped order
+	// lists `currentDate` LAST instead of first (`SHIPPED_PROMPT_BLOCK_IDS`),
+	// matching the shipped template, which moved the date to the end of the
+	// system block so the top of the prompt stays cache-stable. Nothing else
+	// moved: with the old order put back the descriptor hashes to the old pin.
+	// (was "a09e1d06836e8")
+	"core:task/assemble@2": "980fcefab8e91",
 	// Tool calling's pure halves (20 §9), added 2026-08-26. New types — a
 	// row inserts and conflicts with nothing.
 	// Moved (enum member labels, 2026-09-29): `style` gained `members` — a label
@@ -1001,7 +1098,20 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// (B13, was "1017d8d6385e1a"), removed with no alias (owner 2026-09-27:
 	// no back-compat before distribution; the only spec pinning it was
 	// `lair-respond`, repinned in the same change).
-	"core:task/undescribed-name@1": "cbaecbe798dca",
+	// Moved 2026-09-29 (places plan B6): a `path` param (default `''`) — where
+	// the name sits inside `name`, so *Answer the door* can read the world's
+	// `location` off a session-state document (and a lore reference is its
+	// listed entry, a binding rule with no declaration). A widened declaration
+	// the pointer carries: an unset `path` reads `name` whole, as before.
+	// Proven: the registry snapshot of this declaration with only
+	// `slots.params.schema.path` deleted hashes back to the old pin.
+	// (was "cbaecbe798dca")
+	// Moved 2026-09-30 (plan A27 P5): an additive in-port `fallbackName`
+	// (`json@1`), looked for when `name` at `path` names nothing — the Lair's
+	// door reads the knock's `vantage` there. Unwired, it reads as before.
+	// Proven: the snapshot with only that port deleted hashes back to the old
+	// pin. (was "298d40eeb2950")
+	"core:task/undescribed-name@1": "10d69dd5844c15",
 	// The two pure Tasks of D-4a (2026-09-17), and **new** types — a row
 	// inserts and conflicts with nothing, so no migration and no bump.
 	//
@@ -1082,7 +1192,11 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// `core:task/context-budget@1`. `batchTokens` also moves from 2048 to 2560
 	// — a default is content, and the old number meant 548 tokens of chat once
 	// the binding subtracted its reserve from it.
-	"core:task/batch-messages@1": "3a1bef51d6d9a",
+	// Moved 2026-10-03 (attachments follow-ups, owner ruling): an optional
+	// `attachments` in-port (`core:shape/media-by-message@1`) — each file is
+	// named after its message's text and counted in the cut. Unwired, or a
+	// message with no files, batches exactly as before. (was "3a1bef51d6d9a")
+	"core:task/batch-messages@1": "1e1437002c1acc",
 	// The narrator's half of the split (migration 0114). It shares this one's
 	// implementation and ports; what makes it a separate type is that it
 	// declares a different configurable surface — `narratorName`, and no
@@ -1092,7 +1206,14 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// contract — they decide what a template may reference — so its declared `portSchemas` (out main/templateContext)
 	// is now hashed (still read from the row's policy). Nothing else moved:
 	// with it excluded the descriptor hashes to the old pin. (was "f832d75d396be")
-	"core:task/build-narrator-context@1": "79532f3db7018",
+	// Moved 2026-09-29 (genre uplift C2): an additive `turnDirection` in-port
+	// (S.text) — what the person asked the narration to do, rendered
+	// `{{turnDirection}}` by the shipped narrator row; it was stored beside the
+	// row and sent nowhere. Proven: the registered declaration with only that
+	// port deleted hashes back to the old pin. (was "79532f3db7018")
+	// Moved 2026-10-02 (author's note AN1): `TEMPLATE_CONTEXT_SCHEMA` (its
+	// hashed `portSchemas`) declares the optional `authorsNote`. (was "a5f7ffcdaf881")
+	"core:task/build-narrator-context@1": "2d7e9cd66420c",
 	// The third context surface (ruling 2026-09-07), and a NEW type for the
 	// same reason the narrator's was one: it declares a different configurable
 	// surface. What separates it from the narrator's is a `speaker` IN-PORT —
@@ -1130,7 +1251,11 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// prose, rendered `{{locationPassage}}` for the voices. Proven: the
 	// registered declaration with only that port deleted hashes back to the
 	// old pin. (was "1b8e23fe2a287e")
-	"core:task/build-side-character-context@1": "10d63d20f9448a",
+	// Moved 2026-09-29 (genre uplift C2): an additive `turnDirection` in-port
+	// (S.text) — the narrator modal's text on a side character's turn, wired by
+	// `narrate-character` alone. Proven: the registered declaration with only
+	// that port deleted hashes back to the old pin. (was "10d63d20f9448a")
+	"core:task/build-side-character-context@1": "66f7e3d3276d3",
 	// Gained the `variables` slot in 0.6-preview (migration 0107), a
 	// `speakerRelationships` layout when the graph query was wired in
 	// (migration 0111), and lost `narratorName` from its `prompts` slot when
@@ -1178,7 +1303,10 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// `fields` (the genre fields, `{{sanctumSteers}}` for the Castellan) and
 	// `scratchpad` (the Castellan's own notes). Proven: the descriptor with
 	// only those two ports deleted hashes to the old pin. (was "f3b1eb062b5a1")
-	"core:task/build-template-context@1": "a684804f023dc",
+	// Moved 2026-10-02 (author's note AN1): `TEMPLATE_CONTEXT_SCHEMA` (its
+	// hashed `portSchemas`) declares the optional `authorsNote` the builder
+	// carries to Assemble. (was "a684804f023dc")
+	"core:task/build-template-context@1": "1211721006a38a",
 	/**
 	 * The Adventure genre's three agent surfaces onto that same builder.
 	 *
@@ -1205,8 +1333,22 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// `scratchpad` (`{{scratchpad}}`) on the planner. Proven: each descriptor
 	// with only those ports deleted hashes to its old pin.
 	// (was "152c3965ec862a" and "30b7bc4427e4d")
-	"core:task/build-planner-context@1": "3ada6d27fc92f",
-	"core:task/build-scene-context@1": "b8a0eaecd7649",
+	// Both moved 2026-09-29 (genre plan F6(a)): an additive `castRelationships`
+	// in-port (`S.candidates`, the ranker's allocation) rendered as
+	// `{{castRelationships}}` — how the cast stand with each other, for the game
+	// master's two agents only. Proven: each descriptor with only that port
+	// deleted hashes to its old pin. (was "3ada6d27fc92f" and "b8a0eaecd7649")
+	"core:task/build-planner-context@1": "17ad9c92aaac9a",
+	// Moved 2026-09-30 (Lair party speech, owner ruling): an additive
+	// `partySpeakers` in-port (`S.json`, side-character facts read flat)
+	// rendered as `{{partySpeakers}}` — whose lines the Castellan's party call
+	// writes. Proven: the descriptor with only that port deleted hashes to its
+	// old pin. (was "179a221d8168a8")
+	// Moved 2026-09-30 (place sight, owner ruling): a `placeSight` in-port —
+	// `'reach'`, the place the scene is at and the places one way from it,
+	// read by the Lair's Castellan speaking for the party. Additive. Proven
+	// with create-message's. (was "bc25ffbd21a10")
+	"core:task/build-scene-context@1": "18bfc96d9426b0",
 	"core:task/build-keeper-context@1": "17dab50617992b",
 	/**
 	 * A model's JSON answer, read back as data — the other half of asking for
@@ -1247,7 +1389,11 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// once per reference; the Whisper's recipients. Additive. Proven: the
 	// registry entry with only that port deleted hashes to the old pin.
 	// (was "1043888051f27a")
-	"core:query/resolve-state-changes@1": "8e48a372c8f42",
+	// Moved 2026-09-30 (stat ownership, owner ruling): a `keeps` in-port —
+	// whose stats this keeper keeps (`'world'`, or one participant
+	// reference); a change to any other owner is refused. Additive. Proven
+	// with create-message's. (was "8e48a372c8f42")
+	"core:query/resolve-state-changes@1": "1f628fee792deb",
 	// Moved (R-8, 2026-09-15): a `connection` slot, shared with the generating
 	// step in every shipped spec, so the ONE window computation reads the
 	// model's own window (0114) off the same pair the request goes out on.
@@ -1270,6 +1416,10 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// read one (ports alone, no slots, was all the material had to tell them
 	// apart by).
 	"core:task/concat-candidates@1": "16fda337949636",
+	// New 2026-10-02 (lorebooks C2, R2/R4): the gates between the mechanisms
+	// and the ranker — exclusions, secrecy, presence — marking
+	// `Candidate.ineligible`, never deleting. A new type: no re-projection.
+	"core:task/eligibility@1": "85ca266c8f6c5",
 	// Re-projected by **0106** (policy answer 3). It gained a
 	// `continuationPrefill` IN-port — and the seam it feeds is older than the
 	// port: `prompt/messages.ts` has put `input.continuationPrefill` on the seed
@@ -1285,7 +1435,24 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// are a node and not a flag on a provider: by the time a completion prompt is
 	// rendered the seed is an open block inside one string.
 	"core:task/prose-transcript@1": "1faa916f51a8e2",
-	"core:task/query-windows@1": "74c7f9fc461f",
+	// 🚧 New 2026-10-02 (composer attachments phase 4, PLAN §3.5): a
+	// transcript's files by message, and where each line's files go — a media
+	// marker the call can read, a text file inlined, or a name.
+	"core:query/history-attachments@1": "1af76901817d05",
+	"core:task/place-attachments@1": "e09e819d9ff6b",
+	// (was "74c7f9fc461f") — 2026-09-29, genre uplift C3: gains `searchByMeaning`
+	// (boolean, default false, `quick`), the semantic mechanism's one switch, on
+	// the chain's first node so an off arm cuts no probes and embeds nothing.
+	// (was "1fc11e6254a0fd") — 2026-09-29, genre uplift F1 (owner: one
+	// EXPENSIVE call per turn, local models don't count): `searchByMeaning`
+	// becomes `auto | on | off`, default `auto`, and the node gains a
+	// `connection` slot (the embed step's, by reference) whose connection group
+	// `auto` reads. Proven: contracts/src copied with only that edit reverted
+	// hashes back to the old pin. Held 2026-09-30 (owner: never skip a paid
+	// service for retrieval): `auto` now reads only whether that slot resolves
+	// — any embedding model set up searches — and only display text moved,
+	// which is stripped before hashing.
+	"core:task/query-windows@1": "15ef89ff8f32d7",
 	// Re-projected by **0201**, and it is the one type in that migration nobody
 	// set out to touch. Ruling R6 removes per-source floors — *"lore competes on
 	// score alone"* — which narrows `minEntries` from the five bands to
@@ -1301,7 +1468,8 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// reproduces the shipped constants exactly, so an untouched spec selects
 	// identically — `nodeParams.test.ts` and the parity corpus are the checks.
 	//
-	// Re-projected again by **0196** (policy answer 3): `scoreLedAllocation`,
+	// Re-projected again by the pre-squash **0196** (`0196_score_led_allocation`,
+	// archived) (policy answer 3): `scoreLedAllocation`,
 	// the declared switch between the two allocation precedences (design §7).
 	// `SelectOptions.scoreLedAllocation` was built and tested with no runtime
 	// caller at all — this node is the only runtime `select()` there is — so
@@ -1381,7 +1549,11 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// Moved (enum member labels, 2026-09-29): `shareNormalisation` gained `members` — a label
 	// and hint per option, so the Pipelines panel stops showing raw values. Display
 	// text inside a slot schema is hashed; nothing pinning it moves. (was "876a234180ff9")
-	"core:task/rank-hybrid@1": "125d3aaf08a75f",
+	// Moved 2026-10-02 (lorebooks Wave 8): the `shownElsewhere` in-port — entry ids
+	// a prompt shows in a slot of their own, ruled out before ranking (the room
+	// rule). Edited in place; no migration (the slug's pointer moves at boot). (was
+	// "125d3aaf08a75f")
+	"core:task/rank-hybrid@1": "5013ea258d836",
 	// Moved (R-12, 2026-09-16): `params.currentWindow` / `recentWindow` are culled from
 	// the ranker — they size the two windows `query-windows@1` cuts and
 	// declares as its own; here they were rendered twice and read once.
@@ -1481,8 +1653,27 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// policy and the declared `fields` schema are all contract, so changing any
 	// of them is `@2` and not an edit here.
 	"core:entry/world-lore@1": "100f8933de881b",
-	"core:entry/character-lore@1": "50f9370f3ab1",
-	"core:entry/history@1": "64444542921c6",
+	// Moved 2026-09-30 (same ruling): `render` names `core:var/character-lore@1`
+	// in place of the `character-card` destination. With it put back the
+	// descriptor hashes to the old pin (was "50f9370f3ab1").
+	"core:entry/character-lore@1": "16fb98fc8626a4",
+	// A15 (2026-09-30): month and day take the story-time rule's range
+	// (`STORY_TIME_PART_RANGES` — a floor of 1, no ceiling) instead of a
+	// Gregorian 1–12 / 1–31 that refused dates the book's calendar allows.
+	// Kept at `@1` under the pre-0.7 version freeze; the pointer moves at
+	// boot, and 0198 drops the CHECK projected under the old range.
+	// (was "64444542921c6")
+	// A15 follow-up (2026-09-30): `day` declares `narrows: "month"` — a day
+	// needs a month, projected into the history CHECK. Same `@1` under the
+	// freeze; 0207 drops every projected CHECK so the next boot re-projects.
+	// Proven: the snapshot with `day.narrows` removed hashes to the old pin.
+	// (was "14f631ac57def2")
+	// Note 1 (owner, 2026-10-02): drops the `parent` field role — history is
+	// always top level relative to other lore, never filed under another
+	// entry. Same `@1` under the freeze; the app asks the role map
+	// (`declaresParent`), and the history-anchor clear migration empties any
+	// stored filing. (was "c52dca49f40fd")
+	"core:entry/history@1": "1d2cdefaa3b6d2",
 	// NEW (L3, 2026-09-17): a place the story can be in, and can be walked out
 	// of. World lore's roles and fields, the `worldLore` band, rendered by the
 	// world-lore variable — what earns it a type is that a place is a thing
@@ -1490,11 +1681,28 @@ const PUBLISHED_HASHES: Record<string, string> = {
 	// are link rows (the settings language has no reference type, so a field
 	// could only hold names with no foreign key and no cascade), and the wire
 	// vocabulary has no word for a location, so it exports as world lore.
-	"core:entry/location@1": "1d81270e5347d7",
+	// Moved 2026-09-29 (places plan B2, owner ruling 2026-09-29): drops the
+	// `parent` field role — a place is never filed under anything; places join
+	// by relationships. Edited in place at `@1` under the freeze (SDK versions
+	// frozen until 0.7.0); the app asks the role map (`declaresParent`), and
+	// 0195 already cleared every place's anchor. Proven: the snapshot entry
+	// with `roles.parent: 'anchorEntryId'` restored hashes back to the old pin.
+	// (was "1d81270e5347d7")
+	// A26 (2026-09-30): declares `exportKey: "location"` — a place travels as a
+	// place (`ENTRY_EXPORT_KEYS` gained the word), so the paragraph above's "no
+	// `exportKey`, exports as world lore" holds only for the 0.5-compat export
+	// profile. Same `@1` under the freeze. Proven: the snapshot with
+	// `entryShape.exportKey` removed hashes to the old pin.
+	// (was "124df05bc5d692")
+	"core:entry/location@1": "98ba6f0d87011",
 	// NEW (attributes phase 3a, 2026-09-26): a thing somebody can hold. World
 	// lore's roles, band and layout plus `supply` (unique · limited ·
-	// unlimited) and `supplyLimit`; no `exportKey`, so it exports as world lore.
-	"core:entry/item@1": "1eea67730e8c97",
+	// unlimited) and `supplyLimit`.
+	// A26 (2026-09-30): declares `exportKey: "item"` — an item travels as an
+	// item; only the 0.5-compat export profile writes it as world lore. Same
+	// `@1` under the freeze. Proven: the snapshot with `entryShape.exportKey`
+	// removed hashes to the old pin. (was "1eea67730e8c97")
+	"core:entry/item@1": "12c63b4101539c",
 	"test:task/passthrough@1": "14f0c9d8aaf7b0",
 	"test:task/sloppy-stream@1": "1224877b3fece4",
 	"test:task/slow@1": "b227d955f2539"

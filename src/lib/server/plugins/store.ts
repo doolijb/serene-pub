@@ -222,7 +222,7 @@ export function pluginIdFindings(pluginId: unknown): string[] {
 	// under it would share that component's UI worker and answer as it.
 	if (isReservedAuthoredNamespace(pluginId))
 		return [
-			`id '${pluginId}' is in the 'authored' namespace, which this instance keeps for ` +
+			`id '${pluginId}' is in the 'authored' namespace, which this pub keeps for ` +
 				`components authored in the app — a plugin cannot take it`
 		]
 	return []

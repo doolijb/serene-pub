@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest"
 import {
 	compareDates,
+	dateFromValue,
+	dateValue,
 	datesThatDoNotLand,
 	formatDate,
 	formatDateValue,
@@ -135,5 +137,51 @@ describe("one comparator", () => {
 			{ year: 1, month: 1, day: 30 },
 			{ year: 1, month: 2, day: 1 }
 		])
+	})
+})
+
+/**
+ * `dateValue` is placement, and placement never contradicts the order.
+ *
+ * Every month and day under 99 packs exactly as it always has
+ * (`year×10000 + month×100 + day`); from 99 on, a part is squeezed into the
+ * last hundredth before the next one, so a later date never lands before an
+ * earlier one however large its day or month.
+ */
+describe("dateValue — monotone placement for any magnitude", () => {
+	it("packs a date with small parts exactly as before", () => {
+		expect(dateValue({ year: 3, month: 2, day: 12 })).toBe(30212)
+		expect(dateValue({ year: 4 })).toBe(40000)
+		expect(dateValue({ year: -2, month: 98, day: 98 })).toBe(-20000 + 9898)
+	})
+
+	it("never places a later date before an earlier one", () => {
+		const dates = [
+			{ year: 3, month: 1, day: 98 },
+			{ year: 3, month: 1, day: 99 },
+			{ year: 3, month: 1, day: 150 },
+			{ year: 3, month: 1, day: 1000 },
+			{ year: 3, month: 2 },
+			{ year: 3, month: 2, day: 1 },
+			{ year: 3, month: 99 },
+			{ year: 3, month: 99, day: 500 },
+			{ year: 3, month: 100 },
+			{ year: 3, month: 400, day: 400 },
+			{ year: 4 }
+		]
+		for (let i = 1; i < dates.length; i++) {
+			expect(compareDates(dates[i - 1], dates[i])).toBeLessThan(0)
+			expect(dateValue(dates[i])).toBeGreaterThan(dateValue(dates[i - 1]))
+		}
+	})
+
+	it("reads back the date a value stands for, past 99 too", () => {
+		for (const date of [
+			{ year: 3, month: 1, day: 150 },
+			{ year: 3, month: 99, day: 99 },
+			{ year: 3, month: 120, day: 1000 },
+			{ year: -7, month: 100, day: null }
+		])
+			expect(dateFromValue(dateValue(date))).toEqual(date)
 	})
 })

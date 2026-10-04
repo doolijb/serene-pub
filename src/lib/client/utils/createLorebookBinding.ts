@@ -40,7 +40,9 @@ const REQUEST_TIMEOUT_MS = 15000
 export function resolveOrCreateBindingByName(
 	socket: TypedSocket,
 	lorebookId: number,
-	name: string
+	name: string,
+	/** The session a summarize saves from: under Off the server refuses the name (plan A22). */
+	sessionId?: number
 ): Promise<{ id: number; created: boolean }> {
 	return new Promise((resolve, reject) => {
 		const requestId = crypto.randomUUID()
@@ -88,7 +90,8 @@ export function resolveOrCreateBindingByName(
 				{
 					lorebookId,
 					name,
-					requestId
+					requestId,
+					...(sessionId != null ? { sessionId } : {})
 				} satisfies Sockets.Lorebooks.ResolveOrCreateBindingByName.Params,
 				handler
 			)

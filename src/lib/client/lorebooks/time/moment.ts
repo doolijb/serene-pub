@@ -24,7 +24,8 @@ import {
 	dateProblem,
 	type StoryCalendar
 } from "$lib/shared/lorebooks/storyDate"
-import { momentKey, tickAtRatio, type TimelineTick } from "../timelineStrip"
+import { momentKey } from "$lib/shared/lorebooks/loreRoute"
+import { tickAtRatio, type TimelineTick } from "../timelineStrip"
 import type { TimeItem } from "./storyTime"
 
 export { momentKey }
@@ -138,20 +139,23 @@ export function castArrivalDates(
 	return arrivals
 }
 
-export interface CastAsOf extends CastArrival {
+export interface CastArrivalMark extends CastArrival {
 	inStory: boolean
 }
 
 /**
  * The cast, with whoever has not arrived marked.
  *
+ * Not the amendment resolver `castAsOf` (`shared/lorebooks/amendments.ts`),
+ * which folds dated changes into one member; this only flags arrival.
+ *
  * A member nothing dated names counts as in the story: the book records no
  * arrival for them, and an unrecorded arrival is not a late one.
  */
-export function castAsOf(
+export function markCastArrived(
 	cast: readonly CastArrival[],
 	moment: StoryDate | null
-): CastAsOf[] {
+): CastArrivalMark[] {
 	return cast.map((member) => ({
 		...member,
 		inStory: isInStoryAsOf(member.arrival, moment)
@@ -162,7 +166,7 @@ export function countNotInStory(
 	cast: readonly CastArrival[],
 	moment: StoryDate | null
 ): number {
-	return castAsOf(cast, moment).filter((m) => !m.inStory).length
+	return markCastArrived(cast, moment).filter((m) => !m.inStory).length
 }
 
 const plural = (n: number, one: string, many: string) =>

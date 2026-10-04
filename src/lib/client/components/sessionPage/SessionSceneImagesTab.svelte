@@ -219,10 +219,11 @@
 				>
 					<!-- Entity row -->
 					<div class="flex items-center gap-2 px-2 py-1.5">
-						<!-- Avatar. Sized via the prop rather than the previous
-						     `scale-75` transform, which only scaled the paint and
-						     still reserved the full 4em of layout width. -->
-						<Avatar char={e.entity} size="w-12 h-12" />
+						<Avatar
+							char={e.entity}
+							size="md"
+							decorative
+						/>
 						<!-- Name -->
 						<span
 							class="min-w-0 flex-1 truncate text-sm font-medium"

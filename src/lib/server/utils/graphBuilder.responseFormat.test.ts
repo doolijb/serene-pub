@@ -40,9 +40,7 @@ vi.mock("./getConnectionAdapter", () => ({
 const conn = { id: 1, name: "c", type: "openai_session" } as any
 const base = {
 	connection: conn,
-	sampling: { id: 1, name: "s" } as any,
-	contextConfig: { id: 1 } as any,
-	promptConfig: { id: 1 } as any
+	sampling: { id: 1, name: "s" } as any
 }
 
 /** label -> { responseFormat, hasSchema } actually set on the adapter */

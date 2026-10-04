@@ -23,7 +23,7 @@ import { eq } from "drizzle-orm"
 import { resolveConfigSources } from "@serene-pub/sdk"
 import type { TestDb } from "$lib/server/utils/testDb"
 import * as schema from "$lib/server/db/schema"
-import { NARRATE_SPEC_ID, RESPOND_SPEC_ID } from "$lib/server/pipelines/specs"
+import { RESPOND_SPEC_ID } from "$lib/server/pipelines/specs"
 
 let db: TestDb
 let dataDir: string
@@ -166,18 +166,6 @@ describe("the shipped configuration reaches a run", () => {
 		await db
 			.delete(schema.pipelineNodeOverrides)
 			.where(eq(schema.pipelineNodeOverrides.slot, "prompts"))
-
-		// The legacy projection also lands at `defaults` and — because the
-		// pipeline's prompts were seeded *from* those very rows — carries
-		// identical text. Left in place, this test would pass on the legacy
-		// path and prove nothing about the floor, so the legacy pointers are
-		// cleared: what remains is an instance with no prompt selected
-		// anywhere, which is the case the floor exists for.
-		await db
-			.update(schema.systemSettings)
-			.set({ defaultPromptConfigId: null })
-		await db.update(schema.userSettings).set({ activePromptConfigId: null })
-		await db.update(schema.sessions).set({ promptConfigId: null })
 
 		const resolved = await resolvedAt("context", "prompts", "systemPrompt")
 		expect(resolved).toBeTruthy()
@@ -409,114 +397,5 @@ describe("a prompt edited in the panel", () => {
 		// At the scope it was written at — over the selected config's preset
 		// layer, so a per-session pick beats the named config in that session.
 		expect(resolved!.scopeKind).toBe("session")
-	})
-})
-
-/**
- * The narrator does not inherit the reply pipeline's prompt.
- *
- * `respond` and `narrate` share every node key — `context`, `prompt`,
- * `generate` — because structurally they are the same pipeline. The legacy
- * projection read `prompt_configs` regardless of which one was running and
- * layered the reply's text onto `context` at **user** and **session** scope; those
- * outrank `preset`, where the narrator's own selection lives. So a narrator run
- * resolved "Write one reply only…" and the narrator's own text lost.
- *
- * The seed alone cannot catch this: with no *active* reply config there is no
- * `user` layer to do the overriding, and both pipelines look right. The active
- * config below is the entire test.
- */
-describe("each pipeline reads its own legacy prompt table", () => {
-	// Its own user and session: the tests above write session-scope overrides on the
-	// shared fixture, and a session layer would mask the user layer this is about.
-	let nUserId: number
-	let nSessionId: number
-
-	const worldFor = async (slug: string, nodeKey: string) => {
-		const { buildWorld } = await import(
-			"$lib/server/pipelines/config/world"
-		)
-		const world = await buildWorld(db, {
-			sessionId: nSessionId,
-			specId: slug
-		})
-		return resolveConfigSources(world as any, [nodeKey])
-	}
-
-	const resolvedFor = async (slug: string, path: string) =>
-		(await worldFor(slug, "context")).context?.prompts?.[path]
-
-	beforeAll(async () => {
-		const [u] = await db
-			.insert(schema.users)
-			.values({ username: "narrator-scoping-user", isAdmin: false })
-			.returning()
-		nUserId = u.id
-		const [c] = await db
-			.insert(schema.sessions)
-			.values({ userId: nUserId, isGroup: false })
-			.returning()
-		nSessionId = c.id
-
-		// The ordinary case: a session set to a reply prompt somebody likes —
-		// the user layer no longer projects (ruled 2026-08-24), so the session's
-		// own pick is the personal layer now.
-		const [reply] = await db
-			.select()
-			.from(schema.promptConfigs)
-			.where(eq(schema.promptConfigs.name, "Roleplay - Immersive"))
-		await db
-			.update(schema.sessions)
-			.set({ promptConfigId: reply.id })
-			.where(eq(schema.sessions.id, nSessionId))
-	})
-
-	it("gives the reply pipeline the reply config the session picked", async () => {
-		const sp = await resolvedFor(RESPOND_SPEC_ID, "systemPrompt")
-		expect(sp?.scopeKind).toBe("session")
-		expect(String(sp?.value)).toContain("Write one reply only")
-	})
-
-	it("gives the narrator its own prompt, not the reply one", async () => {
-		const sp = await resolvedFor(NARRATE_SPEC_ID, "systemPrompt")
-		expect(
-			String(sp?.value),
-			"the narrator resolved the reply pipeline's system prompt"
-		).not.toContain("Write one reply only")
-		expect(String(sp?.value)).toContain("{{narratorName}}")
-	})
-
-	it("keeps the narrator's post-history reminder unsuppressed", async () => {
-		// `narrator_prompt_configs.post_history_token_trigger` defaults to 0 —
-		// "always reinforce" — while the reply side ships 3000. Inheriting the
-		// reply's number silently switched the reminder off for short sessions,
-		// which is the case a narrator is most often used in.
-		const sourced = await worldFor(NARRATE_SPEC_ID, "prompt")
-		const trigger = sourced.prompt?.params?.postHistoryTokenTrigger
-		expect(Number(trigger?.value ?? 0)).toBe(0)
-	})
-
-	it("projects no legacy prompt text onto a summarize pipeline", async () => {
-		// Its nodes are configured from its own tables. Today the stray
-		// overrides landed on node keys that spec does not have and were
-		// therefore inert — but "inert because nothing reads it" is one
-		// renamed node away from being live.
-		const { buildWorld } = await import(
-			"$lib/server/pipelines/config/world"
-		)
-		const { SUMMARIZE_WORLD_SPEC_ID } = await import(
-			"$lib/server/pipelines/specs"
-		)
-		const world: any = await buildWorld(db, {
-			sessionId: nSessionId,
-			specId: SUMMARIZE_WORLD_SPEC_ID
-		})
-		const leaked = world.overrides.filter(
-			(o: any) =>
-				o.nodeKey === "context" &&
-				o.slot === "prompts" &&
-				["user", "session", "defaults"].includes(o.scopeKind)
-		)
-		expect(leaked).toEqual([])
 	})
 })

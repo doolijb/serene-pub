@@ -22,6 +22,11 @@
  *
  * Same lesson, same shape as `loreScanDepth.int.test.ts`, which was written for
  * this defect's older twin on the three lore lanes.
+ *
+ * Since the history window (2026-10-03) the reply and the narrator wire
+ * `budget` into their read, which is then sized by the context window and
+ * reads no `limit`; the count is asserted where it still applies — an asking
+ * step's read (the answer form's) — and its absence where it does not.
  */
 
 import { describe, it, expect, beforeAll, vi } from "vitest"
@@ -46,6 +51,7 @@ import {
 	narrateSpec,
 	NARRATE_SPEC_ID
 } from "$lib/server/pipelines/specs"
+import { answerFormChatSpec, ANSWER_FORM_CHAT_SPEC_ID } from "@serene-pub/core-catalog"
 
 // No embedding model: the retrieval mechanisms downstream of `history` stay on
 // the keyword path, which needs no network. Nothing here asserts on them — this
@@ -68,6 +74,7 @@ let sessionId: number
 let userId: number
 let respondSpecRow: { id: number }
 let narrateSpecRow: { id: number }
+let answerSpecRow: { id: number }
 
 /**
  * More messages than the narrowed window and fewer than the declared one, so a
@@ -80,7 +87,10 @@ const NARROWED = 3
 /** Where the control lives in each shipped document. */
 const HISTORY_NODE = {
 	[RESPOND_SPEC_ID]: "gather.history.read",
-	[NARRATE_SPEC_ID]: "history"
+	[NARRATE_SPEC_ID]: "history",
+	// A read the window does NOT size (history window, 2026-10-03): an
+	// asking step's, which keeps its count.
+	[ANSWER_FORM_CHAT_SPEC_ID]: "gather.history.read"
 } as const
 
 beforeAll(async () => {
@@ -124,6 +134,13 @@ beforeAll(async () => {
 			.where(eq(schema.pipelineSpecs.slug, NARRATE_SPEC_ID))
 			.limit(1)
 	)[0]
+	answerSpecRow = (
+		await db
+			.select({ id: schema.pipelineSpecs.id })
+			.from(schema.pipelineSpecs)
+			.where(eq(schema.pipelineSpecs.slug, ANSWER_FORM_CHAT_SPEC_ID))
+			.limit(1)
+	)[0]
 }, 120_000)
 
 /**
@@ -161,12 +178,10 @@ const historyLengthOn = async (
 /**
  * The config a run on this session actually resolves to.
  *
- * ⚠ Not the `pipeline-default:` row. `migrateContextTemplates` duplicates the
- * shipped config into a mutable "Default (customized)" and selects that at
- * instance scope, so on every install that has context templates the live values
- * are the copy's. A fixture that wrote to the immutable original would change
- * nothing and prove nothing — which is exactly the shape of the bug this file is
- * about, so it is worth stating rather than discovering twice.
+ * ⚠ Not the `pipeline-default:` row. A run resolves through the session's
+ * selection chain, which may name a mutable configuration rather than the
+ * shipped one, so a fixture writing to the immutable original could change
+ * nothing and prove nothing.
  */
 const selectedConfigId = async (slug: string, specId: number) => {
 	const { resolveSelectedConfig } = await import(
@@ -221,38 +236,48 @@ describe("the session history window reaches the query", () => {
 		expect(await historyLengthOn(narrateSpec(), NARRATE_SPEC_ID)).toBe(
 			MESSAGE_COUNT
 		)
+		expect(
+			await historyLengthOn(answerFormChatSpec(), ANSWER_FORM_CHAT_SPEC_ID)
+		).toBe(MESSAGE_COUNT)
 	}, 60_000)
 
-	it("a configured window narrows the reply pipeline's read, and only it", async () => {
+	it("a configured window narrows a count-sized read, and only that pipeline's", async () => {
 		// The assertion neither half of the defect could fail: the binding read
 		// a key nothing supplies, and the slot carrying the number was never
-		// resolved, so this came back as all 8 whatever was stored.
-		await setLimit(RESPOND_SPEC_ID, respondSpecRow.id, NARROWED)
+		// resolved, so this came back as all 8 whatever was stored. On the
+		// answer form, whose read the window does not size (2026-10-03).
+		await setLimit(ANSWER_FORM_CHAT_SPEC_ID, answerSpecRow.id, NARROWED)
 		try {
-			expect(await historyLengthOn(respondSpec(), RESPOND_SPEC_ID)).toBe(
-				NARROWED
-			)
+			expect(
+				await historyLengthOn(answerFormChatSpec(), ANSWER_FORM_CHAT_SPEC_ID)
+			).toBe(NARROWED)
 			// Each pipeline owns its own row. One spec's number reaching the
 			// other would be the same defect wearing the opposite sign.
+			expect(await historyLengthOn(respondSpec(), RESPOND_SPEC_ID)).toBe(
+				MESSAGE_COUNT
+			)
+		} finally {
+			await resetLimit(ANSWER_FORM_CHAT_SPEC_ID, answerSpecRow.id)
+		}
+	}, 60_000)
+
+	it("a reply's read is sized by the window, so a configured count does not narrow it (history window, 2026-10-03)", async () => {
+		// The reply and the narrator wire `budget` into the read: the window,
+		// which belongs to the sampling config, decides how much is read, and
+		// the transcript fit decides where the conversation starts. Both
+		// documents asserted, for the reason the narrator's was asserted
+		// separately before — a change applied to one and not the other.
+		await setLimit(RESPOND_SPEC_ID, respondSpecRow.id, NARROWED)
+		await setLimit(NARRATE_SPEC_ID, narrateSpecRow.id, NARROWED)
+		try {
+			expect(await historyLengthOn(respondSpec(), RESPOND_SPEC_ID)).toBe(
+				MESSAGE_COUNT
+			)
 			expect(await historyLengthOn(narrateSpec(), NARRATE_SPEC_ID)).toBe(
 				MESSAGE_COUNT
 			)
 		} finally {
 			await resetLimit(RESPOND_SPEC_ID, respondSpecRow.id)
-		}
-	}, 60_000)
-
-	it("a configured window narrows the narrator's read", async () => {
-		// The narrator's history node is keyed `history`, not
-		// `gather.history.read`, and it was missing the same wiring — asserted
-		// separately because a fix applied to one document and not the other is
-		// exactly what this subsystem has shipped twice before.
-		await setLimit(NARRATE_SPEC_ID, narrateSpecRow.id, NARROWED)
-		try {
-			expect(await historyLengthOn(narrateSpec(), NARRATE_SPEC_ID)).toBe(
-				NARROWED
-			)
-		} finally {
 			await resetLimit(NARRATE_SPEC_ID, narrateSpecRow.id)
 		}
 	}, 60_000)

@@ -92,6 +92,7 @@ await exitAfterClose(
 			process.stdout.write(`  config    ${key}\n`)
 		process.stdout.write(`  files     ${report.files.stored}\n`)
 
+		let layoutLines: string[] = []
 		if (flags.has("--enable")) {
 			await setEnabled(db, report.pluginId, true)
 			// Everything projected from the stored manifest follows the enable
@@ -103,10 +104,14 @@ await exitAfterClose(
 			)
 			await syncPluginPresets(db)
 			await syncPluginTemplates(db)
-			const { syncPluginLayouts } = await import(
+			const { syncPluginLayouts, pluginLayoutReportLines } = await import(
 				"$lib/server/db/pluginLayouts"
 			)
-			await syncPluginLayouts(db)
+			// This package's refused and warned layouts join the warnings below.
+			layoutLines = pluginLayoutReportLines(
+				await syncPluginLayouts(db),
+				report.pluginId
+			)
 			process.stdout.write(`  enabled\n`)
 		} else {
 			process.stdout.write(
@@ -116,7 +121,7 @@ await exitAfterClose(
 			)
 		}
 
-		for (const line of [...report.warnings, ...report.refused])
+		for (const line of [...report.warnings, ...report.refused, ...layoutLines])
 			process.stderr.write(`warning: ${line}\n`)
 		return 0
 	},

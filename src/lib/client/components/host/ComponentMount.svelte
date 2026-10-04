@@ -12,8 +12,9 @@
 	 * sees the real event.
 	 *
 	 * `contain: paint` keeps a remote's `class` (a `fixed inset-0`, say)
-	 * inside the box; ids are prefixed per box; the widget skin applies to
-	 * the box through `WidgetHost`.
+	 * inside the box; ids are prefixed per box — bar the conversation mounts
+	 * the layout names `pageIds`; the widget skin applies to the box
+	 * through `WidgetHost`.
 	 */
 	import { onMount } from "svelte"
 	import * as Icons from "@lucide/svelte"
@@ -57,13 +58,23 @@
 		channels?: string[]
 		props?: Record<string, unknown>
 		settings?: Record<string, unknown>
-		skin?: { css: string; vars: Record<string, string> }
 		placement?: PlacementInput
 		actions?: ActionsV1
 		actionDispatch?: ActionDispatch
 		source?: WidgetEventSource
 		suspended?: boolean
 		surfaceId?: string
+		/**
+		 * This mount holds the page's own ids (brief 7b, plan §M.3.8 as
+		 * amended): a conversation mount the layout names — its primary log,
+		 * and each copy showing channels no earlier one shows (the Lair's
+		 * Sanctum) — whose `#message-<id>` the page navigates by (j/k, links,
+		 * notifications). Honoured for core's conversation only; every other
+		 * mount, a second view of one channel included, takes its box's
+		 * prefix, so two copies showing one row never put one id on the page
+		 * twice.
+		 */
+		pageIds?: boolean
 		/** The scoped sections this component was granted, by name — posted as `scoped`. */
 		scoped?: WireInputs["scoped"]
 		/** The base sections it reads (R75) — only those are posted; absent posts all. */
@@ -83,6 +94,12 @@
 		) => void
 		class?: string
 		/**
+		 * The message backing the host draws behind this widget (note 18;
+		 * `$lib/shared/widgets/messageBacking`), as `data-sp-backing` on the
+		 * box for widgets.css to paint. Absent: no attribute.
+		 */
+		backing?: "card" | "glass" | "none"
+		/**
 		 * The component failed or threw at runtime, as its worker reported it
 		 * (C6 P5): `failed` — it never mounted (its module did not load, or
 		 * its mount function threw) — or `error` — a handler threw after it
@@ -101,18 +118,19 @@
 		channels,
 		props,
 		settings,
-		skin,
 		placement,
 		actions,
 		actionDispatch,
 		source,
 		suspended = false,
 		surfaceId,
+		pageIds = false,
 		scoped,
 		reads,
 		grants,
 		onAction,
 		class: klass = "",
+		backing,
 		onRuntimeError
 	}: Props = $props()
 
@@ -147,14 +165,19 @@
 	 */
 	const coreTrusted = () => owner === "core" && src.startsWith("/core-ui/")
 	/**
-	 * Core's own CONVERSATION — the one module the page navigates into
-	 * (`#message-<id>`, j/k over `[id^="message-"]`), so the one kept to the
-	 * ids and the paint its native copy had. Every other core module is a
-	 * widget that may be on screen twice (a rail and its flyout): its ids are
-	 * its box's, as a plugin's are (F8), or two mounts would share element
-	 * ids and radio names.
+	 * Core's own CONVERSATION — the module the page navigates into
+	 * (`#message-<id>`, j/k over `[id^="message-"]`), so kept to the paint its
+	 * native copy had. Its ids are the page's only in a mount the layout
+	 * names `pageIds` (`pageIdsHere`): a layout may place several copies of
+	 * it (brief 7b) — it names each copy whose channels no earlier one shows
+	 * (`channelClaims` `pageIdsHolders`) — and every other core module is a widget that
+	 * may be on screen twice (a rail and its flyout). Those ids are their
+	 * box's, as a plugin's are (F8), or two mounts would share element ids
+	 * and radio names.
 	 */
 	const coreConversation = () => coreTrusted() && src === "/core-ui/messages"
+	/** This mount keeps the page's ids: the conversation, named `pageIds`. */
+	const pageIdsHere = () => pageIds && coreConversation()
 
 	const wire = createWidgetWire({
 		inputs: () => ({
@@ -163,7 +186,6 @@
 			channels,
 			props,
 			settings,
-			skin,
 			placement,
 			actions,
 			source,
@@ -226,10 +248,13 @@
 		const { connection, dispose } = createGuardedReceiver(box, {
 			owner,
 			// A plugin's ids are its box's, so it can neither collide with nor
-			// stand in for the page's — and so are every core widget's. Core's
-			// own conversation keeps the ids its native copy had: the page
-			// navigates by them (`#message-<id>`, j/k over `[id^="message-"]`).
-			idPrefix: coreConversation() ? "" : `sp-r${++boxes}-${mountId.slice(0, 8)}-`,
+			// stand in for the page's — and so are every core widget's, every
+			// copy of the conversation included. A conversation mount the
+			// layout names `pageIds` keeps the ids its native copy had:
+			// the page navigates by them (`#message-<id>`, j/k over
+			// `[id^="message-"]`). Read once, at mount: the box's ids are its
+			// receiver's, made here.
+			idPrefix: pageIdsHere() ? "" : `sp-r${++boxes}-${mountId.slice(0, 8)}-`,
 			warn: (message) => console.warn(`${label()}: ${message}`),
 			fnFor: (handle, event) => () => {
 				const e = currentEvent(event)
@@ -323,13 +348,16 @@
 	     through it).
 	     `data-sp-card` is whether the host is drawing its card around this
 	     widget (ruled 2026-09-27; `sessionLayout/hostCard`) — the same fact as
-	     `layout.v1.chrome.card`, for a stylesheet to key off. -->
+	     `layout.v1.chrome.card`, for a stylesheet to key off.
+	     `data-sp-backing` is the message backing the host draws behind core's
+	     conversation (card | glass | none; note 18) — widgets.css paints it. -->
 	<div
 		bind:this={box}
 		class="sp-remote-box h-full w-full overflow-auto {klass}"
 		data-sp-owner={owner}
 		data-sp-widget-box=""
 		data-sp-card={placement?.chrome?.card ? "on" : "off"}
+		data-sp-backing={backing}
 		style:contain={coreConversation() ? undefined : "paint"}
 		aria-label={title}
 		role="region"

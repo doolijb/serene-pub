@@ -8,6 +8,11 @@
 		useInterest
 	} from "$lib/client/sockets/interest.svelte"
 	import { interestKey } from "$lib/shared/sockets/interest"
+	import EmbeddingSwitchDialog from "$lib/client/components/connections/EmbeddingSwitchDialog.svelte"
+	import {
+		addressOf,
+		useEmbeddingEditConfirm
+	} from "$lib/client/components/connections/useEmbeddingEditConfirm.svelte"
 	import { announce } from "$lib/client/accessibility/state.svelte"
 	import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 	import { isKoboldCppManagedType } from "$lib/shared/utils/connectionServiceItems"
@@ -40,6 +45,14 @@
 	const formatOptions = completionTemplateOptions()
 	const connectionId = $derived(Number(page.params.id))
 	let userCtx: UserCtx = getContext("userCtx")
+	const systemSettingsCtx: SystemSettingsCtx = getContext("systemSettingsCtx")
+	/**
+	 * A save that moves the starred embedding connection to another address
+	 * re-embeds the index, so it asks first — the star's own confirmation.
+	 */
+	const embeddingEdits = useEmbeddingEditConfirm()
+	/** The address as last loaded — what an edit moves from. */
+	let savedBaseUrl = $state("")
 
 	// Both managed KoboldCPP types are left out for the same reason the create
 	// form leaves them out: they are made from the page of KoboldCPP, run by
@@ -209,7 +222,7 @@
 		socket.emit("connections:test", { connection: buildConnection() })
 	}
 
-	function submit(event: SubmitEvent) {
+	async function submit(event: SubmitEvent) {
 		event.preventDefault()
 		error = ""
 		notice = ""
@@ -217,6 +230,20 @@
 			error = "Connection name is required."
 			announce(error)
 			return
+		}
+		if (baseUrl.trim() !== savedBaseUrl.trim()) {
+			const starred =
+				systemSettingsCtx?.capabilityDefaults?.["text->embedding"]
+					?.connectionModelId
+			const model =
+				models.find((m) => m.id === starred)?.name ?? name.trim()
+			const ok = await embeddingEdits.confirmEdit({
+				connectionId,
+				edit: { baseUrl: baseUrl.trim() },
+				currentName: `${model} at ${addressOf(savedBaseUrl)}`,
+				nextName: `${model} at ${addressOf(baseUrl)}`
+			})
+			if (!ok) return
 		}
 		saving = true
 		socket.emit("connections:update", {
@@ -240,6 +267,7 @@
 		name = c.name
 		type = c.type
 		baseUrl = c.baseUrl || ""
+		savedBaseUrl = baseUrl
 		apiKey = (c.extraJson as any)?.apiKey || ""
 		tokenCounter = c.tokenCounter
 		promptFormat = c.promptFormat || PromptFormats.VICUNA
@@ -466,7 +494,7 @@
 			<h2>Models</h2>
 			<p class="a11y-hint">
 				The models this endpoint offers. Read-only here — models are
-				added, renamed and switched off in the Connections panel, and
+				added, renamed and switched off in the Connections view, and
 				which model is used for what is set on the
 				<a href="/admin/defaults">Defaults page</a>
 				.
@@ -561,7 +589,7 @@
 		</div>
 
 		<p class="a11y-hint">
-			Advanced service-specific options (streaming, thinking, keep-alive,
+			Advanced service-specific options (streaming, keep-alive,
 			etc.) aren't available in Document View yet — use the standard site
 			for those.
 		</p>
@@ -649,6 +677,8 @@
 		{/if}
 	</fieldset>
 {/snippet}
+
+<EmbeddingSwitchDialog {...embeddingEdits.dialog} />
 
 <style>
 	/* Document View's base rule stretches every input to the full field width

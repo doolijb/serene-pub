@@ -14,7 +14,7 @@ function toMeta(
 		name: row.name,
 		label: row.label,
 		cssKey: row.cssKey,
-		isInstanceTheme: row.isInstanceTheme,
+		isPubTheme: row.isPubTheme,
 		uploadedBy: includeUploader ? row.uploadedBy : undefined,
 		uploaderName: includeUploader
 			? (row.uploader?.username ?? null)
@@ -78,13 +78,13 @@ export const customThemesList: Handler<
 			.filter((r) => r.uploadedBy === userId)
 			.map((r) => toMeta(r, isAdmin))
 
-		const instanceThemes = rows
-			.filter((r) => r.isInstanceTheme && r.uploadedBy !== userId)
+		const pubThemes = rows
+			.filter((r) => r.isPubTheme && r.uploadedBy !== userId)
 			.map((r) => toMeta(r, isAdmin))
 
 		const res: Sockets.CustomThemes.List.Response = {
 			myThemes,
-			instanceThemes
+			pubThemes
 		}
 		emitToUser("customThemes:list", res)
 		return res
@@ -105,7 +105,7 @@ export const customThemesGetCss: Handler<
 		})
 
 		if (!row) throw new Error("Theme not found")
-		if (!isAdmin && row.uploadedBy !== userId && !row.isInstanceTheme) {
+		if (!isAdmin && row.uploadedBy !== userId && !row.isPubTheme) {
 			throw new Error("Unauthorized")
 		}
 
@@ -225,23 +225,23 @@ export const customThemesDelete: Handler<
 	}
 }
 
-export const customThemesSetInstanceTheme: Handler<
-	Sockets.CustomThemes.SetInstanceTheme.Params,
-	Sockets.CustomThemes.SetInstanceTheme.Response
+export const customThemesSetPubTheme: Handler<
+	Sockets.CustomThemes.SetPubTheme.Params,
+	Sockets.CustomThemes.SetPubTheme.Response
 > = {
-	event: "customThemes:setInstanceTheme",
+	event: "customThemes:setPubTheme",
 	handler: async (socket, params, emitToUser) => {
 		if (!socket.user?.isAdmin) throw new Error("Unauthorized")
 
 		await db
 			.update(schema.customThemes)
-			.set({ isInstanceTheme: params.enabled })
+			.set({ isPubTheme: params.enabled })
 			.where(eq(schema.customThemes.id, params.id))
 
-		const res: Sockets.CustomThemes.SetInstanceTheme.Response = {
+		const res: Sockets.CustomThemes.SetPubTheme.Response = {
 			success: true
 		}
-		emitToUser("customThemes:setInstanceTheme", res)
+		emitToUser("customThemes:setPubTheme", res)
 		return res
 	}
 }
@@ -259,5 +259,5 @@ export function registerCustomThemeHandlers(
 	register(socket, customThemesGetCss, emitToUser)
 	register(socket, customThemesSave, emitToUser)
 	register(socket, customThemesDelete, emitToUser)
-	register(socket, customThemesSetInstanceTheme, emitToUser)
+	register(socket, customThemesSetPubTheme, emitToUser)
 }

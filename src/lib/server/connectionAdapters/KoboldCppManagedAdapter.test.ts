@@ -127,8 +127,7 @@ function makeAdapter(overrides: Record<string, any> = {}) {
 		connection: makeConnection(),
 		// Empty is what "the context budget is switched off" resolves to now:
 		sampling: {},
-		contextConfig: {} as any,
-		promptConfig: { systemPrompt: "system" } as any,
+		systemPrompt: "system",
 		session: makeSession(),
 		currentCharacterId: null,
 		tokenCounter: { countTokens: async () => 1 } as any,

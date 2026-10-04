@@ -14,12 +14,16 @@ import {
 	normalizeNativeWorldInfoEntry,
 	parseImportedLorebook,
 	resolveAnchorEntryLinks,
-	resolveParentNodeLinks
+	resolveParentNodeLinks,
+	importedStatRows
 } from "./lorebookImportMapper"
+import { readsAsRegex } from "$lib/shared/entries/runawayPattern"
 import { mapEntry } from "./lorebookExportMapper"
 import {
 	CHARACTER_LORE_TYPE_ID,
 	HISTORY_TYPE_ID,
+	ITEM_TYPE_ID,
+	LOCATION_TYPE_ID,
 	WORLD_LORE_TYPE_ID
 } from "$lib/shared/entries/types"
 import {
@@ -48,6 +52,25 @@ describe("normalizeLorebookEntryPriority", () => {
 		expect(normalizeLorebookEntryPriority(1)).toBe(1)
 		expect(normalizeLorebookEntryPriority(2)).toBe(2)
 		expect(normalizeLorebookEntryPriority(3)).toBe(3)
+	})
+
+	test("is a whole number: a fraction rounds, and what is no number is 1", () => {
+		// The type's CHECK holds a priority to a whole number, so a 2.5
+		// passed through failed the whole import.
+		expect(normalizeLorebookEntryPriority(2.5)).toBe(3)
+		expect(normalizeLorebookEntryPriority(1.4)).toBe(1)
+		expect(normalizeLorebookEntryPriority(2.9999)).toBe(3)
+		expect(normalizeLorebookEntryPriority(Number.NaN)).toBe(1)
+		expect(normalizeLorebookEntryPriority("2" as any)).toBe(1)
+	})
+
+	test("a mapped entry's priority is whole", () => {
+		const mapped = mapImportedEntry(
+			{ keys: ["a"], content: "x", enabled: true, priority: 2.5 },
+			WORLD_LORE_TYPE_ID,
+			0
+		) as Record<string, unknown>
+		expect(mapped.priority).toBe(3)
 	})
 })
 
@@ -413,6 +436,8 @@ describe("matchMode on the imported entry mappers", () => {
 			probability: 80,
 			depth: 4,
 			group: "royalty",
+			// Word and substring ride on SillyTavern's flag alone (A26
+			// review): a copy in the bag would outlive an edit made there.
 			serenepub: { entryType: "world" }
 		})
 
@@ -1175,26 +1200,99 @@ describe("export → import round trip", () => {
 		expect("selectiveLogic" in reimported).toBe(false)
 	})
 
-	test("⚠ a matchMode with no `match_whole_words` behind it does NOT survive", () => {
-		// A pre-existing gap of the same family as the one the condition tests
-		// close, pinned here rather than fixed because **nothing can reach it
-		// today**: `matchMode` is written by this importer alone (no editor
-		// binds it), and the importer only ever sets it *from* an
-		// `extensions.match_whole_words` that then rides in `extraJson` and
-		// carries it back out — which is the only reason the round trip above
-		// holds. The moment a control writes `matchMode` on its own, the
-		// exporter needs the same column-derived key the condition just got.
-
+	test("a matchMode with no `match_whole_words` behind it survives (plan A26)", () => {
+		// The editor writes `matchMode` on its own, so the column — not the
+		// foreign flag the row may or may not still carry — is what travels.
 		const exported = mapEntry(
 			row({ extraJson: {}, secondaryKeys: "", selectiveLogic: null }),
 			0
 		)
-		expect(exported.extensions).toEqual({
-			serenepub: { entryType: "world", category: "Bestiary" }
+		expect(
+			mapImportedEntry(exported, WORLD_LORE_TYPE_ID, 0).matchMode
+		).toBe("word")
+		// `regex` has no SillyTavern spelling at all, and still comes back.
+		const regex = mapEntry(
+			row({ extraJson: {}, matchMode: "regex", secondaryKeys: "" }),
+			0
+		)
+		expect(mapImportedEntry(regex, WORLD_LORE_TYPE_ID, 0).matchMode).toBe(
+			"regex"
+		)
+	})
+
+	test("an in-app matchMode edit beats the stale flag the import left behind", () => {
+		// Imported whole-word from SillyTavern, then changed to substring in
+		// the editor: `extraJson` still says `match_whole_words: true`.
+		const exported = mapEntry(row({ matchMode: "substring" }), 0)
+		const back = mapImportedEntry(exported, WORLD_LORE_TYPE_ID, 0)
+		expect(back.matchMode).toBe("substring")
+		// And reset to no opinion: nothing brings "word" back.
+		const reset = mapImportedEntry(
+			mapEntry(row({ matchMode: null }), 0),
+			WORLD_LORE_TYPE_ID,
+			0
+		)
+		expect("matchMode" in reset).toBe(false)
+		expect(reset.extraJson).not.toHaveProperty("match_whole_words")
+	})
+
+	test("archived, recursionDepth and provenance make the trip, and the second export is the first", () => {
+		const exported = mapEntry(
+			row({
+				archived: true,
+				enabled: true,
+				recursionDepth: 2,
+				provenance: "summarizer"
+			}),
+			0
+		)
+		const back = mapImportedEntry(exported, WORLD_LORE_TYPE_ID, 0)
+		expect(back).toMatchObject({
+			archived: true,
+			// Off on the wire for a foreign reader; its own switch comes back.
+			enabled: true,
+			recursionDepth: 2,
+			provenance: "summarizer"
 		})
 		expect(
-			"matchMode" in mapImportedEntry(exported, WORLD_LORE_TYPE_ID, 0)
-		).toBe(false)
+			mapEntry({ ...back, id: 7, typeId: WORLD_LORE_TYPE_ID }, 0)
+		).toEqual(exported)
+	})
+
+	test("every machine writer's provenance makes the trip — a pipeline's too", () => {
+		for (const provenance of ["summarizer", "graph-builder", "pipeline"]) {
+			const back = mapImportedEntry(
+				mapEntry(row({ provenance }), 0),
+				WORLD_LORE_TYPE_ID,
+				0
+			)
+			expect(back.provenance).toBe(provenance)
+		}
+	})
+
+	test("a foreign file cannot claim an unknown provenance or a nonsense depth", () => {
+		const back = mapImportedEntry(
+			{
+				keys: ["a"],
+				content: "x",
+				enabled: true,
+				extensions: {
+					serenepub: {
+						entryType: "world",
+						provenance: "root",
+						recursionDepth: -3,
+						archived: "yes",
+						matchMode: "fuzzy"
+					}
+				}
+			},
+			WORLD_LORE_TYPE_ID,
+			0
+		)
+		expect("provenance" in back).toBe(false)
+		expect("recursionDepth" in back).toBe(false)
+		expect("archived" in back).toBe(false)
+		expect("matchMode" in back).toBe(false)
 	})
 })
 
@@ -1214,6 +1312,53 @@ describe("entryTypeIdOf", () => {
 				extensions: { serenepub: { entryType: "something-else" } }
 			})
 		).toBe(WORLD_LORE_TYPE_ID)
+	})
+
+	test("routes a place and an item by their own markers (plan A26)", () => {
+		expect(
+			entryTypeIdOf({
+				keys: [],
+				content: "",
+				enabled: true,
+				extensions: { serenepub: { entryType: "location" } }
+			})
+		).toBe(LOCATION_TYPE_ID)
+		expect(
+			entryTypeIdOf({
+				keys: [],
+				content: "",
+				enabled: true,
+				extensions: { serenepub: { entryType: "item" } }
+			})
+		).toBe(ITEM_TYPE_ID)
+	})
+
+	test("an item's supply outside its declared modes reads as the default", () => {
+		const item = (supply: unknown, supplyLimit: unknown) =>
+			mapImportedEntry(
+				{
+					keys: [],
+					content: "",
+					enabled: true,
+					extensions: {
+						serenepub: { entryType: "item", supply, supplyLimit }
+					}
+				},
+				ITEM_TYPE_ID,
+				0
+			)
+		expect(item("limited", 3)).toMatchObject({
+			supply: "limited",
+			supplyLimit: 3
+		})
+		expect(item("bottomless", 0.5)).toMatchObject({
+			supply: "unlimited",
+			supplyLimit: null
+		})
+		expect(item({ mode: "unique" }, -2)).toMatchObject({
+			supply: "unlimited",
+			supplyLimit: null
+		})
 	})
 
 	test("routes character and history entries by their serenepub marker", () => {
@@ -1311,6 +1456,26 @@ describe("mapImportedEntry — history", () => {
 			0
 		)
 		expect(mapped.year).toBe(1)
+		expect(mapped.month).toBeNull()
+		expect(mapped.day).toBeNull()
+	})
+
+	test("drops a day that comes with no month — the day narrows its month", () => {
+		// The database refuses a day with no month (history's projected
+		// CHECK), so a file carrying one would fail the whole import on it.
+		const mapped = mapImportedEntry(
+			{
+				keys: [],
+				content: "",
+				enabled: true,
+				extensions: {
+					serenepub: { entryType: "history", year: 5, day: 12 }
+				}
+			},
+			HISTORY_TYPE_ID,
+			0
+		)
+		expect(mapped.year).toBe(5)
 		expect(mapped.month).toBeNull()
 		expect(mapped.day).toBeNull()
 	})
@@ -1522,6 +1687,30 @@ describe("resolveAnchorEntryLinks", () => {
 				realIds
 			)
 		).toEqual([])
+	})
+
+	test("drops the parent of a type that declares none — a place is never filed (places plan B2)", () => {
+		// The editor and the re-parent refuse it by the role map; so does the
+		// import, so a file cannot put back what the app will not write.
+		expect(
+			resolveAnchorEntryLinks(
+				[
+					{
+						realId: 102,
+						localId: 2,
+						anchorLocalId: 1,
+						typeId: "core:entry/location"
+					},
+					{
+						realId: 103,
+						localId: 3,
+						anchorLocalId: 1,
+						typeId: "core:entry/world-lore"
+					}
+				],
+				realIds
+			)
+		).toEqual([{ realId: 103, anchorRealId: 101 }])
 	})
 })
 
@@ -1765,5 +1954,233 @@ describe("parseImportedLorebook", () => {
 		const parsed = parseImportedLorebook(data)
 		expect(parsed.entries[0]).toBe(data.entries[0])
 		expect(data.entries[0].keys).toEqual(["a|b"])
+	})
+})
+
+describe("runaway patterns on import (plan S3)", () => {
+	const entry = (extra: Record<string, any> = {}) => ({
+		keys: [],
+		content: "",
+		enabled: true,
+		...extra
+	})
+
+	test("a delimited key that could run away is not read as a pattern", () => {
+		expect(parseDelimitedRegexKey("/(a+)+$/")).toBeNull()
+		expect(parseDelimitedRegexKey("/(\\w+\\s?)*$/i")).toBeNull()
+		// An ordinary one still is.
+		expect(parseDelimitedRegexKey("/\\bdragons?\\b/i")).toBe("\\bdragons?\\b")
+	})
+
+	test("so its entry imports as a literal, the key kept verbatim and never run", () => {
+		const e = entry({ keys: ["/(a+)+$/", "/dragon/"] })
+		expect(useRegexOf(e)).toBe(false)
+		expect(importedKeyColumns(e).keys).toEqual(["/(a+)+$/", "/dragon/"])
+	})
+
+	test("a 0.5.x bare regex entry with a runaway key imports as a literal", () => {
+		const e = entry({
+			keys: ["(a+)+$"],
+			use_regex: true,
+			extensions: { serenepub: { entryType: "worldLore" } }
+		})
+		expect(useRegexOf(e)).toBe(false)
+		// The same entry with a safe key is still a regex.
+		expect(useRegexOf({ ...e, keys: ["\\bash\\w*"] })).toBe(true)
+	})
+
+	test("a runaway condition key makes the entry a literal too", () => {
+		expect(
+			useRegexOf(entry({ keys: ["/dragon/"], secondary_keys: ["/(a|aa)+$/"] }))
+		).toBe(false)
+		expect(
+			useRegexOf(entry({ keys: ["/dragon/"], secondary_keys: ["/statue/"] }))
+		).toBe(true)
+	})
+})
+
+describe("what a file's serenepub bag may say about matching (A26 review)", () => {
+	const wire = (extensions: Record<string, unknown>, keys = ["king"]) => ({
+		keys,
+		content: "The king",
+		enabled: true,
+		extensions
+	})
+
+	test("a whole-word untick made in SillyTavern survives the bag it kept", () => {
+		// SillyTavern keeps an entry's whole `extensions` and writes it back,
+		// so a `serenepub.matchMode` from before the edit comes home beside
+		// the edited flag. The flag is the one SillyTavern let the person edit.
+		const back = mapImportedEntry(
+			wire({
+				match_whole_words: false,
+				serenepub: { entryType: "world", matchMode: "word" }
+			}),
+			WORLD_LORE_TYPE_ID,
+			0
+		)
+		expect(back.matchMode).toBe("substring")
+		const ticked = mapImportedEntry(
+			wire({
+				match_whole_words: true,
+				serenepub: { entryType: "world", matchMode: "substring" }
+			}),
+			WORLD_LORE_TYPE_ID,
+			0
+		)
+		expect(ticked.matchMode).toBe("word")
+	})
+
+	test("a bag's `regex` cannot turn keys the importer read as plain text into patterns", () => {
+		// Plan S3: a runaway or mixed entry imports as a literal.
+		const back = mapImportedEntry(
+			wire(
+				{ serenepub: { entryType: "world", matchMode: "regex" } },
+				["(a+)+$", "Mr. Smith"]
+			),
+			WORLD_LORE_TYPE_ID,
+			0
+		)
+		expect(back.useRegex).toBe(false)
+		expect(back.matchMode).not.toBe("regex")
+		expect(readsAsRegex(back)).toBe(false)
+		// Keys that read as patterns keep the bag's `regex`.
+		const kept = mapImportedEntry(
+			wire({ serenepub: { entryType: "world", matchMode: "regex" } }, [
+				"/dragons?/i"
+			]),
+			WORLD_LORE_TYPE_ID,
+			0
+		)
+		expect(kept).toMatchObject({ useRegex: true, matchMode: "regex" })
+	})
+
+	test("an in-app `regex` with the legacy flag off makes the round trip", () => {
+		const exported = mapEntry(
+			{
+				id: 3,
+				typeId: WORLD_LORE_TYPE_ID,
+				name: "Dragons",
+				content: "x",
+				keys: "dragons?",
+				enabled: true,
+				constant: false,
+				useRegex: false,
+				caseSensitive: false,
+				priority: 1,
+				matchMode: "regex",
+				extraJson: {}
+			} as any,
+			0
+		)
+		const back = mapImportedEntry(exported, WORLD_LORE_TYPE_ID, 0)
+		expect(readsAsRegex(back)).toBe(true)
+		expect(back.matchMode).toBe("regex")
+		expect(
+			mapEntry({ ...back, id: 3, typeId: WORLD_LORE_TYPE_ID } as any, 0)
+		).toEqual(exported)
+	})
+})
+
+describe("importedStatRows — a file names only its own entries (A26 review)", () => {
+	const PLACE = 11
+	const OTHER_PLACE = 12
+	const HISTORY = 13
+	const WORLD = 14
+	const ITEM = 15
+	const maps = (over: Record<string, unknown> = {}) => ({
+		lorebookId: 1,
+		bindingLocalIdToRealId: new Map([[1, 21]]),
+		// File-local id → this book's id, for what the import landed.
+		entryLocalIdToRealId: new Map([
+			[1, PLACE],
+			[2, OTHER_PLACE],
+			[3, HISTORY],
+			[4, WORLD],
+			[5, ITEM]
+		]),
+		historyEntryLocalIdToRealId: new Map<number, number>(),
+		sceneLocalIdToRealId: new Map<number, number>(),
+		entryTypeIdByRealId: new Map<number, string>([
+			[PLACE, LOCATION_TYPE_ID],
+			[OTHER_PLACE, LOCATION_TYPE_ID],
+			[HISTORY, HISTORY_TYPE_ID],
+			[WORLD, WORLD_LORE_TYPE_ID],
+			[ITEM, ITEM_TYPE_ID]
+		]),
+		singleRefEntryTypes: (slotId: string) =>
+			slotId === "core:slot/location@1"
+				? ["core:entry/location@1"]
+				: slotId === "core:slot/weather@1"
+					? null
+					: undefined,
+		...over
+	})
+	const values = (rows: unknown[], over?: Record<string, unknown>) =>
+		importedStatRows({ stats: { values: rows } }, maps(over) as any).values
+
+	test("a reference spelled with this install's ids is never stored", () => {
+		// `{ entryId }` is a row id of whichever install reads the file — any
+		// book's, any person's. Only `{ entryLocalId }` is the file's own.
+		expect(
+			values([
+				{ ownerKind: "lorebook", slotId: "test:slot/x@1", value: { v: { entryId: 424242 } } }
+			])
+		).toEqual([])
+		expect(
+			values([
+				{
+					ownerKind: "cast_member",
+					bindingLocalId: 1,
+					slotId: "core:slot/inventory@1",
+					value: {
+						v: [{ entryId: 31337, count: 2 }, { entryLocalId: 5 }, "rope", { nested: true }, [1]]
+					}
+				}
+			]).map((r) => r.value)
+		).toEqual([{ v: [{ entryId: ITEM }, "rope"] }])
+	})
+
+	test("a place's stats stay on places, and a place's list holds no place or date", () => {
+		const rows = values([
+			{
+				ownerKind: "location",
+				entryLocalId: 1,
+				slotId: "core:slot/inventory@1",
+				value: {
+					v: [
+						{ entryLocalId: 1 },
+						{ entryLocalId: 2 },
+						{ entryLocalId: 3 },
+						{ entryLocalId: 5, count: 3 },
+						{ entryLocalId: 5 },
+						"bones"
+					]
+				}
+			},
+			// A place stat on a world lore entry has no place to live on.
+			{ ownerKind: "location", entryLocalId: 4, slotId: "test:slot/lamps@1", value: { v: 1 } }
+		])
+		expect(rows.map((r) => [r.ownerId, r.value])).toEqual([
+			[PLACE, { v: [{ entryId: ITEM, count: 3 }, "bones"] }]
+		])
+	})
+
+	test("one reference on its own names an entry of the types its slot allows", () => {
+		const one = (slotId: string, entryLocalId: number) =>
+			values([
+				{
+					ownerKind: "cast_member",
+					bindingLocalId: 1,
+					slotId,
+					value: { v: { entryLocalId } }
+				}
+			]).map((r) => r.value)
+		expect(one("core:slot/location@1", 2)).toEqual([{ v: { entryId: OTHER_PLACE } }])
+		expect(one("core:slot/location@1", 4)).toEqual([])
+		// A slot that takes no reference on its own takes none from a file.
+		expect(one("core:slot/weather@1", 2)).toEqual([])
+		// A slot this install does not declare cannot be judged: kept.
+		expect(one("plugin:slot/home@1", 2)).toEqual([{ v: { entryId: OTHER_PLACE } }])
 	})
 })

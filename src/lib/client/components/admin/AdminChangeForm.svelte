@@ -5,8 +5,8 @@
 
 <script lang="ts">
 	/**
-	 * Django admin's change form, for any admin object: a breadcrumb back to
-	 * its changelist, the header (the object's name, a History link, the
+	 * Django admin's change form, for any admin object: the breadcrumb trail
+	 * back to its changelist (`AdminPageHeader` draws it), the header (the object's name, a History link, the
 	 * section's own extra actions), an error summary, the caller's
 	 * `AdminFieldset`s, and the **save row** pinned to the foot of the pane.
 	 *
@@ -16,9 +16,10 @@
 	 * does not save anything itself: `onSave(intent)` hands the intent to the
 	 * page, which owns the socket and decides where each intent lands.
 	 *
-	 * Delete asks first through `AdminDeleteConfirm`, listing what the page
-	 * says goes with the object (`deletion()`), and only then calls
-	 * `onDelete`.
+	 * Delete asks first: the form gives its place to `AdminDeleteConfirm`
+	 * (Django's confirmation page, breadcrumb "… › <object> › Delete"),
+	 * listing what the page says goes with the object (`deletion()`), and
+	 * only "Delete <thing>" there calls `onDelete`.
 	 *
 	 * Ctrl/Cmd+S inside the form is Save and continue editing.
 	 *
@@ -33,6 +34,7 @@
 	import AdminDeleteConfirm from "./AdminDeleteConfirm.svelte"
 	import RowMenu from "$lib/client/components/menus/RowMenu.svelte"
 	import type { AdminDeletion } from "./changelist"
+	import type { AdminCrumb } from "./breadcrumbs"
 
 	interface Props {
 		/** The object's name, or "Add connection". */
@@ -67,6 +69,10 @@
 		onSave: (intent: AdminSaveIntent) => void
 		/** Hide "Save and add another" (objects that are made elsewhere). */
 		addAnother?: boolean
+		/** Steps between the section and this object (a preset under its genre). */
+		trail?: readonly AdminCrumb[]
+		/** Tonal buttons in the save row, after the unsaved-changes words (Review, Discard). */
+		saveRowExtra?: Snippet
 		children: Snippet
 	}
 	let {
@@ -88,6 +94,8 @@
 		onDelete,
 		onSave,
 		addAnother = true,
+		trail = [],
+		saveRowExtra,
 		children
 	}: Props = $props()
 
@@ -99,12 +107,10 @@
 	)
 	const hasErrors = $derived(errors.length > 0 || fieldErrorList.length > 0)
 
-	let confirmOpen = $state(false)
 	let pendingDeletion = $state<AdminDeletion | null>(null)
 	function askDelete() {
 		if (!deletion) return
 		pendingDeletion = deletion()
-		confirmOpen = true
 	}
 
 	function focusField(id: string) {
@@ -121,27 +127,21 @@
 	}
 </script>
 
+{#if pendingDeletion}
+	<AdminDeleteConfirm
+		deletion={pendingDeletion}
+		trail={[...trail, { label: title, onclick: () => (pendingDeletion = null) }]}
+		onCancel={() => (pendingDeletion = null)}
+		onConfirm={() => {
+			pendingDeletion = null
+			onDelete?.()
+		}}
+	/>
+{:else}
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div class="flex min-w-0 flex-1 flex-col" onkeydown={handleKeydown}>
-	<nav aria-label="Breadcrumb" class="mb-2 text-sm">
-		<ol class="text-surface-600-400 flex min-w-0 items-center gap-1.5">
-			<li class="shrink-0">
-				<a
-					href={changelistHref}
-					class="hover:text-surface-950-50 inline-flex min-h-8 items-center gap-1 underline-offset-2 hover:underline"
-				>
-					<Icons.ChevronLeft size={14} aria-hidden="true" />
-					{changelistLabel}
-				</a>
-			</li>
-			<li aria-hidden="true" class="shrink-0">/</li>
-			<li class="text-surface-950-50 min-w-0 truncate" aria-current="page">
-				{title}
-			</li>
-		</ol>
-	</nav>
 
-	<AdminPageHeader {title} {purpose}>
+	<AdminPageHeader {title} {purpose} {trail}>
 		{#snippet actions()}
 			{@render headerActions?.()}
 			{#if mode === "change" && historyHref}
@@ -220,6 +220,7 @@
 				Unsaved changes
 			{/if}
 		</span>
+		{@render saveRowExtra?.()}
 		<!-- From 36rem of pane the three saves stand side by side; narrower
 		     (the 400px dock) it is a split button (STYLE-GUIDE §6.1): Save,
 		     and a chevron holding the two that stay or start another. -->
@@ -275,12 +276,4 @@
 	</div>
 </div>
 
-<AdminDeleteConfirm
-	open={confirmOpen}
-	deletion={pendingDeletion}
-	onCancel={() => (confirmOpen = false)}
-	onConfirm={() => {
-		confirmOpen = false
-		onDelete?.()
-	}}
-/>
+{/if}

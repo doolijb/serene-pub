@@ -194,8 +194,6 @@ const corpusTemplate = (wrappers: "template" | "layouts") => {
 
 /** What the pipeline renders: structure only, wrappers supplied by layouts. */
 const TEMPLATE = corpusTemplate("layouts")
-/** What 0.5 rendered: the same prompt, with the wrappers typed in. */
-const LEGACY_TEMPLATE = corpusTemplate("template")
 
 beforeAll(async () => {
 	db = await createTestDb()
@@ -210,32 +208,14 @@ beforeAll(async () => {
 	)
 	await bootstrapPipelines(db)
 
-	const [contextConfig] = await db
-		.insert(schema.contextConfigs)
-		.values({ name: "Parity Context", template: LEGACY_TEMPLATE })
-		.returning()
-
-	const [promptConfig] = await db
-		.insert(schema.promptConfigs)
-		.values({
-			name: "Parity Prompt",
-			systemPrompt: "You are {{char}}, speaking with {{user}}."
-		})
-		.returning()
-
-	await db.insert(schema.systemSettings).values({
-		id: 1,
-		defaultContextConfigId: contextConfig.id,
-		defaultPromptConfigId: promptConfig.id
-	})
+	await db.insert(schema.systemSettings).values({ id: 1 })
 
 	configs = {
 		connection: { id: 1, promptFormat: "vicuna", extraJson: {} },
 		// Empty is what "the context budget is switched off" resolves to now, and
 		// both sides of the parity comparison get the same object either way.
 		sampling: {},
-		contextConfig,
-		promptConfig
+		prompts: { systemPrompt: "You are {{char}}, speaking with {{user}}." }
 	}
 }, 60_000)
 
@@ -523,15 +503,6 @@ const decoratedLore: ParityFixture = {
 const postHistory: ParityFixture = {
 	name: "session/post-history",
 	async seed(db) {
-		const [config] = await db
-			.insert(schema.promptConfigs)
-			.values({
-				name: `Reinforced ${nextSuffix()}`,
-				systemPrompt: "You are {{char}}.",
-				postHistoryInstructions: "Stay in character, {{char}}."
-			})
-			.returning()
-
 		const w = await seedWorld(db, {
 			characters: [
 				{
@@ -556,7 +527,10 @@ const postHistory: ParityFixture = {
 			userId: w.user.id,
 			currentCharacterId: w.characters[0]!.id,
 			text: "Speak.",
-			promptConfigId: config.id
+			prompts: {
+				systemPrompt: "You are {{char}}.",
+				postHistoryInstructions: "Stay in character, {{char}}."
+			}
 		}
 	}
 }
@@ -666,15 +640,6 @@ const mixedVisibility: ParityFixture = {
 const narrator: ParityFixture = {
 	name: "session/narrator",
 	async seed(db) {
-		const [config] = await db
-			.insert(schema.promptConfigs)
-			.values({
-				name: `Narrator ${nextSuffix()}`,
-				systemPrompt: "Narrate the scene for {{user}}.",
-				postHistoryInstructions: "Describe, do not speak as {{char}}."
-			})
-			.returning()
-
 		const w = await seedWorld(db, {
 			characters: [
 				{
@@ -697,7 +662,10 @@ const narrator: ParityFixture = {
 			// The mode itself.
 			currentCharacterId: null,
 			text: "Tell me of the ashguard.",
-			promptConfigId: config.id
+			prompts: {
+				systemPrompt: "Narrate the scene for {{user}}.",
+				postHistoryInstructions: "Describe, do not speak as {{char}}."
+			}
 		}
 	}
 }
@@ -839,35 +807,10 @@ const entityCooccurrence: ParityFixture = {
  * instead of next to the generation point, and comparing one real session found it
  * immediately.
  *
- * Read from the seeded row rather than pasted here, so it cannot drift from what
- * users get.
  */
 const shippedTemplate: ParityFixture = {
 	name: "session/shipped-template",
 	async seed(db) {
-		const { DEFAULT_CONTEXT_TEMPLATE } = await import(
-			"$lib/server/db/legacyContextTemplate"
-		)
-		const [shipped] = await db
-			.insert(schema.contextConfigs)
-			.values({
-				name: `Shipped ${nextSuffix()}`,
-				template: DEFAULT_CONTEXT_TEMPLATE
-			})
-			.returning()
-
-		const [config] = await db
-			.insert(schema.promptConfigs)
-			.values({
-				name: `Shipped ${nextSuffix()}`,
-				systemPrompt: "You are {{char}}.",
-				postHistoryInstructions:
-					"Remember: you are {{char}}, speaking with {{user}}.",
-				postHistoryDepth: 0,
-				postHistoryTokenTrigger: 0
-			})
-			.returning()
-
 		const w = await seedWorld(db, {
 			characters: [
 				{ name: "Alice", description: "A knight sworn to {{user}}." }
@@ -885,17 +828,18 @@ const shippedTemplate: ParityFixture = {
 			userId: w.user.id,
 			currentCharacterId: w.characters[0]!.id,
 			text: "Have you seen the ashguard?",
-			promptConfigId: config.id,
-			// Declared rather than written directly to system settings: the
-			// harness sets every instance default on every fixture, so a
-			// fixture that wrote its own would leak into the next one.
-			contextConfigId: shipped.id,
-			// The two real ones: `context_configs` still holds what 0.5
-			// shipped, and this is what 0.6 seeds into
-			// `pipeline_context_templates`. Every other fixture compares two
-			// corpus templates; this one compares the two the product actually
-			// has, which is where "0.6 reproduces 0.5" stops being a claim
-			// about a fixture.
+			prompts: {
+				systemPrompt: "You are {{char}}.",
+				postHistoryInstructions:
+					"Remember: you are {{char}}, speaking with {{user}}.",
+				postHistoryDepth: 0,
+				postHistoryTokenTrigger: 0
+			},
+			// What 0.6 seeds into `pipeline_context_templates`. Every other
+			// fixture compares two corpus templates; this one compares the
+			// golden 0.5 rendered through its shipped template with the
+			// template 0.6 ships, which is where "0.6 reproduces 0.5" stops
+			// being a claim about a fixture.
 			pipelineTemplate: SHIPPED_CONTEXT_TEMPLATE
 		}
 	}
@@ -965,7 +909,6 @@ const CORPUS = [
 	macroHeavy,
 	decoratedLore,
 	postHistory,
-	datedHistory,
 	mixedVisibility,
 	allHidden,
 	narrator,
@@ -975,6 +918,7 @@ const CORPUS = [
 	// `core:task/merge-candidates@1`, and it left again when the signal it is
 	// named for changed measurement. See `DEPARTED`, which is where it is now
 	// held — with more assertions on it than it had in the gate, not fewer.
+	// `datedHistory` is not here either, for the same reason (plan A20).
 ]
 
 /**
@@ -1033,7 +977,47 @@ const OPEN: Array<{ fixture: ParityFixture; because: string }> = []
  * bounded is indistinguishable from a regression that happens to land in the
  * same file.
  */
-const DEPARTED: Array<{ fixture: ParityFixture; because: string }> = [
+/** Sort the keys of any minified JSON object on its own line. */
+const sortObjects = (text: string) =>
+	text
+		.split("\n")
+		.map((line) => {
+			if (!line.startsWith("{") || !line.endsWith("}")) return line
+			try {
+				const parsed = JSON.parse(line) as Record<string, unknown>
+				return JSON.stringify(
+					Object.fromEntries(
+						Object.entries(parsed).sort(([a], [b]) => a.localeCompare(b))
+					)
+				)
+			} catch {
+				return line
+			}
+		})
+		.join("\n")
+
+const DEPARTED: Array<{
+	fixture: ParityFixture
+	because: string
+	/**
+	 * What the departure changed, undone — applied to both prompts, which
+	 * must then be byte-identical.
+	 */
+	normalise: (prompt: string) => string
+}> = [
+	{
+		fixture: datedHistory,
+		because:
+			"History is headed by its date, newest first. 0.5 headed a year " +
+			"alone by the bare number (`\"1180\"`), and an integer-like key is " +
+			"listed ascending ahead of every other key of a JSON object, so " +
+			"0.5 printed its oldest year-only entry first — the opposite of " +
+			"the order it sorted. 0.6 heads it `Year 1180`, which keeps its " +
+			"place (plan A20 b). Stated way: the same two entries under the " +
+			"same dates, the year-only heading named.",
+		normalise: (prompt) =>
+			sortObjects(prompt.replace(/"Year (-?\d+)"/g, '"$1"'))
+	},
 	{
 		fixture: entityCooccurrence,
 		because:
@@ -1047,7 +1031,8 @@ const DEPARTED: Array<{ fixture: ParityFixture; because: string }> = [
 			"says — which is the one-sidedness design §13.6 removes, so the " +
 			"predecessor wins here by being wrong and no correct measure can " +
 			"match it (§13.11 predicted exactly this). The golden is a record " +
-			"of 0.5's arithmetic and cannot be re-derived."
+			"of 0.5's arithmetic and cannot be re-derived.",
+		normalise: sortObjects
 	}
 ]
 
@@ -1141,16 +1126,8 @@ describe("the parity corpus", () => {
 		const { pipelinePreview } = await import(
 			"$lib/server/pipelines/parity/harness"
 		)
-		await db
-			.update(schema.systemSettings)
-			.set({
-				defaultPromptConfigId: configs.promptConfig.id,
-				defaultContextConfigId: configs.contextConfig.id
-			})
-			.where(eq(schema.systemSettings.id, 1))
-
 		const scope = await withPipelineTemplate(entityCooccurrence).seed(db)
-		const run: any = await pipelinePreview(db, scope)
+		const run: any = await pipelinePreview(db, scope, configs.prompts)
 		const worldLore = (run.nodes as any[]).find(
 			(n) => n.nodeKey === "worldLore"
 		)
@@ -1260,7 +1237,7 @@ describe("the parity corpus", () => {
 				"$lib/server/pipelines/parity/harness"
 			)
 			const scope = await CORPUS[0]!.seed(db)
-			const pv: any = await pipelinePreview(db, scope)
+			const pv: any = await pipelinePreview(db, scope, configs.prompts)
 			console.log(
 				"--- 0.5 (frozen golden) ---\n" +
 					readFileSync(goldenPathFor(CORPUS[0]!.name), "utf8") +
@@ -1292,13 +1269,16 @@ describe("the parity corpus", () => {
 		 * by sorting the keys of the `World lore` JSON object — nothing else is
 		 * touched — and they must then be byte-identical. A dropped entry, a
 		 * changed body, a different block anywhere else in the prompt all fail.
+		 * For `session/history-entries` it is: **the same two entries under the
+		 * same dates, the year-only one headed `Year 1180`** — read back as
+		 * `1180`, then sorted the same way.
 		 */
 		const { readFileSync } = await import("node:fs")
 		const { goldenPathFor, pipelinePreview } = await import(
 			"$lib/server/pipelines/parity/harness"
 		)
 
-		for (const { fixture, because } of DEPARTED) {
+		for (const { fixture, because, normalise } of DEPARTED) {
 			expect(because.length).toBeGreaterThan(120)
 
 			const r = await runFixture(
@@ -1315,37 +1295,12 @@ describe("the parity corpus", () => {
 			})
 
 			const scope = await withPipelineTemplate(fixture).seed(db)
-			const preview: any = await pipelinePreview(db, scope)
+			const preview: any = await pipelinePreview(db, scope, configs.prompts)
 			const pipeline: string =
 				preview.preview?.context?.rendered?.rendered ?? ""
 			const legacy = readFileSync(goldenPathFor(fixture.name), "utf8")
 
-			/** Sort the keys of any minified JSON object on its own line. */
-			const sortObjects = (text: string) =>
-				text
-					.split("\n")
-					.map((line) => {
-						if (!line.startsWith("{") || !line.endsWith("}"))
-							return line
-						try {
-							const parsed = JSON.parse(line) as Record<
-								string,
-								unknown
-							>
-							return JSON.stringify(
-								Object.fromEntries(
-									Object.entries(parsed).sort(([a], [b]) =>
-										a.localeCompare(b)
-									)
-								)
-							)
-						} catch {
-							return line
-						}
-					})
-					.join("\n")
-
-			expect(sortObjects(pipeline)).toBe(sortObjects(legacy))
+			expect(normalise(pipeline)).toBe(normalise(legacy))
 		}
 	})
 })

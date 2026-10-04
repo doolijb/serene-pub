@@ -177,6 +177,11 @@ export function hasInterest(
  * a false negative would be silence — which is why it walks every socket rather
  * than guessing at rooms.
  *
+ * `scope` may be **`ANY_SCOPE`**: does anybody want ANY scope of it at all
+ * (`socketWantsAnyScope`)? The question a push asks before it knows which
+ * scopes it is about — `sessions/startedFromPush.ts` has only a moved layout,
+ * not the sessions that started from it, until it reads them.
+ *
  * Fails CLOSED on an `io` with no socket registry (a test double, never the real
  * server), for the same reason `socketsInUserRoom` does: a missing roster is
  * "nobody is listening", which surfaces as a test that emitted nothing rather
@@ -185,13 +190,56 @@ export function hasInterest(
 export function anyInterestAnywhere(
 	io: InterestIo,
 	event: string,
-	scope?: string | null
+	scope?: string | null | typeof ANY_SCOPE
 ): boolean {
 	const all = io?.sockets?.sockets
 	if (!all || typeof all.values !== "function") return false
 	for (const socket of all.values())
-		if (socket && socketWants(socket, event, scope)) return true
+		if (
+			socket &&
+			(scope === ANY_SCOPE
+				? socketWantsAnyScope(socket, event)
+				: socketWants(socket, event, scope))
+		)
+			return true
 	return false
+}
+
+/** `anyInterestAnywhere`'s "any scope of the event", as opposed to one scope or the bare key. */
+export const ANY_SCOPE: unique symbol = Symbol("any scope")
+
+/**
+ * Which scopes of this event each connected person declared: user id → the
+ * scopes (`sessions:panelLayout:startedFromUpdated#42` → `"42"`).
+ *
+ * For a push that is about a whole kind of thing rather than one of them — a
+ * shared layout's card changed, so every person with a session of its genre
+ * open wants their refreshed list — and so has to learn WHICH sessions are
+ * open before it can read anything. Only scoped keys count: a bare key names
+ * no scope to look up (its holder is still served by every exact-scope
+ * emit). A socket with no user is nobody's. Fails closed, like the rest.
+ */
+export function scopesWantedAnywhere(
+	io: InterestIo,
+	event: string
+): Map<number, Set<string>> {
+	const out = new Map<number, Set<string>>()
+	const all = io?.sockets?.sockets
+	if (!all || typeof all.values !== "function") return out
+	const prefix = `${event}${INTEREST_SCOPE_SEPARATOR}`
+	for (const socket of all.values()) {
+		const userId = socket?.user?.id
+		if (typeof userId !== "number" || !socket.interest?.size) continue
+		for (const key of socket.interest) {
+			if (!key.startsWith(prefix)) continue
+			const scope = key.slice(prefix.length)
+			if (!scope) continue
+			let scopes = out.get(userId)
+			if (!scopes) out.set(userId, (scopes = new Set()))
+			scopes.add(scope)
+		}
+	}
+	return out
 }
 
 /**

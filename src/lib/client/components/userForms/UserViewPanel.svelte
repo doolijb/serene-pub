@@ -60,7 +60,8 @@
 		</DetailHero>
 
 		<!-- Details -->
-		<section class="space-y-3">
+		<!-- Side by side once the detail has the room (notes 14). -->
+		<section class="grid max-w-3xl gap-3 @xl/detail:grid-cols-2">
 			<div class="space-y-1">
 				<p
 					class="text-surface-600-400 text-xs font-semibold"

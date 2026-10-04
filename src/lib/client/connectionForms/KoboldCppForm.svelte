@@ -29,7 +29,6 @@
 		renderSpecial: boolean
 		bypassEos: boolean
 		grammarRetainState: boolean
-		logprobs: boolean
 		replaceInstructPlaceholders: boolean
 	}
 
@@ -41,7 +40,6 @@
 		renderSpecial?: boolean
 		bypassEos?: boolean
 		grammarRetainState?: boolean
-		logprobs?: boolean
 		replaceInstructPlaceholders?: boolean
 	}
 
@@ -151,7 +149,6 @@
 			renderSpecial: extraJson.renderSpecial ?? false,
 			bypassEos: extraJson.bypassEos ?? false,
 			grammarRetainState: extraJson.grammarRetainState ?? false,
-			logprobs: extraJson.logprobs ?? false,
 			replaceInstructPlaceholders:
 				extraJson.replaceInstructPlaceholders ?? false
 		}
@@ -166,7 +163,6 @@
 			renderSpecial: fields.renderSpecial,
 			bypassEos: fields.bypassEos,
 			grammarRetainState: fields.grammarRetainState,
-			logprobs: fields.logprobs,
 			replaceInstructPlaceholders: fields.replaceInstructPlaceholders
 		}
 	}
@@ -400,23 +396,6 @@
 				>
 					<Switch.Label class="font-semibold">
 						Retain Grammar State
-					</Switch.Label>
-					<Switch.Control
-						class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500"
-					>
-						<Switch.Thumb />
-					</Switch.Control>
-					<Switch.HiddenInput />
-				</Switch>
-				<Switch
-					name="logprobs"
-					checked={koboldCppFields.logprobs}
-					onCheckedChange={(e) =>
-						(koboldCppFields!.logprobs = e.checked)}
-					class="flex items-center justify-between gap-4"
-				>
-					<Switch.Label class="font-semibold">
-						Return Logprobs
 					</Switch.Label>
 					<Switch.Control
 						class="preset-filled-surface-300-700 data-[state=checked]:preset-filled-primary-500"

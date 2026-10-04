@@ -14,7 +14,8 @@
 	 *
 	 * Features:
 	 *  - Draggable nodes
-	 *  - ⌥-drag from one node to another to name a relationship
+	 *  - ⌥-drag (Alt-drag) from one node to another to name a relationship
+ *  - Tab to a node and press Enter or Space to pick it, as a click does
 	 *  - Scroll-to-zoom, drag-to-pan
 	 *  - Fullscreen toggle
 	 *  - Perspective-scoping: click a node to focus; out-of-scope nodes dim
@@ -23,8 +24,13 @@
 	 * separate id spaces that collide at the same number, so identity here is
 	 * `cast#3` / `entry#3`. The geometry underneath is keyed on a numeric slot
 	 * instead, which is this drawing's own ordinal and means nothing outside it.
+	 *
+	 * ⚠ **A redraw keeps the layout.** The nodes and edges arrive again on
+	 * every write (a new link, a renamed one); a node already on the canvas
+	 * keeps where it stands, and only a new one is placed, so drawing a link
+	 * does not throw the map across the screen.
 	 */
-	import { onMount, onDestroy } from "svelte"
+	import { onMount, onDestroy, untrack } from "svelte"
 	import * as Icons from "@lucide/svelte"
 	import type {
 		GraphEdge,
@@ -40,6 +46,19 @@
 		onEdgeClick?: (edge: GraphEdge) => void
 		/** ⌥-drag landed on a second node: name what joins them. */
 		onLinkDraw?: (from: GraphNode, to: GraphNode) => void
+		/**
+		 * `auto` (the Graph lens) collapses edges to counts until the view is
+		 * zoomed in or focused. `always` (the Places lens, a map to draw on)
+		 * draws every edge on its own with its label, clickable at any zoom,
+		 * and writes each node's whole name under it.
+		 */
+		labels?: "auto" | "always"
+		/**
+		 * Every category the drawing can show, in a stable order — the
+		 * book's, not the canvas's — so a category keeps its tint when a chip
+		 * narrows the canvas to it. Absent, the canvas's own categories.
+		 */
+		categoryOrder?: readonly string[]
 	}
 
 	let {
@@ -48,8 +67,14 @@
 		selectedKey = null,
 		onNodeClick,
 		onEdgeClick,
-		onLinkDraw
+		onLinkDraw,
+		labels = "auto",
+		categoryOrder
 	}: Props = $props()
+
+	/** Marker ids are document-wide; two canvases must not share one. */
+	const uid = $props.id()
+	const arrowId = `graph-arrow-${uid}`
 
 	// ── Container / SVG refs ──────────────────────────────────────────────────
 	let containerEl = $state<HTMLDivElement | undefined>(undefined)
@@ -70,6 +95,7 @@
 		label: string
 		nodeState: string
 		nodeVisibility: string
+		category: string | null
 		pinned: boolean
 	}
 
@@ -86,6 +112,19 @@
 	let dragNode: SimNode | null = null
 	let dragOffsetX = 0
 	let dragOffsetY = 0
+	/** Where the node press began, to tell a drag from a click. */
+	let dragStartClientX = 0
+	let dragStartClientY = 0
+	/** The pressed node has moved further than a click's jitter. */
+	let dragMoved = false
+	/**
+	 * The click that follows a drag's release is not a pick (plan B7: every
+	 * drag also selected the node — and on compact, closed the canvas).
+	 * Cleared at the next press, should no click come.
+	 */
+	let swallowClick = false
+	/** A click's jitter, in screen pixels. */
+	const DRAG_SLOP = 4
 
 	// Physics — looser spring + stronger repulsion so dense graphs breathe
 	const REPULSION = 12000
@@ -188,7 +227,9 @@
 	 */
 	const LABEL_ZOOM_THRESHOLD = 1.4
 	let showEdgeLabels = $derived(
-		perspectiveKey !== null || zoom >= LABEL_ZOOM_THRESHOLD
+		labels === "always" ||
+			perspectiveKey !== null ||
+			zoom >= LABEL_ZOOM_THRESHOLD
 	)
 
 	/**
@@ -228,38 +269,89 @@
 		iter = 0
 		const slots = new Map<string, number>()
 		const angleStep = (2 * Math.PI) / Math.max(nodes.length, 1)
+		// Where each node already stands, and whether it was put there by
+		// hand (a dragged node stays where it was dropped). Untracked: the
+		// effect that calls this must not re-run on the positions the
+		// simulation writes.
+		const standing = untrack(
+			() =>
+				new Map(
+					simNodes.map((n) => [n.key, { x: n.x, y: n.y, pinned: n.pinned }])
+				)
+		)
 
 		simNodes = nodes.map((n, i) => {
 			const angle = i * angleStep
 			const r = Math.min(width, height) * 0.35
 			slots.set(n.key, i)
+			const at = standing.get(n.key)
 			return {
 				id: i,
 				key: n.key,
 				kind: n.kind,
-				x: width / 2 + r * Math.cos(angle) + (Math.random() - 0.5) * 30,
+				x:
+					at?.x ??
+					width / 2 + r * Math.cos(angle) + (Math.random() - 0.5) * 30,
 				y:
+					at?.y ??
 					height / 2 +
-					r * Math.sin(angle) +
-					(Math.random() - 0.5) * 30,
+						r * Math.sin(angle) +
+						(Math.random() - 0.5) * 30,
 				vx: 0,
 				vy: 0,
 				label: n.name,
 				nodeState: n.state ?? "active",
 				nodeVisibility: n.visibility ?? "normal",
-				pinned: false
+				category: n.category?.trim() || null,
+				pinned: at?.pinned ?? false
 			}
 		})
 
-		simEdges = edges
+		simEdges = edgesFor(slots)
+
+		startSimulation()
+	}
+
+	function edgesFor(slots: Map<string, number>): SimEdge[] {
+		return edges
 			.filter((e) => slots.has(e.fromKey) && slots.has(e.toKey))
 			.map((e) => ({
 				source: slots.get(e.fromKey)!,
 				target: slots.get(e.toKey)!,
 				edge: e
 			}))
+	}
 
-		startSimulation()
+	/**
+	 * The same nodes and edges, drawn afresh: what each says (its label, its
+	 * state, the edge rows) follows the props, and nobody moves — the
+	 * simulation is NOT restarted (plan B7: every selection rebuilt the node
+	 * list, which restarted the O(N²) layout from its first step).
+	 */
+	function refreshInPlace() {
+		const byKey = new Map(nodes.map((n) => [n.key, n]))
+		const slots = new Map<string, number>()
+		simNodes = untrack(() => simNodes).map((sim, i) => {
+			slots.set(sim.key, i)
+			const n = byKey.get(sim.key)
+			if (!n) return sim
+			sim.label = n.name
+			sim.kind = n.kind
+			sim.nodeState = n.state ?? "active"
+			sim.nodeVisibility = n.visibility ?? "normal"
+			sim.category = n.category?.trim() || null
+			return sim
+		})
+		simEdges = edgesFor(slots)
+	}
+
+	/** What the layout is OF: which nodes, and which pairs are joined. */
+	function structureOf(): string {
+		return (
+			nodes.map((n) => n.key).join("|") +
+			"#" +
+			edges.map((e) => `${e.fromKey}>${e.toKey}`).join("|")
+		)
 	}
 
 	function tick() {
@@ -372,6 +464,20 @@
 		if (a && b) onLinkDraw?.(a, b)
 	}
 
+	/** The node keyboard focus is on, ringed while it is there. */
+	let focusedKey = $state<string | null>(null)
+
+	/** A node picked — clicked, or Enter / Space while it has focus. */
+	function activateNode(node: SimNode) {
+		if (perspectiveKey === node.key) {
+			clearPerspective()
+		} else {
+			perspectiveKey = node.key
+		}
+		const origNode = nodes.find((n) => n.key === node.key)
+		if (origNode) onNodeClick?.(origNode)
+	}
+
 	// ── Drag ──────────────────────────────────────────────────────────────────
 	function onNodePointerDown(e: PointerEvent, node: SimNode) {
 		e.stopPropagation()
@@ -386,11 +492,19 @@
 			return
 		}
 		dragNode = node
+		dragMoved = false
+		swallowClick = false
+		dragStartClientX = e.clientX
+		dragStartClientY = e.clientY
+		// Held while pressed; kept pinned on release only if it moved.
+		dragWasPinned = node.pinned
 		node.pinned = true
 		dragOffsetX = sx - node.x
 		dragOffsetY = sy - node.y
 		if (rafId === null) rafId = requestAnimationFrame(tick)
 	}
+	/** Whether the pressed node was already put somewhere by hand. */
+	let dragWasPinned = false
 
 	// ── Pan ───────────────────────────────────────────────────────────────────
 	// Track whether the pointer moved since pointerdown to distinguish click vs drag
@@ -413,6 +527,15 @@
 			linkX = sx
 			linkY = sy
 		} else if (dragNode && svgEl) {
+			if (
+				!dragMoved &&
+				Math.hypot(
+					e.clientX - dragStartClientX,
+					e.clientY - dragStartClientY
+				) <= DRAG_SLOP
+			)
+				return
+			dragMoved = true
 			const [vx, vy] = clientToViewBox(e.clientX, e.clientY)
 			const [sx, sy] = viewBoxToSim(vx, vy)
 			dragNode.x = sx - dragOffsetX
@@ -435,10 +558,16 @@
 		if (linkFrom) {
 			finishLink()
 		} else if (dragNode) {
-			dragNode.pinned = false
+			// A node put somewhere by hand STAYS there (plan B7: released, it
+			// unpinned and drifted back); a press that never moved is a click,
+			// and leaves the node as it was.
+			dragNode.pinned = dragMoved || dragWasPinned
+			swallowClick = dragMoved
 			dragNode = null
-			iter = 0
-			if (rafId === null) rafId = requestAnimationFrame(tick)
+			if (dragMoved) {
+				iter = 0
+				if (rafId === null) rafId = requestAnimationFrame(tick)
+			}
 		} else if (isPanning && !pointerMoved) {
 			// Tap on background — clear perspective
 			clearPerspective()
@@ -460,7 +589,6 @@
 
 	// ── Lifecycle ─────────────────────────────────────────────────────────────
 	onMount(() => {
-		initSim()
 		svgEl?.addEventListener("wheel", onSvgWheel, { passive: false })
 
 		const onFsChange = () => {
@@ -476,19 +604,41 @@
 
 	onDestroy(() => stopSimulation())
 
+	/**
+	 * The layout restarts only when what it is OF changes — a node or a join
+	 * comes or goes. Anything else (a selection, a renamed node, a status)
+	 * is drawn in place (`refreshInPlace`); the props are new arrays on
+	 * every rebuild upstream, so their identity says nothing.
+	 */
+	let laidOut: string | null = null
 	$effect(() => {
-		nodes.length
-		edges.length
-		initSim()
+		const structure = structureOf()
+		void nodes
+		void edges
+		untrack(() => {
+			if (structure === laidOut) {
+				refreshInPlace()
+				return
+			}
+			laidOut = structure
+			initSim()
+		})
 	})
 
 	onMount(() => {
 		if (!svgEl?.parentElement) return
 		const ro = new ResizeObserver((entries) => {
 			const e = entries[0]
-			width = e.contentRect.width || 600
-			height = Math.max(e.contentRect.height, 300) || 450
-			initSim()
+			const nextWidth = e.contentRect.width || 600
+			const nextHeight = Math.max(e.contentRect.height, 300) || 450
+			// A side column opening or a scrollbar is not a new layout: only
+			// a real change of room lets the nodes settle again.
+			const moved =
+				Math.abs(nextWidth - width) > 40 ||
+				Math.abs(nextHeight - height) > 40
+			width = nextWidth
+			height = nextHeight
+			if (moved && simNodes.length) startSimulation()
 		})
 		ro.observe(svgEl.parentElement)
 		return () => ro.disconnect()
@@ -505,6 +655,45 @@
 	/** An entry is a place or a thing rather than somebody, and reads apart. */
 	const ENTRY_COLOR = "#0ea5e9"
 
+	/**
+	 * A place's category tints it (plan places-graph §6.2). Hues kept clear of
+	 * the node states' and of the signal colours (red, amber, green), so a
+	 * tint never reads as a warning; past six categories the hues repeat.
+	 */
+	const CATEGORY_COLORS = [
+		"#14b8a6",
+		"#a855f7",
+		"#ec4899",
+		"#0891b2",
+		"#d946ef",
+		"#78716c"
+	]
+	/** Each category on the canvas, once, in a stable order. */
+	let categoryList = $derived.by(() => {
+		const byKey = new Map<string, string>()
+		for (const n of nodes) {
+			const name = n.category?.trim()
+			if (name && !byKey.has(name.toLowerCase()))
+				byKey.set(name.toLowerCase(), name)
+		}
+		return [...byKey.values()].sort((a, b) =>
+			a.localeCompare(b, undefined, { sensitivity: "base" })
+		)
+	})
+	/**
+	 * The order hues are dealt in: the book's categories when the lens knows
+	 * them (a filtered canvas holds fewer, and would deal them again).
+	 */
+	let paletteOrder = $derived(
+		categoryOrder && categoryOrder.length ? categoryOrder : categoryList
+	)
+	function categoryColor(category: string): string {
+		const i = paletteOrder.findIndex(
+			(c) => c.toLowerCase() === category.toLowerCase()
+		)
+		return CATEGORY_COLORS[Math.max(i, 0) % CATEGORY_COLORS.length]
+	}
+
 	const REL_STATUS_DASH: Record<string, string> = {
 		active: "none",
 		resolved: "4 2",
@@ -512,8 +701,13 @@
 		evolved: "6 2 2 2"
 	}
 
-	function nodeColor(node: { kind: string; nodeState: string }) {
-		if (node.kind === "entry") return ENTRY_COLOR
+	function nodeColor(node: {
+		kind: string
+		nodeState: string
+		category: string | null
+	}) {
+		if (node.kind === "entry")
+			return node.category ? categoryColor(node.category) : ENTRY_COLOR
 		return NODE_STATE_COLORS[node.nodeState] ?? "#6366f1"
 	}
 	function edgeDash(s: string) {
@@ -613,13 +807,15 @@
 		onpointerleave={onSvgPointerUp}
 	>
 		<defs>
+			<!-- `auto-start-reverse`: the one marker points outward at either
+			     end, so a both-ways edge carries it as marker-start too. -->
 			<marker
-				id="arrowhead"
+				id={arrowId}
 				markerWidth="8"
 				markerHeight="6"
 				refX="8"
 				refY="3"
-				orient="auto"
+				orient="auto-start-reverse"
 			>
 				<polygon points="0 0, 8 3, 0 6" fill="#6b7280" opacity="0.6" />
 			</marker>
@@ -644,7 +840,7 @@
 								? "4 3"
 								: "none"}
 							fill="none"
-							marker-end="url(#arrowhead)"
+							marker-end="url(#{arrowId})"
 							class="transition-opacity"
 						>
 							<title>
@@ -676,7 +872,6 @@
 					{#if srcNode && tgtNode}
 						{@const ep = edgePath(srcNode, tgtNode, idx, total)}
 						{@const scoped = edgeInScope(edge.source, edge.target)}
-						<!-- svelte-ignore a11y_click_events_have_key_events -->
 						<path
 							d={ep.d}
 							stroke="#6b7280"
@@ -684,18 +879,41 @@
 							stroke-opacity={scoped ? 0.55 : 0.1}
 							stroke-dasharray={edgeDash(edge.edge.status)}
 							fill="none"
-							marker-end="url(#arrowhead)"
-							class="cursor-pointer transition-opacity"
+							marker-end="url(#{arrowId})"
+							marker-start={edge.edge.bothWays
+								? `url(#${arrowId})`
+								: undefined}
+							class="pointer-events-none transition-opacity"
+							data-graph-edge-both-ways={edge.edge.bothWays
+								? ""
+								: undefined}
+						/>
+						<!-- The line itself is 1.5px: a clear stroke over it is
+						     what a click lands on. The keyboard reaches the same
+						     link as a button in its node's panel (nodes are in
+						     the Tab order; lines are not). -->
+						<!-- svelte-ignore a11y_click_events_have_key_events -->
+						<path
+							d={ep.d}
+							stroke="transparent"
+							stroke-width="12"
+							fill="none"
+							class="cursor-pointer"
 							data-graph-edge={edge.edge.id}
 							onclick={() => onEdgeClick?.(edge.edge)}
-						/>
+						>
+							<title>{edge.edge.label}</title>
+						</path>
 						{#if scoped && showEdgeLabels}
 							<text
 								x={ep.labelX}
 								y={ep.labelY - 4}
 								text-anchor="middle"
-								font-size="9"
+								font-size={labels === "always" ? 10 : 9}
 								fill="#9ca3af"
+								stroke={labels === "always" ? "#09090b" : undefined}
+								stroke-width={labels === "always" ? 3 : undefined}
+								paint-order="stroke"
 								class="pointer-events-none select-none"
 							>
 								{edge.edge.label}
@@ -731,28 +949,58 @@
 			{/if}
 
 			<!-- Nodes -->
-			{#each simNodes as node}
+			{#each simNodes as node (node.key)}
 				{@const scoped = inScope(node.key)}
 				{@const isFocal = node.key === perspectiveKey}
 				{@const color = nodeColor(node)}
-				<!-- svelte-ignore a11y_click_events_have_key_events -->
+				<!-- A node is a button: Tab reaches it, Enter or Space picks it
+				     as a click does. Its links are then buttons in the panel
+				     beside the canvas, which is the keyboard's way to a link
+				     (the lines stay out of the Tab order, or it would walk
+				     every line before the first node). -->
 				<g
-					class="cursor-pointer"
+					class="cursor-pointer outline-none"
 					data-graph-node={node.key}
+					role="button"
+					tabindex="0"
+					aria-label={node.label}
+					aria-pressed={node.key === selectedKey}
 					onclick={() => {
-						if (perspectiveKey === node.key) {
-							clearPerspective()
-						} else {
-							perspectiveKey = node.key
+						if (swallowClick) {
+							swallowClick = false
+							return
 						}
-						const origNode = nodes.find((n) => n.key === node.key)
-						if (origNode) onNodeClick?.(origNode)
+						activateNode(node)
+					}}
+					onkeydown={(e) => {
+						if (e.key !== "Enter" && e.key !== " ") return
+						e.preventDefault()
+						activateNode(node)
+					}}
+					onfocus={(e) => {
+						if (e.currentTarget.matches(":focus-visible"))
+							focusedKey = node.key
+					}}
+					onblur={() => {
+						if (focusedKey === node.key) focusedKey = null
 					}}
 					onpointerdown={(e) => onNodePointerDown(e, node)}
 					opacity={scoped ? 1 : 0.12}
 					style="transition: opacity 0.2s"
 				>
 					<title>{node.label} ({node.nodeState})</title>
+					<!-- Keyboard focus: a solid ring, clear of the dashed one. -->
+					{#if focusedKey === node.key}
+						<circle
+							cx={node.x}
+							cy={node.y}
+							r={NODE_RADIUS + 10}
+							fill="none"
+							stroke={color}
+							stroke-width="2.5"
+							data-graph-node-focus
+						/>
+					{/if}
 					<!-- Focal dashed ring -->
 					{#if isFocal || node.key === selectedKey}
 						<circle
@@ -828,20 +1076,39 @@
 							class="pointer-events-none"
 						/>
 					{/if}
-					<text
-						x={node.x}
-						y={node.y + 1}
-						text-anchor="middle"
-						dominant-baseline="middle"
-						font-size="9"
-						font-weight="600"
-						fill="white"
-						class="pointer-events-none select-none"
-					>
-						{node.label.length > 12
-							? node.label.slice(0, 11) + "…"
-							: node.label}
-					</text>
+					{#if labels === "always"}
+						<!-- A map is read by its names: the whole of it, under
+						     the node, rather than eleven letters inside it. -->
+						<text
+							x={node.x}
+							y={node.y + NODE_RADIUS + 13}
+							text-anchor="middle"
+							font-size="11"
+							font-weight="600"
+							fill="#e4e4e7"
+							stroke="#09090b"
+							stroke-width="3"
+							paint-order="stroke"
+							class="pointer-events-none select-none"
+						>
+							{node.label}
+						</text>
+					{:else}
+						<text
+							x={node.x}
+							y={node.y + 1}
+							text-anchor="middle"
+							dominant-baseline="middle"
+							font-size="9"
+							font-weight="600"
+							fill="white"
+							class="pointer-events-none select-none"
+						>
+							{node.label.length > 12
+								? node.label.slice(0, 11) + "…"
+								: node.label}
+						</text>
+					{/if}
 				</g>
 			{/each}
 		</g>
@@ -953,6 +1220,22 @@
 					</svg>
 					<span class="text-surface-800-200">entry</span>
 				</div>
+				{#each categoryList as category (category)}
+					<div class="flex items-center gap-1.5" data-legend-category>
+						<svg width="16" height="16" class="shrink-0">
+							<rect
+								x="2"
+								y="2"
+								width="12"
+								height="12"
+								rx="3"
+								fill={categoryColor(category)}
+								opacity="0.9"
+							/>
+						</svg>
+						<span class="text-surface-800-200">{category}</span>
+					</div>
+				{/each}
 			</div>
 			<div class="border-surface-600 space-y-1 border-t pt-2">
 				<p
@@ -961,6 +1244,21 @@
 				>
 					Edge status
 				</p>
+				<div class="flex items-center gap-1.5">
+					<svg width="24" height="8" class="shrink-0">
+						<line
+							x1="3"
+							y1="4"
+							x2="21"
+							y2="4"
+							stroke="#6b7280"
+							stroke-width="1.5"
+							marker-start="url(#{arrowId})"
+							marker-end="url(#{arrowId})"
+						/>
+					</svg>
+					<span class="text-surface-800-200">both ways</span>
+				</div>
 				{#each [["active", "none"], ["resolved", "4 2"], ["broken", "2 3"], ["evolved", "6 2 2 2"]] as [status, dash]}
 					<div class="flex items-center gap-1.5">
 						<svg width="24" height="8" class="shrink-0">

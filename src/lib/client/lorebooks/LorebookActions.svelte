@@ -1,17 +1,19 @@
 <script lang="ts">
 	import { getContext } from "svelte"
 	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
-	import type { SpecV3 } from "@lenml/char-card-reader"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { useInterest } from "$lib/client/sockets/interest.svelte"
+	import { v4 as uuid } from "uuid"
 	import { toaster } from "$lib/client/utils/toaster"
 	import { attachLorebookToSession } from "$lib/client/utils/attachLorebookToSession"
 	import FileDropzone from "$lib/client/components/FileDropzone.svelte"
 	import NewLorebookDialog from "$lib/client/components/lorebookForms/NewLorebookDialog.svelte"
 	import ImportConflictModal from "$lib/client/components/modals/ImportConflictModal.svelte"
 	import { LOREBOOK_EXPORT_PAUSED } from "$lib/shared/lorebooks/exportPaused"
+	import { lorebookFileTooLarge } from "$lib/shared/imports/fileCaps"
 	import { copyName } from "./bookCopy"
 	import { describeOverwriteLosses } from "./overwriteLosses"
+	import { lorebookImportedToast } from "./lorebookImportedToast"
 
 	/**
 	 * Everything that happens to a lorebook as a whole — create, import,
@@ -73,22 +75,32 @@
 	const socket = useTypedSocket()
 	const openSessionCtx: OpenSessionCtx = getContext("openSessionCtx")
 
-	let importingBook: SpecV3.Lorebook | undefined = $state(undefined)
+	/**
+	 * The file chosen for import: its text, sent as it was read (the server
+	 * measures, normalizes and parses it), the name it gives the book, and
+	 * the name the dialog shows — the only thing the person edits.
+	 */
+	let importingBook:
+		| { text: string; fileName: string; name: string }
+		| undefined = $state(undefined)
 	let importConflict:
 		| Sockets.Lorebooks.Import.Response["conflict"]
 		| undefined = $state(undefined)
 	let showImportConflictModal: boolean = $state(false)
 
 	/**
-	 * Set when the user ticked "attach to this session" so the
-	 * `lorebooks:create` broadcast can be matched back to this request.
-	 * Correlating on the submitted name rather than a bare boolean — see the
-	 * same reasoning in SummarizeLoreModal.handleLorebookCreate.
+	 * Whether the create in flight should attach the new book to the open
+	 * session (the user ticked "attach to this session").
 	 */
-	let pendingAttachName: string | null = $state(null)
+	let pendingAttach: boolean = $state(false)
 
-	/** Set when this tab emitted `lorebooks:create`; the name it asked for. */
-	let pendingCreateName: string | null = $state(null)
+	/**
+	 * The `requestId` of the create this tab sent, until it is answered. The
+	 * server echoes it on the `lorebooks:create` broadcast, so a same-named
+	 * create from another tab or surface is never taken for this one's (plan
+	 * B8 — this matched on the name before).
+	 */
+	let pendingCreateRequestId: string | null = $state(null)
 	/** Set while this tab has an import or import-resolve in flight. */
 	let importPending: boolean = $state(false)
 	/** The book this tab asked to delete, until the server answers. */
@@ -126,11 +138,23 @@
 		const trimmed = details.name.trim()
 		// Only claim the create when the switch was both shown and on;
 		// `attachToSession` is meaningless if the modal rendered no switch.
-		pendingAttachName =
-			details.attachToSession && canOfferAttachToSession ? trimmed : null
-		pendingCreateName = trimmed
-		const req: Sockets.Lorebooks.Create.Params = { name: trimmed }
+		pendingAttach = details.attachToSession && canOfferAttachToSession
+		pendingCreateRequestId = uuid()
+		const req: Sockets.Lorebooks.Create.Params = {
+			name: trimmed,
+			requestId: pendingCreateRequestId
+		}
 		socket.emit("lorebooks:create", req)
+	}
+
+	/**
+	 * The book's name as the file states it, wherever the file keeps it — the
+	 * same lookup the server's reader makes (a whole card's `character_book`
+	 * first), so the dialog shows the name the book would get.
+	 */
+	function nameInFile(json: any): string {
+		const book = json?.character_book ?? json?.data?.character_book ?? json
+		return typeof book?.name === "string" ? book.name : ""
 	}
 
 	function handleFileImport(details: FileAcceptDetails) {
@@ -143,65 +167,38 @@
 			})
 			return
 		}
+		// The server's own ceiling, said before a byte is read or sent.
+		const tooLarge = lorebookFileTooLarge(file.size)
+		if (tooLarge) {
+			toaster.error({ title: tooLarge })
+			return
+		}
 
 		const reader = new FileReader()
 		reader.onload = function (e) {
+			const text = e.target?.result as string
+			let name: string
 			try {
-				const json: SpecV3.Lorebook = JSON.parse(
-					e.target?.result as string
-				)
-				let entries = json.entries
-				if (entries && !Array.isArray(entries)) {
-					entries = Object.values(entries)
-				}
-				// Normalize both 'key' and 'keys' fields for every entry
-				entries = (entries || []).map((entry) => {
-					// @ts-ignore
-					let keyArr = entry.key
-					if (!Array.isArray(keyArr)) {
-						keyArr =
-							entry.keys && Array.isArray(entry.keys)
-								? entry.keys
-								: keyArr
-									? [keyArr]
-									: []
-					}
-					let keysArr = entry.keys
-					if (!Array.isArray(keysArr)) {
-						keysArr = keyArr
-					}
-					// @ts-ignore
-					let keysecondaryArr = entry.keysecondary
-					if (!Array.isArray(keysecondaryArr)) {
-						keysecondaryArr = keysecondaryArr
-							? [keysecondaryArr]
-							: []
-					}
-					return {
-						...entry,
-						key: keyArr,
-						keys: keysArr,
-						keysecondary: keysecondaryArr
-					}
+				name = nameInFile(JSON.parse(text))
+			} catch {
+				toaster.error({
+					title: "This lorebook file isn't valid JSON, so Serene Pub can't read it."
 				})
-				importingBook = {
-					...json,
-					entries: entries,
-					name: json.name || "",
-					description: json.description || "",
-					extensions: json.extensions || {}
-				}
-			} catch (err) {
-				toaster.error({ title: "Invalid JSON file" })
+				return
 			}
+			importingBook = { text, fileName: name, name }
 		}
 		reader.readAsText(file)
 	}
 
 	function handleImportConfirm() {
 		if (importingBook && importingBook.name?.trim()) {
+			const name = importingBook.name.trim()
 			const req: Sockets.Lorebooks.Import.Params = {
-				lorebookData: importingBook
+				lorebookJson: importingBook.text,
+				// Only a changed name travels, so an untouched re-import of a
+				// book still reads as unchanged.
+				...(name !== importingBook.fileName.trim() ? { name } : {})
 			}
 			importPending = true
 			socket.emit("lorebooks:import", req)
@@ -214,7 +211,7 @@
 		if (!importConflict) return
 		const req: Sockets.Lorebooks.ImportResolve.Params = {
 			action: "overwrite",
-			lorebookData: importConflict.lorebookData,
+			heldImportId: importConflict.heldImportId,
 			existingId: importConflict.existingLorebook.id
 		}
 		importPending = true
@@ -227,7 +224,7 @@
 		if (!importConflict) return
 		const req: Sockets.Lorebooks.ImportResolve.Params = {
 			action: "createNew",
-			lorebookData: importConflict.lorebookData,
+			heldImportId: importConflict.heldImportId,
 			existingId: importConflict.existingLorebook.id
 		}
 		importPending = true
@@ -295,21 +292,21 @@
 
 	function handleLorebooksCreate(msg: Sockets.Lorebooks.Create.Response) {
 		if (!msg.lorebook) return
-		// Only this tab's own create (see the component note).
-		if (pendingCreateName === null || msg.lorebook.name !== pendingCreateName)
+		// Only this tab's own create, by the id it sent.
+		if (
+			pendingCreateRequestId === null ||
+			msg.requestId !== pendingCreateRequestId
+		)
 			return
-		pendingCreateName = null
+		pendingCreateRequestId = null
+		const attach = pendingAttach
+		pendingAttach = false
 		toaster.success({
 			title: "Lorebook created",
 			description: `"${msg.lorebook.name}" created successfully.`
 		})
 		// Server automatically emits updated list
-		if (
-			pendingAttachName !== null &&
-			msg.lorebook.name === pendingAttachName &&
-			openSessionCtx.sessionId !== null
-		) {
-			pendingAttachName = null
+		if (attach && openSessionCtx.sessionId !== null) {
 			attachLorebookToSession(
 				socket,
 				openSessionCtx.sessionId,
@@ -335,7 +332,8 @@
 			if (msg.lorebook) onImported?.(msg.lorebook.id)
 			return
 		}
-		toaster.success({ title: "Lorebook imported" })
+		const toast = lorebookImportedToast(msg.warnings)
+		toaster[toast.kind]({ title: toast.title, description: toast.description })
 		if (msg.lorebook) onImported?.(msg.lorebook.id)
 	}
 
@@ -354,7 +352,8 @@
 	) {
 		if (!importPending) return
 		importPending = false
-		toaster.success({ title: "Lorebook imported" })
+		const toast = lorebookImportedToast(msg.warnings)
+		toaster[toast.kind]({ title: toast.title, description: toast.description })
 		if (msg.lorebook) onImported?.(msg.lorebook.id)
 	}
 

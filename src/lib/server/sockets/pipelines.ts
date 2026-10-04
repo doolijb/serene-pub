@@ -19,6 +19,7 @@
 
 import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
+import { isFailedQuery } from "$lib/server/db/errors"
 import { and, asc, desc, eq, inArray, or, sql, type SQL } from "drizzle-orm"
 import type { Handler } from "$lib/shared/events"
 import {
@@ -31,6 +32,7 @@ import {
 	namespaceView,
 	resetConfig,
 	selectNamedConfig,
+	stepKeyFor,
 	writeOption,
 	OptionNotFoundError,
 	OptionNotWritableError,
@@ -69,6 +71,7 @@ import { entryDeclaration, bandOfType } from "$lib/server/entries/declarations"
 import { entrySourceHash } from "$lib/server/annotations"
 import type { EntryTypeId } from "$lib/shared/entries/types"
 import { CORE_TEMPLATE_ENGINE } from "$lib/shared/pipelines/templateEngines"
+import { askerOf } from "./refusable"
 
 /**
  * The instance secret that keys option handles.
@@ -79,7 +82,7 @@ import { CORE_TEMPLATE_ENGINE } from "$lib/shared/pipelines/templateEngines"
  * the filesystem merely by being imported.
  */
 let cachedSecret: string | null = null
-async function instanceSecret(): Promise<string> {
+async function pubSecret(): Promise<string> {
 	if (cachedSecret) return cachedSecret
 	const { getCryptoSecretKey } = await import("$lib/server/db")
 	cachedSecret = getCryptoSecretKey()
@@ -93,20 +96,40 @@ async function instanceSecret(): Promise<string> {
  * from inside a session you own writes at session scope; the ownership half of that is
  * not decoration, because the parameter arrives from the client and a session id is
  * a small integer somebody can guess.
+ *
+ * And only for a pipeline that session runs (owner Q7): opened from inside a
+ * session, any other pipeline is the configuration's — an administrator's to
+ * change, read-only for everyone else — so `slug` narrows the scope too.
+ *
+ * The session's creation pipeline is one it runs, but only while creating:
+ * once the session is created the scope stays the session's and is read-only,
+ * with the sentence saying why (owner ruling 2026-09-30).
  */
-async function viewerFor(socket: any, sessionId?: number): Promise<Viewer> {
+async function viewerFor(
+	socket: any,
+	sessionId?: number,
+	slug?: string
+): Promise<Viewer> {
 	const userId = socket.user!.id
-	if (sessionId == null) return { userId, isAdmin: !!socket.user!.isAdmin }
+	const isAdmin = !!socket.user!.isAdmin
+	if (sessionId == null) return { userId, isAdmin }
 	const [session] = await db
 		.select({ userId: schema.sessions.userId })
 		.from(schema.sessions)
 		.where(eq(schema.sessions.id, sessionId))
 		.limit(1)
-	return {
-		userId,
-		isAdmin: !!socket.user!.isAdmin,
-		sessionId: session?.userId === userId ? sessionId : undefined
+	if (session?.userId !== userId) return { userId, isAdmin }
+	if (slug != null) {
+		const { sessionPipelines, CREATION_READ_ONLY_NOTE } = await import(
+			"$lib/server/pipelines/entities/sessionPipelines"
+		)
+		const { pipelines } = await sessionPipelines(db, sessionId, userId)
+		const runs = pipelines.find((p) => p.slug === slug)
+		if (!runs) return { userId, isAdmin }
+		if (runs.creation === "created")
+			return { userId, isAdmin, sessionId, readOnlyBecause: CREATION_READ_ONLY_NOTE }
 	}
+	return { userId, isAdmin, sessionId }
 }
 
 /**
@@ -120,10 +143,10 @@ async function buildView(
 	slug: string,
 	sessionId?: number
 ): Promise<Sockets.Pipelines.Get.Response> {
-	const viewer = await viewerFor(socket, sessionId)
+	const viewer = await viewerFor(socket, sessionId, slug)
 	const pipeline = await namespaceView(
 		db,
-		await instanceSecret(),
+		await pubSecret(),
 		slug,
 		viewer
 	)
@@ -250,9 +273,9 @@ export const pipelinesSetOption: Handler<
 		try {
 			await writeOption(
 				db,
-				await instanceSecret(),
+				await pubSecret(),
 				params.slug,
-				await viewerFor(socket, params.sessionId),
+				await viewerFor(socket, params.sessionId, params.slug),
 				params.optionId,
 				params.value,
 				params.configId
@@ -282,9 +305,9 @@ export const pipelinesClearOption: Handler<
 		try {
 			await clearOption(
 				db,
-				await instanceSecret(),
+				await pubSecret(),
 				params.slug,
-				await viewerFor(socket, params.sessionId),
+				await viewerFor(socket, params.sessionId, params.slug),
 				params.optionId,
 				params.configId
 			)
@@ -323,7 +346,7 @@ export const pipelinesResetConfig: Handler<
 			cleared = await resetConfig(
 				db,
 				params.slug,
-				await viewerFor(socket, params.sessionId),
+				await viewerFor(socket, params.sessionId, params.slug),
 				params.configId
 			)
 		} catch (err) {
@@ -356,8 +379,8 @@ export const pipelinesSetOptions: Handler<
 > = {
 	event: "pipelines:setOptions",
 	handler: async (socket, params, emitToUser) => {
-		const secret = await instanceSecret()
-		const viewer = await viewerFor(socket, params.sessionId)
+		const secret = await pubSecret()
+		const viewer = await viewerFor(socket, params.sessionId, params.slug)
 		let applied = 0
 		try {
 			for (const entry of params.set ?? []) {
@@ -404,7 +427,16 @@ export const pipelinesSetOptions: Handler<
 			params.slug,
 			params.sessionId
 		)
-		return {}
+		// The batch's own answer, after the refreshed view: a form that
+		// waits for its Save (the admin workspace) settles on this, never
+		// on a `pipelines:get` that any other write could have sent.
+		const res = {
+			slug: params.slug,
+			configId: params.configId ?? null,
+			applied
+		}
+		emitToUser("pipelines:setOptions", res)
+		return res
 	}
 }
 
@@ -457,7 +489,7 @@ async function configInSpec(slug: string, configId: number) {
  * Slot-filtered because values are arbitrary json: a params value that
  * happens to equal the row id must not be swept up as a reference.
  */
-async function ownInstanceConfigValues(
+async function ownPubConfigValues(
 	slug: string,
 	rowId: number,
 	slots: string[]
@@ -543,7 +575,13 @@ const configRefusal = async (err: unknown): Promise<string> => {
 		err instanceof ConfigNotUsableError
 	)
 		return err.message
-	if (err instanceof Error && /pipeline|configuration/.test(err.message))
+	// Not a failed query: its message is SQL, and any `pipeline*` table name
+	// in it would match.
+	if (
+		err instanceof Error &&
+		!isFailedQuery(err) &&
+		/pipeline|configuration/.test(err.message)
+	)
 		return err.message
 	console.error("[pipelines] config mutation failed:", err)
 	return "That change could not be saved. The server log has the details."
@@ -602,7 +640,10 @@ export const pipelinesSetPresetActions: Handler<
 			params.slug,
 			params.sessionId
 		)
-		return {}
+		// Its own answer, so a form waiting on its Save hears this write.
+		const res = { slug: params.slug, configId: params.configId }
+		emitToUser("pipelines:setPresetActions", res)
+		return res
 	}
 }
 
@@ -682,7 +723,9 @@ export const pipelinesRenameConfig: Handler<
 			params.slug,
 			params.sessionId
 		)
-		return {}
+		const res = { slug: params.slug, configId: params.configId }
+		emitToUser("pipelines:renameConfig", res)
+		return res
 	}
 }
 
@@ -726,7 +769,7 @@ export const pipelinesSelectConfig: Handler<
 			await selectNamedConfig(
 				db,
 				params.slug,
-				await viewerFor(socket, params.sessionId),
+				await viewerFor(socket, params.sessionId, params.slug),
 				params.configId,
 				params.scope
 			)
@@ -889,11 +932,11 @@ async function promptForOption(
 	const { assertSelectable } = await import(
 		"$lib/server/pipelines/entities/prompts"
 	)
-	const viewer = await viewerFor(socket, params.sessionId)
+	const viewer = await viewerFor(socket, params.sessionId, params.slug)
 	const { nodeDefinitionId, slot, nodeKey, specId, specVersionId } =
 		await promptOptionGate(
 			db,
-			await instanceSecret(),
+			await pubSecret(),
 			params.slug,
 			viewer,
 			params.optionId
@@ -977,7 +1020,8 @@ const promptRefusal = async (err: unknown): Promise<string> => {
 		err instanceof OptionNotWritableError
 	)
 		return err.message
-	if (err instanceof Error && /pipeline/.test(err.message)) return err.message
+	if (err instanceof Error && !isFailedQuery(err) && /pipeline/.test(err.message))
+		return err.message
 	console.error("[pipelines] prompt mutation failed:", err)
 	return "That change could not be saved. The server log has the details."
 }
@@ -1003,10 +1047,10 @@ export const pipelinesCreatePrompt: Handler<
 			const { promptOptionGate } = await import(
 				"$lib/server/pipelines/config/panel"
 			)
-			const viewer = await viewerFor(socket, params.sessionId)
+			const viewer = await viewerFor(socket, params.sessionId, params.slug)
 			const { nodeDefinitionId, slot, specId } = await promptOptionGate(
 				db,
-				await instanceSecret(),
+				await pubSecret(),
 				params.slug,
 				viewer,
 				params.optionId
@@ -1298,10 +1342,10 @@ async function layoutForOption(
 	const { assertSelectable } = await import(
 		"$lib/server/pipelines/entities/variableTemplates"
 	)
-	const viewer = await viewerFor(socket, params.sessionId)
+	const viewer = await viewerFor(socket, params.sessionId, params.slug)
 	const { variableId } = await variableOptionGate(
 		db,
-		await instanceSecret(),
+		await pubSecret(),
 		params.slug,
 		viewer,
 		params.optionId
@@ -1442,7 +1486,7 @@ export const pipelinesDeleteVariableTemplate: Handler<
 			const { deleteVariableTemplate, variableSlotNames } = await import(
 				"$lib/server/pipelines/entities/variableTemplates"
 			)
-			const own = await ownInstanceConfigValues(
+			const own = await ownPubConfigValues(
 				params.slug,
 				row.id,
 				await variableSlotNames(db)
@@ -1493,11 +1537,11 @@ async function contextTemplateForOption(
 	const { assertSelectable } = await import(
 		"$lib/server/pipelines/entities/contextTemplates"
 	)
-	const viewer = await viewerFor(socket, params.sessionId)
+	const viewer = await viewerFor(socket, params.sessionId, params.slug)
 	const { nodeDefinitionId, engine, acceptedEngines, specId } =
 		await contextTemplateOptionGate(
 			db,
-			await instanceSecret(),
+			await pubSecret(),
 			params.slug,
 			viewer,
 			params.optionId
@@ -1570,11 +1614,11 @@ export const pipelinesCreateContextTemplate: Handler<
 			const { contextTemplateOptionGate } = await import(
 				"$lib/server/pipelines/config/panel"
 			)
-			const viewer = await viewerFor(socket, params.sessionId)
+			const viewer = await viewerFor(socket, params.sessionId, params.slug)
 			const { nodeDefinitionId, acceptedEngines, specId } =
 				await contextTemplateOptionGate(
 					db,
-					await instanceSecret(),
+					await pubSecret(),
 					params.slug,
 					viewer,
 					params.optionId
@@ -1716,7 +1760,7 @@ export const pipelinesDeleteContextTemplate: Handler<
 			// refused delete must not still clear the caller's choice.
 			const { deleteContextTemplate, contextTemplateSlotNames } =
 				await import("$lib/server/pipelines/entities/contextTemplates")
-			const own = await ownInstanceConfigValues(
+			const own = await ownPubConfigValues(
 				params.slug,
 				row.id,
 				await contextTemplateSlotNames(db)
@@ -1904,16 +1948,23 @@ const libraryRefusal = async (err: unknown): Promise<string> => {
 async function libraryAnswer(
 	emitToUser: any,
 	event: string,
-	warnings?: Sockets.Pipelines.TemplateWarning[]
+	warnings?: Sockets.Pipelines.TemplateWarning[],
+	/** The row a create or clone just made, so the asker can open it. */
+	createdId?: number
 ): Promise<{
 	library: Sockets.Pipelines.Library.Response
 	warnings?: Sockets.Pipelines.TemplateWarning[]
+	createdId?: number
 }> {
 	const { libraryView } = await import("$lib/server/pipelines/config/library")
 	const library = (await libraryView(
 		db
 	)) as Sockets.Pipelines.Library.Response
-	const res = warnings?.length ? { library, warnings } : { library }
+	const res = {
+		library,
+		...(warnings?.length ? { warnings } : {}),
+		...(createdId != null ? { createdId } : {})
+	}
 	emitToUser(event, res)
 	return res
 }
@@ -2159,7 +2210,8 @@ export const pipelinesLibraryCreateTemplate: Handler<
 			return await libraryAnswer(
 				emitToUser,
 				"pipelines:libraryCreateTemplate",
-				await savedTemplateWarnings(params.kind, created.id)
+				await savedTemplateWarnings(params.kind, created.id),
+				created.id
 			)
 		} catch (err) {
 			const res = { error: await libraryRefusal(err) }
@@ -2324,6 +2376,7 @@ export const pipelinesLibraryClonePrompt: Handler<
 > = {
 	event: "pipelines:libraryClonePrompt",
 	handler: async (socket, params, emitToUser) => {
+		let createdId: number | undefined
 		const gate = await libraryGate(socket)
 		if (!gate.ok) {
 			emitToUser("pipelines:libraryClonePrompt:error", gate)
@@ -2339,7 +2392,7 @@ export const pipelinesLibraryClonePrompt: Handler<
 			const { duplicatePrompt } = await import(
 				"$lib/server/pipelines/entities/prompts"
 			)
-			await duplicatePrompt(
+			createdId = (await duplicatePrompt(
 				db,
 				params.id,
 				await promptCopyName(
@@ -2347,13 +2400,18 @@ export const pipelinesLibraryClonePrompt: Handler<
 					row.slot,
 					params.name?.trim() || `${row.name} (copy)`
 				)
-			)
+			)).id
 		} catch (err) {
 			const res = { error: await libraryRefusal(err) }
 			emitToUser("pipelines:libraryClonePrompt:error", res)
 			return res
 		}
-		return await libraryAnswer(emitToUser, "pipelines:libraryClonePrompt")
+		return await libraryAnswer(
+			emitToUser,
+			"pipelines:libraryClonePrompt",
+			undefined,
+			createdId
+		)
 	}
 }
 
@@ -2784,18 +2842,19 @@ export const pipelinesDetail: Handler<
 					typeNames.set(r.definitionId, name)
 			}
 
-			// Which node each `ConfigStep` belongs to, from the panel's own
-			// declarations rather than a second copy of its indexing: steps are
-			// `s${i}` over configurable nodes in position order, so re-deriving
-			// that here would be a rule in two places waiting to disagree.
+			// Which step's settings a node or clause opens: the panel's own
+			// opaque handle (`stepKeyFor`), for the addresses the panel's
+			// declarations configure — one rule, so a map click and the panel
+			// name a step alike. Null where nothing is configurable.
 			const decls = await declarations(db, spec.activeVersionId)
-			const configurable: string[] = []
-			for (const d of decls)
-				if (!configurable.includes(d.nodeKey))
-					configurable.push(d.nodeKey)
-			const stepKeyOf = new Map(
-				configurable.map((nodeKey, i) => [nodeKey, `s${i}`])
-			)
+			const secret = await pubSecret()
+			const configurable = new Set(decls.map((d) => d.nodeKey))
+			const stepKeyOf = {
+				get: (address: string) =>
+					configurable.has(address)
+						? stepKeyFor(secret, address)
+						: undefined
+			}
 
 			const edges = await db
 				.select()
@@ -4152,6 +4211,36 @@ export function explainRetrieval(
 		? `The scene named ${sceneEntities.slice(0, 8).join(", ")}` +
 			`${sceneEntities.length > 8 ? ", …" : ""}.`
 		: ""
+	/**
+	 * The semantic mechanism not searching, when the run says so.
+	 *
+	 * ⚠ **The switch's reason wins over every other `vectorSearch` reason** on
+	 * the run. `query-windows` carries the mechanism's switch —
+	 * `searchByMeaning`, `auto | on | off` — and publishes what it decided:
+	 * `searchedByMeaning: false` with its reason when it cut no probes. That is
+	 * `off`, or `auto` with no embedding model set up. Downstream,
+	 * `vector-search` is handed no vectors and still reads `embedding_status`
+	 * first, so with no
+	 * model loaded it names the missing model; and the lore lanes name the
+	 * model's state on every turn either way. Each of those is true, and none
+	 * of them is *why* nothing was searched by meaning: a reader told "no
+	 * embedding model is loaded" goes to load one and finds the mechanism
+	 * still off. So the switch's own sentence replaces them. `vector-search`
+	 * cannot say it itself — its in-ports are the vectors, and "no texts" and
+	 * "no model" both arrive as none.
+	 */
+	const notSearched = (d: any): boolean =>
+		typeof d?.searchByMeaning === "string" && d.searchedByMeaning === false
+	let semanticOff: string | undefined
+	for (const n of nodes) {
+		const d = n?.output?.diagnostics
+		if (!notSearched(d)) continue
+		semanticOff =
+			typeof d.reason === "string" && d.reason
+				? d.reason
+				: "off — Search by meaning is off"
+		break
+	}
 
 	for (const n of nodes) {
 		/**
@@ -4226,8 +4315,11 @@ export function explainRetrieval(
 						`across ${d.queries} quer${d.queries === 1 ? "y" : "ies"}.`
 				)
 		}
-		if (typeof d.vectorSearch === "string")
-			note(`Vector search: ${d.vectorSearch}.`)
+		if (
+			typeof d.vectorSearch === "string" ||
+			(semanticOff && notSearched(d))
+		)
+			note(`Vector search: ${semanticOff ?? d.vectorSearch}.`)
 		/**
 		 * The entity-vector mechanism's own line, and it exists for the reason
 		 * `vectorSearch` does rather than for symmetry.
@@ -4282,6 +4374,17 @@ export function explainRetrieval(
 		if (typeof d.indexing === "string") note(`Indexing: ${d.indexing}.`)
 		if (typeof d.entityIndexing === "string")
 			note(`Indexing: ${d.entityIndexing}.`)
+		/**
+		 * Regex keys the keyword scan did not run (plan S3) — a warning, not a
+		 * note, because a key that is not run never matches and the entry's
+		 * own row would otherwise say only that nothing did. One line per
+		 * pattern, deduplicated by `warn`, so the trigger node and a lane
+		 * reporting the same key say it once.
+		 */
+		if (Array.isArray(d.patternsNotRun))
+			for (const p of d.patternsNotRun)
+				if (typeof p?.key === "string" && typeof p?.why === "string")
+					warn(`The pattern “${p.key}” was not checked: ${p.why}.`)
 		if (Array.isArray(d.truncated) && d.truncated.length)
 			// `{source, fetched, available}`, in the INDEX vocabulary — folded
 			// like every other source name here, and reported with both numbers
@@ -5048,8 +5151,15 @@ export const pipelinesPreviewRetrieval: Handler<
 	handler: async (socket, params, emitToUser) => {
 		const userId = socket.user!.id
 		const sessionId = Number(params.sessionId)
+		// The asker's id rides every answer: two panels in one tab (the
+		// entry's Test and the composer's "What would fire now") ask the same
+		// event, and the reply goes to every tab of the user (plan B8).
+		const asker = askerOf(params)
 		const refuse = (error: string) => {
-			const res: Sockets.Pipelines.PreviewRetrieval.Response = { error }
+			const res: Sockets.Pipelines.PreviewRetrieval.Response = {
+				error,
+				...asker
+			}
 			emitToUser("pipelines:previewRetrieval:error", res)
 			return res
 		}
@@ -5079,7 +5189,7 @@ export const pipelinesPreviewRetrieval: Handler<
 		// reason attached is the failure this surface exists to remove.
 		if (!session.lorebookId)
 			return refuse(
-				"This conversation has no lorebook attached, so there is no lore to fire."
+				"This session reads no lorebook, so there is no lore to fire."
 			)
 
 		const activeCharacters = session.sessionCharacters.filter(
@@ -5203,12 +5313,18 @@ export const pipelinesPreviewRetrieval: Handler<
 					(receipt?.haltReason ? ` — ${receipt.haltReason}` : "")
 			)
 
-		const { entries, read } = await retrievalEntriesFor(sessionId, userId)
+		// The gate above let an administrator through who is not the owner;
+		// the entry read must say so too, or it refuses them its owner-only
+		// read and every row's facts come back empty (R55).
+		const { entries, read } = await retrievalEntriesFor(sessionId, userId, {
+			asAdmin: !access.isOwner && !!socket.user?.isAdmin
+		})
 		const res: Sockets.Pipelines.PreviewRetrieval.Response = {
 			sessionId,
 			explanation: explainRetrieval(receipt, entries, {
 				entriesRead: read
-			})
+			}),
+			...asker
 		}
 		emitToUser("pipelines:previewRetrieval", res)
 		return res

@@ -29,7 +29,7 @@ import {
 	mergeFields,
 	type LorebookEntry
 } from "$lib/server/utils/lorebookEntries"
-import type { TestDb } from "$lib/server/utils/testDb"
+import { asDriverRejection, type TestDb } from "$lib/server/utils/testDb"
 
 let testDb: TestDb
 let dataDir: string
@@ -745,14 +745,16 @@ describe("a reorder is a permutation, and lands as one", () => {
 		// Not decoration, and not deferred: a second row in the same
 		// (lorebook, type) at a taken slot fails on the insert itself.
 		await expect(
-			testDb.insert(schema.lorebookEntries).values({
-				lorebookId: lorebook.id,
-				typeId: WORLD,
-				typeVersion: 1,
-				position: 1,
-				content: "collides",
-				fields: {}
-			})
+			asDriverRejection(
+				testDb.insert(schema.lorebookEntries).values({
+					lorebookId: lorebook.id,
+					typeId: WORLD,
+					typeVersion: 1,
+					position: 1,
+					content: "collides",
+					fields: {}
+				})
+			)
 		).rejects.toThrow(/lorebook_entries_position_uq|duplicate key/i)
 	})
 

@@ -70,7 +70,6 @@ import {
 } from "$lib/server/utils/llmQueue"
 import { contextWindowFrom } from "$lib/server/pipelines/runtime/contextWindow"
 import { getConnectionAdapter } from "$lib/server/utils/getConnectionAdapter"
-import { getUserConfigurations } from "$lib/server/utils/getUserConfigurations"
 import { resolveSampling } from "$lib/server/utils/resolveSampling"
 import { TokenCounters } from "$lib/server/utils/TokenCounterManager"
 import { TokenCounterOptions } from "$lib/shared/constants/TokenCounters"
@@ -86,9 +85,10 @@ import {
 	connectionIdentity
 } from "$lib/server/connections/visibility"
 import { promptFormatOf } from "$lib/shared/constants/PromptFormats"
+import { sendsAttachmentsOn } from "$lib/shared/connectionAdapters/manifest"
 import {
 	composeStopsFor,
-	trimAtSpeakerBoundary,
+	ownLabelsFor,
 	type CompiledMessagesProbe,
 	type ComposedStops,
 	type ReplyTrim
@@ -101,7 +101,12 @@ import {
 } from "$lib/server/connections/structuredOutput"
 import type { JsonSchemaNode } from "$lib/server/connectionAdapters/jsonSchemaToGbnf"
 import type { WireExchange } from "$lib/server/connectionAdapters/BaseConnectionAdapter"
-import { resolveThinking } from "$lib/shared/utils/thinkingDelimiters"
+import type { ReasoningOpening } from "$lib/shared/utils/reasoningDelimiters"
+import {
+	promptOpensReasoning,
+	replyView,
+	type ReplyFacts
+} from "$lib/server/messages/replyView"
 
 /**
  * A dispatch failure, and a marker: this sentence is ours.
@@ -216,7 +221,15 @@ export interface DispatchRequest {
 	structured?: { schema?: unknown } | null
 	/** Called with each chunk when the adapter streams. */
 	onChunk?: (chunk: string) => void
-	onThinking?: (chunk: string) => void
+	/** Called with each chunk of the service's NATIVE reasoning trace. */
+	onReasoning?: (chunk: string) => void
+	/**
+	 * Called once, before the first chunk, with what the request said about the
+	 * reply — whether it opened a reasoning block, the stops, the speaker's own
+	 * labels. A live view splits its frames by exactly these (`replyView`), so
+	 * the frames and this function's result agree about where reasoning ends.
+	 */
+	onReplyFacts?: (facts: ReplyFacts) => void
 	signal?: AbortSignal
 	/**
 	 * Send through the LLM queue — one model call at a time across the
@@ -243,7 +256,8 @@ export interface DispatchRequest {
 
 export interface DispatchResult {
 	text: string
-	thinking?: string
+	/** The reasoning trace, native or lifted out of the text. */
+	reasoning?: string
 	isAborted: boolean
 	/**
 	 * Which adapter answered, by connection type — a label, not a handle.
@@ -486,6 +500,14 @@ export function toCompiledPrompt(
 			},
 			sources: payload?.groups ?? {},
 			/**
+			 * The seed line's label when the chat wire did not send the line
+			 * (B2): `seedLabelOf` reads it here, so the reply's own copy of
+			 * the label is still stripped. Absent otherwise.
+			 */
+			...(typeof payload?.seedLabel === "string"
+				? { seedLabel: payload.seedLabel }
+				: {}),
+			/**
 			 * What retrieval actually did, in the pipeline's own terms.
 			 *
 			 * This replaces the legacy `meta.rag` rather than reproducing it.
@@ -547,6 +569,40 @@ const idsOf = (payload: any, included: boolean): number[] =>
  * Applied to the COMPILED payload rather than to the assembled context, so the
  * two wires are one branch on a shape this module has already normalised.
  */
+/**
+ * 🚧 Each message's files, lifted off the compiled messages
+ * (PLAN-composer-attachments §3.5.6) — references the prompt parser put on the
+ * message they belong to (`parseSplitChatPrompt`), returned indexed like
+ * `messages`, and the `attachments` key removed so no adapter sends it.
+ *
+ * A payload with no message carrying the key is returned as the SAME object
+ * with an empty list — a request with no attachments is the bytes it was.
+ */
+export function liftMessageAttachments(compiled: any): {
+	compiled: any
+	perMessage: unknown[][]
+} {
+	const messages = compiled?.messages
+	if (
+		!Array.isArray(messages) ||
+		!messages.some(
+			(m) => m && typeof m === "object" && "attachments" in m
+		)
+	)
+		return { compiled, perMessage: [] }
+	const perMessage: unknown[][] = []
+	const stripped = messages.map((m) => {
+		if (!m || typeof m !== "object" || !("attachments" in m)) {
+			perMessage.push([])
+			return m
+		}
+		const { attachments, ...rest } = m as { attachments?: unknown }
+		perMessage.push(Array.isArray(attachments) ? attachments : [])
+		return rest
+	})
+	return { compiled: { ...compiled, messages: stripped }, perMessage }
+}
+
 export function withJsonInstruction(compiled: any, instruction: string): any {
 	if (Array.isArray(compiled?.messages))
 		return {
@@ -590,7 +646,15 @@ export function withJsonInstruction(compiled: any, instruction: string): any {
 export async function resolveAttachments(
 	db: Db,
 	refs: readonly unknown[],
-	scope: { sessionId: number; userId?: number }
+	scope: { sessionId: number; userId?: number },
+	/**
+	 * 🚧 `fitted`: read an IMAGE's fitted variant (≤1568 px, the size a
+	 * vision model is sent anyway) rather than its original — the history
+	 * path (PLAN-composer-attachments §3.5.6), where ten photos at camera
+	 * resolution would spend the request cap on pixels no model reads. Falls
+	 * back to the original when no fitted form can be made.
+	 */
+	opts: { fitted?: boolean } = {}
 ): Promise<AttachmentInput[]> {
 	if (!refs.length) return []
 
@@ -621,23 +685,39 @@ export async function resolveAttachments(
 		const file = await getMediaByUuid(db, uuid)
 		if (!file)
 			throw new DispatchError(
-				`${at} names media ${uuid}, which this instance no longer has. It was deleted, or it was ` +
+				`${at} names media ${uuid}, which this pub no longer has. It was deleted, or it was ` +
 					`never here. The request is not sent without it.`
 			)
 
 		// The same ownership rule the host applies to media it posts into a
 		// message, and for a sharper reason: this file is about to leave the
 		// instance for a third-party API.
+		//
+		// …or shown in this session by an attachment (PLAN-composer-attachments
+		// §6.3): a part of one of its messages refers to the file. Dedupe is per
+		// (user, hash), so a guest's re-attached avatar names its character,
+		// not this session, and a group reply would otherwise refuse it.
 		const ownedHere =
 			(file.sessionId != null && file.sessionId === scope.sessionId) ||
-			(scope.userId != null && file.userId === scope.userId)
+			(scope.userId != null && file.userId === scope.userId) ||
+			(await (
+				await import("$lib/server/attachments/references")
+			).isFileReferencedInSession(db, file.id, scope.sessionId))
 		if (!ownedHere)
 			throw new DispatchError(
 				`${at} names media ${uuid}, which belongs to neither this session nor the user this run is ` +
 					`acting as, so it is not sent to a model on their behalf.`
 			)
 
-		const read = await readMedia(db, file.id)
+		const read =
+			(opts.fitted && file.kind === "image"
+				? await readMedia(
+						db,
+						file.id,
+						(await import("$lib/shared/constants/MediaVisibility"))
+							.MediaVariant.FITTED
+					).catch(() => null)
+				: null) ?? (await readMedia(db, file.id))
 		if (!read)
 			throw new DispatchError(
 				`${at} names media ${uuid}, whose row exists but whose bytes could not be read. The request is ` +
@@ -759,14 +839,6 @@ export async function dispatchGeneration(
 		)
 
 	const session = await loadAdapterSession(request.db, request.sessionId)
-	// Context and prompt only — the two legacy rows an adapter's constructor
-	// still wants. Neither is a resolution tier: the prompt config's own
-	// sampling column reaches the run through the world (`config/world.ts`)
-	// and arrives here already resolved, and its connection column is read by
-	// nothing (see the ⏳ note there).
-	const { contextConfig, promptConfig } = await getUserConfigurations(
-		request.userId as number
-	)
 
 	/**
 	 * One resolution per run (R-8). The ids are the executor's answer; what
@@ -814,8 +886,6 @@ export async function dispatchGeneration(
 		session: session as any,
 		connection,
 		sampling: values,
-		contextConfig,
-		promptConfig,
 		currentCharacterId: request.currentCharacterId ?? null,
 		tokenCounter: new TokenCounters(
 			(connection as any).tokenCounter || TokenCounterOptions.ESTIMATE
@@ -900,9 +970,16 @@ export async function dispatchGeneration(
 
 	// After this line the adapter builds nothing. Everything below is the same
 	// code the legacy path runs.
-	const compiled = toCompiledPrompt(request.compiledPrompt, connection, {
-		currentCharacterId: request.currentCharacterId ?? null
-	})
+	// 🚧 Each message's files come OFF the messages here (PLAN-composer-
+	// attachments §3.5.6): the parser left them as references on the message
+	// they belong to, and no adapter may put an `attachments` key on a wire.
+	// Indexed like `messages`; `withJsonInstruction` only appends, so the
+	// indices still hold after it.
+	const { compiled, perMessage: perMessageRefs } = liftMessageAttachments(
+		toCompiledPrompt(request.compiledPrompt, connection, {
+			currentCharacterId: request.currentCharacterId ?? null
+		})
+	)
 	adapter.withCompiledPrompt(
 		structured?.mode === "instruction"
 			? withJsonInstruction(compiled, JSON_INSTRUCTION)
@@ -916,20 +993,44 @@ export async function dispatchGeneration(
 		request.attachments ?? [],
 		{ sessionId: request.sessionId, userId: request.userId }
 	)
-	if (attachments.length) {
+	// Per message, with the same ownership rule, reading images' fitted form.
+	// Sequential: the first bad reference is the one worth reporting.
+	const perMessage: AttachmentInput[][] = []
+	for (const refs of perMessageRefs)
+		perMessage.push(
+			await resolveAttachments(
+				request.db,
+				refs,
+				{ sessionId: request.sessionId, userId: request.userId },
+				{ fitted: true }
+			)
+		)
+	const allFiles = [...attachments, ...perMessage.flat()]
+	if (allFiles.length) {
+		const fileCount = allFiles.length
 		// Two different questions, asked in the order they matter. First: has
 		// somebody switched vision OFF for this connection? That is the user's
 		// own setting, and `capabilityRefusal` is the app's single answer to it —
 		// permissive on a row nobody has determined yet, so an untested
 		// connection is not refused, and phrased in the words the connection
-		// screen showed rather than in a transform id.
-		const refusal = capabilityRefusal(connection, "text+image->text")
-		if (refusal)
-			throw new DispatchError(
-				`${refusal} This request carries ${attachments.length} file${attachments.length === 1 ? "" : "s"}, ` +
-					`which would have gone out unseen.`,
-				connectionIdentity(connection)
+		// screen showed rather than in a transform id. Asked per kind the
+		// request carries: an image needs vision, a PDF needs documents.
+		const kinds = new Set(
+			allFiles.map((f) =>
+				f.mime.startsWith("image/")
+					? ("text+image->text" as const)
+					: ("text+document->text" as const)
 			)
+		)
+		for (const transform of kinds) {
+			const refusal = capabilityRefusal(connection, transform)
+			if (refusal)
+				throw new DispatchError(
+					`${refusal} This request carries ${fileCount} file${fileCount === 1 ? "" : "s"}, ` +
+						`which would have gone out unseen.`,
+					connectionIdentity(connection)
+				)
+		}
 
 		// ⚠ Refused, never sent anyway. Most connection types whose API format
 		// has vision have no adapter code that sends it, so handing the files
@@ -943,13 +1044,28 @@ export async function dispatchGeneration(
 			// compute), so it rides in the field rather than in the sentence —
 			// same rule, same key, one place that removes it.
 			throw new DispatchError(
-				`this request carries ${attachments.length} file${attachments.length === 1 ? "" : "s"}, and the ` +
+				`this request carries ${fileCount} file${fileCount === 1 ? "" : "s"}, and the ` +
 					`configured adapter has no code that sends them. It would go out as text alone, and a reply ` +
 					`about files the model never received is indistinguishable from a model ignoring them — so it is ` +
 					`refused instead. Bind a connection whose adapter sends attachments.`,
 				connectionIdentity(connection)
 			)
+		// 🚧 The wire the request goes out on must be one the type sends files
+		// on (`sendsAttachments`, the manifest twin the reading rule judges
+		// by) — the chat wire, for every sender today. A completion prompt is
+		// one string with nowhere to put a file.
+		if (
+			(connection as { wireMode?: string }).wireMode === "completion" &&
+			!sendsAttachmentsOn(connection.type, "completion")
+		)
+			throw new DispatchError(
+				`this request carries ${fileCount} file${fileCount === 1 ? "" : "s"}, and this connection sends its ` +
+					`prompt as completion text, which carries no files. Switch it to chat to send them.`,
+				connectionIdentity(connection)
+			)
 		adapter.withAttachments(attachments)
+		if (perMessage.some((list) => list.length))
+			adapter.withMessageAttachments(perMessage)
 	}
 
 	/**
@@ -1054,7 +1170,32 @@ export async function dispatchGeneration(
 	try {
 		const result = await generate()
 		let text = ""
-		let thinking = ""
+		let reasoning = ""
+
+		/**
+		 * What the request said about the reply, before its first token — the
+		 * facts the live row splits every frame by and the result below is
+		 * split by, so the two readings cannot disagree (`messages/replyView`).
+		 *
+		 * The opening is read off the PAYLOAD first (a prompt that ends inside
+		 * an open block is certain) and the adapter second (a chat template it
+		 * asked to reason, whose text comes back inline). Read after
+		 * `generateText()` returned — that is when the adapter decided what it
+		 * asked — and structurally, since a test fake has no such getter.
+		 */
+		const facts: ReplyFacts = {
+			opensInReasoning: promptOpensReasoning(request.compiledPrompt)
+				? "prompt"
+				: (adapter as { reasoningOpening?: ReasoningOpening })
+						.reasoningOpening,
+			stops,
+			ownLabels: ownLabelsFor(
+				session,
+				request.currentCharacterId ?? null,
+				request.compiledPrompt
+			)
+		}
+		request.onReplyFacts?.(facts)
 
 		if (typeof result.completionResult === "function") {
 			// Streaming. The chunks are forwarded *and* accumulated: the caller
@@ -1067,11 +1208,11 @@ export async function dispatchGeneration(
 					request.onChunk?.(chunk)
 				},
 				(chunk: string) => {
-					thinking += chunk
-					request.onThinking?.(chunk)
+					reasoning += chunk
+					request.onReasoning?.(chunk)
 				}
 			)
-			// `TextGenResult.thinkingContent` is documented as non-streaming
+			// `TextGenResult.reasoningContent` is documented as non-streaming
 			// only — a streaming adapter delivers reasoning through the callback
 			// above. Read anyway, as a fallback the contract says should never
 			// fire: an adapter that populated both would otherwise have its
@@ -1080,13 +1221,13 @@ export async function dispatchGeneration(
 			// was captured when `generateText()` returned, i.e. before the stream
 			// ran, so it can only ever carry a trace the adapter had in hand up
 			// front.
-			if (!thinking) thinking = result.thinkingContent ?? ""
+			if (!reasoning) reasoning = result.reasoningContent ?? ""
 		} else {
 			text = result.completionResult ?? ""
-			thinking = result.thinkingContent ?? ""
-			// Non-streaming adapters return thinking in one piece rather than
+			reasoning = result.reasoningContent ?? ""
+			// Non-streaming adapters return reasoning in one piece rather than
 			// through the callback, so it is forwarded here instead.
-			if (thinking) request.onThinking?.(thinking)
+			if (reasoning) request.onReasoning?.(reasoning)
 			if (text) request.onChunk?.(text)
 		}
 
@@ -1098,30 +1239,29 @@ export async function dispatchGeneration(
 		// so nothing is lost by moving it there.
 		//
 		// The chunks forwarded above are deliberately NOT filtered: a sink is a
-		// live view of the stream and the caller re-parses the accumulated
-		// buffer anyway (see generateResponse). Filtering deltas would mean
-		// parsing across chunk boundaries, which is the one thing the
+		// live view of the stream and re-splits the accumulated buffer with the
+		// facts it was handed (`onReplyFacts`, the live row). Filtering deltas
+		// would mean parsing across chunk boundaries, which is the one thing the
 		// accumulate-then-parse shape exists to avoid.
-		const resolved = resolveThinking(text, thinking)
-
-		/**
-		 * The speaker boundary, held whatever the backend honoured.
-		 *
-		 * Several services ignore a stop list on their chat leg, and a model
-		 * handed a labelled transcript continues it — the reply carries the next
-		 * participant's line, which reads as this app writing both sides of the
-		 * conversation. The labels come off `stops.sent`, so a request that asked
-		 * for no speaker stop is cut by nothing.
-		 *
-		 * ⚠ After `resolveThinking`, never before: a reasoning trace is prose a
-		 * model talks to itself in, and a `Name:` line inside one would otherwise
-		 * take the real reply with it.
-		 */
-		const bounded = trimAtSpeakerBoundary(resolved.content, stops)
+		//
+		// The split, the own label and the speaker boundary, as ONE reading
+		// (`replyView`) — the same one the live row has been showing frame by
+		// frame, with `final` deciding only what a request-opened block whose
+		// close never came was (see `splitReasoningStream`).
+		//
+		// The boundary holds whatever the backend honoured: several services
+		// ignore a stop list on their chat leg, and a model handed a labelled
+		// transcript continues it (`trimAtSpeakerBoundary`).
+		//
+		// ⚠ The boundary after the split, never before: a reasoning trace is
+		// prose a model talks to itself in, and a `Name:` line inside one would
+		// otherwise take the real reply with it.
+		const view = replyView(text, reasoning, facts, { final: true })
+		const bounded = { text: view.content, trimmedAt: view.trimmedAt }
 
 		return {
 			text: bounded.text,
-			thinking: resolved.thinking,
+			reasoning: view.reasoning,
 			// A streaming adapter reports `isAborted` as of the moment
 			// `generateText()` returned — BEFORE the stream ran — so a stop
 			// that landed mid-stream ends the stream early and reads as a

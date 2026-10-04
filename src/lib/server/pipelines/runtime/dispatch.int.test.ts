@@ -58,14 +58,18 @@ let mode:
 	| "stream"
 	| "empty"
 	| "abort"
-	| "inlineThinking"
-	| "inlineThinkingStream"
+	| "inlineReasoning"
+	| "inlineReasoningStream"
 	| "prefilledClose"
 	| "nativeAndInline"
-	| "streamWithThinkingContent"
+	| "streamWithReasoningContent"
 	| "streamWithToolCall"
+	| "templateOpenedStream"
+	| "labelledAfterReasoning"
 	| "toolCallNoStream" = "text"
 let connectionForRun: any = connection
+/** What the stand-in says it asked of a chat template — `reasoningOpening`. */
+let adapterOpening: "requested" | undefined
 
 /** Pinned to the real action, so a rename cannot pass here — fakeTextAdapter.ts. */
 class FakeAdapter implements FakeTextAdapter {
@@ -77,6 +81,10 @@ class FakeAdapter implements FakeTextAdapter {
 	}
 	/** The queue's pre-send hook — a managed backend loads its model here. */
 	async preflight() {}
+	/** A chat template asked to reason, whose text comes back inline. */
+	get reasoningOpening() {
+		return adapterOpening
+	}
 	/** The composed stop list. Recorded so a test can assert what was handed over. */
 	stops: any
 	/** Filled while the stream runs, like the real adapters fill it. */
@@ -152,9 +160,9 @@ class FakeAdapter implements FakeTextAdapter {
 				isAborted: false,
 				completionResult: async (
 					onContent: (c: string) => void,
-					onThinking?: (c: string) => void
+					onReasoning?: (c: string) => void
 				) => {
-					onThinking?.("hmm")
+					onReasoning?.("hmm")
 					for (const chunk of ["Hel", "lo ", "there"]) {
 						if (this.aborted) return
 						onContent(chunk)
@@ -197,8 +205,8 @@ class FakeAdapter implements FakeTextAdapter {
 				}
 			}
 		// A model whose backend has no reasoning parser: the delimiters arrive
-		// as ordinary text in the completion, with nothing on `thinkingContent`.
-		if (mode === "inlineThinking")
+		// as ordinary text in the completion, with nothing on `reasoningContent`.
+		if (mode === "inlineReasoning")
 			return {
 				completionResult: "<think>weighing it up</think>Hello there",
 				compiledPrompt: this.injected,
@@ -206,13 +214,13 @@ class FakeAdapter implements FakeTextAdapter {
 			}
 		// The same, streamed — and with the markup split across chunks, which is
 		// safe because the parse runs over the accumulated buffer.
-		if (mode === "inlineThinkingStream")
+		if (mode === "inlineReasoningStream")
 			return {
 				compiledPrompt: this.injected,
 				isAborted: false,
 				completionResult: async (
 					onContent: (c: string) => void,
-					_onThinking?: (c: string) => void
+					_onReasoning?: (c: string) => void
 				) => {
 					for (const chunk of [
 						"<thi",
@@ -229,20 +237,46 @@ class FakeAdapter implements FakeTextAdapter {
 		// result object. `TextGenResult` says this cannot happen — the field is
 		// documented as non-streaming only — so this is the contract-breaking
 		// case, pinned so the fallback that catches it is not deleted as dead.
-		if (mode === "streamWithThinkingContent")
+		if (mode === "streamWithReasoningContent")
 			return {
 				compiledPrompt: this.injected,
 				isAborted: false,
-				thinkingContent: "reasoned up front",
+				reasoningContent: "reasoned up front",
 				completionResult: async (
 					onContent: (c: string) => void,
-					_onThinking?: (c: string) => void
+					_onReasoning?: (c: string) => void
 				) => {
 					for (const chunk of ["Hel", "lo ", "there"]) {
 						if (this.aborted) return
 						onContent(chunk)
 					}
 				}
+			}
+		// Qwen 3.5 on KoboldCPP's chat wire with `enable_thinking` on: the
+		// template opened the block, the stream carries no opener at all, and
+		// after the close the model writes its own label afresh.
+		if (mode === "templateOpenedStream")
+			return {
+				compiledPrompt: this.injected,
+				isAborted: false,
+				completionResult: async (onContent: (c: string) => void) => {
+					for (const chunk of [
+						"Okay, the user",
+						" waves.</th",
+						"ink>\n\nAlice: Hi",
+						" there!"
+					]) {
+						if (this.aborted) return
+						onContent(chunk)
+					}
+				}
+			}
+		// A paired block, then the speaker's own label in bold.
+		if (mode === "labelledAfterReasoning")
+			return {
+				completionResult: "<think>a wave back</think>\n\n**Alice:** Hello!",
+				compiledPrompt: this.injected,
+				isAborted: false
 			}
 		// DeepSeek-R1's shape: the template emitted the opening tag, so only the
 		// close is generated.
@@ -253,19 +287,19 @@ class FakeAdapter implements FakeTextAdapter {
 				isAborted: false
 			}
 		// Native reasoning AND a stray inline block. The native trace must win
-		// the `thinking` port; the markup must still leave the text.
+		// the `reasoning` port; the markup must still leave the text.
 		if (mode === "nativeAndInline")
 			return {
 				completionResult: "<think>stray</think>Hello there",
 				compiledPrompt: this.injected,
 				isAborted: false,
-				thinkingContent: "the native trace"
+				reasoningContent: "the native trace"
 			}
 		return {
 			completionResult: "Hello there",
 			compiledPrompt: this.injected,
 			isAborted: false,
-			thinkingContent: "hmm"
+			reasoningContent: "hmm"
 		}
 	}
 }
@@ -323,6 +357,12 @@ vi.mock("$lib/server/media", () => ({
 	getMediaByUuid: async (_db: any, uuid: string) => mediaRows[uuid] ?? null,
 	readMedia: async (_db: any, id: number) => mediaBytes[id] ?? null
 }))
+// The third ownership road (a part in this session shows the file) reads
+// message parts; these fixtures have none, so it never admits a file here —
+// `attachments/send.int.test.ts` covers it against a real database.
+vi.mock("$lib/server/attachments/references", () => ({
+	isFileReferencedInSession: async () => false
+}))
 /**
  * What the resolver was ASKED for — the run's own resolution arrives as
  * `pipelineConfig` (R-8: dispatch consumes it and re-walks nothing).
@@ -360,13 +400,6 @@ vi.mock("$lib/server/connections/capabilityTarget", async (importOriginal) => {
 		}
 	}
 })
-vi.mock("$lib/server/utils/getUserConfigurations", () => ({
-	getUserConfigurations: async () => ({
-		sampling: { id: 1 },
-		contextConfig: { id: 1, template: "{{instructions}}" },
-		promptConfig: { id: 1, systemPrompt: "Be brief." }
-	})
-}))
 let sessionRow = true
 
 /**
@@ -409,6 +442,7 @@ beforeEach(() => {
 	resolveArgs = null
 	adapterExchanges = []
 	mode = "text"
+	adapterOpening = undefined
 	sessionRow = true
 	connectionForRun = connection
 	adapterSendsAttachments = true
@@ -536,7 +570,7 @@ describe("dispatching a prompt built elsewhere", () => {
 		})
 		expect(seen.compiledPrompt).toBe(compiled)
 		expect(r.text).toBe("Hello there")
-		expect(r.thinking).toBe("hmm")
+		expect(r.reasoning).toBe("hmm")
 	})
 
 	it("drops cast rows whose character was deleted, as the legacy path does", async () => {
@@ -559,7 +593,7 @@ describe("dispatching a prompt built elsewhere", () => {
 			compiledPrompt: compiled,
 			sessionId: 7,
 			onChunk: (c) => chunks.push(c),
-			onThinking: (c) => thoughts.push(c)
+			onReasoning: (c) => thoughts.push(c)
 		})
 		expect(chunks).toEqual(["Hel", "lo ", "there"])
 		expect(thoughts).toEqual(["hmm"])
@@ -928,24 +962,24 @@ describe("reasoning never reaches the port as markup", () => {
 		})
 
 	it("lifts an inline block out of a non-streamed completion", async () => {
-		mode = "inlineThinking"
+		mode = "inlineReasoning"
 		const r = await dispatch()
 		expect(r.text).toBe("Hello there")
-		expect(r.thinking).toBe("weighing it up")
+		expect(r.reasoning).toBe("weighing it up")
 	})
 
 	it("lifts an inline block out of a streamed completion", async () => {
-		mode = "inlineThinkingStream"
+		mode = "inlineReasoningStream"
 		const r = await dispatch()
 		expect(r.text).toBe("Hello there")
-		expect(r.thinking).toBe("weighing it up")
+		expect(r.reasoning).toBe("weighing it up")
 	})
 
 	it("handles a prefilled opening tag (only the close is generated)", async () => {
 		mode = "prefilledClose"
 		const r = await dispatch()
 		expect(r.text).toBe("Hello there")
-		expect(r.thinking).toBe("weighing it up")
+		expect(r.reasoning).toBe("weighing it up")
 	})
 
 	it("native reasoning leads the trace, and the text is still cleaned", async () => {
@@ -954,14 +988,14 @@ describe("reasoning never reaches the port as markup", () => {
 		mode = "nativeAndInline"
 		const r = await dispatch()
 		expect(r.text).toBe("Hello there")
-		expect(r.thinking).toBe("the native trace\n\nstray")
+		expect(r.reasoning).toBe("the native trace\n\nstray")
 	})
 
 	it("forwards the raw stream to the sink, unfiltered", async () => {
 		// Deliberate: a sink is a live view of what the model is emitting, and
 		// the caller re-parses the accumulated buffer anyway. Filtering deltas
 		// would mean parsing across chunk boundaries.
-		mode = "inlineThinkingStream"
+		mode = "inlineReasoningStream"
 		const chunks: string[] = []
 		await dispatchGeneration({
 			db: fakeDb,
@@ -976,19 +1010,65 @@ describe("reasoning never reaches the port as markup", () => {
 		mode = "text"
 		const r = await dispatch()
 		expect(r.text).toBe("Hello there")
-		expect(r.thinking).toBe("hmm")
+		expect(r.reasoning).toBe("hmm")
 	})
 
-	it("does not drop thinkingContent from an adapter that also streams", async () => {
+	it("a template-opened block: the facts say so before the first chunk, and the reply starts after the close, without its label", async () => {
+		mode = "templateOpenedStream"
+		adapterOpening = "requested"
+		const order: string[] = []
+		let facts: any
+		const r = await dispatchGeneration({
+			db: fakeDb,
+			// The completion prompt ends on the seed line's label.
+			compiledPrompt: { prompt: "You are Alice.\nAlice:" },
+			sessionId: 7,
+			onReplyFacts: (f) => {
+				facts = f
+				order.push("facts")
+			},
+			onChunk: () => order.push("chunk")
+		})
+		expect(order[0]).toBe("facts")
+		expect(facts.opensInReasoning).toBe("requested")
+		expect(facts.ownLabels).toContain("Alice")
+		expect(r.text).toBe("Hi there!")
+		expect(r.reasoning).toBe("Okay, the user waves.")
+	})
+
+	it("a prompt that ends inside an open block is a CERTAIN opening", async () => {
+		mode = "prefilledClose"
+		let facts: any
+		await dispatchGeneration({
+			db: fakeDb,
+			compiledPrompt: { prompt: "You are Alice.\n<think>\n" },
+			sessionId: 7,
+			onReplyFacts: (f) => (facts = f)
+		})
+		expect(facts.opensInReasoning).toBe("prompt")
+	})
+
+	it("the speaker's own label comes off the body after reasoning — bold spelling too", async () => {
+		mode = "labelledAfterReasoning"
+		const r = await dispatchGeneration({
+			db: fakeDb,
+			compiledPrompt: { prompt: "You are Alice.\nAlice:" },
+			sessionId: 7
+		})
+		expect(r.text).toBe("Hello!")
+		expect(r.reasoning).toBe("a wave back")
+	})
+
+	it("does not drop reasoningContent from an adapter that also streams", async () => {
 		// The asymmetry the streaming branch used to have: it read reasoning
 		// only from the callback while the non-streaming branch read the field,
 		// so an adapter populating both lost the half it streamed. Contractually
-		// impossible (`TextGenResult.thinkingContent` is non-streaming only) —
+		// impossible (`TextGenResult.reasoningContent` is non-streaming only) —
 		// which is exactly why nothing would have noticed.
-		mode = "streamWithThinkingContent"
+		mode = "streamWithReasoningContent"
 		const r = await dispatch()
 		expect(r.text).toBe("Hello there")
-		expect(r.thinking).toBe("reasoned up front")
+		expect(r.reasoning).toBe("reasoned up front")
 	})
 })
 

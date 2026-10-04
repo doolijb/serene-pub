@@ -63,13 +63,6 @@ vi.mock("$lib/server/embedding/vectorizationQueue", () => ({
 	ensureSessionMessageEmbedded: async () => {},
 	autoEnqueueSession: async () => {}
 }))
-vi.mock("$lib/server/utils/getUserConfigurations", () => ({
-	getUserConfigurations: async () => ({
-		contextConfig: { id: 1, template: "{{instructions}}" },
-		promptConfig: { id: 1, systemPrompt: "Be brief." },
-		narratorPromptConfig: null
-	})
-}))
 
 /** Every session broadcast the host and the live row made, in order. */
 const broadcasts: Array<{ sessionId: number; event: string; payload: any }> = []
@@ -183,8 +176,6 @@ let pickedConnectionId: number
 let pickedModelId: number
 let defaultSamplingId: number
 let pickedSamplingId: number
-/** An endpoint with a model row but NO registered default — the stale target. */
-let staleConnectionId: number
 let RESPOND: string
 
 const fakeSocket = (uid: number) => ({ user: { id: uid }, io: {} }) as any
@@ -309,17 +300,6 @@ beforeAll(async () => {
 		responseTokens: REPLY_RESERVE,
 		temperature: PICKED_TEMP
 	})
-
-	const [staleConn] = await db
-		.insert(schema.connections)
-		.values({
-			name: "Stale prompt-config target",
-			type: "koboldcpp",
-			baseUrl: "http://stale"
-		})
-		.returning()
-	staleConnectionId = staleConn.id
-	await ensureConnectionModel(db, staleConn.id, "stale-7b")
 
 	const { setCapabilityDefault } = await import(
 		"$lib/server/connections/capabilityDefaults"
@@ -1306,7 +1286,7 @@ describe("one resolution per run (R-8)", () => {
 				shipped.id,
 				"reply road (test)"
 			)
-			await selectConfig(db, spec.id, "instance", 0, copy.id, userId)
+			await selectConfig(db, spec.id, "pub", 0, copy.id, userId)
 			configId = copy.id
 		}
 		await db
@@ -1331,42 +1311,6 @@ describe("one resolution per run (R-8)", () => {
 	const budgetOf = (receipt: any) =>
 		receipt.nodes.find((n: any) => n.nodeKey === "contextBudget")!.output
 			.main
-
-	it("a prompt config's stale connection_id is not a tier: the reply goes to the capability default", async () => {
-		// The legacy "AI Override" picker wrote `prompt_configs.connection_id`.
-		// The old walk read it but the capability default outranked it, so
-		// on every install that generates the column was dead. Projecting it
-		// into the world revived it — pointing at an endpoint with no chosen
-		// model — and every reply on such an install refused with "No model
-		// is chosen". Decision: the connection half of that tier does not
-		// ship; the sampling half, which was live, stays.
-		const sessionId = await makeSession("stale-prompt-config")
-		const [stale] = await db
-			.insert(schema.promptConfigs)
-			.values({
-				name: "Stale override",
-				systemPrompt: "Be brief.",
-				connectionId: staleConnectionId
-			} as any)
-			.returning()
-		await db
-			.update(schema.sessions)
-			.set({ promptConfigId: stale!.id })
-			.where(eq(schema.sessions.id, sessionId))
-		textCalls.length = 0
-
-		const outcome = await reply(sessionId)
-		expect(outcome.ok, outcome.error).toBe(true)
-		expect(textCalls.length).toBe(1)
-		expect(textCalls[0]!.connection.id).toBe(defaultConnectionId)
-		expect(textCalls[0]!.connection.model).toBe("default-7b")
-		const generate = outcome.receipt!.nodes.find(
-			(n) => n.nodeKey === "generate"
-		)!
-		expect(String((generate.input as any).connection.id)).toBe(
-			String(defaultConnectionId)
-		)
-	})
 
 	it("the session's sampling pick and the panel's connection pick reach budget and wire as one answer", async () => {
 		const sessionId = await makeSession("r8")
@@ -1441,6 +1385,9 @@ describe("one resolution per run (R-8)", () => {
 		const { namespaceView } = await import(
 			"$lib/server/pipelines/config/panel"
 		)
+		const { groupOptions } = await import(
+			"$lib/server/pipelines/config/panel/groups"
+		)
 		// The panel reads the pipeline config's sampling pick, so make the
 		// panel's own pick the same row the session chose.
 		await pick("generate", "sampling", pickedSamplingId)
@@ -1451,8 +1398,7 @@ describe("one resolution per run (R-8)", () => {
 		// The shares live on the sources since R-7 P5 (2026-09-16): each
 		// source's own "Share — …" number carries the window it is a share OF.
 		const shareOf = (v: any) =>
-			v.steps
-				.flatMap((s: any) => [...s.options, ...s.advanced])
+			groupOptions(v.groups)
 				.find((o: any) => /^Share — /.test(o.label))
 		expect(shareOf(view)?.windowTokens).toBe(expected)
 

@@ -3,15 +3,14 @@ import { spriteLabelFromFilename } from "$lib/shared/sprites"
 import * as schema from "$lib/server/db/schema"
 import {
 	WORLD_LORE_TYPE_ID,
-	entryInsert,
-	inBookOfType
+	entryInsert
 } from "$lib/server/utils/lorebookEntries"
 import {
 	importedKeyColumns,
 	mapImportedEntry,
 	normalizeNativeWorldInfoEntry
 } from "$lib/server/utils/lorebookImportMapper"
-import { insertLegacy } from "$lib/server/messages/store"
+import { insertLegacyMany } from "$lib/server/messages/store"
 import { broadcastSessionRow } from "$lib/server/sessions/rowPush"
 import type { Handler } from "$lib/shared/events"
 import * as fsPromises from "fs/promises"
@@ -27,6 +26,7 @@ import {
 	listSillyTavernPersonas,
 	normalizeTimestamp,
 	mapGroupReplyStrategy,
+	authorsNoteFromChatMetadata,
 	type CharacterCardV2,
 	type CharacterBook,
 	type SillyTavernGroup,
@@ -37,6 +37,22 @@ import {
 	SILLYTAVERN_DIRS
 } from "$lib/shared/utils/sillyTavernPaths"
 import { characterFieldsFromParsedData } from "./characters"
+import {
+	ENTRY_INSERT_BATCH,
+	assertBookWithinImportLimits,
+	assertEntryWithinImportLimits,
+	extractLorebookLevelExtraJson,
+	queueImportedBook,
+	syncLorebookBindings
+} from "./lorebooks"
+import { importFailureSentence } from "$lib/server/imports/importFailure"
+import {
+	IMPORT_FILE_CAPS,
+	cardFileTooLarge,
+	lorebookFileTooLarge,
+	megabytes
+} from "$lib/shared/imports/fileCaps"
+import { assertImportJsonShape } from "$lib/server/imports/jsonShape"
 import { personaFieldsFromParsedData } from "$lib/server/utils/personaCard"
 import { markCharacterAsPersona } from "$lib/server/utils/markCharacterAsPersona"
 
@@ -81,10 +97,59 @@ interface ImportSession {
 	userId: number
 	dir: string
 	lastActivity: number
+	/** Every byte this import has staged so far (`STAGING_LIMITS`). */
+	stagedBytes: number
 }
 
 const importSessions = new Map<string, ImportSession>()
 const SESSION_TTL_MS = 30 * 60 * 1000 // 30 minutes of inactivity
+
+/**
+ * What one SillyTavern import may stage on the server's disk (S4 review:
+ * nothing bounded it). Mutable only so a test can lower it.
+ */
+export const STAGING_LIMITS = {
+	/** Every file one import uploads, together. */
+	sessionBytes: 4 * 1024 * 1024 * 1024,
+	/** A batch that would leave less than this free on the disk is refused. */
+	freeBytesFloor: 1024 * 1024 * 1024
+}
+
+/** Every staging directory is `<tmp>/serene-pub-import-<import session id>`. */
+const STAGING_PREFIX = "serene-pub-import-"
+
+/**
+ * Remove staging directories no live import owns and nothing has touched for
+ * longer than an import may sit idle — what a restart leaves behind, since
+ * the in-memory sweep below forgets them (S4 review). Another process's live
+ * import keeps its directory fresh: every staged batch touches it.
+ */
+async function sweepOrphanedStaging(): Promise<void> {
+	const live = new Set([...importSessions.values()].map((s) => s.dir))
+	let names: string[]
+	try {
+		names = await fsPromises.readdir(os.tmpdir())
+	} catch {
+		return
+	}
+	const now = Date.now()
+	await Promise.all(
+		names
+			.filter((n) => n.startsWith(STAGING_PREFIX))
+			.map(async (n) => {
+				const dir = path.join(os.tmpdir(), n)
+				if (live.has(dir)) return
+				try {
+					const st = await fsPromises.stat(dir)
+					if (!st.isDirectory() || now - st.mtimeMs <= SESSION_TTL_MS) return
+					await fsPromises.rm(dir, { recursive: true, force: true })
+				} catch {
+					// Gone already, or not ours to remove.
+				}
+			})
+	)
+}
+void sweepOrphanedStaging()
 
 // lorebooks:import enforces LOREBOOK_IMPORT_LIMITS for the exact same
 // unbounded-import-DoS reason (lorebooks.ts) — this bulk SillyTavern-folder
@@ -101,6 +166,44 @@ export function assertWithinBulkImportLimit(
 			`${itemDescription} has too many items (${count}); the maximum supported is ${MAX_BULK_IMPORT_ITEMS}.`
 		)
 	}
+}
+
+/**
+ * A SillyTavern World Info file, measured on disk before it is read and
+ * parsed (plan S4): the same ceiling `lorebooks:import` holds a lorebook file
+ * to, refused in the same sentence.
+ */
+export async function readWorldInfoFile(worldPath: string): Promise<WorldInfo> {
+	const text = await readStagedText(worldPath, lorebookFileTooLarge)
+	assertImportJsonShape(text, "This lorebook file")
+	return JSON.parse(text) as WorldInfo
+}
+
+/**
+ * A staged text file, measured on disk before it is read: `tooLarge` says
+ * the sentence refusing its size, or null when it fits.
+ */
+async function readStagedText(
+	file: string,
+	tooLarge: (bytes: number) => string | null
+): Promise<string> {
+	const refusal = tooLarge((await fsPromises.stat(file)).size)
+	if (refusal) throw new Error(refusal)
+	return fsPromises.readFile(file, "utf8")
+}
+
+/**
+ * A staged SillyTavern settings or group file — small JSON, held to the
+ * lorebook file's ceilings, which are far past any real one.
+ */
+async function readStagedJson(file: string, subject: string): Promise<any> {
+	const text = await readStagedText(file, (bytes) =>
+		bytes > IMPORT_FILE_CAPS.lorebookBytes
+			? `${subject} is ${megabytes(bytes)}, larger than the ${megabytes(IMPORT_FILE_CAPS.lorebookBytes)} Serene Pub will read.`
+			: null
+	)
+	assertImportJsonShape(text, subject)
+	return JSON.parse(text)
 }
 
 async function cleanupImportSession(sessionId: string) {
@@ -167,16 +270,33 @@ async function importSillyTavernSprites(
 	} catch {
 		return 0
 	}
+	const { importSprites, SPRITE_IMPORT_LIMITS } = await import(
+		"$lib/server/sprites"
+	)
 	const items: { set?: string; label: string; bytes: Buffer; filename: string }[] = []
+	// Each image is measured on disk before it is read, against the same
+	// ceilings `importSprites` holds a card's sprites to: a folder was read
+	// whole into memory before any of them applied (S4 review). An image
+	// past them is left behind unread, as `importSprites` would skip it.
+	let total = 0
 	const readImages = async (dir: string, set?: string) => {
 		for (const e of await fsPromises.readdir(dir, { withFileTypes: true })) {
+			if (items.length >= SPRITE_IMPORT_LIMITS.count) return
 			if (!e.isFile() || !SPRITE_FILE.test(e.name)) continue
 			const label = spriteLabelFromFilename(e.name)
 			if (!label) continue
+			const file = resolveSafePath(dir, e.name)
+			const { size } = await fsPromises.stat(file)
+			if (
+				size > SPRITE_IMPORT_LIMITS.bytes ||
+				total + size > SPRITE_IMPORT_LIMITS.totalBytes
+			)
+				continue
+			total += size
 			items.push({
 				...(set ? { set } : {}),
 				label,
-				bytes: await fsPromises.readFile(resolveSafePath(dir, e.name)),
+				bytes: await fsPromises.readFile(file),
 				filename: e.name
 			})
 		}
@@ -187,7 +307,6 @@ async function importSillyTavernSprites(
 		await readImages(resolveSafePath(root, e.name), e.name)
 	}
 	if (items.length === 0) return 0
-	const { importSprites } = await import("$lib/server/sprites")
 	const result = await importSprites(db, userId, characterId, items, "sillytavern")
 	return result.added
 }
@@ -255,7 +374,7 @@ export const importStartSillyTavernSession: Handler<
 		if (!userId) {
 			throw new Error("User not authenticated")
 		}
-		// UI-only restriction (routes/import/+page.svelte) isn't enforcement —
+		// UI-only restriction (Settings › Import, settingsTabs/ImportSettingsTab.svelte) isn't enforcement —
 		// without this, any authenticated non-admin user could drive the whole
 		// SillyTavern import pipeline directly via sockets.
 		if (!socket.user!.isAdmin) {
@@ -263,16 +382,18 @@ export const importStartSillyTavernSession: Handler<
 		}
 
 		try {
+			await sweepOrphanedStaging()
 			const importSessionId = uuid()
 			const dir = path.join(
 				os.tmpdir(),
-				`serene-pub-import-${importSessionId}`
+				`${STAGING_PREFIX}${importSessionId}`
 			)
 			await fsPromises.mkdir(dir, { recursive: true })
 			importSessions.set(importSessionId, {
 				userId,
 				dir,
-				lastActivity: Date.now()
+				lastActivity: Date.now(),
+				stagedBytes: 0
 			})
 
 			const result = { success: true, importSessionId }
@@ -281,10 +402,7 @@ export const importStartSillyTavernSession: Handler<
 		} catch (error) {
 			const result = {
 				success: false,
-				error:
-					error instanceof Error
-						? error.message
-						: "Failed to start import session"
+				error: importFailureSentence(error, "SillyTavern import start")
 			}
 			emitToUser("import:sillytavern:startSession", result)
 			return result
@@ -302,7 +420,7 @@ export const importStageSillyTavernFiles: Handler<
 		if (!userId) {
 			throw new Error("User not authenticated")
 		}
-		// UI-only restriction (routes/import/+page.svelte) isn't enforcement —
+		// UI-only restriction (Settings › Import, settingsTabs/ImportSettingsTab.svelte) isn't enforcement —
 		// without this, any authenticated non-admin user could drive the whole
 		// SillyTavern import pipeline directly via sockets.
 		if (!socket.user!.isAdmin) {
@@ -312,6 +430,34 @@ export const importStageSillyTavernFiles: Handler<
 		try {
 			const session = getImportSession(message.importSessionId, userId)
 			const blob = Buffer.from(message.blob)
+
+			// The manifest must account for the upload exactly, and the
+			// import stays under its quota and off a full disk (S4 review:
+			// staging had no bound at all).
+			const lengths = Array.isArray(message.manifest)
+				? message.manifest.map((e) => e?.length)
+				: []
+			if (
+				!Array.isArray(message.manifest) ||
+				!lengths.every((n) => Number.isSafeInteger(n) && n >= 0) ||
+				lengths.reduce((a, b) => a + b, 0) !== blob.length
+			) {
+				throw new Error(
+					"This upload doesn't match its own list of files, so nothing was saved."
+				)
+			}
+			if (session.stagedBytes + blob.length > STAGING_LIMITS.sessionBytes) {
+				throw new Error(
+					`This SillyTavern folder is larger than the ${megabytes(STAGING_LIMITS.sessionBytes)} Serene Pub will stage for one import.`
+				)
+			}
+			const disk = await fsPromises.statfs(session.dir)
+			if (disk.bavail * disk.bsize - blob.length < STAGING_LIMITS.freeBytesFloor) {
+				throw new Error(
+					"The server's disk is nearly full, so Serene Pub stopped staging this import."
+				)
+			}
+			session.stagedBytes += blob.length
 
 			let offset = 0
 			for (const entry of message.manifest) {
@@ -327,6 +473,10 @@ export const importStageSillyTavernFiles: Handler<
 				})
 				await fsPromises.writeFile(filePath, fileData)
 			}
+			// Fresh for `sweepOrphanedStaging` in any process sharing the
+			// temp directory: a live import is never an orphan.
+			const now = new Date()
+			await fsPromises.utimes(session.dir, now, now)
 
 			const result = { success: true, staged: message.manifest.length }
 			emitToUser("import:sillytavern:stageFiles", result)
@@ -334,10 +484,7 @@ export const importStageSillyTavernFiles: Handler<
 		} catch (error) {
 			const result = {
 				success: false,
-				error:
-					error instanceof Error
-						? error.message
-						: "Failed to stage files"
+				error: importFailureSentence(error, "SillyTavern import staging")
 			}
 			emitToUser("import:sillytavern:stageFiles", result)
 			return result
@@ -357,7 +504,7 @@ export const importScanSillyTavern: Handler<
 		if (!userId) {
 			throw new Error("User not authenticated")
 		}
-		// UI-only restriction (routes/import/+page.svelte) isn't enforcement —
+		// UI-only restriction (Settings › Import, settingsTabs/ImportSettingsTab.svelte) isn't enforcement —
 		// without this, any authenticated non-admin user could drive the whole
 		// SillyTavern import pipeline directly via sockets.
 		if (!socket.user!.isAdmin) {
@@ -412,12 +559,10 @@ export const importScanSillyTavern: Handler<
 			const personas: Array<{ name: string; selected: boolean }> = []
 
 			try {
-				const settingsPath = path.join(dataDir, "settings.json")
-				const settingsContent = await fsPromises.readFile(
-					settingsPath,
-					"utf8"
+				const settings = await readStagedJson(
+					path.join(dataDir, "settings.json"),
+					"This SillyTavern settings file"
 				)
-				const settings = JSON.parse(settingsContent)
 
 				// ST keys a persona by its avatar file; the name the user
 				// knows it by is `power_user.personas[file]`.
@@ -484,12 +629,10 @@ export const importScanSillyTavern: Handler<
 
 				for (const groupFile of groupFiles) {
 					if (groupFile.endsWith(".json")) {
-						const groupPath = path.join(groupsDir, groupFile)
-						const groupContent = await fsPromises.readFile(
-							groupPath,
-							"utf8"
-						)
-						const group = JSON.parse(groupContent) as SillyTavernGroup
+						const group = (await readStagedJson(
+							path.join(groupsDir, groupFile),
+							"This SillyTavern group file"
+						)) as SillyTavernGroup
 
 						groupSessions.push({
 							filename: groupFile,
@@ -520,15 +663,17 @@ export const importScanSillyTavern: Handler<
 				for (const worldFile of worldFiles) {
 					if (worldFile.endsWith(".json")) {
 						const worldPath = path.join(worldsDir, worldFile)
-						const worldContent = await fsPromises.readFile(
-							worldPath,
-							"utf8"
-						)
-						const world = JSON.parse(worldContent) as WorldInfo
+						const fallbackName = worldFile.replace(".json", "")
+						// Listed by its file name, unread, when it is past the
+						// lorebook ceiling: the import then says why it stopped.
+						const { size } = await fsPromises.stat(worldPath)
+						const world = lorebookFileTooLarge(size)
+							? null
+							: await readWorldInfoFile(worldPath)
 
 						lorebooks.push({
 							filename: worldFile,
-							name: world.name || worldFile.replace(".json", ""),
+							name: world?.name || fallbackName,
 							selected: true
 						})
 					}
@@ -550,13 +695,9 @@ export const importScanSillyTavern: Handler<
 			emitToUser("import:sillytavern:scan", result)
 			return result
 		} catch (error) {
-			console.error("Error scanning SillyTavern directory:", error)
 			const result = {
 				success: false,
-				error:
-					error instanceof Error
-						? error.message
-						: "Failed to scan directory"
+				error: importFailureSentence(error, "SillyTavern import scan")
 			}
 			emitToUser("import:sillytavern:scan", result)
 			return result
@@ -576,7 +717,7 @@ export const importExecuteSillyTavern: Handler<
 		if (!userId) {
 			throw new Error("User not authenticated")
 		}
-		// UI-only restriction (routes/import/+page.svelte) isn't enforcement —
+		// UI-only restriction (Settings › Import, settingsTabs/ImportSettingsTab.svelte) isn't enforcement —
 		// without this, any authenticated non-admin user could drive the whole
 		// SillyTavern import pipeline directly via sockets.
 		if (!socket.user!.isAdmin) {
@@ -594,21 +735,63 @@ export const importExecuteSillyTavern: Handler<
 			return r
 		}
 
+		// ── Counters & tracking ──────────────────────────────────────────────
+		// Outside the try: a failure that stops the import still reports what
+		// had already landed, rather than "import failed" over saved rows.
+		const stats = {
+			characters: 0,
+			sprites: 0,
+			personas: 0,
+			sessions: 0,
+			lorebooks: 0,
+			errors: 0
+		}
+		// What failed: one sentence per item, in the person's words — the
+		// database's and the machine's go to the server log (`importFailureSentence`).
+		const errors: string[] = []
+		// What did not finish for an item that DID land (plan A13).
+		const warnings: string[] = []
+		// The books this import made, by id → name: each gets its cast tags
+		// read and is queued for its vectors and annotations, however the
+		// import ends (`finishMadeBooks`).
+		const madeBooks = new Map<number, string>()
+		const tagsRead = new Set<number>()
+
+		/**
+		 * What an entry save gives a book, for each book this import made: its
+		 * cast tags read (`syncLorebookBindings`) — before any session seats a
+		 * cast in it, so a member a tag names keeps its number — once.
+		 */
+		async function readMadeBooksTags() {
+			for (const [id, name] of madeBooks) {
+				if (tagsRead.has(id)) continue
+				tagsRead.add(id)
+				try {
+					await syncLorebookBindings({ lorebookId: id })
+				} catch (e) {
+					warnings.push(
+						`Lorebook "${name}" was imported, but the cast members its entries name were not all added: ${importFailureSentence(e, `lorebook "${name}"'s cast tags`)}`
+					)
+				}
+			}
+		}
+
+		/**
+		 * Every book this import made, finished however the import ends: its
+		 * tags read if a stop came first, and queued for its vectors and
+		 * annotations, as an entry save queues them — after the sessions,
+		 * whose cast the annotation vocabulary reads.
+		 */
+		async function finishMadeBooks() {
+			await readMadeBooksTags()
+			for (const [id, name] of madeBooks) queueImportedBook(id, name)
+		}
+
 		try {
 			// ── Resolve the same data dir the scan phase used ────────────────────
 			const session = getImportSession(importSessionId, userId)
 			const dataDir = await resolveStagedDataDir(session)
 
-			// ── Counters & tracking ──────────────────────────────────────────────
-			const stats = {
-				characters: 0,
-				sprites: 0,
-				personas: 0,
-				sessions: 0,
-				lorebooks: 0,
-				errors: 0
-			}
-			const errors: string[] = []
 			// Map ST name → newly inserted DB ID (for session / character linking)
 			const characterNameToId = new Map<string, number>()
 			const personaNameToId = new Map<string, number>()
@@ -616,8 +799,6 @@ export const importExecuteSillyTavern: Handler<
 			const lorebookNameToId = new Map<string, number>()
 			// Character DB id → its lorebook DB id (set when character_book is imported)
 			const characterIdToLorebookId = new Map<number, number>()
-			// Lorebook names already imported this session (catches within-run duplicates)
-			const importedLorebookNames = new Set<string>()
 
 			// Helpers: look up existing records by name for this user
 			async function findCharacterId(
@@ -648,6 +829,8 @@ export const importExecuteSillyTavern: Handler<
 				return existing?.id ?? null
 			}
 
+			// A book is matched by name (docs/importing-from-sillytavern.md): one
+			// this user already has, or this import made, is reused as it is.
 			async function findLorebookId(
 				name: string
 			): Promise<number | null> {
@@ -663,33 +846,110 @@ export const importExecuteSillyTavern: Handler<
 				return existing?.id ?? null
 			}
 
-			// Returns the existing lorebook ID if one with this name already exists for the
-			// user, otherwise inserts a new one and returns its ID.
-			async function findOrCreateLorebook(
+			/**
+			 * Make a book whole (plan A13): its row, with the book's own
+			 * settings the file states (`extraJson`), and every entry, in one
+			 * transaction and in batches — so a failure leaves no half-made
+			 * book behind. `entries` are a card book's (CCv2/V3) or World
+			 * Info's already renamed (`normalizeNativeWorldInfoEntry`): the
+			 * same shape, run through the mapper `lorebooks:import` runs —
+			 * key-shape regex detection, declared whole-word intent, the
+			 * preserved `extensions` bag and the 1-3 priority clamp come from
+			 * there rather than from a second copy of the rules here.
+			 */
+			async function createImportedBook(
 				name: string,
-				description: string
+				description: string,
+				extraJson: Record<string, any>,
+				entries: any[]
 			): Promise<number> {
-				const cached = lorebookNameToId.get(name)
-				if (cached !== undefined) return cached
-				const existing = await db.query.lorebooks.findFirst({
-					where: and(
-						eq(schema.lorebooks.userId, userId),
-						eq(schema.lorebooks.name, name)
+				// The one-file lorebook import's book-level ceilings, in its
+				// sentences, as its per-entry ones are met before this.
+				assertBookWithinImportLimits(name, description)
+				const id = await db.transaction(async (tx) => {
+					const [lb] = await tx
+						.insert(schema.lorebooks)
+						.values({ userId, name, description, extraJson })
+						.returning({ id: schema.lorebooks.id })
+					const rows = entries.map((entry, position) =>
+						entryInsert({
+							typeId: WORLD_LORE_TYPE_ID,
+							// `position` has no column default on the one
+							// table and is unique per (lorebook, type).
+							...(mapImportedEntry(
+								entry,
+								WORLD_LORE_TYPE_ID,
+								position
+							) as any),
+							// One file key, one stored key: the mapper's
+							// joined string would be re-split on every comma,
+							// tearing a regex `{1,3}` or "Smith, John" in two
+							// (finding #146).
+							...importedKeyColumns(entry),
+							lorebookId: lb.id
+						})
 					)
+					for (let i = 0; i < rows.length; i += ENTRY_INSERT_BATCH)
+						await tx
+							.insert(schema.lorebookEntries)
+							.values(rows.slice(i, i + ENTRY_INSERT_BATCH))
+					return lb.id
 				})
-				if (existing) {
-					importedLorebookNames.add(name)
-					lorebookNameToId.set(name, existing.id)
-					return existing.id
-				}
-				const [lb] = await db
-					.insert(schema.lorebooks)
-					.values({ userId, name, description })
-					.returning()
-				importedLorebookNames.add(name)
-				lorebookNameToId.set(name, lb.id)
+				lorebookNameToId.set(name, id)
+				madeBooks.set(id, name)
 				stats.lorebooks++
-				return lb.id
+				return id
+			}
+
+			/**
+			 * What a session needs once it is in (its transaction committed):
+			 * its persona marked as one, its cast seated in the book it reads
+			 * — as reading a book into a session seats it
+			 * (`runLorebookBindingCheck`, plan A13) — and its one push. None of
+			 * it can undo the session, so a step that fails is a warning.
+			 */
+			async function afterSessionImported(
+				label: string,
+				sessionId: number,
+				lorebookId: number | null,
+				personaId: number | null
+			) {
+				if (personaId) {
+					try {
+						await markCharacterAsPersona(personaId)
+					} catch (e) {
+						warnings.push(
+							`${label} was imported, but the character you play in it was not marked as a persona: ${importFailureSentence(e, `${label}'s persona`)}`
+						)
+					}
+				}
+				if (lorebookId) {
+					try {
+						const { runLorebookBindingCheck } = await import("./sessions")
+						// Seated only: an import asks nothing about the book's
+						// cast members no card stands behind — one prompt per
+						// imported session would be noise nobody asked for.
+						await runLorebookBindingCheck(
+							socket,
+							sessionId,
+							lorebookId,
+							emitToUser,
+							{ askAboutOrphans: false }
+						)
+					} catch (e) {
+						warnings.push(
+							`${label} was imported, but its characters were not all added to its lorebook's cast. They are added when its cast next changes. ${importFailureSentence(e, `${label}'s cast`)}`
+						)
+					}
+				}
+				// One push for the whole imported history, after it: the new
+				// row has a line to quote from the moment it appears.
+				try {
+					broadcastSessionRow(socket.io, sessionId)
+				} catch (e) {
+					console.error(`[import] ${label}: the session row push failed:`, e)
+				}
+				await announceImportedSession(db, { sessionId, userId })
 			}
 
 			// ── Phase 1: Characters ──────────────────────────────────────────────
@@ -739,10 +999,8 @@ export const importExecuteSillyTavern: Handler<
 							// rule 6): it lands under the entity it produced,
 							// through the same choke point, rather than
 							// getting its own tree and its own path format.
-							// Nothing here asks not to encode a thumbnail any
-							// more: since 0182 derivation happens on first
-							// request, so a bulk import already pays for
-							// nothing it does not need.
+							// Derivation happens on first request, so a bulk
+							// import pays for no thumbnail it does not need.
 							const created = await createMedia(db, {
 								userId,
 								characterId: newChar.id,
@@ -780,67 +1038,55 @@ export const importExecuteSillyTavern: Handler<
 						console.warn(`Could not import sprites for ${d.name}:`, e)
 					}
 
-					// Import embedded character book as lorebook
+					// Import embedded character book as lorebook. The
+					// character is in by now, so a book that fails is the
+					// book's failure, and the line says the character landed.
 					if (d.character_book?.entries?.length) {
-						assertWithinBulkImportLimit(
-							d.character_book.entries.length,
-							`Character "${d.name}"'s embedded lorebook`
-						)
 						const lbName =
 							d.character_book.name || `${d.name} Lorebook`
-						const lbId = await findOrCreateLorebook(
-							lbName,
-							d.character_book.description ?? ""
-						)
-						await db
-							.update(schema.characters)
-							.set({ lorebookId: lbId })
-							.where(eq(schema.characters.id, newChar.id))
-						characterIdToLorebookId.set(newChar.id, lbId)
-						// Only insert entries for a freshly created lorebook
-						const entryCount = await db.$count(
-							schema.lorebookEntries,
-							inBookOfType(lbId, WORLD_LORE_TYPE_ID)
-						)
-						if (entryCount === 0) {
-							let position = 0
-							for (const entry of d.character_book.entries) {
-								await db.insert(schema.lorebookEntries).values(
-									entryInsert({
-										typeId: WORLD_LORE_TYPE_ID,
-										// The identical CCv2/V3 shape
-										// `lorebooks:import` maps, so it
-										// runs the identical mapper —
-										// key-shape regex detection,
-										// declared whole-word intent, the
-										// preserved `extensions` bag and
-										// the 1-3 priority clamp all come
-										// from there rather than from a
-										// second copy of the rules here.
-										...(mapImportedEntry(
-											entry,
-											WORLD_LORE_TYPE_ID,
-											// `position` has no column
-											// default on the one table and
-											// is unique per (lorebook,
-											// type).
-											position++
-										) as any),
-										// One file key, one stored key: the
-										// mapper's joined string would be
-										// re-split on every comma, tearing a
-										// regex `{1,3}` or "Smith, John" in
-										// two (finding #146).
-										...importedKeyColumns(entry),
-										lorebookId: lbId
-									})
+						try {
+							assertWithinBulkImportLimit(
+								d.character_book.entries.length,
+								`Character "${d.name}"'s embedded lorebook`
+							)
+							// The one-file lorebook import's per-entry
+							// ceilings, in its sentences, before the book is
+							// made (S4 review).
+							d.character_book.entries.forEach((entry, i) =>
+								assertEntryWithinImportLimits(entry, i)
+							)
+							const existingId = await findLorebookId(lbName)
+							// A book of this name — the user's, or one this
+							// import made — is reused as it is, and the card's
+							// own entries are left out: said, never silent.
+							if (existingId !== null)
+								warnings.push(
+									`Character "${d.name}" reads the lorebook "${lbName}" that already existed; the card's own lorebook of that name was not imported.`
 								)
-							}
+							const lbId =
+								existingId ??
+								(await createImportedBook(
+									lbName,
+									d.character_book.description ?? "",
+									extractLorebookLevelExtraJson(d.character_book),
+									d.character_book.entries
+								))
+							await db
+								.update(schema.characters)
+								.set({ lorebookId: lbId })
+								.where(eq(schema.characters.id, newChar.id))
+							characterIdToLorebookId.set(newChar.id, lbId)
+						} catch (e) {
+							errors.push(
+								`Character "${d.name}" was imported without its lorebook "${lbName}": ${importFailureSentence(e, `character "${d.name}"'s lorebook "${lbName}"`)}`
+							)
+							stats.errors++
 						}
 					}
 				} catch (e) {
-					const msg = `Character "${charItem.name}": ${e instanceof Error ? e.message : e}`
-					errors.push(msg)
+					errors.push(
+						`Character "${charItem.name}": ${importFailureSentence(e, `character "${charItem.name}"`)}`
+					)
 					stats.errors++
 				}
 			}
@@ -848,11 +1094,10 @@ export const importExecuteSillyTavern: Handler<
 			// ── Phase 2: Personas ────────────────────────────────────────────────
 			let settingsData: any = null
 			try {
-				const content = await fsPromises.readFile(
+				settingsData = await readStagedJson(
 					path.join(dataDir, "settings.json"),
-					"utf8"
+					"This SillyTavern settings file"
 				)
-				settingsData = JSON.parse(content)
 			} catch {
 				/* no settings.json */
 			}
@@ -892,6 +1137,10 @@ export const importExecuteSillyTavern: Handler<
 						avatarFilename
 					)
 					try {
+						const tooLarge = cardFileTooLarge(
+							(await fsPromises.stat(avatarSrc)).size
+						)
+						if (tooLarge) throw new Error(tooLarge)
 						const buffer = await fsPromises.readFile(avatarSrc)
 						const created = await createMedia(db, {
 							userId,
@@ -907,8 +1156,9 @@ export const importExecuteSillyTavern: Handler<
 						/* no avatar file — that's fine */
 					}
 				} catch (e) {
-					const msg = `Persona "${personaItem.name}": ${e instanceof Error ? e.message : e}`
-					errors.push(msg)
+					errors.push(
+						`Persona "${personaItem.name}": ${importFailureSentence(e, `persona "${personaItem.name}"`)}`
+					)
 					stats.errors++
 				}
 			}
@@ -920,77 +1170,72 @@ export const importExecuteSillyTavern: Handler<
 						path.join(dataDir, SILLYTAVERN_DIRS.worlds),
 						lbItem.filename
 					)
-					const content = await fsPromises.readFile(worldPath, "utf8")
-					const worldData = JSON.parse(content) as WorldInfo
+					const worldData = await readWorldInfoFile(worldPath)
 
 					const lbName = worldData.name || lbItem.name
-					const wasNew =
-						!importedLorebookNames.has(lbName) &&
-						!(await db.query.lorebooks.findFirst({
-							where: and(
-								eq(schema.lorebooks.userId, userId),
-								eq(schema.lorebooks.name, lbName)
+					// A book of this name is reused as it is, and the file is
+					// not imported: an item not imported when the person
+					// already had it, and said once when a card above just
+					// brought a book of that name in.
+					const existingId = await findLorebookId(lbName)
+					if (existingId !== null) {
+						if (madeBooks.has(existingId))
+							warnings.push(
+								`Lorebook "${lbName}" was not imported again: a character's lorebook of that name came in with this import.`
 							)
-						}))
-					const lbId = await findOrCreateLorebook(
-						lbName,
-						worldData.description ?? ""
-					)
-
-					// Only insert entries if this lorebook was just created
-					if (wasNew) {
-						const entries: WorldInfo["entries"] = Array.isArray(
-							worldData.entries
-						)
-							? worldData.entries
-							: Object.values((worldData as any).entries ?? {})
-
-						assertWithinBulkImportLimit(
-							entries.length,
-							`Lorebook "${lbName}"`
-						)
-						let position = 0
-						for (const entry of entries) {
-							const normalized = normalizeNativeWorldInfoEntry(entry)
-							await db.insert(schema.lorebookEntries).values(
-								entryInsert({
-									typeId: WORLD_LORE_TYPE_ID,
-									// ST's *native* World Info shape: the
-									// same facts as a `character_book`
-									// entry under different names, so it is
-									// renamed once and then mapped by the
-									// same function everything else is.
-									//
-									// ⚠ `entry.order` no longer becomes
-									// `priority`. It is ST's insertion
-									// index, defaulting to 100, so clamping
-									// it into Serene Pub's 1-3 band read
-									// "every imported entry is maximum
-									// priority" — a fact the file never
-									// stated. Native World Info declares no
-									// priority, so imported entries take
-									// the mapper's default of 1, which is
-									// what the same book already gets
-									// through `lorebooks:import`.
-									...(mapImportedEntry(
-										normalized,
-										WORLD_LORE_TYPE_ID,
-										position++
-									) as any),
-									// One file key, one stored key (finding
-									// #146) — see the character book above.
-									...importedKeyColumns(normalized),
-									lorebookId: lbId
-								})
+						else {
+							errors.push(
+								`Lorebook "${lbName}" was not imported: you already have a lorebook with that name.`
 							)
+							stats.errors++
 						}
+						continue
 					}
+					const worldEntries: WorldInfo["entries"] = Array.isArray(
+						worldData.entries
+					)
+						? worldData.entries
+						: Object.values((worldData as any).entries ?? {})
+					// A book about to be made meets its ceilings first — the
+					// count, and the one-file import's per-entry ones in its
+					// sentences (S4 review).
+					assertWithinBulkImportLimit(
+						worldEntries.length,
+						`Lorebook "${lbName}"`
+					)
+					// ST's *native* World Info shape: the same facts as a
+					// `character_book` entry under different names, so it is
+					// renamed once and then mapped by the same function
+					// everything else is.
+					//
+					// ⚠ `entry.order` is not `priority`. It is ST's insertion
+					// index, defaulting to 100, so clamping it into Serene
+					// Pub's 1-3 band read "every imported entry is maximum
+					// priority" — a fact the file never stated. Native World
+					// Info declares no priority, so imported entries take the
+					// mapper's default of 1, which is what the same book gets
+					// through `lorebooks:import`.
+					const normalizedEntries = worldEntries.map((entry) =>
+						normalizeNativeWorldInfoEntry(entry)
+					)
+					normalizedEntries.forEach((entry, i) =>
+						assertEntryWithinImportLimits(entry, i)
+					)
+					await createImportedBook(
+						lbName,
+						worldData.description ?? "",
+						extractLorebookLevelExtraJson(worldData),
+						normalizedEntries
+					)
 				} catch (e) {
-					const msg = `Lorebook "${lbItem.name}": ${e instanceof Error ? e.message : e}`
-					errors.push(msg)
+					errors.push(
+						`Lorebook "${lbItem.name}": ${importFailureSentence(e, `lorebook "${lbItem.name}"`)}`
+					)
 					stats.errors++
 				}
 			}
+
+			await readMadeBooksTags()
 
 			// Fallback persona: prefer the DB default, then any existing persona for this user.
 			// Imported personas are inserted with isDefaultPersona=false, so we need the secondary
@@ -1013,13 +1258,18 @@ export const importExecuteSillyTavern: Handler<
 
 			// ── Phase 4: SillyTavern chats → sessions ───────────────────────────
 			for (const sessionItem of selectedData.sessions) {
+				const label = `Session "${sessionItem.name}"`
 				try {
 					const chatPath = resolveSafePath(
 						path.join(dataDir, SILLYTAVERN_DIRS.chats),
 						sessionItem.filename
 					)
 					const parsed = await parseSillyTavernChatFile(chatPath)
-					if (!parsed) continue
+					if (!parsed)
+						throw new Error(
+							"The chat file is missing or empty, so there is nothing to import."
+						)
+					assertWithinBulkImportLimit(parsed.messages.length, label)
 
 					const charName = sessionItem.characterNames[0]
 					const characterId =
@@ -1036,24 +1286,6 @@ export const importExecuteSillyTavern: Handler<
 							? (characterIdToLorebookId.get(characterId) ?? null)
 							: null
 
-					const [newSession] = await db
-						.insert(schema.sessions)
-						.values({
-							userId,
-							name: sessionItem.name,
-							isGroup: false,
-							lorebookId: sessionLorebookId
-						})
-						.returning()
-
-					if (characterId) {
-						await db.insert(schema.sessionCharacters).values({
-							sessionId: newSession.id,
-							characterId,
-							position: 0
-						})
-					}
-
 					// Resolve persona from the chat's user_name header, fall back to default
 					const sessionPersonaName = parsed.header.user_name
 					const sessionPersonaId = sessionPersonaName
@@ -1062,70 +1294,81 @@ export const importExecuteSillyTavern: Handler<
 						: null
 					const resolvedPersonaId =
 						sessionPersonaId ?? defaultPersona?.id ?? null
-					if (resolvedPersonaId) {
-						await db.insert(schema.sessionPersonas).values({
-							sessionId: newSession.id,
-							personaId: resolvedPersonaId
-						})
-						await markCharacterAsPersona(resolvedPersonaId)
-					}
-
-					assertWithinBulkImportLimit(
-						parsed.messages.length,
-						`Session "${sessionItem.name}"`
+					// The line it reads, as a session made here reads one.
+					const sessionLine = await importedSessionLine(sessionLorebookId)
+					// 🚧 The chat's Author's Note, as the Chat session's own
+					// (AN1) — an imported chat is a Chat session, which
+					// declares the note. Absent: the row is what it was.
+					const sessionNote = authorsNoteFromChatMetadata(
+						parsed.header.chat_metadata
 					)
-					for (const msg of parsed.messages) {
-						if (msg.is_system) continue
-						const role = msg.is_user ? "user" : "character"
-						const metadata: Record<string, any> = {}
-						if (msg.swipes && msg.swipes.length > 1) {
-							metadata.swipes = {
-								currentIdx: msg.swipe_id ?? 0,
-								history: msg.swipes
-							}
+
+					// The session, its members and its history land whole or
+					// not at all — one transaction, the history in batches.
+					const newSession = await db.transaction(async (tx) => {
+						const [row] = await tx
+							.insert(schema.sessions)
+							.values({
+								userId,
+								name: sessionItem.name,
+								isGroup: false,
+								lorebookId: sessionLorebookId,
+								...(sessionNote
+									? { genreFields: { authorsNote: sessionNote.note } }
+									: {}),
+								...sessionLine
+							})
+							.returning()
+						if (characterId) {
+							await tx.insert(schema.sessionCharacters).values({
+								sessionId: row.id,
+								characterId,
+								position: 0
+							})
 						}
-						await insertLegacy(db, {
-							sessionId: newSession.id,
+						if (resolvedPersonaId) {
+							await tx.insert(schema.sessionPersonas).values({
+								sessionId: row.id,
+								personaId: resolvedPersonaId
+							})
+						}
+						await insertImportedHistory(
+							tx,
+							row.id,
 							userId,
-							characterId:
-								!msg.is_user && characterId
-									? characterId
-									: null,
-							role,
-							content: msg.mes,
-							metadata,
-							createdAt: normalizeTimestamp(msg.send_date)
-								.toISOString()
-								.split("T")[0]
-						})
-					}
-
-					// One push for the whole imported history, after it: the
-					// new row has a line to quote from the moment it appears.
-					broadcastSessionRow(socket.io, newSession.id)
-					await announceImportedSession(db, { sessionId: newSession.id, userId })
-
+							parsed.messages,
+							() => characterId ?? null
+						)
+						return row
+					})
 					stats.sessions++
+					if (sessionNote?.importNote)
+						warnings.push(`${label} was imported, but ${sessionNote.importNote}.`)
+					await afterSessionImported(
+						label,
+						newSession.id,
+						sessionLorebookId,
+						resolvedPersonaId
+					)
 				} catch (e) {
-					const msg = `Session "${sessionItem.name}": ${e instanceof Error ? e.message : e}`
-					errors.push(msg)
+					errors.push(`${label}: ${importFailureSentence(e, label)}`)
 					stats.errors++
 				}
 			}
 
 			// ── Phase 5: SillyTavern group chats → group sessions ───────────────
 			for (const groupItem of selectedData.groupSessions) {
+				const label = `Group session "${groupItem.name}"`
 				try {
 					// Re-read group JSON to get the id of its chat file
 					const groupPath = resolveSafePath(
 						path.join(dataDir, SILLYTAVERN_DIRS.groups),
 						groupItem.filename
 					)
-					const groupContent = await fsPromises.readFile(
+					const groupData = (await readStagedJson(
 						groupPath,
-						"utf8"
-					)
-					const groupData = JSON.parse(groupContent) as SillyTavernGroup
+						"This SillyTavern group file"
+					)) as SillyTavernGroup
 
 					const memberIds: (number | null)[] = await Promise.all(
 						groupItem.memberNames.map(
@@ -1135,14 +1378,14 @@ export const importExecuteSillyTavern: Handler<
 						)
 					)
 
-					// The group's chat history is parsed later; read the file now so we
-					// can check the world_info in the header before inserting the
-					// session. SillyTavern names the file after the group's CURRENT
-					// chat, `group chats/<chat_id>.jsonl` — not the group's own id,
-					// which only matches for a group made before `chat_id` existed.
-					// Both come from parsed JSON content, not re-validated like
-					// groupItem.filename above, so they need the same traversal
-					// guard before being used in a path.
+					// The group's chat history is parsed before the session is
+					// made, so its world_info can pick the book. SillyTavern
+					// names the file after the group's CURRENT chat,
+					// `group chats/<chat_id>.jsonl` — not the group's own id,
+					// which only matches for a group made before `chat_id`
+					// existed. Both come from parsed JSON content, not
+					// re-validated like groupItem.filename above, so they need
+					// the same traversal guard before being used in a path.
 					const groupChatId =
 						groupData.chat_id ||
 						groupData.id ||
@@ -1151,14 +1394,14 @@ export const importExecuteSillyTavern: Handler<
 						path.join(dataDir, SILLYTAVERN_DIRS.groupChats),
 						`${groupChatId}.jsonl`
 					)
-					let groupParsed: Awaited<
-						ReturnType<typeof parseSillyTavernChatFile>
-					> = null
-					try {
-						groupParsed = await parseSillyTavernChatFile(groupChatFile)
-					} catch {
-						/* no history file */
-					}
+					// Null when the group has no history file yet; a damaged
+					// one is this item's failure, never an empty group.
+					const groupParsed = await parseSillyTavernChatFile(groupChatFile)
+					if (groupParsed)
+						assertWithinBulkImportLimit(
+							groupParsed.messages.length,
+							label
+						)
 
 					const groupWorldInfoName =
 						groupData.chat_metadata?.world_info ??
@@ -1168,57 +1411,8 @@ export const importExecuteSillyTavern: Handler<
 						? await findLorebookId(groupWorldInfoName)
 						: null
 
-					const [newSession] = await db
-						.insert(schema.sessions)
-						.values({
-							userId,
-							name: groupItem.name,
-							isGroup: true,
-							lorebookId: groupLorebookId
-						})
-						.returning()
-					// The group's activation strategy, as a rebind of the
-					// session's speaker node (2026-09-21) — only `manual`
-					// is one; the rest inherit round robin.
-					const importedStrategy = mapGroupReplyStrategy(
-						groupData.activation_strategy
-					)
-					if (importedStrategy) {
-						// The Turn order control is a rebind of the session
-						// genre's turn-order spec's `strategy` node (R27, R28),
-						// found in core-catalog's table — never a slug built
-						// here.
-						const [{ setSessionNodeRebind }, { TURN_ORDER_BY_GENRE }] =
-							await Promise.all([
-								import("$lib/server/pipelines/entities/bindings"),
-								import("@serene-pub/core-catalog")
-							])
-						const turnOrder = TURN_ORDER_BY_GENRE.find(
-							(t) => t.genre.id === newSession.genreId
-						)
-						if (turnOrder)
-							await setSessionNodeRebind(db, {
-								sessionId: newSession.id,
-								userId,
-								spec: turnOrder.spec,
-								nodeKey: turnOrder.strategyNode,
-								definitionId: importedStrategy
-							})
-					}
-
-					for (let i = 0; i < groupItem.memberNames.length; i++) {
-						const charId = memberIds[i]
-						if (charId) {
-							await db.insert(schema.sessionCharacters).values({
-								sessionId: newSession.id,
-								characterId: charId,
-								position: i
-							})
-						}
-					}
-
-					// Persona link: resolve from history header user_name, fall back to default.
-					// Done outside the history try/catch so the link is created even with no messages.
+					// Persona link: resolve from history header user_name, fall
+					// back to default — a group with no history gets one too.
 					const groupPersonaName =
 						groupParsed?.header.user_name ?? null
 					const groupPersonaId = groupPersonaName
@@ -1227,109 +1421,244 @@ export const importExecuteSillyTavern: Handler<
 						: null
 					const resolvedGroupPersonaId =
 						groupPersonaId ?? defaultPersona?.id ?? null
-					if (resolvedGroupPersonaId) {
-						await db.insert(schema.sessionPersonas).values({
-							sessionId: newSession.id,
-							personaId: resolvedGroupPersonaId
-						})
-						await markCharacterAsPersona(resolvedGroupPersonaId)
-					}
+					const groupLine = await importedSessionLine(groupLorebookId)
+					// The group chat's Author's Note (AN1), as a solo chat's.
+					const groupNote = authorsNoteFromChatMetadata(
+						groupParsed?.header.chat_metadata?.note_prompt
+							? groupParsed.header.chat_metadata
+							: groupData.chat_metadata
+					)
 
-					if (groupParsed) {
-						assertWithinBulkImportLimit(
-							groupParsed.messages.length,
-							`Group session "${groupItem.name}"`
-						)
-						for (const msg of groupParsed.messages) {
-							if (msg.is_system) continue
-							const role = msg.is_user ? "user" : "character"
-							const charId = !msg.is_user
-								? (memberIds[
-										groupItem.memberNames.indexOf(msg.name)
-									] ?? null)
-								: null
-							const metadata: Record<string, any> = {}
-							if (msg.swipes && msg.swipes.length > 1) {
-								metadata.swipes = {
-									currentIdx: msg.swipe_id ?? 0,
-									history: msg.swipes
-								}
-							}
-							await insertLegacy(db, {
-								sessionId: newSession.id,
+					// Whole or not at all, as a solo session.
+					const newSession = await db.transaction(async (tx) => {
+						const [row] = await tx
+							.insert(schema.sessions)
+							.values({
 								userId,
-								characterId: charId,
-								role,
-								content: msg.mes,
-								metadata,
-								createdAt: normalizeTimestamp(msg.send_date)
-									.toISOString()
-									.split("T")[0]
+								name: groupItem.name,
+								isGroup: true,
+								lorebookId: groupLorebookId,
+								...(groupNote
+									? { genreFields: { authorsNote: groupNote.note } }
+									: {}),
+								...groupLine
+							})
+							.returning()
+						const members = groupItem.memberNames
+							.map((_, i) => ({
+								sessionId: row.id,
+								characterId: memberIds[i],
+								position: i
+							}))
+							.filter(
+								(m): m is typeof m & { characterId: number } =>
+									!!m.characterId
+							)
+						if (members.length)
+							await tx.insert(schema.sessionCharacters).values(members)
+						if (resolvedGroupPersonaId) {
+							await tx.insert(schema.sessionPersonas).values({
+								sessionId: row.id,
+								personaId: resolvedGroupPersonaId
 							})
 						}
-					}
-
-					// As above: one push once the copied history is in.
-					broadcastSessionRow(socket.io, newSession.id)
-					await announceImportedSession(db, { sessionId: newSession.id, userId })
-
+						if (groupParsed)
+							await insertImportedHistory(
+								tx,
+								row.id,
+								userId,
+								groupParsed.messages,
+								(msg) =>
+									memberIds[groupItem.memberNames.indexOf(msg.name)] ??
+									null
+							)
+						return row
+					})
 					stats.sessions++
+
+					// The group's activation strategy, as a rebind of the
+					// session's speaker node (2026-09-21) — only `manual` is
+					// one; the rest inherit round robin. After the session is
+					// in: a rebind that fails leaves round robin, and says so.
+					const importedStrategy = mapGroupReplyStrategy(
+						groupData.activation_strategy
+					)
+					if (importedStrategy) {
+						try {
+							// The Turn order control is a rebind of the
+							// session genre's turn-order spec's `strategy`
+							// node (R27, R28), found in core-catalog's table
+							// — never a slug built here.
+							const [{ setSessionNodeRebind }, { TURN_ORDER_BY_GENRE }] =
+								await Promise.all([
+									import("$lib/server/pipelines/entities/bindings"),
+									import("@serene-pub/core-catalog")
+								])
+							const turnOrder = TURN_ORDER_BY_GENRE.find(
+								(t) => t.genre.id === newSession.genreId
+							)
+							if (turnOrder)
+								await setSessionNodeRebind(db, {
+									sessionId: newSession.id,
+									userId,
+									spec: turnOrder.spec,
+									nodeKey: turnOrder.strategyNode,
+									definitionId: importedStrategy
+								})
+						} catch (e) {
+							warnings.push(
+								`${label} was imported, but it takes turns in order rather than its SillyTavern setting: ${importFailureSentence(e, `${label}'s turn order`)}`
+							)
+						}
+					}
+					if (groupNote?.importNote)
+						warnings.push(`${label} was imported, but ${groupNote.importNote}.`)
+					await afterSessionImported(
+						label,
+						newSession.id,
+						groupLorebookId,
+						resolvedGroupPersonaId
+					)
 				} catch (e) {
-					const msg = `Group session "${groupItem.name}": ${e instanceof Error ? e.message : e}`
-					errors.push(msg)
+					errors.push(`${label}: ${importFailureSentence(e, label)}`)
 					stats.errors++
 				}
 			}
 
-			// ── Build result message ─────────────────────────────────────────────
-			const parts: string[] = []
-			if (stats.characters)
-				parts.push(
-					`${stats.characters} character${stats.characters !== 1 ? "s" : ""}`
-				)
-			if (stats.sprites)
-				parts.push(
-					`${stats.sprites} sprite${stats.sprites !== 1 ? "s" : ""}`
-				)
-			if (stats.personas)
-				parts.push(
-					`${stats.personas} persona${stats.personas !== 1 ? "s" : ""}`
-				)
-			if (stats.sessions)
-				parts.push(
-					`${stats.sessions} session${stats.sessions !== 1 ? "s" : ""}`
-				)
-			if (stats.lorebooks)
-				parts.push(
-					`${stats.lorebooks} lorebook${stats.lorebooks !== 1 ? "s" : ""}`
-				)
+			await finishMadeBooks()
 
-			const summaryMessage = parts.length
-				? `Imported ${parts.join(", ")}.${stats.errors ? ` ${stats.errors} item(s) had errors.` : ""}`
-				: "Nothing was imported."
-
-			const r = {
+			const r: Sockets.Import.SillyTavern.Execute.Response = {
 				success: true,
-				message: summaryMessage,
-				errors: errors.length ? errors : undefined
+				conclusion: !landedAny(stats)
+					? "nothing"
+					: stats.errors
+						? "partial"
+						: "complete",
+				message: importSummary(stats),
+				errors: errors.length ? errors : undefined,
+				warnings: warnings.length ? warnings : undefined
 			}
 			await cleanupImportSession(importSessionId)
 			emitToUser("import:sillytavern:execute", r)
 			return r
 		} catch (error) {
-			console.error("Error executing import:", error)
-			const r = {
-				success: false,
-				error:
-					error instanceof Error
-						? error.message
-						: "Failed to execute import"
-			}
+			const sentence = importFailureSentence(
+				error,
+				"SillyTavern import"
+			)
+			// The books that landed before the stop are finished all the same.
+			await finishMadeBooks()
 			await cleanupImportSession(importSessionId)
+			// What landed before the stop is in: say so, and why it stopped —
+			// apart from the items that failed, which `errors` counts.
+			const r: Sockets.Import.SillyTavern.Execute.Response = landedAny(stats)
+				? {
+						success: true,
+						conclusion: "stopped",
+						message: importSummary(stats),
+						stoppedBecause: sentence,
+						errors: errors.length ? errors : undefined,
+						warnings: warnings.length ? warnings : undefined
+					}
+				: { success: false, error: sentence }
 			emitToUser("import:sillytavern:execute", r)
 			return r
 		}
 	}
+}
+
+/**
+ * A chat's history, as rows of one session, in batches inside the session's
+ * transaction (plan A13): the order is the file's, so ids follow it.
+ * `characterOf` names who spoke a character's line.
+ */
+async function insertImportedHistory(
+	tx: Db,
+	sessionId: number,
+	userId: number,
+	messages: ImportedChatMessage[],
+	characterOf: (msg: ImportedChatMessage) => number | null
+): Promise<void> {
+	const rows = messages
+		.filter((msg) => !msg.is_system)
+		.map((msg) => {
+			const metadata: Record<string, any> = {}
+			if (msg.swipes && msg.swipes.length > 1) {
+				metadata.swipes = {
+					currentIdx: msg.swipe_id ?? 0,
+					history: msg.swipes
+				}
+			}
+			return {
+				sessionId,
+				userId,
+				characterId: msg.is_user ? null : characterOf(msg),
+				role: msg.is_user ? "user" : "character",
+				content: msg.mes,
+				metadata,
+				createdAt: normalizeTimestamp(msg.send_date)
+					.toISOString()
+					.split("T")[0]
+			}
+		})
+	for (let i = 0; i < rows.length; i += HISTORY_INSERT_BATCH)
+		await insertLegacyMany(tx, rows.slice(i, i + HISTORY_INSERT_BATCH))
+}
+
+/** One line of a parsed SillyTavern chat file. */
+type ImportedChatMessage = NonNullable<
+	Awaited<ReturnType<typeof parseSillyTavernChatFile>>
+>["messages"][number]
+
+/** Messages one INSERT writes on a SillyTavern import (plan A13). */
+const HISTORY_INSERT_BATCH = 500
+
+/** Whether anything an import counts landed (sprites ride on a character). */
+function landedAny(stats: {
+	characters: number
+	personas: number
+	sessions: number
+	lorebooks: number
+}): boolean {
+	return stats.characters + stats.personas + stats.sessions + stats.lorebooks > 0
+}
+
+/**
+ * The line an imported session reads its book on — the columns
+ * `sessionLinePatch` gives a session made here (the book's most recently
+ * used line) — read before the session's transaction, which may use only
+ * its own handle.
+ */
+async function importedSessionLine(
+	lorebookId: number | null
+): Promise<Partial<typeof schema.sessions.$inferInsert>> {
+	if (!lorebookId) return {}
+	const { sessionLinePatch } = await import("./sessions")
+	// Names no clock and brings no stats, so it checks no date and needs
+	// no lock.
+	return sessionLinePatch(db, { before: null, lorebookId })
+}
+
+/** "Imported 3 characters, 2 sprites, …", or that nothing was. */
+function importSummary(stats: {
+	characters: number
+	sprites: number
+	personas: number
+	sessions: number
+	lorebooks: number
+	errors: number
+}): string {
+	const parts: string[] = []
+	const count = (n: number, one: string) =>
+		n ? parts.push(`${n} ${one}${n !== 1 ? "s" : ""}`) : 0
+	count(stats.characters, "character")
+	count(stats.sprites, "sprite")
+	count(stats.personas, "persona")
+	count(stats.sessions, "session")
+	count(stats.lorebooks, "lorebook")
+	return parts.length
+		? `Imported ${parts.join(", ")}.${stats.errors ? ` ${stats.errors} item(s) had errors.` : ""}`
+		: "Nothing was imported."
 }
 
 // ==================== Register Handlers ====================

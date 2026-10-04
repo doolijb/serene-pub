@@ -165,7 +165,6 @@ describe("connections:update — ack payload shape (bugfix, PGlite integration)"
 			renderSpecial: false,
 			bypassEos: false,
 			grammarRetainState: false,
-			logprobs: false,
 			replaceInstructPlaceholders: false
 		})
 	})

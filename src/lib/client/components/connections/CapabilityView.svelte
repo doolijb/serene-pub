@@ -49,7 +49,6 @@
 		finderNote,
 		getModelButtonLabel,
 		hiddenSentence,
-		kindIcon,
 		modelFact,
 		nothingCanSentence,
 		nothingElseSentence,
@@ -57,6 +56,7 @@
 		statusSentence
 	} from "./capabilityView"
 	import type { PairDefaultSelection } from "./modelSystemDefaults"
+	import { connectionTypeIcon } from "./connectionTypeIcon"
 
 	interface Props {
 		/** A transform id, e.g. `text->text`. */
@@ -175,9 +175,7 @@
 	const StatusIcon = $derived(
 		((Icons as any)[status.icon] as any) ?? Icons.Boxes
 	)
-	const PairIcon = $derived(
-		((Icons as any)[kindIcon(entry.connection?.type)] as any) ?? Icons.Cable
-	)
+	const PairIcon = $derived(connectionTypeIcon(entry.connection?.type))
 
 	let alsoSection = $state<HTMLElement | null>(null)
 
@@ -396,8 +394,10 @@
 				</p>
 			{:else}
 				{#each shown as row (`${row.connectionId}:${row.modelId}`)}
-					{@const RowIcon =
-						((Icons as any)[row.icon] as any) ?? Icons.Cable}
+					{@const RowIcon = connectionTypeIcon(
+						row.connectionType,
+						((Icons as any)[row.icon] as any) ?? Icons.Cable
+					)}
 					<!-- The row opens the model; Use is a sibling button beside
 					     it, never nested (R7). -->
 					<div class="flex min-h-11 items-center gap-2">

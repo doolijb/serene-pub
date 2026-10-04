@@ -6,6 +6,7 @@
 	import { toaster } from "$lib/client/utils/toaster"
 	import { formatDate } from "../sections/historyDates"
 	import { momentLabel, parseMoment } from "./moment"
+	import { deleteLineWarning } from "./deleteLine"
 
 	/**
 	 * Which line of the story is being read, and the fork that makes another.
@@ -76,16 +77,26 @@
 	 * opposite of "from the start", which is what this said until the ruling.
 	 */
 	function forkedAt(b: Sockets.Amendments.Branch): string {
-		const from = b.forkedFromBranchId
-			? (branches.find((x) => x.id === b.forkedFromBranchId)?.name ??
-				"a deleted line")
-			: "main"
+		const from = leftFrom(b)
 		if (b.forkYear == null) return `from ${from}, still following it`
 		return `from ${from} at ${formatDate({
 			year: b.forkYear,
 			month: b.forkMonth,
 			day: b.forkDay
 		})}`
+	}
+
+	/** The name of the line a line left. */
+	function leftFrom(b: Sockets.Amendments.Branch): string {
+		return b.forkedFromBranchId
+			? (branches.find((x) => x.id === b.forkedFromBranchId)?.name ??
+					"a deleted line")
+			: "main"
+	}
+
+	/** Whether any line forked from this one (deleting it moves them). */
+	function hasForks(b: Sockets.Amendments.Branch): boolean {
+		return branches.some((x) => x.forkedFromBranchId === b.id)
 	}
 
 	function reset() {
@@ -237,13 +248,23 @@
 									<p
 										class="text-surface-700-300 text-xs leading-relaxed"
 									>
-										Deleting <strong>{b.name}</strong> removes
-										everything written on it: its amendments, its
-										own entries, its scenes, the relationships drawn
-										on it and the placements made on it. Shared
-										entries stay. Sessions played on it move to main
-										at the same point in the story, and lines forked
-										from it become lines off main.
+										Deleting <strong>{b.name}</strong>
+										{deleteLineWarning(
+											{
+												name: b.name,
+												leftFrom: leftFrom(b),
+												forkDate:
+													b.forkYear == null
+														? null
+														: {
+																year: b.forkYear,
+																month: b.forkMonth,
+																day: b.forkDay
+															},
+												hasForks: hasForks(b)
+											},
+											formatDate
+										).join(" ")}
 									</p>
 									<div class="flex gap-1">
 										<button

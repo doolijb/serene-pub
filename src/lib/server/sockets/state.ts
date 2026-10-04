@@ -30,6 +30,20 @@
  * written at all. A client patching a row off a mutation reply would be
  * maintaining a second resolver, and the two would disagree the first time a
  * lorebook default moved. Same posture as `widgetStyles:*`.
+ *
+ * ## Whole, as the caller may hear it
+ *
+ * Every reply that carries values — a read, a write's own reply, the ledger,
+ * the pending changes — is the CALLER's view (plan A28): a value on a slot
+ * declared `earshot: 'holder'` (the Lair's whisper) reaches only its data
+ * audience, the session's owner and whoever portrays the member holding it
+ * (`state/earshot.ts`). `state:changed` carries no values, so each tab
+ * re-reads its own view. The widgets and plugin frames are handed
+ * `session_state.v1`, built from `state:get`, so they read the same view.
+ * And a value the caller does not hear is not theirs to change: `state:set`
+ * and `state:configure` refuse it (`unheardWrite`), `state:decide` answers
+ * a pending change the caller is not shown as one that does not exist, and
+ * `state:get` offers no control for it (`describeState`).
  */
 
 import { db } from "$lib/server/db"
@@ -64,10 +78,20 @@ import {
 	vocabularyFor,
 	defaultFor,
 	worldAttributesFor,
+	type LocationLink,
 	type SessionLinks,
 	type TrackedSlot
 } from "$lib/server/state/resolve"
 import { locationOwnerKey } from "$lib/server/state/keys"
+import { MAIN_HEAD, placesOnReading } from "$lib/server/state/entriesOnReading"
+import {
+	earshotSlots,
+	hearingOf,
+	stateAsHeard,
+	valueHeard,
+	type EarshotSlots,
+	type Hearing
+} from "$lib/server/state/earshot"
 import {
 	isOwnerKind,
 	ownerFacet,
@@ -102,10 +126,9 @@ function refuse(
 /**
  * Access, checked once per handler, in the sentence a refusal reads.
  *
- * The refusal names the session it was asked about: it reaches every tab of
- * the user, and a tab looking at another session must be able to tell it is
- * not about the one it shows. Only the id the caller sent — nothing it did
- * not already know.
+ * The refusal names the session it was asked about, so a surface in the
+ * asking tab that shows another session can tell it is not about the one it
+ * shows. Only the id the caller sent — nothing it did not already know.
  */
 async function scoped(
 	socket: any,
@@ -127,9 +150,10 @@ async function scoped(
  * `emitToUser`, stamping the writer's `requestId` on `event`'s reply and on
  * its refusal — unchanged, and only when the writer sent one.
  *
- * Both go to every tab of the user, in whatever order the async handlers
- * finish, so a store matching replies to writes by order settles the wrong
- * write; the id is what lets it settle the one write it names.
+ * The reply goes to every tab of the user and the refusal to the tab that
+ * asked, each in whatever order the async handlers finish, so a store
+ * matching replies to writes by order settles the wrong write; the id is what
+ * lets it settle the one write it names.
  *
  * The two are tracked apart, because they call for opposite answers to a
  * failure that follows. `refused` says a refusal went out, so a failure
@@ -170,6 +194,17 @@ function echoingRequestId(
 	}
 }
 
+/**
+ * The owner a write names, as a shape: a kind and an id.
+ *
+ * ⚠ Only the shape. Whether the owner is this session's — the session's own
+ * book, a place of it on its line, a member of it, a card the caller owns
+ * (plan B0) — and whether the caller may write its durable layer at all (a
+ * guest never writes the host's book, places or members) is
+ * `assertSessionOwner`'s, asked by every writer these handlers call
+ * (`setValue`, `configure`, `decideProposal`) with the caller as `userId`,
+ * inside the refusal `guarded` turns into a sentence.
+ */
 function owner(
 	emitToUser: (event: string, data: any) => void,
 	event: string,
@@ -201,11 +236,40 @@ async function guarded<T>(
  * no buttons so the ledger says why the model's ask never landed. Accepted
  * and rejected rows are not listed: an accepted one became a ledger line,
  * a rejected one changed nothing.
+ *
+ * As `hearing` may read them: a pending change to a whisper its caller does
+ * not hear is not listed at all (A28) — its payload IS the value.
  */
 const proposalRows = async (
-	sessionId: number
-): Promise<Sockets.State.ProposalRow[]> =>
-	(await listedProposals(db, sessionId)).map(toProposalRow)
+	sessionId: number,
+	hearing: Hearing,
+	links: SessionLinks
+): Promise<Sockets.State.ProposalRow[]> => {
+	const slots = earshotSlots()
+	return (await listedProposals(db, sessionId))
+		.filter((row: any) => proposalHeard(hearing, slots, row.payload, links))
+		.map(toProposalRow)
+}
+
+/** Whether a pending change's payload — the value it would write — is `hearing`'s to read. */
+const proposalHeard = (hearing: Hearing, slots: EarshotSlots, raw: unknown, links: SessionLinks): boolean => {
+	const payload = (raw ?? {}) as { owner?: { kind?: unknown; id?: unknown }; slotId?: unknown }
+	return valueHeard(
+		hearing,
+		slots,
+		{
+			owner: { kind: payload.owner?.kind as StateOwner["kind"], id: Number(payload.owner?.id) },
+			slotId: payload.slotId
+		},
+		castMemberOf(links)
+	)
+}
+
+/** The character a book's cast member is, in this session — `valueHeard`'s way to its member. */
+const castMemberOf =
+	(links: SessionLinks) =>
+	(castMemberId: number): number | undefined =>
+		links.cast.find((c) => c.castMemberId === castMemberId)?.characterId
 
 const toProposalRow = (row: any): Sockets.State.ProposalRow => ({
 	id: row.id,
@@ -220,8 +284,53 @@ const toProposalRow = (row: any): Sockets.State.ProposalRow => ({
 })
 
 /**
- * The one place a write ends: re-resolve, answer the caller, and tell everyone
- * else in the session that something moved.
+ * Which cast members' holder-only values the caller's replies carry (A28): all of
+ * them for the session's owner, the members they portray for anybody else.
+ */
+const callerHearing = async (socket: any, sessionId: number, links: SessionLinks): Promise<Hearing> =>
+	hearingOf(db, sessionId, socket.user!.id, links.cast)
+
+/**
+ * Why the caller may not change `slotId` on `target`, or `null` when they
+ * may (A28): a value not everybody hears is changed only by whoever hears
+ * it — a holder-only one by the session's owner and whoever plays its
+ * member, an owner-only one by the session's owner. A guest who cannot read
+ * a whisper never overwrites or clears it, so its player never reads a
+ * guest's words as the owner's.
+ */
+async function unheardWrite(
+	socket: any,
+	sessionId: number,
+	target: StateOwner,
+	slotId: unknown
+): Promise<string | null> {
+	const slots = earshotSlots()
+	if (typeof slotId !== "string" || !(slots.holder.has(slotId) || slots.ownerOnly.has(slotId))) return null
+	const links = await sessionLinks(db, sessionId)
+	const hearing = await callerHearing(socket, sessionId, links)
+	if (valueHeard(hearing, slots, { owner: target, slotId }, castMemberOf(links))) return null
+	const decl = getAttributeSlot(slotId)
+	const label = (decl && i18nTextIn(decl.label)) ?? slotKey(slotId)
+	const characterId =
+		target.kind === "cast_member"
+			? castMemberOf(links)(target.id)
+			: target.kind === "session_cast" || target.kind === "card"
+				? target.id
+				: null
+	const name =
+		target.kind === "session_location" || target.kind === "location"
+			? links.locations.find((l) => l.entryId === target.id)?.name
+			: links.cast.find((c) => c.characterId === characterId)?.name
+	const whose = name ? `${name}'s ${label}` : label
+	return slots.holder.has(slotId)
+		? `Only the session's owner and whoever plays ${name ?? "that character"} can change ${whose}.`
+		: `Only the session's owner can change ${whose}.`
+}
+
+/**
+ * The one place a write ends: re-resolve, answer the caller with the state as
+ * they may hear it, and tell everyone else in the session that something
+ * moved — with no values, so each re-reads their own view.
  */
 async function settled(
 	socket: any,
@@ -229,7 +338,8 @@ async function settled(
 	event: string,
 	sessionId: number
 ) {
-	const state = await stateFor(db, sessionId)
+	const links = await sessionLinks(db, sessionId)
+	const state = stateAsHeard(await stateFor(db, sessionId), await callerHearing(socket, sessionId, links))
 	const res = { sessionId, state }
 	emitToUser(event, res)
 	await broadcastToSessionUsers(socket.io, sessionId, "state:changed", {
@@ -260,7 +370,7 @@ const declaredSlots = (): AttributeSlotDecl[] =>
  * `TrackedSlot`) — each present only when it holds, so a surface can grey a
  * retired slot rather than offer a control the write would refuse.
  */
-const describeSlot = (
+export const describeSlot = (
 	decl: AttributeSlotDecl,
 	tracked?: Pick<TrackedSlot, "required" | "sheetId">
 ): Sockets.State.SlotDescriptor => ({
@@ -342,7 +452,8 @@ const chainOf = (
 async function describeState(
 	sessionId: number,
 	links: SessionLinks,
-	tracked: readonly TrackedSlot[] = []
+	tracked: readonly TrackedSlot[],
+	hearing: Hearing
 ): Promise<{
 	slots: Sockets.State.SlotDescriptor[]
 	owners: Sockets.State.StateOwnerRow[]
@@ -398,12 +509,16 @@ async function describeState(
 	}))
 	const configured = await configuredPairs(chains.flatMap((c) => c.chain))
 
+	const slots = earshotSlots(tracked)
 	for (const { owner, chain } of chains) {
 		const facet = ownerFacet(owner.kind)
 		for (const decl of declared) {
 			// A slot the owner may not carry is not an empty control on its
 			// card: it is not that owner's slot at all.
 			if (!slotAppliesTo(decl, facet)) continue
+			// Nor is one the caller does not hear there (A28): a guest is
+			// offered no Whisper box on a character they do not play.
+			if (!valueHeard(hearing, slots, { owner: { kind: owner.kind, id: owner.id }, slotId: decl.id })) continue
 			const deviates = chain.some((layer) =>
 				configured.has(`${layer.kind}:${layer.id}:${decl.id}`)
 			)
@@ -444,10 +559,14 @@ const byAnchor = (
  * Session-layer rows only. The template layers are what the session inherited,
  * not what it changed, and a ledger that listed them would attribute a world's
  * standing weather to whichever message happened to be first.
+ *
+ * As `hearing` may read them: a line on a holder-only slot (the Lair's whisper) is
+ * listed only for its data audience (A28), and a baseline follows its lines.
  */
 async function ledgerFor(
 	sessionId: number,
-	links: SessionLinks
+	links: SessionLinks,
+	hearing: Hearing
 ): Promise<Sockets.State.Ledger.Response> {
 	const [session] = await db
 		.select({ name: schema.sessions.name })
@@ -456,12 +575,24 @@ async function ledgerFor(
 	const worldLabel = session?.name ?? "World"
 	const memberOf = new Map(links.cast.map((c) => [c.characterId, c]))
 
-	const values = await db
-		.select()
-		.from(schema.attributeValues)
-		.where(eq(schema.attributeValues.sessionId, sessionId))
+	const slots = earshotSlots()
+	const values = (
+		await db
+			.select()
+			.from(schema.attributeValues)
+			.where(eq(schema.attributeValues.sessionId, sessionId))
+	).filter((row) =>
+		valueHeard(hearing, slots, {
+			owner: { kind: row.ownerKind as StateOwner["kind"], id: row.ownerId },
+			slotId: row.slotId
+		})
+	)
 
-	const placeOf = new Map(links.locations.map((l) => [l.entryId, l]))
+	// Named by the places the BOOK sees (plan A27): the session's values on
+	// a room switched Off since are still its rows, and a row with no name
+	// names nobody. The session's own sight would drop them.
+	const places = await ledgerPlaces(links)
+	const placeOf = new Map(places.map((l) => [l.entryId, l]))
 	const named = (ownerKind: string, ownerId: number) =>
 		ownerKind === "session"
 			? { key: "world", label: worldLabel }
@@ -501,15 +632,32 @@ async function ledgerFor(
 		)
 		.map((r) => r.row)
 
-	const baselines = await baselinesFor(rows, links)
+	const baselines = await baselinesFor(rows, links, places)
 	// A lore reference reads by its title, as `stateFor` names them — the
 	// row stores the id (and held count) alone, and a ledger line saying
 	// `entry 12` names nothing a person wrote (phase 3a). Read-time only.
-	await nameLoreRefs(db, [
-		...rows.filter((r) => r.kind === "value"),
-		...baselines
-	] as unknown as Record<string, unknown>[])
+	await nameLoreRefs(
+		db,
+		[...rows.filter((r) => r.kind === "value"), ...baselines] as unknown as Record<
+			string,
+			unknown
+		>[],
+		links.reading ?? null,
+		"session"
+	)
 	return { sessionId, rows, baselines }
+}
+
+/**
+ * The places the ledger names a row by: every place the book sees on the
+ * session's reading, switched Off ones included (`placesOnReading(…,
+ * "book")`). A ledger is the session's own history, and a value it set on a
+ * room since switched off is part of it.
+ */
+async function ledgerPlaces(links: SessionLinks): Promise<LocationLink[]> {
+	return links.lorebookId
+		? await placesOnReading(db, links.lorebookId, links.reading ?? MAIN_HEAD, "book")
+		: []
 }
 
 /**
@@ -523,7 +671,9 @@ async function ledgerFor(
  */
 async function baselinesFor(
 	rows: Sockets.State.LedgerRow[],
-	links: SessionLinks
+	links: SessionLinks,
+	/** The places the ledger names its rows by (`ledgerPlaces`). */
+	places: readonly LocationLink[]
 ): Promise<Sockets.State.LedgerBaseline[]> {
 	const wanted = new Map<string, { ownerKey: string; slotId: string }>()
 	for (const row of rows)
@@ -538,7 +688,7 @@ async function baselinesFor(
 		links.cast.map((c) => [castKey(c.name), c] as const)
 	)
 	const placeByKey = new Map(
-		links.locations.map((l) => [locationOwnerKey(l.name), l] as const)
+		places.map((l) => [locationOwnerKey(l.name), l] as const)
 	)
 	const layers: StateOwner[] = [
 		...(links.lorebookId
@@ -635,10 +785,12 @@ export const stateGet: Handler<
 		)
 		const links = await sessionLinks(db, sessionId)
 		const state = await stateFor(db, sessionId)
+		const hearing = await callerHearing(socket, sessionId, links)
 		const res = {
 			sessionId,
-			state,
-			...(await describeState(sessionId, links, state.slots))
+			// The caller's view: a whisper only for whoever may hear it (A28).
+			state: stateAsHeard(state, hearing),
+			...(await describeState(sessionId, links, state.slots, hearing))
 		}
 		emitToUser("state:get", res)
 		return res
@@ -657,9 +809,11 @@ export const stateLedger: Handler<
 			"state:ledger",
 			params?.sessionId
 		)
+		const links = await sessionLinks(db, sessionId)
 		const res = await ledgerFor(
 			sessionId,
-			await sessionLinks(db, sessionId)
+			links,
+			await callerHearing(socket, sessionId, links)
 		)
 		emitToUser("state:ledger", res)
 		return res
@@ -692,11 +846,15 @@ export const stateSet: Handler<
 			await guarded(reply.emitToUser, "state:set", async () => {
 				// Only what this session's genre enables (ruled 2026-09-25).
 				await assertTracked(db, sessionId, params.slotId)
+				// Only a value the writer hears (A28): a guest never changes a whisper they cannot read.
+				const unheard = await unheardWrite(socket, sessionId, target, params.slotId)
+				if (unheard) throw new StateRefusal(unheard)
 				// A lore reference names an entry of this session's lorebook (3a).
 				await assertLoreRefsInSession(db, sessionId, { value: params.value, slotId: params.slotId })
 				return setValue(
 					db,
-					{ sessionId, updatedBy: "user" },
+					// The caller, so a `card` owner is checked as theirs.
+					{ sessionId, updatedBy: "user", userId: socket.user!.id },
 					{
 						owner: target,
 						slotId: params.slotId,
@@ -710,8 +868,8 @@ export const stateSet: Handler<
 			// The write landed and its writer was told so; what failed after
 			// the reply (telling the session's other tabs) is not a refusal
 			// of it. Logged, and NOT rethrown: `register()` answers a throw
-			// with its own id-less refusal to every tab of the user, which a
-			// store reads as a failure of its own — for a write that landed.
+			// with its own id-less refusal to the writer's tab, which a store
+			// reads as a failure of its own — for a write that landed.
 			if (reply.replied) {
 				console.error("state:set: failed after the write was answered:", e)
 				return reply.replied.data
@@ -757,10 +915,13 @@ export const stateConfigure: Handler<
 			params?.sessionId
 		)
 		const target = owner(emitToUser, "state:configure", params?.owner)
+		// Only a slot the writer hears on that owner (A28), as `state:set`.
+		const unheard = await unheardWrite(socket, sessionId, target, params?.slotId)
+		if (unheard) refuse(emitToUser, "state:configure", unheard)
 		await guarded(emitToUser, "state:configure", () =>
 			configure(
 				db,
-				{ sessionId, updatedBy: "user" },
+				{ sessionId, updatedBy: "user", userId: socket.user!.id },
 				{
 					owner: target,
 					slotId: params.slotId,
@@ -784,7 +945,11 @@ export const stateProposals: Handler<
 			"state:proposals",
 			params?.sessionId
 		)
-		const res = { sessionId, proposals: await proposalRows(sessionId) }
+		const links = await sessionLinks(db, sessionId)
+		const res = {
+			sessionId,
+			proposals: await proposalRows(sessionId, await callerHearing(socket, sessionId, links), links)
+		}
 		emitToUser("state:proposals", res)
 		return res
 	}
@@ -801,7 +966,10 @@ export const stateDecide: Handler<
 		// also name the session would be asking it to name the fact this check
 		// is testing.
 		const [row] = await db
-			.select({ sessionId: schema.stateProposals.sessionId })
+			.select({
+				sessionId: schema.stateProposals.sessionId,
+				payload: schema.stateProposals.payload
+			})
 			.from(schema.stateProposals)
 			.where(eq(schema.stateProposals.id, Number(params?.proposalId)))
 		if (!row) refuse(emitToUser, "state:decide", "Proposal not found.")
@@ -811,20 +979,29 @@ export const stateDecide: Handler<
 			"state:decide",
 			row!.sessionId
 		)
+		// A pending change `state:proposals` does not list for the caller is
+		// not theirs to accept or reject (A28) — and is answered as one that
+		// does not exist, so guessing ids learns nothing.
+		const judging = await sessionLinks(db, sessionId)
+		if (!proposalHeard(await callerHearing(socket, sessionId, judging), earshotSlots(), row!.payload, judging))
+			refuse(emitToUser, "state:decide", "Proposal not found.")
 
 		const outcome = await guarded(emitToUser, "state:decide", () =>
-			decideProposal(db, Number(params.proposalId), !!params.accept)
+			// Judged as the person deciding: a guest's Accept is a guest's write.
+			decideProposal(db, Number(params.proposalId), !!params.accept, socket.user!.id)
 		)
 		// `superseded` (U5f) is an accept that applied nothing: the slot
 		// moved since the proposal's base. `movedSlots` names it, and the
 		// row comes back in `proposals` collapsed for the list to draw.
+		const links = await sessionLinks(db, sessionId)
+		const hearing = await callerHearing(socket, sessionId, links)
 		const res: Sockets.State.Decide.Response = {
 			sessionId,
 			proposalId: Number(params.proposalId),
 			status: outcome.status,
 			...(outcome.movedSlots ? { movedSlots: outcome.movedSlots } : {}),
-			proposals: await proposalRows(sessionId),
-			state: await stateFor(db, sessionId)
+			proposals: await proposalRows(sessionId, hearing, links),
+			state: stateAsHeard(await stateFor(db, sessionId), hearing)
 		}
 		emitToUser("state:decide", res)
 		await broadcastToSessionUsers(socket.io, sessionId, "state:changed", {
@@ -939,7 +1116,7 @@ export const stateSetAttributePicks: Handler<
 		for (const pick of params.picks ?? []) {
 			const decl = typeof pick?.slotId === "string" ? getAttributeSlot(pick.slotId) : undefined
 			if (!decl)
-				refuse(emitToUser, event, `'${String(pick?.slotId)}' is not an attribute this install declares.`, { sessionId })
+				refuse(emitToUser, event, `'${String(pick?.slotId)}' is not an attribute this pub declares.`, { sessionId })
 			if (pick.enabled === true && !slotPickable(decl))
 				refuse(emitToUser, event, `${i18nTextIn(decl.label) ?? pick.slotId} is kept by Serene Pub itself, not an attribute a session picks.`, { sessionId })
 			if (pick.enabled === false && required.has(pick.slotId))

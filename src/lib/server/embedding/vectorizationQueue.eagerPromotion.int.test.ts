@@ -272,6 +272,33 @@ describe("what the scan finds", () => {
 		expect(missing.some((r) => r.id === entries[0]!.id)).toBe(false)
 		expect(missing.some((r) => r.id === entries[1]!.id)).toBe(true)
 	}, 60_000)
+
+	test("names only the sources the search will fetch — no messages for Search by meaning (plan A1)", async () => {
+		const { lorebook, entries, session } = await makeBook("sources", 1)
+		const { scopedMissingVectors } = await import("./vectorizationQueue")
+		const { RECENT_MESSAGES_IN_PROMPT } = await import("./ragContext")
+		// Older than the recent window, unembedded: rows the scan would name
+		// if messages were searched.
+		await testDb.insert(schema.sessionMessages).values(
+			Array.from({ length: RECENT_MESSAGES_IN_PROMPT + 5 }, (_, i) => ({
+				sessionId: session.id,
+				role: "user",
+				content: `line ${i}`
+			})) as any
+		)
+		const context = contextFor(session.id, lorebook.id)
+
+		// Not vacuous: asked for everything, the old lines are named.
+		const all = await scopedMissingVectors(context, MODEL, { limit: 200 })
+		expect(all.filter((r) => r.source === "message").length).toBe(5)
+
+		const lore = await scopedMissingVectors(context, MODEL, {
+			limit: 200,
+			sources: ["worldLore", "characterLore", "historyEntry"]
+		})
+		expect(lore.filter((r) => r.source === "message")).toEqual([])
+		expect(lore.some((r) => r.id === entries[0]!.id)).toBe(true)
+	}, 60_000)
 })
 
 describe("the bound", () => {

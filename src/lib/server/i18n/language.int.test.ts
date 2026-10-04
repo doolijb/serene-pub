@@ -42,7 +42,7 @@ beforeEach(async () => {
 		.returning()
 })
 
-async function setInstanceLanguage(language: string) {
+async function setPubLanguage(language: string) {
 	await testDb
 		.update(schemaModule.systemSettings)
 		.set({ defaultLanguage: language })
@@ -61,31 +61,31 @@ async function setUserLanguage(language: string | null) {
 
 const resolveUser = async () =>
 	(await import("./index")).resolveUserLanguage(user.id)
-const resolveInstance = async () =>
-	(await import("./index")).resolveInstanceLanguage()
+const resolvePub = async () =>
+	(await import("./index")).resolvePubLanguage()
 
 describe("resolveUserLanguage", () => {
 	test("a user with no settings row at all follows the instance", async () => {
 		// The row is created lazily on first `userSettings:get`, so this is the
 		// normal state of a freshly invited account — not an error case.
-		await setInstanceLanguage("de")
+		await setPubLanguage("de")
 		expect(await resolveUser()).toMatchObject({
 			code: "de",
-			source: "instance"
+			source: "pub"
 		})
 	})
 
 	test("a settings row with NULL language follows the instance", async () => {
-		await setInstanceLanguage("fr")
+		await setPubLanguage("fr")
 		await setUserLanguage(null)
 		expect(await resolveUser()).toMatchObject({
 			code: "fr",
-			source: "instance"
+			source: "pub"
 		})
 	})
 
 	test("an explicit choice wins over the instance", async () => {
-		await setInstanceLanguage("fr")
+		await setPubLanguage("fr")
 		await setUserLanguage("es")
 		expect(await resolveUser()).toMatchObject({
 			code: "es",
@@ -95,15 +95,15 @@ describe("resolveUserLanguage", () => {
 
 	test("moving the instance default moves the inheritors and nobody else", async () => {
 		// The property the whole nullable-column design exists for.
-		await setInstanceLanguage("fr")
+		await setPubLanguage("fr")
 		await setUserLanguage(null)
 		expect((await resolveUser()).code).toBe("fr")
 
-		await setInstanceLanguage("de")
+		await setPubLanguage("de")
 		expect((await resolveUser()).code).toBe("de")
 
 		await setUserLanguage("es")
-		await setInstanceLanguage("it")
+		await setPubLanguage("it")
 		expect((await resolveUser()).code).toBe("es")
 	})
 
@@ -130,17 +130,17 @@ describe("resolveUserLanguage", () => {
 	})
 })
 
-describe("resolveInstanceLanguage", () => {
+describe("resolvePubLanguage", () => {
 	test("reports the stored default", async () => {
-		await setInstanceLanguage("sv")
-		expect(await resolveInstance()).toMatchObject({
+		await setPubLanguage("sv")
+		expect(await resolvePub()).toMatchObject({
 			code: "sv",
-			source: "instance"
+			source: "pub"
 		})
 	})
 
 	test("an unknown stored default reads as English", async () => {
-		await setInstanceLanguage("kl")
-		expect((await resolveInstance()).code).toBe("en")
+		await setPubLanguage("kl")
+		expect((await resolvePub()).code).toBe("en")
 	})
 })

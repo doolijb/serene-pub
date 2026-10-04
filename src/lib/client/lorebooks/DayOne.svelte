@@ -4,8 +4,8 @@
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import { declareInterest } from "$lib/client/sockets/interest.svelte"
 	import { interestKey } from "$lib/shared/sockets/interest"
-	import { awaitReply, isReplyTimeout } from "$lib/client/utils/awaitReply"
-	import { toaster } from "$lib/client/utils/toaster"
+	import { awaitReply } from "$lib/client/utils/awaitReply"
+	import { toastUnsaved } from "$lib/client/utils/toastUnsaved"
 	import LoreContentField from "$lib/client/components/lorebookForms/LoreContentField.svelte"
 	import { WORLD_LORE_TYPE_ID } from "$lib/shared/entries/types"
 
@@ -38,8 +38,9 @@
 	let canAdd = $derived(!adding && (!!name.trim() || !!content.trim()))
 
 	/**
-	 * ⚠ The typed text is kept until the server has the row. A refusal (shown
-	 * by Layout's `:error` toast) or a lost reply leaves it here to retry; a
+	 * ⚠ The typed text is kept until the server has the row. A refusal (said
+	 * here, as this composer's own toast: Layout leaves `entries:create:error`
+	 * to the surface that asked) or a lost reply leaves it here to retry; a
 	 * success adds the book's first entry and the workspace swaps this screen
 	 * out on its own.
 	 */
@@ -79,12 +80,7 @@
 			})
 		} catch (err) {
 			adding = false
-			if (isReplyTimeout(err))
-				toaster.error({
-					title: "The entry was not added",
-					description:
-						"The server did not answer in time. Your text is still here."
-				})
+			toastUnsaved(err, "The entry was not added", "Your text is still here.")
 			return
 		}
 		adding = false
@@ -186,7 +182,7 @@
 		so you can add a cast member by hand before writing anything.
 	</p>
 
-	<p class="text-surface-700-300 border-border border-t pt-2 text-xs">
+	<p class="text-surface-700-300 pt-2 text-xs">
 		Moment: Nothing is dated yet, date an entry and the story time fills in
 		here
 	</p>

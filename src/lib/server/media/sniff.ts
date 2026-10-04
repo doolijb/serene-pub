@@ -60,7 +60,12 @@ function looksLikeText(buffer: Uint8Array): boolean {
 		if (byte < 32 || byte === 127) return false
 	}
 	try {
-		new TextDecoder("utf-8", { fatal: true }).decode(sample)
+		// `stream` when the sample is a prefix: a multi-byte character cut
+		// in half by the sample's end is not evidence of a binary. A whole
+		// file must decode completely.
+		new TextDecoder("utf-8", { fatal: true }).decode(sample, {
+			stream: sample.length < buffer.length
+		})
 	} catch {
 		return false
 	}

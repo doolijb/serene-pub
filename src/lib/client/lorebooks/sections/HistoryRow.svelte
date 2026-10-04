@@ -1,6 +1,5 @@
 <script lang="ts">
 	import * as Icons from "@lucide/svelte"
-	import { getContext } from "svelte"
 	import { substituteBindings } from "$lib/client/components/lorebookForms/entryManager"
 	import type { EntryRowProps } from "./types"
 	import EntryMarks from "./EntryMarks.svelte"
@@ -14,14 +13,12 @@
 		$props()
 
 	const pool = getLorePoolCtx()
-	const compileEntriesCtx: CompileEntriesCtx = getContext("compileEntriesCtx")
 
 	let preview = $derived(substituteBindings(item.content, bindings))
 	let scenes = $derived(pool.scenesOf(source.id))
 	let compiling = $derived(
-		compileEntriesCtx?.activities?.find(
-			(a) => a.historyEntryId === source.id
-		)
+		// This reading's compile, never another line's of the same entry.
+		pool.compileActivityOf(source.id)
 	)
 </script>
 

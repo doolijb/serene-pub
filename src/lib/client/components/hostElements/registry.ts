@@ -20,6 +20,8 @@ import SpCombobox from "./SpCombobox.svelte"
 import SpComposerField from "./SpComposerField.svelte"
 import SpData from "./SpData.svelte"
 import SpDialog from "./SpDialog.svelte"
+import SpDropZone from "./SpDropZone.svelte"
+import SpFilePicker from "./SpFilePicker.svelte"
 import SpFrame from "./SpFrame.svelte"
 import SpHostView from "./SpHostView.svelte"
 import SpIcon from "./SpIcon.svelte"
@@ -57,6 +59,8 @@ export const SP_ELEMENTS: Record<string, SpElementDef> = {
 	"sp-message-body": { component: SpMessageBody },
 	"sp-composer-field": { component: SpComposerField },
 	"sp-scroll": { component: SpScroll },
+	"sp-file-picker": { component: SpFilePicker },
+	"sp-drop-zone": { component: SpDropZone },
 	"sp-frame": { component: SpFrame }
 }
 

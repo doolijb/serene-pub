@@ -315,6 +315,46 @@ describe("deriveSceneMentions", () => {
 		expect(after.coverage).toEqual({ total: 1, annotated: 0 })
 	}, 60_000)
 
+	it("counts the span's messages that still exist", async () => {
+		// Plan A23(a): a deleted message can never be annotated, so counting it
+		// in `total` kept its scene `pending` for ever. A gone message is no
+		// text to fall behind on.
+		const { lorebook, session, scene, bramBinding } = await makeScene([
+			"Aria set down her cup. She had not heard from Bramwell in weeks.",
+			"The rain kept on."
+		])
+		await annotate(lorebook.id, session.id)
+		const goneId = (scene.selectedMessageIds ?? [])[1]!
+		// Deleted underneath the scene; its span keeps the id.
+		await testDb
+			.delete(schema.sessionMessages)
+			.where(eq(schema.sessionMessages.id, goneId))
+		await testDb
+			.delete(schema.messages)
+			.where(eq(schema.messages.id, goneId))
+
+		const mentions = await derive(lorebook.id, scene)
+		expect(mentions.status).toBe("derived")
+		if (mentions.status !== "derived") throw new Error("unreachable")
+		expect(mentions.bindingIds).toEqual([bramBinding.id])
+		expect(mentions.coverage).toEqual({ total: 1, annotated: 1 })
+	}, 60_000)
+
+	it("answers completely when every message of the span is gone", async () => {
+		const { lorebook, scene } = await makeScene(["The rain kept on."])
+		for (const id of scene.selectedMessageIds ?? []) {
+			await testDb
+				.delete(schema.sessionMessages)
+				.where(eq(schema.sessionMessages.id, id))
+			await testDb
+				.delete(schema.messages)
+				.where(eq(schema.messages.id, id))
+		}
+		const mentions = await derive(lorebook.id, scene)
+		expect(mentions.status).toBe("derived")
+		expect(mentions.coverage).toEqual({ total: 0, annotated: 0 })
+	}, 60_000)
+
 	it("answers a scene with no message span completely, not pendingly", async () => {
 		// No text is not unread text: there is nothing for the lane to fall
 		// behind on, so "nobody" is the whole answer.
@@ -323,6 +363,106 @@ describe("deriveSceneMentions", () => {
 		expect(mentions.status).toBe("derived")
 		if (mentions.status !== "derived") throw new Error("unreachable")
 		expect(mentions.bindingIds).toEqual([])
+		expect(mentions.coverage).toEqual({ total: 0, annotated: 0 })
+	}, 60_000)
+})
+
+/**
+ * A scene's span outlives the messages it names (plan A23(a)).
+ *
+ * The ids are the scene's place in play: `scenes:compile` orders a history
+ * entry's scenes by their earliest message id (`inPlayOrder`), and a message
+ * that no longer exists keeps its id as its place (`placesInPlay`). A delete
+ * that emptied a span sent its scene back to the order it was written in, and
+ * nothing could restore the ids. `deriveSceneMentions` reads only the
+ * messages that still exist, so a kept id costs nothing there.
+ */
+describe("deletes keep scene spans", () => {
+	const scenesOf = async (ids: number[]) => {
+		const { inArray } = await import("drizzle-orm")
+		return await testDb
+			.select({
+				id: schema.scenes.id,
+				selectedMessageIds: schema.scenes.selectedMessageIds
+			})
+			.from(schema.scenes)
+			.where(inArray(schema.scenes.id, ids))
+	}
+
+	/**
+	 * Two scenes under one history entry, written out of play order: the
+	 * first written covers the later messages, the second the earlier ones.
+	 */
+	async function twoScenes() {
+		const made = await makeScene(["One.", "Two.", "Three.", "Four."])
+		const [m1, m2, m3, m4] = made.scene.selectedMessageIds ?? []
+		await testDb
+			.update(schema.scenes)
+			.set({ selectedMessageIds: [m3!, m4!] })
+			.where(eq(schema.scenes.id, made.scene.id))
+		const [earlier] = await testDb
+			.insert(schema.scenes)
+			.values({
+				lorebookId: made.lorebook.id,
+				sessionId: made.session.id,
+				historyEntryId: made.scene.historyEntryId,
+				selectedMessageIds: [m1!, m2!]
+			})
+			.returning()
+		const { inPlayOrder } = await import("$lib/shared/lorebooks/sceneOrder")
+		const order = async () =>
+			inPlayOrder(await scenesOf([made.scene.id, earlier.id])).map(
+				(s) => s.id
+			)
+		expect(await order()).toEqual([earlier.id, made.scene.id])
+		return {
+			...made,
+			later: made.scene,
+			earlier,
+			ids: [m1!, m2!, m3!, m4!],
+			order
+		}
+	}
+
+	it("deleting one message leaves the span naming it", async () => {
+		const { scene } = await makeScene(["First.", "Second.", "Third."])
+		const { deleteLegacy } = await import("$lib/server/messages/store")
+		await deleteLegacy(testDb as any, scene.selectedMessageIds![1]!)
+		const [row] = await scenesOf([scene.id])
+		expect(row.selectedMessageIds).toEqual(scene.selectedMessageIds)
+	}, 60_000)
+
+	it("deleting every message of the earlier-played scene keeps the play order", async () => {
+		const { earlier, later, ids, order } = await twoScenes()
+		const { deleteLegacyWhere } = await import("$lib/server/messages/store")
+		const { inArray } = await import("drizzle-orm")
+		await deleteLegacyWhere(
+			testDb as any,
+			inArray(schema.sessionMessages.id, [ids[0]!, ids[1]!])
+		)
+		expect(await order()).toEqual([earlier.id, later.id])
+	}, 60_000)
+
+	it("deleting the session keeps its scenes in play order, and complete", async () => {
+		const { user, session, lorebook, earlier, later, order } =
+			await twoScenes()
+		const { sessionsDeleteHandler } = await import(
+			"$lib/server/sockets/sessions"
+		)
+		await sessionsDeleteHandler.handler(
+			{
+				user: { id: user.id },
+				io: { to: () => ({ emit: () => {} }) }
+			} as any,
+			{ id: session.id } as any,
+			() => {}
+		)
+		// The scenes are history and outlive the session, spans and all.
+		expect(await order()).toEqual([earlier.id, later.id])
+		// Every message they name is gone, which is no text to wait on.
+		const [row] = await scenesOf([later.id])
+		const mentions = await derive(lorebook.id, row)
+		expect(mentions.status).toBe("derived")
 		expect(mentions.coverage).toEqual({ total: 0, annotated: 0 })
 	}, 60_000)
 })

@@ -1,9 +1,11 @@
 import { db } from "$lib/server/db"
 import { eq, and, desc, isNull, or, like, ne } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
+import { isUniqueViolation } from "$lib/server/db/errors"
 import type { Handler } from "$lib/shared/events"
 import { z } from "zod"
 import { passphraseSchema } from "$lib/shared/validation/passphrase"
+import { displayNameSchema } from "$lib/shared/validation/displayName"
 import * as passphrase from "$lib/server/providers/users/passphrase"
 import { cookies } from "$lib/server/auth"
 import * as userTokens from "$lib/server/providers/users/tokens"
@@ -36,15 +38,9 @@ async function requireAccountsEnabled() {
 		columns: { isAccountsEnabled: true }
 	})
 	if (!settings?.isAccountsEnabled)
-		throw new Error("Accounts are disabled on this instance.")
+		throw new Error("Accounts are disabled on this pub.")
 }
 
-// Display name validation schema
-const displayNameSchema = z
-	.string()
-	.min(3, "Display name must be at least 3 characters long")
-	.max(50, "Display name must not exceed 50 characters")
-	.trim()
 
 /**
  * The signed-in user's own row.
@@ -339,34 +335,27 @@ export const usersCurrentUpdateDisplayName: Handler<
 			throw new Error("Not authenticated")
 		}
 
-		try {
-			// Validate display name
-			displayNameSchema.parse(params.displayName)
-		} catch (error) {
-			if (error instanceof z.ZodError) {
-				const errorMessage =
-					error.errors[0]?.message || "Invalid display name"
-				console.error(
-					"[usersCurrentUpdateDisplayName] Validation error:",
-					errorMessage
-				)
-				emitToUser("users:current:updateDisplayName:error", {
-					error: errorMessage
-				})
-				throw new Error(errorMessage)
-			}
+		// Trimmed; empty clears the name, so the app falls back to the username.
+		const parsed = displayNameSchema.safeParse(params.displayName ?? "")
+		if (!parsed.success) {
+			const errorMessage =
+				parsed.error.errors[0]?.message || "Invalid display name"
+			emitToUser("users:current:updateDisplayName:error", {
+				error: errorMessage
+			})
+			throw new Error(errorMessage)
 		}
+		const displayName = parsed.data
 
 		try {
-			// Update the user's display name
 			await db
 				.update(schema.users)
-				.set({ displayName: params.displayName })
+				.set({ displayName })
 				.where(eq(schema.users.id, userId))
 
 			const res: Sockets.Users.UpdateDisplayName.Response = {
 				success: true,
-				displayName: params.displayName
+				displayName
 			}
 
 			emitToUser("users:current:updateDisplayName", res)
@@ -585,6 +574,9 @@ export const usersList: Handler<
 	}
 }
 
+/** The refusal for a username already in use — by the pre-check or the index. */
+const USERNAME_TAKEN = "Username already exists"
+
 export const usersCreate: Handler<
 	Sockets.Users.Create.Params,
 	Sockets.Users.Create.Response
@@ -620,8 +612,12 @@ export const usersCreate: Handler<
 			where: (u, { eq }) => eq(u.username, params.username)
 		})
 
+		// Emitted as well as thrown: the wrapper's own catch would otherwise
+		// answer "An error occurred…", and this is a refusal the admin can act
+		// on. Both paths below say the same sentence.
 		if (existingUser) {
-			throw new Error("Username already exists")
+			emitToUser("users:create:error", { error: USERNAME_TAKEN })
+			throw new Error(USERNAME_TAKEN)
 		}
 
 		// The findFirst check above is a friendly pre-check, not the real
@@ -644,9 +640,11 @@ export const usersCreate: Handler<
 					isAdmin: false
 				})
 				.returning()
-		} catch (err: any) {
-			if (err?.code === "23505") {
-				throw new Error("Username already exists")
+		} catch (err) {
+			// The SQLSTATE is on the driver error, under drizzle's wrapper.
+			if (isUniqueViolation(err)) {
+				emitToUser("users:create:error", { error: USERNAME_TAKEN })
+				throw new Error(USERNAME_TAKEN)
 			}
 			throw err
 		}

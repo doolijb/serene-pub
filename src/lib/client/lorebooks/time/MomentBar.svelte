@@ -4,9 +4,11 @@
 	import { timelineCursor } from "../timelineCursor.svelte"
 	import { openBookTime } from "./bookTime.svelte"
 	import {
+		ratioAlongTrack,
 		ratioOf,
 		stepTick,
 		tickAtRatio,
+		trackInsetPx,
 		type TimelineTick
 	} from "../timelineStrip"
 	import {
@@ -97,10 +99,11 @@
 		)
 	)
 
+	/** Read against the inset the ticks are drawn in (plan B7). */
 	function ratioFromEvent(event: { clientX: number }): number | null {
 		const rect = trackEl?.getBoundingClientRect()
-		if (!rect || rect.width === 0) return null
-		return (event.clientX - rect.left) / rect.width
+		if (!rect) return null
+		return ratioAlongTrack(event.clientX, rect, trackInsetPx())
 	}
 
 	function tickFrom(event: { clientX: number }): TimelineTick | null {
@@ -292,7 +295,7 @@
 {/snippet}
 
 <div
-	class="border-border flex flex-wrap items-center gap-2 border-t pt-2 text-xs"
+	class="panel-edge bg-surface-50-950 flex flex-wrap items-center gap-2 rounded-[10px] border px-3 py-2 text-xs"
 	data-lore-moment-bar
 >
 	{#if ticks.length === 0}

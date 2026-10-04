@@ -13,8 +13,14 @@
 	import { Dialog, Popover, Portal } from "@skeletonlabs/skeleton-svelte"
 	import { goto } from "$app/navigation"
 	import { toaster } from "$lib/client/utils/toaster"
+	import { notRecordedToast } from "$lib/client/lorebooks/notRecordedToast"
 	import { page } from "$app/state"
 	import SessionListItem from "../listItems/SessionListItem.svelte"
+	import SessionCardItem from "../listItems/SessionCardItem.svelte"
+	import ViewToolbar from "../panels/ViewToolbar.svelte"
+	import ListCardToggle from "../panels/ListCardToggle.svelte"
+	import { toolbarButtonClass } from "../panels/toolbarButton"
+	import { createViewMode } from "$lib/client/utils/viewMode.svelte"
 	import SessionsUnsavedChangesModal from "../modals/SessionsUnsavedChangesModal.svelte"
 	import EmptyState from "../EmptyState.svelte"
 	import PanelFilterInput from "../panels/PanelFilterInput.svelte"
@@ -87,6 +93,8 @@
 	// Measures the view's own box, not the window: the same view is 400px in
 	// the dock and ~1376px full page, and both must land in the right shape.
 	const vm = new ViewModeTracker()
+	/** Rows or cards (notes 36), remembered per browser like Characters'. */
+	const listMode = createViewMode("serene-pub:viewMode:sessionsSidebar")
 
 	/**
 	 * The one pick in force, on top of whatever the filter box says — made
@@ -405,14 +413,9 @@
 								.filter(Boolean)
 								.join(", ") || undefined
 					})),
-			// The row's own onclick, which opens the session — or, for the one
-			// already open, its view panel.
-			onPick: (hit) => {
-				const id = Number(hit.id)
-				const session = sessions.find((s) => s.id === id)
-				if (session) handleSessionClick(session)
-				else handleOpenSession(id)
-			}
+			// Jump is "go to": a pick goes into the session, where a row's
+			// click opens its detail (notes 32).
+			onPick: (hit) => handleOpenSession(Number(hit.id))
 		})
 	)
 
@@ -423,8 +426,21 @@
 		viewingId = null
 	}
 
-	function handleViewClick(sessionId: number) {
+	/**
+	 * Show a session's detail. A form open in the detail column closes with
+	 * it, so the detail never sits behind a stale form; a form with unsaved
+	 * changes asks first.
+	 */
+	async function handleViewClick(sessionId: number) {
+		if (sessionFormHasChanges && (isStarting || isEditing)) {
+			const confirmed = await handleOnClose()
+			if (!confirmed) return
+		}
 		closeStartForm()
+		showEditSessionForm = false
+		editSessionId = null
+		returnToViewId = null
+		sessionFormHasChanges = false
 		viewingId = sessionId
 	}
 
@@ -453,15 +469,22 @@
 		panelsCtx.openPanel({ key: "lorebooks", toggle: false })
 	}
 
-	function handleSessionClick(session: any) {
-		// Clicking the already-open session a second time opens *into* it in
-		// the sidebar (its detail panel: cast, last line, scenario) rather than
-		// re-navigating to where you already are.
-		if (session.id === sessionId) {
-			handleViewClick(session.id)
-			return
-		}
-		handleOpenSession(session.id)
+	/**
+	 * A row opens the session's DETAIL, at every width and for every row
+	 * (note 32, 2026-10-02): one press, one meaning. The detail's header
+	 * carries **Open session** as its primary and **Edit** beside it.
+	 */
+	function handleSessionClick(session: SessionRow) {
+		if (session.id == null) return
+		handleViewClick(session.id)
+	}
+
+	/** Marked as selected: the open session, or the detail beside the list. */
+	function isRowActive(session: SessionRow): boolean {
+		return (
+			session.id === sessionId ||
+			(vm.mode === "desk" && session.id === viewingId)
+		)
 	}
 
 	function closeEditForm() {
@@ -513,7 +536,9 @@
 		sessions = sessions.filter((c) => c.id !== msg.id)
 		// The detail panel is showing the row that just went away — close it.
 		if (viewingId === msg.id) viewingId = null
-		toaster.success({ title: "Session deleted" })
+		// What its last recording left off the timeline is said too (A18).
+		const done = notRecordedToast("Session deleted", msg.notRecorded)
+		toaster[done.kind]({ title: done.title, description: done.description })
 	}
 	// Not shown to the user here - the generic onAny catch-all in Layout.svelte
 	// already toasts on "sessions:delete:error"; this listener just clears the
@@ -810,6 +835,83 @@
 	})
 </script>
 
+<!-- One group's sessions, in whichever mode the list/card pair chose. A
+     snippet and not two copies: the pinned row and every group are the same
+     list, and the props drifting apart between them is the bug to avoid.
+
+     `active` covers two facts that never disagree in practice: the session
+     open in the main view (pinned), and — in desk mode only — the one whose
+     detail is showing beside this list. In compact the list is not on screen
+     while a detail is, so the second half would mark nothing. -->
+{#snippet sessionItems(
+	rows: SessionRow[],
+	names: { label?: string; labelledBy?: string }
+)}
+	{#if listMode.value === "cards"}
+		<!-- auto-fill/minmax off the list pane's own width, as the character
+		     cards: two across a dock, as many as fit in Half or Focus. -->
+		<div
+			class="grid min-w-0 grid-cols-[repeat(auto-fill,minmax(150px,1fr))] gap-3"
+			role="list"
+			aria-label={names.label}
+			aria-labelledby={names.labelledBy}
+		>
+			{#each rows as session (session.id)}
+				<SessionCardItem
+					{session}
+					runStatus={runStatusOf(session)}
+					active={isRowActive(session)}
+					showGenre={hasSeveralGenres}
+					onclick={handleSessionClick}
+					onEdit={handleEditClick}
+					onDelete={handleDeleteClick}
+					onToggleFavorite={toggleFavorite}
+				/>
+			{/each}
+		</div>
+	{:else}
+		<div
+			class="flex min-w-0 flex-col gap-2"
+			role="list"
+			aria-label={names.label}
+			aria-labelledby={names.labelledBy}
+		>
+			{#each rows as session (session.id)}
+				<SessionListItem
+					{session}
+					runStatus={runStatusOf(session)}
+					active={isRowActive(session)}
+					showGenre={hasSeveralGenres}
+					layout="stack"
+					contentTitle="View session"
+					onclick={handleSessionClick}
+					onEdit={handleEditClick}
+					onDelete={handleDeleteClick}
+					onToggleFavorite={toggleFavorite}
+				/>
+			{/each}
+		</div>
+	{/if}
+{/snippet}
+
+<!-- A narrowing in force, as one dismissible chip (§6.3). -->
+{#snippet narrowingChip(text: string, clearLabel: string, onClear: () => void)}
+	<span
+		class="bg-surface-200-800 text-surface-700-300 flex min-w-0 items-center gap-1 rounded-full px-2.5 py-1 text-xs"
+	>
+		<span class="min-w-0 truncate">{text}</span>
+		<button
+			type="button"
+			class="hover:text-foreground shrink-0"
+			onclick={onClear}
+			title="Clear filter"
+			aria-label={clearLabel}
+		>
+			<Icons.X size={12} aria-hidden="true" />
+		</button>
+	</span>
+{/snippet}
+
 <div use:vm.observe class="text-foreground flex h-full min-h-0 flex-col">
 	<PanelSplit
 		mode={vm.mode}
@@ -860,209 +962,165 @@
 		{/snippet}
 
 		{#snippet list()}
-			<!-- The one thing this view is FOR, on its own line above the
-			     controls that narrow it: starting a session is not a way of
-			     filtering the list, and one row holding both would read as
-			     though it were. -->
-			<div class="mb-2 flex min-w-0 shrink-0 items-center">
-				<button
-					type="button"
-					class="btn btn-sm preset-filled-primary-500 shrink-0 {panelsCtx
-						.digest.tutorial
-						? 'ring-primary-500/50 animate-pulse ring-4'
-						: ''}"
-					onclick={handleCreateClick}
-					title="New session"
-					aria-label="New session"
-				>
-					<Icons.Plus size={16} aria-hidden="true" />
-					New
-				</button>
-			</div>
-			<!-- Filter box and filter popout: everything that says "which of
-			     these am I looking at" on one line, with the icon control
-			     pinned at the end so the box takes the rest. Every child is
-			     shrinkable or fixed, so the row fits a 399px dock without
-			     scrolling sideways. -->
-			<div class="mb-2 flex min-w-0 shrink-0 items-center gap-2">
-				<div class="min-w-0 flex-1">
+			<!-- The view toolbar (STYLE-GUIDE §6.3): New on the action row;
+			     the filter box, the filter popout and the list/card pair on
+			     the find row; the standing picks and every narrowing in force
+			     under them. -->
+			<ViewToolbar label="Sessions" class="mb-2">
+				{#snippet primary()}
+					<button
+						type="button"
+						class="btn btn-sm preset-filled-primary-500 shrink-0 {panelsCtx
+							.digest.tutorial
+							? 'ring-primary-500/50 animate-pulse ring-4'
+							: ''}"
+						onclick={handleCreateClick}
+						title="New session"
+						aria-label="New session"
+					>
+						<Icons.Plus size={16} aria-hidden="true" />
+						New
+					</button>
+				{/snippet}
+				{#snippet filter()}
 					<PanelFilterInput
 						bind:value={search}
 						placeholder="sessions"
-					singular="session"
+						singular="session"
 						count={sessions.length}
 						aria-label="Filter sessions by name, persona, character or tag"
 					/>
-				</div>
-				<!-- The genre and tag picks live in a popout rather than a row
-				     of chips: the row grows with the tag list, and the list
-				     pane has no sideways room to grow into. -->
-				<Popover
-					open={filterOpen}
-					onOpenChange={(e) => (filterOpen = e.open)}
-					positioning={{ placement: "bottom-end" }}
-				>
-					<Popover.Trigger
-						class="btn grid size-10 shrink-0 place-items-center p-0 {popoutPickActive
-							? 'preset-tonal-primary'
-							: ''}"
-						title="Filter sessions"
-						aria-label="Filter sessions"
-						aria-expanded={filterOpen}
+				{/snippet}
+				{#snippet filterActions()}
+					<!-- The genre and tag picks live in a popout rather than a
+					     row of chips: the row grows with the tag list, and the
+					     list pane has no sideways room to grow into. -->
+					<Popover
+						open={filterOpen}
+						onOpenChange={(e) => (filterOpen = e.open)}
+						positioning={{ placement: "bottom-end" }}
 					>
-						<Icons.SlidersHorizontal size={16} aria-hidden="true" />
-					</Popover.Trigger>
-					<Portal>
-						<Popover.Positioner class="z-[1000]!">
-							<Popover.Content
-								class="card bg-surface-100-900 border-surface-300-700 w-[min(90vw,260px)] border p-2 shadow-xl"
-							>
-								<div
-									class="flex max-h-[min(60vh,320px)] flex-col gap-0.5 overflow-y-auto"
-									role="radiogroup"
-									aria-label="Filter sessions"
-								>
-									{#each filterOptions as option (option.value)}
-										{@const checked =
-											activeChip === option.value}
-										<button
-											type="button"
-											role="radio"
-											aria-checked={checked}
-											class="flex h-9 w-full items-center gap-2 rounded-lg px-2.5 text-left text-sm {checked
-												? 'sidebar-row-active'
-												: 'hover:preset-tonal-primary'}"
-											onclick={() =>
-												pickFilter(option.value)}
-										>
-											{#if option.value.startsWith("tag:")}
-												<span
-													class="size-2 shrink-0 rounded-full {tagDotPreset(
-														option.colorPreset
-													)}"
-													aria-hidden="true"
-												></span>
-											{/if}
-											<span class="min-w-0 truncate">
-												{option.label}
-											</span>
-										</button>
-									{/each}
-								</div>
-							</Popover.Content>
-						</Popover.Positioner>
-					</Portal>
-				</Popover>
-			</div>
-			<!-- The standing picks, always in view: a fixed two, so the row
-			     never needs to scroll sideways (§6.3). Pressed = tonal
-			     primary, the app's active-chip treatment (§2.4). -->
-			<div
-				class="mb-2 flex min-w-0 shrink-0 items-center gap-1.5"
-				role="group"
-				aria-label="Show sessions"
-			>
-				<button
-					type="button"
-					class="rounded-full px-3 py-1 text-[13px] {activeChip ===
-					'all'
-						? 'preset-tonal-primary'
-						: 'preset-tonal-surface'}"
-					aria-pressed={activeChip === "all"}
-					onclick={() => pickFilter("all")}
-				>
-					All
-				</button>
-				<button
-					type="button"
-					class="flex items-center gap-1.5 rounded-full px-3 py-1 text-[13px] {activeChip ===
-					'waiting'
-						? 'preset-tonal-primary'
-						: 'preset-tonal-surface'}"
-					aria-pressed={activeChip === "waiting"}
-					onclick={() => pickFilter("waiting")}
-				>
-					Your turn
-					<span class="tabular-nums opacity-80">{yourTurnCount}</span>
-				</button>
-				<button
-					type="button"
-					class="flex items-center gap-1.5 rounded-full px-3 py-1 text-[13px] {activeChip ===
-					'favorites'
-						? 'preset-tonal-primary'
-						: 'preset-tonal-surface'}"
-					aria-pressed={activeChip === "favorites"}
-					onclick={() => pickFilter("favorites")}
-				>
-					<Icons.Star size={13} aria-hidden="true" />
-					Favorites
-				</button>
-			</div>
-			<!-- Every narrowing in force, said once and in one strip. At `All`
-			     with no deep link there is nothing to say and the strip is
-			     absent entirely. -->
-			{#if activeFilterLabel || searchCharacter || searchPersona}
-				<div
-					class="mb-3 flex min-w-0 shrink-0 flex-wrap items-center gap-2"
-				>
-					{#if activeFilterLabel}
-						<span
-							class="bg-surface-200-800 text-surface-700-300 flex min-w-0 items-center gap-1 rounded-full px-2.5 py-1 text-xs"
+						<Popover.Trigger
+							class={toolbarButtonClass(popoutPickActive)}
+							title="Filter sessions"
+							aria-label="Filter sessions"
+							aria-expanded={filterOpen}
 						>
-							<span class="min-w-0 truncate">
-								{activeFilterLabel}
-							</span>
-							<button
-								type="button"
-								class="hover:text-foreground shrink-0"
-								onclick={() => pickFilter("all")}
-								title="Clear filter"
-								aria-label="Clear filter: {activeFilterLabel}"
-							>
-								<Icons.X size={12} aria-hidden="true" />
-							</button>
-						</span>
+							<Icons.SlidersHorizontal size={16} aria-hidden="true" />
+						</Popover.Trigger>
+						<Portal>
+							<Popover.Positioner class="z-[1000]!">
+								<Popover.Content
+									class="card bg-surface-50-950 border-surface-200-800 w-[min(90vw,260px)] border p-2 shadow-xl"
+								>
+									<div
+										class="flex max-h-[min(60vh,320px)] flex-col gap-0.5 overflow-y-auto"
+										role="radiogroup"
+										aria-label="Filter sessions"
+									>
+										{#each filterOptions as option (option.value)}
+											{@const checked =
+												activeChip === option.value}
+											<button
+												type="button"
+												role="radio"
+												aria-checked={checked}
+												class="flex h-9 w-full items-center gap-2 rounded-lg px-2.5 text-left text-sm {checked
+													? 'sidebar-row-active'
+													: 'hover:bg-surface-200-800'}"
+												onclick={() =>
+													pickFilter(option.value)}
+											>
+												{#if option.value.startsWith("tag:")}
+													<span
+														class="size-2 shrink-0 rounded-full {tagDotPreset(
+															option.colorPreset
+														)}"
+														aria-hidden="true"
+													></span>
+												{/if}
+												<span class="min-w-0 truncate">
+													{option.label}
+												</span>
+											</button>
+										{/each}
+									</div>
+								</Popover.Content>
+							</Popover.Positioner>
+						</Portal>
+					</Popover>
+					<ListCardToggle mode={listMode} label="Sessions" />
+				{/snippet}
+				{#snippet chips()}
+					<!-- The standing picks, always in view: a fixed three, so
+					     the row never needs to scroll sideways (§6.3). Pressed =
+					     tonal primary, the app's active-chip treatment (§2.4). -->
+					<div
+						class="flex min-w-0 shrink-0 items-center gap-1.5"
+						role="group"
+						aria-label="Show sessions"
+					>
+						<button
+							type="button"
+							class="rounded-full px-3 py-1 text-[13px] {activeChip ===
+							'all'
+								? 'preset-tonal-primary'
+								: 'preset-tonal-surface'}"
+							aria-pressed={activeChip === "all"}
+							onclick={() => pickFilter("all")}
+						>
+							All
+						</button>
+						<button
+							type="button"
+							class="flex items-center gap-1.5 rounded-full px-3 py-1 text-[13px] {activeChip ===
+							'waiting'
+								? 'preset-tonal-primary'
+								: 'preset-tonal-surface'}"
+							aria-pressed={activeChip === "waiting"}
+							onclick={() => pickFilter("waiting")}
+						>
+							Your turn
+							<span class="tabular-nums opacity-80">{yourTurnCount}</span>
+						</button>
+						<button
+							type="button"
+							class="flex items-center gap-1.5 rounded-full px-3 py-1 text-[13px] {activeChip ===
+							'favorites'
+								? 'preset-tonal-primary'
+								: 'preset-tonal-surface'}"
+							aria-pressed={activeChip === "favorites"}
+							onclick={() => pickFilter("favorites")}
+						>
+							<Icons.Star size={13} aria-hidden="true" />
+							Favorites
+						</button>
+					</div>
+					<!-- Every narrowing in force, said once. At `All` with no
+					     deep link there is nothing to say and nothing is drawn. -->
+					{#if activeFilterLabel}
+						{@render narrowingChip(
+							activeFilterLabel,
+							`Clear filter: ${activeFilterLabel}`,
+							() => pickFilter("all")
+						)}
 					{/if}
 					{#if searchCharacter}
-						<span
-							class="bg-surface-200-800 text-surface-700-300 flex min-w-0 items-center gap-1 rounded-full px-2.5 py-1 text-xs"
-						>
-							<span class="min-w-0 truncate">
-								{searchCharacter.nickname ||
-									searchCharacter.name}
-							</span>
-							<button
-								type="button"
-								class="hover:text-foreground shrink-0"
-								onclick={clearCharacterFilter}
-								title="Clear filter"
-								aria-label="Clear character filter: {searchCharacter.nickname ||
-									searchCharacter.name}"
-							>
-								<Icons.X size={12} aria-hidden="true" />
-							</button>
-						</span>
+						{@render narrowingChip(
+							searchCharacter.nickname || searchCharacter.name,
+							`Clear character filter: ${searchCharacter.nickname || searchCharacter.name}`,
+							clearCharacterFilter
+						)}
 					{/if}
 					{#if searchPersona}
-						<span
-							class="bg-surface-200-800 text-surface-700-300 flex min-w-0 items-center gap-1 rounded-full px-2.5 py-1 text-xs"
-						>
-							<span class="min-w-0 truncate">
-								{searchPersona.name}
-							</span>
-							<button
-								type="button"
-								class="hover:text-foreground shrink-0"
-								onclick={clearPersonaFilter}
-								title="Clear filter"
-								aria-label="Clear persona filter: {searchPersona.name}"
-							>
-								<Icons.X size={12} aria-hidden="true" />
-							</button>
-						</span>
+						{@render narrowingChip(
+							searchPersona.name,
+							`Clear persona filter: ${searchPersona.name}`,
+							clearPersonaFilter
+						)}
 					{/if}
-				</div>
-			{/if}
+				{/snippet}
+			</ViewToolbar>
 			<div class="min-h-0 flex-1 overflow-y-auto">
 				{#if isLoading}
 					<div class="flex items-center justify-center py-8">
@@ -1087,23 +1145,9 @@
 						     whose turn it is or when it last moved, and filing
 						     it under a group would put it back in the scroll. -->
 						{#if pinnedSession}
-							<div
-								class="flex min-w-0 flex-col gap-2"
-								role="list"
-								aria-label="Open session"
-							>
-								<SessionListItem
-									session={pinnedSession}
-									runStatus={runStatusOf(pinnedSession)}
-									active={true}
-									showGenre={hasSeveralGenres}
-									layout="stack"
-									onclick={handleSessionClick}
-									onEdit={handleEditClick}
-									onDelete={handleDeleteClick}
-									onToggleFavorite={toggleFavorite}
-								/>
-							</div>
+							{@render sessionItems([pinnedSession], {
+								label: "Open session"
+							})}
 						{/if}
 						{#each sessionGroups as group (group.key)}
 							<!-- A <p> and not an <h3>: this pane carries no
@@ -1118,35 +1162,9 @@
 							>
 								{group.label}
 							</p>
-							<div
-								class="flex min-w-0 flex-col gap-2"
-								role="list"
-								aria-labelledby="sessions-group-{group.key}"
-							>
-								{#each group.rows as session (session.id)}
-									<!-- `active` covers two facts that never
-									     disagree in practice: the session open
-									     in the main view (pinned above), and —
-									     in desk mode only — the one whose
-									     detail is showing in the column beside
-									     this list. In compact the list is not
-									     on screen while a detail is, so the
-									     second half would mark nothing. -->
-									<SessionListItem
-										{session}
-										runStatus={runStatusOf(session)}
-										active={session.id === sessionId ||
-											(vm.mode === "desk" &&
-												session.id === viewingId)}
-										showGenre={hasSeveralGenres}
-										layout="stack"
-										onclick={handleSessionClick}
-										onEdit={handleEditClick}
-										onDelete={handleDeleteClick}
-										onToggleFavorite={toggleFavorite}
-									/>
-								{/each}
-							</div>
+							{@render sessionItems(group.rows, {
+								labelledBy: `sessions-group-${group.key}`
+							})}
 						{/each}
 					</div>
 				{/if}

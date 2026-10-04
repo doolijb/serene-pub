@@ -4,10 +4,12 @@
  * components lazily, so the shell does not carry the pipeline workspace just
  * because the rail has an Admin item.
  *
- * A `layout` wraps its `page` the way a SvelteKit `+layout.svelte` did: the
- * list-and-detail sections draw their list in the layout and the item in the
- * page. Literal segments come before `:params` so `/new` and `/events` are
- * never read as an id.
+ * Every object section is Django-shaped (note 37, STYLE-GUIDE §6.11): the
+ * changelist at `/admin/<section>`, the add form at `/new`, the change form
+ * at `/:id` — each its own page, never a list beside a detail. A `layout`
+ * may still wrap a `page` the way a SvelteKit `+layout.svelte` did; no
+ * section uses one today. Literal segments come before `:params` so `/new`,
+ * `/invites` and `/events` are never read as an id.
  */
 import type { Component } from "svelte"
 
@@ -25,8 +27,6 @@ export interface AdminMatch {
 	route: AdminRoute | null
 }
 
-const empty: Loader = () => import("./sections/Empty.svelte")
-
 const S = {
 	overview: () => import("./sections/overview/Page.svelte"),
 	defaults: () => import("./sections/defaults/Page.svelte"),
@@ -36,41 +36,48 @@ const S = {
 	sampling: () => import("./sections/sampling/Page.svelte"),
 	samplingNew: () => import("./sections/sampling/NewPage.svelte"),
 	samplingId: () => import("./sections/sampling/IdPage.svelte"),
-	users: () => import("./sections/users/Layout.svelte"),
+	users: () => import("./sections/users/Page.svelte"),
 	usersNew: () => import("./sections/users/NewPage.svelte"),
 	usersInvites: () => import("./sections/users/InvitesPage.svelte"),
 	usersId: () => import("./sections/users/IdPage.svelte"),
 	sessions: () => import("./sections/sessions/Page.svelte"),
-	genres: () => import("./sections/session-genres/Layout.svelte"),
+	genres: () => import("./sections/session-genres/Page.svelte"),
 	genresId: () => import("./sections/session-genres/IdPage.svelte"),
-	presets: () => import("./sections/session-presets/Layout.svelte"),
+	presets: () => import("./sections/session-presets/Page.svelte"),
 	presetsNew: () => import("./sections/session-presets/NewPage.svelte"),
 	presetsId: () => import("./sections/session-presets/IdPage.svelte"),
 	pipelines: () => import("./sections/pipelines/Page.svelte"),
 	events: () => import("./sections/pipelines/EventsPage.svelte"),
+	eventsId: () => import("./sections/pipelines/EventIdPage.svelte"),
 	workspace: () => import("./sections/pipelines/SlugPage.svelte"),
 	configurations: () => import("./sections/configurations/Page.svelte"),
-	scripts: () => import("./sections/scripts/Layout.svelte"),
+	scripts: () => import("./sections/scripts/Page.svelte"),
 	scriptsNew: () => import("./sections/scripts/NewPage.svelte"),
 	scriptsId: () => import("./sections/scripts/IdPage.svelte"),
-	prompts: () => import("./sections/prompts/Layout.svelte"),
+	prompts: () => import("./sections/prompts/Page.svelte"),
+	promptsNew: () => import("./sections/prompts/NewPage.svelte"),
 	promptsId: () => import("./sections/prompts/IdPage.svelte"),
-	context: () => import("./sections/context-templates/Layout.svelte"),
+	context: () => import("./sections/context-templates/Page.svelte"),
 	contextNew: () => import("./sections/context-templates/NewPage.svelte"),
 	contextId: () => import("./sections/context-templates/IdPage.svelte"),
-	variables: () => import("./sections/variable-templates/Layout.svelte"),
+	variables: () => import("./sections/variable-templates/Page.svelte"),
 	variablesNew: () => import("./sections/variable-templates/NewPage.svelte"),
 	variablesId: () => import("./sections/variable-templates/IdPage.svelte"),
-	completion: () => import("./sections/completion-templates/Layout.svelte"),
+	completion: () => import("./sections/completion-templates/Page.svelte"),
+	completionNew: () => import("./sections/completion-templates/NewPage.svelte"),
 	completionId: () => import("./sections/completion-templates/IdPage.svelte"),
 	plugins: () => import("./sections/plugins/Page.svelte"),
+	pluginsId: () => import("./sections/plugins/IdPage.svelte"),
 	components: () => import("./sections/components/Page.svelte"),
+	componentsNew: () => import("./sections/components/NewPage.svelte"),
 	componentsId: () => import("./sections/components/IdPage.svelte"),
 	general: () => import("./sections/general/Page.svelte"),
 	network: () => import("./sections/network/Page.svelte"),
 	data: () => import("./sections/data/Page.svelte"),
 	diagnostics: () => import("./sections/diagnostics/Page.svelte"),
-	history: () => import("./sections/history/Page.svelte")
+	history: () => import("./sections/history/Page.svelte"),
+	historyId: () => import("./sections/history/IdPage.svelte"),
+	updates: () => import("./sections/updates/Page.svelte")
 } satisfies Record<string, Loader>
 
 export const ADMIN_ROUTES: AdminRoute[] = [
@@ -82,41 +89,48 @@ export const ADMIN_ROUTES: AdminRoute[] = [
 	{ pattern: "/admin/sampling", page: S.sampling },
 	{ pattern: "/admin/sampling/new", page: S.samplingNew },
 	{ pattern: "/admin/sampling/:id", page: S.samplingId },
-	{ pattern: "/admin/users", layout: S.users, page: empty },
-	{ pattern: "/admin/users/new", layout: S.users, page: S.usersNew },
-	{ pattern: "/admin/users/invites", layout: S.users, page: S.usersInvites },
-	{ pattern: "/admin/users/:id", layout: S.users, page: S.usersId },
+	{ pattern: "/admin/users", page: S.users },
+	{ pattern: "/admin/users/new", page: S.usersNew },
+	{ pattern: "/admin/users/invites", page: S.usersInvites },
+	{ pattern: "/admin/users/:id", page: S.usersId },
 	{ pattern: "/admin/sessions", page: S.sessions },
-	{ pattern: "/admin/session-genres", layout: S.genres, page: empty },
-	{ pattern: "/admin/session-genres/:id", layout: S.genres, page: S.genresId },
-	{ pattern: "/admin/session-presets", layout: S.presets, page: empty },
-	{ pattern: "/admin/session-presets/new", layout: S.presets, page: S.presetsNew },
-	{ pattern: "/admin/session-presets/:id", layout: S.presets, page: S.presetsId },
+	{ pattern: "/admin/session-genres", page: S.genres },
+	{ pattern: "/admin/session-genres/:id", page: S.genresId },
+	{ pattern: "/admin/session-presets", page: S.presets },
+	{ pattern: "/admin/session-presets/new", page: S.presetsNew },
+	{ pattern: "/admin/session-presets/:id", page: S.presetsId },
 	{ pattern: "/admin/pipelines", page: S.pipelines },
 	{ pattern: "/admin/pipelines/events", page: S.events },
+	{ pattern: "/admin/pipelines/events/:id", page: S.eventsId },
 	{ pattern: "/admin/pipelines/:slug", page: S.workspace },
 	{ pattern: "/admin/configurations", page: S.configurations },
-	{ pattern: "/admin/scripts", layout: S.scripts, page: empty },
-	{ pattern: "/admin/scripts/new", layout: S.scripts, page: S.scriptsNew },
-	{ pattern: "/admin/scripts/:id", layout: S.scripts, page: S.scriptsId },
-	{ pattern: "/admin/prompts", layout: S.prompts, page: empty },
-	{ pattern: "/admin/prompts/:id", layout: S.prompts, page: S.promptsId },
-	{ pattern: "/admin/context-templates", layout: S.context, page: empty },
-	{ pattern: "/admin/context-templates/new", layout: S.context, page: S.contextNew },
-	{ pattern: "/admin/context-templates/:id", layout: S.context, page: S.contextId },
-	{ pattern: "/admin/variable-templates", layout: S.variables, page: empty },
-	{ pattern: "/admin/variable-templates/new", layout: S.variables, page: S.variablesNew },
-	{ pattern: "/admin/variable-templates/:id", layout: S.variables, page: S.variablesId },
-	{ pattern: "/admin/completion-templates", layout: S.completion, page: empty },
-	{ pattern: "/admin/completion-templates/:id", layout: S.completion, page: S.completionId },
+	{ pattern: "/admin/scripts", page: S.scripts },
+	{ pattern: "/admin/scripts/new", page: S.scriptsNew },
+	{ pattern: "/admin/scripts/:id", page: S.scriptsId },
+	{ pattern: "/admin/prompts", page: S.prompts },
+	{ pattern: "/admin/prompts/new", page: S.promptsNew },
+	{ pattern: "/admin/prompts/:id", page: S.promptsId },
+	{ pattern: "/admin/context-templates", page: S.context },
+	{ pattern: "/admin/context-templates/new", page: S.contextNew },
+	{ pattern: "/admin/context-templates/:id", page: S.contextId },
+	{ pattern: "/admin/variable-templates", page: S.variables },
+	{ pattern: "/admin/variable-templates/new", page: S.variablesNew },
+	{ pattern: "/admin/variable-templates/:id", page: S.variablesId },
+	{ pattern: "/admin/completion-templates", page: S.completion },
+	{ pattern: "/admin/completion-templates/new", page: S.completionNew },
+	{ pattern: "/admin/completion-templates/:id", page: S.completionId },
 	{ pattern: "/admin/plugins", page: S.plugins },
+	{ pattern: "/admin/plugins/:id", page: S.pluginsId },
 	{ pattern: "/admin/components", page: S.components },
+	{ pattern: "/admin/components/new", page: S.componentsNew },
 	{ pattern: "/admin/components/:id", page: S.componentsId },
 	{ pattern: "/admin/general", page: S.general },
 	{ pattern: "/admin/network", page: S.network },
 	{ pattern: "/admin/data", page: S.data },
 	{ pattern: "/admin/diagnostics", page: S.diagnostics },
-	{ pattern: "/admin/history", page: S.history }
+	{ pattern: "/admin/history", page: S.history },
+	{ pattern: "/admin/history/:id", page: S.historyId },
+	{ pattern: "/admin/updates", page: S.updates }
 ]
 
 /** Addresses that moved, kept working (`/admin/settings` was one page). */

@@ -7,16 +7,11 @@
  *     a real, shipped row **in that step's own pool**. A step with no prompt
  *     runs its provider with no instructions, which reads as the model failing
  *     rather than as a missing selection — the worst possible first impression.
- *  2. **Faithful.** The prose is byte-identical to what `db/defaults.ts` ships.
- *     An upgrade that silently improved somebody's system prompt would be the
- *     most alarming thing this migration could do, and it would be invisible
- *     until their character started behaving differently.
- *
- * The canary below is what enforces (2) through the re-keying. It is a
- * **per-pool** comparison now, because a shipped row is no longer a bundle — but
- * it still asserts that **every legacy string appears exactly once**, and that
- * total is the whole value of it. Weakened to a spot check it would pass while
- * the split quietly dropped a field.
+ *  2. **Faithful.** The prose is byte-identical to what 0.5.3 shipped — the
+ *     catalog (`CORE_PROMPTS`) was extracted from it byte-exact and is the
+ *     record now. An upgrade that silently improved somebody's system prompt
+ *     would be the most alarming thing this migration could do, and it would
+ *     be invisible until their character started behaving differently.
  */
 
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest"
@@ -219,161 +214,29 @@ describe("every pipeline arrives usable", () => {
 	})
 })
 
-describe("the catalog matches the legacy seeds — the drift canary (24 T6b)", () => {
-	/**
-	 * The catalog is the system of record now; the deprecated legacy tables
-	 * still seed their copies from db/defaults.ts. Until legacy is deleted, the
-	 * two must agree byte-for-byte.
-	 *
-	 * ## Why this is per-FIELD rather than per-row
-	 *
-	 * It used to compare one legacy row against one catalog row, because a
-	 * catalog row *was* the bundle. Split across pools, a legacy scene config's
-	 * four texts live in four different rows — so the comparison is now "every
-	 * string this legacy row carries appears, byte-identical, in exactly one
-	 * catalog row, in the pool whose node declares that field name".
-	 *
-	 * **Exactly one, and every one.** Both halves are load-bearing and neither
-	 * is a spot check: "every one" catches a field the split dropped, "exactly
-	 * one" catches a field the split copied into two pools, where editing it in
-	 * the panel would fix half the pipeline.
-	 */
+describe("the catalog is the record", () => {
 	const str = (v: unknown): string => (typeof v === "string" ? v : "")
-	const chatFields = (row: any) => ({
-		systemPrompt: str(row.systemPrompt),
-		postHistoryInstructions: str(row.postHistoryInstructions)
-	})
-	const narratorFields = (row: any) => ({
-		...chatFields(row),
-		narratorName: str(row.narratorName) || "Narrator"
-	})
-	const summarizeFields = (row: any) => ({
-		batch: str(row.batchSystemPrompt),
-		synth: str(row.synthSystemPrompt),
-		name: str(row.nameSystemPrompt)
-	})
-	const LEGACY_SOURCES: Array<{
-		specSlug: string
-		table: any
-		fields: (row: any) => Record<string, string>
-	}> = [
-		{
-			specSlug: RESPOND_SPEC_ID,
-			table: schema.promptConfigs,
-			fields: chatFields
-		},
-		{
-			specSlug: NARRATE_SPEC_ID,
-			table: schema.narratorPromptConfigs,
-			fields: narratorFields
-		},
-		{
-			specSlug: SUMMARIZE_WORLD_SPEC_ID,
-			table: schema.worldSummarizeConfigs,
-			fields: summarizeFields
-		},
-		{
-			specSlug: SUMMARIZE_CHARACTER_SPEC_ID,
-			table: schema.characterSummarizeConfigs,
-			fields: summarizeFields
-		},
-		{
-			// ⚠ `characterExtraction` is deliberately absent from this list.
-			// The scene spec no longer wires `core:oracle/extract-cast` (plan
-			// §2 put it on ice, migration `0104_ice_scene_cast_extraction`), so
-			// no step of this pipeline declares that field and the pool lookup
-			// below would have nothing to resolve. The prompt itself still
-			// ships byte-identical — that is what makes the ice revivable — and
-			// the test right after this one is where it is checked, off the
-			// node type rather than off a spec's declarations.
-			specSlug: SUMMARIZE_SCENE_SPEC_ID,
-			table: schema.sceneSummarizeConfigs,
-			fields: summarizeFields
-		},
-		{
-			specSlug: SUMMARIZE_HISTORY_SPEC_ID,
-			table: schema.sceneSummarizeConfigs,
-			fields: summarizeFields
-		}
-	]
-
-	it("places every legacy field in exactly one catalog row, byte-identical", async () => {
-		const { CORE_PROMPTS } = await import("@serene-pub/core-catalog")
-
-		let compared = 0
-		for (const source of LEGACY_SOURCES) {
-			// The pools this pipeline's steps actually read, and which field
-			// each one declares — the split's own answer, read back from the
-			// declarations rather than restated here.
-			const decls = await promptDeclsOf(source.specSlug)
-			const poolForField = new Map<string, string>()
-			for (const d of decls)
-				for (const field of (d as any).promptFields ?? [])
-					poolForField.set(field, `${d.nodeDefinitionId}#${d.slot}`)
-
-			const rows = await db.select().from(source.table)
-			for (const row of rows as any[]) {
-				if (!row.seedKey) continue
-				const authored = source.fields(row)
-
-				for (const [field, text] of Object.entries(authored)) {
-					const pool = poolForField.get(field)
-					expect(
-						pool,
-						`${source.specSlug} declares no step reading '${field}'`
-					).toBeTruthy()
-
-					// Every catalog row in that pool carrying this exact text.
-					const matches = CORE_PROMPTS.filter(
-						(p) =>
-							`${p.nodeType}#${p.slot}` === pool &&
-							p.fields[field] === text
-					)
-					expect(
-						matches.length,
-						`'${row.name}'.${field} for ${source.specSlug} appears in ` +
-							`${matches.length} catalog rows of ${pool}, not 1`
-					).toBe(1)
-					// The name travelled too — a shipped prompt renamed on the
-					// way through the split would be as alarming as a reworded
-					// one, and just as invisible.
-					expect(matches[0]!.name).toBe(row.name)
-					compared++
-				}
-			}
-		}
-		// The canary is worthless if the loop found nothing to compare.
-		expect(compared).toBeGreaterThan(20)
-	})
 
 	it("keeps the iced cast prompt shipped, byte-identical, though no spec reads it", async () => {
 		// The other half of "on ice, not deleted". `core:oracle/extract-cast`
-		// is no longer wired into the scene summarize document, so the canary
-		// above cannot reach its prompt through a spec's declarations — but the
-		// prose still has to be exactly what `db/defaults.ts` ships, or
-		// reviving the step later would quietly hand somebody a different
-		// extractor. Checked off the NODE TYPE, which is what survives the ice.
+		// is no longer wired into the scene summarize document, so no spec's
+		// declarations reach its prompt — but the prose still has to be the
+		// extractor the summarizer sends (`summarizer/templates.ts`), or
+		// reviving the step later would quietly hand somebody a different one.
+		// Checked off the NODE TYPE, which is what survives the ice.
 		const { CORE_PROMPTS } = await import("@serene-pub/core-catalog")
-		const rows = (await db
-			.select()
-			.from(schema.sceneSummarizeConfigs)) as any[]
-		const seeded = rows.filter((r) => r.seedKey)
-		expect(seeded.length).toBeGreaterThan(0)
-		for (const row of seeded) {
-			const text = str(row.characterExtractionSystemPrompt)
-			const matches = CORE_PROMPTS.filter(
-				(p) =>
-					p.nodeType === "core:oracle/extract-cast" &&
-					p.slot === "prompts" &&
-					p.fields.characterExtraction === text
-			)
-			expect(
-				matches.length,
-				`'${row.name}'.characterExtraction appears in ${matches.length} ` +
-					`extract-cast catalog rows, not 1`
-			).toBe(1)
-			expect(matches[0]!.name).toBe(row.name)
-		}
+		const { DEFAULT_CHARACTER_EXTRACTION_SYSTEM_PROMPT } = await import(
+			"$lib/server/utils/summarizer/templates"
+		)
+		const matches = CORE_PROMPTS.filter(
+			(p) =>
+				p.nodeType === "core:oracle/extract-cast" &&
+				p.slot === "prompts" &&
+				str(p.fields.characterExtraction) ===
+					DEFAULT_CHARACTER_EXTRACTION_SYSTEM_PROMPT
+		)
+		expect(matches.length).toBe(1)
+		expect(matches[0]!.name).toBe("Default Scene Summarization")
 	})
 
 	it("seeds every catalog row, and nothing twice", async () => {
@@ -405,13 +268,21 @@ describe("the catalog matches the legacy seeds — the drift canary (24 T6b)", (
 
 describe("the wording is the wording", () => {
 	it("copies the graph build's five step prompts, each into its own pool", async () => {
-		// The clearest case of the split: one legacy row's five texts belong to
-		// five different node types. Under the bundle model all five steps
-		// shared one row and the panel put five editors on each of them.
-		const [legacy] = await db
-			.select()
-			.from(schema.graphBuildConfigs)
-			.where(eq(schema.graphBuildConfigs.seedKey, "graph-build-default"))
+		// The clearest case of the split: 0.5's one graph build config carried
+		// five texts that belong to five different node types. Its wording is
+		// the graph builder's own (`utils/graphPrompts.ts`).
+		const prompts = await import("$lib/server/utils/graphPrompts")
+		const legacy = {
+			name: "Default Graph Build",
+			nodeResolutionSystemPrompt:
+				prompts.DEFAULT_GRAPH_NODE_RESOLUTION_SYSTEM_PROMPT,
+			preFilterSystemPrompt: prompts.DEFAULT_GRAPH_PRE_FILTER_SYSTEM_PROMPT,
+			perspectiveSystemPrompt: prompts.DEFAULT_GRAPH_PERSPECTIVE_SYSTEM_PROMPT,
+			nodeDescriptionSystemPrompt:
+				prompts.DEFAULT_GRAPH_NODE_DESCRIPTION_SYSTEM_PROMPT,
+			stateDetectionSystemPrompt:
+				prompts.DEFAULT_GRAPH_STATE_DETECTION_SYSTEM_PROMPT
+		}
 
 		const decls = await promptDeclsOf(GRAPH_BUILD_SPEC_ID)
 		const pools = new Set(

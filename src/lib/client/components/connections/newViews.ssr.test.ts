@@ -11,9 +11,9 @@ import { describe, expect, test } from "vitest"
 import { render } from "svelte/server"
 import StatusStrip from "./StatusStrip.svelte"
 import JobsGrid from "./JobsGrid.svelte"
+import ConnectionCard from "./ConnectionCard.svelte"
 import ModelRow from "./ModelRow.svelte"
 import ModelTable from "./ModelTable.svelte"
-import ConnectionsOverview from "./ConnectionsOverview.svelte"
 
 const noop = () => {}
 
@@ -80,6 +80,10 @@ describe("JobsGrid", () => {
 		}).body
 		expect(html).toContain("Job 7")
 		expect(html).toContain("1 set up")
+		// …and the fold names only what it hides, never the tile pulled out
+		// of it (it listed `slice(limit)`, so "job 7" twice).
+		expect(html.match(/job 7/gi)?.length).toBe(1)
+		expect(html).toContain("job 3")
 	})
 
 	test("never scores the set out of ten", () => {
@@ -98,6 +102,18 @@ describe("JobsGrid", () => {
 		expect(two).toContain("grid-cols-2")
 		expect(four).toContain("grid-cols-4")
 		expect(four).not.toContain("@min-[900px]/view:grid-cols-4")
+	})
+
+	test('"fit" asks the LIST pane, never the whole view (notes 42)', () => {
+		// The index carries the grid at every width now; the box it sits in
+		// is the list pane (`@container/list`), so that is what it asks.
+		const fit = render(JobsGrid, {
+			props: { tiles, onOpen: noop, columns: "fit", limit: 3 }
+		}).body
+		expect(fit).toContain("@min-[36rem]/list:grid-cols-4")
+		expect(fit).not.toContain("/view:")
+		// Three modality tiles, then the fold.
+		expect(fit).toContain("6 more")
 	})
 })
 
@@ -268,61 +284,70 @@ describe("ModelTable", () => {
 	})
 })
 
-describe("ConnectionsOverview", () => {
-	test("the full-page empty pane is the dashboard, not an apology", () => {
-		const html = render(ConnectionsOverview, {
+
+describe("ConnectionCard", () => {
+	const status = {
+		state: "unfinished" as const,
+		label: "Needs a key",
+		detail: "openrouter.ai",
+		metric: null,
+		action: { verb: "setup" as const, label: "Set up", icon: "ArrowRight", emphasis: "tonal" as const }
+	}
+
+	test("says what it is, its state and its model count at once", () => {
+		// A row lets its action take the metric's column; a card has a
+		// footer for the action, so the count always shows (notes 42).
+		const html = render(ConnectionCard, {
 			props: {
-				tiles: [
-					{ capability: "text->image", label: "Image generation" }
-				],
-				connectionCount: 3,
-				onOpenCapability: noop,
-				onGetModel: noop
+				title: "Work",
+				serviceLabel: "OpenRouter",
+				kind: "api",
+				managed: false,
+				status,
+				modelCount: 3,
+				onOpen: noop,
+				onAction: noop
 			}
 		}).body
-		expect(html).toContain("What this pub can do")
-		expect(html).toContain("Image generation")
-		expect(html).not.toContain("Pick a connection, or add one")
+		expect(html).toContain("Work")
+		expect(html).toContain("OpenRouter")
+		expect(html).toContain("Needs a key")
+		expect(html).toContain("3 models")
+		expect(html).toContain("openrouter.ai")
+		expect(html).toContain("Set up")
 	})
 
-	test("does NOT repeat the status strip the list column already carries", () => {
-		// Two copies of "Sessions can reply" on one screen is the same landmark
-		// twice, answering a question the first copy answered a few hundred
-		// pixels to the left.
-		const html = render(ConnectionsOverview, {
+	test("a default-named connection does not repeat itself in a chip", () => {
+		const html = render(ConnectionCard, {
 			props: {
-				tiles: [],
-				connectionCount: 1,
-				onOpenCapability: noop,
-				onGetModel: noop
+				title: "Ollama",
+				serviceLabel: "Ollama",
+				kind: "ollama",
+				managed: true,
+				status: { ...status, state: "ready" as const, label: "Ready", action: null },
+				modelCount: 1,
+				onOpen: noop,
+				onAction: noop
 			}
 		}).body
-		expect(html).not.toContain("Sessions can reply")
-		expect(html).not.toContain("Sessions can't reply yet")
+		expect(html.match(/Ollama/g)?.length).toBe(1)
+		expect(html).toContain("1 model")
+		expect(html).not.toContain("1 models")
 	})
 
-	test("it is not a second index — no list and no Add", () => {
-		const html = render(ConnectionsOverview, {
+	test("the metric rides the detail line only when it is not the count", () => {
+		const html = render(ConnectionCard, {
 			props: {
-				tiles: [],
-				connectionCount: 1,
-				onOpenCapability: noop,
-				onGetModel: noop
+				title: "KoboldCPP",
+				serviceLabel: "KoboldCPP",
+				kind: "koboldcpp-managed",
+				managed: true,
+				status: { ...status, state: "idle" as const, label: "Stopped", metric: "2 models", action: null },
+				modelCount: 2,
+				onOpen: noop,
+				onAction: noop
 			}
 		}).body
-		expect(html).toContain("1 connection")
-		expect(html).not.toContain("Filter")
-	})
-
-	test("does not declare a banner landmark inside the view's own", () => {
-		const html = render(ConnectionsOverview, {
-			props: {
-				tiles: [],
-				connectionCount: 1,
-				onOpenCapability: noop,
-				onGetModel: noop
-			}
-		}).body
-		expect(html).not.toContain("<header")
+		expect(html.match(/2 models/g)?.length).toBe(1)
 	})
 })

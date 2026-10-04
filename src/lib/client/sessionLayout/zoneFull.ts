@@ -13,10 +13,10 @@
  * answers the prior question — is there any room at all — which is the one the
  * user can act on ("resize a widget").
  */
-import type { GsLayout } from "./GridStackZone.svelte"
+import type { ArrangedZone } from "@serene-pub/sdk"
 
 /** True when the arrangement's items account for every cell in its frame. */
-export function zoneIsFull(l: GsLayout | undefined): boolean {
+export function zoneIsFull(l: ArrangedZone | undefined): boolean {
 	if (!l || !l.items.length) return false
 	const cells = l.cols * l.rows
 	if (cells <= 0) return false

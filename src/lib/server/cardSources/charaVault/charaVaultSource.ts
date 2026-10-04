@@ -20,7 +20,10 @@ import {
 } from "./session"
 import { getOrFetchCardBytes } from "../diskCache"
 import { getOrFetchImportedCardBytes } from "../importCache"
+import { readCappedBody } from "../readCappedBody"
+import { IMPORT_FILE_CAPS } from "$lib/shared/imports/fileCaps"
 import { parseCharacterCard } from "$lib/server/utils/characterCardParser"
+import { withImportLimit } from "$lib/server/imports/importLimit"
 import {
 	applyDefaultContentFilter,
 	hasExcludedTag,
@@ -297,12 +300,15 @@ async function getCardBytesAndParsed(
 	const { folder, file } = toCharaVaultCardRef(ref)
 	const key = `charavault:${folder}/${file}`
 	const fetcher = async (signal: AbortSignal) => {
+		// Streamed under the card ceiling and aborted the moment it passes
+		// (plan S4): `arrayBuffer()` read whatever the server chose to send.
+		const over = new AbortController()
 		const response = await fetchCharaVaultCardResponse(
 			ref,
 			"interactive",
-			signal
+			AbortSignal.any([signal, over.signal])
 		)
-		return Buffer.from(await response.arrayBuffer())
+		return readCappedBody(response, IMPORT_FILE_CAPS.cardBytes, over)
 	}
 	const buffer =
 		cache === "import"
@@ -471,7 +477,12 @@ export const charaVaultSource: CardSource = {
 		// the real issue is gone. Let it reject; the cache correctly skips
 		// caching a rejection, and the client's existing "No description
 		// provided" fallback already degrades gracefully either way.
-		const { parsed } = await getCardBytesAndParsed(ref, ctx, "browse")
+		//
+		// Under the import limit (S4 review): a detail view fetches up to a
+		// whole card file and parses it, the same memory an import costs.
+		const { parsed } = await withImportLimit(ctx.userId, () =>
+			getCardBytesAndParsed(ref, ctx, "browse")
+		)
 		const { card, lorebook } = parsed
 		const data = card.toSpecV3().data
 		return {

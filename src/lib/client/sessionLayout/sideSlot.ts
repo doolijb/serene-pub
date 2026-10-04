@@ -246,8 +246,9 @@ export interface SideZoneFill {
 	mode: SideMode | StripMode
 	/**
 	 * What it holds that a person can open: its panel instances AND its
-	 * conversation copies (`messages#…`) — `zoneEntriesOf`'s count, the one
-	 * the phone's panels menu lists. Not `widgetsOf`, which skips the copies.
+	 * conversations (any `messages` instance, the bare log included) —
+	 * `zoneEntries`' count (./panelWidgets), the one the rail draws and the
+	 * phone's panels menu lists.
 	 */
 	entries: number
 }
@@ -267,7 +268,7 @@ export interface SidePopulatedInput {
 /**
  * Does this side hold anything? The one question the desktop (an empty column
  * or not) and the phone (listed in the panels menu or not) both ask, so the
- * two cannot disagree about a side holding only a conversation copy.
+ * two cannot disagree about a side holding only a conversation.
  */
 export function sidePopulated(o: SidePopulatedInput): boolean {
 	return o.arranged || o.zones.some(zonePopulated)

@@ -1,8 +1,9 @@
 /**
  * R81 on the page: the server's `sessions:loreRanked` push for this session
  * reaches the page's widget fan-out as `lore:ranked`; another session's push
- * does not, and after the release nothing does. A mark the viewer sets
- * anywhere reaches it as `lore:marked` (the entry id only).
+ * does not, and after the release nothing does. A change the viewer makes
+ * to an entry of the session's book, anywhere, reaches it as `lore:marked`
+ * (the entry id only).
  */
 import { beforeEach, describe, expect, test, vi } from "vitest"
 
@@ -54,26 +55,19 @@ describe("hearLoreRanked", () => {
 })
 
 describe("hearLoreMarked", () => {
-	test("a mark the viewer sets in this session's book, from any tab, reaches the widgets as lore:marked; another book's, a refusal and the release do not", () => {
+	test("a change to an entry of this session's book — a mark set in a widget, a pin or an Off saved in an editor — reaches the widgets as lore:marked; another book's and the release do not", () => {
 		const manager = new SurfaceManager()
 		const heard: unknown[] = []
 		manager.subscribe((e) => heard.push(e))
 
-		let book: number | null = 7
-		const release = hearLoreMarked(() => book, manager)
-		push("entries:setMarks", { entryId: 4, lorebookId: 7, pinned: true })
-		push("entries:setMarks", { entryId: 8, lorebookId: 9, pinned: true })
-		push("entries:setMarks", { entryId: 5, error: "only the book's owner may mark its entries" })
+		const release = hearLoreMarked(7, manager)
+		// `entries:setMarks` sends this row too, as every entry save does.
+		push("entries:update", { entry: { id: 4, lorebookId: 7, constant: true } })
+		push("entries:update", { entry: { id: 8, lorebookId: 9, constant: true } })
 		expect(heard).toEqual([{ kind: "lore:marked", entryId: 4 }])
 
-		// A session that reads no book hears none.
-		book = null
-		push("entries:setMarks", { entryId: 4, lorebookId: 7, off: true })
-		expect(heard).toHaveLength(1)
-
-		book = 7
 		release()
-		push("entries:setMarks", { entryId: 4, lorebookId: 7, off: true })
+		push("entries:update", { entry: { id: 4, lorebookId: 7, enabled: false } })
 		expect(heard).toHaveLength(1)
 	})
 })

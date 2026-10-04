@@ -1,0 +1,191 @@
+{
+  "fixture": "tiny",
+  "generator": "scripts/fixtures/populate-0.5.3.ts",
+  "generatedAt": "2026-10-01T09:27:45.519Z",
+  "bundle": {
+    "path": "/home/jody/Downloads/serene-pub-v0.5.3-linux-x64/serene-pub-0.5.3-beta-linux-x64",
+    "version": "0.5.3-beta",
+    "pglite": "0.2.17",
+    "lastMigration": "0093_green_bushwacker"
+  },
+  "meta": {
+    "version": "0.5.3-beta",
+    "devVariant": "meta.dev.json (version 0.0.0)",
+    "hasCryptoSecretKey": true
+  },
+  "credentials": null,
+  "fakeModelHost": "http://127.0.0.1:47991",
+  "counts": {
+    "binding_merge_logs": 0,
+    "character_gallery_images": 0,
+    "character_lore_entries": 3,
+    "character_summarize_configs": 1,
+    "character_tags": 2,
+    "characters": 2,
+    "chat_characters": 1,
+    "chat_guests": 0,
+    "chat_lorebooks": 0,
+    "chat_messages": 5,
+    "chat_personas": 1,
+    "chat_tags": 0,
+    "chats": 1,
+    "connections": 1,
+    "context_configs": 1,
+    "custom_themes": 0,
+    "dismissed_duplicate_pairs": 0,
+    "graph_build_configs": 1,
+    "history_entries": 5,
+    "koboldcpp_models": 0,
+    "koboldcpp_settings": 1,
+    "lorebook_bindings": 3,
+    "lorebook_tags": 0,
+    "lorebooks": 1,
+    "narrative_relationships": 0,
+    "narrator_prompt_configs": 1,
+    "ollama_settings": 1,
+    "passphrases": 0,
+    "persona_gallery_images": 0,
+    "persona_tags": 0,
+    "personas": 1,
+    "prompt_configs": 12,
+    "sampling_configs": 4,
+    "scene_characters": 0,
+    "scene_summarize_configs": 1,
+    "scenes": 0,
+    "setup": 1,
+    "system_settings": 1,
+    "tags": 1,
+    "user_settings": 1,
+    "user_tokens": 0,
+    "users": 1,
+    "vectorization_configs": 1,
+    "world_lore_entries": 4,
+    "world_summarize_configs": 1
+  },
+  "migrationLedger": {
+    "n": 94,
+    "max": "1786511598724"
+  },
+  "detail": {
+    "connectionsByType": {
+      "openai": 1
+    },
+    "chatsByStrategy": {
+      "ordered": 1
+    },
+    "chatsByType": {
+      "roleplay/solo": 1
+    },
+    "chatCharacterVisibility": {
+      "visible": 1
+    },
+    "messages": {
+      "total": 5,
+      "generating": 1,
+      "errors": 0,
+      "hidden": 0,
+      "narrator": 0,
+      "edited": 0,
+      "multi_swipe": 2,
+      "thinking": 0,
+      "greetings": 1,
+      "persona_authored": 2
+    },
+    "embeddingsByModel": [],
+    "bindingTokens": {
+      "double": 3
+    },
+    "historyClampCandidates": 1,
+    "usersAdmin": {
+      "admin": true
+    },
+    "systemSettings": {
+      "is_accounts_enabled": false,
+      "vectorization_enabled": false,
+      "embedding_model_name": null,
+      "embedding_model_dimensions": null,
+      "summarization_enabled": false,
+      "default_connection_id": 1,
+      "default_sampling_id": 1
+    },
+    "vectorizationConfig": {
+      "mode": "local",
+      "api_base_url": null,
+      "api_model": null,
+      "api_dimensions": null,
+      "has_key": false
+    }
+  },
+  "ids": {
+    "users": {
+      "admin": 1
+    },
+    "connections": {
+      "openai": 1
+    },
+    "sampling": {
+      "creative": 4
+    },
+    "lorebooks": {
+      "atlas": 1
+    },
+    "chats": {
+      "solo": 1
+    },
+    "characters": [
+      1,
+      2
+    ],
+    "personas": [
+      1
+    ]
+  },
+  "edgeCases": [
+    {
+      "id": "connection-api-key",
+      "table": "connections",
+      "note": "encrypted extraJson.apiKey envelope ({__enc,ciphertext,iv,authTag}) — decrypts only with meta.json cryptoSecretKey",
+      "rowIds": [
+        1
+      ]
+    },
+    {
+      "id": "lorebook-every-entry-kind",
+      "table": "lorebooks",
+      "note": "Atlas of Everything: world (regex, case-sensitive, constant, disabled, extra_json), character lore (bound to a character binding, a persona binding, unbound), history (full date, month only, year only)",
+      "rowIds": [
+        1
+      ]
+    },
+    {
+      "id": "message-stuck-generating",
+      "table": "chat_messages",
+      "note": "is_generating=true left by a crash (generation_stage 'generating', queue_item_id set)",
+      "rowIds": [
+        5
+      ]
+    },
+    {
+      "id": "history-clamp",
+      "table": "history_entries",
+      "note": "year 0 / month 0 / day 5 → clamp to year 1, month 1",
+      "rowIds": [
+        34
+      ]
+    }
+  ],
+  "files": {
+    "usersTgz": "users.tgz",
+    "entries": [
+      "1/characters/1/avatar-bf87.png",
+      "1/personas/1/avatar-b6ff.png"
+    ]
+  },
+  "gate": {
+    "accountsEnabled": false,
+    "loginProbe": null,
+    "characterList": 2,
+    "chatList": 1,
+    "suspiciousLogLines": []
+  }
+}

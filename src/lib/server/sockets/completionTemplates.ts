@@ -8,8 +8,7 @@
  * offered. A row written here changes the bytes of every prompt sent through
  * every connection that references it, and a socket event does not go through a
  * layout. So the check that matters is the one in each handler, and there is one
- * in each handler — the same rule `samplingConfigs.ts` and `graphBuildConfigs.ts`
- * state next door.
+ * in each handler — the same rule `samplingConfigs.ts` states next door.
  *
  * ## Built-ins are refused server-side, and that is what makes the boot safe
  *

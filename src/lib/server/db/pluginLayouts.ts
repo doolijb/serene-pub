@@ -10,13 +10,28 @@
  * layouts: [{ genreId, slug, name, description?, preset }]
  * ```
  *
- * `preset` is the SDK's `LayoutPreset`. ⏳ Until brief 1 of
- * `PLAN-layout-one-format-2026-09-28` it still carries a retired layout
- * document (LayoutDoc v2), which is validated and then NOT stored: a row
- * stores only the **session layout** in `layout`, and a plugin's stays `{}`
- * ("no overrides") until brief 1 declares that format in the SDK. This reads
- * the field defensively either way, because a manifest is stored verbatim at
- * install and runtime is where its shape is actually checked.
+ * `preset` is a **session layout** (`SessionLayoutV1`), the one format: the
+ * row stores it verbatim in `layout`, so what a package declares is what a
+ * session draws. It is checked here with the SDK's `validateSessionLayout`
+ * — the same check `layout()` made where the package declared it — because a
+ * manifest is stored verbatim at install and runtime is where its shape is
+ * actually checked. A layout that fails, the retired layout document
+ * (LayoutDoc v2) included, is refused and reported, never converted: a
+ * package built against an older SDK is rebuilt.
+ *
+ * Here the check knows what a packager cannot — every widget this instance
+ * offers (`knownWidgetDecls`) — so it also reports, as warnings, a layout
+ * that draws otherwise than it is written: a widget nothing declares (it
+ * draws a labelled placeholder) and one placed past its `maxInstances`. A
+ * warned layout is projected all the same. The callers log the report
+ * (`pluginLayoutReportLines`); the install command prints it.
+ *
+ * ## It writes only what changed
+ *
+ * A projection whose fields already match its row writes nothing, and
+ * `layout_updated_at` moves only when `layout` itself does — so a session can
+ * tell that the layout it started from was **Updated** since, rather than
+ * every boot or every enable/disable saying so.
  *
  * ## It marks, it never deletes
  *
@@ -38,14 +53,21 @@
  * names, which is the whole point of shipping a layout for somebody else's
  * genre.
  */
-import { i18nText, type I18n } from "@serene-pub/sdk"
+import {
+	i18nText,
+	validateSessionLayout,
+	type I18n,
+	type SessionLayoutV1,
+	type WidgetDecl
+} from "@serene-pub/sdk"
 import { and, eq } from "drizzle-orm"
 import * as schema from "./schema"
 import { engineNamespaceOf } from "$lib/server/plugins/engineHost"
-import { notCoreRow } from "$lib/server/plugins/frameHost"
-import { DEFAULT_LAYOUT_SLUG } from "./layoutPresets"
-import { validateLayoutDoc } from "@serene-pub/sdk"
-import type { LayoutDecls, LayoutPreset } from "@serene-pub/sdk"
+import {
+	notCoreRow,
+	pluginWidgetDecls
+} from "$lib/server/plugins/frameHost"
+import { DEFAULT_LAYOUT_SLUG, sameLayout } from "./layoutPresets"
 
 /** One entry of a manifest's `layouts[]`, as this reconciler reads it. */
 export interface DeclaredLayout {
@@ -54,19 +76,88 @@ export interface DeclaredLayout {
 	slug: string
 	name: string
 	description?: string
-	preset: LayoutPreset
+	/** As the manifest holds it: checked (`validateSessionLayout`) before any row is written. */
+	preset: SessionLayoutV1
 }
 
 /** What a sync did, for the log line and the tests. */
 export interface PluginLayoutSyncReport {
-	/** Seed keys written (inserted or re-forced). */
+	/** Seed keys whose row now holds the declaration (inserted, re-forced, or already current). */
 	projected: string[]
 	/** Seed keys marked withdrawn this pass. */
 	withdrawn: string[]
 	/** Seed keys whose withdrawal this pass cleared. */
 	restored: string[]
 	/** Declarations that were refused, each with the reason. */
-	refused: Array<{ key: string; reason: string }>
+	refused: Array<{ key: string; pluginId: string; reason: string }>
+	/**
+	 * What a projected layout draws otherwise than it is written — the
+	 * validator's warnings against every widget this instance knows. The
+	 * layout is projected all the same.
+	 */
+	warnings: Array<{ key: string; pluginId: string; warning: string }>
+}
+
+/**
+ * The report as log lines, one per refusal and per warning — what boot and the
+ * enable switch `console.warn` and the install command prints. `pluginId`
+ * narrows it to one package's layouts; empty when every declared layout
+ * projected as written.
+ */
+export function pluginLayoutReportLines(
+	report: Pick<PluginLayoutSyncReport, "refused" | "warnings">,
+	pluginId?: string
+): string[] {
+	const mine = (e: { pluginId: string }) =>
+		pluginId === undefined || e.pluginId === pluginId
+	return [
+		...report.refused
+			.filter(mine)
+			.map((r) => `layout ${r.key} refused: ${r.reason}`),
+		...report.warnings
+			.filter(mine)
+			.map((w) => `layout ${w.key}: ${w.warning}`)
+	]
+}
+
+/** A widget as the validator checks a layout's ids and caps against it. */
+type KnownWidget = Pick<WidgetDecl, "id" | "maxInstances">
+
+/**
+ * Every widget this instance knows, under the id a layout names it by — the
+ * declarers `sessions:view` seats: core's `CORE_WIDGETS`; each enabled
+ * plugin's `widgets` and ⏳ panels, namespaced (`pluginWidgetDecls`, the one
+ * definition `enabledPluginWidgetIds` reads too — a panel sharing a widget's id
+ * is listed after it, as the view seats the panel) and its genres' ⏳
+ * `shape.panels` (as declared); and every offered authored component.
+ */
+async function knownWidgetDecls(
+	db: Db,
+	enabled: ReadonlyArray<{ pluginId: string; manifest: unknown }>
+): Promise<KnownWidget[]> {
+	const { CORE_WIDGETS } = await import("@serene-pub/core-catalog")
+	const out: KnownWidget[] = CORE_WIDGETS.map((w) => ({
+		id: w.id,
+		maxInstances: w.maxInstances
+	}))
+	for (const { pluginId, manifest } of enabled) {
+		// The package's own widgets and panels: the one list the id
+		// allow-lists read too (`pluginWidgetDecls`).
+		out.push(...pluginWidgetDecls(manifest, pluginId))
+		const m = (manifest ?? {}) as { genres?: unknown }
+		if (Array.isArray(m.genres))
+			for (const g of m.genres as Array<{ shape?: { panels?: unknown } } | null>) {
+				const panels = g?.shape?.panels
+				if (Array.isArray(panels))
+					for (const p of panels as Array<{ id?: unknown } | null>)
+						if (p && typeof p.id === "string") out.push({ id: p.id })
+			}
+	}
+	const { offeredAuthoredWidgetIds } = await import(
+		"$lib/server/components/offer"
+	)
+	for (const id of await offeredAuthoredWidgetIds(db)) out.push({ id })
+	return out
 }
 
 /** The reseed-stable natural key of a plugin's layout. */
@@ -75,16 +166,6 @@ export const pluginLayoutSeedKey = (
 	pluginId: string,
 	slug: string
 ): string => `layout:${genreId}:${pluginId}/${slug}`
-
-/** The declaration sets `validateLayoutDoc` reads. Warnings only; see below. */
-let declsPromise: Promise<LayoutDecls> | null = null
-async function layoutDecls(): Promise<LayoutDecls> {
-	declsPromise ??= import("@serene-pub/core-catalog").then((m) => ({
-		widgets: m.CORE_WIDGETS,
-		looks: m.CORE_LOOKS
-	}))
-	return declsPromise
-}
 
 /** Read `layouts` off a stored manifest, tolerant of its json being anything. */
 export function declaredLayoutsOf(manifest: unknown): DeclaredLayout[] {
@@ -117,7 +198,7 @@ export function declaredLayoutsOf(manifest: unknown): DeclaredLayout[] {
 			// Display text is a string or a locale map (R-20); the row keeps English.
 			name: i18nText(d.name as I18n)!,
 			description: i18nText(d.description as I18n | undefined),
-			preset: d.preset as LayoutPreset
+			preset: d.preset as SessionLayoutV1
 		})
 	}
 	return out
@@ -146,11 +227,16 @@ export async function syncPluginLayouts(
 		projected: [],
 		withdrawn: [],
 		restored: [],
-		refused: []
+		refused: [],
+		warnings: []
 	}
 
 	// A row stored as `core` would own core's genres by grammar: it declares nothing.
 	const plugins = await db.select().from(schema.plugins).where(notCoreRow())
+	const widgets = await knownWidgetDecls(
+		db,
+		plugins.filter((p) => p.enabled)
+	)
 	const declared = new Map<
 		string,
 		{ pluginId: string; version: string; decl: DeclaredLayout }
@@ -166,6 +252,7 @@ export async function syncPluginLayouts(
 			) {
 				report.refused.push({
 					key,
+					pluginId: p.pluginId,
 					reason: `'${DEFAULT_LAYOUT_SLUG}' is the genre owner's slug, and '${p.pluginId}' does not own '${decl.genreId}' — ship it under a slug of its own.`
 				})
 				continue
@@ -189,21 +276,27 @@ export async function syncPluginLayouts(
 	)
 
 	for (const [seedKey, { pluginId, version, decl }] of declared) {
-		// A refused document is REPORTED and never written. An unknown widget
-		// id or an undeclared look key is a WARNING, not an error, and is
-		// deliberately let through: it draws a labelled placeholder, which is
-		// what keeps a layout readable when the widget it names arrives later.
-		const verdict = validateLayoutDoc(decl.preset.layout, await layoutDecls())
+		// A refused layout is REPORTED and never written. An unknown widget id
+		// is not an error — it draws a labelled placeholder, which is what
+		// keeps a layout readable when the widget it names arrives later — so
+		// only errors refuse, and it is reported as a warning.
+		const verdict = validateSessionLayout(decl.preset, {
+			widgets,
+			unknownWidgets: "warn"
+		})
 		if (!verdict.ok) {
 			report.refused.push({
 				key: seedKey,
+				pluginId,
 				reason: verdict.errors.join(" ")
 			})
-			console.warn(
-				`[layouts] plugin layout ${seedKey} was refused: ${verdict.errors.join(" ")}`
-			)
 			continue
 		}
+		const warned = verdict.warnings.map((warning) => ({
+			key: seedKey,
+			pluginId,
+			warning
+		}))
 
 		const projected = {
 			genreId: decl.genreId,
@@ -214,22 +307,23 @@ export async function syncPluginLayouts(
 			name: decl.name,
 			description: decl.description ?? null,
 			visibility: "shared" as const,
-			// ⏳ `{}` is "no overrides", which the client renders as its own
-			// arrangement — so applying a plugin's layout is inert rather than
-			// broken until brief 1 lets a manifest declare a session layout.
-			layout: {},
+			// The session layout, verbatim: what a session starting from this
+			// row draws.
+			layout: decl.preset as Record<string, unknown>,
 			seededByVersion: version
 		}
 
 		const existing = bySeedKey.get(seedKey)
 		if (!existing) {
 			await db.insert(schema.sessionLayoutPresets).values({
-				// NO id — the sequence assigns one (seed rule).
+				// NO id — the sequence assigns one (seed rule). `layout_updated_at`
+				// takes its default: the layout is new.
 				seedKey,
 				withdrawnAt: null,
 				...projected
 			})
 			report.projected.push(seedKey)
+			report.warnings.push(...warned)
 			continue
 		}
 		// A row under this key that another package owns is not this sync's to
@@ -237,17 +331,31 @@ export async function syncPluginLayouts(
 		// it over would silently replace somebody else's layout.
 		if (existing.pluginId !== pluginId) continue
 
+		report.projected.push(seedKey)
+		report.warnings.push(...warned)
 		if (existing.withdrawnAt) report.restored.push(seedKey)
+		const layoutMoved = !sameLayout(existing.layout, projected.layout)
+		const current =
+			!existing.withdrawnAt &&
+			!layoutMoved &&
+			(Object.keys(projected) as Array<keyof typeof projected>).every(
+				(k) => k === "layout" || existing[k] === projected[k]
+			)
+		// Already what the manifest says: nothing to write, and nothing moves.
+		if (current) continue
 		await db
 			.update(schema.sessionLayoutPresets)
-			.set({ ...projected, withdrawnAt: null })
+			.set({
+				...projected,
+				withdrawnAt: null,
+				...(layoutMoved ? { layoutUpdatedAt: new Date() } : {})
+			})
 			.where(
 				and(
 					eq(schema.sessionLayoutPresets.id, existing.id),
 					eq(schema.sessionLayoutPresets.origin, "plugin")
 				)
 			)
-		report.projected.push(seedKey)
 	}
 
 	for (const row of rows as Array<Record<string, any>>) {

@@ -15,6 +15,9 @@
 	 * amendments and still read the same at this moment, and that is not a
 	 * difference worth a row — what an author wants to know is whether the two
 	 * stories say different things now.
+	 *
+	 * A row the moment has not reached yet (`later`) is listed dimmed and
+	 * marked, as the pool draws it: it is still the line's, just not yet.
 	 */
 	interface Props {
 		lineName: string
@@ -69,6 +72,15 @@
 	}
 </script>
 
+{#snippet laterBadge()}
+	<span
+		class="badge preset-tonal-surface shrink-0 text-[11px]"
+		title="Dated after the moment being read"
+	>
+		later
+	</span>
+{/snippet}
+
 <section class="flex min-h-0 flex-1 flex-col gap-3" data-lore-compare>
 	<div class="flex flex-wrap items-center gap-2">
 		<Icons.GitCompare size={16} class="shrink-0" aria-hidden="true" />
@@ -109,6 +121,7 @@
 						<li>
 							<button
 								class="bg-surface-100-900 hover:preset-tonal-surface flex w-full items-center gap-2 rounded-[10px] px-3 py-2 text-left"
+								class:opacity-50={d.later}
 								type="button"
 								onclick={() => onOpen?.(d)}
 							>
@@ -120,6 +133,9 @@
 								<span class="min-w-0 flex-1 truncate text-sm">
 									{titleOf(d.line)}
 								</span>
+								{#if d.later}
+									{@render laterBadge()}
+								{/if}
 							</button>
 						</li>
 					{/each}
@@ -138,14 +154,20 @@
 					{#each differs as d (d.key)}
 						<li
 							class="bg-surface-100-900 flex flex-col gap-2 rounded-[10px] px-3 py-2"
+							class:opacity-50={d.later}
 						>
-							<button
-								class="min-w-0 truncate text-left text-sm font-semibold hover:underline"
-								type="button"
-								onclick={() => onOpen?.(d)}
-							>
-								{titleOf(d.line)}
-							</button>
+							<div class="flex min-w-0 items-center gap-2">
+								<button
+									class="min-w-0 flex-1 truncate text-left text-sm font-semibold hover:underline"
+									type="button"
+									onclick={() => onOpen?.(d)}
+								>
+									{titleOf(d.line)}
+								</button>
+								{#if d.later}
+									{@render laterBadge()}
+								{/if}
+							</div>
 							{#each d.fields as field (field)}
 								<div class="flex flex-col gap-1">
 									<span

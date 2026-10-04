@@ -182,7 +182,10 @@ export const GUIDE_ORDER = [
 			"getting-started",
 			"what-is-serene-pub",
 			"install",
-			"connect-a-model"
+			"connect-a-model",
+			// The path's last step: getting-started's numbered list ends here,
+			// and the page reads as both that step and a map to come back to.
+			"getting-around"
 		]
 	},
 	{
@@ -191,14 +194,21 @@ export const GUIDE_ORDER = [
 			"characters",
 			"personas",
 			"sessions",
-			"lorebooks",
-			"tags",
+			"group-sessions",
 			"session-layout",
-			"themes-and-settings",
-			"languages",
+			"genres",
+			"genre-adventure",
+			"genre-lair",
+			"lorebooks",
+			"lorebook-cast",
+			"lorebook-places",
+			"lorebook-time",
 			"summarization",
 			"embeddings-and-rag",
 			"stats-and-states",
+			"tags",
+			"themes-and-settings",
+			"languages",
 			"connections",
 			"users-and-accounts",
 			"document-view",
@@ -207,12 +217,13 @@ export const GUIDE_ORDER = [
 	},
 	{
 		group: "How-to",
-		pages: ["importing-from-sillytavern", "hosting"]
+		pages: ["coming-from-sillytavern", "importing-from-sillytavern", "updating", "upgrading-from-0.5", "hosting"]
 	},
 	{
 		group: "For power users",
 		pages: [
 			"pipelines",
+			"session-actions",
 			"context-templates",
 			"system-settings",
 			"component-authoring",
@@ -221,7 +232,7 @@ export const GUIDE_ORDER = [
 	},
 	{
 		group: "Reference and help",
-		pages: ["getting-around", "environment-variables", "troubleshooting"]
+		pages: ["environment-variables", "troubleshooting", "release-notes/0.6.0-pr-1"]
 	}
 ]
 
@@ -233,7 +244,7 @@ export const GUIDE_ORDER = [
  * A guide missing from this list is appended alphabetically and reported as a
  * warning — the compiler's rule, not a special case for this source.
  */
-const SDK_GUIDE_ORDER = ["vocabulary", "your-first-plugin", "where-values-come-from", "extending", "widgets", "frames", "channels", "events", "storage", "forms-and-effects", "plugin-permissions"]
+const SDK_GUIDE_ORDER = ["extending", "vocabulary", "your-first-plugin", "widgets", "frames", "channels", "events", "storage", "forms-and-effects", "plugin-permissions", "where-values-come-from"]
 
 /**
  * Reading order for the catalog-and-laws source, derived from its own pages.
@@ -286,16 +297,20 @@ function apiReadingOrder(pages) {
  * them by hand (NOMENCLATURE §27, "banner").
  */
 const SDK_BANNER =
-	"Plugin modding is only available in 0.7 previews. This reference " +
-	"describes the SDK the app runs; authoring and installing plugins " +
-	"arrives in 0.7."
+	"Plugins are a preview in Serene Pub 0.6: releases ship with them " +
+	"switched off (an administrator turns them on with SP_PLUGINS_ENABLED), " +
+	"and the SDK may still change before its first stable release in 0.7. " +
+	"This reference describes the SDK the app runs."
 
 /**
- * The guides are written for plugin authors, so the second sentence of the
+ * The guides are written for plugin authors, so the last sentence of the
  * reference banner ("describes the SDK the app runs") would mislead here.
  */
 const SDK_GUIDES_BANNER =
-	"Plugin modding is only available in 0.7 previews. Everything on this page builds and runs today; installing a plugin is what the 0.7 previews add."
+	"Plugins are a preview in Serene Pub 0.6: releases ship with them " +
+	"switched off (an administrator turns them on with SP_PLUGINS_ENABLED), " +
+	"and the SDK may still change before its first stable release in 0.7. " +
+	"Everything on this page builds and runs today."
 
 /** Assets are served from static/, which ships whole — 6 MB is the ceiling. */
 const ASSET_BUDGET_BYTES = 6 * 1024 * 1024

@@ -5,6 +5,7 @@ import {
 	presencesByMember,
 	type Presence
 } from "./presence"
+import { lineOf, MAIN_LINE } from "./lineReading"
 
 const p = (
 	over: Partial<Presence> &
@@ -142,12 +143,12 @@ describe("appearances", () => {
 			p({ id: 2, personalPosition: 50, fromYear: 1, branchId: 7 })
 		]
 		expect(
-			appearancesOf(1, rows, { branchId: null }).map(
+			appearancesOf(1, rows, { line: MAIN_LINE }).map(
 				(a) => a.personalPosition
 			)
 		).toEqual([34])
 		expect(
-			appearancesOf(1, rows, { branchId: 7 }).map(
+			appearancesOf(1, rows, { line: lineOf(7, [{ id: 7 }]) }).map(
 				(a) => a.personalPosition
 			)
 		).toEqual([34, 50])

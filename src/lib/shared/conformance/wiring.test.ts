@@ -516,11 +516,35 @@ const UNFILLED_IN_PORTS: Deliberate[] = [
 		subject: "core:outlet/create-lore-entry@1.links",
 		reason:
 			"Graph edges written with the entry, from a structured list. The " +
-			"shipped writers (Lair's room drafting, the Writing Room's bible) " +
-			"produce prose, and nothing in core parses a line of prose into " +
+			"shipped writer (Lair's room drafting) produces prose, and " +
+			"nothing in core parses a line of prose into " +
 			"entry names (`LAIR_ROOM_CONTENT_SHAPE`), so none has a list to " +
 			"wire. The host writes whatever arrives; a spec with structured " +
 			"output fills it."
+	},
+	{
+		subject: "core:outlet/link-lore-entries@1.name",
+		reason:
+			"A way's own name — \"the rusted iron door\" (places plan B2). " +
+			"Core's one wirer, the Lair's *Answer the door* (B6), knows the " +
+			"two ends and nothing about the way between them: the knock's " +
+			"`referent` is the ROOM's name (the entry's `name`) and the " +
+			"master's words are the room's body, so wiring either would put a " +
+			"room's words on the link. It writes `leads to` both ways from the " +
+			"preset and leaves the way unnamed, which reads as a plain sentence " +
+			"under \"From here:\". The port is how a spec whose author knows " +
+			"the way names it. ⏳ Expires with B6's §11 departure: when the " +
+			"door's link moves back into `create-lore-entry`'s `links` (the " +
+			"conditional-links work B6's review left open), no shipped spec " +
+			"pins this node and the stale check asks for this entry's " +
+			"deletion. Delete it sooner if a spec wires a name."
+	},
+	{
+		subject: "core:outlet/link-lore-entries@1.description",
+		reason:
+			"The prose half of the pair above (B2): what the way " +
+			"is like, beyond its name. Same wirer, same terms — the door has " +
+			"no words about the way to give it — and the same ⏳ expiry."
 	}
 ]
 
@@ -817,6 +841,15 @@ const RUN_OPTIONS: Record<string, true | string> = {
 	// resolves an id to a loaded, synchronous counter before the run starts
 	// and the fit loop never had to change. `runSpec` passes the id.
 	tokenizer: true,
+	// The model server's own counts where it publishes them (`runTurn` via
+	// `runTokenCounter.ts`), layered over the connection's tokenizer estimate
+	// so the connection's setting still decides the rest. It wins over
+	// `tokenizer` in the executor, so it is passed only when the server counts.
+	countTokens: true,
+	// The absolute bound on any one node, idle-timed or not (`runTurn`'s
+	// NODE_TIMEOUT_CEILING_MS). Unwired, a tethered reply that never ends
+	// runs forever.
+	timeoutCeilingMs: true,
 	// The one that motivated this file. Wired now (runTurn passes the
 	// registry's cancellation probe through), and this line is what keeps it
 	// wired: unwiring it fails here rather than in a cancelled run that
@@ -873,10 +906,6 @@ const RUN_OPTIONS: Record<string, true | string> = {
 		"Same: who ran it is a column on the app's run row, written by " +
 		"`saveReceipt` from `request.userId`, not a field it reads back off " +
 		"the receipt.",
-	timeoutCeilingMs:
-		"There is no instance-wide timeout ceiling setting to pass. Per-node " +
-		"timeouts come from the descriptors; the admin surface for a ceiling " +
-		"over them does not exist yet.",
 	forceSequential:
 		"The admin control for 'run every block sequentially' is not built. " +
 		"Block mode is the spec author's `async` mode today.",
@@ -900,13 +929,6 @@ const RUN_OPTIONS: Record<string, true | string> = {
 		"Deliberately left to the executor's own default, which is already " +
 		"the behaviour the app wants — compact for event-triggered runs, full " +
 		"detail for a run somebody clicked.",
-	countTokens:
-		"Superseded by `tokenizer`, and deliberately NOT passed beside it. " +
-		"The function still exists for hosts and for the SDK's own suite, and " +
-		"it WINS when both are given — so passing it here would silently " +
-		"override the id and put the connection's setting back out of reach, " +
-		"which is the exact bug the entry above records fixing. An id is also " +
-		"the form that lands in the receipt; a closure is not."
 }
 
 describe("§3 executor options — the app supplies what the SDK expects", () => {
@@ -1042,7 +1064,9 @@ function declaredSocketEvents(): string[] {
 
 /**
  * Where an event name is written as a string, and where it is written as a
- * handler's `event:` — the two facts the source text can actually settle.
+ * handler's `event:` or as `refusable("…"` (which builds that same handler and
+ * emits its own `${event}:error`) — the two facts the source text can
+ * actually settle.
  */
 function socketReferences(): {
 	referenced: Map<string, string[]>
@@ -1065,7 +1089,8 @@ function socketReferences(): {
 			const seen = referenced.get(name) ?? []
 			if (!seen.includes(path)) seen.push(path)
 			referenced.set(name, seen)
-			if (/\bevent\s*:\s*$/.test(before)) handled.add(name)
+			if (/(?:\bevent\s*:|\brefusable(?:<[^>]*>)?\()\s*$/.test(before))
+				handled.add(name)
 		}
 	}
 	return { referenced, handled }
@@ -1643,18 +1668,7 @@ const endowedNested = (): Record<string, string[]> => ({
  * class is readable before anybody decides how to close it — and so that
  * closing one is a deletion here rather than a silent improvement.
  */
-const UNENDOWED_HOOK_CTX: Deliberate[] = [
-	{
-		subject: "readCore",
-		reason:
-			"⚠ `LifecycleCallbackSurface`'s whole reason to exist beside the event " +
-			"surface — 'scoped core reads' is the first line of its docblock — " +
-			"and no backend endows it. `CoreQuery` and `CorePage` beside it " +
-			"are types with no producer. Declared ahead of a host-side reader " +
-			"that would have to make the table allowlist and the pagination " +
-			"real, and nothing in `src/` mentions any of the three."
-	}
-]
+const UNENDOWED_HOOK_CTX: Deliberate[] = []
 
 /**
  * Members a backend puts on `ctx` that no hook surface declares.
@@ -1665,19 +1679,14 @@ const UNENDOWED_HOOK_CTX: Deliberate[] = [
  */
 const UNDECLARED_HOOK_CTX: Deliberate[] = [
 	{
-		subject: "random",
+		subject: "fetch",
 		reason:
-			"The per-call deterministic RNG, and load-bearing rather than a " +
-			"convenience: SES freezes `Math.random`, so `ctx.random` is the " +
-			"ONLY stream a hook has on that backend. Named on no surface, so " +
-			"an author reading the SDK cannot know it is there."
-	},
-	{
-		subject: "now",
-		reason:
-			"The pinned clock, same story as `random` — `Date.now` is frozen " +
-			"or overwritten and `ctx.now()` is the replay-safe replacement. " +
-			"Undeclared."
+			"Endowed only on an oracle's call (the grant table, `hookCtxGrants`), " +
+			"and declared on `PluginHandlerContext` (`@serene-pub/sdk/testing`) — which " +
+			"this scan does not read, since it reads hooks.ts's `*Surface` " +
+			"interfaces. The event and lifecycle surfaces there are not granted " +
+			"it and do not declare it, which is the point: their types say what " +
+			"the sandbox gives them."
 	},
 	{
 		subject: "storage.read",

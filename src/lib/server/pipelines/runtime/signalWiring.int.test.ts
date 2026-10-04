@@ -254,6 +254,10 @@ beforeAll(async () => {
  */
 const EVERY_MECHANISM = [
 	{ nodeKey: "gather.entities.read", path: "maxEntries", value: 20 },
+	// The semantic mechanism's switch is `query-windows`' since 2026-09-29
+	// (C3), on its chain's first node; `maxEntries` is its ceiling, raised
+	// beside it so the cap cannot bite.
+	{ nodeKey: "semantic.arm.queries", path: "searchByMeaning", value: "on" },
 	{ nodeKey: "semantic.arm.search", path: "maxEntries", value: 20 },
 	{ nodeKey: "names.arm.mentions", path: "maxMentions", value: 4 }
 ]

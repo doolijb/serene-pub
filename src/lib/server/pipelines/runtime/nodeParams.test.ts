@@ -576,7 +576,9 @@ describe("lore floors cannot be set through the node (R6)", () => {
 })
 
 /**
- * The allocation precedence reaching `select` (migration 0196).
+ * The allocation precedence reaching `select` (`scoreLedAllocation`, declared
+ * by the pre-squash migration 0196 — archived, superseded by the 0094
+ * baseline; today's 0196 is unrelated).
  *
  * ⚠ `SelectOptions.scoreLedAllocation` was built and tested with **no runtime
  * caller at all** — this node is the only runtime `select()` there is, and it

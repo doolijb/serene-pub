@@ -14,7 +14,9 @@
 		title?: string
 		description?: string
 		multiSelect?: boolean
-		onMultiSelect?: (userIds: number[]) => void
+		/** The picked ids, and their rows — a caller holding the pick as a
+		 *  pending change needs the names before the server has them. */
+		onMultiSelect?: (userIds: number[], users: SelectUser[]) => void
 	}
 
 	let {
@@ -77,7 +79,11 @@
 
 	function handleConfirmMultiSelect() {
 		if (onMultiSelect) {
-			onMultiSelect(Array.from(selectedUserIds))
+			const ids = Array.from(selectedUserIds)
+			onMultiSelect(
+				ids,
+				users.filter((u) => u.id != null && selectedUserIds.has(u.id))
+			)
 		}
 		onclose()
 	}

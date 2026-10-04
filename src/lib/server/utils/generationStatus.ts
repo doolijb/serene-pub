@@ -1,5 +1,11 @@
 import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
+import {
+	isFailedQuery,
+	QUERY_FAILED_SENTENCE,
+	sqlStateOf,
+	withoutQueryText
+} from "$lib/server/db/errors"
 import { updateLegacyWhere } from "$lib/server/messages/store"
 import { and, eq } from "drizzle-orm"
 import { broadcastToSessionUsers } from "../sockets/utils/broadcastHelpers"
@@ -37,7 +43,17 @@ export function friendlyErrorFromUnknown(err: unknown): {
 	message: string
 	code?: string
 } {
-	const raw = err instanceof Error ? err.message : String(err)
+	// A failed query's message is its SQL and the values it wrote — the
+	// reply's own text among them. The row says the plain sentence and keeps
+	// the SQLSTATE as its code; the whole error is in the server log.
+	if (isFailedQuery(err))
+		return { message: QUERY_FAILED_SENTENCE, code: sqlStateOf(err) }
+	const text = err instanceof Error ? err.message : String(err)
+	// …and so does a message that QUOTES one: a halted run's reason carried in
+	// a `ComposedError` (`LiveRow.finish`), a wrapper's `${label}: ${e.message}`.
+	// Its own words stay; no code is read out of what was the SQL.
+	const raw = withoutQueryText(text)
+	if (raw !== text) return { message: raw }
 	// Pull a leading HTTP-status-looking token out of adapter error messages
 	// (e.g. "KoboldCPP API error: 500 ...") so it can be shown as a code.
 	const statusMatch = raw.match(/\b([1-5]\d{2})\b/)
@@ -162,8 +178,12 @@ export async function persistGenerationErrorRow(
 	console.error("[generationStatus] generation failed:", err)
 
 	const composed = err instanceof ComposedError
+	// `detail` is free text too, and an administrator reads it on the row: a
+	// failed query in it becomes the plain sentence like everywhere else.
 	const connection: ConnectionIdentity | undefined = composed
-		? err.connection
+		? err.connection && typeof err.connection.detail === "string"
+			? { ...err.connection, detail: withoutQueryText(err.connection.detail) }
+			: err.connection
 		: { detail: raw.message }
 
 	// The code goes with the message it was extracted from, and only when that

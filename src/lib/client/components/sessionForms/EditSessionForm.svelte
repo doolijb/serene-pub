@@ -17,6 +17,8 @@
 	import SessionLorebookReading from "./SessionLorebookReading.svelte"
 	import type { StoryClock } from "$lib/shared/lorebooks/storyDate"
 	import { stripUnmovedReading } from "./sessionReadingPatch"
+	import { adoptSavedGenreFields, changedGenreFields } from "./genreFieldsPatch"
+	import { guestChanges } from "./guestChanges"
 	import { storedPlayerLabel } from "$lib/shared/sessions/playerLabel"
 	import { useTypedSocket } from "$lib/client/sockets/loadSockets.client"
 	import {
@@ -42,6 +44,8 @@
 	import { z } from "zod"
 	import SchemaForm from "../pipelines/SchemaForm.svelte"
 	import PipelineConfigOptions from "../pipelines/PipelineConfigOptions.svelte"
+	import DocPeek from "$lib/client/components/docs/DocPeek.svelte"
+	import { docsHref } from "$lib/shared/utils/docsHref"
 	import PanelNavHeader from "../panels/PanelNavHeader.svelte"
 	import PanelTabStrip from "../panels/PanelTabStrip.svelte"
 	import { actionIdentity } from "$lib/shared/actions/identity"
@@ -123,8 +127,6 @@
 					lorebookId?: number | null
 					tags: string[]
 					samplingConfigId?: number | null
-					promptConfigId?: number | null
-					narratorPromptConfigId?: number | null
 					genreId?: string
 					genreFields?: Record<string, unknown>
 				}
@@ -146,8 +148,6 @@
 					lorebookId?: number | null
 					tags: string[]
 					samplingConfigId?: number | null
-					promptConfigId?: number | null
-					narratorPromptConfigId?: number | null
 					genreId?: string
 					genreFields?: Record<string, unknown>
 				}
@@ -175,8 +175,6 @@
 	let lorebookBranchId: number | null = $state(null)
 	let storyClock: StoryClock | null = $state(null)
 	let sessionSamplingConfigId: number | null = $state(null)
-	let sessionPromptConfigId: number | null = $state(null)
-	let narratorPromptConfigId: number | null = $state(null)
 
 	// CHAT MODE (19 §2, U-C2)
 	let modesList: Sockets.Sessions.Genres.Response["genres"] = $state([])
@@ -278,11 +276,12 @@
 	 * turn order (`characterPositions`).
 	 */
 	let isDirty: boolean = $derived(
-		!!data &&
+		(!!data &&
 			!!originalData &&
 			!sameFormValue($state.snapshot(data), $state.snapshot(originalData), {
 				unordered: ["session.tags", "personaIds", "guestIds"]
-			})
+			})) ||
+			participantSwitchesDirty()
 	)
 	let canSave: boolean = $derived(
 		// Name plus the mode's participant floors — for the standard mode
@@ -309,9 +308,51 @@
 		$state([])
 	let selectedPersonas: (Partial<SelectCharacter> & { id: number })[] =
 		$state([])
-	let selectedGuests: NonNullable<
-		NonNullable<Sockets.Sessions.Get.Response["session"]>["sessionGuests"]
-	> = $state([])
+	/**
+	 * The guests the form wants. A pending change like the cast (note 34):
+	 * added and removed here, committed by Save as the difference from the
+	 * session's saved guests (`guestChanges`), dropped with the form. A row
+	 * picked but not yet saved carries only the user the picker returned.
+	 */
+	type GuestRow = {
+		userId: number
+		user?: { username?: string | null; displayName?: string | null } | null
+	}
+	let selectedGuests: GuestRow[] = $state([])
+	/**
+	 * Participant writes Save sent and not yet answered (guests, a cast
+	 * member's enabled switch, an envoy's seat) — the form closes after, so a
+	 * refusal can still be told. Every path of each write's handler answers
+	 * (a refusal on its own event, a throw or the setup gate on `:error`), so
+	 * the form closes on the answers alone.
+	 */
+	let participantWritesInFlight = $state(0)
+	let closeWhenParticipantsSettle = false
+
+	/**
+	 * A cast member's enabled switch and an envoy's seat, held until Save
+	 * (note 34): the switch shows the draft, and Save sends only what differs
+	 * from the saved row — so flipping one back is clean (§6.14).
+	 */
+	let activeDraft: Record<number, boolean> = $state({})
+	let envoyDraft: Record<string, boolean> = $state({})
+	const savedActive = (characterId: number): boolean | undefined =>
+		session?.sessionCharacters?.find(
+			(cc) => cc.characterId === characterId && !cc.removedAt
+		)?.isActive ?? undefined
+	const shownActive = (characterId: number): boolean =>
+		activeDraft[characterId] ?? savedActive(characterId) ?? true
+	/** Saved cast members whose switch differs from the saved row. */
+	const activeChanges = $derived(
+		selectedCharacters.filter((c) => {
+			const saved = savedActive(c.id)
+			return (
+				saved !== undefined &&
+				c.id in activeDraft &&
+				activeDraft[c.id] !== saved
+			)
+		})
+	)
 	let showRemoveModal = $state(false)
 	let removeType: "character" | "persona" | "guest" = $state("character")
 	let removeName = $state("")
@@ -415,8 +456,6 @@
 				: {}
 		const _tags = selectedTags
 		const _samplingConfigId = sessionSamplingConfigId
-		const _promptConfigId = sessionPromptConfigId
-		const _narratorPromptConfigId = narratorPromptConfigId
 		const _genreId = genreId
 		const _genreFields = JSON.parse(JSON.stringify(genreFields))
 		const _playerLabel = playerLabelOverride.trim()
@@ -429,8 +468,6 @@
 				..._reading,
 				tags: _tags,
 				samplingConfigId: _samplingConfigId,
-				promptConfigId: _promptConfigId,
-				narratorPromptConfigId: _narratorPromptConfigId,
 				genreId: _genreId,
 				genreFields: _genreFields
 			},
@@ -584,29 +621,73 @@
 		reassignTarget = null
 	}
 
-	function handleAddGuests(userIds: number[]) {
-		if (!session?.id) return
-		const sessionId = session.id
-
-		// Add each guest via socket
-		userIds.forEach((userId) => {
-			const req: Sockets.Sessions.AddGuest.Params = {
-				sessionId,
-				guestUserId: userId
-			}
-			socket.emit("sessions:addGuest", req)
-		})
+	/** Held, not written: Save commits it (note 34). */
+	function handleAddGuests(userIds: number[], users: SelectUser[]) {
+		const held = new Set(selectedGuests.map((g) => g.userId))
+		const added = userIds
+			.filter((id) => !held.has(id))
+			.map((userId) => ({
+				userId,
+				user: users.find((u) => u.id === userId) ?? null
+			}))
+		if (added.length) selectedGuests = [...selectedGuests, ...added]
 		showGuestModal = false
 	}
 
+	/** Held, not written: Save commits it (note 34). */
 	function handleRemoveGuest(userId: number) {
-		if (!session?.id) return
+		selectedGuests = selectedGuests.filter((g) => g.userId !== userId)
+	}
 
-		const req: Sockets.Sessions.RemoveGuest.Params = {
-			sessionId: session.id,
-			guestUserId: userId
+	/**
+	 * Save's guest half: the difference from the saved guests, one write per
+	 * user (`sessions:update` carries no guests). Counted, so the form stays
+	 * open until every answer is in and a refusal can still be toasted.
+	 */
+	function commitParticipantChanges(sessionId: number) {
+		// The seat is SET to the held value, never flipped, so a stale form
+		// cannot invert it; only a switch that differs from the saved row is
+		// sent.
+		for (const c of activeChanges) {
+			participantWritesInFlight++
+			socket.emit("sessions:setCastSeatEnabled", {
+				sessionId,
+				characterId: c.id,
+				enabled: activeDraft[c.id]
+			})
 		}
-		socket.emit("sessions:removeGuest", req)
+		if (!isGuest)
+			for (const e of envoyChanges) {
+				participantWritesInFlight++
+				socket.emit("sessions:setEnvoySeat", {
+					sessionId,
+					slug: e.slug,
+					seated: envoyDraft[e.slug]
+				})
+			}
+		if (!isGuest) commitGuestChanges(sessionId)
+	}
+
+	function commitGuestChanges(sessionId: number) {
+		const saved = (session?.sessionGuests ?? []).map((g) => g.userId)
+		const { add, remove } = guestChanges(
+			saved,
+			selectedGuests.map((g) => g.userId)
+		)
+		participantWritesInFlight += add.length + remove.length
+		for (const guestUserId of add)
+			socket.emit("sessions:addGuest", { sessionId, guestUserId })
+		for (const guestUserId of remove)
+			socket.emit("sessions:removeGuest", { sessionId, guestUserId })
+	}
+
+	function participantWriteAnswered() {
+		participantWritesInFlight = Math.max(0, participantWritesInFlight - 1)
+		if (participantWritesInFlight === 0 && closeWhenParticipantsSettle) {
+			closeWhenParticipantsSettle = false
+			showEditSessionForm = false
+			onClose?.()
+		}
 	}
 
 	function handleSave() {
@@ -655,6 +736,17 @@
 		// save of the tab (#136).
 		const was = (originalData?.session ?? {}) as Record<string, unknown>
 		stripUnmovedReading(sent, was)
+		// Genre fields go only as the person changed them here, field by
+		// field (2026-10-03): the server merges them over what is stored, so
+		// an author's note saved from its widget while this form was open is
+		// not put back to the value the form loaded.
+		const fieldsPatch = changedGenreFields(
+			data!.session.genreFields,
+			was.genreFields as Record<string, unknown> | undefined,
+			modeShape ? Object.keys(modeFieldDecls) : undefined
+		)
+		if (fieldsPatch) sent.genreFields = fieldsPatch
+		else delete sent.genreFields
 		const { playerLabel, ...rest } = data!
 		const updateSession: Sockets.Sessions.Update.Params = {
 			...rest,
@@ -662,6 +754,9 @@
 			// R4: only where the genre names the person's lines; blank clears.
 			...(genrePlayerLabel ? { playerLabel } : {})
 		}
+		// Participant writes first: their answers are counted, and the
+		// update's answer closes the form only once they are all in.
+		commitParticipantChanges(session.id)
 		socket.emit("sessions:update", updateSession)
 	}
 
@@ -801,6 +896,7 @@
 					?.filter((cp) => !cp.removedAt)
 					.map((cp) => cp.persona) || []
 			selectedGuests = session.sessionGuests || []
+			activeDraft = {}
 			lorebookId = session.lorebookId || null
 			savedLorebookId = lorebookId
 			lorebookBranchId = session.lorebookBranchId ?? null
@@ -816,8 +912,6 @@
 					: null
 			selectedTags = session.tags || []
 			sessionSamplingConfigId = session.samplingConfigId ?? null
-			sessionPromptConfigId = session.promptConfigId ?? null
-			narratorPromptConfigId = session.narratorPromptConfigId ?? null
 			genreId = (session as any).genreId ?? STANDARD_GENRE_ID
 			genreFields = ((session as any).genreFields ?? {}) as Record<
 				string,
@@ -895,7 +989,7 @@
 	})
 
 	// The mode's functions and their state on this session (19 §3). Companions —
-	// contributed from the mode owner's own namespace — arrive on; attachments
+	// contributed from the mode owner's own namespace — arrive on; foreign ones
 	// arrive off and are opt-in. Absence of a row means the default answers, so
 	// a companion added in a later update reaches sessions that never had a view.
 	let sessionFunctions: Sockets.Sessions.Functions.Response["functions"] =
@@ -1051,23 +1145,39 @@
 		tagsList = msg.tagsList || []
 	}
 
-	const handleToggleSessionCharacterActive = (
-		msg: Sockets.Sessions.ToggleSessionCharacterActive.Response
+	const handleSetCastSeatEnabled = (
+		msg: Sockets.Sessions.SetCastSeatEnabled.Response
 	) => {
-		if (msg.error) {
+		if (msg.sessionId !== session?.id) return
+		// Sent by Save (note 34): "Session updated" says it landed, and the
+		// server re-sends the session itself — only a refusal speaks.
+		if (msg.error)
 			toaster.error({
-				title: "Error toggling character",
+				title: "Character not enabled or disabled",
 				description: msg.error
 			})
-			return
-		}
-		if (session && session.id === msg.sessionId) {
-			toaster.success({
-				title: `Character ${msg.isActive ? "enabled" : "disabled"}`
-			})
-			// Refresh session data to get updated state
-			socket.emit("sessions:get", { id: session.id })
-		}
+		participantWriteAnswered()
+	}
+
+	/**
+	 * A newer save of this session's genre fields — the Author's note
+	 * widget's, another tab's (2026-10-03). Each one moves what the form
+	 * counts as saved; a field the person has not touched here follows it,
+	 * an edited one keeps the edit (§6.14), so Save never puts back a value
+	 * the form loaded before someone else saved.
+	 */
+	const handleGenreFieldsChanged = (
+		msg: Sockets.Sessions.GenreFieldsChanged.Response
+	) => {
+		if (msg.sessionId !== session?.id || !originalData) return
+		const next = adoptSavedGenreFields(
+			$state.snapshot(genreFields),
+			$state.snapshot(originalData.session.genreFields ?? {}),
+			msg.genreFields ?? {}
+		)
+		if (!next.moved) return
+		originalData.session.genreFields = next.loaded
+		genreFields = next.current
 	}
 
 	const handleSessionsUpdate = (res: any) => {
@@ -1075,36 +1185,39 @@
 			title: "Session updated",
 			description: `Session "${res.session.name || "Unnamed session"}" updated successfully.`
 		})
+		// Participant writes still out: the last answer closes the form.
+		if (participantWritesInFlight > 0) {
+			closeWhenParticipantsSettle = true
+			return
+		}
 		showEditSessionForm = false
 		onClose?.()
 	}
 
+	/**
+	 * The answers to Save's guest writes. "Session updated" already says the
+	 * save landed, so only a refusal speaks; the server re-broadcasts the
+	 * session to its participants, so there is nothing to re-ask.
+	 */
 	const handleSessionsAddGuest = (
 		res: Sockets.Sessions.AddGuest.Response
 	) => {
-		if (res.success) {
-			toaster.success({ title: "Guest added successfully" })
-			// Request updated session data
-			if (editSessionId) {
-				socket.emit("sessions:get", { id: editSessionId })
-			}
-		} else if (res.error) {
-			toaster.error({ title: res.error })
-		}
+		if (res.sessionId !== session?.id) return
+		if (!res.success && res.error)
+			toaster.error({ title: "Guest not added", description: res.error })
+		participantWriteAnswered()
 	}
 
 	const handleSessionsRemoveGuest = (
 		res: Sockets.Sessions.RemoveGuest.Response
 	) => {
-		if (res.success) {
-			toaster.success({ title: "Guest removed successfully" })
-			// Request updated session data
-			if (editSessionId) {
-				socket.emit("sessions:get", { id: editSessionId })
-			}
-		} else if (res.error) {
-			toaster.error({ title: res.error })
-		}
+		if (res.sessionId !== session?.id) return
+		if (!res.success && res.error)
+			toaster.error({
+				title: "Guest not removed",
+				description: res.error
+			})
+		participantWriteAnswered()
 	}
 
 	const handleReassignRemovedParticipant = (
@@ -1138,11 +1251,15 @@
 	 * Declared at initialisation and released when the form is destroyed: the
 	 * interest registry releases this form's subscribers as its effects are.
 	 */
-	useInterest<"sessions:toggleSessionCharacterActive">(
-		"sessions:toggleSessionCharacterActive",
-		handleToggleSessionCharacterActive
+	useInterest<"sessions:setCastSeatEnabled">(
+		"sessions:setCastSeatEnabled",
+		handleSetCastSeatEnabled
 	)
 	useInterest<"sessions:update">("sessions:update", handleSessionsUpdate)
+	useInterest<"sessions:genreFieldsChanged">(
+		"sessions:genreFieldsChanged",
+		handleGenreFieldsChanged
+	)
 	useInterest<"sessions:addGuest">(
 		"sessions:addGuest",
 		handleSessionsAddGuest
@@ -1150,6 +1267,26 @@
 	useInterest<"sessions:removeGuest">(
 		"sessions:removeGuest",
 		handleSessionsRemoveGuest
+	)
+	// A thrown write answers on its `:error` sibling, which Layout's catch-all
+	// already toasts — counted here only, so the form still closes.
+	useInterest<"sessions:addGuest:error">(
+		"sessions:addGuest:error",
+		participantWriteAnswered
+	)
+	useInterest<"sessions:removeGuest:error">(
+		"sessions:removeGuest:error",
+		participantWriteAnswered
+	)
+	// The setup gate (and any throw `register` catches) answers the cast and
+	// envoy writes on `:error` too — counted the same way.
+	useInterest<"sessions:setCastSeatEnabled:error">(
+		"sessions:setCastSeatEnabled:error",
+		participantWriteAnswered
+	)
+	useInterest<"sessions:setEnvoySeat:error">(
+		"sessions:setEnvoySeat:error",
+		participantWriteAnswered
 	)
 	useInterest<"sessions:reassignRemovedParticipant">(
 		"sessions:reassignRemovedParticipant",
@@ -1228,29 +1365,34 @@
 		sessionEnvoys.filter((e) => e.origin === "genre")
 	)
 	/**
-	 * The switch is controlled (`checked={envoy.seated}`), so it moves when
-	 * the list does and not before. Flipped here optimistically, so the
-	 * press answers at once; the server's `sessions:view` re-send confirms
-	 * it, and a refusal (`sessions:setEnvoySeat` with `error` — not the
-	 * owner, an undeclared slug, an action's envoy) puts it back by
-	 * re-reading the list, with the sentence as a toast (U5g review, S3).
+	 * An envoy's seat is a pending change like the rest of Participants
+	 * (note 34): the switch shows `envoyDraft` over the saved seat, and Save
+	 * sends `sessions:setEnvoySeat` for each that differs. A refusal (not the
+	 * owner, an undeclared slug, an action's envoy) is toasted and the list
+	 * re-read, so the saved truth shows (U5g review, S3).
 	 */
 	function setEnvoySeat(slug: string, seated: boolean): void {
-		if (!session?.id) return
-		sessionEnvoys = sessionEnvoys.map((e) =>
-			e.slug === slug ? { ...e, seated } : e
+		// Held until Save (note 34); `envoyChanges` is what Save sends.
+		envoyDraft = { ...envoyDraft, [slug]: seated }
+	}
+	const shownSeated = (e: { slug: string; seated: boolean }) =>
+		envoyDraft[e.slug] ?? e.seated
+	/** Envoys whose seat switch differs from the saved seat. */
+	const envoyChanges = $derived(
+		genreEnvoys.filter(
+			(e) => e.slug in envoyDraft && envoyDraft[e.slug] !== e.seated
 		)
-		const req: Sockets.Sessions.SetEnvoySeat.Params = {
-			sessionId: session.id,
-			slug,
-			seated
-		}
-		socket.emit("sessions:setEnvoySeat", req)
+	)
+	/** The held switches (cast enabled, envoy seats) that differ from saved —
+	 *  read by `isDirty`, which is declared before these. */
+	function participantSwitchesDirty(): boolean {
+		return activeChanges.length > 0 || envoyChanges.length > 0
 	}
 	const handleSessionsSetEnvoySeat = (
 		msg: Sockets.Sessions.SetEnvoySeat.Response
 	) => {
 		if (msg.sessionId !== session?.id) return
+		participantWriteAnswered()
 		if (!msg.error) return
 		toaster.error({ title: "Envoy seat", description: msg.error })
 		// The truth is the server's list; the optimistic flip is reverted by
@@ -1262,19 +1404,12 @@
 		handleSessionsSetEnvoySeat
 	)
 
+	/** Held until Save (note 34); `activeChanges` is what Save sends. */
 	function toggleCharacterActive(
 		e: { checked: boolean },
 		c: Partial<SelectCharacter> & { id: number }
 	): void {
-		if (!session?.id) {
-			console.error("No session ID available")
-			return
-		}
-		const req: Sockets.Sessions.ToggleSessionCharacterActive.Params = {
-			sessionId: session.id,
-			characterId: c.id
-		}
-		socket.emit("sessions:toggleSessionCharacterActive", req)
+		activeDraft = { ...activeDraft, [c.id]: e.checked }
 	}
 </script>
 
@@ -1317,8 +1452,8 @@
 		{:else}
 			{#if isGuest}
 				<p class="preset-tonal-surface rounded-[10px] p-3 text-[13px]">
-					You're a guest in this session. You can manage characters,
-					personas, and guests below — session settings (name,
+					You're a guest in this session. You can manage characters
+					and personas below — guests and session settings (name,
 					scenario, lorebook, tags, etc.) can only be changed by the
 					session owner.
 				</p>
@@ -1402,6 +1537,14 @@
 				hidden={activeSessionTab !== "participants"}
 			>
 				<div class="flex flex-col gap-3 pt-3">
+					<!-- The tab's rule, said once (note 34; STYLE-GUIDE §6.14):
+					     everything here is held until Save. -->
+					<p class="text-surface-600-400 text-xs">
+						Changes here wait for Save — adding, removing, reordering
+						and switching people on or off. Reassigning a removed
+						participant's history is the one thing that happens at
+						once.
+					</p>
 					<!-- Capability-gated (19 §2): a section the mode's shape
 						     omits does not exist for this session, so it neither
 						     renders nor blocks saving. -->
@@ -1428,10 +1571,7 @@
 								>
 									{#each selectedCharacters as c, i (c.id)}
 										{@const isActive = session
-											? !!session?.sessionCharacters?.find(
-													(cc) =>
-														cc.characterId === c.id
-												)?.isActive
+											? shownActive(c.id)
 											: true}
 										{@const isSaved =
 											!session ||
@@ -1453,7 +1593,11 @@
 											>
 												<Icons.GripVertical size={16} />
 											</span>
-											<Avatar char={c} size="w-10 h-10" />
+											<Avatar
+												char={c}
+												size="md"
+												decorative
+											/>
 											<div class="min-w-0 flex-1">
 												<div
 													class="truncate text-[15px] font-medium select-none"
@@ -1622,7 +1766,7 @@
 										</span>
 										<Switch
 											name="toggle-envoy-seat-{envoy.slug}"
-											checked={envoy.seated}
+											checked={shownSeated(envoy)}
 											disabled={isGuest}
 											onCheckedChange={(e) =>
 												setEnvoySeat(envoy.slug, e.checked)}
@@ -1632,7 +1776,7 @@
 												class="preset-filled-surface-500 data-[state=checked]:preset-filled-primary-500 w-9"
 											>
 												<Switch.Thumb>
-													{#if envoy.seated}
+													{#if shownSeated(envoy)}
 														<Icons.Smile size="14" />
 													{:else}
 														<Icons.Meh size="14" />
@@ -1680,7 +1824,11 @@
 										>
 											<Icons.GripVertical size={16} />
 										</span>
-										<Avatar char={p} size="w-10 h-10" />
+										<Avatar
+											char={p}
+											size="md"
+											decorative
+										/>
 										<div class="min-w-0 flex-1">
 											<div
 												class="truncate text-[15px] font-medium select-none"
@@ -1757,7 +1905,7 @@
 								These were removed from the session, but their
 								past messages are kept. Reassign a removed
 								participant's history to a character or persona
-								you own.
+								you own — it happens at once, not on Save.
 							</p>
 							<div class="flex flex-col gap-2">
 								{#each removedCharacters as rc (rc.id)}
@@ -1813,6 +1961,10 @@
 								<button
 									class="btn btn-sm preset-tonal shrink-0"
 									onclick={() => (showGuestModal = true)}
+									disabled={isGuest}
+									title={isGuest
+										? "Only the session's owner can add guests"
+										: undefined}
 								>
 									<Icons.UserPlus
 										size={16}
@@ -1822,12 +1974,15 @@
 								</button>
 							</div>
 							<div class="flex flex-col gap-1">
-								{#each selectedGuests as guest}
+								{#each selectedGuests as guest (guest.userId)}
+									{@const guestSaved = !!session?.sessionGuests?.some(
+										(g) => g.userId === guest.userId
+									)}
 									<div
 										class="border-surface-300 dark:border-surface-800 flex min-h-11 items-center justify-between gap-2 rounded-[10px] border p-2"
 									>
 										<span
-											class="flex min-w-0 items-center gap-2"
+											class="flex min-w-0 flex-1 items-center gap-2"
 										>
 											<Icons.UserRound
 												size={18}
@@ -1840,6 +1995,13 @@
 												{resolveUserHandle(guest.user)}
 											</span>
 										</span>
+										{#if !guestSaved}
+											<span
+												class="text-surface-600-400 shrink-0 text-xs"
+											>
+												Ready to add
+											</span>
+										{/if}
 										<button
 											class="btn-ghost text-error-500 hover:bg-error-500/10 shrink-0 rounded p-1"
 											onclick={() =>
@@ -1871,6 +2033,14 @@
 				hidden={activeSessionTab !== "settings"}
 			>
 				<div class="flex flex-col gap-3 pt-3">
+					<!-- The tab's rule, said once (note 34; STYLE-GUIDE §6.14):
+					     the session's own fields wait for Save; the controls that
+					     change how it runs write as they move and say so. -->
+					<p class="text-surface-600-400 text-xs">
+						The story, genre settings and what your lines are called
+						wait for Save. Controls marked “Applies at once” change
+						the session as you set them.
+					</p>
 					<section class={CARD_CLASS}>
 						<h3 class="mb-3 text-sm font-medium">The story</h3>
 						<div class="flex flex-col gap-4">
@@ -1982,7 +2152,7 @@
 								class="text-surface-600-400 mb-1.5 block text-xs"
 								aria-hidden="true"
 							>
-								Preset
+								Preset · Applies at once
 							</p>
 							<Select
 								label="Preset"
@@ -2011,7 +2181,8 @@
 							<h3 class="mb-1 text-sm font-medium">Actions</h3>
 							<p class="text-surface-600-400 mb-2 text-xs">
 								What this session can do besides reply. Replying
-								is intrinsic and always available.
+								is intrinsic and always available. Applies at
+								once.
 							</p>
 
 							{#each presetActions as f (actionIdentity(f))}
@@ -2167,39 +2338,44 @@
 						</section>
 					{/if}
 
-					<!-- Configurables grouped BY PIPELINE (not by setting
-						     type): every pipeline this chat involves — the reply
-						     pipeline plus each enabled function like narrate — gets
-						     its own card, rendered from the pipeline's own
-						     declarations and written at this session's scope. The
-						     panel already handles connection (text-gen only),
-						     sampling, prompts and tuning per step. -->
+					<!-- One card per pipeline this session runs — the reply's,
+					     titled by its pipeline (*Adventure turn*), then each
+					     enabled action's — each drawn by the settings panel at this
+					     session's scope: every model call's switch, Prompt, Model
+					     (read-only: a session names no model) and Sampling — each
+					     only to a role that normally edits it, so a non-admin sees
+					     prompts alone. A card is drawn only when it holds a row
+					     this role edits (owner ruling 2026-09-30). Last
+					     comes the pipeline that created the session: editable while
+					     creating, then collapsed and read-only, its card saying why
+					     (owner ruling 2026-09-30). The section is a heading, not a
+					     card: the cards are siblings. -->
 					{#if session?.id && sessionPipelines.length}
-						<section class={CARD_CLASS}>
-							<h3 class="mb-1 text-sm font-medium">Pipelines</h3>
-							<p class="text-surface-600-400 mb-3 text-xs">
-								Changes here apply to this session only. Leave a
-								control on its default to inherit the global
-								setting.
-							</p>
-							<div class="flex flex-col gap-3">
-								{#each sessionPipelines as p (p.slug)}
-									<div
-										class="border-surface-300 dark:border-surface-800 flex flex-col gap-2 rounded-[10px] border p-3"
-									>
-										<p class="text-[13px] font-medium">
-											{p.label}
-										</p>
-										<PipelineConfigOptions
-											slug={p.slug}
-											sessionId={session.id}
-											selectorsOnly
-											showConfigPicker={false}
-											showScopeNote={false}
-										/>
-									</div>
-								{/each}
+						<section class="flex flex-col gap-3" aria-labelledby="session-pipelines">
+							<div>
+								<div class="flex items-center gap-1">
+									<h3 id="session-pipelines" class="text-sm font-medium">
+										Pipelines
+									</h3>
+									<DocPeek
+										href={docsHref("pipelines", "agents")}
+										topic="pipeline settings"
+									/>
+								</div>
+								<p class="text-surface-600-400 text-xs">
+									Changes here apply to this session only. Applies at
+									once — each setting saves as you make it.
+								</p>
 							</div>
+							{#each sessionPipelines as p, i (p.slug)}
+								<PipelineConfigOptions
+									slug={p.slug}
+									sessionId={session.id}
+									mode="session"
+									title={p.label}
+									collapsed={i > 0 || p.creation === "created"}
+								/>
+							{/each}
 						</section>
 					{/if}
 
@@ -2462,10 +2638,15 @@
 		{/if}
 	</div>
 {/if}
+<!-- Each picker hides what the other holds (note 33): a character in the
+	cast is not offered to play as, and the one played as is not offered for
+	the cast. The same rule as the start form's castOptions / playAsOptions. -->
 <CharacterSelectModal
 	open={showCharacterModal}
 	characters={characters.filter(
-		(c) => !selectedCharacters.some((sel) => sel.id === c.id)
+		(c) =>
+			!selectedCharacters.some((sel) => sel.id === c.id) &&
+			!selectedPersonas.some((sel) => sel.id === c.id)
 	)}
 	onOpenChange={(e) => (showCharacterModal = e.open)}
 	onSelect={handleAddCharacter}
@@ -2476,7 +2657,10 @@
 />
 <PersonaSelectModal
 	open={showPersonaModal}
-	excludeIds={selectedPersonas.map((p) => p.id)}
+	excludeIds={[
+		...selectedPersonas.map((p) => p.id),
+		...selectedCharacters.map((c) => c.id)
+	]}
 	onOpenChange={(e) => (showPersonaModal = e.open)}
 	onSelect={handleAddPersona}
 	returnFullPersona={true}

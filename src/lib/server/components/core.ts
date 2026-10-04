@@ -29,7 +29,8 @@ const SOURCES: Readonly<Record<string, () => Promise<{ default: string }>>> = {
 	"world-state": () => import("@serene-pub/core-catalog/components/world-state.source.json?raw"),
 	stats: () => import("@serene-pub/core-catalog/components/stats.source.json?raw"),
 	"lore-entries": () => import("@serene-pub/core-catalog/components/lore-entries.source.json?raw"),
-	"scene-portraits": () => import("@serene-pub/core-catalog/components/scene-portraits.source.json?raw")
+	"scene-portraits": () => import("@serene-pub/core-catalog/components/scene-portraits.source.json?raw"),
+	"authors-note": () => import("@serene-pub/core-catalog/components/authors-note.source.json?raw")
 }
 
 /** The slugs this module can load a source for — for the test that pins it to `CORE_COMPONENTS`. */
@@ -87,7 +88,6 @@ export function coreWidgetShape(slug: string): AuthoredWidgetShape | undefined {
 	if (w.scopes?.length) out.scopes = [...w.scopes]
 	if (w.reads?.length) out.reads = [...w.reads]
 	if (w.channels?.length) out.channels = [...w.channels]
-	if (w.cells) out.cells = { ...w.cells }
 	if (w.settings) out.settings = structuredClone(w.settings) as Record<string, unknown>
 	if (w.defaultActive !== undefined) out.defaultActive = w.defaultActive
 	return out

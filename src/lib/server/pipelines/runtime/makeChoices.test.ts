@@ -129,3 +129,31 @@ describe("make-choices: who the addressee names", () => {
 		])
 	})
 })
+
+/**
+ * Where a question was asked from (plan A27, 2026-09-30): the Lair's knock
+ * stamps the room its planner said the party stood in, and *Answer the door*
+ * reads it back through `read-answer@1` to link the new room when the world's
+ * location names nowhere.
+ */
+describe("make-choices / read-answer: the vantage", () => {
+	it("a non-blank vantage is stamped on the block, trimmed; anything else writes none", async () => {
+		expect((await blockFor("Tom", { vantage: "  The Stair " })).blocks[0].vantage).toBe(
+			"The Stair"
+		)
+		for (const vantage of [undefined, "", "   ", null, { entryId: 2 }, 7])
+			expect(
+				(await blockFor("Tom", { vantage })).blocks[0],
+				JSON.stringify(vantage)
+			).not.toHaveProperty("vantage")
+	})
+
+	it("read-answer hands the form's vantage back, null when it named nowhere", async () => {
+		const readAnswer = bindings["core:task/read-answer@1"]!
+		const form = { blockId: "b1", question: "Is there a room?", addressee: "owner" }
+		const at = (await readAnswer({ form: { ...form, vantage: "The Stair" }, payload: {} } as any, ctx)) as any
+		expect(at.value.vantage).toBe("The Stair")
+		const none = (await readAnswer({ form, payload: {} } as any, ctx)) as any
+		expect(none.value.vantage).toBeNull()
+	})
+})

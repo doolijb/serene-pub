@@ -104,6 +104,47 @@ const INJECTIONS_BLOCK =
 	"{{/if}}\n" +
 	"{{/each}}\n"
 
+/**
+ * The third recorded exception: character lore is a block of its own (owner
+ * ruling 2026-09-30). 0.5 folded bound lore into each card; 0.6's template
+ * places `{{{characterLore}}}` under the cards, with no blank line before it,
+ * so an empty one renders zero bytes. Written as the exact string, wrapper
+ * included, so anything that is not precisely this block still fails.
+ */
+const CHARACTER_LORE_BLOCK =
+	"{{#if characterLore}}\n" +
+	"Character lore:\n" +
+	"```json\n" +
+	"{{{characterLore}}}\n" +
+	"```\n" +
+	"{{/if}}\n"
+
+/**
+ * The fourth recorded exception: the session's author's note (AN1, owner
+ * ruling 2026-10-02). 0.5 had none; 0.6's loop renders `authorsNote` first at
+ * its index, before the injections, and a session whose genre declares no
+ * note carries none, so the `{{#with}}` renders zero bytes. Written as the
+ * exact string so anything that is not precisely this block still fails.
+ */
+const AUTHORS_NOTE_BLOCK =
+	"{{#with ../authorsNote}}\n" +
+	"{{#if (and (eq msgIndex targetIndex) hasContent)}}\n" +
+	'{{#if (eq role "user")}}\n' +
+	"{{#userBlock}}\n" +
+	"{{{text}}}\n" +
+	"{{/userBlock}}\n" +
+	'{{else if (eq role "assistant")}}\n' +
+	"{{#assistantBlock}}\n" +
+	"{{{text}}}\n" +
+	"{{/assistantBlock}}\n" +
+	"{{else}}\n" +
+	"{{#systemBlock}}\n" +
+	"{{{text}}}\n" +
+	"{{/systemBlock}}\n" +
+	"{{/if}}\n" +
+	"{{/if}}\n" +
+	"{{/with}}\n"
+
 describe("the wrappers moved without changing", () => {
 	it("rebuilds 0.5's template from 0.6's plus the shipped layouts", () => {
 		let rebuilt = SHIPPED_CONTEXT_TEMPLATE
@@ -123,12 +164,14 @@ describe("the wrappers moved without changing", () => {
 			)
 		}
 
-		// ── The one recorded exception ──────────────────────────────────
+		// ── The recorded exceptions ─────────────────────────────────────
 		//
 		// 0.6 splits the graph summary in two: `relationshipsPerspectives` and
 		// `relationshipsKnown`, one heading each, where 0.5 had a single
 		// "Your relationships:" block holding both directions. That is a real
-		// change to the prompt and the only one in the release.
+		// change to the prompt; the injections loop, the character lore
+		// block, the author's note, the current date's move and the
+		// transcript's attachments below are the other five.
 		//
 		// It is folded back here rather than the assertion being relaxed,
 		// because a weaker assertion would stop noticing the *next* change.
@@ -148,6 +191,51 @@ describe("the wrappers moved without changing", () => {
 			"the injections block is no longer the shape this exception describes"
 		).toBe(true)
 		rebuilt = rebuilt.replace(INJECTIONS_BLOCK, "")
+
+		expect(
+			rebuilt.includes(CHARACTER_LORE_BLOCK),
+			"the character lore block is not the shape this exception describes"
+		).toBe(true)
+		rebuilt = rebuilt.replace(CHARACTER_LORE_BLOCK, "")
+
+		expect(
+			rebuilt.includes(AUTHORS_NOTE_BLOCK),
+			"the author's note block is not the shape this exception describes"
+		).toBe(true)
+		rebuilt = rebuilt.replace(AUTHORS_NOTE_BLOCK, "")
+
+		// The story's current date moved from the FIRST line of the system
+		// block to the last (B2, 2026-10-03): the top of the prompt is what a
+		// backend's cache reuses turn to turn, and the date is the one value
+		// there that changes on its own. Same block, same wrapper, one move —
+		// folded back as exactly that, so any other change to it still fails.
+		const DATE_BLOCK =
+			"{{#if currentDate}}\n" +
+			"The current date in the story is {{{currentDate}}}.\n" +
+			"{{/if}}\n"
+		const DATE_AT_END = "{{/if}}\n" + DATE_BLOCK + "\n{{/systemBlock}}"
+		expect(
+			rebuilt.includes(DATE_AT_END) && rebuilt.startsWith("{{#systemBlock}}\n\n{{#if instructions}}"),
+			"the current date's move is not the shape this exception describes"
+		).toBe(true)
+		rebuilt = rebuilt
+			.replace(DATE_AT_END, "{{/if}}\n\n{{/systemBlock}}")
+			.replace(
+				"{{#systemBlock}}\n\n{{#if instructions}}",
+				"{{#systemBlock}}\n" + DATE_BLOCK + "\n{{#if instructions}}"
+			)
+
+		// The transcript line's placed files (PLAN-composer-attachments §3.5,
+		// 2026-10-02): `{{{attachments}}}` right after each line's message, on
+		// both roles and nowhere else. It renders nothing for a line with no
+		// files — `promptPath.int.test.ts` holds that byte for byte — so it is
+		// folded out as exactly those two occurrences.
+		const ATTACHMENTS = "{{{message}}}{{{attachments}}}"
+		expect(
+			rebuilt.split(ATTACHMENTS).length - 1,
+			"the attachments variable is not the shape this exception describes"
+		).toBe(2)
+		rebuilt = rebuilt.replaceAll(ATTACHMENTS, "{{{message}}}")
 
 		expect(rebuilt).toBe(legacyTemplate())
 	})

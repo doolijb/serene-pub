@@ -48,9 +48,15 @@ let poolRows: any[] = []
 vi.mock("$lib/server/embedding/ragContext", () => ({
 	getSessionRagContext: async () => ({ lorebookId: 1 }),
 	// The real one returns the pool alongside a per-source truncation
-	// report; the pool here is never capped, so nothing is truncated.
-	fetchScopedCandidates: async () => ({
-		candidates: poolRows,
+	// report; the pool here is never capped, so nothing is truncated. It
+	// honours `sources` as the real one does, since the mechanism names them.
+	fetchScopedCandidates: async (
+		_context: unknown,
+		opts: { sources?: readonly string[] } = {}
+	) => ({
+		candidates: poolRows.filter(
+			(row) => !opts.sources || opts.sources.includes(row.source)
+		),
 		truncated: []
 	}),
 	rankScopedCandidates: (
@@ -824,14 +830,19 @@ describe("what the index returns and the lorebook read does not", () => {
 		expect(r.value.skipped).toEqual([])
 	})
 
-	it("still passes a message and a graph node through untouched", async () => {
-		// Neither has a lore row anywhere, so absence really does mean "nothing
-		// to honour" for them — the case the always-eligible branch is for.
+	it("never asks for a graph node, which no band ranks (plan A1)", async () => {
+		// A node has no band (`excluded_unknown_source`), so a node hit only
+		// took a `maxEntries` place from an entry. The search asks for the
+		// lorebook's entries alone, so it is neither returned nor skipped.
 		const r = await runQuery(aria)
-		expect(keys(r)).toContain("message:30")
-		expect(keys(r)).toContain("narrativeNode:40")
-		expect(r.value.skipped.map((s: any) => s.id)).not.toContain(30)
+		expect(keys(r)).not.toContain("narrativeNode:40")
 		expect(r.value.skipped.map((s: any) => s.id)).not.toContain(40)
+	})
+
+	it("never asks for a message, which no prompt renders as a ranked entry (plan A1)", async () => {
+		const r = await runQuery(aria)
+		expect(keys(r)).not.toContain("message:30")
+		expect(r.value.skipped.map((s: any) => s.id)).not.toContain(30)
 	})
 })
 
@@ -840,9 +851,13 @@ describe("what the index returns and the lorebook read does not", () => {
  *
  * Not every source keeps its text in `content`: a graph node keeps it in
  * `summary` and a relationship in `description` (`ScopedRagItem`). Projecting
- * `content` alone handed those hits an empty string, which the mechanism then costed
- * at zero tokens — a result slot occupied by nothing, and a ranker with no text
- * to weigh.
+ * `content` alone handed those hits an empty string, which a mechanism then
+ * costed at zero tokens — a result slot occupied by nothing, and a ranker with
+ * no text to weigh.
+ *
+ * Asked of the host's `vector_search` read directly: Search by meaning names
+ * the lorebook's entries only (`SEMANTIC_SEARCH_SOURCES`), and the read is
+ * what any other caller naming these sources gets.
  */
 describe("the text a hit carries", () => {
 	const GRAPH_POOL = [
@@ -876,31 +891,26 @@ describe("the text a hit carries", () => {
 	})
 
 	const runQuery = () =>
-		bindings["core:query/vector-search@1"]!(
-			{
-				vectors: [[0, 1, 0]],
-				scope: { sessionId },
-				params: { maxEntries: 50 }
-			},
-			ctxFor("vsearch", "core:query/vector-search")
-		) as any
+		ctxFor("vsearch", "core:query/vector-search").read("vector_search", {
+			sessionId,
+			vectors: [[0, 1, 0]],
+			sources: ["narrativeNode", "narrativeRelationship"]
+		}) as any
 
 	const hitOf = (r: any, source: string) =>
-		r.value.hits.find((h: any) => h.source === source)
+		r.candidates.find((h: any) => h.source === source)
 
-	it("publishes a graph node's summary as its text, costed", async () => {
+	it("publishes a graph node's summary as its text", async () => {
 		const r = await runQuery()
 		const hit = hitOf(r, "narrativeNode")
-		expect(hit.payload.content).toBe("the keep fell in the siege")
-		expect(hit.tokens).toBeGreaterThan(0)
+		expect(hit.content).toBe("the keep fell in the siege")
+		expect(roughTokens(hit.content)).toBeGreaterThan(0)
 	})
 
-	it("publishes a relationship's description as its text, costed", async () => {
+	it("publishes a relationship's description as its text", async () => {
 		const r = await runQuery()
 		const hit = hitOf(r, "narrativeRelationship")
-		expect(hit.payload.content).toBe(
-			"aria held the walls through the siege"
-		)
-		expect(hit.tokens).toBeGreaterThan(0)
+		expect(hit.content).toBe("aria held the walls through the siege")
+		expect(roughTokens(hit.content)).toBeGreaterThan(0)
 	})
 })

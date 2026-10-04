@@ -600,11 +600,10 @@ export interface RebindMoveReport {
 	dropped: number
 }
 
-/** The speaker rebind's old homes — the three respond specs (§7), node `speaker`. */
+/** The speaker rebind's old homes — core's two respond specs (§7), node `speaker`. */
 const SPEAKER_REBIND_SPECS = [
 	"core:spec/respond",
-	"core:spec/guide-respond",
-	"core:spec/writing-room-respond"
+	"core:spec/guide-respond"
 ]
 
 /** The two shared turn-order specs A6 shipped and the modder pass retired (R27), node `strategy`. */

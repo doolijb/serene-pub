@@ -28,9 +28,12 @@ import { pluginEvents, syncPluginEventHooks } from "./eventHost"
 import { setRunStopObserver } from "$lib/server/pipelines/runtime/runRegistry"
 import { reserveAttributeOwner } from "@serene-pub/sdk"
 import { firePendingUpdate, fireShutdown } from "./lifecycle"
+import { SCHEDULE_TICK_EVENT, startScheduleTick } from "./scheduleTick"
 
 let manager: SandboxManager | null = null
 let dbRef: Db | null = null
+/** Stops the hourly `core:event/schedule-tick@1` (`scheduleTick.ts`). */
+let stopScheduleTick: (() => void) | null = null
 
 /** Best-effort, fire-and-forget: a failed log write never affects a hook. */
 function persist(rec: InvocationRecord): void {
@@ -180,6 +183,16 @@ export async function bootstrapPlugins(db: Db): Promise<void> {
 		} catch (e) {
 			console.warn("[plugins] event-subscription sync failed:", e)
 		}
+		// The scheduled-work path (SDK `SCHEDULED_WORK_PATH`): an hourly
+		// tick, delivered through the same registry, so only a subscribed,
+		// enabled, granted listener hears it — read per tick, so one that
+		// subscribes later hears the next.
+		stopScheduleTick?.()
+		stopScheduleTick = startScheduleTick({
+			subscribers: () => pluginEvents().subscribers(SCHEDULE_TICK_EVENT).length,
+			notify: (payload, nowMs) =>
+				pluginEvents().notify(mgr, SCHEDULE_TICK_EVENT, payload, { nowMs })
+		})
 		// Manifest-declared session presets, projected into the rows an
 		// administrator enables from (24 §10). Best-effort for the same reason
 		// as the two above, and at boot as well as on enable because a preset
@@ -213,12 +226,29 @@ export async function bootstrapPlugins(db: Db): Promise<void> {
 		// when it starts, and a package whose layout is refused costs itself
 		// that layout and nobody else theirs.
 		try {
-			const { syncPluginLayouts } = await import(
+			const { syncPluginLayouts, pluginLayoutReportLines } = await import(
 				"$lib/server/db/pluginLayouts"
 			)
-			await syncPluginLayouts(db)
+			// …and a layout it moves marks the sessions that started from it
+			// **Updated**, pushed to any tab already connected (brief 6b).
+			const { afterLayoutReconcile } = await import(
+				"$lib/server/sessions/startedFromPush"
+			)
+			const report = await afterLayoutReconcile(() => syncPluginLayouts(db))
+			for (const line of pluginLayoutReportLines(report))
+				console.warn(`[plugins] ${line}`)
 		} catch (e) {
 			console.warn("[plugins] session-layout sync failed:", e)
+		}
+		// Every installed plugin's shipped widget styles (`presets`), as
+		// system rows a person can pick — and the rows of one that is gone
+		// pruned. Best-effort for the same reasons as the layouts above.
+		try {
+			const { syncPluginWidgetStyles } = await import("./pluginWidgetStyles")
+			for (const line of await syncPluginWidgetStyles(db))
+				console.warn(`[plugins] widget style refused: ${line}`)
+		} catch (e) {
+			console.warn("[plugins] widget-style sync failed:", e)
 		}
 	}
 
@@ -247,6 +277,8 @@ export async function shutdownPlugins(): Promise<void> {
 	// First: the observer closes over the manager being disposed, and a run
 	// cancelled after this point has no hooks left to stop.
 	setRunStopObserver(null)
+	stopScheduleTick?.()
+	stopScheduleTick = null
 	// Subscriptions outlive nothing: a registry left populated would answer the
 	// next emit with subscribers whose sandbox is gone.
 	pluginEvents().clear()

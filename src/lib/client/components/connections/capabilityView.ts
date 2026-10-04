@@ -392,6 +392,8 @@ export interface CandidateRow {
 	connectionTitle: string
 	/** A `@lucide/svelte` export name, resolved by the component. */
 	icon: string
+	/** The connection's type — its brand mark wins over `icon` (`connectionTypeIcon`). */
+	connectionType: string | null
 	modelId: number
 	modelName: string
 	/** The second line's last clause: loaded · on disk · listed · … */
@@ -475,6 +477,7 @@ export function candidateRows(
 				connectionId: connection.id,
 				connectionTitle: title,
 				icon,
+				connectionType: connection.type ?? null,
 				modelId: model.id,
 				modelName: model.name,
 				fact: modelFact(model),

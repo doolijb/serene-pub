@@ -15,6 +15,7 @@
 		flattenTree,
 		hasNesting,
 		SCENE_KIND,
+		CAST_KIND,
 		type PoolFilters,
 		type PoolItem
 	} from "./poolFilter"
@@ -126,8 +127,11 @@
 	 */
 	const dragOptions = (item: PoolItem) => ({
 		key: item.key,
-		draggable: item.kind !== SCENE_KIND,
+		// A cast member lists in All (note 12) but is never filed or filed
+		// under: the people are not lore's parents.
+		draggable: item.kind !== SCENE_KIND && item.kind !== CAST_KIND,
 		canDrop: (from: string) =>
+			item.kind !== CAST_KIND &&
 			canFileUnder(from, item.key, poolCtx.pool, poolCtx.newRowBranchId),
 		onDrop: (from: string) => poolCtx.reparent(from, item.key)
 	})
@@ -195,7 +199,14 @@
 		return markerFor(decisions, item.id)
 	}
 
+	/**
+	 * Enter or Space on the row itself picks it. ⚠ Only on the row: a key
+	 * pressed on a control inside the row's box bubbles here too, and that
+	 * key belongs to the control — picking the row would swallow the
+	 * control's own press (plan B7).
+	 */
 	function activate(event: KeyboardEvent, item: PoolItem) {
+		if (event.target !== event.currentTarget) return
 		if (event.key !== "Enter" && event.key !== " ") return
 		event.preventDefault()
 		onSelect(item)
@@ -262,23 +273,20 @@
 				})
 		)}
 	</div>
-	<!-- The rail's saved scopes, as chips: the compact layout has no rail, so
-	     without these a saved scope set on the desk kept narrowing the list
-	     with nothing on screen to say so or to switch it off. Pinned is the
-	     third, and is the chip above. -->
-	<div class="flex flex-wrap gap-1" role="group" aria-label="Saved scopes">
+	<!-- Needs keywords stays a filter (note 5, 2026-10-02): the same rule as
+	     the Loose ends queue's keyword chore, as a narrowing of this list.
+	     The queue itself opens from the rail, or the chip beside the scopes
+	     in compact. -->
+	<div class="flex flex-wrap gap-1" role="group" aria-label="Chores">
 		{@render chip(
 			"Needs keywords",
 			facets.needsKeywords,
-			filters.keywords === "none",
+			filters.needsKeywords,
 			() =>
 				onFilters({
 					...filters,
-					keywords: filters.keywords === "none" ? "any" : "none"
+					needsKeywords: !filters.needsKeywords
 				})
-		)}
-		{@render chip("Loose ends", facets.looseEnds, filters.looseEnds, () =>
-			onFilters({ ...filters, looseEnds: !filters.looseEnds })
 		)}
 	</div>
 {/snippet}
@@ -348,25 +356,31 @@
 								onSelect(item)
 							}}
 						>
-							<Icons.Pencil size={14} /> Edit
+							{#if item.kind === CAST_KIND}
+								<Icons.Users size={14} /> Open in Cast
+							{:else}
+								<Icons.Pencil size={14} /> Edit
+							{/if}
 						</button>
-						{#if Extra}
-							<Extra
-								{source}
-								close={() => (openMenuKey = null)}
-							/>
+						{#if item.kind !== CAST_KIND}
+							{#if Extra}
+								<Extra
+									{source}
+									close={() => (openMenuKey = null)}
+								/>
+							{/if}
+							<hr class="border-surface-300-700" />
+							<button
+								class="btn btn-sm preset-filled-error-500 w-full justify-start"
+								type="button"
+								onclick={() => {
+									openMenuKey = null
+									onDelete(item)
+								}}
+							>
+								<Icons.Trash2 size={14} /> Delete
+							</button>
 						{/if}
-						<hr class="border-surface-300-700" />
-						<button
-							class="btn btn-sm preset-filled-error-500 w-full justify-start"
-							type="button"
-							onclick={() => {
-								openMenuKey = null
-								onDelete(item)
-							}}
-						>
-							<Icons.Trash2 size={14} /> Delete
-						</button>
 					</Popover.Content>
 				</Popover.Positioner>
 			</Portal>
@@ -383,25 +397,23 @@
 	{@const source = sourceOf(item)}
 	{#if source}
 		{@const Row = descriptorOf(item).row}
+		<!-- The row's box holds the controls BESIDE the part that picks it
+		     (plan B7): a control nested in a role=button is a nested
+		     interactive, and its keys reached the row instead of it. -->
 		<div
-			role="button"
-			tabindex="0"
 			data-entry-row
 			data-entry-key={item.key}
-			aria-current={selectedKey === item.key ? "true" : undefined}
-			class="preset-filled-surface-100-900 hover:bg-surface-200-800 data-[drop-target]:ring-primary-500 flex cursor-pointer items-start gap-2 rounded-lg p-3 transition-colors data-[drop-target]:ring-2"
+			class="preset-filled-surface-100-900 hover:bg-surface-200-800 data-[drop-target]:ring-primary-500 flex items-start gap-2 rounded-lg transition-colors data-[drop-target]:ring-2"
 			class:preset-tonal-primary={selectedKey === item.key}
 			class:opacity-60={item.archived}
 			class:opacity-50={!item.archived && dimmedKeys?.has(item.key)}
 			style={depth ? `margin-left:${depth * 16}px` : undefined}
-			onclick={() => onSelect(item)}
-			onkeydown={(e) => activate(e, item)}
 			use:rowDrag={dragOptions(item)}
 		>
 			{#if treeToggle}
 				{#if hasChildren}
 					<button
-						class="btn btn-sm preset-tonal-surface shrink-0 p-1"
+						class="btn btn-sm preset-tonal-surface mt-3 ml-3 shrink-0 p-1"
 						type="button"
 						aria-label={collapsed.has(item.key)
 							? "Expand"
@@ -419,14 +431,25 @@
 						{/if}
 					</button>
 				{:else}
-					<span class="w-6 shrink-0" aria-hidden="true"></span>
+					<span class="mt-3 ml-3 w-6 shrink-0" aria-hidden="true"></span>
 				{/if}
 			{/if}
-			<div class="min-w-0 flex-1">
+			<div
+				role="button"
+				tabindex="0"
+				data-entry-pick
+				aria-current={selectedKey === item.key ? "true" : undefined}
+				class="focus-visible:outline-primary-500 min-w-0 flex-1 cursor-pointer self-stretch rounded-lg py-3 focus-visible:outline-2 focus-visible:outline-offset-2"
+				class:pl-3={!treeToggle}
+				onclick={() => onSelect(item)}
+				onkeydown={(e) => activate(e, item)}
+			>
 				<Row {item} {source} {bindings} {vectorizationEnabled} />
 			</div>
-			{@render retrievalMark(item)}
-			{@render rowMenu(item, source)}
+			<div class="flex shrink-0 items-start gap-2 py-3 pr-3">
+				{@render retrievalMark(item)}
+				{@render rowMenu(item, source)}
+			</div>
 		</div>
 	{/if}
 {/snippet}
@@ -434,41 +457,50 @@
 {#snippet card(item: PoolItem)}
 	{@const source = sourceOf(item)}
 	{#if source}
+		<!-- The retrieval mark stands beside the part that picks the card,
+		     never inside it (plan B7: a nested interactive). -->
 		<div
-			role="button"
-			tabindex="0"
 			data-entry-row
 			data-entry-key={item.key}
-			aria-current={selectedKey === item.key ? "true" : undefined}
-			class="preset-filled-surface-100-900 hover:bg-surface-200-800 data-[drop-target]:ring-primary-500 flex cursor-pointer flex-col gap-2 rounded-lg p-3 transition-colors data-[drop-target]:ring-2"
+			class="preset-filled-surface-100-900 hover:bg-surface-200-800 data-[drop-target]:ring-primary-500 flex items-start gap-1 rounded-lg transition-colors data-[drop-target]:ring-2"
 			class:preset-tonal-primary={selectedKey === item.key}
 			class:opacity-60={item.archived}
 			class:opacity-50={!item.archived && dimmedKeys?.has(item.key)}
-			onclick={() => onSelect(item)}
-			onkeydown={(e) => activate(e, item)}
 			use:rowDrag={dragOptions(item)}
 		>
-			<div class="flex min-w-0 items-start gap-2">
-				<span class="min-w-0 flex-1 truncate text-sm font-semibold">
-					{item.name}
+			<div
+				role="button"
+				tabindex="0"
+				data-entry-pick
+				aria-current={selectedKey === item.key ? "true" : undefined}
+				class="focus-visible:outline-primary-500 flex min-w-0 flex-1 cursor-pointer flex-col gap-2 self-stretch rounded-lg p-3 focus-visible:outline-2 focus-visible:outline-offset-2"
+				onclick={() => onSelect(item)}
+				onkeydown={(e) => activate(e, item)}
+			>
+				<div class="flex min-w-0 items-start gap-2">
+					<span class="min-w-0 flex-1 truncate text-sm font-semibold">
+						{item.name}
+					</span>
+					{#if item.pinned}
+						<Icons.Pin
+							size={12}
+							class="text-warning-500 shrink-0"
+							aria-label="Pinned"
+						/>
+					{/if}
+				</div>
+				<p
+					class="text-surface-600-400 line-clamp-3 text-xs leading-relaxed"
+				>
+					{item.content.trim().split("\n")[0] || "No content yet."}
+				</p>
+				<span class="badge preset-tonal-surface self-start text-[11px]">
+					{kindLabel(item.kind)}
 				</span>
-				{#if item.pinned}
-					<Icons.Pin
-						size={12}
-						class="text-warning-500 shrink-0"
-						aria-label="Pinned"
-					/>
-				{/if}
+			</div>
+			<div class="shrink-0 pt-3 pr-3 empty:hidden">
 				{@render retrievalMark(item)}
 			</div>
-			<p
-				class="text-surface-600-400 line-clamp-3 text-xs leading-relaxed"
-			>
-				{item.content.trim().split("\n")[0] || "No content yet."}
-			</p>
-			<span class="badge preset-tonal-surface self-start text-[11px]">
-				{kindLabel(item.kind)}
-			</span>
 		</div>
 	{/if}
 {/snippet}
@@ -565,9 +597,7 @@
 				/>
 			</div>
 		{:else if isReordering}
-			<div
-				class="text-surface-600-400 text-xs font-semibold"
-			>
+			<div class="text-surface-600-400 text-xs font-semibold">
 				Drag to reorder
 			</div>
 			<div

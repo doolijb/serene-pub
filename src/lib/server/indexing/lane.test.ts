@@ -19,7 +19,7 @@
  * signal and says so, never that it halts.
  */
 
-import { describe, it, expect, vi } from "vitest"
+import { afterEach, describe, it, expect, vi } from "vitest"
 import {
 	IndexingLane,
 	modelFreeBroker,
@@ -496,5 +496,187 @@ describe("residency is requested only once there is work", () => {
 
 		expect(request).toHaveBeenCalled()
 		expect(pending.size).toBe(0)
+	})
+})
+
+describe("a start() during a run is answered", () => {
+	it("picks again when content arrived after the run had looked", async () => {
+		// The run's first look sees nothing; content lands and start() is called
+		// while that look is still in flight. The run owes another pass.
+		const pending = new Set<number>()
+		const processed: number[] = []
+		let release!: () => void
+		const firstLook = new Promise<void>((r) => (release = r))
+		let looks = 0
+		const source: LaneWorkSource = {
+			async fromGroup() {
+				return null
+			},
+			async global() {
+				const seen = [...pending][0]
+				if (looks++ === 0) await firstLook
+				if (seen === undefined) return null
+				return {
+					ref: ref(seen),
+					label: { type: "thing", label: `thing ${seen}` },
+					modelId: null,
+					process: async () => {
+						pending.delete(seen)
+						processed.push(seen)
+					}
+				}
+			},
+			async specific() {
+				return null
+			}
+		}
+		const lane = laneOver(source)
+
+		lane.start()
+		pending.add(9)
+		lane.start()
+		release()
+		await lane.settled()
+
+		expect(processed).toEqual([9])
+		expect(lane.isRunning()).toBe(false)
+	})
+})
+
+/**
+ * Turns before background work (2026-10-03). A lane shares PGlite's one thread
+ * with every turn, so while a turn hold is active it picks no background item —
+ * and it never holds back a promotion, which a turn is waiting on.
+ */
+describe("a lane under a turn hold", () => {
+	const delay = (ms: number) => new Promise((r) => setTimeout(r, ms))
+
+	afterEach(async () => {
+		const { resetTurnHoldsForTests } = await import("./turnHold")
+		resetTurnHoldsForTests()
+	})
+
+	it("picks no background item while a turn holds, and resumes after the grace", async () => {
+		const { openTurnHold, setTurnHoldGraceForTests } = await import(
+			"./turnHold"
+		)
+		setTurnHoldGraceForTests(30)
+		const { source, processed } = fakeWork([1, 2, 3])
+		const lane = laneOver(source)
+
+		const close = openTurnHold()
+		lane.start()
+		await delay(50)
+		expect(processed).toEqual([])
+		expect(lane.isRunning()).toBe(true) // parked, not ended
+
+		close()
+		await delay(10)
+		expect(processed).toEqual([]) // the grace has not passed
+		await lane.settled()
+		expect(processed).toEqual([1, 2, 3])
+	})
+
+	it("still serves a promotion while a turn holds — the turn is waiting on it", async () => {
+		const { openTurnHold } = await import("./turnHold")
+		const { source, processed } = fakeWork([1, 2, 3])
+		const lane = laneOver(source)
+
+		const close = openTurnHold()
+		lane.start()
+		await delay(10)
+		const report = await lane.promote({ refs: [ref(2)] })
+
+		expect(report.processed).toBe(1)
+		expect(report.boundHit).toBe(false)
+		expect(processed).toEqual([2]) // 1 and 3 are background — still held
+		lane.stop()
+		await lane.settled()
+		close()
+	})
+
+	it("reads a pick that gave way as interrupted — the group is not retired and the run does not end", async () => {
+		const { openTurnHold, setTurnHoldGraceForTests } = await import(
+			"./turnHold"
+		)
+		setTurnHoldGraceForTests(20)
+		const pending = new Set([1, 2])
+		const processed: number[] = []
+		let close: (() => void) | null = null
+		const source: LaneWorkSource = {
+			// A two-step walk that gives way between steps, as the annotation
+			// lane's walk over books does. A turn arrives during the first step.
+			async fromGroup(_group, _modelId, pick) {
+				if (!close) close = openTurnHold()
+				if (await pick?.giveWay()) return null
+				const next = [...pending][0]
+				if (next === undefined) return null
+				return {
+					ref: ref(next),
+					label: { type: "thing", label: `thing ${next}` },
+					modelId: null,
+					process: async () => {
+						pending.delete(next)
+						processed.push(next)
+					}
+				}
+			},
+			async global() {
+				return null
+			},
+			async specific() {
+				return null
+			}
+		}
+		const lane = laneOver(source)
+		lane.enqueueGroup({
+			label: "session",
+			ownerDisplayName: "",
+			lorebookIds: [],
+			characterIds: [],
+			personaIds: []
+		})
+
+		lane.start()
+		await delay(40)
+		expect(processed).toEqual([])
+		expect(lane.isRunning()).toBe(true)
+		expect(lane.snapshotGroups()).toHaveLength(1) // interrupted, not finished
+		expect(lane.snapshotHistory()).toHaveLength(0)
+
+		close!()
+		await lane.settled()
+		expect(processed).toEqual([1, 2])
+		expect(lane.snapshotHistory()).toHaveLength(1)
+	})
+
+	it("goes round the event loop between items, so a timer is not starved by a long run", async () => {
+		const ids = Array.from({ length: 400 }, (_, i) => i + 1)
+		let processedWhenTimerFired = -1
+		const { source, processed } = fakeWork(ids)
+		const lane = laneOver(source)
+
+		setTimeout(() => (processedWhenTimerFired = processed.length), 0)
+		lane.start()
+		await lane.settled()
+
+		expect(processed).toHaveLength(400)
+		// Without the yield every item is one microtask chain and the timer
+		// fires only after the last of them.
+		expect(processedWhenTimerFired).toBeGreaterThanOrEqual(0)
+		expect(processedWhenTimerFired).toBeLessThan(400)
+	})
+
+	it("stop() wakes a lane parked behind a turn", async () => {
+		const { openTurnHold } = await import("./turnHold")
+		const { source } = fakeWork([1])
+		const lane = laneOver(source)
+		const close = openTurnHold()
+		lane.start()
+		await delay(10)
+		lane.stop()
+		await lane.settled()
+		expect(lane.isRunning()).toBe(false)
+		close()
 	})
 })

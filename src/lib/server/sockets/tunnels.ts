@@ -72,7 +72,7 @@ export async function assertAccountsEnabled() {
 	if (!settings?.isAccountsEnabled) {
 		throw new Error(
 			"User accounts must be enabled before a tunnel can be started — " +
-				"a publicly reachable instance with no account boundary is not " +
+				"a publicly reachable pub with no account boundary is not " +
 				"a state this app will put you in. Enable them in Settings > System."
 		)
 	}

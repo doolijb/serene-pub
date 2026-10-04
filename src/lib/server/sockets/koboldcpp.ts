@@ -62,6 +62,7 @@ import {
 	ensureConnectionModel,
 	forgetModelEverywhere
 } from "$lib/server/connections/models"
+import { withStarConsequences } from "$lib/server/connections/starConsequences"
 import { syncManyConnectionModels } from "$lib/server/connections/modelSync"
 import {
 	ensureManagedKoboldCppEndpoint,
@@ -2390,10 +2391,14 @@ export const koboldCppDeleteModelHandler: Handler<
 			.where(eq(schema.localModels.filename, params.modelName))
 		// The MODEL rows, never the endpoint: the managed endpoint is the
 		// process, and it outlives any one file (see forgetModelEverywhere).
-		await forgetModelEverywhere(db, params.modelName, [
-			CONNECTION_TYPE.KOBOLDCPP_MANAGED,
-			CONNECTION_TYPE.KOBOLDCPP_MANAGED_IMAGE
-		])
+		// A starred model among them releases its star by cascade, with the
+		// consequence every door runs.
+		await withStarConsequences(db, () =>
+			forgetModelEverywhere(db, params.modelName, [
+				CONNECTION_TYPE.KOBOLDCPP_MANAGED,
+				CONNECTION_TYPE.KOBOLDCPP_MANAGED_IMAGE
+			])
+		)
 
 		await emitToUser("connections:list", () => buildConnectionsList())
 		// The text->image default may have just been released by the cascade

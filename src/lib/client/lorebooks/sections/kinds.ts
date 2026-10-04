@@ -2,9 +2,10 @@ import {
 	CHARACTER_LORE_TYPE_ID,
 	HISTORY_TYPE_ID,
 	ITEM_TYPE_ID,
+	LOCATION_TYPE_ID,
 	WORLD_LORE_TYPE_ID
 } from "$lib/shared/entries/types"
-import { SCENE_KIND } from "../poolFilter"
+import { CAST_KIND, SCENE_KIND } from "../poolFilter"
 
 /**
  * What a chip calls one kind of row.
@@ -19,8 +20,10 @@ const LABELS: Record<string, string> = {
 	[WORLD_LORE_TYPE_ID]: "World lore",
 	[CHARACTER_LORE_TYPE_ID]: "Character lore",
 	[HISTORY_TYPE_ID]: "History",
+	[LOCATION_TYPE_ID]: "Places",
 	[ITEM_TYPE_ID]: "Items",
-	[SCENE_KIND]: "Scenes"
+	[SCENE_KIND]: "Scenes",
+	[CAST_KIND]: "Cast"
 }
 
 export function kindLabel(kind: string): string {

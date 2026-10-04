@@ -74,6 +74,8 @@ export function getRegisteredServices(): ManagedService[] {
 export function clearRegisteredServices() {
 	services.clear()
 	shuttingDown = false
+	shutdownInFlight = null
+	exitRequested = false
 }
 
 /**
@@ -104,11 +106,17 @@ export async function reconcileServices(): Promise<void> {
 const SHUTDOWN_TIMEOUT_MS = 10_000
 
 let shuttingDown = false
+/** The teardown in flight, so `requestShutdown` can join it rather than cut it short. */
+let shutdownInFlight: Promise<void> | null = null
 
-export async function shutdownServices(signal: string): Promise<void> {
-	if (shuttingDown) return
+export function shutdownServices(signal: string): Promise<void> {
+	if (shuttingDown) return Promise.resolve()
 	shuttingDown = true
+	shutdownInFlight = runShutdown(signal)
+	return shutdownInFlight
+}
 
+async function runShutdown(signal: string): Promise<void> {
 	const withShutdown = getRegisteredServices().filter((s) => s.shutdown)
 	if (withShutdown.length === 0) return
 
@@ -160,4 +168,36 @@ export function installShutdownHandlers() {
 			void shutdownServices(signal).finally(() => process.exit(0))
 		})
 	}
+}
+
+let exitRequested = false
+
+/**
+ * Stop every managed service, then exit with `exitCode` — the graceful stop
+ * the launcher asks for over `POST /api/launcher/shutdown` (exit 0) and the
+ * one an applied update ends with (exit 75; CONTRACT §C3, §C4).
+ *
+ * Windows has no usable SIGTERM, so this is the only graceful stop there.
+ * Shares the signal handlers' latch and deadline: a teardown already running
+ * (a Ctrl+C a moment earlier) is joined, never restarted and never cut short,
+ * and the exit code asked for here still wins. Works when the `services`
+ * startup task never ran — the registry is then empty and the exit is
+ * immediate. Nothing here, or anywhere, SIGKILLs Node: PGlite's WAL does not
+ * survive it.
+ *
+ * `exit` is a test seam; production passes nothing.
+ */
+export function requestShutdown(opts: {
+	reason: string
+	exitCode: number
+	exit?: (code: number) => void
+}): Promise<void> {
+	const exit = opts.exit ?? ((code: number) => process.exit(code))
+	if (exitRequested) return shutdownInFlight ?? Promise.resolve()
+	exitRequested = true
+	console.log(`Shutdown requested (${opts.reason}) — exiting with code ${opts.exitCode}.`)
+	const teardown = shuttingDown
+		? (shutdownInFlight ?? Promise.resolve())
+		: shutdownServices(opts.reason)
+	return teardown.finally(() => exit(opts.exitCode))
 }

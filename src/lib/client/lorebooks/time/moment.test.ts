@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest"
 import { buildTicks } from "../timelineStrip"
 import {
 	asOfKey,
-	castAsOf,
+	markCastArrived,
 	castMomentSentence,
 	countNotInStory,
 	dateAtRatio,
@@ -112,7 +112,7 @@ describe("cast as of — who has arrived", () => {
 	]
 
 	it("marks a member whose first dated mention is later", () => {
-		const seen = castAsOf(cast, { year: 2, month: 8 })
+		const seen = markCastArrived(cast, { year: 2, month: 8 })
 		expect(seen.map((m) => m.inStory)).toEqual([true, false, true])
 	})
 

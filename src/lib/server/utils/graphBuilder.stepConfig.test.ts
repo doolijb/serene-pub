@@ -58,7 +58,7 @@ beforeEach(() => {
 		const label: string = opts?.label ?? ""
 		calls.push({
 			label,
-			system: opts.adapter?.opts?.promptConfig?.systemPrompt ?? "",
+			system: opts.adapter?.opts?.systemPrompt ?? "",
 			connection: opts.connectionName,
 			sampling: opts.samplingName
 		})
@@ -95,8 +95,6 @@ async function runBuild(steps?: any) {
 		] as any,
 		connection: baseConn,
 		sampling: baseSampling,
-		contextConfig: { id: 1 } as any,
-		promptConfig: { id: 1 } as any,
 		steps,
 		seedNodes: [
 			{

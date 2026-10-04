@@ -103,9 +103,20 @@ import { deriveValue } from "$lib/server/state/derive"
 // THE comparator for the book's calendar (one comparator per calendar): the
 // shared one, which delegates to the SDK's `compareStoryTimes`.
 import { storyNowOf } from "$lib/server/state/storyTime"
-import { rowsOnReading, sessionReadingOf, type LineReading } from "$lib/server/state/reading"
-import { MAIN_HEAD, placesOnReading } from "$lib/server/state/entriesOnReading"
-import type { StoryDate } from "$lib/shared/lorebooks/storyDate"
+import { readingOf, rowsOnReading, sessionReadingOf, type LineReading } from "$lib/server/state/reading"
+import {
+	MAIN_HEAD,
+	entryAt,
+	entryOnLineSql,
+	entriesAsRead,
+	entryOverlaysFor,
+	placesOnReading,
+	type EntryReading
+} from "$lib/server/state/entriesOnReading"
+import type { PlaceSight } from "$lib/shared/lorebooks/placeSight"
+import { declaresPrivateLore } from "$lib/server/utils/lorebookEntries"
+import { castMemberCards } from "$lib/server/utils/castMemberCards"
+import { compareDates, type StoryDate } from "$lib/shared/lorebooks/storyDate"
 import { castKey, qualifiedSlotKey, slotKey } from "$lib/server/state/keys"
 import {
 	createExpressionBudget,
@@ -336,17 +347,31 @@ export { castKey, qualifiedSlotKey, slotKey }
 // ── Rows ────────────────────────────────────────────────────────────────────
 
 /** Enough of a row to say which of several is in force. */
-type Layered = { validFromMessageId: number | null; id: number }
+type Layered = { validFromMessageId: number | null; id: number; historyEntryId?: number | null }
 
 /**
- * The row in force among several for one owner and slot: latest anchor wins,
- * and the later row wins a tie.
+ * The row in force among several for one owner and slot: latest anchor wins;
+ * on one anchor, the later STORY DATE wins; on one date, the later row.
  *
  * A null anchor is "from the beginning" and therefore the earliest, which is
  * what makes a template-layer row lose to a session-layer one written at
  * message 47 without either of them having to know the other exists.
+ *
+ * The date is the history entry a row hangs from (`dates`, the reading's
+ * cache — `rowsOnReading` fills it), undated earliest: the order the stat
+ * trail lists the timeline in (`statTrail.ts`). It is what decides among the
+ * durable rows, which carry no anchor: a value dated Year 7 holds from Year 7
+ * on, whichever was WRITTEN last (places plan L4 review — by write order, an
+ * undated edit made after it put the Year 7 lamp in the crypt at Year 3).
+ * Without `dates`, every row reads undated and write order decides, as it
+ * always did.
  */
-export function inForce<T extends Layered>(rows: T[]): T | undefined {
+export function inForce<T extends Layered>(
+	rows: T[],
+	dates?: ReadonlyMap<number, StoryDate | null>
+): T | undefined {
+	const dateOf = (row: T) =>
+		row.historyEntryId != null ? (dates?.get(row.historyEntryId) ?? null) : null
 	let best: T | undefined
 	for (const row of rows) {
 		if (!best) {
@@ -355,9 +380,20 @@ export function inForce<T extends Layered>(rows: T[]): T | undefined {
 		}
 		const a = row.validFromMessageId ?? -1
 		const b = best.validFromMessageId ?? -1
-		if (a > b || (a === b && row.id > best.id)) best = row
+		if (a !== b) {
+			if (a > b) best = row
+			continue
+		}
+		const byDate = compareRowDates(dateOf(row), dateOf(best))
+		if (byDate > 0 || (byDate === 0 && row.id > best.id)) best = row
 	}
 	return best
+}
+
+/** Two rows' story dates, undated earliest. */
+function compareRowDates(a: StoryDate | null, b: StoryDate | null): number {
+	if (a && b) return compareDates(a, b)
+	return a ? 1 : b ? -1 : 0
 }
 
 const ownerMatches = (
@@ -370,9 +406,9 @@ const ownerMatches = (
 /**
  * The session's lorebook, as the ids every state read scopes to — none or one.
  *
- * ⚠ **`sessions.lorebook_id`, never `session_lorebooks`.** A session's lorebook
- * is one binding on the session row; the junction is unused legacy that
- * nothing writes (sockets/sessions.ts). State read the junction, so for every
+ * ⚠ **`sessions.lorebook_id`.** A session's lorebook is one binding on the
+ * session row; 0.5's `session_lorebooks` junction was never written and is
+ * dropped (`0095_schema_0_6_0`). State read the junction, so for every
  * session created the real way the lorebook layer, a list's lore references
  * and item supply found no lorebook at all (found 2026-09-26 by the phase 3c
  * live check). An array so the callers that scope by "the session's
@@ -484,32 +520,14 @@ export async function sessionLinks(
 			})
 		)
 
-	const characterIds = cast.map((c) => c.characterId)
-	const bindings =
-		lorebookId && characterIds.length
-			? await db
-					.select({
-						id: schema.lorebookBindings.id,
-						characterId: schema.lorebookBindings.characterId
-					})
-					.from(schema.lorebookBindings)
-					.where(
-						and(
-							eq(schema.lorebookBindings.lorebookId, lorebookId),
-							inArray(
-								schema.lorebookBindings.characterId,
-								characterIds
-							)
-						)
-					)
-			: []
-	const bindingFor = new Map(
-		bindings
-			.filter((b) => typeof b.characterId === "number")
-			.map((b) => [b.characterId as number, b.id])
-	)
+	// Each seat's cast member, by any card of theirs — linked, or one a dated
+	// change draws them with (plan A25).
+	const memberOf =
+		lorebookId && cast.length
+			? (await castMemberCards(db, lorebookId)).memberOf
+			: new Map<number, number>()
 	for (const member of cast)
-		member.castMemberId = bindingFor.get(member.characterId) ?? null
+		member.castMemberId = memberOf.get(member.characterId) ?? null
 
 	// The session's line and story clock (ruling 15, story-time P3): which
 	// durable rows it inherits, and where its story's now stands.
@@ -519,7 +537,6 @@ export async function sessionLinks(
 		lorebookId,
 		storyDate: await storyDateOf(db, lorebookId, reading?.branchId ?? null, {
 			sessionStoryClock: reading?.moment ?? null,
-			forkedAt: reading?.forkedAt ?? null,
 			line: reading?.line ?? null
 		}),
 		reading,
@@ -529,12 +546,12 @@ export async function sessionLinks(
 }
 
 /**
- * 🚧 The world's locations (phase 4): every live `core:entry/location` entry
- * of the lorebook on the session's line, titled as amended by its moment, in
- * entry order (finding #41 — one reader with `lorebookState.lorebookLinks`).
- * An archived one is not a place in the story any more; its stored values
- * stay and are simply not read. A sibling fork's own place is not a place in
- * this session's story at all.
+ * 🚧 The world's locations (phase 4): the places the session sees (plan A27,
+ * `seesPlace(…, "session")`) — `core:entry/location` entries of the lorebook
+ * on the session's line at its moment, titled as amended by then, in entry
+ * order. An archived place, or one switched Off, is not a place in the story;
+ * its stored values stay and are simply not read. A sibling fork's own place
+ * is not a place in this session's story at all.
  */
 async function locationsOf(
 	db: Db,
@@ -542,7 +559,7 @@ async function locationsOf(
 	reading: LineReading | null
 ): Promise<LocationLink[]> {
 	if (!lorebookId) return []
-	return await placesOnReading(db, lorebookId, reading ?? MAIN_HEAD)
+	return await placesOnReading(db, lorebookId, reading ?? MAIN_HEAD, "session")
 }
 
 /**
@@ -562,7 +579,6 @@ export async function storyDateOf(
 	branchId: number | null = null,
 	opts: {
 		sessionStoryClock?: StoryDate | null
-		forkedAt?: StoryDate | null
 		line?: import("$lib/shared/lorebooks/lineReading").Line | null
 	} = {}
 ): Promise<SessionLinks["storyDate"]> {
@@ -581,6 +597,55 @@ export interface ValueQuery {
 	sessionId?: number
 	owner: StateOwner
 	slotId: string
+	/**
+	 * Where a read with NO session stands (plan A22): the durable rows it
+	 * sees are those on this line at this moment, ordered by their dates.
+	 * Absent, main at the head of the owner's book. A session read stands at
+	 * its session's own reading and ignores this.
+	 */
+	reading?: LineReading | null
+}
+
+/**
+ * The book a durable owner belongs to: the lorebook itself, a cast member's,
+ * a place's. Null for a card or a session layer, which have no line.
+ */
+async function ownerBookOf(db: Db, owner: StateOwner): Promise<number | null> {
+	if (owner.kind === "lorebook") return owner.id
+	if (owner.kind === "cast_member") {
+		const [row] = await db
+			.select({ lorebookId: schema.lorebookBindings.lorebookId })
+			.from(schema.lorebookBindings)
+			.where(eq(schema.lorebookBindings.id, owner.id))
+			.limit(1)
+		return row?.lorebookId ?? null
+	}
+	if (owner.kind === "location") {
+		const [row] = await db
+			.select({ lorebookId: schema.lorebookEntries.lorebookId })
+			.from(schema.lorebookEntries)
+			.where(eq(schema.lorebookEntries.id, owner.id))
+			.limit(1)
+		return row?.lorebookId ?? null
+	}
+	return null
+}
+
+/**
+ * The reading a read stands at: its session's, or — with no session — the
+ * caller's, else main at the head of the owner's book. Never "every line at
+ * once": a sessionless read that merged the lines handed one line's value to
+ * another.
+ */
+async function readingForQuery(
+	db: Db,
+	query: ValueQuery,
+	links: SessionLinks | null
+): Promise<LineReading | null> {
+	if (query.sessionId) return links?.reading ?? null
+	if (query.reading !== undefined) return query.reading
+	const book = await ownerBookOf(db, query.owner)
+	return book == null ? null : await readingOf(db, book)
 }
 
 /**
@@ -616,15 +681,16 @@ export async function valueOf(
 				? await sessionLinks(db, query.sessionId)
 				: null
 	const chain = chainFor(query.owner, links)
-	const rows = await valueRows(db, chain, [query.slotId], query.sessionId, links?.reading)
+	const reading = await readingForQuery(db, query, links)
+	const rows = await valueRows(db, chain, [query.slotId], query.sessionId, reading)
 
 	if (decl?.type === "derived")
 		return deriveValue(decl, {
 			storyDate: links?.storyDate ?? null,
-			read: async (slotId) => valueOf(db, { ...query, slotId }, { ...known, links })
+			read: async (slotId) => valueOf(db, { ...query, slotId, reading }, { ...known, links })
 		})
 
-	const found = fromLayers(rows, chain, query.slotId)
+	const found = fromLayers(rows, chain, query.slotId, reading?.dates)
 	if (found !== undefined) return found
 	const vocabulary =
 		known.vocabulary ??
@@ -659,11 +725,14 @@ export function defaultFor(
 function fromLayers(
 	rows: Array<Layered & { ownerKind: string; ownerId: number; slotId: string; value: { v: unknown } | null }>,
 	chain: StateOwner[],
-	slotId: string
+	slotId: string,
+	/** The reading's history-entry dates (`rowsOnReading` fills them), which order the durable rows. */
+	dates: ReadonlyMap<number, StoryDate | null> | undefined
 ): SlotValue | undefined {
 	for (const layer of chain) {
 		const row = inForce(
-			rows.filter((r) => ownerMatches(r, layer) && r.slotId === slotId)
+			rows.filter((r) => ownerMatches(r, layer) && r.slotId === slotId),
+			dates
 		)
 		if (!row) continue
 		const v = row.value?.v as SlotValue
@@ -696,14 +765,19 @@ export async function configFor(
 		? await sessionLinks(db, query.sessionId)
 		: null
 	const chain = chainFor(query.owner, links)
-	const rows = await configRows(db, chain, [query.slotId], query.sessionId)
+	// At the read's reading, as a value is (plan A22): a configuration filed
+	// on another line, or dated after the moment, is not in force here, and
+	// among the ones that are, the later story date wins.
+	const reading = await readingForQuery(db, query, links)
+	const rows = await configRows(db, chain, [query.slotId], query.sessionId, reading)
 	const layers = [...chain]
 		.reverse()
 		.map((layer) =>
 			inForce(
 				rows.filter(
 					(r) => ownerMatches(r, layer) && r.slotId === query.slotId
-				)
+				),
+				reading?.dates
 			)
 		)
 		.map((row) => (row?.config ?? null) as SlotConfig | null)
@@ -786,10 +860,12 @@ async function configRows(
 	db: Db,
 	owners: StateOwner[],
 	slotIds: string[],
-	sessionId?: number
+	sessionId?: number,
+	/** As `valueRows`: the durable rows on the reading, the session's own untouched. */
+	reading?: LineReading | null
 ) {
 	if (!owners.length || !slotIds.length) return []
-	return await db
+	const rows = await db
 		.select()
 		.from(schema.attributeConfigs)
 		.where(
@@ -806,6 +882,7 @@ async function configRows(
 				ownedBySession(schema.attributeConfigs.sessionId, sessionId)
 			)
 		)
+	return reading ? await rowsOnReading(db, rows, reading) : rows
 }
 
 // ── The vocabulary ──────────────────────────────────────────────────────────
@@ -1192,7 +1269,9 @@ export async function stateFor(
 	const locations = await locationsFor(db, sessionId, links, vocabulary)
 
 	const who = await whoFor(db, sessionId, links, byId, opts)
-	await nameLoreRefs(db, [world, ...Object.values(byId), ...Object.values(locations.byId)])
+	const bags = [world, ...Object.values(byId), ...Object.values(locations.byId)]
+	await nameLoreRefs(db, bags, links.reading ?? null, "session")
+	await unsetUnseenReferences(db, bags, links.reading ?? null, links.locations)
 
 	const state: ResolvedState = {
 		world,
@@ -1244,7 +1323,7 @@ async function locationsFor(
 			await writeKeys(entry, decl, declared, async () =>
 				decl.type === "derived"
 					? valueOf(db, { sessionId, owner, slotId: decl.id }, { links, vocabulary })
-					: (fromLayers(rows, chain, decl.id) ?? defaultFor(decl, vocabulary))
+					: (fromLayers(rows, chain, decl.id, links.reading?.dates) ?? defaultFor(decl, vocabulary))
 			)
 		byId[String(place.entryId)] = entry
 	}
@@ -1254,16 +1333,32 @@ async function locationsFor(
 }
 
 /**
- * 🚧 Fill in the title of every lore reference a list holds (`{ entryId }` →
+ * 🚧 Fill in the title of every lore reference a value holds (`{ entryId }` →
  * `{ entryId, name }`), so a template and a widget can say it. One query for
- * the whole state, and only when a list holds a reference at all. The title is
+ * every bag, and only when a value holds a reference at all. The title is
  * READ, never stored (`slotValueForStorage` drops it on the way back in) — a
- * copied title is a second answer that goes stale on the first rename. An
- * entry that does not exist keeps its bare id: shown, never dropped.
+ * copied title is a second answer that goes stale on the first rename.
+ *
+ * Named as `reading` sees the entry (plan A27): an entry of the reading's own
+ * book, on its line, titled as the line's amendments have it by the moment —
+ * so "the party are at X" names X as `state.locations` and the rooms listing
+ * do. Anything else keeps its bare id — shown, never dropped: an entry since
+ * deleted, another book's (a name a session must not learn), a sibling
+ * line's. A held reference to an entry archived or switched Off since is
+ * still named: the value still holds it. No reading (no book) names nothing.
+ *
+ * `sight` is who reads the names. `"session"` — a session's state, ledger or
+ * pending changes, which everybody in the session reads — never names a
+ * character's private lore (`declaresPrivateLore`): its title is that
+ * character's own knowledge, and the door refuses such a reference coming in
+ * (`write.ts assertLoreRefsInSession`); one held already stays a bare id.
+ * `"book"` — the book's own pages — names it.
  */
 export async function nameLoreRefs(
 	db: Db,
-	bags: Record<string, unknown>[]
+	bags: Record<string, unknown>[],
+	reading: NamingReading | null,
+	sight: PlaceSight
 ): Promise<void> {
 	const ids = new Set<number>()
 	for (const bag of bags)
@@ -1274,12 +1369,33 @@ export async function nameLoreRefs(
 			// 🚧 One reference on its own: a location that is a place entry.
 			else if (isSlotLoreRef(value)) ids.add(value.entryId)
 		}
-	if (!ids.size) return
+	if (!ids.size || !reading) return
 	const rows = await db
-		.select({ id: schema.lorebookEntries.id, title: schema.lorebookEntries.title })
+		.select({
+			id: schema.lorebookEntries.id,
+			title: schema.lorebookEntries.title,
+			typeId: schema.lorebookEntries.typeId
+		})
 		.from(schema.lorebookEntries)
-		.where(inArray(schema.lorebookEntries.id, [...ids]))
-	const titles = new Map(rows.map((r) => [r.id, r.title]))
+		.where(
+			and(
+				inArray(schema.lorebookEntries.id, [...ids]),
+				eq(schema.lorebookEntries.lorebookId, reading.lorebookId),
+				entryOnLineSql(reading)
+			)
+		)
+	const named = rows.filter((r) => sight === "book" || !declaresPrivateLore(r.typeId))
+	const overlays = await entryOverlaysFor(
+		db,
+		reading.lorebookId,
+		reading,
+		named.map((r) => r.id)
+	)
+	const titles = new Map<number, string>()
+	for (const r of named) {
+		const seen = entryAt({ id: r.id, name: r.title ?? "" }, overlays, reading)
+		if (typeof seen.name === "string" && seen.name) titles.set(r.id, seen.name)
+	}
 	// A new array per value: a declaration's default may be frozen, and the
 	// bare and qualified keys of one value are rewritten alike.
 	for (const bag of bags)
@@ -1294,6 +1410,44 @@ export async function nameLoreRefs(
 			else if (isSlotLoreRef(value) && titles.get(value.entryId))
 				bag[key] = { ...value, name: titles.get(value.entryId)! }
 }
+
+/**
+ * 🚧 A value that is ONE reference — where somebody is, a place entry — reads
+ * as **not set** in a session's state when the session does not see what it
+ * points at (plan A27): archived, switched Off or off for a while at its
+ * moment, a character's private lore, another book's, a sibling line's, or
+ * gone. The party stood in a room that has since left the story; the prompt
+ * then says the location is not set (`{{location}}` takes the planner's hint)
+ * rather than naming a room no other reader has, and the State widget shows
+ * it unset. The stored value stays and is simply not read — back on, the room
+ * is where they are again. A LIST keeps what it holds (`nameLoreRefs`): a
+ * thing in a pack is still carried.
+ *
+ * `stateFor` only: a ledger row or a pending change says what was written.
+ */
+async function unsetUnseenReferences(
+	db: Db,
+	bags: Record<string, unknown>[],
+	reading: LineReading | null,
+	/** The places the session sees (`SessionLinks.locations`): seen without asking again. */
+	places: readonly LocationLink[]
+): Promise<void> {
+	const seen = new Set(places.map((p) => p.entryId))
+	const ids = new Set<number>()
+	for (const bag of bags)
+		for (const value of Object.values(bag))
+			if (isSlotLoreRef(value) && !seen.has(value.entryId)) ids.add(value.entryId)
+	if (!ids.size) return
+	if (reading)
+		for (const e of await entriesAsRead(db, reading.lorebookId, reading, "session", null, [...ids]))
+			if (!e.unseen && !declaresPrivateLore(e.typeId)) seen.add(e.entryId)
+	for (const bag of bags)
+		for (const [key, value] of Object.entries(bag))
+			if (isSlotLoreRef(value) && !seen.has(value.entryId)) delete bag[key]
+}
+
+/** Where a lore reference is named from: a book and a reading of it (`nameLoreRefs`). */
+export type NamingReading = Pick<LineReading, "lorebookId"> & EntryReading
 
 /**
  * One value under both its keys: the qualified one always, the bare one when

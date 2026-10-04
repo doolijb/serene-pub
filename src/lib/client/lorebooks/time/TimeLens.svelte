@@ -1,17 +1,21 @@
 <script lang="ts">
 	import * as Icons from "@lucide/svelte"
-	import { onDestroy, onMount } from "svelte"
+	import ResizableSplit from "$lib/client/components/panels/ResizableSplit.svelte"
+	import { LORE_SPLIT_KEY } from "../layoutMode"
+	import { onDestroy } from "svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
-	import { declareInterest } from "$lib/client/sockets/interest.svelte"
 	import { interestKey } from "$lib/shared/sockets/interest"
 	import { toaster } from "$lib/client/utils/toaster"
 	import { awaitReply, isReplyTimeout } from "$lib/client/utils/awaitReply"
+	import { toastUnsaved } from "$lib/client/utils/toastUnsaved"
 	import { changedFields } from "$lib/shared/lorebooks/amendments"
 	import CompileHistoryEntryModal from "$lib/client/components/modals/CompileHistoryEntryModal.svelte"
 	import type { BindingWithRelations } from "$lib/client/components/lorebookForms/entryManager"
 	import { HISTORY_TYPE_ID } from "$lib/shared/entries/types"
 	import { castMembers } from "../castPool"
 	import { loreRoute } from "../loreRoute.svelte"
+	import { getBookData } from "../bookData.svelte"
+	import { lensEmptyMessage } from "../lenses/registry"
 	import { descriptorForKind, draftStale } from "../sections"
 	import {
 		compareDates,
@@ -20,15 +24,22 @@
 		type StoryDate
 	} from "../sections/historyDates"
 	import type { PoolSource } from "../sections/types"
-	import { buildTicks, ratioOf } from "../timelineStrip"
+	import {
+		buildTicks,
+		ratioAlongTrack,
+		ratioOf,
+		trackInsetPx
+	} from "../timelineStrip"
 	import DatedEntryPanel from "./DatedEntryPanel.svelte"
 	import { dateAtRatio, parseMoment } from "./moment"
 	import { findGaps } from "./timeGaps"
 	import {
 		buildLanes,
 		dropOffer,
+		isDatable,
 		isDated,
 		storyItems,
+		timeListGroups,
 		timeHeaderLine,
 		undatedEntries,
 		undatedLine,
@@ -84,13 +95,27 @@
 	const socket = useTypedSocket()
 	const descriptor = descriptorForKind(HISTORY_TYPE_ID)!
 
+	/**
+	 * The book's cast — the workspace's copy (plan B4: this lens asked for
+	 * its own on mount). Held as state so the entry panel's binding picker
+	 * can write to it, and re-read whenever the workspace's moves.
+	 */
+	const book = getBookData()
 	let bindings = $state<BindingWithRelations[]>([])
+	$effect(() => {
+		bindings = [...book.cast]
+	})
 	let creating = $state(false)
 	let draft = $state<Record<string, any> | null>(null)
 	/** Which row the draft belongs to, so a re-render does not discard edits. */
 	let draftKey = $state<string | null>(null)
-	/** A date a drop asked for, held until there is a draft to write it to. */
-	let pendingDate = $state<StoryDate | null>(null)
+	/**
+	 * A date a drop asked for, and the entry it was dropped FOR — held until
+	 * that entry's draft exists, and written to no other (plan B7: a bare
+	 * date was written to whatever draft was open, and a stale one re-dated
+	 * the next entry opened).
+	 */
+	let pendingDate = $state<{ entryId: number; date: StoryDate } | null>(null)
 	let compileTarget = $state<PoolSource | null>(null)
 	let compileOpen = $state(false)
 	let showAllUndated = $state(false)
@@ -120,6 +145,7 @@
 	)
 	let ticks = $derived(buildTicks(datedRows))
 	let items = $derived(storyItems({ entries, scenes, session }))
+	let listGroups = $derived(timeListGroups(items))
 	let cast = $derived(
 		castMembers(bindings as any).map((m) => ({ id: m.id, name: m.name }))
 	)
@@ -153,10 +179,16 @@
 		return map
 	})
 
-	/** The dated entry the address names, when it names one. */
+	/**
+	 * The entry the address names, when it names one this lens can edit: a
+	 * row of a kind with date fields, dated or not yet — an undated row
+	 * dropped onto the line opens here to take its date (plan B7).
+	 */
 	let selected = $derived(
 		route.entryId != null
-			? (dated.find((row) => row.id === route.entryId) ?? null)
+			? (entries.find(
+					(row) => row.id === route.entryId && isDatable(row)
+				) ?? null)
 			: null
 	)
 	let selectedKey = $derived(
@@ -304,7 +336,7 @@
 				})
 			} catch (err) {
 				saving = false
-				reportUnanswered(err, "History was not created")
+				toastUnsaved(err, "History was not created")
 				return
 			}
 			saving = false
@@ -360,14 +392,19 @@
 		}
 	}
 
-	/** Where along the line a pointer is, as a fraction of the track. */
+	/**
+	 * Where along the line a pointer is, as a fraction of the part the ticks
+	 * are drawn on — inset half a rem each side, as the ticks are (plan B7).
+	 */
 	function ratioFromEvent(
 		event: { clientX: number },
 		el: HTMLElement
 	): number | null {
-		const rect = el.getBoundingClientRect()
-		if (rect.width === 0) return null
-		return (event.clientX - rect.left) / rect.width
+		return ratioAlongTrack(
+			event.clientX,
+			el.getBoundingClientRect(),
+			trackInsetPx()
+		)
 	}
 
 	async function dropOnLine(event: DragEvent) {
@@ -397,10 +434,19 @@
 	 */
 	async function offerDate(row: TimeEntryRow, date: StoryDate) {
 		if (dropOffer(row) === "date") {
-			pendingDate = date
+			// Dropped onto the entry already open: its own draft takes the
+			// date, and nothing is left to ask about.
+			if (draft && !creating && draftKey === `entry#${row.id}`) {
+				writeDate(draft, date)
+				return
+			}
+			// ⚠ Ask FIRST, and only then hold the date: held before the
+			// answer, the draft effect wrote it into the draft being left —
+			// even when the answer was Cancel.
 			if (!(await loreRoute.confirmLeave())) return
-			if (route.entryId === row.id) applyPendingDate()
-			else void loreRoute.navigate({ type: "openEntry", entryId: row.id })
+			discardDraft()
+			pendingDate = { entryId: row.id, date }
+			void loreRoute.navigate({ type: "openEntry", entryId: row.id })
 			return
 		}
 		await startCreate(date, (row.name ?? "").trim())
@@ -411,11 +457,17 @@
 		return ticks.length ? dateAtRatio(ticks, 1) : null
 	}
 
+	function writeDate(target: Record<string, any>, date: StoryDate) {
+		target.year = date.year
+		target.month = date.month ?? null
+		target.day = date.day ?? null
+	}
+
+	/** The held date, into the draft of the entry it was dropped for only. */
 	function applyPendingDate() {
-		if (!pendingDate || !draft) return
-		draft.year = pendingDate.year
-		draft.month = pendingDate.month ?? null
-		draft.day = pendingDate.day ?? null
+		const held = pendingDate
+		if (!held || !draft || draftKey !== `entry#${held.entryId}`) return
+		writeDate(draft, held.date)
 		pendingDate = null
 	}
 
@@ -455,6 +507,8 @@
 				pristineDraft = draft ? { ...$state.snapshot(draft) } : null
 			}
 		}
+		// Only into the dropped entry's own draft (`applyPendingDate`); any
+		// other move clears it (`discardDraft`).
 		if (pendingDate && draft) applyPendingDate()
 	})
 
@@ -475,59 +529,60 @@
 		hasUnsavedChanges = dirty
 	})
 
-	function handleBindingList(msg: Sockets.Lorebooks.BindingList.Response) {
-		if (msg.lorebookId !== lorebookId) return
-		bindings = msg.lorebookBindingList as BindingWithRelations[]
-	}
-
-	/**
-	 * The book's cast, keyed on the open book. An effect rather than
-	 * `useInterest` because `lorebookId` is a prop and the key moves with
-	 * it; declared above `onMount` so the interest exists before the request
-	 * goes out. (A create's own reply is waited on in `save`.)
-	 */
-	$effect(() =>
-		declareInterest<"lorebooks:bindingList">(
-			interestKey("lorebooks:bindingList", lorebookId),
-			handleBindingList
-		)
-	)
-
-	onMount(() => {
-		socket.emit("lorebooks:bindingList", { lorebookId })
-	})
-
 	onDestroy(() => {
 		hasUnsavedChanges = false
 	})
 </script>
 
 {#snippet itemRow(item: TimeItem)}
-	<button
-		type="button"
-		class="hover:preset-tonal-surface flex w-full items-center gap-2 rounded px-2 py-1 text-left text-sm {selectedKey ===
-		item.key
-			? 'preset-tonal-primary'
-			: ''}"
-		disabled={item.kind === "session"}
-		data-lore-time-item={item.key}
-		onclick={() => openItem(item)}
-	>
-		<span
-			class="text-surface-600-400 w-16 shrink-0 text-xs"
+	{#if item.kind === "session"}
+		<!-- The session sits at now and opens nothing here, so it reads as a
+		     static row: no button, no hover, no pointer (note 4). -->
+		<div
+			class="text-surface-700-300 flex w-full items-center gap-2 px-2 py-1 text-sm"
+			data-lore-time-item={item.key}
 		>
-			{kindLabelOf(item)}
-		</span>
-		<span class="min-w-0 flex-1 truncate">{item.label}</span>
-		{#if item.note}
-			<span class="text-surface-700-300 shrink-0 text-xs">
-				{item.note}
+			<span class="text-surface-600-400 w-16 shrink-0 text-xs">
+				{kindLabelOf(item)}
 			</span>
-		{/if}
-		<span class="text-surface-600-400 shrink-0 text-xs">
-			{dateLabelOf(item)}
-		</span>
-	</button>
+			<span class="min-w-0 flex-1 truncate italic">{item.label}</span>
+			{#if item.note}
+				<span class="shrink-0 text-xs">{item.note}</span>
+			{/if}
+			<span class="text-surface-600-400 shrink-0 text-xs">
+				{dateLabelOf(item)}
+			</span>
+		</div>
+	{:else}
+		<button
+			type="button"
+			class="hover:bg-surface-200-800 focus-visible:ring-primary-500 flex w-full cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm transition-colors focus-visible:ring-2 focus-visible:outline-none {selectedKey ===
+			item.key
+				? 'preset-tonal-primary'
+				: ''}"
+			aria-current={selectedKey === item.key ? "true" : undefined}
+			data-lore-time-item={item.key}
+			onclick={() => openItem(item)}
+		>
+			<span class="text-surface-600-400 w-16 shrink-0 text-xs">
+				{kindLabelOf(item)}
+			</span>
+			<span class="min-w-0 flex-1 truncate">{item.label}</span>
+			{#if item.note}
+				<span class="text-surface-700-300 shrink-0 text-xs">
+					{item.note}
+				</span>
+			{/if}
+			<span class="text-surface-600-400 shrink-0 text-xs">
+				{dateLabelOf(item)}
+			</span>
+			<Icons.ChevronRight
+				size={14}
+				class="text-surface-600-400 shrink-0"
+				aria-hidden="true"
+			/>
+		</button>
+	{/if}
 {/snippet}
 
 {#snippet line()}
@@ -558,8 +613,7 @@
 
 		{#if ticks.length === 0}
 			<p class="text-surface-700-300 p-6 text-center text-sm italic">
-				Nothing is dated yet. Add a dated entry and it becomes a point
-				on this line.
+				{lensEmptyMessage("time")}
 			</p>
 		{:else}
 			<!-- The axis, which is also where a drop lands. -->
@@ -604,7 +658,7 @@
 							{lane.label}
 						</span>
 						<div
-							class="border-border relative h-6 min-w-0 flex-1 rounded border-b"
+							class="panel-edge relative h-6 min-w-0 flex-1 rounded border-b"
 							data-lore-time-lane={lane.id}
 						>
 							{#each lane.items as item (item.key)}
@@ -642,7 +696,7 @@
 
 			{#each gaps as gap (gap.sentence)}
 				<div
-					class="border-border flex flex-wrap items-center gap-2 rounded-lg border border-dashed px-3 py-2 text-xs"
+					class="panel-edge flex flex-wrap items-center gap-2 rounded-lg border border-dashed px-3 py-2 text-xs"
 					data-lore-time-gap
 				>
 					<Icons.MoveHorizontal
@@ -657,15 +711,30 @@
 				</div>
 			{/each}
 
+			<!-- A history entry's scenes nest under it, tabbed in on a guide,
+			     rather than standing between it and the next row (note 4). -->
 			<ul class="flex flex-col gap-0.5" data-lore-time-list>
-				{#each items as item (item.key)}
-					<li>{@render itemRow(item)}</li>
+				{#each listGroups as group (group.item.key)}
+					<li>
+						{@render itemRow(group.item)}
+						{#if group.children.length}
+							<ul
+								class="panel-edge mt-0.5 ml-5 flex flex-col gap-0.5 border-l pl-2"
+								aria-label="Scenes in {group.item.label}"
+								data-lore-time-scenes={group.item.key}
+							>
+								{#each group.children as child (child.key)}
+									<li>{@render itemRow(child)}</li>
+								{/each}
+							</ul>
+						{/if}
+					</li>
 				{/each}
 			</ul>
 		{/if}
 
 		{#if undated.length > 0}
-			<div class="border-border flex flex-col gap-2 border-t pt-3">
+			<div class="panel-inset flex flex-col gap-2">
 				<span class="text-sm font-semibold">Not on the line</span>
 				<p class="text-surface-700-300 text-xs">
 					{undatedLine(undated.length)}
@@ -744,7 +813,9 @@
 			present={selectedItem?.present ?? []}
 			castName={(id) => bindingNameById.get(id) ?? `#${id}`}
 			title={selectedItem?.label ??
-				(selected ? formatDate(selected as StoryDate) : "")}
+				(selected && isDated(selected)
+					? formatDate(selected as StoryDate)
+					: (selected?.name ?? "").trim() || "Not dated yet")}
 			readIn={selected ? readInOf(selected.id) : null}
 			{dirty}
 			canSave={!saving &&
@@ -765,17 +836,20 @@
 
 <div class="flex min-h-0 flex-1 flex-col" data-lore-lens="time">
 	{#if mode === "desk"}
-		<div class="flex min-h-0 flex-1 gap-4">
-			<div class="flex min-h-0 min-w-0 flex-1 flex-col">
+		<!-- The same divider and the same remembered share as Entries. -->
+		<ResizableSplit storageKey={LORE_SPLIT_KEY} firstId="loreSplitTime">
+			{#snippet first()}
 				{@render line()}
-			</div>
-			<div
-				class="border-border flex min-h-0 w-[420px] shrink-0 flex-col border-l pl-4"
-				data-lore-editor
-			>
-				{@render panel()}
-			</div>
-		</div>
+			{/snippet}
+			{#snippet second()}
+				<div
+					class="panel-card flex min-h-0 min-w-0 flex-1 flex-col p-3"
+					data-lore-editor
+				>
+					{@render panel()}
+				</div>
+			{/snippet}
+		</ResizableSplit>
 	{:else if draft}
 		<div class="flex min-h-0 flex-1 flex-col" data-lore-editor>
 			{@render panel()}

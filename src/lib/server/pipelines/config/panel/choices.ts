@@ -161,7 +161,8 @@ export async function choiceSets(db: Db, specId: number) {
 			isImmutable: boolean
 			createdForSpecId: number | null
 		}>,
-		keyOf: (r: any) => string
+		keyOf: (r: any) => string,
+		opts: { markForeign?: boolean } = {}
 	): Map<string, ChoiceList> => {
 		const by = new Map<string, ChoiceList>()
 		for (const r of rows as any[]) {
@@ -176,6 +177,12 @@ export async function choiceSets(db: Db, specId: number) {
 			list.push({
 				id: r.id,
 				label: r.name,
+				// Written for another pipeline (`promptsForPipeline` drops it).
+				...(opts.markForeign &&
+				r.createdForSpecId != null &&
+				r.createdForSpecId !== specId
+					? { foreign: true }
+					: {}),
 				// The subtitle answers the question the grouping raises — "then
 				// where is this one from" — for exactly the rows where it is not
 				// already obvious.
@@ -211,8 +218,10 @@ export async function choiceSets(db: Db, specId: number) {
 	// Keyed on the composite, which is an in-memory Map key and never leaves
 	// this process — the rows carry two columns and `choicesFor` rebuilds the
 	// key from the declaration's two halves. See `promptPool.ts`.
-	const promptsBy = pooled(promptRows as any[], (p: any) =>
-		promptPoolKeyFor(p.nodeDefinitionId, p.slot)
+	const promptsBy = pooled(
+		promptRows as any[],
+		(p: any) => promptPoolKeyFor(p.nodeDefinitionId, p.slot),
+		{ markForeign: true }
 	)
 
 	// Every layout on the instance, not this spec's — a layout is keyed by the
@@ -471,17 +480,47 @@ export const judgeAgainst = (
  * offers the layouts for **its** variable, and a connection or sampling option
  * offers only what its slot can actually use.
  */
+/**
+ * A prompt pool narrowed to the pipeline being configured (owner note 37,
+ * 2026-10-02: "Prompts need to be properly filtered by pipeline across the
+ * app").
+ *
+ * The pool is still `(node definition, slot)` — that is what a row can be
+ * selected into — but a picker offers only the rows that belong HERE: written
+ * for this pipeline, shipped for no pipeline in particular, or written for no
+ * pipeline at all. A row written for (or shipped with) ANOTHER pipeline is
+ * not offered: Chat's reply picker never lists the Guide's or the
+ * Lair's prompts. `keep` names rows that stay whatever they are — the value
+ * this option holds and its author default — because hiding the current
+ * selection would make the dropdown show nothing and read as data loss.
+ * @internal exported for its test
+ */
+export function promptsForPipeline(
+	pool: ChoiceList,
+	keep: ReadonlyArray<unknown> = []
+): ChoiceList {
+	return pool
+		.filter((c: any) => !c.foreign || keep.includes(c.id))
+		.map(({ foreign: _f, ...c }: any) => c) as ChoiceList
+}
+
 export const choicesFor = (
 	d: Decl,
-	sets: Awaited<ReturnType<typeof choiceSets>>
+	sets: Awaited<ReturnType<typeof choiceSets>>,
+	/** For a prompts-ref: rows to offer even when written for another pipeline. */
+	keep: ReadonlyArray<unknown> = []
 ): ChoiceList | undefined => {
 	// Narrowed by the pool, exactly as a context template is — the difference
 	// is that a prompt's pool takes both halves. A slot's declared field set is
 	// a property of the type's VERSION, so it is checked at selection
 	// (`assertSelectable`) rather than fragmenting the pool on every bump.
+	// Then narrowed to this pipeline (`promptsForPipeline`).
 	if (d.control === "prompts-ref")
 		return d.nodeDefinitionId
-			? (sets.promptsBy.get(promptPoolKeyFor(d.nodeDefinitionId, d.slot)) ?? [])
+			? promptsForPipeline(
+					sets.promptsBy.get(promptPoolKeyFor(d.nodeDefinitionId, d.slot)) ?? [],
+					keep
+				)
 			: []
 	// Judged against what the slot declared it requires, and only narrowed by
 	// shape when it declared none — the fallback for every slot authored before

@@ -1,6 +1,0 @@
-#!/bin/bash
-# Serene Pub Application Launcher
-# This launches the main run.sh script
-DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
-cd "$DIR"
-exec ./run.sh

@@ -1,4 +1,7 @@
 import { v4 as uuidv4 } from "uuid"
+import { messageWithoutQueryText, withoutQueryText } from "$lib/server/db/errors"
+import type { StoryDate } from "$lib/shared/lorebooks/storyDate"
+import { sameLineAndMoment } from "$lib/shared/lorebooks/loreRoute"
 import {
 	ComposedError,
 	type ConnectionIdentity
@@ -43,14 +46,29 @@ export function activityError(err: unknown): {
 	errorMessage: string
 	connection?: ConnectionIdentity
 } {
+	// A failed query's message is its SQL and the values it wrote — itself, or
+	// quoted inside another message (a run's reason in a `ComposedError`, a
+	// wrapper's `${label}: ${e.message}`). Whoever reads the card gets the
+	// plain sentence; the whole error is in the server log.
 	if (err instanceof ComposedError)
 		return {
 			// `ComposedError`'s `message` is optional, matching `Error` — an
 			// empty one would otherwise terminalize the card with a blank.
-			errorMessage: err.message || OPAQUE_ACTIVITY_ERROR_MESSAGE,
-			...(err.connection ? { connection: err.connection } : {})
+			errorMessage:
+				messageWithoutQueryText(err) || OPAQUE_ACTIVITY_ERROR_MESSAGE,
+			...(err.connection
+				? {
+						connection:
+							typeof err.connection.detail === "string"
+								? {
+										...err.connection,
+										detail: withoutQueryText(err.connection.detail)
+									}
+								: err.connection
+					}
+				: {})
 		}
-	const detail = err instanceof Error ? err.message : String(err)
+	const detail = messageWithoutQueryText(err)
 	return {
 		errorMessage: OPAQUE_ACTIVITY_ERROR_MESSAGE,
 		// Only when there is something to carry, matching `connectionIdentity`:
@@ -68,6 +86,14 @@ export type GraphBuildActivity = {
 	lorebookId: number
 	lorebookLabel: string
 	mode: "replace" | "extend"
+	/**
+	 * The line the build read and its apply writes (plan A3), null for main:
+	 * the session's line for Extend from this session, the line the Graph
+	 * lens was reading for Extend graph, main for a Rebuild. Held here,
+	 * server-side, like what the build read — an apply never says which line
+	 * it writes.
+	 */
+	branchId: number | null
 	status: "building" | "review" | "error"
 	phase: string
 	sceneIndex: number
@@ -161,6 +187,17 @@ export type CompileHistoryEntryActivity = {
 	historyEntryDate: string
 	lorebookId: number
 	lorebookLabel: string
+	/**
+	 * The line the compile read (null is main): its scenes are that line's,
+	 * and the review saves on it — wherever its reader stands when they
+	 * reopen it.
+	 */
+	branchId: number | null
+	/**
+	 * The moment the compile was asked at (null is now). A review saved at a
+	 * moment is an amendment dated then; at now it changes the entry.
+	 */
+	moment: StoryDate | null
 	status: "running" | "review" | "error"
 	phase?: "drafting" | "synthesizing"
 	batch?: number
@@ -207,12 +244,13 @@ export type SessionSummarizeActivity = {
 		name?: string
 		raw: string
 		/**
-		 * Minted server-side by resolveOrCreateBinding for character lore. It
-		 * has to ride the activity: the client otherwise only ever sees it on
-		 * the `sessions:summarize:complete` payload, so a review reopened from the
-		 * Activity panel would save the entry with a null binding.
+		 * The character a character-lore review binds its entry to, when one
+		 * was picked. The book's cast member for them is found or added at
+		 * Save, never by the run. It rides the activity because the client
+		 * otherwise only sees it on the `sessions:summarize:complete` payload,
+		 * so a review reopened from the Activity panel would save unbound.
 		 */
-		lorebookBindingId?: number | null
+		lorebookBindingCharacterId?: number | null
 	}
 	startedAt: string
 }
@@ -326,6 +364,8 @@ class ActivityStore {
 		lorebookId: number
 		lorebookLabel: string
 		mode: "replace" | "extend"
+		/** The build's line; absent is main. */
+		branchId?: number | null
 	}): string {
 		// The cross-kind refusal that stood here (a running scene_backfill
 		// rewriting the same scene cast a build reads) is gone with the
@@ -352,6 +392,7 @@ class ActivityStore {
 		const activity: GraphBuildActivity = {
 			kind: "graph_build",
 			...params,
+			branchId: params.branchId ?? null,
 			id,
 			status: "building",
 			phase: "loading",
@@ -446,14 +487,20 @@ class ActivityStore {
 			historyEntryDate: string
 			lorebookId: number
 			lorebookLabel: string
+			branchId: number | null
+			moment: StoryDate | null
 		},
 		abortController?: AbortController
 	): string {
+		// One compile per entry AND reading: two lines read different scenes
+		// and save to different places, so a compile on one line neither
+		// waits for nor replaces another line's.
 		for (const [existingId, activity] of this.activities) {
 			if (
 				activity.kind === "compile_history_entry" &&
 				activity.historyEntryId === params.historyEntryId &&
-				activity.userId === params.userId
+				activity.userId === params.userId &&
+				sameLineAndMoment(activity, params)
 			) {
 				if (activity.status === "running") {
 					// Rejected outright rather than silently superseded, even
@@ -467,7 +514,7 @@ class ActivityStore {
 					// from another tab is worse than a clear "already in
 					// progress" error.
 					throw new Error(
-						"A compile is already in progress for this entry."
+						"A compile of this entry is already in progress for this line and moment."
 					)
 				}
 				// review/error activities have already finished running —

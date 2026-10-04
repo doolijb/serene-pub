@@ -3,7 +3,6 @@
 // Moved from app.d.ts to be shared between client and server
 
 import type { ListResponse } from "ollama"
-import type { SpecV3 } from "@lenml/char-card-reader"
 import type {
 	LibraryCatalogItem,
 	CardSourceId,
@@ -24,6 +23,7 @@ import type {
 	TemplateScope as SdkTemplateScope
 } from "@serene-pub/sdk"
 import type { SpriteSetView } from "$lib/shared/sprites"
+import type { LoreWriteMode } from "$lib/shared/lorebooks/loreWriteMode"
 
 declare global {
 	namespace Sockets {
@@ -171,7 +171,7 @@ declare global {
 					id: number
 				}
 				interface Response {
-					// embedding/embeddingModel/vectorizedAt are deliberately
+					// The vector and its bookkeeping are deliberately
 					// excluded — see the `columns` restriction in
 					// charactersGet (characters.ts) — unlike Create/Update
 					// below, which return the full row.
@@ -181,6 +181,8 @@ declare global {
 									SelectCharacter,
 									| "embedding"
 									| "embeddingModel"
+									| "embeddingSourceHash"
+									| "embedTextHash"
 									| "vectorizedAt"
 								>
 						  > & {
@@ -244,6 +246,17 @@ declare global {
 					sessionId?: number | null
 				}
 			}
+			/**
+			 * A card's embedded lorebook, HELD on the server (a **held
+			 * import**, NOMENCLATURE §16) for the "Import the lorebook?"
+			 * dialog, which imports it by `lorebooks:import`'s
+			 * `heldImportId`. The book itself never crosses the wire back.
+			 */
+			interface HeldCardBook {
+				heldImportId: string
+				/** The book's own name, for the dialog to offer. */
+				name: string
+			}
 			namespace ImportCard {
 				interface Params {
 					file: string // base64 encoded file (JSON or PNG)
@@ -251,12 +264,18 @@ declare global {
 				interface Response {
 					status: "created" | "unchanged" | "conflict"
 					character: SelectCharacter | null
-					book: SpecV3.Lorebook | null
+					/** Only on "created"; null when the card carries no book. */
+					book: HeldCardBook | null
 					conflict?: {
 						existingCharacter: SelectCharacter
-						// The raw base64 file, held so the client can hand it
-						// back verbatim in ImportResolve.Params.
-						file: string
+						/**
+						 * The **held import** (NOMENCLATURE §16): the file stays
+						 * on the server and the choice names it in
+						 * ImportResolve.Params — never the file itself, which
+						 * would cross the wire twice more and reach every tab.
+						 * Only this person can settle it, once.
+						 */
+						heldImportId: string
 					}
 					/**
 					 * Non-fatal problems during an otherwise successful
@@ -272,12 +291,13 @@ declare global {
 			namespace ImportResolve {
 				interface Params {
 					action: "overwrite" | "createNew"
-					file: string
+					/** From ImportCard.Response.conflict. */
+					heldImportId: string
 					existingId: number
 				}
 				interface Response {
 					character: SelectCharacter
-					book: SpecV3.Lorebook | null
+					book: HeldCardBook | null
 					/** See ImportCard.Response.warnings. */
 					warnings?: string[]
 				}
@@ -342,7 +362,7 @@ declare global {
 				}
 				interface Response {
 					character: SelectCharacter
-					book: SpecV3.Lorebook | null
+					book: HeldCardBook | null
 				}
 			}
 			namespace ListGallery {
@@ -1188,12 +1208,6 @@ declare global {
 				scopes?: string[]
 				reads?: string[]
 				channels?: string[]
-				cells?: {
-					minW?: number
-					maxW?: number
-					minH?: number
-					maxH?: number
-				}
 				settings?: Record<string, unknown>
 				defaultActive?: boolean
 			}
@@ -1903,6 +1917,14 @@ declare global {
 					 * state here. See `LocalModelState`.
 					 */
 					local?: LocalModelState
+					/**
+					 * Present only on the managed KoboldCPP's rows: the vision
+					 * projector (`mmproj`) file loaded beside this model, or
+					 * null for none. A file name in the models folder. Setting
+					 * one turns Vision on for the model (the host-declared
+					 * capability layer). See `koboldcpp/visionProjector.ts`.
+					 */
+					visionProjector?: string | null
 				}
 				interface Response {
 					connectionId?: number
@@ -1998,7 +2020,15 @@ declare global {
 					modelId: number
 					model: Partial<
 						Omit<CreateModel.Params["model"], "model">
-					> & { model?: string }
+					> & {
+						model?: string
+						/**
+						 * The managed KoboldCPP only: a bare `.gguf` name in the
+						 * models folder, or null / blank to clear it. Refused on
+						 * any other endpoint.
+						 */
+						visionProjector?: string | null
+					}
 				}
 				type Response = Models.Response
 			}
@@ -2262,6 +2292,8 @@ declare global {
 			 */
 			namespace Logbook {
 				interface Params {
+					/** One record by id — History's change view (`/admin/history/:id`). */
+					recordId?: number | null
 					objectType?: string | null
 					objectId?: string | null
 					actorUserId?: number | null
@@ -2511,7 +2543,6 @@ declare global {
 				interface Params {
 					slug: string
 					enabled?: boolean
-					defaultPresetId?: number | null
 				}
 				interface Response {
 					slug: string
@@ -2775,6 +2806,45 @@ declare global {
 			 * `set: null` clears it. Pushed to every member as
 			 * `sessions:spriteSetChanged`.
 			 */
+			/**
+			 * 🚧 The session's author's note (AN1), for core's Author's note
+			 * widget: read by anyone in the session, written by its owner.
+			 * Each ask carries a `request` token the reply (and the `:error`
+			 * refusal) echoes, since the reply reaches every tab of the person.
+			 */
+			namespace AuthorsNote {
+				interface Params {
+					sessionId: number
+					request?: string
+				}
+				interface Response {
+					sessionId: number
+					request?: string
+					note?: import("@serene-pub/sdk").AuthorsNoteV1
+					error?: string
+				}
+			}
+			namespace SetAuthorsNote {
+				interface Params {
+					sessionId: number
+					note: import("@serene-pub/sdk").AuthorsNoteValueV1
+					request?: string
+				}
+				type Response = AuthorsNote.Response
+			}
+			/**
+			 * Pushed to the session owner's tabs whenever a write moved the
+			 * session's stored genre fields (`sessions:update`,
+			 * `sessions:setAuthorsNote`; 2026-10-03), so an open Edit Session
+			 * form refreshes the fields nobody touched there. `genreFields` is
+			 * the stored value, not the cascade.
+			 */
+			namespace GenreFieldsChanged {
+				interface Response {
+					sessionId: number
+					genreFields: Record<string, unknown>
+				}
+			}
 			namespace SetSpriteSet {
 				interface Params {
 					sessionId: number
@@ -3092,8 +3162,8 @@ declare global {
 						subject: string
 						/** null clears the binding — inherit again. */
 						specSlug: string | null
-						/** Default 'session'. 'instance' requires admin. */
-						scope?: "session" | "instance"
+						/** Default 'session'. 'pub' requires admin. */
+						scope?: "session" | "pub"
 						/**
 						 * The session's **enabled-when override** for this
 						 * action (plans/29 R-15; U5e): a predicate or a list
@@ -3398,6 +3468,12 @@ declare global {
 				interface Pipeline {
 					slug: string
 					label: string
+					/**
+					 * Set on the session's creation pipeline only: `creating`
+					 * while its create run is under way, `created` after —
+					 * when its card is collapsed and read-only.
+					 */
+					creation?: "creating" | "created"
 				}
 				interface Response {
 					sessionId: number
@@ -3442,26 +3518,22 @@ declare global {
 					pluginId: string
 					src: string
 					title?: string
-					/** panels only. */
-					panelId?: string
 				}
 				/**
 				 * A mode-declared panel (21) as it crosses the wire — mirrors the
-				 * SDK `WidgetDecl`, plus a resolved `src` when the surface is a
-				 * frame whose plugin is installed (absent → the frame is missing
-				 * and the client shows a placeholder, never an error).
+				 * SDK `WidgetDecl`, plus the resolved `src` of its component's
+				 * module (absent → the component is missing and the client shows
+				 * a placeholder, never an error).
 				 */
 				interface ModePanel {
 					id: string
 					title: string
 					icon?: string
 					role?: "primary" | "secondary"
-					surface:
-						| { kind: "frame"; pluginId: string; entry: string }
-						| { kind: "remote"; owner: string; component: string }
+					surface: { kind: "remote"; owner: string; component: string }
 					/**
-					 * Resolved URL: a frame's document, or a remote component's
-					 * module (`/plugin-ui/<owner>/<entry>`, run in the UI worker).
+					 * Resolved URL: the remote component's module
+					 * (`/plugin-ui/<owner>/<entry>`, run in the UI worker).
 					 */
 					src?: string
 					/**
@@ -3488,6 +3560,14 @@ declare global {
 					}
 					defaultActive?: boolean
 					/**
+					 * How many instances of this widget one layout may place
+					 * (`WidgetDecl.maxInstances`, a positive integer); absent =
+					 * no cap. The layout editor's Add menu turns the widget
+					 * away at the cap, and a layout placing more draws the
+					 * first ones (brief 7b).
+					 */
+					maxInstances?: number
+					/**
 					 * Per-instance settings this panel offers, in the SDK's
 					 * `FieldDecl` language (`WidgetDecl.settings`). The settings
 					 * panel renders exactly what is declared here; core adds
@@ -3502,15 +3582,6 @@ declare global {
 					sessionId: number
 					/** Present when the mode declares a custom session view. */
 					sessionView?: Frame
-					/**
-					 * ⏳ Every enabled plugin's `surfaces.panels`, flattened.
-					 *
-					 * @deprecated A panel IS a widget (SDK `panelToWidgetDecl`)
-					 * and the client seats widgets off `modePanels`; nothing
-					 * reads this list. Kept one release for anything outside
-					 * this repo that does.
-					 */
-					panels: Frame[]
 					/** The mode's declared surface-grid panels (21). */
 					modePanels: ModePanel[]
 					/**
@@ -3688,75 +3759,142 @@ declare global {
 				}
 			}
 			/**
-			 * One saved layout preset (PLAN 25 redesign, 2026-08-30) — a
-			 * reusable layout DEFINITION scoped to a genre. The rows a caller
-			 * is offered are the shipped per-genre defaults plus their OWN
-			 * saved layouts; another user's presets are never listed.
+			 * One **session layout preset** (NOMENCLATURE §9): a named,
+			 * copyable session layout scoped to a genre — core's, a plugin's,
+			 * a person's. A session never references one to draw; it COPIES
+			 * one in (`sessions:panelLayout:startFrom`) and keeps only which
+			 * one it **started from**. Every field the editor's Start from
+			 * pane reads is here (briefs 3–6 of the layout plan), so the pane
+			 * never needs a second read.
 			 */
 			interface LayoutPreset {
 				id: number
 				name: string
 				genreId: string
+				/** Who brought the row: `core` · `plugin` · `user`. */
+				origin: "core" | "plugin" | "user"
+				/** The stable key within its owner (`default`, `wide-table`). */
+				slug: string
+				description: string | null
+				/** The plugin that ships it; null for core's and people's rows. */
+				pluginId: string | null
+				/** That plugin's name, for the _From *Plugin*_ group. */
+				pluginName: string | null
 				/**
-				 * `true` for the shipped per-genre default (author-less,
-				 * seeded). Its layout is `{}` — "no overrides", i.e. the app's
-				 * built-in arrangement — so applying it is the reset.
+				 * The genre's **genre default layout**: what a session starts
+				 * from when its person has no new-session layout, and what
+				 * _Reset to genre default layout_ copies back in.
 				 */
-				isDefault: boolean
-				/** `{ zoneLayout?, widgetGrid?, arrangedGrid? }`, verbatim. */
+				isGenreDefault: boolean
+				/** `shared` · `private`. Shipped rows are always shared. */
+				visibility: "shared" | "private"
+				/** The caller may rename, re-capture, share and delete it. */
+				mine: boolean
+				/** Who made a person's row; null for shipped rows. */
+				authorName: string | null
+				/** The caller's **new-session layout** for this genre. */
+				isNewSessionLayout: boolean
+				/**
+				 * The session layout, verbatim: its arrangement (`zoneLayout?`,
+				 * `widgetGrid?`, `arrangedGrid?`) plus the `widgetSettings` and
+				 * `widgetStyles` a copy unpacks.
+				 */
 				layout: Record<string, unknown>
+				/**
+				 * When `layout` last changed (ISO). Later than a session's
+				 * `layoutCopiedAt` means the layout it started from was
+				 * **Updated** since the copy.
+				 */
+				layoutUpdatedAt: string
 			}
 			namespace PanelLayout {
 				namespace Get {
 					interface Params {
 						sessionId: number
 					}
+					/**
+					 * The caller's own session layout for this session, whole.
+					 * The first open copies one in (their new-session layout,
+					 * else the genre default layout), so there is no base to
+					 * resolve and nothing is drawn from anywhere else.
+					 */
 					interface Response {
 						sessionId: number
-						/** `{}` when the user has no saved layout yet. */
+						/**
+						 * The session layout: its arrangement plus `active` and
+						 * `tierSizeOverrides`. `{}` draws the floor (and is what a
+						 * stranger to the session gets).
+						 */
 						layout: Record<string, unknown>
 						/**
-						 * The preset this user has applied, or `null` for the
-						 * genre default. A reference — never the definition.
+						 * **Started from**: the preset this layout was last copied
+						 * from. Null after _Start from scratch_, or once that row
+						 * was deleted. A label, never a base.
 						 */
-						layoutPresetId: number | null
+						startedFromLayoutPresetId: number | null
+						/** When that copy was made (ISO); null only for a stranger. */
+						layoutCopiedAt: string | null
 						/**
-						 * This user's own per-widget settings, keyed by widget
-						 * id. Stored verbatim; merged OVER the preset, under
-						 * `layout`.
+						 * The preset it started from has changed since the copy
+						 * (its `layoutUpdatedAt` is later than `layoutCopiedAt`):
+						 * the **Updated** chip. Nothing moves until the person
+						 * starts again from it.
+						 */
+						startedFromUpdated: boolean
+						/**
+						 * This user's own per-session layout settings, stored
+						 * verbatim: `widgetStyles` style pins, keyed by widget
+						 * instance id.
 						 */
 						layoutSettings: Record<string, unknown>
 						/**
 						 * This user's per-INSTANCE widget settings for this
-						 * session, keyed by widget id: the deviations from each
-						 * widget's declared defaults, never the defaults
+						 * session, keyed by widget instance id: the deviations
+						 * from each widget's declared defaults, never the defaults
 						 * themselves. `{}` when nothing is overridden.
 						 */
 						widgetSettings: Record<string, Record<string, unknown>>
-						/**
-						 * The ALREADY-RESOLVED layout of the active preset —
-						 * `layoutPresetId`'s row if it still resolves, else the
-						 * genre default, else `{}`. Resolving server-side keeps
-						 * the fallback chain in one place.
-						 */
-						presetLayout: Record<string, unknown>
-						/** What the Presets tab lists: default + this user's. */
+						/** What the editor offers to start from (see `LayoutPreset`). */
 						presets: LayoutPreset[]
+					}
+				}
+				/**
+				 * Replace the caller's session layout by COPYING one in — the
+				 * ONE event behind _Start from_ (a card), _Start again from
+				 * "X"_, _Reset to genre default layout_ (the genre default's
+				 * id) and _Start from scratch_ (`null`). The incoming layout's
+				 * widget settings and style pins win for each widget instance
+				 * it names; the session keeps the rest (owner LB). The answer
+				 * is `Get`'s, so the client re-seeds from one message.
+				 */
+				namespace StartFrom {
+					interface Params {
+						sessionId: number
+						/** The preset to copy; `null` is Start from scratch. */
+						layoutPresetId: number | null
+					}
+					interface Response extends Get.Response {
+						ok: boolean
+						/** "That layout isn't available." (`LAYOUT_PRESET_UNKNOWN`) for anything not the caller's to copy. */
+						error?: string
 					}
 				}
 				namespace Set {
 					interface Params {
 						sessionId: number
+						/**
+						 * The session's whole layout. Provenance is never written
+						 * here — only a copy (`StartFrom`) or _Save as new
+						 * layout_ writes it.
+						 */
 						layout: Record<string, unknown>
 						/**
 						 * OPTIONAL, and absence is meaningful: a key that is
 						 * not present leaves the stored column alone, so the
 						 * surface manager's debounced blob save — which knows
-						 * only `layout` — can never clobber the user's preset
-						 * choice or their widget settings. `null` explicitly
-						 * clears the selection back to the genre default.
+						 * only `layout` — can never clobber the style pins or
+						 * the widget settings.
 						 */
-						layoutPresetId?: number | null
 						layoutSettings?: Record<string, unknown>
 						/**
 						 * The caller's per-instance widget settings, keyed by
@@ -3775,17 +3913,31 @@ declare global {
 					}
 				}
 				/**
-				 * Save the caller's current arrangement as a NEW user-authored
-				 * preset for this session's genre. Never writes a seeded row:
-				 * `authorUserId` is always the caller and `seedKey` always
-				 * NULL, so the boot reconciler can never see, re-force, or
-				 * prune what a user saved here.
+				 * **Save as new layout**: write a new private session layout
+				 * preset from this session's layout — the sent arrangement, with
+				 * the placed widget instances' settings and style pins packed
+				 * in server-side — and make it what this session **started
+				 * from**. Never writes a seeded row: `authorUserId` is always
+				 * the caller and `seedKey` always NULL, so no reconciler can
+				 * see, re-force, or prune it.
 				 */
 				namespace Save {
 					interface Params {
 						sessionId: number
 						name: string
+						description?: string
+						/** The arrangement to save: `zoneLayout?`, `widgetGrid?`, `arrangedGrid?`. */
 						layout: Record<string, unknown>
+						/**
+						 * Every widget instance id this session draws — the
+						 * arrangement's, and what the page's floor adds to it
+						 * (the conversation or the genre's primary widget, and
+						 * the genre's panels an empty layout draws by default).
+						 * The server packs these instances' widget settings and
+						 * style pins with the arrangement's own; nothing else is
+						 * packed, so a removed copy's leftovers never travel.
+						 */
+						drawnWidgetIds: string[]
 					}
 					interface Response {
 						sessionId: number
@@ -3795,14 +3947,20 @@ declare global {
 						preset?: LayoutPreset
 						/** The refreshed list, so the tab needs no re-fetch. */
 						presets: LayoutPreset[]
+						/** The session's provenance now: the row just written. */
+						startedFromLayoutPresetId?: number
+						/** …copied at the same instant the row was written (ISO). */
+						layoutCopiedAt?: string
 					}
 				}
 				/**
 				 * Rename one of the CALLER'S OWN presets. Managing a preset is a
 				 * narrower permission than seeing one: the list mixes the shipped
 				 * defaults with your saves, but only what you authored is yours to
-				 * rename — and admins are deliberately not a superset, because a
-				 * person's saved layouts are their own business.
+				 * rename. An admin manages a SHARED row too, never a private one:
+				 * a person's private layouts are their own business
+				 * (`db/layoutPermissions.ts`; the same for delete, usage, share and
+				 * update).
 				 */
 				namespace Rename {
 					interface Params {
@@ -3828,11 +3986,11 @@ declare global {
 					}
 				}
 				/**
-				 * Delete one of the caller's own presets. Nothing is stranded: the
-				 * `layout_preset_id` FK is `ON DELETE SET NULL`, so every session
-				 * that was on it silently falls back to the genre default. That is
-				 * the intended behaviour, which is exactly why the count comes back
-				 * — ask `Usage` first and warn before, not after.
+				 * Delete one of the caller's own presets. No session's layout
+				 * changes — each holds its own copy; the `layout_preset_id` FK is
+				 * `ON DELETE SET NULL`, so a session that started from it only
+				 * loses that label, and a person whose new-session layout it was
+				 * gets the genre default layout at their next first open.
 				 */
 				namespace Delete {
 					interface Params {
@@ -3845,9 +4003,9 @@ declare global {
 						/** See `Rename.Response.genreId`. */
 						genreId?: string
 						/**
-						 * How many sessions were on it, counted BEFORE the delete —
-						 * afterwards the FK has already nulled the evidence. `0` on a
-						 * refusal.
+						 * How many sessions had started from it, counted BEFORE the
+						 * delete — afterwards the FK has already nulled the evidence.
+						 * `0` on a refusal.
 						 */
 						affectedSessions: number
 						/** The refreshed list, so the tab needs no re-fetch. */
@@ -3855,9 +4013,8 @@ declare global {
 					}
 				}
 				/**
-				 * How many sessions are on one of the caller's own presets — what
-				 * the delete confirmation warns with, asked before the delete
-				 * rather than reported after it.
+				 * What the delete confirmation says about one of the caller's own
+				 * presets, asked before the delete rather than reported after it.
 				 */
 				namespace Usage {
 					interface Params {
@@ -3867,8 +4024,144 @@ declare global {
 						id: number
 						ok: boolean
 						error?: string
-						/** Sessions currently pinned to it; `0` on a refusal. */
+						/** Sessions that started from it (they keep their layout); `0` on a refusal. */
 						sessions: number
+						/**
+						 * People who use it as their new-session layout (they get
+						 * the genre default layout instead); `0` on a refusal.
+						 */
+						newSessionLayoutUsers: number
+					}
+				}
+				/**
+				 * What `Share`, `Clone` and `Update` answer: the row they acted
+				 * on and the refreshed list for its genre, like `Rename`. A
+				 * refusal names no genre and lists nothing — it must not say
+				 * where an id it declined to touch lives.
+				 */
+				interface ManagedAnswer {
+					/** The layout the verb was asked about, echoed. */
+					id: number
+					ok: boolean
+					error?: string
+					/** The genre `presets` belongs to; present only on success. */
+					genreId?: string
+					/** The row as it now reads (`Clone`: the new copy). */
+					preset?: LayoutPreset
+					/** The refreshed list, so the pane needs no re-fetch. */
+					presets: LayoutPreset[]
+				}
+				/**
+				 * _Share with everyone on this server_ / _Stop sharing_ one of
+				 * your layouts (the author's, or an admin's for a shared one).
+				 * A guest is refused: publishing to the instance is the one
+				 * thing a guest may not do with a layout, and a guest is a
+				 * guest ON A SESSION, so the verb names the session the editor
+				 * is open in. Unsharing moves no session (each holds a copy);
+				 * someone whose new-session layout it was starts from the genre
+				 * default layout at their next first open.
+				 */
+				namespace Share {
+					interface Params {
+						/** The session the editor is open in; the caller must be in it. */
+						sessionId: number
+						id: number
+						visibility: "shared" | "private"
+					}
+					type Response = ManagedAnswer
+				}
+				/**
+				 * _Make a copy_: any layout the caller can see — the genre
+				 * default layout, a plugin's, a shared one, their own — becomes
+				 * a new private layout of theirs, named "*Name* (copy)" unless
+				 * named. Keeps no reference back.
+				 */
+				namespace Clone {
+					interface Params {
+						id: number
+						/** Trimmed and capped server-side; default "*Name* (copy)". */
+						name?: string
+					}
+					type Response = ManagedAnswer
+				}
+				/**
+				 * _Save changes to "*Name*"_: re-capture this session's layout
+				 * into one of your layouts, packed as _Save as new layout_
+				 * packs it, and make it what this session **started from**. Its
+				 * `layoutUpdatedAt` moves only when the layout changed, so other
+				 * sessions that started from it read **Updated** only then.
+				 */
+				namespace Update {
+					interface Params {
+						sessionId: number
+						id: number
+						/** The arrangement to save: `zoneLayout?`, `widgetGrid?`, `arrangedGrid?`. */
+						layout: Record<string, unknown>
+						/** Every widget instance id this session draws (see `Save.Params`). */
+						drawnWidgetIds: string[]
+						/**
+						 * The person was told the layout changed since this
+						 * session copied it (the session reads it as
+						 * **Updated**) and said to save over those changes.
+						 * Without it such a save is refused and nothing moves
+						 * (brief 6b).
+						 */
+						overwriteUpdated?: boolean
+					}
+					interface Response extends ManagedAnswer {
+						sessionId: number
+						/** The session's provenance now: this row. */
+						startedFromLayoutPresetId?: number
+						/** …stamped at the instant the row was written (ISO). */
+						layoutCopiedAt?: string
+					}
+				}
+				/**
+				 * **Updated**, live (brief 6b): a layout this session started
+				 * from moved — saved into from another session, or updated by
+				 * its plugin or by core — and the session now reads it as
+				 * Updated. Pushed, scoped to the session
+				 * (`sessions:panelLayout:startedFromUpdated#<sessionId>`), to
+				 * each person their own; also answered when asked (the page
+				 * asks after a refused _Save changes to_). `Get`'s **started
+				 * from** half: nothing about the session's layout itself moves.
+				 */
+				namespace StartedFromUpdated {
+					interface Params {
+						sessionId: number
+					}
+					interface Response {
+						sessionId: number
+						/** What this session's layout started from, now. */
+						startedFromLayoutPresetId: number | null
+						/** When that copy was made (ISO). */
+						layoutCopiedAt: string | null
+						/** The Updated flag, as `Get` computes it. */
+						startedFromUpdated: boolean
+						/** The refreshed list, with the moved layout's new `layout`. */
+						presets: LayoutPreset[]
+					}
+				}
+				/**
+				 * Choose (or, with `null`, stop using) the caller's
+				 * **new-session layout** for a genre: what a session of it they
+				 * open with no layout of their own copies in. It must be a
+				 * layout of that genre they can see. Moves no existing session.
+				 */
+				namespace SetNewSessionLayout {
+					interface Params {
+						genreId: string
+						/** `null`: none — the genre default layout applies. */
+						layoutPresetId: number | null
+					}
+					interface Response {
+						genreId: string
+						ok: boolean
+						error?: string
+						/** The new-session layout now (`null`: none); present only on success. */
+						layoutPresetId?: number | null
+						/** The refreshed list (its `isNewSessionLayout` flags). */
+						presets: LayoutPreset[]
 					}
 				}
 			}
@@ -3909,7 +4202,7 @@ declare global {
 					audience: { see: string[]; act: string[] }
 					venue: string
 					channel?: string
-					origin: "core" | "companion" | "attachment"
+					origin: "core" | "companion" | "foreign"
 					floor: boolean
 					canAct: boolean
 					itemGated: boolean
@@ -4060,7 +4353,7 @@ declare global {
 						name: string
 						specSlug: string
 						/** Namespace-decided: the mode owner's, or someone else's. */
-						origin: "companion" | "attachment"
+						origin: "companion" | "foreign"
 						enabledByDefault: boolean
 						enabled: boolean
 						/** A session row states this, rather than a lower layer. */
@@ -4159,7 +4452,11 @@ declare global {
 					sessionId: number
 					guestUserId: number
 				}
+				/** Every path answers, the request's ids echoed so the asker
+				 *  can tell its own answer (Edit Session's Save counts them). */
 				interface Response {
+					sessionId: number
+					guestUserId: number
 					success?: boolean
 					error?: string
 				}
@@ -4169,7 +4466,11 @@ declare global {
 					sessionId: number
 					guestUserId: number
 				}
+				/** Every path answers, the request's ids echoed so the asker
+				 *  can tell its own answer (Edit Session's Save counts them). */
 				interface Response {
+					sessionId: number
+					guestUserId: number
 					success?: boolean
 					error?: string
 				}
@@ -4182,6 +4483,13 @@ declare global {
 					success?: string
 					error?: string
 					id?: number
+					/**
+					 * The values the delete safeguard could not record onto
+					 * the world's timeline before the session went, each in
+					 * a sentence led by whose it was (plan A18). Absent when
+					 * nothing was left out.
+					 */
+					notRecorded?: string[]
 				}
 			}
 			namespace ExportLogs {
@@ -4382,15 +4690,22 @@ declare global {
 					error?: string
 				}
 			}
-			namespace ToggleSessionCharacterActive {
+			/**
+			 * Switch one cast seat on or off — SET to `enabled`, never
+			 * flipped (the seat's **enabled**; column `is_active`, R5). A
+			 * repeated set answers as a success. Every path answers; a
+			 * refusal carries `error` and the seat as it stands.
+			 */
+			namespace SetCastSeatEnabled {
 				interface Params {
 					sessionId: number
 					characterId: number
+					enabled: boolean
 				}
 				interface Response {
 					sessionId: number
 					characterId: number
-					isActive: boolean
+					enabled: boolean
 					error?: string
 				}
 			}
@@ -4491,9 +4806,28 @@ declare global {
 						name?: string | null
 					}
 				}
+				/**
+				 * How the narration went, pushed to the person who fired it
+				 * once the run ends (genre uplift C2, 2026-09-29) — what
+				 * spends a `/narrate <text>` draft. `success` false on a stop,
+				 * an error, or a refusal before the run (over the cap, a
+				 * response already generating, not the owner); the sentence
+				 * itself arrives on `:error` (`ErrorResponse`).
+				 */
 				interface Response {
+					sessionId?: number
 					success?: boolean
 					error?: string
+				}
+				/**
+				 * `sessions:fireNarratorResponse:error` — why a press was
+				 * refused or its run failed, for the page's toast. Never
+				 * gated; `sessionId` so only that session's page says it —
+				 * absent only from the socket layer's own generic fallback.
+				 */
+				interface ErrorResponse {
+					sessionId?: number
+					error: string
 				}
 			}
 			/**
@@ -4583,19 +4917,27 @@ declare global {
 				interface Params {
 					sessionId: number
 					messageIds: number[] | "all"
-					loreType: "world" | "history" | "character" | "scene"
+					/**
+					 * World or character lore. A scene summary is not this
+					 * event's: the modal creates the scene and hands it to
+					 * `scenes:process` (Phase D cut the dead scene/history
+					 * branches here).
+					 */
+					loreType: "world" | "character"
 					topic?: string
 					/** Character to bind the lore entry to (character lore only) */
 					lorebookBindingCharacterId?: number | null
 				}
+				/**
+				 * `sessions:summarize:progress` — scoped on `sessionId`
+				 * (`SCOPED_EVENTS`), so a tab on another session is not fed
+				 * this run's frames.
+				 */
 				interface Progress {
+					sessionId: number
 					phase: "drafting" | "synthesizing" | "naming" | "extracting"
 					batch: number
 					totalBatches: number
-					partial: {
-						content?: string
-						raw?: string
-					}
 					/**
 					 * What the run says it is doing (R-19) — *summarising part
 					 * 2 of 5*, *merging the drafts* — a locale map the client
@@ -4604,22 +4946,25 @@ declare global {
 					 */
 					status?: import("@serene-pub/sdk").StatusText
 				}
+				/**
+				 * The run's result. ⚠ Never emitted as `sessions:summarize`:
+				 * the verb answers only on `:progress`, `:complete` (this
+				 * shape, scoped on `sessionId`) and `:error`.
+				 */
 				interface Response {
+					/** The session the run summarised — the scope key. */
+					sessionId: number
 					content: string
 					name?: string
 					raw: string
 					lorebookId: number
 					batchCount: number
-					/** Resolved lorebook binding ID (character lore only) */
-					lorebookBindingId?: number | null
-					/** Lorebook binding ids physically present in the scene (scene type only) */
-					participantCharacters?: number[]
-					/** Lorebook binding ids referenced but not physically present (scene type only) */
-					mentionedCharacters?: number[]
-					/** Extracted names not yet backed by a binding — suggested, physically present (scene type only) */
-					suggestedParticipantCharacters?: string[]
-					/** Extracted names not yet backed by a binding — suggested, referenced but absent (scene type only) */
-					suggestedMentionedCharacters?: string[]
+					/**
+					 * The character the review binds its entry to (character
+					 * lore only). Nothing is bound by the run: Save finds or
+					 * adds the book's cast member for them.
+					 */
+					lorebookBindingCharacterId?: number | null
 					/** Activity this run was tracked under, so the client can dismiss it once saved. */
 					activityId?: string
 				}
@@ -4629,12 +4974,6 @@ declare global {
 						| "no_connection"
 						| "generation_failed"
 					error: string
-				}
-				interface TraceEntry {
-					label: string
-					system: string
-					user: string
-					response: string
 				}
 			}
 		}
@@ -4662,8 +5001,18 @@ declare global {
 					 * the handler, never coerced.
 					 */
 					channel?: string
+					/**
+					 * The sender's ready **tray items** to send as this
+					 * message's attachments (PLAN-composer-attachments §3.1),
+					 * in any order — they land in tray order. Any that is not
+					 * the sender's, not this session's, or not ready refuses
+					 * the whole send and leaves the tray as it was.
+					 */
+					trayItemIds?: string[]
 				}
 				interface Response {
+					/** The session asked about — on every reply, refusals too. */
+					sessionId?: number
 					sessionMessage?: SelectSessionMessage
 					error?: string
 				}
@@ -4837,6 +5186,30 @@ declare global {
 				}
 				type Response = BookStoryTime
 			}
+			/**
+			 * The book's lines alone (plan B6, contract E-6): main first (`id`
+			 * null, named "main"), then each branch — for a surface that reads
+			 * a line's ancestor chain or names its lines and needs nothing
+			 * else of the book's amendments. Scoped on `lorebookId`; re-sent
+			 * by a fork, a rename and a delete of a line.
+			 */
+			namespace Lines {
+				interface Params {
+					lorebookId: number
+				}
+				interface Line {
+					id: number | null
+					name: string
+					forkedFromBranchId: number | null
+					forkYear: number | null
+					forkMonth: number | null
+					forkDay: number | null
+				}
+				interface Response {
+					lorebookId: number
+					lines: Line[]
+				}
+			}
 			/** The preflight: what a proposed calendar would strand. Writes nothing. */
 			namespace CheckCalendar {
 				interface Params {
@@ -4892,15 +5265,13 @@ declare global {
 				interface Params {
 					id: number
 				}
+				/**
+				 * The book's own row and its tags — what Book settings reads
+				 * and edits. Entries and cast members are not on it: they have
+				 * their own reads (`entries:list`, `lorebooks:bindingList`).
+				 */
 				interface Response {
 					lorebook: (WireLorebook & { tags: string[] }) | null
-					/**
-					 * Every entry of the book, of every type, in one list —
-					 * `typeId` is what splits them, and nothing at this end
-					 * needs them split. The three lists this replaces were the
-					 * three tables' names on the wire.
-					 */
-					entries: LorebookEntry[]
 					/**
 					 * The id that was asked for — the interest scope, on EVERY
 					 * reply (`scopedReplies.test.ts` requires it).
@@ -4917,9 +5288,17 @@ declare global {
 			namespace Create {
 				interface Params {
 					name: string
+					/**
+					 * The asker's id for this create, echoed on the broadcast
+					 * and on `lorebooks:create:error`, so the one surface that
+					 * asked claims the answer (several in a tab wait on it).
+					 */
+					requestId?: string
 				}
 				interface Response {
 					lorebook: WireLorebook
+					/** The `requestId` the create was sent with, when it had one. */
+					requestId?: string
 				}
 			}
 			namespace Update {
@@ -4929,15 +5308,23 @@ declare global {
 					 * (empty included) replaces them.
 					 */
 					lorebook: UpdateLorebook & { tags?: string[] }
+					/**
+					 * The asker's id, echoed on the reply (every tab hears
+					 * it) and on the refusal, so only the form that saved
+					 * says so and leaves its edit mode (plan B8).
+					 */
+					requestId?: string
 				}
 				interface Response {
 					/** The saved row, with its tags as they now stand. */
 					lorebook: WireLorebook & { tags: string[] }
+					/** The `requestId` the save was sent with, when it had one. */
+					requestId?: string
 				}
 			}
 			/**
-			 * What an overwrite-import deletes that the file cannot bring
-			 * back, counted before the user chooses Overwrite.
+			 * What an overwrite-import deletes, or changes, that the file
+			 * cannot bring back, counted before the user chooses Overwrite.
 			 */
 			interface OverwriteLosses {
 				/** Entry and cast amendments (dated changes). */
@@ -4948,6 +5335,45 @@ declare global {
 				branches: number
 				/** Scenes captured from a session. */
 				sceneLinks: number
+				/**
+				 * Stats before play on main — one per slot on the book, a cast
+				 * member or a place — that a format-1 file cannot carry; 0 for
+				 * a file that can.
+				 */
+				stats: number
+				/**
+				 * Location entries on main that a format-1 file brings back as
+				 * world lore; 0 for a file that carries places.
+				 */
+				places: number
+				/** Item entries on main that a format-1 file brings back as world lore. */
+				items: number
+				/**
+				 * Each session's own stats on the book's places
+				 * (`session_location`) — one per slot on each place in each
+				 * session — which no file carries, whatever its format.
+				 */
+				sessionStats: number
+				/**
+				 * Stat sheets assigned to the book, its cast members or its
+				 * places, which no file carries, whatever its format.
+				 */
+				sheets: number
+				/**
+				 * What sessions hold of the book's entries — an item a
+				 * character carries, the place a character or the party is in
+				 * (lore references on `session_cast` and `session` values) —
+				 * one per entry held in one slot of one owner in one session.
+				 * Every entry comes back new, so an overwrite drops these.
+				 */
+				sessionLoreRefs: number
+				/**
+				 * The user's live characters (personas included) the file
+				 * embeds under their own uuid with different content — the
+				 * import rewrites each from the file's copy, whichever way it
+				 * goes.
+				 */
+				charactersRewritten: number
 			}
 			namespace Delete {
 				interface Params {
@@ -4965,6 +5391,8 @@ declare global {
 					error?: string
 					/** The book that went. */
 					id?: number
+					/** The same book, under the name every lorebook reply uses (plan B5). */
+					lorebookId?: number
 				}
 			}
 			namespace Duplicate {
@@ -4996,8 +5424,34 @@ declare global {
 				}
 			}
 			namespace Import {
-				interface Params {
-					lorebookData: object
+				/**
+				 * The book to import: a lorebook file's text, or a card's
+				 * book the server is holding (`Characters.HeldCardBook`).
+				 */
+				type Params = (
+					| {
+							/**
+							 * The lorebook file's text, as read. The server
+							 * measures it against
+							 * `IMPORT_FILE_CAPS.lorebookBytes` before parsing
+							 * it, and reads every accepted shape (SillyTavern,
+							 * 0.5.x, a whole card) itself.
+							 */
+							lorebookJson: string
+							heldImportId?: never
+					  }
+					| {
+							/** From a card import's `book`. Only its owner, once. */
+							heldImportId: string
+							lorebookJson?: never
+					  }
+				) & {
+					/**
+					 * The name the person gave the book in the import dialog,
+					 * when it differs from the file's. Sent only then, so an
+					 * untouched re-import still reads as "unchanged".
+					 */
+					name?: string
 				}
 				interface Response {
 					// "created": no uuid match, a fresh lorebook was inserted.
@@ -5011,23 +5465,37 @@ declare global {
 					lorebook: WireLorebook | null
 					conflict?: {
 						existingLorebook: WireLorebook
-						// The raw parsed import payload, held so the client
-						// can hand it back verbatim in ImportResolve.Params
-						// without re-uploading/re-parsing the file.
-						lorebookData: object
+						/**
+						 * The **held import** (NOMENCLATURE §16): the file stays
+						 * on the server and the choice names it in
+						 * ImportResolve.Params. Only this person can settle
+						 * it, once.
+						 */
+						heldImportId: string
 						/** What Overwrite would delete that the file lacks. */
 						losses?: OverwriteLosses
 					}
+					/**
+					 * With `created`: what did not finish after the book was
+					 * saved — its list refresh, its cast's names, a link the
+					 * file carries. The book IS imported; these are shown as a
+					 * warning, never as a failed import (same meaning as
+					 * `Characters.ImportCard.Response.warnings`).
+					 */
+					warnings?: string[]
 				}
 			}
 			namespace ImportResolve {
 				interface Params {
 					action: "overwrite" | "createNew"
-					lorebookData: object
+					/** From Import.Response.conflict. */
+					heldImportId: string
 					existingId: number
 				}
 				interface Response {
 					lorebook: WireLorebook
+					/** See Import.Response.warnings. */
+					warnings?: string[]
 				}
 			}
 			namespace BindingList {
@@ -5060,8 +5528,16 @@ declare global {
 			namespace CreateBinding {
 				interface Params {
 					lorebookBinding: InsertLorebookBinding
+					/**
+					 * The asker's id, echoed on the broadcast and on the
+					 * refusal, so only the surface that asked says how it
+					 * went (plan B8).
+					 */
+					requestId?: string
 				}
 				interface Response {
+					/** The `requestId` the create was sent with, when it had one. */
+					requestId?: string
 					lorebookBinding: SelectLorebookBinding
 					/**
 					 * The book already held this character or persona, so the
@@ -5086,8 +5562,16 @@ declare global {
 					name: string
 					/** Client-generated correlation id, echoed back verbatim in the response */
 					requestId: string
+					/**
+					 * The session a summarize is saving from, when it is one: under the
+					 * lorebook owner's lore write mode Off the name is refused before it
+					 * adds a cast member (plan A22). Absent — the lorebook's own screens.
+					 */
+					sessionId?: number
 				}
 				interface Response {
+					/** The book it resolved in (plan B5: every lorebook reply names it). */
+					lorebookId: number
 					lorebookBindingId: number
 					created: boolean
 					requestId: string
@@ -5236,6 +5720,30 @@ declare global {
 			namespace Create {
 				interface Params {
 					entry: NewLorebookEntry
+					/**
+					 * The session this row is written from, when it is a
+					 * session write (a summarize's save). The session must be
+					 * the writer's own and read this book. The row then lands on
+					 * the session's line — the session decides, whatever
+					 * `entry.branchId` says — and a dated row sent with no date
+					 * is dated at the session's story now.
+					 */
+					sessionId?: number
+					/**
+					 * For character lore: the character whose cast member the
+					 * entry is private to. The member is found, or added, in the
+					 * same write as the entry — a refused write adds no one —
+					 * and it wins over any `entry.lorebookBindingId`.
+					 */
+					lorebookBindingCharacterId?: number
+					/**
+					 * The summarize review this save keeps (a
+					 * `session_summarize` activity of the writer's, for this
+					 * book, still in review). Only that makes the row
+					 * machine-written (`provenance: "summarizer"`); the server
+					 * checks the activity, so naming one claims nothing.
+					 */
+					activityId?: string
 				}
 				interface Response {
 					entry: LorebookEntry
@@ -5405,9 +5913,17 @@ declare global {
 					 * Absent = the source entry's own line.
 					 */
 					branchId?: number | null
+					/**
+					 * The asker's id, echoed on the reply (which every tab of
+					 * the user hears) and on `entries:iterateNext:error`, so
+					 * only the surface that asked opens or toasts it.
+					 */
+					requestId?: string
 				}
 				interface Response {
 					entry: LorebookEntry
+					/** The `requestId` the request was sent with, when it had one. */
+					requestId?: string
 				}
 			}
 			/** An entry's Off and Pin marks, and nothing else (L1). Owner or admin. */
@@ -5420,6 +5936,13 @@ declare global {
 					filter?: "all" | "fired" | "pinned" | "off"
 					/** 🚧 Only entries of these entry types — a state widget's item picker (phase 3c). Empty is every type. */
 					typeIds?: string[]
+					/**
+					 * 🚧 Only these entries — one entry's reading, for Teach it's
+					 * buttons (plan A14). An entry the session does not read
+					 * (archived there, off its line, dated past its clock) is
+					 * absent from the rows. Empty is every entry.
+					 */
+					entryIds?: number[]
 					offset?: number
 					limit?: number
 					/** Echoed on the answer, so a panel can drop replies to superseded asks. */
@@ -5452,19 +5975,60 @@ declare global {
 					request?: string
 					error?: string
 				}
+				/** A read refused: the sentence, with the session and the ask's `request` it named. */
+				interface ErrorResponse {
+					sessionId?: number
+					request?: string
+					error: string
+				}
 			}
 			namespace SetMarks {
 				interface Params {
 					entryId: number
 					off?: boolean
 					pinned?: boolean
+					/**
+					 * The session asking (plan A14): the reply's marks and
+					 * `heldBy` are as that session reads the entry — its line,
+					 * at its clock. Absent: main at its head. One the asker
+					 * cannot open is refused; one reading another book is
+					 * read as absent.
+					 */
+					sessionId?: number
+					/**
+					 * Echoed on the reply and on the refusal. The answer
+					 * depends on the asking session and reaches every tab of
+					 * the person, so an ask settles only on the answer
+					 * carrying its own token.
+					 */
+					request?: string
 				}
 				interface Response {
 					entryId: number
 					/** The entry's book — absent on a refusal. */
 					lorebookId?: number
+					/**
+					 * Both marks as the asking session reads the entry (see
+					 * `Params.sessionId`) — the base row the write changed,
+					 * with the line's amendments applied by the moment.
+					 */
 					off?: boolean
 					pinned?: boolean
+					/**
+					 * The dated amendment that decides a mark the write asked
+					 * for, where it does not read as asked (A14): the base row
+					 * was written, and this still wins from `date` on. The
+					 * first held of `enabled` (Off) and `constant` (Pin).
+					 */
+					heldBy?: {
+						field: "enabled" | "constant"
+						date: { year: number; month: number | null; day: number | null }
+						/** `date` spelled through the book's calendar. */
+						label: string
+						amendmentId: number
+					}
+					/** The ask's `request`, when it sent one. */
+					request?: string
 					error?: string
 				}
 			}
@@ -5698,8 +6262,11 @@ declare global {
 			/**
 			 * ⚠ Removes the line's OWN rows — its amendments, its entries, its
 			 * scenes, its edges, its placements — by cascade. Shared rows are
-			 * untouched, sessions on it move to main, and branches forked FROM
-			 * it become children of main rather than disappearing with it.
+			 * untouched and sessions on it move to main. A branch forked FROM
+			 * it forks from its parent instead, at the earlier of the two fork
+			 * dates (`forkPastDeleted`), so it reads what it read before less
+			 * the deleted line's rows; sessions on those lines get
+			 * `state:changed`.
 			 */
 			namespace DeleteBranch {
 				interface Params {
@@ -5889,20 +6456,12 @@ declare global {
 				/** The value declaration (24 T6c) — single-key, for value-decl controls. */
 				decl?: Record<string, Record<string, unknown>>
 				/**
-				 * What *kind* of setting this is — `prompts`, `variables`,
-				 * `weights`, `review` — as the descriptor declared it. The
-				 * sidebar groups on this rather than on the step, because a
-				 * facet is what someone is looking for and a step is where the
-				 * machine happens to compute it. Names a kind, never a node.
+				 * The step this option belongs to: an opaque handle (never the
+				 * node key) and the step's heading — never a counter. The
+				 * builder lists steps by it; a front row in a settings group is
+				 * traced back to its step through it.
 				 */
-				facet: string
-				/**
-				 * One of the few settings people actually reach for here.
-				 *
-				 * Declared on the type, so the panel leads with the author's
-				 * answer rather than guessing from position or control kind.
-				 */
-				quick?: boolean
+				step: { key: string; heading: string }
 				description?: string
 				control: string
 				min?: number
@@ -6168,26 +6727,65 @@ declare global {
 				 * reset would remove.
 				 */
 				changed: boolean
+				/**
+				 * For a `connection-ref` or `sampling-ref`: what the option
+				 * resolves to when nothing is stored at the scope this viewer
+				 * writes — the picker's first choice, and what Reset lands on.
+				 * `label` is the whole line, value named (*As configured —
+				 * KoboldCpp · Nemo 12B*, *Pipeline default — Background*,
+				 * *Instance default — …*, *No model set*).
+				 */
+				inherits?: {
+					from: "config" | "pipeline" | "pub" | "none"
+					label: string
+				}
+				/**
+				 * For a `connection-ref` or `sampling-ref`: where the value in
+				 * force came from — the one muted line under the control
+				 * (*Set for this session*, *From the “Adventure”
+				 * configuration*, *Pipeline default*, *Instance default*).
+				 */
+				provenance?: {
+					source: "session" | "config" | "author" | "pub" | "none"
+					label: string
+				}
+				/**
+				 * For a `*-ref`: the NAME of the value in force — what a
+				 * read-only row shows, never an id.
+				 */
+				valueLabel?: string
 			}
 			/**
-			 * One step of the pipeline, in run order. The `key` is an ordinal,
-			 * not a node key — grouping by step reveals the count and order
-			 * (a deliberate 0.6 trade), never an address. `advanced` is the
-			 * tuning parameters, collapsed by default in the panel.
+			 * One step's rows inside a settings group's Advanced: the
+			 * step's heading (its step label, else its definition's name —
+			 * never a counter) and its options. `key` is the step's opaque
+			 * handle, the one each of its options carries in `step.key`.
 			 */
-			interface Step {
+			interface SettingsGroupStep {
 				key: string
-				label: string
-				/**
-				 * What the step is — `query`, `task`, `provider`, `consumer`.
-				 *
-				 * Shown as a badge in the builder, where it is the difference
-				 * between a step that reads rows and one that costs a model
-				 * request. Names a kind, never a node.
-				 */
-				kind: string
+				heading: string
 				options: Option[]
-				advanced: Option[]
+			}
+			/**
+			 * A settings group (owner rulings 2026-09-30): one model call
+			 * and what exists only to serve it, derived from the graph — what
+			 * the settings show as an **agent**. `kind: "pipeline"` is the
+			 * *Whole pipeline* group. `front` is, in order: the prompt (a
+			 * prompts-ref, or an envoy's texts), the connection, the
+			 * sampling, then each source's switch, labelled by its step;
+			 * `enabled` is the model call's own switch. Everything else is `advanced`, by step. No `heading` on
+			 * the one group of a single-call spec, or when only one group has
+			 * anything for this viewer.
+			 */
+			interface SettingsGroup {
+				key: string
+				kind: "model-call" | "pipeline"
+				heading?: string
+				purpose?: string
+				enabled?: Option
+				front: Option[]
+				advanced: SettingsGroupStep[]
+				changedInAdvanced: number
 			}
 			/**
 			 * A named configuration for this pipeline — the shipped immutable
@@ -6285,7 +6883,7 @@ declare global {
 					key: string
 					name: string
 					specSlug: string
-					origin: "companion" | "attachment"
+					origin: "companion" | "foreign"
 				}[]
 				/** `source` is where the selection came from: session | instance | shipped. */
 				selectedConfig: {
@@ -6303,31 +6901,30 @@ declare global {
 				 * live one whose every use is refused.
 				 */
 				canSelectConfig: boolean
-				steps: Step[]
 				/**
-				 * An envoy's settings (plans/29 R-18 (2); U5g) — no step of the
-				 * run's spine names one, so it is not counted or numbered among
-				 * `steps`. Render after them, under their own small heading
-				 * ("Also configured here"); same `Step` shape as the rest.
+				 * The settings grouped by model call — what every surface
+				 * renders (owner rulings 2026-09-30). One group per model call,
+				 * then *Whole pipeline*; a single-call spec is one unheaded
+				 * group.
 				 */
-				alsoConfigured: Step[]
+				groups: SettingsGroup[]
 				/**
-				 * The kinds of setting this pipeline contains, in render order,
-				 * each with the heading it appears under.
-				 *
-				 * Sent rather than known. The panel used to hold this list and
-				 * match options *into* it, so a facet it had not heard of —
-				 * a plugin's own — matched no group and rendered nowhere at
-				 * all. Two facets sharing a label are one group, which is how
-				 * `connection` and `sampling` become "Model".
+				 * Where this view's edits land. A panel takes a view only for
+				 * its own slug AND scope, so two panels on one pipeline at
+				 * different scopes never take each other's answers.
 				 */
-				facets: Array<{
-					id: string
-					label: string
-					order: number
-					simple: boolean
-				}>
-				writeScope: string
+				scope:
+					| {
+							kind: "session"
+							sessionId: number
+							/**
+							 * Set when this session's values here are read-only —
+							 * its creation pipeline once it is created: the
+							 * sentence saying why. Every row is read-only too.
+							 */
+							readOnlyBecause?: string
+					  }
+					| { kind: "config" }
 			}
 
 			namespace List {
@@ -6422,8 +7019,11 @@ declare global {
 				interface Response {
 					pipeline?: NamespaceDetail
 					error?: string
-					/** How many writes landed before an error stopped the batch. */
+					/** How many writes landed (before an error stopped the batch, on `:error`). */
 					applied?: number
+					/** On success: the batch's own answer, after the refreshed view. */
+					slug?: string
+					configId?: number | null
 				}
 			}
 			/**
@@ -6893,11 +7493,19 @@ declare global {
 					content?: string
 					/** Whose draft it is, so switching persona changes the answer. */
 					personaId?: number | null
+					/**
+					 * The asker's id, echoed on the answer and the refusal:
+					 * two panels in one tab ask this, and the answer goes to
+					 * every tab of the user (plan B8).
+					 */
+					requestId?: string
 				}
 				interface Response {
 					sessionId?: number
 					explanation?: RunExplain.Response["explanation"]
 					error?: string
+					/** The `requestId` the request was sent with, when it had one. */
+					requestId?: string
 				}
 			}
 			/**
@@ -7085,6 +7693,11 @@ declare global {
 				schema: Record<string, unknown>
 				values: Record<string, unknown>
 				requestedAt: number
+				/**
+				 * One sentence on what the card asks about — which moment of
+				 * the run, not only which fields (`whatIsReviewed`, note 16).
+				 */
+				whatIsReviewed: string
 			}
 			namespace Reviews {
 				interface Params {}
@@ -7105,8 +7718,8 @@ declare global {
 					/**
 					 * Which review the error is about. A refused edit leaves
 					 * that card parked and decidable, so the client needs to
-					 * know which one to re-enable — and, since errors reach
-					 * every tab this person has open, which ones to ignore.
+					 * know which one to re-enable — and, when several cards
+					 * wait in the asking tab, which ones to ignore.
 					 */
 					id?: string
 				}
@@ -7244,6 +7857,9 @@ declare global {
 				interface Response {
 					pipeline?: NamespaceDetail
 					error?: string
+					/** On success: which configuration was written. */
+					slug?: string
+					configId?: number
 				}
 			}
 			namespace RenameConfig {
@@ -7256,6 +7872,9 @@ declare global {
 				interface Response {
 					pipeline?: NamespaceDetail
 					error?: string
+					/** On success: which configuration was renamed. */
+					slug?: string
+					configId?: number
 				}
 			}
 			namespace DeleteConfig {
@@ -7274,7 +7893,7 @@ declare global {
 					slug: string
 					configId: number
 					sessionId?: number
-					scope?: "instance"
+					scope?: "pub"
 				}
 				interface Response {
 					pipeline?: NamespaceDetail
@@ -7580,6 +8199,10 @@ declare global {
 					version: string | null
 					status: string | null
 					nodeCount: number
+					/** Prompt pools (`<node type>#<slot>`) its steps declare. */
+					promptPools: string[]
+					/** Genres whose presets bind it, by id and name. */
+					genres: { id: string; name: string }[]
 				}
 				interface LibraryPrompt {
 					id: number
@@ -7699,6 +8322,8 @@ declare global {
 				interface Response {
 					library?: Library.Response
 					error?: string
+					/** A create's new row, so the asker can open it. */
+					createdId?: number
 					/**
 					 * Names the saved template references that the step does
 					 * not supply.
@@ -7760,6 +8385,8 @@ declare global {
 				}
 				interface Response {
 					library?: Library.Response
+					/** A clone's new row, so the asker can open it. */
+					createdId?: number
 					error?: string
 				}
 			}
@@ -7933,7 +8560,7 @@ declare global {
 								toggleable: boolean
 								enabledDefault: boolean
 								/**
-								 * The `ConfigStep` this node is configured by, or
+								 * The step (`Option.step.key`) this node is configured by, or
 								 * null when it declares nothing.
 								 *
 								 * The map is keyed by node and the inspector by
@@ -7993,7 +8620,7 @@ declare global {
 									}
 								> | null
 								/**
-								 * The `ConfigStep` that configures the clause itself.
+								 * The step (`Option.step.key`) that configures the clause itself.
 								 *
 								 * A clause carries a setting of its own — whether its
 								 * chains run together — so it is a step like any
@@ -8148,11 +8775,13 @@ declare global {
 			}
 			namespace UpdateDisplayName {
 				interface Params {
+					/** Empty clears the display name. */
 					displayName: string
 				}
 				interface Response {
 					success: boolean
-					displayName: string
+					/** NULL when the name was cleared. */
+					displayName: string | null
 				}
 			}
 			namespace ChangePassphrase {
@@ -8907,58 +9536,6 @@ declare global {
 			}
 		}
 
-		// Selection Memory namespace
-		namespace SelectionMemory {
-			namespace Get {
-				interface Params {
-					id: string
-				}
-				interface Response {
-					selectionMemory: {
-						session: SelectSession | null
-						character: SelectCharacter | null
-						persona: SelectCharacter | null
-						prompt: SelectPromptConfig | null
-						sampling: SelectSamplingConfig | null
-						context: SelectContextConfig | null
-						activePromptConfig: SelectPromptConfig | null
-						activeSamplingConfig: SelectSamplingConfig | null
-						activeContextConfig: SelectContextConfig | null
-					}
-				}
-			}
-			namespace Update {
-				interface Params {
-					selectionMemory: {
-						session: SelectSession | null
-						character: SelectCharacter | null
-						persona: SelectCharacter | null
-						prompt: SelectPromptConfig | null
-						sampling: SelectSamplingConfig | null
-						context: SelectContextConfig | null
-						activePromptConfig: SelectPromptConfig | null
-						activeSamplingConfig: SelectSamplingConfig | null
-						activeContextConfig: SelectContextConfig | null
-					}
-				}
-				interface Response {
-					selectionMemory:
-						| {
-								session: SelectSession | null
-								character: SelectCharacter | null
-								persona: SelectCharacter | null
-								prompt: SelectPromptConfig | null
-								sampling: SelectSamplingConfig | null
-								context: SelectContextConfig | null
-								activePromptConfig: SelectPromptConfig | null
-								activeSamplingConfig: SelectSamplingConfig | null
-								activeContextConfig: SelectContextConfig | null
-						  }
-						| undefined
-				}
-			}
-		}
-
 		// Tags namespace
 		namespace Tags {
 			namespace List {
@@ -9238,6 +9815,20 @@ declare global {
 				}
 			}
 			/**
+			 * 🚧 The instance's lore write mode (plan A22) — what every user
+			 * who has not chosen one of their own follows. Admin only.
+			 */
+			namespace UpdateLoreWriteModeDefault {
+				interface Params {
+					/** `full` · `review` · `off`. Refused otherwise. */
+					mode: LoreWriteMode
+				}
+				interface Response {
+					success: boolean
+					mode: LoreWriteMode
+				}
+			}
+			/**
 			 * Whether the server may call an outside service to fill in UI
 			 * strings, and which one. Off until an admin says otherwise — see
 			 * the schema note on `auto_translate_enabled`.
@@ -9294,12 +9885,6 @@ declare global {
 				interface Params {}
 				interface Response {
 					userSettings: {
-						activeContextConfigId?: number | null
-						activePromptConfigId?: number | null
-						activeNarratorPromptConfigId?: number | null
-						activeSummarizeWorldConfigId?: number | null
-						activeSummarizeCharacterConfigId?: number | null
-						activeSummarizeSceneConfigId?: number | null
 						theme: string
 						darkMode: boolean
 						showHomePageBanner: boolean
@@ -9324,7 +9909,30 @@ declare global {
 						 * The one field anything drawing the interface reads.
 						 */
 						effectiveLanguage: string
+						/**
+						 * 🚧 This person's own lore write mode (plan A22), or
+						 * **null** following the instance's — sent as stored,
+						 * as `language` is, so "use the instance default" is its
+						 * own state in the picker.
+						 */
+						loreWriteMode: LoreWriteMode | null
+						/** The resolved mode — theirs, else the instance's. */
+						effectiveLoreWriteMode: LoreWriteMode
 					}
+				}
+			}
+			/**
+			 * 🚧 Choose a lore write mode (plan A22), or null to follow the
+			 * instance's again.
+			 */
+			namespace UpdateLoreWriteMode {
+				interface Params {
+					mode: LoreWriteMode | null
+				}
+				interface Response {
+					success: boolean
+					mode: LoreWriteMode | null
+					effectiveMode: LoreWriteMode
 				}
 			}
 			/** Pick a UI language, or null to follow the instance default (R5). */
@@ -9450,8 +10058,13 @@ declare global {
 				participantCharacters: number[]
 				mentionedCharacters: number[]
 			}
+			/**
+			 * A scene as a list reply carries it: the row without its latent
+			 * vector columns (`SCENE_REPLY_COLUMNS`, sockets/scenes.ts).
+			 */
+			type SceneListRow = Omit<SelectScene, "embedding" | "embeddingModel">
 			/** Scene with resolved session name for sidebar display */
-			interface SceneWithMeta extends SelectScene, SceneCast {
+			interface SceneWithMeta extends SceneListRow, SceneCast {
 				sessionName: string | null
 			}
 			namespace List {
@@ -9459,7 +10072,7 @@ declare global {
 					sessionId: number
 				}
 				/** Scene enriched with its history entry data for session display */
-				interface SceneWithEntry extends SelectScene, SceneCast {
+				interface SceneWithEntry extends SceneListRow, SceneCast {
 					historyEntry: {
 						id: number
 						year: number
@@ -9501,7 +10114,8 @@ declare global {
 					 * Every line's scenes, each with its own `branchId` — the
 					 * reply reaches every view of the book, and they read
 					 * different lines. Keep the ones on yours with
-					 * `rowsOnLine`, as `entries:list` readers do.
+					 * `rowsReadingOnLine` (the line's chain), as `entries:list`
+					 * readers do.
 					 */
 					sceneList: Sockets.Scenes.SceneWithMeta[]
 				}
@@ -9509,9 +10123,25 @@ declare global {
 			namespace Create {
 				interface Params {
 					scene: InsertScene & Partial<SceneCast>
+					/**
+					 * The asker's id, echoed on the broadcast and on
+					 * `scenes:create:error`, so the surface that asked claims
+					 * the answer (plan B8).
+					 */
+					requestId?: string
 				}
 				interface Response {
+					/** The `requestId` the create was sent with, when it had one. */
+					requestId?: string
 					scene: SelectScene & SceneCast
+					/**
+					 * The values the capture could not record onto the
+					 * world's timeline, each in a sentence led by whose it
+					 * was (plan A18): a story time the book's calendar cannot
+					 * place, a retired slot. The scene is saved either way.
+					 * Absent when nothing was left out.
+					 */
+					notRecorded?: string[]
 				}
 			}
 			namespace Update {
@@ -9569,6 +10199,22 @@ declare global {
 			namespace Compile {
 				interface Params {
 					historyEntryId: number
+					/**
+					 * The line the compile reads, null for main: its scenes are
+					 * the ones that line reads (main's shared scenes and its own,
+					 * never a sibling's), and the review saves on it.
+					 */
+					branchId: number | null
+					/**
+					 * The moment it is asked at, null for now; never before the
+					 * entry's own date. The review saves there: at a moment as an
+					 * amendment dated then, on the line. At now it changes the
+					 * entry itself only when the entry is the line's own; an
+					 * entry the line reads from main or a parent line gets an
+					 * amendment on the line dated at the entry's own date, so the
+					 * line's scenes never reach the lines it came from.
+					 */
+					moment: import("$lib/shared/lorebooks/storyDate").StoryDate | null
 				}
 				interface Progress {
 					/**
@@ -9582,6 +10228,13 @@ declare global {
 					 * frames that precede it.
 					 */
 					historyEntryId: number
+					/**
+					 * The reading the compile was asked at (`Params`): one entry
+					 * compiled on two lines is two runs, and a modal hears only
+					 * the one it asked for.
+					 */
+					branchId: number | null
+					moment: import("$lib/shared/lorebooks/storyDate").StoryDate | null
 					phase: "drafting" | "synthesizing"
 					batch: number
 					totalBatches: number
@@ -9590,10 +10243,15 @@ declare global {
 				interface Response {
 					content: string
 					historyEntryId: number
+					/** The reading it was asked at, as on `Progress`. */
+					branchId: number | null
+					moment: import("$lib/shared/lorebooks/storyDate").StoryDate | null
 					activityId: string
 				}
 				interface ErrorResponse {
 					error: string
+					/** The entry the refused compile was about, when the request named one. */
+					historyEntryId?: number
 				}
 			}
 			namespace Process {
@@ -9781,10 +10439,47 @@ declare global {
 			 * no honest rate to put beside it.
 			 */
 			namespace ReindexCost {
-				interface Params {}
+				/**
+				 * A connection and one of its models, about to be starred —
+				 * or, with `edit`, a connection about to be saved.
+				 */
+				interface Target {
+					connectionId: number
+					/**
+					 * The model to star. With `edit`, the model whose
+					 * identifier it renames; absent for an address edit.
+					 */
+					modelId?: number
+					/**
+					 * An edit not saved yet — the address, the model
+					 * identifier, as the form holds them. Priced against the
+					 * star as the server holds it: an edit of the starred pair
+					 * as that pair would resolve after the save, and any other
+					 * edit at zero. So a screen asks about every such edit and
+					 * confirms exactly when the save will re-embed.
+					 */
+					edit?: {
+						baseUrl?: string
+						model?: string
+					}
+				}
+				interface Params {
+					/**
+					 * Price starring THIS pair: count only the vectors it would
+					 * clear — those not made by the model it resolves to, under
+					 * any spelling of its address. Absent: every stored vector.
+					 */
+					target?: Target
+				}
 				interface Response {
-					/** How many rows currently carry a vector. */
+					/**
+					 * How many rows currently carry a vector — or, answering a
+					 * `target`, how many starring it would clear.
+					 */
 					rows: number
+					/** The `target` asked about, echoed so a screen can tell its
+					 *  answer from the untargeted one another screen asked for. */
+					target?: Target
 					/**
 					 * The same rows by what they are — `lorebookEntries`,
 					 * `messages`, `characters`, … — so the switch confirmation can
@@ -9838,7 +10533,7 @@ declare global {
 			namespace Progress {
 				interface Params {}
 				interface Response {
-					status: "idle" | "running" | "paused"
+					status: "idle" | "running"
 					currentItem?: {
 						type: string
 						label: string
@@ -9932,35 +10627,43 @@ declare global {
 			}
 
 			/**
-			 * Check the RAG embedding status for all content linked to a session:
-			 *  - Messages older than the last 10 (last 10 assumed in context window)
-			 *  - Characters linked to the session
-			 *  - Personas linked to the session
-			 *  - Lorebook entries (world lore, character lore, history) for the session's
-			 *    lorebook and each linked character's lorebook
+			 * Check the RAG embedding status of what Search by meaning searches:
+			 * the entries (world lore, character lore, history) of the session's
+			 * own lorebook. The queue embeds more than that, none of which is
+			 * ever found by meaning, so none of it is counted here.
 			 */
 			namespace CheckRagStatus {
 				interface Params {
 					sessionId: number
 				}
 				interface Response {
-					/** False when vectorization is disabled or session has ≤ 10 messages */
+					/**
+					 * False when no embedding model is starred, the session has
+					 * ≤ 10 messages, or its lorebook has no entries.
+					 */
 					applicable: boolean
-					messages: RagTypeCounts
-					characters: RagTypeCounts
-					personas: RagTypeCounts
 					/** null when the session has no associated lorebook */
 					lorebook: RagTypeCounts | null
 					/** Whether the vectorization queue is currently running */
 					queueRunning: boolean
 					/** The active embedding model name, or null if none */
 					activeModelName: string | null
-					/** Whether the user has opted out of RAG for this session */
+					/**
+					 * Whether the session's owner hid this notice for the
+					 * session. It hides the notice and nothing else: Search by
+					 * meaning still runs.
+					 */
 					ragIgnored: boolean
+					/**
+					 * Whether the viewer may hide or show the notice: the
+					 * session's owner, never a guest (it hides it for everyone
+					 * in the session).
+					 */
+					canHide: boolean
 				}
 			}
 
-			/** Set whether RAG is ignored for a specific session */
+			/** Hide or show the RAG notice for one session; retrieval is unchanged. */
 			namespace SetSessionRagIgnored {
 				interface Params {
 					sessionId: number
@@ -10053,10 +10756,23 @@ declare global {
 				/**
 				 * The line the link belongs to — null is shared (main). Every
 				 * line's links come back; a view keeps the ones on its line
-				 * with `rowsOnLine`, as it does for entries.
+				 * with `edgesOnLine` (the chain, each link dated by its
+				 * history entry against the fork cuts).
 				 */
 				branchId: number | null
+				/** Read from the `from` end ("leads north to"). */
 				relationshipType: string
+				/**
+				 * Read from the `to` end ("leads south to"); null is one way.
+				 * Never set between two cast members — a cast tie's other side
+				 * is its own perspective row. (Plan B1.)
+				 */
+				reverseRelationshipType: string | null
+				/**
+				 * The relationship's own name ("the rusted iron door"); empty
+				 * is unnamed. Column `title`, `name` here as an entry's is.
+				 */
+				name: string
 				description: string
 				visibility: string
 				status: string
@@ -10182,25 +10898,57 @@ declare global {
 			}
 
 			/**
-			 * What a Rebuild (replace) would delete — it wipes every link in
-			 * the book and re-derives only cast-to-cast links from scenes, so
-			 * its confirmation warns with these first (owner ruling 6).
+			 * What a Rebuild (replace) would delete, which its confirmation
+			 * states first. A rebuild deletes the cast ties and re-derives
+			 * them from scenes; a relationship with an entry at either end (a
+			 * road between two places, the keeper of a place) is never in its
+			 * reach (owner ruling 2026-09-29, Q1), so it is not counted.
 			 * There is no hand-drawn count: nothing records a link's origin.
 			 */
 			interface RelationshipCounts {
-				/** Every link in the book, on every line. */
-				total: number
-				/** Both ends are entries — a road between two places. */
-				entryToEntry: number
-				/** One end a cast member, the other an entry. */
-				castToEntry: number
+				/** Both ends are cast members — every such link, on every line. */
+				castToCast: number
+			}
+
+			/**
+			 * What a graph build of ONE line reads, counted: that line's own
+			 * scenes and direct history entries (plan A3 review — a build
+			 * reads its line's own writing, never an ancestor's). Main's are
+			 * the list's top-level fields; each branch's is a row of
+			 * `branchCounts`.
+			 */
+			interface GraphBuildCounts {
+				/** Scenes with a summary not yet processed into the graph (ready to extend) */
+				ungraphedSceneCount: number
+				/**
+				 * Summarized scenes whose cast has never been resolved
+				 * (castResolvedAt IS NULL). Each costs roughly one
+				 * extraction call on the next build — used for up-front
+				 * cost disclosure, never to refuse a build.
+				 *
+				 * An over-estimate on purpose: scenes still holding legacy
+				 * name strings resolve without an LLM call. Making it exact
+				 * would mean scanning the cast columns' shapes again, which
+				 * is precisely what castResolvedAt exists to stop. Do not
+				 * "refine" it.
+				 */
+				unresolvedCastSceneCount: number
+				/** Scenes without a summary not yet processed (need summarising first) */
+				ungraphedUnsummarizedCount: number
+				/** All scenes with a summary (used for replace-mode preflight) */
+				totalSummarizedCount: number
+				/** History entries with content and no scene of the line's own, not yet graphed */
+				ungraphedHistoryEntryCount: number
+				/** All history entries with content and no scene of the line's own (for replace-mode preflight) */
+				totalDirectHistoryEntryCount: number
 			}
 
 			namespace List {
 				interface Params {
 					lorebookId: number
 				}
-				interface Response {
+				/** Main's build counts at the top level; see `GraphBuildCounts`. */
+				interface Response extends GraphBuildCounts {
 					/**
 					 * The book these nodes belong to.
 					 *
@@ -10217,21 +10965,6 @@ declare global {
 					relationships: NarrativeRelationship[]
 					/** For the Rebuild confirmation — see `RelationshipCounts`. */
 					relationshipCounts: RelationshipCounts
-					/** Scenes with a summary not yet processed into the graph (ready to extend) */
-					ungraphedSceneCount: number
-					/**
-					 * Summarized scenes whose cast has never been resolved
-					 * (castResolvedAt IS NULL). Each costs roughly one
-					 * extraction call on the next build — used for up-front
-					 * cost disclosure, never to refuse a build.
-					 *
-					 * An over-estimate on purpose: scenes still holding legacy
-					 * name strings resolve without an LLM call. Making it exact
-					 * would mean scanning the cast columns' shapes again, which
-					 * is precisely what castResolvedAt exists to stop. Do not
-					 * "refine" it.
-					 */
-					unresolvedCastSceneCount: number
 					/**
 					 * Parent bindings with an empty name. They can never match
 					 * an extracted name, so a build proposes a fresh node
@@ -10239,14 +10972,12 @@ declare global {
 					 * them. See migration 0075's missing backfill.
 					 */
 					namelessBindingCount: number
-					/** Scenes without a summary not yet processed (need summarising first) */
-					ungraphedUnsummarizedCount: number
-					/** All scenes with a summary (used for replace-mode preflight) */
-					totalSummarizedCount: number
-					/** History entries with content and no scenes, not yet graphed */
-					ungraphedHistoryEntryCount: number
-					/** All history entries with content and no scenes (for replace-mode preflight) */
-					totalDirectHistoryEntryCount: number
+					/**
+					 * Each branch's own build counts — what Extend graph on
+					 * that branch reads. A branch with nothing of its own is
+					 * absent (all zero).
+					 */
+					branchCounts: Array<GraphBuildCounts & { branchId: number }>
 				}
 			}
 			interface TraceEntry {
@@ -10277,12 +11008,19 @@ declare global {
 					resume?: boolean
 					/**
 					 * Extend only: read just this session's ungraphed scenes
-					 * (and no direct history entries, which belong to no
-					 * session). Absent or null reads the whole book. Ignored
-					 * by replace, which always re-reads everything. A resume
-					 * keeps the scope its build started with.
+					 * on the session's line (and no direct history entries,
+					 * which belong to no session). Absent or null reads the
+					 * whole line. Ignored by replace, which always re-reads
+					 * main. A resume keeps the scope its build started with.
 					 */
 					sessionId?: number | null
+					/**
+					 * Extend without a session: the line the Graph lens is
+					 * reading, whose own scenes and history entries the build
+					 * reads and whose ties it writes. Null or absent is main.
+					 * Refused for replace: a Rebuild reads and writes main.
+					 */
+					branchId?: number | null
 				}
 				interface Progress {
 					phase:
@@ -10312,29 +11050,35 @@ declare global {
 					error: string
 					raw?: string
 					/**
-					 * Which lorebook this failure belongs to. emitToUser is
-					 * user-scoped, so without this a build failing in one tab
-					 * would un-stick a GraphBuildModal open on a *different*
-					 * lorebook in another tab. Listeners must filter on it.
+					 * Which lorebook the refusal is about, so a
+					 * GraphBuildModal open on a *different* lorebook does not
+					 * un-stick on it. Listeners must filter on it.
 					 */
 					lorebookId?: number
 				}
 			}
 			namespace ApplyProposal {
+				/**
+				 * Built only by `applyProposalParams`
+				 * (client/components/modals/graphProposalApply.ts).
+				 */
 				interface Params {
 					lorebookId: number
-					proposal: GraphProposal
-					/** replace: delete existing graph first; extend: keep existing */
-					mode: "replace" | "extend"
 					/**
-					 * The build this proposal came from. The server marks as
-					 * graphed exactly what THAT build read (it keeps the list
-					 * on the activity) — without it, everything summarized
-					 * but ungraphed at apply time is stamped, including scenes
-					 * summarized while the build ran.
+					 * The parked build this proposal answers — required. The
+					 * server reads everything the client must not say from it:
+					 * the build's mode (a Rebuild stays a Rebuild whichever
+					 * button reopened its review), what it read (stamped
+					 * graphed), and the proposal the review may only trim and
+					 * edit. The apply consumes it, so it lands once.
 					 */
-					activityId?: string
+					activityId: string
 					/**
+					 * The review's proposal: the build's, less what the person
+					 * removed (a removed character takes its relationships and
+					 * its places in `resolvedSceneCast` with it), with their
+					 * edits.
+					 *
 					 * No seedTempIdMap. A build's `existing_<id>` tempIds carry
 					 * the row id in the string, so the map the client used to
 					 * send was a pure identity map — and the server validated
@@ -10343,27 +11087,39 @@ declare global {
 					 * character. The server parses and validates the tempIds
 					 * itself now; the client cannot influence the mapping.
 					 */
+					proposal: GraphProposal
+					/**
+					 * The modal's own id for this apply, echoed unchanged on
+					 * its reply (which reaches every tab of the user) and its
+					 * refusal (the tab that asked), so the modal settles the
+					 * one apply the id names and nothing else.
+					 */
+					requestId?: string
 				}
 				interface Response {
+					lorebookId: number
+					/** The apply's `requestId`, when it sent one. */
+					requestId?: string
 					nodes: NarrativeNode[]
 					relationships: NarrativeRelationship[]
+					/**
+					 * Sentences for the person on what the apply did otherwise
+					 * than the proposal said — a relationship left out because
+					 * a character it names was removed, a new character who was
+					 * already in the cast. Empty when it applied as sent.
+					 */
+					applyNotes: string[]
 				}
+				/** A refusal: the sentence, with the apply's book and `requestId` when it named them. */
 				interface ErrorResponse {
 					error: string
 					/**
-					 * emitToUser is user-scoped, so a failure for one lorebook
-					 * would otherwise un-stick a modal open on another in a
-					 * second tab. Listeners must filter on it.
+					 * The book the refusal is about, so a modal open on
+					 * another book does not settle on it. Listeners must
+					 * filter on it.
 					 */
 					lorebookId?: number
-				}
-			}
-			namespace UpdateNode {
-				interface Params {
-					node: Partial<NarrativeNode> & { id: number }
-				}
-				interface Response {
-					node: NarrativeNode
+					requestId?: string
 				}
 			}
 			namespace DeleteNode {
@@ -10376,6 +11132,9 @@ declare global {
 					 * `"delete"` deletes every such entry, archived included,
 					 * in the same transaction. Count them first with
 					 * `narrativeGraph:checkNodeMergeReferences`.
+					 *
+					 * Either way, the lore left behind reads their NAME where
+					 * their cast tag stood (A16), so no tag outlives them.
 					 */
 					privateLore?: "keep" | "delete"
 				}
@@ -10393,6 +11152,8 @@ declare global {
 					nodeId: number
 				}
 				interface Response {
+					/** The member's book (plan B5: every lorebook reply names it). */
+					lorebookId: number
 					/**
 					 * The member asked about — the reply is bare and names no
 					 * one otherwise, so a dialog matches its own reply on it.
@@ -10414,6 +11175,13 @@ declare global {
 					relationship: Partial<NarrativeRelationship> & {
 						id: number
 					}
+					/**
+					 * The line being read (#124). The row must be this line's
+					 * own, or the update is refused — never the row's
+					 * `relationship.branchId`, which only echoes the row.
+					 * Absent or null is main.
+					 */
+					branchId?: number | null
 				}
 				interface Response {
 					relationship: NarrativeRelationship
@@ -10422,6 +11190,11 @@ declare global {
 			namespace DeleteRelationship {
 				interface Params {
 					id: number
+					/**
+					 * The line being read (#124). The row must be this line's
+					 * own, or the delete is refused. Absent or null is main.
+					 */
+					branchId?: number | null
 				}
 				interface Response {
 					success: string
@@ -10447,6 +11220,13 @@ declare global {
 					fromNodeId?: number
 					toNodeId?: number
 					relationshipType: string
+					/**
+					 * Read from the `to` end; absent, null or blank is one way.
+					 * Dropped between two cast members. (Plan B1.)
+					 */
+					reverseRelationshipType?: string | null
+					/** The relationship's own name; absent is unnamed. */
+					name?: string
 					status: string
 					description?: string
 					visibility?: string
@@ -10480,6 +11260,16 @@ declare global {
 				interface Response {
 					survivorNode: NarrativeNode
 				}
+				/**
+				 * A refused absorb, naming the pair as the request sent it,
+				 * so the surface that asked claims its own. Absent only on a
+				 * refusal sent before the handler ran (the setup gate).
+				 */
+				interface ErrorResponse {
+					error: string
+					nodeId?: number
+					parentNodeId?: number
+				}
 			}
 			/** Reverses a previous MergeNode (absorb) via its audit log entry */
 			namespace UndoMerge {
@@ -10487,19 +11277,40 @@ declare global {
 					mergeLogId: number
 				}
 				interface Response {
+					/** The book the undo was in. */
+					lorebookId: number
+					/** The merge record undone, so the list that asked claims the answer. */
+					mergeLogId: number
 					restoredNode: NarrativeNode
 					/**
-					 * Links the absorb deleted that could not be put back,
-					 * because an end or the line they were on has been
-					 * deleted since. The rest of the undo still happened.
+					 * Links the undo could not put back: an end or the line
+					 * they were on has been deleted since, or the link put
+					 * back would say what one made since already says (the
+					 * relationship guard refused it). The rest of the undo
+					 * still happened.
 					 */
 					unrestoredLinkCount: number
 					/**
-					 * The member's own amendments, presences and attribute
-					 * rows that could not be put back — their branch or
-					 * session has been deleted since.
+					 * Of `unrestoredLinkCount`, the links the merge had moved
+					 * onto the member kept: the guard refused moving them
+					 * back, so they stay with that member. The rest were
+					 * links the merge deleted, and stay deleted.
+					 */
+					unrestoredMovedLinkCount: number
+					/**
+					 * The member's own amendments, presences, stats and
+					 * stat sheets that could not be put back — their branch,
+					 * session or sheet has been deleted since.
 					 */
 					unrestoredStoryCount: number
+					/**
+					 * Pieces of lore (rows — an entry counts once, however many
+					 * of its fields) whose cast tags the merge rewrote to the
+					 * survivor's and that could not get the absorbed member's
+					 * tag back: each was edited since, so it keeps the
+					 * survivor's tag (A16).
+					 */
+					unrestoredTextCount: number
 				}
 			}
 			/** Recent absorbs for this lorebook, for the Bindings tab's undo list */
@@ -10703,10 +11514,35 @@ declare global {
 						}
 					}
 					interface Response {
+						/** False only when the import stopped before anything landed (`error`). */
 						success: boolean
+						/**
+						 * How the import ended, for the completion screen:
+						 * `complete` (everything selected landed, maybe with
+						 * `warnings`) · `partial` (some items did not — `errors`)
+						 * · `stopped` (it stopped partway after something landed
+						 * — `stoppedBecause`) · `nothing` (no item landed). Absent
+						 * with `success: false`.
+						 */
+						conclusion?: "complete" | "partial" | "stopped" | "nothing"
 						message?: string
 						error?: string
+						/**
+						 * With `conclusion: "stopped"`: why the import stopped
+						 * before it finished. Never one of `errors`, which are
+						 * the items that did not import.
+						 */
+						stoppedBecause?: string
+						/** One sentence per item that did not import. */
 						errors?: string[]
+						/**
+						 * What did not finish for an item that DID import — a
+						 * session's cast not seated in its book, a group's turn
+						 * order, a card's lorebook left out for a book of its
+						 * name (same meaning as
+						 * `Characters.ImportCard.Response.warnings`).
+						 */
+						warnings?: string[]
 					}
 				}
 			}
@@ -10834,7 +11670,7 @@ declare global {
 				name: string
 				label: string
 				cssKey: string
-				isInstanceTheme: boolean
+				isPubTheme: boolean
 				uploadedBy?: number | null
 				uploaderName?: string | null
 				createdAt: string
@@ -10844,7 +11680,7 @@ declare global {
 				interface Params {}
 				interface Response {
 					myThemes: ThemeMeta[]
-					instanceThemes: ThemeMeta[]
+					pubThemes: ThemeMeta[]
 				}
 			}
 
@@ -10880,7 +11716,7 @@ declare global {
 				}
 			}
 
-			namespace SetInstanceTheme {
+			namespace SetPubTheme {
 				interface Params {
 					id: number
 					enabled: boolean
@@ -11233,6 +12069,52 @@ declare global {
 			}
 		}
 
+		// Updates namespace (Admin › Updates; the in-app updater). Every event
+		// answers with the whole `State`; `updates:progress` is the push while
+		// a download runs. Admin only, restricted interest.
+		namespace Updates {
+			type Phase =
+				| "idle"
+				| "downloading"
+				| "extracting"
+				| "ready"
+				| "applying"
+				| "error"
+
+			interface State {
+				currentVersion: string
+				/**
+				 * Whether this install can update itself. `reason` is a code
+				 * (`prerelease`, `container`, `no-launcher`, …) and `message`
+				 * the sentence to show when it cannot.
+				 */
+				inApp: {
+					allowed: boolean
+					reason: string | null
+					message: string | null
+				}
+				/** The newer release the daily check found, if any. */
+				latestTag: string | null
+				phase: Phase
+				/** The release being downloaded or already downloaded. */
+				tag: string | null
+				received: number
+				total: number | null
+				/** Plain-words reason the last attempt failed. */
+				error: string | null
+				/** A downloaded, verified update waiting for Apply. */
+				staged: {
+					tag: string
+					version: string
+					stagedAt: string
+					size: number
+				} | null
+				releasesUrl: string
+			}
+
+			type Params = Record<string, never>
+		}
+
 		// Tunnels namespace (plan 26 §8)
 		//
 		// Its own namespace and its own server file, deliberately never folded
@@ -11531,8 +12413,8 @@ declare global {
 				}
 				/**
 				 * A read refused. `sessionId` is the session the read named,
-				 * when it named one: the refusal reaches every tab of the
-				 * user, and a tab looking at another session ignores it.
+				 * when it named one: a late refusal can arrive after the tab
+				 * has moved to another session, which then ignores it.
 				 */
 				interface ErrorResponse {
 					error: string
@@ -11553,9 +12435,9 @@ declare global {
 					value: import("@serene-pub/sdk").SlotValue
 					/**
 					 * The writer's own id for this write, echoed unchanged on
-					 * its reply and its refusal: both reach every tab of the
-					 * user, and in no promised order, so the writer settles
-					 * the one write the id names and nothing else.
+					 * its reply (every tab of the user) and its refusal (the
+					 * tab that asked), in no promised order, so the writer
+					 * settles the one write the id names and nothing else.
 					 */
 					requestId?: string
 				}
@@ -11842,6 +12724,91 @@ declare global {
 				characters: number
 				worlds: number
 				values: number
+			}
+		}
+
+		/**
+		 * 🚧 `lorebookState:*` — the stats a lorebook itself holds, read and
+		 * written with no session (plan places-graph L4, 2026-09-29). Only a
+		 * place's, for now: the place editor's **Stats** section, where an
+		 * author puts the key in the crypt before play. What a session
+		 * inherits (`state:*` reads the same rows under its own layer).
+		 * Owner-only, like every `entries:*` verb; scoped by `lorebookId`.
+		 */
+		namespace LorebookState {
+			/** 🚧 A place (a `core:entry/location` entry, by id) — the one owner so far. */
+			interface Owner {
+				kind: "location"
+				id: number
+			}
+
+			/** A story date the editor reads at; null is now. */
+			interface Moment {
+				year: number
+				month: number | null
+				day: number | null
+			}
+
+			namespace Get {
+				interface Params {
+					lorebookId: number
+					owner: Owner
+					/** The line being read; null is main. */
+					branchId: number | null
+					/** The moment being read; null is now. */
+					moment: Moment | null
+					/** Echoed on the reply and the refusal, so a tab settles its own read. */
+					requestId?: string
+				}
+				interface Response {
+					lorebookId: number
+					owner: Owner
+					branchId: number | null
+					moment: Moment | null
+					/** What the place's Stats section offers: the inventory, then the place stats the book records. */
+					slots: State.SlotDescriptor[]
+					/** The book's value per slot id, present only when set. Lore references carry their `name`. */
+					values: Record<string, import("@serene-pub/sdk").SlotValue>
+					/** The configuration in force for this place, per slot id: a list's limits, a number's bounds. */
+					configs: Record<string, Record<string, unknown>>
+					/**
+					 * Per slot id, the story date the value in force holds from —
+					 * present only when that value is dated. A change made here
+					 * keeps it, unless `writeDatedBy` names a date of its own.
+					 */
+					heldSince: Record<string, Moment>
+					/**
+					 * The history entry on the line dated exactly the moment being
+					 * read, which dates every change made here; null at now, or
+					 * when nothing is dated then.
+					 */
+					writeDatedBy: { historyEntryId: number; date: Moment } | null
+					requestId?: string
+				}
+				interface ErrorResponse {
+					error: string
+					lorebookId?: number
+					requestId?: string
+				}
+			}
+
+			namespace Set {
+				interface Params extends Get.Params {
+					slotId: string
+					/** A list is written whole, its items in order. `null` clears the book's value. */
+					value: import("@serene-pub/sdk").SlotValue
+					/**
+					 * The book's value the change was made from, as read (null:
+					 * not set). Refused when the value at the reading has moved
+					 * since, so a stale list never lands over a newer one.
+					 * The server dates the write itself (`writeDatedBy`, else
+					 * the value's own `heldSince`).
+					 */
+					readValue?: import("@serene-pub/sdk").SlotValue
+				}
+				/** The place's stats after the write, read as `get` reads them. */
+				type Response = Get.Response
+				type ErrorResponse = Get.ErrorResponse
 			}
 		}
 

@@ -89,7 +89,7 @@ describe("admin logbook (PGlite integration)", () => {
 			actorUserId: 1,
 			actorName: "Ada",
 			event: "systemSettings:updateDefaultLanguage",
-			objectType: "instance",
+			objectType: "pub",
 			objectId: null,
 			action: "change"
 		})
@@ -144,14 +144,22 @@ describe("admin logbook (PGlite integration)", () => {
 		expect(page2.records[0].id).toBeLessThan(page1.records[1].id)
 
 		const singleton = await listLogbook(testDb as any, {
-			objectType: "instance",
+			objectType: "pub",
 			objectId: ""
 		})
 		expect(singleton.records.length).toBeGreaterThan(0)
 		expect(singleton.actors).toEqual([{ id: 1, name: "Ada" }])
 
 		const text = await listLogbook(testDb as any, { text: "default language" })
-		expect(text.records.every((r) => r.objectType === "instance")).toBe(true)
+		expect(text.records.every((r) => r.objectType === "pub")).toBe(true)
+
+		// One record by id: the change view's read.
+		const target = page1.records[1]
+		const byId = await listLogbook(testDb as any, { recordId: target.id })
+		expect(byId.records).toEqual([target])
+		expect(byId.hasMore).toBe(false)
+		const none = await listLogbook(testDb as any, { recordId: 999_999 })
+		expect(none.records).toEqual([])
 	}, 60_000)
 
 	test("pruning keeps the newest N and drops the expired", async () => {

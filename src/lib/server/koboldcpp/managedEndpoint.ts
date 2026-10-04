@@ -40,13 +40,22 @@ export async function managedKoboldCppEndpoint(
  * `connections:create` enforces, which a raw insert would otherwise skip.
  */
 async function freeName(db: Db): Promise<string> {
-	const taken = new Set(
+	return managedEndpointName(
 		(
 			await db
 				.select({ name: schema.connections.name })
 				.from(schema.connections)
-		).map((r) => (r.name ?? "").trim().toLowerCase())
+		).map((r) => r.name ?? "")
 	)
+}
+
+/**
+ * The managed endpoint's name against the names already taken — the rule
+ * `freeName` applies, pure, so the 0.5.3 upgrade names the endpoint it builds
+ * exactly as a fresh one would be named.
+ */
+export function managedEndpointName(names: Iterable<string>): string {
+	const taken = new Set([...names].map((n) => n.trim().toLowerCase()))
 	const base = MANAGED_ENDPOINT_NAME
 	if (!taken.has(base.toLowerCase())) return base
 	const local = `${base} on this machine`

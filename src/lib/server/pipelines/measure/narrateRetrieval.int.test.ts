@@ -149,6 +149,7 @@ beforeAll(async () => {
 	 * would report the bug it was written to detect, at random.
 	 */
 	await narrationTurn(narrateSpec, [
+		{ nodeKey: "semantic.arm.queries", path: "searchByMeaning", value: "on" },
 		{ nodeKey: "semantic.arm.search", path: "maxEntries", value: 10 }
 	])
 }, 120_000)
@@ -229,13 +230,17 @@ describe.each(SPECS)("%s — the semantic control moves retrieval", (_, spec) =>
 			keys,
 			"the keyword scan did not run, so this fixture measures nothing"
 		).toContain(`worldLore:${keyedId}`)
-		// Off by default — `vector-search.maxEntries` is 0 — so an upgraded
-		// install retrieves exactly what it retrieved before.
+		// Not searched on the shipped setting here — `query-windows.
+		// searchByMeaning` is Automatic (the switch, on the chain's first node
+		// since 2026-09-29), which searches only when an embedding model is
+		// set up, and this world stars none — so an install without one
+		// retrieves exactly what it retrieved before.
 		expect(keys).not.toContain(`worldLore:${meaningOnlyId}`)
 	}, 60_000)
 
 	it("brings in an entry only meaning can reach once it is turned on", async () => {
 		const receipt = await narrationTurn(spec, [
+			{ nodeKey: "semantic.arm.queries", path: "searchByMeaning", value: "on" },
 			{ nodeKey: "semantic.arm.search", path: "maxEntries", value: 10 }
 		])
 		// The mechanism must have RUN, not merely produced nothing — a timed
@@ -248,7 +253,7 @@ describe.each(SPECS)("%s — the semantic control moves retrieval", (_, spec) =>
 		const keys = rankedKeys(receipt)
 		expect(
 			keys,
-			"raising the semantic cap changed nothing the narrator retrieves — " +
+			"turning the semantic mechanism on changed nothing the narrator retrieves — " +
 				"either the mechanism is not in this document or its `params` " +
 				"slot is not wired, and from outside those look identical"
 		).toContain(`worldLore:${meaningOnlyId}`)

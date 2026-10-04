@@ -10,16 +10,32 @@
 	 * Delete), the seat's URL mirror (tab, step, configuration), and the
 	 * socket wiring.
 	 *
+	 * It is the pipeline's change view (Django admin, STYLE-GUIDE §6.11):
+	 * `AdminChangeForm` draws the trail, the header and the save row. The
+	 * configuration's settings — every option, and whether it is offered —
+	 * are unsaved edits until Save (owner ruling 2026-10-02, "levers wait for
+	 * Save"); Save sends the option batch, then the switch, each waiting for
+	 * its own answer, and only then says it saved.
+	 *
 	 * The pipeline itself is the *backbone* — a fixed sequence a published
 	 * version freezes. What people tune and keep is a **configuration**: a
 	 * named set of values against that backbone. Shipped configurations
-	 * refuse edits; Save all offers a copy instead. Structural editing —
+	 * refuse edits; Save offers a copy instead. Structural editing —
 	 * swapping a node, reordering, publishing — is the lens view (05 §1–§5)
 	 * and remains undrafted: this page configures the published backbone.
 	 */
 	import { getContext, onMount, tick, untrack } from "svelte"
 	import * as Icons from "@lucide/svelte"
-	import AdminPageHeader from "$lib/client/components/admin/AdminPageHeader.svelte"
+	import AdminChangeForm, {
+		type AdminSaveIntent
+	} from "$lib/client/components/admin/AdminChangeForm.svelte"
+	import { awaitReply } from "$lib/client/utils/awaitReply"
+	import {
+		saveErrors,
+		saveInSequence,
+		saveSummary,
+		type SaveStep
+	} from "$lib/client/admin/sequentialSave"
 	import { adminRouter, adminUnsavedEdits, adminGoto as goto, adminReplaceState as replaceState } from "$lib/client/admin/adminRouter.svelte"
 	import { sameFormValue } from "$lib/client/forms/sameFormValue"
 	import { adminPage as page } from "$lib/client/admin/adminRouter.svelte"
@@ -28,6 +44,10 @@
 	import { toaster } from "$lib/client/utils/toaster"
 	import { Dialog, Portal } from "@skeletonlabs/skeleton-svelte"
 	import PipelineConfigOptions from "$lib/client/components/pipelines/PipelineConfigOptions.svelte"
+	import {
+		builderStepsOf,
+		optionsOf
+	} from "$lib/client/components/pipelines/settingsGroups"
 	import ConfigNotices from "$lib/client/components/pipelines/ConfigNotices.svelte"
 	import PipelineMap from "$lib/client/components/pipelines/workspace/PipelineMap.svelte"
 	import StepList from "$lib/client/components/pipelines/workspace/StepList.svelte"
@@ -77,7 +97,9 @@
 		return () => ro.disconnect()
 	})
 
-	const steps = $derived(detail?.steps ?? [])
+	// The builder's steps, filed under the agent (settings group) each belongs
+	// to — derived from the server's groups, never counted.
+	const steps = $derived(detail ? builderStepsOf(detail.groups) : [])
 	const active = $derived(
 		steps.find((s) => s.key === selectedStep) ?? steps[0] ?? null
 	)
@@ -165,12 +187,11 @@
 	 */
 	function setAvailability(enabled: boolean) {
 		if (!selected || selected.readOnly) return
-		socket.emit("pipelines:setPresetActions", {
-			slug,
-			configId: selected.id,
-			enabled
-		})
+		// An unsaved edit like any setting: the save row sends it.
+		offeredDraft = enabled === selected.enabled ? null : enabled
 	}
+	/** The "Offered" tick as edited; null while it is what is saved. */
+	let offeredDraft = $state<boolean | null>(null)
 
 	function removeConfig() {
 		if (!selected) return
@@ -204,13 +225,9 @@
 	const onConfigCreated = (res: Sockets.Pipelines.CreateConfig.Response) => {
 		if (res.error || res.configId == null) return
 		if (res.pipeline && res.pipeline.slug !== slug) return
+		// The shipped-save path waits for this answer itself (`saveToCopy`).
+		if (savingToCopy) return
 		socket.emit("pipelines:selectConfig", { slug, configId: res.configId })
-		// The shipped-save path (22 §2.1): the draft was waiting for this
-		// configuration to exist — land it there now.
-		if (applyToCreated) {
-			applyToCreated = false
-			applyPending(res.configId)
-		}
 	}
 
 	onMount(() => {
@@ -262,14 +279,6 @@
 			interest.declareInterest<"pipelines:deleteConfig:error">(
 				"pipelines:deleteConfig:error",
 				onConfigError
-			),
-			interest.declareInterest<"pipelines:setPresetActions:error">(
-				"pipelines:setPresetActions:error",
-				onConfigError
-			),
-			interest.declareInterest<"pipelines:setOptions:error">(
-				"pipelines:setOptions:error",
-				onBatchError
 			),
 			interest.declareInterest<"pipelines:resetConfig:error">(
 				"pipelines:resetConfig:error",
@@ -354,15 +363,15 @@
 
 	let pending = $state<Record<string, unknown>>({})
 	let pendingClears = $state<string[]>([])
-	const pendingCount = $derived(
-		Object.keys(pending).length + pendingClears.length
+	const offeredChange = $derived(
+		offeredDraft != null && !!selected && offeredDraft !== selected.enabled
 	)
+	const optionCount = $derived(Object.keys(pending).length + pendingClears.length)
+	const pendingCount = $derived(optionCount + (offeredChange ? 1 : 0))
 
 	/** The raw (un-overlaid) option row, for "was it truly overridden". */
 	const rawOption = (id: string) =>
-		detail?.steps
-			.flatMap((s) => [...s.options, ...s.advanced])
-			.find((o) => o.id === id)
+		(detail ? optionsOf(detail.groups) : []).find((o) => o.id === id)
 
 	/**
 	 * A value put back to what the configuration holds is no edit: it leaves
@@ -392,6 +401,7 @@
 	function discardAll() {
 		pending = {}
 		pendingClears = []
+		offeredDraft = null
 	}
 
 	/**
@@ -435,72 +445,145 @@
 	const stepPendingByKey = (stepKey: string) => {
 		const step = steps.find((s) => s.key === stepKey)
 		if (!step) return 0
-		return [...step.options, ...step.advanced].filter(
+		return step.options.filter(
 			(o) => o.id in pending || pendingClears.includes(o.id)
 		).length
 	}
 
 	/**
-	 * The whole draft in one request (22 §3): sets and clears together,
-	 * answered with one refreshed view. A refusal mid-batch stops it and
-	 * names what landed.
+	 * The option edits in one request (22 §3): sets and clears together,
+	 * answered — after the refreshed view — on the batch's own event. A
+	 * refusal mid-batch stops it and names what landed; the edits stay, so
+	 * Save again resends them (re-setting what landed changes nothing).
 	 */
-	function applyPending(configId?: number) {
-		const n = pendingCount
-		socket.emit("pipelines:setOptions", {
-			slug,
-			...(configId != null ? { configId } : {}),
-			set: Object.entries(pending).map(([optionId, value]) => ({
-				optionId,
-				value
-			})),
-			clear: [...pendingClears]
-		})
-		pending = {}
-		pendingClears = []
-		toaster.success({
-			title: `Saving ${n} change${n === 1 ? "" : "s"}…`
-		})
+	function sendOptions(configId: number) {
+		const set = Object.entries($state.snapshot(pending)).map(([optionId, value]) => ({
+			optionId,
+			value
+		}))
+		const clear = [...pendingClears]
+		return awaitReply({
+			socket,
+			event: "pipelines:setOptions",
+			errorEvent: "pipelines:setOptions:error",
+			params: { slug, configId, set, clear },
+			match: (r) => r.slug === slug && r.configId === configId,
+			timeoutMs: 60_000
+		}).then(
+			() => {
+				pending = {}
+				pendingClears = []
+			},
+			(e: unknown) => {
+				throw e
+			}
+		)
 	}
 
-	const onBatchError = (res: Sockets.Pipelines.SetOptions.Response) => {
-		if (res.error)
-			toaster.error({
-				title: "Save stopped by a refusal",
-				description: `${res.applied ?? 0} change${
-					(res.applied ?? 0) === 1 ? "" : "s"
-				} landed before: ${res.error}`
-			})
-	}
+	let saving = $state(false)
+	let formErrors = $state<string[]>([])
 
 	/** The shipped-configuration question, asked at save time (22 §2.1). */
 	let shippedDialog = $state(false)
 	let shippedNewName = $state("")
-	/** Apply the draft into the configuration this id names, once it exists. */
-	let applyToCreated = false
+	/** The intent a Save asked with, held while the shipped question is open. */
+	let shippedIntent: AdminSaveIntent = "continue"
+	/** The shipped-save path is creating the copy; its answer is the save's. */
+	let savingToCopy = false
 
-	function saveAll() {
-		if (!pendingCount || !selected) return
+	function land(intent: AdminSaveIntent) {
+		if (intent === "save") void goto("/admin/pipelines")
+	}
+
+	async function save(intent: AdminSaveIntent) {
+		if (!selected || saving) return
+		formErrors = []
+		if (!pendingCount) return land(intent)
 		if (selected.readOnly) {
+			shippedIntent = intent
 			shippedNewName = `${selected.name} copy`
 			shippedDialog = true
 			return
 		}
-		applyPending(selected.id)
+		const configId = selected.id
+		const steps: SaveStep[] = []
+		if (optionCount) {
+			const n = optionCount
+			steps.push({
+				label: `${n} setting${n === 1 ? "" : "s"}`,
+				run: () => sendOptions(configId)
+			})
+		}
+		if (offeredChange) {
+			const enabled = offeredDraft!
+			steps.push({
+				label: enabled ? "Offer this configuration" : "Withdraw this configuration",
+				run: () =>
+					awaitReply({
+						socket,
+						event: "pipelines:setPresetActions",
+						errorEvent: "pipelines:setPresetActions:error",
+						params: { slug, configId, enabled },
+						match: (r) => r.slug === slug && r.configId === configId
+					}).then(() => {
+						offeredDraft = null
+					})
+			})
+		}
+		await finishSave(steps, intent)
 	}
 
-	function saveAsNewConfig() {
+	async function finishSave(steps: SaveStep[], intent: AdminSaveIntent) {
+		saving = true
+		const outcome = await saveInSequence(steps)
+		saving = false
+		const name = selected?.name ?? spec?.name ?? slug
+		if (outcome.refused.length || outcome.skipped.length) {
+			formErrors = saveErrors(outcome)
+			toaster.warning({ title: saveSummary(outcome, name) })
+			return
+		}
+		toaster.success({ title: saveSummary(outcome, name) })
+		land(intent)
+	}
+
+	/** Shipped: the edits land in a new copy, which becomes the selection. */
+	async function saveAsNewConfig() {
 		if (!shippedNewName.trim() || !selected) return
-		applyToCreated = true
-		socket.emit("pipelines:createConfig", {
-			slug,
-			name: shippedNewName.trim(),
-			fromConfigId: selected.id
-		})
+		const name = shippedNewName.trim()
+		const fromConfigId = selected.id
 		shippedDialog = false
+		const steps: SaveStep[] = []
+		let copyId: number | null = null
+		steps.push({
+			label: `Create ${name}`,
+			run: async () => {
+				savingToCopy = true
+				try {
+					const res = await awaitReply({
+						socket,
+						event: "pipelines:createConfig",
+						errorEvent: "pipelines:createConfig:error",
+						params: { slug, name, fromConfigId },
+						match: (r) => r.configId != null && (!r.pipeline || r.pipeline.slug === slug)
+					})
+					copyId = res.configId!
+					socket.emit("pipelines:selectConfig", { slug, configId: copyId })
+				} finally {
+					savingToCopy = false
+				}
+			}
+		})
+		if (optionCount)
+			steps.push({
+				label: "Settings",
+				after: [`Create ${name}`],
+				run: () => sendOptions(copyId!)
+			})
+		await finishSave(steps, shippedIntent)
 	}
 
-	/** Leaving with a draft is asked about, through the Admin view's dialog. */
+	/** Leaving with unsaved edits is asked about, through the Admin view's dialog. */
 	adminUnsavedEdits(() => pendingCount > 0)
 
 	/** A different configuration is a different draft: the same question. */
@@ -515,8 +598,8 @@
 	const changeRows = $derived.by((): ChangeRow[] => {
 		if (!detail) return []
 		const out: ChangeRow[] = []
-		for (const s of detail.steps)
-			for (const o of [...s.options, ...s.advanced]) {
+		for (const s of steps)
+			for (const o of s.options) {
 				const isPend = o.id in pending
 				const isClear = pendingClears.includes(o.id)
 				// `changed`, not `overriddenHere` (ruled 2026-09-10). The two
@@ -531,7 +614,8 @@
 				out.push({
 					option: o,
 					stepKey: s.key,
-					stepLabel: s.label,
+					agent: s.agent ?? "",
+					stepLabel: s.heading,
 					state: isClear
 						? "pending-reset"
 						: isPend
@@ -558,12 +642,13 @@
 			stepLabel: string
 			option: Sockets.Pipelines.Option
 		}[] = []
-		for (const s of detail.steps)
-			for (const o of [...s.options, ...s.advanced])
+		// Walks agent and step names as well as the settings' own.
+		for (const s of steps)
+			for (const o of s.options)
 				if (
 					o.label.toLowerCase().includes(q) ||
 					(o.description ?? "").toLowerCase().includes(q) ||
-					o.facet.toLowerCase().includes(q)
+					s.label.toLowerCase().includes(q)
 				)
 					out.push({ stepKey: s.key, stepLabel: s.label, option: o })
 		return out.slice(0, 30)
@@ -644,21 +729,20 @@
 	)
 </script>
 
-<div class="flex flex-col gap-4">
-	<div class="flex flex-col gap-1">
-		<a
-			class="text-surface-600-400 hover:text-surface-800-200 inline-flex items-center gap-1 self-start text-[13px]"
-			href="/admin/pipelines"
-		>
-			<Icons.ChevronLeft size={14} /> Back to pipelines
-		</a>
-		<!-- The workspace is a two-pane tool; in the dock it stacks and still
-		     works, and this says where the room is. -->
-		<p class="text-surface-600-400 text-[13px] @min-[700px]/content:hidden">
-			Wider is easier: press the Focus button above.
-		</p>
-	</div>
-	<AdminPageHeader title={spec?.name ?? slug}>
+<AdminChangeForm
+	mode="change"
+	title={spec?.name ?? slug}
+	noun="pipeline"
+	changelistHref="/admin/pipelines"
+	changelistLabel="Pipelines"
+	dirty={pendingCount > 0}
+	{saving}
+	canSave={pendingCount > 0 && !saving && !!selected}
+	addAnother={false}
+	errors={formErrors}
+	onSave={save}
+>
+	{#snippet headerExtra()}
 			<p
 				class="text-surface-600-400 flex flex-wrap items-center gap-1.5 font-mono text-xs"
 			>
@@ -708,14 +792,32 @@
 					</span>
 				{/if}
 			</p>
-	</AdminPageHeader>
+			<!-- The workspace is a two-pane tool; in the dock it stacks and
+			     still works, and this says where the room is. -->
+			<p class="text-surface-600-400 text-[13px] @min-[700px]/content:hidden">
+				Wider is easier: press the Focus button above.
+			</p>
+	{/snippet}
+	{#snippet saveRowExtra()}
+		{#if pendingCount}
+			<span class="text-surface-600-400 text-xs">
+				{pendingCount} change{pendingCount === 1 ? "" : "s"}
+			</span>
+			<button type="button" class="btn btn-sm preset-tonal-surface" onclick={() => (tab = "changes")}>
+				Review
+			</button>
+			<button type="button" class="btn btn-sm preset-tonal-surface" onclick={discardAll} disabled={saving}>
+				Discard
+			</button>
+		{/if}
+	{/snippet}
 
 	{#if loading}
 		<p class="text-surface-600-400 text-sm">Loading…</p>
 	{:else if !spec}
 		<p class="text-surface-600-400 text-sm">
 			There is no pipeline called <code class="font-mono">{slug}</code>
-			on this instance.
+			on this pub.
 		</p>
 	{:else}
 		<!-- ── configuration bar ─────────────────────────────────────── -->
@@ -753,11 +855,11 @@
 				<input
 					type="checkbox"
 					class="checkbox"
-					checked={selected ? selected.enabled : true}
+					checked={selected ? (offeredDraft ?? selected.enabled) : true}
 					disabled={!selected || selected.readOnly}
 					onchange={(e) => setAvailability(e.currentTarget.checked)}
 				/>
-				{selected && !selected.enabled ? "Withdrawn" : "Offered"}
+				{selected && !(offeredDraft ?? selected.enabled) ? "Withdrawn" : "Offered"}
 			</label>
 
 			<div class="flex flex-wrap items-center gap-1">
@@ -925,7 +1027,7 @@
 									<span
 										class="text-surface-600-400 shrink-0 text-xs"
 									>
-										{r.stepLabel} · {r.option.facet}
+										{r.stepLabel}
 									</span>
 								</button>
 							{/each}
@@ -1031,11 +1133,6 @@
 							<h2 class="text-lg font-semibold">
 								{active.label}
 							</h2>
-							<span class="text-surface-600-400 text-xs">
-								step {steps.findIndex(
-									(s) => s.key === active.key
-								) + 1} of {steps.length}
-							</span>
 						</div>
 					{:else}
 						<div
@@ -1061,7 +1158,7 @@
 							<Icons.Lock size={12} class="shrink-0" />
 							<span>
 								<strong>{selected.name}</strong>
-								 is shipped — Save all will ask where your changes
+								 is shipped — Save will ask where your changes
 								land.
 							</span>
 						</p>
@@ -1069,9 +1166,7 @@
 					<PipelineConfigOptions
 						{slug}
 						stepKey={active?.key}
-						granular
-						showConfigPicker={false}
-						showScopeNote={false}
+						mode="builder"
 						editsConfigId={selected && !selected.readOnly
 							? selected.id
 							: undefined}
@@ -1081,8 +1176,8 @@
 						onDraftClear={draftClear}
 						onLoaded={(d) => {
 							detail = d
-							if (!selectedStep && d.steps.length)
-								selectedStep = d.steps[0].key
+							const first = builderStepsOf(d.groups)[0]
+							if (!selectedStep && first) selectedStep = first.key
 							// ?config= deep link: applied once, then forgotten.
 							if (
 								urlConfigId != null &&
@@ -1138,34 +1233,7 @@
 		</div>
 	{/if}
 
-	<!-- ── the draft bar: sticky, on every tab (22 §2.1) ──────────────────
-	     A draft off-screen is a draft forgotten; the bar rides the bottom of the
-	     section's scroller (sticky, not fixed: the `content` container is
-	     the containing block for anything fixed inside it) whichever tab is open, and nothing writes until Save all. -->
-	{#if pendingCount}
-		<div
-			class="draft-bar bg-surface-50-950 border-warning-500 flex flex-wrap items-center gap-2 rounded-[12px] border px-3 py-2"
-			role="status"
-		>
-			<Icons.CircleDot size={15} class="text-warning-500 shrink-0" />
-			<span class="text-sm font-semibold">
-				{pendingCount} pending change{pendingCount === 1 ? "" : "s"}
-			</span>
-			<button
-				class="btn btn-sm preset-tonal-surface"
-				onclick={() => (tab = "changes")}
-			>
-				Review
-			</button>
-			<button class="btn btn-sm preset-filled-primary-500" onclick={saveAll}>
-				<Icons.Save size={14} /> Save all
-			</button>
-			<button class="btn btn-sm preset-tonal-surface" onclick={discardAll}>
-				Discard
-			</button>
-		</div>
-	{/if}
-</div>
+</AdminChangeForm>
 
 <!-- ── the shipped-configuration question, at save time (22 §2.1) ────── -->
 <Dialog open={shippedDialog} onOpenChange={(e) => (shippedDialog = e.open)}>
@@ -1226,12 +1294,5 @@
 		100% {
 			box-shadow: 0 0 0 2px transparent;
 		}
-	}
-	.draft-bar {
-		position: sticky;
-		bottom: 1rem;
-		z-index: 40;
-		align-self: center;
-		max-width: 100%;
 	}
 </style>

@@ -59,8 +59,7 @@ import { resolveConnectionCapabilities } from "$lib/server/connections/resolve"
  * The quarantine key 0127 writes.
  *
  * ⚠ Spelled once, here, and the SQL spells it once, there. If the two ever
- * disagree the envelope is stranded — present, unconverted, and invisible —
- * which `migration0127.int.test.ts` replays the real file to catch.
+ * disagree the envelope is stranded — present, unconverted, and invisible.
  */
 const LEGACY_KEY = "__legacyVectorizationApiKey"
 

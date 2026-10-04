@@ -9,8 +9,10 @@ import {
 	autoSessionName,
 	buildCreatePayload,
 	castCountHint,
+	castOptions,
 	defaultGenreId,
 	enabledPresetsFor,
+	filterPickRows,
 	finalSessionName,
 	genreFacts,
 	genreVersion,
@@ -22,6 +24,8 @@ import {
 	reconcileToShape,
 	STANDARD_GENRE_ID,
 	StartSessionFlow,
+	WELCOME_SESSION_NAME,
+	welcomeSessionInput,
 	type GenreRow,
 	type PresetRow
 } from "./createSession.svelte"
@@ -579,6 +583,15 @@ describe("StartSessionFlow — playing a cast character", () => {
 		expect(flow.personaIds).toEqual([])
 	})
 
+	it("playing a cast character takes them out of the cast", () => {
+		const flow = flowWith()
+		flow.toggleCharacter(1)
+		flow.toggleCharacter(2)
+		flow.playAs(2)
+		expect(flow.characterIds).toEqual([1])
+		expect(flow.personaIds).toEqual([2])
+	})
+
 	it("holds the cast to the genre's cap", () => {
 		const flow = new StartSessionFlow()
 		flow.rawGenres = [
@@ -590,6 +603,46 @@ describe("StartSessionFlow — playing a cast character", () => {
 		flow.toggleCharacter(1)
 		flow.toggleCharacter(2)
 		expect(flow.characterIds).toEqual([1])
+	})
+})
+
+describe("castOptions — the cast picker (note 33)", () => {
+	it("hides the character the person plays as, keeping list order", () => {
+		const rows = [{ id: 3 }, { id: 1 }, { id: 2 }]
+		expect(castOptions(rows, [1]).map((r) => r.id)).toEqual([3, 2])
+	})
+
+	it("offers everyone when nobody is played yet", () => {
+		expect(castOptions([{ id: 1 }, { id: 2 }], []).map((r) => r.id)).toEqual([
+			1, 2
+		])
+	})
+
+	it("with playAsOptions, no row is ever offered on both sides", () => {
+		const rows = [1, 2, 3, 4].map((id) => ({ id, name: `C${id}` }))
+		const cast = [2]
+		const seat = [3]
+		const castSide = castOptions(rows, seat).map((r) => r.id)
+		const seatSide = playAsOptions(rows, cast).map((r) => r.id)
+		expect(castSide).not.toContain(3)
+		expect(seatSide).not.toContain(2)
+	})
+})
+
+describe("filterPickRows — both pickers' filter", () => {
+	const rows = [
+		{ id: 1, name: "Mara", nickname: "The Fox", characterTags: [{ tag: { name: "noir" } }] },
+		{ id: 2, name: "Aldo", nickname: null, characterTags: [] }
+	]
+
+	it("keeps everyone for a blank query", () => {
+		expect(filterPickRows(rows, "  ")).toHaveLength(2)
+	})
+
+	it("matches name, nickname and tag, ignoring case", () => {
+		expect(filterPickRows(rows, "ALD").map((r) => r.id)).toEqual([2])
+		expect(filterPickRows(rows, "fox").map((r) => r.id)).toEqual([1])
+		expect(filterPickRows(rows, "Noir").map((r) => r.id)).toEqual([1])
 	})
 })
 
@@ -617,5 +670,31 @@ describe("StartSessionFlow — the preset's name", () => {
 		flow.chooseGenre(STANDARD_GENRE_ID)
 		flow.choosePreset(1)
 		expect(flow.fields.name).toBe("Tavern night")
+	})
+})
+
+describe("the wizard's first Guide session", () => {
+	it("is named Welcome to Serene Pub, and carries no scenario and no lorebook", () => {
+		const input = welcomeSessionInput(
+			{ genreId: "core:genre/guide@1.0.0", presetId: 7 },
+			3
+		)
+		expect(WELCOME_SESSION_NAME).toBe("Welcome to Serene Pub")
+		const body = buildCreatePayload(input)
+		expect(body.session.name).toBe("Welcome to Serene Pub")
+		expect(body.session.scenario).toBe("")
+		expect(body.session.lorebookId).toBeNull()
+		expect(body.session.genreId).toBe("core:genre/guide@1.0.0")
+		expect(body.session.presetId).toBe(7)
+		expect(body.characterIds).toEqual([])
+		expect(body.personaIds).toEqual([3])
+	})
+
+	it("starts with no persona when the person has none", () => {
+		const input = welcomeSessionInput(
+			{ genreId: "core:genre/guide@1.0.0", presetId: 7 },
+			null
+		)
+		expect(buildCreatePayload(input).personaIds).toEqual([])
 	})
 })

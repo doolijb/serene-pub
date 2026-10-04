@@ -9,6 +9,9 @@
 	import { sectionForModality } from "$lib/shared/constants/connectionSections"
 	import { serviceLabel } from "$lib/client/components/connections/connectionIndexFilter"
 	import { isLocalOnnxType } from "$lib/client/components/connections/modelManagement"
+	import EmbeddingSwitchDialog from "$lib/client/components/connections/EmbeddingSwitchDialog.svelte"
+	import EntitySwitchDialog from "$lib/client/components/connections/EntitySwitchDialog.svelte"
+	import { useStarConfirm } from "$lib/client/components/connections/useStarConfirm.svelte"
 
 	const socket = useTypedSocket()
 	let userCtx: UserCtx = getContext("userCtx")
@@ -66,10 +69,31 @@
 	// would write is "the first one it can do". `modelId` is required too:
 	// connections have no default model, and the server refuses a
 	// registration without one.
+	//
+	// Moving the embedding or entity star asks first, with the same
+	// confirmation as the Connections view (`useStarConfirm`).
 	let setDefaultError = $state<string | null>(null)
+	const stars = useStarConfirm({
+		getDefaults: () => systemSettingsCtx.capabilityDefaults ?? undefined,
+		modelOf: (connectionId, modelId) => {
+			const conn = connections.find((c) => c.id === connectionId)
+			const model = conn?.models?.find((m) => m.id === modelId)
+			return model
+				? { name: model.name, isLocal: isLocalOnnxType(conn!.type) }
+				: null
+		},
+		commit: (moves) => {
+			for (const move of moves)
+				socket.emit("connections:setDefault", {
+					capability: move.capability,
+					id: move.connectionId,
+					modelId: move.modelId
+				})
+		}
+	})
 	function setDefault(capability: string, id: number, modelId: number) {
 		setDefaultError = null
-		socket.emit("connections:setDefault", { capability, id, modelId })
+		stars.stage([{ capability, connectionId: id, modelId }])
 	}
 
 	function deleteConnection(id: number, name: string) {
@@ -225,3 +249,7 @@
 		</ul>
 	{/if}
 {/if}
+
+<!-- Moving the embedding or entity star asks first, with the numbers. -->
+<EmbeddingSwitchDialog {...stars.embeddingDialog} />
+<EntitySwitchDialog {...stars.entityDialog} />

@@ -204,7 +204,9 @@ describe("activity → notification (PGlite integration)", () => {
 			historyEntryId: 901,
 			historyEntryDate: "Year 3",
 			lorebookId: 13,
-			lorebookLabel: "Chronicle"
+			lorebookLabel: "Chronicle",
+			branchId: null,
+			moment: null
 		})
 		activityStore.updateCompile(id, { status: "review" })
 		await until(
@@ -215,6 +217,23 @@ describe("activity → notification (PGlite integration)", () => {
 		await new Promise((r) => setTimeout(r, 50))
 		expect(activityStore.getById(id)).toBeDefined()
 		expect((await rowsOf(owner))[0].clearedAt).toBeNull()
+		activityStore.remove(id)
+		tab.disconnect()
+	})
+
+	test("another user's Stop is refused and the run keeps running", async () => {
+		const owner = await newUser()
+		const other = await newUser()
+		const tab = connect(other, false)
+		const abort = new AbortController()
+		const id = activityStore.startScene(
+			{ userId: owner, sceneId: 902, lorebookId: 15 },
+			abort
+		)
+		tab.fire("activity:cancel", { id })
+		await new Promise((r) => setTimeout(r, 50))
+		expect(abort.signal.aborted).toBe(false)
+		expect(activityStore.getById(id)?.status).toBe("running")
 		activityStore.remove(id)
 		tab.disconnect()
 	})
@@ -239,7 +258,9 @@ describe("activity → notification (PGlite integration)", () => {
 			historyEntryId: 602,
 			historyEntryDate: "Year 9",
 			lorebookId: 14,
-			lorebookLabel: "Marsh"
+			lorebookLabel: "Marsh",
+			branchId: null,
+			moment: null
 		})
 		activityStore.updateCompile(compile, { status: "review" })
 		await until(
@@ -260,7 +281,9 @@ describe("activity → notification (PGlite integration)", () => {
 				historyEntryId: 602,
 				historyEntryDate: "Year 9",
 				lorebookId: 14,
-				lorebookLabel: "Marsh"
+				lorebookLabel: "Marsh",
+				branchId: null,
+				moment: null
 			})
 		]
 		const rows = await until(
@@ -286,6 +309,7 @@ describe("activityHref / activityNotice", () => {
 			lorebookId: 3,
 			lorebookLabel: "B",
 			mode: "replace",
+			branchId: null,
 			status: "review",
 			phase: "",
 			sceneIndex: 0,
@@ -326,9 +350,31 @@ describe("activityHref / activityNotice", () => {
 				historyEntryDate: "Year 1",
 				lorebookId: 3,
 				lorebookLabel: "B",
+				branchId: null,
+				moment: null,
 				status: "error"
 			})
 		).toBe("/lorebooks#lore=3/history/40")
+		// A compile asked on a line at a moment reopens there: the review
+		// saves to that reading, so it is read against it.
+		const compileOnLine = activityHref({
+			...base,
+			kind: "compile_history_entry",
+			historyEntryId: 40,
+			historyEntryDate: "Year 1",
+			lorebookId: 3,
+			lorebookLabel: "B",
+			branchId: 9,
+			moment: { year: 4, month: 2, day: null },
+			status: "review"
+		})
+		expect(fromHash(compileOnLine.slice(compileOnLine.indexOf("#")))).toMatchObject({
+			lorebookId: 3,
+			scope: "history",
+			entryId: 40,
+			branch: 9,
+			moment: "Y4-2"
+		})
 
 		expect(
 			activityHref({
@@ -367,6 +413,8 @@ describe("activityHref / activityNotice", () => {
 				historyEntryDate: "Year 1",
 				lorebookId: 3,
 				lorebookLabel: "Chronicle",
+				branchId: null,
+				moment: null,
 				status: "error"
 			})
 		).toMatchObject({

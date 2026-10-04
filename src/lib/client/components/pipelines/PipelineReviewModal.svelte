@@ -24,6 +24,7 @@
 	import * as Icons from "@lucide/svelte"
 	import SchemaForm from "./SchemaForm.svelte"
 	import { toaster } from "$lib/client/utils/toaster"
+	import { queueAfterThis, queuePosition } from "./reviewQueue"
 
 	const socket = useTypedSocket()
 
@@ -36,6 +37,12 @@
 	let lastError = $state<string | null>(null)
 
 	const current = $derived(queue[0] ?? null)
+
+	/** `core:spec/respond` → "Respond": the pipeline the card belongs to. */
+	const specLabel = (specId: string) => {
+		const tail = specId.slice(specId.lastIndexOf("/") + 1).replace(/-/g, " ")
+		return tail ? tail[0].toUpperCase() + tail.slice(1) : specId
+	}
 	const submitting = $derived(!!current && submittingId === current.id)
 
 	// A fresh card resets the working values to the payload's own.
@@ -93,8 +100,8 @@
 	}
 	const onError = (res: { error?: string; id?: string }) => {
 		if (res?.error) toaster.error({ title: res.error })
-		// Errors reach every tab this person has open; only the one that asked
-		// re-enables. A server too old to name the card falls back to whatever
+		// A refusal reaches the tab that asked and names its card; only the
+		// card in flight re-enables. A server too old to name the card falls back to whatever
 		// this tab has in flight.
 		if (submittingId && (!res?.id || res.id === submittingId)) {
 			if (res?.error && submittingId === current?.id)
@@ -142,14 +149,27 @@
 			<div class="flex items-start gap-2">
 				<Icons.ShieldQuestion size={20} class="mt-0.5 shrink-0" />
 				<div class="min-w-0 flex-1">
-					<p class="font-semibold">Waiting for your review</p>
+					<p class="font-semibold">
+						Waiting for your review{#if queuePosition(queue.length)}
+							<span class="text-surface-600-400 font-normal">
+								· {queuePosition(queue.length)}</span
+							>{/if}
+					</p>
 					<p class="text-surface-600-400 text-xs">
 						A pipeline is paused before it acts. Nothing happens
 						until you decide — waiting costs nothing.
-						{#if queue.length > 1}
-							· {queue.length - 1} more waiting
+						{#if queueAfterThis(queue.length)}
+							· {queueAfterThis(queue.length)}
 						{/if}
 					</p>
+					{#if current.whatIsReviewed}
+						<p class="mt-1 text-sm" data-testid="review-what">
+							<span class="text-surface-600-400"
+								>{specLabel(current.specId)} · step “{current.nodeKey}”:</span
+							>
+							{current.whatIsReviewed}
+						</p>
+					{/if}
 				</div>
 			</div>
 

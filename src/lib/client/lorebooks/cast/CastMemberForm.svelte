@@ -267,7 +267,9 @@
 	let missingSet = $derived(
 		draft.spriteSet &&
 			!spriteSets.some(
-				(s) => normalizeSpriteName(s.name) === normalizeSpriteName(draft.spriteSet)
+				(s) =>
+					normalizeSpriteName(s.name) ===
+					normalizeSpriteName(draft.spriteSet)
 			)
 			? draft.spriteSet
 			: null
@@ -302,24 +304,23 @@
 
 <div class="flex flex-col gap-4">
 	<div class="flex items-start gap-3">
-		<div class="shrink-0">
-			{#if card}
-				<div
-					class="ring-offset-surface-50-950 rounded-full ring-2 ring-offset-2 {stateBadge(
-						member.state
-					).ring}"
-				>
-					<Avatar char={card as any} />
-				</div>
-			{:else}
-				<div
-					class="ring-offset-surface-50-950 bg-surface-200-800 text-surface-500 flex h-[4em] w-[4em] items-center justify-center rounded-full ring-2 ring-offset-2 {stateBadge(
-						member.state
-					).ring}"
-				>
-					<Icons.UserRound size={28} aria-hidden="true" />
-				</div>
-			{/if}
+		<!-- The member's face on the avatar scale (STYLE-GUIDE §6.4): lg,
+		     square — an identity — ringed in the state's colour. A member
+		     with no card gets their kind's glyph, or a background member's
+		     initial. -->
+		<div
+			class="ring-offset-surface-50-950 shrink-0 rounded-full ring-2 ring-offset-2 {stateBadge(
+				member.state
+			).ring}"
+		>
+			<Avatar
+				char={card as any}
+				name={member.name}
+				size="lg"
+				kind={member.kind === "persona" ? "persona" : "character"}
+				fallback={member.kind === "background" ? "initial" : "glyph"}
+				decorative
+			/>
 		</div>
 		<div class="min-w-0 flex-1">
 			<h4 class="truncate text-sm font-semibold">{member.name}</h4>
@@ -448,13 +449,13 @@
 		</p>
 	</div>
 
-	<div class="border-border flex flex-col gap-3 border-t pt-3">
+	<div class="panel-inset flex flex-col gap-3">
 		<p class="text-sm font-semibold">Status in world</p>
 		<div class="grid grid-cols-2 gap-3">
 			<div class="flex flex-col gap-1">
 				<Select
 					label="State"
-					class="text-surface-600-400 min-w-0 text-xs [&_input]:text-sm [&_input]:text-surface-950-50"
+					class="text-surface-600-400 [&_input]:text-surface-950-50 min-w-0 text-xs [&_input]:text-sm"
 					options={CAST_STATES.map((s) => ({ value: s, label: s }))}
 					value={draft.nodeState}
 					onValueChange={(v) => {
@@ -465,8 +466,11 @@
 			<div class="flex flex-col gap-1">
 				<Select
 					label="Visibility"
-					class="text-surface-600-400 min-w-0 text-xs [&_input]:text-sm [&_input]:text-surface-950-50"
-					options={CAST_VISIBILITIES.map((v) => ({ value: v, label: v }))}
+					class="text-surface-600-400 [&_input]:text-surface-950-50 min-w-0 text-xs [&_input]:text-sm"
+					options={CAST_VISIBILITIES.map((v) => ({
+						value: v,
+						label: v
+					}))}
 					value={draft.nodeVisibility}
 					onValueChange={(v) => {
 						if (v) draft.nodeVisibility = v
@@ -483,7 +487,7 @@
 	</div>
 
 	{#if member.linked && (spriteSets.length > 0 || draft.spriteSet)}
-		<div class="border-border flex flex-col gap-1 border-t pt-3">
+		<div class="panel-inset flex flex-col gap-1">
 			<!-- ⚠ The missing set stays a row so choosing it again is possible
 			     and saving does not silently drop it. The card they resolve to
 			     here has no set by this name; another card may. -->
@@ -497,7 +501,12 @@
 						label: `${set.name}${set.isDefault ? " (default)" : ""}`
 					})),
 					...(missingSet
-						? [{ value: missingSet, label: `${missingSet} — not on this card` }]
+						? [
+								{
+									value: missingSet,
+									label: `${missingSet} — not on this card`
+								}
+							]
 						: [])
 				]}
 				bind:value={draft.spriteSet}
@@ -512,9 +521,9 @@
 				</p>
 			{:else}
 				<p class="text-surface-700-300 text-xs leading-relaxed">
-					Which of the card's sets this member is drawn with. Sets belong
-					to the card; which one they use is theirs, and can be dated like
-					anything else on this page.
+					Which of the card's sets this member is drawn with. Sets
+					belong to the card; which one they use is theirs, and can be
+					dated like anything else on this page.
 				</p>
 			{/if}
 		</div>
@@ -523,7 +532,7 @@
 	<!-- ⚠ Which card represents them is amendable like any other field
 	     (#115): read at a moment, Change and Unlink are DATED from it, and the
 	     outright rewrite is in the menu, never the primary (STYLE-GUIDE §6.1). -->
-	<div class="border-border flex flex-col gap-2 border-t pt-3" data-cast-card>
+	<div class="panel-inset flex flex-col gap-2" data-cast-card>
 		<div class="flex flex-wrap items-center gap-2">
 			{#if member.linked}
 				<div class="flex min-w-0 flex-1 flex-col gap-0.5">
@@ -541,7 +550,8 @@
 					title={cardDated
 						? `Draw this member with a different card from ${momentLabel}`
 						: "Point this member at a different card"}
-					onclick={() => onLinkCharacter(cardDated ? "amend" : "base")}
+					onclick={() =>
+						onLinkCharacter(cardDated ? "amend" : "base")}
 				>
 					<Icons.Repeat size={14} aria-hidden="true" /> Change
 				</button>
@@ -559,7 +569,9 @@
 			{:else}
 				<!-- One picker: a persona IS a character, so "link a persona" and
 					"link a character" were always the same act. -->
-				<p class="min-w-0 flex-1 text-sm font-semibold">Character card</p>
+				<p class="min-w-0 flex-1 text-sm font-semibold">
+					Character card
+				</p>
 				<button
 					class="btn btn-sm preset-tonal-surface"
 					type="button"
@@ -567,7 +579,8 @@
 					title={cardDated
 						? `Draw this member with a card from ${momentLabel}`
 						: "Draw this member with a character card"}
-					onclick={() => onLinkCharacter(cardDated ? "amend" : "base")}
+					onclick={() =>
+						onLinkCharacter(cardDated ? "amend" : "base")}
 				>
 					<Icons.Link size={14} aria-hidden="true" /> Link character
 				</button>

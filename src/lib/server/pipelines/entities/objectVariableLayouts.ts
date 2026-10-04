@@ -14,7 +14,7 @@
  * - `list` whose element is one of those (at any depth of lists) — its
  *   `String()` is `[object Object],[object Object]`, so it needs a layout as
  *   much as a single object does. A list of strings or numbers is not: it
- *   joins into text (`core:var/character-lore@1` is deliberately raw).
+ *   joins into text.
  * - the legacy `string[]` form — a bare list of an object's field names, so an
  *   object.
  * - `'any'` is unchecked and may as well be a string; it is NOT counted. A

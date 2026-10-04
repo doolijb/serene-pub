@@ -19,6 +19,7 @@ import {
 	entryAsOf,
 	type Amendment
 } from "$lib/shared/lorebooks/amendments"
+import { lineOf, MAIN_LINE } from "$lib/shared/lorebooks/lineReading"
 import type { TestDb } from "$lib/server/utils/testDb"
 
 let testDb: TestDb
@@ -334,7 +335,7 @@ describe("neither id is a capability", () => {
 				{ lorebookId: book.id },
 				noopEmit
 			)
-		).rejects.toThrow(/permission/i)
+		).rejects.toThrow("Lorebook not found.")
 	})
 
 	test("an entry in ANOTHER book cannot be amended through this one", async () => {
@@ -445,10 +446,12 @@ describe("branches", () => {
 		const overlays = list.entries as unknown as Amendment[]
 		expect(list.branches).toHaveLength(1)
 		expect(
-			entryAsOf({ content: "base" }, overlays, { branchId: null }).content
+			entryAsOf({ content: "base" }, overlays, { line: MAIN_LINE }).content
 		).toBe("main")
 		expect(
-			entryAsOf({ content: "base" }, overlays, { branchId: branch.id })
+			entryAsOf({ content: "base" }, overlays, {
+				line: lineOf(branch.id, list.branches)
+			})
 				.content
 		).toBe("on the branch")
 	})
@@ -605,7 +608,7 @@ describe("branches", () => {
 				{ lorebookId: book.id, name: "stolen" },
 				noopEmit
 			)
-		).rejects.toThrow(/permission/)
+		).rejects.toThrow("Lorebook not found.")
 	})
 
 	test("an amendment can be filed on a line, and main does not read it", async () => {
@@ -634,10 +637,12 @@ describe("branches", () => {
 		)
 		const overlays = after.entries as unknown as Amendment[]
 		expect(
-			entryAsOf({ content: "base" }, overlays, { branchId }).content
+			entryAsOf({ content: "base" }, overlays, {
+				line: lineOf(branchId, after.branches)
+			}).content
 		).toBe("on the fork")
 		expect(
-			entryAsOf({ content: "base" }, overlays, { branchId: null }).content
+			entryAsOf({ content: "base" }, overlays, { line: MAIN_LINE }).content
 		).toBe("base")
 	})
 

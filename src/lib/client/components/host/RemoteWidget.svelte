@@ -73,8 +73,19 @@
 			blockId?: string
 		) => void
 		class?: string
+		/**
+		 * The message backing the host draws behind this widget (note 18;
+		 * `$lib/shared/widgets/messageBacking`) — core's conversation only.
+		 */
+		backing?: "card" | "glass" | "none"
 		/** Mount at once, shown or not — the conversation. Otherwise on first show. */
 		eager?: boolean
+		/**
+		 * This mount holds the page's own ids — a conversation mount the
+		 * layout names (`ComponentMount`'s `pageIds`, brief 7b): one per
+		 * set of channels, so no id is on the page twice.
+		 */
+		pageIds?: boolean
 		/** The component failed or threw at runtime (`ComponentMount`). */
 		onRuntimeError?: ComponentProps<typeof ComponentMount>["onRuntimeError"]
 	}
@@ -97,7 +108,9 @@
 		suspended = false,
 		onAction,
 		class: klass,
+		backing,
 		eager = false,
+		pageIds = false,
 		onRuntimeError
 	}: Props = $props()
 
@@ -141,8 +154,11 @@
 			<span>This widget isn't available (it may be switched off).</span>
 		</div>
 	{:else if shown}
-		<!-- A new module is a new mount, in the same worker (C6 P5). -->
-		{#key src}
+		<!-- A new module is a new mount, in the same worker (C6 P5). So is a
+		     change of which conversation copy holds the page's ids (brief 7b):
+		     a box's ids are fixed when it mounts, and the copy that gave the
+		     ids up must take its prefix, or one id would be on the page twice. -->
+		{#key pageIds ? `${src} page-ids` : src}
 			<ComponentMount
 				{owner}
 				{src}
@@ -161,8 +177,10 @@
 				{actionDispatch}
 				{suspended}
 				surfaceId={widget.id}
+				{pageIds}
 				{onAction}
 				{onRuntimeError}
+				{backing}
 				class={klass}
 			/>
 		{/key}

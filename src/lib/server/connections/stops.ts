@@ -400,21 +400,16 @@ export function composeStops(input: ComposeStopsInput): ComposedStops {
  * because a blank row says less to a reader than the runaway does. This is the
  * same boundary the newline-prefixed stop draws on the wire.
  *
- * `own` is the speaker's own name, whose opening label is theirs to lose once:
- * the chat wire seeds a trailing `Verity:` and a model that repeats it would
- * otherwise show the label to the reader.
+ * `own` is the speaker's own name — or names — whose opening label is theirs
+ * to lose once: {@link stripOwnLabel}, the one rule for it.
  */
 export function trimAtSpeakerBoundary(
 	text: string,
 	stops: ComposedStops,
-	own?: string | null
+	own?: string | readonly string[] | null,
+	opts: { streaming?: boolean } = {}
 ): TrimmedReply {
-	let out = text
-	const ownLabel = own?.trim() ? `${own.trim()}:` : ""
-	if (ownLabel) {
-		const opener = new RegExp(`^[ \\t]*${escapeRegExp(ownLabel)}`)
-		if (opener.test(out)) out = out.replace(opener, "").trimStart()
-	}
+	const out = stripOwnLabel(text, own, opts)
 
 	const labels = stops.sent
 		.filter((stop) => stop.kind === "speaker")
@@ -430,6 +425,143 @@ export function trimAtSpeakerBoundary(
 		text: out.slice(0, match.index).trimEnd(),
 		trimmedAt: { label: match[1]!, offset: match.index }
 	}
+}
+
+/** Markdown emphasis a model wraps its own label in: `**Verity:**`, `__Verity__:`. */
+const EMPHASIS = "(?:\\*\\*|__|\\*|_)?"
+
+/** The whole spellings of one name's label, for the streaming hold-back. */
+const labelSpellings = (name: string) => [
+	`${name}:`,
+	`**${name}:**`,
+	`**${name}**:`,
+	`*${name}:*`,
+	`__${name}:__`,
+	`__${name}__:`
+]
+
+/**
+ * Take the speaker's OWN label off the front of their reply — once, and only at
+ * the very start. The one rule for it, applied by the live view and by the
+ * stored reply alike (`messages/replyView.ts`), so a reader never watches a
+ * label stream in that the record then drops.
+ *
+ * ## Why a model writes it at all
+ *
+ * The transcript teaches it: every history line is `Name: text` (the default
+ * context template's `{{{name}}}: {{{message}}}`) and the turn ends on a seed
+ * line `Verity:`. On the completion wire the model continues that line and
+ * rarely repeats it — until a reasoning block intervenes, after which it
+ * starts its reply afresh, label and all. On the chat wire the seed is a
+ * trailing assistant turn the server's template may close and reopen, with the
+ * same result. The label is the prompt's, never the character's words.
+ *
+ * ## The spellings
+ *
+ * `Verity:`, and the same label in markdown emphasis — `**Verity:**`,
+ * `**Verity**:` — which chat-tuned models favour. Case-sensitive and anchored:
+ * "Verity smiled" and "She said Verity: was late" are prose. `own` is every
+ * name the turn can be labelled with: the seed line's label as the prompt
+ * carried it ({@link seedLabelOf}), and the speaking character's name and
+ * nickname.
+ *
+ * `streaming` holds back a body that is so far only the START of a label
+ * (`Ver`, `**Verity:*`): the next frame either completes it — and it goes —
+ * or rules it out, so a label never flashes into the row for a frame.
+ */
+export function stripOwnLabel(
+	text: string,
+	own?: string | readonly string[] | null,
+	opts: { streaming?: boolean } = {}
+): string {
+	const names = (typeof own === "string" ? [own] : (own ?? []))
+		.map((name) => name?.trim())
+		.filter((name): name is string => !!name)
+	if (!names.length) return text
+	const lead = text.trimStart()
+	for (const name of names) {
+		if (
+			opts.streaming &&
+			lead.length > 0 &&
+			labelSpellings(name).some(
+				(form) => form.length > lead.length && form.startsWith(lead)
+			)
+		)
+			return ""
+		const opener = new RegExp(
+			`^\\s*${EMPHASIS}${escapeRegExp(name)}${EMPHASIS}:${EMPHASIS}[ \\t]*`
+		)
+		if (opener.test(text)) return text.replace(opener, "").trimStart()
+	}
+	return text
+}
+
+/**
+ * The label the prompt's seed line carries — `Verity` from a completion prompt
+ * ending `…<|im_start|>assistant\nVerity:`, or from a chat payload whose
+ * trailing assistant turn is `Verity:` (plus a continue's prefill after it).
+ *
+ * Read off the bytes being sent, not re-derived from the cast: the seed name has
+ * four sources (a channel's narrator voice, the cast member, a side character or
+ * envoy, the own voice — `prompt/seedLine.ts`), and the payload already holds
+ * whichever won. On the chat wire the label-only seed turn is not sent (B2,
+ * 2026-10-03), and `meta.seedLabel` carries the label it would have had —
+ * read first. Undefined when the prompt ends on no label — a template that
+ * renders none, a chat payload ending on a user turn with no `seedLabel`.
+ */
+export function seedLabelOf(compiled: unknown): string | undefined {
+	const payload = compiled as {
+		prompt?: unknown
+		messages?: unknown
+		meta?: { seedLabel?: unknown }
+	} | null
+	// The chat wire sends no label-only seed turn (B2, 2026-10-03); the label
+	// it would have carried rides the payload's `meta` instead.
+	const named = payload?.meta?.seedLabel
+	if (typeof named === "string" && named.trim()) return named.trim()
+	let line: string | undefined
+	if (Array.isArray(payload?.messages) && payload.messages.length) {
+		const last = payload.messages[payload.messages.length - 1] as {
+			role?: unknown
+			content?: unknown
+		}
+		if (last?.role === "assistant" && typeof last.content === "string")
+			line = last.content.split("\n")[0]
+	} else if (typeof payload?.prompt === "string") {
+		line = payload.prompt.slice(payload.prompt.lastIndexOf("\n") + 1)
+	}
+	const match = line?.match(/^\s*([^\n:<>|#[\]]{1,64}?)\s*:(?:\s|$)/)
+	return match?.[1]?.trim() || undefined
+}
+
+/**
+ * Every name the speaking turn can be labelled with: the seed line's label as
+ * the payload carries it, and the speaking character's name and nickname —
+ * which is what {@link stripOwnLabel} takes as `own`.
+ */
+export function ownLabelsFor(
+	session:
+		| { sessionCharacters?: { character?: unknown }[] | null }
+		| null
+		| undefined,
+	currentCharacterId: number | null | undefined,
+	compiled: unknown
+): string[] {
+	const out: string[] = []
+	const seed = seedLabelOf(compiled)
+	if (seed) out.push(seed)
+	if (currentCharacterId != null) {
+		const character = (session?.sessionCharacters ?? [])
+			.map((cc) => cc?.character as {
+				id?: number
+				name?: string | null
+				nickname?: string | null
+			} | undefined)
+			.find((c) => c?.id === currentCharacterId)
+		if (character?.name) out.push(character.name)
+		if (character?.nickname) out.push(character.nickname)
+	}
+	return [...new Set(out)]
 }
 
 /**

@@ -122,6 +122,39 @@ export function sidesTucked(o: SidesTuckedInput): boolean {
 	return need > 0 && o.bodyPx < need
 }
 
+export interface TuckedSidesInput extends SidesTuckedInput {
+	/**
+	 * The side holding the layout's primary log (brief 7a: the conversation
+	 * may sit in a side), or null when the middle holds it.
+	 */
+	logSide: "left" | "right" | null
+	/**
+	 * What the middle is owed when it does NOT hold the log: the centre's own
+	 * reserve (./sideSlot `MIN_CENTER_PX`), not the log's measure.
+	 */
+	middleMinPx: number
+}
+
+/**
+ * Rule (2), side by side, now the log may sit in a side (brief 7a review).
+ *
+ * With the log in the middle this is `sidesTucked` for both sides, unchanged.
+ * With the log in a side, that side NEVER tucks — the log is what a session is
+ * read and written in, and a rail icon would put it behind a click and an
+ * outside click would put it away again — and the other side tucks once the
+ * body cannot hold both docked sides and the middle's own reserve: a middle
+ * without the log is owed `middleMinPx`, not the log's measure.
+ */
+export function tuckedSidesOf(o: TuckedSidesInput): { left: boolean; right: boolean } {
+	const fires = sidesTucked(
+		o.logSide ? { ...o, stagePx: o.middleMinPx } : o
+	)
+	return {
+		left: fires && o.logSide !== "left",
+		right: fires && o.logSide !== "right"
+	}
+}
+
 export interface BalancedGuttersInput {
 	/** Width of the body row, px. */
 	bodyPx: number

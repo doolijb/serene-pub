@@ -27,6 +27,10 @@
  */
 import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 import { isKoboldCppManagedType } from "$lib/shared/utils/connectionServiceItems"
+import {
+	endpointKind,
+	type EndpointKind
+} from "$lib/shared/connections/connectionGroup"
 
 /**
  * A runtime this pub RUNS, whose own view owns this endpoint's models.
@@ -135,33 +139,12 @@ export function modelsSourceHint(
 }
 
 /**
- * What KIND of endpoint a row belongs to, for the one branch the index really
- * has: a group's shape, and what a row in it can be asked to do.
- *
- * Five values and no sixth: they are the four cases with their own status
- * line, header badge and row action, plus everything else. ⚠ Not a modality —
- * a modality says what a model is FOR (§10), and two of these share one
- * (`local-onnx` and `ollama-embeddings` are both `embeddings`) while one
- * endpoint of kind `koboldcpp-managed` serves three.
+ * What KIND of endpoint a row belongs to — defined beside the **connection
+ * group**, in `$lib/shared/connections/connectionGroup`, so the two rules are
+ * read side by side and never confused. Re-exported here, where the index's
+ * row logic has always imported it from.
  */
-export type EndpointKind =
-	| "koboldcpp-managed"
-	| "ollama"
-	| "onnx-embeddings"
-	| "onnx-entities"
-	| "api"
-
-export function endpointKind(type: string | null | undefined): EndpointKind {
-	if (isKoboldCppManagedType(type ?? "")) return "koboldcpp-managed"
-	if (
-		type === CONNECTION_TYPE.OLLAMA ||
-		type === CONNECTION_TYPE.OLLAMA_EMBEDDINGS
-	)
-		return "ollama"
-	if (type === CONNECTION_TYPE.LOCAL_ONNX_EMBEDDINGS) return "onnx-embeddings"
-	if (type === CONNECTION_TYPE.LOCAL_ONNX_NER) return "onnx-entities"
-	return "api"
-}
+export { endpointKind, type EndpointKind }
 
 /** True for the two kinds whose rows carry `local` disk state. */
 export function isOnnxKind(kind: EndpointKind): boolean {

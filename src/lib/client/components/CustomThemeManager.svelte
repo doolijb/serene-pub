@@ -60,7 +60,7 @@
 	type ThemeMeta = Sockets.CustomThemes.ThemeMeta
 
 	let myThemes = $state<ThemeMeta[]>([])
-	let instanceThemes = $state<ThemeMeta[]>([])
+	let pubThemes = $state<ThemeMeta[]>([])
 	let isLoading = $state(true)
 
 	/**
@@ -68,7 +68,7 @@
 	 * name); `dataTheme` is the selector its CSS answers to — the name for a
 	 * built-in, the cssKey for a custom theme (Layout injects each custom
 	 * theme's stylesheet under `[data-theme='<cssKey>']`). A theme that is
-	 * both yours and the instance's shows once, under My themes.
+	 * both yours and the pub's shows once, under My themes.
 	 */
 	type ThemeChoice = { value: string; label: string; dataTheme: string }
 	let themeGroups = $derived.by(() => {
@@ -92,9 +92,9 @@
 			},
 			{ key: "mine", label: "My themes", themes: myThemes.map(toChoice) },
 			{
-				key: "instance",
-				label: "Instance themes",
-				themes: instanceThemes
+				key: "pub",
+				label: "Pub themes",
+				themes: pubThemes
 					.filter((t) => !mine.has(t.name))
 					.map(toChoice)
 			}
@@ -118,7 +118,7 @@
 	function handleCustomThemesList(msg: Sockets.CustomThemes.List.Response) {
 		isLoading = false
 		myThemes = msg.myThemes
-		instanceThemes = msg.instanceThemes
+		pubThemes = msg.pubThemes
 	}
 
 	function handleCustomThemesListError() {
@@ -238,7 +238,7 @@
 						<div
 							role="radiogroup"
 							aria-label="{group.label} themes"
-							class="grid grid-cols-2 gap-3 @min-[900px]/view:grid-cols-4"
+							class="grid grid-cols-[repeat(auto-fill,minmax(9rem,1fr))] gap-3"
 						>
 							{#each group.themes as t (t.value)}
 								{@const isSelected = selectedTheme === t.value}
@@ -369,7 +369,7 @@
 		</section>
 
 		<!-- Background -->
-		<div class="border-t pt-4">
+		<div class="panel-edge border-t pt-4">
 			<h3 class="text-sm font-medium">Background</h3>
 
 			<div class="mt-3">
@@ -459,13 +459,13 @@
 								{/if}
 							</div>
 							<div class="flex shrink-0 items-center gap-1">
-								{#if theme.isInstanceTheme}
+								{#if theme.isPubTheme}
 									<span
 										class="badge text-xs"
 										style="background: #2a1f4a; color: #a78bfa; padding: 0.1rem 0.5rem; border-radius: 999px;"
 									>
 										<Icons.Globe size={9} />
-										Instance
+										Pub
 									</span>
 								{/if}
 								<button
@@ -481,15 +481,15 @@
 				{/if}
 			</div>
 
-			<!-- Instance Themes (only when accounts enabled and there are some) -->
-			{#if isAccountsEnabled && instanceThemes.length > 0}
+			<!-- Pub Themes (only when accounts enabled and there are some) -->
+			{#if isAccountsEnabled && pubThemes.length > 0}
 				<div class="space-y-2">
 					<p
 						class="text-surface-600-400 text-xs"
 					>
-						Instance themes
+						Pub themes
 					</p>
-					{#each instanceThemes as theme}
+					{#each pubThemes as theme}
 						<div
 							class="bg-surface-100-800 flex items-center gap-3 rounded-lg p-3"
 						>

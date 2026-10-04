@@ -1,5 +1,6 @@
 /**
- * 2a: narrativeGraph:updateNode / updateRelationship used to build their
+ * 2a: a cast row's update (now `lorebooks:updateBinding`, the one door since
+ * plan B2 deleted `narrativeGraph:updateNode`) and updateRelationship used to build their
  * UPDATE payload from a denylist (`...fields` after excluding a few known
  * columns), which silently let through any field not on the denylist —
  * including lorebookId itself, letting a client move a node/relationship
@@ -59,22 +60,30 @@ async function makeLorebook(userId: number, name = "Test Book") {
 	return lorebook
 }
 
+/**
+ * A tag of its own for each seeded member: one member per tag per book
+ * (`lorebook_bindings_binding_unique`). Not a number, so it is never a cast
+ * tag and never moves a book's counter.
+ */
+let seedTag = 0
 async function makeBinding(
 	lorebookId: number,
 	overrides: Partial<typeof schema.lorebookBindings.$inferInsert> = {}
 ) {
 	const [binding] = await testDb
 		.insert(schema.lorebookBindings)
-		.values({ lorebookId, binding: "", ...overrides })
+		.values({
+			lorebookId,
+			binding: `{{char:seed-${++seedTag}}}`,
+			...overrides
+		})
 		.returning()
 	return binding
 }
 
-describe("narrativeGraph:updateNode — scoping (PGlite integration)", () => {
+describe("lorebooks:updateBinding — scoping, the one cast-row door (plan B2)", () => {
 	test("ignores a foreign lorebookId in the payload instead of moving the node", async () => {
-		const { narrativeGraphUpdateNodeHandler } = await import(
-			"./narrativeGraph"
-		)
+		const { updateLorebookBindingHandler } = await import("./lorebooks")
 		const owner = await makeUser("update-node-owner")
 		const attacker = await makeUser("update-node-attacker")
 		const ownLorebook = await makeLorebook(owner.id, "Owner's Book")
@@ -84,10 +93,10 @@ describe("narrativeGraph:updateNode — scoping (PGlite integration)", () => {
 		)
 		const node = await makeBinding(ownLorebook.id, { name: "Node" })
 
-		const res = await narrativeGraphUpdateNodeHandler.handler(
+		const res = await updateLorebookBindingHandler.handler(
 			fakeSocket(owner.id),
 			{
-				node: {
+				lorebookBinding: {
 					id: node.id,
 					lorebookId: foreignLorebook.id,
 					nodeState: "active"
@@ -96,7 +105,7 @@ describe("narrativeGraph:updateNode — scoping (PGlite integration)", () => {
 			noopEmit
 		)
 
-		expect(res.node.lorebookId).toBe(ownLorebook.id)
+		expect(res.lorebookBinding.lorebookId).toBe(ownLorebook.id)
 		const afterUpdate = await testDb.query.lorebookBindings.findFirst({
 			where: eq(schema.lorebookBindings.id, node.id)
 		})
@@ -104,9 +113,7 @@ describe("narrativeGraph:updateNode — scoping (PGlite integration)", () => {
 	})
 
 	test("rejects a parentNodeId pointing at a row in a different lorebook", async () => {
-		const { narrativeGraphUpdateNodeHandler } = await import(
-			"./narrativeGraph"
-		)
+		const { updateLorebookBindingHandler } = await import("./lorebooks")
 		const owner = await makeUser("update-node-parent-owner")
 		const ownLorebook = await makeLorebook(owner.id, "Owner's Book 2")
 		const otherLorebook = await makeLorebook(owner.id, "Other Book")
@@ -116,31 +123,31 @@ describe("narrativeGraph:updateNode — scoping (PGlite integration)", () => {
 		})
 
 		await expect(
-			narrativeGraphUpdateNodeHandler.handler(
+			updateLorebookBindingHandler.handler(
 				fakeSocket(owner.id),
 				{
-					node: {
+					lorebookBinding: {
 						id: node.id,
 						parentNodeId: foreignNode.id
 					} as any
 				},
 				noopEmit
 			)
-		).rejects.toThrow(/parent node not found/i)
+		).rejects.toThrow(
+			"The cast member to file this one under is not in this lorebook."
+		)
 	})
 
 	test("allows setting nodeState/nodeVisibility, the intended graph-shaped fields", async () => {
-		const { narrativeGraphUpdateNodeHandler } = await import(
-			"./narrativeGraph"
-		)
+		const { updateLorebookBindingHandler } = await import("./lorebooks")
 		const user = await makeUser("update-node-allowed-user")
 		const lorebook = await makeLorebook(user.id)
 		const node = await makeBinding(lorebook.id, { name: "Node" })
 
-		const res = await narrativeGraphUpdateNodeHandler.handler(
+		const res = await updateLorebookBindingHandler.handler(
 			fakeSocket(user.id),
 			{
-				node: {
+				lorebookBinding: {
 					id: node.id,
 					nodeState: "deceased",
 					nodeVisibility: "hidden"
@@ -149,8 +156,8 @@ describe("narrativeGraph:updateNode — scoping (PGlite integration)", () => {
 			noopEmit
 		)
 
-		expect(res.node.nodeState).toBe("deceased")
-		expect(res.node.nodeVisibility).toBe("hidden")
+		expect(res.lorebookBinding.nodeState).toBe("deceased")
+		expect(res.lorebookBinding.nodeVisibility).toBe("hidden")
 	})
 })
 

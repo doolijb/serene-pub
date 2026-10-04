@@ -9,7 +9,7 @@
  *
  *     user_settings.language  →  system_settings.default_language  →  "en"
  *
- * NULL at the user end means *"whatever the instance default is"*, not English.
+ * NULL at the user end means *"whatever the pub default is"*, not English.
  * That is what makes the admin's setup choice apply to everybody who never
  * expressed a preference, and what makes changing it later move them. Reading
  * either column alone gives the wrong answer, which is why they are read here
@@ -63,7 +63,7 @@ export interface ResolvedLanguage {
 	 * needs to decide whether its picker shows a choice or a default — and what
 	 * a receipt needs to explain why a run stemmed or did not.
 	 */
-	source: "user" | "instance" | "fallback"
+	source: "user" | "pub" | "fallback"
 }
 
 function resolved(
@@ -77,8 +77,8 @@ function resolved(
 	return { code: definition.code, definition, source }
 }
 
-/** The instance default — the language a user with no preference gets. */
-export async function resolveInstanceLanguage(): Promise<ResolvedLanguage> {
+/** The pub default — the language a user with no preference gets. */
+export async function resolvePubLanguage(): Promise<ResolvedLanguage> {
 	const row = await db.query.systemSettings.findFirst({
 		where: eq(schema.systemSettings.id, 1),
 		columns: { defaultLanguage: true }
@@ -86,7 +86,7 @@ export async function resolveInstanceLanguage(): Promise<ResolvedLanguage> {
 	// No settings row at all is a pre-seed boot, not a corrupted install —
 	// `defaults.ts` inserts it. English until it does.
 	if (!row?.defaultLanguage) return resolved(DEFAULT_LANGUAGE, "fallback")
-	return resolved(row.defaultLanguage, "instance")
+	return resolved(row.defaultLanguage, "pub")
 }
 
 /**
@@ -95,7 +95,7 @@ export async function resolveInstanceLanguage(): Promise<ResolvedLanguage> {
  * Two queries rather than a join: `user_settings` may legitimately have no row
  * yet (it is created lazily on first `userSettings:get`), and a join would make
  * that indistinguishable from a user with no preference — which needs the
- * instance default, not the fallback.
+ * pub default, not the fallback.
  */
 export async function resolveUserLanguage(
 	userId: number
@@ -105,5 +105,5 @@ export async function resolveUserLanguage(
 		columns: { language: true }
 	})
 	if (row?.language) return resolved(row.language, "user")
-	return resolveInstanceLanguage()
+	return resolvePubLanguage()
 }

@@ -387,6 +387,58 @@ describe.skipIf(!haveFixture)("listing and deleting", () => {
 	})
 })
 
+describe("a restore reads the lorebooks before it trusts the archive", () => {
+	/** A data directory with no live database, holding one backup made from `sql`. */
+	async function dataDirWithBackup(label: string, sql: string) {
+		const dataDir = fs.mkdtempSync(path.join(root, `probe-${label}-`))
+		fs.writeFileSync(
+			path.join(dataDir, "meta.json"),
+			JSON.stringify({ version: "0.6.0", cryptoSecretKey: "live-key" })
+		)
+		// On disk, as an install's is: an in-memory dump carries no PG_VERSION.
+		const client = new PGlite(
+			path.join(fs.mkdtempSync(path.join(root, `src-${label}-`)), "db")
+		)
+		await client.waitReady
+		await client.exec(sql)
+		const entry = await backupNow({
+			label,
+			paths: recoveryPaths(dataDir),
+			db: drizzle(client)
+		})
+		await client.close()
+		return { dataDir, name: entry.name }
+	}
+
+	test("a backup whose lorebook entries read restores", async () => {
+		const { dataDir, name } = await dataDirWithBackup(
+			"readable",
+			`CREATE TABLE lorebooks (id int); CREATE TABLE lorebook_entries (id int); INSERT INTO lorebook_entries VALUES (1);`
+		)
+		const paths = recoveryPaths(dataDir)
+		await restoreBackup(name, paths)
+		expect(fs.existsSync(path.join(paths.dbPath, "PG_VERSION"))).toBe(true)
+	}, 120_000)
+
+	test("a backup whose lorebook entries cannot be read is refused, and the live database is left alone", async () => {
+		// A stand-in for an unreadable page: every read of the table raises.
+		const { dataDir, name } = await dataDirWithBackup(
+			"unreadable",
+			`CREATE FUNCTION unreadable() RETURNS boolean VOLATILE LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'could not read block 0'; END $$;
+			 CREATE VIEW lorebook_entries AS SELECT id FROM generate_series(1, 1) AS id WHERE unreadable();`
+		)
+		const paths = recoveryPaths(dataDir)
+		await expect(restoreBackup(name, paths)).rejects.toThrow(
+			/lorebook_entries table cannot be read/
+		)
+		expect(fs.existsSync(paths.dbPath)).toBe(false)
+		expect(readRecoveryLog(paths).at(-1)).toMatchObject({
+			action: "restore",
+			ok: false
+		})
+	}, 120_000)
+})
+
 describe("backing up on demand", () => {
 	test("writes an archive with its meta.json companion, and logs it", async () => {
 		const dataDir = fs.mkdtempSync(path.join(root, "manual-"))

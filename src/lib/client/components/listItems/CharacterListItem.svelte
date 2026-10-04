@@ -1,7 +1,7 @@
 <script lang="ts">
-	import { avatarSrc } from "$lib/client/utils/media"
 	import * as Icons from "@lucide/svelte"
 	import SidebarListItem from "../SidebarListItem.svelte"
+	import Avatar from "../Avatar.svelte"
 	import EmbeddingStatusIcon from "../EmbeddingStatusIcon.svelte"
 	import RowMenu from "../menus/RowMenu.svelte"
 
@@ -80,24 +80,9 @@
 	{active}
 >
 	{#snippet content()}
-		{#if avatarSrc(character)}
-			<img
-				src={avatarSrc(character)}
-				alt=""
-				loading="lazy"
-				class="h-10 w-10 shrink-0 rounded-[9px] object-cover object-top"
-			/>
-		{:else}
-			<span
-				class="bg-surface-200-800 grid h-10 w-10 shrink-0 place-items-center rounded-[9px]"
-			>
-				<Icons.UsersRound
-					size={20}
-					class="text-surface-600-400"
-					aria-hidden="true"
-				/>
-			</span>
-		{/if}
+		<!-- The avatar scale's row step (STYLE-GUIDE §6.4): 40px, the
+		     identity's rounded square. Decorative — the name is beside it. -->
+		<Avatar char={character as any} size="md" decorative />
 		<div class="flex min-w-0 flex-1 items-center gap-2">
 			<div class="min-w-0 flex-1">
 				<div

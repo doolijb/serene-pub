@@ -254,7 +254,9 @@
 				     is legible against. A section whose field is empty is not
 				     rendered at all: an empty card states a blank where the
 				     character simply has none. -->
-				<div class="flex flex-col gap-3 pt-3">
+				<!-- Two columns once the detail has the room (notes 14); each card
+				     keeps a readable measure. -->
+				<div class="grid items-start gap-3 pt-3 @3xl/detail:grid-cols-2">
 					{#if character.description}
 						<section class="panel-card">
 							<p class="text-surface-600-400 mb-1.5 text-xs">

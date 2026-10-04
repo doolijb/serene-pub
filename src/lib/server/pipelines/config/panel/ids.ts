@@ -33,3 +33,17 @@ export function optionId(
 		.digest("hex")
 		.slice(0, 32)
 }
+
+/**
+ * A step's opaque handle: the same HMAC over its address (a node key or a
+ * clause id) alone. One rule for every surface that names a step — the
+ * settings groups (`SettingsGroupStep.key`, `ConfigOption.step`) and the
+ * builder's map (`graph.nodes[].stepKey`) — so a map click and the panel
+ * agree without either counting steps.
+ */
+export function stepKeyFor(secret: string, address: string): string {
+	return createHmac("sha256", secret)
+		.update(`step\u0000${address}`)
+		.digest("hex")
+		.slice(0, 16)
+}

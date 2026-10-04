@@ -43,13 +43,6 @@ vi.mock("$lib/server/db", async () => {
 	return { db }
 })
 
-// Same isolation as the trigger-lock suite: `resolveNarratorPromptConfig`
-// reaches `getUserConfigurations`, which throws against a bare test database
-// with no prompt/context/sampling fixtures. Irrelevant to the subject.
-vi.mock("$lib/server/utils/resolveNarratorPromptConfig", () => ({
-	resolveNarratorPromptConfig: async () => null
-}))
-
 const generated: any[] = []
 vi.mock("../utils/runReply", () => ({
 	runReply: async (args: any) => {

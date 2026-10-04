@@ -185,16 +185,17 @@ export function entryChannel<T extends EntryTypeId>(
 	 *
 	 * ⚠ `entries:delete` answers with `{ lorebookId, entryId }` and no type, so
 	 * the book is the only filter the payload offers — and every door open on
-	 * the book heard every delete, so "All entries" toasted "World lore
+	 * the book heard every delete, so "Everything" toasted "World lore
 	 * deleted", "History deleted"… for one row. A delete is this channel's
 	 * when the row is one it listed, one it created, or one it removed.
 	 */
 	const known = new Set<number>()
 	const removing = new Set<number>()
 	/**
-	 * Reorders this channel sent that have not been answered. The reply is a
-	 * bare `{ success }` naming neither book nor type, so the only way to know
-	 * it is ours is to have asked.
+	 * Reorders this channel sent that have not been answered. The reply names
+	 * its book (the scope) and type, which narrows it to this door's kind;
+	 * another tab's reorder of the same book and kind is still not ours, so
+	 * having asked is what makes a reply this door's to toast.
 	 */
 	let reordersInFlight = 0
 
@@ -230,9 +231,19 @@ export function entryChannel<T extends EntryTypeId>(
 		if (mine && msg.success) handlers.onDeleted?.(msg.entryId, asked)
 	}
 	const onReordered = (msg: Sockets.Entries.UpdatePositions.Response) => {
+		if (msg.lorebookId !== lorebookId || msg.typeId !== typeId) return
 		if (reordersInFlight <= 0) return
 		reordersInFlight -= 1
 		if (msg.success) handlers.onReordered?.()
+	}
+	/**
+	 * A refused reorder answers on the `:error` twin (to the asking tab
+	 * alone) and never on the reply, so it is counted off here or every later
+	 * reply from another tab would be taken for this door's.
+	 */
+	const onReorderRefused = (msg: { lorebookId?: number; typeId?: string }) => {
+		if (msg?.lorebookId !== lorebookId || msg?.typeId !== typeId) return
+		if (reordersInFlight > 0) reordersInFlight -= 1
 	}
 	const onBindings = async (msg: Sockets.Lorebooks.BindingList.Response) => {
 		if (msg.lorebookId !== lorebookId) return
@@ -257,9 +268,9 @@ export function entryChannel<T extends EntryTypeId>(
 	 *
 	 * ⚠ Which keys carry a scope is not a choice made here — `SCOPED_EVENTS`
 	 * in the shared contract is the one table, and a `#<id>` key for an event
-	 * that table does not scope matches NO payload at all. The five that ARE
-	 * scoped key on this tab's book; the two that are not stay bare and keep
-	 * their handler's own filter as the whole of the narrowing.
+	 * that table does not scope matches NO payload at all. The seven `#<id>`
+	 * keys below are scoped there, and each keys on this tab's book; the
+	 * reorder's `:error` twin is bare (never scoped).
 	 *
 	 * ⚠ `entries:list`/`create`/`update` narrow to the BOOK, never to this
 	 * tab's `typeId` — one namespace serves every entry type, so a History tab
@@ -270,13 +281,26 @@ export function entryChannel<T extends EntryTypeId>(
 	const releases: Array<() => void> = []
 
 	return {
-		/** Declare this tab's interest, then ask for both lists. Call from `onMount`. */
-		open() {
+		/**
+		 * Declare this tab's interest, then ask for both lists. Call from
+		 * `onMount`.
+		 *
+		 * `read: false` is a channel for WRITES only (plan B4): a lorebook
+		 * lens reads the rows, the cast and the embedding badges from the
+		 * workspace's book data, which already asked for them — so it neither
+		 * asks again nor holds those keys, and keeps only what its own writes
+		 * answer on (create, update, delete, reorder).
+		 */
+		open(opts: { read?: boolean } = {}) {
+			const read = opts.read !== false
+			if (read)
+				releases.push(
+					declareInterest<"entries:list">(
+						interestKey("entries:list", lorebookId),
+						onList
+					)
+				)
 			releases.push(
-				declareInterest<"entries:list">(
-					interestKey("entries:list", lorebookId),
-					onList
-				),
 				declareInterest<"entries:create">(
 					interestKey("entries:create", lorebookId),
 					onCreated
@@ -289,23 +313,29 @@ export function entryChannel<T extends EntryTypeId>(
 					interestKey("entries:delete", lorebookId),
 					onDeleted
 				),
-				// BARE: `entries:updatePositions` answers with `{ success }`
-				// and nothing to scope on, so it has no entry in the table.
+				// Scoped by the book (E-6); `onReordered` still filters on
+				// this tab's type.
 				declareInterest<"entries:updatePositions">(
-					"entries:updatePositions",
+					interestKey("entries:updatePositions", lorebookId),
 					onReordered
 				),
+				// Never scoped: an `:error` twin goes to the asking tab only.
+				declareInterest<"entries:updatePositions:error">(
+					"entries:updatePositions:error",
+					onReorderRefused
+				)
+			)
+			if (!read) return
+			releases.push(
 				declareInterest<"lorebooks:bindingList">(
 					interestKey("lorebooks:bindingList", lorebookId),
 					onBindings
 				),
-				// BARE: the vectorizer's family is a later slice and
-				// `vectorization:itemUpdated` is not in `SCOPED_EVENTS` yet —
-				// a scoped key would match nothing today. `onVectorized`'s own
-				// `msg.lorebookId !== lorebookId` check is the filter either
-				// way, so this is a one-line change when that slice lands.
+				// Scoped by the book: the server tells an item's owner (plan
+				// A7), keyed on the item's `lorebookId`. `onVectorized` still
+				// filters on the source this tab lists.
 				declareInterest<"vectorization:itemUpdated">(
-					"vectorization:itemUpdated",
+					interestKey("vectorization:itemUpdated", lorebookId),
 					onVectorized
 				)
 			)

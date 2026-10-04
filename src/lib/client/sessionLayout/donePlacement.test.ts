@@ -5,10 +5,9 @@
  * dragged into a side was back in the middle the moment Done was pressed.
  */
 import { describe, expect, test } from "vitest"
-import type { Arranged } from "./arrangedGeometry"
+import type { ArrangedGridV1, ZoneLayoutV1 } from "@serene-pub/sdk"
 import { placementAtDone } from "./donePlacement"
 import { withPrimaryFloor } from "./primaryFloor"
-import type { ZoneLayout } from "./schema"
 import {
 	defaultChatLayout,
 	loadChatLayout,
@@ -16,7 +15,7 @@ import {
 	withGridWidget
 } from "./widgetGrid"
 
-const zones = (left: string[], right: string[]): ZoneLayout => ({
+const zones = (left: string[], right: string[]): ZoneLayoutV1 => ({
 	version: 1,
 	zones: {
 		left: { kind: "side", side: "left", widgets: left },
@@ -27,7 +26,7 @@ const sideZoneIds = { left: "left", right: "right" }
 
 describe("placementAtDone — Messages moved into a side stays there", () => {
 	/** The conversation dragged from the middle into the left column, world-state into the middle. */
-	const arrangement: Arranged = {
+	const arrangement: ArrangedGridV1 = {
 		left: {
 			cols: 1,
 			rows: 12,
@@ -89,6 +88,33 @@ describe("placementAtDone — Messages moved into a side stays there", () => {
 		})
 		expect(done.zones.zones.left.widgets).toEqual(["stats"])
 		expect(widgetsInZone(done.grid, "middle").map((w) => w.id)).toEqual(["world-state", "messages"])
+	})
+
+	test("joining the middle's grid, the log takes the floor's shape, not a strip's", () => {
+		// A Chat session Done'd before free placement: the log in the middle
+		// frame, the grid empty. The next Done writes it into the grid — as a
+		// log that fills, so the grid draws what the frame did.
+		const done = placementAtDone({
+			zones: zones([], []),
+			grid: loadChatLayout({ version: 1, widgets: [] }),
+			arrangement: { middle: { cols: 10, rows: 12, items: [{ id: "messages", x: 0, y: 0, w: 10, h: 12 }] } },
+			sideZoneIds,
+			primaryId: "messages"
+		})
+		expect(widgetsInZone(done.grid, "middle")).toMatchObject([
+			{ id: "messages", size: { w: "grow", h: "grow" }, anchor: { top: true, bottom: true, left: true, right: true } }
+		])
+	})
+
+	test("any other newcomer keeps a strip's shape", () => {
+		const done = placementAtDone({
+			zones: zones([], []),
+			grid: loadChatLayout({ version: 1, widgets: [] }),
+			arrangement: { middle: { cols: 10, rows: 12, items: [{ id: "world-state", x: 0, y: 0, w: 10, h: 3 }] } },
+			sideZoneIds,
+			primaryId: "messages"
+		})
+		expect(widgetsInZone(done.grid, "middle")[0].size).toEqual({ w: "grow", h: "fixed" })
 	})
 
 	test("a side's frame folds a grid entry that named that side into its list", () => {

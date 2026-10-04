@@ -101,6 +101,48 @@
 	--sp-rail-bg: color-mix(in oklch, var(--color-surface-950), black 20%);
 }
 
+/*
+ * GLASS — the theme's translucent surface (note 18; STYLE-GUIDE §2.8). Skeleton
+ * ships no glass preset; its Presets guide builds one in the global sheet from
+ * theme colours and a backdrop blur, and this is that preset. Theme tokens, so
+ * a custom theme restyles every glass surface at once: the messages widget's
+ * glass backing (widgets.css) and a message style's glassy cards (Dreamlit
+ * Cameo) both read them. A pair, like the rail: one step off the ground in
+ * whichever direction the mode runs.
+ */
+:root {
+	--sp-glass-bg: color-mix(in oklab, var(--color-surface-50) 78%, transparent);
+	--sp-glass-bd: color-mix(in oklab, var(--color-surface-300) 70%, transparent);
+	--sp-glass-glow: color-mix(in oklab, var(--color-surface-50) 30%, transparent);
+	--sp-glass-blur: 14px;
+}
+:root[data-mode="dark"] {
+	--sp-glass-bg: color-mix(in oklab, var(--color-surface-950) 78%, transparent);
+	--sp-glass-bd: color-mix(in oklab, var(--color-surface-800) 70%, transparent);
+	--sp-glass-glow: color-mix(in oklab, var(--color-surface-950) 30%, transparent);
+}
+@utility preset-glass-surface {
+	background: var(--sp-glass-bg);
+	border: 1px solid var(--sp-glass-bd);
+	box-shadow: 0 0 30px var(--sp-glass-glow) inset;
+	backdrop-filter: blur(var(--sp-glass-blur));
+}
+
+/*
+ * SECONDARY BUTTON GROUND (notes 25, 2026-10-02; STYLE-GUIDE §2.4). Skeleton's
+ * `preset-tonal-surface` fills with `surface-50-950` — in dark mode the very
+ * stop the sidebar and popovers stand on (§2.3), so every secondary button,
+ * toolbar icon and tonal chip on a view read as bare text with no button
+ * around it. Redeclared here, after the Skeleton import: a second `@utility`
+ * of one name MERGES into the first and its later declaration wins, so the
+ * colour moves for all ~480 uses at once and the class keeps its name. One
+ * step off either ground (800 on the 950 sidebar and the 900 card alike),
+ * the same stop a row's hover uses.
+ */
+@utility preset-tonal-surface {
+	background-color: var(--color-surface-200-800);
+}
+
 .funnel-display {
 	font-family: "Funnel Display", sans-serif;
 	font-optical-sizing: auto;
@@ -213,6 +255,21 @@
    beats every Tailwind utility regardless of specificity. */
 @utility panel-card {
 	@apply border-surface-300 bg-surface-100 dark:border-surface-800 dark:bg-surface-900 rounded-[12px] border p-4;
+}
+
+/* The card's edge on its own, for a bordered box that is not a section card
+   (a chip strip, a bar, a lane): the Settings view's border tone, paired for
+   light mode. Never write a bare `border` — Tailwind 4's default border
+   colour is currentColor, which drew white bars across the Lorebooks view
+   (notes 3/24, 2026-10-02). */
+@utility panel-edge {
+	@apply border-surface-300 dark:border-surface-800;
+}
+
+/* A section inside a card, one step back toward the ground (950 on a 900
+   card) — the replacement for a `border-t` separator between sections. */
+@utility panel-inset {
+	@apply border-surface-300 bg-surface-50 dark:border-surface-800 dark:bg-surface-950 rounded-[10px] border p-3;
 }
 
 /* The action row that sits under a panel's back/title row — see
@@ -362,6 +419,23 @@
 		0 0 0 3px var(--tutorial-glow-tint),
 		0 0 8px 1px var(--tutorial-glow-tint);
 	animation: tutorial-glow 2.2s ease-in-out infinite;
+}
+
+/* A segmented control lays out by ITS OWN orientation, never an ancestor's.
+   Skeleton's segmented-control.css flips the control to a column under
+   `:has(> [data-orientation='vertical']) &` — true for ANY ancestor holding a
+   vertical element, so every segmented control inside Settings' vertical tab
+   rail (desk width) stacked its options in a column: "Story text size shows
+   up as a column of options" (owner note 20, 2026-10-02). Keyed on the zag
+   root's own `data-orientation`, and more specific than Skeleton's rule, so a
+   control asked for `orientation="vertical"` still gets its column. */
+[data-scope="radio-group"][data-part="root"][data-orientation="horizontal"]
+	> [data-scope="radio-group"][data-part="control"] {
+	flex-direction: row;
+}
+[data-scope="radio-group"][data-part="root"][data-orientation="vertical"]
+	> [data-scope="radio-group"][data-part="control"] {
+	flex-direction: column;
 }
 
 /* Global prefers-reduced-motion support. Dozens of components use Tailwind's

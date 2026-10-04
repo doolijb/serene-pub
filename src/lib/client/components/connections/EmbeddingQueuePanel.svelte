@@ -151,16 +151,10 @@
 	const statusColor = $derived(
 		vectorizationCtx.status === "running"
 			? "text-success-500"
-			: vectorizationCtx.status === "paused"
-				? "text-warning-500"
-				: "text-surface-600-400"
+			: "text-surface-600-400"
 	)
 	const statusLabel = $derived(
-		vectorizationCtx.status === "running"
-			? "Running"
-			: vectorizationCtx.status === "paused"
-				? "Paused"
-				: "Idle"
+		vectorizationCtx.status === "running" ? "Running" : "Idle"
 	)
 
 	function timeAgo(iso: string): string {
@@ -285,12 +279,6 @@
 						<Icons.Loader2
 							size={16}
 							class="text-success-500 animate-spin"
-							aria-hidden="true"
-						/>
-					{:else if vectorizationCtx.status === "paused"}
-						<Icons.PauseCircle
-							size={16}
-							class="text-warning-500"
 							aria-hidden="true"
 						/>
 					{:else}

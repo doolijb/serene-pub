@@ -189,12 +189,6 @@ vi.mock("$lib/server/connections/capabilityTarget", async (importOriginal) => {
 		}
 	}
 })
-vi.mock("$lib/server/utils/getUserConfigurations", () => ({
-	getUserConfigurations: async () => ({
-		contextConfig: { id: 1, template: "{{instructions}}" },
-		promptConfig: { id: 1, systemPrompt: "Be brief." }
-	})
-}))
 
 /**
  * The two windows, chosen far enough apart that a batch cut against one cannot
@@ -272,7 +266,7 @@ async function mutableConfigFor(slug: string): Promise<number> {
 			)
 		)
 	const copy = await duplicateConfig(db, shipped.id, `${slug} (test)`)
-	await selectConfig(db, spec.id, "instance", 0, copy.id, userId)
+	await selectConfig(db, spec.id, "pub", 0, copy.id, userId)
 	configs.set(slug, copy.id)
 	return copy.id
 }
@@ -483,8 +477,7 @@ beforeAll(async () => {
  * copy in memory to make the other two halves observable, and the guard below
  * pinned the hole so the patch could not outlive it.
  *
- * `drizzle/0111_reply_slots_and_relationship_cap.sql` closed it — all three
- * documents wire `connection: slot.connection()` and `sampling: slot.sampling()`
+ * All three documents wire `connection: slot.connection()` and `sampling: slot.sampling()`
  * on their `generate` node now — so the patch is gone and the guard is inverted.
  * Everything here is the real one: the document, the config store, the world,
  * the binding, the host and `dispatch`.
@@ -611,9 +604,7 @@ describe("dispatch — the reply step's own Sampling", () => {
 		// had to patch a line in: every shipped `generate-text` node called
 		// `C.generateText.v1({ context, prompts })` and named neither slot, so
 		// nothing the panel stored for it was ever resolved.
-		// `drizzle/0111_reply_slots_and_relationship_cap.sql` closed it —
-		// editing published documents under frozen versions, which is why it
-		// needed a re-projection migration and moved three spec hashes.
+		// Wiring both on the documents closed it, and moved three spec hashes.
 		//
 		// Read off the PUBLISHED rows, not the compiled catalog: the rows are
 		// what `loadPublished` hands the executor, so a document corrected in

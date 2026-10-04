@@ -177,8 +177,6 @@ const corpusTemplate = (wrappers: "template" | "layouts") => {
 
 /** What the pipeline renders: structure only, wrappers supplied by layouts. */
 const TEMPLATE = corpusTemplate("layouts")
-/** What 0.5 rendered: the same prompt, with the wrappers typed in. */
-const LEGACY_TEMPLATE = corpusTemplate("template")
 
 beforeAll(async () => {
 	// The *same* instance the mock returns, so the legacy gate, the legacy
@@ -187,22 +185,7 @@ beforeAll(async () => {
 	const dbModule = await import("$lib/server/db")
 	db = dbModule.db as unknown as TestDb
 
-	const [contextConfig] = await db
-		.insert(schema.contextConfigs)
-		.values({ name: "RAG Parity Context", template: LEGACY_TEMPLATE })
-		.returning()
-	const [promptConfig] = await db
-		.insert(schema.promptConfigs)
-		.values({
-			name: "RAG Parity Prompt",
-			systemPrompt: "You are {{char}}."
-		})
-		.returning()
-	await db.insert(schema.systemSettings).values({
-		id: 1,
-		defaultContextConfigId: contextConfig.id,
-		defaultPromptConfigId: promptConfig.id
-	})
+	await db.insert(schema.systemSettings).values({ id: 1 })
 	// The star: no row in `connection_defaults` means embeddings are off,
 	// which would close the RAG gate the same way the old
 	// `vectorizationEnabled` flag being unset used to.
@@ -236,8 +219,7 @@ beforeAll(async () => {
 		// Empty is what "the context budget is switched off" resolves to now, and
 		// both sides of the parity comparison get the same object either way.
 		sampling: {},
-		contextConfig,
-		promptConfig
+		prompts: { systemPrompt: "You are {{char}}." }
 	}
 }, 60_000)
 
@@ -440,7 +422,7 @@ describe("the semantic parity corpus", () => {
 	})
 
 	it("reports where the paths diverge", async () => {
-		const { goldenPathFor, ragParityPipeline } = await import(
+		const { goldenPathFor, ragParityPipeline, layerParityPrompts } = await import(
 			"$lib/server/pipelines/parity/harness"
 		)
 		const { readFileSync } = await import("node:fs")
@@ -470,6 +452,7 @@ describe("the semantic parity corpus", () => {
 			const world = await buildWorld(db, {
 				sessionId: scope.sessionId
 			})
+			layerParityPrompts(world, scope.prompts ?? configs.prompts)
 			// `source` and `engine` together, never one alone — the rule
 			// `world.ts`'s `pushTemplate` enforces on the real path. A source
 			// with no engine used to render anyway, because `renderTemplate`
@@ -491,14 +474,23 @@ describe("the semantic parity corpus", () => {
 				value: CORE_TEMPLATE_ENGINE,
 				scopeKind: "defaults"
 			} as any)
-			// ⚠ The semantic mechanism's own switch, turned on for the corpus that
-			// exists to measure it. `core:query/vector-search@1` ships with
-			// `maxEntries: 0` — off, the `admitThreshold` convention — because
-			// the reply pipeline must not start embedding on upgrade. This
-			// corpus is the mechanism, so it says so out loud rather than relying on
-			// a default that is deliberately the other way.
-			//
-			// 500 rather than a small number, so the cap cannot bite. It bounds
+			// ⚠ The semantic mechanism's own switch, turned On for the corpus that
+			// exists to measure it. `core:task/query-windows@1` ships with
+			// `searchByMeaning: 'auto'` — on the chain's first node so a mechanism
+			// that does not search embeds nothing (2026-09-29, C3), and searching
+			// only when an embedding model is set up. This harness's ad-hoc spec
+			// wires no connection to its queries step, so Automatic would not
+			// search here; the corpus is the mechanism, so it says On out loud
+			// rather than relying on a default that depends on what is starred.
+			world.overrides.push({
+				nodeKey: "queries",
+				slot: "params",
+				path: "searchByMeaning",
+				value: "on",
+				scopeKind: "defaults"
+			} as any)
+			// And the ceiling (`maxEntries`, 5 by default since the switch
+			// moved) raised to 500, so the cap cannot bite. It bounds
 			// `main`/`hits` — the direct-to-ranker path this corpus does not
 			// use, since it reads `lists` and `similarity` into
 			// `core:task/rank-semantic@1` instead — and a corpus measuring the

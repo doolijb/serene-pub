@@ -1,18 +1,7 @@
 import { db } from "$lib/server/db"
 import * as schema from "$lib/server/db/schema"
 import { DEFAULT_VECTOR_NAME } from "$lib/server/utils/lorebookEntries"
-import {
-	and,
-	desc,
-	eq,
-	inArray,
-	isNotNull,
-	isNull,
-	ne,
-	or,
-	sql,
-	type SQL
-} from "drizzle-orm"
+import { and, eq, isNotNull, isNull, ne, or, sql, type SQL } from "drizzle-orm"
 import type { Handler } from "$lib/shared/events"
 import {
 	isModelReady,
@@ -26,12 +15,15 @@ import {
 import { resolveEmbeddingTarget } from "$lib/server/embedding/target"
 import { embeddingReindexCost } from "$lib/server/embedding/reindex"
 import { checkSessionAccess } from "$lib/server/utils/sessionAccess"
+import { refusable } from "./refusable"
 import {
 	startVectorizationQueue,
 	stopVectorization,
 	isVectorizationRunning,
 	registerProgressEmitter,
 	unregisterProgressEmitter,
+	registerOwnerEmitter,
+	unregisterOwnerEmitter,
 	countUnembedded,
 	getPriorityQueue,
 	getCompletedHistory,
@@ -43,6 +35,7 @@ import {
 	clearVectorizationFailureTracking,
 	clearInlineEmbedCooldown
 } from "$lib/server/embedding/vectorizationQueue"
+import { messageHasText } from "$lib/server/embedding/messageText"
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -180,10 +173,40 @@ export const vectorizationReindexCost: Handler<
 	Sockets.Vectorization.ReindexCost.Response
 > = {
 	event: "vectorization:reindexCost",
-	handler: async (socket, _params, emitToUser) => {
+	handler: async (socket, params, emitToUser) => {
 		if (!socket.user!.isAdmin) throw new Error("Unauthorized")
+		// Only a well-formed pair is priced as one; anything else is the
+		// untargeted question rather than a guess at what was meant.
+		const t = params?.target
+		const e = t?.edit
+		const edit =
+			e && typeof e === "object"
+				? {
+						...(typeof e.baseUrl === "string"
+							? { baseUrl: e.baseUrl }
+							: {}),
+						...(typeof e.model === "string"
+							? { model: e.model }
+							: {})
+					}
+				: undefined
+		// A star names both halves; an edit names the connection, and the
+		// model only when it renames one.
+		const edits = !!edit && Object.keys(edit).length > 0
+		const target =
+			t &&
+			Number.isInteger(t.connectionId) &&
+			(Number.isInteger(t.modelId) || edits)
+				? {
+						connectionId: t.connectionId,
+						...(Number.isInteger(t.modelId)
+							? { modelId: t.modelId }
+							: {}),
+						...(edits ? { edit } : {})
+					}
+				: undefined
 		const res: Sockets.Vectorization.ReindexCost.Response =
-			await embeddingReindexCost(db)
+			await embeddingReindexCost(db, target)
 		emitToUser("vectorization:reindexCost", res)
 		return res
 	}
@@ -335,6 +358,8 @@ export const vectorizationCheckRagStatus: Handler<
 				"Access denied. Session not found or no permission to access."
 			)
 		}
+		// Who may hide the notice, the rule `setSessionRagIgnored` refuses by.
+		const canHide = sessionAccess.isOwner
 
 		// The star, which is both halves of what this used to ask two columns:
 		// whether embeddings are on at all, and which model identity a row's
@@ -342,226 +367,62 @@ export const vectorizationCheckRagStatus: Handler<
 		const target = await resolveEmbeddingTarget(db)
 		const activeModelName = target?.modelId ?? null
 
-		const empty: Sockets.Vectorization.RagTypeCounts = {
-			total: 0,
-			nullCount: 0,
-			staleCount: 0,
-			readyCount: 0
-		}
-
 		if (!activeModelName) {
 			const res: Sockets.Vectorization.CheckRagStatus.Response = {
 				applicable: false,
-				messages: empty,
-				characters: empty,
-				personas: empty,
 				lorebook: null,
 				queueRunning: isVectorizationRunning(),
 				activeModelName,
-				ragIgnored: false
+				ragIgnored: false,
+				canHide
 			}
 			emitToUser("vectorization:checkRagStatus", res)
 			return res
 		}
 
-		// Load session metadata + linked content in parallel
-		const [session, sessionCharsRows, sessionPersonasRows] =
-			await Promise.all([
-				db.query.sessions.findFirst({
-					where: eq(schema.sessions.id, params.sessionId),
-					columns: { lorebookId: true, metadata: true }
-				}),
-				db
-					.select({
-						characterId: schema.sessionCharacters.characterId,
-						charLorebookId: schema.characters.lorebookId
-					})
-					.from(schema.sessionCharacters)
-					.leftJoin(
-						schema.characters,
-						eq(
-							schema.sessionCharacters.characterId,
-							schema.characters.id
-						)
-					)
-					.where(
-						eq(schema.sessionCharacters.sessionId, params.sessionId)
-					),
-				db
-					.select({ personaId: schema.sessionPersonas.personaId })
-					.from(schema.sessionPersonas)
-					.where(
-						eq(schema.sessionPersonas.sessionId, params.sessionId)
-					)
-			])
-
+		const session = await db.query.sessions.findFirst({
+			where: eq(schema.sessions.id, params.sessionId),
+			columns: { lorebookId: true, metadata: true }
+		})
 		const ragIgnored = !!(session?.metadata as any)?.ragIgnored
 
-		// Gather linked IDs
-		const characterIds: number[] = []
-		const allLorebookIds: number[] = []
-
-		if (session?.lorebookId) allLorebookIds.push(session.lorebookId)
-
-		for (const cc of sessionCharsRows) {
-			if (cc.characterId) characterIds.push(cc.characterId)
-			if (
-				cc.charLorebookId &&
-				!allLorebookIds.includes(cc.charLorebookId)
-			) {
-				allLorebookIds.push(cc.charLorebookId)
-			}
-		}
-
-		const personaIds: number[] = []
-		for (const cp of sessionPersonasRows) {
-			if (cp.personaId) personaIds.push(cp.personaId)
-		}
-
-		// Count total messages to determine if RAG is applicable
+		// The notice waits until a session is past ten messages.
 		const totalMessages = await db.$count(
 			schema.sessionMessages,
 			eq(schema.sessionMessages.sessionId, params.sessionId)
 		)
-
-		// Not applicable if session has ≤ 10 messages (all are in context window)
 		if (Number(totalMessages) <= 10) {
 			const res: Sockets.Vectorization.CheckRagStatus.Response = {
 				applicable: false,
-				messages: empty,
-				characters: empty,
-				personas: empty,
 				lorebook: null,
 				queueRunning: isVectorizationRunning(),
 				activeModelName,
-				ragIgnored
+				ragIgnored,
+				canHide
 			}
 			emitToUser("vectorization:checkRagStatus", res)
 			return res
 		}
 
-		// Get IDs of the 10 most recent messages to exclude them
-		const recentRows = await db
-			.select({ id: schema.sessionMessages.id })
-			.from(schema.sessionMessages)
-			.where(eq(schema.sessionMessages.sessionId, params.sessionId))
-			.orderBy(desc(schema.sessionMessages.id))
-			.limit(10)
-		const recentIds = recentRows.map((r) => r.id)
-
-		// Messages older than the last 10
-		const olderWhere = and(
-			eq(schema.sessionMessages.sessionId, params.sessionId),
-			recentIds.length > 0
-				? sql`${schema.sessionMessages.id} NOT IN (${sql.join(
-						recentIds.map((id) => sql`${id}`),
-						sql`, `
-					)})`
-				: undefined
-		)
-
-		const [msgTotal, msgNull, msgStale] = await Promise.all([
-			db.$count(schema.sessionMessages, olderWhere),
-			db.$count(
-				schema.sessionMessages,
-				and(olderWhere, isNull(schema.sessionMessages.embedding))
-			),
-			db.$count(
-				schema.sessionMessages,
-				and(
-					olderWhere,
-					sql`${schema.sessionMessages.embedding} IS NOT NULL`,
-					ne(schema.sessionMessages.embeddingModel, activeModelName)
-				)
-			)
-		])
-
-		const messages: Sockets.Vectorization.RagTypeCounts = {
-			total: Number(msgTotal),
-			nullCount: Number(msgNull),
-			staleCount: Number(msgStale),
-			readyCount: Number(msgTotal) - Number(msgNull) - Number(msgStale)
-		}
-
-		// Characters
-		let characters: Sockets.Vectorization.RagTypeCounts = empty
-		if (characterIds.length > 0) {
-			const charWhere = inArray(schema.characters.id, characterIds)
-			const [cTotal, cNull, cStale] = await Promise.all([
-				db.$count(schema.characters, charWhere),
-				db.$count(
-					schema.characters,
-					and(charWhere, isNull(schema.characters.embedding))
-				),
-				db.$count(
-					schema.characters,
-					and(
-						charWhere,
-						sql`${schema.characters.embedding} IS NOT NULL`,
-						ne(schema.characters.embeddingModel, activeModelName)
-					)
-				)
-			])
-			characters = {
-				total: Number(cTotal),
-				nullCount: Number(cNull),
-				staleCount: Number(cStale),
-				readyCount: Number(cTotal) - Number(cNull) - Number(cStale)
-			}
-		}
-
-		// The characters this session's users voice — the same table as the
-		// cast, counted apart because the panel reports the two scopes
-		// separately and a voiced character is not cast.
-		let personas: Sockets.Vectorization.RagTypeCounts = empty
-		if (personaIds.length > 0) {
-			const personaWhere = inArray(schema.characters.id, personaIds)
-			const [pTotal, pNull, pStale] = await Promise.all([
-				db.$count(schema.characters, personaWhere),
-				db.$count(
-					schema.characters,
-					and(personaWhere, isNull(schema.characters.embedding))
-				),
-				db.$count(
-					schema.characters,
-					and(
-						personaWhere,
-						sql`${schema.characters.embedding} IS NOT NULL`,
-						ne(schema.characters.embeddingModel, activeModelName)
-					)
-				)
-			])
-			personas = {
-				total: Number(pTotal),
-				nullCount: Number(pNull),
-				staleCount: Number(pStale),
-				readyCount: Number(pTotal) - Number(pNull) - Number(pStale)
-			}
-		}
-
-		// Lorebook content (aggregate across all linked lorebooks)
+		/**
+		 * The entries of the session's own lorebook, and nothing else: what
+		 * Search by meaning searches (`SEMANTIC_SEARCH_SOURCES`, over the one
+		 * book `getSessionRagContext` scopes it to).
+		 *
+		 * ⚠ The queue embeds more than this — messages, the cast, personas,
+		 * graph nodes, links, a cast member's own lorebook — and none of it is
+		 * ever found by meaning. Counting it kept the notice up over a fully
+		 * indexed lorebook, naming a backlog RAG was never waiting on.
+		 *
+		 * The vector is a row in another table, so `IS NULL` is "no
+		 * default-space vector" and stale is "a vector whose model is not the
+		 * active one".
+		 */
 		let lorebook: Sockets.Vectorization.RagTypeCounts | null = null
-		if (allLorebookIds.length > 0) {
-			const nnWhere = inArray(
-				schema.lorebookBindings.lorebookId,
-				allLorebookIds
-			)
-			const nrWhere = inArray(
-				schema.narrativeRelationships.lorebookId,
-				allLorebookIds
-			)
-
-			/**
-			 * The three entry types, counted once.
-			 *
-			 * They are one table, and the vector they are counted against is a
-			 * row in another — so `IS NULL` becomes "no default-space vector"
-			 * and the stale test becomes "a vector whose model is not the
-			 * active one". Every clause keeps the meaning it had as a column.
-			 */
-			const entryWhere = inArray(
+		if (session?.lorebookId) {
+			const entryWhere = eq(
 				schema.lorebookEntries.lorebookId,
-				allLorebookIds
+				session.lorebookId
 			)
 			const countEntries = async (extra?: SQL) => {
 				const [row] = await db
@@ -585,17 +446,7 @@ export const vectorizationCheckRagStatus: Handler<
 				return Number(row?.n ?? 0)
 			}
 
-			const [
-				entryTotal,
-				entryNull,
-				entryStale,
-				nnTotal,
-				nnNull,
-				nnStale,
-				nrTotal,
-				nrNull,
-				nrStale
-			] = await Promise.all([
+			const [total, nullCount, staleCount] = await Promise.all([
 				countEntries(),
 				countEntries(isNull(schema.lorebookEntryVectors.entryId)),
 				countEntries(
@@ -603,71 +454,23 @@ export const vectorizationCheckRagStatus: Handler<
 						isNotNull(schema.lorebookEntryVectors.entryId),
 						ne(schema.lorebookEntryVectors.model, activeModelName)
 					)
-				),
-				db.$count(schema.lorebookBindings, nnWhere),
-				db.$count(
-					schema.lorebookBindings,
-					and(nnWhere, isNull(schema.lorebookBindings.embedding))
-				),
-				db.$count(
-					schema.lorebookBindings,
-					and(
-						nnWhere,
-						sql`${schema.lorebookBindings.embedding} IS NOT NULL`,
-						ne(
-							schema.lorebookBindings.embeddingModel,
-							activeModelName
-						)
-					)
-				),
-				db.$count(schema.narrativeRelationships, nrWhere),
-				db.$count(
-					schema.narrativeRelationships,
-					and(
-						nrWhere,
-						isNull(schema.narrativeRelationships.embedding)
-					)
-				),
-				db.$count(
-					schema.narrativeRelationships,
-					and(
-						nrWhere,
-						sql`${schema.narrativeRelationships.embedding} IS NOT NULL`,
-						ne(
-							schema.narrativeRelationships.embeddingModel,
-							activeModelName
-						)
-					)
 				)
 			])
-
-			const lbTotal = entryTotal + Number(nnTotal) + Number(nrTotal)
-			const lbNull = entryNull + Number(nnNull) + Number(nrNull)
-			const lbStale = entryStale + Number(nnStale) + Number(nrStale)
-
 			lorebook = {
-				total: lbTotal,
-				nullCount: lbNull,
-				staleCount: lbStale,
-				readyCount: lbTotal - lbNull - lbStale
+				total,
+				nullCount,
+				staleCount,
+				readyCount: total - nullCount - staleCount
 			}
 		}
 
-		const applicable =
-			messages.total > 0 ||
-			characters.total > 0 ||
-			personas.total > 0 ||
-			(lorebook?.total ?? 0) > 0
-
 		const res: Sockets.Vectorization.CheckRagStatus.Response = {
-			applicable,
-			messages,
-			characters,
-			personas,
+			applicable: (lorebook?.total ?? 0) > 0,
 			lorebook,
 			queueRunning: isVectorizationRunning(),
 			activeModelName,
-			ragIgnored
+			ragIgnored,
+			canHide
 		}
 		emitToUser("vectorization:checkRagStatus", res)
 		return res
@@ -677,17 +480,23 @@ export const vectorizationCheckRagStatus: Handler<
 export const vectorizationSetSessionRagIgnored: Handler<
 	Sockets.Vectorization.SetSessionRagIgnored.Params,
 	Sockets.Vectorization.SetSessionRagIgnored.Response
-> = {
-	event: "vectorization:setSessionRagIgnored",
-	handler: async (socket, params, emitToUser) => {
+> = refusable(
+	"vectorization:setSessionRagIgnored",
+	async (
+		socket,
+		params: Sockets.Vectorization.SetSessionRagIgnored.Params,
+		emitToUser
+	) => {
 		const userId = socket.user!.id
 		// A session-level setting, like the other session-level toggles gated to
-		// owners only in sessionsUpdateHandler — guests can use RAG, not
-		// reconfigure it for everyone else in the session.
+		// owners only in sessionsUpdateHandler — guests see the notice, and do
+		// not hide it for everyone else in the session (`canHide` keeps the
+		// button from them). It hides the RAG notice and nothing else: Search
+		// by meaning reads no `ragIgnored`.
 		const sessionAccess = await checkSessionAccess(params.sessionId, userId)
 		if (!sessionAccess.hasAccess || !sessionAccess.isOwner) {
 			throw new Error(
-				"Access denied. Only the session owner can change this."
+				"Only the session's owner can hide or show this notice."
 			)
 		}
 
@@ -708,8 +517,9 @@ export const vectorizationSetSessionRagIgnored: Handler<
 		}
 		emitToUser("vectorization:setSessionRagIgnored", res)
 		return res
-	}
-}
+	},
+	"The notice could not be hidden or shown."
+)
 
 // ---------------------------------------------------------------------------
 // Residency
@@ -824,5 +634,15 @@ export function registerVectorizationHandlers(
 	if (socket.user?.isAdmin) {
 		registerProgressEmitter(emitToUser)
 		socket.on("disconnect", () => unregisterProgressEmitter(emitToUser))
+	}
+	// An embedded item's badge refresh (`vectorization:itemUpdated`) is its
+	// owner's, admin or not (plan A7): every signed-in socket listens for its
+	// own user's items.
+	const userId = socket.user?.id
+	if (typeof userId === "number") {
+		registerOwnerEmitter(userId, emitToUser)
+		socket.on("disconnect", () =>
+			unregisterOwnerEmitter(userId, emitToUser)
+		)
 	}
 }

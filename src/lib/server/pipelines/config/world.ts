@@ -1,34 +1,20 @@
 /**
- * SP's existing configuration, projected into the pipeline config model.
+ * SP's configuration, projected into the pipeline config model.
  *
- * The rows a user has been tuning for two releases — `connections`,
- * `sampling_configs`, `context_configs`, `prompt_configs` — do not move. They
- * are read here and presented as the executor's five-layer scope chain, which
- * is what makes the two paths comparable: a pipeline run and a legacy run are
- * looking at the same values, so a difference in output is a difference in how
- * they were used and nothing else.
- *
- * The mapping is the interesting part, because SP's names and the pipeline's
- * slot names are not the same words for the same things:
+ * The rows a person tunes outside the pipeline panel — `connections`,
+ * `connection_defaults`, `sampling_configs`, a session's own sampling pick —
+ * are read here and presented as the executor's five-layer scope chain, under
+ * the configuration the pipeline panel writes:
  *
  * | SP row | pipeline slot | on which node |
  * |---|---|---|
- * | `prompt_configs.*` | `prompts` | the Assemble task |
  * | `sampling_configs` | `sampling` | the oracle |
  * | `connections` | `connection` | the oracle |
  *
- * That table is the whole migration of user configuration, stated once. When
- * 08 §5b's migration writes preset rows, it writes exactly these mappings.
- *
- * ⚠ It used to list `context_configs.template` + `.engine` → `template` as a
- * fourth row, and that line documented a path that never existed. The story
- * string is a `pipeline_context_templates` reference resolved through the
- * config layer (see the "template: nothing to project" note below), and the
- * `.engine` half in particular was fiction in both directions: the legacy
- * column was never read here, and the *new* engine was resolved and then
- * thrown away one line later in `derefTemplate` — which is the bug
- * `pushTemplate` exists to make unrepeatable. `migrateContextTemplates` reads
- * the legacy columns once, to carry each scope's selection across.
+ * Prompt text, the post-history numbers and the story string are pipeline
+ * configuration only (prompt rows, `params`, `pipeline_context_templates`).
+ * 0.5's `prompt_configs` / `context_configs` were carried into them by the
+ * 0.5.3 upgrade and dropped (0097).
  *
  * **Credentials never enter.** `ConnectionRecord.metadata` is readable by a
  * node; `material` is not, and is injected per call by the host. The API key
@@ -60,21 +46,16 @@ import { completionTemplatesByKey } from "$lib/server/connections/completionTemp
 import { CORE_TEMPLATE_ENGINE } from "$lib/server/pipelines/prompt/renderers"
 import { resolvePromptFields } from "$lib/server/pipelines/entities/prompts"
 import { declarations, type Decl } from "$lib/server/pipelines/config/panel"
-import {
-	NARRATE_CHARACTER_SPEC_ID,
-	NARRATE_SPEC_ID,
-	RESPOND_SPEC_ID
-} from "$lib/server/pipelines/specs"
 import { storedCapabilities } from "$lib/server/pipelines/runtime/capabilityGuard"
 import { resolveWireMode } from "$lib/server/connections/resolve"
+import { midSystemFor } from "$lib/shared/connectionAdapters/midSystem"
+import { EMBEDDING_CAPABILITY } from "$lib/shared/constants/embeddings"
+import { unreadSlotsOf } from "$lib/server/pipelines/boot/unreadAllowList"
 
 export interface WorldScope {
 	sessionId?: number
-	/** Which node keys carry the assemble/connection slots in the spec being run. */
-	assembleNodeKey?: string
+	/** Which node key carries the connection slot in the spec being run. */
 	oracleNodeKey?: string
-	/** The node that builds the template context, which needs the prompts too. */
-	contextNodeKey?: string
 	/** Which pipeline is running, so its own configuration can be read. */
 	specId?: string
 }
@@ -82,81 +63,17 @@ export interface WorldScope {
 /**
  * Build the config world for one run.
  *
- * **The scope chain is already there.** SP resolves configuration today as
- * system settings → user settings → the session's own choice, per config type
- * (`getUserConfigurations`, and the `sessions` row). That is the pipeline's scope
- * chain wearing different names, so this projects each existing layer onto its
- * equivalent rather than flattening everything to one:
+ * Each existing layer is projected onto its scope:
  *
  * | today | scope layer |
  * |---|---|
  * | `connection_defaults` (per capability) | `defaults` |
- * | `system_settings.default*PromptConfigId` | `defaults` |
- * | `sessions.samplingConfigId` / `promptConfigId` | `session` |
+ * | `sessions.samplingConfigId` | `session` |
+ * | the pipeline panel's rows | `preset` / `session` (`applyPipelineLayer`) |
  *
- * The connection/sampling half of that first row used to read
- * `system_settings.default_connection_id` / `default_sampling_id`. Those columns
- * are gone (0181) and `connection_defaults` is the only store; the prompt
- * columns beside them are 0.5 archives and stay.
+ * There is no user layer (ruled 2026-08-24): a person's levers are the
+ * session's — its config selection and its overrides.
  *
- * The legacy `user_settings.active*` columns are no longer projected (ruled
- * 2026-08-24): the user layer is gone from the model, so a person's levers are
- * the session's — its config selection and its overrides.
- */
-/**
- * Which legacy prompt table backs which pipeline.
- *
- * The reply pipeline and the narrator pipeline share every node key —
- * `context`, `prompt`, `generate` — because structurally they *are* the same
- * pipeline; the narrator is a different configuration of it, which is the whole
- * reason it is its own namespace. That made this projection dangerous: it read
- * `prompt_configs` unconditionally and layered the reply's system prompt onto
- * `context` at **user** and **session** scope, and those outrank the `preset` layer
- * where the narrator's own selection lives. A narrator run resolved the reply's
- * "Write one reply only…" instead of "You are {{narratorName}}…", so the one
- * thing narrating exists not to do — sound like the character reply sharing its
- * session — is what it did. The only narrator field that survived was
- * `narratorName`, because `prompt_configs` has no column to overwrite it with.
- *
- * A spec absent from this map gets no legacy prompt projection. That is right
- * for the summarize and graph namespaces (their nodes are configured from their
- * own tables) and right for a plugin's spec, which core cannot have a legacy
- * table for.
- */
-const LEGACY_PROMPT_SOURCES: Record<
-	string,
-	{
-		table: any
-		systemCol: string
-		sessionCol: string
-	}
-> = {
-	[RESPOND_SPEC_ID]: {
-		table: schema.promptConfigs,
-		systemCol: "defaultPromptConfigId",
-		sessionCol: "promptConfigId"
-	},
-	[NARRATE_SPEC_ID]: {
-		table: schema.narratorPromptConfigs,
-		systemCol: "defaultNarratorPromptConfigId",
-		sessionCol: "narratorPromptConfigId"
-	}
-}
-
-/**
- * Which legacy config's sampling column backs which pipeline —
- * `LEGACY_PROMPT_SOURCES` plus the side-character turn, which resolves under
- * the narrator config's compute while rendering its own words. See the
- * projection block below for why this tier is in the world at all, and why
- * the connection column beside it is not.
- */
-const LEGACY_CONNECTION_SOURCES: typeof LEGACY_PROMPT_SOURCES = {
-	[RESPOND_SPEC_ID]: LEGACY_PROMPT_SOURCES[RESPOND_SPEC_ID]!,
-	[NARRATE_SPEC_ID]: LEGACY_PROMPT_SOURCES[NARRATE_SPEC_ID]!,
-	[NARRATE_CHARACTER_SPEC_ID]: LEGACY_PROMPT_SOURCES[NARRATE_SPEC_ID]!
-}
-
-/**
  * **Reads only.** Building a world never writes — it is a projection of what is
  * configured, and a write here would mean resolving somebody's config had a
  * side effect on it.
@@ -172,9 +89,7 @@ export async function buildWorld(
 	db: Db,
 	scope: WorldScope = {}
 ): Promise<ConfigWorld> {
-	const assemble = scope.assembleNodeKey ?? "prompt"
 	const oracle = scope.oracleNodeKey ?? "generate"
-	const context = scope.contextNodeKey ?? "context"
 
 	const [system] = await db.select().from(schema.systemSettings).limit(1)
 
@@ -207,31 +122,6 @@ export async function buildWorld(
 	 * would pin every render on the instance to whatever the first one used.
 	 */
 	const completionTemplateRows = await completionTemplatesByKey(db)
-	/**
-	 * No `specId` means the caller is not running a published pipeline — the
-	 * parity harness builds an ad-hoc spec standing in for 0.5's session path, and
-	 * that path is the reply one. Defaulting to reply keeps it comparing what it
-	 * means to compare.
-	 */
-	const legacyPrompts = LEGACY_PROMPT_SOURCES[scope.specId ?? RESPOND_SPEC_ID]
-	const promptRows = legacyPrompts
-		? await db.select().from(legacyPrompts.table)
-		: []
-	/**
-	 * Which legacy config's SAMPLING column this spec resolves under — one
-	 * more spec than the prompts: a side character's turn ran against the
-	 * narrator config's compute through `resolveTaskConfig`, while its words
-	 * come from its own context type. Same rows as `promptRows` where the two
-	 * maps agree, read once.
-	 */
-	const legacyConnection =
-		LEGACY_CONNECTION_SOURCES[scope.specId ?? RESPOND_SPEC_ID]
-	const legacyConnectionRows = !legacyConnection
-		? []
-		: legacyConnection === legacyPrompts
-			? promptRows
-			: await db.select().from(legacyConnection.table)
-
 	const overrides: OverrideRow[] = []
 
 	/** One config choice, written at whichever layers actually made it. */
@@ -247,55 +137,17 @@ export async function buildWorld(
 		overrides.push({ nodeKey, slot, path, value, scopeKind, scopeId })
 	}
 
-	// ── template: nothing to project ─────────────────────────────────────
+	// ── template and prompts: nothing to project ─────────────────────────
 	//
-	// The story string used to be read out of `context_configs` here and
-	// layered in as a literal, selected by `system_settings.defaultContextConfigId`
-	// and `user_settings.activeContextConfigId`. It is a
-	// `pipeline_context_templates` reference now, resolved through the config
-	// layer like every other slot, so the projection is gone rather than
-	// disabled — two sources for one slot is how a panel ends up showing a
-	// choice the run does not make.
-	//
-	// Those legacy columns still exist and still point at legacy rows. Nothing
-	// in 0.6 renders from them; `migrateContextTemplates` reads them once, to
-	// carry each scope's selection across.
-
-	// ── prompts: the authored text fields ────────────────────────────────
-	const promptsAt = (
-		kind: OverrideRow["scopeKind"],
-		id: string | number | undefined,
-		configId?: number | null
-	) => {
-		const row = pick(promptRows, configId)
-		if (!row) return
-		for (const [path, value] of Object.entries(promptFields(row))) {
-			// Written once, at the node that owns the slot. Assemble and the
-			// oracle read it **by reference** (`slot.prompts({node})`, spec
-			// 1.1.0) — the executor resolves the shared slot to this node's
-			// values, which is what retired the double-write that used to
-			// live here and the three "System" boxes it produced in the panel
-			// (13 §12 finding i).
-			layer(kind, id, context, "prompts", path, value)
-		}
-	}
-	if (legacyPrompts) {
-		promptsAt(
-			"defaults",
-			undefined,
-			(system as any)?.[legacyPrompts.systemCol]
-		)
-		promptsAt(
-			"session",
-			scope.sessionId,
-			(session as any)?.[legacyPrompts.sessionCol]
-		)
-	}
+	// The story string is a `pipeline_context_templates` reference and prompt
+	// text a prompt-row reference, both resolved through the config layer like
+	// every other slot — two sources for one slot is how a panel ends up
+	// showing a choice the run does not make.
 
 	// ── connection and sampling ──────────────────────────────────────────
-	// A user cannot write a connection slot (F20); these layers are instance
-	// and session only, and the session's choice is an admin-permitted selection
-	// rather than a user override.
+	// Nobody writes a connection slot at session scope (F20, ruled
+	// 2026-09-30): the pair is the pipeline configuration's, else the
+	// instance default layered here.
 	//
 	// The instance layer is keyed by CAPABILITY (`connection_defaults`), so the
 	// oracle gets the default for the thing it actually needs to do rather
@@ -317,61 +169,9 @@ export async function buildWorld(
 	// connection" is a text connection, and handing it to a slot that wanted an
 	// MCP server is the cross-modality leak this whole indirection exists to
 	// prevent. It is also what they got before capabilities existed.
-	const instanceDefault = oracleCapability
+	const pubDefault = oracleCapability
 		? defaultsByCapability[oracleCapability]
 		: undefined
-
-	/**
-	 * The legacy prompt config's own SAMPLING — the reply config's "Sampling"
-	 * picker, and the narrator config's.
-	 *
-	 * ⚠ **A tier the run never saw until R-8.** `resolveTaskConfig` read this
-	 * column at dispatch and layered it between the node's slot and the
-	 * capability default — so the request could go out under samplers the
-	 * budget had never heard of, since the executor resolved against this
-	 * projection alone. One resolution per run means the tier lives HERE
-	 * now, at the precedence it always had: above the capability default,
-	 * below the pipeline panel's pick. Dispatch consumes what the run resolved
-	 * and re-walks nothing.
-	 *
-	 * The config is the session's own where it chose one, else the instance
-	 * default — the same two rows the prompts above are projected from. It
-	 * lands at `defaults` scope AHEAD of the capability default, because
-	 * `resolveConfigSources` takes the first candidate it finds at a scope.
-	 *
-	 * ⏳ **The CONNECTION column of the same row is deliberately NOT
-	 * projected** (architect's decision on the U1 review, 2026-09-16). The
-	 * old walk read it but a capability default — which every install that
-	 * generates has — outranked it, so on those installs the column was dead
-	 * and the reply went to the default. Projecting it here revived it at a
-	 * precedence it never effectively had, and since the column names an
-	 * endpoint with no model, a config still pointing at some other endpoint
-	 * made every reply on that install refuse with "No model is chosen".
-	 * This is NOT parity with the old walk; it is the half of the tier that
-	 * was live, kept live. The prompt config's "AI Override" connection
-	 * column is therefore read by nothing; whether it is retired or re-homed
-	 * onto the pipeline panel's connection slot awaits a ruling — see
-	 * plans/29 R-8.
-	 */
-	if (legacyConnection && oracleIsText) {
-		const legacyRow =
-			pick(
-				legacyConnectionRows,
-				(session as any)?.[legacyConnection.sessionCol]
-			) ??
-			pick(
-				legacyConnectionRows,
-				(system as any)?.[legacyConnection.systemCol]
-			)
-		layer(
-			"defaults",
-			undefined,
-			oracle,
-			"sampling",
-			SLOT_VALUE,
-			idOrNull(legacyRow?.samplingConfigId)
-		)
-	}
 
 	// The table, and only the table (0181). This used to read
 	// `?? (oracleIsText ? system.defaultConnectionId : undefined)`, because
@@ -392,10 +192,10 @@ export async function buildWorld(
 		oracle,
 		"connection",
 		SLOT_VALUE,
-		instanceDefault?.connectionId != null
+		pubDefault?.connectionId != null
 			? {
-					id: String(instanceDefault.connectionId),
-					modelId: idOrNull(instanceDefault.connectionModelId) ?? null
+					id: String(pubDefault.connectionId),
+					modelId: idOrNull(pubDefault.connectionModelId) ?? null
 				}
 			: undefined
 	)
@@ -405,83 +205,18 @@ export async function buildWorld(
 		oracle,
 		"sampling",
 		SLOT_VALUE,
-		idOrNull(instanceDefault?.samplingConfigId)
+		idOrNull(pubDefault?.samplingConfigId)
 	)
 
 	// ── the pipeline layer, which wins over everything above ─────────────
 	//
-	// Written last so it is *appended* after the legacy projection, and
+	// Written last so it is *appended* after the projection above, and
 	// `resolveConfigSources` walks candidates in SCOPE_ORDER and takes the first
 	// match at each scope — so a value a person set in the pipeline panel is the
 	// one that runs. Without this the panel would edit rows nothing reads, which
 	// is worse than not having it: every screen would agree with the user and
 	// the model would not.
 	if (scope.specId) await applyPipelineLayer(db, overrides, scope)
-
-	// ── post-history: the prompt config's two numbers ────────────────────
-	//
-	// Numbers rather than text, so they layer onto the `params` slot. The
-	// trigger is a *suppression*: below it a short session gets no post-history
-	// reminder, because a reinforcement note two messages after the system
-	// prompt is noise.
-	//
-	// **Onto every assemble node in the spec**, rather than onto one named key.
-	// A genre that plans, narrates, gives each speaker a voice and then writes
-	// the numbers down assembles four prompts in a turn, and a key names one of
-	// them; the other three resolve the declaration's `0` and remind on every
-	// turn while the panel shows the number somebody set. Nothing errors and
-	// the prompt is well-formed, so the only evidence is a "Response reminder"
-	// block in a two-message session.
-	//
-	// **Under the pipeline layer.** Written after it and skipped at any address
-	// it already wrote, so a value set in the pipeline panel wins — the same
-	// precedence the session block below canonises. An `author` row is the
-	// declaration's own default rather than a choice, and does not count as set.
-	//
-	// **Read for a spec with no legacy table of its own.** These two describe
-	// where a reminder goes and whether it goes at all, which is a property of
-	// the instance rather than of any pipeline's words, and the reply config is
-	// the one screen they are authored on. The TEXT projection above stays
-	// keyed to the spec: words differ per agent, and handing a narrator the
-	// reply's system prompt is what `LEGACY_PROMPT_SOURCES` exists to prevent.
-	const postHistorySource =
-		legacyPrompts ?? LEGACY_PROMPT_SOURCES[RESPOND_SPEC_ID]
-	const postHistoryRows = legacyPrompts
-		? promptRows
-		: await db.select().from(postHistorySource.table)
-	const postHistoryNodes = await assembleNodeKeys(db, scope, assemble)
-	// Snapshotted before anything below is pushed: the check is "did the
-	// pipeline layer decide this", and reading `overrides` live would let the
-	// instance-scope row written here answer for the session-scope one, which
-	// would pin every session to the instance default.
-	const pipelineParams = new Set(
-		overrides
-			.filter((o) => o.slot === "params" && o.scopeKind !== "author")
-			.map((o) => `${o.nodeKey}\u0000${o.path}`)
-	)
-	const postHistoryAt = (
-		kind: OverrideRow["scopeKind"],
-		id: string | number | undefined,
-		configId?: number | null
-	) => {
-		const row = pick(postHistoryRows, configId) as any
-		if (!row) return
-		for (const key of ["postHistoryDepth", "postHistoryTokenTrigger"])
-			for (const nodeKey of postHistoryNodes) {
-				if (pipelineParams.has(`${nodeKey}\u0000${key}`)) continue
-				layer(kind, id, nodeKey, "params", key, row[key])
-			}
-	}
-	postHistoryAt(
-		"defaults",
-		undefined,
-		(system as any)?.[postHistorySource.systemCol]
-	)
-	postHistoryAt(
-		"session",
-		scope.sessionId,
-		(session as any)?.[postHistorySource.sessionCol]
-	)
 
 	// ── the session's own column, BELOW the panel's session-scope rows ───
 	//
@@ -557,6 +292,28 @@ export async function buildWorld(
 		const id = capability ? defaultConnectionFor(capability) : undefined
 		if (id) activeConnection[shape] = id
 	}
+	/**
+	 * The embeddings shape, named here rather than through the mapper above —
+	 * which is right to answer `undefined` for it: that mapper is also asked
+	 * which SAMPLING vocabulary a shape speaks, and embeddings have none.
+	 * The connection half is not in doubt. `text->embedding` is the one
+	 * capability the embed step can need, and its default is the singleton
+	 * `ConfigWorld.activeConnection` was declared for ("singleton kinds, e.g.
+	 * embeddings", 01 §10): the star the embedding lane loads its model from
+	 * (`resolveEmbeddingTarget`).
+	 *
+	 * ⚠ Published since 2026-09-29. Until then an embed step with no pick
+	 * resolved its connection slot to null — harmless while nothing read it
+	 * (the host embeds through the loaded model, not the slot).
+	 * `core:task/query-windows@1` reads it now, through
+	 * `slot.connectionOf('semantic.arm.embed')`, to decide whether
+	 * *Automatic* searches by meaning: whenever an embedding model is set up,
+	 * wherever it runs (owner, 2026-09-30). No pick ever stands on that slot
+	 * (`isUnreadSlot`, `applyPipelineLayer`), so what it resolves to IS this
+	 * star — the connection the host embeds through.
+	 */
+	const embeddingsId = defaultConnectionFor(EMBEDDING_CAPABILITY)
+	if (embeddingsId) activeConnection[S.embeddings] = embeddingsId
 
 	/**
 	 * The same store's other half — the sampling config a step falls back to
@@ -586,6 +343,22 @@ export async function buildWorld(
 		const id = capability ? defaultSamplingFor(capability) : undefined
 		if (id) activeSampling[shape] = id
 	}
+
+	/**
+	 * 🚧 **What each pair reads** (PLAN-composer-attachments §5.2) — the
+	 * connection descriptor's `metadata.reads` (and, per model, `readsByModel`),
+	 * which `core:task/place-attachments@1` reads to decide whether a file is
+	 * sent or named. Computed by `pairReads`, the ONE predicate the composer's
+	 * readers line also uses (one verdict per law), on the pair a run would be
+	 * sent to: the endpoint with each of its models merged in. The endpoint's
+	 * own entry is judged on the text capability default's model when this is
+	 * its endpoint — the pair dispatch resolves a model-less slot to.
+	 */
+	const readsByConnection = await connectionReads(
+		connectionRows,
+		modelRows,
+		defaultsByCapability[TEXT_CAPABILITY]
+	)
 
 	return {
 		overrides,
@@ -662,7 +435,17 @@ export async function buildWorld(
 				 * an existing row was written before these keys existed and names
 				 * neither mode.
 				 */
-				wireMode: resolveWireMode(c)
+				wireMode: resolveWireMode(c),
+				/**
+				 * What this type's chat wire does with depth-placed system
+				 * text (AN3, `midSystemFor`) — read by the assemble node
+				 * beside `wireMode`, so the message builder folds it where the
+				 * backend would hoist or reject it. Static per type; `keep`
+				 * off the chat wire.
+				 */
+				midSystem: midSystemFor(c.type, resolveWireMode(c)),
+				reads: readsByConnection.get(c.id)?.reads,
+				readsByModel: readsByConnection.get(c.id)?.byModel
 			},
 			// Empty by construction. Material is resolved inside the dispatch
 			// path from the encrypted column and never travels with the world —
@@ -692,7 +475,7 @@ export async function buildWorld(
 }
 
 /**
- * The configuration a person actually edited, layered over the legacy
+ * The configuration a person actually edited, layered over the instance
  * projection.
  *
  * Three things arrive here, and they are different in kind:
@@ -714,7 +497,7 @@ export async function buildWorld(
  * Read from the spec's own declarations rather than guessed from the node key,
  * because the key is the author's ("generate", "render", "narrate") and says
  * nothing about what it talks to. `undefined` when there is no spec in scope —
- * the legacy path, which is text by construction — or when the node declares no
+ * an ad-hoc spec, which is text by construction — or when the node declares no
  * connection at all.
  */
 async function oracleConnectionDecl(
@@ -761,46 +544,6 @@ async function connectionSlotShape(
 	return (await oracleConnectionDecl(db, scope, oracleKey))?.shape
 }
 
-/** The task that renders a prompt. Its `params` carry the post-history pair. */
-const ASSEMBLE_TYPE_ID = "core:task/assemble"
-
-/**
- * Every node in the spec that assembles a prompt.
- *
- * Read from the spec's own nodes rather than named by the caller: a key names
- * ONE node, and a pipeline may assemble a planner's prompt, a narrator's, one
- * per speaking voice and a state-keeper's in a single turn. Every version of
- * the type counts — the pair is the type's post-history contract, and a node
- * whose pin does not declare it simply resolves the address to nothing.
- *
- * The caller's single key is the answer when there is no spec in scope (the
- * parity harness's ad-hoc spec) and when the spec has no published version.
- */
-async function assembleNodeKeys(
-	db: Db,
-	scope: WorldScope,
-	fallback: string
-): Promise<string[]> {
-	if (!scope.specId) return [fallback]
-	const [spec] = await db
-		.select()
-		.from(schema.pipelineSpecs)
-		.where(eq(schema.pipelineSpecs.slug, scope.specId))
-		.limit(1)
-	if (!spec?.activeVersionId) return [fallback]
-	const nodes = await db
-		.select()
-		.from(schema.pipelineNodes)
-		.where(
-			and(
-				eq(schema.pipelineNodes.specVersionId, spec.activeVersionId),
-				eq(schema.pipelineNodes.definitionId, ASSEMBLE_TYPE_ID)
-			)
-		)
-	const keys = nodes.map((n) => n.nodeKey)
-	return keys.length ? keys : [fallback]
-}
-
 async function applyPipelineLayer(
 	db: Db,
 	overrides: OverrideRow[],
@@ -813,6 +556,40 @@ async function applyPipelineLayer(
 		.limit(1)
 	if (!spec) return
 
+	/**
+	 * The addresses that take no pick: a slot no handler reads
+	 * (`isUnreadSlot`), at every node of this spec that carries one — today
+	 * the embed steps' `connection`.
+	 *
+	 * ⚠ Dropped here, at the one door every stored value comes through — the
+	 * selected config and the session's own rows alike — so the executor sees
+	 * no pick and resolves the slot to the instance default: the star the
+	 * host embeds through. A pick left standing made *Automatic* decide about
+	 * a connection the embed never used (review 2026-09-29), and a stale
+	 * one naming a deleted row resolved to nothing and said "no embedding
+	 * model is set up" beside a star.
+	 */
+	const unreadSlots = new Set<string>(
+		spec.activeVersionId
+			? (
+					await db
+						.select({
+							nodeKey: schema.pipelineNodes.nodeKey,
+							definitionId: schema.pipelineNodes.definitionId,
+							definitionVersion: schema.pipelineNodes.definitionVersion
+						})
+						.from(schema.pipelineNodes)
+						.where(
+							eq(schema.pipelineNodes.specVersionId, spec.activeVersionId)
+						)
+				).flatMap((n) =>
+					unreadSlotsOf(`${n.definitionId}@${n.definitionVersion}`).map(
+						(slot) => `${n.nodeKey}\u0000${slot}`
+					)
+				)
+			: []
+	)
+
 	const push = (
 		scopeKind: OverrideRow["scopeKind"],
 		scopeId: string | number | undefined,
@@ -822,6 +599,7 @@ async function applyPipelineLayer(
 		value: unknown
 	) => {
 		if (value === undefined) return
+		if (unreadSlots.has(`${nodeKey}\u0000${slot}`)) return
 		overrides.push({ nodeKey, slot, path, value, scopeKind, scopeId })
 	}
 
@@ -873,6 +651,17 @@ async function applyPipelineLayer(
 	const promptSlots = new Set(
 		allDecls
 			.filter((d) => d.control === "prompts-ref")
+			.map((d) => addressOf(d.nodeKey, d.slot))
+	)
+	/**
+	 * Which slots hold a connection — the ones a session row never answers
+	 * (ruled 2026-09-30). The pair is the configuration's or the instance
+	 * default's; a session-scope row here is one `reconcileConfigs` culls at
+	 * the next boot, and until it does it must not be what runs.
+	 */
+	const connectionSlots = new Set(
+		allDecls
+			.filter((d) => d.matrixSlot === "connection")
 			.map((d) => addressOf(d.nodeKey, d.slot))
 	)
 
@@ -1032,6 +821,7 @@ async function applyPipelineLayer(
 	// instance's tuning lives in the selected config, projected above.
 	for (const o of rows as any[]) {
 		if (o.scopeKind !== "session" || o.scopeId !== scope.sessionId) continue
+		if (connectionSlots.has(addressOf(o.nodeKey, o.slot))) continue
 		const scopeKind: OverrideRow["scopeKind"] = "session"
 		const scopeId = scope.sessionId
 
@@ -1106,7 +896,7 @@ async function applyPipelineLayer(
 	// ── the floor: a prompts slot always resolves to words ───────────────
 	//
 	// Every layer above this is optional — a config may not carry a prompts
-	// value, an instance may have no legacy config to project, and clearing
+	// value, and clearing
 	// an override deletes a row rather than writing one. With nothing
 	// underneath, the node ran with empty instructions, which does not read
 	// as "no prompt is selected"; it reads as the model ignoring its
@@ -1131,9 +921,8 @@ async function applyPipelineLayer(
 	// only way to notice is to compare the prompt against the step it came
 	// from, which nobody does when the output merely looks a bit off.
 	//
-	// Pushed after the legacy projection, so on a migrated instance the
-	// user's own carried-over wording still wins at this scope — this fills
-	// the hole rather than papering over what somebody already had.
+	// Pushed last, so anything already at this scope wins — this fills the
+	// hole rather than papering over what somebody already had.
 	if (!spec.activeVersionId) return
 	const promptDecls = allDecls.filter((d) => d.control === "prompts-ref")
 
@@ -1238,33 +1027,6 @@ const requiredTransform = (requires?: readonly string[]): string | undefined =>
 const idOrNull = (v: number | null | undefined) =>
 	v == null ? undefined : String(v)
 
-const pick = (rows: any[], id?: number | null): any | undefined =>
-	id == null ? undefined : rows.find((r) => r.id === id)
-
-/**
- * The authored text fields of a prompt config, as `prompts` slot paths.
- *
- * Enumerated rather than spread, because a prompt config row also carries ids,
- * names and flags that are not prompts — and a slot that quietly accepts
- * everything is a slot nobody can render a form for (12 §2).
- */
-function promptFields(p: any): Record<string, unknown> {
-	const fields: Record<string, unknown> = {}
-	for (const key of [
-		"systemPrompt",
-		"postHistoryInstructions",
-		"instructions",
-		"exampleDialogue",
-		// Narrator-only, and load-bearing: it is the name on the seed line in
-		// no-perspective mode, and `{{narratorName}}` in the config's own text.
-		// Absent from this list, a renamed narrator ("The GM") seeded as
-		// "Narrator" and read as one thing in the prompt and another in the UI.
-		"narratorName"
-	])
-		if (p[key] != null) fields[key] = p[key]
-	return fields
-}
-
 // `samplingValues(row)` used to live here: it took `Object.entries` of the whole
 // row and kept everything outside a six-name skip list, which was how sampler
 // values were separated from bookkeeping when they were columns side by side.
@@ -1275,3 +1037,67 @@ function promptFields(p: any): Record<string, unknown> {
 // `{shape, values, enabled}` as if those were three samplers, and handed that to
 // the adapter, where every key would have missed the key map and every real
 // sampler would have silently vanished.
+
+/**
+ * Every connection's reading verdicts, for the world's descriptors (see the
+ * call site). Enabled models only: a switched-off model is refused at
+ * resolution before anything is sent.
+ */
+async function connectionReads(
+	connections: readonly (typeof schema.connections.$inferSelect)[],
+	models: readonly (typeof schema.connectionModels.$inferSelect)[],
+	textDefault: { connectionId: number | null; connectionModelId: number | null } | undefined
+): Promise<
+	Map<
+		number,
+		{
+			reads: import("@serene-pub/sdk").ConnectionReadsV1
+			byModel: Record<string, import("@serene-pub/sdk").ConnectionReadsV1>
+		}
+	>
+> {
+	const out = new Map<
+		number,
+		{
+			reads: import("@serene-pub/sdk").ConnectionReadsV1
+			byModel: Record<string, import("@serene-pub/sdk").ConnectionReadsV1>
+		}
+	>()
+	if (!connections.length) return out
+	const { pairReads } = await import("$lib/server/attachments/readers")
+	const { mergeEndpointModel } = await import(
+		"$lib/server/connections/models"
+	)
+	const { withWireMode } = await import("$lib/server/connections/resolve")
+	const { adapterIo } = await import("$lib/shared/connectionAdapters/manifest")
+	const judge = async (
+		endpoint: typeof schema.connections.$inferSelect,
+		model: typeof schema.connectionModels.$inferSelect | null
+	): Promise<import("@serene-pub/sdk").ConnectionReadsV1> => {
+		const verdict = await pairReads(
+			withWireMode(mergeEndpointModel(endpoint, model)) as any
+		)
+		const why: { image?: string; pdf?: string } = {}
+		if (verdict.image) why.image = verdict.image
+		if (verdict.pdf) why.pdf = verdict.pdf
+		const tokensPerImage = adapterIo(endpoint.type)?.tokensPerImage
+		return {
+			image: verdict.image == null,
+			pdf: verdict.pdf == null,
+			...(why.image || why.pdf ? { why } : {}),
+			...(tokensPerImage ? { tokensPerImage } : {})
+		}
+	}
+	for (const c of connections) {
+		const own = models.filter((m) => m.connectionId === c.id && m.enabled)
+		const byModel: Record<string, import("@serene-pub/sdk").ConnectionReadsV1> = {}
+		for (const m of own) byModel[String(m.id)] = await judge(c, m)
+		const defaultModelId =
+			textDefault?.connectionId === c.id ? textDefault.connectionModelId : null
+		const reads =
+			(defaultModelId != null ? byModel[String(defaultModelId)] : undefined) ??
+			(await judge(c, null))
+		out.set(c.id, { reads, byModel })
+	}
+	return out
+}

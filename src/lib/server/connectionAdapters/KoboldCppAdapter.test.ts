@@ -43,8 +43,7 @@ function makeAdapter(
 	return new KoboldCppAdapter({
 		connection: makeConnection(connectionOverrides),
 		sampling: sampling as any,
-		contextConfig: {} as any,
-		promptConfig: { systemPrompt: "You are a helpful narrator." } as any,
+		systemPrompt: "You are a helpful narrator.",
 		session: {
 			id: 1,
 			userId: 1,
@@ -478,7 +477,7 @@ describe("KoboldCppAdapter — native reasoning_content readback", () => {
 		vi.unstubAllGlobals()
 	})
 
-	test("streaming: forwards delta.reasoning_content via thinkingCb, separately from content", async () => {
+	test("streaming: forwards delta.reasoning_content via reasoningCb, separately from content", async () => {
 		fetchMock = vi.fn(async () =>
 			makeSSEResponse([
 				{ choices: [{ delta: { reasoning_content: "Pondering" } }] },
@@ -497,22 +496,48 @@ describe("KoboldCppAdapter — native reasoning_content readback", () => {
 		const result = await adapter.generateText()
 
 		let content = ""
-		let thinking = ""
+		let reasoning = ""
 		expect(typeof result.completionResult).toBe("function")
 		await (result.completionResult as any)(
 			(chunk: string) => {
 				content += chunk
 			},
 			(chunk: string) => {
-				thinking += chunk
+				reasoning += chunk
 			}
 		)
 
 		expect(content).toBe("Hello there.")
-		expect(thinking).toBe("Pondering deeply.")
+		expect(reasoning).toBe("Pondering deeply.")
 	})
 
-	test("non-streaming: populates thinkingContent from message.reasoning_content in chat mode", async () => {
+	test("streaming: the `reasoning` spelling (vLLM, OpenRouter) is read too — first match wins", async () => {
+		fetchMock = vi.fn(async () =>
+			makeSSEResponse([
+				{ choices: [{ delta: { reasoning: "Pondering" } }] },
+				{
+					choices: [
+						{ delta: { reasoning_content: " deeply.", reasoning: " deeply." } }
+					]
+				},
+				{ choices: [{ delta: { content: "Hello." } }] }
+			])
+		)
+		vi.stubGlobal("fetch", fetchMock)
+		const adapter = makeAdapter({ wireMode: "chat", extraJson: { stream: true } })
+		mockCompilePrompt(adapter)
+		const result = await adapter.generateText()
+		let content = ""
+		let reasoning = ""
+		await (result.completionResult as any)(
+			(chunk: string) => (content += chunk),
+			(chunk: string) => (reasoning += chunk)
+		)
+		expect(content).toBe("Hello.")
+		expect(reasoning).toBe("Pondering deeply.")
+	})
+
+	test("non-streaming: populates reasoningContent from message.reasoning_content in chat mode", async () => {
 		fetchMock = vi.fn(async () => ({
 			ok: true,
 			json: async () => ({
@@ -536,10 +561,10 @@ describe("KoboldCppAdapter — native reasoning_content readback", () => {
 		const result = await adapter.generateText()
 
 		expect(result.completionResult).toBe("Hello there.")
-		expect((result as any).thinkingContent).toBe("Pondering deeply.")
+		expect((result as any).reasoningContent).toBe("Pondering deeply.")
 	})
 
-	test("non-streaming: thinkingContent is undefined when the response has no reasoning_content", async () => {
+	test("non-streaming: reasoningContent is undefined when the response has no reasoning_content", async () => {
 		fetchMock = vi.fn(async () => ({
 			ok: true,
 			json: async () => ({
@@ -555,7 +580,7 @@ describe("KoboldCppAdapter — native reasoning_content readback", () => {
 		mockCompilePrompt(adapter)
 		const result = await adapter.generateText()
 
-		expect((result as any).thinkingContent).toBeUndefined()
+		expect((result as any).reasoningContent).toBeUndefined()
 	})
 })
 
@@ -743,7 +768,7 @@ describe("KoboldCppAdapter — generation writes nothing to the server log", () 
 
 			const result = await adapter.generateText()
 			// Still delivered to the CALLER — this is about where it does not go.
-			expect((result as any).thinkingContent).toBe("Pondering deeply.")
+			expect((result as any).reasoningContent).toBe("Pondering deeply.")
 			expect(logSpy).not.toHaveBeenCalled()
 		} finally {
 			logSpy.mockRestore()
@@ -799,17 +824,17 @@ describe("KoboldCppAdapter — generation writes nothing to the server log", () 
 
 			const result = await adapter.generateText()
 			let content = ""
-			let thinking = ""
+			let reasoning = ""
 			await (result.completionResult as any)(
 				(chunk: string) => {
 					content += chunk
 				},
 				(chunk: string) => {
-					thinking += chunk
+					reasoning += chunk
 				}
 			)
 			expect(content).toBe("Hello there.")
-			expect(thinking).toBe("Pondering deeply.")
+			expect(reasoning).toBe("Pondering deeply.")
 			expect(logSpy).not.toHaveBeenCalled()
 		} finally {
 			logSpy.mockRestore()
@@ -939,11 +964,155 @@ describe("KoboldCppAdapter — reasoning on the wire", () => {
 		expect(adapter.ignoredSamplers).toContain("reasoning")
 	})
 
+	test("on, on the chat wire: the template may open the block itself, so the reply is said to open in reasoning", async () => {
+		const { adapter } = await bodyFor({ reasoning: "high" })
+		expect(adapter.reasoningOpening).toBe("requested")
+	})
+
+	test("off, unset, or the completion wire: nothing opened a block", async () => {
+		expect((await bodyFor({ reasoning: "off" })).adapter.reasoningOpening).toBeUndefined()
+		expect((await bodyFor({})).adapter.reasoningOpening).toBeUndefined()
+		expect(
+			(await bodyFor({ reasoning: "high" }, "completion")).adapter
+				.reasoningOpening
+		).toBeUndefined()
+	})
+
 	test("a budget has no field on this service at all", async () => {
 		const { adapter } = await bodyFor({
 			reasoning: "low",
 			reasoningBudget: 2048
 		})
 		expect(adapter.ignoredSamplers).toContain("reasoningBudget")
+	})
+})
+
+/**
+ * The five KoboldCPP request switches on the connection form. Each maps to one
+ * field KoboldCPP's own `generate()` reads from the request (koboldcpp.py), on
+ * the raw completion endpoint and the OpenAI-compatible one alike, since both
+ * feed the same genparams. A switch nobody touched is not sent, so KoboldCPP's
+ * own default stands.
+ */
+describe("KoboldCppAdapter — request switches", () => {
+	let fetchMock: ReturnType<typeof vi.fn>
+
+	beforeEach(() => {
+		fetchMock = vi.fn(async () => ({
+			ok: true,
+			json: async () => ({
+				results: [{ text: "hi" }],
+				choices: [{ message: { content: "hi" } }]
+			})
+		}))
+		vi.stubGlobal("fetch", fetchMock)
+	})
+	afterEach(() => {
+		vi.unstubAllGlobals()
+	})
+
+	const SWITCHES = [
+		["trimStop", "trim_stop"],
+		["renderSpecial", "render_special"],
+		["bypassEos", "bypass_eos"],
+		["grammarRetainState", "grammar_retain_state"],
+		["replaceInstructPlaceholders", "replace_instruct_placeholders"]
+	] as const
+
+	async function bodyFor(
+		wireMode: "completion" | "chat",
+		extraJson: Record<string, unknown>
+	): Promise<any> {
+		const adapter = makeAdapter({
+			wireMode,
+			extraJson: { stream: false, ...extraJson }
+		})
+		adapter.withCompiledPrompt({
+			prompt: "hi",
+			messages: [{ role: "user", content: "hi" }],
+			meta: {} as any
+		} as any)
+		await adapter.generateText()
+		const call = fetchMock.mock.calls.find((args: any[]) => {
+			const url = String(args[0])
+			return (
+				url.includes("/api/v1/generate") ||
+				url.includes("/v1/chat/completions")
+			)
+		})
+		expect(call).toBeDefined()
+		return JSON.parse((call as any)[1].body)
+	}
+
+	for (const wireMode of ["completion", "chat"] as const) {
+		for (const [key, field] of SWITCHES) {
+			test(`${wireMode}: ${key} on sends ${field}: true`, async () => {
+				expect((await bodyFor(wireMode, { [key]: true }))[field]).toBe(
+					true
+				)
+			})
+			test(`${wireMode}: ${key} off sends ${field}: false`, async () => {
+				expect(
+					(await bodyFor(wireMode, { [key]: false }))[field]
+				).toBe(false)
+			})
+			test(`${wireMode}: ${key} unset sends no ${field}`, async () => {
+				expect(await bodyFor(wireMode, {})).not.toHaveProperty(field)
+			})
+		}
+	}
+
+	test("logprobs is never sent — nothing reads them back", async () => {
+		expect(
+			await bodyFor("completion", { logprobs: true })
+		).not.toHaveProperty("logprobs")
+	})
+})
+
+// ── Images per message (PLAN-composer-attachments §3.6) ─────────────────────
+describe("KoboldCppAdapter — images on the chat wire", () => {
+	let fetchMock: ReturnType<typeof vi.fn>
+	beforeEach(() => {
+		fetchMock = vi.fn(async () => ({
+			ok: true,
+			json: async () => ({ choices: [{ message: { content: "hi" } }] })
+		}))
+		vi.stubGlobal("fetch", fetchMock)
+	})
+	afterEach(() => {
+		vi.unstubAllGlobals()
+	})
+
+	test("declares that it sends them", () => {
+		expect(makeAdapter().consumesAttachments).toBe(true)
+	})
+
+	test("a turn's image rides /v1/chat/completions as an OpenAI image_url part, before its text", async () => {
+		const png = Buffer.from("png bytes of a map")
+		const adapter = makeAdapter({ wireMode: "chat", extraJson: { stream: false } })
+		adapter.withCompiledPrompt({
+			prompt: undefined,
+			messages: [
+				{ role: "system", content: "Narrate." },
+				{ role: "user", content: "Ash: the map" },
+				{ role: "assistant", content: "Mara:" }
+			],
+			meta: {} as any
+		} as any)
+		adapter.withMessageAttachments([[], [{ bytes: png, mime: "image/png", filename: "map.png" }], []])
+		await adapter.generateText()
+		const call = fetchMock.mock.calls.find((args: any[]) =>
+			String(args[0]).includes("/v1/chat/completions")
+		)
+		const body = JSON.parse(call![1].body)
+		expect(body.messages[1]).toEqual({
+			role: "user",
+			content: [
+				{ type: "image_url", image_url: { url: `data:image/png;base64,${png.toString("base64")}` } },
+				{ type: "text", text: "Ash: the map" }
+			]
+		})
+		expect(body.messages[0]).toEqual({ role: "system", content: "Narrate." })
+		expect(body.messages[2]).toEqual({ role: "assistant", content: "Mara:" })
 	})
 })

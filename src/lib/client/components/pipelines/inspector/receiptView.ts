@@ -80,6 +80,12 @@ export interface NodeRow {
 	cacheHit: boolean
 	/** The node failed, its type declares `optional`, and the run continued. */
 	recoveredAsEmpty: boolean
+	/**
+	 * The node's clock ran out (`NodeReceipt.timedOut`). With
+	 * `recoveredAsEmpty` it means what the step would have added — lore, most
+	 * often — is missing from the run, which `timedOutNotice` says at run level.
+	 */
+	timedOut: boolean
 	hasWire: boolean
 	hasPrompt: boolean
 	/**
@@ -118,7 +124,7 @@ export interface ValueLayerRow {
 const LAYER_LABEL: Record<string, string> = {
 	session: "session override",
 	config: "selected config",
-	defaults: "instance defaults",
+	defaults: "pub defaults",
 	author: "node default"
 }
 const LAYER_ORDER = Object.keys(LAYER_LABEL)
@@ -225,6 +231,7 @@ export function nodeRows(receipt: unknown): NodeRow[] {
 				model: modelOf(raw ?? {}),
 				cacheHit: raw?.cacheHit === true,
 				recoveredAsEmpty: raw?.recoveredAsEmpty === true,
+				timedOut: raw?.timedOut === true,
 				hasWire: wireView(raw) !== null,
 				hasPrompt: promptView(raw, receipt) !== null,
 				layers: layersOf(raw ?? {}),
@@ -235,6 +242,34 @@ export function nodeRows(receipt: unknown): NodeRow[] {
 			}
 		})
 		.sort((a, b) => a.seq - b.seq)
+}
+
+/**
+ * The run-level sentence for steps that ran out of time, or `null` when none
+ * did.
+ *
+ * A timed-out step that its type lets fail is recovered as empty and the run
+ * carries on, so its absence is otherwise only visible by opening that step —
+ * and a lore read that ran out of time is exactly how lore went missing from a
+ * reply without a word (2026-10-03). The steps are named with the limit each
+ * one had, from the receipt's own `timeoutMsApplied`.
+ */
+export function timedOutNotice(rows: readonly NodeRow[]): string | null {
+	const late = rows.filter((r) => r.timedOut)
+	if (!late.length) return null
+	const named = late
+		.map((r) => {
+			const limit = Number(r.raw?.timeoutMsApplied)
+			return Number.isFinite(limit) && limit > 0
+				? `${r.label} (${limit >= 1000 ? `${limit / 1000} s` : `${limit} ms`})`
+				: r.label
+		})
+		.join(", ")
+	const recovered = late.every((r) => r.recoveredAsEmpty)
+	const steps = late.length === 1 ? "1 step" : `${late.length} steps`
+	return recovered
+		? `${steps} ran out of time and added nothing to this run: ${named}.`
+		: `${steps} ran out of time: ${named}.`
 }
 
 /**
@@ -771,6 +806,39 @@ export function postHistoryView(
 		line: `Post-history reminder: carried, gated at ${gatedBy}`,
 		notes: []
 	}
+}
+
+/* ── the author's note ──────────────────────────────── */
+
+/** 🚧 The author's note decision (AN1), as one line beside the reminder's. */
+export interface AuthorsNoteView {
+	included: boolean
+	/** The one line the pane draws. */
+	line: string
+}
+
+/**
+ * Whether the session's author's note went into this prompt, where, and why
+ * not — the assemble node's own record (`output.authorsNote`), read rather
+ * than inferred: a skipped note leaves no trace in the prompt. Null for a node
+ * that made no such decision (no note in scope) and for older receipts.
+ */
+export function authorsNoteView(
+	node: ReceiptNode | null | undefined
+): AuthorsNoteView | null {
+	const decision = asRecord(asRecord(node?.output)?.authorsNote)
+	if (!decision || typeof decision.included !== "boolean") return null
+	const included = decision.included === true
+	const reason = asString(decision.reason)
+	const depth = Number(decision.depth ?? 0)
+	const line = included
+		? `included at message ${Number(decision.targetIndex ?? 0)} ` +
+			`(${depth} from the end, as ${asString(decision.role) ?? "system"})`
+		: reason === "interval"
+			? `skipped, reply ${Number(decision.replyCount ?? 0) + 1} is not one of every ` +
+				`${Number(decision.interval ?? 1)}`
+			: "empty, nothing to add"
+	return { included, line: `Author's note: ${line}` }
 }
 
 /* ── the output ─────────────────────────────────────────────────────── */

@@ -111,7 +111,7 @@
 					</div>
 
 					{#if inputValue.trim()}
-						<div class="bg-surface-100-900 rounded border p-3">
+						<div class="bg-surface-100-900 panel-edge rounded border p-3">
 							<div
 								class="text-surface-600-400 mb-1 text-xs font-medium"
 							>

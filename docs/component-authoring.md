@@ -5,7 +5,7 @@ strip. Serene Pub ships its own, plugins bring theirs, and an admin can write on
 the app — an **authored component**. You can start from blank, or clone one of core's widgets
 and change how it looks.
 
-An authored component belongs to this instance. It is not a plugin: there is nothing to package
+An authored component belongs to this pub. It is not a plugin: there is nothing to package
 or install, and it never replaces the widget it was cloned from. It sits beside core's as a new
 widget that layouts can place.
 
@@ -18,9 +18,9 @@ session.
 
 ## Where to find it
 
-Open **Admin → Components** (below Plugins). The page has two lists:
+Open **Admin › Components** (below Plugins). The page has two lists:
 
-- **Your components** — the ones written or imported on this instance. Each row shows its name,
+- **Your components** — the ones written or imported on this pub. Each row shows its name,
   its widget id (`authored.<id>:<slug>`), its framework, and an **On / Off** switch. A **Needs
   review** badge means it asks for something you have not decided on yet (see
   [Scopes](#switching-it-on-and-reviewing-its-scopes)); **Clone of** names the core widget it
@@ -124,7 +124,8 @@ banner too.
 ## Switching it on and reviewing its scopes
 
 A component is **off** until you switch it on — **Offered to layouts** in the editor, **On /
-Off** in the list. Off, it is drawn nowhere.
+Off** in the list. Off, it is drawn nowhere. In the editor the switch is part of the form, like
+the source: it changes when you press **Save**.
 
 Beyond the basics every widget gets, a component asks for what it wants to read, on the
 **Widget** tab under _What it may read beyond the basics_:
@@ -138,7 +139,8 @@ Beyond the basics every widget gets, a component asks for what it wants to read,
 | **The viewer's persona**   | Declared, but nothing supplies it yet.                       |
 
 Asking is not having. Every scope it asks for waits under **Scope review** as _Waiting for
-review_, and is refused until you tick or untick it and press **Save review**. This is the
+review_, and is refused until you tick or untick it and press **Save** (the review is saved
+first, then the switch, then the source; if one is refused, the form says which). This is the
 same review plugins get, and the same **Needs review** badge. Changing what a component asks
 for puts the new request back into review.
 
@@ -154,6 +156,11 @@ same settings window as every other widget: a title of your own, and a style.
 
 A component switched on while a session is open appears in that session's tray the next time the
 session is opened.
+
+If the list shows **Not offered** under a component's name, with a reason such as _built for
+widget protocol 3_, its compiled module was made for a different version of Serene Pub than this
+one. This happens to an imported module. On a pub that can compile, save the component once
+to rebuild it here.
 
 ## Live reload
 
@@ -175,12 +182,12 @@ the editor says so when it leaves one out.
 file, dropped, chosen, or pasted (up to 4 MB). Before anything is stored, **Import a component**
 shows what the file brings:
 
-- **Runs** — how it will run here. On an instance that can compile, it is always recompiled
+- **Runs** — how it will run here. On a pub that can compile, it is always recompiled
   from its source; a compiled module inside the file is never used. On one that cannot, it runs
   the compiled module the file carries — or cannot run at all if the file carries none.
 - **Compiled module** — whether the file carries one, and whether it still matches the hash
-  recorded when it was exported. One that does not match was changed after export, and an
-  instance without a compiler will not run it.
+  recorded when it was exported. One that does not match was changed after export, and a
+  pub without a compiler will not run it.
 - **Based on** — for a clone, the core widget and version it came from, and whether core's has
   changed since.
 - **Scopes** — what it will ask for. Each one needs your review.
@@ -194,7 +201,7 @@ you already have a component with the same name, it arrives as a copy under a ne
 
 The Android app has no component compiler: writing components on a phone is impractical, and
 the compiler does not run on its bundled server. On Android the Components page says _Authoring
-is not available on this instance_. You can still switch components on and off, review their
+is not available on this pub_. You can still switch components on and off, review their
 scopes, export and delete them, and **import share files that carry their compiled module** —
 those run the module they carry, in the same sandbox as everywhere else.
 
@@ -203,4 +210,4 @@ those run the module they carry, in the same sandbox as everywhere else.
 The in-app editor compiles and highlights, but it does not type-check. For a component big
 enough to want that, or one you mean to ship as part of a plugin, use the SDK's command line
 (`serene-pub create component`, `serene-pub build`), where your editor and `tsc` check the
-code — see the SDK's Widgets guide.
+code. See the SDK's [Widgets](./sdk/guides/widgets.md) guide.

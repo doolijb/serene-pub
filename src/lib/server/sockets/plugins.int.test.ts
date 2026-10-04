@@ -646,3 +646,24 @@ describe("user-scoped plugin settings", () => {
 		expect(res.plugins.map((p) => p.name)).not.toContain("Plain")
 	})
 })
+
+describe("consent writes always answer", () => {
+	// The admin change form waits for every write its Save sends (owner
+	// ruling 2026-10-02): a write for a plugin uninstalled meanwhile must be
+	// refused on its own `:error`, never left silent.
+	test("a permission write or review for a missing plugin is refused in words", async () => {
+		const h = await import("./plugins")
+		const c = collector()
+		await h.pluginsSetPermission.handler(
+			adminSocket,
+			{ pluginId: "acme.gone", key: "storage", granted: true },
+			c.emit
+		)
+		await h.pluginsReviewPermissions.handler(adminSocket, { pluginId: "acme.gone" }, c.emit)
+		expect(c.events.map((e) => e.event)).toEqual([
+			"plugins:setPermission:error",
+			"plugins:reviewPermissions:error"
+		])
+		expect(c.events[0].data.error).toMatch(/acme\.gone/)
+	}, 60_000)
+})

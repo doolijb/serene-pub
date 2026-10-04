@@ -2,9 +2,8 @@
  * Round-10 audit fix (HIGH): lorebooks:createBinding/updateBinding accepted
  * `sceneId`/`historyEntryId`/`parentNodeId` from the client with no check
  * that the referenced row belongs to the same lorebook as the binding being
- * written — narrativeGraphUpdateNodeHandler (narrativeGraph.ts) already
- * guards this exact pattern for the same table/columns via a different
- * entry point; this handler pair didn't. Also allowed a client to directly
+ * written (`validateBindingCrossRefs` now guards it; since plan B2 this
+ * pair is the only door that writes those columns). Also allowed a client to directly
  * set embedding/embeddingModel/vectorizedAt/absorbedAliases/createdAt/
  * updatedAt on a binding.
  */
@@ -143,7 +142,9 @@ describe("lorebooks:createBinding — cross-tenant FK validation (PGlite integra
 				},
 				noopEmit
 			)
-		).rejects.toThrow(/parent node not found/i)
+		).rejects.toThrow(
+			"The cast member to file this one under is not in this lorebook."
+		)
 	})
 
 	test("accepts a sceneId/historyEntryId/parentNodeId belonging to the same lorebook", async () => {

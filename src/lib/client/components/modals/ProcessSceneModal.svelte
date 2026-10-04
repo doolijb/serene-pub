@@ -1,6 +1,6 @@
 <script lang="ts">
 	import * as Icons from "@lucide/svelte"
-	import { untrack } from "svelte"
+	import { getContext, untrack } from "svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 	import {
 		declareInterest,
@@ -10,6 +10,7 @@
 	import { toaster } from "$lib/client/utils/toaster"
 	import { resolveOrCreateBindingByName } from "$lib/client/utils/createLorebookBinding"
 	import AiTaskModal, { type AiTaskStep } from "./AiTaskModal.svelte"
+	import { showSceneRun } from "./sceneRunShown"
 	import Select from "$lib/client/components/inputs/Select.svelte"
 
 	type PendingResult = {
@@ -281,7 +282,72 @@
 		onOpenChange({ open: false })
 	}
 
+	/**
+	 * The run, as the Activity panel knows it — so a reconnect that drops the
+	 * `:complete` (or `:error`) frame cannot leave this window spinning
+	 * forever (plan B8). The store is refreshed on every `activity:update`
+	 * and on reconnect; while the window runs it follows the run there.
+	 * Which activity is ours: the one named, else this scene's activity that
+	 * is running, or that was not there (as a finished one) when the run
+	 * started — never an older review of the same scene.
+	 */
+	const sceneSummarizesCtx: SceneSummarizesCtx | undefined =
+		getContext("sceneSummarizesCtx")
+	const finishedRunsOf = () =>
+		new Set(
+			(sceneSummarizesCtx?.activities ?? [])
+				.filter((a) => a.sceneId === sceneId && a.status !== "running")
+				.map((a) => a.activityId)
+		)
+	/** The run being watched: the reopened one, else found below. */
+	let runActivityId = $state<string | null>(
+		untrack(() => (step === "running" ? activityId : null))
+	)
+	let finishedBeforeRun = untrack(() =>
+		runActivityId ? new Set<string>() : finishedRunsOf()
+	)
+
+	$effect(() => {
+		if (step !== "running") return
+		const list = sceneSummarizesCtx?.activities ?? []
+		const named = runActivityId
+		const run = named
+			? list.find((a) => a.activityId === named)
+			: list.find(
+					(a) =>
+						a.sceneId === sceneId &&
+						(a.status === "running" ||
+							!finishedBeforeRun.has(a.activityId))
+				)
+		if (!run) return
+		const status = run.status
+		const result = run.pendingResult
+		const failure = run.errorMessage
+		untrack(() => {
+			runActivityId = run.activityId
+			if (status === "review" && result) {
+				internalActivityId = run.activityId
+				reviewName = result.name ?? ""
+				reviewContent = result.content
+				reviewParticipants = [...(result.participantCharacters ?? [])]
+				reviewMentioned = [...(result.mentionedCharacters ?? [])]
+				pendingNewParticipants = (
+					result.suggestedParticipantCharacters ?? []
+				).map((name) => ({ name, source: "suggested" as const }))
+				pendingNewMentioned = (
+					result.suggestedMentionedCharacters ?? []
+				).map((name) => ({ name, source: "suggested" as const }))
+				step = "review"
+			} else if (status === "error") {
+				errorMessage = failure || "The scene was not summarized."
+				step = "error"
+			}
+		})
+	})
+
 	function startRerun() {
+		finishedBeforeRun = finishedRunsOf()
+		runActivityId = null
 		step = "running"
 		genPhase = "drafting"
 		genBatch = 0
@@ -360,6 +426,17 @@
 		return () => {
 			for (const release of releases) release()
 		}
+	})
+
+	/**
+	 * While the run is on screen, its failure is this window's to say, and the
+	 * tab's fallback toast (`sayUnshownSceneRunFailure`, declared by Layout)
+	 * stays quiet. Closing the window lets go, so a run that fails after it
+	 * is minimized is still said, once.
+	 */
+	$effect(() => {
+		if (step !== "running") return
+		return showSceneRun(sceneId)
 	})
 
 	// In confirm step (pre-rerun): cancel goes back to review; otherwise discard + close

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest"
 import { unitsOf } from "./tabGroups"
-import type { GsPos } from "./GridStackZone.svelte"
+import type { ArrangedItem } from "@serene-pub/sdk"
 
 const pos = (
 	id: string,
@@ -9,7 +9,7 @@ const pos = (
 	w: number,
 	h: number,
 	group?: string
-): GsPos => ({ id, x, y, w, h, ...(group ? { group } : {}) })
+): ArrangedItem => ({ id, x, y, w, h, ...(group ? { group } : {}) })
 
 describe("unitsOf", () => {
 	test("ungrouped items are one-member units at their own cell", () => {

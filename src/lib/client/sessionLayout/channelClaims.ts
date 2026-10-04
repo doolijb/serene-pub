@@ -13,7 +13,7 @@
  * the dossier's `composer.channels` (the list the conversation shows rows
  * for and writes on).
  */
-import { isInstanceOf } from "$lib/shared/widgets/instanceId"
+import { isInstanceOf } from "@serene-pub/sdk"
 
 /** The conversation's widget id — the widget every claiming copy is an instance of. */
 export const CONVERSATION_WIDGET = "messages"
@@ -85,4 +85,62 @@ export function channelsForCopy(
 	const rest = all.filter((c) => !claimed.has(c))
 	if (own) return id === primaryLog ? [own, ...rest] : [own]
 	return rest.length ? rest : [...all]
+}
+
+/**
+ * The conversation mounts that hold the page's message ids (`#message-<id>`,
+ * which j/k, links and notifications land on) — brief 7b, plan §M.3.8 as
+ * amended by its review: every Messages copy whose channels share none with a
+ * mount already holding them, taken primary log first, then in reading order.
+ *
+ * So every row a layout draws is reachable by its page id, and none is on the
+ * page twice: the story's log and the Lair's Sanctum both keep their ids (they
+ * show different channels), while a second Sanctum or a second view of the
+ * story takes its box's prefix (`ComponentMount`'s `pageIds`). A rule of ONE
+ * mount — the first draft — left every row only a claiming copy draws (the
+ * Sanctum's, Castellan's greeting included) with a prefixed id alone, so a
+ * notification aimed at one never landed.
+ *
+ * `all` is the session's channels (the dossier's `composer.channels`), each
+ * copy's own list read through `channelsForCopy`. Before the dossier arrives
+ * (`all` empty) an unclaimed copy counts as showing "whatever no copy claims",
+ * which is what it shows once the channels are known in every layout but one
+ * whose every channel is claimed — so a box is not remounted as the page loads.
+ *
+ * Always the CONVERSATION's: an R71 genre's own primary is a widget like any
+ * other, whose ids are its box's.
+ */
+export function pageIdsHolders(
+	readingOrder: Iterable<string>,
+	claims: ReadonlyMap<string, string>,
+	all: readonly string[]
+): Set<string> {
+	const order = [...readingOrder].filter((id) => isInstanceOf(id, CONVERSATION_WIDGET))
+	const log = primaryLogOf(order, claims, CONVERSATION_WIDGET)
+	const held = new Set<string>()
+	if (!log) return held
+	const shown = new Set<string>()
+	for (const id of [log, ...order.filter((id) => id !== log)]) {
+		const mine = channelsShownBy(all, claims, id, log)
+		if (mine.some((c) => shown.has(c))) continue
+		held.add(id)
+		for (const c of mine) shown.add(c)
+	}
+	return held
+}
+
+/** Stands for "every channel no copy claims" while the session's channels are unknown. */
+const UNCLAIMED = "\u0000unclaimed"
+
+/** `channelsForCopy`, or — with no channels known yet — the same answer in outline. */
+function channelsShownBy(
+	all: readonly string[],
+	claims: ReadonlyMap<string, string>,
+	id: string,
+	log: string
+): string[] {
+	if (all.length) return channelsForCopy(all, claims, id, log)
+	const own = claims.get(id)
+	if (!own) return [UNCLAIMED]
+	return id === log ? [own, UNCLAIMED] : [own]
 }

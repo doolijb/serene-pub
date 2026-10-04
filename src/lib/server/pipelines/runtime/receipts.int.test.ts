@@ -29,7 +29,10 @@ class FakeAdapter implements FakeTextAdapter {
 		return this
 	}
 	abort() {}
+	/** Set by a test to make the next generations fail with this. */
+	static failWith: unknown = null
 	async generateText() {
+		if (FakeAdapter.failWith) throw FakeAdapter.failWith
 		return {
 			compiledPrompt: this.injected,
 			isAborted: false,
@@ -76,13 +79,6 @@ vi.mock("$lib/server/connections/capabilityTarget", async (importOriginal) => {
 		}
 	}
 })
-vi.mock("$lib/server/utils/getUserConfigurations", () => ({
-	getUserConfigurations: async () => ({
-		sampling: { id: 1 },
-		contextConfig: { id: 1 },
-		promptConfig: { id: 1, systemPrompt: "Stay in character." }
-	})
-}))
 vi.mock("$lib/server/embedding", () => ({
 	isModelReady: () => false,
 	getLoadedModelId: () => null,
@@ -141,19 +137,7 @@ beforeAll(async () => {
 		personaId: persona.id
 	})
 
-	const [contextConfig] = await db
-		.insert(schema.contextConfigs)
-		.values({ name: "Receipt Context", template: "{{instructions}}" })
-		.returning()
-	const [promptConfig] = await db
-		.insert(schema.promptConfigs)
-		.values({ name: "Receipt Prompt", systemPrompt: "You are {{char}}." })
-		.returning()
-	await db.insert(schema.systemSettings).values({
-		id: 1,
-		defaultContextConfigId: contextConfig.id,
-		defaultPromptConfigId: promptConfig.id
-	})
+	await db.insert(schema.systemSettings).values({ id: 1 })
 }, 60_000)
 
 const turn = async (over: any = {}) => {
@@ -229,6 +213,12 @@ describe("recording what a run did", () => {
 			// gone: who speaks is state the fired entry names, decided by
 			// `core:spec/<genre>-turn-order` outside this run entirely.
 			"placeholder",
+			// Spec 1.6.0: how much room the context has, derived from the
+			// sampling config's window instead of typed on the ranker. Its own
+			// node for the same reason `relationships` is — a number that
+			// decides what fits belongs in the receipt. Before the reads since
+			// 2026-10-03 (history window): the history read is sized by it.
+			"contextBudget",
 			// Spec 1.6.0: the four reads moved into an `async` block, which
 			// qualifies the keys inside it. They still each appear, and still
 			// in declaration order — the receipt is ordered by assignment, not
@@ -262,6 +252,12 @@ describe("recording what a run did", () => {
 			// receipt accounts for it. It spends nothing until somebody raises
 			// that band, and it is a line in the trail either way.
 			"gather.relationships.read",
+			// Wave 8 C2: the cast's presences on this line, read for
+			// `eligible`'s presence rule.
+			"gather.presences.read",
+			// The files the transcript's rows show (PLAN-composer-attachments
+			// §3.5), one query; `attached` below places them.
+			"gather.history.attachments",
 			// Spec 1.19.0: the fourth mechanism. Its own block rather than a fifth
 			// chain in `gather`, because chains of a parallel block cannot read
 			// each other and this one needs `gather.history`'s messages — and
@@ -276,11 +272,6 @@ describe("recording what a run did", () => {
 			"semantic.arm.queries",
 			"semantic.arm.embed",
 			"semantic.arm.search",
-			// Spec 1.6.0: how much room the context has, derived from the
-			// sampling config's window instead of typed on the ranker. Its own
-			// node for the same reason `relationships` is — a number that
-			// decides what fits belongs in the receipt.
-			"contextBudget",
 			"lore",
 			// Spec 1.20.0: the fifth mechanism — entries reached by a
 			// *description* rather than by a name the scene actually said.
@@ -299,6 +290,9 @@ describe("recording what a run did", () => {
 			"names.arm.embed",
 			"names.arm.link",
 			"loreLinked",
+			// Wave 8 C2: selective logic, secrets and presences mark
+			// candidates ineligible before the ranker sees them.
+			"eligible",
 			"rank",
 			// ⚠ **Below the ranker, where it used to be above it.** The context
 			// builder's two relationship in-ports carry `rank`'s inclusions, so
@@ -308,6 +302,8 @@ describe("recording what a run did", () => {
 			// between the two ever read this node.
 			"context",
 			"lines",
+			// Each line's attachments, placed for the model.
+			"attached",
 			"prompt",
 			"generate",
 			"save",
@@ -460,7 +456,7 @@ describe("recording what a run did", () => {
 					kind: "oracle",
 					definitionId: "core:oracle/generate-text@1",
 					result: "ok",
-					output: { main: long, text: long, thinking: "short" }
+					output: { main: long, text: long, reasoning: "short" }
 				},
 				{
 					seq: 1,
@@ -484,7 +480,7 @@ describe("recording what a run did", () => {
 		const generate = stored.nodes.find((n: any) => n.nodeKey === "generate")
 		expect(generate.output.text.length).toBe(WIRE_RAW_LIMIT)
 		expect(generate.output.main.length).toBe(WIRE_RAW_LIMIT)
-		expect(generate.output.thinking).toBe("short")
+		expect(generate.output.reasoning).toBe("short")
 		expect(generate.output.textTruncated).toEqual({
 			bytes: WIRE_RAW_LIMIT + 1000,
 			kept: WIRE_RAW_LIMIT,
@@ -507,7 +503,7 @@ describe("recording what a run did", () => {
 	})
 
 	it("bounds the save node's stored input at the wire cap, and says so", async () => {
-		// `update-message`'s `input.text`/`input.thinking` carry the same reply
+		// `update-message`'s `input.text`/`input.reasoning` carry the same reply
 		// a generate node already published, recorded a second time as this
 		// node's own input — the same wire cap applies there.
 		const { saveReceipt } = await import(
@@ -533,7 +529,7 @@ describe("recording what a run did", () => {
 					kind: "outlet",
 					definitionId: "core:outlet/update-message@1",
 					result: "ok",
-					input: { text: long, thinking: "short" },
+					input: { text: long, reasoning: "short" },
 					output: { id: 1 }
 				}
 			],
@@ -549,7 +545,7 @@ describe("recording what a run did", () => {
 		const stored = row.receipt as any
 		const save = stored.nodes.find((n: any) => n.nodeKey === "save")
 		expect(save.input.text.length).toBe(WIRE_RAW_LIMIT)
-		expect(save.input.thinking).toBe("short")
+		expect(save.input.reasoning).toBe("short")
 		expect(save.input.textTruncated).toEqual({
 			bytes: WIRE_RAW_LIMIT + 1000,
 			kept: WIRE_RAW_LIMIT,
@@ -615,4 +611,71 @@ describe("recording what a run did", () => {
 		)
 		expect((await lastRunFor(db, sessionId)).isPreview).toBe(false)
 	}, 30_000)
+})
+
+describe("a failed query in a run (drizzle-orm 0.44+)", () => {
+	/**
+	 * The review's chain: a query's failure inside a run became the node's
+	 * reason, the receipt's `haltReason`, the stored run, and the reply row's
+	 * error — every member of the session reads the last one — as the SQL and
+	 * every value it bound. Here the model call fails with a message that
+	 * QUOTES a real failed query (the `${label}: ${e.message}` wrapper shape,
+	 * which no `instanceof` check catches); its bound value stands in for a
+	 * person's text.
+	 */
+	it("reaches the receipt, the stored run and the reply row as the plain sentence", async () => {
+		const { QUERY_FAILED_SENTENCE } = await import("$lib/server/db/errors")
+		const SECRET = "SECRET-PROSE-r5"
+		await db.insert(schema.users).values({ username: SECRET })
+		const failed = await db
+			.insert(schema.users)
+			.values({ username: SECRET })
+			.then(
+				() => null,
+				(e: unknown) => e as Error
+			)
+		expect(failed?.message).toContain(SECRET)
+		const leaks = (v: unknown) =>
+			new RegExp(`Failed query|insert into|${SECRET}`, "i").test(JSON.stringify(v ?? null))
+
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+		const error = vi.spyOn(console, "error").mockImplementation(() => {})
+		FakeAdapter.failWith = new Error(`the reply could not be written: ${failed!.message}`)
+		try {
+			const receipt = await turn({ seed: "receipt:failed-query" })
+			expect(receipt.outcome).not.toBe("ok")
+			expect(receipt.haltReason).toContain(QUERY_FAILED_SENTENCE)
+			expect(leaks(receipt.haltReason)).toBe(false)
+			expect(leaks(receipt.nodes.map((n: any) => n.reason))).toBe(false)
+
+			const { run } = await recordFor(receipt)
+			expect(leaks(run.haltReason)).toBe(false)
+			expect(leaks(run.receipt)).toBe(false)
+			const nodes = await db
+				.select()
+				.from(schema.pipelineRunNodes)
+				.where(eq(schema.pipelineRunNodes.runId, run.id))
+			expect(leaks(nodes.map((n) => n.reason))).toBe(false)
+
+			// The reply row everyone in the session reads, and the detail an
+			// administrator reads on it: what the run-end hook handed the row
+			// writer (`LiveRow.finish` → `persistGenerationErrorRow`, which
+			// logs the object and stores `friendlyErrorFromUnknown`'s words —
+			// through the app's own db handle, which this file does not mock).
+			const { friendlyErrorFromUnknown } = await import(
+				"$lib/server/utils/generationStatus"
+			)
+			const handed = error.mock.calls.find((c) =>
+				String(c[0]).includes("[generationStatus] generation failed")
+			)
+			expect(handed, "the row writer was never reached").toBeTruthy()
+			const onRow = friendlyErrorFromUnknown(handed![1])
+			expect(onRow.message).toContain(QUERY_FAILED_SENTENCE)
+			expect(leaks(onRow)).toBe(false)
+		} finally {
+			FakeAdapter.failWith = null
+			warn.mockRestore()
+			error.mockRestore()
+		}
+	}, 60_000)
 })

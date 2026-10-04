@@ -414,7 +414,9 @@ export interface SelectOptions {
 	 * oversight: turning it on needed somewhere for a user to say so, and the
 	 * paragraph above is the argument for why that place is **not**
 	 * `RankingParams`. That place is now `scoreLedAllocation` on
-	 * `core:task/rank-hybrid@1`'s `params` slot (migration 0196), read by
+	 * `core:task/rank-hybrid@1`'s `params` slot (declared by the pre-squash
+	 * migration 0196, `0196_score_led_allocation` — archived, superseded by the
+	 * 0094 baseline; today's 0196 is unrelated), read by
 	 * `scoreLedFrom` in `bindings.ts` and handed straight in here.
 	 *
 	 * It still **ships false**, so an untouched install takes exactly the code

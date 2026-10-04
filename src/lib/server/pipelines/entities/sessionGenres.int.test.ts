@@ -272,7 +272,10 @@ describe("the fields round-trip (19 §1, U-C2)", () => {
 				genreFields: { anything: "at all" }
 			} as any)
 			.returning()
+		// The standard mode is Chat, and Chat declares the author's note.
 		expect(await genreFieldsFor(db, session.id)).toEqual({
+			// The note goes at the end unless moved (owner ruling 2026-10-03).
+			authorsNote: { text: "", depth: 0, interval: 1, role: "system" },
 			autoAdvance: "round",
 			characterDetail: "full",
 			turnMode: "rules"
@@ -305,6 +308,16 @@ describe("the trigger set (19 §4, U-C5)", () => {
 			name: "Narrate",
 			// Required since 2026-09-28: the action legend lists it.
 			description: "Ask the narrator to describe what happens next.",
+			// What should happen next, optionally (genre uplift C2,
+			// 2026-09-29): what `/narrate <text>` fires with.
+			collects: {
+				text: {
+					need: "optional",
+					label: "What should happen next?",
+					placeholder: "The storm breaks over the harbour.",
+					ifEmpty: "The narrator decides."
+				}
+			},
 			specSlug: NARRATE_SPEC_ID,
 			// Classified where it is read, not where it is used (19 §3):
 			// `core:spec/narrate` contributing to `core:inlet/user-message@1`
@@ -1149,7 +1162,7 @@ describe("a session's own binding beats its preset (R-6)", () => {
 	}
 
 	const bindAt = async (
-		scopeKind: "session" | "instance",
+		scopeKind: "session" | "pub",
 		scopeId: number,
 		specId: number
 	) =>
@@ -1251,7 +1264,7 @@ describe("a session's own binding beats its preset (R-6)", () => {
 
 	it("an instance binding still sits below the preset", async () => {
 		await unbind()
-		await bindAt("instance", 0, otherSpecId)
+		await bindAt("pub", 0, otherSpecId)
 		try {
 			// The preset's session: the preset wins over the instance row.
 			expect((await verdict()).spec).toBe(RESPOND_SPEC_ID)
@@ -1270,7 +1283,7 @@ describe("a session's own binding beats its preset (R-6)", () => {
 
 	it("the session's binding beats the instance's as well", async () => {
 		await unbind()
-		await bindAt("instance", 0, respondSpecId)
+		await bindAt("pub", 0, respondSpecId)
 		await bindAt("session", sessionId, otherSpecId)
 		try {
 			expect((await verdict()).spec).toBe(OTHER)
@@ -1326,7 +1339,7 @@ describe("the respond bucket is read *and* write", () => {
 		// with the check removed — respond sorts first either way — so the
 		// test proved nothing about the rule it was named for.
 		await db.insert(schema.pipelineBindings).values({
-			scopeKind: "instance",
+			scopeKind: "pub",
 			scopeId: 0,
 			genreId: STANDARD_GENRE_ID,
 			subject: sessionEvents.messageRespond,

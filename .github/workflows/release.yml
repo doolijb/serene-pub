@@ -214,6 +214,58 @@ jobs:
             - name: Prepare SvelteKit
               run: npx @sveltejs/kit sync
 
+            # ── Toolchain for the launcher and window helper ───────────
+            #
+            # launcher/build.mjs (owned by the launcher, not this file)
+            # builds two binaries per target: the launcher (`serene-pub` /
+            # `Serene Pub.exe`; CGO_ENABLED=0 on Linux/Windows, cgo+Cocoa on
+            # macOS) and the window helper (`serene-pub-window[.exe]`,
+            # webview_go, always cgo). This job only provides compilers and
+            # headers; it never runs `go build` itself.
+            - name: Set up Go
+              uses: actions/setup-go@v5
+              with:
+                  go-version: "1.24"
+                  cache-dependency-path: launcher/go.sum
+
+            # The window helper links WebKitGTK. webview_go asks pkg-config
+            # for webkit2gtk-4.0, which Ubuntu 24.04 (ubuntu-latest) no
+            # longer ships; launcher/pkgconfig/webkit2gtk-4.0.pc aliases it
+            # to 4.1. build.mjs prepends that directory itself — it is
+            # exported here too so the probe below sees what the build sees.
+            - name: Install window-helper build dependencies (Linux)
+              if: runner.os == 'Linux'
+              shell: bash
+              run: |
+                  sudo apt-get update
+                  sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev
+                  echo "PKG_CONFIG_PATH=$GITHUB_WORKSPACE/launcher/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}" >> "$GITHUB_ENV"
+                  PKG_CONFIG_PATH="$GITHUB_WORKSPACE/launcher/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}" \
+                    pkg-config --modversion gtk+-3.0 webkit2gtk-4.0
+
+            # cgo on Windows needs a MinGW-w64 gcc/g++ (webview_go compiles
+            # C++). Installed explicitly rather than trusting whatever the
+            # runner image happens to carry; GITHUB_PATH puts it first.
+            - name: Set up MinGW-w64 (Windows)
+              if: runner.os == 'Windows'
+              id: msys2
+              uses: msys2/setup-msys2@v2
+              with:
+                  msystem: MINGW64
+                  update: false
+                  path-type: inherit
+                  install: mingw-w64-x86_64-gcc
+
+            - name: Put MinGW-w64 on PATH (Windows)
+              if: runner.os == 'Windows'
+              shell: pwsh
+              env:
+                  MSYS2_LOCATION: ${{ steps.msys2.outputs.msys2-location }}
+              run: |
+                  $bin = Join-Path $env:MSYS2_LOCATION "mingw64\bin"
+                  & (Join-Path $bin "gcc.exe") --version
+                  $bin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
             - name: Run typecheck
               # Non-blocking: the codebase currently carries a large pre-existing
               # type-error backlog (see project history) that predates this gate.
@@ -225,8 +277,12 @@ jobs:
             - name: Build app
               run: npm run build
 
-            - name: Create platform-specific executables and icons
-              run: node scripts/create-executables.js
+            # Info.plist + favicon.icns (macOS) and install-desktop-shortcut.sh
+            # (Linux), rendered from dist-assets/ templates into
+            # dist/generated/<target>/. Windows has nothing to render: the
+            # .exe's icon and version resource come from build.mjs.
+            - name: Render release templates and icons
+              run: node scripts/create-executables.js ${{ matrix.target }}
 
             - name: Prepare production dependencies
               shell: bash
@@ -309,12 +365,87 @@ jobs:
                     echo "Downloaded node binary ($(du -h node | cut -f1))"
                   fi
 
+            # One version source: package.json, baked into the launcher as
+            # main.version. The updater refuses a release whose payload
+            # version differs from its tag (READY.json), so a stable tag that
+            # disagrees with package.json would publish a release nobody can
+            # update to — refuse it here instead. Pre-releases never update
+            # in-app, so for them it is only a warning.
+            #
+            # Channel (§C11): `prerelease` for pre-release tags — the launcher
+            # then never applies an update — else `portable`, which every zip
+            # is.
+            - name: Build launcher and window helper for ${{ matrix.target }}
+              shell: bash
+              env:
+                  TARGET: ${{ matrix.target }}
+                  REF_NAME: ${{ github.ref_name }}
+                  IS_PRERELEASE: ${{ needs.test.outputs.is_prerelease }}
+                  COMMIT: ${{ github.sha }}
+              run: |
+                  if [ ! -f launcher/build.mjs ]; then
+                    echo "::error::launcher/build.mjs is missing — the release cannot ship without its launcher"
+                    exit 1
+                  fi
+                  VERSION=$(node -p "require('./package.json').version")
+                  if [ "${REF_NAME#v}" != "$VERSION" ]; then
+                    if [ "$IS_PRERELEASE" = "true" ]; then
+                      echo "::warning::tag $REF_NAME does not match package.json version $VERSION"
+                    else
+                      echo "::error::tag $REF_NAME does not match package.json version $VERSION — the updater would refuse this release"
+                      exit 1
+                    fi
+                  fi
+                  if [ "$IS_PRERELEASE" = "true" ]; then CHANNEL=prerelease; else CHANNEL=portable; fi
+                  node launcher/build.mjs --target "$TARGET" --version "$VERSION" \
+                    --channel "$CHANNEL" --commit "$COMMIT" --out "dist/launcher/$TARGET"
+                  ls -la "dist/launcher/$TARGET"
+                  # The baked values, read back (§C7: `--version` prints
+                  # "version channel target"). Windows is skipped: the
+                  # launcher is a GUI-subsystem binary there.
+                  if [ "$RUNNER_OS" != "Windows" ]; then
+                    GOT=$("dist/launcher/$TARGET/serene-pub" --version)
+                    if [ "$GOT" != "$VERSION $CHANNEL $TARGET" ]; then
+                      echo "::error::launcher --version printed '$GOT', expected '$VERSION $CHANNEL $TARGET'"
+                      exit 1
+                    fi
+                  fi
+
+            # Fails if dist/launcher/<target>/ lacks either binary — there is
+            # no shim fallback (scripts/bundle-dist.js placeLauncher).
             - name: Bundle for ${{ matrix.target }}
               run: node scripts/bundle-dist.js ${{ matrix.target }}
 
             - name: Check dist bundle size
               shell: bash
               run: node scripts/check-dist-size.js ${{ matrix.target }}
+
+            # Ad-hoc signature over the finished bundle — after the payload is
+            # complete, before zipping; nothing may touch the .app after this.
+            # Not notarized (see docs/install.md for the first-run unblock).
+            # On Apple Silicon an unsigned or broken-seal bundle does not
+            # launch at all, so verify here rather than in users' hands. The
+            # launcher re-signs the same way after an in-app swap (§C8).
+            - name: Check and ad-hoc sign the app bundle (macOS)
+              if: runner.os == 'macOS'
+              shell: bash
+              env:
+                  TARGET: ${{ matrix.target }}
+              run: |
+                  APP="$(ls -d dist/serene-pub-*-"$TARGET"/serene-pub/"Serene Pub.app" | head -1)"
+                  if [ -z "$APP" ] || [ ! -d "$APP" ]; then
+                    echo "::error::no Serene Pub.app under dist/serene-pub-*-$TARGET/serene-pub"
+                    exit 1
+                  fi
+                  plutil -lint "$APP/Contents/Info.plist"
+                  # The .icns is written without iconutil (create-executables.js);
+                  # round-trip it through iconutil so a malformed one fails here.
+                  iconutil --convert iconset --output "$RUNNER_TEMP/favicon.iconset" "$APP/Contents/Resources/favicon.icns"
+                  ls "$RUNNER_TEMP/favicon.iconset"
+                  # codesign refuses Finder info / resource forks on any file.
+                  xattr -cr "$APP"
+                  codesign --force --deep --sign - "$APP"
+                  codesign --verify --deep --verbose=2 "$APP"
 
             # The archive keeps the version in its FILENAME, but its single
             # top-level entry is the unversioned "serene-pub" directory inside
@@ -371,12 +502,33 @@ jobs:
                   cd "$DIST_DIR"
                   zip -r -y "../../serene-pub-$REF_NAME-${{ matrix.target }}.zip" serene-pub
 
+            # §C12: `<zip>.sha256` beside every zip, in sha256sum's format
+            # ("<64 lowercase hex>  <zip name>\n", ASCII, no BOM). The in-app
+            # updater refuses a release without it. Written by one Node
+            # implementation on every runner (no pwsh encoding defaults),
+            # then checked with the platform's own tool.
+            - name: Write the zip's checksum
+              shell: bash
+              env:
+                  REF_NAME: ${{ github.ref_name }}
+                  TARGET: ${{ matrix.target }}
+              run: |
+                  ZIP="serene-pub-$REF_NAME-$TARGET.zip"
+                  node scripts/bundle-dist.js --checksum "$ZIP"
+                  if command -v sha256sum > /dev/null 2>&1; then
+                    sha256sum -c "$ZIP.sha256"
+                  else
+                    shasum -a 256 -c "$ZIP.sha256"
+                  fi
+
             # ── Pre-releases ship portable zips ONLY ───────────────────
             #
             # Nothing is gated here today because nothing needs gating: the
-            # two steps above are the only packaging steps in this workflow,
-            # and a zip IS the portable artifact. There is no installer, .dmg
-            # or AppImage job to switch off yet.
+            # steps above (launcher build, bundle, macOS ad-hoc signature, zip,
+            # checksum) all make the portable artifact, and a zip IS the
+            # portable artifact. A pre-release zip's launcher is built with
+            # channel=prerelease, so it never applies an update. There is no
+            # installer, .dmg or AppImage job to switch off yet.
             #
             # When one is added, it goes BELOW this comment and carries:
             #
@@ -403,14 +555,17 @@ jobs:
             #     in step: if betas should ever be denied an installer anyway,
             #     gate that job on a separate output rather than changing what
             #     `prerelease:` tells GitHub below.
-            #  2. `files:` uses a glob, so a gated step that does not run just
+            #  2. `files:` uses globs, so a gated step that does not run just
             #     contributes no file — the upload step itself needs no
-            #     condition.
+            #     condition. A new artifact still needs its own `.sha256`
+            #     (and a pattern here) if the updater is ever to consume it.
             - name: Upload release assets
               uses: softprops/action-gh-release@v2
               with:
                   name: ${{ needs.test.outputs.title }}
-                  files: serene-pub-*.zip
+                  files: |
+                      serene-pub-*.zip
+                      serene-pub-*.zip.sha256
                   prerelease: ${{ needs.test.outputs.is_prerelease }}
               env:
                   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

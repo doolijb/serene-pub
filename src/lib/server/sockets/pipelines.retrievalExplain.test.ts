@@ -953,6 +953,29 @@ describe("explainRetrieval — the mechanism-level half no row can carry", () =>
 		)
 	})
 
+	it("warns about a regex key the scan did not run, once (plan S3)", async () => {
+		const notRun = {
+			id: 2,
+			source: "worldLore",
+			key: "(a+)+$",
+			why: "it repeats a group that already repeats, like (a+)+, so a long message can take minutes to check"
+		}
+		const base = receipt()
+		const lane = base.nodes[0]!.output as any
+		lane.diagnostics.patternsNotRun = [notRun]
+		// The trigger node reports the same key; the reader hears it once.
+		base.nodes.push({
+			nodeKey: "triggers",
+			seq: 5,
+			output: { diagnostics: { patternsNotRun: [notRun] } } as any
+		})
+		const out = await explain(base)
+		const lines = out.warnings.filter((w: string) => w.includes("(a+)+$"))
+		expect(lines).toEqual([
+			"The pattern “(a+)+$” was not checked: it repeats a group that already repeats, like (a+)+, so a long message can take minutes to check."
+		])
+	})
+
 	it("raises a wiring warning rather than burying it in diagnostics", async () => {
 		const out = await explain(receipt())
 		expect(out.warnings).toContain(
@@ -994,6 +1017,135 @@ describe("explainRetrieval — the mechanism-level half no row can carry", () =>
 				"the window, or the mention scan is switched off.",
 			"Character lore and history entries: nothing to scan."
 		])
+	})
+
+	/**
+	 * ⚠ **Switched off beats "no model".** The shipped default and the
+	 * commonest install together: `query-windows` says the mechanism is off,
+	 * and `vector-search` — handed no vectors — plus every lore lane still name
+	 * the missing model. That line sent a reader to load a model, after which
+	 * the mechanism was still off. The switch's own reason replaces them, once.
+	 */
+	it("names the switched-off mechanism, not the missing model, when Search by meaning is off", async () => {
+		const off = "off — Search by meaning is off, so the search makes no embedding request"
+		const noModel = "no embedding model is loaded and validated"
+		const session = barrenSession()
+		session.nodes.splice(3, 1, {
+			nodeKey: "semantic.arm.queries",
+			seq: 4,
+			output: {
+				diagnostics: {
+					searchByMeaning: "off",
+					searchedByMeaning: false,
+					reason: off
+				} as any
+			}
+		} as any, {
+			nodeKey: "semantic.arm.search",
+			seq: 5,
+			output: { diagnostics: { vectorSearch: noModel } }
+		} as any)
+		const out = await explain(session)
+		const vector = out.notes.filter((n) => n.startsWith("Vector search:"))
+		expect(vector).toEqual([`Vector search: ${off}.`])
+		expect(out.notes.join(" ")).not.toContain(noModel)
+	})
+
+	/**
+	 * Automatic, the shipped setting, not searching because no embedding
+	 * model is set up — the one reason it has not to (R5). Same precedence:
+	 * the switch's reason, which names what to change, beats the model's
+	 * state. The sentence is the decision's own, not a copy of it.
+	 */
+	it("names Automatic's reason when no embedding model is set up", async () => {
+		const { searchByMeaningDecision } = await import(
+			"$lib/server/pipelines/runtime/bindings"
+		)
+		const decision = searchByMeaningDecision("auto", null)
+		expect(decision.search).toBe(false)
+		const session = barrenSession()
+		session.nodes.splice(3, 1, {
+			nodeKey: "semantic.arm.queries",
+			seq: 4,
+			output: {
+				diagnostics: {
+					searchByMeaning: decision.setting,
+					searchedByMeaning: decision.search,
+					reason: decision.reason
+				} as any
+			}
+		} as any, {
+			nodeKey: "semantic.arm.search",
+			seq: 5,
+			output: {
+				diagnostics: {
+					vectorSearch:
+						"off — nothing was embedded to search with (Search by meaning did not search, there are no messages yet, or the embed step is off or failed)"
+				}
+			}
+		} as any)
+		const out = await explain(session)
+		expect(
+			out.notes.filter((n) => n.startsWith("Vector search:"))
+		).toEqual([
+			"Vector search: off — Search by meaning is Automatic and no embedding model is set up, so the search makes no embedding request."
+		])
+	})
+
+	/**
+	 * Automatic searched with an embedding SERVICE — as it does with any model
+	 * that is set up (owner, 2026-09-30: *"I never said to skip paid services
+	 * for retrieval, that's what they are there for"*). The search's own line
+	 * stands, and no sentence from the switch.
+	 */
+	it("leaves the search's own line when Automatic searched with an embedding service", async () => {
+		const { searchByMeaningDecision } = await import(
+			"$lib/server/pipelines/runtime/bindings"
+		)
+		const decision = searchByMeaningDecision("auto", {
+			id: "7",
+			name: "Embeddings service",
+			kind: "core:shape/text-gen@1",
+			metadata: {},
+			material: {}
+		})
+		expect(decision.search).toBe(true)
+		const session = barrenSession()
+		session.nodes.splice(3, 1, {
+			nodeKey: "semantic.arm.queries",
+			seq: 4,
+			output: {
+				diagnostics: {
+					searchByMeaning: decision.setting,
+					searchedByMeaning: decision.search,
+					reason: decision.reason
+				} as any
+			}
+		} as any, {
+			nodeKey: "semantic.arm.search",
+			seq: 5,
+			output: { diagnostics: { vectorSearch: "available (text-embedding-3-small)" } }
+		} as any)
+		const out = await explain(session)
+		const vector = out.notes.filter((n) => n.startsWith("Vector search:"))
+		// The search's own line, and no sentence from the switch: its reason
+		// on a turn that searched is for the receipt, not the panel.
+		expect(vector).toContain("Vector search: available (text-embedding-3-small).")
+		expect(vector.join(" ")).not.toContain("Automatic")
+	})
+
+	it("still names the missing model when Search by meaning is on", async () => {
+		const noModel = "no embedding model is loaded and validated"
+		const session = barrenSession()
+		session.nodes.splice(3, 1, {
+			nodeKey: "semantic.arm.search",
+			seq: 4,
+			output: { diagnostics: { vectorSearch: noModel } }
+		} as any)
+		const out = await explain(session)
+		expect(
+			out.notes.filter((n) => n.startsWith("Vector search:"))
+		).toEqual([`Vector search: ${noModel}.`])
 	})
 
 	it("says one empty band in the singular", async () => {
@@ -1891,5 +2043,86 @@ describe("explainRetrieval — the prompt cache", () => {
 			})
 		)
 		expect(out.promptCache).toEqual({ prompt: 2048, cached: 1024 })
+	})
+})
+
+/**
+ * `core:task/query-windows@1`'s one decision, `searchByMeaningDecision`.
+ *
+ * ⚠ **Automatic never asks where the embedding model runs.** For one day
+ * (2026-09-29) it searched only with a model "on this machine" and skipped an
+ * embedding service; the owner, 2026-09-30: *"I never said to skip paid
+ * services for retrieval, that's what they are there for. Don't do that."*
+ * Automatic searches whenever an embedding model is set up — local, a
+ * runtime you run yourself, or a service billed per request — and skips only
+ * when none is (R5). A connection's metadata, whatever it says about where it
+ * runs, is not an input.
+ */
+describe("searchByMeaningDecision — Automatic searches with any embedding model that is set up", () => {
+	const connection = (metadata: Record<string, unknown>) => ({
+		id: "1",
+		name: "Embeddings",
+		kind: "core:shape/text-gen@1",
+		metadata,
+		material: {}
+	})
+	const ON_AUTO =
+		"on — Search by meaning is Automatic and an embedding model is set up"
+	const OFF_NONE =
+		"off — Search by meaning is Automatic and no embedding model is set up, so the search makes no embedding request"
+
+	it("searches with an embedding service, as with a local model, and says the same", async () => {
+		const { searchByMeaningDecision } = await import(
+			"$lib/server/pipelines/runtime/bindings"
+		)
+		for (const metadata of [
+			{ connectionGroup: "service" },
+			{ connectionGroup: "local" },
+			{}
+		])
+			expect(
+				searchByMeaningDecision("auto", connection(metadata)),
+				JSON.stringify(metadata)
+			).toEqual({ setting: "auto", search: true, reason: ON_AUTO })
+	})
+
+	it("skips only when no embedding model is set up", async () => {
+		const { searchByMeaningDecision } = await import(
+			"$lib/server/pipelines/runtime/bindings"
+		)
+		for (const none of [null, undefined])
+			expect(searchByMeaningDecision("auto", none)).toEqual({
+				setting: "auto",
+				search: false,
+				reason: OFF_NONE
+			})
+	})
+
+	it("reads anything that is not one of the three as Automatic", async () => {
+		const { searchByMeaningDecision } = await import(
+			"$lib/server/pipelines/runtime/bindings"
+		)
+		for (const value of [undefined, true, false, "yes", 0])
+			expect(
+				searchByMeaningDecision(value, connection({})),
+				String(value)
+			).toEqual({ setting: "auto", search: true, reason: ON_AUTO })
+	})
+
+	it("On searches and Off does not, whatever is set up", async () => {
+		const { searchByMeaningDecision } = await import(
+			"$lib/server/pipelines/runtime/bindings"
+		)
+		for (const c of [connection({ connectionGroup: "service" }), null]) {
+			expect(searchByMeaningDecision("on", c)).toMatchObject({
+				setting: "on",
+				search: true
+			})
+			expect(searchByMeaningDecision("off", c)).toEqual({
+				setting: "off",
+				search: false,
+				reason: "off — Search by meaning is off, so the search makes no embedding request"
+			})
+		}
 	})
 })

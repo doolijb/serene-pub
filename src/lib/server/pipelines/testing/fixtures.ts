@@ -529,11 +529,19 @@ export async function insertLorebookBindingRow(
 	lorebookId: number,
 	overrides: Partial<InsertLorebookBinding> = {}
 ) {
+	// The book's next free tag: one member per tag per book
+	// (`lorebook_bindings_binding_unique`).
+	const held = await db
+		.select({ binding: schema.lorebookBindings.binding })
+		.from(schema.lorebookBindings)
+		.where(eq(schema.lorebookBindings.lorebookId, lorebookId))
+	let n = 1
+	while (held.some((r) => r.binding === `{{char:${n}}}`)) n++
 	const [row] = await db
 		.insert(schema.lorebookBindings)
 		.values({
 			lorebookId,
-			binding: "{{char:1}}",
+			binding: `{{char:${n}}}`,
 			...overrides
 		})
 		.returning()

@@ -16,9 +16,12 @@ import { describe, expect, test, vi } from "vitest"
 // enough to short-circuit that import.
 vi.mock("$lib/server/db", () => ({ db: {} }))
 
+/** A progress broadcast, the lane's own — nothing public sends one without a run. */
+const broadcastProgress = (lane: unknown) => (lane as any).broadcast("idle")
+
 describe("vectorizationQueue progress emitter fan-out", () => {
 	test("broadcasts to every registered emitter", async () => {
-		const { registerProgressEmitter, pauseVectorization } = await import(
+		const { registerProgressEmitter, embeddingLane } = await import(
 			"./vectorizationQueue"
 		)
 		const emitterA = vi.fn()
@@ -26,15 +29,15 @@ describe("vectorizationQueue progress emitter fan-out", () => {
 		registerProgressEmitter(emitterA)
 		registerProgressEmitter(emitterB)
 
-		pauseVectorization()
+		broadcastProgress(embeddingLane)
 
 		expect(emitterA).toHaveBeenCalledWith(
 			"vectorization:progress",
-			expect.objectContaining({ status: "paused" })
+			expect.objectContaining({ status: "idle" })
 		)
 		expect(emitterB).toHaveBeenCalledWith(
 			"vectorization:progress",
-			expect.objectContaining({ status: "paused" })
+			expect.objectContaining({ status: "idle" })
 		)
 	})
 
@@ -42,7 +45,7 @@ describe("vectorizationQueue progress emitter fan-out", () => {
 		const {
 			registerProgressEmitter,
 			unregisterProgressEmitter,
-			pauseVectorization
+			embeddingLane
 		} = await import("./vectorizationQueue")
 		const staying = vi.fn()
 		const leaving = vi.fn()
@@ -50,14 +53,14 @@ describe("vectorizationQueue progress emitter fan-out", () => {
 		registerProgressEmitter(leaving)
 
 		unregisterProgressEmitter(leaving)
-		pauseVectorization()
+		broadcastProgress(embeddingLane)
 
 		expect(staying).toHaveBeenCalled()
 		expect(leaving).not.toHaveBeenCalled()
 	})
 
 	test("one emitter throwing doesn't prevent the others from receiving the broadcast", async () => {
-		const { registerProgressEmitter, pauseVectorization } = await import(
+		const { registerProgressEmitter, embeddingLane } = await import(
 			"./vectorizationQueue"
 		)
 		const throwing = vi.fn(() => {
@@ -67,7 +70,7 @@ describe("vectorizationQueue progress emitter fan-out", () => {
 		registerProgressEmitter(throwing)
 		registerProgressEmitter(healthy)
 
-		expect(() => pauseVectorization()).not.toThrow()
+		expect(() => broadcastProgress(embeddingLane)).not.toThrow()
 		expect(healthy).toHaveBeenCalled()
 	})
 })

@@ -211,15 +211,9 @@ async function gateScenario() {
 			bundleHash: `hash-${pluginId}`,
 			enabled,
 			manifest: {
-				surfaces: {
-					panels: [
-						{
-							id: panelId,
-							entry: `ui/${panelId}.html`,
-							title: panelId
-						}
-					]
-				}
+				widgets: [
+					{ id: panelId, title: panelId, component: panelId }
+				]
 			}
 		})
 

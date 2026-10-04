@@ -12,6 +12,7 @@
 	 * sizing) is identical to the live render — the editor is the live layout
 	 * plus guides, which is what makes it WYSIWYG.
 	 */
+	import type { WidgetGridV1, ZoneId } from "@serene-pub/sdk"
 	import type { Snippet } from "svelte"
 	import type { PlacementInput } from "$lib/shared/widgets/context"
 	import {
@@ -19,14 +20,12 @@
 		stackPlacements,
 		widgetItemStyle,
 		widgetsInZone,
-		zoneGridStyle,
-		type GridLayout,
-		type Zone
+		zoneGridStyle
 	} from "./widgetGrid"
 
 	interface Props {
-		layout: GridLayout
-		zone: Zone
+		layout: WidgetGridV1
+		zone: ZoneId
 		/**
 		 * Render a widget's content by id (the parent owns what each id is),
 		 * with the cell geometry this zone just placed it at — the input to its

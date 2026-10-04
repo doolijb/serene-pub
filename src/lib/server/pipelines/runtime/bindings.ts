@@ -31,6 +31,7 @@ import {
 	withBandIntents,
 	isParticipantRef,
 	parseParticipantRef,
+	canonicalParticipantRef,
 	envoySlugOfRef,
 	fieldLabel,
 	formAnswerSchema,
@@ -99,13 +100,20 @@ import type {
 } from "./bindingTypes"
 import {
 	keywordQuery,
-	normaliseTfidf
+	normaliseTfidf,
+	SHELVED_SKIP_REASONS
 } from "$lib/server/pipelines/ranking/keywordQuery"
 import {
 	fuseRanks,
 	disjointOrderings
 } from "$lib/server/pipelines/ranking/strategy"
 import { select } from "$lib/server/pipelines/ranking/select"
+import { applyEligibility } from "$lib/server/pipelines/ranking/eligibility"
+import {
+	placeAttachments,
+	withAttachmentNames
+} from "$lib/server/attachments/placement"
+import { markShownElsewhere } from "$lib/server/pipelines/ranking/shownElsewhere"
 import {
 	entityDocFreq,
 	entityRarity,
@@ -166,15 +174,36 @@ import {
 	type ChannelVoice
 } from "$lib/server/messages/channels"
 import { resolvePostHistoryContext } from "$lib/server/pipelines/prompt/postHistory"
-import type { PostHistoryDiag } from "$lib/server/pipelines/prompt/promptTypes"
+import type {
+	AuthorsNoteDiag,
+	AuthorsNoteTemplateContext,
+	PostHistoryDiag
+} from "$lib/server/pipelines/prompt/promptTypes"
+import {
+	AUTHORS_NOTE_DEPTH_DEFAULT,
+	resolveAuthorsNoteContext
+} from "$lib/server/pipelines/prompt/authorsNote"
+import { stableExamplePick } from "$lib/server/pipelines/prompt/promptFields"
+import {
+	MESSAGE_SCAFFOLD_TOKENS,
+	historyReadTokens,
+	holdCut,
+	isCuttableLine,
+	planTranscriptCut,
+	promptTokens,
+	transcriptCutNote
+} from "$lib/server/pipelines/prompt/transcriptFit"
 import { buildTemplateContext } from "$lib/server/pipelines/prompt/templateContext"
 import {
 	locationVariables,
 	sceneAnchor,
 	slotGuide,
 	stateSummary,
-	withinEarshot
+	withinEarshot,
+	withinReach,
+	withinSight
 } from "$lib/server/pipelines/prompt/adventureContext"
+import { castRelationshipsSection } from "$lib/server/pipelines/prompt/rankedRelationships"
 import {
 	buildBatchPrompt,
 	buildCharacterExtractionPrompt,
@@ -202,6 +231,7 @@ import {
 	rotationTurns,
 	roundRobinEntries,
 	spokenRefsSince,
+	standingTurnPlan,
 	turnOrderSelection,
 	userSplitEntries,
 	type CastRead,
@@ -209,6 +239,8 @@ import {
 	type TurnCandidate,
 	type TurnEntry
 } from "$lib/server/pipelines/runtime/speakerRotation"
+import { TURN_PLAN_WINDOW } from "$lib/server/sessions/turnPlan"
+
 
 /**
  * ⚠ **This file's `Unsupplied` population is ZERO** (R-12, 2026-09-16) — the
@@ -294,8 +326,6 @@ function retrievalParamsFrom(params: any) {
 		)
 	if (typeof params.maxRecursionDepth === "number")
 		retrieval.maxRecursionDepth = params.maxRecursionDepth
-	if (typeof params.matchMode === "string")
-		retrieval.matchMode = params.matchMode
 	// The admission gate's one control. Read here rather than declared and
 	// left — the whole point of this seam is that a number a panel accepted
 	// reaches the code that acts on it, and this file is where the last two
@@ -492,6 +522,70 @@ function scoreLedFrom(params: any): boolean {
 	return params?.scoreLedAllocation === true
 }
 
+/** `core:task/query-windows@1`'s `searchByMeaning`, as the node read it. */
+export type SearchByMeaningSetting = "auto" | "on" | "off"
+
+/**
+ * Whether the semantic mechanism searches this turn, and the sentence that
+ * says why — `core:task/query-windows@1`'s one decision.
+ *
+ * `on` and `off` are what they say. `auto` searches whenever an embedding
+ * model is **set up** — the embed step's connection resolved to one — and
+ * skips only when none is (R5: an optional mechanism that is unavailable is
+ * skipped). Anything that is not one of the three reads as `auto`, the
+ * default.
+ *
+ * ⚠ **Where the model runs is not a question.** A local ONNX model, an
+ * Ollama or KoboldCPP you run yourself and an embedding service billed per
+ * request all search alike: a person sets an embedding service up to be
+ * used for retrieval. For one day (2026-09-29) `auto` searched only with a
+ * model "on this machine", read into ruling F1 (one expensive call per turn);
+ * the owner, 2026-09-30: *"I never said to skip paid services for retrieval,
+ * that's what they are there for. Don't do that."* So nothing about the
+ * connection is read here but that there is one.
+ *
+ * The connection is the embed step's slot, and that slot is held at the star
+ * (`isUnreadSlot`): the host embeds through the star whatever a slot names,
+ * so "set up" means the model the embed actually uses. Whether that model is
+ * *loaded* is the host's moment-to-moment fact, not this Task's: a star that
+ * is not ready still searches here, `embed-text` makes no call, and
+ * `vector-search` names the model — the thing to fix.
+ *
+ * ⚠ The reasons are sentences a person reads (`explainRetrieval` prints them
+ * as "Vector search: …"), and the off ones say what to change. The on ones
+ * are receipt-only: when the search runs, `vector-search` has its own line.
+ */
+export function searchByMeaningDecision(
+	value: unknown,
+	connection: unknown
+): { setting: SearchByMeaningSetting; search: boolean; reason: string } {
+	const setting: SearchByMeaningSetting =
+		value === "on" || value === "off" ? value : "auto"
+	if (setting === "off")
+		return {
+			setting,
+			search: false,
+			reason: "off — Search by meaning is off, so the search makes no embedding request"
+		}
+	if (setting === "on")
+		return {
+			setting,
+			search: true,
+			reason: "on — Search by meaning is on"
+		}
+	if (!connection)
+		return {
+			setting,
+			search: false,
+			reason: "off — Search by meaning is Automatic and no embedding model is set up, so the search makes no embedding request"
+		}
+	return {
+		setting,
+		search: true,
+		reason: "on — Search by meaning is Automatic and an embedding model is set up"
+	}
+}
+
 /**
  * ⚠ **`castEntityNames` was here and is gone** — plan phase 3.
  *
@@ -676,6 +770,35 @@ export function castEntityRefs(
  * Absent when the pool has no such row — a skip whose entry the read withheld —
  * and absent reads downstream as *nothing claimed*, never as *unchanged*.
  */
+/**
+ * The entries a keyword scan found and then ruled out on their own selective
+ * logic, as eligibility verdicts (`exclusions`, plan C2). A copy of one that a
+ * later mechanism brings in is the entry the author said *not here*, and
+ * `core:task/eligibility@1` marks it with this sentence. Disabled and shelved
+ * rows are not verdicts: they never reach any mechanism's pool.
+ */
+export function exclusionsFrom(
+	skipped: readonly any[] | null | undefined
+): Array<{ source: string; id: number | string; reason: string }> {
+	return (skipped ?? [])
+		.filter(
+			(s) =>
+				s?.kind === "excluded" &&
+				s.id !== undefined &&
+				s.source &&
+				// A shelved row (disabled, archived) is not a verdict.
+				!SHELVED_SKIP_REASONS.has(s.reason)
+		)
+		.map((s) => ({
+			source: String(s.source),
+			id: s.id,
+			reason:
+				typeof s.reason === "string" && s.reason
+					? `Ruled out by its own condition: ${s.reason}.`
+					: "Ruled out by its own condition."
+		}))
+}
+
 function withFingerprints(skipped: any[], entries: any[] | null | undefined) {
 	const fingerprintOf = new Map<string, string>()
 	for (const e of entries ?? [])
@@ -750,10 +873,6 @@ const LORE_LANES = [
  * run it — the three lanes and `lorebook-triggers`, which declare identically
  * from one `loreSlots()` helper. Typed against the intersection, so a param one
  * lane adds is not declared read on the others until they declare it too.
- *
- * `retrievalParamsFrom` also tolerates a `matchMode` no definition declares;
- * it is not declared here for that reason, and a definition that grows one
- * has to say so on both sides.
  */
 const LORE_READS = {
 	ports: ["scope"],
@@ -894,12 +1013,9 @@ async function loreFor(
 		messages: messages ?? [],
 		entityRefs: castEntityRefs(cast),
 		retrieval: params.retrieval,
-		// ⚠ Nothing about retrieval *routing* is handed to the scan any more.
-		// The node's `retrievalMode` went in pre-squash migration 0203 and the
-		// per-entry `retrieval_strategy` column in 0204 (both now folded into
-		// `0094_baseline_0_6`), and `availability` went with the
-		// second because reading it was the gate's only purpose here. Every
-		// mechanism runs; one this install cannot run subtracts its signal and
+		// ⚠ Nothing about retrieval *routing* is handed to the scan: there is
+		// no node `retrievalMode`, no per-entry retrieval strategy, and so no
+		// `availability` to consult. Every mechanism runs; one this install cannot run subtracts its signal and
 		// says so in `diagnostics` below, which is why `embedding` is still read.
 		// The run's tokenizer, not this binding's opinion of one. A candidate
 		// counted here is spent against a budget by the ranker and allocated
@@ -928,6 +1044,7 @@ async function loreFor(
 	return ok({
 		main: published,
 		hits: published,
+		exclusions: exclusionsFrom(mineSkipped),
 		skipped: mineSkipped,
 		/**
 		 * ⚠ These were dropped when the one lore query became two, and the loss
@@ -958,6 +1075,11 @@ async function loreFor(
 			admittedByEvidence: result.diagnostics.admittedByEvidence,
 			entities: result.diagnostics.entities,
 			extractorVersion: result.diagnostics.extractorVersion,
+			// This source's share, like `considered`: the regex keys of its
+			// entries that were not run (plan S3), for the receipt's warning.
+			patternsNotRun: result.diagnostics.patternsNotRun.filter(
+				(p) => p.source === source
+			),
 			// Named in the result so "why did RAG not run" is answerable from
 			// the receipt rather than from the embedding settings screen.
 			vectorSearch: embedding?.available
@@ -997,10 +1119,50 @@ const VECTOR_SOURCE_ALIASES: Record<string, string> = {
  * A hit from one of these that has no row in that read was *withheld* by it —
  * character lore belonging to someone other than the speaker, today — and
  * absence is the answer rather than the absence of one. Everything else
- * (messages, graph nodes, cast rows) has no lore row to find and no strategy to
- * honour.
+ * (graph nodes, cast rows) has no lore row to find and no strategy to honour.
  */
 const LORE_SOURCES = new Set(["worldLore", "characterLore", "history"])
+
+/**
+ * What Search by meaning asks the index for: the lorebook's entries, in the
+ * index's vocabulary (`RAG_INDEX_SOURCES`, which the host checks this against
+ * on every read) — `LORE_SOURCES` below, with history spelled `historyEntry`.
+ *
+ * ⚠ **Only sources the prompt can place a ranked hit from** (plan A1). The
+ * index holds four more, and each one cost lore without reaching the prompt:
+ *
+ * - `message` lands in the `messages` band, where the conversation's band
+ *   intent keeps a minimum of six, so the ranker reserves its tokens before
+ *   the lore shares divide the rest — and `assemble` builds the transcript
+ *   from the history read's lines, never from ranked candidates.
+ * - `narrativeNode`, `character` and `persona` have no band; the ranker drops
+ *   them as `excluded_unknown_source`.
+ * - `narrativeRelationship` reaches the `relationships` band with no lane, and
+ *   the relationship sections render only laned ties (`rankedRelationships`).
+ *
+ * All four still took a `maxEntries` place here, ahead of any entry they
+ * outscored, so the turn brought in fewer entries than the control says. The
+ * eager index pass reads the same list, so a turn embeds nothing it will not
+ * search.
+ *
+ * Retrieval over past lines is the entity mechanism's `messages` port, which
+ * is its own band (`recalledLines`) and placed by a template, not by the
+ * ranker's lore pool.
+ */
+/**
+ * The retrieval-on-by-default numbers (R5, ruled 2026-09-30), as the SDK
+ * declares them — read when a node's `params` slot is absent, so an unwired
+ * slot behaves as the declaration says rather than as off.
+ */
+const DEFAULT_ENTITY_MAX_ENTRIES = 5
+const DEFAULT_ENTITY_MAX_MESSAGES = 20
+const DEFAULT_MAX_MENTIONS = 8
+
+export const SEMANTIC_SEARCH_SOURCES = [
+	"worldLore",
+	"characterLore",
+	"historyEntry"
+] as const
 
 /**
  * Every candidate's `source`, in budget vocabulary (`BUDGET_GROUP_ALIASES`,
@@ -1077,16 +1239,19 @@ function capRelationships(
 	if (cap === undefined || cap < 0) return section
 	if (cap === 0) return null
 
-	const out: Record<string, unknown[]> = {}
+	// A `Map`, not `out[name] = …` on a `{}`: the key is a character's name,
+	// and one called `__proto__` set this object's prototype and dropped out
+	// of the section (review 2026-09-29; `groupByOther` has the full note).
+	const out = new Map<string, unknown[]>()
 	let left = cap
 	for (const [name, rels] of Object.entries(section)) {
 		if (left <= 0) break
 		const take = rels.slice(0, left)
 		if (take.length === 0) continue
-		out[name] = take
+		out.set(name, take)
 		left -= take.length
 	}
-	return Object.keys(out).length ? out : null
+	return out.size ? Object.fromEntries(out) : null
 }
 
 /**
@@ -1214,6 +1379,32 @@ export const UNPLAYED_ON_MAIN_REFUSAL =
 	"unplayedOnly reads a side channel's talk since the story's last line — it cannot read the 'main' channel, whose rows are that bound"
 
 /** Transcript rows as prose — one `Name: line` per row, named as the transcript names them; "" when none. */
+/**
+ * What a resolved connection descriptor's pair reads (PLAN-composer-
+ * attachments §5.2): the model's own verdict when the slot named one
+ * (`metadata.readsByModel`), else the endpoint's (`metadata.reads`, judged on
+ * the capability default's model when this is its endpoint — the pair
+ * dispatch resolves a model-less slot to). `null` — reads no media — for an
+ * unwired slot or a world that published no verdict.
+ */
+function readsOfDescriptor(
+	descriptor:
+		| { metadata?: Record<string, unknown>; modelId?: unknown }
+		| null
+		| undefined
+): import("@serene-pub/sdk").ConnectionReadsV1 | null {
+	const md = descriptor?.metadata
+	if (!md) return null
+	const byModel = md.readsByModel as Record<string, unknown> | undefined
+	const modelId = descriptor?.modelId
+	const own =
+		modelId != null && byModel ? byModel[String(modelId)] : undefined
+	const reads = (own ?? md.reads) as
+		| import("@serene-pub/sdk").ConnectionReadsV1
+		| undefined
+	return reads && typeof reads === "object" ? reads : null
+}
+
 function transcriptProseOf(rows: unknown, cast: unknown): string {
 	if (!Array.isArray(rows) || !rows.length) return ""
 	const result = processMessages({
@@ -1680,7 +1871,7 @@ const generateBinding = async (
 	return ok({
 		main: result.text,
 		text: result.text,
-		thinking: result.thinking,
+		reasoning: result.reasoning,
 		// The connection *type*, not the connection: enough to answer
 		// "which provider answered this turn" from the receipt, and
 		// nothing that could be replayed by whoever reads it.
@@ -1992,6 +2183,32 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 			{ ports: ["scope"], params: ["envoy"] }
 		),
 
+		/**
+		 * 🚧 The files a transcript's rows show (PLAN-composer-attachments
+		 * §3.5): one read for every row on the port, keyed by message id. The
+		 * host scopes it to the run's own session — see
+		 * `attachments/history.ts`.
+		 */
+		"core:query/history-attachments@1": reads<typeof C.historyAttachments>(
+			async (
+				input: NodeInput<typeof C.historyAttachments>,
+				ctx: CoreQueryCtx
+			) => {
+				const rows = (input?.messages ?? []) as Array<{ id?: unknown }>
+				const messageIds = rows
+					.map((r) => r?.id)
+					.filter((id): id is number => typeof id === "number" && id > 0)
+				const attachments = messageIds.length
+					? ((await ctx.read("history_attachments", {
+							messageIds,
+							textFileBytes: input?.params?.textFileBytes
+						})) ?? {})
+					: {}
+				return ok({ main: attachments, attachments })
+			},
+			{ ports: ["messages"], params: ["textFileBytes"] }
+		),
+
 		"core:query/session-history@1": reads<typeof C.sessionHistory>(
 			async (
 				input: NodeInput<typeof C.sessionHistory>,
@@ -2016,6 +2233,9 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 					)
 						return halt(UNPLAYED_ON_MAIN_REFUSAL)
 				}
+				const readTokens = historyReadTokens(
+					(input?.budget as { total?: unknown } | undefined)?.total
+				)
 				const messages = await ctx.read("session_messages", {
 					sessionId: input?.scope?.sessionId,
 					/**
@@ -2040,6 +2260,16 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 					 * key, and the fallback is the declared default.
 					 */
 					limit: input?.params?.limit ?? 100,
+					/**
+					 * **Sized by the window** (history window, 2026-10-03):
+					 * with `budget` wired, the host reads the newest rows up to
+					 * twice the budget by a generous estimate (never more than
+					 * `HISTORY_READ_MAX_ROWS`) and `limit` is not read — so
+					 * `assemble`'s transcript fit, not a row count, decides
+					 * where the conversation starts. The talk (`unplayedOnly`)
+					 * keeps its `limit`; the host says the same.
+					 */
+					...(readTokens && !unplayedOnly ? { readTokens } : {}),
 					// Which lane builds this context (20 §7). 'main' is the chat
 					// log and today's exact behaviour; another value is a mode's
 					// declared channel, read on purpose by the pipeline that
@@ -2084,7 +2314,7 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 				})
 			},
 			{
-				ports: ["scope", "messageId"],
+				ports: ["scope", "messageId", "budget"],
 				params: [
 					"limit",
 					"channel",
@@ -2097,6 +2327,44 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 					"priority"
 				]
 			}
+		),
+
+		/**
+		 * 🚧 **The standing turn plan** a character turn plays from (Lair
+		 * character turns, owner ruling 2026-09-30): the newest row carrying
+		 * a turn plan, across every channel, unless a person's line on `main`
+		 * is newer — `standingTurnPlan`, the reading the narrator strategy
+		 * prepares the turns from, so the turn and the order never disagree.
+		 * With `messageId` (a re-voice) only rows older than it count. No
+		 * plan standing: every port absent, and the turn plays from the scene
+		 * as it stands.
+		 */
+		"core:query/turn-plan@1": reads<typeof C.turnPlan>(
+			async (input: NodeInput<typeof C.turnPlan>, ctx: CoreQueryCtx) => {
+				const rows = (await ctx.read("session_messages", {
+					sessionId: input?.scope?.sessionId,
+					channel: "*",
+					limit: TURN_PLAN_WINDOW
+				})) as RotationMessage[]
+				const before =
+					typeof input?.messageId === "number" ? input.messageId : undefined
+				const standing = standingTurnPlan(rows ?? [], before)
+				const stored = (standing?.row.turnPlan ?? null) as {
+					plan?: unknown
+					locationPassage?: unknown
+				} | null
+				if (!stored) return ok({ main: null })
+				const passage =
+					typeof stored.locationPassage === "string" && stored.locationPassage
+						? stored.locationPassage
+						: undefined
+				return ok({
+					main: stored,
+					...(stored.plan !== undefined ? { plan: stored.plan } : {}),
+					...(passage ? { locationPassage: passage } : {})
+				})
+			},
+			{ ports: ["scope", "messageId"] }
 		),
 
 		/**
@@ -2121,7 +2389,9 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 		 *   exist* and *pick one of these*, so a row the author switched off or
 		 *   shelved must not be offered. The scan asks for neither and still
 		 *   sees disabled rows, on purpose, so it can report them on `skipped`
-		 *   with a reason.
+		 *   with a reason. For a place this posture IS a session's place sight
+		 *   (plan A27, `seesPlace(…, "session")`), so the rooms listed are the
+		 *   places `state.locations` holds and every write door takes.
 		 * · `currentCharacterId` passed through, exactly as the lore lanes pass
 		 *   it. This is not a way around the binding-visibility policy: while a
 		 *   character is speaking, another character's private lore stays out
@@ -2159,7 +2429,14 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 					 */
 					limit: clampListingLimit(input?.params?.limit),
 					enabled: true,
-					archived: false
+					archived: false,
+					/**
+					 * Each row's lore links, said from the row (places plan
+					 * B2). Only a literal `true` asks: an unset control, a
+					 * stored `null` or a string in a hand-written document
+					 * reads the rows exactly as they always were.
+					 */
+					withLinks: input?.params?.withLinks === true
 				})
 				// `main` and `entries` carry the same value, on
 				// `session-history`'s terms: `main` is what an unrefined
@@ -2167,7 +2444,10 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 				// than a wrapper is what makes the scope sugar read well.
 				return ok({ main: entries, entries })
 			},
-			{ ports: ["scope"], params: ["entryTypes", "name", "limit"] }
+			{
+				ports: ["scope"],
+				params: ["entryTypes", "name", "limit", "withLinks"]
+			}
 		),
 
 		/**
@@ -2288,6 +2568,7 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 				return ok({
 					main: published,
 					hits: published,
+					exclusions: exclusionsFrom(result.skipped),
 					skipped: withFingerprints(result.skipped ?? [], entries),
 					diagnostics: {
 						...result.diagnostics,
@@ -2337,15 +2618,34 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 			) => {
 				ctx.status?.(STATUS.thinking)
 				/**
-				 * ⚠ **0 is off, and is the shipped default** — the
-				 * `maxRecursionDepth` / `admitThreshold` convention, and the same
-				 * one the entity mechanism uses. Returned before the reads rather than
-				 * after them: a mechanism nobody asked for should cost nothing, not a
-				 * candidate fetch it then throws away.
+				 * A **ceiling, not the switch** (2026-09-29, genre uplift C3).
+				 *
+				 * ⚠ It *was* the switch — 0, the shipped default, was off — and
+				 * that was the defect: this is the chain's last node, so by the
+				 * time 0 said nothing was wanted `embed-text` had already embedded
+				 * the probes, on every turn with an embedding model ready. The
+				 * switch is `query-windows.searchByMeaning` now, on the chain's
+				 * first node, and this ships at 5 — the entity-vector mechanism's
+				 * one-switch-plus-ceiling pair (`mention-spans.maxMentions` +
+				 * `entity-link.maxLinks`).
+				 *
+				 * 0 contributes nothing and returns before the reads — but
+				 * **after the embed**: a 0 here does not spare the probe embed,
+				 * so with a model set up it is an embed thrown away each turn —
+				 * a billed request, on a service. Search by meaning **Off** is
+				 * the switch, and a 0 stored to switch the search off before C3
+				 * is not read as one (no back-compat before distribution, owner
+				 * 2026-09-27).
+				 * Absent (a `params` slot nothing wired) reads as the declared 5,
+				 * the way `topK` below reads as its declared 40: the switch
+				 * upstream already decided whether to search.
 				 */
+				const rawMax = input?.params?.maxEntries
 				const maxEntries = Math.max(
 					0,
-					Number(input?.params?.maxEntries) || 0
+					rawMax === undefined || rawMax === null
+						? 5
+						: Number(rawMax) || 0
 				)
 				/**
 				 * ⚠ **Off `params`, and it was read off `input?.topK`.**
@@ -2360,7 +2660,8 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 				 *
 				 * Clamped at 1: `topK: 0` asks the host for the top nothing, which
 				 * is the mechanism switched off under a name that does not say so.
-				 * `maxEntries` is the switch, one field up.
+				 * The switch is `query-windows.searchByMeaning`, on the chain's
+				 * first node.
 				 */
 				const topK = Math.max(
 					1,
@@ -2431,21 +2732,59 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 				if (!embedding?.available)
 					return off(embedding?.reason ?? "unavailable")
 
+				/**
+				 * Nothing to search with — returned before the candidate reads.
+				 *
+				 * With a model ready, no vectors means one of four things, and
+				 * this node cannot tell which: the retrieval queries asked
+				 * nothing (`searchByMeaning` decided not to search — `off`, or
+				 * `auto` with no embedding model set up), the session has
+				 * no messages yet, the embed step's own `enabled` is Off, or the
+				 * embed failed under `auto` (an API error or a timeout, recovered
+				 * as no vectors). So the sentence names all four rather than
+				 * blaming the switch for a failure. Either way a lorebook fetch
+				 * here would be thrown away, which is the cost the switch exists
+				 * to spare (2026-09-29).
+				 *
+				 * ⚠ With no model loaded the read above answers first, so a
+				 * switched-off turn says "no embedding model" here: this node
+				 * cannot tell "no texts" from "no model" by its vectors. The
+				 * retrieval explanation (`explainRetrieval`) reads
+				 * `query-windows`' own `searchByMeaning: false` and lets that
+				 * reason win.
+				 */
+				const vectors: unknown[] = Array.isArray(input?.vectors)
+					? input.vectors.filter(Array.isArray)
+					: []
+				if (vectors.length === 0)
+					return off(
+						"off — nothing was embedded to search with (Search by meaning did not search, there are no messages yet, or the embed step is off or failed)"
+					)
+
 				const [entries, result] = await Promise.all([
 					ctx.read("lorebook_entries", {
 						sessionId: input?.scope?.sessionId,
 						currentCharacterId:
-							input?.scope?.currentCharacterId ?? null
+							input?.scope?.currentCharacterId ?? null,
+						// The per-speaker subject (C3), on `character-lore`'s
+						// terms: the lore read is this mechanism's visibility
+						// gate, so naming the voice here is what keeps a search
+						// inside a repeating clause to that voice's own lore.
+						...(input?.speaker === undefined
+							? {}
+							: { speaker: input.speaker })
 					}),
 					ctx.read("vector_search", {
 						sessionId: input?.scope?.sessionId,
 						// Several query vectors: the current window and the recent
 						// one are different questions, and one blended embedding
-						// answers neither. No singular `input.vector` alias and no
-						// `input.sources` filter: the definition declares neither
-						// name and nothing supplies them (R-12); the host takes an
-						// absent `sources` as "every source".
+						// answers neither. No singular `input.vector` alias: the
+						// definition declares no such name (R-12).
 						vectors: input?.vectors ?? [],
+						// Chosen here, not declared: the definition has no
+						// `sources` param, so no spec can widen the search past
+						// the lorebook's entries.
+						sources: [...SEMANTIC_SEARCH_SOURCES],
 						topK
 					})
 				])
@@ -2461,6 +2800,50 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 				const visible = new Set(
 					(entries ?? []).map((e: any) => `${e.source}:${e.id}`)
 				)
+				/**
+				 * Each entry's text as the lore read readied it (plan A19):
+				 * decorator lines stripped, `{{char:N}}` named at the session's
+				 * reading. The index keeps the stored text, and a hit only this
+				 * mechanism found reached the prompt with it.
+				 */
+				const readied = new Map<string, string>(
+					(entries ?? [])
+						.filter((e: any) => typeof e.content === "string")
+						.map((e: any) => [`${e.source}:${e.id}`, e.content])
+				)
+				const readiedOf = (hit: any): string =>
+					readied.get(
+						`${VECTOR_SOURCE_ALIASES[hit.source] ?? hit.source}:${hit.id}`
+					) ??
+					hit.content ??
+					""
+				/**
+				 * The cast member the lore read named for an anchored entry
+				 * (`castMember`), so a character-lore hit only this mechanism
+				 * found still says whose it is in the prompt.
+				 */
+				const castMembers = new Map<string, string>(
+					(entries ?? [])
+						.filter((e: any) => typeof e.castMember === "string")
+						.map((e: any) => [`${e.source}:${e.id}`, e.castMember])
+				)
+				/**
+				 * The cast member an anchored entry is about (`lorebookBindingId`),
+				 * off the same read: what `core:task/eligibility@1`'s presence
+				 * rule reads, so a hit only this mechanism found is gated like a
+				 * keyword hit is.
+				 */
+				const memberOfEntry = new Map<string, number>(
+					(entries ?? [])
+						.filter((e: any) => typeof e.lorebookBindingId === "number")
+						.map((e: any) => [`${e.source}:${e.id}`, e.lorebookBindingId])
+				)
+				const castMemberOf = (hit: any): { castMember?: string } => {
+					const name = castMembers.get(
+						`${VECTOR_SOURCE_ALIASES[hit.source] ?? hit.source}:${hit.id}`
+					)
+					return name ? { castMember: name } : {}
+				}
 				const skipped: any[] = []
 				const excluded = new Set<string>()
 				const isEligible = (hit: any) => {
@@ -2469,11 +2852,11 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 					const key = `${source}:${hit.id}`
 					if (excluded.has(key)) return false
 					if (!visible.has(key)) {
-						// A hit with no lore row at all is a message, a graph node
-						// or a cast row: nothing to honour, always eligible.
-						if (!LORE_SOURCES.has(source)) return true
-						// ⚠ A lore row the read declined to return, on the other
-						// hand, is a decision — `lorebook_entries` withholds
+						// Every source searched is a lore source
+						// (`SEMANTIC_SEARCH_SOURCES`), so a hit with no row in
+						// the lore read is one the read declined to return.
+						//
+						// ⚠ That absence is a decision — `lorebook_entries` withholds
 						// character lore that is not the speaker's own. Reading
 						// that absence as "not lore" published every character's
 						// private self-knowledge through this mechanism whoever was
@@ -2534,7 +2917,7 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 					// The vector mechanism builds candidates itself rather than through
 					// keywordQuery, so it is the one place the two mechanisms could have
 					// gone on measuring differently.
-					tokens: ctx.countTokens(hit.content ?? ""),
+					tokens: ctx.countTokens(readiedOf(hit)),
 					/**
 					 * ⚠ **The cosine lands here and no longer on `presetScore`.**
 					 *
@@ -2561,7 +2944,21 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 						)
 					},
 					priority: hit.priority ?? 1,
-					payload: { ...hit, foundBy: "vector-search" }
+					payload: {
+						...hit,
+						content: readiedOf(hit),
+						...castMemberOf(hit),
+						...(memberOfEntry.has(
+							`${VECTOR_SOURCE_ALIASES[hit.source] ?? hit.source}:${hit.id}`
+						)
+							? {
+									lorebookBindingId: memberOfEntry.get(
+										`${VECTOR_SOURCE_ALIASES[hit.source] ?? hit.source}:${hit.id}`
+									)
+								}
+							: {}),
+						foundBy: "vector-search"
+					}
 				})
 
 				// One ranked list per query vector, each filtered independently so a
@@ -2660,7 +3057,7 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 				})
 			},
 			{
-				ports: ["scope", "vectors"],
+				ports: ["scope", "vectors", "speaker"],
 				params: ["maxEntries", "topK", "similarityFalloff"]
 			}
 		),
@@ -2706,8 +3103,21 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 				ctx: CoreQueryCtx
 			) => {
 				const params = input?.params ?? {}
-				const maxEntries = Math.max(0, Number(params.maxEntries) || 0)
-				const maxMessages = Math.max(0, Number(params.maxMessages) || 0)
+				// Absent reads as the declared default (R5: on by default — 5
+				// entries, 20 messages); an explicit 0 is still off.
+				const declared = (v: unknown, fallback: number) =>
+					Math.max(
+						0,
+						v === undefined || v === null ? fallback : Number(v) || 0
+					)
+				const maxEntries = declared(
+					params.maxEntries,
+					DEFAULT_ENTITY_MAX_ENTRIES
+				)
+				const maxMessages = declared(
+					params.maxMessages,
+					DEFAULT_ENTITY_MAX_MESSAGES
+				)
 
 				/**
 				 * ⚠ **0 is off, in both halves** — the `maxRecursionDepth` /
@@ -2749,7 +3159,11 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 					ctx.read("lorebook_entries", {
 						sessionId: input?.scope?.sessionId,
 						currentCharacterId:
-							input?.scope?.currentCharacterId ?? null
+							input?.scope?.currentCharacterId ?? null,
+						// The per-speaker subject (C3), as `vector-search`'s.
+						...(input?.speaker === undefined
+							? {}
+							: { speaker: input.speaker })
 					}),
 					ctx.read("session_messages", {
 						sessionId: input?.scope?.sessionId,
@@ -2983,7 +3397,7 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 				})
 			},
 			{
-				ports: ["scope"],
+				ports: ["scope", "speaker"],
 				params: [
 					"maxEntries",
 					"maxMessages",
@@ -3007,14 +3421,16 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 		 *
 		 * ## This node carries the mechanism's one switch
 		 *
-		 * `maxMentions` is **0 by default and that is off** — the
-		 * `maxRecursionDepth` / `admitThreshold` convention. It is on the
+		 * `maxMentions` is **8 by default** (R5, ruled 2026-09-30: all supported
+		 * retrieval is on by default; it was 0) and **0 is off**. It is on the
 		 * *first* node of the chain deliberately: switched off, this returns
 		 * before it reads anything, `embed-text` is handed no texts and makes
 		 * no model call, and `entity-link` returns before its own read. A mechanism
 		 * nobody asked for costs nothing at all — not a message read and not an
-		 * embedding, which is the cost the semantic mechanism's switch position
-		 * cannot avoid and this one can.
+		 * embedding. (The semantic mechanism's switch sat on its chain's *last*
+		 * node and could not say the same, so every turn with a model ready
+		 * embedded its probes for nothing; since 2026-09-29 it has this shape
+		 * too — `query-windows.searchByMeaning`, below.)
 		 *
 		 * Its sibling `entity-link.maxLinks` is therefore a **ceiling and not a
 		 * second switch**, and ships non-zero: a feature where two controls both
@@ -3027,7 +3443,14 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 				ctx: CoreQueryCtx
 			) => {
 				const params = input?.params ?? {}
-				const maxMentions = Math.max(0, Number(params.maxMentions) || 0)
+				// Absent (a `params` slot nothing wired) reads as the declared
+				// default, as `vector-search`'s `maxEntries` does (R5).
+				const maxMentions = Math.max(
+					0,
+					params.maxMentions === undefined || params.maxMentions === null
+						? DEFAULT_MAX_MENTIONS
+						: Number(params.maxMentions) || 0
+				)
 				if (maxMentions === 0)
 					return ok({
 						main: [],
@@ -3165,11 +3588,11 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 				if (maxLinks === 0)
 					return off("off — no links requested (maxLinks is 0)")
 				// ⚠ Two states with one symptom, and the note has to admit it. The
-				// mechanism's switch is `mention-spans`' `maxMentions`, which ships at 0, so
-				// an empty mention list is *usually* "the mechanism is off" and not "the
-				// scene described nothing" — and this node cannot tell them apart from
-				// an empty array. Naming only the second reads as a false negative on
-				// every default install, now that the receipt renders this line.
+				// mechanism's switch is `mention-spans`' `maxMentions` (on by default
+				// since R5, but a preset may set 0), so an empty mention list may be
+				// "the mechanism is off" as well as "the scene described nothing" —
+				// and this node cannot tell them apart from an empty array, so the
+				// note names both.
 				if (!mentions.length)
 					return off(
 						"nothing to link — no descriptions were found in the window, " +
@@ -3203,11 +3626,35 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 				 * re-deriving visibility here would be a second implementation of
 				 * that rule, free to disagree with the first.
 				 */
+				/**
+				 * ⚠ **With a `speaker`, only what that voice may see is linked**
+				 * (C3). A pool shared across a repeating clause can carry another
+				 * voice's private lore; enriching it would rank a secret higher
+				 * for somebody who must not read it. The same gated read every
+				 * other mechanism uses decides — never a second rule. A null or
+				 * empty speaker is unwired, as on `vector-search` and
+				 * `entity-search` (`character-lore`'s semantics): no gate.
+				 */
+				const speakerWired =
+					typeof input?.speaker === "string" && input.speaker.trim() !== ""
+				const visibleToSpeaker = !speakerWired
+					? null
+					: new Set(
+							(
+								((await ctx.read("lorebook_entries", {
+									sessionId: input?.scope?.sessionId,
+									currentCharacterId:
+										input?.scope?.currentCharacterId ?? null,
+									speaker: input.speaker
+								})) ?? []) as any[]
+							).map((e) => Number(e?.id))
+						)
 				const byId = new Map<number, any>()
 				for (const candidate of pool) {
 					const id = Number(candidate?.id)
 					if (!Number.isFinite(id)) continue
 					if (!LORE_SOURCES.has(String(candidate?.source))) continue
+					if (visibleToSpeaker && !visibleToSpeaker.has(id)) continue
 					if (!byId.has(id)) byId.set(id, candidate)
 				}
 				if (!byId.size) return off("no lore candidates to link against")
@@ -3293,7 +3740,7 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 				})
 			},
 			{
-				ports: ["scope", "candidates", "mentions", "vectors"],
+				ports: ["scope", "candidates", "mentions", "vectors", "speaker"],
 				params: ["maxLinks"]
 			}
 		),
@@ -3725,6 +4172,7 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 		 * `disjoint` below, and `core:task/concat-candidates@1` for what such a
 		 * pipeline meant.
 		 */
+		// ⚠ Test-only: no shipped spec or parity harness runs this node; kept because the SDK catalog declares it (`vector.int.test.ts`).
 		"core:task/merge-candidates@1": reads<typeof C.mergeCandidates>(
 			async (input: NodeInput<typeof C.mergeCandidates>) => {
 				/**
@@ -3869,6 +4317,54 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 		 *     position said the same thing before this existed; now the rule
 		 *     says it rather than the ordering implying it.
 		 */
+		/**
+		 * Who is in the world, and when (plan E-2, R4) — the presences on the
+		 * session's line and the moment it reads at. The host resolves the
+		 * line; this hands both on as the two ports eligibility reads.
+		 */
+		"core:query/cast-presences@1": reads<typeof C.castPresences>(
+			async (
+				input: NodeInput<typeof C.castPresences>,
+				ctx: CoreQueryCtx
+			) => {
+				const read = (await ctx.read("cast_presences", {
+					sessionId: input?.scope?.sessionId
+				})) as { rows?: unknown[]; at?: unknown } | null
+				const rows = Array.isArray(read?.rows) ? read!.rows : []
+				return ok({
+					main: rows,
+					at: read?.at ?? null,
+					diagnostics: { presences: rows.length }
+				})
+			},
+			{ ports: ["scope"] }
+		),
+
+		/**
+		 * The hard gates between the mechanisms and the ranker (plan C2, R2/R4):
+		 * exclusions, secrecy, presence. Marks `ineligible`, never deletes —
+		 * `select` turns each into an `excluded_ineligible` decision with the
+		 * sentence. Pure; see `ranking/eligibility.ts`.
+		 */
+		"core:task/eligibility@1": reads<typeof C.eligibility>(
+			async (input: NodeInput<typeof C.eligibility>) => {
+				const { candidates, diagnostics } = applyEligibility({
+					candidates: Array.isArray(input?.candidates)
+						? input.candidates
+						: [],
+					exclusions: input?.exclusions,
+					speaker:
+						typeof input?.speaker === "string" ? input.speaker : null,
+					presences: Array.isArray(input?.presences)
+						? input.presences
+						: [],
+					at: input?.at ?? null
+				})
+				return ok({ main: candidates, candidates, diagnostics })
+			},
+			{ ports: ["candidates", "exclusions", "speaker", "presences", "at"] }
+		),
+
 		"core:task/concat-candidates@1": reads<typeof C.concatCandidates>(
 			async (input: NodeInput<typeof C.concatCandidates>) => {
 				const orderings: any[][] = (input?.sources ?? []).filter(
@@ -3957,20 +4453,72 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 		 * two formattings of a query are two different sets of results with no
 		 * way to tell which is which, and the speaker fallback reaches through
 		 * participants who have left the session.
+		 *
+		 * ## This node carries the semantic mechanism's one switch
+		 *
+		 * `searchByMeaning` is `auto | on | off`, **`auto` by default**, on the
+		 * chain's *first* node for `mention-spans.maxMentions`' reason: when it
+		 * does not search, this cuts no probes, `embed-text` is handed no texts
+		 * and makes no model call, and `vector-search` returns before its
+		 * candidate reads.
+		 *
+		 *   · **on** — search, with whatever embedding model is set up.
+		 *   · **off** — never search.
+		 *   · **auto** — search whenever an embedding model is set up, and
+		 *     not when none is (R5). Local or a service billed per request
+		 *     alike — the owner, 2026-09-30: *"I never said to skip paid
+		 *     services for retrieval, that's what they are there for."* "Set
+		 *     up" is the embed step's resolved connection —
+		 *     `slot.connectionOf('semantic.arm.embed')` in every shipped spec,
+		 *     a slot held at the star (`isUnreadSlot`: no pick offered, a
+		 *     stored one dropped) because the host embeds through the star
+		 *     whatever the slot names. A Task reading data it was handed: the
+		 *     connection resolves before the run, as `context-budget`'s does.
+		 *
+		 * A value that is none of the three — a boolean stored before the switch
+		 * had three positions — reads as the default, `auto`. Nothing is carried
+		 * across (no back-compat before distribution); it is simply not a value.
+		 *
+		 * Every branch says what it decided, on `diagnostics`: the setting
+		 * (`searchByMeaning`), whether the probes were cut (`searchedByMeaning`)
+		 * and why. `explainRetrieval` reads the pair to let the switch's reason
+		 * win over the model's when nothing was searched.
+		 *
+		 * Until 2026-09-29 the switch was `vector-search.maxEntries = 0`, on the
+		 * last node, and every turn with an embedding model ready — lorebook or
+		 * not — embedded its probes and threw the vectors away: a provider call
+		 * per turn in API mode (genre uplift C3). `maxEntries` is the ceiling
+		 * now, and ships non-zero.
 		 */
 		"core:task/query-windows@1": reads<typeof C.queryWindows>(
 			async (input: NodeInput<typeof C.queryWindows>) => {
+				const decision = searchByMeaningDecision(
+					input?.params?.searchByMeaning,
+					input?.connection
+				)
+				const diagnostics = {
+					searchByMeaning: decision.setting,
+					searchedByMeaning: decision.search,
+					reason: decision.reason
+				}
+				if (!decision.search)
+					return ok({
+						main: { current: [], recent: [] },
+						current: [],
+						recent: [],
+						diagnostics
+					})
 				const params = withDefaults({ semantic: input?.params ?? {} })
 				const windows = queryWindows(
 					input?.messages ?? [],
 					input?.cast ?? {},
 					params.semantic
 				)
-				return ok({ main: windows, ...windows })
+				return ok({ main: windows, ...windows, diagnostics })
 			},
 			{
-				ports: ["messages", "cast"],
-				params: ["currentWindow", "recentWindow"]
+				ports: ["messages", "cast", "connection"],
+				params: ["searchByMeaning", "currentWindow", "recentWindow"]
 			}
 		),
 
@@ -3983,6 +4531,7 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 		 * merge's job, and selecting against a budget is the hybrid ranker's.
 		 * Doing all three in one node would make each of them unswappable.
 		 */
+		// ⚠ Parity-harness-only: no shipped spec runs this node; kept for `parity/harness.ts`.
 		"core:task/rank-semantic@1": reads<typeof C.rankSemantic>(
 			async (input: NodeInput<typeof C.rankSemantic>) => {
 				const params = withDefaults({ semantic: input?.params ?? {} })
@@ -4109,8 +4658,14 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 				 * source spoke for takes `DEFAULT_GROUPS`; a plugin band
 				 * arrives with what it declared and nothing else.
 				 */
-				const { intents, items } = splitCandidates<any>(
+				const { intents, items: arrived } = splitCandidates<any>(
 					input?.candidates ?? []
+				)
+				// The room rule (`shownElsewhere`): an entry the prompt shows
+				// in a slot of its own leaves before ranking, with its reason.
+				const { items, marked: shownElsewhere } = markShownElsewhere(
+					arrived,
+					input?.shownElsewhere
 				)
 				const { groups, declared } = bandsFromIntents(intents)
 				const params = withDefaults({
@@ -4172,12 +4727,13 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 						defaulted: Object.keys(params.groups.share).filter(
 							(band) => !declared.includes(band)
 						),
-						shareNormalisation
+						shareNormalisation,
+						shownElsewhere
 					}
 				})
 			},
 			{
-				ports: ["candidates", "budget"],
+				ports: ["candidates", "budget", "shownElsewhere"],
 				// The cross-source schema the ranker declares, read through
 				// `rankingParamsFrom` / `scoreLedFrom` — every field of it. No
 				// `share` / `maxEntries` / `minEntries`: those are the sources'
@@ -4301,7 +4857,20 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 					turnChannelVoice: (
 						cast as { turnChannelVoice?: ChannelVoice }
 					).turnChannelVoice,
-					pickExample: (n: number) => Math.floor(random() * n)
+					/**
+					 * The example dialogue, picked ONCE per session and speaker
+					 * (B2, 2026-10-03) — never re-drawn from the run's seed, which
+					 * is fresh every turn: a pick that changes moves the reminder
+					 * block's bytes, and a backend that reuses its cache only on an
+					 * exact prefix reprocesses everything after it. A regenerate
+					 * or a swipe keeps it too. The run's random draw stays only for
+					 * a cast read with no session behind it (a test's literal).
+					 */
+					pickExample: stableExamplePick(
+						(cast as { sessionId?: unknown }).sessionId,
+						input?.currentCharacterId ?? cast.currentCharacterId ?? null,
+						random
+					)
 				})
 
 				// The `variables` slot, resolved through the scope chain and already
@@ -4369,6 +4938,12 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 					// room build. One of the two places state reaches a template;
 					// `mergeContext` below is the other. See `withinEarshot`.
 					state: heard,
+					// 🚧 The session's AI replies before this one (AN1), for
+					// the author's note's interval — on the cast read only for
+					// a genre that declares the note (`host.ts`).
+					replyCount: (cast as { replyCount?: unknown }).replyCount as
+						| number
+						| undefined,
 					// Every layout here may be a plugin's engine, so the run rides
 					// along — without it a cancelled run cannot stop them.
 					...run
@@ -4509,6 +5084,43 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 				})
 			},
 			{ ports: ["messages", "cast", "templateContext"] }
+		),
+
+		/**
+		 * 🚧 Each line's attachments, placed (PLAN-composer-attachments §3.5;
+		 * D2/D3). Pure: what the call reads arrives on its connection slot's
+		 * descriptor as `metadata.reads` (computed by the one reading
+		 * predicate, `attachments/readers.ts` `pairReads`, in `world.ts`), the
+		 * way `assemble` reads `metadata.promptFormat`. An unwired slot reads
+		 * no media, so every image is a name. Lines with no files come back
+		 * as the same objects — see `attachments/placement.ts`. Imported
+		 * statically: the contract's 1s budget is for placing, and a module
+		 * load inside the timed body spends it.
+		 */
+		"core:task/place-attachments@1": reads<typeof C.placeAttachments>(
+			async (input: NodeInput<typeof C.placeAttachments>, ctx: TaskCtx) => {
+				const descriptor = input?.connection as
+					| { metadata?: Record<string, unknown>; modelId?: unknown }
+					| null
+					| undefined
+				const result = placeAttachments({
+					lines: (input?.messages ?? []) as any[],
+					attachments: (input?.attachments ?? {}) as any,
+					reads: readsOfDescriptor(descriptor),
+					mediaLookback: input?.params?.mediaLookback,
+					textFileTokens: input?.params?.textFileTokens,
+					countTokens: (t: string) => ctx.countTokens(t)
+				})
+				return ok({
+					main: result.lines,
+					messages: result.lines,
+					notes: result.notes
+				})
+			},
+			{
+				ports: ["messages", "attachments", "connection"],
+				params: ["mediaLookback", "textFileTokens"]
+			}
 		),
 
 		/**
@@ -4662,6 +5274,32 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 				}
 
 				/**
+				 * 🚧 The author's note (AN1), placed against the same messages
+				 * by the same arithmetic — and decided on its own terms: no
+				 * token trigger, an `interval` over the session's replies.
+				 * Absent — no key, no diagnostic — when the context carries
+				 * no note, which is every genre that declares none.
+				 */
+				const ctxAuthorsNote = (input?.templateContext as any)
+					?.authorsNote as AuthorsNoteTemplateContext | undefined
+				let authorsNote: AuthorsNoteTemplateContext | undefined
+				let authorsNoteDiag: AuthorsNoteDiag | undefined
+				if (ctxAuthorsNote && messages.length) {
+					const resolved = resolveAuthorsNoteContext({
+						renderMessages: messages,
+						note: {
+							text: ctxAuthorsNote.text ?? "",
+							depth: ctxAuthorsNote.depth ?? AUTHORS_NOTE_DEPTH_DEFAULT,
+							interval: ctxAuthorsNote.interval ?? 1,
+							role: ctxAuthorsNote.role
+						},
+						replyCount: ctxAuthorsNote.replyCount
+					})
+					authorsNote = resolved.authorsNote
+					authorsNoteDiag = resolved.diagnostics
+				}
+
+				/**
 				 * The wire format this prompt is being written FOR.
 				 *
 				 * From the node's own `connection` slot, which every shipped spec
@@ -4724,37 +5362,178 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 				 * template's own `renderMode` deciding exactly as before.
 				 */
 				const wireMode = input?.connection?.metadata?.wireMode
+				// AN3: whether this connection's chat wire folds depth-placed
+				// system text (`midSystemFor`, projected by `world.ts`).
+				const midSystem = input?.connection?.metadata?.midSystem
 
-				const rendered = await render({
-					allocation,
-					postHistory,
-					template,
-					blocks: input?.params?.blocks,
-					// Resolved from the template slot, so a config written in a
-					// plugin's engine renders with the plugin's assembler rather
-					// than being run through core's (12 §2a).
-					engine,
-					prompts: input?.prompts,
-					templateContext: input?.templateContext,
-					// The template view of the annex, when a spec wired it
-					// (typed templates P6; law T2 says only session-annex with
-					// `view: 'template'` may). Absent otherwise, and then the
-					// template's scope has no `annex` either.
-					annex: input?.annex,
-					// This node's own `variables` slot: how the lore and history
-					// *it* produced are laid out. Separate from the context
-					// builder's slot, because these are post-budget — what fits is
-					// only known here.
-					variables: input?.variables,
-					messages: input?.messages ?? [],
-					promptFormat,
-					completionTemplate,
-					wireMode,
-					// The story string and this node's layouts both render here, and
-					// both can be somebody's engine. Same reason as the context
-					// builder above.
-					...run
-				})
+				const renderWith = (
+					lines: typeof messages,
+					placedReminder: typeof postHistory,
+					placedNote: typeof authorsNote
+				) =>
+					render({
+						allocation,
+						postHistory: placedReminder,
+						authorsNote: placedNote,
+						template,
+						blocks: input?.params?.blocks,
+						// Resolved from the template slot, so a config written in a
+						// plugin's engine renders with the plugin's assembler rather
+						// than being run through core's (12 §2a).
+						engine,
+						prompts: input?.prompts,
+						templateContext: input?.templateContext,
+						// The template view of the annex, when a spec wired it
+						// (typed templates P6; law T2 says only session-annex with
+						// `view: 'template'` may). Absent otherwise, and then the
+						// template's scope has no `annex` either.
+						annex: input?.annex,
+						// This node's own `variables` slot: how the lore and history
+						// *it* produced are laid out. Separate from the context
+						// builder's slot, because these are post-budget — what fits is
+						// only known here.
+						variables: input?.variables,
+						messages: lines,
+						promptFormat,
+						completionTemplate,
+						wireMode,
+						midSystem,
+						// The story string and this node's layouts both render here, and
+						// both can be somebody's engine. Same reason as the context
+						// builder above.
+						...run
+					})
+				let rendered = await renderWith(messages, postHistory, authorsNote)
+
+				/**
+				 * The conversation, fitted to the window (B2, 2026-10-03;
+				 * `prompt/transcriptFit.ts`). Measured on what was RENDERED —
+				 * only this node knows the finished size — and only when that
+				 * is over the budget does anything change: the oldest lines are
+				 * left out in a chunk, at a cut an earlier turn made when one
+				 * still fits, the reminder and the note are placed again among
+				 * the lines that remain, and the prompt is rendered again. A
+				 * prompt that fits is returned exactly as rendered.
+				 *
+				 * The reminder's token trigger is NOT asked again: it was
+				 * answered on the whole conversation, and a cut that made the
+				 * conversation look shorter must not switch the reminder off.
+				 */
+				let transcriptFit: Record<string, unknown> | undefined
+				const fitBudget = Number(input?.budget?.total ?? 0)
+				const count = (t: string) => ctx.countTokens(t)
+				// The executor always hands a counter; a binding called
+				// directly (a unit test's literal ctx) may not, and then there
+				// is nothing to measure with — the render stands as it is.
+				if (
+					fitBudget > 0 &&
+					messages.length &&
+					typeof ctx?.countTokens === "function"
+				) {
+					const measured = promptTokens(rendered, count)
+					const cuttable = (messages as any[]).filter(isCuttableLine)
+					// Each line's cost is only worth counting once the prompt
+					// is over: the ordinary turn pays one measurement.
+					let plan = measured <= fitBudget ? null : planTranscriptCut({
+						ids: cuttable.map((m) => m.id as number),
+						tokens: cuttable.map(
+							(m) =>
+								count(`${m.name ?? ""}: ${m.message ?? ""}`) +
+								MESSAGE_SCAFFOLD_TOKENS
+						),
+						total: measured,
+						budget: fitBudget
+					})
+					let from = 0
+					let held = false
+					let size = measured
+					// A few passes at most: each one re-measures, and a
+					// render that still does not fit cuts again from where
+					// the last cut left it.
+					for (let pass = 0; plan && pass < 4; pass++) {
+						from += plan.from
+						held = pass === 0 && plan.held
+						holdCut(cuttable[from].id as number)
+						const keep = new Set(cuttable.slice(from))
+						const lines = (messages as any[]).filter(
+							(m) => !isCuttableLine(m) || keep.has(m)
+						) as typeof messages
+						let placedReminder = postHistory
+						if (postHistory?.hasContent)
+							placedReminder = (
+								await resolvePostHistoryContext({
+									renderMessages: lines,
+									instructions: postHistory.instructions,
+									charInstructions: postHistory.charInstructions,
+									exampleDialogue: postHistory.exampleDialogue,
+									postHistoryDepth: input?.params?.postHistoryDepth ?? 0,
+									postHistoryTokenTrigger: 0,
+									tokenCounter: { countTokens: count }
+								})
+							).postHistory
+						const placedNote =
+							ctxAuthorsNote && authorsNote
+								? resolveAuthorsNoteContext({
+										renderMessages: lines,
+										note: {
+											text: ctxAuthorsNote.text ?? "",
+											depth: ctxAuthorsNote.depth ?? AUTHORS_NOTE_DEPTH_DEFAULT,
+											interval: ctxAuthorsNote.interval ?? 1,
+											role: ctxAuthorsNote.role
+										},
+										replyCount: ctxAuthorsNote.replyCount
+									}).authorsNote
+								: authorsNote
+						rendered = await renderWith(lines, placedReminder, placedNote)
+						size = promptTokens(rendered, count)
+						// The receipt's placements follow the lines that went out.
+						if (postHistoryDiag && placedReminder?.hasContent)
+							postHistoryDiag = {
+								...postHistoryDiag,
+								targetIndex: placedReminder.targetIndex
+							}
+						if (authorsNoteDiag && placedNote && placedNote !== authorsNote)
+							authorsNoteDiag = {
+								...authorsNoteDiag,
+								targetIndex: placedNote.targetIndex
+							} as typeof authorsNoteDiag
+						const rest = cuttable.slice(from)
+						plan = planTranscriptCut({
+							ids: rest.map((m) => m.id as number),
+							tokens: rest.map(
+								(m) =>
+									count(`${m.name ?? ""}: ${m.message ?? ""}`) +
+									MESSAGE_SCAFFOLD_TOKENS
+							),
+							total: size,
+							budget: fitBudget,
+							fresh: true
+						})
+					}
+					if (from > 0) {
+						transcriptFit = {
+							measured,
+							budget: fitBudget,
+							dropped: from,
+							heldAt: cuttable[from].id,
+							held,
+							final: size
+						}
+						rendered = {
+							...rendered,
+							notes: [
+								...(rendered.notes ?? []),
+								transcriptCutNote({
+									dropped: from,
+									measured,
+									budget: fitBudget,
+									heldAt: cuttable[from].id as number,
+									held
+								})
+							]
+						}
+					}
+				}
 
 				return ok({
 					/**
@@ -4804,7 +5583,20 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 					 * among. Absence is drawn as absence, so the inspector never
 					 * reports a verdict that was never reached.
 					 */
-					...(postHistoryDiag ? { postHistory: postHistoryDiag } : {})
+					...(postHistoryDiag ? { postHistory: postHistoryDiag } : {}),
+					/**
+					 * 🚧 Whether the author's note went in, where, and why not
+					 * (AN1). Undeclared, like `postHistory` beside it: the
+					 * receipt is the reader — the inspector, and the Author's
+					 * note widget's last-reply line.
+					 */
+					...(authorsNoteDiag ? { authorsNote: authorsNoteDiag } : {}),
+					/**
+					 * Whether the conversation was cut to fit, by how much and
+					 * where (B2). Undeclared, like the two above: the receipt is
+					 * the reader. Absent when everything fit.
+					 */
+					...(transcriptFit ? { transcriptFit } : {})
 				})
 			},
 			{
@@ -5692,16 +6484,22 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 				// knock's room, read back by `read-answer` on the press's run.
 				const referent =
 					typeof input?.referent === "string" ? input.referent.trim() : ""
+				// Where it was asked from (plan A27) — the room the Lair's
+				// planner said the party stood in. Words only: a JSON port,
+				// because it is read off a model's document.
+				const vantage =
+					typeof input?.vantage === "string" ? input.vantage.trim() : ""
 				const block: MessageBlock = {
 					kind: "choices",
 					question,
 					...(addressee ? { addressee } : {}),
 					...(referent ? { referent } : {}),
+					...(vantage ? { vantage } : {}),
 					actions
 				}
 				return ok({ main: [block], blocks: [block], text: question, addressee })
 			},
-			{ ports: ["json", "fn", "action", "addressee", "cast", "referent"] }
+			{ ports: ["json", "fn", "action", "addressee", "cast", "referent", "vantage"] }
 		),
 
 		/**
@@ -5717,6 +6515,7 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 					blockId?: string
 					question?: string | null
 					referent?: string | null
+					vantage?: string | null
 					addressee?: string | null
 					characterId?: number | null
 					choice?: string
@@ -5738,6 +6537,7 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 					characterId: form.characterId ?? null,
 					question: form.question ?? null,
 					referent: typeof form.referent === "string" ? form.referent : "",
+					vantage: typeof form.vantage === "string" ? form.vantage : null,
 					values
 				})
 			},
@@ -5838,9 +6638,17 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 		 */
 		"core:task/batch-messages@1": reads<typeof C.batchMessages>(
 			async (input: NodeInput<typeof C.batchMessages>) => {
-				const messages: any[] = Array.isArray(input?.messages)
-					? input.messages
-					: []
+				/**
+				 * Each message's files named after its text (attachments
+				 * follow-ups, owner ruling 2026-10-03) — before the cut, so
+				 * the names count against the batch like the words do. A
+				 * message with no files is the same object, so a transcript
+				 * with none batches exactly as it did.
+				 */
+				const messages: any[] = withAttachmentNames(
+					Array.isArray(input?.messages) ? input.messages : [],
+					input?.attachments as any
+				)
 				const resolved = resolveBatchBudget({
 					batchTokens: input?.params?.batchTokens,
 					sampling: input?.sampling
@@ -5908,7 +6716,7 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 				return ok({ main: out, batches: out })
 			},
 			{
-				ports: ["messages", "sampling"],
+				ports: ["messages", "attachments", "sampling"],
 				params: ["batchTokens", "minBatchMessages"]
 			}
 		),
@@ -6456,7 +7264,8 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 					"row",
 					"channel",
 					"blocks",
-					"sections"
+					"sections",
+					"turnPlan"
 				]
 			}
 		),
@@ -6472,7 +7281,7 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 				input: NodeInput<typeof C.updateMessage>,
 				ctx: OutletCtx
 			) => ok(await ctx.commit(input)),
-			{ ports: ["target", "text", "thinking", "blocks", "sections"] }
+			{ ports: ["target", "text", "reasoning", "blocks", "sections"] }
 		),
 		/**
 		 * Bound 2026-09-17 (plans/29 R-2): the host's commit for both — bytes
@@ -6751,13 +7560,21 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 		 * one created without holding an id across the two. A name nothing
 		 * answers to, and a name TWO entries answer to, are both refused at
 		 * the commit — picking one would link the wrong room silently.
+		 *
+		 * The relationship's descriptor rides through whole (places plan B2):
+		 * `name` and `description` (the port that was `label`) as ports,
+		 * `linkType` and `reverseLinkType` as params. The commit is
+		 * idempotent — a link the book already has answers with its id.
 		 */
 		"core:outlet/link-lore-entries@1": reads<typeof C.linkLoreEntries>(
 			async (
 				input: NodeInput<typeof C.linkLoreEntries>,
 				ctx: OutletCtx
 			) => ok(await ctx.commit(input)),
-			{ ports: ["from", "to", "label"], params: ["linkType"] }
+			{
+				ports: ["from", "to", "name", "description"],
+				params: ["linkType", "reverseLinkType"]
+			}
 		),
 		// Gate-eligible, and that is the mechanism behind "a graph build stops at
 		// the review screen": what comes back is a proposal, not rows.
@@ -6784,6 +7601,10 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 	 * two pins READ differently and a read declaration attaches to the function
 	 * (R-12): the narrator declares `cast` and `currentCharacterId` and none of
 	 * the relationship or speaker ports, so its declaration is its own.
+	 *
+	 * `turnDirection` (genre uplift C2, 2026-09-29): what the person asked
+	 * this narration to do — read by the shared handler exactly as it reads
+	 * the Lair's (`{{turnDirection}}`, absent when blank).
 	 */
 	const templateContext = bindings["core:task/build-template-context@1"]!
 	bindings["core:task/build-narrator-context@1"] = reads<
@@ -6791,7 +7612,15 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 	>(
 		(input: NodeInput<typeof C.buildNarratorContext>, ctx: TaskCtx) =>
 			templateContext(input, ctx),
-		{ ports: ["cast", "currentCharacterId", "prompts", "variables"] }
+		{
+			ports: [
+				"cast",
+				"currentCharacterId",
+				"turnDirection",
+				"prompts",
+				"variables"
+			]
+		}
 	)
 
 	/**
@@ -6942,6 +7771,54 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 			? { turnDirection: turnDirection.trim() }
 			: {}
 
+	/**
+	 * How the cast stand with each other (genre plan F6(a), 2026-09-29):
+	 * `{{castRelationships}}`, the cast-view ties the ranker admitted, as JSON
+	 * keyed by holder and then by whom the view is of — at the indent the graph
+	 * has always been shown at. Absent when nothing was admitted, so
+	 * `{{#if castRelationships}}` is false on a band at share 0 or a cast with
+	 * no ties. The planner's and the scene's alone: no voice declares the port.
+	 */
+	const castRelationshipsOf = (band: unknown): Record<string, unknown> => {
+		const section = castRelationshipsSection(band)
+		return section
+			? { castRelationships: JSON.stringify(section, null, 1) }
+			: {}
+	}
+
+	/**
+	 * Whose lines a party call writes (the Lair's party speech, owner ruling
+	 * 2026-09-30): `{{partySpeakers}}`, one line per speaker in order — the
+	 * name the cast gives them (by row for a picked delver's
+	 * `{ characterId }`, else the name the planner wrote), then what they
+	 * mean to do when the fact says. A nested list is read flat, so
+	 * `[first, rest]` off `split-first@1` arrives as one list. Absent when
+	 * nobody is named, so `{{#if partySpeakers}}` is false.
+	 */
+	const partySpeakersOf = (
+		list: unknown,
+		cast: unknown
+	): Record<string, unknown> => {
+		const facts = (Array.isArray(list) ? list : list == null ? [] : [list])
+			.flat()
+			.filter(
+				(f): f is Record<string, unknown> => !!f && typeof f === "object"
+			)
+		const lines = facts
+			.map((fact) => {
+				const who = sideCharacterIdentity({
+					sideCharacter: fact,
+					cast
+				} as NodeInput<typeof C.buildSideCharacterContext>)
+				const intent =
+					typeof fact.intent === "string" ? fact.intent.trim() : ""
+				if (!who.name) return ""
+				return intent ? `${who.name} — ${intent}` : who.name
+			})
+			.filter(Boolean)
+		return lines.length ? { partySpeakers: lines.join("\n") } : {}
+	}
+
 	bindings["core:task/build-planner-context@1"] = reads<
 		typeof C.buildPlannerContext
 	>(
@@ -6962,7 +7839,9 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 					// (R13): `{{sideTalk}}`, `{{scratchpad}}` — each absent
 					// when unwired, so a switched-off session renders neither.
 					...sideTalkOf(input?.sideTalk, input?.cast),
-					...scratchpadOf(input?.scratchpad)
+					...scratchpadOf(input?.scratchpad),
+					// How the cast stand with each other (F6(a)).
+					...castRelationshipsOf(input?.castRelationships)
 				}),
 				ctx
 			),
@@ -6975,6 +7854,7 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 				"locationEntries",
 				"sideTalk",
 				"scratchpad",
+				"castRelationships",
 				"prompts",
 				"variables"
 			]
@@ -7015,7 +7895,16 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 	>(
 		async (input: NodeInput<typeof C.buildSceneContext>, ctx: TaskCtx) =>
 			mergeContext(
-				asNarrator(input),
+				// 🚧 The party's reach (`placeSight: 'reach'`, owner ruling
+				// 2026-09-30): the Castellan speaking for the party reads the
+				// stats of the party's room and the rooms one way on, before
+				// any variable reads the state. Absent: the session's sight.
+				input?.placeSight === "reach" && input?.state !== undefined
+					? {
+							...asNarrator(input),
+							state: withinReach(input.state, input?.plan, input?.locationEntries)
+						}
+					: asNarrator(input),
 				// Nobody's voice: the scene hears no holder's slot.
 				null,
 				(state) => ({
@@ -7031,11 +7920,16 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 					// is text.
 					plan: input?.plan,
 					...turnDirectionOf(input?.turnDirection),
-					...locationVariables(input?.locationEntries, state as never),
+					// The room `{{location}}` names, the planner's hint included.
+					...locationVariables(input?.locationEntries, state as never, input?.plan),
 					// The unplayed side talk (R13), `{{sideTalk}}`: the
 					// Castellan's narration, when the talk steers or Narrate
 					// was pressed in the Sanctum. Absent when unwired.
-					...sideTalkOf(input?.sideTalk, input?.cast)
+					...sideTalkOf(input?.sideTalk, input?.cast),
+					// How the cast stand with each other (F6(a)).
+					...castRelationshipsOf(input?.castRelationships),
+					// Whose lines a party call writes (the Lair's party speech).
+					...partySpeakersOf(input?.partySpeakers, input?.cast)
 				}),
 				ctx
 			),
@@ -7048,6 +7942,9 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 				"turnDirection",
 				"locationEntries",
 				"sideTalk",
+				"castRelationships",
+				"partySpeakers",
+				"placeSight",
 				"prompts",
 				"variables"
 			]
@@ -7089,6 +7986,84 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 	)
 
 	/**
+	 * **Who the `sideCharacter` fact names** — the one resolution the card,
+	 * `{{char}}`, the seed line and the `speaker` out-port all read.
+	 *
+	 * By row when the fact says so: its `characterId` (a Lair pick names the
+	 * delver, lair pass B15) or its `ref`, a participant reference (a
+	 * Whodunit Answer press names the suspect by the option it carried; plan
+	 * A28 review). A fact that names a row IS that person — the name is a
+	 * label and never a second lookup, so two suspects sharing a name stay
+	 * two people, a renamed card is still them, and a row the cast does not
+	 * seat is still the person it names rather than the first card whose
+	 * name matches. Only a fact with no row resolves by name, and a name the
+	 * cast does not hold is a free-form side character.
+	 *
+	 * - `seated` — the cast member whose card is compiled, or null;
+	 * - `ref` — who the voice is, as a participant reference: the row the
+	 *   fact named, else the seated match, else null (free-form);
+	 * - `named` — whether the fact named anybody at all.
+	 */
+	const sideCharacterIdentity = (
+		input: NodeInput<typeof C.buildSideCharacterContext>
+	): {
+		name: string
+		seated: number | null
+		ref: string | null
+		named: boolean
+		card: object | null
+	} => {
+		const fact = (input?.sideCharacter ?? {}) as {
+			name?: unknown
+			characterId?: unknown
+			ref?: unknown
+			character?: unknown
+		}
+		const cast = input?.cast as any
+		const seats = Array.isArray(cast?.sessionCharacters)
+			? cast.sessionCharacters
+			: []
+		const given = factIdentity(fact)
+		const byRow =
+			given?.id != null
+				? (seats.find((cc: any) => cc?.character?.id === given.id)
+						?.character ?? null)
+				: null
+		const name =
+			typeof fact.name === "string" && fact.name.trim()
+				? fact.name.trim()
+				: typeof byRow?.name === "string"
+					? byRow.name.trim()
+					: ""
+		// Matched on name and nickname alike: either can open a line in a
+		// transcript, and a planner names whichever the conversation uses.
+		const matches = (character: any) => {
+			const known = [character?.name, character?.nickname]
+				.filter((n: unknown): n is string => typeof n === "string")
+				.map((n) => n.trim().toLowerCase())
+			return known.includes(name.toLowerCase())
+		}
+		const seated = given
+			? byRow
+				? (byRow.id as number)
+				: null
+			: name
+				? (seats.find((cc: any) => matches(cc?.character))?.character
+						?.id ?? null)
+				: null
+		return {
+			name,
+			seated,
+			ref: given ? given.ref : seated != null ? `character:${seated}` : null,
+			named: !!given || !!name,
+			card:
+				fact.character && typeof fact.character === "object"
+					? (fact.character as object)
+					: null
+		}
+	}
+
+	/**
 	 * The third surface, and the one place the implementation genuinely differs.
 	 *
 	 * Not an alias, because this node takes a `speaker` in-port the other two do
@@ -7121,69 +8096,23 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 	const asSideCharacter = (
 		input: NodeInput<typeof C.buildSideCharacterContext>
 	) => {
-		// The fact, off the `sideCharacter` in-port (was `speaker` until
-		// 2026-09-16, when that word became the participant reference).
-		const speaker = (input?.sideCharacter ?? {}) as {
-			name?: unknown
-			characterId?: unknown
-			character?: unknown
-		}
+		const who = sideCharacterIdentity(input)
 		const cast = input?.cast as any
-		const seated = Array.isArray(cast?.sessionCharacters)
-			? cast.sessionCharacters
-			: []
-		/**
-		 * By id first — the fact's `characterId`, which a pick carries (lair
-		 * pass B15: Pick who speaks names the delver, not a name) — and then
-		 * by the seated card's own name, so `{{char}}` and the seed line are
-		 * the card's. An id the cast does not seat names nobody.
-		 */
-		const byId =
-			typeof speaker.characterId === "number" ||
-			(typeof speaker.characterId === "string" &&
-				/^\d+$/.test(speaker.characterId))
-				? (seated.find(
-						(cc: any) => cc?.character?.id === Number(speaker.characterId)
-					)?.character ?? null)
-				: null
-		const name =
-			typeof speaker.name === "string" && speaker.name.trim()
-				? speaker.name.trim()
-				: typeof byId?.name === "string"
-					? byId.name.trim()
-					: ""
-		// Matched on name and nickname alike: either can open a line in a
-		// transcript, and a planner names whichever the conversation uses.
-		const matches = (character: any) => {
-			const known = [character?.name, character?.nickname]
-				.filter((n: unknown): n is string => typeof n === "string")
-				.map((n) => n.trim().toLowerCase())
-			return known.includes(name.toLowerCase())
-		}
-		const speaking = byId
-			? (byId.id as number)
-			: name
-				? (seated.find((cc: any) => matches(cc?.character))?.character
-						?.id ?? null)
-				: null
 		return {
 			...input,
-			speakerName: name || undefined,
-			speakerCharacter:
-				speaker.character && typeof speaker.character === "object"
-					? speaker.character
-					: null,
+			speakerName: who.name || undefined,
+			speakerCharacter: who.card,
 			// Only when the port named somebody: a spec that wires no
 			// speaker at all keeps the session's, which is every pipeline
 			// this node served before the adventure genre existed.
-			...(name
+			...(who.named
 				? {
-						currentCharacterId: speaking,
+						currentCharacterId: who.seated,
 						...(cast && typeof cast === "object"
 							? {
 									cast: {
 										...cast,
-										currentCharacterId: speaking
+										currentCharacterId: who.seated
 									}
 								}
 							: {})
@@ -7208,15 +8137,24 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 			input: NodeInput<typeof C.buildSideCharacterContext>,
 			ctx: TaskCtx
 		) => {
-			const prepared = asSideCharacter(input)
-			const speaking = (prepared as { currentCharacterId?: number | null })
-				.currentCharacterId
+			const side = asSideCharacter(input)
+			const voice = sideCharacterIdentity(input).ref
+			// A voice reads the stats of the place the scene is at, and no
+			// other place's (place sight's third looker, `withinSight`) —
+			// before earshot and before any variable reads the state.
+			const prepared =
+				input?.state !== undefined
+					? {
+							...side,
+							state: withinSight(input.state, input?.plan, input?.locationEntries)
+						}
+					: side
 			const built = await mergeContext(
 				prepared,
 				// The one voice that is somebody's: the member this node
 				// derived keeps the slots only they may hear (their whisper),
 				// and nobody else's. A name the cast does not hold is nobody.
-				speaking != null ? `character:${speaking}` : null,
+				voice,
 				(state) => ({
 					...adventureVariables({
 						state,
@@ -7226,38 +8164,42 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 					// The rooms, when wired (lair pass R8): a voice names
 					// the room it stands in now that nothing narrates it.
 					...(input?.locationEntries !== undefined
-						? locationVariables(input.locationEntries, state as never)
+						? locationVariables(input.locationEntries, state as never, input?.plan)
 						: {}),
 					// A room described only in prose (lair pass R9):
 					// `{{locationPassage}}`, absent when blank.
 					...(typeof input?.locationPassage === "string" &&
 					input.locationPassage.trim()
 						? { locationPassage: input.locationPassage.trim() }
-						: {})
+						: {}),
+					// What the person asked a side character's turn to do
+					// (genre uplift C2): `{{turnDirection}}`, absent when
+					// blank — wired by `narrate-character` alone.
+					...turnDirectionOf(input?.turnDirection)
 				}),
 				ctx
 			)
 			if (built.kind !== "ok") return built
 			/**
-			 * ⚠ **The `speaker` out-port is the id this node ALREADY derived**
-			 * (W1, 2026-09-17), spelled as a participant reference — not a
-			 * second resolution.
+			 * ⚠ **The `speaker` out-port is the identity this node ALREADY
+			 * derived** (W1, 2026-09-17), spelled as a participant reference —
+			 * not a second resolution (`sideCharacterIdentity`).
 			 *
-			 * `asSideCharacter` matches the planner's name against the cast to
-			 * decide whose card is compiled and what `{{char}}` renders. Until
-			 * this port existed that answer stopped here, so a lore lane in the
-			 * same clause had no way to be told whose secrets this voice may
-			 * read — and every voice read every character's. Publishing it is
-			 * what lets `core:query/character-lore@1` be wired
-			 * `speaker: $.voices.item.context.speaker` beside it.
+			 * The same answer decides whose card is compiled and what `{{char}}`
+			 * renders, so a lore lane in the same clause is told whose secrets
+			 * this voice may read — `core:query/character-lore@1` wired
+			 * `speaker: $.voices.item.context.speaker` beside it. A fact that
+			 * named a row publishes that row, seated or not.
 			 *
-			 * `null` for a name the cast does not hold — a genuine side
-			 * character is nobody, and the host reads that as nobody's private
-			 * lore rather than as the narrator's omniscience.
+			 * ⚠ `null` for a free-form name the cast does not hold, and the lore
+			 * read takes a null `speaker` as unwired: the run's scope decides
+			 * (`speakerLore.int.test.ts` pins that rule). Where the scope is
+			 * nobody — an action, a multi-agent turn — a free-form voice reads
+			 * as the narrator: an open question (plan A28 review).
 			 */
 			return ok({
 				...(built.value as Record<string, unknown>),
-				speaker: speaking != null ? `character:${speaking}` : null
+				speaker: voice
 			})
 		},
 		{
@@ -7268,6 +8210,7 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 				"plan",
 				"locationEntries",
 				"locationPassage",
+				"turnDirection",
 				"prompts",
 				"variables"
 			]
@@ -7275,6 +8218,34 @@ export function coreBindings(run: RenderRun = {}): Bindings {
 	)
 
 	return bindings
+}
+
+/**
+ * The row a side-character fact names, when it names one: its `characterId`
+ * (a number, or digits), else its `ref` when that is a participant reference
+ * — `character:<id>` names that row; any other reference (an envoy) names
+ * somebody with no card. Undefined when the fact names nobody by row, so the
+ * caller resolves it by name.
+ */
+function factIdentity(fact: {
+	characterId?: unknown
+	ref?: unknown
+}): { id: number | null; ref: string } | undefined {
+	const raw = fact.characterId
+	if (
+		typeof raw === "number" ||
+		(typeof raw === "string" && /^\d+$/.test(raw))
+	) {
+		const id = Number(raw)
+		return { id, ref: `character:${id}` }
+	}
+	if (typeof fact.ref !== "string" || !isParticipantRef(fact.ref)) return undefined
+	const ref = canonicalParticipantRef(fact.ref)
+	const parsed = parseParticipantRef(ref)
+	return {
+		id: parsed.kind === "character" ? participantRowId(parsed.id) : null,
+		ref
+	}
 }
 
 /**

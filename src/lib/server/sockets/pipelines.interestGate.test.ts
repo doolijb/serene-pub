@@ -119,7 +119,7 @@ vi.mock("$lib/shared/sockets/interest", async (importOriginal) => {
 // import time, and `connectSockets` reaches auth. Nothing here may import the
 // real module — doing so opens PGlite — so the handful of exports the graph
 // actually loads are stood in for. `getCryptoSecretKey` is one of them for a
-// second reason as well: `instanceSecret()` in `pipelines.ts` reads it before
+// second reason as well: `pubSecret()` in `pipelines.ts` reads it before
 // every view.
 vi.mock("$lib/server/db", async () => {
 	const schema = await import("$lib/server/db/schema")

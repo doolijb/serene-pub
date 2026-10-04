@@ -4,6 +4,7 @@
  * become drawers, and normalization survives garbage while preserving the
  * user's own template fields.
  */
+import type { LayoutZoneDef } from "@serene-pub/sdk"
 import { describe, expect, it } from "vitest"
 import {
 	defaultZoneLayout,
@@ -11,11 +12,10 @@ import {
 	pinsOnFirstDrop,
 	resolveZone,
 	withWidget,
-	withoutWidget,
-	type ZoneDef
+	withoutWidget
 } from "./schema"
 
-const side = (over: Partial<ZoneDef> = {}): ZoneDef => ({
+const side = (over: Partial<LayoutZoneDef> = {}): LayoutZoneDef => ({
 	kind: "side",
 	side: "right",
 	widgets: [],
@@ -71,7 +71,7 @@ describe("rule resolution", () => {
 	})
 
 	it("strips are rows or hidden, never drawers", () => {
-		const strip: ZoneDef = {
+		const strip: LayoutZoneDef = {
 			kind: "strip",
 			area: "top",
 			widgets: [],

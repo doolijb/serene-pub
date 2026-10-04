@@ -1,15 +1,17 @@
 <script lang="ts">
 	/**
-	 * The Connections sidebar — three views over one list.
+	 * The Connections sidebar — the connections, and what is inside each.
 	 *
-	 * - **index**: every endpoint with its models (`ConnectionIndexView`).
-	 *   Search, one filter, the defaults strip, and the groups. Models are
-	 *   opened from here and only from here.
-	 * - **connection**: one endpoint's own settings — host, key, format,
-	 *   capabilities, stop scripts. It says how many models it has and when
-	 *   they were last checked, and offers Refresh; it does not list or edit
-	 *   them. Models are not managed from the connection view.
-	 * - **model**: one model's own settings (`ModelDetailView`).
+	 * - **index**: the per-modality defaults on top (status strip + jobs
+	 *   grid), then every endpoint as a row or a card with its type, state
+	 *   and model count (`ConnectionIndexView`; notes 42, 2026-10-03). With
+	 *   nothing open at desk width it takes the whole view.
+	 * - **connection**: one endpoint — its status, its MODELS (the Models
+	 *   tab lists them: a table where the pane is wide, model rows where it
+	 *   is not; Use, hide, Refresh, Add by name) and its settings. A managed
+	 *   runtime's view carries the same inside its own tabs.
+	 * - **model**: one model's own settings (`ModelDetailView`), opened from
+	 *   its connection.
 	 *
 	 * ## Models are synced, not imported
 	 *
@@ -21,10 +23,7 @@
 	 * model views, so every open tab moves at once.
 	 */
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
-	import {
-		declareInterest,
-		useInterest
-	} from "$lib/client/sockets/interest.svelte"
+	import { useInterest } from "$lib/client/sockets/interest.svelte"
 	import { getContext, onDestroy, onMount, untrack } from "svelte"
 	import { SvelteMap, SvelteSet } from "svelte/reactivity"
 	import * as Icons from "@lucide/svelte"
@@ -47,6 +46,7 @@
 		type NavView
 	} from "$lib/client/components/connections/navStack"
 	import { serviceLabel } from "$lib/client/components/connections/connectionIndexFilter"
+	import { connectionTypeIcon } from "$lib/client/components/connections/connectionTypeIcon"
 	import ModelRow from "$lib/client/components/connections/ModelRow.svelte"
 	import ConnectionIndexView from "$lib/client/components/connections/ConnectionIndexView.svelte"
 	import { ViewModeTracker } from "$lib/client/shell/viewMode.svelte"
@@ -56,6 +56,16 @@
 	import ConnectionTypeForm from "$lib/client/components/connections/ConnectionTypeForm.svelte"
 	import ConnectionStopScripts from "$lib/client/components/connections/ConnectionStopScripts.svelte"
 	import ModelDetailView from "$lib/client/components/connections/ModelDetailView.svelte"
+	import EmbeddingSwitchDialog from "$lib/client/components/connections/EmbeddingSwitchDialog.svelte"
+	import EntitySwitchDialog from "$lib/client/components/connections/EntitySwitchDialog.svelte"
+	import {
+		useStarConfirm,
+		type StarMove
+	} from "$lib/client/components/connections/useStarConfirm.svelte"
+	import {
+		addressOf,
+		useEmbeddingEditConfirm
+	} from "$lib/client/components/connections/useEmbeddingEditConfirm.svelte"
 	import OnnxModelView from "$lib/client/components/connections/OnnxModelView.svelte"
 	import OnnxEndpointView from "$lib/client/components/connections/OnnxEndpointView.svelte"
 	import type { PairDefaultSelection } from "$lib/client/components/connections/modelSystemDefaults"
@@ -88,18 +98,15 @@
 	} from "$lib/shared/connections/credentials"
 	import { manualAddAllowed } from "$lib/client/components/connections/modelManagement"
 	import DownloadsView from "$lib/client/components/connections/DownloadsView.svelte"
-	import ConnectionsOverview from "$lib/client/components/connections/ConnectionsOverview.svelte"
 	import ModelTable from "$lib/client/components/connections/ModelTable.svelte"
 	import { systemCapabilitiesForModel } from "$lib/client/components/connections/modelSystemDefaults"
 	import { capabilityLabel } from "@serene-pub/sdk"
-	import type { JobTile } from "$lib/client/components/connections/jobTile"
 	import { timeAgo } from "$lib/client/utils/timeAgo"
 	import {
 		sectionForCapability,
 		sectionForModality
 	} from "$lib/shared/constants/connectionSections"
 	import { EMBEDDING_CAPABILITY } from "$lib/shared/constants/embeddings"
-	import { NER_CAPABILITY } from "$lib/shared/constants/ner"
 	import type {
 		ConnectionServiceCategory,
 		ConnectionServiceItem
@@ -190,23 +197,6 @@
 	let initialIndexFilter = $state<string | null>(null)
 	/** The group the index scrolls to on return from a connection or model. */
 	let indexFocusId = $state<number | null>(null)
-	/**
-	 * What the index worked out about readiness, for the full-page empty pane.
-	 *
-	 * Handed up by the index rather than derived again here: the tiles depend
-	 * on live status only that view subscribes to, and a second derivation
-	 * would disagree with the first exactly when something was wrong.
-	 */
-	let overviewFacts = $state<{
-		chat: {
-			modelName: string | null
-			connectionName: string | null
-			problem: string | null
-			set: boolean
-		}
-		tiles: JobTile[]
-		connectionCount: number
-	} | null>(null)
 
 	// ── Data ────────────────────────────────────────────────────────────────
 	let connectionsList: ListRow[] = $state([])
@@ -693,72 +683,59 @@
 
 	// ── Defaults (the star) ─────────────────────────────────────────────────
 	/**
-	 * Star presses waiting on a reindex/re-annotate confirmation.
-	 *
-	 * The confirm dialogs' buttons call `commitSetDefault()` with no
-	 * arguments, so the targets ride here — set by every path before any
-	 * dialog opens. A "default for all" press stages several; the confirms
-	 * chain (reindex, then re-annotate) before the single commit.
-	 *
-	 * ⚠ `$state` since 0.6, and it has to be: the confirmation copy names the
-	 * model it would install ("Switch embeddings to bge-small?"), which is read
-	 * back out of here. While it was a plain `let` the dialog happened to be
-	 * right only because `showReindexModal` flipped in the same tick and
-	 * dragged the derived with it — an invariant nothing states and the next
-	 * caller would not know to keep.
+	 * A star press that throws stored work away asks first — the embedding
+	 * star with the server's price, the entity star with its re-scan count —
+	 * in the one flow every screen that moves a star shares
+	 * (`useStarConfirm`). A "default for all" press stages several; the
+	 * questions chain (re-embed, then re-scan) before the single write. The
+	 * first star on a fresh install, a re-star of the model the index was
+	 * built with, and a second row naming the same address and model cost
+	 * nothing and go straight through.
 	 */
-	interface PendingStarTarget {
-		capability: string
-		id: number
-		modelId: number
-		verb: string
-	}
-	let pendingStars = $state<PendingStarTarget[] | null>(null)
+	const stars = useStarConfirm({
+		getDefaults: () => systemSettingsCtx.capabilityDefaults ?? undefined,
+		modelOf: (connectionId, modelId) => {
+			const connection = connectionsList.find(
+				(c) => c.id === connectionId
+			)
+			const model = connection?.models.find((m) => m.id === modelId)
+			// "…stays on disk" is only true of a model whose FILES this
+			// install owns; a hosted endpoint leaves nothing to switch back to.
+			return model
+				? {
+						name: model.name,
+						isLocal: isLocalOnnxType(connection!.type)
+					}
+				: null
+		},
+		commit: commitSetDefault
+	})
 
-	function commitSetDefault() {
-		const targets = pendingStars ?? []
-		pendingStars = null
-		if (!targets.length) return
-		for (const target of targets)
+	function commitSetDefault(moves: StarMove[]) {
+		for (const move of moves)
 			socket.emit("connections:setDefault", {
-				capability: target.capability,
-				id: target.id,
-				modelId: target.modelId
+				capability: move.capability,
+				id: move.connectionId,
+				modelId: move.modelId
 			})
-		const selected = connectionsList.find((c) => c.id === targets[0].id)
+		const selected = connectionsList.find(
+			(c) => c.id === moves[0]?.connectionId
+		)
 		if (selected)
 			announce(
-				`${selected.name} will be used for ${targets.map((t) => t.verb).join(", ")}`
+				`${selected.name} will be used for ${moves
+					.map(
+						(m) =>
+							sectionForCapability(m.capability)?.starVerb ??
+							m.capability
+					)
+					.join(", ")}`
 			)
 	}
 
 	/**
-	 * Moving the embedding star throws every stored vector away, so it asks
-	 * first — with the real number from the server, not a generic warning.
-	 * Only when a DIFFERENT pair is already starred: the first star on a
-	 * fresh install costs nothing and must not open a scary dialog.
-	 */
-	let showReindexModal = $state(false)
-	/**
-	 * The whole estimate, not just the row count.
-	 *
-	 * `byKind`/`lorebooks`/`sessions` are OPTIONAL on the wire, and the
-	 * confirmation says "every entry in N lorebooks and the history of M
-	 * sessions" only when they arrive. A server that answers with the bare
-	 * `rows` still gets a correct dialog with one clause fewer.
-	 */
-	let reindexCost = $state<Sockets.Vectorization.ReindexCost.Response | null>(
-		null
-	)
-	const reindexRows = $derived(reindexCost?.rows ?? null)
-	function handleReindexCost(
-		msg: Sockets.Vectorization.ReindexCost.Response
-	) {
-		reindexCost = msg
-	}
-
-	/**
-	 * What the confirmation is switching FROM, resolved off the list.
+	 * The model starred for a capability, resolved off the list — what an
+	 * edit's confirmation names as the model it keeps.
 	 *
 	 * Named rather than counted: "Replaces bge-small" is a sentence a person
 	 * can check against what they believe is running, and "Keep bge-small" on
@@ -775,48 +752,6 @@
 			(m) => m.id === def.connectionModelId
 		)
 		return model ? { model, connection } : null
-	}
-	const stagedTargetFor = (capability: string) =>
-		pendingStars?.find((t) => t.capability === capability) ?? null
-	/** The model a staged switch would install, by name. */
-	function stagedModelName(capability: string): string | null {
-		const target = stagedTargetFor(capability)
-		if (!target) return null
-		const connection = connectionsList.find((c) => c.id === target.id)
-		return (
-			connection?.models.find((m) => m.id === target.modelId)?.name ??
-			null
-		)
-	}
-	const embeddingCurrent = $derived.by(() =>
-		showReindexModal ? currentDefaultModel(EMBEDDING_CAPABILITY) : null
-	)
-	const embeddingNext = $derived.by(() =>
-		showReindexModal ? stagedModelName(EMBEDDING_CAPABILITY) : null
-	)
-	/** The same disclosure for the entity star, with its own count. */
-	let showReannotateModal = $state(false)
-	let reannotateRows = $state<number | null>(null)
-	const entityCurrent = $derived.by(() =>
-		showReannotateModal ? currentDefaultModel(NER_CAPABILITY) : null
-	)
-	const entityNext = $derived.by(() =>
-		showReannotateModal ? stagedModelName(NER_CAPABILITY) : null
-	)
-	/**
-	 * "…stays on disk" is only true of a model whose FILES this install owns.
-	 * A hosted embedding endpoint leaves nothing behind to switch back to, so
-	 * the line is dropped rather than made vaguely true.
-	 */
-	const embeddingCurrentIsLocal = $derived(
-		embeddingCurrent?.connection?.type ===
-			CONNECTION_TYPE.LOCAL_ONNX_EMBEDDINGS
-	)
-	const entityCurrentIsLocal = $derived(
-		entityCurrent?.connection?.type === CONNECTION_TYPE.LOCAL_ONNX_NER
-	)
-	function handleNerStatus(msg: Sockets.Ner.Status.Response) {
-		reannotateRows = msg.annotatedRows
 	}
 	/**
 	 * A per-MODEL default choice from the model view — one capability, or
@@ -889,8 +824,12 @@
 			{ kind: "one", capability }
 		)
 	}
-	/** The dock's inline model list on an API connection's view. */
-	let dockModelsOpen = $state(false)
+	/**
+	 * The Models tab's own measured width: a table from 640px, model rows
+	 * under it. Measured, not `viewMode` — at Half the view is compact while
+	 * the pane is wide enough for the table.
+	 */
+	let modelsPaneWidth = $state(0)
 
 	function handlePairDefault(
 		connectionId: number,
@@ -901,76 +840,13 @@
 			selection.kind === "all"
 				? selection.capabilities
 				: [selection.capability]
-		const current = systemSettingsCtx.capabilityDefaults ?? {}
-		const targets: PendingStarTarget[] = []
-		for (const capability of capabilities) {
-			const def = current[capability]
-			if (
-				def?.connectionId === connectionId &&
-				(def?.connectionModelId ?? null) === model.id
-			)
-				continue
-			targets.push({
+		stars.stage(
+			capabilities.map((capability) => ({
 				capability,
-				id: connectionId,
-				modelId: model.id,
-				verb: sectionForCapability(capability)?.starVerb ?? capability
-			})
-		}
-		if (!targets.length) return
-		pendingStars = targets
-		maybeConfirmStar()
-	}
-	/** Whether staging this target throws stored work away. */
-	function targetSwitchesPair(
-		target: PendingStarTarget,
-		capability: string
-	): boolean {
-		if (target.capability !== capability) return false
-		const current =
-			systemSettingsCtx.capabilityDefaults?.[target.capability]
-		if (current?.connectionId == null) return false
-		return (
-			current.connectionId !== target.id ||
-			(current.connectionModelId ?? null) !== target.modelId
+				connectionId,
+				modelId: model.id
+			}))
 		)
-	}
-	const stagesNer = () =>
-		!!pendingStars?.some(
-			(t) =>
-				sectionForCapability(t.capability)?.modality === "ner" &&
-				targetSwitchesPair(t, t.capability)
-		)
-	function maybeConfirmStar() {
-		if (!pendingStars?.length) return
-		if (
-			pendingStars.some((t) =>
-				targetSwitchesPair(t, EMBEDDING_CAPABILITY)
-			)
-		) {
-			reindexCost = null
-			socket.emit("vectorization:reindexCost", {})
-			showReindexModal = true
-			return
-		}
-		if (stagesNer()) {
-			reannotateRows = null
-			socket.emit("ner:status", {})
-			showReannotateModal = true
-			return
-		}
-		commitSetDefault()
-	}
-	/** The reindex confirm chains into the re-annotate one when both are staged. */
-	function confirmReindexModal() {
-		showReindexModal = false
-		if (stagesNer()) {
-			reannotateRows = null
-			socket.emit("ner:status", {})
-			showReannotateModal = true
-			return
-		}
-		commitSetDefault()
 	}
 
 	// ── Create / update / delete ────────────────────────────────────────────
@@ -1049,8 +925,44 @@
 	function handleNewConnectionCancel() {
 		showNewConnectionModal = false
 	}
-	function handleUpdate() {
-		socket.emit("connections:update", { connection })
+	/**
+	 * Saving an edit of the starred embedding connection that makes it
+	 * another model — another host — re-embeds the index, so it asks first,
+	 * with the star's own confirmation (`useEmbeddingEditConfirm`). A
+	 * respelled address is the same model and saves straight away.
+	 */
+	const embeddingEdits = useEmbeddingEditConfirm()
+	async function handleUpdate() {
+		if (!connection) return
+		const draft = $state.snapshot(connection)
+		const before = originalConnection
+		if ((draft.baseUrl ?? "") !== (before?.baseUrl ?? "")) {
+			const starred = currentDefaultModel(EMBEDDING_CAPABILITY)
+			const name = starred?.model.name ?? draft.name
+			const ok = await embeddingEdits.confirmEdit({
+				connectionId: draft.id,
+				edit: { baseUrl: draft.baseUrl ?? "" },
+				currentName: `${name} at ${addressOf(before?.baseUrl)}`,
+				nextName: `${name} at ${addressOf(draft.baseUrl)}`
+			})
+			if (!ok) return
+		}
+		socket.emit("connections:update", { connection: draft })
+	}
+	/** The same question for renaming the starred model's identifier. */
+	function confirmIdentifier(
+		connectionId: number,
+		row: { id: number; model: string },
+		next: string
+	): Promise<boolean> {
+		if (next.trim() === row.model.trim()) return Promise.resolve(true)
+		return embeddingEdits.confirmEdit({
+			connectionId,
+			modelId: row.id,
+			edit: { model: next },
+			currentName: row.model,
+			nextName: next.trim()
+		})
 	}
 	function handleReset() {
 		connection = { ...originalConnection }
@@ -1314,26 +1226,6 @@
 		"connections:syncModels:error",
 		handleSyncModelsError
 	)
-	/**
-	 * The re-index estimate. `vectorization:reindexCost` is not in
-	 * `SCOPED_EVENTS` (it prices the whole index, not one book), and the panel
-	 * asks for it again whenever the embedding model picker moves, so the key
-	 * has to outlive each request.
-	 */
-	useInterest<"vectorization:reindexCost">(
-		"vectorization:reindexCost",
-		handleReindexCost
-	)
-	/**
-	 * `ner:` is restricted interest — every handler in that family is
-	 * admin-only. The registry would refuse this key for a non-admin anyway;
-	 * asking first keeps the refusal out of the dev console for the many
-	 * non-admins who open this panel to read the list.
-	 */
-	$effect(() => {
-		if (!userCtx.user?.isAdmin) return
-		return declareInterest<"ner:status">("ner:status", handleNerStatus)
-	})
 
 	onMount(() => {
 		socket.emit("connections:list", {})
@@ -1408,22 +1300,34 @@
 	</div>
 
 	<!--
-		340px of list, the rest is detail (STYLE-GUIDE §4.2). It was 380px,
-		which made the list column NARROWER at full page than in the 400px
-		dock — so expanding the view truncated more, not less.
-
-		`empty` rather than `emptyMessage`: the pane with nothing selected is
-		the readiness dashboard, not the line "Pick a connection, or add one."
-		centred in 1,150px.
+		The connections are the view (notes 42, owner 2026-10-03). With nothing
+		open at desk width the index takes the whole view — the defaults on
+		top, the connections as rows or cards under them, centred at the
+		app's reading width (§5.3) — rather than a 340px column beside a
+		dashboard pane: the list the view is named for is the main thing on
+		it, not a sidebar to it. Opening a connection (or a job, the finder,
+		Downloads) splits it: 340px of list, the rest detail (§4.2). It was
+		380px, which made the list column NARROWER at full page than in the
+		400px dock — so expanding the view truncated more, not less.
 	-->
-	<PanelSplit
-		mode={viewMode.mode}
-		hasDetail={view !== "index"}
-		listWidth="340px"
-		list={indexPane}
-		detail={detailPane}
-		empty={overviewPane}
-	/>
+	{#if viewMode.mode === "desk" && view === "index"}
+		<div
+			class="@container/list flex min-h-0 flex-1 flex-col overflow-y-auto p-4"
+			data-connections-index-full
+		>
+			<div class="mx-auto flex min-h-0 w-full max-w-[1120px] flex-1 flex-col">
+				{@render indexPane()}
+			</div>
+		</div>
+	{:else}
+		<PanelSplit
+			mode={viewMode.mode}
+			hasDetail={view !== "index"}
+			listWidth="340px"
+			list={indexPane}
+			detail={detailPane}
+		/>
+	{/if}
 </div>
 
 {#snippet indexPane()}
@@ -1449,23 +1353,7 @@
 		onOpenDownloads={() => openDownloads(true)}
 		onRefresh={(row) => requestSync(row.id, true)}
 		onAddModel={handleAddModel}
-		onFacts={(facts) => (overviewFacts = facts)}
 	/>
-{/snippet}
-
-<!--
-	The detail pane at full page with nothing open. See `ConnectionsOverview`:
-	`PanelSplit` has always taken this snippet and nobody had passed one.
--->
-{#snippet overviewPane()}
-	{#if overviewFacts}
-		<ConnectionsOverview
-			tiles={overviewFacts.tiles}
-			connectionCount={overviewFacts.connectionCount}
-			onOpenCapability={(capability) => openCapability(capability, true)}
-			onGetModel={() => openFinder({}, true)}
-		/>
-	{/if}
 {/snippet}
 
 {#snippet detailPane()}
@@ -1599,7 +1487,7 @@
 			     disclosure, open by default only when a note exists —
 			     a person who wrote one wants to see it. -->
 			<details
-				class="group border-surface-300-700 rounded-lg border"
+				class="group panel-edge rounded-lg border"
 				open={!!connection.notes}
 			>
 				<summary
@@ -1664,6 +1552,8 @@
 			onRefresh={() => requestSync(connectionId, true)}
 			onOpenManager={openManager}
 			onRemoved={handleModelRemoved}
+			confirmIdentifier={(row, next) =>
+				confirmIdentifier(connectionId, row, next)}
 		/>
 	{/if}
 {/snippet}
@@ -1809,7 +1699,7 @@
 	<span
 		class="shrink-0 rounded-full px-1.5 py-0.5 text-[11px] font-normal {managed
 			? 'preset-tonal-tertiary'
-			: 'border-surface-300-700 text-surface-600-400 border'}"
+			: 'panel-edge text-surface-600-400 border'}"
 	>
 		{paneService}
 	</span>
@@ -1835,7 +1725,10 @@
 		<div class="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto pb-2">
 			<DetailHero
 				title={paneTitle}
-				icon={Icons.Plug}
+				icon={connectionTypeIcon(
+					connection?.type ?? selectedRow?.type,
+					Icons.Plug
+				)}
 				chips={showPaneChip ? paneServiceChip : undefined}
 			/>
 			{#if !connection}
@@ -2017,61 +1910,61 @@
 								</button>
 							</div>
 							<!--
-								At desk width the models are a TABLE, with the
-								context and price columns 400px cannot hold. In
-								the dock the same rows are `ModelRow`s, shown
-								in place under "Show N models" — one list, two shapes.
+								The connection's models, listed in place — this is
+								where models live now (notes 42): the index lists
+								connections, and opening one shows what it holds.
+								Where the pane is wide they are a TABLE, with the
+								context and price columns 400px cannot hold;
+								narrower, the same models are `ModelRow`s. One
+								list, two shapes, decided by the pane's own
+								measured width — at Half the detail is ~650px and
+								takes the table, in the dock it takes rows.
 							-->
-							{#if viewMode.mode === "desk" && selectedRow.models.length}
-								<ModelTable
-									models={selectedRow.models}
-									defaultsByModel={defaultsByModel(
-										selectedRow
-									)}
-									local={endpointKind(connection.type) !==
-										"api"}
-									onOpen={(modelId) =>
-										openModel(connection.id, modelId)}
-									onUse={(modelId) =>
-										useModelOn(selectedRow, modelId)}
-									onToggleEnabled={(modelId, enabled) =>
-										socket.emit("connections:updateModel", {
-											id: connection.id,
-											modelId,
-											model: { enabled }
-										})}
-								/>
+							{#if selectedRow.models.length}
+								<div class="min-w-0" bind:clientWidth={modelsPaneWidth}>
+									{#if modelsPaneWidth >= 640}
+										<ModelTable
+											models={selectedRow.models}
+											defaultsByModel={defaultsByModel(
+												selectedRow
+											)}
+											local={endpointKind(connection.type) !==
+												"api"}
+											onOpen={(modelId) =>
+												openModel(connection.id, modelId)}
+											onUse={(modelId) =>
+												useModelOn(selectedRow, modelId)}
+											onToggleEnabled={(modelId, enabled) =>
+												socket.emit("connections:updateModel", {
+													id: connection.id,
+													modelId,
+													model: { enabled }
+												})}
+										/>
+									{:else}
+										{@const byModel = defaultsByModel(selectedRow)}
+										<div class="flex flex-col gap-3" data-connection-models>
+											{#each selectedRow.models as m (m.id)}
+												<ModelRow
+													model={m}
+													defaultFor={byModel[m.id] ?? []}
+													canUse={!!(
+														m.satisfiableCapabilities ?? []
+													).length &&
+														m.enabled !== false &&
+														!(byModel[m.id] ?? []).length}
+													onOpen={() =>
+														openModel(connection.id, m.id)}
+													onUse={() =>
+														useModelOn(selectedRow, m.id)}
+												/>
+											{/each}
+										</div>
+									{/if}
+								</div>
 							{/if}
-							<div class="flex flex-wrap gap-2">
-								{#if selectedRow.models.length && viewMode.mode !== "desk"}
-									<!-- The dock's list, in place. "Browse
-									     models" went back to the index, which
-									     has listed no models since R1 (plan
-									     2026-09-24 C3). -->
-									<button
-										type="button"
-										class="btn btn-sm preset-tonal"
-										aria-expanded={dockModelsOpen}
-										onclick={() =>
-											(dockModelsOpen = !dockModelsOpen)}
-									>
-										{dockModelsOpen
-											? "Hide models"
-											: `Show ${selectedRow.models.length} models`}
-										{#if dockModelsOpen}
-											<Icons.ChevronUp
-												size={14}
-												aria-hidden="true"
-											/>
-										{:else}
-											<Icons.ChevronDown
-												size={14}
-												aria-hidden="true"
-											/>
-										{/if}
-									</button>
-								{/if}
-								{#if manualAddAllowed(connection.type)}
+							{#if manualAddAllowed(connection.type)}
+								<div class="flex flex-wrap gap-2">
 									<button
 										type="button"
 										class="btn btn-sm hover:preset-tonal"
@@ -2085,25 +1978,6 @@
 										/>
 										Add by name
 									</button>
-								{/if}
-							</div>
-							{#if dockModelsOpen && viewMode.mode !== "desk"}
-								{@const byModel = defaultsByModel(selectedRow)}
-								<div class="flex flex-col gap-3">
-									{#each selectedRow.models as m (m.id)}
-										<ModelRow
-											model={m}
-											defaultFor={byModel[m.id] ?? []}
-											canUse={!!(
-												m.satisfiableCapabilities ?? []
-											).length &&
-												!(byModel[m.id] ?? []).length}
-											onOpen={() =>
-												openModel(connection.id, m.id)}
-											onUse={() =>
-												useModelOn(selectedRow, m.id)}
-										/>
-									{/each}
 								</div>
 							{/if}
 							{#if addByNameOpen}
@@ -2111,7 +1985,7 @@
 								     compatible endpoint with no /models, a
 								     catalogue that lags a launch. -->
 								<form
-									class="border-surface-300-700 flex flex-col gap-2 border-t pt-2"
+									class="panel-edge flex flex-col gap-2 border-t pt-2"
 									onsubmit={(e) => {
 										e.preventDefault()
 										submitAddByName()
@@ -2212,7 +2086,7 @@
 		{#if connection && unsavedChanges}
 			<!-- Only while there is something to save. -->
 			<div
-				class="border-surface-300-700 bg-surface-50-950 flex shrink-0 gap-2 border-t pt-2"
+				class="panel-edge bg-surface-50-950 flex shrink-0 gap-2 border-t pt-2"
 				role="toolbar"
 				aria-label="Unsaved changes"
 			>
@@ -2392,239 +2266,13 @@
 </Dialog>
 <!-- Switching the embedding connection re-indexes everything. The number is
      the whole point of this dialog. -->
-<Dialog
-	open={showReindexModal}
-	onOpenChange={(e) => (showReindexModal = e.open)}
->
-	<Portal>
-		<Dialog.Backdrop
-			class="bg-surface-50-950/50 fixed inset-0 z-50 backdrop-blur-sm"
-		/>
-		<Dialog.Positioner
-			class="fixed inset-0 z-50 flex items-center justify-center p-4"
-		>
-			<Dialog.Content
-				class="card bg-surface-100-900 w-full max-w-lg space-y-5 p-6 shadow-xl"
-			>
-				<div
-					role="alertdialog"
-					aria-labelledby="reindex-title"
-					aria-describedby="reindex-desc"
-				>
-					<header>
-						<h2 id="reindex-title" class="h2 text-lg font-bold">
-							{embeddingNext
-								? `Switch embeddings to ${embeddingNext}?`
-								: "Switch the embedding model?"}
-						</h2>
-						<p class="text-surface-600-400 mt-1 text-sm">
-							{#if embeddingCurrent}
-								Replaces {embeddingCurrent.model.name} as the one
-								embedding model for this install.
-							{:else if embeddingNext}
-								Sets {embeddingNext} as the embedding model for this
-								install.
-							{:else}
-								One embedding model runs for this whole install.
-							{/if}
-						</p>
-					</header>
-					<!-- What it costs, boxed: three consequences, each its own
-					     line, most expensive first. NO time estimate — nothing
-					     in the queue measures throughput, so there is no honest
-					     rate to put here. -->
-					<article
-						id="reindex-desc"
-						class="preset-tonal-surface mt-4 space-y-2 rounded-lg p-3 text-sm"
-					>
-						<p class="flex items-start gap-2">
-							<Icons.AlertTriangle
-								class="text-warning-500 mt-0.5 h-4 w-4 shrink-0"
-								aria-hidden="true"
-							/>
-							<span>
-								{#if reindexRows === null}
-									<span class="text-surface-600-400">
-										Counting what is stored…
-									</span>
-								{:else}
-									<strong class="font-semibold">
-										{reindexRows.toLocaleString()}
-										stored {reindexRows === 1
-											? "vector is"
-											: "vectors are"} re-embedded
-									</strong>
-									{#if reindexCost?.lorebooks || reindexCost?.sessions || reindexCost?.byKind}
-										{#if reindexCost.lorebooks || reindexCost.sessions}
-											<span>
-												— every entry in {(
-													reindexCost.lorebooks ?? 0
-												).toLocaleString()}
-												{(reindexCost.lorebooks ??
-													0) === 1
-													? "lorebook"
-													: "lorebooks"} and the history
-												of {(
-													reindexCost.sessions ?? 0
-												).toLocaleString()}
-												{(reindexCost.sessions ?? 0) ===
-												1
-													? "session"
-													: "sessions"}.
-											</span>
-										{/if}
-									{/if}
-									<span>
-										Vectors from the old model don't match
-										the new one.
-									</span>
-								{/if}
-							</span>
-						</p>
-						<p class="text-surface-600-400">
-							Until it finishes, retrieval answers from keywords
-							only.
-						</p>
-						{#if embeddingCurrentIsLocal}
-							<p class="text-surface-600-400">
-								{embeddingCurrent?.model.name} stays on disk. Switching
-								back later re-embeds again.
-							</p>
-						{/if}
-					</article>
-					<footer class="mt-5 flex justify-end gap-2">
-						<button
-							type="button"
-							class="btn preset-filled-surface-500"
-							onclick={() => {
-								showReindexModal = false
-								pendingStars = null
-							}}
-						>
-							{embeddingCurrent
-								? `Keep ${embeddingCurrent.model.name}`
-								: "Cancel"}
-						</button>
-						<button
-							type="button"
-							class="btn preset-filled-primary-500"
-							onclick={confirmReindexModal}
-						>
-							<Icons.RefreshCw size={16} aria-hidden="true" />
-							Switch and re-embed
-						</button>
-					</footer>
-				</div>
-			</Dialog.Content>
-		</Dialog.Positioner>
-	</Portal>
-</Dialog>
-<Dialog
-	open={showReannotateModal}
-	onOpenChange={(e) => (showReannotateModal = e.open)}
->
-	<Portal>
-		<Dialog.Backdrop
-			class="bg-surface-50-950/50 fixed inset-0 z-50 backdrop-blur-sm"
-		/>
-		<Dialog.Positioner
-			class="fixed inset-0 z-50 flex items-center justify-center p-4"
-		>
-			<Dialog.Content
-				class="card bg-surface-100-900 w-full max-w-lg space-y-5 p-6 shadow-xl"
-			>
-				<div
-					role="alertdialog"
-					aria-labelledby="reannotate-title"
-					aria-describedby="reannotate-desc"
-				>
-					<header>
-						<h2 id="reannotate-title" class="h2 text-lg font-bold">
-							{entityNext
-								? `Switch entity extraction to ${entityNext}?`
-								: "Switch the entity model?"}
-						</h2>
-						<p class="text-surface-600-400 mt-1 text-sm">
-							{#if entityCurrent}
-								Replaces {entityCurrent.model.name} as the one entity
-								model for this install.
-							{:else if entityNext}
-								Sets {entityNext} as the entity model for this install.
-							{:else}
-								One entity model runs for this whole install.
-							{/if}
-						</p>
-					</header>
-					<article
-						id="reannotate-desc"
-						class="preset-tonal-surface mt-4 space-y-2 rounded-lg p-3 text-sm"
-					>
-						<p class="flex items-start gap-2">
-							<Icons.AlertTriangle
-								class="text-warning-500 mt-0.5 h-4 w-4 shrink-0"
-								aria-hidden="true"
-							/>
-							<span>
-								{#if reannotateRows === null}
-									<span class="text-surface-600-400">
-										Counting what is annotated…
-									</span>
-								{:else}
-									<strong class="font-semibold">
-										{reannotateRows.toLocaleString()}
-										{reannotateRows === 1
-											? "entry or message is"
-											: "entries and messages are"} re-scanned
-										for names
-									</strong>
-									<span>
-										Names one model finds are not the names
-										another finds.
-									</span>
-								{/if}
-							</span>
-						</p>
-						<p class="text-surface-600-400">
-							Names your lorebook declares keep matching
-							throughout.
-						</p>
-						{#if entityCurrentIsLocal}
-							<p class="text-surface-600-400">
-								{entityCurrent?.model.name} stays on disk. Switching
-								back later re-scans again.
-							</p>
-						{/if}
-					</article>
-					<footer class="mt-5 flex justify-end gap-2">
-						<button
-							type="button"
-							class="btn preset-filled-surface-500"
-							onclick={() => {
-								showReannotateModal = false
-								pendingStars = null
-							}}
-						>
-							{entityCurrent
-								? `Keep ${entityCurrent.model.name}`
-								: "Cancel"}
-						</button>
-						<button
-							type="button"
-							class="btn preset-filled-primary-500"
-							onclick={() => {
-								showReannotateModal = false
-								commitSetDefault()
-							}}
-						>
-							<Icons.RefreshCw size={16} aria-hidden="true" />
-							Switch and re-scan
-						</button>
-					</footer>
-				</div>
-			</Dialog.Content>
-		</Dialog.Positioner>
-	</Portal>
-</Dialog>
+<EmbeddingSwitchDialog {...stars.embeddingDialog} />
+<!-- The same question for an edit of the starred connection that makes it
+     another model. -->
+<EmbeddingSwitchDialog {...embeddingEdits.dialog} />
+<!-- Moving the entity star to another model re-scans; the count says how
+     much. -->
+<EntitySwitchDialog {...stars.entityDialog} />
 <Dialog open={showDeleteModal} onOpenChange={(e) => (showDeleteModal = e.open)}>
 	<Portal>
 		<Dialog.Backdrop

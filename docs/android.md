@@ -1,19 +1,28 @@
-# Android App
+# Android app
 
-Serene Pub is also available as a native Android app. It's not a thin client — the same server that normally runs on your desktop or in Docker is bundled into the app and runs locally on your device, so everything works offline aside from whatever AI connection you configure. There's nothing separate to host; install the APK and it's a self-contained instance.
+The Android app is a complete Serene Pub that runs on your phone: the same app as on a computer, with your characters and stories saved on the phone itself.
 
-## System Requirements
+:::tip What it's for
+- Using Serene Pub on a phone with no computer involved, through an online model service.
+- Keeping a pub in your pocket that doesn't depend on a computer at home being switched on.
+:::
 
-- **Requires Android 8.0+ on a 64-bit ARM device.** This covers the overwhelming majority of phones sold in the last several years, but rules out older 32-bit-only devices.
-- **You may see a device-compatibility notice at install time on the newest Android versions.** This is expected and doesn't block installation or affect functionality.
+To install it, see [Install Serene Pub](./install.md#android). If you'd rather use the pub on your computer from your phone, you don't need the app: open your computer's address in the phone's browser (see [Install](./install.md#everyday-use)).
 
-## Feature Limitations
+## System requirements
 
-A few things work differently on Android compared to desktop or Docker, due to constraints of running a full server inside a mobile app:
+- **Android 8.0 or newer, on a 64-bit phone.** That's nearly every phone sold in recent years; older 32-bit-only phones can't run it.
+- **Room for a bigger app than usual.** It carries a whole server inside it, so the download is larger, the first start takes longer while it unpacks, and it uses more battery while it runs.
+- On the newest Android versions you may see a notice at install time about the app being built for an older version. It's expected, and doesn't affect anything.
 
-- **No KoboldCPP or Ollama run by Serene Pub.** Serene Pub can't download and run local model programs for you on Android — there's no supported way to run those binaries on-device. You can still connect to an Ollama or KoboldCPP instance running elsewhere on your network (or anywhere reachable), the same as any other service — just add it from the Connections view. See [Connections](./connections.md).
-- **Embeddings/RAG: an external API only.** On-device models can't run on Android, so the **Local embeddings (ONNX)** and **Local named entities (ONNX)** connections don't work there (Admin › Defaults says so beside the embeddings job). An embeddings connection to an API works exactly as it does everywhere else: point it at OpenAI, or a self-hosted Ollama/LM Studio/llama.cpp server elsewhere on your network, and RAG works normally. See [Embedding connections](./embeddings-and-rag.md#embedding-connections).
-- **No SillyTavern import.** Importing characters, personas, and chats from an existing SillyTavern installation isn't offered on Android. Character cards can still be added one at a time with **Import a card** (PNG, JSON, CHARX and the other card formats); file pickers are tap-to-choose, with no drag and drop.
-- **No component authoring.** Android has no component compiler, so admins cannot write or clone widgets on the device. Components imported from share files that carry their compiled module still run. See [Component authoring](./component-authoring.md#android).
-- **Larger install, slower first launch, more battery use.** The app bundles a full embedded server runtime, so the download is bigger than a typical app, the very first launch takes longer while it unpacks, and keeping that server running in the background uses more battery than a normal lightweight app.
-- **A few connection types may not work if actually used.** LM Studio connections, along with a handful of token counters (the OpenAI GPT-family, Llama 3, and Cohere counters), depend on text-processing functionality that isn't available in Android's bundled runtime. Other connection types and token counters are unaffected.
+## Feature limitations
+
+A phone can't do everything a computer can, so a few things differ:
+
+- **No model runs on the phone.** Serene Pub can't download and run KoboldCPP or Ollama for you here. Use an online service, or connect to a KoboldCPP, Ollama or similar program running on a computer on your network, from the Connections view like any other connection. See [Connect a model](./connect-a-model.md).
+- **Embeddings need an online or networked service.** The on-device **Local embeddings (ONNX)** and **Local named entities (ONNX)** connections don't work on Android. An embeddings connection to an API (OpenAI, or Ollama, LM Studio or llama.cpp on another computer) works normally. See [Embeddings and search by meaning](./embeddings-and-rag.md#embedding-connections).
+- **One person only.** User accounts can't be turned on, so there's no sign-in and no inviting others.
+- **No tunnel.** The built-in tunnel for reaching your pub from elsewhere isn't available.
+- **No SillyTavern import.** Bringing in a whole SillyTavern library isn't offered. Character cards still import one at a time with **Import a card** (PNG, JSON, CHARX and the other card formats). Files are picked by tapping; there's no drag and drop.
+- **No component authoring.** Administrators can't write or copy session widgets on the phone. Components imported from a share file that already carries its compiled code still run. See [Component authoring](./component-authoring.md#android).
+- **A few connection options may fail when used.** LM Studio connections, and the OpenAI GPT, Llama 3 and Cohere token counters, need features the phone's built-in runtime lacks. Every other connection type and token counter works.

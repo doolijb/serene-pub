@@ -387,12 +387,38 @@ async function syncDeclarations(): Promise<void> {
 		// …and the layouts a package ships for a genre (session layout v2
 		// §4.1). Disabling marks them withdrawn rather than deleting, since a
 		// session names its layout preset. See `syncPluginLayouts`.
-		const { syncPluginLayouts } = await import(
+		const { syncPluginLayouts, pluginLayoutReportLines } = await import(
 			"$lib/server/db/pluginLayouts"
 		)
-		await syncPluginLayouts(db)
+		// A package update that moves a layout tells the sessions that
+		// started from it, so their editors read **Updated** live (brief 6b).
+		const { afterLayoutReconcile } = await import(
+			"$lib/server/sessions/startedFromPush"
+		)
+		const report = await afterLayoutReconcile(() => syncPluginLayouts(db))
+		for (const line of pluginLayoutReportLines(report))
+			console.warn(`[plugins] ${line}`)
 	} catch (e) {
 		console.warn("[plugins] session-layout sync failed:", e)
+	}
+	await syncWidgetStylesQuietly()
+}
+
+/**
+ * Every installed plugin's shipped widget styles, reconciled with the table
+ * (`plugins/pluginWidgetStyles`). Installed rather than enabled, so it runs
+ * after an install or an uninstall whether or not the sandbox is on — a style
+ * row is data, and an uninstalled plugin's must not outlive it.
+ */
+async function syncWidgetStylesQuietly(): Promise<void> {
+	try {
+		const { syncPluginWidgetStyles } = await import(
+			"$lib/server/plugins/pluginWidgetStyles"
+		)
+		for (const line of await syncPluginWidgetStyles(db))
+			console.warn(`[plugins] widget style refused: ${line}`)
+	} catch (e) {
+		console.warn("[plugins] widget-style sync failed:", e)
 	}
 }
 
@@ -467,7 +493,7 @@ export const pluginsInstall: Handler<
 			if (missing.length) {
 				const msg =
 					`This package requires ${missing.join(", ")} — not installed ` +
-					`on this instance. Install what it builds on first.`
+					`on this pub. Install what it builds on first.`
 				emitToUser("error", { error: msg })
 				throw new Error(msg)
 			}
@@ -479,6 +505,18 @@ export const pluginsInstall: Handler<
 			const problems = await swapContributionProblems(db, params.manifest as any)
 			if (problems.length) {
 				const msg = `This package cannot install: ${problems.join("; ")}`
+				emitToUser("error", { error: msg })
+				throw new Error(msg)
+			}
+			// A custom pipeline must include a default preset (owner ruling
+			// 2026-10-02) — the package path's gate, in the same sentence.
+			const { genrePresetFindings } = await import("@serene-pub/sdk")
+			const noPreset = genrePresetFindings(
+				((params.manifest as any)?.genres ?? []) as any[],
+				((params.manifest as any)?.presets ?? []) as any[]
+			)
+			if (noPreset.length) {
+				const msg = `This package cannot install: ${noPreset.join("; ")}`
 				emitToUser("error", { error: msg })
 				throw new Error(msg)
 			}
@@ -539,6 +577,8 @@ export const pluginsInstall: Handler<
 					`[plugins] '${params.pluginId}' UI files refused (unsafe path): ${r.refused.join(", ")}`
 				)
 		}
+		// Its widgets' shipped styles, seeded whether or not the sandbox is on.
+		await syncWidgetStylesQuietly()
 		// A fresh/changed bundle is disabled until re-enabled; a running
 		// plugin it replaced hears `disable` on the way out.
 		await afterReinstall(params.pluginId, wasOn)
@@ -637,6 +677,8 @@ export const pluginsUninstall: Handler<
 			.delete(schema.pluginFiles)
 			.where(eq(schema.pluginFiles.pluginId, params.pluginId))
 		if (pluginsEnabled()) await syncDeclarations()
+		// Its shipped widget styles go with it, sandbox on or off.
+		else await syncWidgetStylesQuietly()
 		await pushPresets(socket)
 		return { plugins: await emitList(emitToUser) }
 	}
@@ -678,7 +720,7 @@ export const pluginsInstallLocal: Handler<
 			const msg =
 				"The plugin subsystem is off. A dev install projects a genre and its " +
 				"pipelines into rows the session surface reads, so it asks for " +
-				"SP_PLUGINS_ENABLED rather than landing them on an instance that has " +
+				"SP_PLUGINS_ENABLED rather than landing them on a pub that has " +
 				"the subsystem switched off."
 			emitToUser("error", { error: msg })
 			throw new Error(msg)
@@ -858,6 +900,21 @@ export const pluginsPermissions: Handler<
 }
 
 /**
+ * A consent write for a plugin that is not installed (uninstalled in another
+ * tab) is refused in words, on the verb's own `:error` — the admin form waits
+ * for every write it sends to answer, so silence would hang its Save.
+ */
+function refuseMissingPlugin(
+	emitToUser: Emit,
+	event: "plugins:setPermission" | "plugins:reviewPermissions",
+	pluginId: string
+): { pluginId: string; permissions: never[]; error: string } {
+	const res = { pluginId, permissions: [] as never[], error: `No plugin '${pluginId}' is installed.` }
+	emitToUser(`${event}:error`, res)
+	return res
+}
+
+/**
  * Grant or deny one declared permission.
  *
  * Acting on a key is also *reviewing* it: the decision is recorded alongside the
@@ -880,7 +937,8 @@ export const pluginsSetPermission: Handler<
 			.select()
 			.from(schema.plugins)
 			.where(eq(schema.plugins.pluginId, params.pluginId))
-		if (!row) return { pluginId: params.pluginId, permissions: [] }
+		// Answered, never silent: the admin form waits for this write.
+		if (!row) return refuseMissingPlugin(emitToUser, "plugins:setPermission", params.pluginId)
 		const declared = declaredPermissions(row.manifest as PluginManifest)
 		const known = declared.find((p) => p.key === params.key)
 		// A refused key is never declared, so `known` is already undefined for
@@ -933,7 +991,7 @@ export const pluginsReviewPermissions: Handler<
 			.select()
 			.from(schema.plugins)
 			.where(eq(schema.plugins.pluginId, params.pluginId))
-		if (!row) return { pluginId: params.pluginId, permissions: [] }
+		if (!row) return refuseMissingPlugin(emitToUser, "plugins:reviewPermissions", params.pluginId)
 		const declared = declaredPermissions(row.manifest as PluginManifest)
 		const entries = new Set<string>(row.adminDenied ?? [])
 		for (const mark of reviewMarks(declared)) entries.add(mark)

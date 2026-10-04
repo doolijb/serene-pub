@@ -109,13 +109,6 @@ vi.mock("$lib/server/connections/capabilityTarget", async (importOriginal) => {
 		}
 	}
 })
-vi.mock("$lib/server/utils/getUserConfigurations", () => ({
-	getUserConfigurations: async () => ({
-		sampling: { id: 1 },
-		contextConfig: { id: 1 },
-		promptConfig: { id: 1, systemPrompt: "Stay in character." }
-	})
-}))
 vi.mock("$lib/server/embedding", () => ({
 	isModelReady: () => false,
 	getLoadedModelId: () => null,
@@ -537,6 +530,46 @@ describe("C1 / W-A1 · the reply road pushes the list at its start and its end",
 	})
 })
 
+/**
+ * The smallest parkable action: a Chat composer action whose one node writes
+ * the input's text — gate-eligible, so review ON parks it at `save`. Core's
+ * own demo of this shape (Echo) was removed (owner note 35, 2026-10-02); the
+ * test publishes its own. Idempotent: published once per file.
+ */
+const PARKABLE = "core:spec/test-parkable"
+let parkablePublished = false
+async function publishParkable() {
+	if (parkablePublished) return
+	parkablePublished = true
+	const { spec, compile } = await import("@serene-pub/sdk")
+	const C = await import("@serene-pub/contracts")
+	const { chatGenre } = await import("@serene-pub/core-catalog")
+	const { saveDocument } = await import("$lib/server/pipelines/boot/store")
+	const doc: SpecDocument = compile(
+		spec(PARKABLE, {
+			version: "1.0.0",
+			taxonomy: { role: "action" },
+			contributes: {
+				actions: [
+					{
+						key: "park",
+						venue: { kind: "composer" },
+						label: { en: "Park" },
+						description: { en: "A test action." }
+					}
+				]
+			}
+		})
+			.inlet("input", C.userMessage.v1(), {
+				genre: chatGenre,
+				event: "core:event/session-action@1"
+			})
+			.outlet("save", ($) => C.createMessage.v1({ text: $.input.text }))
+			.build()
+	)
+	await saveDocument(testDb as any, doc, { publish: true })
+}
+
 /** Review ON for one spec's `save` node, as the session's own override. */
 async function reviewSave(specSlug: string, sessionId: number) {
 	const schema = await import("$lib/server/db/schema")
@@ -560,7 +593,8 @@ const retryOf = (push: { payload: any }) =>
 
 describe("S-A2 / W-A2 · a parked run pushes when it settles, and never while it waits", () => {
 	/**
-	 * Echo parks at its `save` (review on): the trigger road pushes once at
+	 * A one-node composer action (`publishParkable`) parks at its `save`
+	 * (review on): the trigger road pushes once at
 	 * the start, answers `parked`, and pushes once more only when the owner
 	 * decides — whichever way. `decide` is the decision; `ended` is what the
 	 * terminal frame must say.
@@ -576,19 +610,20 @@ describe("S-A2 / W-A2 · a parked run pushes when it settles, and never while it
 		)
 		const { CORE_VERB_REASONS } = await import("@serene-pub/sdk")
 		const { owner, session } = await sessionWithTom(tag)
-		await reviewSave("core:spec/echo", session.id)
+		await publishParkable()
+		await reviewSave(PARKABLE, session.id)
 		const { io, emitted } = recordingIo([owner.id], session.id)
 		const ownEmit = (event: string, payload: any) =>
 			emitted.push({ room: "caller", event, payload })
 		const pushes = () =>
 			emitted.filter((e) => e.event === "sessions:actions")
-		const runId = `echo-${tag}`
+		const runId = `park-${tag}`
 
 		const ack = await sessionsFireActionHandler.handler(
 			fakeSocket(owner.id, io),
 			{
 				sessionId: session.id,
-				action: "core:spec/echo#echo",
+				action: `${PARKABLE}#park`,
 				runId
 			},
 			ownEmit
@@ -601,7 +636,7 @@ describe("S-A2 / W-A2 · a parked run pushes when it settles, and never while it
 			reason: { i18n: CORE_VERB_REASONS.generating }
 		})
 		const [review] = pendingReviewsFor(owner.id).filter(
-			(r) => r.specId === "core:spec/echo"
+			(r) => r.specId === PARKABLE
 		)
 		expect(review).toBeTruthy()
 
@@ -638,7 +673,7 @@ describe("S-A2 / W-A2 · a parked run pushes when it settles, and never while it
 		const rows = await runsOf(session.id)
 		expect(rows.map((r) => `${r.specSlug}:${r.outcome}`).sort()).toEqual([
 			"core:spec/chat-turn-order:ok",
-			"core:spec/echo:ok"
+			`${PARKABLE}:ok`
 		])
 	})
 

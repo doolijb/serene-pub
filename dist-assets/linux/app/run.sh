@@ -6,8 +6,10 @@
 # This starts the Node server and nothing else: no launcher, no tray, no
 # window. It is the supported way to run Serene Pub on a headless box, from a
 # systemd unit, over ssh/tmux, or when debugging a start-up problem. The
-# forwarder one directory up (../run.sh) exists so a double-click still works;
-# it does nothing but exec this file.
+# launcher one directory up (../serene-pub) is the double-click start; it does
+# not run this file but starts the same node + build/index.js itself. Start
+# this first and the launcher attaches to it instead of starting a second
+# server (both meet at runtime.json in the data directory).
 #
 # Everything the application is made of lives in this directory ("app/") so
 # that an update can replace the whole directory in one rename. Nothing the

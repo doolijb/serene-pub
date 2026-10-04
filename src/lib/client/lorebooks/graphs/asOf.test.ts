@@ -143,4 +143,20 @@ describe("edgesOnLine — the links the line being read can see (#124)", () => {
 	it("never shows a sibling line's links", () => {
 		expect(ids(lineOf(9, branches))).not.toContain(4)
 	})
+
+	it("draws a branch's own telling of a cast tie in place of the one it inherited at that date", () => {
+		const tie = (id: number, branchId: number | null, historyEntryId: number | null) => ({
+			id,
+			branchId,
+			historyEntryId,
+			fromNodeId: 1,
+			toNodeId: 2,
+			fromEntryId: null,
+			toEntryId: null,
+			relationshipType: "ally"
+		})
+		const ties = [tie(1, null, 1), tie(2, 7, 1), tie(3, null, null)]
+		expect(edgesOnLine(ties, lineOf(7, branches), entries).map((l) => l.id)).toEqual([2, 3])
+		expect(edgesOnLine(ties, MAIN_LINE, entries).map((l) => l.id)).toEqual([1, 3])
+	})
 })

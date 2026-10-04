@@ -17,6 +17,7 @@ const CONTRACT = [
 	"instructions",
 	"characters",
 	"personas",
+	"characterLore",
 	"scenario",
 	"worldLore",
 	"history",
@@ -24,7 +25,9 @@ const CONTRACT = [
 	"relationshipsKnown",
 	"sessionMessages",
 	"injectionsByIndex",
-	"postHistory"
+	"postHistory",
+	// Chat's author's note: placed in the message loop beside postHistory.
+	"authorsNote"
 ]
 
 const ENGINES = [

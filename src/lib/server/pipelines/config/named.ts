@@ -52,13 +52,15 @@
  * inherits the declaration from then on. The asymmetry above holds for every
  * row that differs; a config never carries a copy of the answer it would
  * inherit anyway. See
- * `config/deviations.ts` for the rule and what follows from it, and
- * `drizzle/0115` for the migration that first applies it.
+ * `config/deviations.ts` for the rule and what follows from it.
  */
 
 import { and, asc, desc, eq, inArray, isNull } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
-import { isDeviation } from "$lib/server/pipelines/config/deviations"
+import {
+	holdsRow,
+	isDeviation
+} from "$lib/server/pipelines/config/deviations"
 import { presetConfigForSpec } from "$lib/server/pipelines/entities/presetBindings"
 import {
 	declarations,
@@ -336,7 +338,7 @@ function templateRefOf(value: unknown): TemplateRef | null {
  * An id nothing seeded is **said out loud and then fallen through**, in the
  * voice `refDefaults`' sampling branch already uses and for the same reason: a
  * throw here takes every OTHER pipeline's configuration with it, because
- * `reconcilePublishedConfigs` walks specs this instance does not control.
+ * `reconcilePublishedConfigs` walks specs this pub does not control.
  *
  * Where it does NOT match sampling is what happens next. An unresolved sampling
  * reference leaves the slot unset, because unset is the state every step was in
@@ -648,6 +650,47 @@ async function priorDeclaredLabels(
 }
 
 /**
+ * What a config with no row at an address is handed by the next reconcile's
+ * back-fill, keyed by `nodeKey\u0000slot\u0000path`.
+ *
+ * The same source `reconcileConfigs` back-fills from: the spec's first
+ * immutable config by id, which it reconciles first. Empty for that config
+ * itself and for any other immutable one — neither is back-filled from a
+ * sibling — so `holdsRow` falls back to the bare declaration there.
+ */
+export async function inheritedValues(
+	db: Db,
+	specId: number,
+	configId: number
+): Promise<Map<string, unknown>> {
+	const out = new Map<string, unknown>()
+	const [source] = await db
+		.select()
+		.from(schema.pipelineConfigs)
+		.where(
+			and(
+				eq(schema.pipelineConfigs.specId, specId),
+				eq(schema.pipelineConfigs.isImmutable, true)
+			)
+		)
+		.orderBy(asc(schema.pipelineConfigs.id))
+		.limit(1)
+	if (!source || source.id === configId) return out
+	const [target] = await db
+		.select({ isImmutable: schema.pipelineConfigs.isImmutable })
+		.from(schema.pipelineConfigs)
+		.where(eq(schema.pipelineConfigs.id, configId))
+		.limit(1)
+	if (target?.isImmutable) return out
+	const rows = await db
+		.select()
+		.from(schema.pipelineConfigValues)
+		.where(eq(schema.pipelineConfigValues.configId, source.id))
+	for (const r of rows as any[]) out.set(addrOf(r), r.value)
+	return out
+}
+
+/**
  * Bring every user config for a spec in line with a newly published version.
  *
  * The immutable shipped default is reconciled too, and first: it is the source
@@ -770,9 +813,15 @@ export async function reconcileConfigs(
 		// underneath a row holding the old one. The second is what `0102`,
 		// `0110` and `0111` each hand-swept with a bespoke DELETE, and it is
 		// exactly the case the ruling makes safe.
+		//
+		// "Exactly what the declaration declares" is measured against what the
+		// config would otherwise inherit: a row holding the declared value where
+		// the shipped config holds something else is an explicit choice, and
+		// sweeping it would let the back-fill below write the shipped value
+		// over it on this same boot (`holdsRow`).
 		const inert = (rows as any[]).filter((r) => {
 			const d = declByAddr.get(addrOf(r))
-			return d && !isDeviation(d, r.value)
+			return d && !holdsRow(d, r.value, defaults.get(addrOf(r))?.value)
 		})
 		if (inert.length)
 			await db.delete(schema.pipelineConfigValues).where(
@@ -869,7 +918,90 @@ export async function reconcileConfigs(
 			reports.push(report)
 	}
 
+	await cullSessionConnections(db, specId, specSlug, specVersionId, decls)
+
 	return reports
+}
+
+/**
+ * Remove every session-scope value at a connection address — a session names
+ * no connection (ruled 2026-09-30, NOMENCLATURE §10).
+ *
+ * The same cull → notice rule as an orphaned address: each removal leaves a
+ * `culled` notice on the configuration that session resolves through, naming
+ * the session, the step and the pair it held, with the value kept as
+ * `previousValue`. Runs on every boot; on an install with nothing to cull it
+ * is one query.
+ */
+async function cullSessionConnections(
+	db: Db,
+	specId: number,
+	specSlug: string,
+	specVersionId: number,
+	decls: Awaited<ReturnType<typeof declarations>>
+): Promise<void> {
+	const connectionDecls = new Map(
+		decls
+			.filter((d) => d.matrixSlot === "connection")
+			.map((d) => [`${d.nodeKey}\u0000${d.slot}`, d])
+	)
+	const rows = (
+		(await db
+			.select()
+			.from(schema.pipelineNodeOverrides)
+			.where(
+				and(
+					eq(schema.pipelineNodeOverrides.specId, specId),
+					eq(schema.pipelineNodeOverrides.scopeKind, "session")
+				)
+			)) as any[]
+	).filter(
+		(r) =>
+			connectionDecls.has(`${r.nodeKey}\u0000${r.slot}`) ||
+			// An address this version does not declare still names a
+			// connection when the slot says so.
+			r.slot === "connection"
+	)
+	if (!rows.length) return
+
+	const { connectionPairName } = await import(
+		"$lib/server/connections/pairName"
+	)
+	const notices: any[] = []
+	for (const r of rows) {
+		const selected = await resolveSelectedConfig(db, specId, specSlug, {
+			sessionId: r.scopeId
+		})
+		if (!selected) continue
+		const decl = connectionDecls.get(`${r.nodeKey}\u0000${r.slot}`)
+		const step = decl?.typeLabel || r.nodeKey
+		const pair = (await connectionPairName(db, r.value)) ?? "a connection since deleted"
+		notices.push({
+			configId: selected.configId,
+			kind: "culled",
+			nodeKey: r.nodeKey,
+			slot: r.slot,
+			path: r.path ?? "",
+			label:
+				`session ${r.scopeId} · ${step} · ${decl?.label ?? "Model"} — ` +
+				`held “${pair}”; a session names no connection, so it runs on ` +
+				`this configuration's model or the pub default`,
+			previousValue: r.value,
+			specVersionId
+		})
+	}
+	if (notices.length)
+		await db.insert(schema.pipelineConfigNotices).values(notices)
+	await db.delete(schema.pipelineNodeOverrides).where(
+		inArray(
+			schema.pipelineNodeOverrides.id,
+			rows.map((r) => r.id)
+		)
+	)
+	console.info(
+		`[pipelines] ${specSlug}: removed ${rows.length} session connection ` +
+			`value(s) — a session names no connection`
+	)
 }
 
 /** Notices a person has not been shown yet, newest first. */
@@ -932,9 +1064,9 @@ export async function acknowledgeNotices(
 
 /**
  * The scopes that may select a config (12 §2 as simplified 2026-08-24): the
- * session's own choice, else the instance default. There is no user layer.
+ * session's own choice, else the pub default. There is no user layer.
  */
-export type SelectionScope = "session" | "instance"
+export type SelectionScope = "session" | "pub"
 
 export interface SelectedConfig {
 	configId: number
@@ -1018,7 +1150,7 @@ async function packageDefault(db: Db, specId: number, specSlug: string) {
  * `isDefault`, because a user may well mark one of their own copies as their
  * default and the fallback must still land on core's.
  */
-async function shippedDefault(db: Db, specId: number, specSlug: string) {
+export async function shippedDefault(db: Db, specId: number, specSlug: string) {
 	const fromPackage = await packageDefault(db, specId, specSlug)
 	if (fromPackage) return fromPackage
 
@@ -1031,7 +1163,7 @@ async function shippedDefault(db: Db, specId: number, specSlug: string) {
 		.limit(1)
 	if (byKey) return byKey
 
-	// An instance whose shipped row was somehow removed still has to resolve to
+	// A pub whose shipped row was somehow removed still has to resolve to
 	// something, and any immutable config for the spec is closer to right than
 	// nothing at all.
 	const [fallback] = await db
@@ -1050,17 +1182,17 @@ async function shippedDefault(db: Db, specId: number, specSlug: string) {
 /**
  * Which config applies, for this asker, on this pipeline.
  *
- * session → **preset** → instance → whatever core shipped. The last step is
+ * session → **preset** → pub → whatever core shipped. The last step is
  * the one that makes the rest safe to be optional: a scope that has never
  * chosen, a scope whose choice was deleted (the FK nulls it), and a brand-new
  * namespace all resolve to the shipped default rather than to nothing. No user
  * step (ruled 2026-08-24): a person's choice of config is made per session, or
- * it is the instance's.
+ * it is the pub's.
  *
  * The preset layer (added 2026-09-10, closing a defect: the blob was validated
  * at write and read by nothing) sits where it does because of what each
  * neighbour means. Above it, the session's own row is a choice made *about this
- * session* and must survive the bundle it started from. Below it, the instance
+ * session* and must survive the bundle it started from. Below it, the pub
  * default is what an install does when nobody said otherwise — and "started
  * from a preset that names a configuration" is somebody saying otherwise.
  *
@@ -1071,7 +1203,7 @@ async function shippedDefault(db: Db, specId: number, specSlug: string) {
  * config on.
  *
  * The seven `system_settings.default_*_config_id` columns this replaces could
- * express only the instance layer, and only for the namespaces core happened to
+ * express only the pub layer, and only for the namespaces core happened to
  * ship a column for.
  */
 export async function resolveSelectedConfig(
@@ -1109,7 +1241,7 @@ export async function resolveSelectedConfig(
 				: undefined
 		],
 		["preset", fromPreset ?? undefined],
-		["instance", at("instance", 0)]
+		["pub", at("pub", 0)]
 	]
 
 	for (const [kind, configId] of chain) {
@@ -1306,12 +1438,13 @@ export async function duplicateConfig(
 			)
 		: new Map<string, Decl>()
 
+	const inherited = await inheritedValues(db, source.specId, (copy as any).id)
 	const carried = (values as any[]).filter((v) => {
 		const d = declByAddr.get(addrOf(v))
 		// An address this version does not declare is carried as-is: the
 		// reconciler culls it with a notice, which is where that decision is
 		// made and reported. Swallowing it here would lose the notice.
-		return !d || isDeviation(d, v.value)
+		return !d || holdsRow(d, v.value, inherited.get(addrOf(v)))
 	})
 
 	if (carried.length)

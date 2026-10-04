@@ -40,6 +40,7 @@
 
 import { eq, and, isNull } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
+import { driverReasonOf } from "$lib/server/db/errors"
 import { parseActionIdentity } from "$lib/shared/actions/identity"
 import {
 	snapshotRegistry,
@@ -906,9 +907,25 @@ export async function syncPluginPresets(
 
 		const existing = bySeedKey.get(seedKey)
 		if (!existing) {
+			// Every genre has a default preset (owner ruling 2026-10-02): a
+			// plugin's genre gets its first projected preset as its default,
+			// unless one is already marked — an administrator's choice, or a
+			// preset projected before this one. `is_default` is the one
+			// source of truth (one per genre, `sessionPresets:update`).
+			const [hasDefault] = await db
+				.select({ id: schema.sessionPresets.id })
+				.from(schema.sessionPresets)
+				.where(
+					and(
+						eq(schema.sessionPresets.genreId, projected.genreId),
+						eq(schema.sessionPresets.isDefault, true)
+					)
+				)
+				.limit(1)
 			await db.insert(schema.sessionPresets).values({
 				seedKey,
 				...projected,
+				isDefault: !hasDefault,
 				enabled: decl.enabled === true,
 				// Shipped, so selectable and copyable but never edited in
 				// place — the posture core's presets and a plugin's shipped
@@ -1150,7 +1167,9 @@ async function writeTemplateSeed(
 		// "Terse" for one node, or one package shipping it twice. Refused
 		// per declaration rather than thrown, because a sync that throws
 		// costs every OTHER package its templates for one package's clash.
-		return { refused: e instanceof Error ? e.message : String(e) }
+		// The driver's reason, not drizzle's `Failed query: …` with the
+		// template's values (`driverReasonOf`).
+		return { refused: driverReasonOf(e) }
 	}
 }
 

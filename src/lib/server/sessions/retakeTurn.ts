@@ -74,7 +74,7 @@ export async function retakeTurn(
 	const channel = opts.channel ?? "main"
 	const last = await lastTurnOf(db, opts.sessionId, channel)
 	if (!last.ok) return { ok: false, error: last.refusal }
-	const { rows, entry, runId, runUuid } = last.yield
+	const { rows, entry, runs } = last.yield
 	if (opts.preview) return { ok: true, preview: true, rows }
 	if (!rows.length)
 		return {
@@ -91,8 +91,7 @@ export async function retakeTurn(
 		await keepLaterState(t, {
 			sessionId: opts.sessionId,
 			yieldIds: ids,
-			runId,
-			runUuid
+			runs
 		})
 		return deleteLegacyWhere(t, inArray(schema.sessionMessages.id, ids))
 	})
@@ -163,7 +162,9 @@ export async function retakeTurn(
  *
  * **Written by the turn's run** = the writer is that run (`run:<run_id>`, the
  * keeper's applied values and proposals) AND the row landed before the run
- * ended. Those cascade. "Ended" is when the run's own record was written
+ * ended. Those cascade. A turn whose planned character turns wrote rows of
+ * the yield (🚧 Lair character turns) has several runs (`TurnYield.runs`),
+ * and each one's own work is the turn's. "Ended" is when the run's own record was written
  * (`pipeline_runs.created_at`: `saveReceipt` runs once, at the end) — the
  * database's clock, the same one that stamps the state rows, so no host
  * time zone can skew the comparison.
@@ -193,16 +194,24 @@ async function keepLaterState(
 	opts: {
 		sessionId: number
 		yieldIds: number[]
-		runId: number
-		runUuid: string
+		runs: Array<{ runId: number; runUuid: string }>
 	}
 ): Promise<void> {
 	if (!opts.yieldIds.length) return
-	const writer = `run:${opts.runUuid}`
-	const endedAt = sql`(SELECT ${schema.pipelineRuns.createdAt} FROM ${schema.pipelineRuns} WHERE ${schema.pipelineRuns.id} = ${opts.runId})`
-	/** Not the run's own work: another writer, or landed after the run ended. */
+	/** Not any of the turn's runs' own work: for each, another writer, or landed after it ended. */
 	const notTheRuns = (by: AnyPgColumn, at: AnyPgColumn): SQL =>
-		or(ne(by, writer), gt(at, endedAt))!
+		and(
+			...opts.runs.map(
+				(r) =>
+					or(
+						ne(by, `run:${r.runUuid}`),
+						gt(
+							at,
+							sql`(SELECT ${schema.pipelineRuns.createdAt} FROM ${schema.pipelineRuns} WHERE ${schema.pipelineRuns.id} = ${r.runId})`
+						)
+					)!
+			)
+		)!
 
 	const values = await db
 		.select({

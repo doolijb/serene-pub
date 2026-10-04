@@ -209,7 +209,7 @@ describe("type settings upsert", () => {
 
 		await sessionGenresUpdate.handler(
 			admin(),
-			{ slug, defaultPresetId: null, enabled: true },
+			{ slug, enabled: true },
 			noopEmit
 		)
 		rows = (await testDb

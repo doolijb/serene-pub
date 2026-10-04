@@ -72,7 +72,12 @@ export const MediaVariant = {
 	DISPLAY: "display",
 	/** Long edge capped, for a list or a card. Reduced fidelity, freely
 	 *  cullable, re-derived on the next request. */
-	THUMB: "thumb"
+	THUMB: "thumb",
+	/** Long edge capped at `FITTED_MAX_EDGE`, UNCROPPED — the whole picture at
+	 *  a size a message preview and a model payload can both carry (composer
+	 *  attachments plan §4.2). Reduced fidelity, freely cullable, derived on
+	 *  first request like THUMB. */
+	FITTED: "fitted"
 } as const
 
 export type MediaVariantName = (typeof MediaVariant)[keyof typeof MediaVariant]
@@ -80,7 +85,8 @@ export type MediaVariantName = (typeof MediaVariant)[keyof typeof MediaVariant]
 export const MediaVariantOptions = [
 	MediaVariant.ORIGINAL,
 	MediaVariant.DISPLAY,
-	MediaVariant.THUMB
+	MediaVariant.THUMB,
+	MediaVariant.FITTED
 ] as MediaVariantName[]
 
 /**

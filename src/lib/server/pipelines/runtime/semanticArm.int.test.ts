@@ -348,6 +348,11 @@ describe("a model appears — matches are only added", () => {
 		const on = rankedKeys(
 			await turn([
 				{
+					nodeKey: "semantic.arm.queries",
+					path: "searchByMeaning",
+					value: "on"
+				},
+				{
 					nodeKey: "semantic.arm.search",
 					path: "maxEntries",
 					value: 10
@@ -371,6 +376,7 @@ describe("a model appears — matches are only added", () => {
 	it("adds a signal to an entry both mechanisms found, rather than replacing its score", async () => {
 		modelReady = true
 		const receipt = await turn([
+			{ nodeKey: "semantic.arm.queries", path: "searchByMeaning", value: "on" },
 			{ nodeKey: "semantic.arm.search", path: "maxEntries", value: 10 }
 		])
 		const candidates: any[] =
@@ -397,18 +403,21 @@ describe("a model that goes away mid-session", () => {
 		// difference between "lost it" and "never had it" fails here.
 		modelReady = true
 		const on = await turn([
+			{ nodeKey: "semantic.arm.queries", path: "searchByMeaning", value: "on" },
 			{ nodeKey: "semantic.arm.search", path: "maxEntries", value: 10 }
 		])
 		expect(retrievalOutcome(on)).toEqual(CLEAN)
 
 		modelReady = false
 		const lost = await turn([
+			{ nodeKey: "semantic.arm.queries", path: "searchByMeaning", value: "on" },
 			{ nodeKey: "semantic.arm.search", path: "maxEntries", value: 10 }
 		])
 		expect(retrievalOutcome(lost)).toEqual(CLEAN)
 
 		modelReady = false
 		const never = await turn([
+			{ nodeKey: "semantic.arm.queries", path: "searchByMeaning", value: "on" },
 			{ nodeKey: "semantic.arm.search", path: "maxEntries", value: 10 }
 		])
 		expect(rankedKeys(lost)).toEqual(rankedKeys(never))
@@ -427,6 +436,7 @@ describe("a model that goes away mid-session", () => {
 		 */
 		modelReady = false
 		const receipt = await turn([
+			{ nodeKey: "semantic.arm.queries", path: "searchByMeaning", value: "on" },
 			{ nodeKey: "semantic.arm.embed", path: "enabled", value: "on" }
 		])
 

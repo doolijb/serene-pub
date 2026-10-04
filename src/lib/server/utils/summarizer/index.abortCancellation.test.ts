@@ -2,13 +2,12 @@
  * runGeneration() (the single choke-point every LLM call in this module
  * funnels through) now throws immediately when a result comes back
  * isAborted, instead of returning truncated text as if it were a normal
- * successful generation. Without this, generateSummary()'s batch loop would
- * process/surface a cancelled batch's partial output for one more iteration
- * before the *next* call's pre-check finally caught it — including
- * emitting a truncated onProgress update visible to the client.
+ * successful generation. Without this, compileScenesForEntry() would
+ * surface a cancelled synthesis's truncated output as the history entry's
+ * content — including a truncated onProgress update visible to the client.
  *
  * The adapter itself is mocked out entirely (getConnectionAdapter ->
- * a minimal class) so this exercises generateSummary()'s own cancellation
+ * a minimal class) so this exercises the module's own cancellation
  * handling, not any real adapter's streaming/network behavior — that's
  * covered by runQueuedLLMCall.test.ts (the bridge) and the per-adapter
  * test files.
@@ -47,7 +46,7 @@ vi.mock("../getConnectionAdapter", () => ({
 	}))
 }))
 
-const { generateSummary } = await import("./index")
+const { compileScenesForEntry } = await import("./index")
 
 function macrotask() {
 	return new Promise((resolve) => setTimeout(resolve, 0))
@@ -60,7 +59,7 @@ function baseSampling(): any {
 	return { name: "test-sampling" }
 }
 
-describe("generateSummary — mid-flight cancellation", () => {
+describe("compileScenesForEntry — mid-flight cancellation", () => {
 	beforeEach(() => {
 		mockGenerate.mockReset()
 		mockAbort.mockReset()
@@ -78,7 +77,7 @@ describe("generateSummary — mid-flight cancellation", () => {
 			return {
 				completionResult: "TRUNCATED_DRAFT_SHOULD_NEVER_SURFACE",
 				isAborted: abortedFlag,
-				thinkingContent: undefined
+				reasoningContent: undefined
 			}
 		})
 		mockAbort.mockImplementation(() => {
@@ -91,54 +90,48 @@ describe("generateSummary — mid-flight cancellation", () => {
 		const controller = new AbortController()
 		const onProgress = vi.fn()
 
-		// Force multiple batches so there's a "next batch" the loop must
-		// never reach after the first one is cancelled mid-flight.
-		const messages = Array.from({ length: 30 }, (_, i) => ({
-			senderName: "User",
-			content: `message number ${i} `.repeat(50)
-		}))
-
-		const resultPromise = generateSummary({
-			messages,
-			loreType: "scene",
+		// Two summaries, so the synthesis call actually runs (one is returned
+		// as-is with no call at all).
+		const resultPromise = compileScenesForEntry({
+			scenes: [
+				{ name: "One", summary: "The first scene." },
+				{ name: "Two", summary: "The second scene." }
+			],
 			connection: baseConnection(),
 			sampling: baseSampling(),
-			contextConfig: {} as any,
-			promptConfig: {} as any,
 			onProgress,
 			signal: controller.signal
 		})
 
-		// Let execution actually reach the blocked generateText() call for the
-		// first batch before aborting.
+		// Let execution actually reach the blocked generateText() call before
+		// aborting.
 		await macrotask()
 		controller.abort()
 
 		await expect(resultPromise).rejects.toThrow()
 		expect(mockAbort).toHaveBeenCalled()
 
-		// The abort lands on the very first batch's generateText() call — with
-		// runGeneration throwing on isAborted, generateSummary's post-call
-		// bookkeeping for that batch (parseSummaryOutput, drafts.push,
-		// onProgress) never runs, so onProgress must never have been called
-		// at all. (Checking for the literal truncated string here would be
-		// a weaker assertion — parseSummaryOutput's parsed `content` field
-		// wouldn't equal the raw completion text anyway, fixed or not; the
-		// call count is what actually distinguishes the two cases.)
-		expect(onProgress).not.toHaveBeenCalled()
+		// The abort lands on the synthesis call — with runGeneration throwing on
+		// isAborted, no progress frame ever carries the truncated text. (The
+		// opening "synthesizing" frame, sent before the call, carries none.)
+		expect(onProgress).toHaveBeenCalledTimes(1)
+		for (const [frame] of onProgress.mock.calls) {
+			expect(frame.partial?.content).toBeUndefined()
+			expect(frame.partial?.raw).toBeUndefined()
+		}
 	})
 
 	test("an already-aborted signal throws before invoking the adapter at all (fast path)", async () => {
 		const controller = new AbortController()
 		controller.abort()
 
-		const resultPromise = generateSummary({
-			messages: [{ senderName: "User", content: "hello" }],
-			loreType: "scene",
+		const resultPromise = compileScenesForEntry({
+			scenes: [
+				{ name: "One", summary: "The first scene." },
+				{ name: "Two", summary: "The second scene." }
+			],
 			connection: baseConnection(),
 			sampling: baseSampling(),
-			contextConfig: {} as any,
-			promptConfig: {} as any,
 			signal: controller.signal
 		})
 

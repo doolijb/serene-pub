@@ -17,7 +17,11 @@ import os from "os"
 import path from "path"
 import { eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
-import { LOCATION_TYPE_ID, WORLD_LORE_TYPE_ID } from "$lib/shared/entries/types"
+import {
+	HISTORY_TYPE_ID,
+	LOCATION_TYPE_ID,
+	WORLD_LORE_TYPE_ID
+} from "$lib/shared/entries/types"
 import type { TestDb } from "$lib/server/utils/testDb"
 
 let testDb: TestDb
@@ -176,6 +180,117 @@ describe("anchorEntryId, the re-parent", () => {
 	}, 60_000)
 })
 
+describe("a place is never filed under anything (places plan B2)", () => {
+	// Owner ruling 2026-09-29: places join by relationships, never by
+	// nesting. `core:entry/location@1` declares no `parent` field role, and
+	// the server asks the role map — the refusal follows the declaration,
+	// never a type id written into the handler.
+	test("refuses a place filed under a place, or under world lore, on create and update", async () => {
+		const user = await makeUser("anchor-place")
+		const book = await makeLorebook(user.id)
+		const keep = await create(user.id, book.id, "The Keep", {
+			typeId: LOCATION_TYPE_ID
+		})
+		const region = await create(user.id, book.id, "The Reach")
+
+		for (const parent of [keep.id, region.id])
+			await expect(
+				create(user.id, book.id, "The Cellar", {
+					typeId: LOCATION_TYPE_ID,
+					anchorEntryId: parent
+				})
+			).rejects.toThrow(/Places are never filed inside anything/)
+
+		const cellar = await create(user.id, book.id, "The Cellar", {
+			typeId: LOCATION_TYPE_ID
+		})
+		const { updateEntryHandler } = await import("./entries")
+		for (const parent of [keep.id, region.id])
+			await expect(
+				updateEntryHandler.handler(
+					fakeSocket(user.id),
+					{
+						entry: {
+							typeId: LOCATION_TYPE_ID,
+							id: cellar.id,
+							anchorEntryId: parent
+						}
+					} as any,
+					noopEmit
+				)
+			).rejects.toThrow(/Link them instead/)
+
+		// The editor resends a place's (empty) Part of on every save: top
+		// level is not a filing, so it still saves.
+		const { entry } = await updateEntryHandler.handler(
+			fakeSocket(user.id),
+			{
+				entry: {
+					typeId: LOCATION_TYPE_ID,
+					id: cellar.id,
+					anchorEntryId: null,
+					content: "Damp."
+				}
+			} as any,
+			noopEmit
+		)
+		expect(entry.anchorEntryId).toBeNull()
+		expect(entry.content).toBe("Damp.")
+	}, 60_000)
+
+	// Owner 2026-10-02: history is always top level relative to other lore,
+	// scoped by its line and date. `core:entry/history@1` declares no
+	// `parent` (needs `npm run sdk:build` to reach the app).
+	test("refuses a history entry filed under anything; lore may still sit under one", async () => {
+		const user = await makeUser("anchor-history")
+		const book = await makeLorebook(user.id)
+		const city = await create(user.id, book.id, "Umber")
+		await expect(
+			create(user.id, book.id, "The Founding", {
+				typeId: HISTORY_TYPE_ID,
+				year: 1,
+				anchorEntryId: city.id
+			})
+		).rejects.toThrow(/History entries are never filed inside anything/)
+
+		const founding = await create(user.id, book.id, "The Founding", {
+			typeId: HISTORY_TYPE_ID,
+			year: 1
+		})
+		expect(founding.anchorEntryId ?? null).toBeNull()
+		const { updateEntryHandler } = await import("./entries")
+		await expect(
+			updateEntryHandler.handler(
+				fakeSocket(user.id),
+				{
+					entry: {
+						typeId: HISTORY_TYPE_ID,
+						id: founding.id,
+						anchorEntryId: city.id
+					}
+				} as any,
+				noopEmit
+			)
+		).rejects.toThrow(/Link them instead/)
+
+		// Other lore may still be filed under a history entry.
+		const charter = await create(user.id, book.id, "The Charter", {
+			anchorEntryId: founding.id
+		})
+		expect(charter.anchorEntryId).toBe(founding.id)
+	}, 60_000)
+
+	test("world lore under world lore still files", async () => {
+		const user = await makeUser("anchor-lore-still")
+		const book = await makeLorebook(user.id)
+		const city = await create(user.id, book.id, "Umber")
+		const district = await create(user.id, book.id, "Umber Docks", {
+			anchorEntryId: city.id
+		})
+		expect(district.anchorEntryId).toBe(city.id)
+	}, 60_000)
+})
+
 describe("the wire row's own two facts", () => {
 	test("carries archived and provenance, and lets a client set only the first", async () => {
 		const user = await makeUser("archived-provenance")
@@ -225,7 +340,9 @@ describe("entries:counts — places", () => {
 		const room = await create(user.id, book.id, "The Room", {
 			typeId: LOCATION_TYPE_ID
 		})
-		await create(user.id, book.id, "The Tunnel", { typeId: LOCATION_TYPE_ID })
+		await create(user.id, book.id, "The Tunnel", {
+			typeId: LOCATION_TYPE_ID
+		})
 		await create(user.id, book.id, "Shelved Hall", {
 			typeId: LOCATION_TYPE_ID,
 			archived: true

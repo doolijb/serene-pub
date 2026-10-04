@@ -21,6 +21,8 @@
 	import * as Icons from "@lucide/svelte"
 	import { Popover, Portal } from "@skeletonlabs/skeleton-svelte"
 	import { addMenuItemKeys } from "./addMenuItems"
+	import { connectionTypeIcon } from "./connectionTypeIcon"
+	import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 
 	interface Props {
 		/** The New connection dialog — any service or preset. */
@@ -64,14 +66,17 @@
 		},
 		{
 			key: "koboldcpp",
-			icon: Icons.Cpu,
+			icon: connectionTypeIcon(
+				CONNECTION_TYPE.KOBOLDCPP_MANAGED,
+				Icons.Cpu
+			),
 			title: "KoboldCPP, run by Serene Pub",
 			blurb: "Install and manage a local runtime",
 			run: onAddKoboldCpp
 		},
 		{
 			key: "ollama",
-			icon: Icons.Server,
+			icon: connectionTypeIcon(CONNECTION_TYPE.OLLAMA, Icons.Server),
 			title: "Ollama",
 			blurb: "Point at a running Ollama",
 			run: onAddOllama
@@ -143,8 +148,10 @@
 	}}
 	positioning={{ placement: "bottom-start" }}
 >
+	<!-- The view's one primary (STYLE-GUIDE §6.3, the view toolbar): filled,
+	     labelled, first on the action row. -->
 	<Popover.Trigger
-		class="btn btn-sm preset-tonal-surface shrink-0"
+		class="btn btn-sm preset-filled-primary-500 shrink-0"
 		title="Add a connection or a model"
 		aria-haspopup="menu"
 		aria-expanded={open}
@@ -155,7 +162,7 @@
 	<Portal>
 		<Popover.Positioner class="z-[1000]!">
 			<Popover.Content
-				class="card bg-surface-100-900 border-surface-300-700 w-[min(90vw,300px)] border p-1 shadow-xl"
+				class="card bg-surface-50-950 border-surface-200-800 w-[min(90vw,300px)] border p-1 shadow-xl"
 			>
 				<!-- `tabindex={-1}` and not 0: the menu is one tab stop, and the
 				     stop is whichever ITEM holds the roving focus. -->
@@ -171,7 +178,7 @@
 							type="button"
 							role="menuitem"
 							tabindex={i === focusIndex ? 0 : -1}
-							class="hover:preset-tonal-primary flex items-start gap-3 rounded-lg px-2.5 py-2 text-left"
+							class="hover:bg-surface-200-800 flex items-start gap-3 rounded-lg px-2.5 py-2 text-left"
 							onclick={() => run(item)}
 						>
 							<item.icon

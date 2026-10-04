@@ -109,7 +109,7 @@
 							{copy.lore.lead}
 						</legend>
 						<label
-							class="border-border flex cursor-pointer items-start gap-2 rounded-lg border p-3"
+							class="panel-edge flex cursor-pointer items-start gap-2 rounded-lg border p-3"
 							class:preset-tonal-primary={choice === "keep"}
 						>
 							<input
@@ -129,7 +129,7 @@
 							</span>
 						</label>
 						<label
-							class="border-border flex cursor-pointer items-start gap-2 rounded-lg border p-3"
+							class="panel-edge flex cursor-pointer items-start gap-2 rounded-lg border p-3"
 							class:preset-tonal-error={choice === "delete"}
 						>
 							<input

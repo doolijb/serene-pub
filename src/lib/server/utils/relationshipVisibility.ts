@@ -42,19 +42,20 @@
  */
 
 import type { RelationshipVisibility } from "$lib/server/db/schema"
+import { RELATIONSHIP_VISIBILITIES } from "$lib/shared/lorebooks/linkVocabulary"
 
-export const VALID_RELATIONSHIP_VISIBILITIES = new Set<RelationshipVisibility>([
-	"secret",
-	"acknowledged",
-	"public"
-])
+/** The one list (`linkVocabulary.ts`), as a set to test a value against. */
+export const VALID_RELATIONSHIP_VISIBILITIES = new Set<RelationshipVisibility>(
+	RELATIONSHIP_VISIBILITIES
+)
 
-/** Narrower first. The order the bound is taken over. */
-const OPENNESS: Record<RelationshipVisibility, number> = {
-	secret: 0,
-	acknowledged: 1,
-	public: 2
-}
+/**
+ * Narrower first. The order the bound is taken over: the one list's own
+ * order, least known first.
+ */
+const OPENNESS = Object.fromEntries(
+	RELATIONSHIP_VISIBILITIES.map((visibility, rank) => [visibility, rank])
+) as Record<RelationshipVisibility, number>
 
 /**
  * An LLM's raw string, coerced onto the real union.

@@ -15,10 +15,10 @@
  */
 
 import { describe, it, expect, beforeAll, vi } from "vitest"
-import { eq } from "drizzle-orm"
 import { createTestDb, type TestDb } from "$lib/server/utils/testDb"
 import { createHost } from "$lib/server/pipelines/runtime/host"
 import { buildWorld } from "$lib/server/pipelines/config/world"
+import { layerParityPrompts } from "$lib/server/pipelines/parity/harness"
 import { coreBindings } from "$lib/server/pipelines/runtime/bindings"
 import { CORE_TEMPLATE_ENGINE } from "$lib/server/pipelines/prompt/renderers"
 import { SHIPPED_CONTEXT_TEMPLATE } from "$lib/server/pipelines/entities/contextTemplateDefaults"
@@ -38,7 +38,6 @@ let db: TestDb
 let sessionId: number
 let userId: number
 let characterId: number
-let promptConfigId: number
 
 /** The three texts, one per part of the block. */
 const RESPONSE_REMINDER = "Write one reply only."
@@ -121,21 +120,9 @@ beforeAll(async () => {
 		})
 		.returning()
 
-	const [config] = await db
-		.insert(schema.promptConfigs)
-		.values({
-			name: "Strict reminder",
-			systemPrompt: "You are {{char}}.",
-			postHistoryInstructions: RESPONSE_REMINDER,
-			postHistoryDepth: 0,
-			postHistoryTokenTrigger: 0
-		})
-		.returning()
-	promptConfigId = config.id
-
 	const [session] = await db
 		.insert(schema.sessions)
-		.values({ userId, isGroup: false, promptConfigId })
+		.values({ userId, isGroup: false })
 		.returning()
 	sessionId = session.id
 
@@ -182,14 +169,17 @@ beforeAll(async () => {
 	})
 }, 60_000)
 
-/** Set the Session Prompt's trigger, then render this session's next turn. */
+/** Render this session's next turn with the reminder's trigger set to `postHistoryTokenTrigger`. */
 async function renderWith(postHistoryTokenTrigger: number) {
-	await db
-		.update(schema.promptConfigs)
-		.set({ postHistoryTokenTrigger })
-		.where(eq(schema.promptConfigs.id, promptConfigId))
-
 	const world = await buildWorld(db, { sessionId })
+	// The prompt, layered the way the parity harness does: this ad-hoc spec
+	// has no config layer to select a prompt row through.
+	layerParityPrompts(world, {
+		systemPrompt: "You are {{char}}.",
+		postHistoryInstructions: RESPONSE_REMINDER,
+		postHistoryDepth: 0,
+		postHistoryTokenTrigger
+	})
 	// The shipped story string, layered the way `pipelinePreview` does it: this
 	// ad-hoc spec has no config layer to resolve a template reference through,
 	// and `source` and `engine` travel together or not at all.
@@ -237,11 +227,15 @@ async function renderWith(postHistoryTokenTrigger: number) {
 	expect(messages.length, "the render produced no messages").toBeGreaterThan(
 		0
 	)
+	// ⚠ This connection is Ollama, whose chat wire FOLDS depth-placed system
+	// text into the nearest user message (AN3, `midSystemFor`): Ollama's
+	// templates would hoist a late system message to the top. So the block
+	// is looked for on the whole wire, and pinned to the last user message
+	// with exactly one system message — the top — left.
+	expect(messages.filter((m) => m.role === "system")).toHaveLength(1)
 	return {
-		system: messages
-			.filter((m) => m.role === "system")
-			.map((m) => m.content)
-			.join("\n"),
+		system: messages.map((m) => m.content).join("\n"),
+		lastUser: [...messages].reverse().find((m) => m.role === "user")?.content ?? "",
 		diagnostics: receipt.nodes?.find((n: any) => n.nodeKey === "prompt")
 			?.output?.postHistory
 	}
@@ -249,7 +243,8 @@ async function renderWith(postHistoryTokenTrigger: number) {
 
 describe("the post-history block on the wire", () => {
 	it("carries all three parts once the history is at least the trigger", async () => {
-		const { system, diagnostics } = await renderWith(1)
+		const { system, lastUser, diagnostics } = await renderWith(1)
+		expect(lastUser).toMatch(/\[System note\]\nResponse reminder:/)
 		expect(system).toContain("Response reminder:")
 		expect(system).toContain(RESPONSE_REMINDER)
 		expect(system).toContain("Character reminder:")

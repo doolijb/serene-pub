@@ -53,6 +53,32 @@ sp-avatar {
 sp-message-body {
 	display: block;
 }
+/* The picker is its body's control; it takes no box of its own. */
+sp-file-picker {
+	display: contents;
+}
+/* A drop zone is the box it wraps; the overlay covers it while files are
+   dragged over (STYLE-GUIDE §6.7: a dashed `primary-500/70` border and a short
+   imperative). */
+sp-drop-zone {
+	display: block;
+}
+.sp-drop-zone-region {
+	position: relative;
+}
+.sp-drop-zone-overlay {
+	position: absolute;
+	inset: 0;
+	z-index: 10;
+	display: grid;
+	place-items: center;
+	border: 2px dashed color-mix(in oklab, var(--color-primary-500) 70%, transparent);
+	border-radius: inherit;
+	background-color: color-mix(in oklab, var(--color-surface-50-950) 85%, transparent);
+	color: var(--color-primary-700-300);
+	font-weight: 600;
+	pointer-events: none;
+}
 
 .sp-dialog-backdrop {
 	@apply bg-surface-50-950/50 backdrop-blur-sm;

@@ -1,1 +1,0 @@
-ALTER TABLE "pipeline_spec_versions" ADD COLUMN "input_events" json;

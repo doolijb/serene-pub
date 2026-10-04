@@ -183,11 +183,20 @@ describe("defining what configurations exist is the administrator's", () => {
 		expect(mine).toBeTruthy()
 		expect(made.configId).toBe(mine.id)
 
+		// Recorded, thunks unread: the write's own answer is the claim here.
+		const heard: { event: string; data: unknown }[] = []
 		await pipelinesSetPresetActions.handler(
 			fakeSocket(true),
 			{ slug: SLUG, configId: mine.id, enabled: false },
-			noopEmit
+			((event: string, data: unknown) => {
+				heard.push({ event, data })
+			}) as any
 		)
+		// It answers on its own event, so a form waiting on its Save hears it.
+		expect(heard.find((e) => e.event === "pipelines:setPresetActions")?.data).toEqual({
+			slug: SLUG,
+			configId: mine.id
+		})
 		const [withdrawn] = await testDb
 			.select()
 			.from(schema.pipelineConfigs)

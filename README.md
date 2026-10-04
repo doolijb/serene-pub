@@ -54,7 +54,7 @@ Long stories drift. Characters forget what happened chapters ago, secrets slip t
 
 Most AI roleplay tools are built for one person in one browser tab. Serene Pub isn't.
 
-Turn on multi-user accounts and one server becomes a shared instance. Invite a friend into a session as a guest and they arrive as themselves, with their own persona and their own characters pulled from their own library.
+Turn on multi-user accounts and your pub becomes a shared one. Invite a friend into a session as a guest and they arrive as themselves, with their own persona and their own characters pulled from their own library.
 
 - **Multi-tenant accounts** — each account's characters (personas included), sessions and lorebooks stay private to it
 - **Guests bring their own cast** — friends join with their own persona and characters
@@ -331,15 +331,15 @@ No config files, no build step, no separate services to wire up.
 
 | Platform | Get Serene Pub |
 | --- | --- |
-| 🪟 **Windows** | [Download](https://github.com/doolijb/serene-pub/releases) → extract → run `Serene Pub.bat` (or `run.cmd`) |
-| 🍎 **macOS** | [Download](https://github.com/doolijb/serene-pub/releases) → extract → open `Serene Pub.app` (first launch may need right-click → Open; see [Troubleshooting](docs/troubleshooting.md)) |
-| 🐧 **Linux** | [Download](https://github.com/doolijb/serene-pub/releases) → extract → run `run.sh` (`install-desktop-shortcut.sh` adds an app-menu entry) |
+| 🪟 **Windows** | [Download](https://github.com/doolijb/serene-pub/releases) → extract → double-click `Serene Pub.exe` (see [Install](docs/install.md#windows)) |
+| 🍎 **macOS** | [Download](https://github.com/doolijb/serene-pub/releases) → extract → open `Serene Pub.app` (the first launch needs **Open Anyway** in Privacy & Security; see [Install](docs/install.md#macos)) |
+| 🐧 **Linux** | [Download](https://github.com/doolijb/serene-pub/releases) → extract → run `serene-pub` (`install-desktop-shortcut.sh` adds an app-menu entry) |
 | 📱 **Android** | [Download the APK](https://github.com/doolijb/serene-pub/releases) → install → open |
 | 🐳 **Docker** | `docker compose -f docker-compose.dist.yml up -d` — see [Docker](#-docker) below |
 
 Every desktop archive extracts to a single `serene-pub/` folder. Everything that *is* the application sits in `app/` inside it, with the launcher beside it — so **to upgrade, extract the new archive over your existing folder**. Your characters, sessions and settings are never in there; they live in your [data directory](docs/environment-variables.md#where-env-lives). Running headless, or from a service unit? Use `app/run.sh` (`app\run.cmd` on Windows), which starts the server alone.
 
-Desktop opens at [http://localhost:3000](http://localhost:3000); Android opens straight into the app. The **Setup Wizard** connects an AI provider (or installs KoboldCPP for you), then starts your first session.
+On a desktop, Serene Pub starts with a tray icon and opens in its own window (or at [http://localhost:3000](http://localhost:3000) in your browser); Android opens straight into the app. The **Setup Wizard** connects an AI provider (or installs KoboldCPP for you), then starts your first session.
 
 ### From Source
 
@@ -362,8 +362,8 @@ Prefer Docker? `docker compose -f docker-compose.dev.yml up -d --build` builds f
 Pre-built images are published to the GitHub Container Registry on every release:
 
 ```
-ghcr.io/doolijb/serene-pub:latest   ← always the latest stable release
-ghcr.io/doolijb/serene-pub:0.5.0    ← exact version pin
+ghcr.io/doolijb/serene-pub:latest       ← always the latest stable release
+ghcr.io/doolijb/serene-pub:0.6.0-pr-1   ← exact version pin (pre-releases are published only this way)
 ```
 
 **Quickstart** — download [`docker-compose.dist.yml`](docker-compose.dist.yml) from the release assets, then:
@@ -413,8 +413,8 @@ The same documentation ships inside the app on a built-in **Docs** page.
 
 Upcoming releases are tracked as **[GitHub Milestones](https://github.com/doolijb/serene-pub/milestones)**, each holding the issues that make it up. Nothing is promised on a timeline.
 
-- **0.6.0** — a modular node pipeline, with core logic and AI workflows converted onto it, plus further RAG and Lorebooks+ improvements
-- **0.7.0** — maturing those pipelines into an SDK for modders: custom pipelines, server-side logic, free-form data storage and limited-scope UI components
+- **0.6.0** — in preview now as **0.6.0-pr-1**: genres, inspectable pipelines, session layouts and widgets, a rebuilt Lorebooks+ with story time, cast and places, attachments, a rebuilt Connections view and a desktop launcher that updates itself. See the [release notes](docs/release-notes/0.6.0-pr-1.md)
+- **0.7.0** — the plugin SDK settles into its first stable release (1.0): custom pipelines, server-side logic, free-form data storage and UI components for modders. A preview of the SDK is published to npm (`@serene-pub/*`, on the `next` tag) with each 0.6 pre-release
 
 **Text-to-Speech** was targeted for 0.5.0 and held back. No integration found yet that's small, fast, expressive and tunable without voice cloning or a large sample library.
 

@@ -38,15 +38,7 @@ import {
 import { enqueueLorebookAnnotation } from "$lib/server/annotations/queue"
 import { insertBackgroundBinding, relistBindings } from "./lorebooks"
 import { refusable as refusableHandler } from "./refusable"
-
-/** The lorebook, if this user owns it. `entries.ts`' `findOwnedBook`, verbatim. */
-async function findOwnedBook(lorebookId: number, userId: number) {
-	return db.query.lorebooks.findFirst({
-		where: (l, { and, eq }) =>
-			and(eq(l.id, lorebookId), eq(l.userId, userId)),
-		columns: { id: true, name: true, userId: true }
-	})
-}
+import { assertOwnedBook } from "$lib/server/utils/ownedBook"
 
 /** Every refusal here reaches the person as its own sentence (see `refusable`). */
 const refusable = <P, R>(
@@ -102,8 +94,7 @@ export const bindingSuggestionsListHandler = refusable<
 	Sockets.BindingSuggestions.List.Response
 >("bindingSuggestions:list", async (socket, params, emitToUser) => {
 	const userId = socket.user!.id
-	const book = await findOwnedBook(params.lorebookId, userId)
-	if (!book) throw new Error("Lorebook not found.")
+	const book = await assertOwnedBook(db, userId, params.lorebookId)
 
 	const res = await buildBindingSuggestionsList(params.lorebookId)
 

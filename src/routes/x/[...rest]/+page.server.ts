@@ -36,7 +36,7 @@ export const load: PageServerLoad = async ({ params }) => {
 		.limit(1)
 	if (!plugin?.enabled) return {}
 
-	const page = surfacesOf(plugin.manifest, pluginId).page
+	const page = surfacesOf(plugin.manifest).page
 	if (!page) return {}
 	return { src: frameSrc(pluginId, page.entry), title: page.title ?? plugin.name }
 }

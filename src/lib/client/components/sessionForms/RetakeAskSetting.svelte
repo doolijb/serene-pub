@@ -64,6 +64,7 @@
 				<span class="text-sm font-medium">Ask before regenerating a turn</span>
 				<span class="text-surface-600-400 text-xs">
 					Regenerate deletes the last turn's messages and writes them again.
+					Applies at once.
 				</span>
 			</div>
 			<Switch

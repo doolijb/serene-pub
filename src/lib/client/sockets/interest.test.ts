@@ -42,6 +42,7 @@ import {
 	declareInterest,
 	flushInterestSync,
 	requestWithInterest,
+	onConnect,
 	resyncOnConnect,
 	setInterestUser,
 	syncInterest
@@ -407,6 +408,42 @@ describe("interest sync", () => {
 			"characters:list",
 			"sessions:typing#42"
 		])
+	})
+
+	test("onConnect asks again after every connect, behind the resync, until released", async () => {
+		// A push sent while the socket was down (a dropped connection, a
+		// server restart) is gone for good: a view that holds pushed state
+		// asks again on connect — AFTER the sync, or the gate drops its answer.
+		declareInterest<"sessions:typing">("sessions:typing#42", () => {})
+		await settle()
+		const release = onConnect(() =>
+			socket!.emit("sessions:panelLayout:startedFromUpdated", { sessionId: 42 })
+		)
+		socket!.emits.length = 0
+
+		resyncOnConnect()
+		expect(socket!.emits.map((e) => e.event)).toEqual([
+			"interest:sync",
+			"sessions:panelLayout:startedFromUpdated"
+		])
+
+		socket!.emits.length = 0
+		release()
+		release()
+		resyncOnConnect()
+		expect(socket!.emits.map((e) => e.event)).toEqual(["interest:sync"])
+	})
+
+	test("one view's reconnect ask throwing does not cost the others theirs", () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+		const asked: string[] = []
+		onConnect(() => {
+			throw new Error("boom")
+		})
+		onConnect(() => asked.push("second"))
+		resyncOnConnect()
+		expect(asked).toEqual(["second"])
+		expect(warn).toHaveBeenCalled()
 	})
 
 	test("the periodic sync fires, and stops once nothing is held", () => {

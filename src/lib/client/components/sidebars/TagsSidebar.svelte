@@ -14,6 +14,7 @@
 	import DetailHero from "../panels/DetailHero.svelte"
 	import Select from "../inputs/Select.svelte"
 	import PanelFilterInput from "../panels/PanelFilterInput.svelte"
+	import ViewToolbar from "../panels/ViewToolbar.svelte"
 	import PanelSplit from "../panels/PanelSplit.svelte"
 	import { ViewModeTracker } from "$lib/client/shell/viewMode.svelte"
 	import { goto } from "$app/navigation"
@@ -554,93 +555,100 @@
 						</div>
 					{/if}
 
-					<!-- Related sections -->
-					{#if relatedCharacters.length > 0}
-						<div class="mb-6">
-							<h3
-								class="mb-3 flex items-center gap-2 text-sm font-medium"
-							>
-								<Icons.User size={18} />
-								Characters ({relatedCharacters.length})
-							</h3>
-							<div class="flex flex-col gap-2">
-								{#each relatedCharacters as character}
-									<CharacterListItem
-										{character}
-										onclick={handleCharacterClick}
-										onEdit={() =>
-											handleCharacterEditClick(character)}
-										showControls={true}
-										contentTitle="Go to character sessions"
-									/>
-								{/each}
+					<!-- Related sections: side by side once the detail has the
+					     room (notes 14), as the session detail's cards are. -->
+					<div
+						class="grid items-start gap-x-6 @2xl/detail:grid-cols-2"
+					>
+						{#if relatedCharacters.length > 0}
+							<div class="mb-6">
+								<h3
+									class="mb-3 flex items-center gap-2 text-sm font-medium"
+								>
+									<Icons.User size={18} />
+									Characters ({relatedCharacters.length})
+								</h3>
+								<div class="flex flex-col gap-2">
+									{#each relatedCharacters as character}
+										<CharacterListItem
+											{character}
+											onclick={handleCharacterClick}
+											onEdit={() =>
+												handleCharacterEditClick(
+													character
+												)}
+											showControls={true}
+											contentTitle="Go to character sessions"
+										/>
+									{/each}
+								</div>
 							</div>
-						</div>
-					{/if}
+						{/if}
 
-					{#if relatedLorebooks.length > 0}
-						<div class="mb-6">
-							<h3
-								class="mb-3 flex items-center gap-2 text-sm font-medium"
-							>
-								<Icons.Book size={18} />
-								Lorebooks ({relatedLorebooks.length})
-							</h3>
-							<div class="grid gap-2">
-								{#each relatedLorebooks as lorebook}
-									<LorebookListItem
-										{lorebook}
-										onclick={() =>
-											handleLorebookClick(lorebook)}
-										showControls={false}
-										contentTitle="Go to lorebook"
-									/>
-								{/each}
+						{#if relatedLorebooks.length > 0}
+							<div class="mb-6">
+								<h3
+									class="mb-3 flex items-center gap-2 text-sm font-medium"
+								>
+									<Icons.Book size={18} />
+									Lorebooks ({relatedLorebooks.length})
+								</h3>
+								<div class="grid gap-2">
+									{#each relatedLorebooks as lorebook}
+										<LorebookListItem
+											{lorebook}
+											onclick={() =>
+												handleLorebookClick(lorebook)}
+											showControls={false}
+											contentTitle="Go to lorebook"
+										/>
+									{/each}
+								</div>
 							</div>
-						</div>
-					{/if}
+						{/if}
 
-					{#if relatedSessions.length > 0}
-						<div class="mb-6">
-							<h3
-								class="mb-3 flex items-center gap-2 text-sm font-medium"
-							>
-								<Icons.MessageSquare size={18} />
-								Sessions ({relatedSessions.length})
-							</h3>
-							<div class="flex flex-col gap-2">
-								{#each relatedSessions as session}
-									<SessionListItem
-										{session}
-										onclick={handleSessionClick}
-										onEdit={() => {
-											handleSessionEditClick(session)
-										}}
-										showControls={true}
-										contentTitle="Go to session"
-									/>
-								{/each}
+						{#if relatedSessions.length > 0}
+							<div class="mb-6">
+								<h3
+									class="mb-3 flex items-center gap-2 text-sm font-medium"
+								>
+									<Icons.MessageSquare size={18} />
+									Sessions ({relatedSessions.length})
+								</h3>
+								<div class="flex flex-col gap-2">
+									{#each relatedSessions as session}
+										<SessionListItem
+											{session}
+											onclick={handleSessionClick}
+											onEdit={() => {
+												handleSessionEditClick(session)
+											}}
+											showControls={true}
+											contentTitle="Go to session"
+										/>
+									{/each}
+								</div>
 							</div>
-						</div>
-					{/if}
+						{/if}
+					</div>
 				</div>
 			{:else if isCreating}
 				<!-- Create tag form -->
 				<div>
 					<h1 class="mb-4 text-lg font-bold">Create a tag</h1>
 					<div
-						class="mt-4 mb-4 flex gap-2"
+						class="mt-4 mb-4 flex max-w-3xl gap-2 @xl/detail:justify-end"
 						role="group"
 						aria-label="Form actions"
 					>
 						<button
-							class="btn btn-sm preset-filled-surface-500 w-full"
+							class="btn btn-sm preset-filled-surface-500 w-full @xl/detail:w-auto"
 							onclick={cancelCreate}
 						>
 							Cancel
 						</button>
 						<button
-							class="btn btn-sm preset-filled-primary-500 w-full"
+							class="btn btn-sm preset-filled-primary-500 w-full @xl/detail:w-auto"
 							onclick={createTag}
 							disabled={Object.keys(validationErrors).length >
 								0 || !newTagName.trim()}
@@ -648,7 +656,9 @@
 							Create tag
 						</button>
 					</div>
-					<div class="space-y-4">
+					<!-- Two columns once the detail has the room (notes 14):
+					     the name beside its colour, the description under both. -->
+					<div class="grid max-w-3xl gap-4 @xl/detail:grid-cols-2">
 						<div>
 							<label
 								class="mb-1 block font-semibold"
@@ -690,22 +700,6 @@
 							{/if}
 						</div>
 						<div>
-							<label
-								class="mb-1 block font-semibold"
-								for="tagDescription"
-							>
-								Description (optional)
-							</label>
-							<textarea
-								id="tagDescription"
-								name="tagDescription"
-								class="input w-full"
-								bind:value={newTagDescription}
-								placeholder="Enter tag description"
-								rows="3"
-							></textarea>
-						</div>
-						<div>
 							<Select
 								label="Color preset"
 								options={colorPresetOptions}
@@ -722,6 +716,22 @@
 									{newTagName.trim() || "Tag preview"}
 								</button>
 							</div>
+							<div class="@xl/detail:col-span-2">
+								<label
+									class="mb-1 block font-semibold"
+									for="tagDescription"
+								>
+									Description (optional)
+								</label>
+								<textarea
+									id="tagDescription"
+									name="tagDescription"
+									class="input w-full"
+									bind:value={newTagDescription}
+									placeholder="Enter tag description"
+									rows="3"
+								></textarea>
+							</div>
 						</div>
 					</div>
 				</div>
@@ -730,18 +740,18 @@
 				<div>
 					<h1 class="mb-4 text-lg font-bold">Edit tag</h1>
 					<div
-						class="mt-4 mb-4 flex gap-2"
+						class="mt-4 mb-4 flex max-w-3xl gap-2 @xl/detail:justify-end"
 						role="group"
 						aria-label="Form actions"
 					>
 						<button
-							class="btn btn-sm preset-filled-surface-500 w-full"
+							class="btn btn-sm preset-filled-surface-500 w-full @xl/detail:w-auto"
 							onclick={cancelEdit}
 						>
 							Cancel
 						</button>
 						<button
-							class="btn btn-sm preset-filled-primary-500 w-full"
+							class="btn btn-sm preset-filled-primary-500 w-full @xl/detail:w-auto"
 							onclick={updateTag}
 							disabled={Object.keys(editValidationErrors).length >
 								0 || !editTagName.trim()}
@@ -749,7 +759,9 @@
 							Update tag
 						</button>
 					</div>
-					<div class="space-y-4">
+					<!-- Two columns once the detail has the room (notes 14):
+					     the name beside its colour, the description under both. -->
+					<div class="grid max-w-3xl gap-4 @xl/detail:grid-cols-2">
 						<div>
 							<label
 								class="mb-1 block font-semibold"
@@ -791,22 +803,6 @@
 							{/if}
 						</div>
 						<div>
-							<label
-								class="mb-1 block font-semibold"
-								for="editTagDescription"
-							>
-								Description (optional)
-							</label>
-							<textarea
-								id="editTagDescription"
-								name="editTagDescription"
-								class="input w-full"
-								bind:value={editTagDescription}
-								placeholder="Enter tag description"
-								rows="3"
-							></textarea>
-						</div>
-						<div>
 							<Select
 								label="Color preset"
 								options={colorPresetOptions}
@@ -823,6 +819,22 @@
 									{editTagName.trim() || "Tag preview"}
 								</button>
 							</div>
+							<div class="@xl/detail:col-span-2">
+								<label
+									class="mb-1 block font-semibold"
+									for="editTagDescription"
+								>
+									Description (optional)
+								</label>
+								<textarea
+									id="editTagDescription"
+									name="editTagDescription"
+									class="input w-full"
+									bind:value={editTagDescription}
+									placeholder="Enter tag description"
+									rows="3"
+								></textarea>
+							</div>
 						</div>
 					</div>
 				</div>
@@ -830,27 +842,29 @@
 		{/snippet}
 
 		{#snippet list()}
-			<!-- Main tags list view -->
-			<div class="mb-2 flex gap-2">
-				<button
-					class="btn btn-sm preset-filled-primary-500"
-					onclick={handleCreateClick}
-					title="Create a tag"
-				>
-					<Icons.Plus size={16} />
-					New
-				</button>
-			</div>
-
-			<div class="mb-4">
-				<PanelFilterInput
-					bind:value={search}
-					placeholder="tags"
-					singular="tag"
-					count={tagsList.length}
-					aria-label="Filter tags by name or description"
-				/>
-			</div>
+			<!-- The view toolbar (STYLE-GUIDE §6.3). -->
+			<ViewToolbar label="Tags" class="mb-4">
+				{#snippet primary()}
+					<button
+						type="button"
+						class="btn btn-sm preset-filled-primary-500 shrink-0"
+						onclick={handleCreateClick}
+						title="Create a tag"
+					>
+						<Icons.Plus size={16} aria-hidden="true" />
+						New
+					</button>
+				{/snippet}
+				{#snippet filter()}
+					<PanelFilterInput
+						bind:value={search}
+						placeholder="tags"
+						singular="tag"
+						count={tagsList.length}
+						aria-label="Filter tags by name or description"
+					/>
+				{/snippet}
+			</ViewToolbar>
 
 			{#if isLoading}
 				<div class="flex items-center justify-center py-8">
@@ -944,7 +958,10 @@
 
 {#snippet tagChip()}
 	{#if selectedTag}
-		<span class="chip {selectedTag.colorPreset || 'preset-filled-primary-500'}">
+		<span
+			class="chip {selectedTag.colorPreset ||
+				'preset-filled-primary-500'}"
+		>
 			{selectedTag.name}
 		</span>
 	{/if}

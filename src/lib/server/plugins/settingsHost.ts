@@ -4,7 +4,7 @@
  * The SDK owns the declaration and every pure judgement about it (`checkValues`,
  * `reconcile`, `forClient`, `forOwningHook`, `configState` — settings.ts). What
  * lives here is only what the SDK cannot know: where the values are stored
- * (`plugins.settings`), and the instance's crypto.
+ * (`plugins.settings`), and the pub's crypto.
  *
  * ## Secrets (13 §6)
  *
@@ -29,18 +29,18 @@
  *
  * A field declared `scope: 'user'` is one each person may set for themselves.
  * Their values live in `plugin_user_settings`, one row per (plugin, user); the
- * instance's value in `plugins.settings` is what everyone gets until they set
- * their own, and the declared default is what the instance gets until an
+ * pub's value in `plugins.settings` is what everyone gets until they set
+ * their own, and the declared default is what the pub gets until an
  * administrator sets one. So a hook acting for a user resolves
- * **user → instance → default** (`resolveSettingsFor`). The descriptor carries
+ * **user → pub → default** (`resolveSettingsFor`). The descriptor carries
  * one resolution per user who has a row (`settingsByUser`, keyed by the user id
  * as text — the same spelling a call's `user` has) and the manager picks the
  * one for the user the call acts for; a call for anyone else, or for no one,
- * gets the instance's.
+ * gets the pub's.
  *
- * Who may write what: an administrator writes the instance's values for every
+ * Who may write what: an administrator writes the pub's values for every
  * field; a person writes only their own values, and only for user-scoped
- * fields (`applyUserSettingsWrite` refuses an instance field by name).
+ * fields (`applyUserSettingsWrite` refuses a pub field by name).
  */
 
 import { randomBytes } from "node:crypto"
@@ -243,17 +243,17 @@ export function userScopedSchema(schema: SettingsSchema): SettingsSchema {
 }
 
 /**
- * The stored values a user's resolution starts from: the instance's, with the
+ * The stored values a user's resolution starts from: the pub's, with the
  * user's own laid over them for user-scoped fields only. A user row that
- * somehow holds an instance field (written before a manifest changed a
+ * somehow holds a pub field (written before a manifest changed a
  * field's scope) is ignored rather than trusted.
  */
 export function layeredStored(
 	schema: SettingsSchema,
-	instanceStored: unknown,
+	pubStored: unknown,
 	userStored: unknown
 ): Record<string, unknown> {
-	const out = { ...stored(instanceStored) }
+	const out = { ...stored(pubStored) }
 	const own = stored(userStored)
 	for (const key of Object.keys(userScopedSchema(schema)))
 		if (key in own && own[key] !== undefined && own[key] !== null)
@@ -263,21 +263,21 @@ export function layeredStored(
 
 /**
  * The values a hook acting for one user reads: the user's value, then the
- * instance value, then the declared default. Secrets stay in their stored
+ * pub value, then the declared default. Secrets stay in their stored
  * envelope here — `hookSettingsFor` is what turns them into handles.
  */
 export function resolveSettingsFor(
 	schema: SettingsSchema,
-	instanceStored: unknown,
+	pubStored: unknown,
 	userStored: unknown
 ): Record<string, unknown> {
-	return reconcile(schema, layeredStored(schema, instanceStored, userStored))
+	return reconcile(schema, layeredStored(schema, pubStored, userStored))
 		.values
 }
 
 /** What a person's own settings form renders for one plugin. */
 export interface PluginUserSettingsView extends ClientSettingsView {
-	/** The user-scoped fields this person has set themselves; the rest show the instance's value. */
+	/** The user-scoped fields this person has set themselves; the rest show the pub's value. */
 	own: string[]
 }
 
@@ -289,12 +289,12 @@ export interface PluginUserSettingsView extends ClientSettingsView {
  */
 export function pluginUserSettingsView(
 	manifest: unknown,
-	instanceStored: unknown,
+	pubStored: unknown,
 	userStored: unknown
 ): PluginUserSettingsView | null {
 	const schema = userScopedSchema(settingsSchemaOf(manifest))
 	if (!Object.keys(schema).length) return null
-	const values = resolveSettingsFor(schema, instanceStored, userStored)
+	const values = resolveSettingsFor(schema, pubStored, userStored)
 	const own = stored(userStored)
 	return {
 		schema,
@@ -309,10 +309,10 @@ export function pluginUserSettingsView(
 
 /**
  * Fold a person's edit into their own stored values. The same write rules as
- * the instance's (`applySettingsWrite`) over the user-scoped fields only — an
- * instance field is refused by name, since only an administrator sets it.
+ * the pub's (`applySettingsWrite`) over the user-scoped fields only — an
+ * pub field is refused by name, since only an administrator sets it.
  * Clearing a value (null, or "" for a secret) removes the user's own value,
- * so they read the instance's again.
+ * so they read the pub's again.
  */
 export function applyUserSettingsWrite(
 	schema: SettingsSchema,
@@ -324,7 +324,7 @@ export function applyUserSettingsWrite(
 		if (schema[key] && !userSchema[key])
 			return {
 				ok: false,
-				error: `'${key}' applies to everyone on this instance — only an administrator can change it.`
+				error: `'${key}' applies to everyone on this pub — only an administrator can change it.`
 			}
 	return applySettingsWrite(userSchema, current, incoming)
 }
@@ -336,7 +336,7 @@ export interface PluginUserSettingsRow {
 }
 
 /**
- * Everything the descriptor carries about settings: the instance resolution
+ * Everything the descriptor carries about settings: the pub resolution
  * (handles for the hook, plaintext host-side, R63), and one resolution per
  * user with a row of their own. Every resolution shares one nonce, so a
  * handle reads the same whoever the call is for. Empty when the manifest
@@ -344,14 +344,14 @@ export interface PluginUserSettingsRow {
  */
 export function settingsDelivery(
 	manifest: unknown,
-	instanceStored: unknown,
+	pubStored: unknown,
 	userRows: readonly PluginUserSettingsRow[] = [],
 	nonce: string = randomBytes(8).toString("hex")
 ): Pick<
 	PluginDescriptor,
 	"settings" | "secrets" | "lentSecrets" | "secretNonce" | "settingsByUser"
 > {
-	const base = hookSettingsFor(manifest, instanceStored, nonce)
+	const base = hookSettingsFor(manifest, pubStored, nonce)
 	if (!base) return {}
 	const schema = settingsSchemaOf(manifest)
 	const hasUserFields = Object.keys(userScopedSchema(schema)).length > 0
@@ -360,7 +360,7 @@ export function settingsDelivery(
 		for (const row of userRows) {
 			const own = hookSettingsFor(
 				manifest,
-				layeredStored(schema, instanceStored, row.settings),
+				layeredStored(schema, pubStored, row.settings),
 				nonce
 			)!
 			byUser[String(row.userId)] = {

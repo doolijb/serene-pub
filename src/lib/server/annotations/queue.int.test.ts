@@ -16,17 +16,17 @@
  *
  * The second subject is staleness. Annotations are derived data over mutable
  * rows and their freshness is a triple — `(extractorVersion, sourceHash,
- * gazetteerHash)`. Two thirds of that is knowable in SQL and the third is not,
- * so the picker uses `annotated_at >= updated_at` in its place; a rewrite of the
- * content and a *rename somewhere else in the book* both have to bring a row
- * back round, and only a database can show that they do.
+ * gazetteerHash)` — all of it compared in SQL, the content hash against the
+ * row's GENERATED text hash; a rewrite of the content and a *rename somewhere
+ * else in the book* both have to bring a row back round, a write beside the
+ * text must not, and only a database can show that they do.
  */
 
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest"
 import fs from "fs/promises"
 import os from "os"
 import path from "path"
-import { eq } from "drizzle-orm"
+import { eq, sql } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import { worldLoreValues } from "$lib/server/pipelines/testing/fixtures"
 import type { TestDb } from "$lib/server/utils/testDb"
@@ -255,11 +255,11 @@ describe("a lane with no model starred indexes anyway", () => {
 		/**
 		 * ⚠ The busy-loop this guards.
 		 *
-		 * The picker's freshness predicate compares `annotated_at` against the
-		 * row's `updated_at`, so an item that examined a row and decided it was
-		 * already fresh would leave the predicate true and be handed the same
-		 * row for ever — which is why the lane's unit of work writes
-		 * unconditionally and the freshness filtering lives in the picker.
+		 * The picker compares the row's stored `source_hash` with the entry's
+		 * GENERATED text hash, so a unit of work that stamped any other hash
+		 * would leave the predicate true and be handed the same row for ever —
+		 * which is why the lane's unit of work stamps the column it read with
+		 * the text.
 		 *
 		 * The entry names only itself, through its own title: `buildGazetteer`
 		 * carries entry titles, and `entryAnnotationText` hands the extractor
@@ -386,5 +386,271 @@ describe("promotion on the annotation lane", () => {
 		expect(Date.now() - started).toBeLessThan(5_000)
 		expect(report.requested).toBe(0)
 		expect(report.reason).toMatch(/already covered/)
+	}, 60_000)
+})
+
+/**
+ * Plan A23(a): staleness is the text the lane reads, never a clock.
+ *
+ * A timestamp rule (`annotated_at >= updated_at`) re-annotates on every write,
+ * because every write moves `updated_at`: a mark, a reorder or a hidden message
+ * costs a model lease and a model call when an entity model is starred, for
+ * text that did not change. It misses a write that pins `updated_at`. And its
+ * two sides come from two clocks — the database's `now()` and the app's
+ * `new Date()`. The embedding lane's rule (A9) has none of these: compare the
+ * hash of the text the row would be read from now.
+ */
+describe("staleness is the text, not the clock", () => {
+	async function makeSession(lorebookId: number, userId: number) {
+		const [session] = await testDb
+			.insert(schema.sessions)
+			.values({ userId, isGroup: false, lorebookId })
+			.returning()
+		return session!
+	}
+
+	/** A message in both worlds: the annotation's foreign key is on `messages`. */
+	async function addMessage(
+		sessionId: number,
+		content: string,
+		extra: Partial<typeof schema.sessionMessages.$inferInsert> = {}
+	) {
+		const [legacy] = await testDb
+			.insert(schema.sessionMessages)
+			.values({ sessionId, role: "assistant", content, ...extra })
+			.returning()
+		await testDb
+			.insert(schema.messages)
+			.values({ id: legacy!.id, sessionId, role: "assistant" })
+		return legacy!
+	}
+
+	const messageAnnotationsOf = async (messageId: number) =>
+		await testDb
+			.select()
+			.from(schema.messageAnnotations)
+			.where(eq(schema.messageAnnotations.messageId, messageId))
+
+	test("a write that leaves an entry's text alone re-annotates nothing", async () => {
+		const { lorebook, entries } = await makeBook([
+			{ name: "Stonefast", content: "A keep on the northern ridge." }
+		])
+		const { enqueueLorebookAnnotation, settleAnnotationQueue } =
+			await import("./queue")
+		enqueueLorebookAnnotation(lorebook.id, "Book")
+		await settleAnnotationQueue()
+		const before = await annotationsOf(entries[0]!.id)
+		expect(before.length).toBeGreaterThan(0)
+
+		// A reorder: `updated_at` moves (drizzle's `$onUpdate`), the text does not.
+		await testDb
+			.update(schema.lorebookEntries)
+			.set({ position: 99 })
+			.where(eq(schema.lorebookEntries.id, entries[0]!.id))
+
+		enqueueLorebookAnnotation(lorebook.id, "Book")
+		await settleAnnotationQueue()
+		const after = await annotationsOf(entries[0]!.id)
+		expect(after.map((r) => r.annotatedAt)).toEqual(
+			before.map((r) => r.annotatedAt)
+		)
+	}, 60_000)
+
+	test("a text change that leaves updated_at where it was is still re-annotated", async () => {
+		const { lorebook, entries } = await makeBook([
+			{ name: "Stonefast", content: "A keep on the northern ridge." },
+			{
+				name: "The Hedge Road",
+				content: "The old track that runs past Stonefast."
+			}
+		])
+		const { enqueueLorebookAnnotation, settleAnnotationQueue } =
+			await import("./queue")
+		enqueueLorebookAnnotation(lorebook.id, "Book")
+		await settleAnnotationQueue()
+		const hedgeId = entries[1]!.id
+		expect(
+			(await annotationsOf(hedgeId)).map((r) => r.entityKey)
+		).toContain(`entry:${entries[0]!.id}`)
+
+		// A statement that pins `updated_at` — a repair migration's shape. The
+		// text moved, so the annotation is not about it any more.
+		await testDb
+			.update(schema.lorebookEntries)
+			.set({
+				content: "The old track that runs past nothing at all.",
+				updatedAt: sql`${schema.lorebookEntries.updatedAt}`
+			})
+			.where(eq(schema.lorebookEntries.id, hedgeId))
+
+		enqueueLorebookAnnotation(lorebook.id, "Book")
+		await settleAnnotationQueue()
+		expect(
+			(await annotationsOf(hedgeId)).map((r) => r.entityKey)
+		).not.toContain(`entry:${entries[0]!.id}`)
+	}, 60_000)
+
+	test("a message whose text did not move is not annotated again", async () => {
+		const { user, lorebook } = await makeBook([
+			{ name: "Stonefast", content: "A keep on the northern ridge." }
+		])
+		const session = await makeSession(lorebook.id, user.id)
+		const message = await addMessage(
+			session.id,
+			"They rode for Stonefast before the snow."
+		)
+		const { enqueueSessionAnnotation, settleAnnotationQueue } =
+			await import("./queue")
+		enqueueSessionAnnotation(session.id, lorebook.id, "Session")
+		await settleAnnotationQueue()
+		const before = await messageAnnotationsOf(message.id)
+		expect(before.length).toBeGreaterThan(0)
+
+		// Hiding a message moves its `updated_at` and nothing it says.
+		await testDb
+			.update(schema.sessionMessages)
+			.set({ isHidden: true })
+			.where(eq(schema.sessionMessages.id, message.id))
+
+		enqueueSessionAnnotation(session.id, lorebook.id, "Session")
+		await settleAnnotationQueue()
+		const after = await messageAnnotationsOf(message.id)
+		expect(after.map((r) => r.annotatedAt)).toEqual(
+			before.map((r) => r.annotatedAt)
+		)
+	}, 60_000)
+
+	test("a reply still generating is not annotated until it settles", async () => {
+		// Its text moves with every chunk the stream persists, so an annotation
+		// of it is stale on the next chunk and the lane would take it again —
+		// an entity-model call per chunk, none of them kept.
+		const { user, lorebook, entries } = await makeBook([
+			{ name: "Stonefast", content: "A keep on the northern ridge." }
+		])
+		const session = await makeSession(lorebook.id, user.id)
+		const streaming = await addMessage(session.id, "They rode for Stone", {
+			isGenerating: true
+		})
+		const { enqueueSessionAnnotation, settleAnnotationQueue } =
+			await import("./queue")
+		enqueueSessionAnnotation(session.id, lorebook.id, "Session")
+		await settleAnnotationQueue()
+		expect(await messageAnnotationsOf(streaming.id)).toEqual([])
+
+		await testDb
+			.update(schema.sessionMessages)
+			.set({
+				content: "They rode for Stonefast before the snow.",
+				isGenerating: false
+			})
+			.where(eq(schema.sessionMessages.id, streaming.id))
+		enqueueSessionAnnotation(session.id, lorebook.id, "Session")
+		await settleAnnotationQueue()
+		expect(
+			(await messageAnnotationsOf(streaming.id)).map((r) => r.entityKey)
+		).toContain(`entry:${entries[0]!.id}`)
+	}, 60_000)
+
+	test("a text longer than the extractor's cut is annotated once, and the lane goes idle", async () => {
+		// The stamped hash covers the whole text and the extractor reads the
+		// first `MAX_ANNOTATED_LENGTH` characters. JavaScript cuts UTF-16 units
+		// and Postgres cuts characters, so a hash of the cut could never meet
+		// the column over a long text of emoji — and the picker would take the
+		// row for ever.
+		const long = "🐉".repeat(12_000) + " Stonefast past the cut."
+		const { user, lorebook, entries } = await makeBook([
+			{ name: "Stonefast", content: "A keep on the northern ridge." },
+			{ name: "The Long Scroll", content: long }
+		])
+		const session = await makeSession(lorebook.id, user.id)
+		const message = await addMessage(session.id, long)
+		const {
+			enqueueLorebookAnnotation,
+			enqueueSessionAnnotation,
+			settleAnnotationQueue
+		} = await import("./queue")
+		enqueueLorebookAnnotation(lorebook.id, "Book")
+		enqueueSessionAnnotation(session.id, lorebook.id, "Session")
+		await settleAnnotationQueue()
+		const entryRows = await annotationsOf(entries[1]!.id)
+		const messageRows = await messageAnnotationsOf(message.id)
+		expect(entryRows.length).toBeGreaterThan(0)
+		expect(messageRows.length).toBeGreaterThan(0)
+
+		enqueueLorebookAnnotation(lorebook.id, "Book")
+		enqueueSessionAnnotation(session.id, lorebook.id, "Session")
+		await settleAnnotationQueue()
+		expect(
+			(await annotationsOf(entries[1]!.id)).map((r) => r.annotatedAt)
+		).toEqual(entryRows.map((r) => r.annotatedAt))
+		expect(
+			(await messageAnnotationsOf(message.id)).map((r) => r.annotatedAt)
+		).toEqual(messageRows.map((r) => r.annotatedAt))
+	}, 60_000)
+
+	test("the entity arm's read refuses an entry annotation whose text moved", async () => {
+		// `readEntryAnnotations` promised the freshness triple and checked two
+		// thirds of it: a bounded promotion that left an edited entry behind
+		// handed the arm keys the text no longer names.
+		const { lorebook, entries } = await makeBook([
+			{ name: "Stonefast", content: "A keep on the northern ridge." },
+			{
+				name: "The Hedge Road",
+				content: "The old track that runs past Stonefast."
+			}
+		])
+		const { annotateLorebook, loadVocabulary, readEntryAnnotations } =
+			await import("./index")
+		await annotateLorebook(testDb as any, lorebook.id)
+		const vocabulary = await loadVocabulary(testDb as any, lorebook.id)
+		const hedgeId = entries[1]!.id
+		expect(
+			(
+				await readEntryAnnotations(testDb as any, [hedgeId], vocabulary)
+			).get(hedgeId)
+		).toContain(`entry:${entries[0]!.id}`)
+
+		await testDb
+			.update(schema.lorebookEntries)
+			.set({ content: "The old track that runs past nothing at all." })
+			.where(eq(schema.lorebookEntries.id, hedgeId))
+
+		const index = await readEntryAnnotations(
+			testDb as any,
+			[hedgeId],
+			vocabulary
+		)
+		expect(index.has(hedgeId)).toBe(false)
+	}, 60_000)
+})
+
+describe("the background sweep", () => {
+	test("leaves the books of a deleted account alone", async () => {
+		const { user, entries } = await makeBook([
+			{ name: "Stonefast", content: "A keep on the northern ridge." }
+		])
+		await testDb
+			.update(schema.users)
+			.set({ isDeleted: true })
+			.where(eq(schema.users.id, user.id))
+
+		const { annotationLane, settleAnnotationQueue } = await import(
+			"./queue"
+		)
+		annotationLane.start()
+		await settleAnnotationQueue()
+		expect(await annotationsOf(entries[0]!.id)).toEqual([])
+	}, 60_000)
+
+	test("still reaches a live account's book nobody enqueued", async () => {
+		const { entries } = await makeBook([
+			{ name: "Stonefast", content: "A keep on the northern ridge." }
+		])
+		const { annotationLane, settleAnnotationQueue } = await import(
+			"./queue"
+		)
+		annotationLane.start()
+		await settleAnnotationQueue()
+		expect((await annotationsOf(entries[0]!.id)).length).toBeGreaterThan(0)
 	}, 60_000)
 })

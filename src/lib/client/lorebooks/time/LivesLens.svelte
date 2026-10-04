@@ -5,6 +5,7 @@
 	import type { Line } from "$lib/shared/lorebooks/lineReading"
 	import { formatDate } from "../sections/historyDates"
 	import { buildAxis, pinMarksOf } from "./livesLens"
+	import { lensEmptyMessage } from "../lenses/registry"
 
 	/**
 	 * The weave: every placed life, drawn against the story's own line.
@@ -46,9 +47,7 @@
 		>
 			<Icons.Footprints size={22} aria-hidden="true" />
 			<p class="max-w-md text-sm leading-relaxed">
-				Nobody has been placed on the line yet. Say when a cast member
-				is in the world — and at what point of their own life — and
-				their run appears here.
+				{lensEmptyMessage("lives")}
 			</p>
 			<p class="text-surface-600-400 max-w-md text-xs leading-relaxed">
 				Place the same person twice and you get two runs: a life

@@ -331,3 +331,24 @@ export function simulationExit<T>(
 	if (dirty || snapshot == null) return { arranged: current, restored: false }
 	return { arranged: snapshot, restored: true }
 }
+
+/** The guard's state while a tier is previewed: what to restore, and whether it was earned. */
+export interface SimGuard<T> {
+	snapshot: T | null
+	dirty: boolean
+}
+
+/**
+ * The guard after the arrangement is REPLACED under an open preview — a copy
+ * landing (Start from, Start again from, Reset, Start from scratch) while the
+ * phone-width preview is up. The replacement is the new "before": leaving the
+ * preview restores IT, and nobody has arranged it yet. Keeping the old
+ * snapshot would let Done put the pre-copy arrangement back and save it under
+ * the copy's provenance, settings and pins.
+ *
+ * At Actual (`simulating` false) there is no guard: `{ null, false }`, what
+ * the editor holds whenever no tier is showing.
+ */
+export function simulationRebase<T>(simulating: boolean, arranged: T): SimGuard<T> {
+	return { snapshot: simulating ? arranged : null, dirty: false }
+}

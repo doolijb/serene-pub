@@ -743,8 +743,7 @@ describe("the keeper's inventory arm (2026-09-27)", () => {
 
 	const KEEPERS: Array<[slug: string, nodeKey: string]> = [
 		["core:spec/adventure-respond", "keeperWrite"],
-		["core:spec/lair-respond", "keep.played.keeperWrite"],
-		["core:spec/whodunit-respond", "keeperWrite"]
+		["core:spec/lair-respond", "keep.played.keeperWrite"]
 	]
 	const shippedPath = async (slug: string, nodeKey: string) => {
 		const { coreAnnouncement } = await import("@serene-pub/core-catalog")

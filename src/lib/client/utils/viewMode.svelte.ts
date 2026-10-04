@@ -9,10 +9,20 @@ export function createViewMode(
 	storageKey: string,
 	defaultMode: ViewMode = "list"
 ) {
+	/**
+	 * Every read and write guarded: storage may be absent (SSR), blocked (a
+	 * private window), or — on Node 24+ without `--localstorage-file` — a
+	 * global `localStorage` with no working `getItem`, which threw during a
+	 * server render of the Connections index (2026-10-03). A remembered
+	 * view mode is a convenience; failing to read it is the default.
+	 */
 	function load(): ViewMode {
-		if (typeof localStorage === "undefined") return defaultMode
-		const stored = localStorage.getItem(storageKey)
-		return stored === "cards" || stored === "list" ? stored : defaultMode
+		try {
+			const stored = globalThis.localStorage?.getItem(storageKey)
+			return stored === "cards" || stored === "list" ? stored : defaultMode
+		} catch {
+			return defaultMode
+		}
 	}
 
 	let mode = $state<ViewMode>(load())
@@ -23,8 +33,10 @@ export function createViewMode(
 		},
 		set value(next: ViewMode) {
 			mode = next
-			if (typeof localStorage !== "undefined") {
-				localStorage.setItem(storageKey, next)
+			try {
+				globalThis.localStorage?.setItem(storageKey, next)
+			} catch {
+				// Not remembered; still switched for this visit.
 			}
 		}
 	}

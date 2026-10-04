@@ -83,7 +83,7 @@ if (sizeMb > thresholdMb) {
 	// dist exists solely on the CI runner — so print the breakdown here, at
 	// the one moment it is available.
 	// Point the breakdown at the payload, where all the weight actually is —
-	// the top of the extracted folder only holds docs and launchers.
+	// the top of the extracted folder only holds the launcher and docs.
 	const payloadDir = appDir(stageDir, targetName)
 	printLargest(path.join(payloadDir, "node_modules"), 15, "node_modules")
 	printLargest(payloadDir, 10, "the app payload")

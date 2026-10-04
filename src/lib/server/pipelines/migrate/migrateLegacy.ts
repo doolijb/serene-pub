@@ -1,44 +1,47 @@
 /**
- * Bringing a user's existing configuration across, once.
+ * Bringing a person's 0.5.3 prompt text across, once.
  *
- * Everything a person tuned before the pipeline layer existed lives in the
- * legacy tables: their own prompt configs, their own summarize and graph-build
- * configs, and the system/user/session choices that selected between them. This
- * copies it into the pipeline layer so the new panel shows what they actually
- * have, rather than showing them defaults and quietly running something else.
+ * What a person wrote before the pipeline layer existed lives in the legacy
+ * tables: their own prompt, narrator, summarize and graph-build configs, and
+ * the system/user/chat choices that selected between them. This carries the
+ * **prompt text** into the pipeline layer — each config as a configuration of
+ * the pipeline it fed, a copy of the shipped default with their prompts in it
+ * — and selects it where it was selected, so the panel shows what they wrote
+ * rather than showing them defaults.
  *
- * ## Only what differs from the default
+ * ## Prompt text only (owner ruling, 2026-10-01)
  *
- * A field a user never touched is **not** written. That is the whole difference
- * between a migration and a snapshot: an unwritten field keeps inheriting, so an
- * admin moving an instance default later still reaches this user. Copying
- * everything would look identical on the day it ran and would silently pin every
- * user to the 0.6 defaults forever — the same failure `clearOption` deletes
- * rather than rewrites to avoid.
+ * Nothing else a 0.5.3 config held customises a pipeline: not its
+ * `post_history_*` numbers, not its own connection or sampling picks, and no
+ * context config at all. Those are accepted losses, each said in an upgrade
+ * note (`attic/etl/configs.ts`); the shipped pipeline's own answer stands.
  *
  * ## Where each thing lands
  *
  * The scope chain already existed under different names, and `world.ts` wrote
  * the correspondence down. This follows it exactly rather than inventing one:
  *
- * | today | scope |
+ * | 0.5.3 | scope |
  * |---|---|
- * | `system_settings.default*` | `instance` |
- * | `user_settings.active*` | `user` |
- * | `sessions.promptConfigId` etc. | `session` |
+ * | `system_settings.default*` | `pub` |
+ * | `user_settings.active*` | `session`, on every session that person owns (and `pub` on a single-user install) |
+ * | `chats.narrator_prompt_config_id` | `session` |
  *
- * Flattening to a single layer would "work" and lose the property that makes the
- * chain worth having (12 §2).
+ * `migrateLegacySelections` says why, rule by rule.
  *
- * ## Idempotent, and safe to run before the user has finished migrating
+ * ## Read from the attic, and idempotent
  *
- * Keyed on a marker row per legacy config, so a second run writes nothing. The
- * legacy tables are left completely untouched — they stay readable behind the
- * read-only sidebar until 0.8.0 removes them.
+ * The legacy rows are 0.5.3's, read from the attic (`$lib/server/attic`) the
+ * upgrade stashed them in — never from `public`. No attic, nothing to bring
+ * across: a fresh install, or an upgrade that has finished, passes straight
+ * through. Keyed on a marker row per legacy config, so a second run — a boot
+ * that resumed an interrupted upgrade — writes nothing twice.
  */
 
 import { and, asc, eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
+import { atticExists } from "$lib/server/attic"
+import * as attic from "$lib/server/attic/tables"
 import { declarations } from "$lib/server/pipelines/config/panel"
 import { createPrompt } from "$lib/server/pipelines/entities/prompts"
 import { promptPoolKeyFor } from "$lib/server/pipelines/entities/promptPool"
@@ -58,7 +61,7 @@ const str = (v: unknown): string => (typeof v === "string" ? v : "")
  * The NUMBER-valued columns of a row, as a key union.
  *
  * Every dynamic column name in this file names one — a legacy pointer holds a
- * config id, a legacy param holds a count — and each was spelt `string` behind
+ * config id — and each was spelt `string` behind
  * an `as any` at the read. Derived from the row instead, a misspelt column is a
  * compile error rather than an `undefined` that silently migrates nothing,
  * which is the failure this whole file exists to avoid repeating.
@@ -66,8 +69,9 @@ const str = (v: unknown): string => (typeof v === "string" ? v : "")
 type NumberColumn<Row> = {
 	[K in keyof Row]-?: Row[K] extends number | null ? K : never
 }[keyof Row]
-type SystemPointerColumn = NumberColumn<SelectSystemSettings>
-type SessionPointerColumn = NumberColumn<SelectSession>
+type SystemPointerColumn = NumberColumn<typeof attic.systemSettings.$inferSelect>
+type SessionPointerColumn = NumberColumn<typeof attic.chats.$inferSelect>
+type UserPointerColumn = NumberColumn<typeof attic.userSettings.$inferSelect>
 
 /** One legacy table, and how its rows become a pipeline's prompts. */
 interface LegacySource {
@@ -108,6 +112,32 @@ const sessionFields = (row: any, narratorName = "") => ({
 	narratorName: narratorName || str(row.narratorName)
 })
 
+/**
+ * A narrator config's texts, with the narration's direction where 0.5.3 put it.
+ *
+ * 0.5.3 added what a person typed in the Narrator modal to the prompt in code
+ * (`promptBuilder.compilePrompt`), whatever the config's own text said: after
+ * the system prompt as _Additional focus for this response: …_ (or the bare
+ * direction when the system prompt was empty), and again after the
+ * post-history instructions (or on its own). In 0.6 the prompt row renders it,
+ * inside `{{#if turnDirection}}`, as the shipped Narrator row does — so a row
+ * carried from 0.5.3 says it too, and an undirected narration renders exactly
+ * the text that was written.
+ */
+const FOCUS = "Additional focus for this response: {{turnDirection}}"
+const narratorFields = (row: any) => {
+	const fields = sessionFields(row, str(row.narratorName) || "Narrator")
+	const after = (text: string, alone: string) =>
+		text
+			? `${text}{{#if turnDirection}}\n\n${FOCUS}{{/if}}`
+			: `{{#if turnDirection}}${alone}{{/if}}`
+	return {
+		...fields,
+		systemPrompt: after(fields.systemPrompt, "{{turnDirection}}"),
+		postHistoryInstructions: after(fields.postHistoryInstructions, FOCUS)
+	}
+}
+
 const summarizeFields = (row: any) => ({
 	batch: str(row.batchSystemPrompt),
 	synth: str(row.synthSystemPrompt),
@@ -117,31 +147,31 @@ const summarizeFields = (row: any) => ({
 const SOURCES: LegacySource[] = [
 	{
 		specSlug: RESPOND_SPEC_ID,
-		table: schema.promptConfigs,
+		table: attic.promptConfigs,
 		legacyTable: "prompt_configs",
 		fields: (r) => sessionFields(r)
 	},
 	{
 		specSlug: NARRATE_SPEC_ID,
-		table: schema.narratorPromptConfigs,
+		table: attic.narratorPromptConfigs,
 		legacyTable: "narrator_prompt_configs",
-		fields: (r) => sessionFields(r, str(r.narratorName) || "Narrator")
+		fields: narratorFields
 	},
 	{
 		specSlug: SUMMARIZE_WORLD_SPEC_ID,
-		table: schema.worldSummarizeConfigs,
+		table: attic.worldSummarizeConfigs,
 		legacyTable: "world_summarize_configs",
 		fields: summarizeFields
 	},
 	{
 		specSlug: SUMMARIZE_CHARACTER_SPEC_ID,
-		table: schema.characterSummarizeConfigs,
+		table: attic.characterSummarizeConfigs,
 		legacyTable: "character_summarize_configs",
 		fields: summarizeFields
 	},
 	{
 		specSlug: SUMMARIZE_SCENE_SPEC_ID,
-		table: schema.sceneSummarizeConfigs,
+		table: attic.sceneSummarizeConfigs,
 		legacyTable: "scene_summarize_configs",
 		fields: (r) => ({
 			...summarizeFields(r),
@@ -150,13 +180,13 @@ const SOURCES: LegacySource[] = [
 	},
 	{
 		specSlug: SUMMARIZE_HISTORY_SPEC_ID,
-		table: schema.sceneSummarizeConfigs,
+		table: attic.sceneSummarizeConfigs,
 		legacyTable: "scene_summarize_configs",
 		fields: summarizeFields
 	},
 	{
 		specSlug: GRAPH_BUILD_SPEC_ID,
-		table: schema.graphBuildConfigs,
+		table: attic.graphBuildConfigs,
 		legacyTable: "graph_build_configs",
 		fields: (r) => ({
 			nodeResolution: str(r.nodeResolutionSystemPrompt),
@@ -168,12 +198,19 @@ const SOURCES: LegacySource[] = [
 	}
 ]
 
+/** Each legacy table, and the pipelines its rows are brought into. */
+export const SOURCES_BY_TABLE: Record<string, string[]> = SOURCES.reduce(
+	(acc, s) => {
+		;(acc[s.legacyTable] ??= []).push(s.specSlug)
+		return acc
+	},
+	{} as Record<string, string[]>
+)
+
 export interface MigrationReport {
 	specSlug: string
 	/** User-created configs copied across as pipeline configs. */
 	configs: string[]
-	/** Values written as overrides, by scope. */
-	overrides: { instance: number; user: number; session: number }
 	/** Skipped because a marker said this had already run. */
 	skipped: number
 }
@@ -186,7 +223,7 @@ export interface MigrationReport {
  * whether that legacy row has been brought across. No separate bookkeeping
  * table, and no flag that can disagree with the rows it describes.
  */
-const migratedKey = (specSlug: string, legacyId: number) =>
+const migratedKey = (specSlug: string, legacyId: number | string) =>
 	`migrated:${specSlug}:${legacyId}`
 
 /**
@@ -241,6 +278,89 @@ async function freePromptName(
 }
 
 /**
+ * A free configuration name on this pipeline — `(spec, name)` is unique, and
+ * a person's 0.5.3 config may share its name with core's ("Default") or with
+ * another of theirs. Suffixed, never refused, for `freePromptName`'s reason.
+ */
+async function freeConfigName(
+	db: Db,
+	specId: number,
+	base: string
+): Promise<string> {
+	const rows = await db
+		.select({ name: schema.pipelineConfigs.name })
+		.from(schema.pipelineConfigs)
+		.where(eq(schema.pipelineConfigs.specId, specId))
+	const taken = new Set(rows.map((r) => r.name))
+	const clean = base.trim() || "Configuration"
+	if (!taken.has(clean)) return clean
+	let n = 2
+	while (taken.has(`${clean} (${n})`)) n++
+	return `${clean} (${n})`
+}
+
+interface ConfigValue {
+	nodeKey: string
+	slot: string
+	path: string
+	value: unknown
+}
+
+/**
+ * A migrated configuration, made the way a person makes one: a copy of the
+ * shipped default with their prompts written over it.
+ *
+ * The copy is what makes it run on the boot that wrote it. The shipped
+ * default carries the reference slots nothing else supplies — the context
+ * template, the variable layouts — and `reconcileConfigs`, which would
+ * back-fill them, has already run by the time the migration does; a config
+ * holding only its prompts halts at assemble ("no template") until the NEXT
+ * start reconciles it. Copied from the reconciled default, it is already what
+ * that next start would make of it.
+ */
+async function createFromShipped(
+	db: Db,
+	spec: { id: number; slug: string },
+	seedKey: string,
+	name: string,
+	values: ConfigValue[]
+): Promise<number> {
+	const { shippedDefault } = await import("$lib/server/pipelines/config/named")
+	const shipped = await shippedDefault(db, spec.id, spec.slug)
+	const [config] = await db
+		.insert(schema.pipelineConfigs)
+		.values({
+			specId: spec.id,
+			seedKey,
+			name: await freeConfigName(db, spec.id, name),
+			isImmutable: false,
+			isDefault: false
+		})
+		.returning()
+	const own = new Map(values.map((v) => [`${v.nodeKey}/${v.slot}/${v.path}`, v]))
+	const copied = shipped
+		? (
+				await db
+					.select()
+					.from(schema.pipelineConfigValues)
+					.where(eq(schema.pipelineConfigValues.configId, shipped.id))
+			).filter((v) => !own.has(`${v.nodeKey}/${v.slot}/${v.path ?? ""}`))
+		: []
+	const rows = [
+		...copied.map((v) => ({
+			configId: config.id,
+			nodeKey: v.nodeKey,
+			slot: v.slot,
+			path: v.path ?? "",
+			value: v.value
+		})),
+		...values.map((v) => ({ configId: config.id, ...v }))
+	]
+	if (rows.length) await db.insert(schema.pipelineConfigValues).values(rows as any)
+	return config.id
+}
+
+/**
  * Copy the user's own configs into their namespaces.
  *
  * A *user-created* row is one with no `seedKey` — the same rule `db/defaults.ts`
@@ -250,6 +370,7 @@ async function freePromptName(
  */
 export async function migrateLegacyConfigs(db: Db): Promise<MigrationReport[]> {
 	const out: MigrationReport[] = []
+	if (!(await atticExists(db))) return out
 
 	for (const source of SOURCES) {
 		const [spec] = await db
@@ -262,7 +383,6 @@ export async function migrateLegacyConfigs(db: Db): Promise<MigrationReport[]> {
 		const report: MigrationReport = {
 			specSlug: source.specSlug,
 			configs: [],
-			overrides: { instance: 0, user: 0, session: 0 },
 			skipped: 0
 		}
 
@@ -299,9 +419,6 @@ export async function migrateLegacyConfigs(db: Db): Promise<MigrationReport[]> {
 			// it would be a prompt the other three steps refuse — the panel
 			// would show a config it will not let them select — so the split is
 			// not a nicety here, it is what keeps the migrated config usable.
-			//
-			// "No data migration" does not exempt this: it is a boot path, and
-			// leaving it whole writes config rows the panel then rejects.
 			const authored = source.fields(row)
 			// Pool key → the prompt id every decl in that pool points at. Two
 			// decls sharing a pool share one row: they read the same fields
@@ -354,26 +471,14 @@ export async function migrateLegacyConfigs(db: Db): Promise<MigrationReport[]> {
 				promptIdByPool.set(pool, made.id)
 			}
 
-			const [config] = await db
-				.insert(schema.pipelineConfigs)
-				.values({
-					specId: spec.id,
-					seedKey,
-					name: row.name,
-					isImmutable: false,
-					isDefault: false
-				})
-				.returning()
-
 			// Each prompts slot points at its OWN pool's prompt. It used to
 			// point every one of them at a single row, which was the only thing
 			// a per-pipeline bundle could mean — and which the panel now
 			// refuses, because a summarizer's synth step will not accept a row
 			// carrying only the drafting text.
-			const values = promptNodes
+			const values: ConfigValue[] = promptNodes
 				.filter((d) => d.nodeDefinitionId)
 				.map((d) => ({
-					configId: config.id,
 					nodeKey: d.nodeKey,
 					slot: d.slot,
 					path: "",
@@ -382,9 +487,7 @@ export async function migrateLegacyConfigs(db: Db): Promise<MigrationReport[]> {
 					)
 				}))
 				.filter((v) => v.value != null)
-			if (values.length)
-				await db.insert(schema.pipelineConfigValues).values(values)
-
+			await createFromShipped(db, spec, seedKey, row.name, values)
 			report.configs.push(row.name)
 		}
 
@@ -395,190 +498,217 @@ export async function migrateLegacyConfigs(db: Db): Promise<MigrationReport[]> {
 }
 
 /**
- * Bring across the numeric fields a prompt config used to carry.
- *
- * `post_history_depth` and `post_history_token_trigger` were columns on
- * `prompt_configs`, which is exactly the bundling the new model undoes: they are
- * *params* — how the node behaves — not prompt text. They therefore migrate as
- * overrides at the scope that selected the config, not as part of the prompt.
- *
- * Only values differing from the column default are written, for the reason in
- * the header: a written value stops inheriting.
+ * 0.5.3 seed keys 0.6 spells differently (plan E4.1). The session rename
+ * reached one shipped prompt's key; every other seed kept its spelling.
  */
-export async function migrateLegacyParams(db: Db): Promise<number> {
-	const [spec] = await db
-		.select()
-		.from(schema.pipelineSpecs)
-		.where(eq(schema.pipelineSpecs.slug, RESPOND_SPEC_ID))
+const RENAMED_SEEDS: Readonly<Record<string, string>> = {
+	"prompt-neutral-chat": "prompt-neutral-session"
+}
+
+/**
+ * The 0.6 configuration that renders what a SHIPPED 0.5.3 config rendered.
+ *
+ * 0.6 ships those prompts as rows in the pools (`pipeline-prompt:<node
+ * type>:<slot>:<0.5.3 seed key>`), not as configurations, so a pick of one is
+ * answered by the shipped default when that default already points at it,
+ * and otherwise by a configuration that does — made once, named after the
+ * prompt, keyed `migrated:<spec>:<0.5.3 seed key>`. Null when 0.6 ships
+ * nothing under that key: the shipped default then stands.
+ */
+async function configForSeed(
+	db: Db,
+	spec: { id: number; slug: string; activeVersionId: number },
+	legacySeedKey: string
+): Promise<number | null> {
+	const seedKey = migratedKey(spec.slug, legacySeedKey)
+	const [made] = await db
+		.select({ id: schema.pipelineConfigs.id })
+		.from(schema.pipelineConfigs)
+		.where(eq(schema.pipelineConfigs.seedKey, seedKey))
 		.limit(1)
-	if (!spec?.activeVersionId) return 0
+	if (made) return made.id
 
-	const decls = await declarations(db, spec.activeVersionId)
-	const paramNode = (path: string) =>
-		decls.find((d) => d.slot === "params" && d.path === path)
-
-	const [system] = await db.select().from(schema.systemSettings).limit(1)
-	const sessionRows = await db.select().from(schema.sessions)
-	const prompts = await db.select().from(schema.promptConfigs)
-	const byId = new Map(prompts.map((p) => [p.id, p]))
-
-	/** The column defaults these fields carry; equal means "never touched". */
-	const DEFAULTS: ReadonlyArray<
-		readonly [NumberColumn<SelectPromptConfig>, number]
-	> = [
-		["postHistoryDepth", 0],
-		["postHistoryTokenTrigger", 0]
-	]
-
-	let written = 0
-	/** The tuned fields a legacy config carries, or none. */
-	const tuned = (configId: number | null | undefined) => {
-		const row = configId != null ? byId.get(configId) : undefined
-		if (!row) return []
-		return DEFAULTS.filter(([path, fallback]) => {
-			const value = row[path]
-			return value != null && value !== fallback
-		})
-			.map(([path]) => ({
-				path,
-				value: row[path],
-				decl: paramNode(path)
-			}))
-			.filter((e) => e.decl)
+	const slug = RENAMED_SEEDS[legacySeedKey] ?? legacySeedKey
+	const decls = (await declarations(db, spec.activeVersionId)).filter(
+		(d) => d.control === "prompts-ref" && d.nodeDefinitionId
+	)
+	const seeded = (
+		await db
+			.select({
+				id: schema.pipelinePrompts.id,
+				name: schema.pipelinePrompts.name,
+				seedKey: schema.pipelinePrompts.seedKey,
+				nodeDefinitionId: schema.pipelinePrompts.nodeDefinitionId,
+				slot: schema.pipelinePrompts.slot
+			})
+			.from(schema.pipelinePrompts)
+	).filter(
+		(p) => p.seedKey?.startsWith("pipeline-prompt:") && p.seedKey.endsWith(`:${slug}`)
+	)
+	const wanted: Array<ConfigValue & { name: string }> = []
+	for (const d of decls) {
+		const pool = promptPoolKeyFor(d.nodeDefinitionId!, d.slot)
+		const p = seeded.find(
+			(s) => promptPoolKeyFor(s.nodeDefinitionId, s.slot) === pool
+		)
+		if (p)
+			wanted.push({ nodeKey: d.nodeKey, slot: d.slot, path: "", value: p.id, name: p.name })
 	}
+	if (!wanted.length) return null
 
-	const write = async (
-		scopeId: number,
-		configId: number | null | undefined
-	) => {
-		for (const e of tuned(configId)) {
-			await db
-				.insert(schema.pipelineNodeOverrides)
-				.values({
-					specId: spec.id,
-					scopeKind: "session",
-					scopeId,
-					nodeKey: e.decl!.nodeKey,
-					slot: "params",
-					path: e.path,
-					value: e.value,
-					updatedAt: new Date()
-				})
-				.onConflictDoNothing()
-			written++
-		}
-	}
-
-	// The instance's tuning lands in the instance's config (the layers as
-	// simplified 2026-08-24) — there is no instance override row to write.
-	// The shipped default is immutable, so a tuned legacy install gets a
-	// mutable copy, exactly as migration 0140 does for pre-existing rows.
-	{
-		const entries = tuned(system?.defaultPromptConfigId)
-		if (entries.length) {
-			const { resolveSelectedConfig, duplicateConfig, selectConfig } =
-				await import("$lib/server/pipelines/config/named")
-			let selected = await resolveSelectedConfig(
-				db,
-				spec.id,
-				RESPOND_SPEC_ID,
-				{}
+	const { shippedDefault } = await import("$lib/server/pipelines/config/named")
+	const shipped = await shippedDefault(db, spec.id, spec.slug)
+	if (shipped) {
+		const values = await db
+			.select()
+			.from(schema.pipelineConfigValues)
+			.where(eq(schema.pipelineConfigValues.configId, shipped.id))
+		const holds = (w: ConfigValue) =>
+			values.some(
+				(v) =>
+					v.nodeKey === w.nodeKey &&
+					v.slot === w.slot &&
+					(v.path ?? "") === w.path &&
+					Number(v.value) === w.value
 			)
-			if (selected) {
-				const [cfg] = await db
-					.select()
-					.from(schema.pipelineConfigs)
-					.where(eq(schema.pipelineConfigs.id, selected.configId))
-					.limit(1)
-				let targetId = selected.configId
-				if (cfg?.isImmutable) {
-					const copy = await duplicateConfig(
-						db,
-						selected.configId,
-						`${cfg.name} (customized)`
-					).catch(() => null)
-					if (copy) {
-						targetId = copy.id
-						await selectConfig(db, spec.id, "instance", 0, targetId)
-					} else {
-						targetId = -1
-					}
-				}
-				if (targetId !== -1) {
-					for (const e of entries) {
-						await db
-							.insert(schema.pipelineConfigValues)
-							.values({
-								configId: targetId,
-								nodeKey: e.decl!.nodeKey,
-								slot: "params",
-								path: e.path,
-								value: e.value
-							})
-							.onConflictDoNothing()
-						written++
-					}
-				}
-			}
-		}
+		if (wanted.every(holds)) return shipped.id
 	}
-	// User-scope rows no longer migrate (ruled 2026-08-24) — the layer is gone.
-	for (const c of sessionRows) await write(c.id, c.promptConfigId)
+	return createFromShipped(
+		db,
+		spec,
+		seedKey,
+		wanted[0].name,
+		wanted.map(({ name: _name, ...v }) => v)
+	)
+}
 
-	return written
+/** Which legacy pointer selects which pipeline, and from which table. */
+interface Pointer {
+	specSlug: string
+	table: any
+	system: SystemPointerColumn
+	user?: UserPointerColumn
+	/**
+	 * A chat's own pick, where 0.5.3 READ one. Only the narrator's was
+	 * (`resolveNarratorPromptConfig`: chat → user → system). A chat's prompt
+	 * config ("AI Override") was stored and never read — generation took the
+	 * user's active config — so it selects nothing (owner ruling M5); the
+	 * wiring notes each one instead.
+	 */
+	session?: SessionPointerColumn
+}
+
+const POINTERS: Pointer[] = [
+	{
+		specSlug: RESPOND_SPEC_ID,
+		table: attic.promptConfigs,
+		system: "defaultPromptConfigId",
+		user: "activePromptConfigId"
+	},
+	{
+		specSlug: NARRATE_SPEC_ID,
+		table: attic.narratorPromptConfigs,
+		system: "defaultNarratorPromptConfigId",
+		user: "activeNarratorPromptConfigId",
+		session: "narratorPromptConfigId"
+	},
+	{
+		specSlug: SUMMARIZE_WORLD_SPEC_ID,
+		table: attic.worldSummarizeConfigs,
+		system: "defaultSummarizeWorldConfigId",
+		user: "activeSummarizeWorldConfigId"
+	},
+	{
+		specSlug: SUMMARIZE_CHARACTER_SPEC_ID,
+		table: attic.characterSummarizeConfigs,
+		system: "defaultSummarizeCharacterConfigId",
+		user: "activeSummarizeCharacterConfigId"
+	},
+	// 0.5.3 summarized scenes AND history through the scene config
+	// (`sockets/summarize.ts`: anything not world or character lore).
+	{
+		specSlug: SUMMARIZE_SCENE_SPEC_ID,
+		table: attic.sceneSummarizeConfigs,
+		system: "defaultSummarizeSceneConfigId",
+		user: "activeSummarizeSceneConfigId"
+	},
+	{
+		specSlug: SUMMARIZE_HISTORY_SPEC_ID,
+		table: attic.sceneSummarizeConfigs,
+		system: "defaultSummarizeSceneConfigId",
+		user: "activeSummarizeSceneConfigId"
+	},
+	// System-wide in 0.5.3 (`graphBuildConfigs.ts`): no user or chat pick.
+	{
+		specSlug: GRAPH_BUILD_SPEC_ID,
+		table: attic.graphBuildConfigs,
+		system: "defaultGraphBuildConfigId"
+	}
+]
+
+/**
+ * Whether this install has one person — the case where their picks are the
+ * instance's too (owner ruling B1). Counted on the restored users, so the
+ * seeded admin a 0.5.3 admin merged into is one person, not two.
+ */
+async function isSingleUserInstall(db: Db): Promise<boolean> {
+	const users = await db.select({ id: schema.users.id }).from(schema.users)
+	return users.length === 1
+}
+
+/**
+ * Each person's 0.5.3 settings row, by their 0.5.3 user id — the id a 0.5.3
+ * chat names its owner by.
+ */
+async function legacyUserSettings(db: Db) {
+	const { atticHasTable } = await import("$lib/server/attic")
+	if (!(await atticHasTable(db, "user_settings")))
+		return new Map<number, typeof attic.userSettings.$inferSelect>()
+	const rows = await db.select().from(attic.userSettings)
+	return new Map(rows.map((r) => [r.userId, r]))
 }
 
 /**
  * Point each scope at the config it was already using.
  *
- * Without this the migration copies everyone's configurations across and then
- * shows them the default — which is worse than not migrating, because the panel
- * would confidently display something they did not choose.
+ * 0.5.3 resolved every one of these as `user_settings.active_*` falling back
+ * to `system_settings.default_*` (`getUserConfigurations`), the narrator with
+ * the chat's own pick in front. The person's picks were the only lever with a
+ * writer — nothing but graph build's own panel ever wrote a system default —
+ * so dropping them would hand every person the instance's choice instead of
+ * their own (owner ruling B1, 2026-10-01):
+ *
+ *   · the **pub** selects what someone chose for it: a config somebody wrote,
+ *     a single-user install's own pick (theirs was the pub's in effect), or a
+ *     system default with no person lever (graph build). A shipped 0.5.3
+ *     config it merely defaulted to selects nothing, so new sessions get
+ *     0.6's shipped default;
+ *   · each **session** selects what its owner's chain resolved to, where that
+ *     differs from what the pub now resolves to. Where it is the same,
+ *     nothing is written, so the session keeps following the pub.
+ *
+ * A pick of a shipped config selects its 0.6 equivalent (`configForSeed`); a
+ * pick of a person's own, its `migrated:` configuration.
  */
 export async function migrateLegacySelections(db: Db): Promise<number> {
-	const { selectConfig } = await import("$lib/server/pipelines/config/named")
+	const { selectConfig, resolveSelectedConfig, shippedDefault } = await import(
+		"$lib/server/pipelines/config/named"
+	)
+	if (!(await atticExists(db))) return 0
 
-	const [system] = await db.select().from(schema.systemSettings).limit(1)
-	const sessionRows = await db.select().from(schema.sessions)
-
-	/** Which legacy pointer selects which namespace. */
-	const POINTERS: Array<{
-		specSlug: string
-		system?: SystemPointerColumn
-		user?: string
-		session?: SessionPointerColumn
-	}> = [
-		{
-			specSlug: RESPOND_SPEC_ID,
-			system: "defaultPromptConfigId",
-			user: "activePromptConfigId",
-			session: "promptConfigId"
-		},
-		{
-			specSlug: NARRATE_SPEC_ID,
-			system: "defaultNarratorPromptConfigId",
-			user: "activeNarratorPromptConfigId"
-		},
-		{
-			specSlug: SUMMARIZE_WORLD_SPEC_ID,
-			system: "defaultSummarizeWorldConfigId",
-			user: "activeSummarizeWorldConfigId"
-		},
-		{
-			specSlug: SUMMARIZE_CHARACTER_SPEC_ID,
-			system: "defaultSummarizeCharacterConfigId",
-			user: "activeSummarizeCharacterConfigId"
-		},
-		{
-			specSlug: SUMMARIZE_SCENE_SPEC_ID,
-			system: "defaultSummarizeSceneConfigId",
-			user: "activeSummarizeSceneConfigId"
-		},
-		{
-			specSlug: GRAPH_BUILD_SPEC_ID,
-			system: "defaultGraphBuildConfigId"
-		}
-	]
+	const [system] = await db.select().from(attic.systemSettings).limit(1)
+	// A 0.5.3 chat is the session of the same id.
+	const chats = await db.select().from(attic.chats).orderBy(asc(attic.chats.id))
+	const owners = new Map(
+		(
+			await db
+				.select({ id: schema.sessions.id, userId: schema.sessions.userId })
+				.from(schema.sessions)
+		).map((s) => [s.id, s.userId])
+	)
+	const settings = await legacyUserSettings(db)
+	const single = await isSingleUserInstall(db)
+	const soleSettings = single && settings.size === 1 ? [...settings.values()][0] : undefined
 
 	let selected = 0
 
@@ -588,36 +718,38 @@ export async function migrateLegacySelections(db: Db): Promise<number> {
 			.from(schema.pipelineSpecs)
 			.where(eq(schema.pipelineSpecs.slug, pointer.specSlug))
 			.limit(1)
-		if (!spec) continue
+		if (!spec?.activeVersionId) continue
+		const target = { id: spec.id, slug: spec.slug, activeVersionId: spec.activeVersionId }
 
-		/** The migrated config for a legacy row, if that row was the user's own. */
-		const configFor = async (legacyId: number | null | undefined) => {
+		const legacyRows = new Map<number, { id: number; seedKey: string | null }>(
+			(await db.select().from(pointer.table)).map((r: any) => [r.id, r])
+		)
+		/** The first of these 0.5.3 ids naming a row that still exists. */
+		const firstLiving = (...candidates: Array<number | null | undefined>) =>
+			candidates.find((id) => id != null && legacyRows.has(id)) ?? null
+
+		const configs = new Map<number, number | null>()
+		/** The 0.6 configuration a 0.5.3 config id resolves to. */
+		const configFor = async (legacyId: number | null): Promise<number | null> => {
 			if (legacyId == null) return null
-			const [row] = await db
-				.select()
-				.from(schema.pipelineConfigs)
-				.where(
-					eq(
-						schema.pipelineConfigs.seedKey,
-						migratedKey(pointer.specSlug, legacyId)
-					)
-				)
-				.limit(1)
-			return row?.id ?? null
+			if (configs.has(legacyId)) return configs.get(legacyId)!
+			const row = legacyRows.get(legacyId)!
+			let id: number | null
+			if (row.seedKey) id = await configForSeed(db, target, row.seedKey)
+			else {
+				const [config] = await db
+					.select({ id: schema.pipelineConfigs.id })
+					.from(schema.pipelineConfigs)
+					.where(eq(schema.pipelineConfigs.seedKey, migratedKey(spec.slug, legacyId)))
+					.limit(1)
+				id = config?.id ?? null
+			}
+			configs.set(legacyId, id)
+			return id
 		}
 
-		const apply = async (
-			scope: "instance" | "session",
-			scopeId: number,
-			legacyId: number | null | undefined,
-			updatedBy?: number
-		) => {
-			const configId = await configFor(legacyId)
-			// Nothing selected, or the legacy row was one of core's — either way
-			// the shipped default is already the right answer, and writing a
-			// selection to say so would only stop it tracking future changes.
-			if (configId == null) return
-			const [existing] = await db
+		const existing = async (scope: "pub" | "session", scopeId: number) => {
+			const [row] = await db
 				.select()
 				.from(schema.pipelineConfigSelections)
 				.where(
@@ -628,21 +760,51 @@ export async function migrateLegacySelections(db: Db): Promise<number> {
 					)
 				)
 				.limit(1)
-			if (existing?.configId != null) return
-
-			await selectConfig(db, spec.id, scope, scopeId, configId, updatedBy)
-			selected++
+			return row?.configId ?? null
 		}
 
-		if (pointer.system) await apply("instance", 0, system?.[pointer.system])
+		// ── the pub ──
+		const systemPick = firstLiving(system?.[pointer.system])
+		const pubPick = firstLiving(
+			pointer.user ? soleSettings?.[pointer.user] : null,
+			systemPick
+		)
+		// A shipped config the pub only defaulted to is no choice, so 0.6's
+		// shipped default stands for new sessions (existing ones keep theirs
+		// below). A system default is a choice where no person lever existed.
+		const chosen =
+			!pointer.user ||
+			pubPick !== systemPick ||
+			(pubPick != null && !legacyRows.get(pubPick)?.seedKey)
+		const pubConfig = chosen ? await configFor(pubPick) : null
+		const shipped = await shippedDefault(db, spec.id, spec.slug)
+		if (
+			pubConfig != null &&
+			pubConfig !== shipped?.id &&
+			(await existing("pub", 0)) == null
+		) {
+			await selectConfig(db, spec.id, "pub", 0, pubConfig)
+			selected++
+		}
+		const pubNow =
+			(await resolveSelectedConfig(db, spec.id, spec.slug, {}))?.configId ?? null
 
-		// User-scope selections no longer migrate (ruled 2026-08-24): the
-		// layer is gone, and carrying them to session scope would promote a
-		// preference into a per-session decision nobody made.
-
-		if (pointer.session)
-			for (const c of sessionRows)
-				await apply("session", c.id, c[pointer.session], c.userId)
+		// ── each session, through its owner's chain ──
+		if (!pointer.user && !pointer.session) continue
+		for (const chat of chats) {
+			const own = pointer.user ? settings.get(chat.userId)?.[pointer.user] : null
+			const pick = firstLiving(
+				pointer.session ? chat[pointer.session] : null,
+				own,
+				system?.[pointer.system]
+			)
+			const config = await configFor(pick)
+			if (config == null || config === pubNow) continue
+			if (!owners.has(chat.id)) continue
+			if ((await existing("session", chat.id)) != null) continue
+			await selectConfig(db, spec.id, "session", chat.id, config, owners.get(chat.id))
+			selected++
+		}
 	}
 
 	return selected
@@ -650,7 +812,6 @@ export async function migrateLegacySelections(db: Db): Promise<number> {
 
 export interface FullMigrationReport {
 	configs: MigrationReport[]
-	params: number
 	selections: number
 }
 
@@ -659,7 +820,6 @@ export async function migrateLegacyToPipelines(
 	db: Db
 ): Promise<FullMigrationReport> {
 	const configs = await migrateLegacyConfigs(db)
-	const params = await migrateLegacyParams(db)
 	const selections = await migrateLegacySelections(db)
-	return { configs, params, selections }
+	return { configs, selections }
 }

@@ -10,7 +10,10 @@
 //   - execution-provider libraries the app never requests (no GPU device
 //     option is ever passed to the embedding pipeline), or
 //   - build artifacts/duplicated formats confirmed unread by anything at
-//     runtime (see the size-audit plan this script implements).
+//     runtime (see the size-audit plan this script implements), or
+//   - development-only files in every package — sourcemaps, TypeScript
+//     declarations and sources, docs, test suites (rule 18) — never the
+//     license texts and notices, which ship with the code.
 //
 // Nothing here changes behavior — only removes files nothing reads.
 
@@ -81,7 +84,13 @@ export function pruneDist(outDir, target) {
 	// browser export condition — the Node build always resolves
 	// transformers.node.mjs, which uses onnxruntime-node instead. Confirmed
 	// zero imports of onnxruntime-web anywhere in src/.
-	rm(path.join(nm, "onnxruntime-web"))
+	//
+	// Its own dependencies go with it when nothing else needs them: npm
+	// hoists them to the top level, where they outlived the package —
+	// protobufjs (+ @protobufjs/*, long), flatbuffers, guid-typescript and
+	// platform, ~4 MB that only onnxruntime-web ever required.
+	// onnxruntime-common stays (onnxruntime-node depends on it).
+	removePackageAndOrphans(nm, "onnxruntime-web")
 
 	// 4. @lenml/tokenizer-gemma is loaded via a dynamic ESM import
 	// (TokenCounterManager.ts), which only ever resolves dist/main.mjs —
@@ -109,9 +118,11 @@ export function pruneDist(outDir, target) {
 	// 5. gpt-tokenizer's package.json exports map resolves the dynamic
 	// import("gpt-tokenizer/encoding/...") pattern this app uses
 	// (TokenCounterManager.ts) through "./*": {"import": "./esm/*.js"} only
-	// — dist/ (unpkg/CDN target), cjs/, and src/ are never touched.
+	// — dist/ (unpkg/CDN target), cjs/, and src/ are never touched. data/
+	// holds the raw .tiktoken files (~7 MB) that the package's own codegen
+	// turns into esm/bpeRanks/*.js; only its codegen and tests read them.
 	const gptTok = path.join(nm, "gpt-tokenizer")
-	for (const dir of ["dist", "cjs", "src"]) {
+	for (const dir of ["dist", "cjs", "src", "data"]) {
 		rm(path.join(gptTok, dir))
 	}
 
@@ -146,11 +157,11 @@ export function pruneDist(outDir, target) {
 	if (fs.existsSync(esbuildBin) && fs.statSync(esbuildBin).size > 1024 * 1024) rm(esbuildBin)
 
 	// 11. Server sourcemaps: adapter-node bundles build/server with its own
-	// rollup pass, which hard-codes `sourcemap: true` in its output options.
-	// build/client emits none, and nothing reads them once shipped.
-	rmMatching(path.join(outDir, "build/server"), (name) =>
-		name.endsWith(".map")
-	)
+	// rollup pass, which hard-codes `sourcemap: true` in its output options,
+	// and writes maps beside build/index.js, handler.js, env.js and shims.js
+	// too. build/client emits none, and nothing reads them once shipped (the
+	// server is never started with --enable-source-maps).
+	rmMatching(path.join(outDir, "build"), (name) => name.endsWith(".map"))
 
 	// 12. drizzle-kit's *_snapshot.json files are dev-time artifacts for
 	// `drizzle-kit generate` — drizzle-orm's actual runtime migrator
@@ -172,6 +183,248 @@ export function pruneDist(outDir, target) {
 		path.join(outDir, "build/client"),
 		(name) => name.endsWith(".gz") || name.endsWith(".br")
 	)
+
+	// 14. llama3-tokenizer-js has no exports map: both `import` and
+	// `require` resolve its `main` (bundle/llama3-tokenizer-with-baked-data.js,
+	// the only file the tokenizer code paths import). The two CommonJS copies
+	// of the same 3 MB baked bundle and the 3 MB src/ it is generated from
+	// are never read. KEEP-what-is-needed, like rule 4.
+	keepOnlyMain(path.join(nm, "llama3-tokenizer-js"))
+
+	// 15. Type-only packages. Nothing imports `@types/*` at runtime — they
+	// exist for the TypeScript checker — yet runtime packages (engine.io,
+	// image-q, …) list them as dependencies, so a production install ships them.
+	for (const scope of scopeDirs(nm, "@types")) rm(scope)
+
+	// 16. @huggingface/transformers ships eight builds of itself in dist/;
+	// Node resolves only its `exports.node` targets (the app reaches it by
+	// dynamic import() — transformers.node.mjs; the .cjs twin is kept for
+	// any require()). The web and minified builds are unread. KEEP-what-is-
+	// needed: computed from the package's own exports map, so a renamed
+	// build is kept rather than silently shipped or wrongly removed.
+	const hf = path.join(nm, "@huggingface/transformers")
+	if (fs.existsSync(path.join(hf, "package.json"))) {
+		const exp = readJson(path.join(hf, "package.json")).exports
+		const node = exp?.["."]?.node ?? exp?.node
+		const keep = new Set()
+		;(function walk(v) {
+			if (typeof v === "string") keep.add(path.basename(v))
+			else if (v && typeof v === "object") Object.values(v).forEach(walk)
+		})(node)
+		const dist = path.join(hf, "dist")
+		const BUILD = /^transformers\.(.*\.)?(m|c)?js$/
+		// Only when the node targets are really there — never empty the package.
+		if ([...keep].some((f) => BUILD.test(f) && fs.existsSync(path.join(dist, f)))) {
+			for (const f of fs.readdirSync(dist)) if (BUILD.test(f) && !keep.has(f)) rm(path.join(dist, f))
+		}
+	}
+
+	// 17. PGlite's contrib/vector extension archives (dist/*.tar.gz, ~5 MB).
+	// One is read only when its module (`@electric-sql/pglite/contrib/<name>`
+	// or `/vector`) is imported and passed as `extensions` to new PGlite();
+	// the app opens PGlite with none (db/index.ts via drizzle, and
+	// db/recovery.ts), and core's own .tar.gz handling is dumpDataDir /
+	// loadDataDir of user archives, not these files.
+	rmMatching(path.join(nm, "@electric-sql/pglite/dist"), (name) => name.endsWith(".tar.gz"))
+
+	// 18. Development-only files in every package: sourcemaps, TypeScript
+	// declarations and sources, docs, test suites. See cleanPackage() for
+	// each rule and what it deliberately leaves alone.
+	for (const pkgDir of packageDirs(nm)) cleanPackage(pkgDir)
+}
+
+// ── node_modules cleaning (rules 3, 14 and 18) ───────────────────────────
+
+const readJson = (p) => JSON.parse(fs.readFileSync(p, "utf8"))
+
+/** Every package directory under `nm`, nested node_modules included. */
+function packageDirs(nm) {
+	const out = []
+	;(function walk(dir) {
+		if (!fs.existsSync(dir)) return
+		for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+			if (!entry.isDirectory() || entry.name.startsWith(".")) continue
+			const p = path.join(dir, entry.name)
+			const pkgs = entry.name.startsWith("@")
+				? fs.readdirSync(p, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => path.join(p, e.name))
+				: [p]
+			for (const pkgDir of pkgs) {
+				if (!fs.existsSync(path.join(pkgDir, "package.json"))) continue
+				out.push(pkgDir)
+				walk(path.join(pkgDir, "node_modules"))
+			}
+		}
+	})(nm)
+	return out
+}
+
+/** Every `<scope>` directory: the top level's and any a package nests. */
+function scopeDirs(nm, scope) {
+	const out = []
+	const top = path.join(nm, scope)
+	if (fs.existsSync(top)) out.push(top)
+	for (const pkgDir of packageDirs(nm)) {
+		const nested = path.join(pkgDir, "node_modules", scope)
+		if (fs.existsSync(nested)) out.push(nested)
+	}
+	return out
+}
+
+const depNames = (pkg) => [
+	...Object.keys(pkg.dependencies ?? {}),
+	...Object.keys(pkg.optionalDependencies ?? {}),
+	...Object.keys(pkg.peerDependencies ?? {})
+]
+
+/** The app's own dependencies: what build/ imports, named by no package.json in the payload. */
+function appDependencyNames() {
+	try {
+		return Object.keys(readJson(new URL("../package.json", import.meta.url)).dependencies ?? {})
+	} catch {
+		return null
+	}
+}
+
+/**
+ * Remove top-level package `name`, then each of its dependencies (and
+ * theirs, transitively) that nothing left in the tree — and not the app
+ * itself — still names in dependencies / optionalDependencies /
+ * peerDependencies. Conservative by construction: one mention anywhere keeps
+ * a package; without the app's package.json, nothing beyond `name` goes.
+ */
+function removePackageAndOrphans(nm, name) {
+	const pj = path.join(nm, name, "package.json")
+	let candidates = fs.existsSync(pj) ? depNames(readJson(pj)) : []
+	rm(path.join(nm, name))
+	const app = appDependencyNames()
+	if (!app) return
+	while (candidates.length) {
+		const named = new Set(app)
+		for (const pkgDir of packageDirs(nm)) for (const n of depNames(readJson(path.join(pkgDir, "package.json")))) named.add(n)
+		const next = []
+		for (const c of new Set(candidates)) {
+			const dir = path.join(nm, c)
+			if (named.has(c) || !fs.existsSync(path.join(dir, "package.json"))) continue
+			next.push(...depNames(readJson(path.join(dir, "package.json"))))
+			rm(dir)
+			const scope = path.dirname(dir)
+			if (scope !== nm && fs.existsSync(scope) && fs.readdirSync(scope).length === 0) rm(scope)
+		}
+		candidates = next
+	}
+}
+
+/** A package with no `exports`: keep package.json, its `main`, and its notices. */
+function keepOnlyMain(pkgDir) {
+	const pj = path.join(pkgDir, "package.json")
+	if (!fs.existsSync(pj)) return
+	const pkg = readJson(pj)
+	if (pkg.exports || typeof pkg.main !== "string") return
+	const main = path.normalize(pkg.main)
+	if (!fs.existsSync(path.join(pkgDir, main))) return
+	;(function walk(dir) {
+		for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+			const p = path.join(dir, entry.name)
+			const rel = path.relative(pkgDir, p)
+			if (entry.isDirectory()) {
+				if (main.startsWith(rel + path.sep)) walk(p)
+				else rm(p)
+			} else if (rel !== main && rel !== "package.json" && !NOTICE_FILE.test(entry.name)) rm(p)
+		}
+	})(pkgDir)
+}
+
+/** License texts and notices — the license obligations ship with the code, always. */
+const NOTICE_FILE = /^(licen[cs]e|notice|copying|copyright|authors|patents|third[-_ ]?party)/i
+const DOC_FILE = /^(readme|changelog|changes|history|contributing|code_of_conduct|security|upgrading|migrating)(\.(md|markdown|txt|rst))?$/i
+const MARKDOWN = /\.(md|markdown)$/i
+const DECLARATION = /\.d\.(ts|mts|cts)$/
+const TS_SOURCE = /\.(ts|mts|cts|tsx)$/
+const JUNK_FILE = /^(\.npmignore|\.eslintrc(\..+)?|\.eslintignore|\.prettierrc(\..+)?|\.prettierignore|\.editorconfig|\.travis\.yml|\.gitattributes|\.babelrc|\.nycrc(\..+)?|\.jshintrc|\.DS_Store)$|\.tsbuildinfo$/
+/** Package-root directories that are a package's own tests, docs or CI. */
+const ROOT_DEV_DIRS = new Set(["test", "tests", "__tests__", "example", "examples", "benchmark", "benchmarks", "coverage", ".github", "docs", "doc", "man"])
+
+/**
+ * Packages left whole apart from sourcemaps. The in-app component compiler
+ * (components/compile.ts) bundles authored components against svelte and the
+ * @serene-pub packages FROM node_modules — controls and component-client
+ * export .ts/.svelte sources, and the CLI scaffolds from templates/ — so
+ * nothing else is touched in them.
+ */
+const keepWhole = (name) => name === "svelte" || name.startsWith("@serene-pub/")
+
+/** Paths a Node `import`/`require` of the package can reach (types excluded). */
+function entryTargets(pkg) {
+	const out = []
+	const RUNTIME_CONDITIONS = new Set(["node", "import", "require", "default", "module", "svelte"])
+	/** exports: subpaths and the conditions Node (or the compiler's svelte) resolves. */
+	const walkExports = (v) => {
+		if (typeof v === "string") out.push(v)
+		else if (Array.isArray(v)) v.forEach(walkExports)
+		else if (v && typeof v === "object")
+			for (const [k, x] of Object.entries(v)) if (k.startsWith(".") || RUNTIME_CONDITIONS.has(k)) walkExports(x)
+	}
+	/** main/module/svelte are a path; bin/browser a path or a map whose values are paths. */
+	for (const field of ["main", "module", "svelte", "bin", "browser"]) {
+		const v = pkg[field]
+		if (typeof v === "string") out.push(v)
+		else if (v && typeof v === "object") for (const x of Object.values(v)) if (typeof x === "string") out.push(x)
+	}
+	walkExports(pkg.exports)
+	return out.map((t) => path.normalize(t.replace(/\*.*$/, "")))
+}
+
+/**
+ * Rule 18 for one package (its nested node_modules are packages of their own):
+ *   - `*.map` sourcemaps, everywhere: nothing reads them at runtime;
+ *   - unless keepWhole(): TypeScript declarations; TypeScript sources, unless
+ *     an entry point is one (Node refuses to type-strip under node_modules,
+ *     so a .ts beside its compiled .js is never loaded); markdown and
+ *     readme/changelog files other than license texts and notices; editor and
+ *     CI dotfiles; and the package-root test/docs/example directories no
+ *     entry point reaches into (root only: yaml's runtime lives in dist/doc/).
+ * Directories this empties are removed; other empty directories stay.
+ */
+function cleanPackage(pkgDir) {
+	let pkg
+	try {
+		pkg = readJson(path.join(pkgDir, "package.json"))
+	} catch {
+		return
+	}
+	const whole = keepWhole(pkg.name ?? "")
+	const entries = entryTargets(pkg)
+	const tsEntry = entries.some((t) => TS_SOURCE.test(t) && !DECLARATION.test(t))
+	const reached = new Set(entries.map((t) => t.split(path.sep)[0]))
+	const removable = (name) =>
+		name.endsWith(".map") ||
+		(!whole &&
+			(DECLARATION.test(name) ||
+				(!tsEntry && TS_SOURCE.test(name)) ||
+				(!NOTICE_FILE.test(name) && (MARKDOWN.test(name) || DOC_FILE.test(name))) ||
+				JUNK_FILE.test(name)))
+	;(function walk(dir, atRoot) {
+		let removed = false
+		for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+			const p = path.join(dir, entry.name)
+			if (entry.isDirectory()) {
+				if (atRoot && entry.name === "node_modules") continue
+				if (atRoot && !whole && ROOT_DEV_DIRS.has(entry.name) && !reached.has(entry.name)) {
+					rm(p)
+					removed = true
+					continue
+				}
+				if (walk(p, false) && fs.readdirSync(p).length === 0) {
+					fs.rmdirSync(p)
+					removed = true
+				}
+			} else if (removable(entry.name)) {
+				rm(p)
+				removed = true
+			}
+		}
+		return removed
+	})(pkgDir, true)
 }
 
 /** Every `@esbuild` scope directory: the top level's and any a package nests. */
@@ -320,7 +573,7 @@ export function dirSizeBytes(dir) {
 
 // Per-target uncompressed size ceiling for the CI guard (release.yml). Measured
 // over the whole staging directory, so it covers the app/ payload plus the docs
-// and launchers beside it. Set a comfortable margin above the measured
+// and the launcher beside it. Set a comfortable margin above the measured
 // post-prune size, not a tight tripwire; the point is catching a dependency bump
 // silently reintroducing hundreds of MB, not policing byte-level drift.
 // Re-measure and adjust after any deliberate, expected size change (e.g. a new
@@ -345,11 +598,21 @@ export function dirSizeBytes(dir) {
 // so their old 220 ceilings would fail for the identical reason. Their exact
 // post-prune sizes have NOT been measured — if one of them lands far below
 // this, tighten it rather than leaving slack that hides a real regression.
+//
+// Raised again by 20 MB for every target in 0.6 (2026-10-01), deliberately,
+// for the Go launcher and the window helper that replaced the shell shims
+// (scripts/dist-layout.js). Measured on a probe build of the launcher's shape
+// (fyne.io/systray + net/http + os/exec, `-trimpath -ldflags "-s -w"`):
+// 7.4 MB linux-x64 static, 6.0 MB windows-x64. The window helper (webview_go,
+// cgo) was NOT measured — the dev box lacks the WebKitGTK headers — and is
+// budgeted at up to ~8 MB (Windows statically links libstdc++), plus ~1.2 MB
+// for macOS's favicon.icns. Once the first CI run prints real sizes, tighten
+// these to that plus the usual margin.
 export const SIZE_THRESHOLD_MB = {
-	"linux-x64": 350,
-	"macos-x64": 360,
-	"macos-arm64": 360,
-	"windows-x64": 360
+	"linux-x64": 370,
+	"macos-x64": 380,
+	"macos-arm64": 380,
+	"windows-x64": 380
 }
 
 // Uncompressed ceiling for the Android assets tree, checked by

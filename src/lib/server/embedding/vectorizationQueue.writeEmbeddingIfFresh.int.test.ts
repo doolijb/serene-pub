@@ -16,12 +16,15 @@
  *
  * ⚠ **This file follows the lore-entry half of that write onto
  * `writeEntryVectorIfFresh`**, which is where it lives now that a vector is a
- * row in `lorebook_entry_vectors` rather than three columns on the entry. Every
- * property is the same one: the same text comparison, the same
- * model-changed-mid-flight refusal, and the same "vectorizing is not an edit"
- * — which the new shape gets structurally, because the statement never touches
- * the entry row at all. `writeEmbeddingIfFresh` itself is unchanged and still
- * carries messages, bindings, characters and personas.
+ * row in `lorebook_entry_vectors` rather than three columns on the entry. The
+ * same model-changed-mid-flight refusal and the same "vectorizing is not an
+ * edit" — which the new shape gets structurally, because the statement never
+ * touches the entry row at all. Its edit-during-embed guard is the entry's
+ * **embedded text** now, not `updated_at` (plan A9): the picker captures
+ * `lorebook_entries.embed_text_hash` and the write lands only while the entry still hashes
+ * to it. `writeEmbeddingIfFresh` carries messages, cast members, characters
+ * and relationships under the same kind of guard — the row's text hash —
+ * counted in `columnStoreEmbeddingCost.int.test.ts`.
  */
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest"
 import fs from "fs/promises"
@@ -86,6 +89,15 @@ async function makeEntry(lorebookId: number, name: string, content = "x") {
 	return entry
 }
 
+/** What the picker captures: the hash of the text it is about to embed. */
+async function capturedHash(id: number) {
+	const [row] = await testDb
+		.select({ hash: schema.lorebookEntries.embedTextHash })
+		.from(schema.lorebookEntries)
+		.where(eq(schema.lorebookEntries.id, id))
+	return row.hash
+}
+
 async function rawUpdatedAt(id: number) {
 	const [row] = await testDb
 		.select({
@@ -122,11 +134,12 @@ describe("writeEntryVectorIfFresh (PGlite integration)", () => {
 		// default populate it, at full Postgres microsecond precision.
 		const entry = await makeEntry(lorebook.id, "Entry")
 
-		// Mirrors exactly what the picker's SELECT does: capture updatedAt as
-		// text, not as the Drizzle-parsed Date.
+		// Mirrors exactly what the picker's SELECT does: capture the hash of
+		// the text it embeds.
+		const hash = await capturedHash(entry.id)
 		await writeEntryVectorIfFresh(
 			entry.id,
-			await rawUpdatedAt(entry.id),
+			hash,
 			"test-model",
 			[0.1, 0.2, 0.3]
 		)
@@ -136,6 +149,8 @@ describe("writeEntryVectorIfFresh (PGlite integration)", () => {
 		expect(vector?.model).toBe("test-model")
 		expect(vector?.dims).toBe(3)
 		expect(vector?.vectorizedAt).not.toBeNull()
+		// The hash is stored with the vector: it is what staleness reads.
+		expect(vector?.sourceHash).toBe(hash)
 	})
 
 	test("replaces the vector it already wrote rather than failing on the key", async () => {
@@ -144,10 +159,10 @@ describe("writeEntryVectorIfFresh (PGlite integration)", () => {
 		const user = await makeUser("write-embedding-replace-user")
 		const lorebook = await makeLorebook(user.id)
 		const entry = await makeEntry(lorebook.id, "Replaced")
-		const raw = await rawUpdatedAt(entry.id)
+		const hash = await capturedHash(entry.id)
 
-		await writeEntryVectorIfFresh(entry.id, raw, "test-model", [1, 0, 0])
-		await writeEntryVectorIfFresh(entry.id, raw, "test-model", [0, 1, 0])
+		await writeEntryVectorIfFresh(entry.id, hash, "test-model", [1, 0, 0])
+		await writeEntryVectorIfFresh(entry.id, hash, "test-model", [0, 1, 0])
 
 		// `(entry, name, chunk)` IS the key — there is no second way to name
 		// one of these rows, so a re-embed is an upsert and not a duplicate.
@@ -164,7 +179,7 @@ describe("writeEntryVectorIfFresh (PGlite integration)", () => {
 		const before = await rawUpdatedAt(entry.id)
 		await writeEntryVectorIfFresh(
 			entry.id,
-			before,
+			await capturedHash(entry.id),
 			"test-model",
 			[0.1, 0.2, 0.3]
 		)
@@ -207,7 +222,7 @@ describe("writeEntryVectorIfFresh (PGlite integration)", () => {
 		const user = await makeUser("write-embedding-race-user")
 		const lorebook = await makeLorebook(user.id)
 		const entry = await makeEntry(lorebook.id, "Entry", "original")
-		const captured = await rawUpdatedAt(entry.id)
+		const captured = await capturedHash(entry.id)
 
 		// Simulate a concurrent edit landing while embed() was in flight.
 		await testDb
@@ -232,6 +247,32 @@ describe("writeEntryVectorIfFresh (PGlite integration)", () => {
 		expect(row.content).toBe("edited while embedding was in flight")
 	})
 
+	test("keeps the write when only a mark landed mid-flight (plan A9)", async () => {
+		const { writeEntryVectorIfFresh } = await import("./vectorizationQueue")
+
+		const user = await makeUser("write-embedding-mark-race-user")
+		const lorebook = await makeLorebook(user.id)
+		const entry = await makeEntry(lorebook.id, "Entry", "unchanged")
+		const captured = await capturedHash(entry.id)
+
+		// A pin moves `updated_at` and not a word of the text. Under the old
+		// timestamp guard this dropped the finished embed, and an entry with
+		// no vector yet paid for a second one.
+		await testDb
+			.update(schema.lorebookEntries)
+			.set({ constant: true })
+			.where(eq(schema.lorebookEntries.id, entry.id))
+
+		await writeEntryVectorIfFresh(
+			entry.id,
+			captured,
+			"test-model",
+			[0.4, 0.4, 0.4]
+		)
+
+		expect((await defaultVector(entry.id))?.vector).toEqual([0.4, 0.4, 0.4])
+	})
+
 	test("skips the write when the active embedding model changed mid-flight", async () => {
 		const { writeEntryVectorIfFresh } = await import("./vectorizationQueue")
 
@@ -245,7 +286,7 @@ describe("writeEntryVectorIfFresh (PGlite integration)", () => {
 
 		await writeEntryVectorIfFresh(
 			entry.id,
-			await rawUpdatedAt(entry.id),
+			await capturedHash(entry.id),
 			"model-a",
 			[0.5, 0.5, 0.5]
 		)

@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest"
 import { LORE_SCOPES, SCOPE_LABELS, type LoreScope } from "$lib/shared/lorebooks/loreRoute"
-import type { PoolItem } from "./poolFilter"
+import { comparePoolBy, type PoolItem } from "./poolFilter"
 import { containedBy } from "./editor/partOf"
+import { POOL_KINDS } from "./scopes"
+import { kindLabel } from "./sections/kinds"
 import {
 	SECTION_DESCRIPTORS,
 	bookPoolItems,
@@ -30,6 +32,7 @@ describe("section descriptors", () => {
 			"characters",
 			"history",
 			"scenes",
+			"places",
 			"items"
 		])
 	})
@@ -89,13 +92,65 @@ describe("section descriptors", () => {
 
 	it("resolves a scope to its descriptor", () => {
 		expect(descriptorFor("world")?.id).toBe("world")
-		// Cast is a board of people and Places has no kind yet, so neither
-		// draws the pool.
+		// Cast is a board of people, so it draws no pool.
 		expect(descriptorFor("cast")).toBeUndefined()
-		expect(descriptorFor("places")).toBeUndefined()
-		// Items are a door of their own (phase 3c), not world lore under All entries.
+		// Items are a door of their own (phase 3c), not world lore under Everything.
 		expect(descriptorFor("items")?.typeId).toBe("core:entry/item")
 		expect(descriptorForKind("core:entry/item")?.id).toBe("items")
+	})
+
+	/**
+	 * Places plan B5: a place is a pool entry with its own door. The canvas
+	 * must never be the only way to reach one (a11y, ruling 6), so List,
+	 * Cards and Tree list places, All holds them and search finds them.
+	 */
+	it("gives places a door of their own, which All holds", () => {
+		const places = descriptorFor("places")
+		expect(places?.typeId).toBe("core:entry/location")
+		expect(places?.kind).toBe("core:entry/location")
+		expect(places?.store).toBe("entries")
+		expect(places?.creatable).toBe(true)
+		expect(places?.newLabel).toBe("New place")
+		expect(places?.inspector.map((t) => t.id)).toEqual([
+			"fires",
+			"references"
+		])
+		expect(descriptorForKind("core:entry/location")?.id).toBe("places")
+		// A chip says the declared name, the rail's spelling.
+		expect(kindLabel("core:entry/location")).toBe("Places")
+		expect(POOL_KINDS).toContain("core:entry/location")
+		// All is every door with a kind of its own.
+		const all = descriptorFor("all")!
+		expect(poolKindsOf(all)).toEqual([])
+		expect(
+			SECTION_DESCRIPTORS.filter((d) => d.id !== "all" && d.kind).map(
+				(d) => d.kind
+			)
+		).toContain("core:entry/location")
+		const pool = bookPoolItems(
+			{
+				"core:entry/location": [
+					{ id: 7, name: "The Guardroom", content: "", keys: [] }
+				]
+			},
+			[]
+		)
+		expect(pool.map((i) => [i.key, i.kind, i.name])).toEqual([
+			["entry#7", "core:entry/location", "The Guardroom"]
+		])
+	})
+
+	it("asks a place for its name, as every named door does", () => {
+		const places = descriptorFor("places")!
+		const draft = places.newDraft(3)
+		expect(draft).toMatchObject({
+			typeId: "core:entry/location",
+			lorebookId: 3,
+			name: "",
+			category: null
+		})
+		expect(places.validate(draft, [])).toBe(false)
+		expect(places.validate({ ...draft, name: "The Guardroom" }, [])).toBe(true)
 	})
 
 	it("keeps Character Lore as a door with no scope, because Cast holds it", () => {
@@ -105,7 +160,7 @@ describe("section descriptors", () => {
 		expect(isScopeDoor(characters)).toBe(false)
 		expect(LORE_SCOPES as readonly string[]).not.toContain("characters")
 		// Still in the pool: a member's lore is listed on their page AND in
-		// All entries, and both read the same curated row.
+		// Everything, and both read the same curated row.
 		expect(descriptorForKind(characters.kind!)?.id).toBe("characters")
 	})
 
@@ -149,7 +204,7 @@ function poolItem(key: string, kind: string): PoolItem {
 }
 
 /**
- * "All entries" is a list of several kinds, so the row that is open decides
+ * "Everything" is a list of several kinds, so the row that is open decides
  * which editor is drawn. A section that answered with its own door would open
  * every row in the generic one, which is the placeholder this pool exists to
  * avoid.
@@ -319,5 +374,37 @@ describe("bookPoolItems — every row the book holds", () => {
 	it("never draws a row twice for the door that holds every kind", () => {
 		const pool = bookPoolItems({ [WORLD]: [city] }, [])
 		expect(pool.filter((item) => item.key === "entry#4")).toHaveLength(1)
+	})
+})
+
+/**
+ * "Story order" is the calendar's order, whatever the numbers.
+ *
+ * A history entry's day can pass 99 — a declared calendar allows months of
+ * up to 1000 days, and a free-form book numbers days of the year — and a
+ * packed `year×10000 + month×100 + day` then puts Mo. 1 Day 150 after
+ * Mo. 2 Day 1 (A15 made such days storable; the review caught the sort).
+ */
+describe("Story order sorts by the calendar", () => {
+	const dated = (id: number, month: number, day: number) =>
+		({ id, typeId: HISTORY, year: 3, month, day }) as any
+	const rows = [dated(1, 2, 1), dated(2, 1, 150), dated(3, 1, 99)]
+
+	it("puts a day past 99 before the next month, oldest first", () => {
+		const pool = bookPoolItems({ [HISTORY]: rows }, [])
+		expect(
+			[...pool].sort(comparePoolBy("entry-date-asc")).map((i) => i.id)
+		).toEqual([3, 2, 1])
+		expect(
+			[...pool].sort(comparePoolBy("entry-date-desc")).map((i) => i.id)
+		).toEqual([1, 2, 3])
+	})
+
+	it("keeps undated rows ahead of dated ones, as they always sat", () => {
+		const city = { id: 4, name: "Umber City", typeId: WORLD, position: 0 } as any
+		const pool = bookPoolItems({ [WORLD]: [city], [HISTORY]: rows }, [])
+		expect(
+			[...pool].sort(comparePoolBy("entry-date-asc")).map((i) => i.id)
+		).toEqual([4, 3, 2, 1])
 	})
 })

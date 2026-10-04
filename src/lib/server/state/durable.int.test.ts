@@ -110,6 +110,9 @@ async function world(opts: { lorebook?: boolean } = {}) {
 	const suffix = `${++n}`
 	const { createTestUser } = await import("$lib/server/utils/testDb")
 	const user = await createTestUser(testDb, `durable-${suffix}`)
+	// What is recorded, not whether: Full writes it (the default, Review
+	// changes, files proposals — sessionLoreWrites.int.test.ts).
+	await testDb.insert(schema.userSettings).values({ userId: user.id, loreWriteMode: "full" })
 	const [verity] = await testDb
 		.insert(schema.characters)
 		.values({ userId: user.id, name: `Verity ${suffix}`, description: "…" })

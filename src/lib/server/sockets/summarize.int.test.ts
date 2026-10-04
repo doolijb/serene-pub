@@ -1,12 +1,12 @@
 /**
- * sessionsSummarizeHandler (sessions:summarize) — end-to-end coverage for the
- * scene-type participant/mentioned pipeline: knownCast actually reaching
- * the summarize pipeline's request, a hallucinated castId no longer
- * silently vanishing once it does, and the auto-add-message-senders
- * guarantee. The pipeline run itself (runSpec) is mocked — everything else
- * (lorebook/binding resolution, the reconcile step) runs for real against
- * a PGlite test DB. The full pipeline path has its own coverage in
- * pipelines/summarizeRun.int.test.ts.
+ * sessionsSummarizeHandler (sessions:summarize) — world and character lore.
+ * The pipeline run itself (runSpec) is mocked — everything else runs for
+ * real against a PGlite test DB. The full pipeline path has its own coverage
+ * in pipelines/summarizeRun.int.test.ts.
+ *
+ * Scene summaries are not this handler's: the modal creates the scene and
+ * hands it to `scenes:process`, and the scene/history branches that once
+ * lived here were unreachable (Phase D) — their tests went with them.
  */
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest"
 import { eq } from "drizzle-orm"
@@ -71,19 +71,6 @@ vi.mock("$lib/server/utils/resolveTaskConfig", () => ({
 		sampling: { id: 1 },
 		connectionName: "test-connection",
 		samplingName: "test-sampling"
-	})
-}))
-
-// getUserConfigurations requires seeded sampling/context/prompt configs
-// (irrelevant to this test's scene-participant focus, and generateSummary
-// itself is mocked below anyway) — bypass it with harmless fakes.
-vi.mock("$lib/server/utils/getUserConfigurations", () => ({
-	getUserConfigurations: vi.fn().mockResolvedValue({
-		connection: null,
-		sampling: { id: 1 },
-		contextConfig: { id: 1 },
-		promptConfig: { id: 1 },
-		narratorPromptConfig: null
 	})
 }))
 
@@ -171,111 +158,77 @@ async function makeSceneSession(userId: number) {
 	return { lorebook, character, binding, persona, session, msg1, msg2 }
 }
 
-describe("sessionsSummarizeHandler — scene participant pipeline (PGlite integration)", () => {
-	test("knownCast reaches generateSummary for a scene-type request", async () => {
+describe("sessions:summarize — world and character only (Phase D)", () => {
+	test("a scene request is refused before any run starts", async () => {
 		const { sessionsSummarizeHandler } = await import("./summarize")
-		const user = await makeUser("summarize-knowncast-user")
-		const { session, binding, msg1, msg2 } = await makeSceneSession(user.id)
-		runSpecMock.mockReset().mockResolvedValue(receiptWith())
-
-		await sessionsSummarizeHandler.handler(
-			fakeSocket(user.id),
-			{
-				sessionId: session.id,
-				messageIds: [msg1.id, msg2.id],
-				loreType: "scene"
-			} as any,
-			noopEmit
-		)
-
-		expect(runSpecMock).toHaveBeenCalledTimes(1)
-		const runPassed = runSpecMock.mock.calls[0][0]
-		expect(runPassed.specId).toBe("core:spec/summarize-scene")
-		// Stopped before the write — the modal's review is the save.
-		expect(runPassed.preview).toEqual({ atNode: "save" })
-		const request = runPassed.input?.request
-		expect(request?.knownCast).toBeDefined()
-		expect(request.knownCast.some((c: any) => c.id === binding.id)).toBe(
-			true
-		)
-		// The pinned selection travels too — the pipeline reads exactly the
-		// chosen messages, hidden or not.
-		expect(request.messageIds).toEqual([msg1.id, msg2.id])
-	})
-
-	test("a hallucinated castId with no matching cast entry is dropped, not fabricated — but real senders still end up as participants", async () => {
-		const { sessionsSummarizeHandler } = await import("./summarize")
-		const user = await makeUser("summarize-hallucinated-user")
+		const user = await makeUser("summarize-scene-refused-user")
 		const { session, msg1, msg2 } = await makeSceneSession(user.id)
-		runSpecMock
-			.mockReset()
-			.mockResolvedValue(
-				receiptWith({ participants: [{ castId: 999999 }] })
+		runSpecMock.mockReset()
+
+		await expect(
+			sessionsSummarizeHandler.handler(
+				fakeSocket(user.id),
+				{
+					sessionId: session.id,
+					messageIds: [msg1.id, msg2.id],
+					loreType: "scene"
+				} as any,
+				noopEmit
 			)
+		).rejects.toThrow(/world or character/i)
+		expect(runSpecMock).not.toHaveBeenCalled()
+	}, 60_000)
+})
 
-		const response = await sessionsSummarizeHandler.handler(
-			fakeSocket(user.id),
-			{
-				sessionId: session.id,
-				messageIds: [msg1.id, msg2.id],
-				loreType: "scene"
-			} as any,
-			noopEmit
-		)
-
-		// The hallucinated id contributes nothing, but both actual message
-		// senders (the bound character + the persona) are still guaranteed
-		// participants.
-		expect(response.participantCharacters).toHaveLength(2)
-	})
-
-	test("message senders are always participants even when the LLM extracts nothing at all", async () => {
+describe("sessions:summarize — frames carry their session (Phase D wire hygiene)", () => {
+	test("every progress frame and the result name the run's session, the scope key", async () => {
 		const { sessionsSummarizeHandler } = await import("./summarize")
-		const user = await makeUser("summarize-empty-llm-user")
-		const { session, binding, persona, msg1, msg2 } =
-			await makeSceneSession(user.id)
-		runSpecMock.mockReset().mockResolvedValue(receiptWith())
-
-		const response = await sessionsSummarizeHandler.handler(
-			fakeSocket(user.id),
-			{
-				sessionId: session.id,
-				messageIds: [msg1.id, msg2.id],
-				loreType: "scene"
-			} as any,
-			noopEmit
-		)
-
-		expect(response.participantCharacters).toContain(binding.id)
-		const personaBinding = await testDb.query.lorebookBindings.findFirst({
-			where: eq(schema.lorebookBindings.characterId, persona.id)
+		const { scopeOfPayload } = await import("$lib/shared/sockets/interest")
+		const user = await makeUser("summarize-frames-scoped-user")
+		const { session, msg1, msg2 } = await makeSceneSession(user.id)
+		runSpecMock.mockReset().mockImplementation(async (args: any) => {
+			args.onNode?.({
+				phase: "start",
+				definitionId: "core:oracle/summarize-batch@1"
+			})
+			args.onNode?.({
+				phase: "start",
+				definitionId: "core:oracle/summarize-synth@1"
+			})
+			return receiptWith({ content: "The forge burned.", name: "Forge" })
 		})
-		expect(response.participantCharacters).toContain(personaBinding!.id)
-	})
-
-	test("a sender the LLM also placed in mentioned ends up participant-only, not both", async () => {
-		const { sessionsSummarizeHandler } = await import("./summarize")
-		const user = await makeUser("summarize-double-listed-user")
-		const { session, binding, msg1, msg2 } = await makeSceneSession(user.id)
-		runSpecMock
-			.mockReset()
-			.mockResolvedValue(
-				receiptWith({ mentioned: [{ castId: binding.id }] })
-			)
+		const emitted: Array<[string, any]> = []
 
 		const response = await sessionsSummarizeHandler.handler(
 			fakeSocket(user.id),
 			{
 				sessionId: session.id,
 				messageIds: [msg1.id, msg2.id],
-				loreType: "scene"
-			} as any,
-			noopEmit
+				loreType: "world"
+			},
+			(event, data) => emitted.push([event, data])
 		)
 
-		expect(response.participantCharacters).toContain(binding.id)
-		expect(response.mentionedCharacters).not.toContain(binding.id)
-	})
+		const frames = emitted.filter(([e]) => e === "sessions:summarize:progress")
+		expect(frames.map(([, d]) => d.phase)).toEqual(["drafting", "synthesizing"])
+		for (const [event, data] of frames) {
+			expect(scopeOfPayload(event, data)).toBe(String(session.id))
+			// The always-empty draft preview is gone from the wire.
+			expect(data).not.toHaveProperty("partial")
+		}
+		const complete = emitted.filter(([e]) => e === "sessions:summarize:complete")
+		expect(complete).toHaveLength(1)
+		expect(scopeOfPayload("sessions:summarize:complete", complete[0][1])).toBe(
+			String(session.id)
+		)
+		expect(response).toMatchObject({
+			sessionId: session.id,
+			content: "The forge burned.",
+			name: "Forge"
+		})
+		// Scene-only fields are no longer on the reply.
+		expect(response).not.toHaveProperty("participantCharacters")
+	}, 60_000)
 })
 
 describe("sessions:summarize — topic length cap (round-6 audit fix)", () => {
@@ -320,5 +273,54 @@ describe("sessions:summarize — topic length cap (round-6 audit fix)", () => {
 				noopEmit
 			)
 		).resolves.toBeTruthy()
+	})
+})
+
+describe("sessions:summarize — character lore binds its character only when saved (plan A12)", () => {
+	test("a run names the character to bind and mints no cast member; a discarded review leaves the book as it was", async () => {
+		const { sessionsSummarizeHandler } = await import("./summarize")
+		const { activityStore } = await import("$lib/server/utils/activityStore")
+		const user = await makeUser("summarize-bind-on-save-user")
+		const { session, lorebook, msg1, msg2 } = await makeSceneSession(user.id)
+		const [wren] = await testDb
+			.insert(schema.characters)
+			.values({ userId: user.id, name: "Wren", description: "" })
+			.returning()
+		runSpecMock
+			.mockReset()
+			.mockResolvedValue(receiptWith({ content: "Wren keeps the forge.", name: "Wren" }))
+		const emitted: Array<[string, any]> = []
+
+		const response = await sessionsSummarizeHandler.handler(
+			fakeSocket(user.id),
+			{
+				sessionId: session.id,
+				messageIds: [msg1.id, msg2.id],
+				loreType: "character",
+				topic: "the forge",
+				lorebookBindingCharacterId: wren.id
+			} as any,
+			(event, data) => emitted.push([event, data])
+		)
+
+		const bound = await testDb
+			.select()
+			.from(schema.lorebookBindings)
+			.where(eq(schema.lorebookBindings.characterId, wren.id))
+		expect(bound).toEqual([])
+		expect(response.lorebookBindingCharacterId).toBe(wren.id)
+
+		const activity = activityStore
+			.getFor(user.id, false)
+			.find((a) => a.kind === "session_summarize" && a.sessionId === session.id) as any
+		expect(activity.pendingResult.lorebookBindingCharacterId).toBe(wren.id)
+		// Discarding the review writes nothing: there is nothing to undo.
+		activityStore.remove(activity.id, "dismissed")
+		expect(
+			await testDb
+				.select()
+				.from(schema.lorebookBindings)
+				.where(eq(schema.lorebookBindings.lorebookId, lorebook.id))
+		).toHaveLength(1)
 	})
 })

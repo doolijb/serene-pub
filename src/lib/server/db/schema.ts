@@ -106,34 +106,6 @@ export const userSettings = pgTable(
 		userId: integer("user_id")
 			.notNull()
 			.references(() => users.id, { onDelete: "cascade" }),
-		activeContextConfigId: integer("active_context_config_id").references(
-			() => contextConfigs.id,
-			{
-				onDelete: "set null"
-			}
-		),
-		activePromptConfigId: integer("active_prompt_config_id").references(
-			() => promptConfigs.id,
-			{
-				onDelete: "set null"
-			}
-		),
-		activeNarratorPromptConfigId: integer(
-			"active_narrator_prompt_config_id"
-		).references(() => narratorPromptConfigs.id, {
-			onDelete: "set null"
-		}),
-		activeSummarizeWorldConfigId: integer(
-			"active_summarize_world_config_id"
-		).references(() => worldSummarizeConfigs.id, { onDelete: "set null" }),
-		activeSummarizeCharacterConfigId: integer(
-			"active_summarize_character_config_id"
-		).references(() => characterSummarizeConfigs.id, {
-			onDelete: "set null"
-		}),
-		activeSummarizeSceneConfigId: integer(
-			"active_summarize_scene_config_id"
-		).references(() => sceneSummarizeConfigs.id, { onDelete: "set null" }),
 		theme: text("theme").notNull().default("lamplight"),
 		darkMode: boolean("dark_mode").notNull().default(true),
 		showHomePageBanner: boolean("show_home_page_banner").default(true),
@@ -194,6 +166,18 @@ export const userSettings = pgTable(
 		derivedMediaCacheEnabled: boolean("derived_media_cache_enabled")
 			.notNull()
 			.default(true),
+		/**
+		 * 🚧 This person's **lore write mode** (plan A22, ruled 2026-09-30):
+		 * how their sessions may write to the lorebooks they own — `full`,
+		 * `review` or `off` (`$lib/shared/lorebooks/loreWriteMode.ts`).
+		 *
+		 * **Nullable, exactly as `language` is**: NULL follows the instance's
+		 * `system_settings.lore_write_mode_default`, so an admin moving the
+		 * default moves everyone who never chose, and "use the instance
+		 * default" is writing NULL back. Read through `loreWriteModeFor`, never
+		 * alone.
+		 */
+		loreWriteMode: text("lore_write_mode"),
 		createdAt: date("created_at")
 			.notNull()
 			.default(sql`(CURRENT_TIMESTAMP)`),
@@ -202,7 +186,13 @@ export const userSettings = pgTable(
 			.default(sql`(CURRENT_TIMESTAMP)`)
 			.$onUpdate(() => sql`(CURRENT_TIMESTAMP)`)
 	},
-	(table) => [uniqueIndex("user_settings_user_id_unique").on(table.userId)]
+	(table) => [
+		uniqueIndex("user_settings_user_id_unique").on(table.userId),
+		check(
+			"user_settings_lore_write_mode_check",
+			sql`${table.loreWriteMode} IS NULL OR ${table.loreWriteMode} IN ('full', 'review', 'off')`
+		)
+	]
 )
 
 export const userSettingsRelations = relations(userSettings, ({ one }) => ({
@@ -210,30 +200,6 @@ export const userSettingsRelations = relations(userSettings, ({ one }) => ({
 		fields: [userSettings.userId],
 		references: [users.id]
 	}),
-	activeContextConfig: one(contextConfigs, {
-		fields: [userSettings.activeContextConfigId],
-		references: [contextConfigs.id]
-	}),
-	activePromptConfig: one(promptConfigs, {
-		fields: [userSettings.activePromptConfigId],
-		references: [promptConfigs.id]
-	}),
-	activeNarratorPromptConfig: one(narratorPromptConfigs, {
-		fields: [userSettings.activeNarratorPromptConfigId],
-		references: [narratorPromptConfigs.id]
-	}),
-	activeSummarizeWorldConfig: one(worldSummarizeConfigs, {
-		fields: [userSettings.activeSummarizeWorldConfigId],
-		references: [worldSummarizeConfigs.id]
-	}),
-	activeSummarizeCharacterConfig: one(characterSummarizeConfigs, {
-		fields: [userSettings.activeSummarizeCharacterConfigId],
-		references: [characterSummarizeConfigs.id]
-	}),
-	activeSummarizeSceneConfig: one(sceneSummarizeConfigs, {
-		fields: [userSettings.activeSummarizeSceneConfigId],
-		references: [sceneSummarizeConfigs.id]
-	})
 }))
 
 export const passphrases = pgTable(
@@ -1016,449 +982,6 @@ export const connectionScripts = pgTable(
 	]
 )
 
-export const contextConfigs = pgTable("context_configs", {
-	id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
-	/**
-	 * Which template language `template` is written in — a registry id, not a
-	 * hardcoded assumption (12 §2a).
-	 *
-	 * NULL means core's default, which is Handlebars. Stored rather than assumed
-	 * so an extension can register its own engine and supply the renderer for
-	 * it: the schema describes what the template *is*, and core resolves who can
-	 * render it at run time. Without this column, "core renders Handlebars" is a
-	 * fact buried in code, and a plugin shipping a different assembler would
-	 * have nowhere to say so.
-	 */
-	engine: text("engine"),
-	/** Stable seed identity, e.g. "sampling-default". NULL for user-created
-	 *  rows — see db/defaults.ts for why matching on id was unsafe. */
-	seedKey: text("seed_key").unique(),
-	isImmutable: boolean("is_immutable").notNull().default(false),
-	name: text("name").notNull(),
-	template: text("template") // Sillytavern storyString
-})
-
-export const contextConfigsRelations = relations(contextConfigs, () => ({}))
-
-export const promptConfigs = pgTable("prompt_configs", {
-	id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
-	/** Stable seed identity, e.g. "sampling-default". NULL for user-created
-	 *  rows — see db/defaults.ts for why matching on id was unsafe. */
-	seedKey: text("seed_key").unique(),
-	isImmutable: boolean("is_immutable").notNull().default(false),
-	name: text("name").notNull(),
-	systemPrompt: text("system_prompt").notNull(),
-	// Reinforcement inserted right before the model's generation point —
-	// after all session history, immediately preceding the seed turn — rather
-	// than only at the top of a long prompt alongside systemPrompt. Mirrors
-	// narratorPromptConfigs.postHistoryInstructions below.
-	postHistoryInstructions: text("post_history_instructions"),
-	// Number of messages back from the last message the post-history block
-	// is positioned at. 0 = immediately after the last message (default).
-	postHistoryDepth: integer("post_history_depth").notNull().default(0),
-	// Minimum token count of session history required before
-	// postHistoryInstructions is included — lets short sessions skip the
-	// reminder since the system prompt is still close by. 0 = always
-	// included.
-	postHistoryTokenTrigger: integer("post_history_token_trigger")
-		.notNull()
-		.default(0),
-	connectionId: integer("connection_id").references(() => connections.id, {
-		onDelete: "set null"
-	}),
-	samplingConfigId: integer("sampling_config_id").references(
-		() => samplingConfigs.id,
-		{ onDelete: "set null" }
-	)
-})
-
-export const promptConfigsRelations = relations(promptConfigs, ({ one }) => ({
-	connection: one(connections, {
-		fields: [promptConfigs.connectionId],
-		references: [connections.id]
-	}),
-	samplingConfig: one(samplingConfigs, {
-		fields: [promptConfigs.samplingConfigId],
-		references: [samplingConfigs.id]
-	})
-}))
-
-// "session" prefix is deliberate: this is a prompt config scoped to the
-// standard roleplay session type specifically, so a future narrator/environment
-// config for a different session type can't collide with it.
-export const narratorPromptConfigs = pgTable("narrator_prompt_configs", {
-	id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
-	/** Stable seed identity, e.g. "sampling-default". NULL for user-created
-	 *  rows — see db/defaults.ts for why matching on id was unsafe. */
-	seedKey: text("seed_key").unique(),
-	isImmutable: boolean("is_immutable").notNull().default(false),
-	name: text("name").notNull(),
-	// Session-facing display name/label shown on messages generated with this
-	// config (e.g. "Narrator", "The World", "Fate") — distinct from
-	// `name` above, which only identifies the config itself in the sidebar.
-	narratorName: text("narrator_name").notNull().default("Narrator"),
-	// Reinforcement inserted right before the model's generation point —
-	// after all session history, immediately preceding the seed turn — rather
-	// than only at the top of a long prompt alongside systemPrompt. Far more
-	// effective against a model drifting back into character-dialogue
-	// patterns established over many prior turns. See defaults.ts's context
-	// template for exactly where this lands relative to the seed.
-	postHistoryInstructions: text("post_history_instructions"),
-	// Number of messages back from the last message the post-history block
-	// is positioned at. 0 = immediately after the last message (default).
-	postHistoryDepth: integer("post_history_depth").notNull().default(0),
-	// Minimum token count of session history required before
-	// postHistoryInstructions is included. 0 = always included — the
-	// Narrator's own seed keeps this at 0 so it's always reinforced.
-	postHistoryTokenTrigger: integer("post_history_token_trigger")
-		.notNull()
-		.default(0),
-	systemPrompt: text("system_prompt").notNull(),
-	connectionId: integer("connection_id").references(() => connections.id, {
-		onDelete: "set null"
-	}),
-	samplingConfigId: integer("sampling_config_id").references(
-		() => samplingConfigs.id,
-		{ onDelete: "set null" }
-	)
-})
-
-export const narratorPromptConfigsRelations = relations(
-	narratorPromptConfigs,
-	({ one }) => ({
-		connection: one(connections, {
-			fields: [narratorPromptConfigs.connectionId],
-			references: [connections.id]
-		}),
-		samplingConfig: one(samplingConfigs, {
-			fields: [narratorPromptConfigs.samplingConfigId],
-			references: [samplingConfigs.id]
-		})
-	})
-)
-
-export const worldSummarizeConfigs = pgTable("world_summarize_configs", {
-	id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
-	/** Stable seed identity, e.g. "sampling-default". NULL for user-created
-	 *  rows — see db/defaults.ts for why matching on id was unsafe. */
-	seedKey: text("seed_key").unique(),
-	isImmutable: boolean("is_immutable").notNull().default(false),
-	name: text("name").notNull(),
-	batchSystemPrompt: text("batch_system_prompt").notNull(),
-	synthSystemPrompt: text("synth_system_prompt").notNull(),
-	nameSystemPrompt: text("name_system_prompt").notNull(),
-	batchConnectionId: integer("batch_connection_id").references(
-		() => connections.id,
-		{ onDelete: "set null" }
-	),
-	batchSamplingConfigId: integer("batch_sampling_config_id").references(
-		() => samplingConfigs.id,
-		{ onDelete: "set null" }
-	),
-	synthConnectionId: integer("synth_connection_id").references(
-		() => connections.id,
-		{ onDelete: "set null" }
-	),
-	synthSamplingConfigId: integer("synth_sampling_config_id").references(
-		() => samplingConfigs.id,
-		{ onDelete: "set null" }
-	),
-	nameConnectionId: integer("name_connection_id").references(
-		() => connections.id,
-		{ onDelete: "set null" }
-	),
-	nameSamplingConfigId: integer("name_sampling_config_id").references(
-		() => samplingConfigs.id,
-		{ onDelete: "set null" }
-	)
-})
-
-export const worldSummarizeConfigsRelations = relations(
-	worldSummarizeConfigs,
-	({ one }) => ({
-		batchConnection: one(connections, {
-			fields: [worldSummarizeConfigs.batchConnectionId],
-			references: [connections.id]
-		}),
-		batchSamplingConfig: one(samplingConfigs, {
-			fields: [worldSummarizeConfigs.batchSamplingConfigId],
-			references: [samplingConfigs.id]
-		}),
-		synthConnection: one(connections, {
-			fields: [worldSummarizeConfigs.synthConnectionId],
-			references: [connections.id]
-		}),
-		synthSamplingConfig: one(samplingConfigs, {
-			fields: [worldSummarizeConfigs.synthSamplingConfigId],
-			references: [samplingConfigs.id]
-		}),
-		nameConnection: one(connections, {
-			fields: [worldSummarizeConfigs.nameConnectionId],
-			references: [connections.id]
-		}),
-		nameSamplingConfig: one(samplingConfigs, {
-			fields: [worldSummarizeConfigs.nameSamplingConfigId],
-			references: [samplingConfigs.id]
-		})
-	})
-)
-
-export const characterSummarizeConfigs = pgTable(
-	"character_summarize_configs",
-	{
-		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
-		/** Stable seed identity, e.g. "sampling-default". NULL for user-created
-		 *  rows — see db/defaults.ts for why matching on id was unsafe. */
-		seedKey: text("seed_key").unique(),
-		isImmutable: boolean("is_immutable").notNull().default(false),
-		name: text("name").notNull(),
-		batchSystemPrompt: text("batch_system_prompt").notNull(),
-		synthSystemPrompt: text("synth_system_prompt").notNull(),
-		nameSystemPrompt: text("name_system_prompt").notNull(),
-		batchConnectionId: integer("batch_connection_id").references(
-			() => connections.id,
-			{ onDelete: "set null" }
-		),
-		batchSamplingConfigId: integer("batch_sampling_config_id").references(
-			() => samplingConfigs.id,
-			{ onDelete: "set null" }
-		),
-		synthConnectionId: integer("synth_connection_id").references(
-			() => connections.id,
-			{ onDelete: "set null" }
-		),
-		synthSamplingConfigId: integer("synth_sampling_config_id").references(
-			() => samplingConfigs.id,
-			{ onDelete: "set null" }
-		),
-		nameConnectionId: integer("name_connection_id").references(
-			() => connections.id,
-			{ onDelete: "set null" }
-		),
-		nameSamplingConfigId: integer("name_sampling_config_id").references(
-			() => samplingConfigs.id,
-			{ onDelete: "set null" }
-		)
-	}
-)
-
-export const characterSummarizeConfigsRelations = relations(
-	characterSummarizeConfigs,
-	({ one }) => ({
-		batchConnection: one(connections, {
-			fields: [characterSummarizeConfigs.batchConnectionId],
-			references: [connections.id]
-		}),
-		batchSamplingConfig: one(samplingConfigs, {
-			fields: [characterSummarizeConfigs.batchSamplingConfigId],
-			references: [samplingConfigs.id]
-		}),
-		synthConnection: one(connections, {
-			fields: [characterSummarizeConfigs.synthConnectionId],
-			references: [connections.id]
-		}),
-		synthSamplingConfig: one(samplingConfigs, {
-			fields: [characterSummarizeConfigs.synthSamplingConfigId],
-			references: [samplingConfigs.id]
-		}),
-		nameConnection: one(connections, {
-			fields: [characterSummarizeConfigs.nameConnectionId],
-			references: [connections.id]
-		}),
-		nameSamplingConfig: one(samplingConfigs, {
-			fields: [characterSummarizeConfigs.nameSamplingConfigId],
-			references: [samplingConfigs.id]
-		})
-	})
-)
-
-export const sceneSummarizeConfigs = pgTable("scene_summarize_configs", {
-	id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
-	/** Stable seed identity, e.g. "sampling-default". NULL for user-created
-	 *  rows — see db/defaults.ts for why matching on id was unsafe. */
-	seedKey: text("seed_key").unique(),
-	isImmutable: boolean("is_immutable").notNull().default(false),
-	name: text("name").notNull(),
-	batchSystemPrompt: text("batch_system_prompt").notNull(),
-	synthSystemPrompt: text("synth_system_prompt").notNull(),
-	nameSystemPrompt: text("name_system_prompt").notNull(),
-	characterExtractionSystemPrompt: text("character_extraction_system_prompt")
-		.notNull()
-		.default(""),
-	batchConnectionId: integer("batch_connection_id").references(
-		() => connections.id,
-		{ onDelete: "set null" }
-	),
-	batchSamplingConfigId: integer("batch_sampling_config_id").references(
-		() => samplingConfigs.id,
-		{ onDelete: "set null" }
-	),
-	synthConnectionId: integer("synth_connection_id").references(
-		() => connections.id,
-		{ onDelete: "set null" }
-	),
-	synthSamplingConfigId: integer("synth_sampling_config_id").references(
-		() => samplingConfigs.id,
-		{ onDelete: "set null" }
-	),
-	nameConnectionId: integer("name_connection_id").references(
-		() => connections.id,
-		{ onDelete: "set null" }
-	),
-	nameSamplingConfigId: integer("name_sampling_config_id").references(
-		() => samplingConfigs.id,
-		{ onDelete: "set null" }
-	),
-	characterExtractionConnectionId: integer(
-		"character_extraction_connection_id"
-	).references(() => connections.id, { onDelete: "set null" }),
-	characterExtractionSamplingConfigId: integer(
-		"character_extraction_sampling_config_id"
-	).references(() => samplingConfigs.id, { onDelete: "set null" })
-})
-
-export const sceneSummarizeConfigsRelations = relations(
-	sceneSummarizeConfigs,
-	({ one }) => ({
-		batchConnection: one(connections, {
-			fields: [sceneSummarizeConfigs.batchConnectionId],
-			references: [connections.id]
-		}),
-		batchSamplingConfig: one(samplingConfigs, {
-			fields: [sceneSummarizeConfigs.batchSamplingConfigId],
-			references: [samplingConfigs.id]
-		}),
-		synthConnection: one(connections, {
-			fields: [sceneSummarizeConfigs.synthConnectionId],
-			references: [connections.id]
-		}),
-		synthSamplingConfig: one(samplingConfigs, {
-			fields: [sceneSummarizeConfigs.synthSamplingConfigId],
-			references: [samplingConfigs.id]
-		}),
-		nameConnection: one(connections, {
-			fields: [sceneSummarizeConfigs.nameConnectionId],
-			references: [connections.id]
-		}),
-		nameSamplingConfig: one(samplingConfigs, {
-			fields: [sceneSummarizeConfigs.nameSamplingConfigId],
-			references: [samplingConfigs.id]
-		}),
-		characterExtractionConnection: one(connections, {
-			fields: [sceneSummarizeConfigs.characterExtractionConnectionId],
-			references: [connections.id]
-		}),
-		characterExtractionSamplingConfig: one(samplingConfigs, {
-			fields: [sceneSummarizeConfigs.characterExtractionSamplingConfigId],
-			references: [samplingConfigs.id]
-		})
-	})
-)
-
-export const graphBuildConfigs = pgTable("graph_build_configs", {
-	id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
-	/** Stable seed identity, e.g. "sampling-default". NULL for user-created
-	 *  rows — see db/defaults.ts for why matching on id was unsafe. */
-	seedKey: text("seed_key").unique(),
-	isImmutable: boolean("is_immutable").notNull().default(false),
-	name: text("name").notNull(),
-	nodeResolutionSystemPrompt: text("node_resolution_system_prompt")
-		.notNull()
-		.default(""),
-	preFilterSystemPrompt: text("pre_filter_system_prompt")
-		.notNull()
-		.default(""),
-	perspectiveSystemPrompt: text("perspective_system_prompt")
-		.notNull()
-		.default(""),
-	nodeResolutionConnectionId: integer(
-		"node_resolution_connection_id"
-	).references(() => connections.id, { onDelete: "set null" }),
-	nodeResolutionSamplingConfigId: integer(
-		"node_resolution_sampling_config_id"
-	).references(() => samplingConfigs.id, { onDelete: "set null" }),
-	preFilterConnectionId: integer("pre_filter_connection_id").references(
-		() => connections.id,
-		{ onDelete: "set null" }
-	),
-	preFilterSamplingConfigId: integer(
-		"pre_filter_sampling_config_id"
-	).references(() => samplingConfigs.id, { onDelete: "set null" }),
-	perspectiveConnectionId: integer("perspective_connection_id").references(
-		() => connections.id,
-		{ onDelete: "set null" }
-	),
-	perspectiveSamplingConfigId: integer(
-		"perspective_sampling_config_id"
-	).references(() => samplingConfigs.id, { onDelete: "set null" }),
-	/** Prose, not JSON — the two-sentence intro written for a new character. */
-	nodeDescriptionSystemPrompt: text("node_description_system_prompt")
-		.notNull()
-		.default(""),
-	nodeDescriptionConnectionId: integer(
-		"node_description_connection_id"
-	).references(() => connections.id, { onDelete: "set null" }),
-	nodeDescriptionSamplingConfigId: integer(
-		"node_description_sampling_config_id"
-	).references(() => samplingConfigs.id, { onDelete: "set null" }),
-	/** Did any present character reach a new lifecycle state this scene? */
-	stateDetectionSystemPrompt: text("state_detection_system_prompt")
-		.notNull()
-		.default(""),
-	stateDetectionConnectionId: integer(
-		"state_detection_connection_id"
-	).references(() => connections.id, { onDelete: "set null" }),
-	stateDetectionSamplingConfigId: integer(
-		"state_detection_sampling_config_id"
-	).references(() => samplingConfigs.id, { onDelete: "set null" })
-})
-
-export const graphBuildConfigsRelations = relations(
-	graphBuildConfigs,
-	({ one }) => ({
-		nodeResolutionConnection: one(connections, {
-			fields: [graphBuildConfigs.nodeResolutionConnectionId],
-			references: [connections.id]
-		}),
-		nodeResolutionSamplingConfig: one(samplingConfigs, {
-			fields: [graphBuildConfigs.nodeResolutionSamplingConfigId],
-			references: [samplingConfigs.id]
-		}),
-		preFilterConnection: one(connections, {
-			fields: [graphBuildConfigs.preFilterConnectionId],
-			references: [connections.id]
-		}),
-		preFilterSamplingConfig: one(samplingConfigs, {
-			fields: [graphBuildConfigs.preFilterSamplingConfigId],
-			references: [samplingConfigs.id]
-		}),
-		perspectiveConnection: one(connections, {
-			fields: [graphBuildConfigs.perspectiveConnectionId],
-			references: [connections.id]
-		}),
-		perspectiveSamplingConfig: one(samplingConfigs, {
-			fields: [graphBuildConfigs.perspectiveSamplingConfigId],
-			references: [samplingConfigs.id]
-		}),
-		nodeDescriptionConnection: one(connections, {
-			fields: [graphBuildConfigs.nodeDescriptionConnectionId],
-			references: [connections.id]
-		}),
-		nodeDescriptionSamplingConfig: one(samplingConfigs, {
-			fields: [graphBuildConfigs.nodeDescriptionSamplingConfigId],
-			references: [samplingConfigs.id]
-		}),
-		stateDetectionConnection: one(connections, {
-			fields: [graphBuildConfigs.stateDetectionConnectionId],
-			references: [connections.id]
-		}),
-		stateDetectionSamplingConfig: one(samplingConfigs, {
-			fields: [graphBuildConfigs.stateDetectionSamplingConfigId],
-			references: [samplingConfigs.id]
-		})
-	})
-)
-
 /**
  * The shape rules a stored story clock obeys, on every table that carries the
  * five `story_clock_*` columns (`lorebooks`, `lorebook_branches`, `sessions`).
@@ -1603,6 +1126,23 @@ export const lorebooksRelations = relations(lorebooks, ({ many, one }) => ({
 	lorebookTags: many(lorebookTags)
 }))
 
+/**
+ * The digest a GENERATED `embed_text_hash` column stores: sha-256 of the text's
+ * UTF-8, first 16 hex characters — `textDigest` in
+ * `embedding/vectorizationQueue.ts`, and the digest every vector's source hash
+ * records.
+ *
+ * ⚠ `decode(replace(…, '\', '\\'), 'escape')` is the text's UTF-8 bytes, as
+ * `convert_to(…, 'UTF8')` gives them — which Postgres marks STABLE and so
+ * refuses in a generated column. Doubling every backslash leaves `escape`
+ * decoding nothing else, and the server encoding is UTF-8, so the bytes and
+ * the hash are the same (`lorebook_entries.embed_text_hash` spells it inline).
+ */
+const embedTextDigest = (text: string) =>
+	sql.raw(
+		`left(encode(sha256(decode(replace(${text}, '\\', '\\\\'), 'escape')), 'hex'), 16)`
+	)
+
 export const lorebookBindings = pgTable(
 	"lorebook_bindings",
 	{
@@ -1615,7 +1155,12 @@ export const lorebookBindings = pgTable(
 		}),
 		// ⚠ No `persona_id`: a persona is a character, so a persona binding IS
 		// a character binding and `character_id` is the only bound arc.
-		binding: text("binding").notNull(), // e.g. "{{char:1}}" (preferred) or "{char:1}" (deprecated)
+		// The member's **cast tag**, `{{char:N}}` — the one spelling every
+		// writer stores (0200 normalized the deprecated `{char:N}`), unique in
+		// its book (`lorebook_bindings_binding_unique`). N comes from
+		// `lorebooks.next_binding_number` and is never reissued. See
+		// `utils/castTags.ts`.
+		binding: text("binding").notNull(),
 		// ── Narrative-graph fields (merged in from the former narrativeNodes
 		// table — every binding is also this character's graph presence now;
 		// see plan doc for the merge rationale) ──────────────────────────────
@@ -1669,6 +1214,25 @@ export const lorebookBindings = pgTable(
 		spriteSet: text("sprite_set"),
 		embedding: real("embedding").array(),
 		embeddingModel: text("embedding_model"),
+		/**
+		 * The hash of the text `embedding` was computed over — the vector's
+		 * own fact. Staleness is this disagreeing with `embed_text_hash`.
+		 */
+		embeddingSourceHash: text("embedding_source_hash"),
+		/**
+		 * The hash of what the embedding queue embeds for this member NOW —
+		 * `bindingEmbedText`: the name, and the summary under it when there
+		 * is one. GENERATED, so no writer can leave it behind. Not a second
+		 * `embedding_source_hash` (NOMENCLATURE R1): that one is what the
+		 * vector was made from, this is what it would be made from now.
+		 */
+		embedTextHash: text("embed_text_hash")
+			.notNull()
+			.generatedAlwaysAs(
+				embedTextDigest(
+					`CASE WHEN coalesce("summary", '') <> '' THEN "name" || chr(10) || "summary" ELSE "name" END`
+				)
+			),
 		vectorizedAt: timestamp("vectorized_at"),
 		// Parent binding — set when this row is an alias/child of another
 		// (2-level max), from graph-merge operations.
@@ -1701,12 +1265,32 @@ export const lorebookBindings = pgTable(
 		)
 			.on(table.lorebookId, table.characterId)
 			.where(sql`"character_id" IS NOT NULL`),
+		// One member per cast tag per book (A16). Without it an entry save
+		// could mint a blank member on the tag of one a merge had absorbed,
+		// and undoMerge then put the absorbed one back beside it — two
+		// members answering to one `{{char:N}}`. 0200 renumbered the
+		// duplicates this refuses before it was created.
+		uniqueTag: uniqueIndex("lorebook_bindings_binding_unique").on(
+			table.lorebookId,
+			table.binding
+		),
 		lorebookIdIdx: index("lorebook_bindings_lorebook_id_idx").on(
 			table.lorebookId
 		),
 		characterIdIdx: index("lorebook_bindings_character_id_idx").on(
 			table.characterId
-		)
+		),
+		// Foreign-key targets a scene, history entry or parent delete sets
+		// null (plan D). Partial — most members carry none.
+		sceneIdIdx: index("lorebook_bindings_scene_id_idx")
+			.on(table.sceneId)
+			.where(sql`${table.sceneId} IS NOT NULL`),
+		historyEntryIdIdx: index("lorebook_bindings_history_entry_id_idx")
+			.on(table.historyEntryId)
+			.where(sql`${table.historyEntryId} IS NOT NULL`),
+		parentNodeIdIdx: index("lorebook_bindings_parent_node_id_idx")
+			.on(table.parentNodeId)
+			.where(sql`${table.parentNodeId} IS NOT NULL`)
 	})
 )
 
@@ -1843,10 +1427,33 @@ export const bindingMergeLogs = pgTable(
 			.notNull()
 			.default([])
 			.$type<number[]>(),
+		// The merge's **undo notes** for cast tags (A16): one per lore text
+		// column the merge rewrote from the absorbed member's `{{char:N}}` to
+		// the survivor's — `utils/castTags.ts` `CastTagRewrite`. Only the text
+		// BEFORE is kept: its tags where the absorbed member stood are the
+		// positions the merge rewrote, and undo puts them back while the text
+		// around them is unchanged (an edit since keeps the survivor's tag and
+		// is counted). A delete writes its member's name into `before` as into
+		// the row; an undo appends notes here for text it restored naming this
+		// merge's absorbed member. Empty on logs written before A16.
+		tagRewrites: json("tag_rewrites").notNull().default([]).$type<
+			{
+				site: string
+				id: number
+				column: string
+				from: number
+				to: string
+				before: unknown
+			}[]
+		>(),
 		createdAt: timestamp("created_at").notNull().defaultNow()
 	},
 	(table) => [
-		index("binding_merge_logs_lorebook_id_idx").on(table.lorebookId)
+		index("binding_merge_logs_lorebook_id_idx").on(table.lorebookId),
+		// The survivor's delete sets it null (plan D).
+		index("binding_merge_logs_survivor_id_idx")
+			.on(table.survivorId)
+			.where(sql`${table.survivorId} IS NOT NULL`)
 	]
 )
 
@@ -1896,253 +1503,6 @@ export const dismissedDuplicatePairs = pgTable(
 		)
 	})
 )
-
-export const worldLoreEntries = pgTable(
-	"world_lore_entries",
-	{
-		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
-		lorebookId: integer("lorebook_id")
-			.notNull()
-			.references(() => lorebooks.id, { onDelete: "cascade" }),
-		name: text("name").notNull(),
-		category: text("category"),
-		keys: text("keys").notNull().default(""),
-		/**
-		 * ⚠ **Dead residue on a legacy table.**
-		 *
-		 * `keyword` / `rag` / `both`, NULL meaning `rag`. Nothing reads this
-		 * column; its live counterpart on `lorebook_entries` is gone — see the
-		 * tombstone there for what replaced it.
-		 *
-		 * The column survives only because this whole table does: it drops
-		 * with the three legacy source tables as one unit, not before, and
-		 * dropping it alone buys nothing.
-		 */
-		retrievalStrategy: text("retrieval_strategy"),
-		/**
-		 * How this entry's keys are matched: `substring` (today's behaviour),
-		 * `word`, or `regex`.
-		 *
-		 * NULL falls back to `useRegex`, which is why that column stays. Keys
-		 * match by substring today — `art` fires on "hearth" — so the default
-		 * cannot change before parity without changing what every existing
-		 * lorebook retrieves.
-		 */
-		matchMode: text("match_mode"),
-		useRegex: boolean("use_regex").default(false),
-		caseSensitive: boolean("case_sensitive").notNull().default(false),
-		/**
-		 * The deepest recursion level this entry may still be reached at.
-		 *
-		 * `0` is the conversation only: never dragged in by another entry.
-		 * NULL is no opinion, and the query node's `maxRecursionDepth` decides
-		 * — which is what makes turning recursion on for a whole lorebook one
-		 * setting rather than several hundred. Nullable so an entry nobody has
-		 * ruled on stays distinguishable from one somebody deliberately set to
-		 * the default.
-		 */
-		recursionDepth: integer("recursion_depth"),
-		content: text("content").notNull().default(""),
-		priority: integer("priority").notNull().default(1),
-		constant: boolean("constant").notNull().default(false),
-		enabled: boolean("enabled").notNull().default(true),
-		extraJson: json("extra_json")
-			.notNull()
-			.default({})
-			.$type<Record<string, any>>(),
-		createdAt: date("created_at")
-			.notNull()
-			.default(sql`(CURRENT_TIMESTAMP)`),
-		updatedAt: timestamp("updated_at")
-			.notNull()
-			.default(sql`(CURRENT_TIMESTAMP)`)
-			.$onUpdate(() => new Date()),
-		position: integer("position").notNull().default(0),
-		embedding: real("embedding").array(),
-		embeddingModel: text("embedding_model"),
-		vectorizedAt: timestamp("vectorized_at")
-	},
-	(table) => [
-		index("world_lore_entries_lorebook_id_idx").on(table.lorebookId)
-	]
-)
-
-export const worldLoreEntriesRelations = relations(
-	worldLoreEntries,
-	({ one }) => ({
-		lorebook: one(lorebooks, {
-			fields: [worldLoreEntries.lorebookId],
-			references: [lorebooks.id]
-		})
-	})
-)
-
-export const characterLoreEntries = pgTable(
-	"character_lore_entries",
-	{
-		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
-		lorebookId: integer("lorebook_id")
-			.notNull()
-			.references(() => lorebooks.id, { onDelete: "cascade" }),
-		lorebookBindingId: integer("character_binding_id").references(
-			() => lorebookBindings.id,
-			{ onDelete: "set null" }
-		),
-		name: text("name").notNull(),
-		keys: text("keys").notNull().default(""),
-		/**
-		/**
-		 * ⚠ **Dead residue on a legacy table.**
-		 *
-		 * `keyword` / `rag` / `both`, NULL meaning `rag`. Nothing reads this
-		 * column; its live counterpart on `lorebook_entries` is gone — see the
-		 * tombstone there for what replaced it.
-		 *
-		 * The column survives only because this whole table does: it drops
-		 * with the three legacy source tables as one unit, not before, and
-		 * dropping it alone buys nothing.
-		 */
-		retrievalStrategy: text("retrieval_strategy"),
-		/**
-		 * How this entry's keys are matched: `substring` (today's behaviour),
-		 * `word`, or `regex`.
-		 *
-		 * NULL falls back to `useRegex`, which is why that column stays. Keys
-		 * match by substring today — `art` fires on "hearth" — so the default
-		 * cannot change before parity without changing what every existing
-		 * lorebook retrieves.
-		 */
-		matchMode: text("match_mode"),
-		useRegex: boolean("use_regex").default(false),
-		caseSensitive: boolean("case_sensitive").notNull().default(false),
-		/**
-		 * The deepest recursion level this entry may still be reached at.
-		 *
-		 * `0` is the conversation only: never dragged in by another entry.
-		 * NULL is no opinion, and the query node's `maxRecursionDepth` decides
-		 * — which is what makes turning recursion on for a whole lorebook one
-		 * setting rather than several hundred. Nullable so an entry nobody has
-		 * ruled on stays distinguishable from one somebody deliberately set to
-		 * the default.
-		 */
-		recursionDepth: integer("recursion_depth"),
-		content: text("content").notNull().default(""),
-		priority: integer("priority").notNull().default(1),
-		constant: boolean("constant").notNull().default(false),
-		enabled: boolean("enabled").notNull().default(true),
-		extraJson: json("extra_json")
-			.notNull()
-			.default({})
-			.$type<Record<string, any>>(),
-		createdAt: date("created_at")
-			.notNull()
-			.default(sql`(CURRENT_TIMESTAMP)`),
-		updatedAt: timestamp("updated_at")
-			.notNull()
-			.default(sql`(CURRENT_TIMESTAMP)`)
-			.$onUpdate(() => new Date()),
-		position: integer("position").notNull().default(0),
-		embedding: real("embedding").array(),
-		embeddingModel: text("embedding_model"),
-		vectorizedAt: timestamp("vectorized_at")
-	},
-	(table) => [
-		index("character_lore_entries_lorebook_id_idx").on(table.lorebookId)
-	]
-)
-
-export const characterLoreEntriesRelations = relations(
-	characterLoreEntries,
-	({ one }) => ({
-		lorebook: one(lorebooks, {
-			fields: [characterLoreEntries.lorebookId],
-			references: [lorebooks.id]
-		}),
-		lorebookBinding: one(lorebookBindings, {
-			fields: [characterLoreEntries.lorebookBindingId],
-			references: [lorebookBindings.id]
-		})
-	})
-)
-
-export const historyEntries = pgTable(
-	"history_entries",
-	{
-		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
-		lorebookId: integer("lorebook_id")
-			.notNull()
-			.references(() => lorebooks.id, { onDelete: "cascade" }),
-		year: integer("year").notNull().default(1), // Default to year 1
-		month: integer("month"), // Default to January
-		day: integer("day"), // Default to 1
-		keys: text("keys").notNull().default(""),
-		/**
-		/**
-		 * ⚠ **Dead residue on a legacy table.**
-		 *
-		 * `keyword` / `rag` / `both`, NULL meaning `rag`. Nothing reads this
-		 * column; its live counterpart on `lorebook_entries` is gone — see the
-		 * tombstone there for what replaced it.
-		 *
-		 * The column survives only because this whole table does: it drops
-		 * with the three legacy source tables as one unit, not before, and
-		 * dropping it alone buys nothing.
-		 */
-		retrievalStrategy: text("retrieval_strategy"),
-		/**
-		 * How this entry's keys are matched: `substring` (today's behaviour),
-		 * `word`, or `regex`.
-		 *
-		 * NULL falls back to `useRegex`, which is why that column stays. Keys
-		 * match by substring today — `art` fires on "hearth" — so the default
-		 * cannot change before parity without changing what every existing
-		 * lorebook retrieves.
-		 */
-		matchMode: text("match_mode"),
-		useRegex: boolean("use_regex").default(false),
-		caseSensitive: boolean("case_sensitive").notNull().default(false),
-		/**
-		 * The deepest recursion level this entry may still be reached at.
-		 *
-		 * `0` is the conversation only: never dragged in by another entry.
-		 * NULL is no opinion, and the query node's `maxRecursionDepth` decides
-		 * — which is what makes turning recursion on for a whole lorebook one
-		 * setting rather than several hundred. Nullable so an entry nobody has
-		 * ruled on stays distinguishable from one somebody deliberately set to
-		 * the default.
-		 */
-		recursionDepth: integer("recursion_depth"),
-		content: text("content").notNull().default(""),
-		constant: boolean("constant").notNull().default(false),
-		enabled: boolean("enabled").notNull().default(true),
-		extraJson: json("extra_json")
-			.notNull()
-			.default({})
-			.$type<Record<string, any>>(),
-		createdAt: date("created_at")
-			.notNull()
-			.default(sql`(CURRENT_TIMESTAMP)`),
-		updatedAt: timestamp("updated_at")
-			.notNull()
-			.default(sql`(CURRENT_TIMESTAMP)`)
-			.$onUpdate(() => new Date()),
-		position: integer("position").notNull().default(0),
-		isCompleted: boolean("is_completed").notNull().default(false),
-		graphed: boolean("graphed").notNull().default(false),
-		embedding: real("embedding").array(),
-		embeddingModel: text("embedding_model"),
-		vectorizedAt: timestamp("vectorized_at")
-	},
-	(table) => [index("history_entries_lorebook_id_idx").on(table.lorebookId)]
-)
-
-export const historyEntriesRelations = relations(historyEntries, ({ one }) => ({
-	lorebook: one(lorebooks, {
-		fields: [historyEntries.lorebookId],
-		references: [lorebooks.id]
-	})
-	// `scenes` moved to `lorebookEntriesRelations` with the FK it described.
-}))
 
 export const tags = pgTable(
 	"tags",
@@ -2526,6 +1886,19 @@ export const characters = pgTable(
 		isDeleted: boolean("is_deleted").notNull().default(false),
 		embedding: real("embedding").array(),
 		embeddingModel: text("embedding_model"),
+		/** The hash of the text `embedding` was computed over (see `lorebookBindings`). */
+		embeddingSourceHash: text("embedding_source_hash"),
+		/**
+		 * The hash of what the embedding queue embeds for this character now
+		 * — `characterEmbedText`: the name, a newline, the description.
+		 * GENERATED. Nothing else on the card is embedded, so a folder, an
+		 * avatar, a persona flag or a soft delete never moves it.
+		 */
+		embedTextHash: text("embed_text_hash")
+			.notNull()
+			.generatedAlwaysAs(
+				embedTextDigest(`"name" || chr(10) || "description"`)
+			),
 		vectorizedAt: timestamp("vectorized_at")
 	},
 	(table) => [
@@ -2699,8 +2072,11 @@ export const sessions = pgTable(
 		 * model's (ruling 4 parks the pinned-session case).
 		 *
 		 * `set null` rather than cascade: deleting a branch must not delete the
-		 * sessions played on it. They fall back to main, which is a story the
-		 * author can still read.
+		 * sessions played on it. `amendments:deleteBranch` moves them first, to
+		 * the line the deleted one left (`survivingLineOf`), a stored clock
+		 * past the deleted line's fork date going back to it
+		 * (`clockPastDeleted`); the `set null` is the backstop, and an
+		 * overwrite import, which deletes every line, takes them to main.
 		 */
 		lorebookBranchId: integer("lorebook_branch_id").references(
 			(): AnyPgColumn => lorebookBranches.id,
@@ -2733,14 +2109,6 @@ export const sessions = pgTable(
 			() => samplingConfigs.id,
 			{ onDelete: "set null" }
 		),
-		promptConfigId: integer("prompt_config_id").references(
-			() => promptConfigs.id,
-			{ onDelete: "set null" }
-		),
-		narratorPromptConfigId: integer("narrator_prompt_config_id").references(
-			() => narratorPromptConfigs.id,
-			{ onDelete: "set null" }
-		),
 		drafts: json("drafts")
 			.$type<Record<string, string>>()
 			.notNull()
@@ -2763,6 +2131,11 @@ export const sessions = pgTable(
 		index("sessions_lorebook_branch_id_idx")
 			.on(table.lorebookBranchId)
 			.where(sql`${table.lorebookBranchId} IS NOT NULL`),
+		// "The sessions reading this book", and the book delete's SET NULL
+		// (plan D).
+		index("sessions_lorebook_id_idx")
+			.on(table.lorebookId)
+			.where(sql`${table.lorebookId} IS NOT NULL`),
 		...storyClockChecks("sessions", table)
 	]
 )
@@ -2783,14 +2156,6 @@ export const sessionsRelations = relations(sessions, ({ one, many }) => ({
 	samplingConfig: one(samplingConfigs, {
 		fields: [sessions.samplingConfigId],
 		references: [samplingConfigs.id]
-	}),
-	promptConfig: one(promptConfigs, {
-		fields: [sessions.promptConfigId],
-		references: [promptConfigs.id]
-	}),
-	narratorPromptConfig: one(narratorPromptConfigs, {
-		fields: [sessions.narratorPromptConfigId],
-		references: [narratorPromptConfigs.id]
 	}),
 	sessionTags: many(sessionTags),
 	scenes: many(scenes)
@@ -2833,8 +2198,7 @@ export const sessionMessages = pgTable(
 		 * Filter lane within a session (20 §7, R6) — mirrored to
 		 * `messages.channel`, which this row is now authoritative for.
 		 *
-		 * Every message written before channels existed (pre-squash
-		 * `0200_message_channels`, now in `0094_baseline_0_6`) is on `main`, and every genre
+		 * Every message written before channels existed is on `main`, and every genre
 		 * that declares no extra lanes keeps writing there, so a history read
 		 * scoped to `main` returns exactly what an unscoped read returned. The
 		 * column exists on the legacy table because the legacy table is what
@@ -2860,29 +2224,37 @@ export const sessionMessages = pgTable(
 		isEdited: boolean("is_edited").notNull().default(false), // 1 if edited, 0 otherwise
 		metadata: json("metadata").notNull().default({}).$type<{
 			isGreeting?: boolean
+			/**
+			 * On a branched session's copy of its parent's history: the id of
+			 * the message it copies — the ORIGINAL, never another copy — set by
+			 * `branchSession`. The copy is a new row with a larger id, so this
+			 * is what gives it its place in play (`inPlayOrder`).
+			 */
+			copyOf?: number
 			swipes?: {
 				currentIdx: number | null
 				history: string[]
-				thinkingHistory?: (string | null)[]
+				reasoningHistory?: (string | null)[]
 				/**
 				 * The sprite each swipe showed, parallel to `history` exactly as
-				 * `thinkingHistory` is (DESIGN-sprites §3.3). `null` where a swipe
+				 * `reasoningHistory` is (DESIGN-sprites §3.3). `null` where a swipe
 				 * showed none.
 				 */
 				spriteHistory?: (ShownSprite | null)[]
 			}
 			/**
 			 * The **shown sprite** of the active swipe — mirrors
-			 * `swipes.spriteHistory[currentIdx]`, denormalised like `thinking`
+			 * `swipes.spriteHistory[currentIdx]`, denormalised like `reasoning`
 			 * below because that is what the renderer reads. The set is recorded
 			 * WITH the label: a line shows what the speaker wore when they said
 			 * it, not what they wear now.
 			 */
 			sprite?: ShownSprite | null
-			// Native model thinking content (e.g. Ollama `think: true`) for the
-			// message's currently-active swipe — mirrors swipes.thinkingHistory[currentIdx],
-			// kept denormalized here since that's what SessionMessage.svelte reads.
-			thinking?: string | null
+			// The model's reasoning trace (native, e.g. Ollama `think: true`, or
+			// lifted out of the text) for the message's currently-active swipe —
+			// mirrors swipes.reasoningHistory[currentIdx], kept denormalized here
+			// since that's what SessionMessage.svelte reads.
+			reasoning?: string | null
 			narratorInstructions?: string // Optional extra focus text for a Narrator response generation
 			narratorName?: string // Display name resolved at generation time for a Narrator response message (e.g. "Narrator")
 			/**
@@ -2940,6 +2312,16 @@ export const sessionMessages = pgTable(
 		debugMeta: json("debug_meta").$type<Record<string, any>>(),
 		embedding: real("embedding").array(),
 		embeddingModel: text("embedding_model"),
+		/** The hash of the text `embedding` was computed over (see `lorebookBindings`). */
+		embeddingSourceHash: text("embedding_source_hash"),
+		/**
+		 * The hash of what the embedding queue embeds for this message now —
+		 * `messageEmbedText`: its content. GENERATED. Host bookkeeping, never
+		 * posted to a widget (`MESSAGE_HOST_FIELDS`).
+		 */
+		embedTextHash: text("embed_text_hash")
+			.notNull()
+			.generatedAlwaysAs(embedTextDigest(`"content"`)),
 		vectorizedAt: timestamp("vectorized_at")
 	},
 	// The single hottest query in the app — every session load filters by this.
@@ -3142,7 +2524,7 @@ export const messageParts = pgTable(
 		step: integer("step").notNull().default(0),
 		revision: integer("revision").notNull().default(0),
 		ordinal: integer("ordinal").notNull().default(0),
-		/** `core:markdown | core:thinking | core:section | core:image | …` */
+		/** `core:markdown | core:reasoning | core:section | core:image | …` */
 		type: text("type").notNull(),
 		content: text("content"),
 		data: json("data").$type<Record<string, unknown> | null>()
@@ -3153,7 +2535,14 @@ export const messageParts = pgTable(
 			t.step,
 			t.revision,
 			t.ordinal
-		)
+		),
+		// "Which parts name file F" — the attachments plan's access branch
+		// and the tray sweep's "is this file referenced" ask it by
+		// `data->>'assetId'` (the file id, as text), so it is an expression
+		// index, partial to the few parts that carry one.
+		index("message_parts_asset_idx")
+			.on(sql`(${t.data}->>'assetId')`)
+			.where(sql`${t.data}->>'assetId' IS NOT NULL`)
 	]
 )
 
@@ -3466,11 +2855,68 @@ export const variants = pgTable(
 		index("variants_cache_idx").on(t.cache),
 		check(
 			"variants_variant_check",
-			sql`${t.variant} IN ('original', 'display', 'thumb')`
+			sql`${t.variant} IN ('original', 'display', 'thumb', 'fitted')`
 		),
 		check(
 			"variants_fidelity_check",
 			sql`${t.fidelity} IN ('full', 'reduced')`
+		)
+	]
+)
+
+/**
+ * **Tray items** — files uploaded into a session's composer and not yet sent
+ * (PLAN-composer-attachments §4.1). A person's tray items for one session are
+ * their **tray**. ⚠ Not a *held import* (one import file waiting on one
+ * question, `imports/heldImports.ts`), not the downloads tray, not the layout
+ * editor's widget tray.
+ *
+ * A row exists from `attachments:begin`; the bytes reach disk only through
+ * `createMedia` at `attachments:finish`, which is when `file_id` is set. Send
+ * turns ready items into `core:image` / `core:file` parts and deletes the
+ * rows. Unsent rows expire after a day (`attachments/tray.ts` sweep).
+ *
+ * Cascades on user and session, unlike file provenance: a tray belongs to a
+ * live composer. Deleting a row NEVER deletes its file — only the sweep or a
+ * remove does, and only when `fresh` and nothing references the file.
+ */
+export const trayItems = pgTable(
+	"tray_items",
+	{
+		/** The `trayItemId` on the wire; unguessable. */
+		id: uuid("id")
+			.primaryKey()
+			.default(sql`(gen_random_uuid ())`),
+		userId: integer("user_id")
+			.notNull()
+			.references(() => users.id, { onDelete: "cascade" }),
+		sessionId: integer("session_id")
+			.notNull()
+			.references(() => sessions.id, { onDelete: "cascade" }),
+		/** The file it became; null while chunks are arriving. Plain int — the
+		 *  files table's no-FK provenance ruling. */
+		fileId: integer("file_id"),
+		/** True when THIS upload created the file (not a dedupe hit) — the
+		 *  only case a sweep or a remove may delete the file. */
+		fresh: boolean("fresh").notNull().default(false),
+		/** Display only — never part of a path. */
+		filename: text("filename"),
+		/** Declared at begin; the stored size once ready. */
+		bytes: integer("bytes").notNull(),
+		/** uploading | ready | refused */
+		status: text("status").notNull().default("uploading"),
+		/** The sentence a refused item shows. */
+		refusal: text("refusal"),
+		/** Tray order — the order the parts are written in on Send. */
+		position: integer("position").notNull().default(0),
+		createdAt: timestamp("created_at").notNull().defaultNow()
+	},
+	(t) => [
+		index("tray_items_user_session_idx").on(t.userId, t.sessionId),
+		index("tray_items_file_idx").on(t.fileId),
+		check(
+			"tray_items_status_check",
+			sql`${t.status} IN ('uploading', 'ready', 'refused')`
 		)
 	]
 )
@@ -3614,49 +3060,6 @@ export const sessionCharactersRelations = relations(
 	})
 )
 
-/**
- * @deprecated **Legacy, KEPT for data migration — never read or write it.**
- *
- * 0.5's `chat_lorebooks` junction, renamed by the 0.6 baseline. 0.5.3 declared
- * it and never wrote it, so it is empty on every install; a session's book is
- * `sessions.lorebook_id` (one book per session, `state/resolve.ts`).
- *
- * ⚠ Kept, not dropped (owner ruling 2026-09-26/27, the legacy keep-list beside
- * `world_lore_entries`, `character_lore_entries` and `history_entries`): the
- * post-0.5.3 migrations are rebuilt and the 0.5.3 → current data-migration
- * script written first, and only then do the legacy tables go, together.
- *
- * ⚠ No primary key, unique or index, deliberately — nothing queries it, so an
- * index would be maintenance on a table with no reader.
- */
-export const sessionLorebooks = pgTable(
-	"session_lorebooks",
-	{
-		sessionId: integer("session_id")
-			.notNull()
-			.references(() => sessions.id, { onDelete: "cascade" }),
-		lorebookId: integer("lorebook_id")
-			.notNull()
-			.references(() => lorebooks.id, { onDelete: "cascade" }),
-		position: integer("position").default(0) // Optional: position/order in the session
-	},
-	(table) => ({})
-)
-
-export const sessionLorebooksRelations = relations(
-	sessionLorebooks,
-	({ one }) => ({
-		session: one(sessions, {
-			fields: [sessionLorebooks.sessionId],
-			references: [sessions.id]
-		}),
-		lorebook: one(lorebooks, {
-			fields: [sessionLorebooks.lorebookId],
-			references: [lorebooks.id]
-		})
-	})
-)
-
 // Many-to-many: sessions <-> users (guests)
 export const sessionGuests = pgTable(
 	"session_guests",
@@ -3707,59 +3110,8 @@ export const systemSettings = pgTable("system_settings", {
 	lockSamplingConfig: boolean("lock_sampling_config")
 		.notNull()
 		.default(false),
-	/**
-	 * ⚠ Superseded by `pipeline_config_selections` at instance scope.
-	 *
-	 * One column per namespace is the shape that cannot survive an extension
-	 * shipping its own pipeline — there is no column for a namespace core did not
-	 * know about, and adding one is a core migration. A selection row keys on the
-	 * spec, so every namespace works including a plugin's, and the same table
-	 * covers user and session scope instead of only this one.
-	 *
-	 * Kept, not dropped: the legacy run path still reads these, and they are what
-	 * the config migration reads *from*. Remove them once nothing does.
-	 */
-	defaultContextConfigId: integer("default_context_config_id").references(
-		() => contextConfigs.id,
-		{
-			onDelete: "set null"
-		}
-	),
 	lockContextConfig: boolean("lock_context_config").notNull().default(false),
-	/**
-	 * ⚠ Superseded by `pipeline_config_selections` at instance scope.
-	 *
-	 * One column per namespace is the shape that cannot survive an extension
-	 * shipping its own pipeline — there is no column for a namespace core did not
-	 * know about, and adding one is a core migration. A selection row keys on the
-	 * spec, so every namespace works including a plugin's, and the same table
-	 * covers user and session scope instead of only this one.
-	 *
-	 * Kept, not dropped: the legacy run path still reads these, and they are what
-	 * the config migration reads *from*. Remove them once nothing does.
-	 */
-	defaultPromptConfigId: integer("default_prompt_config_id").references(
-		() => promptConfigs.id,
-		{
-			onDelete: "set null"
-		}
-	),
 	lockPromptConfig: boolean("lock_prompt_config").notNull().default(false),
-	/**
-	 * ⚠ Superseded by `pipeline_config_selections` at instance scope.
-	 *
-	 * One column per namespace is the shape that cannot survive an extension
-	 * shipping its own pipeline — there is no column for a namespace core did not
-	 * know about, and adding one is a core migration. A selection row keys on the
-	 * spec, so every namespace works including a plugin's, and the same table
-	 * covers user and session scope instead of only this one.
-	 *
-	 * Kept, not dropped: the legacy run path still reads these, and they are what
-	 * the config migration reads *from*. Remove them once nothing does.
-	 */
-	defaultNarratorPromptConfigId: integer(
-		"default_narrator_prompt_config_id"
-	).references(() => narratorPromptConfigs.id, { onDelete: "set null" }),
 	isAccountsEnabled: boolean("is_accounts_enabled").notNull().default(false),
 	/**
 	 * Every account must carry a second factor (27 §4). Enforced through the
@@ -3785,12 +3137,8 @@ export const systemSettings = pgTable("system_settings", {
 	// itself. The three spellings this collapses — a boolean here, a model name
 	// here, and the endpoint halves in `vectorization_configs` — each had to be
 	// written "in step" by every handler that touched any of them.
-	//
-	// ⚠ `embedding_model_dimensions` below is what remains, and it is DEAD:
-	// nothing has read it since before 0.6 and the three handlers that wrote it
-	// went with the columns above. Kept only because dropping a column nobody
-	// asked about is a separate migration's worth of risk.
-	embeddingModelDimensions: integer("embedding_model_dimensions"),
+	// `embedding_model_dimensions`, dead since then, went too (lorebooks plan
+	// Phase D): the embedding connection carries the dimensions.
 	/**
 	 * The scripts kill switch (18 §10, §13.3 — ruled: default **on**). Unlike
 	 * plugins, nothing executes until an admin authors or imports a script, so
@@ -3824,66 +3172,6 @@ export const systemSettings = pgTable("system_settings", {
 	 * Nothing new should branch on it.
 	 */
 	pipelinesEnabled: boolean("pipelines_enabled").notNull().default(false),
-	/**
-	 * ⚠ Superseded by `pipeline_config_selections` at instance scope.
-	 *
-	 * One column per namespace is the shape that cannot survive an extension
-	 * shipping its own pipeline — there is no column for a namespace core did not
-	 * know about, and adding one is a core migration. A selection row keys on the
-	 * spec, so every namespace works including a plugin's, and the same table
-	 * covers user and session scope instead of only this one.
-	 *
-	 * Kept, not dropped: the legacy run path still reads these, and they are what
-	 * the config migration reads *from*. Remove them once nothing does.
-	 */
-	defaultSummarizeWorldConfigId: integer(
-		"default_summarize_world_config_id"
-	).references(() => worldSummarizeConfigs.id, { onDelete: "set null" }),
-	/**
-	 * ⚠ Superseded by `pipeline_config_selections` at instance scope.
-	 *
-	 * One column per namespace is the shape that cannot survive an extension
-	 * shipping its own pipeline — there is no column for a namespace core did not
-	 * know about, and adding one is a core migration. A selection row keys on the
-	 * spec, so every namespace works including a plugin's, and the same table
-	 * covers user and session scope instead of only this one.
-	 *
-	 * Kept, not dropped: the legacy run path still reads these, and they are what
-	 * the config migration reads *from*. Remove them once nothing does.
-	 */
-	defaultSummarizeCharacterConfigId: integer(
-		"default_summarize_character_config_id"
-	).references(() => characterSummarizeConfigs.id, { onDelete: "set null" }),
-	/**
-	 * ⚠ Superseded by `pipeline_config_selections` at instance scope.
-	 *
-	 * One column per namespace is the shape that cannot survive an extension
-	 * shipping its own pipeline — there is no column for a namespace core did not
-	 * know about, and adding one is a core migration. A selection row keys on the
-	 * spec, so every namespace works including a plugin's, and the same table
-	 * covers user and session scope instead of only this one.
-	 *
-	 * Kept, not dropped: the legacy run path still reads these, and they are what
-	 * the config migration reads *from*. Remove them once nothing does.
-	 */
-	defaultSummarizeSceneConfigId: integer(
-		"default_summarize_scene_config_id"
-	).references(() => sceneSummarizeConfigs.id, { onDelete: "set null" }),
-	/**
-	 * ⚠ Superseded by `pipeline_config_selections` at instance scope.
-	 *
-	 * One column per namespace is the shape that cannot survive an extension
-	 * shipping its own pipeline — there is no column for a namespace core did not
-	 * know about, and adding one is a core migration. A selection row keys on the
-	 * spec, so every namespace works including a plugin's, and the same table
-	 * covers user and session scope instead of only this one.
-	 *
-	 * Kept, not dropped: the legacy run path still reads these, and they are what
-	 * the config migration reads *from*. Remove them once nothing does.
-	 */
-	defaultGraphBuildConfigId: integer(
-		"default_graph_build_config_id"
-	).references(() => graphBuildConfigs.id, { onDelete: "set null" }),
 	// Admin-configured CharaVault account, shared instance-wide across all
 	// users (not a per-user credential). Never sent to the client — see
 	// systemSettingsGet's column exclusions.
@@ -3891,24 +3179,6 @@ export const systemSettings = pgTable("system_settings", {
 	charaVaultEncryptedToken: text("chara_vault_encrypted_token"),
 	charaVaultTokenIv: text("chara_vault_token_iv"),
 	charaVaultTokenAuthTag: text("chara_vault_token_auth_tag"),
-	/**
-	 * Whether `migrateContextTemplates` has run.
-	 *
-	 * A ledger flag rather than a re-derived condition: that distinction is
-	 * why the column exists. The migration carries each scope's context
-	 * config into `pipeline_context_templates` and, where the template is one
-	 * somebody wrote, pins that scope's variable layouts to the bare rows so
-	 * the heading is not written twice.
-	 *
-	 * Both halves have to happen once. The obvious alternative — re-checking
-	 * each boot whether the selected template is core's — quietly re-pins
-	 * anyone who resets that setting on purpose, so the panel would keep
-	 * reverting with nothing on screen saying why. A migration that has run is
-	 * a fact about the database, and this is where that fact lives.
-	 */
-	contextTemplatesMigrated: boolean("context_templates_migrated")
-		.notNull()
-		.default(false),
 	/**
 	 * The instance's language (R5) — the admin's choice at setup, and the value
 	 * every user who has not picked one of their own inherits.
@@ -3983,41 +3253,27 @@ export const systemSettings = pgTable("system_settings", {
 	 */
 	backupIncludeUserFiles: boolean("backup_include_user_files")
 		.notNull()
-		.default(false)
-})
+		.default(false),
+	/**
+	 * 🚧 The instance's **lore write mode** (plan A22, ruled 2026-09-30): what
+	 * every user who has not chosen one of their own follows
+	 * (`user_settings.lore_write_mode` NULL). **Review changes** by ruling —
+	 * what a session changes in a book on its own waits to be accepted.
+	 */
+	loreWriteModeDefault: text("lore_write_mode_default")
+		.notNull()
+		.default("review")
+}, (t) => [
+	check(
+		"system_settings_lore_write_mode_default_check",
+		sql`${t.loreWriteModeDefault} IN ('full', 'review', 'off')`
+	)
+])
 
 export const systemSettingsRelations = relations(systemSettings, ({ one }) => ({
 	// `defaultConnection` and `defaultSamplingConfig` were here. Their columns
 	// are gone (0181); the relation to walk is `connectionDefaults`, whose row
 	// is keyed by capability rather than assumed to be the text one.
-	defaultContextConfig: one(contextConfigs, {
-		fields: [systemSettings.defaultContextConfigId],
-		references: [contextConfigs.id]
-	}),
-	defaultPromptConfig: one(promptConfigs, {
-		fields: [systemSettings.defaultPromptConfigId],
-		references: [promptConfigs.id]
-	}),
-	defaultNarratorPromptConfig: one(narratorPromptConfigs, {
-		fields: [systemSettings.defaultNarratorPromptConfigId],
-		references: [narratorPromptConfigs.id]
-	}),
-	defaultSummarizeWorldConfig: one(worldSummarizeConfigs, {
-		fields: [systemSettings.defaultSummarizeWorldConfigId],
-		references: [worldSummarizeConfigs.id]
-	}),
-	defaultSummarizeCharacterConfig: one(characterSummarizeConfigs, {
-		fields: [systemSettings.defaultSummarizeCharacterConfigId],
-		references: [characterSummarizeConfigs.id]
-	}),
-	defaultSummarizeSceneConfig: one(sceneSummarizeConfigs, {
-		fields: [systemSettings.defaultSummarizeSceneConfigId],
-		references: [sceneSummarizeConfigs.id]
-	}),
-	defaultGraphBuildConfig: one(graphBuildConfigs, {
-		fields: [systemSettings.defaultGraphBuildConfigId],
-		references: [graphBuildConfigs.id]
-	})
 }))
 
 /**
@@ -4460,6 +3716,27 @@ export const narrativeRelationships = pgTable(
 			.default("neutral"),
 		// Description of the relationship at this point in time
 		description: text("description").notNull().default(""),
+		/**
+		 * The relationship's own name — "the rusted iron door", "the King's
+		 * Road". Empty is unnamed. The wire, the SDK and the UI call it `name`,
+		 * exactly as an entry's `title` column is `name` on the wire.
+		 *
+		 * ⚠ Something you can stand in is a place, not a named relationship: a
+		 * long road is a `core:entry/location` of its own, joined to its towns
+		 * by ordinary relationships.
+		 */
+		title: text("title").notNull().default(""),
+		/**
+		 * The relationship type read from the `to` end ("leads south to"),
+		 * where `relationship_type` is read from the `from` end ("leads north
+		 * to"). NULL is one way. A symmetric wording repeats itself ("connects
+		 * to" / "connects to"). So one two-way door is ONE row, with one name
+		 * and one description that cannot drift apart.
+		 *
+		 * ⚠ Never on a cast↔cast row (`narrative_relationships_reverse_check`):
+		 * a cast tie's other side is its own **perspective** row.
+		 */
+		reverseRelationshipType: text("reverse_relationship_type"),
 		// Who can see this relationship — see RelationshipVisibility type
 		visibility: text("visibility")
 			.notNull()
@@ -4473,9 +3750,12 @@ export const narrativeRelationships = pgTable(
 		 * The line this edge was drawn on. NULL = shared.
 		 *
 		 * An edge is already dated through `history_entry_id`, so it needs no
-		 * amendment table: a relationship that changes is a NEW dated edge with
-		 * the old one `status: ended`. The branch column is what keeps one
-		 * line's new edge out of another's reading.
+		 * amendment table. A **cast tie** that changes is a NEW dated edge with
+		 * the old one `status: ended`. A **place relationship** (an entry at
+		 * either end) is edited in place — rewording or renaming it never mints
+		 * a new row, so its id stays stable — while a way that *appears* later is
+		 * still its own row, dated by its history entry. The branch column is
+		 * what keeps one line's new edge out of another's reading.
 		 */
 		branchId: integer("branch_id").references(
 			(): AnyPgColumn => lorebookBranches.id,
@@ -4483,6 +3763,16 @@ export const narrativeRelationships = pgTable(
 		),
 		embedding: real("embedding").array(),
 		embeddingModel: text("embedding_model"),
+		/**
+		 * The hash of the text `embedding` was computed over (see
+		 * `lorebookBindings`).
+		 *
+		 * ⚠ No `embed_text_hash` beside it: what a relationship embeds names
+		 * both members (`relationshipEmbedText`), which a generated column
+		 * cannot read, so the queue hashes that text where it reads it.
+		 * Renaming a member moves the text of every relationship naming it.
+		 */
+		embeddingSourceHash: text("embedding_source_hash"),
 		vectorizedAt: timestamp("vectorized_at"),
 		createdAt: timestamp("created_at").notNull().defaultNow(),
 		updatedAt: timestamp("updated_at")
@@ -4502,6 +3792,13 @@ export const narrativeRelationships = pgTable(
 		index("narrative_relationships_branch_id_idx")
 			.on(table.branchId)
 			.where(sql`${table.branchId} IS NOT NULL`),
+		// A history entry's or scene's delete sets these null (plan D).
+		index("narrative_relationships_history_entry_id_idx")
+			.on(table.historyEntryId)
+			.where(sql`${table.historyEntryId} IS NOT NULL`),
+		index("narrative_relationships_scene_id_idx")
+			.on(table.sceneId)
+			.where(sql`${table.sceneId} IS NOT NULL`),
 		// Exactly one endpoint kind per side. Without it a row could name a
 		// binding AND an entry — two answers to "what is this end of the edge"
 		// — or neither, which is an edge attached to nothing.
@@ -4512,7 +3809,39 @@ export const narrativeRelationships = pgTable(
 		check(
 			"narrative_relationships_to_endpoint_check",
 			sql`(${table.toNodeId} IS NULL) <> (${table.toEntryId} IS NULL)`
-		)
+		),
+		// No entry linked to itself. Entry ends only: a cast self-loop can
+		// arrive in a 0.5.x import and only the cast merge deletes those, so
+		// the writers refuse a NEW one (`utils/relationshipGuards.ts`).
+		check(
+			"narrative_relationships_entry_self_check",
+			sql`${table.fromEntryId} IS NULL OR ${table.toEntryId} IS NULL OR ${table.fromEntryId} <> ${table.toEntryId}`
+		),
+		// A reverse relationship type needs an entry at one end at least: a
+		// cast tie's other side is its own perspective row.
+		check(
+			"narrative_relationships_reverse_check",
+			sql`${table.reverseRelationshipType} IS NULL OR ${table.fromEntryId} IS NOT NULL OR ${table.toEntryId} IS NOT NULL`
+		),
+		// One entry↔entry link per pair, relationship type, name, line and
+		// date (case aside). Two differently named doors between the same
+		// rooms stay legal; the same unnamed "leads to" twice on one line at
+		// one date does not. Cast rows stay unconstrained: their versions are
+		// several rows per pair. A MIRROR (the same words from the far end) is
+		// the writers' to refuse — no index can see it.
+		uniqueIndex("narrative_relationships_entry_pair_uq")
+			.on(
+				table.lorebookId,
+				table.fromEntryId,
+				table.toEntryId,
+				sql`lower(${table.relationshipType})`,
+				sql`lower(${table.title})`,
+				sql`coalesce(${table.branchId}, 0)`,
+				sql`coalesce(${table.historyEntryId}, 0)`
+			)
+			.where(
+				sql`${table.fromEntryId} IS NOT NULL AND ${table.toEntryId} IS NOT NULL`
+			)
 	]
 )
 
@@ -4596,7 +3925,7 @@ export const customThemes = pgTable("custom_themes", {
 	uploadedBy: integer("uploaded_by").references(() => users.id, {
 		onDelete: "set null"
 	}),
-	isInstanceTheme: boolean("is_instance_theme").notNull().default(false),
+	isPubTheme: boolean("is_pub_theme").notNull().default(false),
 	createdAt: timestamp("created_at").notNull().defaultNow(),
 	updatedAt: timestamp("updated_at")
 		.notNull()
@@ -5094,7 +4423,7 @@ export const pipelineConfigSelections = pgTable(
 		specId: integer("spec_id")
 			.notNull()
 			.references(() => pipelineSpecs.id, { onDelete: "cascade" }),
-		scopeKind: text("scope_kind").notNull(), // instance | session (ruled 2026-08-24: no user layer)
+		scopeKind: text("scope_kind").notNull(), // pub | session (ruled 2026-08-24: no user layer)
 		scopeId: integer("scope_id").notNull().default(0),
 		/**
 		 * The author preset a scope selected, where it selected one.
@@ -5138,7 +4467,7 @@ export const pipelineConfigSelections = pgTable(
 		),
 		check(
 			"pipeline_config_selections_scope_check",
-			sql`${t.scopeKind} IN ('instance', 'session')`
+			sql`${t.scopeKind} IN ('pub', 'session')`
 		)
 	]
 )
@@ -5338,7 +4667,7 @@ export const seenActions = pgTable(
  *    (genre, event), and the row selects among them: a session choosing
  *    which pipeline takes its turns is a row on `core:event/message-respond@1`.
  *
- * Resolution is session > preset (for an event subject) > instance, then the
+ * Resolution is session > preset (for an event subject) > pub, then the
  * default rule (companion namespace first); a row is only ever a *choice among
  * the eligible*, so `resolveSubjectVerdict` re-checks eligibility at read and
  * a binding whose spec left the bucket falls through rather than routing wrong.
@@ -5355,9 +4684,9 @@ export const pipelineBindings = pgTable(
 	"pipeline_bindings",
 	{
 		id: integer("id").primaryKey().generatedByDefaultAsIdentity(),
-		/** `instance` or `session` — the check below is the whole rule (the user layer was retired 2026-08-24). */
+		/** `pub` or `session` — the check below is the whole rule (the user layer was retired 2026-08-24). */
 		scopeKind: text("scope_kind").notNull(),
-		/** Zero at instance scope — half of the uniqueness rule (see node overrides). */
+		/** Zero at pub scope — half of the uniqueness rule (see node overrides). */
 		scopeId: integer("scope_id").notNull().default(0),
 		/** Which sessions this binding shapes — bindings are genre-scoped like presets. */
 		genreId: text("genre_id").notNull(),
@@ -5390,7 +4719,7 @@ export const pipelineBindings = pgTable(
 		),
 		check(
 			"pipeline_bindings_scope_check",
-			sql`${t.scopeKind} IN ('instance', 'session')`
+			sql`${t.scopeKind} IN ('pub', 'session')`
 		)
 	]
 )
@@ -5417,7 +4746,7 @@ export const pipelineNodeRebinds = pgTable(
 		specId: integer("spec_id")
 			.notNull()
 			.references(() => pipelineSpecs.id, { onDelete: "cascade" }),
-		scopeKind: text("scope_kind").notNull(), // instance | user | session
+		scopeKind: text("scope_kind").notNull(), // pub | session
 		scopeId: integer("scope_id").notNull().default(0),
 		nodeKey: text("node_key").notNull(),
 		/** The substitute's pinned definition id, e.g. `core:task/turn-round-robin@1`. */
@@ -5436,7 +4765,7 @@ export const pipelineNodeRebinds = pgTable(
 		),
 		check(
 			"pipeline_node_rebinds_scope_check",
-			sql`${t.scopeKind} IN ('instance', 'session')`
+			sql`${t.scopeKind} IN ('pub', 'session')`
 		)
 	]
 )
@@ -5789,9 +5118,10 @@ export const pipelineVariableTemplates = pgTable(
 /**
  * The story string — the layout of a whole finished prompt.
  *
- * Supersedes `context_configs`, which stays as data only. This is the table the
- * pipeline reads; the legacy one is kept so a template somebody spent a year on
- * survives the upgrade, and is dropped once nothing needs to read it.
+ * Supersedes 0.5's `context_configs`. The 0.5.3 upgrade copies every template
+ * somebody wrote into this table (`migrateContextTemplates`, reading the
+ * attic), so a story string somebody spent a year on survives the upgrade; the
+ * legacy table itself is dropped (`0095_schema_0_6_0`).
  *
  * ## What it owns, and what it does not
  *
@@ -5807,7 +5137,7 @@ export const pipelineVariableTemplates = pgTable(
  * `pipeline_variable_templates` makes with `variable_id`: a row is keyed by
  * *what it renders against*, never by who happened to be rendering. Session reply
  * and the narrator both run `core:task/assemble`, so one template genuinely
- * serves both — which is how `context_configs` has always behaved, and
+ * serves both — which is how 0.5's `context_configs` behaved, and
  * namespacing to a spec would turn that into two copies to keep in sync. A
  * pipeline with no such node offers no picker at all, so a summarizer's
  * settings cannot fill up with templates written for session.
@@ -5882,15 +5212,6 @@ export const pipelineContextTemplates = pgTable(
 		withdrawnAt: timestamp("withdrawn_at"),
 		/** Core's shipped layout: selectable and copyable, never edited in place. */
 		isImmutable: boolean("is_immutable").notNull().default(false),
-		/**
-		 * The `context_configs` row this was copied from, if it was.
-		 *
-		 * Not a foreign key and not used for resolution — the copy is
-		 * independent the moment it exists. It is here so the migration can be
-		 * idempotent without a ledger, and so "where did this come from" has an
-		 * answer while both tables are still present.
-		 */
-		migratedFromContextConfigId: integer("migrated_from_context_config_id"),
 		createdAt: timestamp("created_at").notNull().defaultNow(),
 		updatedAt: timestamp("updated_at").notNull().defaultNow()
 	},
@@ -5908,9 +5229,6 @@ export const pipelineContextTemplates = pgTable(
 			t.nodeDefinitionId,
 			t.engine,
 			t.name
-		),
-		uniqueIndex("pipeline_context_templates_migrated_from_idx").on(
-			t.migratedFromContextConfigId
 		)
 	]
 )
@@ -6970,13 +6288,15 @@ export const pipelinePresetValuesRelations = relations(
 
 /**
  * A person's **session layout** for one session (NOMENCLATURE §9), one row per
- * (user, session). Availability is declaration (the genre's widgets + plugin
- * `surfaces.panels[]`), recomputed and never stored; only the arrangement and
+ * (user, session). Availability is declaration (the genre's widgets + every
+ * enabled plugin's `widgets`), recomputed and never stored; only the arrangement and
  * activation live here.
  *
+ * The row is the WHOLE layout (the copy model, brief 3 of
+ * `PLAN-layout-one-format-2026-09-28`): a first open copies a starting point
+ * in (`copyLayoutIntoSession`), and nothing is layered over it at read time.
  * `layout` holds the ONE live format, stored verbatim. The retired layout
- * document (LayoutDoc v2) and its `document` column were dropped in brief 2 of
- * `PLAN-layout-one-format-2026-09-28`.
+ * document (LayoutDoc v2) and its `document` column were dropped in brief 2.
  */
 export const sessionPanelLayouts = pgTable(
 	"session_panel_layouts",
@@ -6989,10 +6309,11 @@ export const sessionPanelLayouts = pgTable(
 			.notNull()
 			.references(() => users.id, { onDelete: "cascade" }),
 		/**
-		 * The session layout: `{ zoneLayout?, widgetGrid?, arrangedGrid?,
-		 * active?, tierSizeOverrides? }`. ⏳ Its types are the app client's
-		 * (`LayoutBlob`) until brief 1 declares it in the SDK; the server
-		 * stores it verbatim and never interprets it.
+		 * The session layout, whole: its arrangement (`zoneLayout?`,
+		 * `widgetGrid?`, `arrangedGrid?` — the SDK's `SessionLayoutV1` slots)
+		 * plus this session's `active` and `tierSizeOverrides`. Never
+		 * `widgetSettings` or `widgetStyles`: those live in `widget_settings`
+		 * rows and `layout_settings`. Stored verbatim.
 		 */
 		layout: json("layout")
 			.notNull()
@@ -7004,8 +6325,7 @@ export const sessionPanelLayouts = pgTable(
 		 * only to label, to offer "Start again from", and to notice the source
 		 * changed since the copy. NULL after "Start from scratch", or once that
 		 * row is deleted (`SET NULL`). The SQL column keeps its old name.
-		 * ⏳ Until brief 3 the page still draws this session over the row it
-		 * names (`presetBase`).
+		 * Written only by a copy and by Save as new layout.
 		 */
 		startedFromLayoutPresetId: integer("layout_preset_id").references(
 			() => sessionLayoutPresets.id,
@@ -7013,8 +6333,9 @@ export const sessionPanelLayouts = pgTable(
 		),
 		/**
 		 * When `layout` was last copied in from a source (see
-		 * `startedFromLayoutPresetId`). NULL means a row written before the copy
-		 * model, which brief 3's boot step has not yet made whole.
+		 * `startedFromLayoutPresetId`). Every write under the copy model stamps
+		 * it; NULL is only a row written before the copy model, which the
+		 * ⏳ boot step (`db/sessionLayoutBackfill.ts`) makes whole.
 		 */
 		layoutCopiedAt: timestamp("layout_copied_at"),
 		/**
@@ -7442,13 +6763,13 @@ export const sessionPresetNoticesRelations = relations(
 
 /**
  * Per-genre administration (23 §9, renamed 24 §2): may users start sessions
- * of this genre, and which preset a bare "new session" of it uses. One row
- * per genre id, absent row = enabled with no declared default.
+ * of this genre. One row per genre id, absent row = enabled. A genre's
+ * default preset is not here: it is the `session_presets` row marked
+ * `is_default` (note 27, 2026-10-02).
  */
 export const sessionGenreSettings = pgTable("session_genre_settings", {
 	genreId: text("genre_id").primaryKey(),
 	enabled: boolean("enabled").notNull().default(true),
-	defaultPresetId: integer("default_preset_id"),
 	updatedAt: timestamp("updated_at")
 		.notNull()
 		.defaultNow()
@@ -7790,24 +7111,13 @@ export const lorebookEntries = pgTable(
 			.notNull()
 			.default(sql`ARRAY[]::text[]`),
 		/*
-		 * ⚠ **`retrievalStrategy` was here and is gone** (pre-squash migration
-		 * `0204_retrieval_strategy_cull`, now folded into `0094_baseline_0_6`;
-		 * its prose is kept in `ARCHIVE-migration-prose-0094-0204.md`).
-		 *
-		 * `keyword` / `rag` / `both`, NULL meaning `rag`. It was the last
-		 * exclusive routing in the retrieval path: an entry set to `keyword`
-		 * stayed out of the vector mechanism with a model loaded and a cosine of 1.
-		 * That is the shape the retrieval plan's second governing rule forbids
-		 * — *an unavailable mechanism subtracts a signal; it never reroutes,
-		 * disables a path, or excludes a candidate* — one scope down from the
-		 * node-level `retrievalMode` that pre-squash `0203_retrieval_mode_cull`
-		 * culled for the same reason.
-		 * Two of its three values had also stopped differing, `both`'s fusion
-		 * having been removed in respond 1.17.0.
-		 *
-		 * Dropping it destroyed nothing: no client form ever wrote it, no
-		 * importer set it, no seed set it, so every row a user could have
-		 * created held NULL.
+		 * ⚠ **There is no per-entry retrieval strategy** (`keyword` / `rag` /
+		 * `both`). An entry set to `keyword` would stay out of the vector
+		 * mechanism with a model loaded and a cosine of 1 — the shape the
+		 * retrieval plan's second governing rule forbids: *an unavailable
+		 * mechanism subtracts a signal; it never reroutes, disables a path, or
+		 * excludes a candidate*. The query node has no `retrievalMode` for the
+		 * same reason.
 		 *
 		 * ⚠ **If per-entry mechanism preference comes back, it comes back as
 		 * weights.** The want behind `keyword` was real — *this entry is a
@@ -7819,13 +7129,6 @@ export const lorebookEntries = pgTable(
 		 * mechanism and for the receipt. A column that gates removes it, and
 		 * nothing downstream can tell it existed. Do not re-add a gate under
 		 * another name.
-		 *
-		 * The three legacy tables above keep their copies. Nothing reads or
-		 * writes them; they are kept (owner ruling 2026-09-26) as the source
-		 * shape for the 0.5.3 → current data-migration script still to be
-		 * written. The pre-squash `0188_lorebook_entries` backfill that once
-		 * copied them across, and the replay test that proved it, went with
-		 * the squash into `0094_baseline_0_6`.
 		 */
 		/**
 		 * `substring` / `word` / `regex`. NULL falls back to `useRegex`, which
@@ -7888,9 +7191,6 @@ export const lorebookEntries = pgTable(
 		 * the manager list without being destroyed.
 		 */
 		archived: boolean("archived").notNull().default(false),
-		/** A manual score multiplier. NULL is no opinion — not 1, which would
-		 *  be an author's deliberate "leave it alone" and is a different fact. */
-		weight: real("weight"),
 		/**
 		 * Who wrote this row — `human`, `summarizer`, `graph-builder`.
 		 *
@@ -7916,12 +7216,63 @@ export const lorebookEntries = pgTable(
 		 * Denormalized from the `title` role.
 		 *
 		 * A column and not a `fields` read because two callers need it without
-		 * asking a declaration: the manager list renders it, and
-		 * `attachCharacterLoreToCharacters` asserts it non-null. Nullable
+		 * asking a declaration: the manager list renders it, and Assemble's
+		 * `characterLore` names each admitted entry by it. Nullable
 		 * because a history entry has no title — it is *dated*, and its heading
 		 * is the date.
 		 */
 		title: text("title"),
+		/**
+		 * The hash of what the default vector space embeds for this entry —
+		 * `entryEmbedText` in `vectorizationQueue.ts`, sha-256 of its UTF-8,
+		 * first 16 hex characters: the digest the vector's `source_hash`
+		 * records (plan A9).
+		 *
+		 * Stored so the queue's staleness check compares two short strings
+		 * instead of hashing every entry's whole text on every pick and every
+		 * reply's scoped count. GENERATED so no writer can leave it behind —
+		 * a raw statement that pins `updated_at` moves it too, which is the
+		 * case content hashes exist to catch.
+		 *
+		 * ⚠ The titled entry types are spelled out, frozen as of the
+		 * migration that added this; `entryEmbedText` derives them from the
+		 * declarations. `entryEmbedTextHash.int.test.ts` fails when the two
+		 * part, and a new migration re-spells this expression.
+		 *
+		 * ⚠ `decode(replace(…, '\', '\\'), 'escape')` is the text's UTF-8
+		 * bytes, as `convert_to(…, 'UTF8')` would give — which Postgres marks
+		 * STABLE and so refuses in a generated column. Doubling every backslash
+		 * leaves `escape` decoding nothing else, and the server encoding is
+		 * UTF-8, so the bytes are the same and so is every hash already stored.
+		 */
+		embedTextHash: text("embed_text_hash")
+			.notNull()
+			.generatedAlwaysAs(
+			sql`left(encode(sha256(decode(replace(CASE WHEN "type_id" IN ('core:entry/world-lore', 'core:entry/character-lore', 'core:entry/location', 'core:entry/item') AND coalesce("title", '') <> '' THEN "title" || chr(10) || "content" ELSE "content" END, '\\', '\\\\'), 'escape')), 'hex'), 16)`
+		),
+		/**
+		 * The hash of what the annotation lane reads for this entry now —
+		 * `entryAnnotationSource` in `annotations/index.ts`: the title, the
+		 * keys joined by ", " and the content, one space apart, whole. sha-256
+		 * of its UTF-8, first 16 hex characters: `entrySourceHash`, and what
+		 * an annotation pass stamps on `entry_annotations.source_hash`
+		 * (plan A23). An annotation is stale when the two differ.
+		 *
+		 * Not `embed_text_hash` (R1): the vector space embeds the title and
+		 * the content of the titled types and never the keys; the annotation
+		 * lane reads all three for every type.
+		 *
+		 * ⚠ `entry_keys_text` is a SQL function, created by migration
+		 * `0094_entry_keys_text`: `array_to_string` is STABLE, and a generated
+		 * column takes only IMMUTABLE functions. A squash must create it before
+		 * this column. `annotationTextHash.int.test.ts` pins this expression
+		 * equal to `entrySourceHash`.
+		 */
+		annotationTextHash: text("annotation_text_hash")
+			.notNull()
+			.generatedAlwaysAs(
+				sql`left(encode(sha256(decode(replace(coalesce("title", '') || ' ' || entry_keys_text("keys") || ' ' || "content", '\\', '\\\\'), 'escape')), 'hex'), 16)`
+			),
 		/**
 		 * The privacy anchor — character lore's `anchor` role.
 		 *
@@ -8089,10 +7440,11 @@ export const lorebookBranches = pgTable(
 		/**
 		 * The line this one left. NULL = it left main.
 		 *
-		 * `set null` rather than cascade: deleting a branch must not silently
-		 * delete the branches forked FROM it. They become children of main,
-		 * which is wrong in the story sense and right in the data sense — the
-		 * alternative is a delete that removes work nobody asked about.
+		 * `set null` is a backstop, never the path a delete takes:
+		 * `amendments:deleteBranch` first moves each child onto this line's
+		 * parent at the earlier of the two fork dates (`forkPastDeleted`) and
+		 * hands children the history entries they read (`keepHistoryForForks`),
+		 * so a handler delete never nulls this column.
 		 */
 		forkedFromBranchId: integer("forked_from_branch_id").references(
 			(): any => lorebookBranches.id,
@@ -8382,8 +7734,12 @@ export const castAmendments = pgTable(
 		 */
 		personalPosition: integer("personal_position"),
 		/**
-		 * A partial of the cast member's writable columns: `name`, `aliases`,
-		 * `nodeState`, `summary`, and `characterId` — the card.
+		 * A partial of what a cast member says at a date — `CAST_AMENDABLE`
+		 * (`sockets/amendments.ts`, plan A25): `name`, `aliases`, `summary`,
+		 * `nodeState`, `nodeVisibility`, `spriteSet`, and `characterId` — the
+		 * card that draws them from this date, which is then one of the
+		 * member's cards (`utils/castMemberCards.ts`). Never empty: a change
+		 * that sets nothing is refused.
 		 */
 		fields: json("fields")
 			.notNull()
@@ -8624,6 +7980,11 @@ export const lorebookEntryVectorsRelations = relations(
  * entity key — every reader filters on keys the conversation actually produced,
  * and no such key is the empty string — so it is invisible to search by
  * construction.
+ *
+ * ⚠ No `lorebook_id`: a row is a book's only through its entry, and every
+ * cleanup reaches it by the `entry_id` cascade. A book-level operation (a
+ * copy, a count, a delete that is not an entry delete) has to join through
+ * `lorebook_entries` — the lorebook table registry (plan B1) records it.
  */
 export const entryAnnotations = pgTable(
 	"entry_annotations",
@@ -8668,10 +8029,24 @@ export const entryAnnotations = pgTable(
 			.default(sql`'[]'::jsonb`)
 			.$type<Array<{ start: number; end: number }>>(),
 		extractorVersion: text("extractor_version").notNull(),
-		/** Over the annotated text. Content moved ⇒ re-extract. */
+		/**
+		 * The entry's `annotation_text_hash` when the pass read it. Differs
+		 * from the entry's now ⇒ the text moved ⇒ re-extract.
+		 */
 		sourceHash: text("source_hash").notNull(),
 		/** Over the vocabulary matched against. Names moved ⇒ re-extract. */
 		gazetteerHash: text("gazetteer_hash").notNull(),
+		/**
+		 * The entity model whose spans this pass included — its identity, as
+		 * the entity star resolves it (`resolveNerTarget().modelId`) — or
+		 * NULL for a lexical pass (no model starred, resident or answering).
+		 *
+		 * Not part of the freshness triple: it is what a move of the entity
+		 * star is judged against (`applyNerStarChange`), so re-starring the
+		 * model a row was annotated with keeps the row, and a different model
+		 * re-scans only what it did not write.
+		 */
+		entityModel: text("entity_model"),
 		annotatedAt: timestamp("annotated_at").notNull().defaultNow()
 	},
 	(t) => [
@@ -8725,8 +8100,11 @@ export const messageAnnotations = pgTable(
 			.default(sql`'[]'::jsonb`)
 			.$type<Array<{ start: number; end: number }>>(),
 		extractorVersion: text("extractor_version").notNull(),
+		/** The message's `embed_text_hash` when the pass read it — its content. */
 		sourceHash: text("source_hash").notNull(),
 		gazetteerHash: text("gazetteer_hash").notNull(),
+		/** As on `entry_annotations`. */
+		entityModel: text("entity_model"),
 		annotatedAt: timestamp("annotated_at").notNull().defaultNow()
 	},
 	(t) => [
@@ -9027,6 +8405,16 @@ export const attributeConfigs = pgTable(
 			t.ownerId,
 			t.historyEntryId
 		),
+		// Foreign-key targets, as on `attribute_values` (plan D).
+		index("attribute_configs_valid_from_message_id_idx")
+			.on(t.validFromMessageId)
+			.where(sql`${t.validFromMessageId} IS NOT NULL`),
+		index("attribute_configs_history_entry_id_idx")
+			.on(t.historyEntryId)
+			.where(sql`${t.historyEntryId} IS NOT NULL`),
+		index("attribute_configs_scene_id_idx")
+			.on(t.sceneId)
+			.where(sql`${t.sceneId} IS NOT NULL`),
 		check(
 			"attribute_configs_owner_kind_check",
 			sql`${t.ownerKind} IN ('card', 'cast_member', 'lorebook', 'session', 'session_cast', 'location', 'session_location')`
@@ -9123,6 +8511,18 @@ export const attributeValues = pgTable(
 			t.ownerId,
 			t.historyEntryId
 		),
+		// Foreign-key targets (plan D, missing indexes): every swipe or
+		// regenerate deletes by the message, and a history entry or scene
+		// delete sets these null. Partial — most rows carry none.
+		index("attribute_values_valid_from_message_id_idx")
+			.on(t.validFromMessageId)
+			.where(sql`${t.validFromMessageId} IS NOT NULL`),
+		index("attribute_values_history_entry_id_idx")
+			.on(t.historyEntryId)
+			.where(sql`${t.historyEntryId} IS NOT NULL`),
+		index("attribute_values_scene_id_idx")
+			.on(t.sceneId)
+			.where(sql`${t.sceneId} IS NOT NULL`),
 		check(
 			"attribute_values_owner_kind_check",
 			sql`${t.ownerKind} IN ('card', 'cast_member', 'lorebook', 'session', 'session_cast', 'location', 'session_location')`
@@ -9183,12 +8583,36 @@ export const stateProposals = pgTable(
 		 * moved. Null = proposed before the counter existed: applied as is.
 		 */
 		baseVersion: integer("base_version"),
+		/**
+		 * 🚧 Where a change to a **durable** owner (`lorebook`,
+		 * `cast_member`, `location`) was proposed: the session's line (NULL
+		 * main) and the history entry its write is dated at
+		 * (`writeDatingAt`), both taken when it is PROPOSED (plan A22, ruled
+		 * 2026-09-30). An accept applies it there, whatever the session's
+		 * clock or line says by then — the same two columns the row it
+		 * becomes carries on `attribute_values`, with the same keys: the line
+		 * cascades (a deleted line's proposals go with it), the dating is
+		 * `SET NULL` (losing the moment does not lose the change). Both NULL
+		 * for a session-layer change, which has no line of its own.
+		 */
+		branchId: integer("branch_id").references(
+			(): AnyPgColumn => lorebookBranches.id,
+			{ onDelete: "cascade" }
+		),
+		historyEntryId: integer("history_entry_id").references(
+			(): AnyPgColumn => lorebookEntries.id,
+			{ onDelete: "set null" }
+		),
 		decidedAt: timestamp("decided_at"),
 		createdAt: timestamp("created_at").notNull().defaultNow()
 	},
 	(t) => [
 		// The widget's whole query: this session's pending lines.
 		index("state_proposals_session_status_idx").on(t.sessionId, t.status),
+		// Branch deletes cascade through this; partial, NULL being main.
+		index("state_proposals_branch_id_idx")
+			.on(t.branchId)
+			.where(sql`${t.branchId} IS NOT NULL`),
 		index("state_proposals_message_idx").on(t.messageId),
 		check(
 			"state_proposals_kind_check",
@@ -9405,7 +8829,6 @@ export interface AuthoredWidgetShape {
 	scopes?: string[]
 	reads?: string[]
 	channels?: string[]
-	cells?: { minW?: number; maxW?: number; minH?: number; maxH?: number }
 	settings?: Record<string, unknown>
 	defaultActive?: boolean
 }

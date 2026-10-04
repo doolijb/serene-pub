@@ -10,7 +10,8 @@ import {
 	ratioOf,
 	tickAtRatio,
 	momentAxisRows,
-	stepTick
+	stepTick,
+	ratioAlongTrack
 } from "./timelineStrip"
 
 const dates = [
@@ -213,7 +214,7 @@ describe("the axis's identity is the date, not the row id", () => {
 	})
 
 	it("keeps two dates whose packed values collide as two ticks", () => {
-		// Y3 Mo.1 Day 150 and Y3 Mo.2 Day 50 both pack to 30250.
+		// Y3 Mo.1 Day 150 and Y3 Mo.2 Day 50 both packed to 30250 at radix 100.
 		const rows = momentAxisRows(
 			[{ id: 1, year: 3, month: 1, day: 150 }],
 			[{ id: 2, year: 3, month: 2, day: 50 }]
@@ -254,5 +255,59 @@ describe("stepTick — arrow keys move by date", () => {
 
 	it("has nothing to step on an empty axis", () => {
 		expect(stepTick([], null, "back")).toBeUndefined()
+	})
+})
+
+/**
+ * Placement never contradicts the order.
+ *
+ * A day past 99 is storable (A15: months of up to 1000 days; free-form days of
+ * the year), and a radix-100 packing then put Mo. 1 Day 150 to the RIGHT of
+ * Mo. 2 Day 1 — ticks drawn out of order, and the cursor's `value <=
+ * position` reading the wrong side of a tick.
+ */
+describe("placement keeps the calendar's order past day 99", () => {
+	const rows = [
+		{ id: 1, year: 3, month: 2, day: 1 },
+		{ id: 2, year: 3, month: 1, day: 150 },
+		{ id: 3, year: 3, month: 1, day: 99 },
+		{ id: 4, year: 3, month: 1, day: 250 }
+	]
+
+	it("draws every tick left of the next date's", () => {
+		const ticks = buildTicks(rows)
+		expect(ticks.map((t) => t.id)).toEqual([3, 2, 4, 1])
+		for (let i = 1; i < ticks.length; i++) {
+			expect(ticks[i].value).toBeGreaterThan(ticks[i - 1].value)
+			expect(ticks[i].ratio).toBeGreaterThan(ticks[i - 1].ratio)
+		}
+	})
+
+	it("puts the cursor on the tick it stands on", () => {
+		const ticks = buildTicks(rows)
+		for (const tick of ticks)
+			expect(ratioOf(ticks, tick.value)).toBe(tick.ratio)
+	})
+})
+
+describe("ratioAlongTrack — a pointer read against the inset the ticks are drawn in (plan B7)", () => {
+	const track = { left: 100, width: 416 }
+	const inset = 8
+
+	it("reads the first and last tick where they are drawn, not where the box ends", () => {
+		// The ticks run from left+8 to left+width-8.
+		expect(ratioAlongTrack(108, track, inset)).toBe(0)
+		expect(ratioAlongTrack(508, track, inset)).toBe(1)
+		expect(ratioAlongTrack(308, track, inset)).toBe(0.5)
+	})
+
+	it("clamps the margins outside the ticks to the ends", () => {
+		expect(ratioAlongTrack(100, track, inset)).toBe(0)
+		expect(ratioAlongTrack(516, track, inset)).toBe(1)
+	})
+
+	it("has nothing to read on a track with no room", () => {
+		expect(ratioAlongTrack(10, { left: 0, width: 0 }, inset)).toBeNull()
+		expect(ratioAlongTrack(10, { left: 0, width: 16 }, inset)).toBeNull()
 	})
 })

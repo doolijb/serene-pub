@@ -15,7 +15,7 @@
  * This also covers the three non-choke-point consumers the audit's
  * correction round specifically called out as needing their own,
  * independent isNull(removedAt) filter (sessionsGetResponseOrderHandler via
- * getPromptSessionFromDb, toggleSessionCharacterActiveHandler,
+ * getPromptSessionFromDb, sessionsSetCastSeatEnabledHandler,
  * the since-retired updateSessionCharacterVisibilityHandler), plus sessionsBranchHandler's new
  * owner-only gate (a separate, lower-severity finding from the same round)
  * and its exclusion of removed participants from a branched session's copy.
@@ -555,8 +555,8 @@ describe("sessions:branch — owner-only gate + removed participants excluded fr
 })
 
 describe("toggle/visibility handlers — removed row excluded (PGlite integration)", () => {
-	test("toggleSessionCharacterActive 404s on a removed character", async () => {
-		const { sessionsUpdateHandler, toggleSessionCharacterActiveHandler } =
+	test("setCastSeatEnabled 404s on a removed character", async () => {
+		const { sessionsUpdateHandler, sessionsSetCastSeatEnabledHandler } =
 			await import("./sessions")
 		const owner = await makeUser("toggle-owner")
 		const session = await makeSession(owner.id)
@@ -568,9 +568,9 @@ describe("toggle/visibility handlers — removed row excluded (PGlite integratio
 			noopEmit
 		)
 
-		const res = await toggleSessionCharacterActiveHandler.handler(
+		const res = await sessionsSetCastSeatEnabledHandler.handler(
 			fakeSocket(owner.id),
-			{ sessionId: session.id, characterId: char.id } as any,
+			{ sessionId: session.id, characterId: char.id, enabled: false },
 			noopEmit
 		)
 		expect(res.error).toBeTruthy()

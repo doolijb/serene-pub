@@ -67,6 +67,39 @@ export interface PendingReviewView {
 	schema: SettingsSchema
 	values: Record<string, unknown>
 	requestedAt: number
+	/** One sentence on what this card is asking about (`whatIsReviewed`). */
+	whatIsReviewed: string
+}
+
+/**
+ * One sentence on what a review card is asking the person about (owner note
+ * 16, 2026-10-02).
+ *
+ * The form alone says which fields a write carries, not which moment of the
+ * run it is: review on respond's step 2 (`placeholder`, a `create-message`
+ * with `generating`) parks on the EMPTY row the reply is about to fill, before
+ * the model has written a word — and a card showing an empty Text field reads
+ * like a bug. Pure: the definition, the step and the payload decide it.
+ */
+export function whatIsReviewed(e: {
+	definitionId: string
+	nodeKey: string
+	payload: unknown
+}): string {
+	const bare = e.definitionId.replace(/@\d+$/, "")
+	const p = (e.payload ?? {}) as Record<string, unknown>
+	switch (bare) {
+		case "core:outlet/create-message":
+			return p.generating === true
+				? "The reply's placeholder: the empty message the reply will be written into, before the model writes anything. Approving starts the reply. To read the reply's words before they are saved, review the step that saves the finished message instead."
+				: "A new message, before it is posted."
+		case "core:outlet/update-message":
+			return "The finished message, before it is saved."
+		case "core:outlet/attach-image":
+			return "An image, before it is attached to its message."
+	}
+	const name = bare.slice(bare.lastIndexOf("/") + 1).replace(/-/g, " ")
+	return `This step's write (${name || e.nodeKey}), before it takes effect.`
 }
 
 interface Parked {
@@ -107,7 +140,8 @@ const viewOf = (e: PendingReview): PendingReviewView => ({
 	definitionId: e.definitionId,
 	schema: e.schema,
 	values: e.values,
-	requestedAt: e.requestedAt
+	requestedAt: e.requestedAt,
+	whatIsReviewed: whatIsReviewed(e)
 })
 
 /** Everything waiting on this person, oldest first. */
@@ -342,6 +376,21 @@ export function createReviewer(scope: {
 		})
 	}
 }
+
+/**
+ * The reviewer a preview is handed: it approves without parking.
+ *
+ * A preview is dry (R-21 (1)) — nothing it reaches is committed — so there
+ * is nothing for a person to decide, and parking would push a card per
+ * debounced token count (owner note 16, 2026-10-02). The approval is
+ * receipted as `system:dry-run`, the same actor the SDK executor stamps when
+ * it skips the gate on a dry run itself.
+ */
+export const previewReviewer: Reviewer = async () => ({
+	action: "approve",
+	by: "system:dry-run",
+	at: Date.now()
+})
 
 /**
  * **An answer rejected at review that wrote nothing is no answer** (lair pass

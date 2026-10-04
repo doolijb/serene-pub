@@ -35,8 +35,8 @@ export function spineProviders(doc: SpecDocument): Node[] {
  * JSON, and voices generating in parallel would interleave. At most one may
  * stream on any execution path, and core routes it (R-21 (2)) — the oracle
  * stays blind to messages. A set, not one key (W2, 2026-09-27): steps in
- * mutually exclusive branches of one junction may each be declared — the
- * Writing Room's manuscript and talk — and whichever branch runs streams;
+ * mutually exclusive branches of one junction may each be declared — a
+ * reply that branches on its channel — and whichever branch runs streams;
  * `validate()` proves no two in the set can run in one execution.
  *
  * ⚠ **Declared, never inferred.** The rule this replaced walked back from the

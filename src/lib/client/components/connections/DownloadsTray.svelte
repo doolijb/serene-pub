@@ -27,7 +27,7 @@
 </script>
 
 <div
-	class="border-surface-300-700 bg-surface-100-900 mt-2 flex shrink-0 items-center gap-2 rounded-[10px] border px-2.5 py-2"
+	class="panel-edge bg-surface-100-900 mt-2 flex shrink-0 items-center gap-2 rounded-[10px] border px-2.5 py-2"
 	role="status"
 	aria-label={`${count} ${count === 1 ? "download" : "downloads"} in progress`}
 >

@@ -24,7 +24,11 @@ import type {
 	ActivityClearedHow
 } from "$lib/server/utils/activityStore"
 import { activityStore } from "$lib/server/utils/activityStore"
-import { toHash, type LoreRoute } from "$lib/shared/lorebooks/loreRoute"
+import {
+	momentKey,
+	toHash,
+	type LoreRoute
+} from "$lib/shared/lorebooks/loreRoute"
 import {
 	ACTIVITY_FAILED,
 	ACTIVITY_READY,
@@ -109,10 +113,14 @@ export function activityHref(activity: Activity): string {
 					: { lorebookId: activity.lorebookId, scope: "history" }
 			)
 		case "compile_history_entry":
+			// At the reading the compile was asked from, so the review opens
+			// against the entry as it reads there — the line and moment it saves to.
 			return loreHref({
 				lorebookId: activity.lorebookId,
 				scope: "history",
-				entryId: activity.historyEntryId
+				entryId: activity.historyEntryId,
+				...(activity.branchId != null ? { branch: activity.branchId } : {}),
+				...(activity.moment ? { moment: momentKey(activity.moment) } : {})
 			})
 		case "session_summarize":
 			return sessionHref(activity.sessionId)

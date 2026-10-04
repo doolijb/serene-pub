@@ -14,10 +14,24 @@ import {
 	SELECTIVE_LOGIC_BY_ST_CODE,
 	type SelectiveLogic
 } from "$lib/server/pipelines/ranking/signals"
+import type { MatchMode } from "$lib/server/pipelines/ranking/weights"
+import { ENTRY_PROVENANCES } from "$lib/server/utils/lorebookEntries"
 import {
 	entryTypeIdOfExportKey,
+	HISTORY_TYPE_ID,
+	LOCATION_TYPE_ID,
 	type EntryTypeId
 } from "$lib/shared/entries/types"
+// How deep an imported nesting may go, and the ceiling that ends a walk over a
+// chain that turns out to contain a cycle — `assertAnchorEntry`'s own limit,
+// so the import refuses exactly what a re-parent would.
+import { MAX_ANCHOR_DEPTH } from "$lib/shared/lorebooks/limits"
+// Which types may be filed at all — the re-parent's first question, asked of
+// the declaration (places plan B2).
+import { declaresParent } from "$lib/server/entries/declarations"
+// A key that could take unbounded time to match is not read as a pattern
+// (plan S3) — the import's refusal, since an import cannot stop to ask.
+import { runawayPatternOf } from "$lib/shared/entries/runawayPattern"
 
 /**
  * True if a lorebook-shaped object actually has entries — handles both a
@@ -227,43 +241,39 @@ export function resolveParentNodeLinks(
 }
 
 /**
- * How deep an imported nesting may go, and the ceiling that ends a walk over a
- * chain that turns out to contain a cycle. Matches `assertAnchorEntry`'s limit,
- * which is the same rule for a single re-parent: a tree deeper than this is not
- * a tree anybody is reading, and refusing at the ceiling is the same answer as
- * refusing a cycle.
- */
-const MAX_ANCHOR_DEPTH = 32
-
-/**
  * Resolves each imported entry's `anchorEntryId` from the local ids its file
  * states, refusing the links the app's own re-parent refuses.
  *
- * Three are dropped rather than written: a parent this import never inserted,
- * an entry filed under itself, and a link whose chain of parents leads back to
- * the entry being filed — a cycle, which the column itself does not prevent and
- * which hangs any walk over the tree. A cycle drops every link in it, because
- * none of them is the one that is right.
+ * Four are dropped rather than written: the parent of an entry whose type
+ * declares no `parent` field role (a place is never filed — places plan B2,
+ * 2026-09-29; `unfileable` below names them so the caller can say so), a
+ * parent this import never inserted, an entry filed under itself, and a link
+ * whose chain of parents leads back to the entry being filed — a cycle, which
+ * the column itself does not prevent and which hangs any walk over the tree. A
+ * cycle drops every link in it, because none of them is the one that is right.
  *
  * `localId` is null for an entry the document points at from nowhere: such an
  * entry cannot be a link in a cycle, since every member of one is some other
- * member's parent. Pure/DB-free so this is unit testable without a database —
- * `insertLorebookEntries` (lorebooks.ts) does the per-link update.
+ * member's parent. `typeId` absent is a type that files. Pure/DB-free so this
+ * is unit testable without a database — `insertLorebookEntries`
+ * (lorebooks.ts) does the per-link update.
  */
 export function resolveAnchorEntryLinks(
 	pending: Array<{
 		realId: number
 		localId: number | null
 		anchorLocalId: number
+		typeId?: string
 	}>,
 	entryLocalIdToRealId: Map<number, number>
 ): Array<{ realId: number; anchorRealId: number }> {
+	const filed = pending.filter((p) => !unfileable(p))
 	const anchorLocalIdByLocalId = new Map<number, number>()
-	for (const { localId, anchorLocalId } of pending)
+	for (const { localId, anchorLocalId } of filed)
 		if (localId !== null) anchorLocalIdByLocalId.set(localId, anchorLocalId)
 
 	const links: Array<{ realId: number; anchorRealId: number }> = []
-	for (const { realId, localId, anchorLocalId } of pending) {
+	for (const { realId, localId, anchorLocalId } of filed) {
 		const anchorRealId = entryLocalIdToRealId.get(anchorLocalId)
 		if (anchorRealId === undefined || anchorRealId === realId) continue
 
@@ -285,6 +295,14 @@ export function resolveAnchorEntryLinks(
 	}
 	return links
 }
+
+/**
+ * Whether an imported entry's stated parent must be dropped because its type
+ * is never filed (declares no `parent` field role) — the re-parent's first
+ * refusal, so the import writes nothing the editor would refuse.
+ */
+export const unfileable = (pending: { typeId?: string }): boolean =>
+	pending.typeId !== undefined && !declaresParent(pending.typeId)
 
 export interface LorebookEntryLike {
 	keys: string[]
@@ -436,17 +454,16 @@ function omitSerenepubExtension(
 	return rest
 }
 
-/** Clamp an entry's priority into Serene Pub's supported 1-3 range, defaulting to 1. */
+/**
+ * Clamp an entry's priority into Serene Pub's supported 1-3 range, as a whole
+ * number (the type's CHECK holds it to one): a fraction rounds, and anything
+ * that is not a finite number is the default, 1.
+ */
 export function normalizeLorebookEntryPriority(
 	priority: number | null | undefined
 ): number {
-	if (priority === null || priority === undefined || priority < 1) {
-		return 1
-	}
-	if (priority > 3) {
-		return 3
-	}
-	return priority
+	if (typeof priority !== "number" || !Number.isFinite(priority)) return 1
+	return Math.min(3, Math.max(1, Math.round(priority)))
 }
 
 /**
@@ -478,6 +495,13 @@ const UNESCAPED_DELIMITER = /(^|[^\\])\//
  * would corrupt a `\\/` (a literal backslash before the delimiter) — which is
  * precisely what SillyTavern's own `pattern.replace('\\/', '/')` does, since a
  * string-argument replace only touches the first occurrence.
+ *
+ * ⚠ **A runaway pattern is not a regex key either** (plan S3) — one that can
+ * take unbounded time to match, `/(a+)+$/`. It is read the way an invalid one
+ * is: its entry imports as a literal, the key sits in its list delimiters and
+ * all where its author can see it, and it never runs. That is the editor's
+ * refusal made without a person to refuse to — and the same direction the
+ * mixed-entry rule below takes: under-matching, visibly.
  */
 export function parseDelimitedRegexKey(key: unknown): string | null {
 	if (typeof key !== "string") return null
@@ -492,6 +516,7 @@ export function parseDelimitedRegexKey(key: unknown): string | null {
 		// matching the whole `/.../` string as plain text, and so do we.
 		return null
 	}
+	if (runawayPatternOf(pattern)) return null
 	return pattern
 }
 
@@ -543,11 +568,26 @@ export function parseDelimitedRegexKey(key: unknown): string | null {
 export function useRegexOf(entry: LorebookEntryLike): boolean {
 	const keys = entry.keys ?? []
 	if (keys.length === 0) return false
-	if (keys.every((key) => parseDelimitedRegexKey(key) !== null)) return true
-	return isSerenePubBareRegexEntry(entry)
+	const regex =
+		keys.every((key) => parseDelimitedRegexKey(key) !== null) ||
+		isSerenePubBareRegexEntry(entry)
+	// The condition keys are read in the same mode, so a regex entry whose
+	// condition key is a runaway pattern would run it (plan S3): the entry
+	// imports as a literal instead, like a mixed one.
+	return regex && !secondaryKeysOf(entry).some(runawayConditionKey)
 }
 
-/** A 0.5.x Serene Pub regex entry: marker, honest flag, bare compilable keys. */
+/** A condition key that would run as a runaway pattern on a regex entry. */
+const runawayConditionKey = (key: unknown): boolean => {
+	if (typeof key !== "string" || !key.trim()) return false
+	const delimited = DELIMITED_REGEX_KEY.exec(key)
+	return !!runawayPatternOf(delimited ? delimited[1]! : key.trim())
+}
+
+/**
+ * A 0.5.x Serene Pub regex entry: marker, honest flag, bare compilable keys —
+ * none of them a runaway pattern (plan S3; see `parseDelimitedRegexKey`).
+ */
 function isSerenePubBareRegexEntry(entry: LorebookEntryLike): boolean {
 	if (entry.use_regex !== true) return false
 	if (typeof entry.extensions?.serenepub?.entryType !== "string") return false
@@ -555,10 +595,10 @@ function isSerenePubBareRegexEntry(entry: LorebookEntryLike): boolean {
 		if (typeof key !== "string" || key.length === 0) return false
 		try {
 			new RegExp(key)
-			return true
 		} catch {
 			return false
 		}
+		return !runawayPatternOf(key)
 	})
 }
 
@@ -731,11 +771,62 @@ export function matchModeOf(
 	return declared ? "word" : "substring"
 }
 
+// Who may be named as an entry's writer (`ENTRY_PROVENANCES`). `human` is the
+// column's default and is never written into a file, so it is the answer for
+// anything else.
+
+/** The deepest per-entry recursion depth a file may state. */
+const MAX_IMPORTED_RECURSION_DEPTH = 100
+
+/**
+ * The per-entry facts a format-2 file carries in its `serenepub` bag
+ * (`entryFacts` on the export side), each read only when it is a value this
+ * app holds — otherwise omitted, so the column keeps its default.
+ *
+ * ⚠ **`matchMode` is read here only as `regex`, and only when the keys read
+ * as patterns** (`useRegexOf`). Word and substring travel on SillyTavern's own
+ * `match_whole_words` (`matchModeOf`): SillyTavern keeps an entry's whole
+ * `extensions` and writes it back, so a copy in this bag would come home
+ * beside an edit made there and undo it. `regex` has no spelling there, but
+ * its keys go out delimited, so keys a SillyTavern edit left plain — or that
+ * plan S3 imports as a literal — are not re-read as patterns on the bag's
+ * word. And `enabled`, when stated, is the entry's own switch: the spec's
+ * field goes out off for an archived entry so a foreign reader does not fire
+ * it.
+ */
+export function importedEntryFacts(entry: LorebookEntryLike): {
+	archived?: boolean
+	enabled?: boolean
+	matchMode?: MatchMode
+	recursionDepth?: number
+	provenance?: string
+} {
+	const meta = entry.extensions?.serenepub ?? {}
+	const depth = meta.recursionDepth
+	return {
+		...(meta.archived === true ? { archived: true } : {}),
+		...(typeof meta.enabled === "boolean" ? { enabled: meta.enabled } : {}),
+		...(meta.matchMode === "regex" && useRegexOf(entry)
+			? { matchMode: "regex" as MatchMode }
+			: {}),
+		...(Number.isInteger(depth) &&
+		depth >= 0 &&
+		depth <= MAX_IMPORTED_RECURSION_DEPTH
+			? { recursionDepth: depth }
+			: {}),
+		...(typeof meta.provenance === "string" &&
+		(ENTRY_PROVENANCES as readonly string[]).includes(meta.provenance)
+			? { provenance: meta.provenance }
+			: {})
+	}
+}
+
 // What every type carries, whatever it declares. `name` and `priority` are
 // deliberately NOT here: they are the `title` and `priority` roles, and a type
 // that declares neither — history — must not be handed either.
 function sharedEntryFields(entry: LorebookEntryLike) {
-	const matchMode = matchModeOf(entry)
+	const facts = importedEntryFacts(entry)
+	const matchMode = facts.matchMode ?? matchModeOf(entry)
 	const selectiveLogic = selectiveLogicOf(entry)
 	return {
 		content: entry.content || "",
@@ -752,7 +843,7 @@ function sharedEntryFields(entry: LorebookEntryLike) {
 		// the column stays NULL — Serene Pub's own "no opinion" — exactly as
 		// `matchMode` below is.
 		...(selectiveLogic ? { selectiveLogic } : {}),
-		enabled: entry.enabled ?? true,
+		enabled: facts.enabled ?? entry.enabled ?? true,
 		constant: entry.constant ?? false,
 		caseSensitive: entry.case_sensitive ?? false,
 		// Read off the keys rather than the file's `use_regex`, which
@@ -763,6 +854,11 @@ function sharedEntryFields(entry: LorebookEntryLike) {
 		// Pub's own "no opinion, use the default". A book that says nothing
 		// about whole-word matching imports exactly as it did before.
 		...(matchMode ? { matchMode } : {}),
+		...(facts.archived ? { archived: true } : {}),
+		...(facts.recursionDepth !== undefined
+			? { recursionDepth: facts.recursionDepth }
+			: {}),
+		...(facts.provenance ? { provenance: facts.provenance } : {}),
 		// Preserves any *foreign* extension data verbatim (eg. SillyTavern's
 		// rich per-entry bag: position, probability, depth, group, sticky,
 		// cooldown, role, vectorized, etc.) so re-exporting later reproduces
@@ -781,9 +877,9 @@ function sharedEntryFields(entry: LorebookEntryLike) {
  * the most agnostic shape, which is what this importer has always done for a
  * foreign source.
  *
- * ⚠ **The marker is a wire name, never a type id.** `world` / `character` /
- * `history` are what every lorebook Serene Pub has ever written carries, and a
- * file is read by installs whose type registry is not this one.
+ * ⚠ **The marker is a wire name, never a type id** (`world`, `character`,
+ * `history`, and from format 2 `location` and `item`), and a file is read by
+ * installs whose type registry is not this one.
  * `entryTypeIdOfExportKey` is the one translation table, shared with the
  * exporter.
  */
@@ -809,7 +905,10 @@ export interface ImportedEntryValues {
 	constant: boolean
 	caseSensitive: boolean
 	useRegex: boolean
-	matchMode?: "word" | "substring"
+	matchMode?: MatchMode
+	archived?: boolean
+	recursionDepth?: number
+	provenance?: string
 	extraJson: Record<string, any>
 	position: number
 	name?: string
@@ -853,6 +952,10 @@ export function mapImportedEntry(
 		if (field === priorityField) continue
 		fields[field] = coerceDeclaredField(typeId, field, meta[field])
 	}
+	// A value in a field that narrows an empty one is dropped — a day with no
+	// month means nothing, and the type's projected CHECK refuses it.
+	for (const [field, spec] of Object.entries(decl?.fields ?? {}))
+		if (spec.narrows && fields[spec.narrows] == null) fields[field] = null
 
 	return {
 		...sharedEntryFields(entry),
@@ -869,4 +972,226 @@ export function mapImportedEntry(
 			: {}),
 		...fields
 	}
+}
+
+/**
+ * The format a lorebook file states (`extensions.serenepub.formatVersion`,
+ * see `LOREBOOK_FORMAT_VERSION`): a whole number from 2, or 1 for a file that
+ * states none — a Serene Pub 0.5 file, a foreign one, or one written before
+ * places, items and stats travelled. Format 1 carries no stats and writes a
+ * place or an item as world lore.
+ */
+export function lorebookFileFormatOf(data: unknown): number {
+	const stated = (data as any)?.extensions?.serenepub?.formatVersion
+	return Number.isInteger(stated) && stated >= 2 ? stated : 1
+}
+
+/** Where a file's stat rows land: the maps the import built as it went. */
+export interface ImportedStatMaps {
+	lorebookId: number
+	bindingLocalIdToRealId: Map<number, number>
+	entryLocalIdToRealId: Map<number, number>
+	historyEntryLocalIdToRealId: Map<number, number>
+	sceneLocalIdToRealId: Map<number, number>
+	/** The type of every entry the import landed, by its id in this book. */
+	entryTypeIdByRealId: Map<number, string>
+	/**
+	 * The entry types one reference on its own may name in this slot (a
+	 * location names places): a list of type ids, `null` when the slot takes
+	 * no reference on its own, `undefined` when this install does not declare
+	 * the slot and so cannot judge.
+	 */
+	singleRefEntryTypes: (slotId: string) => readonly string[] | null | undefined
+}
+
+/** One stat row as it is inserted: the template layer of this book, on main. */
+export interface ImportedStatRow {
+	ownerKind: "lorebook" | "cast_member" | "location"
+	ownerId: number
+	slotId: string
+	config?: Record<string, unknown>
+	value?: { v: unknown }
+	historyEntryId: number | null
+	sceneId: number | null
+	updatedBy: string
+	note: string | null
+}
+
+/** A slot id's longest spelling a file may use, and a note's. */
+const MAX_IMPORTED_SLOT_ID_CHARS = 200
+const MAX_IMPORTED_STAT_NOTE_CHARS = 10_000
+
+const plainObject = (v: unknown): v is Record<string, unknown> =>
+	!!v && typeof v === "object" && !Array.isArray(v)
+
+/**
+ * A file's lore reference (`{ entryLocalId, count }`) as this book's
+ * (`{ entryId, count }`), or null when the entry did not land here.
+ */
+function importedLoreRef(
+	item: Record<string, unknown>,
+	entryLocalIdToRealId: Map<number, number>
+): { entryId: number; count?: number } | null {
+	if (typeof item.entryLocalId !== "number") return null
+	const entryId = entryLocalIdToRealId.get(item.entryLocalId)
+	if (entryId === undefined) return null
+	const count = item.count
+	return typeof count === "number" && Number.isInteger(count) && count > 1
+		? { entryId, count }
+		: { entryId }
+}
+
+/** A word, a number, a switch or nothing: what a value holds beside references. */
+const isStatScalar = (v: unknown): boolean =>
+	v === null ||
+	typeof v === "string" ||
+	typeof v === "boolean" ||
+	(typeof v === "number" && Number.isFinite(v))
+
+/** Stored types are unversioned; a slot's config may name either spelling. */
+const bareTypeId = (typeId: string) => typeId.replace(/@\d+$/, "")
+
+/**
+ * A file's stat value with its lore references in this book's ids — or null
+ * when nothing of it may be stored.
+ *
+ * ⚠ **A reference is read only as `{ entryLocalId }`, the file's own id.** An
+ * object in any other shape is dropped — above all `{ entryId }`, which is a
+ * row id of whichever install reads the file: stored as written, it would name
+ * any book's entry, anyone's, and the state readers print a referenced entry's
+ * title whatever book it is in. Then the rules the app's own writers hold
+ * (`placeStats.ts assertLoreRefsInBook`, `write.ts assertLoreRefsInSession`):
+ *
+ *  - a **place's list** holds no place (itself included) and no history entry;
+ *  - **one reference on its own** names an entry of the types its slot allows
+ *    (`singleRefEntryTypes`), and none where the slot allows none;
+ *  - a list names one entry once (the count is its multiplicity).
+ *
+ * A list drops what breaks a rule; a single value that breaks one is dropped
+ * whole. An archived entry is kept: a reference may outlive the archive.
+ */
+function importedStatValue(
+	value: unknown,
+	slotId: string,
+	ownerPlaceId: number | null,
+	maps: ImportedStatMaps
+): { v: unknown } | null {
+	if (!plainObject(value) || !("v" in value)) return null
+	const v = value.v
+	const typeOf = (entryId: number) =>
+		bareTypeId(maps.entryTypeIdByRealId.get(entryId) ?? "")
+	if (plainObject(v)) {
+		const ref = importedLoreRef(v, maps.entryLocalIdToRealId)
+		if (ref === null) return null
+		const allowed = maps.singleRefEntryTypes(slotId)
+		if (allowed === null) return null
+		if (allowed && !allowed.some((t) => bareTypeId(t) === typeOf(ref.entryId)))
+			return null
+		return { v: ref }
+	}
+	if (!Array.isArray(v)) return isStatScalar(v) ? { v } : null
+	const held = new Set<number>()
+	return {
+		v: v.flatMap((item) => {
+			if (isStatScalar(item)) return [item]
+			if (!plainObject(item)) return []
+			const ref = importedLoreRef(item, maps.entryLocalIdToRealId)
+			if (ref === null || held.has(ref.entryId)) return []
+			if (ownerPlaceId !== null) {
+				const type = typeOf(ref.entryId)
+				if (type === LOCATION_TYPE_ID || type === HISTORY_TYPE_ID) return []
+			}
+			held.add(ref.entryId)
+			return [ref]
+		})
+	}
+}
+
+/**
+ * The stat rows a file carries (`extensions.serenepub.stats`, format 2), as
+ * rows of this book — owners and references remapped through what the import
+ * landed. Best-effort like the graph: a row whose owner did not land, whose
+ * slot id is not a string, or whose payload is not the stored shape is left
+ * out rather than failing the import. Sizes are checked before any DB work
+ * (`assertLorebookImportWithinLimits`).
+ */
+export function importedStatRows(
+	serenepub: unknown,
+	maps: ImportedStatMaps
+): { configs: ImportedStatRow[]; values: ImportedStatRow[] } {
+	const stats = plainObject(serenepub) ? serenepub.stats : undefined
+	if (!plainObject(stats)) return { configs: [], values: [] }
+
+	const owner = (
+		row: Record<string, unknown>
+	): Pick<ImportedStatRow, "ownerKind" | "ownerId"> | null => {
+		if (row.ownerKind === "lorebook")
+			return { ownerKind: "lorebook", ownerId: maps.lorebookId }
+		if (
+			row.ownerKind === "cast_member" &&
+			typeof row.bindingLocalId === "number"
+		) {
+			const id = maps.bindingLocalIdToRealId.get(row.bindingLocalId)
+			return id === undefined ? null : { ownerKind: "cast_member", ownerId: id }
+		}
+		// A place's stats live on a place: `location` names the owner kind,
+		// and an entry of any other type has no place to hold them.
+		if (row.ownerKind === "location" && typeof row.entryLocalId === "number") {
+			const id = maps.entryLocalIdToRealId.get(row.entryLocalId)
+			return id === undefined ||
+				bareTypeId(maps.entryTypeIdByRealId.get(id) ?? "") !== LOCATION_TYPE_ID
+				? null
+				: { ownerKind: "location", ownerId: id }
+		}
+		return null
+	}
+	const dating = (row: Record<string, unknown>) => ({
+		historyEntryId:
+			typeof row.historyEntryLocalId === "number"
+				? (maps.historyEntryLocalIdToRealId.get(row.historyEntryLocalId) ??
+					null)
+				: null,
+		sceneId:
+			typeof row.sceneLocalId === "number"
+				? (maps.sceneLocalIdToRealId.get(row.sceneLocalId) ?? null)
+				: null,
+		updatedBy:
+			typeof row.updatedBy === "string" &&
+			row.updatedBy.length > 0 &&
+			row.updatedBy.length <= MAX_IMPORTED_SLOT_ID_CHARS
+				? row.updatedBy
+				: "user",
+		note:
+			typeof row.note === "string" &&
+			row.note.length <= MAX_IMPORTED_STAT_NOTE_CHARS
+				? row.note
+				: null
+	})
+	const slotIdOf = (row: Record<string, unknown>) =>
+		typeof row.slotId === "string" &&
+		row.slotId.length > 0 &&
+		row.slotId.length <= MAX_IMPORTED_SLOT_ID_CHARS
+			? row.slotId
+			: null
+
+	const rows = (raw: unknown, kind: "config" | "value") =>
+		(Array.isArray(raw) ? raw : []).flatMap((row): ImportedStatRow[] => {
+			if (!plainObject(row)) return []
+			const who = owner(row)
+			const slotId = slotIdOf(row)
+			if (!who || !slotId) return []
+			if (kind === "config") {
+				if (!plainObject(row.config)) return []
+				return [{ ...who, slotId, config: row.config, ...dating(row) }]
+			}
+			const value = importedStatValue(
+				row.value,
+				slotId,
+				who.ownerKind === "location" ? who.ownerId : null,
+				maps
+			)
+			return value === null ? [] : [{ ...who, slotId, value, ...dating(row) }]
+		})
+
+	return { configs: rows(stats.configs, "config"), values: rows(stats.values, "value") }
 }

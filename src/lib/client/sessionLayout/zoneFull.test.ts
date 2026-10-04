@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { zoneIsFull } from "./zoneFull"
-import type { GsLayout } from "./GridStackZone.svelte"
+import type { ArrangedZone } from "@serene-pub/sdk"
 
 const at = (x: number, y: number, w: number, h: number, id = `w${x}${y}`) => ({
 	id,
@@ -17,7 +17,7 @@ describe("zoneIsFull", () => {
 	})
 
 	it("is not full while cells are left over", () => {
-		const l: GsLayout = {
+		const l: ArrangedZone = {
 			cols: 4,
 			rows: 4,
 			items: [at(0, 0, 4, 2), at(0, 2, 2, 2)]

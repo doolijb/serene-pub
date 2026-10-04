@@ -1,5 +1,5 @@
 /**
- * Round-13 audit fix (MEDIUM): toggleSessionCharacterActiveHandler and
+ * Round-13 audit fix (MEDIUM): sessionsSetCastSeatEnabledHandler and
  * updateSessionCharacterVisibilityHandler (retired 2026-09-27; see the last
  * describe) each re-implemented session access
  * ad-hoc as an owner-only check (eq(sessions.userId, userId)) instead of using
@@ -88,22 +88,22 @@ async function makeSharedSessionWithGuestCharacter() {
 	return { owner, guest, session, guestCharacter }
 }
 
-describe("sessions:toggleSessionCharacterActive — ownership scoping (Round-13 audit fix, PGlite integration)", () => {
-	test("a guest can toggle the active status of a character they own", async () => {
-		const { toggleSessionCharacterActiveHandler } = await import(
+describe("sessions:setCastSeatEnabled — ownership scoping (Round-13 audit fix, PGlite integration)", () => {
+	test("a guest can switch the seat of a character they own", async () => {
+		const { sessionsSetCastSeatEnabledHandler } = await import(
 			"./sessions"
 		)
 		const { guest, session, guestCharacter } =
 			await makeSharedSessionWithGuestCharacter()
 
-		const res = await toggleSessionCharacterActiveHandler.handler(
+		const res = await sessionsSetCastSeatEnabledHandler.handler(
 			fakeSocket(guest.id),
-			{ sessionId: session.id, characterId: guestCharacter.id } as any,
+			{ sessionId: session.id, characterId: guestCharacter.id, enabled: false },
 			noopEmit
 		)
 
 		expect(res.error).toBeUndefined()
-		expect(res.isActive).toBe(false)
+		expect(res.enabled).toBe(false)
 
 		const row = await testDb.query.sessionCharacters.findFirst({
 			where: (cc, { eq, and }) =>
@@ -115,8 +115,8 @@ describe("sessions:toggleSessionCharacterActive — ownership scoping (Round-13 
 		expect(row?.isActive).toBe(false)
 	})
 
-	test("a guest cannot toggle the active status of a character they don't own", async () => {
-		const { toggleSessionCharacterActiveHandler } = await import(
+	test("a guest cannot switch the seat of a character they don't own", async () => {
+		const { sessionsSetCastSeatEnabledHandler } = await import(
 			"./sessions"
 		)
 		const { owner, guest, session } =
@@ -135,9 +135,9 @@ describe("sessions:toggleSessionCharacterActive — ownership scoping (Round-13 
 			position: 1
 		})
 
-		const res = await toggleSessionCharacterActiveHandler.handler(
+		const res = await sessionsSetCastSeatEnabledHandler.handler(
 			fakeSocket(guest.id),
-			{ sessionId: session.id, characterId: ownerCharacter.id } as any,
+			{ sessionId: session.id, characterId: ownerCharacter.id, enabled: false },
 			noopEmit
 		)
 
@@ -154,33 +154,33 @@ describe("sessions:toggleSessionCharacterActive — ownership scoping (Round-13 
 	})
 
 	test("the session owner retains full control over a guest's character", async () => {
-		const { toggleSessionCharacterActiveHandler } = await import(
+		const { sessionsSetCastSeatEnabledHandler } = await import(
 			"./sessions"
 		)
 		const { owner, session, guestCharacter } =
 			await makeSharedSessionWithGuestCharacter()
 
-		const res = await toggleSessionCharacterActiveHandler.handler(
+		const res = await sessionsSetCastSeatEnabledHandler.handler(
 			fakeSocket(owner.id),
-			{ sessionId: session.id, characterId: guestCharacter.id } as any,
+			{ sessionId: session.id, characterId: guestCharacter.id, enabled: false },
 			noopEmit
 		)
 
 		expect(res.error).toBeUndefined()
-		expect(res.isActive).toBe(false)
+		expect(res.enabled).toBe(false)
 	})
 
 	test("a non-participant has no access at all", async () => {
-		const { toggleSessionCharacterActiveHandler } = await import(
+		const { sessionsSetCastSeatEnabledHandler } = await import(
 			"./sessions"
 		)
 		const { session, guestCharacter } =
 			await makeSharedSessionWithGuestCharacter()
 		const outsider = await makeUser("sessionchar-outsider")
 
-		const res = await toggleSessionCharacterActiveHandler.handler(
+		const res = await sessionsSetCastSeatEnabledHandler.handler(
 			fakeSocket(outsider.id),
-			{ sessionId: session.id, characterId: guestCharacter.id } as any,
+			{ sessionId: session.id, characterId: guestCharacter.id, enabled: false },
 			noopEmit
 		)
 
@@ -208,8 +208,9 @@ describe("sessions:updateSessionCharacterVisibility — retired", () => {
 				events.push(handler.event)
 			}
 		)
-		// The toggle next to it is still there — this is the one that went.
-		expect(events).toContain("sessions:toggleSessionCharacterActive")
+		// The seat's enabled switch next to it is still there — this is the one that went.
+		expect(events).toContain("sessions:setCastSeatEnabled")
+		expect(events).not.toContain("sessions:toggleSessionCharacterActive")
 		expect(events).not.toContain("sessions:updateSessionCharacterVisibility")
 	})
 })

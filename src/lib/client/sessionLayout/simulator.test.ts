@@ -17,7 +17,8 @@ import {
 	narrowWidth,
 	railColumns,
 	simulatedGeometry,
-	simulationExit
+	simulationExit,
+	simulationRebase
 } from "./simulator"
 
 const CELL = 48
@@ -180,7 +181,7 @@ describe("simulatedGeometry — the down-scale that keeps the frame on screen", 
 })
 
 describe("simulationExit — the snapshot guard around a preview", () => {
-	/** A zone arrangement, shaped like the editor's captured GsLayout. */
+	/** A zone arrangement, shaped like the editor's captured ArrangedZone. */
 	const wide = {
 		middle: {
 			cols: 12,
@@ -227,6 +228,43 @@ describe("simulationExit — the snapshot guard around a preview", () => {
 		simulationExit(snap, cur, true)
 		expect(snap).toEqual(wide)
 		expect(cur).toEqual(clamped)
+	})
+})
+
+describe("simulationRebase — a copy landing under an open preview", () => {
+	/** The arrangement the editor opened on, and the preview's clamp of it. */
+	const before = {
+		right: { cols: 5, rows: 8, items: [{ id: "stats", x: 0, y: 0, w: 5, h: 4 }] }
+	}
+	/** What Start from scratch put in its place, and the preview's clamp of that. */
+	const copied = {
+		middle: { cols: 12, rows: 8, items: [{ id: "messages", x: 0, y: 0, w: 12, h: 8 }] }
+	}
+	const copiedClamped = {
+		middle: { cols: 1, rows: 8, items: [{ id: "messages", x: 0, y: 0, w: 1, h: 8 }] }
+	}
+
+	it("makes the copy the arrangement Done keeps, not the one from before it", () => {
+		// Entered the preview on `before`, looked only; then the copy landed.
+		const guard = simulationRebase(true, copied)
+		const done = simulationExit(guard.snapshot, copiedClamped, guard.dirty)
+		expect(done.arranged).toEqual(copied)
+		expect(done.arranged).not.toEqual(before)
+		// Without the rebase the old snapshot came back — the reviewed defect.
+		expect(
+			simulationExit<Record<string, unknown>>(before, copiedClamped, false).arranged
+		).toBe(before)
+	})
+
+	it("forgets a gesture made on the arrangement the copy replaced", () => {
+		// A drag before the copy made the preview "earned"; the copy is new.
+		const guard = simulationRebase(true, copied)
+		expect(guard.dirty).toBe(false)
+		expect(simulationExit(guard.snapshot, copiedClamped, guard.dirty).restored).toBe(true)
+	})
+
+	it("holds no snapshot at Actual", () => {
+		expect(simulationRebase(false, copied)).toEqual({ snapshot: null, dirty: false })
 	})
 })
 

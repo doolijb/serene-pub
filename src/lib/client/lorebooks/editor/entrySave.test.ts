@@ -14,6 +14,7 @@ vi.mock("$lib/client/sockets/interest.svelte", () => ({
 }))
 
 import {
+	amendmentDateToast,
 	entryAmendmentParams,
 	fileEntryAmendments,
 	isOurAmendment,
@@ -22,6 +23,7 @@ import {
 	maskedFields,
 	maskingAmendment
 } from "./entrySave"
+import { MAIN_LINE } from "$lib/shared/lorebooks/lineReading"
 
 const target = { lorebookId: 4, entryId: 9, branchId: 7 }
 
@@ -177,6 +179,19 @@ describe("fileEntryAmendments", () => {
 	})
 })
 
+describe("amendmentDateToast (A18(b))", () => {
+	test("a change that re-dates the entry is not filed as of a moment, and says where it goes", () => {
+		const toast = amendmentDateToast({ year: 5, content: "Moved." })
+		expect(toast?.title).toBe("A date can't be amended")
+		expect(toast?.description).toMatch(/Change the base/)
+		expect(amendmentDateToast({ day: null })).not.toBeNull()
+	})
+
+	test("a change that leaves the date alone files as usual", () => {
+		expect(amendmentDateToast({ content: "Later.", enabled: false })).toBeNull()
+	})
+})
+
 describe("lineName", () => {
 	test("names the fork from the reply, and main as null", () => {
 		expect(lineName(list([]), 7)).toBe("The long winter")
@@ -200,7 +215,7 @@ describe("masked base saves (#99)", () => {
 			{ id: 2, branchId: null, year: 4, fields: { content: "amended" } },
 			{ id: 3, branchId: 99, year: 6, fields: { content: "amended" } }
 		]
-		expect(maskingAmendment("content", "amended", overlays, null)?.id).toBe(2)
+		expect(maskingAmendment("content", "amended", overlays, MAIN_LINE)?.id).toBe(2)
 	})
 
 	test("the warning names the field and the amendment's date", () => {
@@ -230,7 +245,5 @@ describe("maskingAmendment reads the ancestor chain (ruling 5)", () => {
 		]
 		const line = lineOf(2, branches)
 		expect(maskingAmendment("content", "amended", overlays, line)?.id).toBe(1)
-		// A bare id with no book open is a one-level fork: the parent is not read.
-		expect(maskingAmendment("content", "amended", overlays, 2)).toBeNull()
 	})
 })

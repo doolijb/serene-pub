@@ -87,13 +87,6 @@ vi.mock("$lib/server/connections/capabilityTarget", async (importOriginal) => {
 		}
 	}
 })
-vi.mock("$lib/server/utils/getUserConfigurations", () => ({
-	getUserConfigurations: async () => ({
-		sampling: { id: 1 },
-		contextConfig: { id: 1 },
-		promptConfig: { id: 1, systemPrompt: "Stay in character." }
-	})
-}))
 vi.mock("$lib/server/embedding", () => ({
 	isModelReady: () => false,
 	getLoadedModelId: () => null,
@@ -160,19 +153,7 @@ beforeAll(async () => {
 		personaId: persona.id
 	})
 
-	const [contextConfig] = await db
-		.insert(schema.contextConfigs)
-		.values({ name: "Bindings Context", template: "{{instructions}}" })
-		.returning()
-	const [promptConfig] = await db
-		.insert(schema.promptConfigs)
-		.values({ name: "Bindings Prompt", systemPrompt: "You are {{char}}." })
-		.returning()
-	await db.insert(schema.systemSettings).values({
-		id: 1,
-		defaultContextConfigId: contextConfig.id,
-		defaultPromptConfigId: promptConfig.id
-	})
+	await db.insert(schema.systemSettings).values({ id: 1 })
 
 	// A second narrate contributor: a foreign spec whose active published
 	// version declares the trigger. Contributed functions need no nodes —

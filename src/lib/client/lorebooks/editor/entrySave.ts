@@ -22,7 +22,7 @@ import { awaitReply } from "$lib/client/utils/awaitReply"
 import { interestKey } from "$lib/shared/sockets/interest"
 import { formatDate, type StoryDate } from "../sections/historyDates"
 import { amendmentsOnLine, type Line } from "$lib/shared/lorebooks/lineReading"
-import { openBookTime } from "../time/bookTime.svelte"
+import { amendmentDateProblem } from "$lib/shared/lorebooks/amendments"
 
 export interface AmendmentTarget {
 	lorebookId: number
@@ -186,21 +186,18 @@ type OverlayRow = {
  * own, and its ancestors' up to each fork cut (`amendmentsOnLine`, ruling 5)
  * — the last in apply order that sets this field to the value that won.
  *
- * `line` is the chain; a bare branch id is looked up against the open book's
- * lines (`openBookTime.lineOf`), so a fork of a branch still reads through
- * its parent. `moment` null is the head.
+ * `line` is the chain the resolver read (the shell's `lineOf`), so a fork of
+ * a branch reads through its parent. `moment` null is the head.
  */
 export function maskingAmendment(
 	field: string,
 	winning: unknown,
 	overlays: readonly OverlayRow[],
-	line: Line | number | null,
+	line: Line,
 	moment: StoryDate | null = null
 ): OverlayRow | null {
-	const chain =
-		line !== null && typeof line === "object" ? line : openBookTime.lineOf(line)
 	let best: OverlayRow | null = null
-	for (const a of amendmentsOnLine(overlays, chain, moment))
+	for (const a of amendmentsOnLine(overlays, line, moment))
 		if (field in a.fields && same(a.fields[field], winning)) best = a
 	return best
 }
@@ -234,6 +231,26 @@ export function maskedBaseWarning(
 		description:
 			`Saved, but ${joinWords(clauses)}, so the entry reads the same as before. ` +
 			"Edit or delete that amendment to change what it says from then on."
+	}
+}
+
+/**
+ * The toast a Save as of earns when the change re-dates the entry, or null
+ * (A18(b)). A date is part of the entry — when it happened — so it is saved
+ * with Change the base and moves on every line; it is never an amendment.
+ * Asked before anything is sent: the server refuses one
+ * (`amendmentDateProblem`), and a re-date left out of the amendment would be
+ * an edit the author believes they made.
+ */
+export function amendmentDateToast(
+	fields: Record<string, unknown>
+): { title: string; description: string } | null {
+	if (!amendmentDateProblem(fields)) return null
+	return {
+		title: "A date can't be amended",
+		description:
+			"When an entry happened is part of the entry. To re-date it, use " +
+			"Change the base in the save menu: it moves on every line."
 	}
 }
 

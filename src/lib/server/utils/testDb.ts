@@ -11,10 +11,12 @@ import { PGlite } from "@electric-sql/pglite"
 import { and, eq } from "drizzle-orm"
 import { drizzle } from "drizzle-orm/pglite"
 import { migrate } from "drizzle-orm/pglite/migrator"
+import os from "os"
 import path from "path"
 import fsp from "fs/promises"
 import * as schema from "$lib/server/db/schema"
 import { guardTransactions } from "$lib/server/db/transactionGuard"
+import { driverErrorOf } from "$lib/server/db/errors"
 
 export type TestDb = ReturnType<typeof drizzle<typeof schema, PGlite>>
 
@@ -72,6 +74,16 @@ export async function createTestDb(opts?: {
 	`)
 
 	/**
+	 * The built-in completion templates, as boot's `defaults.sync()` writes
+	 * them. `connections.prompt_format` is a foreign key to their `key`, so a
+	 * connection naming a built-in format cannot be inserted without them.
+	 */
+	const { seedCompletionTemplates } = await import(
+		"$lib/server/db/seedCompletionTemplates"
+	)
+	await seedCompletionTemplates(db)
+
+	/**
 	 * Publish the declared entry types.
 	 *
 	 * ⚠ **`lorebook_entries` cannot be written without them.** `type_id` +
@@ -94,6 +106,52 @@ export async function createTestDb(opts?: {
 	}
 
 	return db
+}
+
+/**
+ * The shipped migrations folder, cut off after `tag`.
+ *
+ * For a test that has to put a database in the state an older install is in:
+ * migrate from this folder, write the rows such an install holds, then migrate
+ * again from the real `drizzle/` — which is how an upgrading install meets the
+ * migrations above it. The `.sql` files are copied byte for byte, so the ledger
+ * rows drizzle writes carry the hashes the real folder produces; only
+ * `meta/_journal.json` is cut, and `restamp` replaces an entry's `when` by tag.
+ *
+ * The caller calls `dispose`. The folder's name carries a prefix the stale-temp
+ * sweep (`scripts/testTempDirs.ts`) knows, so a killed run's copy is removed by
+ * the next run.
+ */
+export async function migrationsFolderThrough(
+	tag: string,
+	opts?: { restamp?: Record<string, number> }
+): Promise<{ folder: string; dispose: () => Promise<void> }> {
+	const real = path.resolve(process.cwd(), "drizzle")
+	const journal = JSON.parse(
+		await fsp.readFile(path.join(real, "meta/_journal.json"), "utf8")
+	) as { entries: Array<{ tag: string; when: number }> }
+	const cut = journal.entries.findIndex((e) => e.tag === tag)
+	if (cut < 0) throw new Error(`No journal entry for "${tag}"`)
+	const entries = journal.entries
+		.slice(0, cut + 1)
+		.map((e) => ({ ...e, when: opts?.restamp?.[e.tag] ?? e.when }))
+	const folder = await fsp.mkdtemp(
+		path.join(os.tmpdir(), "serene-pub-vitest-migrations-")
+	)
+	await fsp.mkdir(path.join(folder, "meta"))
+	for (const e of entries)
+		await fsp.copyFile(
+			path.join(real, `${e.tag}.sql`),
+			path.join(folder, `${e.tag}.sql`)
+		)
+	await fsp.writeFile(
+		path.join(folder, "meta/_journal.json"),
+		JSON.stringify({ ...journal, entries }, null, 2)
+	)
+	return {
+		folder,
+		dispose: () => fsp.rm(folder, { recursive: true, force: true })
+	}
 }
 
 /**
@@ -174,6 +232,19 @@ export async function clearConfigValue(
 			)
 		)
 }
+
+/**
+ * A query's rejection as the driver raised it, for
+ * `rejects.toThrow(/constraint_name/)`.
+ *
+ * drizzle-orm (0.44+) re-throws every failed query as a `DrizzleQueryError`
+ * whose message is the SQL; the constraint name a test pins is in the
+ * driver's own message, under `.cause`.
+ */
+export const asDriverRejection = <T>(query: PromiseLike<T>): Promise<T> =>
+	Promise.resolve(query).catch((e) => {
+		throw driverErrorOf(e)
+	})
 
 /** Creates a bare test user row — most handlers require a valid userId FK. */
 export async function createTestUser(db: TestDb, username?: string) {

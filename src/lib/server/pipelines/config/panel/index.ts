@@ -27,10 +27,14 @@ export type {
 	OptionSource,
 	WriteScope,
 	ConfigOption,
-	ConfigStep,
+	SettingsGroup,
+	SettingsGroupStep,
+	OptionInherits,
+	OptionProvenance,
 	NamedConfigSummary,
 	NamespaceSummary,
 	NamespaceView,
+	ViewScope,
 	Decl
 } from "$lib/server/pipelines/config/panel/types"
 export {
@@ -38,7 +42,7 @@ export {
 	OptionNotWritableError
 } from "$lib/server/pipelines/config/panel/types"
 
-export { optionId } from "$lib/server/pipelines/config/panel/ids"
+export { optionId, stepKeyFor } from "$lib/server/pipelines/config/panel/ids"
 export {
 	declarations,
 	humanizeTypeId,

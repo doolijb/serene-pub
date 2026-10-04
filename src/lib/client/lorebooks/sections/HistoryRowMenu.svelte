@@ -1,6 +1,5 @@
 <script lang="ts">
 	import * as Icons from "@lucide/svelte"
-	import { getContext } from "svelte"
 	import type { PoolSource } from "./types"
 	import { getLorePoolCtx } from "./poolContext"
 
@@ -18,13 +17,11 @@
 	let { source, close }: Props = $props()
 
 	const pool = getLorePoolCtx()
-	const compileEntriesCtx: CompileEntriesCtx = getContext("compileEntriesCtx")
 
 	let scenes = $derived(pool.scenesOf(source.id))
 	let activity = $derived(
-		compileEntriesCtx?.activities?.find(
-			(a) => a.historyEntryId === source.id
-		)
+		// This reading's compile, never another line's of the same entry.
+		pool.compileActivityOf(source.id)
 	)
 </script>
 

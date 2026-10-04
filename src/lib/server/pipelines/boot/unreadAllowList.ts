@@ -49,11 +49,13 @@ export const UNREAD_ALLOW_LIST: readonly AllowedUnread[] = [
 		kind: "slot",
 		reason:
 			"awaiting embeddings-as-connections (DESIGN-embedding-ner-connections): " +
-			"the host embeds through the local model (`embeddingApi()` in " +
-			"host.ts), so the slot resolves a value into a port nobody reads. Its " +
-			"fix is a reader, which that design supplies — six spec nodes carry " +
-			"the unwired slot meanwhile (paramsSlotWiring.test.ts derives them " +
-			"from this line)."
+			"the host embeds through the star (`embeddingApi()` in host.ts), so " +
+			"the slot resolves a value into a port nobody reads. Held at the " +
+			"star meanwhile (`isUnreadSlot`): the panel offers no pick and the " +
+			"run drops a stored one, because Search by meaning's Automatic reads " +
+			"this slot to learn where the embed runs. Its fix is a reader, which " +
+			"that design supplies — ten spec nodes carry the unwired slot " +
+			"meanwhile (paramsSlotWiring.test.ts derives them from this line)."
 	},
 	{
 		definition: "core:task/build-keeper-context@1",
@@ -71,3 +73,29 @@ export const UNREAD_ALLOW_LIST: readonly AllowedUnread[] = [
 /** The allow-list, keyed the way findings are. */
 export const allowKey = (definition: string, name: string) =>
 	`${definition} ${name}`
+
+/**
+ * Whether `slot` on the pinned `definition` is a slot no handler reads — and so
+ * **not a choice**: the panel offers no option for it and the run drops a value
+ * stored there, so it resolves to the instance default like a slot nobody
+ * picked (review 2026-09-29).
+ *
+ * ⚠ The reason is not tidiness. A pick on a slot nothing reads is a setting
+ * that changes nothing — except for whoever reads the slot BY REFERENCE. The
+ * embed step's connection is read that way: `query-windows` takes
+ * `slot.connectionOf('semantic.arm.embed')` to decide whether *Automatic*
+ * searches by meaning (whether an embedding model is set up), while the host
+ * embeds through the star whatever the slot says. A pick there made the
+ * decision about a connection the embed never used — searching with no model
+ * starred, or a stale pick hiding the star that is. Held at the star, the two
+ * cannot disagree. The line comes off the
+ * list the day a reader exists, and the pick is a choice again.
+ */
+export const isUnreadSlot = (definition: string, slot: string): boolean =>
+	unreadSlotsOf(definition).includes(slot)
+
+/** The slots `isUnreadSlot` answers yes for on one pinned definition. */
+export const unreadSlotsOf = (definition: string): string[] =>
+	UNREAD_ALLOW_LIST.filter(
+		(a) => a.kind === "slot" && a.definition === definition
+	).map((a) => a.name)

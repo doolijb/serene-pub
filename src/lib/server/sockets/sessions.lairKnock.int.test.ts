@@ -13,7 +13,7 @@
  *    exits, and every room the dungeon holds, whatever retrieval ranked; a
  *    room the lorebook lists never knocks.
  *  - **R8** (2026-09-28) — nothing narrates a turn: the planner plans the
- *    party only, and the first prose call is the lead delver's (B14's scene
+ *    party only, and the first prose call is a delver's character turn (B14's scene
  *    prompt retired with the narrator's scene step).
  *  - **R1** — the per-turn direction renders from `{{turnDirection}}`.
  */
@@ -96,17 +96,17 @@ class FakeAdapter implements FakeTextAdapter {
 			isAborted: false,
 			completionResult: async (
 				onContent: (c: string) => void,
-				onThinking?: (c: string) => void
+				onReasoning?: (c: string) => void
 			) => {
 				if (json) {
 					jsonPrompts.push(JSON.stringify(this.injected ?? ""))
 					// The planner reasons too — and that must NOT reach the row.
-					onThinking?.("The planner weighs the beats.")
+					onReasoning?.("The planner weighs the beats.")
 					onContent(JSON.stringify(document))
 					return
 				}
 				prosePrompts.push(JSON.stringify(this.injected ?? ""))
-				onThinking?.(`Reasoning of prose call ${call}.`)
+				onReasoning?.(`Reasoning of prose call ${call}.`)
 				for (const chunk of prose) onContent(chunk)
 			}
 		}
@@ -145,13 +145,6 @@ vi.mock("$lib/server/connections/capabilityTarget", async (importOriginal) => {
 		}
 	}
 })
-vi.mock("$lib/server/utils/getUserConfigurations", () => ({
-	getUserConfigurations: async () => ({
-		sampling: { id: 1 },
-		contextConfig: { id: 1 },
-		promptConfig: { id: 1, systemPrompt: "Stay in character." }
-	})
-}))
 vi.mock("$lib/server/embedding", () => ({
 	isModelReady: () => false,
 	getLoadedModelId: () => null,
@@ -195,8 +188,11 @@ afterAll(async () => {
 
 let n = 0
 
-/** A Lair session: two rooms in its dungeon, the party in the first, the owner's line waiting. */
-async function lair() {
+/**
+ * A Lair session: two rooms in its dungeon, the party in the first, the
+ * owner's line waiting. `standing: false` leaves the world's location unset.
+ */
+async function lair({ standing = true }: { standing?: boolean } = {}) {
 	const schema = await import("$lib/server/db/schema")
 	const { insertLegacy } = await import("$lib/server/messages/store")
 	const { createTestUser } = await import("$lib/server/utils/testDb")
@@ -251,16 +247,18 @@ async function lair() {
 		userId: owner.id
 	})
 	// Where the party stand: the world's location, as the keeper writes it.
-	const { applyChange } = await import("$lib/server/state/write")
-	await applyChange(
-		testDb as unknown as Db,
-		{ sessionId: row!.id, updatedBy: "user" } as never,
-		{
-			owner: { kind: "session", id: row!.id },
-			slotId: "core:slot/location@1",
-			value: "The Old Well"
-		} as never
-	)
+	if (standing) {
+		const { applyChange } = await import("$lib/server/state/write")
+		await applyChange(
+			testDb as unknown as Db,
+			{ sessionId: row!.id, updatedBy: "user" } as never,
+			{
+				owner: { kind: "session", id: row!.id },
+				slotId: "core:slot/location@1",
+				value: "The Old Well"
+			} as never
+		)
+	}
 	return { owner, session: row!, lorebookId: lorebook!.id }
 }
 
@@ -361,7 +359,11 @@ async function roomsNamed(lorebookId: number, name: string) {
 		)
 }
 
-/** The story went on by itself: `n` respond runs ended ok, and the newest row is not the person's. */
+/**
+ * The story went on by itself: `n` respond runs ended ok — the knock's, the
+ * Castellan's turn the answer let go on, and the character turn it planned
+ * for Brannoc (owner ruling 2026-09-30).
+ */
 async function storyWentOn(w: Awaited<ReturnType<typeof lair>>, n: number) {
 	await vi.waitFor(
 		async () => {
@@ -432,7 +434,7 @@ describe("R9 · the knock asks the person to describe the room", () => {
 		expect(entry!.content).toBe(TYPED)
 		expect(entry!.typeId).toBe("core:entry/location")
 		// The answer made no model call of its own: the first prose call is
-		// the next turn's lead delver.
+		// the next turn's first character turn.
 		expect(prosePrompts.some((p) => p.includes("has left the description to you"))).toBe(false)
 		// Answered, and the master's own line sent the party on …
 		const answered = (await lastBlockTree(w.session.id))!
@@ -448,7 +450,7 @@ describe("R9 · the knock asks the person to describe the room", () => {
 			{ timeout: 30_000, interval: 100 }
 		)
 		// … and the story resumed by itself.
-		await storyWentOn(w, 2)
+		await storyWentOn(w, 3)
 	})
 
 	test("/room <text> from the composer is the same answer (S2's slash argument rides this road)", async () => {
@@ -471,7 +473,7 @@ describe("R9 · the knock asks the person to describe the room", () => {
 		expect((ack as any)?.parked).toBeUndefined()
 		const [entry] = await roomsNamed(w.lorebookId, "The Drowned Hall")
 		expect(entry!.content).toBe(TYPED)
-		await storyWentOn(w, 2)
+		await storyWentOn(w, 3)
 	})
 
 	test("an empty answer is the Castellan's draft, parked at the review with the room's name", async () => {
@@ -503,7 +505,7 @@ describe("R9 · the knock asks the person to describe the room", () => {
 			},
 			{ timeout: 30_000, interval: 100 }
 		)
-		await storyWentOn(w, 2)
+		await storyWentOn(w, 3)
 	})
 
 	test("a rejected draft re-opens the knock: open again, /room listed, and a second answer works", async () => {
@@ -586,7 +588,7 @@ describe("R9 · the knock asks the person to describe the room", () => {
 		expect(second.ack?.error).toBeUndefined()
 		const [entry] = await roomsNamed(w.lorebookId, "The Drowned Hall")
 		expect(entry!.content).toBe(TYPED)
-		await storyWentOn(w, 2)
+		await storyWentOn(w, 3)
 	})
 
 	test("a knock row's own Regenerate is refused with a pointer to the composer's Regenerate (the retake)", async () => {
@@ -781,8 +783,8 @@ describe("B13 · the party's room is always in view", () => {
 	})
 })
 
-describe("R8 · nothing narrates a turn: the planner plans the party, the lead speaks first", () => {
-	test("the planner plans the party only; the first prose call is the lead delver's, in the room", async () => {
+describe("R8 · nothing narrates a turn: the planner plans the party, and a delver speaks first", () => {
+	test("the planner plans the party only; the first prose call is a delver's character turn, in the room", async () => {
 		const w = await lair()
 		reset(PLAN)
 		await reply(w, "the Castellan's turn")
@@ -793,11 +795,214 @@ describe("R8 · nothing narrates a turn: the planner plans the party, the lead s
 		expect(planner).toContain("Direction this turn: I open the door.")
 		expect(planner).toContain("Dungeon Master")
 		// The first prose call of a turn is a delver's voice, never a narrator's.
-		const lead = prosePrompts[0]!
-		expect(lead).not.toContain("Write ONE short beat")
-		expect(lead).toContain("nobody narrates it for you")
+		const turn = prosePrompts[0]!
+		expect(turn).not.toContain("Write ONE short beat")
+		expect(turn).toContain("nobody narrates it for you")
 		// The voice is shown the room it stands in (R8: `locationEntries`).
-		expect(lead).toContain("The room you are standing in")
-		expect(lead).not.toContain("{{")
+		expect(turn).toContain("The room you are standing in")
+		expect(turn).not.toContain("{{")
+	})
+})
+
+/**
+ * **B6 (places plan, 2026-09-29) — Answer the door links the new room to the
+ * room the party stand in, both ways, when that room resolves.**
+ *
+ * The party's room is the world's `location` (the fixture's *The Old Well*,
+ * words), resolved by the Lair's name rule against the rooms the dungeon
+ * lists. Resolved, the answer writes one relationship after the room lands —
+ * from the new room, `leads to` both ways — and the next turn's planner reads
+ * it under the room as "From here:". A location naming no room is no failure:
+ * the room is saved unlinked and the story goes on.
+ */
+describe("B6 · Answer the door links the new room to where the party stand", () => {
+	async function linksOf(lorebookId: number) {
+		const schema = await import("$lib/server/db/schema")
+		return testDb
+			.select()
+			.from(schema.narrativeRelationships)
+			.where(eq(schema.narrativeRelationships.lorebookId, lorebookId))
+	}
+	async function standAt(w: Awaited<ReturnType<typeof lair>>, value: unknown) {
+		const { applyChange } = await import("$lib/server/state/write")
+		await applyChange(
+			testDb as unknown as Db,
+			{ sessionId: w.session.id, updatedBy: "user" } as never,
+			{
+				owner: { kind: "session", id: w.session.id },
+				slotId: "core:slot/location@1",
+				value
+			} as never
+		)
+	}
+	const oneLink = async (w: Awaited<ReturnType<typeof lair>>, to: string) => {
+		const [hall] = await roomsNamed(w.lorebookId, "The Drowned Hall")
+		const [there] = await roomsNamed(w.lorebookId, to)
+		const links = await linksOf(w.lorebookId)
+		expect(links).toHaveLength(1)
+		expect(links[0]).toMatchObject({
+			fromEntryId: hall!.id,
+			toEntryId: there!.id,
+			fromNodeId: null,
+			toNodeId: null,
+			relationshipType: "leads to",
+			reverseRelationshipType: "leads to",
+			title: "",
+			status: "active"
+		})
+		// Standing and not secret, so the next turn's reading lists it.
+		expect(links[0]!.visibility).not.toBe("secret")
+	}
+
+	test("typed: the room lands, then one link both ways to the party's room — and the planner reads it from here", async () => {
+		const w = await lair()
+		reset(KNOCK)
+		await reply(w, "the knock")
+		reset(PLAN)
+		const { ack } = await pressKnock(w, TYPED)
+		expect(ack?.error).toBeUndefined()
+		await oneLink(w, "The Old Well")
+		await storyWentOn(w, 3)
+		// The turn after the answer: the planner stands in the Old Well, and
+		// its ways out now include the room just built, said from the well.
+		const planner = jsonPrompts[0]!
+		expect(planner).toContain("From here:\\n- Leads to The Drowned Hall.")
+	})
+
+	test("drafted: the link is written once the master approves the draft", async () => {
+		const { pendingReviewsFor, resolveReview } = await import(
+			"$lib/server/pipelines/runtime/reviewGate"
+		)
+		const w = await lair()
+		reset(KNOCK)
+		await reply(w, "the knock")
+		reset(PLAN)
+		const { ack } = await pressKnock(w)
+		expect(ack?.parked).toBe(true)
+		// Parked: no room yet, so no link either.
+		expect(await linksOf(w.lorebookId)).toEqual([])
+		const [review] = pendingReviewsFor(w.owner.id)
+		resolveReview(review!.id, w.owner.id, "approve")
+		await vi.waitFor(async () => oneLink(w, "The Old Well"), {
+			timeout: 30_000,
+			interval: 100
+		})
+		await storyWentOn(w, 3)
+	})
+
+	test("a rejected draft writes no link, and the second answer writes exactly one", async () => {
+		const { pendingReviewsFor, resolveReview } = await import(
+			"$lib/server/pipelines/runtime/reviewGate"
+		)
+		const w = await lair()
+		reset(KNOCK)
+		await reply(w, "the knock")
+		reset(PLAN)
+		const first = await pressKnock(w)
+		expect(first.ack?.parked).toBe(true)
+		const [review] = pendingReviewsFor(w.owner.id)
+		resolveReview(review!.id, w.owner.id, "reject")
+		await vi.waitFor(
+			async () => {
+				const runs = await runsOf(w.session.id)
+				expect(
+					runs.find((r) => r.specSlug === "core:spec/lair-room-answer")?.outcome
+				).toBe("halt")
+			},
+			{ timeout: 30_000, interval: 100 }
+		)
+		expect(await linksOf(w.lorebookId)).toEqual([])
+		const second = await pressKnock(w, TYPED)
+		expect(second.ack?.error).toBeUndefined()
+		await oneLink(w, "The Old Well")
+	})
+
+	/**
+	 * Review round: the brief's "a re-run stacks nothing", on the Lair's own
+	 * path. The link Answer the door wrote is asked for again exactly as the
+	 * Lair's `link.resolved.write` asks (the new room to the party's, `leads
+	 * to` both ways, no name), through the host's outlet seam: the standing
+	 * row answers (`written: false`), and nothing stacks.
+	 */
+	test("the same link asked again, as the Lair asks it, stacks nothing", async () => {
+		const w = await lair()
+		reset(KNOCK)
+		await reply(w, "the knock")
+		reset(PLAN)
+		const { ack } = await pressKnock(w, TYPED)
+		expect(ack?.error).toBeUndefined()
+		await oneLink(w, "The Old Well")
+		const [before] = await linksOf(w.lorebookId)
+		const [hall] = await roomsNamed(w.lorebookId, "The Drowned Hall")
+		const [well] = await roomsNamed(w.lorebookId, "The Old Well")
+		const { createHost } = await import("$lib/server/pipelines/runtime/host")
+		const host = createHost(testDb as any, { sessionId: w.session.id, artifacts: [] })
+		const again = (await host.commit!(
+			{
+				from: hall!.id,
+				to: well!.id,
+				params: { linkType: "leads to", reverseLinkType: "leads to" }
+			},
+			{ key: "link.resolved.write", definitionId: "core:outlet/link-lore-entries" } as any
+		)) as { id: number; written?: boolean }
+		expect(again).toMatchObject({ id: before!.id, written: false })
+		await oneLink(w, "The Old Well")
+	})
+
+	test("a location naming no room: the room is saved unlinked, and the story goes on", async () => {
+		const w = await lair()
+		await standAt(w, "somewhere in the dark below the well")
+		reset(KNOCK)
+		await reply(w, "the knock")
+		reset(PLAN)
+		const { ack } = await pressKnock(w, TYPED)
+		expect(ack?.error).toBeUndefined()
+		const [entry] = await roomsNamed(w.lorebookId, "The Drowned Hall")
+		expect(entry!.content).toBe(TYPED)
+		expect(await linksOf(w.lorebookId)).toEqual([])
+		await storyWentOn(w, 3)
+		const runs = await runsOf(w.session.id)
+		expect(
+			runs.find((r) => r.specSlug === "core:spec/lair-room-answer")?.outcome
+		).toBe("ok")
+	})
+
+	test("a location set to a place entry links to that room, by its id", async () => {
+		const w = await lair()
+		const [stair] = await roomsNamed(w.lorebookId, "The Stair")
+		await standAt(w, { entryId: stair!.id })
+		reset(KNOCK)
+		await reply(w, "the knock")
+		reset(PLAN)
+		const { ack } = await pressKnock(w, TYPED)
+		expect(ack?.error).toBeUndefined()
+		await oneLink(w, "The Stair")
+	})
+
+	/**
+	 * Plan A27 P5, the "fall back" default (2026-09-30): with the world's
+	 * location unset, the door links to the room the knock turn's planner
+	 * named — carried from the knock's turn on the block as its `vantage`.
+	 */
+	test("no location set: the knock's planner hint is where the party stand", async () => {
+		const w = await lair({ standing: false })
+		reset({ ...KNOCK, worldHints: { location: "The Stair" } })
+		await reply(w, "the knock")
+		const knock = (await lastBlockTree(w.session.id))!.blocks[0] as any
+		expect(knock.vantage).toBe("The Stair")
+		reset(PLAN)
+		const { ack } = await pressKnock(w, TYPED)
+		expect(ack?.error).toBeUndefined()
+		await oneLink(w, "The Stair")
+	})
+
+	test("the world's location wins over the planner's hint, as it does in the prompt", async () => {
+		const w = await lair()
+		reset({ ...KNOCK, worldHints: { location: "The Stair" } })
+		await reply(w, "the knock")
+		reset(PLAN)
+		const { ack } = await pressKnock(w, TYPED)
+		expect(ack?.error).toBeUndefined()
+		await oneLink(w, "The Old Well")
 	})
 })

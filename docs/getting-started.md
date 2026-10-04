@@ -1,136 +1,139 @@
-# Getting Started
+# Getting started
 
-The first time you open Serene Pub, a short setup wizard asks a few questions and then drops you straight into your first session. It takes a few minutes. This page walks through each screen and says what to pick if you're not sure.
+New to Serene Pub, or to AI chat apps in general? Start here. These pages take you from nothing installed to your first story, one step at a time, and assume no technical knowledge at all.
 
-Never used an AI chat app before? That's fine. Nothing here needs any technical knowledge. If you'd like the background first, read [What is Serene Pub?](./what-is-serene-pub.md), then [Install Serene Pub](./install.md) and [Connect a model](./connect-a-model.md).
+_Written for Serene Pub 0.6._
 
-## The wizard at a glance
+## The path
 
-The wizard shows one question per screen. A bar across the top shows how many screens there are and which one you're on; click a finished one to go back to it, or use **Back** at the bottom.
+Follow these in order. Each page says what you'll have at the end of it, and what you should see on screen after each step.
 
-1. **Get started**: a welcome, and the language you'd like to use.
-2. **Choose an LLM**: the AI that writes the replies. Only the person who runs the pub (the admin) sees this screen.
-3. **What would you like to do?**: **Talk to an AI**, or **Play with characters**.
-4. **Pick a character** and **Who are you in the story?**: only if you chose **Play with characters**.
+1. [What is Serene Pub?](./what-is-serene-pub.md): what it does, and what you need before you start.
+2. [Install Serene Pub](./install.md): download it, start it, and open it in your browser.
+3. [Connect a model](./connect-a-model.md): give it an AI to write with. This is the one step it can't do without.
+4. [Your first session](#your-first-session), further down this page: pick a character, choose who you are, and start talking.
+5. [Getting around](./getting-around.md): the rail, the sidebar, search and Help, so you can find everything else.
 
-When you finish, the wizard opens your new session. From then on, the same page is your home screen.
+Already installed and connected? Skip to [Your first session](#your-first-session).
 
-<!-- SHOT: the wizard's progress bar and the Choose an LLM screen -->
-
-## 1. Get started
-
-The welcome screen says what's about to happen and has one choice on it: your **Language**. Everything after this is shown in the language you pick. If you're the admin, it also becomes the default for everyone on your pub; anyone can change their own later in **Settings**. See [Languages](./languages.md).
-
-Click **Get started** to carry on.
-
-<!-- SHOT: the Get started screen with the Language picker -->
-
-## 2. Choose an LLM
-
-An **LLM** (large language model) is the AI that actually writes. Serene Pub doesn't include one; it connects to one. This screen asks where yours should run.
-
-It starts by looking for model servers already running on this computer: **Ollama**, **LM Studio**, **llama.cpp** and **KoboldCPP**. Anything it finds is listed first, under **Found on this computer**, as a card with the program's name, its address and how many chat models it has; the first card with a model is marked **Recommended**. Click a card, pick a model, and click **Use this model**. That's the whole setup. If you start one of those programs while the wizard is open, **Scan again** looks once more.
-
-Below that, under **Or set one up**, are the ways to get a model when nothing is running yet. Each lists what it costs you in a few short tags.
-
-- **KoboldCPP, run by Serene Pub** (_Private · Free · Needs about 8 GB of memory_). Serene Pub downloads a program called KoboldCPP and a model that suits your computer, and runs them for you. When nothing was found, this is the **Recommended** choice on a reasonably strong computer.
-- **Ollama, managed by Serene Pub** (_Private · Free_). For a computer with Ollama installed: Serene Pub connects to it and downloads models into it for you.
-- **An online service** (_Fast · Nothing to install · Costs per message_). OpenAI, Anthropic, OpenRouter, Groq and more. You need an account with the service and an API key (a long password the service gives you).
-- **A custom connection**. A server on another computer, or one on an unusual address. You type its address in Connections.
-
-On the Android app there is no scan and nothing runs locally, so the list is headed **Where it runs** and offers only **An online service** and **A custom connection**.
-
-Not sure which? [Connect a model](./connect-a-model.md) explains the trade in plain terms and walks through each one.
-
-<!-- SHOT: the Choose an LLM screen with one Found on this computer card marked Recommended, and the Or set one up options below -->
-
-What happens next depends on your choice:
-
-- **A card under Found on this computer** shows that program's chat models. Pick one and click **Use this model**; the wizard moves on as soon as it is registered. If the program is running but has no chat model loaded, load one (for Ollama, **Get a model** opens it in Connections so you can download one there) and click **Check again**.
-- **KoboldCPP, run by Serene Pub** opens the **Connections** panel on the KoboldCPP setup: pick the download that suits your computer, then a model. Downloads can take a while. The wizard waits, and moves on by itself once the model is ready. **Open the setup again** reopens the panel if you closed it.
-- **Ollama, managed by Serene Pub** opens the Connections panel on Ollama: download a model there and choose it for chat. The wizard moves on by itself once it can reply.
-- **An online service** opens the **New connection** window in the Connections panel. Choose your service, paste its API key and pick a model. The wizard moves on by itself once a model can reply. If you've added it and the wizard is still waiting, click **Choose which model replies**.
-- **A custom connection** opens the same window, narrowed to programs you run yourself. Pick the program from the **Service** list and give its address. The wizard moves on by itself once a model can reply.
-
-You never need to come back and press anything: as soon as your pub can reply, the wizard goes to the next screen. If you return to this step later, it simply reads **Your pub can reply** and names the connection, with a **Continue** button.
-
-:::note Embeddings are optional
-Earlier versions asked about embeddings (smarter lore search, also called RAG) during setup. The wizard no longer does: your pub works without them. Turn them on whenever you like in **Connections**. See [Embeddings & RAG](./embeddings-and-rag.md).
+:::note Someone else runs this pub for you?
+If you were given an address and an account on someone else's pub, you don't need steps 2 and 3: the person who runs it has done them. Open the address, sign in, and carry on from [Your first session](#your-first-session).
 :::
 
-## 3. What would you like to do?
+**Coming from SillyTavern?** Read [Coming from SillyTavern](./coming-from-sillytavern.md) for where everything you know lives here. Install first, then see [Importing from SillyTavern](./importing-from-sillytavern.md) to bring your characters and chats across. Your SillyTavern cards also work one at a time, straight from the wizard below.
 
-Two big choices. You can do both later; this is just where to start.
+## Your first session
 
-- **Talk to an AI** starts a conversation with the **Guide**, an AI helper that knows Serene Pub and its documentation. Ask it anything, including how to do something in the app. Clicking it starts the session straight away; there are no more screens.
-- **Play with characters** is for stories: the AI plays a character, and you play yourself (or someone you make up). It adds two more screens, below.
+:::note By the end of this section
+You'll have a character, a persona for yourself, and a session where the character has answered you.
+:::
 
-If the admin has switched the Guide off, **Talk to an AI** says so and can't be chosen.
+:::note You'll need
+Serene Pub open in your browser ([Install](./install.md)). If you run the pub, you also need a model connected ([Connect a model](./connect-a-model.md)); the wizard below helps you do that if you haven't yet.
+:::
 
-<!-- SHOT: the What would you like to do screen with its two choices -->
+The first time you open Serene Pub, a short **setup wizard** fills the home page. It shows one question per screen, with a bar across the top showing how many screens there are and which one you're on. Click a finished screen in that bar, or press **Back**, to return to it.
 
-## 4. Pick a character
+<!-- SHOT: the wizard's progress bar and the Get started screen -->
 
-Only if you chose **Play with characters**. The AI plays the character you pick here.
+### 1. Get started
 
-Any characters you already have are listed; click one to select it (it gets a gold outline and a tick). Or add one:
+The first screen is headed **Welcome to Serene Pub**. Choose your **Language**: the rest of the app is shown in the language you pick. If you haven't given the app a name to call you yet, there's also **What should we call you?**: the name the characters will see when you speak as yourself. It's optional; leave it empty to go by your username, and change it later in **Settings › User**. Then press **Get started**.
 
-- **Create one**: a name, a picture and a personality, in a few short steps. The new character is selected for you.
-- **Browse the library**: ready-made characters from the community. The **Library** opens beside the wizard; a character you import there shows up in the list here, ready to pick.
-- **Import a card**: drop a character card file (`.png`, `.json` or `.charx`, as used by SillyTavern and other apps) or click **Browse**. The imported character is selected for you.
+Under every screen of the setup, **You can browse the entire documentation in the app at any time** opens these pages.
 
-Coming from SillyTavern with a whole library? The admin sees a link to **Import your characters and personas** (not on the Android app). See [Importing from SillyTavern](./importing-from-sillytavern.md).
+:::tip You should see
+The next screen. If you run the pub, it's **Choose an LLM**. If someone else does, it's **What would you like to do?**: skip to step 3.
+:::
 
-Click **Continue** once a character is selected. See [Characters](./characters.md) for everything a character can hold.
+Leave the language on English if you're not sure; you can change it any time in **Settings**. See [Languages](./languages.md).
 
-## 5. Who are you in the story?
+### 2. Choose an LLM
 
-Your **persona** is the character you play. The AI sees its name and description, so it knows who it's talking to. If you already have personas, your default one is selected; click another to change it. Or add one:
+Only the person who runs the pub sees this screen. An **LLM** (large language model) is the AI that writes the replies, and this is where you connect one. [Connect a model](./connect-a-model.md) walks through this screen choice by choice, so if you haven't read it yet, do that now and come back.
 
-- **Just call me "You"**: the quickest start. It makes a simple persona named "You" that you can fill in later.
+The short version: if a model program is already running on this computer, it's listed under **Found on this computer**: click it, pick a model and press **Use this model**. Otherwise pick one of the ways under **Or set one up** and follow along in the **Connections** view, which opens beside the wizard.
+
+:::tip You should see
+You don't need to press anything when you're done. As soon as your pub can reply, the wizard moves on to **What would you like to do?** by itself.
+:::
+
+:::warning If this didn't work
+- **The wizard keeps waiting.** No model is ready to answer yet. If you added an online service, press **Choose which model replies** and pick one. If a download is still running, let it finish.
+- **You closed the Connections view.** Press **Open the setup again** (or **Open Connections**) to bring it back.
+- Still stuck? See the [Check that it worked](./connect-a-model.md#check-that-it-worked) section of Connect a model.
+:::
+
+### 3. What would you like to do?
+
+Two choices. You can do both later; this is only where to start.
+
+- **Play with characters**: the AI plays a character and you play yourself (or someone you make up). Choose this for your first story. It adds the two screens below.
+- **Talk to an AI**: a calm conversation with **Serene**, Serene Pub's mascot and guide, who answers questions about the app from this documentation. Pressing it starts a session called *Welcome to Serene Pub* straight away, and Serene greets you. If it says *The Guide is switched off on this pub*, the person who runs the pub has turned it off.
+
+### 4. Pick a character
+
+The AI plays the character you pick here. Any characters you already have are listed: click one to select it (it gets an outline and a tick). If you have none yet, add one:
+
+- **Browse the library**: ready-made characters shared by the community. The easiest start. The **Library** opens beside the wizard; anything you import there appears in the list here.
+- **Import a card**: a **character card** is a picture (or a small file) with a character written inside it, the format SillyTavern and similar apps use. Drop a `.png`, `.json` or `.charx` file, or press **Browse**.
+- **Create one**: a name, a picture and a few lines of personality, in a short guided form.
+
+A character you import or create is selected for you. Press **Continue**.
+
+:::tip You should see
+**Who are you in the story?**
+:::
+
+### 5. Who are you in the story?
+
+Your **persona** is you, in the story: the name and description the AI knows you by. A persona is simply a character you play.
+
+- **Just call me "You"**: the quickest start. It makes a persona named *You* that you can fill in later. Pick this if you're not sure.
 - **Create one**: your name, a picture and a few lines about you.
-- **Import a card**: a persona is just a character card you play, so any card works.
+- **Import a card**: any character card works as a persona.
 
-Click **Start the session**. The wizard opens your new session with the character you picked, and you can write your first message. See [Personas](./personas.md) and [Sessions](./sessions.md).
+Press **Start the session**.
 
-<!-- SHOT: the Who are you in the story screen with a persona selected and Start the session -->
+:::tip You should see
+Your new session, with the character you picked. Usually their first message is already there. Type something in the box at the bottom and press **Enter**: after a moment, the character's name shows *thinking*, then *typing*, and their reply appears.
+:::
 
-## The home screen after setup
+:::warning If this didn't work
+- **Nobody replies after you send.** The pub's model isn't answering. If you run the pub, open **Connections** on the rail and look at the status line at the top; [Connect a model](./connect-a-model.md#check-that-it-worked) explains each state. If someone else runs it, let them know.
+- **The reply is gibberish, or never stops.** The model and its settings don't match. See [Troubleshooting](./troubleshooting.md#replies-are-garbled-or-wrong).
+- More fixes for a session that misbehaves are in [Sessions](./sessions.md#troubleshooting).
+:::
 
-Once every required step is complete, this same screen stops showing the wizard and answers one
-question instead: what were you doing?
+That's it: you're playing. Not happy with a reply? Hover it and press **Regenerate**, or use the arrows beside it to try another version. [Sessions](./sessions.md) covers everything else you can do in a session.
 
-- A **greeting** for the time of day, with how many sessions are waiting on your reply, an
-  **Import a card** button that imports a character card straight from a file, and a
-  **New session** button.
-- **Pick up where you left off**: up to four sessions with messages, newest first. Each card shows
-  the cast's faces, the genre and when it was last active, and who said the last line and what
-  they said. A **Your turn** chip marks a session waiting on you. **Continue** opens the session.
-  On a phone the cards stack one to a row.
-- A **Characters** shelf of portrait cards, with an **All** link that opens the Characters view,
-  and a **New or import** tile. On a phone it shows two cards to a row; on a wide screen it is a
-  single row of as many as fit.
-- A **Playing as** row of your personas. Clicking one opens it in the Characters view.
-- At the foot, quiet links to the **Documentation** and to **Document View**.
+<!-- SHOT: a first session with the character's reply and the swipe arrows -->
 
-A quiet one-line notice at the top of the home reminds you the app is in beta and under active
-development.
+## Your home screen
 
-## When the wizard comes back
+Once you've started a session (and, if you run the pub, a model can reply), the home page stops showing the wizard. Instead it shows what you were doing:
 
-The home page shows the wizard instead of the home screen while something you need is missing:
+- A greeting, with how many sessions are waiting on your reply, an **Import a card** button and a **New session** button.
+- **Pick up where you left off**: your most recent sessions, newest first. A **Your turn** label marks one waiting on you; **Continue** opens it.
+- A **Characters** shelf of your characters, with **All** to open the Characters view and a **New or import** tile.
+- **Playing as**: your personas.
+- At the foot, links to the **Documentation** and to **Document View**, a simplified, screen-reader-friendly version of the app.
 
-- **For the admin:** the pub can't reply yet (no model is set to answer sessions), or
-- **For everyone:** you haven't started a session yet.
+## If the wizard comes back
 
-Having a character or a persona is not required, since a Guide session needs neither. If the pub can already reply, the admin's wizard skips straight to **What would you like to do?**.
+The home page shows the wizard again while something you need is missing:
 
-Leaving the wizard partway through is safe. Anything you created (a connection, a character, a persona) is kept, and the next visit to the home page starts where the facts say you are.
+- **If you run the pub:** no model is set to answer sessions any more, so **Choose an LLM** is back.
+- **For everyone:** you haven't started a session yet. If you run the pub and it can already reply, the wizard skips straight to **What would you like to do?**.
 
-### If you're not the admin
+Leaving the wizard partway through is safe. Anything you already made (a connection, a character, a persona) is kept, and the next visit picks up where you left off.
 
-Connecting a model is the pub's business, so people who join someone else's pub never see **Choose an LLM**: their wizard is **Get started**, then **What would you like to do?**, and the character screens if they choose them. See [Users and Accounts](./users-and-accounts.md).
+**On the Android app**, **Choose an LLM** doesn't look for programs on this device and offers only **An online service** or **A custom connection** (a model running on another computer), because a phone can't run a model itself. See [Android app](./android.md).
 
-### On the Android app
+## Setting up for other people
 
-**Choose an LLM** has no scan on the Android app, and nothing runs on the phone itself: pick **An online service**, or **A custom connection** to point it at a server on another computer (see [2. Choose an LLM](#2-choose-an-llm)). See [Android App](./android.md).
+If you run the pub and want friends or family to use it too, give each of them an account: see [Users and accounts](./users-and-accounts.md). To reach your pub from outside your home network, see [Hosting](./hosting.md).
+
+## Next
+
+[Getting around](./getting-around.md) →: the rail, the sidebar, search and Help.

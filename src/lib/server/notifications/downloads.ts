@@ -21,6 +21,7 @@ import {
 } from "$lib/shared/notifications/kinds"
 import { LOGBOOK_OBJECT_TYPES } from "$lib/shared/adminLogbook"
 import { raiseNotification } from "./store"
+import { messageWithoutQueryText } from "$lib/server/db/errors"
 
 export type DownloadSource = "koboldcpp" | "onnx" | "ollama"
 
@@ -40,12 +41,12 @@ export function downloadHref(connectionId: number | null | undefined): string {
  * `DOWNLOAD_ERROR_MAX` characters.
  */
 export function shortDownloadError(err: unknown): string {
+	// A failed query is the plain sentence, before the whitespace is collapsed
+	// (which would hide drizzle's `params:` line from every later check).
 	const raw =
-		err instanceof Error
-			? err.message
-			: typeof err === "string"
-				? err
-				: "Unknown error"
+		err instanceof Error || typeof err === "string"
+			? messageWithoutQueryText(err)
+			: "Unknown error"
 	const line = (raw || "Unknown error")
 		.replace(/\s+/g, " ")
 		.replace(/([a-z][a-z0-9+.-]*:\/\/)[^\s/@]+@/gi, "$1…@")

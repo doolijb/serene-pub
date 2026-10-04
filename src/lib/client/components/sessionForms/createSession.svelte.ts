@@ -82,9 +82,9 @@ export function enabledPresetsFor(
  * Which genre the picker opens on: the one whose default preset an
  * administrator has starred, else the first registered.
  *
- * `isDefault` on the row is the client's view of
- * `session_genre_settings.defaultPresetId` — the flag the admin pages write
- * when a preset becomes a genre's default — so a genre that has one is the
+ * `isDefault` on the preset row is the one record of a genre's default
+ * preset (one per genre; "Make default" in the Pipelines view and Admin both
+ * write it through `sessionPresets:update`) — so a genre that has one is a
  * genre the instance is set up to start.
  */
 export function defaultGenreId(
@@ -265,6 +265,47 @@ export function playAsOptions<T extends PlayAsCandidate>(
 		)
 }
 
+/**
+ * Who the cast picker offers: every character except the one the person plays
+ * as — the other half of `playAsOptions`' rule (note 33, 2026-10-02). Nobody
+ * is both voiced by the session and played by the person, so each picker
+ * hides what the other holds. Order is the list's own.
+ */
+export function castOptions<T extends { id: number }>(
+	characters: T[],
+	personaIds: number[]
+): T[] {
+	const seat = new Set(personaIds)
+	return characters.filter((c) => !seat.has(c.id))
+}
+
+/** A picker row's searchable shape — the `characters:list` columns it reads. */
+export interface PickFilterCandidate {
+	name?: string | null
+	nickname?: string | null
+	characterTags?: Array<{ tag?: { name?: string | null } | null }> | null
+}
+
+/**
+ * The filter both session-form pickers share: a case-insensitive match on the
+ * name, the nickname or any tag name. Blank keeps everyone.
+ */
+export function filterPickRows<T extends PickFilterCandidate>(
+	rows: T[],
+	query: string
+): T[] {
+	const q = query.trim().toLowerCase()
+	if (!q) return rows
+	return rows.filter(
+		(r) =>
+			(r.name || "").toLowerCase().includes(q) ||
+			(r.nickname || "").toLowerCase().includes(q) ||
+			(r.characterTags ?? []).some((ct) =>
+				(ct?.tag?.name || "").toLowerCase().includes(q)
+			)
+	)
+}
+
 /** What a genre's shape allows, applied to what the flow currently holds. */
 export interface ReconcilableSelection {
 	genreFields: Record<string, unknown>
@@ -314,6 +355,30 @@ export interface CreateSessionInput {
 	/** Swaps to seat the session with (R40); absent or empty inherits every pin. */
 	swaps?: StoredSwapContribution[]
 	lorebookId?: number | null
+}
+
+/** The name of the Guide session the setup wizard starts. */
+export const WELCOME_SESSION_NAME = "Welcome to Serene Pub"
+
+/**
+ * The setup wizard's first session: a Guide session with Serene, named
+ * {@link WELCOME_SESSION_NAME}. No characters, no scenario and no lorebook —
+ * Serene answers from the docs — and the person's default persona when they
+ * have one (the genre takes at most one, and none is fine).
+ */
+export function welcomeSessionInput(
+	pick: { genreId: string; presetId: number },
+	personaId: number | null
+): CreateSessionInput {
+	return {
+		name: WELCOME_SESSION_NAME,
+		genreId: pick.genreId,
+		presetId: pick.presetId,
+		characterIds: [],
+		personaIds: personaId != null ? [personaId] : [],
+		scenario: "",
+		lorebookId: null
+	}
 }
 
 /**
@@ -492,6 +557,10 @@ export class StartSessionFlow {
 	/** Seat the person as this character — any character, flagged or not. */
 	playAs(id: number) {
 		this.personaIds = [id]
+		// The picker hides the cast, but a prefill or a stale row must not
+		// leave the same character on both sides.
+		if (this.characterIds.includes(id))
+			this.characterIds = this.characterIds.filter((c) => c !== id)
 	}
 
 	/** Re-fit held fields, cast and lorebook to the chosen genre's shape. */

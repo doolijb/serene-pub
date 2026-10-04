@@ -18,8 +18,7 @@ const panels = (): RetargetablePanel[] => [
 	{ surface: { kind: "remote", owner: "acme" }, src: "/plugin-ui/acme/w.js" },
 	{ surface: { kind: "remote", owner: A }, src: art(A, "1") },
 	{ surface: { kind: "remote", owner: A }, src: art(A, "1") },
-	{ surface: { kind: "remote", owner: B }, src: art(B, "1") },
-	{ surface: { kind: "frame" }, src: "/plugin-ui/acme/f.html" }
+	{ surface: { kind: "remote", owner: B }, src: art(B, "1") }
 ]
 
 describe("which keys a page declares", () => {
@@ -40,8 +39,7 @@ describe("what a push retargets", () => {
 			"/plugin-ui/acme/w.js",
 			art(A, "2"),
 			art(A, "2"),
-			art(B, "1"),
-			"/plugin-ui/acme/f.html"
+			art(B, "1")
 		])
 		// The same again changes nothing.
 		expect(retargetAuthoredSrc(p, { ownerId: A, src: art(A, "2") })).toBe(0)

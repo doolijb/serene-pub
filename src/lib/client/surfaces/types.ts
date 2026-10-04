@@ -1,15 +1,16 @@
 /**
- * Surface-grid types (plan 21). The grid never branches on whether a panel is
- * native Svelte or a sandboxed frame — it speaks only this contract. A panel is
+ * Surface-grid types (plan 21). Every panel is a component (a remote,
+ * R25/R79); the grid speaks only this contract. A panel is
  * a *view onto channels*; the grid is *placement by CSS var only*; the tier is
  * chosen by the **content box** width, not the viewport.
  */
-import type {
-	WidgetDecl,
-	SettingsSchema,
-	WidgetBaseSection,
-	WidgetSectionScope,
-	WidgetSurface
+import {
+	instanceNameOf,
+	type WidgetDecl,
+	type SettingsSchema,
+	type WidgetBaseSection,
+	type WidgetSectionScope,
+	type WidgetSurface
 } from "@serene-pub/sdk"
 
 export type { WidgetDecl }
@@ -51,13 +52,29 @@ export function tierFor(widthPx: number): Tier {
  * manager owns these; `pack()` reads them and never mutates.
  */
 export interface PanelInstance {
+	/**
+	 * The **widget instance id** this instance is placed under: its widget's
+	 * id for the widget's own instance, `<widget id>#<instance name>` for a
+	 * copy (brief 7b; `world-state#2`, `acme.maps:map#north`).
+	 */
 	id: string
+	/**
+	 * The widget it is an instance of — the id of the declaration it was
+	 * cloned from. Set on every instance the manager makes; read it rather
+	 * than parsing `id`.
+	 */
+	widgetId?: string
+	/**
+	 * How many instances of its widget one layout may place
+	 * (`WidgetDecl.maxInstances`); absent = no cap. No core widget sets one.
+	 */
+	maxInstances?: number
 	title: string
 	icon?: string
 	role: "primary" | "secondary"
 	/** What renders inside, resolved by the server from the declaration (R25). */
 	surface: WidgetSurface
-	/** Resolved frame document URL (frame surfaces only). */
+	/** The resolved component module URL. */
 	src?: string
 	/**
 	 * The scoped data this widget was granted (`ModePanel.grants`): a
@@ -141,13 +158,24 @@ export interface LayoutBlob {
 	widgetGrid?: unknown
 	/**
 	 * The captured gridstack geometry per zone (PLAN 25) — `{left?,middle?,right?}`
-	 * each a `GsLayout` (cols/rows + per-item x/y/w/h). This is the drag editor's
+	 * each an `ArrangedZone` (cols/rows + per-item x/y/w/h). This is the drag editor's
 	 * full arrangement, the ONE store that carries cell POSITIONS (widgetGrid and
 	 * zoneLayout carry only membership/config). Persisting it is what lets the
 	 * editor restore what you arranged and the live render survive a reload;
 	 * stored verbatim, the manager is only its courier.
 	 */
 	arrangedGrid?: unknown
+}
+
+/**
+ * What a widget instance is called before any `title` setting: its widget's
+ * title, and for a copy ` · ` and its instance name (layout plan M.3.5:
+ * _World state · 2_). A Messages copy that claims a channel is titled by the
+ * channel instead (`SessionLayout`'s `pinnedChannelTitle`).
+ */
+export function instanceTitle(widgetTitle: string, instanceId: string): string {
+	const name = instanceNameOf(instanceId)
+	return name ? `${widgetTitle} · ${name}` : widgetTitle
 }
 
 /** Normalize a raw `WidgetDecl.layout` to the fully-defaulted instance shape. */

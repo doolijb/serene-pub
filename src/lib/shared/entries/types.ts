@@ -55,9 +55,10 @@ export const HISTORY_TYPE_ID = "core:entry/history"
  *
  * World lore's shape — agnostic, about the world, private from nobody, in the
  * `worldLore` band. What earns it a type is that a *place* is a thing other
- * places are next to: its exits are **link rows**
- * (`core:outlet/link-lore-entries@1`), never a field, so "which rows are the
- * map" is a question a reader can finally ask.
+ * places are next to: its ways out are **relationships** (lore links,
+ * `core:outlet/link-lore-entries@1`), never a field, so "which rows are the
+ * map" is a question a reader can finally ask. It is never filed under
+ * anything — it declares no `parent` field role (places plan B2).
  */
 export const LOCATION_TYPE_ID = "core:entry/location"
 /**
@@ -197,14 +198,17 @@ export interface EntryColumns {
 	 * for a root.
 	 *
 	 * On the base rather than per type: the column is one traversal edge for
-	 * every shape (a district's city, a scene's history entry, an amendment's
-	 * base), and the workspace's tree nests every kind on it at once.
+	 * every shape that declares the role (a district filed under its city, an
+	 * altar under its chapel), and the workspace's tree nests every kind on it
+	 * at once. A type that declares no `parent` role is never filed — a place
+	 * (2026-09-29), a history entry (2026-10-02) — and its column stays null
+	 * (`FILEABLE_ENTRY_TYPE_IDS`).
 	 *
 	 * ⚠ **Writable, and validated on the way in.** `null` is top level. The
-	 * handler refuses a parent in another lorebook, a parent that does not
-	 * exist, the entry itself, and any target whose own chain of parents leads
-	 * back to this entry — a cycle is a tree nothing can draw and a walk
-	 * nothing can end.
+	 * handler refuses a child whose type declares no parent, a parent in
+	 * another lorebook, a parent that does not exist, the entry itself, and any
+	 * target whose own chain of parents leads back to this entry — a cycle is a
+	 * tree nothing can draw and a walk nothing can end.
 	 */
 	anchorEntryId: number | null
 	/**
@@ -213,7 +217,8 @@ export interface EntryColumns {
 	 * ⚠ Shared is the default and the common case: a branch duplicates nothing,
 	 * so the entries both lines agree about are one row with `null` here. Only
 	 * an entry created while reading a branch carries an id, and only that
-	 * line sees it (`rowsOnLine`, `$lib/shared/lorebooks/amendments.ts`).
+	 * line and the lines forked from it see it (`rowsReadingOnLine`,
+	 * `$lib/shared/lorebooks/lineReading.ts`).
 	 */
 	branchId: number | null
 	matchMode: string | null
@@ -238,8 +243,9 @@ export interface EntryColumns {
 	 * ⚠ **Projected, never written from a client.** It is the fact that decides
 	 * whether a machine writer may overwrite a sentence a person typed, so a
 	 * payload that could set it would be a payload that could claim to be a
-	 * person. `splitUpdate` does not name it and `entryInsert` leaves it at the
-	 * column's default.
+	 * person. `splitUpdate` does not name it, and `entryInsert` writes it only
+	 * from its own `written` argument — the server's answer (a summarize save
+	 * the server verified writes `summarizer`), never from the payload.
 	 */
 	provenance: string
 	extraJson: Record<string, any>
@@ -324,34 +330,56 @@ export const entriesOfType = <T extends EntryTypeId>(
 ): LorebookEntry<T>[] =>
 	entries.filter((e): e is LorebookEntry<T> => e.typeId === typeId)
 
-/** The three names a lorebook file has ever carried. */
-export type EntryExportKey = "world" | "character" | "history"
+/**
+ * The names a lorebook file carries for an entry's type. The first three are
+ * every file Serene Pub has ever written; `location` and `item` are format 2
+ * (plan A26). Mirrors the SDK's `ENTRY_EXPORT_KEYS`.
+ */
+export type EntryExportKey =
+	| "world"
+	| "character"
+	| "history"
+	| "location"
+	| "item"
 
 /**
  * What a type is called in an exported file.
  *
  * ⚠ **Never write `core:entry/world-lore@1` into a file.** The wire names are
- * `world` / `character` / `history`, they are what every lorebook Serene Pub
- * has ever exported carries in `extensions.serenepub.entryType`, and a file is
+ * short, they are what `extensions.serenepub.entryType` carries, and a file is
  * read by installs whose type registry is not this one. The mapping lives here
  * so both directions read the same table.
  *
- * **Partial, and that is the declaration doing its job** (L3, 2026-09-17). A
- * type outside the three names simply has none: no marker is honest, where a
- * marker no importer reads is a file that round-trips into the wrong shape.
- * `core:entry/location` is the first such type — exported, it is written as
- * world lore (`DEFAULT_EXPORT_KEY`), which is the correct degrade and what
- * every install that has never heard the word reads it back as. The marker
- * waits for an importer that knows it.
+ * **Total over the core types** (plan A26, E-8). A place or an item written as
+ * world lore reads back as world lore, without the rooms listing, a place's
+ * stats or an item's supply. An install that has never heard
+ * `location` or `item` reads it back as world lore (`entryTypeIdOfExportKey`),
+ * which is still the correct degrade.
  */
-export const ENTRY_EXPORT_KEY: Partial<Record<EntryTypeId, EntryExportKey>> = {
+export const ENTRY_EXPORT_KEY: Record<EntryTypeId, EntryExportKey> = {
 	[WORLD_LORE_TYPE_ID]: "world",
 	[CHARACTER_LORE_TYPE_ID]: "character",
-	[HISTORY_TYPE_ID]: "history"
+	[HISTORY_TYPE_ID]: "history",
+	[LOCATION_TYPE_ID]: "location",
+	[ITEM_TYPE_ID]: "item"
 }
 
-/** What a type with no marker of its own is written as: the agnostic shape. */
+/**
+ * What a type with no wire name of its own is written as — a type this build
+ * does not know: the agnostic shape.
+ */
 export const DEFAULT_EXPORT_KEY: EntryExportKey = "world"
+
+/**
+ * The wire names the `0.5-compat` export profile writes: the three a Serene
+ * Pub 0.5 file uses, which is all a reader older than format 2 knows. Any
+ * other type is written as `DEFAULT_EXPORT_KEY` under that profile.
+ */
+export const SERENE_PUB_0_5_EXPORT_KEYS: readonly EntryExportKey[] = [
+	"world",
+	"character",
+	"history"
+]
 
 const TYPE_ID_BY_EXPORT_KEY = Object.fromEntries(
 	Object.entries(ENTRY_EXPORT_KEY).map(([typeId, key]) => [key, typeId])
@@ -366,7 +394,9 @@ const TYPE_ID_BY_EXPORT_KEY = Object.fromEntries(
  * source.
  */
 export const entryTypeIdOfExportKey = (key: unknown): EntryTypeId =>
-	(typeof key === "string" && TYPE_ID_BY_EXPORT_KEY[key as EntryExportKey]) ||
+	(typeof key === "string" &&
+		Object.prototype.hasOwnProperty.call(TYPE_ID_BY_EXPORT_KEY, key) &&
+		TYPE_ID_BY_EXPORT_KEY[key as EntryExportKey]) ||
 	WORLD_LORE_TYPE_ID
 
 /** What the tabs call each type. Curated names, never "entry type". */
@@ -377,3 +407,26 @@ export const ENTRY_TYPE_LABEL = {
 	[LOCATION_TYPE_ID]: "Places",
 	[ITEM_TYPE_ID]: "Items"
 } as const satisfies Record<EntryTypeId, string>
+
+/**
+ * The types whose entries may be **filed** under another entry (Part of): the
+ * ones that declare the `parent` field role (places plan B2, 2026-09-29).
+ *
+ * A mirror, with its alarm in `types.test.ts`, for the reason
+ * `EntryFieldsByType` is one: the client asks it without loading the SDK's
+ * registry, and the server asks the declaration itself (`entryDeclaration(…)
+ * .roles.parent`). Two core types are left out: a place — places join by
+ * relationships, never by nesting — and history, which is always top level
+ * relative to other lore (owner, 2026-10-02). Each is left out because its
+ * declaration says so, not because anything here names it.
+ */
+export const FILEABLE_ENTRY_TYPE_IDS: readonly EntryTypeId[] = [
+	WORLD_LORE_TYPE_ID,
+	CHARACTER_LORE_TYPE_ID,
+	ITEM_TYPE_ID
+]
+
+/** Whether an entry of this type may be filed under another. Unknown: no. */
+export const isFileableEntryType = (typeId: unknown): boolean =>
+	typeof typeId === "string" &&
+	(FILEABLE_ENTRY_TYPE_IDS as readonly string[]).includes(typeId)

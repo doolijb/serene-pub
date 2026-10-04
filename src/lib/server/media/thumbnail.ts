@@ -112,6 +112,79 @@ export async function makeThumbnail(
 }
 
 /**
+ * Longest edge of the FITTED form (composer attachments plan §4.2).
+ *
+ * 1568 is the edge Anthropic documents as the size past which it downscales an
+ * image itself, so a fitted image goes to a vision model without being shrunk
+ * twice — and it is comfortably larger than a message preview ever renders
+ * (`max-height: 20rem` at 2× density is 640 px tall).
+ */
+export const FITTED_MAX_EDGE = 1568
+export const FITTED_QUALITY = 90
+
+export interface FittedResult {
+	bytes: Buffer
+	width: number
+	height: number
+	mime: "image/webp" | "image/png"
+	ext: "webp" | "png"
+}
+
+/** Any pixel not fully opaque — RGBA, alpha every fourth byte. */
+function hasAlpha(raster: RasterImage): boolean {
+	const d = raster.data
+	for (let i = 3; i < d.length; i += 4) if (d[i] !== 255) return true
+	return false
+}
+
+/**
+ * The FITTED form: the WHOLE image (never cropped — a top-anchored square
+ * thumbnail crops a landscape photo badly), long edge capped at
+ * `FITTED_MAX_EDGE`.
+ *
+ * Returns null when there is nothing to do: the source already fits and is
+ * web-safe, so it IS its own fitted form (and an animated GIF that fits keeps
+ * moving in the preview). Otherwise it scales down and encodes lossy WebP —
+ * or PNG for a PNG source with transparency, so a cut-out sticker keeps its
+ * edges. Like the thumbnail it MAY flatten an animation that has to shrink;
+ * the row is written `fidelity: 'reduced'` to say so, and the same reason
+ * keeps this off the conversion router.
+ */
+export async function makeFitted(
+	buffer: Buffer | Uint8Array,
+	mime: string
+): Promise<FittedResult | null> {
+	const src = await decodeImage(buffer, mime)
+	const longest = Math.max(src.width, src.height)
+	if (longest <= FITTED_MAX_EDGE && WEB_SAFE_IMAGE_MIMES.has(mime)) return null
+
+	const scale = Math.min(1, FITTED_MAX_EDGE / longest)
+	const width = Math.max(1, Math.round(src.width * scale))
+	const height = Math.max(1, Math.round(src.height * scale))
+	const raster: RasterImage =
+		scale < 1 ? await resizeRaster(src, width, height) : src
+
+	if (mime === "image/png" && hasAlpha(raster)) {
+		return {
+			bytes: await encodeRaster(raster, "image/png"),
+			width: raster.width,
+			height: raster.height,
+			mime: "image/png",
+			ext: "png"
+		}
+	}
+	return {
+		bytes: await encodeRaster(raster, "image/webp", {
+			quality: FITTED_QUALITY
+		}),
+		width: raster.width,
+		height: raster.height,
+		mime: "image/webp",
+		ext: "webp"
+	}
+}
+
+/**
  * Mimes a browser and every backend can be relied on to take as they are.
  *
  * **This is the list that decides whether a display variant is a second file

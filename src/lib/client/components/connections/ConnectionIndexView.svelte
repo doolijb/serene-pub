@@ -3,6 +3,24 @@
 	 * The OPENING view of connections — what this pub can do, and what it is
 	 * connected to.
 	 *
+	 * ## Connections are the list (notes 42, owner 2026-10-03)
+	 *
+	 * The per-modality defaults stay at the top — the status strip (chat) and
+	 * the jobs grid folded to the other three modalities — and everything
+	 * under them is the CONNECTIONS: one row, or one card (`ConnectionCard`,
+	 * the list/card pair on the find row), per endpoint with its type, its
+	 * state and its model count. A connection's models live inside it: open
+	 * it and its Models tab lists them (a table where the pane is wide).
+	 * No dashboard pane sits beside this list: with nothing open at desk
+	 * width it takes the whole view, so the jobs grid is here, once, at
+	 * every width (`JobsGrid columns="fit"`, off the list's own container).
+	 *
+	 * The toolbar is the shared `ViewToolbar` (STYLE-GUIDE §6.3): Add (the
+	 * New menu) and Get a model on the action row; the filter, its popout and
+	 * the list/card pair on the find row; the narrowing in force as a chip.
+	 *
+	 * ## History
+	 *
 	 * Two things, in that order, and models are in neither of them. Until
 	 * 2026-09-17 this was Connection → Models: a card per endpoint with its
 	 * models listed inside it, a pill row of defaults above, and a filter that
@@ -50,12 +68,18 @@
 	import { Dialog, Popover, Portal } from "@skeletonlabs/skeleton-svelte"
 	import { JUMP_CONTEXT, type JumpCtx } from "$lib/client/shell/jump.svelte"
 	import PanelFilterInput from "$lib/client/components/panels/PanelFilterInput.svelte"
+	import { toolbarButtonClass } from "$lib/client/components/panels/toolbarButton"
+	import ViewToolbar from "$lib/client/components/panels/ViewToolbar.svelte"
+	import ListCardToggle from "$lib/client/components/panels/ListCardToggle.svelte"
+	import { createViewMode } from "$lib/client/utils/viewMode.svelte"
 	import Select from "$lib/client/components/inputs/Select.svelte"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
 	import { declareInterest } from "$lib/client/sockets/interest.svelte"
 	import AddMenu from "./AddMenu.svelte"
 	import { canRunLocalRuntimes } from "./addMenuItems"
 	import ConnectionRow from "./ConnectionRow.svelte"
+	import { connectionTypeIcon } from "./connectionTypeIcon"
+	import ConnectionCard from "./ConnectionCard.svelte"
 	import DefaultsLedger from "./DefaultsLedger.svelte"
 	import DownloadsTray from "./DownloadsTray.svelte"
 	import StatusStrip from "./StatusStrip.svelte"
@@ -91,7 +115,7 @@
 	import { timeAgo } from "$lib/client/utils/timeAgo"
 	import { downloads } from "./downloads.svelte"
 	import type { CapabilityDefaultRef } from "./modelSystemDefaults"
-	import { buildJobTiles, chatFacts, type JobTile } from "./jobTile"
+	import { buildJobTiles, chatFacts } from "./jobTile"
 	import { kcppInstallState } from "./managedConnectionView"
 
 	type Row = Sockets.Connections.List.Row & { id: number }
@@ -114,21 +138,21 @@
 		/**
 		 * The view's measured mode.
 		 *
-		 * ⚠ Passed in rather than measured here, and passed in rather than
-		 * asked of a container query: at full page this column is 340px while
-		 * the VIEW is 1,500px, so `@min-[900px]/view` answers about the wrong
-		 * box. The one thing it decides is whether the jobs grid renders — at
-		 * desk the detail pane shows it four-across, and two copies of the same
-		 * grid a few hundred pixels apart is not emphasis.
+		 * ⚠ Passed in rather than measured here: at desk with something open
+		 * this list is a 340px column while the VIEW is 1,500px, so
+		 * `@min-[900px]/view` answers about the wrong box. With `detailOpen`
+		 * it decides one thing — whether this list is a narrow column beside
+		 * a detail (desk + open), where the jobs fold to a strip of chips.
 		 */
 		mode?: "compact" | "desk"
 		/**
 		 * Something is open in the detail pane beside this list (desk only).
-		 * The full jobs grid lives in the EMPTY pane, so once a connection is
-		 * open the jobs need a way back from here (plan 2026-09-24 C7).
+		 * The list is then a 340px column and the jobs grid folds to chips;
+		 * `onShowAllJobs` closes the detail, which gives the list — and the
+		 * full grid at its top — the whole view back (plan 2026-09-24 C7).
 		 */
 		detailOpen?: boolean
-		/** Close the detail pane, which at desk IS the full jobs grid. */
+		/** Close the detail pane: the list, with the full grid, takes the view. */
 		onShowAllJobs?: () => void
 		/** Open Add; a door may narrow the service picker to one category. */
 		onAddNew: (opts?: { category?: "cloud" | "local" | "custom" }) => void
@@ -148,20 +172,6 @@
 		onOpenDownloads: () => void
 		onRefresh: (connection: Row) => void
 		onAddModel: (connection: Row, model: string, name: string) => void
-		/**
-		 * Handed back up so the FULL-PAGE empty pane can render the same
-		 * dashboard this view renders in a column.
-		 *
-		 * Lifted rather than recomputed: the tiles depend on live status this
-		 * view is the only subscriber to (the KoboldCPP process, the two ONNX
-		 * lanes), and a second derivation in the sidebar would disagree with
-		 * this one exactly when something was wrong.
-		 */
-		onFacts?: (facts: {
-			chat: ReturnType<typeof chatFacts>
-			tiles: JobTile[]
-			connectionCount: number
-		}) => void
 	}
 	let {
 		connectionsList,
@@ -184,9 +194,19 @@
 		onGetModel,
 		onOpenDownloads,
 		onRefresh,
-		onAddModel,
-		onFacts
+		onAddModel
 	}: Props = $props()
+
+	/** Rows or cards, remembered per browser like the other views' pairs. */
+	const listMode = createViewMode("serene-pub:viewMode:connectionsIndex")
+	/** A 340px column beside an open detail: the jobs fold to chips. */
+	const asColumn = $derived(mode === "desk" && detailOpen)
+	/**
+	 * Cards where the list has the room to itself; rows in the column
+	 * beside an open detail, where the list is navigation and a card's
+	 * extra lines only push the next connection off screen.
+	 */
+	const showCards = $derived(listMode.value === "cards" && !asColumn)
 
 	const socket = useTypedSocket()
 	const userCtx: { user?: SelectUser } = getContext("userCtx")
@@ -262,7 +282,7 @@
 	 * Derived from `visible` and not from `rows`, so a filter that empties a
 	 * group drops its header too rather than leaving a heading over nothing.
 	 */
-	const groups = $derived(groupConnections(visible, endpointKind))
+	const groups = $derived(groupConnections(visible))
 
 	function labelOf(id: string): string {
 		try {
@@ -698,9 +718,6 @@
 	const jobTiles = $derived(
 		buildJobTiles(summary.entries, readiness, sectionOrder)
 	)
-	$effect(() => {
-		onFacts?.({ chat, tiles: jobTiles, connectionCount: rows.length })
-	})
 
 	/**
 	 * A readiness row's one fix.
@@ -868,122 +885,124 @@
 	</button>
 {/snippet}
 
-<div class="flex h-full min-h-0 flex-col">
-	<!-- The ways in, on their own row above the controls that narrow the list:
-	     adding a connection is not a way of filtering it, and one row holding
-	     both would read as though it were. -->
-	<div class="mb-2 flex shrink-0 items-center gap-2">
-		<AddMenu
-			onAddConnection={onAddNew}
-			onAddKoboldCpp={() => onEnableManager("koboldcpp")}
-			onAddOllama={() => onEnableManager("ollama")}
-			onGetModel={() => onGetModel()}
-			onAddByName={openAddByName}
-			canAddByName={addByNameTargets.length > 0}
-			canRunLocalRuntimes={localRuntimes}
-		/>
-		<div class="flex-1"></div>
-		<!--
-			Quiet, and absent while nothing is connected.
-
-			It was `preset-filled-primary-500` beside Add — two filled buttons
-			competing in the header, with the gold one offering to fetch a model
-			on a fresh install where there is nowhere to put one. Getting a model
-			is a thing you do to a runtime, so it belongs where a runtime is: the
-			managed connection's own view, and the capability views. It stays
-			here as a quiet shortcut once there is a destination for it.
-		-->
-		{#if rows.length}
-			<button
-				type="button"
-				class="btn btn-sm preset-tonal-surface shrink-0"
-				onclick={() => onGetModel()}
-			>
-				<Icons.Download size={16} aria-hidden="true" />
-				Get a model
-			</button>
-		{/if}
-	</div>
-
-	<!-- No filter box over an empty list: there is nothing to narrow, and the
-	     empty state below is the whole screen. -->
-	{#if rows.length > 0}
-		<div class="mb-2 flex shrink-0 items-center gap-2">
-			<div class="min-w-0 flex-1">
-				<PanelFilterInput
-					bind:value={query}
-					placeholder={totals.connections === 1
-						? "connection"
-						: "connections"}
-					count={totals.connections}
-					aria-label="Filter connections by name, service, host or model"
-				/>
-			</div>
-			<!-- A popout rather than a row of chips: seven choices will not fit
-			     across 400px, and a strip that scrolls sideways is a strip
-			     nobody reads the end of (STYLE-GUIDE §6.3). -->
-			<Popover
-				open={filterOpen}
-				onOpenChange={(e) => (filterOpen = e.open)}
-				positioning={{ placement: "bottom-end" }}
-			>
-				<Popover.Trigger
-					class="btn grid size-10 shrink-0 place-items-center p-0 {filter !==
-					'all'
-						? 'preset-tonal-primary'
-						: ''}"
-					title="Filter connections"
-					aria-label="Filter connections"
-					aria-expanded={filterOpen}
+{#snippet findFilter()}
+	<PanelFilterInput
+		bind:value={query}
+		placeholder={totals.connections === 1
+			? "connection"
+			: "connections"}
+		count={totals.connections}
+		aria-label="Filter connections by name, service, host or model"
+	/>
+{/snippet}
+{#snippet findActions()}
+	<!-- A popout rather than a row of chips: seven choices will not
+	     fit across 400px, and a strip that scrolls sideways is a
+	     strip nobody reads the end of (§6.3). -->
+	<Popover
+		open={filterOpen}
+		onOpenChange={(e) => (filterOpen = e.open)}
+		positioning={{ placement: "bottom-end" }}
+	>
+		<Popover.Trigger
+			class={toolbarButtonClass(filter !== "all")}
+			title="Filter connections"
+			aria-label="Filter connections"
+			aria-expanded={filterOpen}
+		>
+			<Icons.SlidersHorizontal size={16} aria-hidden="true" />
+		</Popover.Trigger>
+		<Portal>
+			<Popover.Positioner class="z-[1000]!">
+				<Popover.Content
+					class="card bg-surface-50-950 border-surface-200-800 w-[min(90vw,260px)] border p-2 shadow-xl"
 				>
-					<Icons.SlidersHorizontal size={16} aria-hidden="true" />
-				</Popover.Trigger>
-				<Portal>
-					<Popover.Positioner class="z-[1000]!">
-						<Popover.Content
-							class="card bg-surface-100-900 border-surface-300-700 w-[min(90vw,260px)] border p-2 shadow-xl"
-						>
-							<div
-								class="flex max-h-[min(60vh,320px)] flex-col gap-0.5 overflow-y-auto"
-								role="radiogroup"
-								aria-label="Filter connections"
+					<div
+						class="flex max-h-[min(60vh,320px)] flex-col gap-0.5 overflow-y-auto"
+						role="radiogroup"
+						aria-label="Filter connections"
+					>
+						{#each filterOptions as option (option.value)}
+							{@const checked = filter === option.value}
+							<button
+								type="button"
+								role="radio"
+								aria-checked={checked}
+								class="flex h-9 w-full items-center gap-2 rounded-lg px-2.5 text-left text-sm {checked
+									? 'sidebar-row-active'
+									: 'hover:bg-surface-200-800'}"
+								onclick={() => pickFilter(option.value)}
 							>
-								{#each filterOptions as option (option.value)}
-									{@const checked = filter === option.value}
-									<button
-										type="button"
-										role="radio"
-										aria-checked={checked}
-										class="flex h-9 w-full items-center gap-2 rounded-lg px-2.5 text-left text-sm {checked
-											? 'sidebar-row-active'
-											: 'hover:preset-tonal-primary'}"
-										onclick={() => pickFilter(option.value)}
+								<span class="min-w-0 flex-1 truncate">
+									{option.label}
+								</span>
+								{#if option.count !== undefined}
+									<span
+										class="text-surface-600-400 shrink-0 text-[11px]"
 									>
-										<span class="min-w-0 flex-1 truncate">
-											{option.label}
-										</span>
-										{#if option.count !== undefined}
-											<span
-												class="text-surface-600-400 shrink-0 text-[11px]"
-											>
-												{option.count}
-											</span>
-										{/if}
-									</button>
-								{/each}
-							</div>
-						</Popover.Content>
-					</Popover.Positioner>
-				</Portal>
-			</Popover>
-		</div>
+										{option.count}
+									</span>
+								{/if}
+							</button>
+						{/each}
+					</div>
+				</Popover.Content>
+			</Popover.Positioner>
+		</Portal>
+	</Popover>
+	<!-- Not beside an open detail: the 340px column is navigation, rows
+	     only, and three icon buttons there cut the filter's own words. -->
+	{#if !asColumn}
+		<ListCardToggle mode={listMode} label="Connections" />
+	{/if}
+{/snippet}
 
-		<!-- The one narrowing in force, said once. At Everything there is
-		     nothing to say and the strip is absent entirely. -->
-		{#if activeFilterLabel}
-			<div
-				class="mb-2 flex min-w-0 shrink-0 flex-wrap items-center gap-2"
-			>
+<div class="flex h-full min-h-0 flex-col">
+	<!-- The view toolbar (STYLE-GUIDE §6.3). Add — the New menu — leads the
+	     action row and Get a model is its quiet icon button; the filter box,
+	     its popout and the list/card pair are the find row; the narrowing in
+	     force is the one chip under them. No find row over an empty list:
+	     there is nothing to narrow, and the doors below are the whole screen. -->
+	<ViewToolbar
+		label="Connections"
+		class="mb-2"
+		filter={rows.length > 0 ? findFilter : undefined}
+		filterActions={rows.length > 0 ? findActions : undefined}
+	>
+		{#snippet primary()}
+			<AddMenu
+				onAddConnection={onAddNew}
+				onAddKoboldCpp={() => onEnableManager("koboldcpp")}
+				onAddOllama={() => onEnableManager("ollama")}
+				onGetModel={() => onGetModel()}
+				onAddByName={openAddByName}
+				canAddByName={addByNameTargets.length > 0}
+				canRunLocalRuntimes={localRuntimes}
+			/>
+		{/snippet}
+		{#snippet actions()}
+			<!--
+				Quiet, and absent while nothing is connected: getting a model is
+				a thing you do to a runtime, and on a fresh install there is
+				nowhere to put one. A tonal icon button with its name in the
+				tooltip and to a screen reader (§6.3).
+			-->
+			{#if rows.length}
+				<button
+					type="button"
+					class={toolbarButtonClass()}
+					onclick={() => onGetModel()}
+					title="Get a model"
+					aria-label="Get a model"
+				>
+					<Icons.Download size={16} aria-hidden="true" />
+				</button>
+			{/if}
+		{/snippet}
+		{#snippet chips()}
+			<!-- The one narrowing in force, said once. At Everything there is
+			     nothing to say and the row is absent (`empty:hidden`). -->
+			{#if rows.length > 0 && activeFilterLabel}
 				<span
 					class="bg-surface-200-800 text-surface-700-300 flex min-w-0 items-center gap-1 rounded-full px-2.5 py-1 text-xs"
 				>
@@ -997,9 +1016,9 @@
 						<Icons.X size={12} aria-hidden="true" />
 					</button>
 				</span>
-			</div>
-		{/if}
-	{/if}
+			{/if}
+		{/snippet}
+	</ViewToolbar>
 
 	<div class="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto pb-2">
 		{#if isLoading}
@@ -1028,7 +1047,10 @@
 				<div class="flex flex-col gap-1">
 					{#if localRuntimes}
 						{@render doorRow(
-							Icons.Cpu,
+							connectionTypeIcon(
+								CONNECTION_TYPE.KOBOLDCPP_MANAGED,
+								Icons.Cpu
+							),
 							"On this machine",
 							"KoboldCPP, installed and run by Serene Pub.",
 							"preset-tonal-primary",
@@ -1059,7 +1081,7 @@
 						["Private", "Free"]
 					)}
 				</div>
-				<hr class="border-surface-300-700 my-1" />
+				<hr class="panel-edge my-1" />
 				<p class="text-surface-600-400 text-xs">
 					Know what you want?
 					<button
@@ -1114,12 +1136,21 @@
 				}}
 			/>
 
-			<!-- The dock carries the grid. At desk the empty detail pane does,
-			     and while something else is open there the jobs are a strip
-			     of chips here instead — never out of reach. -->
-			{#if mode !== "desk"}
-				<JobsGrid tiles={jobTiles} onOpen={onOpenCapability} />
-			{:else if detailOpen && jobTiles.length}
+			<!-- The defaults block's second half. The list carries the grid at
+			     every width now (notes 42): two across in the dock, four
+			     across a wide list (`columns="fit"`, off `@container/list`),
+			     folded to the other three modalities and `N more`. Only as a
+			     340px column beside an open detail is it a strip of chips —
+			     never out of reach, and one press (`N more`) gives the list
+			     the whole view back. -->
+			{#if !asColumn}
+				<JobsGrid
+					tiles={jobTiles}
+					onOpen={onOpenCapability}
+					limit={3}
+					columns="fit"
+				/>
+			{:else if jobTiles.length}
 				<nav class="flex flex-wrap gap-1.5" aria-label="Other jobs">
 					{#each jobTiles.slice(0, 4) as tile (tile.capability)}
 						{@const TileIcon =
@@ -1146,8 +1177,8 @@
 						</button>
 					{/each}
 					{#if jobTiles.length > 4 && onShowAllJobs}
-						<!-- The same cap the dock grid keeps: four, then the
-						     rest behind one press — the full grid in the pane. -->
+						<!-- The rest behind one press: closing the detail gives
+						     this list, with the full grid, the whole view. -->
 						<button
 							type="button"
 							class="text-surface-600-400 hover:preset-tonal-primary flex min-h-8 items-center rounded-full px-2.5 text-xs"
@@ -1179,12 +1210,32 @@
 				</div>
 			{:else}
 				<!--
+					The main list: the connections, under one heading so the
+					defaults above read as their own block.
+
 					Grouped by where the compute is, which is the trade a person
 					is actually weighing: on this machine is private and free,
 					a service is fast and billed. The header names it once so
-					no row has to. See `connectionGroups`.
+					no row has to. See `connectionGroups`. Rows, or cards (the
+					list/card pair on the find row) — the same facts from the
+					same `RowStatus`, a card with the room to show the type,
+					the state and the model count all at once.
 				-->
-				<section class="flex flex-col gap-3">
+				<section
+					class="flex flex-col gap-3"
+					aria-labelledby="connections-index-heading"
+				>
+					<div class="flex items-baseline gap-2 px-0.5">
+						<h2
+							id="connections-index-heading"
+							class="text-sm font-medium"
+						>
+							Connections
+						</h2>
+						<span class="text-surface-600-400 text-xs">
+							{visible.length}
+						</span>
+					</div>
 					{#each groups as { group, rows: groupRows } (group.id)}
 						{@const GroupIcon =
 							((Icons as any)[group.icon] as any) ?? Icons.Cable}
@@ -1211,31 +1262,75 @@
 									{group.trade}
 								</span>
 							</div>
-							{#each groupRows as connection (connection.id)}
-								<div id={`connection-row-${connection.id}`}>
-									<ConnectionRow
-										title={connection.name ||
-											"Untitled connection"}
-										serviceLabel={serviceLabel(connection)}
-										kind={endpointKind(connection.type)}
-										managed={MANAGED_KINDS.has(
-											endpointKind(connection.type)
-										)}
-										status={statusOf(connection)}
-										defaultFor={defaultsForConnection(
-											connection.id,
-											capabilityDefaults,
-											(c) => capabilityLabel(c as any)
-										)}
-										selected={selectedConnectionId ===
-											connection.id}
-										onOpen={() =>
-											onOpenConnection(connection)}
-										onAction={(verb) =>
-											handleRowAction(connection, verb)}
-									/>
+							{#if showCards}
+								<!-- auto-fill/minmax off the list pane's own
+								     width: one across the dock, as many as fit
+								     at Half or across the whole view. -->
+								<div
+									class="mt-1 grid min-w-0 grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-3"
+									role="list"
+									aria-label={group.label}
+								>
+									{#each groupRows as connection (connection.id)}
+										<div
+											id={`connection-row-${connection.id}`}
+											class="flex min-w-0 flex-col"
+											role="listitem"
+										>
+											<ConnectionCard
+												title={connection.name ||
+													"Untitled connection"}
+												serviceLabel={serviceLabel(connection)}
+												kind={endpointKind(connection.type)}
+												type={connection.type}
+												managed={MANAGED_KINDS.has(
+													endpointKind(connection.type)
+												)}
+												status={statusOf(connection)}
+												modelCount={connection.models.length}
+												defaultFor={defaultsForConnection(
+													connection.id,
+													capabilityDefaults,
+													(c) => capabilityLabel(c as any)
+												)}
+												selected={selectedConnectionId ===
+													connection.id}
+												onOpen={() =>
+													onOpenConnection(connection)}
+												onAction={(verb) =>
+													handleRowAction(connection, verb)}
+											/>
+										</div>
+									{/each}
 								</div>
-							{/each}
+							{:else}
+								{#each groupRows as connection (connection.id)}
+									<div id={`connection-row-${connection.id}`}>
+										<ConnectionRow
+											title={connection.name ||
+												"Untitled connection"}
+											serviceLabel={serviceLabel(connection)}
+											kind={endpointKind(connection.type)}
+											type={connection.type}
+											managed={MANAGED_KINDS.has(
+												endpointKind(connection.type)
+											)}
+											status={statusOf(connection)}
+											defaultFor={defaultsForConnection(
+												connection.id,
+												capabilityDefaults,
+												(c) => capabilityLabel(c as any)
+											)}
+											selected={selectedConnectionId ===
+												connection.id}
+											onOpen={() =>
+												onOpenConnection(connection)}
+											onAction={(verb) =>
+												handleRowAction(connection, verb)}
+										/>
+									</div>
+								{/each}
+							{/if}
 						</div>
 					{/each}
 					{#if addByNameTargets.length}

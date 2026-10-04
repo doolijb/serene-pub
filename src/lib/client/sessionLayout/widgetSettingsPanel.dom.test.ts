@@ -85,11 +85,37 @@ describe("the settings panel writes every control", () => {
 		expect(writes.at(-1)).toEqual({ messages: { composer: "minimal" } })
 	})
 
+	test("the Messages widget's Card is a backing mode, and picking one writes it", async () => {
+		// note 18: Auto / On / Off in place of the host card's checkbox.
+		expect(host.querySelector("#sf-hostCard")).toBeNull()
+		const trigger = host.querySelector<HTMLButtonElement>(
+			'button[aria-label="Show Card options"]'
+		)
+		expect(trigger).not.toBeNull()
+		trigger!.click()
+		await settle()
+		const option = [
+			...document.querySelectorAll<HTMLElement>('[role="option"]')
+		].find((o) => o.textContent?.trim() === "Off")
+		expect(option).toBeTruthy()
+		option!.click()
+		await settle()
+		expect(writes.at(-1)).toEqual({ messages: { backingMode: "off" } })
+	})
+
 	test("a checkbox still writes on its own change", async () => {
+		// Any other widget keeps the host card's checkbox.
+		if (app) unmount(app)
+		setWidgetSettingDecls({ notes: { id: "notes", title: "Notes" } })
+		app = mount(WidgetSettingsPanel, {
+			target: host,
+			props: { widgetId: "notes" }
+		})
+		flushSync()
 		const card = host.querySelector<HTMLInputElement>("#sf-hostCard")
 		expect(card).not.toBeNull()
 		card!.click()
 		await settle()
-		expect(writes.at(-1)).toEqual({ messages: { hostCard: true } })
+		expect(writes.at(-1)).toEqual({ notes: { hostCard: true } })
 	})
 })

@@ -255,3 +255,74 @@ describe("the gate never parks on a signal that cannot wake it", () => {
 		).toHaveLength(0)
 	})
 })
+
+/**
+ * Owner note 16 (2026-10-02): a card must say which moment of the run it is
+ * about. Review on respond's `placeholder` parks on the EMPTY row before the
+ * model writes — an empty Text field with no explanation reads like a bug.
+ */
+describe("whatIsReviewed — the card says what it is asking about", () => {
+	it("names the reply's placeholder, and points at the save step", async () => {
+		const { whatIsReviewed } = await import(
+			"$lib/server/pipelines/runtime/reviewGate"
+		)
+		const line = whatIsReviewed({
+			definitionId: "core:outlet/create-message@1",
+			nodeKey: "placeholder",
+			payload: { text: "", generating: true }
+		})
+		expect(line).toMatch(/placeholder/)
+		expect(line).toMatch(/before the model writes anything/)
+		expect(line).toMatch(/saves the finished message/)
+	})
+	it("a complete new message and the finished save read differently", async () => {
+		const { whatIsReviewed } = await import(
+			"$lib/server/pipelines/runtime/reviewGate"
+		)
+		expect(
+			whatIsReviewed({
+				definitionId: "core:outlet/create-message@1",
+				nodeKey: "save",
+				payload: { text: "hi" }
+			})
+		).toBe("A new message, before it is posted.")
+		expect(
+			whatIsReviewed({
+				definitionId: "core:outlet/update-message@1",
+				nodeKey: "save",
+				payload: { text: "hi" }
+			})
+		).toBe("The finished message, before it is saved.")
+	})
+	it("any other write is named from its definition", async () => {
+		const { whatIsReviewed } = await import(
+			"$lib/server/pipelines/runtime/reviewGate"
+		)
+		expect(
+			whatIsReviewed({
+				definitionId: "acme:outlet/post-tweet@2",
+				nodeKey: "post",
+				payload: {}
+			})
+		).toBe("This step's write (post tweet), before it takes effect.")
+	})
+	it("rides on the pushed card", async () => {
+		const pushed: any[] = []
+		setReviewTransport((_u: number, event: string, payload: any) => {
+			if (event === "pipelines:reviewRequested") pushed.push(payload)
+		})
+		const userId = newUser()
+		const reviewer = createReviewer({ userId, specId: "core:spec/respond" })
+		void reviewer({
+			nodeKey: "placeholder",
+			definitionId: "core:outlet/create-message@1",
+			payload: { text: "", generating: true },
+			position: "on"
+		} as any)
+		await new Promise((r) => setTimeout(r, 0))
+		const [card] = pendingReviewsFor(userId)
+		expect(card.whatIsReviewed).toMatch(/placeholder/)
+		expect(pushed.at(-1)?.whatIsReviewed).toBe(card.whatIsReviewed)
+		resolveReview(card.id, userId, "reject")
+	})
+})

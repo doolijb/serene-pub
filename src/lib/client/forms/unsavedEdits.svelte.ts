@@ -32,6 +32,14 @@ export class UnsavedEdits<T = unknown> {
 		this.#options = options
 	}
 
+	/**
+	 * The saved snapshot — what the draft is compared against — for a save
+	 * that has to know what an edit moves from (undefined before a load).
+	 */
+	get saved(): unknown {
+		return this.#saved
+	}
+
 	/** The draft differs from the saved snapshot. */
 	readonly dirty: boolean = $derived.by(() => {
 		if (!this.#armed) return false

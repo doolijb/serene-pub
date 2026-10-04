@@ -22,55 +22,31 @@
  * Strips are horizontal (top/bottom of the core) and scroll sideways when
  * tight.
  */
+import type {
+	LayoutZoneDef,
+	LayoutZoneRule,
+	ZoneLayoutV1
+} from "@serene-pub/sdk"
 import { isRetiredWidget } from "./widgetGrid"
 
-export type ZoneKind = "side" | "strip"
-export type SideMode = "drawer" | "rail" | "icons" | "hidden"
-export type StripMode = "row" | "hidden"
-
-/**
- * One width rule. `min` is the container width (px) at/above which the rule
- * applies; rules merge ascending, so later rules only state what changes.
+/*
+ * The `zoneLayout` slot's types are the SDK's (`ZoneLayoutV1`, its zones
+ * `LayoutZoneDef`, their width ladders `LayoutZoneRule`), imported from
+ * `@serene-pub/sdk` wherever they are used: the session layout is one format
+ * a genre ships and this page draws. What stays here is the page's reading of
+ * it — the modes a zone resolves to at a width, and the normalizer that
+ * repairs a stored blob.
  */
-export interface ZoneRule {
-	min: number
-	mode?: SideMode | StripMode
-	/** Rail/drawer inline size, px. */
-	width?: number
-	/** Rail stack columns (wide screens turn a rail into a grid). */
-	columns?: number
-}
 
-export interface ZoneDef {
-	kind: ZoneKind
-	/** Side zones: which edge. */
-	side?: "left" | "right"
-	/** Strips: above or below the chat core. */
-	area?: "top" | "bottom"
-	/** Edit-mode label; defaults to the zone id. */
-	label?: string
-	/**
-	 * Pinned rails take layout space; unpinned collapse to icons + popover.
-	 * Meaningless for strips and for the drawer mode. Default: true.
-	 */
-	pinned?: boolean
-	/** Widget ids, in order. */
-	widgets: string[]
-	/** The width ladder. Absent → the kind/side defaults below. */
-	rules?: ZoneRule[]
-}
-
-export interface ZoneLayout {
-	version: 1
-	zones: Record<string, ZoneDef>
-	/** Style packs (data-attributes on the root; plumbing for later packs). */
-	styles?: { chat?: string }
-}
+/** What a side zone is drawn as at a width. */
+export type SideMode = "drawer" | "rail" | "icons" | "hidden"
+/** What a strip is drawn as at a width. */
+export type StripMode = "row" | "hidden"
 
 /** What a zone IS at the current width, after rules + pinning. */
 export interface ResolvedZone {
 	id: string
-	def: ZoneDef
+	def: LayoutZoneDef
 	mode: SideMode | StripMode
 	width: number
 	columns: number
@@ -79,7 +55,7 @@ export interface ResolvedZone {
 /* ── defaults ───────────────────────────────────────────────────────── */
 
 /** The default ladders, mirroring the reference mockup's breakpoints. */
-export const DEFAULT_SIDE_RULES: Record<"left" | "right", ZoneRule[]> = {
+export const DEFAULT_SIDE_RULES: Record<"left" | "right", LayoutZoneRule[]> = {
 	right: [
 		{ min: 0, mode: "drawer", width: 320 },
 		{ min: 760, mode: "rail", width: 264 },
@@ -94,7 +70,7 @@ export const DEFAULT_SIDE_RULES: Record<"left" | "right", ZoneRule[]> = {
 	]
 }
 
-export const DEFAULT_STRIP_RULES: ZoneRule[] = [{ min: 0, mode: "row" }]
+export const DEFAULT_STRIP_RULES: LayoutZoneRule[] = [{ min: 0, mode: "row" }]
 
 /**
  * A fresh layout: exactly the three zones (PLAN 25) — Left, Middle, Right.
@@ -102,7 +78,7 @@ export const DEFAULT_STRIP_RULES: ZoneRule[] = [{ min: 0, mode: "row" }]
  * just anchored there within its zone. (The middle is the chat, owned by the
  * widget grid, so it isn't a side zone declared here.)
  */
-export function defaultZoneLayout(rightWidgets: string[] = []): ZoneLayout {
+export function defaultZoneLayout(rightWidgets: string[] = []): ZoneLayoutV1 {
 	return {
 		version: 1,
 		zones: {
@@ -149,7 +125,7 @@ export function pinsOnFirstDrop(o: {
 /* ── resolution ─────────────────────────────────────────────────────── */
 
 /** Ascending cumulative merge — each rule inherits what came before it. */
-function walkRules(rules: ZoneRule[], width: number): Required<Omit<ZoneRule, "min">> {
+function walkRules(rules: LayoutZoneRule[], width: number): Required<Omit<LayoutZoneRule, "min">> {
 	const out = { mode: "row" as SideMode | StripMode, width: 264, columns: 1 }
 	for (const rule of [...rules].sort((a, b) => a.min - b.min)) {
 		if (width < rule.min) break
@@ -162,7 +138,7 @@ function walkRules(rules: ZoneRule[], width: number): Required<Omit<ZoneRule, "m
 
 export function resolveZone(
 	id: string,
-	def: ZoneDef,
+	def: LayoutZoneDef,
 	containerWidth: number
 ): ResolvedZone {
 	const rules =
@@ -195,8 +171,8 @@ export function resolveZone(
 export function normalizeZoneLayout(
 	raw: unknown,
 	fallbackRight: string[] = []
-): ZoneLayout {
-	const candidate = raw as ZoneLayout | undefined
+): ZoneLayoutV1 {
+	const candidate = raw as ZoneLayoutV1 | undefined
 	if (
 		!candidate ||
 		typeof candidate !== "object" ||
@@ -205,7 +181,7 @@ export function normalizeZoneLayout(
 		candidate.zones === null
 	)
 		return defaultZoneLayout(fallbackRight)
-	const zones: Record<string, ZoneDef> = {}
+	const zones: Record<string, LayoutZoneDef> = {}
 	for (const [id, def] of Object.entries(candidate.zones)) {
 		if (!def || typeof def !== "object") continue
 		zones[id] = {
@@ -223,13 +199,13 @@ export function normalizeZoneLayout(
 }
 
 /** Every widget id the layout places, in zone order. */
-export function placedWidgetIds(layout: ZoneLayout): string[] {
+export function placedWidgetIds(layout: ZoneLayoutV1): string[] {
 	return Object.values(layout.zones).flatMap((z) => z.widgets)
 }
 
 /** Remove a widget id everywhere (a widget lives in at most one slot). */
-export function withoutWidget(layout: ZoneLayout, id: string): ZoneLayout {
-	const zones: Record<string, ZoneDef> = {}
+export function withoutWidget(layout: ZoneLayoutV1, id: string): ZoneLayoutV1 {
+	const zones: Record<string, LayoutZoneDef> = {}
 	for (const [zid, def] of Object.entries(layout.zones))
 		zones[zid] = { ...def, widgets: def.widgets.filter((w) => w !== id) }
 	return { ...layout, zones }
@@ -276,7 +252,7 @@ export const MESSAGE_LAYOUTS: StylePack[] = [
 		id: "cameo",
 		label: "Dreamlit Cameo",
 		description:
-			"A large character portrait framed in a soft, dreamlike card."
+			"A large character portrait beside the text, in a soft glass card."
 	}
 ]
 
@@ -289,7 +265,7 @@ export const DEFAULT_CHAT_STYLE = "clean"
  * The composer's shape is a SETTING on the messages widget (`CORE_WIDGETS`), so
  * there is no pack to resolve it to and the key is read past.
  */
-export function resolveStyles(layout: ZoneLayout): { chat: string } {
+export function resolveStyles(layout: ZoneLayoutV1): { chat: string } {
 	const chat = MESSAGE_LAYOUTS.some((l) => l.id === layout.styles?.chat)
 		? layout.styles!.chat!
 		: DEFAULT_CHAT_STYLE
@@ -298,19 +274,19 @@ export function resolveStyles(layout: ZoneLayout): { chat: string } {
 
 /** Return a copy with the style slot patched. */
 export function withStyles(
-	layout: ZoneLayout,
+	layout: ZoneLayoutV1,
 	patch: { chat?: string }
-): ZoneLayout {
+): ZoneLayoutV1 {
 	return { ...layout, styles: { ...layout.styles, ...patch } }
 }
 
 /** Insert a widget into a zone, optionally before another widget. */
 export function withWidget(
-	layout: ZoneLayout,
+	layout: ZoneLayoutV1,
 	zoneId: string,
 	id: string,
 	beforeId?: string
-): ZoneLayout {
+): ZoneLayoutV1 {
 	const cleared = withoutWidget(layout, id)
 	const zone = cleared.zones[zoneId]
 	if (!zone) return cleared

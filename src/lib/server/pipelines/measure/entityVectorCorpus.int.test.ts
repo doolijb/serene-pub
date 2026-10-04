@@ -283,7 +283,9 @@ const linkOf = (receipt: any): Record<number, number> =>
 	)
 
 /**
- * The mechanism is off by default; this is what turning it on looks like.
+ * The mechanism was off by default; since retrieval went on by default (R5,
+ * lorebooks A23(b), 2026-10-02) `maxMentions` ships at 8, so "off" below is
+ * `MECHANISM_OFF` (0) and this is what turning it on looks like.
  *
  * **One control.** `maxLinks` is a ceiling that already ships non-zero and
  * `signalEntityVector` already ships at 0.2, so raising `maxMentions` is the
@@ -293,11 +295,15 @@ const linkOf = (receipt: any): Record<number, number> =>
 const MECHANISM_ON = [
 	{ nodeKey: "names.arm.mentions", path: "maxMentions", value: 4 }
 ]
+/** The same one control at 0 — off, no longer the shipped value. */
+const MECHANISM_OFF = [
+	{ nodeKey: "names.arm.mentions", path: "maxMentions", value: 0 }
+]
 
-describe("the mechanism ships off, and off means invisible", () => {
+describe("the mechanism switched off is invisible", () => {
 	it("ranks by authored order when nothing has linked", async () => {
-		const receipt = await turn()
-		// The shipped `maxMentions` is 0, so nothing is read, nothing is
+		const receipt = await turn(MECHANISM_OFF)
+		// `maxMentions` at 0, so nothing is read, nothing is
 		// embedded, and every entry arrives with the keyword mechanism's signals
 		// only. All three tie, so this is authored position.
 		expect(rankedIds(receipt)).toEqual([stoneId, mixedId, lightId])
@@ -325,7 +331,7 @@ describe("the corpus can see the entity-vector mechanism at all", () => {
 	}, 60_000)
 
 	it("reverses what reaches the prompt when the mechanism is turned on", async () => {
-		const off = rankedIds(await turn())
+		const off = rankedIds(await turn(MECHANISM_OFF))
 		const on = rankedIds(await turn(MECHANISM_ON))
 
 		expect(off).toEqual([stoneId, mixedId, lightId])
@@ -342,7 +348,7 @@ describe("the corpus can see the entity-vector mechanism at all", () => {
 	 * no keyword fixture produces an `entityVector` to scale.
 	 */
 	it("returns to the mechanism-off order when the name strength is zero", async () => {
-		const off = rankedIds(await turn())
+		const off = rankedIds(await turn(MECHANISM_OFF))
 		const zeroed = await turn([
 			...MECHANISM_ON,
 			{
@@ -407,7 +413,7 @@ describe("what the mechanism is forbidden to do, on a corpus that would show it"
 	 * confident wrong link cost a position instead of a block of wrong lore.
 	 */
 	it("brings in no entry the keyword mechanism did not already find", async () => {
-		const off = new Set(rankedIds(await turn()))
+		const off = new Set(rankedIds(await turn(MECHANISM_OFF)))
 		const on = rankedIds(await turn(MECHANISM_ON))
 		for (const id of on) expect(off.has(id)).toBe(true)
 	}, 60_000)

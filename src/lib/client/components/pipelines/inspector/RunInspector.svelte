@@ -27,10 +27,12 @@
 		nodeRows,
 		outputView,
 		postHistoryView,
+		authorsNoteView,
 		promptView,
 		verdict,
 		lastStatusOf,
 		portrayalsLine,
+		timedOutNotice,
 		wireView,
 		type InspectedRun,
 		type NodeRow
@@ -97,6 +99,9 @@
 	})
 
 	const rows = $derived(run ? nodeRows(run.receipt) : [])
+	// Steps whose clock ran out — a lore read most often, recovered as empty
+	// and otherwise only visible by opening it.
+	const timeoutNote = $derived(timedOutNotice(rows))
 
 	/**
 	 * Where a reader's eye should land: the node that ended the run, else the
@@ -129,6 +134,9 @@
 	 * line is the only place a reader can tell "the trigger held it back" from
 	 * "nobody wrote one".
 	 */
+	const authorsNote = $derived(
+		selected ? authorsNoteView(selected.raw) : null
+	)
 	const postHistory = $derived(
 		selected ? postHistoryView(selected.raw) : null
 	)
@@ -333,6 +341,15 @@
 					{/each}
 				</p>
 			{/if}
+			{#if timeoutNote}
+				<p
+					class="preset-tonal-warning rounded-lg p-2 text-xs"
+					data-run-timeouts
+				>
+					{timeoutNote}
+					{t("Open a step to see what it was doing. If this keeps happening, see Troubleshooting.")}
+				</p>
+			{/if}
 			{#if runNotes.length}
 				<ul class="text-surface-600-400 list-disc pl-5 text-xs">
 					{#each runNotes as note (note)}
@@ -391,6 +408,15 @@
 											title="This step finished but turned some of its input down. Open it to read why."
 										>
 											{row.refused.length} refused
+										</span>
+									{/if}
+									{#if row.timedOut}
+										<span
+											class="chip preset-tonal-warning shrink-0 rounded-full px-1.5 py-0 text-[11px]"
+											data-run-timed-out
+											title="This step ran out of time. Open it for the limit it had."
+										>
+											timed out
 										</span>
 									{/if}
 								</span>
@@ -581,6 +607,13 @@
 										{/if}
 									</p>
 
+									{#if authorsNote}
+										<!-- Muted either way: a note skipped on its interval
+										     is the setting working, not a warning. -->
+										<p class="text-surface-600-400 mb-2 text-xs">
+											{authorsNote.line}
+										</p>
+									{/if}
 									{#if postHistory && postHistory.source === "decision"}
 										<p
 											class="mb-2 text-xs {postHistory.included

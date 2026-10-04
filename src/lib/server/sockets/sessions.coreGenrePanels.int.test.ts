@@ -49,6 +49,7 @@ describe("sessions:view — a core genre's panels are core's remotes (K7, R79)",
 					{ id: "plain", title: "Plain", component: "scene-portraits" },
 					// The conversation is the page's primary alone: never a panel.
 					{ id: "log2", title: "Second log", component: "messages", scopes: ["session:full"] },
+					// The retired frame shortcut: names no component, never offered.
 					{
 						id: "doc",
 						title: "Doc",
@@ -88,9 +89,7 @@ describe("sessions:view — a core genre's panels are core's remotes (K7, R79)",
 		// Declaring none, it holds none.
 		expect(byId.get("plain")).not.toHaveProperty("grants")
 		expect(byId.has("log2")).toBe(false)
-		// A frame a core genre seats is a plugin's document: never core's grant.
-		expect(byId.get("doc")?.surface).toMatchObject({ kind: "frame" })
-		expect(byId.get("doc")).not.toHaveProperty("grants")
+		expect(byId.has("doc")).toBe(false)
 	}, 60_000)
 
 	test("a genre a plugin provides is the plugin's, even spelled core:… — its panels are never core's", async () => {

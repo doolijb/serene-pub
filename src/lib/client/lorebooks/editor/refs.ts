@@ -14,6 +14,11 @@
  * three shapes and says so by having no edge rows, not by guessing at them.
  */
 
+import {
+	relationshipSentence,
+	type RelationshipEndLike,
+	type RelationshipEndRef
+} from "$lib/shared/lorebooks/linkVocabulary"
 import { keywordsOf, mentions } from "../references"
 import { SCENE_KIND, type PoolItem } from "../poolFilter"
 import { CAST_KIND } from "../scopes"
@@ -51,13 +56,20 @@ export interface RefEndpoint {
 	name: string
 }
 
-/** A typed edge between two of the book's rows. */
+/**
+ * A typed edge between two of the book's rows, with as much of it as the one
+ * sentence (`relationshipSentence`) needs to say it from either end.
+ */
 export interface RefLink {
 	id: number
 	from: RefEndpoint
 	to: RefEndpoint
-	/** What the writer called it: "keeper of", "connects to". */
-	type: string
+	/** Read from the `from` end: "keeper of", "leads north to". */
+	relationshipType: string
+	/** Read from the `to` end; null is one way. */
+	reverseRelationshipType: string | null
+	/** The relationship's own name ("the rusted iron door"); empty is unnamed. */
+	name: string
 }
 
 /**
@@ -95,8 +107,54 @@ export function refLinksFrom(
 		id: row.id,
 		from: endpointOf(row.from),
 		to: endpointOf(row.to),
-		type: row.relationshipType
+		relationshipType: row.relationshipType,
+		reverseRelationshipType: row.reverseRelationshipType ?? null,
+		name: row.name ?? ""
 	}))
+}
+
+/** An end as the sentence reads it; an entry end says its type. */
+const sayableEnd = (end: RefEndpoint): RelationshipEndLike =>
+	end.kind === CAST_KIND
+		? { kind: "cast", bindingId: end.id }
+		: { kind: "entry", entryId: end.id, typeId: end.kind }
+
+const refOf = (end: RefEndpoint): RelationshipEndRef =>
+	end.kind === CAST_KIND
+		? { kind: "cast", id: end.id }
+		: { kind: "entry", id: end.id }
+
+/**
+ * An edge said from one of its ends — the row it is listed under — with the
+ * one sentence every surface says a relationship with. Names are the pool's
+ * reading where the pool holds the row (an amended name), the endpoint's
+ * otherwise.
+ */
+function linkClause(
+	link: RefLink,
+	from: RefEndpoint,
+	pool: readonly PoolItem[]
+): string {
+	const nameOf = (end: RelationshipEndRef) => {
+		const wire = [link.from, link.to].find(
+			(e) => refOf(e).kind === end.kind && e.id === end.id
+		)
+		const key = wire?.key ?? `${end.kind}#${end.id}`
+		return pool.find((row) => row.key === key)?.name || wire?.name || `#${end.id}`
+	}
+	return (
+		relationshipSentence(
+			{
+				from: sayableEnd(link.from),
+				to: sayableEnd(link.to),
+				relationshipType: link.relationshipType,
+				reverseRelationshipType: link.reverseRelationshipType,
+				name: link.name
+			},
+			refOf(from),
+			nameOf
+		) ?? link.relationshipType
+	)
 }
 
 /**
@@ -237,6 +295,10 @@ export function entryRefs(
 	 * it. An edge that lands on the row the subject is filed under is a step
 	 * away, exactly as a row naming one of the subject's children is, so it is
 	 * filed as indirect and says which row it actually reached.
+	 *
+	 * Each is said from the row it is listed under, as that row's other
+	 * clauses are — so a one-way link reads as a way in from the end it runs
+	 * into, never backwards (places plan B5).
 	 */
 	for (const link of links) {
 		for (const [near, far] of [
@@ -247,20 +309,16 @@ export function entryRefs(
 			// the subject is the same edge read from the other side.
 			if (near.key === far.key || far.key === subject.key) continue
 			const item = pool.find((row) => row.key === far.key) ?? standIn(far)
+			const said = linkClause(link, far, pool)
 			if (near.key === subject.key) {
-				add(
-					"direct",
-					item,
-					`${link.type} · ${subject.name}`,
-					tagOf(item)
-				)
+				add("direct", item, said, tagOf(item))
 				continue
 			}
 			if (subject.parentKey && near.key === subject.parentKey)
 				add(
 					"indirect",
 					item,
-					`${link.type} · ${near.name}, which this entry is inside`,
+					`${said.replace(/[.!?]$/, "")}, which this entry is inside.`,
 					"indirect"
 				)
 		}

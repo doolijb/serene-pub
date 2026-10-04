@@ -24,7 +24,7 @@ export type PoolSource = Record<string, any>
  * Usually a scope. `characters` is the exception the Cast ruling makes: a
  * member's page lists the lore anchored to them, so Character Lore curates a
  * kind of the pool without being a door in the navigation. Its rows still show
- * up in All entries and still get its curated row and editor — the descriptor
+ * up in Everything and still get its curated row and editor — the descriptor
  * is what the editor inside Cast is, too.
  */
 export type DoorId = LoreScope | "characters"
@@ -65,7 +65,7 @@ export interface SectionDescriptor {
 	typeId?: string
 	/**
 	 * The pool kind this door presets. A door with none is the whole pool,
-	 * which is what makes "All entries" the same list with nothing narrowed.
+	 * which is what makes "Everything" the same list with nothing narrowed.
 	 */
 	kind?: string
 	/** Which table a row of this kind is written back to. */

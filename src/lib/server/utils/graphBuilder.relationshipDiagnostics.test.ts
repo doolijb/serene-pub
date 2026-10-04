@@ -46,8 +46,6 @@ const sampling = {
 	values: {},
 	enabled: []
 } as any
-const contextConfig = { id: 1 } as any
-const promptConfig = { id: 1 } as any
 
 function respondByLabel(map: Record<string, string>, fallback = "{}") {
 	runQueuedLLMCallMock.mockImplementation(async (opts: any) => {
@@ -90,8 +88,6 @@ async function build(cast: string, perspective: string) {
 		scenes: [scene(1, "Something happened.")] as any,
 		connection: conn,
 		sampling,
-		contextConfig,
-		promptConfig,
 		seedNodes: [seedAria]
 	})
 }
@@ -287,8 +283,6 @@ describe("field-name tolerance, widened from a real model's output", () => {
 			scenes: [scene(1, "Something happened.")] as any,
 			connection: conn,
 			sampling,
-			contextConfig,
-			promptConfig,
 			seedNodes: [seedAria]
 		})
 		const d = result.relationshipDiagnostics
@@ -319,8 +313,6 @@ describe("field-name tolerance, widened from a real model's output", () => {
 			scenes: [scene(1, "Something happened.")] as any,
 			connection: conn,
 			sampling,
-			contextConfig,
-			promptConfig,
 			seedNodes: [seedAria]
 		})
 		const d = result.relationshipDiagnostics

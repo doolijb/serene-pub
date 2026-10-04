@@ -32,6 +32,7 @@
 
 import { and, eq, inArray } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
+import { driverReasonOf } from "$lib/server/db/errors"
 
 export interface PlacedNodeReconcileReport {
 	/** Published versions examined. */
@@ -189,7 +190,9 @@ export async function reconcilePlacedNodes(
 				}
 			}
 		} catch (e) {
-			report.errors.push(`${spec.slug}: ${(e as Error).message}`)
+			// The driver's reason, not drizzle's `Failed query: …` and its
+			// values (`driverReasonOf`).
+			report.errors.push(`${spec.slug}: ${driverReasonOf(e)}`)
 		}
 	}
 	return report

@@ -1,19 +1,20 @@
 <script lang="ts">
 	import { docsHref } from "$lib/shared/utils/docsHref"
 	/**
-	 * Instance › General — who this instance is and who may use it: its
-	 * language, user accounts, the shared community-library account, and
-	 * the instance-wide scripts switch. Split out of the old one-page System settings (2026-09-27);
+	 * Pub › General — who this instance is and who may use it: its
+	 * language, user accounts, the shared community-library account, the
+	 * instance-wide scripts switch, and how sessions write to lorebooks. Split out of the old one-page System settings (2026-09-27);
 	 * each card owns its own save.
 	 */
 	import { getContext } from "svelte"
 	import { adminUnsavedEdits } from "$lib/client/admin/adminRouter.svelte"
 	import AdminPageHeader from "$lib/client/components/admin/AdminPageHeader.svelte"
-	import LanguageCard from "$lib/client/components/admin/instance/LanguageCard.svelte"
-	import AutoTranslateCard from "$lib/client/components/admin/instance/AutoTranslateCard.svelte"
-	import AccountsCard from "$lib/client/components/admin/instance/AccountsCard.svelte"
-	import CharaVaultCard from "$lib/client/components/admin/instance/CharaVaultCard.svelte"
-	import ScriptsCard from "$lib/client/components/admin/instance/ScriptsCard.svelte"
+	import LanguageCard from "$lib/client/components/admin/pub/LanguageCard.svelte"
+	import AutoTranslateCard from "$lib/client/components/admin/pub/AutoTranslateCard.svelte"
+	import AccountsCard from "$lib/client/components/admin/pub/AccountsCard.svelte"
+	import CharaVaultCard from "$lib/client/components/admin/pub/CharaVaultCard.svelte"
+	import ScriptsCard from "$lib/client/components/admin/pub/ScriptsCard.svelte"
+	import LoreWriteModeCard from "$lib/client/components/admin/pub/LoreWriteModeCard.svelte"
 
 	let systemSettingsCtx: SystemSettingsCtx = $state(
 		getContext("systemSettingsCtx")
@@ -34,7 +35,7 @@
 	<AdminPageHeader
 		title="General"
 		doc={docsHref("system-settings", "general")}
-		purpose="What this instance is called in, who may sign in to it, and the switches that apply to everyone on it."
+		purpose="What this pub is called in, who may sign in to it, and the switches that apply to everyone on it."
 	/>
 
 	{#if systemSettingsCtx.settings}
@@ -48,6 +49,7 @@
 			{/if}
 			<CharaVaultCard bind:hasUnsavedChanges={charaVaultDirty} />
 			<ScriptsCard />
+			<LoreWriteModeCard />
 
 			{#if systemSettingsCtx.settings.isAndroidWrapper}
 				<section class="panel-card flex flex-col gap-2" aria-labelledby="runtimes-heading">
@@ -64,10 +66,6 @@
 					</p>
 				</section>
 			{/if}
-
-			<p class="text-surface-600-400 text-sm">
-				Embeddings moved to <a class="anchor" href="/admin/defaults">Models › Defaults</a>.
-			</p>
 		</div>
 	{:else}
 		<p class="text-surface-600-400 text-sm">Loading…</p>

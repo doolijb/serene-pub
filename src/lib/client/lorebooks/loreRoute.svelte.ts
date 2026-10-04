@@ -16,9 +16,11 @@ import {
  * The lorebook workspace's route, held once and mirrored to the URL fragment.
  *
  * Every transition the user can make goes through `navigate`, which is the one
- * place that asks whether there are unsaved changes. Arrivals — a hash, a deep
- * link from another panel — go through `set`, because a guard belongs to the
- * screen being left and there is none to leave.
+ * place that asks whether there are unsaved changes. Arrivals — the hash the
+ * workspace opens on, a deep link from another panel — go through `set`,
+ * because a guard belongs to the screen being left and there is none to leave.
+ * A hash changed by hand while the workspace is open is a transition, and is
+ * guarded (`attachHash`).
  */
 class LoreRouteStore {
 	#route = $state<LoreRoute>(emptyRoute())
@@ -127,11 +129,28 @@ class LoreRouteStore {
 	 */
 	attachHash(): () => void {
 		if (!browser) return () => {}
+		// The arrival is set: there is no screen yet to leave.
+		const arrival = fromHash(location.hash)
+		if (arrival) this.set(arrival)
+		/**
+		 * A hash changed by hand — or Back over one typed by hand — leaves the
+		 * screen that is open, so it goes through the guard (plan B7). Kept
+		 * here, the address is written back, since the mirror below only
+		 * writes on a route change and the bar would otherwise show where the
+		 * workspace is not.
+		 */
 		const applyHash = () => {
 			const next = fromHash(location.hash)
-			if (next) this.set(next)
+			if (!next) return
+			void this.navigateTo(next).then(() => {
+				const hash = toHash(this.#route)
+				if (location.hash.replace(/^#/, "") === hash.replace(/^#/, ""))
+					return
+				const url = new URL(location.href)
+				url.hash = hash
+				untrack(() => replaceState(url, { ...page.state }))
+			})
 		}
-		applyHash()
 		window.addEventListener("hashchange", applyHash)
 		const stopMirror = $effect.root(() => {
 			$effect(() => {

@@ -13,11 +13,12 @@
  * a real merge hierarchy in parentNodeId, a past merge's restorable
  * relationship content in bindingMergeLogs. Both are left untouched now.
  *
- * The relationship layer is wiped wholesale on replace — EVERY link, entry
- * endpoints and hand-drawn ones included, which the builder never re-derives.
- * That is ruled behaviour (owner ruling 6, 2026-09-28); the confirmation warns
- * with `narrativeGraph:list`'s `relationshipCounts` first. Pinned in
- * narrativeGraph.linksAndLines.int.test.ts.
+ * The cast ties are wiped wholesale on replace, hand-drawn ones included, and
+ * re-derived from the proposal; nothing with an entry at either end is in its
+ * reach (owner ruling 2026-09-29, Q1 — superseding ruling 6's wipe-everything).
+ * The confirmation warns with `narrativeGraph:list`'s `relationshipCounts`
+ * first. Pinned in narrativeGraph.linksAndLines.int.test.ts and
+ * narrativeGraph.rebuildLeavesPlaces.int.test.ts.
  */
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest"
 import fs from "fs/promises"
@@ -25,6 +26,7 @@ import os from "os"
 import path from "path"
 import { eq } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
+import { applyAtReview } from "./fixtures/graphReview"
 import {
 	characterLoreValues,
 	worldLoreValues
@@ -171,11 +173,11 @@ describe("narrativeGraphApplyProposalHandler — replace mode (PGlite integratio
 
 		await narrativeGraphApplyProposalHandler.handler(
 			fakeSocket(user.id),
-			{
+			applyAtReview(user.id, {
 				lorebookId: lorebook.id,
 				proposal: { nodes: [], relationships: [] } as any,
 				mode: "replace"
-			},
+			}),
 			noopEmit
 		)
 
@@ -308,11 +310,11 @@ describe("narrativeGraphApplyProposalHandler — replace mode (PGlite integratio
 
 		await narrativeGraphApplyProposalHandler.handler(
 			fakeSocket(user.id),
-			{
+			applyAtReview(user.id, {
 				lorebookId: lorebook.id,
 				proposal: { nodes: [], relationships: [] } as any,
 				mode: "replace"
-			},
+			}),
 			noopEmit
 		)
 

@@ -1,4 +1,5 @@
 import { expect, test, vi, describe, beforeEach } from "vitest"
+import { PNG } from "pngjs"
 import type { TextGenResult } from "$lib/server/adapters/actions"
 
 // BaseConnectionAdapter pulls in the full promptBuilder module graph
@@ -65,8 +66,7 @@ function makeAdapter(overrides: Record<string, any> = {}) {
 		connection: { id: 1, promptFormat: "vicuna", extraJson: {} } as any,
 		// Empty is what "the context budget is switched off" resolves to now:
 		sampling: {},
-		contextConfig: {} as any,
-		promptConfig: { systemPrompt: "You are a helpful narrator." } as any,
+		systemPrompt: "You are a helpful narrator.",
 		session: makeSession(),
 		currentCharacterId: null,
 		tokenCounter: { countTokens: async () => 1 } as any,
@@ -269,9 +269,11 @@ describe("BaseConnectionAdapter's attachment limits", () => {
 	test("⚠ a type that declares nothing blocks nothing", async () => {
 		// The failure this guards is the one the whole limits design is arranged
 		// around: an unknown limit read as zero would refuse every attachment on
-		// eight of the nine connection types, and the message would sound like it
-		// came from the service.
-		const adapter = forType("openai") as any
+		// the connection types that publish none, and the message would sound
+		// like it came from the service. (OpenAI declared nothing until it gained
+		// images in 2026-10 — formats only, still no caps; A1111 declares no
+		// `io` at all.)
+		const adapter = forType("a1111") as any
 		expect(adapter.io).toBeUndefined()
 		const plan = await adapter.prepareAttachments(
 			Array.from({ length: 300 }, () => stub(1024))
@@ -373,5 +375,106 @@ describe("the exchange an adapter records", () => {
 		expect(wire.exchange.response.truncated).toBe(true)
 		expect(wire.exchange.response.streamed).toBe(true)
 		expect(wire.exchange.response.chunks).toBe(100)
+	})
+})
+
+// ── Files per message (PLAN-composer-attachments §3.5.6) ────────────────────
+describe("BaseConnectionAdapter.filesByMessage", () => {
+	const forType = (type: string) =>
+		makeAdapter({
+			connection: { id: 1, type, promptFormat: "vicuna", extraJson: {} } as any
+		}) as any
+	const png = (seed: number) => {
+		const p = new PNG({ width: 4, height: 4 })
+		for (let i = 0; i < p.data.length; i++) p.data[i] = (i * seed) % 256
+		return PNG.sync.write(p)
+	}
+
+	test("order holds across messages when one file converts and the others pass through", async () => {
+		const { decodeImage, encodeRaster } = await import(
+			"$lib/server/media/convert/codecs"
+		)
+		const webp = await encodeRaster(
+			await decodeImage(png(5), "image/png"),
+			"image/webp",
+			{ lossless: true }
+		)
+		// llama.cpp takes PNG/JPEG: the WebP converts (the expensive one), the
+		// PNGs are forwarded untouched — and each stays on its own turn.
+		const adapter = forType("llamacpp")
+		adapter.withMessageAttachments([
+			[{ bytes: png(1), mime: "image/png", filename: "a.png" }],
+			[],
+			[
+				{ bytes: webp, mime: "image/webp", filename: "b.webp" },
+				{ bytes: png(3), mime: "image/png", filename: "c.png" }
+			]
+		])
+		const out = await adapter.filesByMessage(
+			[
+				{ role: "user" },
+				{ role: "assistant" },
+				{ role: "user" }
+			],
+			{ transport: "base64" }
+		)
+		expect(out.map((l: any[]) => l.map((f) => f.filename))).toEqual([
+			["a.png"],
+			[],
+			["b.webp", "c.png"]
+		])
+		expect(out[2][0].converted).toBe(true)
+		expect(["image/jpeg", "image/png"]).toContain(out[2][0].mime)
+		expect(out[2][1].converted).toBe(false)
+		expect(out[0][0].converted).toBe(false)
+	}, 60_000)
+
+	test("the whole request is counted: one over the cap across messages is refused, never sliced", async () => {
+		// Anthropic's published cap is 100 images per request.
+		const adapter = forType("anthropic")
+		const tiny = () => ({ bytes: Buffer.alloc(64, 1), mime: "image/png" })
+		adapter.withMessageAttachments([
+			Array.from({ length: 60 }, tiny),
+			[],
+			Array.from({ length: 41 }, tiny)
+		])
+		await expect(
+			adapter.filesByMessage(
+				[{ role: "user" }, { role: "assistant" }, { role: "user" }],
+				{ transport: "base64" }
+			)
+		).rejects.toThrow(/100/)
+	})
+
+	test("a file on an assistant or system turn moves to the next user turn, else the previous", async () => {
+		const adapter = forType("anthropic")
+		const f = (name: string) => ({ bytes: Buffer.alloc(8, 2), mime: "image/png", filename: name })
+		adapter.withMessageAttachments([[f("sys")], [], [f("mid")], [], [f("tail")]])
+		adapter.withAttachments([f("frame")])
+		const out = await adapter.filesByMessage(
+			[
+				{ role: "system" },
+				{ role: "user" },
+				{ role: "assistant" },
+				{ role: "user" },
+				{ role: "assistant" }
+			],
+			{ transport: "base64" }
+		)
+		expect(out.map((l: any[]) => l.map((x) => x.filename))).toEqual([
+			[],
+			["sys"],
+			[],
+			["mid", "tail", "frame"],
+			[]
+		])
+	})
+
+	test("files with no user turn to carry them are refused", async () => {
+		const adapter = forType("anthropic")
+		adapter.withMessageAttachments([[{ bytes: Buffer.alloc(8, 2), mime: "image/png" }]])
+		await expect(
+			adapter.filesByMessage([{ role: "assistant" }], { transport: "base64" })
+		).rejects.toThrow(/no user turn/)
 	})
 })

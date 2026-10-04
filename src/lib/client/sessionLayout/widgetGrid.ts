@@ -17,52 +17,27 @@
  * (`placementOf` / `stackPlacements`) — the same cells the grid solves,
  * packaged for the data contract rather than re-derived by each renderer.
  */
-import { RETIRED_WIDGET_IDS } from "@serene-pub/sdk"
+import {
+	RETIRED_WIDGET_IDS,
+	ZONE_IDS,
+	type GridSizeSpec,
+	type GridWidget,
+	type WidgetAnchor,
+	type WidgetGridV1,
+	type ZoneId
+} from "@serene-pub/sdk"
 import type { LayoutV1, PlacementInput } from "$lib/shared/widgets/context"
 import type { WidgetTier } from "$lib/shared/widgets/types"
 import { tierFor } from "$lib/client/surfaces/types"
 
-export type Zone = "left" | "middle" | "right"
-
-/** How a widget sizes on one axis. */
-export type SizeSpec =
-	| "grow" // fills the remaining space (a 1fr track)
-	| "fixed" // content-sized (an `auto` track)
-	| { minCells?: number; maxCells?: number; cells?: number }
-
-/** Which edges of its space a widget sticks to as the grid reflows. */
-export interface Anchor {
-	top?: boolean
-	bottom?: boolean
-	left?: boolean
-	right?: boolean
-}
-
-export interface WidgetConfig {
-	id: string
-	zone: Zone
-	/** Placement order within the zone (top→bottom in the MVP stack). */
-	order: number
-	/** Cells wide; omitted = span the full zone width. */
-	colSpan?: number
-	size: { w: SizeSpec; h: SizeSpec }
-	anchor: Anchor
-	/** Stays visible when the drawer is closed (§7); floats with a card (§8). */
-	pinned?: boolean
-	/** Only meaningful when pinned — the card background toggle (§8). */
-	background?: boolean
-	/** Tab-group membership (§5/§6). */
-	group?: string
-}
-
-export interface GridLayout {
-	version: 1
-	/** The fixed cell module (px). "N cells" is a stable physical size (§3). */
-	cell: number
-	widgets: WidgetConfig[]
-}
-
-export const ZONES: Zone[] = ["left", "middle", "right"]
+/*
+ * The `widgetGrid` slot's types are the SDK's (`WidgetGridV1`, its entries
+ * `GridWidget`, their `GridSizeSpec` and `WidgetAnchor`), imported from
+ * `@serene-pub/sdk` wherever they are used: the session layout is one format
+ * a genre ships and this page draws. What stays here is the page's model of
+ * it — membership edits, the reader that repairs a stored blob, and the grid
+ * CSS it becomes.
+ */
 
 /** The cell module: a fixed floor so `auto-fill` gives a sane column count. */
 export const DEFAULT_CELL = 44
@@ -79,20 +54,19 @@ export function cellsFromPx(px: number, cell: number): number {
 }
 
 /**
- * Widget ids that name nothing this build places. A saved blob, a preset or an
- * arrangement may still carry one — all three are stored verbatim and nothing
- * rewrites them — and every reader drops it, so a layout arranged under an
- * older build opens on the widgets this build has.
+ * Is this a widget id no reader should place? Widget ids that name nothing
+ * this build places: a saved blob, a preset or an arrangement may still carry
+ * one — all three are stored verbatim and nothing rewrites them — and every
+ * reader drops it, so a layout arranged under an older build opens on the
+ * widgets this build has.
  *
- * ONE list, the SDK's: `fromLegacy` (the legacy-to-document reader) drops by
- * it too, and two lists would let the two readers disagree about what a
- * stored layout holds. It says why each id is there — `composer` (the conversation is one
+ * ONE list, the SDK's `RETIRED_WIDGET_IDS` (`sessionLayout.ts`): its id
+ * readers and the validator a shipped layout goes through skip by it too, and
+ * two lists would let them disagree with this page about what a stored layout
+ * holds. It says why each id is there — `composer` (the conversation is one
  * widget) and `inventory` (R79 removed that widget for now). Admitting either
  * would put an empty card where it used to be.
  */
-export { RETIRED_WIDGET_IDS }
-
-/** Is this a widget id no reader should place? */
 export function isRetiredWidget(id: string): boolean {
 	return RETIRED_WIDGET_IDS.has(id)
 }
@@ -108,7 +82,7 @@ export function isRetiredWidget(id: string): boolean {
  * appended to its middle. Nothing else injects it — a saved grid is read as
  * saved (`loadChatLayout`), the conversation included, wherever it was put.
  */
-export function defaultChatLayout(primaryId = "messages"): GridLayout {
+export function defaultChatLayout(primaryId = "messages"): WidgetGridV1 {
 	return {
 		version: 1,
 		cell: DEFAULT_CELL,
@@ -130,16 +104,16 @@ export function defaultChatLayout(primaryId = "messages"): GridLayout {
 }
 
 /** A grid that places nothing — what an absent or unreadable blob reads as. */
-export function emptyChatLayout(): GridLayout {
+export function emptyChatLayout(): WidgetGridV1 {
 	return { version: 1, cell: DEFAULT_CELL, widgets: [] }
 }
 
 /** Immutably patch one widget by id (identity fields aside). Returns a new layout. */
 export function updateWidget(
-	layout: GridLayout,
+	layout: WidgetGridV1,
 	id: string,
-	patch: Partial<Omit<WidgetConfig, "id">>
-): GridLayout {
+	patch: Partial<Omit<GridWidget, "id">>
+): WidgetGridV1 {
 	return {
 		...layout,
 		widgets: layout.widgets.map((w) =>
@@ -170,10 +144,10 @@ export function updateWidget(
  * world-state above its messages).
  */
 export function withGridWidget(
-	layout: GridLayout,
+	layout: WidgetGridV1,
 	id: string,
-	zone: Zone
-): GridLayout {
+	zone: ZoneId
+): WidgetGridV1 {
 	const others = layout.widgets.filter((w) => w.id !== id)
 	const order =
 		others
@@ -200,7 +174,7 @@ export function withGridWidget(
  * the whole layout by the editor before it gets here; this model only sees the
  * middle, and a conversation leaving it may be going to a side.
  */
-export function withoutGridWidget(layout: GridLayout, id: string): GridLayout {
+export function withoutGridWidget(layout: WidgetGridV1, id: string): WidgetGridV1 {
 	const widgets = layout.widgets.filter((w) => w.id !== id)
 	return widgets.length === layout.widgets.length
 		? layout
@@ -236,10 +210,10 @@ export function withoutGridWidget(layout: GridLayout, id: string): GridLayout {
  * there.
  */
 export function withGridMembership(
-	layout: GridLayout,
-	zone: Zone,
+	layout: WidgetGridV1,
+	zone: ZoneId,
 	ids: readonly string[] | null | undefined
-): GridLayout {
+): WidgetGridV1 {
 	if (!ids) return layout
 	const wanted = new Set(ids)
 	let next = layout
@@ -257,10 +231,10 @@ export function withGridMembership(
 function isPlainObject(x: unknown): x is Record<string, unknown> {
 	return !!x && typeof x === "object" && !Array.isArray(x)
 }
-function isZone(x: unknown): x is Zone {
-	return ZONES.includes(x as Zone)
+function isZone(x: unknown): x is ZoneId {
+	return (ZONE_IDS as readonly unknown[]).includes(x)
 }
-function isSizeSpec(x: unknown): x is SizeSpec {
+function isSizeSpec(x: unknown): x is GridSizeSpec {
 	return (
 		x === "grow" ||
 		x === "fixed" ||
@@ -300,7 +274,7 @@ export function loadChatLayout(
 	saved: unknown,
 	primaryId = "messages",
 	omit: ReadonlySet<string> = new Set()
-): GridLayout {
+): WidgetGridV1 {
 	if (
 		!isPlainObject(saved) ||
 		saved.version !== 1 ||
@@ -310,7 +284,7 @@ export function loadChatLayout(
 	}
 	const floor = defaultChatLayout(primaryId).widgets[0]
 	const seen = new Set<string>()
-	const widgets: WidgetConfig[] = []
+	const widgets: GridWidget[] = []
 	for (const s of saved.widgets) {
 		if (!isPlainObject(s) || typeof s.id !== "string") continue
 		const id = s.id
@@ -320,8 +294,8 @@ export function loadChatLayout(
 			isPlainObject(s.size) && isSizeSpec(s.size.w) && isSizeSpec(s.size.h)
 		const size = sizeOk
 			? {
-					w: (s.size as Record<string, unknown>).w as SizeSpec,
-					h: (s.size as Record<string, unknown>).h as SizeSpec
+					w: (s.size as Record<string, unknown>).w as GridSizeSpec,
+					h: (s.size as Record<string, unknown>).h as GridSizeSpec
 				}
 			: null
 		if (id === primaryId) {
@@ -332,7 +306,7 @@ export function loadChatLayout(
 				order: typeof s.order === "number" ? s.order : floor.order,
 				size: size ?? floor.size,
 				anchor: isPlainObject(s.anchor)
-					? { ...(s.anchor as Anchor) }
+					? { ...(s.anchor as WidgetAnchor) }
 					: floor.anchor,
 				...(typeof s.colSpan === "number" ? { colSpan: s.colSpan } : {})
 			})
@@ -345,7 +319,7 @@ export function loadChatLayout(
 			zone: s.zone,
 			order: typeof s.order === "number" ? s.order : widgets.length,
 			size,
-			anchor: isPlainObject(s.anchor) ? { ...(s.anchor as Anchor) } : {},
+			anchor: isPlainObject(s.anchor) ? { ...(s.anchor as WidgetAnchor) } : {},
 			...(typeof s.colSpan === "number" ? { colSpan: s.colSpan } : {})
 		})
 	}
@@ -356,7 +330,7 @@ export function loadChatLayout(
 
 // ─── Placement → the widget data contract (PLAN 25) ──────────────────────────
 
-/** A widget's cells in its zone: 0-based origin + span, the arranged GsPos shape. */
+/** A widget's cells in its zone: 0-based origin + span, the arranged ArrangedItem shape. */
 export interface CellBox {
 	x: number
 	y: number
@@ -457,7 +431,7 @@ export function placementOf(o: PlacementOpts): PlacementInput {
  * `rows: null`. Only a cell-bounded spec has a number worth reporting, and the
  * floor (`cells`, else `minCells`) is the one the grid actually reserves.
  */
-export function cellRowsOf(size: SizeSpec): number | null {
+export function cellRowsOf(size: GridSizeSpec): number | null {
 	if (size === "grow" || size === "fixed") return null
 	return size.cells ?? size.minCells ?? null
 }
@@ -479,7 +453,7 @@ export function cellRowsOf(size: SizeSpec): number | null {
  * stack claim the bottom edge from the middle of the zone.
  */
 export function stackPlacements(
-	widgets: WidgetConfig[],
+	widgets: GridWidget[],
 	measured: { columns: number; widthPx: number }
 ): PlacementInput[] {
 	const cols = Math.max(1, measured.columns)
@@ -497,16 +471,16 @@ export function stackPlacements(
 
 /** Widgets in one zone, in placement order. */
 export function widgetsInZone(
-	layout: GridLayout,
-	zone: Zone
-): WidgetConfig[] {
+	layout: WidgetGridV1,
+	zone: ZoneId
+): GridWidget[] {
 	return layout.widgets
 		.filter((w) => w.zone === zone)
 		.sort((a, b) => a.order - b.order)
 }
 
 /** One axis of a widget's size → a grid track size for its row/column. */
-export function trackFor(size: SizeSpec, cell: number): string {
+export function trackFor(size: GridSizeSpec, cell: number): string {
 	if (size === "grow") return "1fr"
 	if (size === "fixed") return "auto"
 	const min = size.minCells != null ? `${size.minCells * cell}px` : "auto"
@@ -520,7 +494,7 @@ export function trackFor(size: SizeSpec, cell: number): string {
  * grid; rows are derived from the stacked widgets' height specs (grow → 1fr,
  * fixed → auto) so the browser solves the vertical fill.
  */
-export function zoneGridStyle(widgets: WidgetConfig[], cell: number): string {
+export function zoneGridStyle(widgets: GridWidget[], cell: number): string {
 	const cols = `repeat(auto-fill, minmax(${cell}px, 1fr))`
 	const rows = widgets.length
 		? widgets.map((w) => trackFor(w.size.h, cell)).join(" ")
@@ -542,7 +516,7 @@ export function zoneGridStyle(widgets: WidgetConfig[], cell: number): string {
  * still come from the widgets' height specs, so grow/fixed/anchor render exactly
  * as the live `zoneGridStyle` would.
  */
-export function cellsGridStyle(widgets: WidgetConfig[], cell: number): string {
+export function cellsGridStyle(widgets: GridWidget[], cell: number): string {
 	const rows = widgets.length
 		? widgets.map((w) => trackFor(w.size.h, cell)).join(" ")
 		: "1fr"
@@ -568,7 +542,7 @@ function selfAlign(near?: boolean, far?: boolean): string {
  * any min/max cell bounds. Row placement is left to auto-flow (the widgets
  * render in `order`, so they land in successive rows).
  */
-export function widgetItemStyle(w: WidgetConfig, cell: number): string {
+export function widgetItemStyle(w: GridWidget, cell: number): string {
 	// A GROW axis always stretches to fill its (1fr) track; the anchor only
 	// positions a fixed / bounded widget within a larger space.
 	const jself =

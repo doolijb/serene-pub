@@ -1,21 +1,25 @@
 import { describe, expect, test } from "vitest"
 import {
+	connectionGroupOf,
 	defaultsForConnection,
-	groupConnections,
-	groupOf
+	groupConnections
 } from "./connectionGroups"
-import { endpointKind } from "./modelManagement"
 
-describe("groupOf", () => {
-	test("a runtime this pub runs or hosts is local", () => {
-		expect(groupOf("koboldcpp-managed")).toBe("local")
-		expect(groupOf("ollama")).toBe("local")
-		expect(groupOf("onnx-embeddings")).toBe("local")
-		expect(groupOf("onnx-entities")).toBe("local")
+describe("connectionGroupOf", () => {
+	test("a runtime this pub runs, or one you run yourself, is local", () => {
+		expect(connectionGroupOf("koboldcpp_managed")).toBe("local")
+		expect(connectionGroupOf("koboldcpp")).toBe("local")
+		expect(connectionGroupOf("lmstudio")).toBe("local")
+		expect(connectionGroupOf("llamacpp")).toBe("local")
+		expect(connectionGroupOf("ollama")).toBe("local")
+		expect(connectionGroupOf("local-onnx")).toBe("local")
+		expect(connectionGroupOf("local-onnx-ner")).toBe("local")
 	})
 
-	test("anything we merely talk to is a service", () => {
-		expect(groupOf("api")).toBe("service")
+	test("a hosted API is a service", () => {
+		expect(connectionGroupOf("openai")).toBe("service")
+		expect(connectionGroupOf("anthropic")).toBe("service")
+		expect(connectionGroupOf("openai-embeddings")).toBe("service")
 	})
 })
 
@@ -24,33 +28,31 @@ describe("groupConnections", () => {
 		{ id: 1, type: "openai" },
 		{ id: 2, type: "ollama" },
 		{ id: 3, type: "anthropic" },
-		{ id: 4, type: "koboldcpp_managed" }
+		{ id: 4, type: "koboldcpp_managed" },
+		{ id: 5, type: "koboldcpp" }
 	]
 
 	test("splits in two and keeps the groups' own order", () => {
-		const groups = groupConnections(rows, endpointKind)
+		const groups = groupConnections(rows)
 		expect(groups.map((g) => g.group.id)).toEqual(["local", "service"])
-		expect(groups[0].rows.map((r) => r.id)).toEqual([2, 4])
+		expect(groups[0].rows.map((r) => r.id)).toEqual([2, 4, 5])
 		expect(groups[1].rows.map((r) => r.id)).toEqual([1, 3])
 	})
 
 	test("names the trade once per header", () => {
-		const groups = groupConnections(rows, endpointKind)
+		const groups = groupConnections(rows)
 		expect(groups[0].group.trade).toBe("private · free")
 		expect(groups[1].group.trade).toBe("billed per message")
 	})
 
 	test("drops an empty group rather than heading nothing", () => {
-		const groups = groupConnections(
-			[{ id: 1, type: "openai" }],
-			endpointKind
-		)
+		const groups = groupConnections([{ id: 1, type: "openai" }])
 		expect(groups).toHaveLength(1)
 		expect(groups[0].group.id).toBe("service")
 	})
 
 	test("an empty list is no groups at all", () => {
-		expect(groupConnections([], endpointKind)).toEqual([])
+		expect(groupConnections([])).toEqual([])
 	})
 })
 

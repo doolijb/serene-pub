@@ -78,10 +78,10 @@ describe("reprojectBindingSubjects (⏳ plans/31 V2)", () => {
 		const rows = [
 			{ scopeKind: "session", scopeId: sessionId, genreId: CHAT, subject: "respond", specId: respondSpecId },
 			{ scopeKind: "session", scopeId: sessionId, genreId: CHAT, subject: "narrate", specId: narrateSpecId },
-			{ scopeKind: "instance", scopeId: 0, genreId: CHAT, subject: "sum", specId: narrateSpecId },
-			{ scopeKind: "instance", scopeId: 0, genreId: CHAT, subject: "summon-dragon", specId: narrateSpecId },
+			{ scopeKind: "pub", scopeId: 0, genreId: CHAT, subject: "sum", specId: narrateSpecId },
+			{ scopeKind: "pub", scopeId: 0, genreId: CHAT, subject: "summon-dragon", specId: narrateSpecId },
 			// Already a subject: untouched.
-			{ scopeKind: "instance", scopeId: 0, genreId: CHAT, subject: "core:spec/narrate#narrate", specId: narrateSpecId }
+			{ scopeKind: "pub", scopeId: 0, genreId: CHAT, subject: "core:spec/narrate#narrate", specId: narrateSpecId }
 		]
 		await db.insert(schema.pipelineBindings).values(rows as any)
 
@@ -91,8 +91,8 @@ describe("reprojectBindingSubjects (⏳ plans/31 V2)", () => {
 			`(session ${sessionId}, ${CHAT}) 'narrate' → 'core:spec/narrate#narrate'`
 		])
 		expect(report.dropped).toEqual([
-			`(instance, ${CHAT}) 'sum' — 2 actions declare it (core:spec/test-sum-a#sum, acme:spec/sum-b#sum); a binding is about one`,
-			`(instance, ${CHAT}) 'summon-dragon' — no published action declares it`
+			`(pub, ${CHAT}) 'sum' — 2 actions declare it (core:spec/test-sum-a#sum, acme:spec/sum-b#sum); a binding is about one`,
+			`(pub, ${CHAT}) 'summon-dragon' — no published action declares it`
 		])
 		const left = (
 			await db.select().from(schema.pipelineBindings).where(eq(schema.pipelineBindings.genreId, CHAT))
@@ -100,7 +100,7 @@ describe("reprojectBindingSubjects (⏳ plans/31 V2)", () => {
 			.map((r) => `${r.scopeKind}:${r.subject}`)
 			.sort()
 		expect(left).toEqual([
-			"instance:core:spec/narrate#narrate",
+			"pub:core:spec/narrate#narrate",
 			"session:core:event/message-respond@1",
 			"session:core:spec/narrate#narrate"
 		])

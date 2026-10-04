@@ -1,6 +1,6 @@
 /**
  * Round-11 audit fix (MEDIUM): every candidate query inside
- * scopedRankBySimilarity had no LIMIT — fetched every matching row,
+ * the old scopedRankBySimilarity (since deleted) had no LIMIT — fetched every matching row,
  * scored all of them in JS, only sliced to topK after sorting the full
  * set. Separately, the 0.5 RAG path re-ran the entire fetch-and-score up
  * to 5 times per generation turn (once per query-message embedding), even
@@ -276,63 +276,6 @@ describe("rankScopedCandidates — pure scoring over a shared candidate set", ()
 	})
 })
 
-describe("scopedRankBySimilarity — thin wrapper stays behaviorally identical", () => {
-	test("fetch+rank in one call matches fetchScopedCandidates+rankScopedCandidates done separately", async () => {
-		const {
-			scopedRankBySimilarity,
-			fetchScopedCandidates,
-			rankScopedCandidates
-		} = await import("./ragContext")
-		const user = await makeUser("ragcontext-wrapper-user")
-		const [lorebook] = await testDb
-			.insert(schema.lorebooks)
-			.values({ name: "Wrapper Lorebook", userId: user.id })
-			.returning()
-		await testDb.insert(schema.lorebookEntries).values(
-			// ⚠ No vector. `embedding`/`embeddingModel` used to be columns on
-			// the entry row and were passed here; they are a row of their own
-			// now (`seedEntryVectors`), so they have been inert on this fixture
-			// since the tables merged and the two lists below are both empty.
-			// Left as-is rather than repaired, because giving this entry a real
-			// vector changes what the comparison compares.
-			worldLoreValues([
-				{
-					lorebookId: lorebook.id,
-					name: "Entry",
-					content: "x",
-					enabled: true
-				}
-			])
-		)
-
-		const context = {
-			sessionId: -1,
-			characterIds: [],
-			personaIds: [],
-			lorebookId: lorebook.id,
-			allLorebookIds: [lorebook.id]
-		}
-		const opts = {
-			modelId: MODEL_ID,
-			sources: ["worldLore" as const],
-			topK: 5
-		}
-
-		const viaWrapper = await scopedRankBySimilarity(
-			[1, 0, 0],
-			context,
-			opts
-		)
-		const viaSplit = rankScopedCandidates(
-			(await fetchScopedCandidates(context, opts)).candidates,
-			[1, 0, 0],
-			opts.topK
-		)
-
-		expect(viaWrapper).toEqual(viaSplit)
-	})
-})
-
 /**
  * The request-side boundary between the two source vocabularies.
  *
@@ -452,5 +395,43 @@ describe("fetchScopedCandidates — the session's reading (findings #38, #143, #
 		const early = await fetch(await seat({ storyClockYear: 1 }))
 		expect(early.map((c) => c.id)).toContain(offLater)
 		expect(early.find((c) => c.id === amended)).toMatchObject({ name: "Old name" })
+	})
+})
+
+describe("fetchScopedCandidates — messages with nothing to say", () => {
+	test("a message with no text is never a candidate, whatever vector it kept", async () => {
+		const { fetchScopedCandidates } = await import("./ragContext")
+		const user = await makeUser("ragcontext-blank-message-user")
+		const [session] = await testDb
+			.insert(schema.sessions)
+			.values({ userId: user.id, isGroup: false, name: "Blank" } as any)
+			.returning()
+		// Each holds a vector: the blank ones kept the one from the text they
+		// had before a Regenerate cleared it, or a failed run left them bare.
+		const rows = await testDb
+			.insert(schema.sessionMessages)
+			.values(
+				["The door creaks open.", "", "  \n "].map((content) => ({
+					sessionId: session.id,
+					role: "assistant",
+					content,
+					embedding: [1, 0, 0],
+					embeddingModel: MODEL_ID
+				})) as any
+			)
+			.returning()
+
+		const { candidates } = await fetchScopedCandidates(
+			{
+				sessionId: session.id,
+				characterIds: [],
+				personaIds: [],
+				lorebookId: null,
+				allLorebookIds: []
+			},
+			{ modelId: MODEL_ID, sources: ["message"], excludeRecentMessages: 0 }
+		)
+
+		expect(candidates.map((c) => c.id)).toEqual([rows[0]!.id])
 	})
 })

@@ -19,11 +19,16 @@
  *   source lives or which cloud API a connection calls;
  * - the instance's user names and display names (→ `user#<id>`) and this
  *   machine's name;
- * - paths under the home directory (→ `~`).
+ * - paths under the home directory (→ `~`);
+ * - a failed query's bound values (drizzle's `params:` line → `[params withheld]`):
+ *   they are whatever the query wrote — message text, lore — and the report
+ *   promises never to carry content. The query's SQL stays; it is the shape.
  *
  * Pure: nothing here reads the environment. The caller passes the home
  * directory, machine name and people in `RedactionContext`.
  */
+
+import { withoutQueryParams } from "$lib/server/db/errors"
 
 export interface RedactionContext {
 	/** `os.homedir()`; replaced by `~` wherever it appears. */
@@ -225,7 +230,7 @@ function peopleMatcher(ctx: RedactionContext): PeopleMatcher | null {
 }
 
 function redactString(text: string, ctx: RedactionContext, people: PeopleMatcher | null): string {
-	let s = text
+	let s = withoutQueryParams(text)
 	if (ctx.homeDir && ctx.homeDir.length > 1) {
 		s = s.split(ctx.homeDir).join("~")
 		const alt = ctx.homeDir.includes("\\") ? ctx.homeDir.replace(/\\/g, "/") : null

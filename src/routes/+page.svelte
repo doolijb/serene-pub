@@ -1,9 +1,12 @@
 <script lang="ts">
 	import { isAwaitingUser } from "$lib/client/sessions/sessionGroups"
 	import Avatar from "$lib/client/components/Avatar.svelte"
+	import AvatarStack from "$lib/client/components/AvatarStack.svelte"
 	import CharacterCreator from "$lib/client/components/modals/CharacterCreatorModal.svelte"
 	import BindingLinkerModal from "$lib/client/components/modals/BindingLinkerModal.svelte"
 	import OllamaIcon from "$lib/client/components/icons/OllamaIcon.svelte"
+	import KoboldCppIcon from "$lib/client/components/icons/KoboldCppIcon.svelte"
+	import { connectionTypeIcon } from "$lib/client/components/connections/connectionTypeIcon"
 	import FileDropzone from "$lib/client/components/FileDropzone.svelte"
 	import * as Icons from "@lucide/svelte"
 	import { getContext, onMount } from "svelte"
@@ -13,6 +16,7 @@
 	import { getInterestContext } from "$lib/client/sockets/interest.svelte"
 	import type { SocketEventMap } from "$lib/client/sockets/typedSocket"
 	import { toaster } from "$lib/client/utils/toaster"
+	import { cardFileForUpload } from "$lib/client/utils/cardUpload"
 	import { refusedSwapsSentence } from "$lib/client/components/sessionForms/refusedSwaps"
 	import { CONNECTION_TYPE } from "$lib/shared/constants/ConnectionTypes"
 	import { enableManager } from "$lib/client/components/connections/managers"
@@ -30,6 +34,7 @@
 		STANDARD_GENRE_ID,
 		autoSessionName,
 		buildCreatePayload,
+		welcomeSessionInput,
 		enabledPresetsFor,
 		genreVersion,
 		latestGenres,
@@ -37,6 +42,8 @@
 		type CreateSessionInput
 	} from "$lib/client/components/sessionForms/createSession.svelte"
 	import LanguagePicker from "$lib/client/components/inputs/LanguagePicker.svelte"
+	import WelcomeNameField from "$lib/client/components/userForms/WelcomeNameField.svelte"
+	import { welcomeNameSaver } from "$lib/client/components/userForms/welcomeName"
 	// `t()` is the incremental UI-translation seam (R5): the English source
 	// string is the key, an unwrapped string renders in English, and wrapping
 	// one is the whole cost of translating it. The Welcome step is where the
@@ -413,7 +420,7 @@
 		const cast = (session.sessionCharacters ?? [])
 			.map((sc) => sc.character)
 			.filter(Boolean)
-		return { shown: cast.slice(0, 3), more: Math.max(0, cast.length - 3) }
+		return { members: cast }
 	}
 
 	/** "Chat · 2 hours ago" — the genre and when the last line landed. */
@@ -719,6 +726,18 @@
 		if (wizardStep < totalWizardSteps - 1) wizardStep++
 	}
 
+	/** The welcome screen's optional "What should we call you?" answer. */
+	let wizardName = $state("")
+
+	/** Saves the welcome name, and toasts a refusal that lands after the wizard moved on. */
+	const welcomeName = welcomeNameSaver(socket, (t) => toaster.error(t))
+
+	/** Get started: save a name if one was given (never waited on), move on. */
+	function leaveWelcomeStep() {
+		if (welcomeName.save(wizardName)) wizardName = ""
+		nextWizardStep()
+	}
+
 	function prevWizardStep() {
 		if (wizardStep > 0) wizardStep--
 	}
@@ -787,21 +806,19 @@
 	}
 
 	/**
-	 * "Talk to an AI": a Guide session, no characters, the person's default
-	 * persona if they have one (the genre takes at most one, and none is
-	 * fine).
+	 * "Talk to an AI": the "Welcome to Serene Pub" Guide session, where
+	 * Serene greets the person (`welcomeSessionInput`).
 	 */
 	function startGuideSession() {
 		wizardPurpose = "guide"
 		const pick = guidePick
 		if (!pick) return
-		createWizardSession({
-			name: "Guide",
-			genreId: pick.genre.genreId,
-			presetId: pick.preset.id,
-			characterIds: [],
-			personaIds: defaultPersonaId != null ? [defaultPersonaId] : []
-		})
+		createWizardSession(
+			welcomeSessionInput(
+				{ genreId: pick.genre.genreId, presetId: pick.preset.id },
+				defaultPersonaId
+			)
+		)
 	}
 
 	/** "Play with characters": on to the Character step. */
@@ -936,28 +953,27 @@
 
 	async function handleCharacterCardImport(details: FileAcceptDetails) {
 		if (!details.files || details.files.length === 0) return
-		wizardImportingCharacterCard = true
-		const file = details.files[0]
-		const reader = new FileReader()
-		reader.onload = (e) => {
-			const base64 = (e.target?.result as string)?.split(",")[1]
-			if (base64) socket.emit("characters:importCard", { file: base64 })
+		// The server's own ceiling, said before a byte is uploaded.
+		const upload = await cardFileForUpload(details.files[0])
+		if ("refused" in upload) {
+			toaster.error({ title: upload.refused })
+			return
 		}
-		reader.readAsDataURL(file)
+		wizardImportingCharacterCard = true
+		socket.emit("characters:importCard", { file: upload.base64 })
 	}
 
 	async function handlePersonaCardImport(details: FileAcceptDetails) {
 		if (!details.files || details.files.length === 0) return
-		wizardImportingPersonaCard = true
-		const file = details.files[0]
-		const reader = new FileReader()
-		reader.onload = (e) => {
-			const base64 = (e.target?.result as string)?.split(",")[1]
-			// One card family. `handleCharactersImportCard` flags the row as
-			// this user's persona when the wizard is on the persona step.
-			if (base64) socket.emit("characters:importCard", { file: base64 })
+		const upload = await cardFileForUpload(details.files[0])
+		if ("refused" in upload) {
+			toaster.error({ title: upload.refused })
+			return
 		}
-		reader.readAsDataURL(file)
+		wizardImportingPersonaCard = true
+		// One card family. `handleCharactersImportCard` flags the row as
+		// this user's persona when the wizard is on the persona step.
+		socket.emit("characters:importCard", { file: upload.base64 })
 	}
 
 	// Every listener below is named because the interest registry releases by
@@ -1217,6 +1233,14 @@
 	 * Neither event is in `SCOPED_EVENTS`, so a scoped key would match no
 	 * payload at all.
 	 */
+	interest.useInterest<"users:current:updateDisplayName">(
+		"users:current:updateDisplayName",
+		() => welcomeName.saved()
+	)
+	interest.useInterest<"users:current:updateDisplayName:error">(
+		"users:current:updateDisplayName:error",
+		(message) => welcomeName.refused(message)
+	)
 	interest.useInterest<"characters:create">(
 		"characters:create",
 		handleCharacterCreated
@@ -1435,32 +1459,14 @@
 								class="bg-surface-50-950 border-surface-200-800 flex min-w-0 flex-col gap-3 rounded-[14px] border p-4"
 							>
 								<div class="flex min-w-0 items-center gap-3">
-									{#if stack.shown.length > 0}
-										<div
-											class="flex shrink-0 items-center"
-											aria-hidden="true"
-										>
-											{#each stack.shown as member, i (member?.id ?? i)}
-												<span
-													class="ring-surface-50-950 rounded-full ring-2 {i >
-													0
-														? '-ml-2.5'
-														: ''}"
-												>
-													<Avatar
-														char={member}
-														size="w-9 h-9"
-													/>
-												</span>
-											{/each}
-											{#if stack.more > 0}
-												<span
-													class="bg-surface-200-800 text-surface-800-200 ring-surface-50-950 -ml-2.5 flex h-9 w-9 items-center justify-center rounded-full text-[11px] ring-2"
-												>
-													+{stack.more}
-												</span>
-											{/if}
-										</div>
+									{#if stack.members.length > 0}
+										<span aria-hidden="true">
+											<AvatarStack
+												members={stack.members}
+												size="md"
+												ring="ring-surface-50-950"
+											/>
+										</span>
 									{/if}
 									<div class="flex min-w-0 flex-1 flex-col">
 										<span
@@ -1668,7 +1674,7 @@
 								})
 							}}
 						>
-							<Avatar char={persona} size="w-7 h-7" />
+							<Avatar char={persona} size="sm" decorative />
 							<span class="truncate text-[13px] font-medium">
 								{persona.name || "Unnamed"}
 							</span>
@@ -1839,6 +1845,10 @@
 								</p>
 							</div>
 
+							<!-- Optional, and only for someone with no display
+							     name yet; saved as Get started moves on. -->
+							<WelcomeNameField bind:value={wizardName} />
+
 							<!-- ══ CHOOSE AN LLM ══ -->
 						{:else if currentWizardStep === "llm"}
 							{#if hasConnection}
@@ -1942,6 +1952,11 @@
 											{#each localProviders as provider, i (provider.type + provider.baseUrl)}
 												{@const ready =
 													provider.models.length > 0}
+												{@const ProviderIcon =
+													connectionTypeIcon(
+														provider.type,
+														Icons.Server
+													)}
 												<button
 													type="button"
 													class={CHOICE_CARD}
@@ -1956,15 +1971,9 @@
 															: 'preset-tonal-surface'} flex size-10 shrink-0 items-center justify-center rounded-xl"
 														aria-hidden="true"
 													>
-														{#if provider.type === CONNECTION_TYPE.OLLAMA}
-															<OllamaIcon
-																class="h-5 w-5"
-															/>
-														{:else}
-															<Icons.Server
-																size={20}
-															/>
-														{/if}
+														<ProviderIcon
+															size={20}
+														/>
 													</span>
 													<span
 														class="flex min-w-0 flex-col gap-1.5"
@@ -2074,7 +2083,7 @@
 												class="preset-tonal-primary flex size-10 shrink-0 items-center justify-center rounded-xl"
 												aria-hidden="true"
 											>
-												<Icons.Cpu size={20} />
+												<KoboldCppIcon size={20} />
 											</span>
 											<span
 												class="flex min-w-0 flex-col gap-1.5"
@@ -2234,7 +2243,7 @@
 											class="text-primary-500 mx-auto mb-4 h-12 w-12"
 										/>
 									{:else}
-										<Icons.Cpu
+										<KoboldCppIcon
 											size={48}
 											class="text-primary-500 mx-auto mb-4"
 											aria-hidden="true"
@@ -2255,10 +2264,10 @@
 									>
 										{machineKind === "ollama"
 											? t(
-													"The Connections panel shows Ollama's models: get one, then choose it for chat. Downloads can take a while."
+													"The Connections view shows Ollama's models: get one, then choose it for chat. Downloads can take a while."
 												)
 											: t(
-													"The Connections panel walks you through it: choose the download that suits your computer, then a model. Downloads can take a while."
+													"The Connections view walks you through it: choose the download that suits your computer, then a model. Downloads can take a while."
 												)}
 									</p>
 								</div>
@@ -2324,18 +2333,16 @@
 								</p>
 							{:else if connectionChoice === "detected" && detectedProvider}
 								{@const provider = detectedProvider}
+								{@const DetectedIcon = connectionTypeIcon(
+									provider.type,
+									Icons.Server
+								)}
 								<div class="text-center">
-									{#if provider.type === CONNECTION_TYPE.OLLAMA}
-										<OllamaIcon
-											class="text-primary-500 mx-auto mb-4 h-12 w-12"
-										/>
-									{:else}
-										<Icons.Server
-											size={48}
-											class="text-primary-500 mx-auto mb-4"
-											aria-hidden="true"
-										/>
-									{/if}
+									<DetectedIcon
+										size={48}
+										class="text-primary-500 mx-auto mb-4"
+										aria-hidden="true"
+									/>
 									<h2
 										id="wizard-heading"
 										class="mb-3 [font-family:var(--typo-heading--font-family)] text-2xl font-semibold"
@@ -2502,7 +2509,7 @@
 										>
 											{#if guidePick}
 												{t(
-													"A plain conversation with the Guide, an AI helper that knows Serene Pub. Ask it anything."
+													"A calm conversation with Serene, Serene Pub's guide. Ask her anything about the app."
 												)}
 											{:else}
 												{t(
@@ -2578,12 +2585,10 @@
 												(selectedCharacterId =
 													character.id ?? null)}
 										>
-											<!-- Size passed to Avatar, not to a
-											     wrapper: Skeleton hard-sizes the
-											     avatar root. -->
 											<Avatar
 												char={character}
-												size="w-10 h-10"
+												size="md"
+												decorative
 											/>
 											<span class="min-w-0 flex-1">
 												<span
@@ -2712,7 +2717,10 @@
 											class="anchor"
 											onclick={() => {
 												closeWizard()
-												goto("/import")
+												// Settings › Import, the old /import page's home
+												// since owner note 23 (2026-10-02).
+												panelsCtx.digest.settingsSection = "import"
+												panelsCtx.openPanel({ key: "settings", toggle: false })
 											}}
 										>
 											{t(
@@ -2761,7 +2769,8 @@
 										>
 											<Avatar
 												char={persona}
-												size="w-10 h-10"
+												size="md"
+												decorative
 											/>
 											<span class="min-w-0 flex-1">
 												<span
@@ -2915,7 +2924,7 @@
 						<button
 							type="button"
 							class="btn preset-filled-primary-500"
-							onclick={nextWizardStep}
+							onclick={leaveWelcomeStep}
 						>
 							{t("Get started")}
 							<Icons.ChevronRight size={16} aria-hidden="true" />
@@ -3011,6 +3020,15 @@
 				</div>
 			</footer>
 		</section>
+		<!-- Under every wizard step: the Help view at /docs, as the
+		     dashboard's foot links it. -->
+		<p class="text-surface-600-400 max-w-2xl text-center text-sm">
+			<a href="/docs" class="hover:text-surface-800-200 underline">
+				{t(
+					"You can browse the entire documentation in the app at any time."
+				)}
+			</a>
+		</p>
 	{/if}
 </div>
 

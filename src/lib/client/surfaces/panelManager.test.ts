@@ -440,7 +440,7 @@ describe("a genre that withholds the conversation (R71)", () => {
 			defaultActive: true
 		}
 		const m = new SurfaceManager()
-		m.init(1, [board, ...PANELS], {}, () => {}, undefined, new Set(["messages"]))
+		m.init(1, [board, ...PANELS], {}, () => {}, new Set(["messages"]))
 		expect(m.instances.filter((p) => p.role === "primary").map((p) => p.id)).toEqual(["acme.game:board"])
 		expect(m.omitted.has("messages")).toBe(true)
 	})
@@ -449,5 +449,163 @@ describe("a genre that withholds the conversation (R71)", () => {
 		const m = make()
 		expect(m.instances.some((p) => p.role === "primary")).toBe(true)
 		expect(m.omitted.size).toBe(0)
+	})
+})
+
+/**
+ * Widget instances (brief 7b, plan §M.3.7): the manager keeps its
+ * DECLARATIONS — one per declared widget, which the tray, the intents and
+ * channel activation read — apart from its INSTANCES, one per id the layout
+ * places: each declared widget's own (the bare id) and every copy
+ * (`<widget id>#<name>`), cloned from its widget's declaration. So a copy of
+ * any widget draws, not only of Messages.
+ */
+describe("SurfaceManager — widget instances (brief 7b)", () => {
+	const right = (...widgets: string[]) => ({
+		zoneLayout: { version: 1, zones: { right: { kind: "side", side: "right", widgets } } }
+	})
+
+	it("a copy the layout names is an instance of its widget, under its own id", () => {
+		const m = new SurfaceManager()
+		m.init(1, PANELS, right("portraits", "portraits#2"), () => {})
+		const copy = m.instances.find((p) => p.id === "portraits#2")
+		expect(copy).toBeTruthy()
+		expect(copy!.widgetId).toBe("portraits")
+		expect(copy!.title).toBe("Portraits · 2")
+		expect(copy!.surface).toEqual(PANELS[1].surface)
+		expect(copy!.active).toBe(true)
+		// The declarations are the widgets, once each; a copy is never one.
+		expect(m.decls.map((p) => p.id)).toEqual(["conversation", "tasks", "portraits"])
+	})
+
+	it("placing a copy makes it; removing it drops it, and the blob forgets it", () => {
+		const m = new SurfaceManager()
+		m.init(1, PANELS, right("portraits"), () => {})
+		m.setZoneLayout(right("portraits", "tasks#2").zoneLayout)
+		expect(m.instances.map((p) => p.id)).toContain("tasks#2")
+		m.toggleCollapse("tasks#2")
+		expect(m.toBlob().active!.find((a) => a.id === "tasks#2")?.collapsed).toBe(true)
+		m.setZoneLayout(right("portraits").zoneLayout)
+		expect(m.instances.map((p) => p.id)).not.toContain("tasks#2")
+		expect(m.toBlob().active!.some((a) => a.id === "tasks#2")).toBe(false)
+	})
+
+	it("a copy named by the middle grid or the arrangement is an instance too", () => {
+		const m = new SurfaceManager()
+		m.init(
+			1,
+			PANELS,
+			{
+				widgetGrid: { version: 1, cell: 44, widgets: [{ id: "tasks#2", zone: "middle", order: 0, size: { w: "grow", h: "grow" }, anchor: {} }] },
+				arrangedGrid: { left: { cols: 4, rows: 8, items: [{ id: "portraits#3", x: 0, y: 0, w: 4, h: 3 }] } }
+			},
+			() => {}
+		)
+		expect(m.instances.map((p) => p.id)).toEqual(
+			expect.arrayContaining(["tasks#2", "portraits#3"])
+		)
+	})
+
+	it("toBlob drops a saved active[] entry for a copy no longer placed", () => {
+		const m = new SurfaceManager()
+		m.init(
+			1,
+			PANELS,
+			{ ...right("portraits"), active: [{ id: "portraits#2", order: 0, collapsed: true, drawered: false, on: true }] },
+			() => {}
+		)
+		expect(m.toBlob().active!.map((a) => a.id)).not.toContain("portraits#2")
+	})
+
+	it("keeps a placed copy's saved state across a reload", () => {
+		const m = new SurfaceManager()
+		m.init(
+			1,
+			PANELS,
+			{ ...right("portraits", "portraits#2"), active: [{ id: "portraits#2", order: 3, collapsed: true, drawered: false, on: true }] },
+			() => {}
+		)
+		const copy = m.instances.find((p) => p.id === "portraits#2")!
+		expect(copy.collapsed).toBe(true)
+		expect(copy.order).toBe(3)
+	})
+
+	it("closing one copy leaves the others alone", () => {
+		const m = new SurfaceManager()
+		m.init(1, PANELS, right("portraits", "portraits#2"), () => {})
+		m.close("portraits#2")
+		expect(m.instances.find((p) => p.id === "portraits#2")!.active).toBe(false)
+		expect(m.instances.find((p) => p.id === "portraits")!.active).toBe(true)
+	})
+
+	it("an intent addresses a widget: it opens nothing while an instance of it is placed", () => {
+		const m = new SurfaceManager()
+		m.init(1, PANELS, right("portraits", "tasks#2"), () => {})
+		m.applyOpenIntent("tasks")
+		m.activateForChannel("tasks")
+		// `tasks#2` is placed and open; the bare id is not added beside it.
+		expect(m.instances.find((p) => p.id === "tasks")!.active).toBe(false)
+		// With none placed, the intent places the bare id, as before.
+		const n = new SurfaceManager()
+		n.init(1, PANELS, right("portraits"), () => {})
+		n.applyOpenIntent("tasks")
+		expect(n.instances.find((p) => p.id === "tasks")!.active).toBe(true)
+	})
+
+	it("a copy past its widget's maxInstances draws nothing, and says so", () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+		const player: ModePanel = {
+			id: "acme.audio:player",
+			title: "Player",
+			role: "secondary",
+			surface: { kind: "remote", owner: "acme.audio", component: "player" },
+			maxInstances: 2
+		}
+		const m = new SurfaceManager()
+		m.init(1, [player], right("acme.audio:player", "acme.audio:player#2", "acme.audio:player#3"), () => {})
+		expect(m.instances.filter((p) => p.widgetId === "acme.audio:player").map((p) => p.id)).toEqual([
+			"acme.audio:player",
+			"acme.audio:player#2"
+		])
+		expect(m.decls.find((p) => p.id === "acme.audio:player")!.maxInstances).toBe(2)
+		expect(warn.mock.calls.map((c) => String(c[0])).join(" ")).toMatch(/acme\.audio:player#3.*maxInstances/)
+		warn.mockRestore()
+	})
+
+	it("past the cap, the copies kept are the first in READING order — the middle before a side (7b review)", () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+		const player: ModePanel = {
+			id: "acme.audio:player",
+			title: "Player",
+			role: "secondary",
+			surface: { kind: "remote", owner: "acme.audio", component: "player" },
+			maxInstances: 2
+		}
+		const m = new SurfaceManager()
+		// The right lists `#2`; the middle draws `#3`. The middle reads first,
+		// so `#3` is kept and `#2` dropped — not the other way round because
+		// the zone lists happen to be stored before the grid.
+		m.init(
+			1,
+			[player],
+			{
+				...right("acme.audio:player", "acme.audio:player#2"),
+				widgetGrid: {
+					version: 1,
+					cell: 44,
+					widgets: [{ id: "acme.audio:player#3", zone: "middle", order: 0, size: { w: "grow", h: "grow" }, anchor: {} }]
+				}
+			},
+			() => {}
+		)
+		expect(m.copies.map((p) => p.id)).toEqual(["acme.audio:player#3"])
+		warn.mockRestore()
+	})
+
+	it("a copy of a widget nobody declares, or of the conversation, is no panel instance", () => {
+		const m = new SurfaceManager()
+		m.init(1, PANELS, right("gone#2", "messages#sanctum"), () => {})
+		expect(m.instances.map((p) => p.id)).not.toContain("gone#2")
+		expect(m.instances.map((p) => p.id)).not.toContain("messages#sanctum")
 	})
 })

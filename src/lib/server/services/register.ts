@@ -92,6 +92,17 @@ export async function registerCoreServices() {
 		reconcileOnBoot: () => notifications.reconcileNotificationsOnBoot()
 	})
 
+	// The composer tray (PLAN-composer-attachments §3.1): expire unsent tray
+	// items after a day and drop uploads a dead process left behind — at boot,
+	// then hourly.
+	const tray = await import("$lib/server/attachments/tray")
+	registerService({
+		id: "trayItems",
+		label: "Attachment tray",
+		reconcileOnBoot: () => tray.startTraySweep(),
+		shutdown: () => tray.stopTraySweep()
+	})
+
 	const koboldcpp = await import("$lib/server/koboldcpp/subprocessManager")
 	registerService({
 		id: "koboldcpp",

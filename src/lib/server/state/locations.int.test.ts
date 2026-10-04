@@ -277,6 +277,9 @@ describe("write-back to the lorebook", () => {
 	test("recording files a place's values against its entry, and the next session inherits them", async () => {
 		declareSlots()
 		const w = await world()
+		// What is recorded, not whether: Full writes it (the default, Review
+		// changes, files proposals — sessionLoreWrites.int.test.ts).
+		await testDb.insert(schema.userSettings).values({ userId: w.user.id, loreWriteMode: "full" })
 		const { applyChange } = await import("$lib/server/state/write")
 		const { recordToTimeline } = await import("$lib/server/state/durable")
 		const { valueOf } = await import("$lib/server/state/resolve")

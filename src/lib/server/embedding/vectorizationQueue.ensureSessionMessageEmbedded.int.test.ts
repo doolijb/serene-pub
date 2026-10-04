@@ -3,7 +3,7 @@
  * background queue's pickSessionMessage() — called right after a generated
  * message is persisted (generateResponse.ts) so a round-robin chain's next
  * turn can find it as a RAG candidate without waiting for the queue to
- * cycle back to it. It reuses needsEmbedding() and writeEmbeddingIfFresh()
+ * cycle back to it. It reuses columnStoreNeedsEmbedding() and writeEmbeddingIfFresh()
  * directly rather than reimplementing staleness/safe-write logic, and adds
  * a timeout + cooldown specifically because this call sits inside
  * llmQueue's single global lane (see the doc comment above
@@ -32,7 +32,7 @@ import {
 import fs from "fs/promises"
 import os from "os"
 import path from "path"
-import { eq } from "drizzle-orm"
+import { eq, sql } from "drizzle-orm"
 import * as schema from "$lib/server/db/schema"
 import type { TestDb } from "$lib/server/utils/testDb"
 import { releaseDataDir } from "$lib/server/utils/testDb"
@@ -158,12 +158,8 @@ describe("ensureSessionMessageEmbedded (PGlite integration)", () => {
 		)
 		const user = await makeUser("ensure-embed-already-fresh-user")
 		const session = await makeSession(user.id)
-		// updatedAt and vectorizedAt are both explicitly set to the exact same
-		// JS Date value (not left to insert-time DB defaults) — needsEmbedding()
-		// treats a row as stale when updatedAt > vectorizedAt, and comparing a
-		// server-evaluated CURRENT_TIMESTAMP default against a client-computed
-		// Date would leave the "already fresh" precondition at the mercy of
-		// clock/latency timing instead of being deterministic.
+		// Current means: this model's vector, computed over the text the row
+		// holds — its `embedding_source_hash` is the row's `embed_text_hash`.
 		const now = new Date()
 		const msg = await makeSessionMessage(session.id, {
 			content: "already embedded",
@@ -172,6 +168,12 @@ describe("ensureSessionMessageEmbedded (PGlite integration)", () => {
 			updatedAt: now,
 			vectorizedAt: now
 		})
+		await testDb
+			.update(schema.sessionMessages)
+			.set({
+				embeddingSourceHash: sql`${schema.sessionMessages.embedTextHash}`
+			})
+			.where(eq(schema.sessionMessages.id, msg.id))
 
 		await ensureSessionMessageEmbedded(msg.id)
 
@@ -219,10 +221,7 @@ describe("ensureSessionMessageEmbedded (PGlite integration)", () => {
 			embeddingModel: "test-model",
 			vectorizedAt: new Date(Date.now() - 60_000) // vectorized a minute ago
 		})
-		// Edit after vectorization — $onUpdate bumps updatedAt to "now", well
-		// past the minute-old vectorizedAt above, so this isn't sensitive to
-		// small clock/latency skew the way comparing near-simultaneous
-		// timestamps would be.
+		// Edit after vectorization: the text moves, so its hash does.
 		await testDb
 			.update(schema.sessionMessages)
 			.set({ content: "edited content" })
@@ -279,9 +278,9 @@ describe("ensureSessionMessageEmbedded (PGlite integration)", () => {
 		const row = await testDb.query.sessionMessages.findFirst({
 			where: eq(schema.sessionMessages.id, msg.id)
 		})
-		// The stale vector must never land — writeEmbeddingIfFresh's optimistic
-		// concurrency guard drops it because updatedAt no longer matches what
-		// was captured before embed() ran.
+		// The stale vector must never land — writeEmbeddingIfFresh's guard
+		// drops it because the row no longer hashes to the text captured
+		// before embed() ran.
 		expect(row?.embedding).toBeNull()
 		expect(row?.content).toBe("edited while embedding was in flight")
 	})

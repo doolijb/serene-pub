@@ -117,6 +117,12 @@ describe("compareVersions", () => {
 	test("identical versions compare equal", () => {
 		expect(compareVersions("0.5.0-beta", "0.5.0-beta")).toBe(0)
 	})
+
+	test("a 0.5.3 install — shipped or dev-mode stamped — is older than any 0.6 build, so its boot runs the upgrade", () => {
+		for (const installed of ["0.5.3-beta", "0.0.0"])
+			for (const build of ["0.6.0-pr-1", "0.6.0-rc-1", "0.6.0-beta", "0.6.0"])
+				expect(compareVersions(installed, build), `${installed} < ${build}`).toBe(-1)
+	})
 })
 
 describe("shouldNotifyAboutRelease — the stated rule", () => {
@@ -263,5 +269,25 @@ describe("isPrereleaseVersion", () => {
 	test("ignores surrounding whitespace", () => {
 		expect(isPrereleaseVersion("  0.6.0-pr-1  ")).toBe(true)
 		expect(isPrereleaseVersion("  0.6.0  ")).toBe(false)
+	})
+
+	// The vectors the desktop launcher shares (plan resilient-exploring-tome
+	// §C11): both sides must answer these the same, or one side would offer
+	// an update the other refuses.
+	test.each([
+		["0.6.0", false],
+		["0.6.0-beta", false],
+		["0.6.0-beta-2", true],
+		["0.6.0-rc-1", true],
+		["0.6.0-pr-1", true],
+		["0.6.0-dev", true],
+		["garbage", true]
+	])("shared launcher vector %s → %s", (version, expected) => {
+		expect(isPrereleaseVersion(version)).toBe(expected)
+	})
+
+	test("a version that is not x.y.z at all is treated as a pre-release", () => {
+		for (const v of ["", "garbage", "1.0", "1", "v", "1.0.x", "dev"])
+			expect(isPrereleaseVersion(v)).toBe(true)
 	})
 })

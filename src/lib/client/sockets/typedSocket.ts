@@ -47,6 +47,23 @@ import type {
 	JumpSearchResponse
 } from "$lib/shared/sockets/jump"
 import type {
+	AttachmentsBeginParams,
+	AttachmentsBeginResponse,
+	AttachmentsChunkParams,
+	AttachmentsChunkResponse,
+	AttachmentsError,
+	AttachmentsFinishParams,
+	AttachmentsFinishResponse,
+	AttachmentsListParams,
+	AttachmentsListResponse,
+	AttachmentsRemoveFromMessageParams,
+	AttachmentsRemoveFromMessageResponse,
+	AttachmentsRemoveParams,
+	AttachmentsRemoveResponse,
+	AttachmentsReadersParams,
+	AttachmentsReadersResponse
+} from "$lib/shared/sockets/attachments"
+import type {
 	NotificationsChanged,
 	NotificationsIdsParams,
 	NotificationsListParams,
@@ -409,13 +426,25 @@ export type SocketEventMap = {
 		params: Sockets.Plugins.SetEnabled.Params
 		response: Sockets.Plugins.SetEnabled.Response
 	}
+	"plugins:setEnabled:error": {
+		params: never
+		response: { error?: string }
+	}
 	"plugins:setBackend": {
 		params: Sockets.Plugins.SetBackend.Params
 		response: Sockets.Plugins.SetBackend.Response
 	}
+	"plugins:setBackend:error": {
+		params: never
+		response: { error?: string }
+	}
 	"plugins:setSequential": {
 		params: Sockets.Plugins.SetSequential.Params
 		response: Sockets.Plugins.SetSequential.Response
+	}
+	"plugins:setSequential:error": {
+		params: never
+		response: { error?: string }
 	}
 	"plugins:uninstall": {
 		params: Sockets.Plugins.Uninstall.Params
@@ -445,9 +474,17 @@ export type SocketEventMap = {
 		params: Sockets.Plugins.SetPermission.Params
 		response: Sockets.Plugins.SetPermission.Response
 	}
+	"plugins:setPermission:error": {
+		params: never
+		response: { error?: string }
+	}
 	"plugins:reviewPermissions": {
 		params: Sockets.Plugins.ReviewPermissions.Params
 		response: Sockets.Plugins.ReviewPermissions.Response
+	}
+	"plugins:reviewPermissions:error": {
+		params: never
+		response: { error?: string }
 	}
 	"plugins:unload": {
 		params: Sockets.Plugins.Unload.Params
@@ -484,6 +521,10 @@ export type SocketEventMap = {
 	"plugins:setStorageQuota": {
 		params: Sockets.Plugins.SetStorageQuota.Params
 		response: Sockets.Plugins.SetStorageQuota.Response
+	}
+	"plugins:setStorageQuota:error": {
+		params: never
+		response: { error?: string }
 	}
 	// Authored components (C6, P4) — admin-only verbs; `components:changed` is the push.
 	"components:coreList": {
@@ -649,6 +690,12 @@ export type SocketEventMap = {
 	"connections:setDefault": {
 		params: Sockets.Connections.SetDefault.Params
 		response: Sockets.Connections.SetDefault.Response
+	}
+	// Every refusal of the above (the handler's `refuse`), heard by a Save
+	// that waits for its answer (Admin → Connections, `awaitReply`).
+	"connections:setDefault:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
 	}
 	// The admin Defaults screen. `list` is the capability list plus what is
 	// registered; `set` writes one half of one capability's default.
@@ -1011,6 +1058,10 @@ export type SocketEventMap = {
 		params: Sockets.SessionAdmin.UpdateGenre.Params
 		response: Sockets.SessionAdmin.UpdateGenre.Response
 	}
+	"sessionGenres:update:error": {
+		params: never
+		response: { error?: string }
+	}
 	"sessionGenres:detail": {
 		params: Sockets.SessionAdmin.GenreDetail.Params
 		response: Sockets.SessionAdmin.GenreDetail.Response
@@ -1079,6 +1130,18 @@ export type SocketEventMap = {
 		params: Sockets.Sessions.PanelLayout.Set.Params
 		response: Sockets.Sessions.PanelLayout.Set.Response
 	}
+	// Replace this session's layout by copying one in (the copy model). A
+	// refusal rides the main channel with `ok: false` and the server's
+	// sentence, which the page toasts; the `:error` twin is the generic throw
+	// path only.
+	"sessions:panelLayout:startFrom": {
+		params: Sockets.Sessions.PanelLayout.StartFrom.Params
+		response: Sockets.Sessions.PanelLayout.StartFrom.Response
+	}
+	"sessions:panelLayout:startFrom:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
 	"sessions:layoutPreset:save": {
 		params: Sockets.Sessions.PanelLayout.Save.Params
 		response: Sockets.Sessions.PanelLayout.Save.Response
@@ -1111,6 +1174,51 @@ export type SocketEventMap = {
 		response: Sockets.Sessions.PanelLayout.Usage.Response
 	}
 	"sessions:layoutPreset:usage:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	// The L4 verbs (brief 6a): share, make a copy, save changes to, and the
+	// new-session layout. Each answers with the refreshed list; a refusal
+	// rides the main channel with `ok: false`, as rename's does.
+	"sessions:layoutPreset:share": {
+		params: Sockets.Sessions.PanelLayout.Share.Params
+		response: Sockets.Sessions.PanelLayout.Share.Response
+	}
+	"sessions:layoutPreset:share:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"sessions:layoutPreset:clone": {
+		params: Sockets.Sessions.PanelLayout.Clone.Params
+		response: Sockets.Sessions.PanelLayout.Clone.Response
+	}
+	"sessions:layoutPreset:clone:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"sessions:layoutPreset:update": {
+		params: Sockets.Sessions.PanelLayout.Update.Params
+		response: Sockets.Sessions.PanelLayout.Update.Response
+	}
+	"sessions:layoutPreset:update:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	// **Updated**, live (brief 6b): pushed, scoped to the session, and
+	// answered when asked.
+	"sessions:panelLayout:startedFromUpdated": {
+		params: Sockets.Sessions.PanelLayout.StartedFromUpdated.Params
+		response: Sockets.Sessions.PanelLayout.StartedFromUpdated.Response
+	}
+	"sessions:panelLayout:startedFromUpdated:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"sessions:layoutPreset:setNewSessionLayout": {
+		params: Sockets.Sessions.PanelLayout.SetNewSessionLayout.Params
+		response: Sockets.Sessions.PanelLayout.SetNewSessionLayout.Response
+	}
+	"sessions:layoutPreset:setNewSessionLayout:error": {
 		params: Sockets.ErrorResponse
 		response: Sockets.ErrorResponse
 	}
@@ -1188,6 +1296,8 @@ export type SocketEventMap = {
 		params: Sockets.Sessions.SetLorebook.Params
 		response: Sockets.Sessions.SetLorebook.Response
 	}
+	// Answers only on `:progress`, `:complete` and `:error` — never under
+	// its own name; `response` is the `:complete` shape.
 	"sessions:summarize": {
 		params: Sockets.Sessions.Summarize.Params
 		response: Sockets.Sessions.Summarize.Response
@@ -1204,25 +1314,33 @@ export type SocketEventMap = {
 		params: never
 		response: Sockets.Sessions.Summarize.ErrorResponse
 	}
-	"sessions:summarize:trace": {
-		params: never
-		response: Sockets.Sessions.Summarize.TraceEntry
-	}
 	"sessions:delete": {
 		params: Sockets.Sessions.Delete.Params
 		response: Sockets.Sessions.Delete.Response
 	}
-	"sessions:toggleSessionCharacterActive": {
-		params: Sockets.Sessions.ToggleSessionCharacterActive.Params
-		response: Sockets.Sessions.ToggleSessionCharacterActive.Response
+	"sessions:setCastSeatEnabled": {
+		params: Sockets.Sessions.SetCastSeatEnabled.Params
+		response: Sockets.Sessions.SetCastSeatEnabled.Response
+	}
+	"sessions:setCastSeatEnabled:error": {
+		params: never
+		response: Sockets.ErrorResponse
 	}
 	"sessions:setEnvoySeat": {
 		params: Sockets.Sessions.SetEnvoySeat.Params
 		response: Sockets.Sessions.SetEnvoySeat.Response
 	}
+	"sessions:setEnvoySeat:error": {
+		params: never
+		response: Sockets.ErrorResponse
+	}
 	"sessions:fireNarratorResponse": {
 		params: Sockets.Sessions.FireNarratorResponse.Params
 		response: Sockets.Sessions.FireNarratorResponse.Response
+	}
+	"sessions:fireNarratorResponse:error": {
+		params: never
+		response: Sockets.Sessions.FireNarratorResponse.ErrorResponse
 	}
 	"sessions:setFavorite": {
 		params: Sockets.Sessions.SetFavorite.Params
@@ -1347,6 +1465,27 @@ export type SocketEventMap = {
 	"sessionMessages:extend": {
 		params: Sockets.SessionMessages.Extend.Params
 		response: Sockets.SessionMessages.Extend.Response
+	}
+	"sessions:authorsNote": {
+		params: Sockets.Sessions.AuthorsNote.Params
+		response: Sockets.Sessions.AuthorsNote.Response
+	}
+	"sessions:authorsNote:error": {
+		params: never
+		response: Sockets.Sessions.AuthorsNote.Response
+	}
+	"sessions:setAuthorsNote": {
+		params: Sockets.Sessions.SetAuthorsNote.Params
+		response: Sockets.Sessions.SetAuthorsNote.Response
+	}
+	"sessions:setAuthorsNote:error": {
+		params: never
+		response: Sockets.Sessions.SetAuthorsNote.Response
+	}
+	// Server-pushed only: a session's stored genre fields moved.
+	"sessions:genreFieldsChanged": {
+		params: never
+		response: Sockets.Sessions.GenreFieldsChanged.Response
 	}
 	"sessions:setSpriteSet": {
 		params: Sockets.Sessions.SetSpriteSet.Params
@@ -1548,6 +1687,52 @@ export type SocketEventMap = {
 		response: Sockets.ErrorResponse
 	}
 
+	// Updates (Admin › Updates) — admin only; every reply is the whole State.
+	"updates:get": {
+		params: Sockets.Updates.Params
+		response: Sockets.Updates.State
+	}
+	"updates:get:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"updates:download": {
+		params: Sockets.Updates.Params
+		response: Sockets.Updates.State
+	}
+	"updates:download:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"updates:cancel": {
+		params: Sockets.Updates.Params
+		response: Sockets.Updates.State
+	}
+	"updates:cancel:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"updates:discard": {
+		params: Sockets.Updates.Params
+		response: Sockets.Updates.State
+	}
+	"updates:discard:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"updates:apply": {
+		params: Sockets.Updates.Params
+		response: Sockets.Updates.State
+	}
+	"updates:apply:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
+	"updates:progress": {
+		params: Sockets.Updates.Params
+		response: Sockets.Updates.State
+	}
+
 	// Tunnels (plan 26) — its own namespace, never folded into Connections.
 	"tunnels:get": {
 		params: Sockets.Tunnels.Get.Params
@@ -1702,7 +1887,7 @@ export type SocketEventMap = {
 	// waiting rather than spinning forever.
 	"pipelines:previewRetrieval:error": {
 		params: never
-		response: { error?: string }
+		response: { error?: string; requestId?: string }
 	}
 	// And the same explanation addressed the way a reader asks for it: by the
 	// message, not by a run id they were never given. Gated on the session
@@ -2486,6 +2671,14 @@ export type SocketEventMap = {
 		params: Sockets.ErrorResponse
 		response: Sockets.ErrorResponse
 	}
+	"systemSettings:updateLoreWriteModeDefault": {
+		params: Sockets.SystemSettings.UpdateLoreWriteModeDefault.Params
+		response: Sockets.SystemSettings.UpdateLoreWriteModeDefault.Response
+	}
+	"systemSettings:updateLoreWriteModeDefault:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
 	"systemSettings:updateAutoTranslate": {
 		params: Sockets.SystemSettings.UpdateAutoTranslate.Params
 		response: Sockets.SystemSettings.UpdateAutoTranslate.Response
@@ -2521,6 +2714,12 @@ export type SocketEventMap = {
 	"vectorization:reindexCost": {
 		params: Sockets.Vectorization.ReindexCost.Params
 		response: Sockets.Vectorization.ReindexCost.Response
+	}
+	// Synthesised by `register()` on a throw: a non-admin, or a count that
+	// failed. A screen waiting on the price to save settles on it.
+	"vectorization:reindexCost:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
 	}
 	"vectorization:startQueue": {
 		params: Sockets.Vectorization.StartQueue.Params
@@ -2561,6 +2760,10 @@ export type SocketEventMap = {
 	"vectorization:setSessionRagIgnored": {
 		params: Sockets.Vectorization.SetSessionRagIgnored.Params
 		response: Sockets.Vectorization.SetSessionRagIgnored.Response
+	}
+	"vectorization:setSessionRagIgnored:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
 	}
 	"vectorization:getQueue": {
 		params: Sockets.Vectorization.GetQueue.Params
@@ -2640,6 +2843,14 @@ export type SocketEventMap = {
 		params: Sockets.ErrorResponse
 		response: Sockets.ErrorResponse
 	}
+	"userSettings:updateLoreWriteMode": {
+		params: Sockets.UserSettings.UpdateLoreWriteMode.Params
+		response: Sockets.UserSettings.UpdateLoreWriteMode.Response
+	}
+	"userSettings:updateLoreWriteMode:error": {
+		params: Sockets.ErrorResponse
+		response: Sockets.ErrorResponse
+	}
 
 	// Lorebook events
 	"lorebooks:list": {
@@ -2654,6 +2865,11 @@ export type SocketEventMap = {
 		params: Sockets.Lorebooks.Get.Params
 		response: Sockets.Lorebooks.Get.Response
 	}
+	// `refusable()`'s refusal, sent to the asking tab alone.
+	"lorebooks:get:error": {
+		params: never
+		response: Sockets.ErrorResponse
+	}
 	"lorebooks:create": {
 		params: Sockets.Lorebooks.Create.Params
 		response: Sockets.Lorebooks.Create.Response
@@ -2661,11 +2877,16 @@ export type SocketEventMap = {
 	// Synthesised by `register()` on a throw — see `entries:update:error`.
 	"lorebooks:create:error": {
 		params: never
-		response: { error?: string }
+		response: { error?: string; requestId?: string }
 	}
 	"lorebooks:update": {
 		params: Sockets.Lorebooks.Update.Params
 		response: Sockets.Lorebooks.Update.Response
+	}
+	// `refusable()`'s refusal, sent to the asking tab alone.
+	"lorebooks:update:error": {
+		params: never
+		response: Sockets.ErrorResponse
 	}
 	"lorebooks:delete": {
 		params: Sockets.Lorebooks.Delete.Params
@@ -2678,6 +2899,14 @@ export type SocketEventMap = {
 	"lorebooks:duplicate": {
 		params: Sockets.Lorebooks.Duplicate.Params
 		response: Sockets.Lorebooks.Duplicate.Response
+	}
+	"lorebooks:lines": {
+		params: Sockets.Lorebooks.Lines.Params
+		response: Sockets.Lorebooks.Lines.Response
+	}
+	"lorebooks:lines:error": {
+		params: never
+		response: { error?: string }
 	}
 	"lorebooks:storyTime": {
 		params: Sockets.Lorebooks.StoryTime.Params
@@ -2742,6 +2971,11 @@ export type SocketEventMap = {
 	"lorebooks:createBinding": {
 		params: Sockets.Lorebooks.CreateBinding.Params
 		response: Sockets.Lorebooks.CreateBinding.Response
+	}
+	// `refusable()`'s sentence when the create is refused.
+	"lorebooks:createBinding:error": {
+		params: never
+		response: { error?: string }
 	}
 	"lorebooks:updateBinding": {
 		params: Sockets.Lorebooks.UpdateBinding.Params
@@ -2899,6 +3133,10 @@ export type SocketEventMap = {
 		params: Sockets.Entries.SessionEntries.Params
 		response: Sockets.Entries.SessionEntries.Response
 	}
+	"entries:sessionEntries:error": {
+		params: never
+		response: Sockets.Entries.SessionEntries.ErrorResponse
+	}
 	"entries:setMarks": {
 		params: Sockets.Entries.SetMarks.Params
 		response: Sockets.Entries.SetMarks.Response
@@ -2927,9 +3165,20 @@ export type SocketEventMap = {
 		params: Sockets.Entries.UpdatePositions.Params
 		response: Sockets.Entries.UpdatePositions.Response
 	}
+	// `refusable()`'s refusal, sent to the asking tab alone; echoes the book
+	// and type so the door that asked can stop waiting on its reorder.
+	"entries:updatePositions:error": {
+		params: never
+		response: { error?: string; lorebookId?: number; typeId?: string }
+	}
 	"entries:iterateNext": {
 		params: Sockets.Entries.IterateNext.Params
 		response: Sockets.Entries.IterateNext.Response
+	}
+	// `refusable()`'s answer, to the asking tab, with the asker's `requestId`.
+	"entries:iterateNext:error": {
+		params: never
+		response: { error?: string; requestId?: string }
 	}
 	// The two reads the lorebook workspace's frame asks for: the navigation
 	// column's figures, and the retrieval markers on its rows.
@@ -2970,7 +3219,7 @@ export type SocketEventMap = {
 	// Synthesised by `register()` on a throw — see `entries:update:error`.
 	"scenes:create:error": {
 		params: never
-		response: { error?: string }
+		response: { error?: string; requestId?: string }
 	}
 	"scenes:update": {
 		params: Sockets.Scenes.Update.Params
@@ -3182,12 +3431,6 @@ export type SocketEventMap = {
 		params: Sockets.NarrativeGraph.ApplyProposal.ErrorResponse
 		response: Sockets.NarrativeGraph.ApplyProposal.ErrorResponse
 	}
-	"narrativeGraph:updateNode": {
-		params: {
-			node: Partial<Sockets.NarrativeGraph.NarrativeNode> & { id: number }
-		}
-		response: { node: Sockets.NarrativeGraph.NarrativeNode }
-	}
 	"narrativeGraph:deleteNode": {
 		params: Sockets.NarrativeGraph.DeleteNode.Params
 		response: Sockets.NarrativeGraph.DeleteNode.Response
@@ -3206,11 +3449,7 @@ export type SocketEventMap = {
 		response: { error?: string }
 	}
 	"narrativeGraph:updateRelationship": {
-		params: {
-			relationship: Partial<Sockets.NarrativeGraph.NarrativeRelationship> & {
-				id: number
-			}
-		}
+		params: Sockets.NarrativeGraph.UpdateRelationship.Params
 		response: { relationship: Sockets.NarrativeGraph.NarrativeRelationship }
 	}
 	"narrativeGraph:deleteRelationship": {
@@ -3227,7 +3466,7 @@ export type SocketEventMap = {
 	}
 	"narrativeGraph:mergeNode:error": {
 		params: Sockets.ErrorResponse
-		response: Sockets.ErrorResponse
+		response: Sockets.NarrativeGraph.MergeNode.ErrorResponse
 	}
 	"narrativeGraph:undoMerge": {
 		params: Sockets.NarrativeGraph.UndoMerge.Params
@@ -3353,11 +3592,11 @@ export type SocketEventMap = {
 		params: Sockets.ErrorResponse
 		response: Sockets.ErrorResponse
 	}
-	"customThemes:setInstanceTheme": {
-		params: Sockets.CustomThemes.SetInstanceTheme.Params
-		response: Sockets.CustomThemes.SetInstanceTheme.Response
+	"customThemes:setPubTheme": {
+		params: Sockets.CustomThemes.SetPubTheme.Params
+		response: Sockets.CustomThemes.SetPubTheme.Response
 	}
-	"customThemes:setInstanceTheme:error": {
+	"customThemes:setPubTheme:error": {
 		params: Sockets.ErrorResponse
 		response: Sockets.ErrorResponse
 	}
@@ -3427,6 +3666,24 @@ export type SocketEventMap = {
 		params: Sockets.State.Set.ErrorResponse
 		response: Sockets.State.Set.ErrorResponse
 	}
+	// 🚧 A lorebook's own stats, with no session (places-graph L4): a place's,
+	// set in the place editor before play. Both answer with the place's read.
+	"lorebookState:get": {
+		params: Sockets.LorebookState.Get.Params
+		response: Sockets.LorebookState.Get.Response
+	}
+	"lorebookState:get:error": {
+		params: Sockets.LorebookState.Get.ErrorResponse
+		response: Sockets.LorebookState.Get.ErrorResponse
+	}
+	"lorebookState:set": {
+		params: Sockets.LorebookState.Set.Params
+		response: Sockets.LorebookState.Set.Response
+	}
+	"lorebookState:set:error": {
+		params: Sockets.LorebookState.Set.ErrorResponse
+		response: Sockets.LorebookState.Set.ErrorResponse
+	}
 	"state:configure": {
 		params: Sockets.State.Configure.Params
 		response: Sockets.State.Configure.Response
@@ -3479,6 +3736,67 @@ export type SocketEventMap = {
 	"state:changed": {
 		params: Sockets.State.Changed.Params
 		response: Sockets.State.Changed.Response
+	}
+
+	// Attachments — the composer tray's chunked upload (PLAN-composer-
+	// attachments §3.1). `begin`/`chunk` replies and every refusal answer the
+	// asking socket only; `finish`/`remove`/`list` reach every tab. Every
+	// reply carries `sessionId`. Types in shared/sockets/attachments.
+	"attachments:begin": {
+		params: AttachmentsBeginParams
+		response: AttachmentsBeginResponse
+	}
+	"attachments:begin:error": {
+		params: AttachmentsError
+		response: AttachmentsError
+	}
+	"attachments:chunk": {
+		params: AttachmentsChunkParams
+		response: AttachmentsChunkResponse
+	}
+	"attachments:chunk:error": {
+		params: AttachmentsError
+		response: AttachmentsError
+	}
+	"attachments:finish": {
+		params: AttachmentsFinishParams
+		response: AttachmentsFinishResponse
+	}
+	"attachments:finish:error": {
+		params: AttachmentsError
+		response: AttachmentsError
+	}
+	"attachments:remove": {
+		params: AttachmentsRemoveParams
+		response: AttachmentsRemoveResponse
+	}
+	"attachments:remove:error": {
+		params: AttachmentsError
+		response: AttachmentsError
+	}
+	"attachments:list": {
+		params: AttachmentsListParams
+		response: AttachmentsListResponse
+	}
+	"attachments:list:error": {
+		params: AttachmentsError
+		response: AttachmentsError
+	}
+	"attachments:removeFromMessage": {
+		params: AttachmentsRemoveFromMessageParams
+		response: AttachmentsRemoveFromMessageResponse
+	}
+	"attachments:removeFromMessage:error": {
+		params: AttachmentsError
+		response: AttachmentsError
+	}
+	"attachments:readers": {
+		params: AttachmentsReadersParams
+		response: AttachmentsReadersResponse
+	}
+	"attachments:readers:error": {
+		params: AttachmentsError
+		response: AttachmentsError
 	}
 
 	// Jump — the shell's universal search overlay. Request and reply share the

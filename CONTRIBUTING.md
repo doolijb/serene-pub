@@ -33,6 +33,10 @@ Serene Pub is a SvelteKit app. A few starting points if you're getting oriented:
 - `src/lib/server/db/schema.ts` — the database schema (Drizzle ORM)
 - `docs/` — the user-facing documentation, also served in-app via the built-in Docs browser
 
+## Adding a Dependency
+
+`dependencies` is what the **built server** loads from `node_modules` at runtime, and it is exactly what the desktop bundles and the Docker image ship. adapter-node leaves those imports external and bundles everything else into `build/`. Anything only the browser uses (icons, editors, UI widgets), and every build, test or type-only tool, goes in `devDependencies`. Svelte component libraries count as browser-only: Vite compiles them into the server build. Some packages are loaded by name or path at runtime, where no import statement in `build/` shows them: the in-app component compiler's toolchain, the plugin and script sandboxes, and PGlite through drizzle. Those stay in `dependencies`, and `scripts/prune-dist.test.ts` lists them.
+
 ## Database Changes
 
 If your change touches `src/lib/server/db/schema.ts`, generate a migration rather than hand-writing one:
@@ -42,6 +46,13 @@ npm run db:generate
 ```
 
 `npm run db:studio` opens Drizzle Studio if you need to inspect the local database directly.
+
+A few things about the migration chain in `drizzle/` that generation will not tell you:
+
+- `0000`–`0093` are Serene Pub 0.5.3's migrations and must stay byte-identical: an existing install's ledger is matched to them by file hash. `0095_schema_0_6_0` takes a 0.5.3 schema to 0.6's. Two files around it are hand-written: `0094_entry_keys_text`, a SQL function a generated column needs, and `0096_link_description_not_null` (a `db:generate --custom` slot), which closes a gap generation cannot see — 0.5.3 created that column nullable while its snapshots record `NOT NULL DEFAULT ''`. Everything after is generated.
+- A new migration's index must be higher than the highest one already applied, or drizzle skips it silently — and a fresh test database cannot catch that. Check the journal's last entry before generating.
+- Seed rows belong in `src/lib/server/db/defaults.ts` (the boot-time defaults sync), never in a migration, and never at a hard-coded id.
+- Upgrading a 0.5.3 database is not done by migrations: its rows are set aside in an `attic_0_5_3` schema while `0095` runs, and the `attic` startup task brings them back in the 0.6 shape (`src/lib/server/attic/`). Its tests boot real 0.5.3 databases from `src/lib/server/db/fixtures/0.5.3/`.
 
 ## Before Opening a Pull Request
 

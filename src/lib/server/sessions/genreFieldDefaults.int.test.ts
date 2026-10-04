@@ -56,11 +56,13 @@ beforeAll(async () => {
 describe("genre field defaults (B16x)", () => {
 	it("a Lair session created with no preset has its declared defaults", async () => {
 		const session = await lairSession({})
-		// `sanctumSteers` (R13, 2026-09-28): on by default.
+		// `sanctumSteers` (R13, 2026-09-28): on by default. `partySpeech`
+		// (owner ruling 2026-09-30): each delver speaks, by default.
 		const expected = {
 			tone: "grounded",
 			trustNarrator: false,
-			sanctumSteers: true
+			sanctumSteers: true,
+			partySpeech: "each"
 		}
 		// The run's read (the inlet's `fields`) and the settings document agree.
 		expect(await genreFieldsFor(db, session.id)).toEqual(expected)
@@ -77,7 +79,8 @@ describe("genre field defaults (B16x)", () => {
 		expect(await genreFieldsFor(db, session.id)).toEqual({
 			tone: "grim",
 			trustNarrator: true,
-			sanctumSteers: true
+			sanctumSteers: true,
+			partySpeech: "each"
 		})
 	}, 60_000)
 
@@ -94,7 +97,12 @@ describe("genre field defaults (B16x)", () => {
 		// The owner ruled no back-compat: the JSON keeps the key, and no read
 		// passes it on — not the run's fields, not the settings document.
 		const session = await lairSession({ turnStyle: "narrator" })
-		const expected = { tone: "grounded", trustNarrator: false, sanctumSteers: true }
+		const expected = {
+			tone: "grounded",
+			trustNarrator: false,
+			sanctumSteers: true,
+			partySpeech: "each"
+		}
 		expect(await genreFieldsFor(db, session.id)).toEqual(expected)
 		expect((await resolveSessionSettings(db, session.id))!.fields).toEqual(
 			expected

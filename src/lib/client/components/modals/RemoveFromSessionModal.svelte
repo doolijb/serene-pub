@@ -7,7 +7,7 @@
 		onConfirm: () => void
 		onCancel: () => void
 		name?: string
-		type?: "character" | "persona"
+		type?: "character" | "persona" | "guest"
 	}
 
 	let {
@@ -18,6 +18,10 @@
 		name = "",
 		type = "character"
 	}: Props = $props()
+
+	const noun = $derived(
+		type === "persona" ? "persona" : type === "guest" ? "guest" : "character"
+	)
 </script>
 
 <Dialog {open} {onOpenChange}>
@@ -33,15 +37,15 @@
 			>
 				<header class="flex justify-between">
 					<h2 class="h2">
-						Remove {type === "persona" ? "Persona" : "Character"}?
+						Remove {noun}?
 					</h2>
 				</header>
 				<article>
 					<p class="opacity-60">
-						Are you sure you want to remove {type === "persona"
-							? "this persona"
-							: "this character"}{name ? ` (${name})` : ""} from the
-						session?
+						Are you sure you want to remove this {noun}{name
+							? ` (${name})`
+							: ""} from the session? It takes effect when you save
+						the session.
 					</p>
 				</article>
 				<footer class="flex justify-end gap-4">

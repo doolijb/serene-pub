@@ -1171,7 +1171,14 @@ export function deleteBrokenDir(
 /* -------------------------------------------------------------- restoring */
 
 /**
- * Open a data directory with PGlite in a process of its own, and run one query.
+ * The tables a restore reads end to end before it trusts the archive: the
+ * lorebooks, which no other file can rebuild.
+ */
+const RESTORE_PROBE_TABLES = ["lorebooks", "lorebook_entries"] as const
+
+/**
+ * Open a data directory with PGlite in a process of its own, and run one query
+ * — then read every row of the lorebook tables (`RESTORE_PROBE_TABLES`).
  *
  * The verification step, and the extraction step, in one child: PGlite's
  * `loadDataDir` untars into `dataDir` as part of opening it, so "did it extract"
@@ -1196,8 +1203,23 @@ const pg = await PGlite.create({
 })
 await pg.waitReady
 const res = await pg.query("select current_setting('server_version') as v")
-await pg.close()
 if (!res?.rows?.length) throw new Error("the restored database answered nothing")
+// Opening proves the catalog; it reads none of the data. Every page of the
+// lorebook tables is read too, when the backup has them (an empty database,
+// or one from before they existed, does not), so a dump whose user data is
+// unreadable fails here rather than after it replaced the live database.
+for (const table of ${JSON.stringify(RESTORE_PROBE_TABLES)}) {
+	const has = await pg.query("select to_regclass($1) as t", ["public." + table])
+	if (!has.rows[0]?.t) continue
+	try {
+		await pg.query("select count(*) from " + table)
+	} catch (e) {
+		// One line on stderr, which is what the failure names (\`lastLine\`).
+		process.stderr.write("its " + table + " table cannot be read: " + String(e?.message ?? e).split("\\n")[0] + "\\n")
+		process.exit(2)
+	}
+}
+await pg.close()
 process.stdout.write("ok " + res.rows[0].v)
 `
 	const entry = resolvePgliteEntry()

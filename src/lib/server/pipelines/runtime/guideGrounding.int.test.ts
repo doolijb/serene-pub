@@ -55,13 +55,6 @@ vi.mock("$lib/server/embedding/vectorizationQueue", () => ({
 vi.mock("$lib/server/sockets/utils/broadcastHelpers", () => ({
 	broadcastToSessionUsers: async () => {}
 }))
-vi.mock("$lib/server/utils/getUserConfigurations", () => ({
-	getUserConfigurations: async () => ({
-		contextConfig: { id: 1, template: "{{instructions}}" },
-		promptConfig: { id: 1, systemPrompt: "Be brief." },
-		narratorPromptConfig: null
-	})
-}))
 
 /** Every compiled prompt the adapter was handed — the wire's side. */
 const compiledPrompts: any[] = []
@@ -105,7 +98,7 @@ const emit = () => {}
 /** Is the docs-dist compiled here? Decided once, before the suite. */
 const compiled = (await loadSearchIndex()).length > 0
 
-async function createGuideSession(name: string) {
+async function createGuideSession(name: string, lorebookId?: number) {
 	const { sessionsCreateHandler } = await import("$lib/server/sockets/sessions")
 	const res: any = await sessionsCreateHandler.handler(
 		fakeSocket(userId),
@@ -119,12 +112,19 @@ async function createGuideSession(name: string) {
 		emit
 	)
 	expect(res?.error, res?.error).toBeUndefined()
+	if (lorebookId !== undefined) {
+		const { eq } = await import("drizzle-orm")
+		await db
+			.update(schema.sessions)
+			.set({ lorebookId })
+			.where(eq(schema.sessions.id, res.session.id))
+	}
 	return res.session.id as number
 }
 
 /** One guide turn on a fresh session; the whole prompt text and the receipt. */
-async function askGuide(question: string) {
-	const sessionId = await createGuideSession(question.slice(0, 40))
+async function askGuide(question: string, lorebookId?: number) {
+	const sessionId = await createGuideSession(question.slice(0, 40), lorebookId)
 	await db.insert(schema.sessionMessages).values({
 		sessionId,
 		userId,
@@ -239,5 +239,56 @@ describe("a question the docs do not cover", () => {
 		expect(text).toContain("No documentation excerpts matched the person's latest question.")
 		expect(text).toContain("I couldn't find that in the docs.")
 		expect(text).not.toContain("Documentation excerpts retrieved for the person's latest question.")
+	})
+})
+
+/**
+ * **The guide's lorebook is read every turn** (plan A28, 2026-09-30).
+ *
+ * The genre declares a lorebook — "the documentation it answers out of … a
+ * reference, read every turn and never added to" — and `guide-respond` read
+ * none, so a book a person attached to a guide session never reached a
+ * prompt. The guide's reply now reads its world lore by keyword, and its
+ * template places what matched beside the docs excerpts.
+ */
+describe("a lorebook attached to a guide session", () => {
+	async function bookWith(entry: { name: string; keys: string; content: string }) {
+		const { worldLoreValues } = await import("$lib/server/pipelines/testing/fixtures")
+		const [book] = await db
+			.insert(schema.lorebooks)
+			.values({ userId, name: `Reference ${entry.name}` })
+			.returning()
+		await db
+			.insert(schema.lorebookEntries)
+			.values(worldLoreValues([{ lorebookId: book!.id, ...entry }]))
+		return book!.id
+	}
+
+	it("an entry the question names reaches the prompt, as the book's own words", async () => {
+		const lorebookId = await bookWith({
+			name: "Studio backups",
+			keys: "backup rota",
+			content: "Our studio's backup rota: the night shift copies the data folder to the blue drive."
+		})
+		const { text, receipt } = await askGuide("Who runs the backup rota for the studio?", lorebookId)
+		expect(text).toContain("the night shift copies the data folder to the blue drive")
+		const lore = receipt.nodes.find((n) => n.nodeKey === "gather.worldLore.read")
+		expect(lore?.result).toBe("ok")
+		// Framed as the person's own reference, not as docs it cannot cite.
+		expect(text).toContain("From the lorebook attached to this session")
+		expect(text).not.toContain("{{")
+	})
+
+	it("an entry the question does not name stays out, and a session with no book reads none", async () => {
+		const lorebookId = await bookWith({
+			name: "Unrelated",
+			keys: "zeppelin",
+			content: "The zeppelin hangar is closed on Sundays."
+		})
+		const withBook = await askGuide("How do I add a character?", lorebookId)
+		expect(withBook.text).not.toContain("zeppelin hangar")
+		expect(withBook.text).not.toContain("From the lorebook attached to this session")
+		const without = await askGuide("How do I add a character to a session?")
+		expect(without.text).not.toContain("From the lorebook attached to this session")
 	})
 })

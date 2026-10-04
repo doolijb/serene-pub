@@ -1,20 +1,11 @@
 /**
  * Graph-build system prompts, in one place.
  *
- * Deliberately a standalone module with NO imports. Two very different callers
- * need these strings:
- *
- *   - graphBuilder.ts, at build time, as the fallback when no graphBuildConfigs
- *     row resolves;
- *   - db/defaults.ts, at boot, to seed and re-sync the immutable "Default Graph
- *     Build" config row.
- *
- * defaults.ts runs on the boot path, so it must not pull in graphBuilder's
- * adapter/LLM machinery just to read a string — hence the separate file rather
- * than exporting from graphBuilder. Keeping one definition is what stops the
- * seeded default and the code fallback drifting apart, which is exactly what
- * had happened before: the seeded row held a one-line stub bearing no
- * resemblance to the prompt actually being sent.
+ * Deliberately a standalone module with NO imports: graphBuilder.ts reads them
+ * at build time as the fallback when a step's pipeline prompt is blank, and
+ * the catalog's graph-build prompts are byte-checked against them
+ * (`seedPrompts.int.test.ts`), so neither needs graphBuilder's adapter/LLM
+ * machinery just to read a string.
  */
 
 /**

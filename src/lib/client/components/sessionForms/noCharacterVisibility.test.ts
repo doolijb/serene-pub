@@ -21,8 +21,8 @@ describe("the session form has no per-character visibility", () => {
 		expect(form).not.toContain("updateSessionCharacterVisibility")
 		expect(form).not.toContain("SessionCharacterVisibility")
 		expect(form).not.toContain("getNextVisibility")
-		// The active toggle beside it is still there.
-		expect(form).toContain("sessions:toggleSessionCharacterActive")
+		// The seat's enabled switch beside it is still there.
+		expect(form).toContain("sessions:setCastSeatEnabled")
 	})
 
 	it("the event is gone from the typed socket map and the interest list", () => {

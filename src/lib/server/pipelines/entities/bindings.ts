@@ -32,9 +32,9 @@ import {
 
 /**
  * The two scopes left (ruled 2026-08-24): the session's own row, else the
- * instance's. The user layer is gone from bindings and rebinds alike.
+ * pub's. The user layer is gone from bindings and rebinds alike.
  */
-export type ScopeAddress = { kind: "instance" | "session"; id: number }
+export type ScopeAddress = { kind: "pub" | "session"; id: number }
 
 /* --- bindings (19 §3; plans/31 V2) -------------------------------------- */
 
@@ -59,7 +59,7 @@ export async function bindSubject(
 		/**
 		 * The session's enabled-when override for the action (R-15; U5e),
 		 * riding the same row: a predicate list to set, `null` to clear,
-		 * absent to leave as it is. Session scope only — an instance-scope
+		 * absent to leave as it is. Session scope only — a pub-scope
 		 * row never carries one. Validated by the caller with the SDK's
 		 * `enabledWhenFindings`; stored in list form.
 		 */
@@ -313,7 +313,7 @@ async function shapeCompatible(
 /**
  * May `candidateId` stand in for a node pinned to `pinnedId` in the spec
  * `specSlug`? The one rule every door asks — the session picker's listing,
- * the run's rebind (session or instance scope) — so none can offer or apply
+ * the run's rebind (session or pub scope) — so none can offer or apply
  * what another refuses:
  *
  *  - **R53**: a node that uses a connection takes only core's stand-ins —
@@ -322,7 +322,7 @@ async function shapeCompatible(
  *    pipelines, so it stands in only there.
  *
  * Core's definitions are public to all. Reads the registry rows, never a
- * manifest, so what decides is what this instance installed.
+ * manifest, so what decides is what this pub installed.
  */
 export async function mayStandIn(
 	db: Db,
@@ -366,7 +366,7 @@ export async function mayStandIn(
 /**
  * Apply a scope's node rebinds to a loaded document — the load-time step.
  *
- * Consulted session > instance per node key; the winning row's type pin
+ * Consulted session > pub per node key; the winning row's type pin
  * replaces the document's, config carried as-is (the shape guard means the
  * ports agree; a strategy has no slots to disagree about). Returns the same
  * document object — `loadPublished` builds it fresh from rows per run, so
@@ -404,7 +404,7 @@ export async function applyNodeRebinds(
 			...(opts.sessionId != null
 				? [{ kind: "session", id: opts.sessionId } as ScopeAddress]
 				: []),
-			{ kind: "instance", id: 0 }
+			{ kind: "pub", id: 0 }
 		]
 
 		for (const node of doc.nodes ?? []) {
@@ -441,7 +441,7 @@ export async function applyNodeRebinds(
 			// The load-side guard: a rebind that went stale (type retired,
 			// re-projected away, never this shape) degrades to the pin.
 			if (!(await shapeCompatible(db, pinnedId, winner.definitionId))) continue
-			// …and so does one R53 or R62 forbids, at any scope — an instance
+			// …and so does one R53 or R62 forbids, at any scope — a pub
 			// row included, which the listing never sees.
 			if (!(await mayStandIn(db, opts.specSlug, pinnedId, winner.definitionId))) continue
 
@@ -451,7 +451,7 @@ export async function applyNodeRebinds(
 			if (opts.swaps)
 				opts.swaps[node.key] = {
 					pin: pinnedId,
-					by: winner.scopeKind === "session" ? "session" : "instance"
+					by: winner.scopeKind === "session" ? "session" : "pub"
 				}
 		}
 		return doc
@@ -523,6 +523,16 @@ export async function setSessionNodeRebind(
 		.where(eq(schema.sessions.id, opts.sessionId))
 		.limit(1)
 	if (!session) return { error: "That session no longer exists." }
+	// The creation pipeline's swaps, like its settings, only mean something
+	// while the session is being created (`CREATION_READ_ONLY_NOTE`).
+	{
+		const { sessionPipelines, CREATION_READ_ONLY_NOTE } = await import(
+			"$lib/server/pipelines/entities/sessionPipelines"
+		)
+		const { pipelines } = await sessionPipelines(db, opts.sessionId, opts.userId)
+		if (pipelines.find((p) => p.slug === opts.spec)?.creation === "created")
+			return { error: `${CREATION_READ_ONLY_NOTE} Nothing was saved.` }
+	}
 
 	const [spec] = await db
 		.select({
@@ -533,7 +543,7 @@ export async function setSessionNodeRebind(
 		.where(eq(schema.pipelineSpecs.slug, opts.spec))
 		.limit(1)
 	if (!spec?.activeVersionId)
-		return { error: `'${opts.spec}' is not a pipeline this instance publishes.` }
+		return { error: `'${opts.spec}' is not a pipeline this pub publishes.` }
 	const [version] = await db
 		.select({
 			inputGenre: schema.pipelineSpecVersions.inputGenre,
@@ -549,7 +559,7 @@ export async function setSessionNodeRebind(
 		}
 	// …and is a pipeline this session actually runs: for some event its lock
 	// answers, the session's own resolution picks this spec — the reply
-	// through the reply path's resolver (instance binding and companion rule
+	// through the reply path's resolver (pub binding and companion rule
 	// included), any other event through the event dispatcher's. A swap on a
 	// pipeline nothing runs here would be a choice with no effect, stored as
 	// if it had one. An action's spec is the session's whenever its action is
@@ -641,7 +651,7 @@ export async function setSessionNodeRebind(
  * plugins contribute to this spec and node, in install order, minus the ones
  * an admin switched off (`plugins.disabled_swaps`). Only live definitions
  * are offered. A node that declares no swaps offers nothing — never a shape
- * match, which is the admin panel's instance-scope list, not a session's.
+ * match, which is the admin panel's pub-scope list, not a session's.
  */
 export async function listSessionNodeSwaps(
 	db: Db,

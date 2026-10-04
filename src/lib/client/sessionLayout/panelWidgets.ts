@@ -13,9 +13,10 @@
  * to `pinned:false` here, the same as "icons". Plan 25 doesn't yet define a
  * distinct narrow-overlay behavior of its own; this bridge doesn't invent one.
  */
+import type { GridWidget, ZoneId } from "@serene-pub/sdk"
 import type { PanelInstance } from "../surfaces/types"
 import type { ResolvedZone } from "./schema"
-import { cellsFromPx, type WidgetConfig, type Zone } from "./widgetGrid"
+import { cellsFromPx } from "./widgetGrid"
 
 /**
  * The widgets a set of resolved side zones would carry under the PLAN-25
@@ -34,12 +35,12 @@ export function widgetsFromSideZones(
 	instances: PanelInstance[],
 	cell: number,
 	isConversation: (id: string) => boolean = () => false
-): WidgetConfig[] {
+): GridWidget[] {
 	const byId = new Map(instances.map((p) => [p.id, p]))
-	const widgets: WidgetConfig[] = []
+	const widgets: GridWidget[] = []
 	for (const z of zones) {
 		if (z.def.kind !== "side" || z.mode === "hidden") continue
-		const zone: Zone = z.def.side === "left" ? "left" : "right"
+		const zone: ZoneId = z.def.side === "left" ? "left" : "right"
 		// A docked rail takes layout space (pinned); icons AND the narrow-width
 		// drawer overlay both collapse the same way a plan-25 unpinned widget
 		// does — see the module doc for why drawer folds in here too.

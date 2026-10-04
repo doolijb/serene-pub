@@ -63,10 +63,7 @@ async function bootSeed() {
 	)
 	const dbModule = await import("$lib/server/db")
 	const genres = await listSessionGenres(dbModule.db)
-	await syncLayoutPresets([
-		{ genreId: STANDARD_GENRE_ID },
-		...genres.map((g) => ({ genreId: g.genreId }))
-	])
+	await syncLayoutPresets([STANDARD_GENRE_ID, ...genres.map((g) => g.genreId)])
 	return genres
 }
 
@@ -84,14 +81,14 @@ const seededFor = (genreId: string) =>
 			)
 		)
 
-describe("boot seeds a default layout preset per genre", () => {
+describe("boot seeds every core genre's layouts", () => {
 	// ⚠ ORDER-SENSITIVE, deliberately. These tests share one database, so only
 	// the FIRST pass runs against a pristine one — and a pristine database is
 	// the only place the seed-after-publish ordering is observable. Run the
 	// ordering assertion later and a previous pass's published specs mask a
 	// seed that ran too early. Keep this test first.
 	test(
-		"one boot pass on a fresh database seeds every genre it publishes",
+		"one boot pass on a fresh database seeds every core genre it publishes",
 		async () => {
 			const genres = await bootSeed()
 			// Empty here means the genre list was read before the specs were
@@ -100,24 +97,35 @@ describe("boot seeds a default layout preset per genre", () => {
 				genres.length,
 				"no genres visible at seed time — the seed ran before the specs were published"
 			).toBeGreaterThan(0)
+			const { getGenre } = await import("@serene-pub/sdk")
 			for (const g of genres) {
 				const rows = await seededFor(g.genreId)
+				// A plugin's genre is its owner's to lay out; core seeds only its own.
+				if (!g.genreId.startsWith("core:")) {
+					expect(rows, `core seeded ${g.genreId}`).toHaveLength(0)
+					continue
+				}
 				expect(
 					rows,
 					`no default preset seeded for ${g.genreId}`
 				).toHaveLength(1)
+				// …holding exactly the layout the genre declares, or the floor.
+				expect(rows[0].layout, g.genreId).toEqual(
+					getGenre(g.genreId)?.layouts?.[0]?.preset ?? {}
+				)
 			}
-			// …and the standard floor, unioned in regardless.
+			// …and the standard genre, unioned in regardless — Chat, whose
+			// default places the Author's note (2026-10-03).
 			const std = await seededFor("core:genre/chat")
 			expect(std).toHaveLength(1)
-			expect(std[0].name).toBe("Default")
-			expect(std[0].layout).toEqual({})
+			expect(std[0].name).toBe("Chat")
+			expect(std[0].layout).toEqual(getGenre("core:genre/chat")?.layouts?.[0]?.preset)
 		},
 		60_000
 	)
 
 	test(
-		"a second boot changes nothing — same rows, same ids",
+		"a second boot writes nothing — same rows, same ids, no timestamp moved",
 		async () => {
 			await bootSeed()
 			const before = await testDb
@@ -131,6 +139,10 @@ describe("boot seeds a default layout preset per genre", () => {
 				before.map((r) => r.id).sort()
 			)
 			expect(after).toHaveLength(before.length)
+			// Nothing re-forced: `updated_at` and `layout_updated_at` are the
+			// first boot's, so no shipped layout reads as Updated.
+			const byId = new Map(before.map((r) => [r.id, r]))
+			for (const r of after) expect(r).toEqual(byId.get(r.id))
 		},
 		60_000
 	)

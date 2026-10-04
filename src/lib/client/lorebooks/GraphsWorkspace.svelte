@@ -1,13 +1,9 @@
 <script lang="ts">
-	import Select from "$lib/client/components/inputs/Select.svelte"
 	import * as Icons from "@lucide/svelte"
-	import { getContext, onDestroy, onMount } from "svelte"
+	import { getContext, onDestroy, onMount, untrack } from "svelte"
 	import { SvelteSet } from "svelte/reactivity"
 	import { useTypedSocket } from "$lib/client/sockets/typedSocket"
-	import {
-		declareInterest,
-		useInterest
-	} from "$lib/client/sockets/interest.svelte"
+	import { useInterest } from "$lib/client/sockets/interest.svelte"
 	import { interestKey } from "$lib/shared/sockets/interest"
 	import PanelToolbar from "$lib/client/components/panels/PanelToolbar.svelte"
 	import PipelineConfigOptions from "$lib/client/components/pipelines/PipelineConfigOptions.svelte"
@@ -23,22 +19,34 @@
 		HISTORY_TYPE_ID,
 		LOCATION_TYPE_ID
 	} from "$lib/shared/entries/types"
-	import { rowsReadingOnLine } from "$lib/shared/lorebooks/lineReading"
+	import { extendCountsOf } from "$lib/shared/lorebooks/graphBuildScope"
 	import { awaitReply, isReplyTimeout } from "$lib/client/utils/awaitReply"
 	import { formatDate } from "./sections/historyDates"
 	import { openBookTime } from "./time/bookTime.svelte"
 	import LinkForm from "./graphs/LinkForm.svelte"
 	import NodePanel from "./graphs/NodePanel.svelte"
+	import RelationshipFields from "./graphs/RelationshipFields.svelte"
+	import { getBookRelationships } from "./relationships.svelte"
+	import { getBookData } from "./bookData.svelte"
 	import RelationshipsCanvas from "./graphs/RelationshipsCanvas.svelte"
-	import PlacesBoard from "./places/PlacesBoard.svelte"
-	import { buildPlacesMap } from "./places/placesMap"
+	import NewPlaceField from "./places/NewPlaceField.svelte"
+	import { linkFieldsDiffer, placeLinkFields } from "./places/placeLinks"
+	import {
+		buildPlaceGraph,
+		linkCandidates as linkCandidatesOf,
+		newPlaceEntry,
+		placeGraphHeadline,
+		relationshipsOfPlaces,
+		placeNode,
+		type LoreRowLike,
+		type PlaceRowLike
+	} from "./places/placeGraph"
 	import {
 		edgesAtMoment,
 		edgesOnLine,
 		type DatedEntryLike
 	} from "./graphs/asOf"
 	import {
-		bumpLinkCounts,
 		castKey,
 		ceilingFactsFrom,
 		ceilingLine,
@@ -49,18 +57,27 @@
 		graphNodes,
 		nodeNames,
 		panelEdges,
+		sideColumnView,
 		type CeilingFacts,
 		type GraphEdge,
 		type GraphNode
 	} from "./graphs/graphModel"
 	import {
 		createLinkParams,
-		isReplyFor,
+		linkDraftChanged,
 		newLinkDraft,
+		relationshipFieldsProblem,
+		updateLinkParams,
 		whenAtMoment,
 		whenOptions,
 		type LinkDraft
 	} from "./graphs/linkDraft"
+	import {
+		linkPairingOf,
+		relationshipEndRef,
+		relationshipSentence,
+		type RelationshipEndRef
+	} from "$lib/shared/lorebooks/linkVocabulary"
 	import {
 		edgedCastPairs,
 		notDrawnSentence,
@@ -69,7 +86,13 @@
 	} from "./graphs/sceneGaps"
 	import { loreRoute } from "./loreRoute.svelte"
 	import { graphBuildReason, type LoreDrawing } from "./graphs"
-	import { SCOPE_KIND, SCOPE_LABELS } from "$lib/shared/lorebooks/loreRoute"
+	import { lensEmptyMessage } from "./lenses/registry"
+	import {
+		SCOPE_KIND,
+		SCOPE_LABELS,
+		reduce,
+		type LoreScope
+	} from "$lib/shared/lorebooks/loreRoute"
 	import { stateBadge, visibilityBadge } from "./cast/castVocabulary"
 	import { momentDate, momentLabel } from "./time/moment"
 
@@ -126,23 +149,20 @@
 	const GRAPH_PIPELINE_SLUG = "core:spec/graph-build"
 
 	/**
-	 * The kinds that can be a node, a box on the map, or a date on an edge:
-	 * every declared entry type, so the Places lens has its locations and the
-	 * Items scope its items (#117).
+	 * The kinds that can be a node or a date on an edge: every declared entry
+	 * type, so the Items scope has its items (#117).
 	 */
 	const ENTRY_KINDS = ENTRY_TYPE_IDS
 
-	const RELATIONSHIP_STATUSES = [
-		"active",
-		"resolved",
-		"broken",
-		"evolved"
-	] as const
-	const RELATIONSHIP_VISIBILITIES = [
-		"acknowledged",
-		"secret",
-		"public"
-	] as const
+	/**
+	 * The book, as the workspace holds it (plan B4): this lens asks for
+	 * nothing on mount and keeps no copy. Its rows are the workspace's
+	 * RESOLVED ones — every drawing, not only Places, names an entry as it
+	 * reads at the moment (the graph lens drew stored names beside Places'
+	 * amended ones).
+	 */
+	const book = getBookData()
+
 	const REL_STATUS_BADGE: Record<string, string> = {
 		active: "preset-tonal-success",
 		resolved: "preset-tonal-surface",
@@ -150,39 +170,27 @@
 		evolved: "preset-tonal-warning"
 	}
 
-	let nodes = $state<NarrativeNode[]>([])
-	let relationships = $state<NarrativeRelationship[]>([])
-	let entriesByKind = $state<Record<string, any[]>>({})
-	let scenes = $state<SceneRow[]>([])
-	let isLoading = $state(true)
 	/**
-	 * Why the graph is not on screen, when it is not.
-	 *
-	 * ⚠ Before this, `isLoading` began `true` and was cleared by the success
-	 * handler alone: a load that could only succeed. A refused read, a dropped
-	 * socket or a handler that threw all left the spinner turning for as long
-	 * as the panel stayed open, with nothing said and nothing to press. The
-	 * server has always emitted `narrativeGraph:list:error` — the register
-	 * wrapper builds the name — and nothing listened for it.
+	 * The book's relationships and the cast rows they name — the workspace's
+	 * one store (plan places-graph B3), which the References panel reads too.
+	 * It owns the read, the three relationship pushes, and what a failed or
+	 * silent read says; this lens reads it and writes through it.
 	 */
-	let loadError = $state<string | null>(null)
+	const rels = getBookRelationships()
+	let nodes = $derived(rels.nodes)
+	let relationships = $derived(rels.all)
+	/** Every scene of the book on every line (a session's Extend count). */
+	let scenes = $derived(book.allScenes as unknown as SceneRow[])
+	/** The resolved rows the Places lens draws from. */
+	let resolvedEntries = $derived(book.rows as Record<string, readonly unknown[]>)
 	/**
-	 * The failure nobody reports: silence.
-	 *
-	 * An `:error` covers a handler that threw. It does not cover a socket that
-	 * went away mid-flight, which produces no reply at all — and "no reply" is
-	 * indistinguishable from "still loading" without a clock.
+	 * Why the graph is not on screen, when it is not: a refused read or a
+	 * silent one (the store's clock), never a spinner left turning.
 	 */
-	const LOAD_TIMEOUT_MS = 20_000
-	let loadTimer: ReturnType<typeof setTimeout> | null = null
+	let loadError = $derived(rels.error)
+	let isLoading = $derived(!rels.loaded)
 
-	function clearLoadTimer() {
-		if (loadTimer !== null) {
-			clearTimeout(loadTimer)
-			loadTimer = null
-		}
-	}
-
+	// Main's build counts: what Rebuild, and Extend graph on main, read.
 	let ungraphedSceneCount = $state(0)
 	let ungraphedUnsummarizedCount = $state(0)
 	let totalSummarizedCount = $state(0)
@@ -190,12 +198,12 @@
 	let unresolvedCastSceneCount = $state(0)
 	let namelessBindingCount = $state(0)
 	let totalDirectHistoryEntryCount = $state(0)
+	/** Each branch's own build counts: what Extend graph on it reads. */
+	let branchCounts = $state<
+		Sockets.NarrativeGraph.List.Response["branchCounts"]
+	>([])
 	/** What a Rebuild would delete — the confirmation warns with it. */
-	let relationshipCounts = $state<Sockets.NarrativeGraph.RelationshipCounts>({
-		total: 0,
-		entryToEntry: 0,
-		castToEntry: 0
-	})
+	let relationshipCounts = $derived(rels.counts)
 
 	/**
 	 * Nothing shuts the build: summarizing is a capability every instance has.
@@ -210,8 +218,29 @@
 		null
 	)
 
-	let selectedRel = $state<NarrativeRelationship | null>(null)
+	/**
+	 * The relationship open beside the canvas, by id: read through the store,
+	 * so an edit from anywhere shows here and a delete closes it.
+	 */
+	let selectedRelId = $state<number | null>(null)
+	let selectedRel = $derived<NarrativeRelationship | null>(
+		selectedRelId === null ? null : (rels.get(selectedRelId) ?? null)
+	)
 	let editingRel = $state<NarrativeRelationship | null>(null)
+	/**
+	 * The stored fields the open edit started from (PlaceLinks' rule, plan
+	 * B7). An edit made elsewhere — another tab, a place's Links row — moves
+	 * the store's row away from them: with nothing typed here the form
+	 * follows it; with something typed it says so, rather than a Save
+	 * quietly putting the old values back.
+	 */
+	let editingFrom = $state<ReturnType<typeof placeLinkFields> | null>(null)
+	let relStaleNote = $state(false)
+	/**
+	 * The open relationship's delete is waiting on a second press. A delete
+	 * is permanent, so the first press only asks.
+	 */
+	let confirmingRelDelete = $state<number | null>(null)
 	/** A relationship edit is on its way; only the edit form reads it. */
 	let isSaving = $state(false)
 	/** Why the last relationship edit failed, said in the form. */
@@ -228,6 +257,20 @@
 	let appliedBaseline: Set<number> | null = null
 
 	let linkDraft = $state<LinkDraft | null>(null)
+	/**
+	 * The new link's form as it opened: touched, it is an unsaved change and
+	 * leaving it asks first (plan B7 — it never counted before).
+	 */
+	let linkDraftFrom = $state<LinkDraft | null>(null)
+	/**
+	 * Each draft is its own form: a new drag or pick remounts it, so what the
+	 * last one was doing (making a place) does not carry over.
+	 */
+	let linkFormKey = $state(0)
+	/** The draft was opened for New place…, holding what had been typed. */
+	let linkNewPlace = $state<{ name: string } | null>(null)
+	/** The Places lens's toolbar is making a place. */
+	let newPlaceOpen = $state(false)
 	let isConnecting = $state(false)
 	/** Why the last Name it failed, said in the link form. */
 	let linkError = $state<string | null>(null)
@@ -265,31 +308,22 @@
 	 */
 	let line = $derived(openBookTime.lineOf(route.branch ?? null))
 
-	/** A row's own story date (only History carries one), for the fork cut. */
-	function rowDate(row: any) {
-		return typeof row?.year === "number"
-			? { year: row.year, month: row.month ?? null, day: row.day ?? null }
-			: null
-	}
-
 	/**
 	 * The entries this line reads, archived ones left out (the pool's and the
-	 * rail's rule). A shared row dated after the fork is cut from a branch.
+	 * rail's rule) — the workspace's resolved rows, already cut to the line
+	 * (a shared row dated after a fork is not a branch's) and read as of the
+	 * moment, so an amended name or a dated archive draws here too.
 	 */
 	let lineEntriesByKind = $derived.by(() => {
 		const out: Record<string, any[]> = {}
-		for (const [kind, rows] of Object.entries(entriesByKind))
-			out[kind] = rowsReadingOnLine(
-				rows.filter((r) => !r.archived),
-				line,
-				rowDate
-			)
+		for (const [kind, rows] of Object.entries(book.rows))
+			out[kind] = (rows as any[]).filter((r) => !r.archived)
 		return out
 	})
 
-	/** Every history entry the book holds — what dates any link. */
+	/** Every history entry the book holds, as stored — what dates any link. */
 	let allHistoryEntries = $derived(
-		(entriesByKind[HISTORY_TYPE_ID] ?? []) as DatedEntryLike[]
+		(book.rawRows[HISTORY_TYPE_ID] ?? []) as unknown as DatedEntryLike[]
 	)
 	/** The history entries on this line — what a link here can be dated by. */
 	let historyEntries = $derived(
@@ -310,7 +344,7 @@
 	let lineRelationships = $derived(
 		edgesOnLine(relationships, line, allHistoryEntries)
 	)
-	let lineScenes = $derived(rowsReadingOnLine(scenes as any[], line) as SceneRow[])
+	let lineScenes = $derived(book.scenes as unknown as SceneRow[])
 
 	/**
 	 * The entries the scope holds.
@@ -334,14 +368,17 @@
 		return out
 	})
 
-	/** Alias rows fold into the parent they were absorbed into. */
-	let parentNodes = $derived(nodes.filter((n) => !n.parentNodeId))
+	/**
+	 * Alias rows fold into the parent they were absorbed into. Each member
+	 * as they read at the moment, on the line — the workspace's cast
+	 * resolver, so a dated rename draws on the canvas as it does on Cast.
+	 */
+	let parentNodes = $derived(
+		book.resolveCast(nodes.filter((n) => !n.parentNodeId))
+	)
 
 	let visibleRelationships = $derived(
 		edgesAtMoment(lineRelationships, route.moment, allHistoryEntries)
-	)
-	let heldBack = $derived(
-		lineRelationships.length - visibleRelationships.length
 	)
 
 	let selectedKey = $derived<string | null>(
@@ -352,16 +389,71 @@
 				: null
 	)
 
-	let graph = $derived(
-		graphNodes({
+	/**
+	 * The Places lens: the book's places, resolved, and the category chip
+	 * narrowing them (plan places-graph B4). A chip whose category has gone
+	 * reads as none.
+	 */
+	let placeRows = $derived(
+		(resolvedEntries[LOCATION_TYPE_ID] ?? []) as PlaceRowLike[]
+	)
+	let otherEntryRows = $derived(
+		Object.entries(resolvedEntries)
+			.filter(([typeId]) => typeId !== LOCATION_TYPE_ID)
+			.flatMap(([, rows]) => rows) as LoreRowLike[]
+	)
+	let placeCategoryChip = $state<string | null>(null)
+	let places = $derived(
+		buildPlaceGraph({
+			places: placeRows,
+			otherEntries: otherEntryRows,
 			cast: parentNodes,
 			relationships: visibleRelationships,
-			scopeEntries,
-			selectedKey
+			category: placeCategoryChip,
+			newIds: newEdgeIds
 		})
 	)
+	let placeCategory = $derived(places.category)
+
+	/** Links the moment holds back — on the Places lens, a place's only. */
+	let heldBack = $derived(
+		drawing === "places"
+			? relationshipsOfPlaces(lineRelationships, places.placeIds).length -
+					relationshipsOfPlaces(visibleRelationships, places.placeIds).length
+			: lineRelationships.length - visibleRelationships.length
+	)
+
+	/** The nodes on the canvas: the whole web, or the places. */
+	let graph = $derived(
+		drawing === "places"
+			? places.nodes
+			: graphNodes({
+					cast: parentNodes,
+					relationships: visibleRelationships,
+					scopeEntries,
+					selectedKey
+				})
+	)
 	let nodeKeys = $derived(new Set(graph.map((n) => n.key)))
-	let edges = $derived(graphEdges(visibleRelationships, nodeKeys, newEdgeIds))
+	let edges = $derived(
+		drawing === "places"
+			? places.edges
+			: graphEdges(visibleRelationships, nodeKeys, newEdgeIds)
+	)
+	/**
+	 * What a new link's far end may be: the canvas, and every place on the
+	 * line — one the category chip hides included. The Places map draws only
+	 * the members already joined to a place, so it offers the whole cast too:
+	 * a place's first keeper is picked here, not drawn elsewhere first.
+	 */
+	let castCandidates = $derived(
+		drawing === "places"
+			? graphNodes({ cast: parentNodes, relationships: [], scopeEntries: [] })
+			: []
+	)
+	let linkCandidates = $derived(
+		linkCandidatesOf(graph, placeRows, castCandidates)
+	)
 	let names = $derived(nodeNames(graph))
 	let selectedNode = $derived(
 		selectedKey ? (graph.find((n) => n.key === selectedKey) ?? null) : null
@@ -369,16 +461,64 @@
 	let panelRows = $derived(panelEdges(selectedKey, edges, names))
 
 	/**
-	 * Whether the column beside the canvas has anything to say. The graph
-	 * lists its nodes there; the Places map is its own list, so beside it the
-	 * column appears only for something picked (#122).
+	 * The open relationship said from each of its ends, through the one
+	 * sentence builder — "The rusted iron door leads north to the Drowned
+	 * Hall." from one side, "…leads south to the Guardroom." from the other.
+	 * Only with an entry at an end: a cast tie's other side is its own
+	 * perspective row, not a way back.
 	 */
-	let hasSideColumn = $derived(
-		drawing === "relationships" ||
-			linkDraft !== null ||
-			selectedRel !== null ||
-			selectedNode !== null
+	let selectedSentences = $derived.by(() => {
+		const rel = selectedRel
+		if (!rel || (rel.from.kind === "cast" && rel.to.kind === "cast"))
+			return []
+		const nameOf = (end: RelationshipEndRef) =>
+			names.get(end.kind === "cast" ? castKey(end.id) : entryKey(end.id)) ??
+			`#${end.id}`
+		return [rel.from, rel.to].map((end) => {
+			const subject = relationshipEndRef(end)
+			return {
+				key: `${subject.kind}#${subject.id}`,
+				subject: nameOf(subject),
+				sentence: relationshipSentence(rel, subject, nameOf)
+			}
+		})
+	})
+
+	/**
+	 * What the column beside the canvas shows (`sideColumnView`). The graph
+	 * lists its nodes there; beside the Places lens the column appears only
+	 * for something picked — a place, a link, a link being named (#122) — so
+	 * the map keeps the width. A link picked from a selected place's panel,
+	 * or on the canvas while a place is selected, shows over the place.
+	 */
+	let sideView = $derived(
+		sideColumnView({
+			drawing,
+			linking: linkDraft !== null,
+			relationshipOpen: selectedRel !== null,
+			nodeOpen: selectedNode !== null
+		})
 	)
+	let hasSideColumn = $derived(sideView !== null)
+
+	/**
+	 * Another node picked by anything but a click here — the address, Back,
+	 * a member deleted — lets go of the link open beside the last one, which
+	 * would otherwise stand over the new node's panel. A click goes through
+	 * `selectNode`, which lets go itself.
+	 */
+	let heldKey: string | null = null
+	$effect(() => {
+		const key = selectedKey
+		untrack(() => {
+			if (key === heldKey) return
+			heldKey = key
+			if (selectedRelId === null) return
+			selectedRelId = null
+			confirmingRelDelete = null
+			resetRelForm()
+		})
+	})
 
 	let edgedPairs = $derived(edgedCastPairs(lineRelationships))
 	let scenesWithNothingNamed = $derived(
@@ -402,7 +542,9 @@
 	})
 
 	let headline = $derived(
-		graphHeaderLine({
+		drawing === "places"
+			? placeGraphHeadline(places, placeCategory)
+			: graphHeaderLine({
 			scopeLabel: SCOPE_LABELS[route.scope],
 			entriesWithLinks: entriesWithLinks(
 				scopeEntries,
@@ -414,30 +556,6 @@
 		})
 	)
 
-	let castNames = $derived(
-		new Map(parentNodes.map((n) => [n.id, displayName(n)]))
-	)
-
-	/**
-	 * The book's places: its location entries on this line, archived ones
-	 * left out — the one definition the rail's Places count uses (#117).
-	 */
-	let placeEntries = $derived(
-		(lineEntriesByKind[LOCATION_TYPE_ID] ?? []).map((row) => ({
-			id: row.id as number,
-			name: ((row.name ?? "") as string).trim() || `#${row.id}`,
-			parentId: (row.anchorEntryId ?? null) as number | null,
-			place: true
-		}))
-	)
-
-	let placesMap = $derived(
-		buildPlacesMap({
-			entries: placeEntries,
-			relationships: visibleRelationships,
-			castNames
-		})
-	)
 
 	/**
 	 * What the last turn sent of the graph it walked.
@@ -451,42 +569,58 @@
 	)
 	let ceiling = $derived(ceilingLine(ceilingFacts))
 
-	let activeBuild = $derived(
-		graphBuildsCtx?.activeBuild?.lorebookId === lorebookId
-			? graphBuildsCtx.activeBuild
-			: null
-	)
+	/** This book's build — never another book's newer one (plan B8). */
+	let activeBuild = $derived(graphBuildsCtx?.buildFor(lorebookId) ?? null)
 	/**
-	 * The session an Extend reads, or null for the whole book: the open
-	 * session, when it is the one reading this book (#51).
+	 * The session an Extend reads, or null for the whole line: the open
+	 * session, when it reads this book on the line being read (#51). Reading
+	 * another line, Extend graph builds that line (plan A3 review).
 	 */
 	let extendSessionId = $derived(
 		openSessionCtx?.sessionId != null &&
-			openSessionCtx.lorebookId === lorebookId
+			openSessionCtx.lorebookId === lorebookId &&
+			(openSessionCtx.lorebookBranchId ?? null) === line.branchId
 			? openSessionCtx.sessionId
 			: null
 	)
-	/** That session's scenes the graph has not read, split by readiness. */
-	let sessionUngraphed = $derived.by(() => {
-		let ready = 0
-		let unsummarized = 0
-		if (extendSessionId === null) return { ready, unsummarized }
-		for (const s of scenes) {
-			if (s.sessionId !== extendSessionId || s.graphed) continue
-			if (s.summary?.trim()) ready++
-			else unsummarized++
+	/**
+	 * That session's scenes on its line the graph has not read, by the
+	 * build's own rule (`extendCountsOf`).
+	 */
+	let sessionUngraphed = $derived(
+		extendSessionId === null
+			? { ready: 0, unsummarized: 0, unresolvedCast: 0 }
+			: extendCountsOf(scenes, {
+					branchId: line.branchId,
+					sessionId: extendSessionId
+				})
+	)
+	/** What Extend graph on the line being read reads: its own, counted by the server. */
+	let lineCounts = $derived.by(() => {
+		if (line.branchId === null)
+			return {
+				ungraphedSceneCount,
+				ungraphedUnsummarizedCount,
+				ungraphedHistoryEntryCount,
+				unresolvedCastSceneCount
+			}
+		const own = branchCounts.find((c) => c.branchId === line.branchId)
+		return {
+			ungraphedSceneCount: own?.ungraphedSceneCount ?? 0,
+			ungraphedUnsummarizedCount: own?.ungraphedUnsummarizedCount ?? 0,
+			ungraphedHistoryEntryCount: own?.ungraphedHistoryEntryCount ?? 0,
+			unresolvedCastSceneCount: own?.unresolvedCastSceneCount ?? 0
 		}
-		return { ready, unsummarized }
 	})
 	let extendReadyCount = $derived(
 		extendSessionId !== null
 			? sessionUngraphed.ready
-			: ungraphedSceneCount + ungraphedHistoryEntryCount
+			: lineCounts.ungraphedSceneCount + lineCounts.ungraphedHistoryEntryCount
 	)
 	let extendUnsummarizedCount = $derived(
 		extendSessionId !== null
 			? sessionUngraphed.unsummarized
-			: ungraphedUnsummarizedCount
+			: lineCounts.ungraphedUnsummarizedCount
 	)
 	let buildProgressPercent = $derived.by(() => {
 		if (!activeBuild || activeBuild.status !== "building") return 0
@@ -503,31 +637,74 @@
 		)
 	})
 
-	/**
-	 * Only the relationship form is edited here. Compares the fields it binds
-	 * to and nothing else: `embedding` moves whenever the app re-vectorizes, so
-	 * a whole-object diff would report dirty for something nobody typed.
-	 */
+	/** The stored row of the link being edited; gone when a push deleted it. */
+	let relStored = $derived(
+		editingRel
+			? (relationships.find((r) => r.id === editingRel!.id) ?? null)
+			: null
+	)
+	/** Something typed in the edit since it opened (or last followed). */
+	let relTypedHere = $derived(
+		!!editingRel && !!editingFrom && linkFieldsDiffer(editingFrom, editingRel)
+	)
+	/** The stored row moved since the edit opened. */
+	let relChangedElsewhere = $derived(
+		!!relStored &&
+			!!editingFrom &&
+			linkFieldsDiffer(placeLinkFields(relStored), editingFrom)
+	)
 	$effect(() => {
-		const current = editingRel
-		if (!current) {
-			hasUnsavedChanges = false
-			return
-		}
-		const original = relationships.find((r) => r.id === current.id)
-		// Gone out from under an open form leaves nothing to discard back to.
-		if (!original) {
-			hasUnsavedChanges = false
-			return
-		}
-		hasUnsavedChanges =
-			current.relationshipType !== original.relationshipType ||
-			current.status !== original.status ||
-			current.visibility !== original.visibility ||
-			current.description !== original.description ||
-			current.reason !== original.reason ||
-			current.historyEntryId !== original.historyEntryId
+		if (!relChangedElsewhere || !relStored) return
+		const stored = relStored
+		untrack(() => {
+			if (relTypedHere) {
+				relStaleNote = true
+				return
+			}
+			editingRel = $state.snapshot(stored) as NarrativeRelationship
+			editingFrom = placeLinkFields(stored)
+			relStaleNote = false
+		})
 	})
+
+	/**
+	 * What leaving would throw away: the link edit's typing (compared field
+	 * by field, never the whole object — `embedding` moves whenever the app
+	 * re-vectorizes), and a new link's form once touched. A link deleted out
+	 * from under its edit leaves nothing to discard back to.
+	 */
+	let formsDirty = $derived(
+		(relTypedHere && relStored !== null) ||
+			(linkDraft !== null &&
+				(linkNewPlace !== null ||
+					(linkDraftFrom !== null &&
+						linkDraftChanged(linkDraftFrom, linkDraft))))
+	)
+	$effect(() => {
+		hasUnsavedChanges = formsDirty
+	})
+
+	/**
+	 * The one way off an open form (plan B7): ask first, then close both
+	 * forms and drop the guard — written here, not left to the effect above,
+	 * because the very next line is usually a transition, and a transition
+	 * must not ask about a form already thrown away. Every selection change
+	 * on the canvas goes through this; Cancel on a form is the author's own
+	 * discard, and does not ask.
+	 */
+	async function leaveForms(): Promise<boolean> {
+		if (formsDirty && !(await loreRoute.confirmLeave())) return false
+		resetRelForm()
+		resetLinkForm()
+		hasUnsavedChanges = false
+		return true
+	}
+
+	function openRelEdit(rel: NarrativeRelationship) {
+		editingRel = $state.snapshot(rel) as NarrativeRelationship
+		editingFrom = placeLinkFields(rel)
+		relStaleNote = false
+	}
 
 	// The activity sidebar asks for the build modal by naming the book.
 	$effect(() => {
@@ -567,22 +744,41 @@
 		)
 	}
 
-	/** Opening a node is opening the thing it stands for. */
+	/**
+	 * Opening a node is opening the thing it stands for: a member in Cast, an
+	 * entry in its editor. A drawing lens has no editor, so an entry opens in
+	 * the List lens — in the scope being read when that scope holds its kind,
+	 * else in All (plan places-graph §10.2: a place opens its place editor).
+	 * One transition, so the unsaved-changes guard asks once.
+	 */
 	function openNode(node: GraphNode) {
 		if (node.kind === "cast") {
 			onEditMember(node.id)
 			return
 		}
-		void loreRoute.navigate({
-			type: "openEntry",
-			entryId: node.id
-		})
+		const kind =
+			node.typeId ??
+			Object.entries(book.rawRows).find(([, rows]) =>
+				rows.some((row) => row.id === node.id)
+			)?.[0]
+		const narrowsTo = SCOPE_KIND[route.scope]
+		const scope: LoreScope =
+			route.scope !== "cast" && (!narrowsTo || narrowsTo === kind)
+				? route.scope
+				: "all"
+		void loreRoute.navigateTo(
+			reduce(reduce(route, { type: "setLens", lens: "list" }), {
+				type: "openEntry",
+				entryId: node.id,
+				scope,
+				castId: null
+			})
+		)
 	}
 
-	function selectNode(node: GraphNode | null) {
-		selectedRel = null
-		resetRelForm()
-		resetLinkForm()
+	async function selectNode(node: GraphNode | null) {
+		if (!(await leaveForms())) return
+		selectedRelId = null
 		if (!node) {
 			void loreRoute.navigate({ type: "openCastMember", castId: null })
 			return
@@ -597,12 +793,18 @@
 		if (mode === "compact") canvasOpen = false
 	}
 
-	function selectEdge(edge: GraphEdge) {
-		const rel = relationships.find((r) => r.id === edge.id) ?? null
+	async function selectEdge(edge: GraphEdge) {
+		if (!rels.get(edge.id)) return
+		if (!(await leaveForms())) return
+		const rel = rels.get(edge.id)
 		if (!rel) return
-		selectedRel = rel
-		resetRelForm()
-		resetLinkForm()
+		selectedRelId = edge.id
+		confirmingRelDelete = null
+		// The Places lens is a designer: a link clicked is a link to edit,
+		// unless another line owns it (then it is read, with the note). The
+		// place it was picked from stays selected; the column shows the link
+		// over it (`sideColumnView`), and closing the link goes back to it.
+		if (drawing === "places" && !relLockedReason(rel)) openRelEdit(rel)
 		// Compact shows one screen at a time: the edge panel is the other
 		// one, so leave the canvas for it (#119).
 		if (mode === "compact") canvasOpen = false
@@ -611,14 +813,57 @@
 	/** Close the link form and forget any create still in flight. */
 	function resetLinkForm() {
 		linkDraft = null
+		linkDraftFrom = null
+		linkNewPlace = null
 		isConnecting = false
 		linkError = null
 		linkAttempt++
 	}
 
+	/** Open the link form on a fresh draft. */
+	async function openLinkForm(
+		from: GraphNode,
+		to: GraphNode,
+		newPlace: { name: string } | null = null
+	) {
+		if (!(await leaveForms())) return
+		selectedRelId = null
+		linkDraft = draftBetween(from, to)
+		linkDraftFrom = $state.snapshot(linkDraft) as LinkDraft
+		linkNewPlace = newPlace
+		linkFormKey++
+		if (mode === "compact") canvasOpen = false
+	}
+
+	/**
+	 * Make a place on the line being read and hand back its node (plan
+	 * places-graph B4). The workspace's rows hear the create and put it on
+	 * the canvas; the caller points at it straight away. A refusal or silence
+	 * rejects, and the field that asked says why.
+	 */
+	async function createPlace(name: string): Promise<GraphNode> {
+		const params = newPlaceEntry(lorebookId, name, route.branch ?? null)
+		const wanted = name.trim()
+		const res = await awaitReply({
+			socket,
+			event: "entries:create",
+			params,
+			replyKey: interestKey("entries:create", lorebookId),
+			errorEvent: "entries:create:error",
+			fallbackError: "The place could not be made.",
+			match: (data) =>
+				data.entry?.lorebookId === lorebookId &&
+				data.entry.typeId === LOCATION_TYPE_ID &&
+				(data.entry.name ?? "").trim() === wanted
+		})
+		return placeNode(res.entry as PlaceRowLike)
+	}
+
 	/** Close the relationship edit and forget any save still in flight. */
 	function resetRelForm() {
 		editingRel = null
+		editingFrom = null
+		relStaleNote = false
 		isSaving = false
 		relError = null
 		relAttempt++
@@ -635,33 +880,13 @@
 		})
 	}
 
+	/** Read the graph again, through the store. */
 	function load() {
-		isLoading = true
-		loadError = null
-		clearLoadTimer()
-		loadTimer = setTimeout(() => {
-			loadTimer = null
-			if (!isLoading) return
-			isLoading = false
-			loadError = "The graph did not come back."
-		}, LOAD_TIMEOUT_MS)
-		socket.emit("narrativeGraph:list", {
-			lorebookId
-		} satisfies Sockets.NarrativeGraph.List.Params)
-	}
-
-	function handleListError(msg: Sockets.ErrorResponse) {
-		clearLoadTimer()
-		isLoading = false
-		loadError = msg?.error || "The graph could not be read."
+		rels.load()
 	}
 
 	function startLink(from: GraphNode, to: GraphNode) {
-		selectedRel = null
-		resetRelForm()
-		resetLinkForm()
-		linkDraft = draftBetween(from, to)
-		if (mode === "compact") canvasOpen = false
+		openLinkForm(from, to)
 	}
 
 	/**
@@ -680,16 +905,11 @@
 		isConnecting = true
 		linkError = null
 		try {
-			await awaitReply({
-				socket,
-				event: "narrativeGraph:createRelationship",
-				params,
-				errorEvent: "narrativeGraph:createRelationship:error",
-				match: (msg) => isReplyFor(params, msg.relationship),
-				fallbackError: "The link could not be saved."
-			})
+			await rels.create(params)
 			if (attempt !== linkAttempt) return
 			linkDraft = null
+			linkDraftFrom = null
+			linkNewPlace = null
 		} catch (err) {
 			if (attempt !== linkAttempt) return
 			linkError = isReplyTimeout(err)
@@ -704,23 +924,21 @@
 
 	async function saveRel() {
 		if (!editingRel || isSaving) return
-		const id = editingRel.id
 		const attempt = ++relAttempt
 		isSaving = true
 		relError = null
 		try {
-			await awaitReply({
-				socket,
-				event: "narrativeGraph:updateRelationship",
-				params: {
-					relationship: $state.snapshot(editingRel)
-				} satisfies Sockets.NarrativeGraph.UpdateRelationship.Params,
-				errorEvent: "narrativeGraph:updateRelationship:error",
-				match: (msg) => msg.relationship.id === id,
-				fallbackError: "The relationship could not be saved."
-			})
+			// The line being read: the server refuses another line's row,
+			// exactly as `relLockedReason` does here.
+			const { relationship, branchId } = updateLinkParams(
+				$state.snapshot(editingRel),
+				route.branch ?? null
+			)
+			await rels.update(relationship, branchId)
 			if (attempt !== relAttempt) return
 			editingRel = null
+			editingFrom = null
+			relStaleNote = false
 		} catch (err) {
 			if (attempt !== relAttempt) return
 			relError = isReplyTimeout(err)
@@ -734,9 +952,20 @@
 	}
 
 	function deleteRel(id: number) {
-		socket.emit("narrativeGraph:deleteRelationship", {
-			id
-		} satisfies Sockets.NarrativeGraph.DeleteRelationship.Params)
+		// The push drops the edge and closes the panel on it. A refusal (the
+		// link is another line's) or silence is said here, in the tab that
+		// deleted: Layout leaves this event's refusals to the surface that
+		// asked, because the place page says them in its row.
+		void rels.remove(id, route.branch ?? null).catch((err) => {
+			toaster.error({
+				title: "The link was not deleted",
+				description: isReplyTimeout(err)
+					? "The server did not answer in time."
+					: err instanceof Error
+						? err.message
+						: "The link could not be deleted."
+			})
+		})
 	}
 
 	/** How many links a member is an end of, on every line. */
@@ -811,14 +1040,11 @@
 		toaster.success({ title: deletedMemberToast(name, res.deletedLoreCount) })
 	}
 
-	// Named so `off` can name them too: a bare off() removes every listener for
-	// the event, including any other open lorebooks UI.
+	/**
+	 * The list's figures for the Build and Extend buttons, and the links an
+	 * apply brought. The rows themselves are the store's.
+	 */
 	function handleList(msg: Sockets.NarrativeGraph.List.Response) {
-		// The scope the gate reads; checked here too, so a stale book's
-		// reply arriving after a switch cannot paint this one.
-		if (msg.lorebookId !== lorebookId) return
-		nodes = msg.nodes
-		relationships = msg.relationships
 		if (appliedBaseline) {
 			for (const rel of msg.relationships)
 				if (!appliedBaseline.has(rel.id)) newEdgeIds.add(rel.id)
@@ -830,183 +1056,68 @@
 		ungraphedHistoryEntryCount = msg.ungraphedHistoryEntryCount ?? 0
 		totalDirectHistoryEntryCount = msg.totalDirectHistoryEntryCount ?? 0
 		unresolvedCastSceneCount = msg.unresolvedCastSceneCount ?? 0
+		branchCounts = msg.branchCounts ?? []
 		namelessBindingCount = msg.namelessBindingCount ?? 0
-		relationshipCounts = msg.relationshipCounts ?? {
-			total: msg.relationships.length,
-			entryToEntry: 0,
-			castToEntry: 0
-		}
-		clearLoadTimer()
-		loadError = null
-		isLoading = false
-	}
-
-	function handleEntriesList(msg: Sockets.Entries.List.Response) {
-		// One namespace, so another section's list arrives here too; the filter
-		// is what makes that harmless.
-		if (msg.lorebookId !== lorebookId) return
-		entriesByKind = { ...entriesByKind, [msg.typeId]: msg.entryList }
-	}
-
-	function handleScenesList(msg: Sockets.Scenes.ListByLorebook.Response) {
-		scenes = msg.sceneList ?? []
 	}
 
 	// ⚠ The write replies below are BARE (not in SCOPED_EVENTS), so every
 	// tab hears every book's writes. Each one checks the book it names before
 	// it touches this canvas (#55, #158).
 
-	function handleUpdateNode(msg: Sockets.NarrativeGraph.UpdateNode.Response) {
-		if (msg.node.lorebookId !== lorebookId) return
-		nodes = nodes.map((n) => (n.id === msg.node.id ? msg.node : n))
-	}
-
+	/**
+	 * Only the deleted member's selection goes; anyone else stays open. The
+	 * cast and the graph are read again by the workspace, for every lens.
+	 */
 	function handleDeleteNode(msg: Sockets.NarrativeGraph.DeleteNode.Response) {
 		if (msg.lorebookId !== lorebookId) return
-		// Only the deleted member's selection goes; anyone else stays open.
 		if (route.castId === msg.id)
 			void loreRoute.navigate({ type: "openCastMember", castId: null })
-		load()
-	}
-
-	function handleUpdateRelationship(
-		msg: Sockets.NarrativeGraph.UpdateRelationship.Response
-	) {
-		if (msg.relationship.lorebookId !== lorebookId) return
-		relationships = relationships.map((r) =>
-			r.id === msg.relationship.id ? msg.relationship : r
-		)
-		if (selectedRel?.id === msg.relationship.id)
-			selectedRel = msg.relationship
 	}
 
 	/**
-	 * Drop the one edge in place. A reload here threw the canvas away with
-	 * its layout for the sake of one line (#123).
+	 * The store has already dropped the one edge in place (a reload threw the
+	 * canvas away with its layout for the sake of one line, #123); this lens
+	 * lets go of what it had open on it.
 	 */
-	function handleDeleteRelationship(
-		msg: Sockets.NarrativeGraph.DeleteRelationship.Response
-	) {
-		if (msg.lorebookId !== lorebookId) return
-		const gone = relationships.find((r) => r.id === msg.id)
-		if (!gone) return
-		relationships = relationships.filter((r) => r.id !== msg.id)
-		newEdgeIds.delete(msg.id)
-		relationshipCounts = bumpLinkCounts(relationshipCounts, gone, -1)
-		if (selectedRel?.id === msg.id) selectedRel = null
-		if (editingRel?.id === msg.id) resetRelForm()
+	function handleDeletedRelationship(rel: NarrativeRelationship) {
+		newEdgeIds.delete(rel.id)
+		if (selectedRelId === rel.id) selectedRelId = null
+		if (editingRel?.id === rel.id) resetRelForm()
 	}
 
-	function handleCreateRelationship(
-		msg: Sockets.NarrativeGraph.CreateRelationship.Response
-	) {
-		if (msg.relationship.lorebookId !== lorebookId) return
-		if (relationships.some((r) => r.id === msg.relationship.id)) return
-		relationships = [...relationships, msg.relationship]
-		newEdgeIds.add(msg.relationship.id)
-		relationshipCounts = bumpLinkCounts(
-			relationshipCounts,
-			msg.relationship,
-			1
-		)
+	function handleCreatedRelationship(rel: NarrativeRelationship) {
+		newEdgeIds.add(rel.id)
 	}
 
+	/** A merge here closes the absorb and the selection; the workspace re-reads. */
 	function handleMergeWrite(bookId: number) {
 		if (bookId !== lorebookId) return
 		showMergeModal = false
 		mergeTarget = null
 		void loreRoute.navigate({ type: "openCastMember", castId: null })
-		load()
-	}
-
-	// The vectorization queue writes embeddingModel straight to the row, so
-	// without this the badge only refreshes on the next explicit write.
-	function handleVectorized(msg: Sockets.Vectorization.ItemUpdated.Response) {
-		if (msg.lorebookId !== lorebookId) return
-		if (msg.type === "narrativeNode")
-			nodes = nodes.map((n) =>
-				n.id === msg.id
-					? ({ ...n, embeddingModel: msg.embeddingModel } as any)
-					: n
-			)
-		else if (msg.type === "narrativeRelationship")
-			relationships = relationships.map((r) =>
-				r.id === msg.id
-					? ({ ...r, embeddingModel: msg.embeddingModel } as any)
-					: r
-			)
 	}
 
 	/**
-	 * Four reads name the book this canvas is drawing, so they are SCOPED to
-	 * it: the graph itself, the entries behind the nodes, the scenes behind
-	 * the edges, and the embedding badge each of them wears. Effects rather
-	 * than `useInterest` because a key built from a prop is a key that can
-	 * move, and `useInterest` keeps the one it was first given. Declared above
-	 * `onMount` so all of them exist before the reads below go out (effects
-	 * run in creation order, and `onMount` is one of them).
+	 * The graph itself — its list, its failure and the three relationship
+	 * writes — is the store's read (`relationships.svelte.ts`); this lens hears
+	 * what moved through its hooks, after the store's rows have.
 	 */
 	$effect(() =>
-		declareInterest<"narrativeGraph:list">(
-			interestKey("narrativeGraph:list", lorebookId),
-			handleList
-		)
-	)
-	/**
-	 * ⚠ A BARE key, not a scoped one. The failure carries no `lorebookId` to
-	 * scope on, and the server sends it with a raw room emit precisely so the
-	 * interest gate cannot swallow it — a client waiting on a reply declared
-	 * interest in being told it failed.
-	 */
-	$effect(() =>
-		declareInterest<"narrativeGraph:list:error">(
-			"narrativeGraph:list:error",
-			handleListError
-		)
-	)
-	$effect(() =>
-		declareInterest<"entries:list">(
-			interestKey("entries:list", lorebookId),
-			handleEntriesList
-		)
-	)
-	$effect(() =>
-		declareInterest<"scenes:listByLorebook">(
-			interestKey("scenes:listByLorebook", lorebookId),
-			handleScenesList
-		)
-	)
-	$effect(() =>
-		declareInterest<"vectorization:itemUpdated">(
-			interestKey("vectorization:itemUpdated", lorebookId),
-			handleVectorized
-		)
+		rels.listen({
+			listed: handleList,
+			created: handleCreatedRelationship,
+			deleted: handleDeletedRelationship
+		})
 	)
 
 	/**
 	 * The writes are BARE — none has an entry in `SCOPED_EVENTS`, and a scoped
 	 * key for an unscoped event matches nothing at all — so each handler
-	 * filters on the book its reply names.
+	 * filters on the book its reply names (the store's methods do).
 	 */
-	useInterest<"narrativeGraph:updateNode">(
-		"narrativeGraph:updateNode",
-		handleUpdateNode
-	)
 	useInterest<"narrativeGraph:deleteNode">(
 		"narrativeGraph:deleteNode",
 		handleDeleteNode
-	)
-	useInterest<"narrativeGraph:updateRelationship">(
-		"narrativeGraph:updateRelationship",
-		handleUpdateRelationship
-	)
-	useInterest<"narrativeGraph:deleteRelationship">(
-		"narrativeGraph:deleteRelationship",
-		handleDeleteRelationship
-	)
-	useInterest<"narrativeGraph:createRelationship">(
-		"narrativeGraph:createRelationship",
-		handleCreateRelationship
 	)
 	useInterest<"narrativeGraph:mergeNode">("narrativeGraph:mergeNode", (msg) =>
 		handleMergeWrite(msg.survivorNode.lorebookId)
@@ -1015,17 +1126,15 @@
 		handleMergeWrite(msg.restoredNode.lorebookId)
 	)
 
+	// The rows, the scenes, the cast and the embedding badges are the
+	// workspace's (plan B4); the graph is the relationship store's, which the
+	// workspace opens on the book. A mount reads what is already held.
 	onMount(() => {
-		for (const typeId of ENTRY_KINDS)
-			socket.emit("entries:list", { lorebookId, typeId })
-		socket.emit("scenes:listByLorebook", { lorebookId })
-		load()
+		if (!rels.loaded) load()
 	})
 
 	onDestroy(() => {
 		hasUnsavedChanges = false
-		// A timer that outlives the panel would set state on a dead component.
-		clearLoadTimer()
 	})
 </script>
 
@@ -1056,7 +1165,7 @@
 			}}
 			title={buildReason ??
 				(nodes.length > 0
-					? "Rebuild the graph from scratch"
+					? "Rebuild the links between cast members from scenes"
 					: "Build the graph from scenes")}
 		>
 			<Icons.Cpu size={14} aria-hidden="true" />
@@ -1078,7 +1187,7 @@
 							: "The graph is up to date"
 					: extendSessionId !== null
 						? `Read the ${extendReadyCount} scene${extendReadyCount === 1 ? "" : "s"} from the open session that the graph has not read yet, and propose what they add`
-						: `Read the ${extendReadyCount} scene${extendReadyCount === 1 ? "" : "s"} and history entries this book has not graphed yet, and propose what they add`)}
+						: `Read the ${extendReadyCount} scene${extendReadyCount === 1 ? "" : "s"} and history entries on this line that the graph has not read yet, and propose what they add`)}
 			onclick={() => {
 				buildMode = "extend"
 				showBuildModal = true
@@ -1117,62 +1226,24 @@
 {/snippet}
 
 {#snippet relationshipForm(rel: NarrativeRelationship)}
+	{@const problem = relationshipFieldsProblem(rel)}
 	<div class="flex flex-col gap-2">
-		<input
-			class="input text-sm"
-			type="text"
-			aria-label="Relationship type"
-			placeholder="Relationship type…"
-			bind:value={rel.relationshipType}
+		<RelationshipFields
+			value={rel}
+			pairing={linkPairingOf(rel.from.kind, rel.to.kind)}
+			whenOptions={linkWhenOptions}
+			withReason
+			onChange={(next) => (editingRel = next)}
 		/>
-		<div class="grid grid-cols-2 gap-2">
-			<Select
-				label="Status"
-				labelHidden
-				class="min-w-0 text-xs"
-				options={RELATIONSHIP_STATUSES.map((s) => ({ value: s, label: s }))}
-				value={rel.status}
-				onValueChange={(v) => {
-					if (v) rel.status = v as typeof rel.status
-				}}
-			/>
-			<Select
-				label="Visibility"
-				labelHidden
-				class="min-w-0 text-xs"
-				options={RELATIONSHIP_VISIBILITIES.map((v) => ({
-					value: v,
-					label: v
-				}))}
-				value={rel.visibility}
-				onValueChange={(v) => {
-					if (v) rel.visibility = v as typeof rel.visibility
-				}}
-			/>
-		</div>
-		<textarea
-			class="textarea min-h-10 text-xs"
-			aria-label="Description"
-			placeholder="Description…"
-			bind:value={rel.description}
-		></textarea>
-		<input
-			class="input text-xs"
-			type="text"
-			aria-label="Reason for this state"
-			placeholder="Reason for this state…"
-			bind:value={rel.reason}
-		/>
-		{#if linkWhenOptions.length > 1}
-			<Select
-				label="When"
-				labelHidden
-				class="text-xs"
-				options={linkWhenOptions}
-				value={rel.historyEntryId == null ? "" : String(rel.historyEntryId)}
-				onValueChange={(v) =>
-					(rel.historyEntryId = v === "" ? null : Number(v))}
-			/>
+		{#if relStaleNote}
+			<p
+				class="text-warning-600-400 text-xs"
+				role="status"
+				data-graph-link-stale
+			>
+				This link was changed elsewhere while you were editing it. Update
+				puts yours in its place; Cancel keeps the other.
+			</p>
 		{/if}
 		{#if relError}
 			<p class="text-error-500 text-xs" role="alert">{relError}</p>
@@ -1188,7 +1259,8 @@
 			<button
 				class="btn btn-sm preset-filled-primary-500"
 				type="button"
-				disabled={isSaving}
+				disabled={isSaving || problem !== null}
+				title={problem ?? undefined}
 				onclick={saveRel}
 			>
 				<Icons.Save size={13} aria-hidden="true" /> Update
@@ -1246,7 +1318,7 @@
 				icon={drawing === "places" ? Icons.Map : Icons.Network}
 				message={drawing === "places"
 					? "Pick a place on the map to see what joins it."
-					: "No graph yet. Build one from your scenes and history to pull out who is connected to whom."}
+					: lensEmptyMessage("graph")}
 			/>
 		{:else}
 			{#each graph as node (node.key)}
@@ -1288,65 +1360,242 @@
 	</div>
 {/snippet}
 
-{#snippet canvas()}
-	{#if drawing === "places"}
-		<PlacesBoard
-			map={placesMap}
-			selectedEntryId={route.entryId ?? null}
-			onOpenEntry={(entryId) => {
-				// A place is not the selected member's lore (#118).
-				void loreRoute.navigate({
-					type: "openEntry",
-					entryId,
-					castId: null
-				})
-				if (mode === "compact") canvasOpen = false
+{#snippet placesToolbar()}
+	{#if places.categories.length > 0}
+		<div
+			class="flex flex-wrap gap-1"
+			role="group"
+			aria-label="Category"
+			data-place-categories
+		>
+			<button
+				type="button"
+				class="chip text-xs {placeCategory === null
+					? 'preset-tonal-primary'
+					: 'preset-tonal-surface'}"
+				aria-pressed={placeCategory === null}
+				onclick={() => (placeCategoryChip = null)}
+			>
+				All
+			</button>
+			{#each places.categories as category (category)}
+				{@const active =
+					placeCategory?.toLowerCase() === category.toLowerCase()}
+				<button
+					type="button"
+					class="chip text-xs {active
+						? 'preset-tonal-primary'
+						: 'preset-tonal-surface'}"
+					aria-pressed={active}
+					onclick={() => (placeCategoryChip = active ? null : category)}
+				>
+					{category}
+				</button>
+			{/each}
+		</div>
+	{/if}
+	{#if newPlaceOpen}
+		<NewPlaceField
+			onCreate={async (name) => {
+				const node = await createPlace(name)
+				newPlaceOpen = false
+				// A new place has no category yet: a chip would hide it.
+				placeCategoryChip = null
+				selectNode(node)
 			}}
-			onOpenCast={onEditMember}
+			onCancel={() => (newPlaceOpen = false)}
 		/>
-	{:else}
-		<RelationshipsCanvas
-			nodes={graph}
-			{edges}
-			{headline}
-			{heldBack}
-			momentLabel={route.moment ? momentLabel(route.moment) : null}
-			{selectedKey}
-			onNodeClick={selectNode}
-			onEdgeClick={selectEdge}
-			onLinkDraw={startLink}
-		/>
+	{:else if places.placeTotal > 0}
+		<!-- Tonal: beside a picked place or link the column's own action
+		     (Update, Name it) is the one filled primary (STYLE-GUIDE §6.1). -->
+		<button
+			type="button"
+			class="btn btn-sm preset-tonal-primary"
+			data-new-place-open
+			onclick={() => (newPlaceOpen = true)}
+		>
+			<Icons.MapPinPlus size={14} aria-hidden="true" /> New place
+		</button>
+	{/if}
+{/snippet}
+
+{#snippet placesEmpty()}
+	<EmptyState
+		icon={Icons.Map}
+		message={lensEmptyMessage("places")}
+		ctaLabel={newPlaceOpen ? undefined : "New place"}
+		onCta={() => (newPlaceOpen = true)}
+	/>
+{/snippet}
+
+{#snippet canvas()}
+	<RelationshipsCanvas
+		{drawing}
+		nodes={graph}
+		{edges}
+		{headline}
+		{heldBack}
+		momentLabel={route.moment ? momentLabel(route.moment) : null}
+		{selectedKey}
+		onNodeClick={selectNode}
+		onEdgeClick={selectEdge}
+		onLinkDraw={startLink}
+		toolbar={drawing === "places" ? placesToolbar : undefined}
+		empty={drawing === "places" ? placesEmpty : undefined}
+		categoryOrder={drawing === "places" ? places.categories : undefined}
+	/>
+{/snippet}
+
+{#snippet relationshipPanel()}
+	{#if selectedRel}
+		<div class="flex flex-col gap-2 text-sm">
+			<div class="flex items-center gap-1">
+				<span class="min-w-0 flex-1 truncate font-semibold">
+					{names.get(
+						selectedRel.from.kind === "cast"
+							? castKey(selectedRel.from.bindingId)
+							: entryKey(selectedRel.from.entryId)
+					) ?? "?"}
+					{selectedRel.reverseRelationshipType ? "↔" : "→"}
+					{names.get(
+						selectedRel.to.kind === "cast"
+							? castKey(selectedRel.to.bindingId)
+							: entryKey(selectedRel.to.entryId)
+					) ?? "?"}
+				</span>
+				<button
+					class="btn btn-sm preset-filled-surface-400-600 p-1.5"
+					type="button"
+					title={relLockedReason(selectedRel) ?? "Edit relationship"}
+					aria-label="Edit relationship"
+					disabled={!!relLockedReason(selectedRel)}
+					onclick={async () => {
+						const rel = selectedRel
+						if (!rel || !(await leaveForms())) return
+						openRelEdit(rel)
+					}}
+				>
+					<Icons.Pencil size={13} aria-hidden="true" />
+				</button>
+				<button
+					class="btn btn-sm preset-tonal-error p-1.5"
+					type="button"
+					title={relLockedReason(selectedRel) ?? "Delete relationship"}
+					aria-label="Delete relationship"
+					disabled={!!relLockedReason(selectedRel)}
+					onclick={() => (confirmingRelDelete = selectedRel!.id)}
+				>
+					<Icons.Trash2 size={13} aria-hidden="true" />
+				</button>
+				<button
+					class="btn btn-sm preset-filled-surface-400-600 p-1.5"
+					type="button"
+					title="Close"
+					aria-label="Close"
+					onclick={async () => {
+						if (!(await leaveForms())) return
+						selectedRelId = null
+						confirmingRelDelete = null
+					}}
+				>
+					<Icons.X size={13} aria-hidden="true" />
+				</button>
+			</div>
+			{#if confirmingRelDelete === selectedRel.id}
+				<div class="flex items-center gap-1" data-confirm-delete-rel>
+					<span class="text-error-500 flex-1 text-xs">
+						Delete for good?
+					</span>
+					<button
+						class="btn btn-sm preset-filled-error-500 text-xs"
+						type="button"
+						onclick={() => {
+							confirmingRelDelete = null
+							deleteRel(selectedRel!.id)
+						}}
+					>
+						Delete
+					</button>
+					<button
+						class="btn btn-sm preset-tonal-surface text-xs"
+						type="button"
+						onclick={() => (confirmingRelDelete = null)}
+					>
+						Cancel
+					</button>
+				</div>
+			{/if}
+			{#if relLockedReason(selectedRel)}
+				<p class="text-surface-600-400 text-xs" data-link-locked>
+					{relLockedReason(selectedRel)}
+				</p>
+			{/if}
+			{#if editingRel}
+				{@render relationshipForm(editingRel)}
+			{:else}
+				{#if selectedSentences.length}
+					<ul class="flex flex-col gap-1 text-xs" data-link-sentences>
+						{#each selectedSentences as said (said.key)}
+							<li>
+								<span class="font-semibold">{said.subject}</span>
+								<span class="text-surface-600-400">·</span>
+								{said.sentence}
+							</li>
+						{/each}
+					</ul>
+				{/if}
+				<span
+					class="badge {REL_STATUS_BADGE[selectedRel.status] ??
+						'preset-tonal-surface'} self-start text-xs"
+				>
+					{selectedRel.status}
+				</span>
+				{#if selectedRel.description}
+					<p class="text-xs">{selectedRel.description}</p>
+				{/if}
+				{#if selectedRel.reason}
+					<p class="text-surface-700-300 text-xs italic">
+						Reason: {selectedRel.reason}
+					</p>
+				{/if}
+			{/if}
+		</div>
 	{/if}
 {/snippet}
 
 {#snippet sideColumn()}
 	<div class="flex min-h-0 flex-1 flex-col gap-2">
-		{#if linkDraft}
-			<LinkForm
-				draft={linkDraft}
-				nodes={graph}
-				saving={isConnecting}
-				whenOptions={linkWhenOptions}
-				error={linkError}
-				onChange={(next) => (linkDraft = next)}
-				onSubmit={submitLink}
-				onCancel={resetLinkForm}
-			/>
-		{:else if selectedNode}
+		{#if sideView === "link" && linkDraft}
+			{#key linkFormKey}
+				<LinkForm
+					draft={linkDraft}
+					candidates={linkCandidates}
+					saving={isConnecting}
+					whenOptions={linkWhenOptions}
+					error={linkError}
+					onNewPlace={createPlace}
+					startWithNewPlace={linkNewPlace !== null}
+					newPlaceName={linkNewPlace?.name ?? ""}
+					onChange={(next) => (linkDraft = next)}
+					onSubmit={submitLink}
+					onCancel={resetLinkForm}
+				/>
+			{/key}
+		{:else if sideView === "relationship" && selectedRel}
+			{@render relationshipPanel()}
+		{:else if sideView === "node" && selectedNode}
 			<NodePanel
 				node={selectedNode}
 				edges={panelRows}
 				{notDrawn}
 				{ceiling}
 				isNew={(edge) => newEdgeIds.has(edge.id)}
-				canAdd={graph.length > 1}
+				candidates={linkCandidates}
+				canCreatePlace
 				onOpen={() => openNode(selectedNode!)}
-				onAdd={() => {
-					const other = graph.find((n) => n.key !== selectedNode!.key)
-					if (!other) return
-					resetLinkForm()
-					linkDraft = draftBetween(selectedNode!, other)
-				}}
+				onLinkTo={(other) => openLinkForm(selectedNode!, other)}
+				onNewPlace={(typed) =>
+					openLinkForm(selectedNode!, selectedNode!, { name: typed })}
 				onKeep={(edge) => newEdgeIds.delete(edge.id)}
 				onEdgeClick={selectEdge}
 				onDeleteEdge={(edge) => deleteRel(edge.id)}
@@ -1360,76 +1609,12 @@
 				{@const row = nodes.find((n) => n.id === selectedNode!.id)}
 				{#if row}
 					<div
-						class="border-border flex flex-col gap-2 border-t pt-2"
+						class="panel-inset flex flex-col gap-2"
 					>
 						{@render castActions(row)}
 					</div>
 				{/if}
 			{/if}
-		{:else if selectedRel}
-			<div class="flex flex-col gap-2 text-sm">
-				<div class="flex items-center gap-1">
-					<span class="min-w-0 flex-1 truncate font-semibold">
-						{names.get(
-							selectedRel.from.kind === "cast"
-								? castKey(selectedRel.from.bindingId)
-								: entryKey(selectedRel.from.entryId)
-						) ?? "?"} → {names.get(
-							selectedRel.to.kind === "cast"
-								? castKey(selectedRel.to.bindingId)
-								: entryKey(selectedRel.to.entryId)
-						) ?? "?"}
-					</span>
-					<button
-						class="btn btn-sm preset-filled-surface-400-600 p-1.5"
-						type="button"
-						title={relLockedReason(selectedRel) ?? "Edit relationship"}
-						aria-label="Edit relationship"
-						disabled={!!relLockedReason(selectedRel)}
-						onclick={() => {
-							resetRelForm()
-							editingRel = $state.snapshot(selectedRel!)
-						}}
-					>
-						<Icons.Pencil size={13} aria-hidden="true" />
-					</button>
-					<button
-						class="btn btn-sm preset-filled-surface-400-600 p-1.5"
-						type="button"
-						title="Close"
-						aria-label="Close"
-						onclick={() => {
-							selectedRel = null
-							resetRelForm()
-						}}
-					>
-						<Icons.X size={13} aria-hidden="true" />
-					</button>
-				</div>
-				{#if relLockedReason(selectedRel)}
-					<p class="text-surface-600-400 text-xs" data-link-locked>
-						{relLockedReason(selectedRel)}
-					</p>
-				{/if}
-				{#if editingRel}
-					{@render relationshipForm(editingRel)}
-				{:else}
-					<span
-						class="badge {REL_STATUS_BADGE[selectedRel.status] ??
-							'preset-tonal-surface'} self-start text-xs"
-					>
-						{selectedRel.status}
-					</span>
-					{#if selectedRel.description}
-						<p class="text-xs">{selectedRel.description}</p>
-					{/if}
-					{#if selectedRel.reason}
-						<p class="text-surface-700-300 text-xs italic">
-							Reason: {selectedRel.reason}
-						</p>
-					{/if}
-				{/if}
-			</div>
 		{:else}
 			{@render nodeList()}
 		{/if}
@@ -1445,7 +1630,7 @@
 
 	{#if showPipelinePanel}
 		<div
-			class="bg-surface-200-800 border-border max-h-96 space-y-2 overflow-y-auto rounded-lg border p-3 text-sm"
+			class="bg-surface-200-800 panel-edge space-y-2 rounded-lg border p-3 text-sm"
 		>
 			<div class="flex items-center justify-between gap-2">
 				<p class="font-medium">
@@ -1475,7 +1660,7 @@
 
 	{#if activeBuild && drawing === "relationships"}
 		<div
-			class="bg-surface-200-800 border-border flex flex-col gap-2 rounded-lg border p-3 text-sm"
+			class="bg-surface-200-800 panel-edge flex flex-col gap-2 rounded-lg border p-3 text-sm"
 		>
 			{#if activeBuild.status === "building"}
 				<p class="text-surface-700-300 text-xs capitalize">
@@ -1569,7 +1754,7 @@
 		     proposes a fresh one beside it every time. Surfaced so it can be
 		     named or removed by hand. -->
 		<div
-			class="bg-surface-200-800 border-border flex items-center gap-2 rounded-lg border p-3 text-sm"
+			class="bg-surface-200-800 panel-edge flex items-center gap-2 rounded-lg border p-3 text-sm"
 		>
 			<Icons.HelpCircle size={14} class="text-surface-600-400 shrink-0" />
 			<span class="text-surface-700-300">
@@ -1617,7 +1802,7 @@
 			</div>
 			{#if hasSideColumn}
 				<div
-					class="border-border flex min-h-0 w-[360px] shrink-0 flex-col border-l pl-4"
+					class="panel-card flex min-h-0 w-[360px] shrink-0 flex-col p-3"
 					data-graph-side
 				>
 					{@render sideColumn()}
@@ -1663,30 +1848,35 @@
 	{lorebookId}
 	mode={buildMode}
 	sessionId={buildMode === "extend" ? extendSessionId : null}
+	branchId={buildMode === "extend" && extendSessionId === null
+		? line.branchId
+		: null}
 	readySceneCount={buildMode === "extend"
 		? extendSessionId !== null
 			? sessionUngraphed.ready
-			: ungraphedSceneCount
+			: lineCounts.ungraphedSceneCount
 		: totalSummarizedCount}
 	skippedSceneCount={buildMode === "extend" ? extendUnsummarizedCount : 0}
 	ungraphedHistoryEntryCount={buildMode === "extend"
 		? extendSessionId !== null
 			? 0
-			: ungraphedHistoryEntryCount
+			: lineCounts.ungraphedHistoryEntryCount
 		: totalDirectHistoryEntryCount}
 	existingUnboundNodeCount={nodes.filter(
 		(n) => n.characterId == null && !n.parentNodeId
 	).length}
-	existingRelationshipCount={relationshipCounts.total}
-	existingEntryLinkCount={relationshipCounts.entryToEntry}
-	existingCastEntryLinkCount={relationshipCounts.castToEntry}
-	{unresolvedCastSceneCount}
+	existingCastToCastCount={relationshipCounts.castToCast}
+	unresolvedCastSceneCount={buildMode === "extend"
+		? extendSessionId !== null
+			? sessionUngraphed.unresolvedCast
+			: lineCounts.unresolvedCastSceneCount
+		: unresolvedCastSceneCount}
 	onApplied={() => {
 		appliedBaseline = new Set(relationships.map((r) => r.id))
 		load()
 		// The scenes it read are graphed now; the session's Extend count is
 		// read off them.
-		socket.emit("scenes:listByLorebook", { lorebookId })
+		book.refreshScenes()
 	}}
 />
 

@@ -13,7 +13,9 @@
  */
 import { afterEach, describe, expect, test, vi } from "vitest"
 import {
+	ANY_SCOPE,
 	anyInterestAnywhere,
+	scopesWantedAnywhere,
 	hasInterest,
 	interestedSockets,
 	registerInterestHandlers,
@@ -355,6 +357,19 @@ describe("anyInterestAnywhere", () => {
 		expect(anyInterestAnywhere(io, "sessionMessage", "7")).toBe(true)
 	})
 
+	test("ANY_SCOPE asks whether anybody wants any scope of it at all", () => {
+		// The gate a push asks before it knows which sessions it is about
+		// (`sessions/startedFromPush.ts`): one scoped declaration anywhere is
+		// enough; another event's, or nothing, is not.
+		const io = connected([socketWith("a", ["sessionMessage#42"])])
+		expect(anyInterestAnywhere(io, "sessionMessage", ANY_SCOPE)).toBe(true)
+		expect(anyInterestAnywhere(io, "sessionMessages:delete", ANY_SCOPE)).toBe(false)
+		expect(
+			anyInterestAnywhere(connected([socketWith("a", ["sessionMessage"])]), "sessionMessage", ANY_SCOPE)
+		).toBe(true)
+		expect(anyInterestAnywhere(connected([]), "sessionMessage", ANY_SCOPE)).toBe(false)
+	})
+
 	test("is false with nothing connected, and on an io with no registry", () => {
 		expect(anyInterestAnywhere(connected([]), "sessionMessage", "42")).toBe(
 			false
@@ -365,6 +380,33 @@ describe("anyInterestAnywhere", () => {
 		expect(anyInterestAnywhere({} as unknown as InterestIo, "x", "1")).toBe(
 			false
 		)
+	})
+})
+
+describe("scopesWantedAnywhere", () => {
+	test("says which scopes of an event each connected person declared", () => {
+		const io: InterestIo = {
+			sockets: {
+				adapter: { rooms: new Map() },
+				sockets: new Map(
+					[
+						{ ...socketWith("a", ["sessionMessage#42", "sessions:get#42"]), user: { id: 7 } },
+						{ ...socketWith("b", ["sessionMessage#43"]), user: { id: 7 } },
+						{ ...socketWith("c", ["sessionMessage#42"]), user: { id: 8 } },
+						// A bare key names no session to look up; a socket with no
+						// user is nobody's.
+						{ ...socketWith("d", ["sessionMessage"]), user: { id: 9 } },
+						{ id: "e", interest: new Set(["sessionMessage#44"]), user: null }
+					].map((s) => [s.id, s as InterestSocket])
+				)
+			}
+		}
+		const wanted = scopesWantedAnywhere(io, "sessionMessage")
+		expect([...wanted.keys()].sort()).toEqual([7, 8])
+		expect([...wanted.get(7)!].sort()).toEqual(["42", "43"])
+		expect([...wanted.get(8)!]).toEqual(["42"])
+		expect(scopesWantedAnywhere(io, "sessions:typing").size).toBe(0)
+		expect(scopesWantedAnywhere({} as unknown as InterestIo, "x").size).toBe(0)
 	})
 })
 

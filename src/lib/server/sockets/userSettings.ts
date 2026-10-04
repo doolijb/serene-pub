@@ -14,6 +14,9 @@ import { join } from "path"
 import { dev } from "$app/environment"
 import { resolveUserLanguage } from "$lib/server/i18n"
 import { assertSupportedLanguage } from "./language"
+import { refusable } from "./refusable"
+import { isLoreWriteMode } from "$lib/shared/lorebooks/loreWriteMode"
+import { loreWriteModeFor } from "$lib/server/state/loreWriteMode"
 
 const DEFAULT_BACKGROUNDS_MANIFEST = "/backgrounds/defaults/manifest.json"
 
@@ -127,8 +130,7 @@ export function getDefaultBackgrounds(): string[] {
 
 /**
  * This user's settings, as one function, so every cascade that refreshes them —
- * the eleven writes below, and one each in `promptConfigs`, `contextConfigs` and
- * `narratorPromptConfigs` — can be handed the BUILDER rather than the handler.
+ * the eleven writes below — can be handed the BUILDER rather than the handler.
  *
  * It reads the row (inserting defaults the first time), resolves the effective
  * language and may resolve a media URL; `userSettings:get` is gated, so a write
@@ -185,16 +187,6 @@ export async function buildUserSettingsGet(
 
 	const res: Sockets.UserSettings.Get.Response = {
 		userSettings: {
-			activeContextConfigId: settings.activeContextConfigId,
-			activePromptConfigId: settings.activePromptConfigId,
-			activeNarratorPromptConfigId:
-				settings.activeNarratorPromptConfigId,
-			activeSummarizeWorldConfigId:
-				settings.activeSummarizeWorldConfigId,
-			activeSummarizeCharacterConfigId:
-				settings.activeSummarizeCharacterConfigId,
-			activeSummarizeSceneConfigId:
-				settings.activeSummarizeSceneConfigId,
 			theme: settings.theme || "lamplight",
 			darkMode:
 				settings.darkMode !== null ? settings.darkMode : true,
@@ -221,7 +213,12 @@ export async function buildUserSettingsGet(
 			// as its own option. `effectiveLanguage` is the resolved
 			// answer everything that draws the interface reads.
 			language: settings.language ?? null,
-			effectiveLanguage: (await resolveUserLanguage(userId)).code
+			effectiveLanguage: (await resolveUserLanguage(userId)).code,
+			// As `language`: this person's own choice, null following the
+			// instance's — the picker shows "use the instance default" as
+			// its own option. `effectiveLoreWriteMode` is the answer.
+			loreWriteMode: isLoreWriteMode(settings.loreWriteMode) ? settings.loreWriteMode : null,
+			effectiveLoreWriteMode: await loreWriteModeFor(db, userId)
 		}
 	}
 
@@ -684,6 +681,40 @@ export const userSettingsUpdateLanguage: Handler<
 	}
 }
 
+/**
+ * 🚧 Choose this person's **lore write mode** (plan A22, ruled 2026-09-30) —
+ * Full, Review changes or Off — or null to follow the instance's again (the
+ * "use the instance default" reset). Governs how sessions write to the
+ * lorebooks this person owns.
+ */
+export const userSettingsUpdateLoreWriteMode: Handler<
+	Sockets.UserSettings.UpdateLoreWriteMode.Params,
+	Sockets.UserSettings.UpdateLoreWriteMode.Response
+> = refusable(
+	"userSettings:updateLoreWriteMode",
+	async (socket: AuthenticatedSocket, params, emitToUser) => {
+		const userId = socket.user!.id
+		const mode = params?.mode ?? null
+		if (mode !== null && !isLoreWriteMode(mode))
+			throw new Error("Lorebook writes from sessions are Full, Review changes or Off.")
+		// Written whether or not the row exists yet: the choice is the point.
+		await db
+			.insert(schema.userSettings)
+			.values({ userId, loreWriteMode: mode })
+			.onConflictDoUpdate({ target: schema.userSettings.userId, set: { loreWriteMode: mode } })
+		const res: Sockets.UserSettings.UpdateLoreWriteMode.Response = {
+			success: true,
+			mode,
+			effectiveMode: await loreWriteModeFor(db, userId)
+		}
+		emitToUser("userSettings:updateLoreWriteMode", res)
+		// Lazy — see `buildUserSettingsGet`.
+		await emitToUser("userSettings:get", () => buildUserSettingsGet(userId))
+		return res
+	},
+	"Your lorebook writes from sessions could not be changed."
+)
+
 // Registration function for all user settings handlers
 export function registerUserSettingsHandlers(
 	socket: AuthenticatedSocket,
@@ -702,6 +733,7 @@ export function registerUserSettingsHandlers(
 	register(socket, userSettingsUpdateTheme, emitToUser)
 	register(socket, userSettingsUpdateDarkMode, emitToUser)
 	register(socket, userSettingsUpdateLanguage, emitToUser)
+	register(socket, userSettingsUpdateLoreWriteMode, emitToUser)
 	register(socket, userSettingsListBackgrounds, emitToUser)
 	register(socket, userSettingsUploadBackground, emitToUser)
 	register(socket, userSettingsDeleteBackground, emitToUser)

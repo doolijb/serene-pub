@@ -8,6 +8,7 @@
 	} from "$lib/client/sockets/interest.svelte"
 	import { interestKey } from "$lib/shared/sockets/interest"
 	import { toaster } from "$lib/client/utils/toaster"
+	import { v4 as uuid } from "uuid"
 	import { z } from "zod"
 	import type { SocketEventMap } from "$lib/client/sockets/typedSocket"
 	import { sameFormValue } from "$lib/client/forms/sameFormValue"
@@ -127,10 +128,19 @@
 		}
 	}
 
+	/**
+	 * The save this form sent and has not heard back about. Its reply goes to
+	 * every tab of the user; only this one's (`requestId`, echoed by the
+	 * server) is toasted and leaves edit mode (plan B8).
+	 */
+	let savingRequestId: string | null = null
+
 	function handleSave() {
 		if (!validateForm()) return
+		savingRequestId = uuid()
 		const updateReq: Sockets.Lorebooks.Update.Params = {
-			lorebook: editLorebook!
+			lorebook: editLorebook!,
+			requestId: savingRequestId
 		}
 		socket.emit("lorebooks:update", updateReq)
 	}
@@ -189,6 +199,19 @@
 				...msg.lorebook,
 				tags: msg.lorebook.tags ?? editLorebook?.tags
 			}
+			const ours =
+				savingRequestId !== null && msg.requestId === savingRequestId
+			if (!ours) {
+				// Another tab's (or another surface's) save of this book: the
+				// row underneath moves, edits being typed here are kept — the
+				// same rule as a re-read (`handleLorebooksGet`) — and nothing
+				// is said about a save this form did not send.
+				const held = isDirty ? editedFields(editLorebook) : null
+				editLorebook = held ? { ...kept, ...held } : kept
+				originalLorebook = { ...kept }
+				return
+			}
+			savingRequestId = null
 			editLorebook = kept
 			originalLorebook = { ...kept }
 			mode = "view"
@@ -388,7 +411,7 @@
 					<!-- Tag suggestions dropdown -->
 					{#if showTagSuggestions && filteredTags.length > 0}
 						<div
-							class="bg-surface-100-900 absolute z-10 mt-1 max-h-40 w-full overflow-y-auto rounded-lg border shadow-lg"
+							class="bg-surface-100-900 absolute z-10 mt-1 max-h-40 w-full overflow-y-auto panel-edge rounded-lg border shadow-lg"
 						>
 							{#each filteredTags as tag}
 								<button

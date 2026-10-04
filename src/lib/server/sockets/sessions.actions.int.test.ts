@@ -390,7 +390,19 @@ describe("listSessionActions — audiences", () => {
 			canAct: true,
 			itemGated: false,
 			origin: "companion",
-			audience: { see: ["participant"], act: ["owner"] }
+			audience: { see: ["participant"], act: ["owner"] },
+			// What happens next, optionally (genre uplift C2, 2026-09-29):
+			// the listing carries it, so the palette hints `/narrate
+			// [<what should happen next>]`, the legend notes it, and a
+			// slash argument fires the narration directly.
+			collects: {
+				text: {
+					need: "optional",
+					label: "What should happen next?",
+					placeholder: "The storm breaks over the harbour.",
+					ifEmpty: "The narrator decides."
+				}
+			}
 		})
 
 		const forGuest = await sessionsActionsHandler.handler(
@@ -450,6 +462,9 @@ describe("listSessionActions — audiences", () => {
 describe("listSessionActions — placement", () => {
 	test("quick → primary, else overflow; the floors are always present", async () => {
 		const { sessionsActionsHandler } = await import("./sessions")
+		// A core-namespace companion without `quick` (every shipped Chat
+		// action is quick since Echo was removed, owner note 35).
+		await publishActionSpec("core:spec/test-unquick", { key: "unquick" })
 		const { owner, session } = await sessionWithGuest("place")
 		const res = await sessionsActionsHandler.handler(
 			fakeSocket(owner.id),
@@ -458,10 +473,10 @@ describe("listSessionActions — placement", () => {
 		)
 		const composer = res.venues.composer
 		expect(composer.primary.map((a) => a.key)).toContain("narrate")
-		// Echo ships without `quick`: the overflow lists it, the palette
-		// reaches it as `/echo`, and it is never on the primary row.
-		expect(composer.overflow.map((a) => a.key)).toContain("echo")
-		expect(composer.primary.map((a) => a.key)).not.toContain("echo")
+		// Without `quick`: the overflow lists it, the palette reaches it as
+		// `/unquick`, and it is never on the primary row.
+		expect(composer.overflow.map((a) => a.key)).toContain("unquick")
+		expect(composer.primary.map((a) => a.key)).not.toContain("unquick")
 
 		const message = res.venues.message
 		expect(message.primary.map((a) => a.key).sort()).toEqual([
@@ -545,7 +560,7 @@ describe("a newly installed action", () => {
 		expect(roll).toMatchObject({
 			specSlug: "acme:spec/roll",
 			slash: "acme.roll",
-			origin: "attachment",
+			origin: "foreign",
 			isNew: true
 		})
 		expect(

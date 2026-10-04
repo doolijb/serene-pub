@@ -8,10 +8,10 @@
  * had ever been embedded therefore carried a string into a `timestamp` column,
  * and drizzle called `.toISOString()` on it.
  *
- * The fix drops vectorizedAt/embeddingModel instead of restoring them, which is
- * also the correct behaviour: the row returns under a NEW primary key, and
- * embeddings are keyed by row id, so a restored vectorizedAt would mark the row
- * as already-embedded and it would never be re-queued.
+ * The restore revives the timestamp instead. The vector itself lives on the
+ * row and describes the row's text, so it comes back with the row; whether the
+ * row needs embedding is the queue's text-hash rule, never the timestamp
+ * (`columnStoreRewrites.int.test.ts` counts the embeds).
  */
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest"
 import fs from "fs/promises"
@@ -108,9 +108,72 @@ describe("undoMerge with an embedded (vectorized) snapshot", () => {
 		})
 		expect(restored).toBeDefined()
 		expect(restored!.binding).toBe("{{char:2}}")
-		// Cleared, not carried over: the new primary key has no embedding, so
-		// the row must be eligible for re-vectorization.
-		expect(restored!.vectorizedAt).toBeNull()
-		expect(restored!.embeddingModel).toBeNull()
+		// Revived, not spread as a string.
+		expect(restored!.vectorizedAt).toEqual(
+			new Date("2024-01-03T00:00:00.000Z")
+		)
+		// The snapshot carried no vector, so the restored row has none, and
+		// the queue embeds it.
+		expect(restored!.embedding).toBeNull()
+	})
+
+	test("a saved link with no description comes back with an empty one", async () => {
+		// A merge made on a database migrated from 0026's `notes` saved its
+		// links as they were: `description` NULL. The column is to hold text
+		// (NOT NULL DEFAULT ''), so the restore writes the empty string.
+		const { createTestUser } = await import("$lib/server/utils/testDb")
+		const user = await createTestUser(testDb, "undomerge-null-description")
+		const [lorebook] = await testDb
+			.insert(schema.lorebooks)
+			.values({ userId: user.id, name: "LB null description" })
+			.returning()
+		const [survivor] = await testDb
+			.insert(schema.lorebookBindings)
+			.values({ lorebookId: lorebook.id, name: "Survivor", binding: "{{char:1}}" })
+			.returning()
+		const [log] = await testDb
+			.insert(schema.bindingMergeLogs)
+			.values({
+				userId: user.id,
+				lorebookId: lorebook.id,
+				survivorId: survivor.id,
+				absorbedSnapshot: {
+					id: 9998,
+					lorebookId: lorebook.id,
+					name: "Absorbed",
+					binding: "{{char:2}}"
+				},
+				relationshipRewrites: [],
+				deletedRelationships: [
+					{
+						id: 5555,
+						lorebookId: lorebook.id,
+						fromNodeId: 9998,
+						toNodeId: survivor.id,
+						relationshipType: "ally",
+						title: "",
+						description: null,
+						visibility: "acknowledged",
+						status: "active"
+					}
+				],
+				sceneSnapshots: [],
+				reassignedCharacterLoreEntryIds: [],
+				reassignedChildNodeIds: []
+			} as any)
+			.returning()
+
+		const { narrativeGraphUndoMergeHandler } = await import("./narrativeGraph")
+		await narrativeGraphUndoMergeHandler.handler(
+			fakeSocket(user.id),
+			{ mergeLogId: log.id } as any,
+			() => {}
+		)
+
+		const links = await testDb.query.narrativeRelationships.findMany({
+			where: eq(schema.narrativeRelationships.lorebookId, lorebook.id)
+		})
+		expect(links).toHaveLength(1)
+		expect(links[0]!.description).toBe("")
 	})
 })

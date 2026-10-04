@@ -54,7 +54,7 @@
 	)
 </script>
 
-<div class="flex flex-col gap-1">
+<div class="flex flex-col gap-1" data-lore-field="date">
 	<span class="text-sm font-semibold">When</span>
 	<div class="flex gap-2">
 		<div class="flex flex-col gap-1">

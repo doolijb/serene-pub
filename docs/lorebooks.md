@@ -1,269 +1,197 @@
 # Lorebooks
 
-A lorebook is the knowledge behind a story: places, people, rules, what happened and when, and how those things connect. A lorebook is created once and can be read into any [session](./sessions.md), where its entries are added to the model's context as the session calls for them.
+A lorebook is your world written down: places, people, rules, and what has happened. Models forget anything that isn't in front of them, and they can't hold a whole world at once. A lorebook solves both: Serene Pub reads the entries that matter into each reply, as the [session](./sessions.md) calls for them, so characters remember the tavern's name and the king's betrayal without you repeating them.
 
-## One pool, three controls
+:::note By the end of this page
+You will have a lorebook with a first entry, read into a session, and you'll have watched that entry reach the model.
+:::
 
-The workspace shows one pool, the book's entries, through three controls that never nest:
+## Your first lorebook
 
-- **Scope** says what is in the set: a kind (World lore, Cast, History, Scenes, Places, Items), a state (read in last turn, pinned, off, archived, machine-written), or a search. Saved scopes sit under the kinds, and as chips over the list: **Needs keywords** (entries with no keywords, so nothing in a message can match them yet), **Loose ends** (entries with no keywords that the newest run of the session reading this book did not read in) and **Pinned**. A search or filter that matches nothing says so and offers **Clear search and filters**.
-- **Lens** says how the set is drawn: **List**, **Cards**, **Tree** (what is filed under what), **Graph** (who and what is connected), **Time** (dated entries on the story axis), **Lives** (who is in the world, and when) and **Places** (a map of regions and travel links).
-- **Moment** says when you are reading from: now, or any story date on the bar along the bottom.
+You need a session to try it in. Any session works, including one with a single character.
 
-Any scope can be drawn through any lens at any moment. A facet with nothing in it goes dim and sorts last; nothing is hidden and nothing has to be switched on. Every count leaves archived entries out, as the list does.
+### 1. Create the book
 
-Everything about the book rather than in it lives under **Manage** in the book's header, beside its name, entry count and the line you are reading: open another book, new, import, book settings, duplicate, export (paused for now), **Read into this session** or **Stop reading**, delete.
+Open the **Lorebooks** view from the rail and press **New** at the top of the list of books (from inside a book, press **Lorebooks** first to get back to the list). Give it a name and press **Create**.
 
-The workspace draws itself from the width it is given. Wide, and the rail stands beside the pool with the editor in a third column. Narrow, or docked beside a session, the rail collapses to the search and the scope chips, the lens row moves to the bottom, and the editor opens as a step in place of the list. Moving between rows, scopes or books with unsaved edits asks once before discarding them.
+If a session is open, the dialog also offers **Read it into this session**. Leave it on: that's step 3 done for you.
 
-### Book settings are a readout
+### 2. Write your first entry
 
-Book settings show what the book holds on the line you are reading: how many entries of each kind, how many cast members carry lore of their own and how many relationships stand between them, the earliest and latest dates, how many scenes are captured (and from which session) and how many wait to compile, how deep the nesting goes, its **Lines** (main and each branch, by name), and how many **Places** it has — its Location entries. That is a description, not a set of features to switch on. Every capability is available in every lorebook.
+A new book opens on one question: **Write the first thing you don't want to repeat.** Give it a name, write what the model should know, and press **Add entry**. It is filed as **World lore**.
 
-What a book chooses is behaviour: which session it reads into (**Read into this session** or **Stop reading**, the same action as in Manage), its **calendar** and its **clock** (see [Calendar and clock](#calendar-and-clock)).
+Example: name it *The Gilded Tankard*, and write *A crowded tavern on the river docks, run by a one-eyed dwarf named Hild. Smugglers meet in its cellar.*
 
-### Reading a book into a session
+Now give it **keywords**, the words that make Serene Pub read it in. Select the entry, type *tankard* in **Keywords** and press **Enter**, add *tavern* the same way, and **Save**.
 
-**Read into this session**, in Manage or Book settings, makes the session you have open read this book. It is offered only for a session you own. A session reads one book at a time, so reading this one into a session that reads another asks first, and says that nothing in either book changes. **Stop reading** takes the book out of the session; the book itself is untouched.
+### 3. Read it into the session
 
-### Creating, importing, duplicating and deleting
+Skip this if you left **Read it into this session** on. Otherwise, with your session open, press **Read into this session** beside the book's name.
 
-**New lorebook** asks for one name. When a session is open, it also offers to read the new book into that session. Everything else, cast, dates, nesting, relationships, appears as you use it. The first thing you see in an empty book is a composer: write the first thing you do not want to repeat, and it is filed as World lore. Cast, Time, Lives, Graph and Places still open from the rail and the lens row, so you can add a cast member by hand before writing anything.
+A session reads one book at a time. If it was reading another, you're asked first; neither book changes.
 
-**Import** reads a SillyTavern-style lorebook JSON, or a lorebook exported by Serene Pub 0.5. It always makes a new book (or overwrites the one it matches); it never fills the book you have open, which is why the empty book's button says **Import as a new lorebook**.
+### 4. See it work
 
-- A SillyTavern file lands every entry as World lore in a new book, since world entries need no binding. See [Importing from SillyTavern](./importing-from-sillytavern.md) for the foreign format.
-- A Serene Pub 0.5 export brings its entry kinds (world lore, character lore with the cast member it belongs to, dated history), scenes under their history entries, its cast with their cards, and the links between cast members. Personas come back as characters flagged as personas. A member whose card the file did not carry stays in the cast without a card.
+In the session, send a message that mentions the tavern: *"Let's head to the Tankard."*
 
-Re-importing a book that already exists is detected by content hash and asks whether to overwrite it or import it as new. Before an overwrite it says what the file cannot bring back — the book's dated changes, presences, branches and scenes captured from a session — and overwriting deletes them.
+:::tip You should see
+The reply knows about Hild and the cellar. Back in the Lorebooks view, the top of it says **Reading into ‹your session› · 1 entry reached the last turn**, and selecting the entry shows a line such as **Read in · rank 1 of 1 · matched tankard**.
+:::
 
-**Export** is paused while the lorebook format settles. It stays in the menu, greyed, and says so.
+:::warning If this didn't work
+- **The top of the Lorebooks view doesn't name your session.** The book isn't read into it yet: do step 3.
+- **It says "nothing reached the last turn".** Check the keyword appears in your message, and that you pressed **Save** after adding it. Open the entry's **Read in?** tab to ask why it was left out.
+- **The entry is marked Off or Archived.** Switch it back on in the entry's editor.
+:::
 
-**Duplicate** makes an exact copy under a new name: every entry on every line, archived ones included; the cast, with their cards, dated changes, presences and sprite sets; the branches with their fork dates; the links; the scenes and who was in them; the tags; and the story's calendar and clock. Cards are shared, not copied: the copy's cast points at the same character cards. Two things stay with the original: which session's messages each scene was captured from (the copy's scenes keep their summaries and cast), and the undo of a past cast merge. Nothing is read into a session until you say so.
-
-**Delete** cannot be undone. Deleting an entry deletes everything filed under it, however deep, and the confirmation says how many. While you are reading a branch, deleting an entry that every line shares deletes it from every line: the confirmation says so, and points to **Off for a while** for taking it out of this line only.
+That's the whole loop: write an entry, give it keywords, and it reaches the model when the story needs it.
 
 ## The entry
 
-Selecting a row opens its editor. Top to bottom:
+Every piece of lore is an **entry**. Entries come in kinds, chosen from the scope list on the left of the book:
 
-- **Name** and **Content**. Above the content, **Cast** inserts a reference to a cast member (`{{char:1}}`, drawn in the editor as a chip with the member's name, and resolved to that member's current name in the session reading the book) and **Macro** opens the macro list.
-- **Keywords** as chips, one keyword per chip. Press Enter or type a comma to add one. With **Use regex** on, a comma stays inside the pattern (so `\w{2,4}` is one keyword) and only Enter adds it; without it, a comma inside `/…/` or an open bracket stays too. When vectorization is on, the hint says entries are also matched semantically, so every phrasing need not be listed.
-- **Supply**, on an item only: how many of it the world has — **One of a kind**, **Limited** (then **How many exist**, a whole number of 1 or more; the item cannot be saved without it) or **Unlimited**. An item's row shows a bounded supply beside its name (`One of a kind`, `3 exist`). How many each character holds is kept on them, not here; see [Stats and states](./stats-and-states.md#stat-shapes).
-- **Part of**: the entry this one is filed under, or top level. Pick from the list, or drag a row onto another row in the pool. An entry cannot be filed under itself or under anything filed under it.
-- One fold, **Regex, case, recursion, priority, conditions**, holding the retrieval settings, in the same place whether or not any are set. Condition keywords are chips too, with the same comma rule.
-- **Read in**: what the newest run of the session reading this book decided about this entry, as one line. The book's owner sees whether it fired, its rank among the entries the run judged, the key that matched, and the tokens it cost against the budget; an administrator also sees the run's own sentence about it, from the run's report. When no session is reading the book, it says so.
-- **References** and **Contains** as two tabs, with their counts.
+| Kind | For | Example |
+| --- | --- | --- |
+| **World lore** | Facts anyone in the world might know | The Gilded Tankard; the law against magic |
+| **Cast** | The people of your world, and lore private to one of them | Hild, and the debt only she knows about |
+| **History** | Things that happened, with a date | *Year 412*: the docks burned |
+| **Scenes** | Summaries of stretches of a session, filed under a history entry | The night the party met Hild |
+| **Places** | Rooms, towns, roads, joined by ways and drawn on a map | The cellar, the docks |
+| **Items** | Things someone can carry, with how many exist | The cellar key (one of a kind) |
 
-### Keywords and embeddings
+**Everything** shows every kind together, the cast included.
 
-Every entry is matched on its keywords, with **Use regex**, **Case sensitive** and a manual **Priority** used as a tie-breaker. When **vectorization** is enabled system-wide, entries are also retrieved by embedding similarity against the session, and the fold says that Use regex and Case sensitive still govern keyword matching; the three controls are shown either way. See [Embeddings and RAG](./embeddings-and-rag.md).
+Selecting an entry opens its editor:
 
-Either way, a **Pinned** entry is always read in, and an entry switched **Off** stays in the book and out of retrieval. **Archived** is different: an archived entry is out of the list as well, until the Archived chip asks for it, and out of retrieval like an entry that is off. Both are marks on the row. Switching an entry off, pinning it or archiving it never re-embeds it: only a change to its name or content does.
+- **Name** and **Content**: what the model reads. Above the content, **Cast** inserts a reference to a cast member (it reads as their name in the prompt) and **Macro** inserts a macro.
+- **Keywords**: one per chip. Press **Enter**, or type a comma, to add one.
+- **Part of**: the entry this one is filed under (see [Filing entries under others](#filing-entries-under-others)).
+- **Supply**, on an item: **One of a kind**, **Limited** (then **How many exist**) or **Unlimited**.
+- **Category**, **Links** and **Stats**, on a place: see [Places and maps](./lorebook-places.md).
+- A fold, **Regex, case, recursion, priority, conditions**, with the matching settings and the **Pinned** and **Off** switches (see below).
 
-### Read in? (Signals)
+Under the editor, the **Read in?**, **References** and **Contains** tabs say whether the entry would be read in, what points at it, and what's filed under it.
 
-The Read in? tab runs retrieval for this entry against the newest turn of the session reading the book and answers whether it would be read in, at what rank, on which match, with the lexical and semantic scores, and whether it fits the budget. Under it, **Teach it**: **Always read this in** pins the entry, **Never read this in** switches it off. The test runs on the saved entry, because retrieval reads the database rather than the editor.
+## How entries are chosen
 
-### References
+Before each reply, Serene Pub picks the entries that fit the story right now and adds them to the prompt, as many as fit the room set aside for lore.
 
-What points at this entry, with the sentence it comes from where the text carries one: entries that name it in their content, entries filed under it, scenes that mention it from a session, cast members and entries linked to it by a relationship, and indirect references that arrive through its parent. Deleting the entry would leave these behind, which is why they are listed here.
+- **Keywords.** An entry is read in when one of its keywords appears in the recent messages. In the fold, **Use regex** treats keywords as patterns, **Case sensitive** stops *Hild* matching *hild*, condition keywords narrow when an entry fires, and **Priority** breaks ties. An entry imported from SillyTavern may match whole words only; the fold says so, and **Match anywhere** undoes it. **Recursion depth** lets an entry be found through keywords in other entries' text, but only as deep as the pipeline's **Follow keyword chains this deep** allows, and that is 0 until you raise it.
+- **Search by meaning.** With an embedding model set up, entries are also found by what they're about, so *"the dwarf's bar"* can find the Tankard with no keyword at all. See [Embeddings and search by meaning](./embeddings-and-rag.md).
+- **Pinned** entries are always read in, whatever the conversation says. Keep pins for short lore the model must never forget: pinned entries still take room from everything else.
+- **Off** keeps an entry in the book but out of every prompt. **Off for a while…**, in the entry's ⋯ menu, switches it off between two story dates (see [Time, history and branches](./lorebook-time.md#off-for-a-while)).
+- **Archived**, also in the ⋯ menu, takes an entry out of the list as well as the prompt, until the **Archived** chip shows it again.
 
-### Retrieval markers
+Lore that belongs to one character is **Character lore**: only that character's turns (and the turns of characters you play) read it. It reaches the prompt where the session's context template places `{{{characterLore}}}`. The built-in templates already do; if you write your own, include it. See [Cast and relationships](./lorebook-cast.md#lore-only-one-character-knows).
 
-When the session you have open reads this book, every row carries a mark saying what that session's newest run decided: read in, considered and left out, or nothing at all when no mechanism reported on it. The marks are re-read when a reply finishes.
+:::note Patterns that could hang
+A regex keyword that could take unbounded time to check, such as `(a+)+`, is refused when you save, and the chip says why. Every regex keyword also runs under a short time limit, and one that keeps running over is skipped until the app restarts.
+:::
 
-## Nesting and links
+### Why was it read in, or not?
 
-Entries connect in three ways, each stored separately:
+Each entry's **Read in?** tab tests it against the newest turn of the session reading the book. It answers whether the entry would be read in, at what rank, which keyword or meaning matched, and whether it fit the budget. Under it, **Teach it** offers **Always read this in** (pins it) and **Never read this in** (switches it off).
 
-1. **Part of** files an entry inside one other entry: the room inside the inn, the inn inside the Low Quarter. One parent, and deleting the parent deletes what is inside it. The Tree lens draws this, and the Places lens uses it for regions.
-2. **Relationships** are typed, directed links with a description, between any two things in the book: two cast members, a cast member and an entry, or two entries. A road is an entry with a link to each place it runs past. A tunnel has a link from the room it starts in and a link to wherever it comes out. Each link can be dated by the history entry that made it true, and hidden from characters who would not know it.
-3. **References** are derived from the text and never edited.
+The test reads the saved entry, so save before you test.
 
-Part of answers "where is this inside", once. Links answer "how do I get from here to there" and "what stands in relation to what", as many times as needed, with words on each.
+## Finding your way around a book
 
-When an entry is read into a turn, its links are followed one hop: the room brings the tunnel link as a lower-ranked candidate, and not the far end of the tunnel. Only links that stand on the session's line, are still active, are not secret, and reach an entry of this book that is neither archived nor off are followed. **What arrives this way does not reach the prompt yet**: it is ranked and counted against the relationships' share of the budget, and the run's receipt lists it, but no part of the prompt writes it out.
+The workspace shows the book's entries through three controls you can combine freely:
+
+- **Scope**, on the left, says which entries: a kind, a saved filter, or a search. **Everything** is every kind, the cast included (choosing a member opens the Cast board). The saved filter **Pinned** lists what is always in the prompt; its figure counts the list it opens: the scope you're in, or the whole book from Everything and Cast. Chips over the list filter further, including **Archived** and **Needs keywords** (entries in play that nothing can match yet — pinned, off and archived entries, scenes and cast members never need keywords).
+- **Lens** says how they're drawn: **List**, **Cards**, **Tree** (what's filed under what), **Graph** (who and what is connected), **Time** (dated entries on a timeline), **Lives** (who is in the world, and when) and **Places** (a map). **Alt+Shift+1** to **Alt+Shift+7** (**⌥⇧1**–**⌥⇧7** on a Mac) pick them in that order while you're working in the book (not while typing in a field). Lives and Places draw the whole book whatever the scope, so choosing a scope while you're in one of them opens that scope in List.
+- **Moment**, the bar along the bottom, says when in the story you're reading from: now, or any date. See [Time, history and branches](./lorebook-time.md#reading-the-book-at-a-moment).
+
+**Loose ends**, under the scopes, is what is left to finish in the book, one fix at a time. Its figure counts them all. It lists, grouped by what each needs and most recently changed first:
+
+- **Needs keywords**: entries in play that nothing can match yet. Done when it has a keyword, or is pinned or switched off.
+- **Undated history**: history entries with no year.
+- **Empty content**: entries with nothing written in them.
+- **Undescribed places**: places with no content and no link to anywhere.
+- **Cast suggestions**: people the story mentions who aren't members yet, and pairs that may be one person, waiting in the cast's **Suggestions**.
+- **Orphan cast members**: background members with no lore and no relationship.
+
+Pressing a row opens the entry with the field that fixes it ready to type in (the keywords, the date or the content). **Save & next** saves it and opens the next loose end; **Next loose end** moves on without saving. A row leaves the list once it's fixed; there is no way to dismiss one that isn't. The list is taken when you open it and doesn't reorder while you work: anything new shows the next time you open it. **Done**, or choosing a scope or lens, leaves it. A row about the cast opens the Cast board, with a bar to go on or back to the list.
+
+**Search this book**, the box over the scopes, filters the list as you type. **Jump** (**Ctrl K**, **⌘K** on a Mac) searches the open book too, the same way it searches whichever view is open.
+
+Everything about the book itself sits beside the book's name: **Settings**, **Read into this session** (when a session you own is open), and **⋯** for **Duplicate** and **Delete this lorebook**. **Lorebooks**, before the name, goes back to the list of books, which is where you open another book, make a **New** one or **Import a lorebook** (the upload button beside **New**).
+
+**Book settings** describes what the book holds (how many entries of each kind, its cast, dates, scenes and lines), and holds the book's calendar and clock. There are no features to switch on: every book can do everything on these pages.
+
+On a wide screen the list and the editor sit side by side. Drag the divider between them to give either more room, or focus it and use the arrow keys (**Shift** for bigger steps, **Home**/**End** for the ends); double-click it to reset. The width is remembered on this device, and is the same for every lens. On a narrow screen, or docked beside a session, the scope list folds into a search and chips (**Loose ends** is the last chip), the lenses move to the bottom, and the editor opens in place of the list. If you move away from an entry with unsaved changes, you're asked first, and reloading or closing the tab warns you too. Moving the moment bar never asks: an open edit keeps the date it was started at.
+
+## Filing entries under others
+
+**Part of** files an entry inside another: the guild's charter inside the guild, the altar inside the chapel. The **Tree** lens draws this. Pick the parent in the editor, or drag a row onto another row. Places and history entries are never filed inside anything: places join by links, and history always stands at the top level, placed by its line and its date (other lore may still be filed under a history entry).
+
+Deleting an entry deletes everything filed under it; the confirmation says how many.
+
+Two other kinds of connection exist, and you'll meet them on the topic pages:
+
+- **Relationships** link any two things with words: *Hild owes Marrow*, *the cellar door leads to the docks*. See [Cast and relationships](./lorebook-cast.md#relationships) and [Places and maps](./lorebook-places.md#ways-between-places).
+- **References** are worked out from text: an entry that names a cast member, or a scene that mentions an entry. The **References** tab lists them.
 
 ## Cast
 
-Cast members arrive from the session on their own: reading a book into a session, or adding a character or persona to a session that reads it, creates one member per character or persona, and never a second one for the same card. Removing a member from the session keeps the cast member, since lore may be anchored to them.
+The **Cast** is everyone your world holds. When you read a book into a session, its characters and personas join the cast automatically; you can also add background people nobody plays, like the innkeeper. A cast member is that person in *this* story: their private lore, their relationships, and how they change over time. Their character card stays shared and untouched.
 
-Cast is everyone the book's world holds, one row per member, with their aliases, state (active, deceased, missing, departed), how many lore entries are anchored to them and how many relationships they have. A member is a name in the book, optionally bound to a character card (a persona is a character card too); the binding is how `{{char:N}}` in content resolves and how a session knows which participant a member is. A member with no card is a **background** member. The row's read-in mark reports on the member's anchored lore.
+See [Cast and relationships](./lorebook-cast.md) for private lore, relationships, the graph, and characters who change over a story.
 
-A member's page holds their state, aliases, summary, the attached card (with **Change**), their **Relationships** with type, direction, the other end, and where each came from (from lore, from history, from scene, or this session when a graph build just proposed it), **Lore about** them (the entries anchored to them, written where the person is), and the same single fold their lore uses. Suggested members and possible duplicates from the session are listed under the roster, in the narrow layout as well as the wide one, with the existing suggestion and merge panels behind them.
+## Reading a book into a session
 
-A member with a card takes their name from it. Their other names are their own either way: the card's names are added to them, and changing or unlinking the card keeps every name they already had.
+**Read into this session**, beside the book's name or in **Settings**, makes the open session read this book. It's offered for sessions you own. A session reads one book at a time; reading this one into a session that reads another asks first. **Stop reading** takes the book out of the session and leaves the book untouched.
 
-Lore written on a member's page is saved to the entry itself, at every moment: the page has no **Save as of** for their lore yet. To file a dated change to it, open the entry from the list while reading as of the date.
+You can also choose a session's book in its settings, along with its **Line** and **Story clock** (see [Where the session reads its lorebook](./sessions.md#where-the-session-reads-its-lorebook)).
 
-Reading as of a moment, the page shows the relationships that stood at that point and dims the later ones with their date.
-
-**Delete**, on a member's page, says what goes with them: the relationships they are in, their dated changes and their places in scenes. A linked character card is not touched. When they have lore private to them, it asks what happens to it: **Keep their lore**, which leaves it unassigned — and unassigned lore is visible to the narrator — or **Delete their lore too**. If a past merge names them, it says that deleting them disables that merge's undo.
-
-## The lenses
-
-**List** and **Cards** draw rows. **Tree** nests each row under whatever it is filed beneath, with scenes under their history entries.
-
-**Graph** draws the current scope as a force layout: cast members as circles, entries with links as squares, and every link as a labelled, directed edge. Click a node to open it. Hold ⌥ (Alt) and drag from one node to another to name a link: the form suggests types for that pairing (connects to, leads to, runs past for two places; keeper of, lives in for a member and a place), takes any type you write, and, once the book has history, offers **When** — the history entry that dates the link, starting at the one dated the moment you are reading. The panel beside the canvas lists the selected node's links with their provenance (a broken link is marked **cut**), and names scenes that put two members in the same room without a link between them. Deleting a link asks a second time.
-
-The graph shows the links on the line you are reading. While you read a branch, a link another line owns is shown but cannot be changed from here; it says which line to open to change it. A link you draw belongs to the line you draw it on.
-
-**Extend from this session**, offered when the session you have open reads this book, runs the graph build over that session's scenes that have not been graphed yet; with no such session it is **Extend graph**, over everything in the book not yet graphed. Either lands on the review screen, and nothing is applied without you. **Rebuild** replaces the graph: it deletes every link in the book, and its confirmation says how many first. A rebuild re-creates only links between cast members, from your scenes, so links drawn by hand and links with an entry at either end do not come back; the confirmation counts the ones with an entry at either end.
-
-**Time** puts the current scope's dated entries and scenes on the story axis in lanes: the story, one lane per cast member who appears in dated entries, and the world. Search and the pool's chips narrow the list, not the axis. Gaps between dated entries are marked. Entries with no date are listed beside the axis; drag one onto it to date it. Selecting a dated entry opens its When, Content, the scenes compiled into it, and who was present. Saving there always changes the entry itself: the Time lens has no **Save as of** yet, so to file a dated change, open the entry from the list.
-
-**Lives** draws who is in the world over time: a lane for every placed cast member, a bar for each presence, and a mark where two of them overlap — the same person at two points of her life, both here at once. Members who have never been placed are simply always here and are not drawn.
-
-**Places** draws a map of the book's places — its Location entries on the line you are reading, archived ones left out. Every place is a box, nested inside the place it is Part of; travel links are lines between them; and a cast member with a `lives in` or `keeper of` link is a pin inside that place — one pin per member per place, however many such links they have. Another kind of entry appears only when something joins it or holds it. With no places it says so.
-
-## The session reading this book
-
-When a session reads this lorebook, the top of the lorebook sidebar says so: the session's name (click it to open the session), which line it is reading and as of when, and how many entries reached the last turn.
-
-A session reads the book **on its own line, at its own story clock** — or as of now, when it follows the line's present. The workspace does not have to read from the same place. If you have moved the moment or switched to another line, the block says **Read what it reads** — one click puts you on the session's line at its clock, so what is on your screen is the book as the session reads it.
-
-A book no session is reading keeps a single quiet line at the bottom of the rail instead.
+While a session reads the book, the top of the Lorebooks view names it, says which line it reads and as of when, and how many entries reached its last turn. Click the name to open the session. If you've moved the moment bar or switched lines, **Read what it reads** shows you the book as the session sees it.
 
 ### What a session has read
 
-Every turn records what it decided about each entry it judged: read in or left out, why, its rank (its place among the entries that turn read in — "rank 2 of 5"), what it cost, and the keys that matched exactly (a near-miss spelling can still bring an entry in, but is never reported as a match). The markers, the Read in line, the session's usage panel and the **Lore entries** widget read those records. They are the book owner's: the owner sees them for every turn in their sessions, guests' turns included, and so do administrators. A guest sees none of it. A session keeps these records for one round — each character's most recent turn. The counts of how often each entry was read, and when and in which turn it last went in, are kept for good; the usage panel and the widget show those. All of it goes when the session is deleted.
+Every turn records what it decided about each entry it judged: read in or left out, why, its rank, its cost, and the keywords that matched. You see this in three places:
 
-**Lore entries** is a session widget (add it from the layout editor). It lists the session's book as the session reads it — the entries on its line, as they read at its story clock, archived ones left out — with, for each entry, how often it has been read in this session, when last and at what rank. Search it by title or key, sort it by name, last read, times read or rank, and show only the entries read, pinned or off. **Pin** and **Off** on each row set the entry's marks directly; if a mark cannot be changed, the widget says why on its own line, just above the list, until you change the search, sort, filter or page. It updates itself whenever a turn has written its rankings, so the counts are current the moment a reply lands, and whenever you pin or turn off one of its entries somewhere else (another Lore entries widget, another tab); the refresh button beside the search asks again at any time. A guest who opens it is told the entries are the book owner's to manage.
+- **Marks on each row** in the book: read in, considered and left out, or nothing.
+- **The Read in line** in an entry's editor, such as *Read in · rank 2 of 12 · matched umber · 218 of 900 tokens*.
+- **The Lore entries widget** in the session (add it from the [layout editor](./session-layout.md)). It lists the book's entries with how often each was read in this session, when last and at what rank, and has **Pin** and **Off** on each row.
 
-## The moment bar
+These records are the book owner's: guests don't see them. Detailed records are kept for each character's most recent turn; the counts of how often each entry was read are kept for the life of the session.
 
-The bar along the bottom carries a tick for every dated entry, and names the story's present at its **now** end (a clock icon marks one set on the clock). Drag it, click a tick, or use the arrow keys to step between the book's dated moments; **Go to date…** stands you at any date, whether or not anything happened on it (a date the book's calendar does not have is refused, never rounded). Undated entries always show, dated entries and links only once they have happened, and cast members whose first dated mention is later are listed dim as not in the story yet. A banner above the editor names the moment and offers **Return to now**. While you are reading as of a date, **Make this the present** sets the clock there, on the line you are reading.
+## What a session may write
 
-## Amendments
+Sessions can write back to your lorebook: scenes you capture, stats recorded onto the world, links a genre draws between rooms. Your **Lorebook writes from sessions** setting, in **Settings › User**, decides how much. An administrator sets the default for everyone in **Admin › General**.
 
-An **amendment** is a dated change to an entry. The entry itself — its **base** — stays as it was; the amendment says "from this date, it reads like this". Reading before that date shows the base, reading at or after it shows the change.
+- **Full**: sessions write to the lorebook as they play.
+- **Review changes** (the default): changes a session makes on its own wait as proposals under its reply, for you to **Accept** or **Reject**. Only the lorebook's owner decides them. What you save yourself from a review screen, such as **Summarize to Lorebook**, **Compile to Entry** or **Apply graph**, saves straight away: that screen is the review.
+- **Off**: nothing a session does writes to the lorebook. Summarize, compile and the graph build say so and don't start, and so does drafting or saving the summary of a scene a session captured.
 
-While you are reading as of a date, saving offers two things:
+Two writes can't wait for review, so under **Review changes** they behave as under **Full**: a genre linking two rooms, and a genre writing a new entry without its own review step. Under **Off** both are refused. Seating a character always adds them to the cast, whatever the setting.
 
-- **Save as of ‹date›** files the change as an amendment. The entry is untouched and the change begins at that date. It is filed on the line you are reading.
-- **Change the base**, in the menu beside it, changes the entry itself — everywhere, on every line and at every moment, including before the date you are reading, where it becomes what was always true. The menu says so before you press it.
+What a session writes lands on its line, dated where its story stands. See [Stats and states](./stats-and-states.md#when-a-session-changes-the-lorebook) for stats, and [Time, history and branches](./lorebook-time.md#which-line-a-session-reads) for lines.
 
-At **now** there is no choice and one Save button, which changes the base. If an amendment already in effect at now sets a field you changed, the save still lands, but the entry reads the same as before: the amendment wins from its date on. The save says so, naming the amendment's date and the field, so you can edit or delete that amendment instead.
+## Creating, importing, duplicating and deleting
 
-Only what you actually edited is written. If an entry reads a certain way at this moment because of an _earlier_ amendment, saving does not copy that value into wherever your change lands.
+**New lorebook…** asks for a name. Everything else, such as cast, dates and places, appears as you use it.
 
-An entry with amendments lists them under the editor, each with its date and what it changes. The ones the line you are reading reads come first; one on another line says which (`on Exile`, or `on main, after the fork`). **Delete** removes one, after asking. Click a date to change it — an amendment filed at the wrong moment is a change that happens at the wrong time, not a wrong value. While you are reading as of a date, the ones still ahead of you on this line are marked and the list says how many have not happened yet.
+**Import a lorebook…** reads a SillyTavern lorebook or character book file, a lorebook exported by Serene Pub 0.5, or a book Serene Pub wrote into a character card. It always makes a new book; it never fills the one you have open.
 
-An amendment's date is a date the story knows, so the moment bar carries a tick for it: you can stand at the moment something changed even if nothing else is dated there. To file one at a date nothing is dated at yet, use **Go to date…** first.
+- A SillyTavern file comes in as **World lore**. See [Importing from SillyTavern](./importing-from-sillytavern.md).
+- A Serene Pub 0.5 file brings its world lore, character lore with the cast member it belongs to, dated history with its scenes, and its cast with their cards.
+- Importing a book you already have is detected and asks whether to overwrite it or import it as new. Before overwriting, it lists what the file can't bring back (such as branches, dated changes and scenes captured from sessions), and those are lost. It also says how many of your characters the file carries an edited copy of: either choice rewrites those characters from the file.
+- Files over 32 MB, or far larger than any real book, are refused with the reason.
 
-### Off for a while
+An imported book is queued for search indexing straight away. If the book was saved but something after it wasn't, the import says **Lorebook imported with warnings** and names what didn't come through.
 
-**Off for a while…**, in the entry's ⋯ menu, switches an entry off for a period: a date it stops being read from, and optionally a date it starts again. Leave the second blank and it stays off from then on.
+**Export** is paused while the lorebook format settles: it stays in the menu, greyed out. A [character card](./characters.md) can still carry a book, holding the book's main line without branches or dated changes.
 
-The second date is the day it is **back** — an entry off from Year 3 until Year 6 reads as off at Year 5 and on at Year 6. A window that would come back on before it went off is refused, and says so before you press anything.
+**Duplicate** makes a full copy under a new name: every entry on every line, the cast, branches, links, scenes, dated changes, stats and stat sheets, tags, calendar and clock. Character cards are shared, not copied. Scenes in the copy keep their summaries but not the session messages they were captured from, and the undo of a past merge stays with the original. The copy isn't read into any session until you say so.
 
-Underneath it is two amendments, which is the only thing the book can store: a change at the start and a change back at the end. You never have to work them out yourself. Like any amendment, they are filed on the line you are reading, so on a branch it takes the entry out of that line only.
+**Delete this lorebook** can't be undone.
 
-Retrieval reads amendments too: a session reads each entry with the amendments on its line that have happened by its story clock — every one of them, when it follows the line's present.
+## Going further
 
-## Amending a cast member
-
-A cast member changes over a story like anything else, and the same **Save as of ‹date›** appears on their page while you are reading as of one. What can be dated: their name (a member with a card takes their name from it), aliases, state, summary — and **which character card represents them**. At now, the same warning as an entry's says when a dated change still sets a field you saved.
-
-That last one is how a character can be drawn differently at different points in their life. Link the young card, and at the year they change, amend the member to the older one. Read before that year and you see the novice; read after and you see the keeper — in the list, on their page, and anywhere the book draws them.
-
-While you are reading as of a date, **Change**, **Link** and **Unlink** on the card are dated too: before that date the member reads as they do now. The card's menu offers the same actions **everywhere**, which changes the card at every moment instead.
-
-A card is not amended, only which card is used. Cards are shared between books, so changing one would change that person everywhere they appear.
-
-### Sprite set
-
-If the card has more than one sprite set, **Sprite set** on the member's page picks which one they are drawn with. Sets belong to the card; which one this member uses is theirs, and can be dated like anything else here — so she can wear the scarred set from the year she earns it. Choosing nothing means the card's own default. If a card swap moves them to a card that has no set by that name, the name is kept rather than thrown away, they fall back to that card's default, and the page says so.
-
-## When a cast member is in the world
-
-By default a cast member is simply in the world: at every moment, at no particular point of their life. Most members never need more than that.
-
-**Place them**, on the member's page, says more: from what date they are here, until what date, and where in their own life that is. Each one of those is a **presence**. The point in their life is a plain number you choose the meaning of — an age, a chapter, an arc — and it needs no calendar. Leave the departure blank and they never leave.
-
-Placing someone for the first time changes what _no_ presence meant. Until then they were here always; from then on they are here during their presences and **nowhere else**. The form says so before you place the first one.
-
-A departure date is the moment they are **gone**, not their last day here. Someone who leaves at Year 6 is still here at Year 5 and not at Year 6.
-
-### Two of them at once
-
-Two presences that overlap are **two of them in the world at the same time** — her at 34 and her at 50, in the same room. That is what presences are for, not a mistake, so the form says which two you are about to have and lets you through once you confirm it. The only thing refused is an exact repeat: the same point of their life over the same span, which is a slip rather than a story.
-
-Where two of them are here, everything that draws the cast draws both. One of them, resolved at one moment, is an **appearance**. An amendment that carries a point of her life belongs to that appearance and travels with it, so the 50-year-old can carry what the 34-year-old has not lived yet. The member's page does not file one yet: a change saved there carries no point of her life, so it applies to every appearance.
-
-The **World bar** at the top of the book says who is in the world at the moment you are reading, and the **Lives** lens draws it over time: a lane per placed member, a bar per presence, marked where two of them overlap.
-
-A presence belongs to the line it was made on, like an amendment. Make one while reading a branch and it is that branch's; the form says where it will land before you place it.
-
-## Branches
-
-A **branch** is another line of the same story. The chip beside the book's name says which line you are reading; **main** is the line every book starts with.
-
-**Fork** makes a new line, named by you, leaving from the line you are on at the moment you are reading. Fork a branch and the new line reads through it: that branch's own rows up to the new fork's date, and main's up to the earlier of the two fork dates.
-
-Forking while reading as of a date parts the two lines **at that date**: from then on a change on one line is not a change on the other, and the fork stops following what the first line goes on to do. The cut is by story date, not by when a change was written — a line forked at Year 3 never reads a change dated Year 4, however long afterwards you make it. The same goes for dated entries: a history entry on main dated after the fork is not on the fork.
-
-Forking at **now** stores no date, which is a different thing: that line keeps following the one it left. Move the moment first if the two should genuinely part.
-
-What a branch keeps to itself: its amendments, the entries you write while reading it, the scenes captured from sessions on it, the links drawn on it, the presences placed on it, and the stats recorded while playing on it. Everything else is **shared** — one row both lines read. That is what makes a branch cheap: forking does not copy the book, so an edit to a shared entry is made once and both lines see it.
-
-Main sees only shared rows. A branch sees its own rows and the rows of the lines it came from, each up to its fork date — never a sibling's.
-
-**Rename** and **Delete** are in the same menu. Deleting a line removes everything written on it: its amendments, its own entries, its scenes, the links drawn on it, the placements made on it and the stats recorded on it. Shared entries stay. Sessions played on it move to main and keep their story clock, and lines forked from it become lines off main.
-
-**Compare ‹line› with main**, in the same menu, draws the two side by side: what this line has that main does not, and every shared entry or cast member the two read differently, field by field. It follows the moment, so you can compare the two stories as they stood at any date.
-
-Nothing merges, by design. To take something across, read the line it is on and write it on the other.
-
-Each session chooses which line it reads, and its story clock, in its [settings](./sessions.md#where-the-session-reads-its-lorebook). A new session starts on the line played most recently, following that line's present. The stats it inherits from the book follow both: on a branch, the lines it came from count only up to their fork dates; with a clock, only what was recorded by then. Lore retrieval reads the same way: the entries on the session's line, with history dated after its clock left out and the amendments dated by then applied.
-
-## History and scenes
-
-A history entry is anchored to a date: a year, optionally a month and a day. Entries are kept in date order by the editor, which refuses a date that would put an entry out of sequence with its neighbours. **Add the next date in sequence** (the calendar-plus button over the history list) adds a new entry one step after the latest: the next day; for an entry with only a year and month, the next month; for one with only a year, the next year. In a free-form book nothing rolls over (day 31 of month 1 becomes day 32 of month 1); with a calendar, the day after a month's last is the first of the next month, and the month after the year's last is the first of the next year.
-
-A **scene** is a saved reference to a consecutive run of messages in a session, with a name, a generated summary, and who was present or mentioned. Scenes are captured from a session, never typed from nothing, and sit under the history entry they belong to. A message can be in only one scene: a capture that names messages from another session, or messages already in a scene, is refused and nothing is saved. **Process** has the model write or rewrite the summary from the messages. Once an entry has scenes, **Compile to entry** synthesizes their summaries into the entry's content, showing a word-level diff against what was there. Saving a compile writes only what changed: at now it changes the entry; while you are reading as of a date it files an amendment at that date, on the line you are reading.
-
-## Calendar and clock
-
-Both live in **Book settings**.
-
-### The calendar
-
-A book starts **free-form**: dates are numbers that sort, written `Year 412, Mo. 3, Day 5`. Months can go past 12 and days past 31, and nothing rolls over. That is a real choice, not a missing setting, and a book never has to leave it.
-
-**Declare a calendar** to name the months and give them lengths. Start from a preset (twelve months and 365 days, or twelve months of thirty days) or from blank, then set:
-
-- **Months** — a name and a length for each, in order.
-- **Leap day** — one more day in one month, every so many years.
-- **Week** — weekday names, and which one Year 1 begins on. Leave it empty and dates carry no weekday.
-- **Years** — the word before the year (`Year`, or nothing), and **eras**: a name and the year it starts. An era that **counts down** runs toward the next one (300, 299 … 1), which is how a "before" era works. An era only changes how a year is written; it never moves a date.
-
-A live example over the editor shows how a date of this book will be written, and what the next date in sequence would be, as you edit: `Tuesday, 5 March, Year 412`.
-
-**Every date already in the book has to fit before the calendar is saved.** As you edit, the editor checks the book's history entries, amendments, presences, fork dates and clocks against it and lists any that do not land (day 31 of a thirty-day month, month 13 of twelve) with the reason. Save stays off until that list is empty. Nothing is re-dated for you: change those dates where they are, or change the calendar so they land. Once a calendar is saved, dates are checked as they are written, so the list cannot fill up again.
-
-With a calendar, every date in the workspace is written through it: the history list, the moment bar, amendments, presences, the Time and Lives lenses, and the date the model is told. A calendar changes how dates are written and how the next date steps; it never changes their order.
-
-**Return to free-form** is offered from the editor and asks first. Every date keeps the numbers you typed; they stop being named, checked and rolled over.
-
-### The clock
-
-The **clock** is where the story stands: its present. With no clock set, the present is the newest history entry, which is what it always was. Set it when the story stands somewhere else: between entries, before the latest one, or with a time of day. **Next day** steps it on by the calendar, and **Follow the newest entry** clears it.
-
-Each line has its own clock. The clock you set in Book settings, or with **Make this the present** on the moment bar, is the one on the line you are reading. A branch never stands at main's present: with no clock of its own, its present is the newest entry it can see — its own, or main's from before the fork.
-
-**Each session can have its own clock too.** A session reading this book follows the present of the line it reads until its clock is set in its settings or advanced by a pipeline; that first clock starts from the line's present, and from then on it is the session's (see [Where the session reads its lorebook](./sessions.md#where-the-session-reads-its-lorebook)). Moving a session's clock — in its settings, or by a pipeline's **Advance story clock** step — never moves this book's present, and two sessions on one book can stand at different dates. A session told to follow the line's present has no clock of its own and reads the line's present as it moves.
-
-The present — or, for a session with a clock of its own, that clock — is what the session is told the current date is, and what a character's age is measured against. It is also where the session reads the book from: history dated after it and amendments that have not happened by then are not read in. The moment bar is only yours; moving it never changes what a session reads.
-
-## From a session to the graph
-
-Turning a session into structured lore is four steps, each through the same modal shell: configure, run with live progress, review before anything is written.
-
-1. **Summarize to lorebook**, from a session's selected messages: a scene under a history entry (the messages must be consecutive; any already in a scene are dropped from the selection), a world lore entry with an optional focus, or a character lore entry with a required focus. Drafts stream in batches, then a synthesis pass merges them.
-2. **Process scene**, from History or Scenes, derives the summary and the cast lists from the underlying messages. An unfinished review reopens next time; the activity sidebar offers a shortcut to it.
-3. **Compile to entry**, from a history entry with scenes, writes the dated content. Saving marks the entry completed; that content is what search, retrieval and prompts use.
-4. **Build or extend the graph**, from the Graph lens (or **Extend Graph** in a session's workflow tab, which reads that session's scenes only), extracts cast members and relationships from summarized scenes and compiled entries. It stops at the review screen every time.
-
-Scenes without a summary are skipped by the build, so a low "ready to process" count usually means a scene still waiting on step 2.
+- [Cast and relationships](./lorebook-cast.md): private lore, relationships, the graph, characters who change over time.
+- [Places and maps](./lorebook-places.md): rooms joined by ways, the map, and what a place holds.
+- [Time, history and branches](./lorebook-time.md): dates, amendments, the calendar and clock, and alternate lines of a story.
+- [Summarization](./summarization.md): turning sessions into scenes and history.
+- [Embeddings and search by meaning](./embeddings-and-rag.md): finding lore without keywords.
+- [Stats and states](./stats-and-states.md): health, gold, inventories and where things are.

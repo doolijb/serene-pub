@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { docsHref } from "$lib/shared/utils/docsHref"
 	/**
-	 * Instance › Data and backups — the backup policies, then the backups
+	 * Pub › Data and backups — the backup policies, then the backups
 	 * themselves (Back up now, the list, Delete, databases set aside). The
 	 * list is `DataSettingsTab`, the same component the Settings sidebar's
 	 * Data tab shows; restore stays on `/recovery` and `npm run db:recover`,
@@ -9,7 +9,7 @@
 	 */
 	import { getContext } from "svelte"
 	import AdminPageHeader from "$lib/client/components/admin/AdminPageHeader.svelte"
-	import BackupPolicyCard from "$lib/client/components/admin/instance/BackupPolicyCard.svelte"
+	import BackupPolicyCard from "$lib/client/components/admin/pub/BackupPolicyCard.svelte"
 	import DataSettingsTab from "$lib/client/components/settingsTabs/DataSettingsTab.svelte"
 
 	let systemSettingsCtx: SystemSettingsCtx = $state(

@@ -304,3 +304,59 @@ describe("auto-advance — the listener", () => {
 		expect(readTurnOrder(row!.metadata).order).toEqual([])
 	})
 })
+
+/**
+ * **A planned turn is the rest of a turn already taken** (Lair character
+ * turns, owner ruling 2026-09-30). An entry the standing turn plan prepared
+ * (`via: 'plan'`) fires on a run's own cause whoever started that run — a
+ * person's Continue as much as auto-advance — and under `next` as well as
+ * `round`, because the Castellan's run that planned it IS the turn the send
+ * asked for. Still never on an edit, a settings save or a system recompute,
+ * and never under `off`; a Stop ends the plan in the strategy itself.
+ */
+describe("auto-advance — planned turns", () => {
+	beforeEach(() => {
+		fires.length = 0
+	})
+
+	const planned = (ref: string) => entry(ref, "plan")
+	/** A run's own cause with no `auto`: the Castellan's run a person pressed. */
+	const pressedRunOf = (id: number) => ({ kind: "run", runId: "run-pressed", userId: id }) as const
+
+	it("fires a planned turn on the cause of a run a person started, under `next`", async () => {
+		const s = await makeSession("next")
+		const out = await on(s.id, pressedRunOf(userId), orderWith(planned("character:3"), 9000))
+		expect(out).toMatchObject({ fired: true, mode: "next" })
+		expect(fires).toEqual([planned("character:3")])
+		_resetAutoAdvance(s.id)
+	})
+
+	it("fires a planned turn on an auto run's cause under `next`, where a strategy's entry is refused", async () => {
+		const s = await makeSession("next")
+		const out = await on(s.id, autoOf(userId), orderWith(planned("character:4"), 9100))
+		expect(out).toMatchObject({ fired: true, mode: "next" })
+		const strategy = await on(s.id, autoOf(userId), orderWith(entry("character:5"), 9200))
+		expect(strategy).toMatchObject({ fired: false, reason: "cause" })
+		expect(fires).toEqual([planned("character:4")])
+		_resetAutoAdvance(s.id)
+	})
+
+	it("never fires a planned turn on an edit, a settings save or a system recompute, nor under `off`", async () => {
+		const s = await makeSession("next")
+		for (const cause of [
+			{ kind: "edit", userId },
+			{ kind: "settings", userId },
+			{ kind: "system" }
+		])
+			expect(await on(s.id, cause, orderWith(planned("character:6"), 9300))).toMatchObject({
+				fired: false,
+				reason: "cause"
+			})
+		const off = await makeSession("off")
+		expect(await on(off.id, pressedRunOf(userId), orderWith(planned("character:6"), 9400))).toMatchObject({
+			fired: false,
+			reason: "off"
+		})
+		expect(fires).toEqual([])
+	})
+})

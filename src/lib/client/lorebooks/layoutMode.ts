@@ -27,3 +27,10 @@ export type LoreLayoutMode = ViewMode
 export function layoutModeFor(widthPx: number): LoreLayoutMode {
 	return modeForWidth(widthPx)
 }
+
+/**
+ * Where the desk's list-beside-editor share is remembered on this device —
+ * ONE key for Entries, Time and Cast, so changing lens never moves the
+ * divider (`ResizableSplit`).
+ */
+export const LORE_SPLIT_KEY = "serene-pub:loreSplit"

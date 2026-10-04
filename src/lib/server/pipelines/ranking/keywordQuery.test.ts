@@ -8,13 +8,19 @@
  * as missing lore.
  */
 
-import { describe, it, expect } from "vitest"
+import { afterEach, describe, it, expect } from "vitest"
 import {
+	MAX_RECURSION_DEPTH,
 	keywordQuery,
 	normaliseTfidf,
 	type LoreRow
 } from "$lib/server/pipelines/ranking/keywordQuery"
 import { DEFAULT_RETRIEVAL } from "$lib/server/pipelines/ranking/weights"
+import {
+	PATTERN_SCAN_BUDGET_MS,
+	PATTERN_TIME_BOUND_MS,
+	forgetPatternCosts
+} from "$lib/server/pipelines/ranking/boundedPattern"
 
 const entry = (over: Partial<LoreRow> = {}): LoreRow => ({
 	id: 1,
@@ -807,5 +813,114 @@ describe("match facts at the source, and archived entries (L1)", () => {
 		const r = run([entry({ archived: true })], ["the ashguard rode north"])
 		expect(r.candidates).toHaveLength(0)
 		expect(r.skipped[0]).toMatchObject({ kind: "excluded", reason: "entry is archived" })
+	})
+})
+
+describe("regex keys that are not run (plan S3)", () => {
+	const aaa = `${"a".repeat(25)}!`
+
+	it("skips an existing runaway row within the bound, and the receipt says why", () => {
+		const started = performance.now()
+		const r = run(
+			[entry({ name: "Plain", keys: ["(a+)+$"], matchMode: "regex" })],
+			[aaa]
+		)
+		expect(performance.now() - started).toBeLessThan(500)
+		expect(r.candidates).toHaveLength(0)
+		expect(r.skipped[0]!.reason).toContain("the pattern “(a+)+$” was not checked")
+		expect(r.diagnostics.patternsNotRun).toEqual([
+			{
+				id: 1,
+				source: "worldLore",
+				key: "(a+)+$",
+				why: expect.stringContaining("repeats a group that already repeats")
+			}
+		])
+	})
+
+	it("still matches the entry on its other keys, and still reports the one it skipped", () => {
+		const r = run(
+			[entry({ name: "Plain", keys: ["(a+)+$", "ash\\w+"], matchMode: "regex" })],
+			[`the ashguard ${aaa}`]
+		)
+		expect(r.candidates.map((c) => c.id)).toEqual([1])
+		expect(r.diagnostics.patternsNotRun.map((p) => p.key)).toEqual(["(a+)+$"])
+	})
+
+	it("reports a runaway condition key, and reads it as absent", () => {
+		const r = run(
+			[
+				entry({
+					keys: ["ashguard"],
+					matchMode: "regex",
+					secondaryKeys: ["(\\w+\\s?)+$"],
+					selectiveLogic: "notAny"
+				})
+			],
+			[`the ashguard ${aaa}`]
+		)
+		expect(r.candidates.map((c) => c.id)).toEqual([1])
+		expect(r.diagnostics.patternsNotRun.map((p) => p.key)).toEqual(["(\\w+\\s?)+$"])
+	})
+
+	it("says nothing when every pattern ran", () => {
+		const r = run([entry({ keys: ["ash\\w+"], matchMode: "regex" })], ["the ashguard"])
+		expect(r.diagnostics.patternsNotRun).toEqual([])
+	})
+})
+
+describe("one scan, one budget for patterns (plan S3)", () => {
+	afterEach(() => forgetPatternCosts())
+
+	/**
+	 * Polynomial keys the write side lets through, some milliseconds each
+	 * over this many digits — under the bound, so no single run trips it —
+	 * and a chain of plain entries, each naming the next, so recursion keeps
+	 * finding one more level and hands the slow keys a new window every time.
+	 */
+	const DIGITS = "1".repeat(450)
+	const book = (slowKeys: number): LoreRow[] => [
+		...Array.from({ length: slowKeys }, (_, i) =>
+			entry({ id: 1000 + i, name: `Slow ${i}`, keys: [`\\d+\\d+zq${i}`], matchMode: "regex" })
+		),
+		...Array.from({ length: 41 }, (_, i) =>
+			entry({ id: 1 + i, name: `Link ${i}`, keys: [`link${i}`], content: `link${i + 1} ${DIGITS}` })
+		)
+	]
+	const scan = (slowKeys: number, maxRecursionDepth: number) =>
+		run(book(slowKeys), [`link0 ${DIGITS}`], {
+			retrieval: { ...DEFAULT_RETRIEVAL, maxRecursionDepth }
+		})
+
+	it.each([0, 5, 40])(
+		"holds a scan to one budget at recursion depth %i, however deep it goes",
+		(depth) => {
+			const started = performance.now()
+			const r = scan(60, depth)
+			const ms = performance.now() - started
+			// One budget, one bound past it, and the scan's own work. Before,
+			// each pass opened a budget of its own: 0.4 s at depth 0, 1.4 s at
+			// 5 and 8.5 s at 40.
+			expect(ms).toBeLessThan(PATTERN_SCAN_BUDGET_MS + PATTERN_TIME_BOUND_MS + 300)
+			expect(r.diagnostics.recursionDepth).toBe(Math.min(depth, MAX_RECURSION_DEPTH))
+			expect(
+				r.diagnostics.patternsNotRun.some((p) => p.why.includes("this turn's time"))
+			).toBe(true)
+		}
+	)
+
+	it("skips the slow keys after a few turns, and the scan is quick again", async () => {
+		let last = scan(20, 3)
+		let turns = 1
+		while (turns < 15 && last.diagnostics.patternsNotRun.some((p) => !p.why.includes("too long"))) {
+			await new Promise<void>((resolve) => setImmediate(resolve))
+			last = scan(20, 3)
+			turns++
+		}
+		expect(last.diagnostics.patternsNotRun).toHaveLength(20)
+		expect(last.diagnostics.patternsNotRun.every((p) => p.why.includes("too long"))).toBe(true)
+		const started = performance.now()
+		scan(20, 3)
+		expect(performance.now() - started).toBeLessThan(100)
 	})
 })

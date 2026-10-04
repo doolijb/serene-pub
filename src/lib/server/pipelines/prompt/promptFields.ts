@@ -130,9 +130,6 @@ export interface ResolveInput {
 	 * which restores the variety without giving up the replay.
 	 */
 	pickExample?: (count: number) => number
-	/** Lore already selected by retrieval, and the session its bindings live on. */
-	characterLore?: readonly unknown[]
-	session?: unknown
 	/**
 	 * The voice of the channel this turn was **triggered on** (R-C,
 	 * 2026-09-17) — `narrator` puts the narrator's name on the seed line
@@ -189,6 +186,33 @@ export interface ResolvedContextInput extends BuildContextInput {
 	 * dialogue as those characters instead of narrating (index.ts:618-629).
 	 */
 	seedName: string
+}
+
+/**
+ * Which of a speaker's example dialogues a session uses — the same one on
+ * every turn (B2, 2026-10-03).
+ *
+ * A hash of the session and the speaker, so the pick is stable without being
+ * stored: every turn, regenerate and swipe of one speaker in one session
+ * renders the same example, and a different session (or speaker) may land on
+ * a different one. The run's `random` answers only when there is no session to
+ * key on.
+ */
+export function stableExamplePick(
+	sessionId: unknown,
+	characterId: unknown,
+	random: () => number
+): (count: number) => number {
+	if (typeof sessionId !== "number" && typeof sessionId !== "string")
+		return (n) => Math.floor(random() * n)
+	const key = `${sessionId}:${characterId ?? ""}`
+	// FNV-1a, 32-bit: small, dependency-free and stable across processes.
+	let h = 0x811c9dc5
+	for (let i = 0; i < key.length; i++) {
+		h ^= key.charCodeAt(i)
+		h = Math.imul(h, 0x01000193) >>> 0
+	}
+	return (n) => (n > 0 ? h % n : 0)
 }
 
 export function resolveContextInput(input: ResolveInput): ResolvedContextInput {
@@ -289,8 +313,6 @@ export function resolveContextInput(input: ResolveInput): ResolvedContextInput {
 			),
 			charPostHistory: F.charPostHistory(current)
 		},
-		characterLore: input.characterLore as any,
-		session: input.session,
 		exampleDialogueIndex,
 		// The name half of the seed decision (`prompt/seedLine.ts`). The
 		// other half — whether the row is written at all — is read off the

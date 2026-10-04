@@ -46,6 +46,7 @@ import {
 	optionId,
 	writeOption
 } from "$lib/server/pipelines/config/panel"
+import { groupOptions } from "$lib/server/pipelines/config/panel/groups"
 
 const SECRET = "deviation-test-secret"
 
@@ -226,7 +227,7 @@ describe("a config with no row resolves the CURRENT declaration", () => {
 		const { selectConfig } = await import(
 			"$lib/server/pipelines/config/named"
 		)
-		await selectConfig(db, specId, "instance", 0, mine.id, adminId)
+		await selectConfig(db, specId, "pub", 0, mine.id, adminId)
 
 		await redeclareDefault(DECLARED)
 		await reconcileConfigs(db, specId, specVersionId, RESPOND_SPEC_ID)
@@ -241,7 +242,7 @@ describe("a config with no row resolves the CURRENT declaration", () => {
 		await selectConfig(
 			db,
 			specId,
-			"instance",
+			"pub",
 			0,
 			(await shippedConfig()).id,
 			adminId
@@ -311,16 +312,13 @@ describe("the panel says which options were changed", () => {
 		const { selectConfig } = await import(
 			"$lib/server/pipelines/config/named"
 		)
-		await selectConfig(db, specId, "instance", 0, mine.id, adminId)
+		await selectConfig(db, specId, "pub", 0, mine.id, adminId)
 
 		const view = await namespaceView(db, SECRET, RESPOND_SPEC_ID, {
 			userId: adminId,
 			isAdmin: true
 		})
-		const all = (view?.steps ?? []).flatMap((s) => [
-			...s.options,
-			...s.advanced
-		])
+		const all = groupOptions(view?.groups ?? [])
 		const changed = all.find(
 			(o) => o.id === optionId(SECRET, NODE, SLOT, PATH)
 		)
@@ -337,10 +335,123 @@ describe("the panel says which options were changed", () => {
 		await selectConfig(
 			db,
 			specId,
-			"instance",
+			"pub",
 			0,
 			(await shippedConfig()).id,
 			adminId
 		)
+	})
+})
+
+/**
+ * "Never set" and "set back to the declared value" are different states
+ * wherever the shipped config says something else.
+ *
+ * The respond preset ships `postHistoryTokenTrigger` at 3000 where the
+ * declaration says 0. A copy of the shipped config that has never touched it
+ * inherits 3000 through the back-fill; a copy where somebody chose 0 has to
+ * keep 0 — through the write, through every boot's reconcile, and through a
+ * duplicate. Deviation is measured against what the config would otherwise
+ * inherit, not against the bare declaration.
+ */
+describe("a value equal to the declaration is kept where the shipped config differs", () => {
+	const TRIGGER = "postHistoryTokenTrigger"
+	const DECLARED_TRIGGER = 0
+	const SHIPPED_TRIGGER = 3000
+	let node: string
+
+	const triggerAt = async (configId: number) => {
+		const [row] = await db
+			.select()
+			.from(schema.pipelineConfigValues)
+			.where(
+				and(
+					eq(schema.pipelineConfigValues.configId, configId),
+					eq(schema.pipelineConfigValues.nodeKey, node),
+					eq(schema.pipelineConfigValues.slot, SLOT),
+					eq(schema.pipelineConfigValues.path, TRIGGER)
+				)
+			)
+		return row?.value
+	}
+
+	beforeAll(async () => {
+		const { declarations } = await import(
+			"$lib/server/pipelines/config/panel"
+		)
+		const decl = (await declarations(db, specVersionId)).find(
+			(d) => d.slot === SLOT && d.path === TRIGGER
+		)
+		expect(decl, "respond declares no post-history trigger").toBeTruthy()
+		expect(decl!.authorDefault).toBe(DECLARED_TRIGGER)
+		node = decl!.nodeKey
+		expect(
+			await triggerAt((await shippedConfig()).id),
+			"the shipped config no longer carries the preset's trigger"
+		).toBe(SHIPPED_TRIGGER)
+	})
+
+	it("keeps an explicit declared value through the write, a reconcile and a duplicate", async () => {
+		const { duplicateConfig } = await import(
+			"$lib/server/pipelines/config/named"
+		)
+		const copy = await duplicateConfig(
+			db,
+			(await shippedConfig()).id,
+			"Trigger off"
+		)
+		expect(await triggerAt(copy.id)).toBe(SHIPPED_TRIGGER)
+
+		await writeOption(
+			db,
+			SECRET,
+			RESPOND_SPEC_ID,
+			{ userId: adminId, isAdmin: true },
+			optionId(SECRET, node, SLOT, TRIGGER),
+			DECLARED_TRIGGER,
+			copy.id
+		)
+		expect(
+			await triggerAt(copy.id),
+			"writing the declared value deleted the row, so the next boot " +
+				"back-fills the shipped 3000 over the person's 0"
+		).toBe(DECLARED_TRIGGER)
+
+		await reconcileConfigs(db, specId, specVersionId, RESPOND_SPEC_ID)
+		expect(
+			await triggerAt(copy.id),
+			"a reconcile replaced an explicit 0 with the shipped value"
+		).toBe(DECLARED_TRIGGER)
+
+		const again = await duplicateConfig(db, copy.id, "Trigger off again")
+		expect(
+			await triggerAt(again.id),
+			"a duplicate dropped the explicit 0"
+		).toBe(DECLARED_TRIGGER)
+	})
+
+	it("keeps a stored declared value the reconcile finds already there", async () => {
+		const [mine] = await db
+			.insert(schema.pipelineConfigs)
+			.values({ specId, name: "Stored zero", isImmutable: false })
+			.returning()
+		await db.insert(schema.pipelineConfigValues).values({
+			configId: mine.id,
+			nodeKey: node,
+			slot: SLOT,
+			path: TRIGGER,
+			value: DECLARED_TRIGGER
+		})
+		await reconcileConfigs(db, specId, specVersionId, RESPOND_SPEC_ID)
+		expect(await triggerAt(mine.id)).toBe(DECLARED_TRIGGER)
+	})
+
+	it("still back-fills the shipped value into a config that never set it", async () => {
+		const [mine] = await db
+			.insert(schema.pipelineConfigs)
+			.values({ specId, name: "Never set", isImmutable: false })
+			.returning()
+		await reconcileConfigs(db, specId, specVersionId, RESPOND_SPEC_ID)
+		expect(await triggerAt(mine.id)).toBe(SHIPPED_TRIGGER)
 	})
 })

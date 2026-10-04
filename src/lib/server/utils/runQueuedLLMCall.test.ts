@@ -197,7 +197,7 @@ describe("runQueuedLLMCall — reasoning never reaches the text", () => {
 		})
 		expect(await run(adapter)).toEqual({
 			text: "The summary.",
-			thinkingContent: "weighing it",
+			reasoningContent: "weighing it",
 			isAborted: false
 		})
 	})
@@ -212,7 +212,7 @@ describe("runQueuedLLMCall — reasoning never reaches the text", () => {
 		})
 		expect(await run(adapter)).toEqual({
 			text: "The summary.",
-			thinkingContent: "weighing it",
+			reasoningContent: "weighing it",
 			isAborted: false
 		})
 	})
@@ -234,7 +234,7 @@ describe("runQueuedLLMCall — reasoning never reaches the text", () => {
 		})
 		expect(await run(adapter)).toEqual({
 			text: "The summary.",
-			thinkingContent: "weighing it",
+			reasoningContent: "weighing it",
 			isAborted: false
 		})
 	})
@@ -245,13 +245,13 @@ describe("runQueuedLLMCall — reasoning never reaches the text", () => {
 				completionResult: "<think>stray</think>The summary.",
 				compiledPrompt: NO_PAYLOAD,
 				isAborted: false,
-				thinkingContent: "the native trace"
+				reasoningContent: "the native trace"
 			})
 		})
 		expect(await run(adapter)).toEqual({
 			text: "The summary.",
 			// Kept behind the native trace, not deleted.
-			thinkingContent: "the native trace\n\nstray",
+			reasoningContent: "the native trace\n\nstray",
 			isAborted: false
 		})
 	})
@@ -260,7 +260,7 @@ describe("runQueuedLLMCall — reasoning never reaches the text", () => {
 		const adapter = makeMockAdapter()
 		expect(await run(adapter)).toEqual({
 			text: "ok",
-			thinkingContent: undefined,
+			reasoningContent: undefined,
 			isAborted: false
 		})
 	})
