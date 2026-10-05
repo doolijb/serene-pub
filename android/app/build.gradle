@@ -26,9 +26,11 @@ android {
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
 
-        // The bundled Node runtime (a prebuilt Bionic-targeted libnode.so from
-        // nodejs-mobile, pulled in by scripts/build-android.js — see
-        // src/main/cpp/) is only built for this one ABI.
+        // The bundled Node 24 runtime (a prebuilt Bionic-targeted libnode.so
+        // from digidem/nodejs-mobile, pulled in by scripts/build-android.js —
+        // see src/main/cpp/) is only extracted for this one ABI. Its zip also
+        // carries armeabi-v7a and x86_64 builds, unused: adding an ABI here
+        // means extracting it there too.
         ndk {
             abiFilters "arm64-v8a"
         }

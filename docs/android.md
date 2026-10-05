@@ -25,4 +25,17 @@ A phone can't do everything a computer can, so a few things differ:
 - **No tunnel.** The built-in tunnel for reaching your pub from elsewhere isn't available.
 - **No SillyTavern import.** Bringing in a whole SillyTavern library isn't offered. Character cards still import one at a time with **Import a card** (PNG, JSON, CHARX and the other card formats). Files are picked by tapping; there's no drag and drop.
 - **No component authoring.** Administrators can't write or copy session widgets on the phone. Components imported from a share file that already carries its compiled code still run. See [Component authoring](./component-authoring.md#android).
-- **A few connection options may fail when used.** LM Studio connections, and the OpenAI GPT, Llama 3 and Cohere token counters, need features the phone's built-in runtime lacks. Every other connection type and token counter works.
+
+## Node.js runtime
+
+The app carries its own copy of Node.js, the engine Serene Pub's server runs on: **Node.js 24**, the same major version the desktop builds require.
+
+- **Dates and numbers format natively.** The engine has `Intl` built in, so no add-on is loaded for it. Text the server itself formats (rather than your phone's browser view) uses English conventions.
+- **Phones with 16 KB memory pages are supported.** Android 15 and newer can use 16 KB pages; every native library in the app is built for them.
+
+**Where it comes from.** The engine is a prebuilt Android build of Node.js from [digidem/nodejs-mobile](https://github.com/digidem/nodejs-mobile), Digital Democracy's reproducible fork of [nodejs-mobile](https://github.com/nodejs-mobile/nodejs-mobile), release [v24.20.0-0](https://github.com/digidem/nodejs-mobile/releases/tag/v24.20.0-0), the full variant (Node.js 24.20.0, built from recipe commit `7c55423d73`). It is under the Node.js licence (MIT, with the bundled libraries' own notices). The build pins one exact file and refuses any other:
+
+- URL: `https://github.com/digidem/nodejs-mobile/releases/download/v24.20.0-0/nodejs-mobile-android-24.20.0-0.zip`
+- SHA-256: `f5ffbaf4f2679fa9180b0758c637c2f8fc8828300f95129badf213a028fb37bb`
+
+If that release ever disappears, a mirrored copy of the same file can be placed at `android/.cache/nodejs-mobile/nodejs-mobile-android-24.20.0-0.zip`; `scripts/build-android.js` checks it against the SHA-256 above and uses it without downloading.

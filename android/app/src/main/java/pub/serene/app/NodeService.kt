@@ -51,8 +51,8 @@ class NodeService : Service() {
             // The marker stores the versionCode it was extracted from, not just
             // whether extraction ever happened — a plain boolean marker would
             // permanently skip re-extraction after the very first install,
-            // silently serving stale bundled assets (JS, migrations, this
-            // polyfill, etc.) forever across app updates, since `adb install -r`
+            // silently serving stale bundled assets (JS, migrations, etc.)
+            // forever across app updates, since `adb install -r`
             // and the Play Store both preserve app-private storage across
             // updates rather than wiping it.
             val extractedMarker = File(filesDir, ".serene-extracted")
@@ -179,7 +179,6 @@ class NodeService : Service() {
         }
 
         val appMain = File(dataDir, "build/index.js")
-        val intlPolyfill = File(dataDir, "android-intl-polyfill.cjs")
         if (!appMain.exists()) {
             android.util.Log.e("NodeService", "App entrypoint not found: ${appMain.absolutePath}")
             sendBroadcast(Intent(ACTION_NODE_PROCESS_DIED).setPackage(packageName))
@@ -187,11 +186,10 @@ class NodeService : Service() {
         }
 
         // argv[0] is conventionally the program name — Node never touches the
-        // filesystem for it, it's just what process.argv[0] reports. --require
-        // preloads the Intl polyfill (see android-intl-polyfill.cjs) before the
-        // main script runs, since nodejs-mobile's Android Node build has no
-        // Intl global at all.
-        val arguments = arrayOf("node", "--require", intlPolyfill.absolutePath, appMain.absolutePath)
+        // filesystem for it, it's just what process.argv[0] reports. No preload:
+        // the embedded Node 24 (digidem/nodejs-mobile, small-icu) has a real
+        // Intl, so the old Intl polyfill is gone.
+        val arguments = arrayOf("node", appMain.absolutePath)
         val envVars = arrayOf(
             "NODE_ENV=production",
             "PORT=3000",

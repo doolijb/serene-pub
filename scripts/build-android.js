@@ -7,7 +7,8 @@
 
 import fs from "fs"
 import path from "path"
-import { execSync } from "child_process"
+import { execFileSync } from "child_process"
+import crypto from "crypto"
 import { fileURLToPath } from "url"
 import {
 	pruneAndroidAssets,
@@ -144,81 +145,138 @@ if (overCeiling && presentDevDeps.length > 0) {
 // of where it's placed or how its permissions are set. That build cannot run
 // on Android under any packaging scheme.
 //
-// nodejs-mobile (https://github.com/nodejs-mobile/nodejs-mobile) compiles
-// Node specifically for Android via the NDK, producing a real Bionic shared
-// library, and Node is embedded in-process via node::Start() (see
-// android/app/src/main/cpp/node-bridge.cpp) rather than spawned as a
-// subprocess. There's no standalone "just the native bits" package for
-// this — the prebuilt libnode.so + Node's C headers only ship inside the
-// published nodejs-mobile-react-native npm tarball (not its git repo, which
-// excludes the large binaries), so `npm pack` is used to fetch that tarball
-// directly without installing the (React-Native-specific) package itself.
-console.log("Fetching Node.js runtime for Android (nodejs-mobile)...")
-const nodeMobilePkg = "nodejs-mobile-react-native@18.20.4"
-const tempDir = path.join(rootDir, "temp-nodejs-mobile")
+// nodejs-mobile compiles Node specifically for Android via the NDK, producing
+// a real Bionic shared library, and Node is embedded in-process via
+// node::Start() (see android/app/src/main/cpp/node-bridge.cpp) rather than
+// spawned as a subprocess.
+//
+// The build used is Digital Democracy's reproducible "recipe" fork
+// (digidem/nodejs-mobile), not upstream nodejs-mobile: upstream's last
+// release is Node 18.20.4, and this app needs Node 24 (it crashed at startup
+// on 18 — AbortSignal.any, Promise.withResolvers, Array.fromAsync, …). The
+// "full" variant is configured --with-intl=small-icu, so Intl (English locale
+// data) and Unicode regex property escapes (\p{L}) work natively — the old
+// nodejs-mobile was intl=none and needed a preloaded polyfill. Its libnode.so
+// is linked with 16 KB-aligned LOAD segments (Android 15+). The zip is laid
+// out as bin/<abi>/libnode.so + include/node/, exactly what CMakeLists.txt
+// reads, so the two needed paths are extracted straight into libnodeDir.
+//
+// Pinned by URL AND sha256 (which is also GitHub's own published digest for
+// the asset). The zip is cached under android/.cache/ and re-verified on every
+// run; to build from a mirror, drop the same file there. See docs/android.md
+// "Runtime" for the provenance record.
+const NODEJS_MOBILE = {
+	version: "24.20.0-0",
+	url: "https://github.com/digidem/nodejs-mobile/releases/download/v24.20.0-0/nodejs-mobile-android-24.20.0-0.zip",
+	sha256: "f5ffbaf4f2679fa9180b0758c637c2f8fc8828300f95129badf213a028fb37bb",
+	nodeMajor: 24
+}
+const ANDROID_ABI = "arm64-v8a"
 
-if (fs.existsSync(libnodeDir)) {
-	fs.rmSync(libnodeDir, { recursive: true, force: true })
-}
-if (fs.existsSync(tempDir)) {
-	fs.rmSync(tempDir, { recursive: true, force: true })
-}
-fs.mkdirSync(tempDir, { recursive: true })
+console.log(
+	`Fetching Node.js runtime for Android (nodejs-mobile ${NODEJS_MOBILE.version})...`
+)
+const cacheDir = path.join(androidDir, ".cache/nodejs-mobile")
+const zipPath = path.join(
+	cacheDir,
+	path.basename(new URL(NODEJS_MOBILE.url).pathname)
+)
 
 try {
-	execSync(`npm pack ${nodeMobilePkg} --pack-destination ${tempDir}`, {
-		stdio: "inherit",
-		cwd: tempDir
-	})
+	fs.mkdirSync(cacheDir, { recursive: true })
 
-	const tarball = fs.readdirSync(tempDir).find((f) => f.endsWith(".tgz"))
-	if (!tarball) {
-		throw new Error("npm pack did not produce a .tgz file")
+	if (
+		fs.existsSync(zipPath) &&
+		sha256File(zipPath) !== NODEJS_MOBILE.sha256
+	) {
+		console.warn(
+			`Warning: cached ${zipPath} does not match the pinned sha256 — downloading again.`
+		)
+		fs.rmSync(zipPath, { force: true })
 	}
-	execSync(`tar -xzf ${path.join(tempDir, tarball)} -C ${tempDir}`, {
-		stdio: "inherit"
-	})
+	if (!fs.existsSync(zipPath)) {
+		const res = await fetch(NODEJS_MOBILE.url, { redirect: "follow" })
+		if (!res.ok) {
+			throw new Error(
+				`download failed: HTTP ${res.status} for ${NODEJS_MOBILE.url}`
+			)
+		}
+		const partial = `${zipPath}.partial`
+		fs.writeFileSync(partial, Buffer.from(await res.arrayBuffer()))
+		const actual = sha256File(partial)
+		if (actual !== NODEJS_MOBILE.sha256) {
+			fs.rmSync(partial, { force: true })
+			throw new Error(
+				`sha256 mismatch for ${NODEJS_MOBILE.url}\n  expected ${NODEJS_MOBILE.sha256}\n  actual   ${actual}\n` +
+					`Refusing to use it. If the release was deliberately replaced, re-verify it and update the pin.`
+			)
+		}
+		fs.renameSync(partial, zipPath)
+	}
+	console.log(
+		`nodejs-mobile zip verified (sha256 ${NODEJS_MOBILE.sha256.slice(0, 12)}…)`
+	)
 
-	const pkgLibnodeDir = path.join(tempDir, "package/android/libnode")
+	if (fs.existsSync(libnodeDir)) {
+		fs.rmSync(libnodeDir, { recursive: true, force: true })
+	}
 	fs.mkdirSync(libnodeDir, { recursive: true })
-	copyRecursive(
-		path.join(pkgLibnodeDir, "bin/arm64-v8a"),
-		path.join(libnodeDir, "bin/arm64-v8a")
+	// Only the one shipped ABI (build.gradle's abiFilters) and the headers.
+	execFileSync(
+		"unzip",
+		[
+			"-q",
+			"-o",
+			zipPath,
+			`bin/${ANDROID_ABI}/*`,
+			"include/*",
+			"-d",
+			libnodeDir
+		],
+		{ stdio: "inherit" }
 	)
-	copyRecursive(
-		path.join(pkgLibnodeDir, "include"),
-		path.join(libnodeDir, "include")
-	)
+
+	const libnode = path.join(libnodeDir, `bin/${ANDROID_ABI}/libnode.so`)
+	const versionHeader = path.join(libnodeDir, "include/node/node_version.h")
+	if (!fs.existsSync(libnode) || !fs.existsSync(versionHeader)) {
+		throw new Error(
+			`the zip did not contain bin/${ANDROID_ABI}/libnode.so and include/node/`
+		)
+	}
+	const major = /#define NODE_MAJOR_VERSION (\d+)/.exec(
+		fs.readFileSync(versionHeader, "utf8")
+	)?.[1]
+	if (Number(major) !== NODEJS_MOBILE.nodeMajor) {
+		throw new Error(
+			`expected Node ${NODEJS_MOBILE.nodeMajor} headers, found NODE_MAJOR_VERSION ${major}`
+		)
+	}
 
 	console.log(
 		"✅ libnode.so + Node headers extracted to android/app/src/main/cpp/libnode"
 	)
 } catch (error) {
-	console.error("Error fetching nodejs-mobile runtime:", error)
+	if (error?.code === "ENOENT" && error?.path === "unzip") {
+		console.error(
+			"Error: `unzip` is not installed; it is needed to extract the nodejs-mobile zip."
+		)
+	} else {
+		console.error("Error fetching nodejs-mobile runtime:", error)
+	}
 	process.exit(1)
-} finally {
-	fs.rmSync(tempDir, { recursive: true, force: true })
 }
 
 // 7. Create package.json for runtime
 const runtimePackage = {
 	type: "module",
 	name: "serene-pub-android",
-	version: "0.5.0",
+	// The app's own version, so the server reports the release it shipped in.
+	version: JSON.parse(fs.readFileSync(path.join(rootDir, "package.json"), "utf8")).version,
 	private: true
 }
 fs.writeFileSync(
 	path.join(assetsDir, "package.json"),
 	JSON.stringify(runtimePackage, null, 2)
-)
-
-// 8. Copy the Intl polyfill bootstrap script — nodejs-mobile's Android Node
-// build has no Intl global at all (see android-intl-polyfill.cjs for why).
-// NodeService.kt passes this to `node --require` ahead of the main script.
-console.log("Copying Intl polyfill bootstrap...")
-fs.copyFileSync(
-	path.join(rootDir, "scripts/android-intl-polyfill.cjs"),
-	path.join(assetsDir, "android-intl-polyfill.cjs")
 )
 
 console.log("\n✅ Assets prepared successfully!")
@@ -228,7 +286,14 @@ console.log("  ./gradlew assembleRelease")
 console.log("\nOr for debug:")
 console.log("  ./gradlew assembleDebug")
 
-// Helper function
+// Helper functions
+function sha256File(file) {
+	return crypto
+		.createHash("sha256")
+		.update(fs.readFileSync(file))
+		.digest("hex")
+}
+
 function copyRecursive(src, dest) {
 	if (!fs.existsSync(src)) {
 		console.warn(`Warning: ${src} does not exist, skipping...`)

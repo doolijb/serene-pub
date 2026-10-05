@@ -1,7 +1,7 @@
 {
 	"name": "serene-pub",
 	"private": true,
-	"version": "0.6.0-pr-2",
+	"version": "0.6.0-pr-3",
 	"type": "module",
 	"license": "AGPL-3.0",
 	"bin": "build/index.js",
@@ -151,7 +151,6 @@
 		"file-type": "^21.0.0",
 		"gpt-tokenizer": "^3.0.0",
 		"handlebars": "^4.7.8",
-		"intl": "^1.2.5",
 		"liquidjs": "10.29.0",
 		"llama-tokenizer-js": "^1.2.2",
 		"llama3-tokenizer-js": "^1.2.0",

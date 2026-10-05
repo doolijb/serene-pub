@@ -61,6 +61,8 @@ package-lock.json
 
 # Android
 /android/.gradle
+# the hash-pinned nodejs-mobile zip scripts/build-android.js downloads
+/android/.cache
 /android/.idea
 /android/local.properties
 /android/build

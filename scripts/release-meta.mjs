@@ -36,8 +36,12 @@ export function classify(tag) {
 		title = `${base} Development Release`
 		runTests = false
 	} else if (suffix === "beta") title = `${base} Beta Release`
-	else if (suffix && /^pr-\d+$/.test(suffix))
+	else if (suffix && /^pr-\d+$/.test(suffix)) {
 		title = `${base} Pre-Release Build ${suffix.slice(3)}`
+		// Owner 2026-10-05: tests are not required for a -pr-N build; the
+		// test job is skipped and the builds do not wait on it.
+		runTests = false
+	}
 	else if (suffix && /^rc-\d+$/.test(suffix))
 		title = `${base} Release Candidate ${suffix.slice(3)}`
 	// Anything else (an -alpha, a typo, not a version at all) keeps the bare

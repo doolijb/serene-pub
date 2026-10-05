@@ -252,3 +252,63 @@ describe("runtime dependencies a static scan of build/ cannot see", () => {
 		expect(pkg.dependencies[name]).toBeTruthy()
 	})
 })
+
+describe("rules 1, 3b, 3c: what a fresh CI install adds", () => {
+	test("onnxruntime-node keeps only the target platform/arch under any napi-v* level, minus GPU providers", () => {
+		const at = payload({
+			"node_modules/onnxruntime-node/package.json": pj("onnxruntime-node", { main: "./dist/index.js" }),
+			"node_modules/onnxruntime-node/dist/index.js": "x",
+			"node_modules/onnxruntime-node/bin/napi-v3/linux/x64/onnxruntime_binding.node": "x",
+			"node_modules/onnxruntime-node/bin/napi-v3/linux/x64/libonnxruntime_providers_cuda.so": "x",
+			"node_modules/onnxruntime-node/bin/napi-v3/linux/x64/libonnxruntime_providers_tensorrt.so": "x",
+			"node_modules/onnxruntime-node/bin/napi-v3/linux/arm64/onnxruntime_binding.node": "x",
+			"node_modules/onnxruntime-node/bin/napi-v3/darwin/arm64/onnxruntime_binding.node": "x",
+			"node_modules/onnxruntime-node/bin/napi-v3/win32/x64/onnxruntime_binding.node": "x"
+		})
+		const ort = "node_modules/onnxruntime-node/bin/napi-v3"
+		expect(at(`${ort}/linux/x64/onnxruntime_binding.node`)).toBe(true)
+		for (const gone of [
+			`${ort}/linux/x64/libonnxruntime_providers_cuda.so`,
+			`${ort}/linux/x64/libonnxruntime_providers_tensorrt.so`,
+			`${ort}/linux/arm64`,
+			`${ort}/darwin`,
+			`${ort}/win32`
+		])
+			expect(at(gone), gone).toBe(false)
+	})
+
+	test("the docs compiler a production install drags in as cli's optional peer goes, with its orphans", () => {
+		const at = payload({
+			"node_modules/@serene-pub/cli/package.json": pj("@serene-pub/cli", {
+				main: "./dist/index.js",
+				peerDependencies: { "@serene-pub/docs": "*" },
+				peerDependenciesMeta: { "@serene-pub/docs": { optional: true } }
+			}),
+			"node_modules/@serene-pub/cli/dist/index.js": "x",
+			"node_modules/@serene-pub/docs/package.json": pj("@serene-pub/docs", {
+				main: "./dist/index.js",
+				dependencies: { elkjs: "*", shiki: "*" }
+			}),
+			"node_modules/@serene-pub/docs/dist/index.js": "x",
+			"node_modules/elkjs/package.json": pj("elkjs", { main: "./lib/main.js" }),
+			"node_modules/elkjs/lib/main.js": "x",
+			"node_modules/shiki/package.json": pj("shiki", { main: "./dist/index.mjs" }),
+			"node_modules/shiki/dist/index.mjs": "x"
+		})
+		expect(at("node_modules/@serene-pub/cli/dist/index.js")).toBe(true)
+		for (const gone of ["node_modules/@serene-pub/docs", "node_modules/elkjs", "node_modules/shiki"])
+			expect(at(gone), gone).toBe(false)
+	})
+
+	test("node_modules/.bin goes, nested ones too", () => {
+		const at = payload({
+			"node_modules/.bin/esbuild": "x",
+			"node_modules/lib/package.json": pj("lib", { main: "./index.js" }),
+			"node_modules/lib/index.js": "x",
+			"node_modules/lib/node_modules/.bin/tool": "x"
+		})
+		expect(at("node_modules/.bin")).toBe(false)
+		expect(at("node_modules/lib/node_modules/.bin")).toBe(false)
+		expect(at("node_modules/lib/index.js")).toBe(true)
+	})
+})

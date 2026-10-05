@@ -33,6 +33,17 @@ function rmMatching(dir, predicate) {
 	}
 }
 
+/** Remove every directory called `name` under `dir` (not following symlinks). */
+function rmDirsNamed(dir, name) {
+	if (!fs.existsSync(dir)) return
+	for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+		if (!entry.isDirectory()) continue
+		const p = path.join(dir, entry.name)
+		if (entry.name === name) rm(p)
+		else rmDirsNamed(p, name)
+	}
+}
+
 /**
  * @param {string} outDir - the payload directory bundle-dist.js just assembled
  *   (already contains build/, node_modules/, drizzle/). That is the bundle's
@@ -55,8 +66,14 @@ export function pruneDist(outDir, target) {
 	// are pure dead weight today. If GPU embedding is added later, it
 	// should be an on-demand download (mirroring
 	// src/lib/server/koboldcpp/binaryManager.ts's pattern), not re-bundled.
-	const ortBinRoot = path.join(nm, "onnxruntime-node/bin/napi-v6")
-	if (fs.existsSync(ortBinRoot)) {
+	// Every bin/napi-v*/ directory: the N-API level in the path moves between
+	// onnxruntime-node releases, and a fresh CI install can resolve a newer one
+	// than the dev tree's (a hard-coded napi-v6 let a whole other platform ship).
+	const ortBin = path.join(nm, "onnxruntime-node/bin")
+	const ortBinRoots = fs.existsSync(ortBin)
+		? fs.readdirSync(ortBin).filter((d) => d.startsWith("napi-v")).map((d) => path.join(ortBin, d))
+		: []
+	for (const ortBinRoot of ortBinRoots) {
 		for (const platformDir of fs.readdirSync(ortBinRoot)) {
 			const platformPath = path.join(ortBinRoot, platformDir)
 			if (!fs.lstatSync(platformPath).isDirectory()) continue
@@ -73,7 +90,7 @@ export function pruneDist(outDir, target) {
 		rmMatching(
 			ortBinRoot,
 			(name) =>
-				name === "libonnxruntime_providers_cuda.so" ||
+				/onnxruntime_providers_(cuda|tensorrt|rocm|migraphx|openvino|dnnl|qnn|webgpu)/i.test(name) ||
 				name === "DirectML.dll" ||
 				name === "dxcompiler.dll" ||
 				name === "dxil.dll"
@@ -91,6 +108,25 @@ export function pruneDist(outDir, target) {
 	// platform, ~4 MB that only onnxruntime-web ever required.
 	// onnxruntime-common stays (onnxruntime-node depends on it).
 	removePackageAndOrphans(nm, "onnxruntime-web")
+
+	// 3b. Packages that reach a production install only as OPTIONAL peers.
+	// @serene-pub/cli names @serene-pub/docs, ui-preview, conformance and
+	// happy-dom as optional peers; the app has docs/conformance as dev
+	// dependencies, and npm keeps a dev package when a production package's
+	// optional-peer edge points at it, so `npm install --omit=dev` ships the
+	// docs compiler with elkjs, shiki and jimp (~25 MB). Nothing at runtime
+	// imports them — the app uses only cli's sub-entries (component-compile),
+	// never its root — so they and their orphans go, unless the app itself
+	// lists one as a dependency.
+	const appDeps = new Set(appDependencyNames() ?? [])
+	for (const name of ["@serene-pub/docs", "@serene-pub/ui-preview", "@serene-pub/conformance", "happy-dom"]) {
+		if (!appDeps.has(name)) removePackageAndOrphans(nm, name)
+	}
+
+	// 3c. node_modules/.bin (and any nested one): command shims and, for
+	// esbuild, a copy of its ~10 MB binary. The server resolves packages by
+	// import, never by running a .bin command.
+	rmDirsNamed(nm, ".bin")
 
 	// 4. @lenml/tokenizer-gemma is loaded via a dynamic ESM import
 	// (TokenCounterManager.ts), which only ever resolves dist/main.mjs —
@@ -126,10 +162,10 @@ export function pruneDist(outDir, target) {
 		rm(path.join(gptTok, dir))
 	}
 
-	// 6. intl's locale-data is only read by
-	// scripts/android-intl-polyfill.cjs, a workaround for nodejs-mobile's
-	// intl=none build. Every desktop target runs on full Node with complete
-	// ICU built in — this package is never imported outside that polyfill.
+	// 6. `intl` (an Intl polyfill) is no longer a dependency: it existed only
+	// for the Android runtime's old intl=none Node 18, and every runtime now
+	// has a real Intl. Removing it here only catches a stale copy left in a
+	// node_modules that predates the dependency's removal; nothing imports it.
 	rm(path.join(nm, "intl"))
 
 	// 7. @img/sharp-libvips ships both glibc and musl variants for
@@ -449,10 +485,8 @@ function esbuildScopes(nm) {
 /**
  * The Android profile. Same intent as pruneDist above — remove only files
  * nothing reads — but the Android target differs enough that sharing one rule
- * set would be wrong in both directions: it must KEEP `intl` (which desktop
- * strips, because the nodejs-mobile runtime is built with intl=none and the
- * android-intl-polyfill needs the locale data), and it can drop the entire
- * local-embedding stack, which desktop obviously cannot.
+ * set would be wrong: it can drop the entire local-embedding stack (and the
+ * component compiler), which desktop obviously cannot.
  *
  * This was previously not applied at all: scripts/build-android.js copied
  * node_modules verbatim, so an APK shipped ~1GB of assets — over half of it
@@ -506,8 +540,9 @@ export function pruneAndroidAssets(assetsDir) {
 	for (const dir of ["dist", "cjs", "src"]) rm(path.join(gptTok, dir))
 
 	// 2b. The component compiler (C6 P3). There is NO compiler on Android
-	// (owner ruling 2026-09-25: nodejs-mobile 18 cannot start esbuild's Go
-	// service, and authoring on a phone is impractical). The server already
+	// (owner ruling 2026-09-25: the then-embedded nodejs-mobile 18 could not
+	// start esbuild's Go service, and authoring on a phone is impractical; no
+	// esbuild binary for Android is shipped either way). The server already
 	// reports "no compiler" there (components/compile.ts checks
 	// SERENE_PUB_PLATFORM first), so these are files nothing can load:
 	//   - esbuild and every @esbuild/* native binary (desktop-only builds);
@@ -524,8 +559,9 @@ export function pruneAndroidAssets(assetsDir) {
 		/^componentCompile\.(js|d\.ts)(\.map)?$/.test(name)
 	)
 
-	// 3. `intl` is deliberately NOT removed here — see this function's own
-	// doc comment. Removing it would break date/number formatting on-device.
+	// 3. A stale `intl` polyfill copy — same reasoning as desktop rule 6. The
+	// embedded Node 24 (small-icu) has a real Intl; nothing loads the polyfill.
+	rm(path.join(nm, "intl"))
 
 	// 4. Source maps anywhere under node_modules. Nothing on a phone reads
 	// them, and they are pure text — among the largest single categories in
@@ -623,8 +659,9 @@ export const SIZE_THRESHOLD_MB = {
 // Measured, not guessed: simulating this prune over a production-only
 // dependency tree (npm ls --omit=dev) plus the app build gave 185.2 MB, from
 // 1517 MB unpruned. The remainder is mostly the app's own build/ (~50 MB) and
-// legitimately-needed packages — @lenml/tokenizer-gemma, intl (required on
-// Android specifically, see pruneAndroidAssets), date-fns, pglite, lucide.
+// legitimately-needed packages — @lenml/tokenizer-gemma, date-fns, pglite,
+// lucide. (`intl`, a ~23 MB polyfill counted in that measurement, has since
+// been dropped: the Node 24 runtime has a real Intl.)
 //
 // 260 leaves margin for ordinary dependency growth; the point is catching a
 // bump that silently reintroduces the embedding stack, not policing drift. If

@@ -97,10 +97,11 @@ jobs:
                   if-no-files-found: error
 
     test:
-        # Gates every platform build below on a single, OS-agnostic test run —
-        # extracted out of the matrix (rather than re-run per-platform) so a
-        # failure here stops the whole release before any build starts.
+        # One OS-agnostic test run, outside the matrix. Skipped entirely when
+        # release-meta says run_tests=false (-pr-N, -dev and unrecognised tags);
+        # the builds below accept a skipped test job.
         needs: prepare
+        if: needs.prepare.outputs.run_tests == 'true'
         runs-on: ubuntu-latest
         timeout-minutes: 60
         steps:
@@ -206,6 +207,13 @@ jobs:
 
     build-and-release:
         needs: [prepare, test, build-app]
+        # `always()` so a SKIPPED test job (pre-release builds) does not skip
+        # every build; a test job that ran still has to have finished.
+        if: >-
+            always() &&
+            needs.prepare.result == 'success' &&
+            needs.build-app.result == 'success' &&
+            (needs.test.result == 'success' || needs.test.result == 'skipped')
         permissions:
             contents: write # uploads assets to the tag's release
         strategy:
@@ -519,6 +527,9 @@ jobs:
         # the draft goes public. A failed target leaves the release a draft
         # (with whatever was uploaded) for a maintainer to finish or delete.
         needs: [prepare, build-and-release]
+        # Explicit, because a skipped test job upstream would otherwise skip
+        # this one too (GitHub's default success() looks at every ancestor).
+        if: always() && needs.prepare.result == 'success' && needs.build-and-release.result == 'success'
         runs-on: ubuntu-latest
         timeout-minutes: 15
         permissions:

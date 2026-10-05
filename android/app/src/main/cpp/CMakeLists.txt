@@ -1,12 +1,15 @@
 cmake_minimum_required(VERSION 3.10)
 project(serene_pub_node)
 
-set(CMAKE_CXX_STANDARD 14)
+# Node 24's V8 (13.6) headers refuse to compile below C++20
+# (v8config.h: #error "C++20 or later required.").
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# libnode.so + headers are pulled from the nodejs-mobile-react-native npm
-# package by scripts/build-android.js (not committed — see .gitignore) into
-# this same directory, matching the layout of that package's own android/
-# folder so this CMakeLists can be a near-direct adaptation of theirs.
+# libnode.so + headers are extracted from the hash-pinned
+# digidem/nodejs-mobile release zip by scripts/build-android.js (not
+# committed — see .gitignore) into this same directory. The zip's own layout
+# (bin/<abi>/libnode.so, include/node/) is kept as-is.
 include_directories(${CMAKE_SOURCE_DIR}/libnode/include/node)
 
 add_library(libnode SHARED IMPORTED)

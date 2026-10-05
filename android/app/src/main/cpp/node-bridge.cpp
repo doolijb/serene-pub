@@ -10,8 +10,9 @@
 // exist on Android's Bionic-based userspace — execve() on it fails with
 // ENOENT on the interpreter, not the binary itself. libnode.so here is a
 // genuine Android/Bionic-targeted build (no PT_INTERP segment — a real
-// dlopen()-able shared library, not a standalone executable), pulled from
-// nodejs-mobile's prebuilt npm package. See scripts/build-android.js.
+// dlopen()-able shared library, not a standalone executable), from
+// digidem/nodejs-mobile's hash-pinned release zip (Node 24). See
+// scripts/build-android.js.
 
 #include <jni.h>
 #include <string>

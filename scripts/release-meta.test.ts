@@ -35,6 +35,11 @@ describe("classify", () => {
 
 	test("titles", () => {
 		expect(classify("v0.6.0-pr-1").title).toBe("0.6.0 Pre-Release Build 1")
+		// Tests are not required for a -pr-N build (owner 2026-10-05); release
+		// candidates and plain releases still run them.
+		expect(classify("v0.6.0-pr-1").run_tests).toBe("false")
+		expect(classify("v0.6.0-rc-1").run_tests).toBe("true")
+		expect(classify("v0.6.0").run_tests).toBe("true")
 		expect(classify("v0.6.0-rc-2").title).toBe("0.6.0 Release Candidate 2")
 		expect(classify("v0.6.0-alpha").title).toBe("0.6.0-alpha")
 	})

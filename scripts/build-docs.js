@@ -240,7 +240,7 @@ export const GUIDE_ORDER = [
 	},
 	{
 		group: "Reference and help",
-		pages: ["environment-variables", "troubleshooting", "release-notes/0.6.0-pr-2", "release-notes/0.6.0-pr-1"]
+		pages: ["environment-variables", "troubleshooting", "release-notes/0.6.0-pr-3", "release-notes/0.6.0-pr-1"]
 	}
 ]
 
