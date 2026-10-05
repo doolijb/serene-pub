@@ -7,6 +7,8 @@ import { describe, expect, it, vi } from "vitest"
 
 const broadcast = vi.fn(async () => {})
 vi.mock("$lib/server/sockets/utils/broadcastHelpers", () => ({
+	// annexViews pushes per-user views through this; a stub keeps that push quiet.
+	emitToUserRedacted: async () => {},
 	broadcastToSessionUsers: broadcast
 }))
 

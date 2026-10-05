@@ -24,6 +24,29 @@ jobs:
         steps:
             - name: Checkout code
               uses: actions/checkout@v4
+              with:
+                  fetch-depth: 0 # every tag, for the versionCode check below
+
+            # Android refuses to install an update whose versionCode is not higher than
+            # the installed one ("App not installed"), so a release must carry a
+            # versionCode above every earlier tag's.
+            - name: Check the Android versionCode is higher than every earlier release
+              shell: bash
+              env:
+                  REF_NAME: ${{ github.ref_name }}
+              run: |
+                  CUR=$(tr -dc '0-9' < android/versionCode.txt)
+                  MAX=0; AT=""
+                  for t in $(git tag -l 'v*'); do
+                      [ "$t" = "$REF_NAME" ] && continue
+                      c=$(git show "$t:android/versionCode.txt" 2>/dev/null | tr -dc '0-9')
+                      if [ -n "$c" ] && [ "$c" -gt "$MAX" ]; then MAX=$c; AT=$t; fi
+                  done
+                  echo "versionCode $CUR; highest earlier release $MAX ($AT)"
+                  if [ "$CUR" -le "$MAX" ]; then
+                      echo "::error::android/versionCode.txt is $CUR but $AT already shipped $MAX — raise it above $MAX, or phones refuse the update"
+                      exit 1
+                  fi
 
             - name: Set up Node.js
               uses: actions/setup-node@v4

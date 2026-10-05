@@ -127,6 +127,8 @@ vi.mock("$lib/server/embedding/vectorizationQueue", () => ({
 	promoteScopedVectors: async () => ({ promoted: 0 })
 }))
 vi.mock("$lib/server/sockets/utils/broadcastHelpers", () => ({
+	// annexViews pushes per-user views through this; a stub keeps that push quiet.
+	emitToUserRedacted: async () => {},
 	broadcastToSessionUsers: async () => {}
 }))
 

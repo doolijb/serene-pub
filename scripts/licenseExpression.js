@@ -62,6 +62,10 @@ export const ACCEPTABLE_LICENSES = [
 	// the sound choice of the two for this AGPL-3.0-licensed application.
 	"gpl-3.0-or-later",
 	"blueoak-1.0.0",
+	// The zlib licence: permissive and GPL-compatible (FSF). pako ships as
+	// "(MIT AND Zlib)" — its deflate code is a port of zlib — and a fresh CI
+	// install pulls it in, so without this the Windows bundle was refused.
+	"zlib",
 	"bsd",
 	"bsd-2-clause or mit or apache-2.0",
 	"bsd-2-clause or mit",

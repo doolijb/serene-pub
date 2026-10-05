@@ -26,6 +26,10 @@ describe("isAcceptableLicense — required accepts", () => {
 		expect(accepts("MIT AND Apache-2.0")).toBe(true)
 	})
 
+	test("pako's \"(MIT AND Zlib)\" is accepted (Zlib is allowlisted)", () => {
+		expect(accepts("(MIT AND Zlib)")).toBe(true)
+	})
+
 	test("a single allowlisted id with hyphens intact is accepted (AGPL-3.0-or-later)", () => {
 		expect(accepts("AGPL-3.0-or-later")).toBe(true)
 	})

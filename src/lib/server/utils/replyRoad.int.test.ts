@@ -67,6 +67,8 @@ vi.mock("$lib/server/embedding/vectorizationQueue", () => ({
 /** Every session broadcast the host and the live row made, in order. */
 const broadcasts: Array<{ sessionId: number; event: string; payload: any }> = []
 vi.mock("$lib/server/sockets/utils/broadcastHelpers", () => ({
+	// annexViews pushes per-user views through this; a stub keeps that push quiet.
+	emitToUserRedacted: async () => {},
 	broadcastToSessionUsers: async (
 		_io: any,
 		sessionId: number,

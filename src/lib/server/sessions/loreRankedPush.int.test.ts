@@ -27,6 +27,8 @@ const record = async (_io: unknown, sessionId: number, _event: string, _data: un
 }
 const broadcast = vi.fn(record)
 vi.mock("$lib/server/sockets/utils/broadcastHelpers", () => ({
+	// annexViews pushes per-user views through this; a stub keeps that push quiet.
+	emitToUserRedacted: async () => {},
 	broadcastToSessionUsers: broadcast
 }))
 
