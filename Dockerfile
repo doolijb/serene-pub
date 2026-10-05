@@ -13,18 +13,27 @@ FROM node:24-bookworm-slim AS builder
 
 WORKDIR /app
 
-# Install deps first (layer-cached until package files change)
-COPY package.json ./
-RUN npm install --fetch-retries=5 --fetch-retry-mintimeout=20000 --fetch-retry-maxtimeout=120000
+# Install deps first (layer-cached until package files change). The
+# @serene-pub/* SDK packages come from npm at the exact versions package.json
+# pins; .npmrc (no lockfile) comes along so npm behaves as everywhere else.
+COPY package.json .npmrc ./
+RUN npm install --no-audit --no-fund --fetch-retries=5 --fetch-retry-mintimeout=20000 --fetch-retry-maxtimeout=120000
 
 # Copy source and build. The client+SSR build needs more than the ~2 GB heap
 # Node derives from a typical Docker memory limit (it OOMs at ~2 GB); the
 # release workflow sets the same value.
+#
+# The in-app docs compile the SDK's guides, which no npm package carries:
+# put a checkout of github.com/SerenePub/serene-pub-sdk (at the version
+# package.json pins) in the build context as .serene-pub-sdk — docker.yml does
+# this with .github/actions/sdk-docs. It is read here and never reaches the
+# runtime stage.
 COPY . .
-RUN NODE_OPTIONS=--max-old-space-size=4096 npm run build
+RUN if [ -d .serene-pub-sdk ]; then export SERENE_PUB_SDK_DIR=/app/.serene-pub-sdk; fi \
+    && NODE_OPTIONS=--max-old-space-size=4096 npm run build
 
 # Prune to production-only node_modules
-RUN npm prune --production
+RUN npm prune --omit=dev
 
 # ============================================================
 # Stage 2 — Runtime

@@ -19,6 +19,10 @@ node_modules
 # reference — written by `npm run docs:site` for serenepub.com to copy. Never
 # read by the app, never committed.
 /docs-site/
+# The SDK docs content CI copies in for the docs build (.github/actions/sdk-docs):
+# sdk-docs/ in release.yml, .serene-pub-sdk/ in the Docker build context.
+/sdk-docs/
+/.serene-pub-sdk/
 
 # OS
 .DS_Store

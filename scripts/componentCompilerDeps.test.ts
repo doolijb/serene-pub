@@ -22,12 +22,21 @@ describe("the production dependency set", () => {
 		expect(pkg.devDependencies[name]).toBeUndefined()
 	})
 
-	test("@serene-pub/cli is linked like the other SDK packages", () => {
-		expect(pkg.dependencies["@serene-pub/cli"]).toBe("file:../serene-pub-sdk/cli")
+	test("@serene-pub/cli is pinned like the other SDK packages: one exact published version", () => {
+		const sdk = Object.entries({ ...pkg.dependencies, ...pkg.devDependencies }).filter(([name]) =>
+			name.startsWith("@serene-pub/")
+		)
+		expect(sdk.map(([name]) => name)).toContain("@serene-pub/cli")
+		// Exact, never a range: there is no lockfile, so `^0.6.0-pr-1` would drift
+		// to the next SDK pre-release on the next install.
+		for (const [, spec] of sdk) expect(spec).toMatch(/^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/)
+		expect(new Set(sdk.map(([, spec]) => spec)).size).toBe(1)
 	})
 
-	test("esbuild is on the major the SDK CLI builds with", () => {
-		const sdkEsbuild = JSON.parse(readFileSync("../serene-pub-sdk/node_modules/esbuild/package.json", "utf8")).version as string
+	// The SDK's own esbuild is only visible in a sibling checkout (`npm run sdk:link`).
+	const sdkEsbuildManifest = "../serene-pub-sdk/node_modules/esbuild/package.json"
+	test.skipIf(!existsSync(sdkEsbuildManifest))("esbuild is on the major the SDK CLI builds with", () => {
+		const sdkEsbuild = JSON.parse(readFileSync(sdkEsbuildManifest, "utf8")).version as string
 		const minor = sdkEsbuild.split(".").slice(0, 2).join(".")
 		// 0.x: the minor is esbuild's breaking-change line.
 		expect(pkg.dependencies.esbuild).toBe(`^${minor}.0`)

@@ -179,6 +179,21 @@ describe("windows-x64 layout", () => {
 			"serene-pub-window.exe"
 		])
 	})
+
+	test("run.cmd, INSTRUCTIONS.txt and .env.example ship with CRLF line endings; the docs do not", () => {
+		const { bundleRoot, payloadDir } = assemble("windows-x64")
+		const read = (p: string) => fs.readFileSync(p, "utf8")
+		for (const f of [
+			path.join(payloadDir, "run.cmd"),
+			path.join(bundleRoot, "INSTRUCTIONS.txt"),
+			path.join(bundleRoot, ".env.example")
+		]) {
+			const text = read(f)
+			expect(text).toContain("\r\n")
+			expect(text.replace(/\r\n/g, "")).not.toContain("\n")
+		}
+		expect(read(path.join(bundleRoot, "README.md"))).not.toContain("\r\n")
+	})
 })
 
 describe.each(["macos-x64", "macos-arm64"])("%s layout", (targetName) => {

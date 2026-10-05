@@ -1,199 +1,161 @@
 name: Build Desktop Releases
 
+# Every tag v<X.Y.Z>[-<suffix>] builds the portable desktop zips for every
+# target and attaches them to the tag's GitHub release, which docker.yml and
+# build-android.yml attach to as well (one release per tag).
+#
+# Release vs pre-release (scripts/release-meta.mjs, the one rule all three
+# workflows and the SDK's publish.yml share): a plain vX.Y.Z is a release; ANY
+# suffix (-pr-N, -rc-N, -alpha, -beta, -dev) is a pre-release, which never
+# becomes "Latest" and whose launcher is built with channel=prerelease.
+#
+# The @serene-pub/* SDK packages install from npm at the exact versions
+# package.json pins, so publish the SDK's tag first (CONTRIBUTING.md).
 on:
     push:
         tags:
+            # Matches suffixed tags too: the last * takes "0-pr-1".
             - "v*.*.*"
-            - "v*.*.*-dev"
-            - "v*.*.*-alpha"
-            - "v*.*.*-beta"
-            - "v*.*.*-pr-*"
-            - "v*.*.*-rc-*"
+
+permissions:
+    contents: read
 
 jobs:
-    test:
-        # Gates every platform build below on a single, OS-agnostic test run —
-        # extracted out of the matrix (rather than re-run per-platform) so a
-        # failure here stops the whole release before any build starts,
-        # instead of racing against other in-flight matrix jobs that might
-        # finish (and publish their asset) before a same-tag failure elsewhere
-        # gets noticed. dev/unknown-suffix tags still skip tests by design —
-        # see the release-type breakdown below.
+    prepare:
         runs-on: ubuntu-latest
+        timeout-minutes: 30
+        permissions:
+            contents: write # creates the draft release
         outputs:
-            title: ${{ steps.release_title.outputs.title }}
-            is_prerelease: ${{ steps.release_title.outputs.is_prerelease }}
-            base_version: ${{ steps.release_title.outputs.base_version }}
+            version: ${{ steps.meta.outputs.version }}
+            title: ${{ steps.meta.outputs.title }}
+            prerelease: ${{ steps.meta.outputs.prerelease }}
+            make_latest: ${{ steps.meta.outputs.make_latest }}
+            channel: ${{ steps.meta.outputs.channel }}
+            run_tests: ${{ steps.meta.outputs.run_tests }}
         steps:
             - name: Checkout repository
               uses: actions/checkout@v4
-
-            - name: Generate release title
-              id: release_title
-              shell: bash
-              env:
-                  # Never interpolate ${{ github.ref_name }} directly into a
-                  # run: script body — GitHub substitutes it as raw text
-                  # before bash parses the script, so a maliciously crafted
-                  # tag name (anyone with tag-push access) could break out
-                  # and inject arbitrary shell commands. Routing it through
-                  # env: makes it a normal, safe shell variable expansion.
-                  REF_NAME: ${{ github.ref_name }}
-              run: |
-                  TAG="$REF_NAME"
-                  VERSION="${TAG#v}"  # Remove 'v' prefix
-
-                  # Extract base version and suffix
-                  if [[ "$VERSION" =~ ^([0-9]+\.[0-9]+\.[0-9]+)(-(.+))?$ ]]; then
-                    BASE_VERSION="${BASH_REMATCH[1]}"
-                    SUFFIX="${BASH_REMATCH[3]}"
-
-                    if [ -z "$SUFFIX" ]; then
-                      # No suffix - formal release
-                      TITLE="$BASE_VERSION Release"
-                      IS_PRERELEASE="false"
-                      RUN_TESTS="true"
-                    elif [ "$SUFFIX" = "dev" ]; then
-                      # Development release
-                      TITLE="$BASE_VERSION Development Release"
-                      IS_PRERELEASE="true"
-                      RUN_TESTS="false"
-                    elif [ "$SUFFIX" = "beta" ]; then
-                      # Beta release (not a pre-release)
-                      TITLE="$BASE_VERSION Beta Release"
-                      IS_PRERELEASE="false"
-                      RUN_TESTS="true"
-                    elif [[ "$SUFFIX" =~ ^pr-([0-9]+)$ ]]; then
-                      # Pre-release build - these are the tag pattern currently
-                      # shipped as real releases, so run the full test suite
-                      # just like any other release.
-                      PR_NUM="${BASH_REMATCH[1]}"
-                      TITLE="$BASE_VERSION Pre-Release Build $PR_NUM"
-                      IS_PRERELEASE="true"
-                      RUN_TESTS="true"
-                    elif [[ "$SUFFIX" =~ ^rc-([0-9]+)$ ]]; then
-                      # Release candidate
-                      RC_NUM="${BASH_REMATCH[1]}"
-                      TITLE="$BASE_VERSION Release Candidate $RC_NUM"
-                      IS_PRERELEASE="true"
-                      RUN_TESTS="true"
-                    else
-                      # Unknown suffix — fail closed. `-alpha` lands here too:
-                      # alpha nomenclature is retired, so an alpha tag is
-                      # treated as an unrecognised suffix rather than given a
-                      # branch of its own.
-                      TITLE="$VERSION"
-                      IS_PRERELEASE="true"
-                      RUN_TESTS="false"
-                    fi
-                  else
-                    # Invalid version format
-                    TITLE="$VERSION"
-                    IS_PRERELEASE="true"
-                    RUN_TESTS="false"
-                  fi
-
-                  echo "title=$TITLE" >> $GITHUB_OUTPUT
-                  echo "is_prerelease=$IS_PRERELEASE" >> $GITHUB_OUTPUT
-                  echo "run_tests=$RUN_TESTS" >> $GITHUB_OUTPUT
-                  echo "base_version=$BASE_VERSION" >> $GITHUB_OUTPUT
-                  echo "Release Title: $TITLE"
-                  echo "Is Pre-release: $IS_PRERELEASE"
-                  echo "Run Tests: $RUN_TESTS"
 
             - name: Set up Node.js
               uses: actions/setup-node@v4
               with:
                   node-version: "24"
 
-            - name: Install dependencies
-              shell: bash
+            # Never interpolate ${{ github.ref_name }} directly into a run:
+            # script body — GitHub substitutes it as raw text before bash
+            # parses the script, so a crafted tag name could inject commands.
+            # Every step reads it from env instead.
+            - name: Classify the tag
+              id: meta
+              env:
+                  REF_NAME: ${{ github.ref_name }}
+              run: node scripts/release-meta.mjs classify "$REF_NAME"
+
+            # One version source: package.json, baked into the launcher as
+            # main.version. The updater refuses a release whose payload
+            # version differs from its tag (READY.json), so a release tag that
+            # disagrees with package.json would publish a release nobody can
+            # update to — refuse it. Pre-releases never update in-app, so for
+            # them it is only a warning.
+            - name: Check the tag against package.json
+              env:
+                  VERSION: ${{ steps.meta.outputs.version }}
+                  PRERELEASE: ${{ steps.meta.outputs.prerelease }}
               run: |
-                  node -e "const fs = require('fs'); try { fs.unlinkSync('package-lock.json'); } catch (e) { /* ignore */ }"
-                  for i in 1 2 3; do npm install --fetch-retries=5 --fetch-retry-mintimeout=20000 --fetch-retry-maxtimeout=120000 && break || sleep 15; done
+                  PKG=$(node -p "require('./package.json').version")
+                  if [ "$VERSION" != "$PKG" ]; then
+                    if [ "$PRERELEASE" = "true" ]; then
+                      echo "::warning::tag version $VERSION does not match package.json version $PKG"
+                    else
+                      echo "::error::tag version $VERSION does not match package.json version $PKG — the updater would refuse this release"
+                      exit 1
+                    fi
+                  fi
+
+            - name: Create the draft release
+              env:
+                  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+                  GH_REPO: ${{ github.repository }}
+                  REF_NAME: ${{ github.ref_name }}
+              run: bash scripts/ensure-release.sh "$REF_NAME"
+
+            # The in-app docs compile the SDK's guides (and its executed
+            # examples and playground), which no npm package carries. Fetched
+            # and built once here, on Linux, and handed to every build below.
+            - name: SDK docs content
+              uses: ./.github/actions/sdk-docs
+              with:
+                  dest: sdk-docs
+
+            - name: Keep the SDK docs content
+              uses: actions/upload-artifact@v4
+              with:
+                  name: sdk-docs
+                  path: sdk-docs
+                  retention-days: 5
+                  if-no-files-found: error
+
+    test:
+        # Gates every platform build below on a single, OS-agnostic test run —
+        # extracted out of the matrix (rather than re-run per-platform) so a
+        # failure here stops the whole release before any build starts.
+        needs: prepare
+        runs-on: ubuntu-latest
+        timeout-minutes: 60
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@v4
+
+            - name: Set up Node.js
+              uses: actions/setup-node@v4
+              with:
+                  node-version: "24"
+
+            - name: Fetch the SDK docs content
+              uses: actions/download-artifact@v4
+              with:
+                  name: sdk-docs
+                  path: ${{ runner.temp }}/serene-pub-sdk
+
+            - name: Point the docs build at it
+              run: echo "SERENE_PUB_SDK_DIR=$RUNNER_TEMP/serene-pub-sdk" >> "$GITHUB_ENV"
+
+            # No lockfile by design (.npmrc package-lock=false): every install
+            # resolves fresh; the SDK comes from npm at package.json's exact pins.
+            - name: Install dependencies
+              run: |
+                  ok=
+                  for i in 1 2 3; do
+                    if npm install --no-audit --no-fund --fetch-retries=5 --fetch-retry-mintimeout=20000 --fetch-retry-maxtimeout=120000; then ok=1; break; fi
+                    sleep 15
+                  done
+                  [ -n "$ok" ] || { echo "::error::npm install failed three times"; exit 1; }
 
             - name: Prepare SvelteKit
-              run: npx @sveltejs/kit sync
+              run: npx svelte-kit sync
 
             - name: Run tests
               # Non-blocking, deliberately reversing the earlier "a failure must
-              # stop the release" rule.
-              #
-              # The suite still RUNS and its result is still visible in the job
-              # log — this only stops a red result from gating a release. The
-              # reason is test-isolation flakiness rather than product defects:
-              # vectorizationQueue.peekBeforeLoad.int.test.ts shares state
-              # between its own tests and fails intermittently under full-suite
-              # parallelism, so the gate was blocking releases for reasons
-              # unrelated to what was being released.
-              #
-              # This is a deliberate loosening, not an oversight. Restore the
-              # gate (drop continue-on-error) once that file is isolated —
-              # a green suite is only worth gating on when red reliably means
-              # something is broken.
+              # stop the release" rule. The suite still RUNS and its result is
+              # still visible in the job log — this only stops a red result from
+              # gating a release, because of test-isolation flakiness rather
+              # than product defects (vectorizationQueue.peekBeforeLoad.int.test.ts
+              # shares state between its own tests). Restore the gate (drop
+              # continue-on-error) once that file is isolated.
               continue-on-error: true
-              if: steps.release_title.outputs.run_tests == 'true'
+              if: needs.prepare.outputs.run_tests == 'true'
               run: npm test
 
-    build-and-release:
-        needs: test
-        # Explicit, narrowed from whatever the repo-wide GITHUB_TOKEN default
-        # is — this job creates releases and uploads assets, nothing else.
-        permissions:
-            contents: write
-        strategy:
-            matrix:
-                include:
-                    - target: linux-x64
-                      os: ubuntu-latest
-                    # - target: linux-arm64
-                    #   os: ubuntu-latest
-                    #   NOTE: GitHub-hosted runners don't offer native
-                    #   linux-arm64 hardware, and there's no cross-compile
-                    #   setup here (no QEMU, no npm_config_arch/--target_arch
-                    #   overrides) — `npm install` on an x64 ubuntu-latest
-                    #   runner resolves x64-arch native optional deps (eg.
-                    #   sharp, a transitive dep of @huggingface/transformers,
-                    #   which src/lib/server/embedding/ actually imports) and
-                    #   bundles them into a zip labeled "linux-arm64",
-                    #   producing an artifact that's broken on real arm64
-                    #   hardware. Disabled until real cross-compilation is
-                    #   set up.
-                    # - target: linux-ppc64
-                    #   os: ubuntu-latest
-                    #   NOTE: same cross-arch issue as linux-arm64 above.
-                    # - target: linux-arm
-                    #   os: ubuntu-latest
-                    #   NOTE: Node.js does not provide armv7l builds
-                    - target: macos-x64
-                      # NOT macos-latest: GitHub's "-latest" label now points
-                      # to Apple Silicon (macos-15, arm64) — building the
-                      # x64 target there would resolve x64-labeled but
-                      # actually-arm64 native optional deps (eg. sharp, a
-                      # transitive dep of @huggingface/transformers) via
-                      # npm's platform/arch-matching install logic, silently
-                      # shipping an arm64 binary inside a "macos-x64" zip
-                      # that would fail to load on real Intel Macs.
-                      # NOT macos-latest-large either — that's a paid
-                      # "larger runner" (GitHub Team/Enterprise only,
-                      # triggered a billing requirement when tried).
-                      # macos-15-intel is the plain, free-tier Intel runner
-                      # that matches macos-latest's current OS version
-                      # (macOS 15) — just x64 instead of arm64, no paid plan
-                      # needed.
-                      os: macos-15-intel
-                    - target: macos-arm64
-                      os: macos-latest
-                    - target: windows-x64
-                      os: windows-latest
-                    # - target: windows-arm64
-                    #   os: windows-latest
-                    #   NOTE: same cross-arch native-dependency issue as
-                    #   linux-arm64 above — windows-latest is x64, and there's
-                    #   no cross-compile setup, so this would ship an x64
-                    #   sharp binary inside a "windows-arm64" zip. Disabled
-                    #   until real cross-compilation is set up.
-        runs-on: ${{ matrix.os }}
+    build-app:
+        # The app is built ONCE, on Linux: build/ is plain JavaScript, the same
+        # for every target (the local release recipe made the Windows zip from
+        # a Linux build too). The per-OS jobs below add only what is native to
+        # their platform: production node_modules, the Node runtime and the
+        # launcher.
+        needs: prepare
+        runs-on: ubuntu-latest
+        timeout-minutes: 45
         env:
             NODE_OPTIONS: "--max-old-space-size=4096"
         steps:
@@ -205,14 +167,110 @@ jobs:
               with:
                   node-version: "24"
 
+            - name: Fetch the SDK docs content
+              uses: actions/download-artifact@v4
+              with:
+                  name: sdk-docs
+                  path: ${{ runner.temp }}/serene-pub-sdk
+
+            - name: Point the docs build at it
+              run: echo "SERENE_PUB_SDK_DIR=$RUNNER_TEMP/serene-pub-sdk" >> "$GITHUB_ENV"
+
             - name: Install dependencies
-              shell: bash
               run: |
-                  node -e "const fs = require('fs'); try { fs.unlinkSync('package-lock.json'); } catch (e) { /* ignore */ }"
-                  for i in 1 2 3; do npm install --fetch-retries=5 --fetch-retry-mintimeout=20000 --fetch-retry-maxtimeout=120000 && break || sleep 15; done
+                  ok=
+                  for i in 1 2 3; do
+                    if npm install --no-audit --no-fund --fetch-retries=5 --fetch-retry-mintimeout=20000 --fetch-retry-maxtimeout=120000; then ok=1; break; fi
+                    sleep 15
+                  done
+                  [ -n "$ok" ] || { echo "::error::npm install failed three times"; exit 1; }
 
             - name: Prepare SvelteKit
-              run: npx @sveltejs/kit sync
+              run: npx svelte-kit sync
+
+            - name: Run typecheck
+              # Non-blocking: informational. Errors still surface in the log.
+              continue-on-error: true
+              run: npm run check
+
+            - name: Build app
+              run: npm run build
+
+            - name: Keep the build
+              uses: actions/upload-artifact@v4
+              with:
+                  name: app-build
+                  path: build
+                  retention-days: 5
+                  if-no-files-found: error
+
+    build-and-release:
+        needs: [prepare, test, build-app]
+        permissions:
+            contents: write # uploads assets to the tag's release
+        strategy:
+            fail-fast: false
+            matrix:
+                include:
+                    - target: linux-x64
+                      os: ubuntu-latest
+                    # linux-arm64 / linux-ppc64 / windows-arm64: GitHub-hosted
+                    # runners for these are x64 here and there is no
+                    # cross-compile setup, so `npm install` would resolve x64
+                    # native optional deps (eg. sharp, which @huggingface/
+                    # transformers imports) into a zip labelled for another
+                    # arch. Disabled until real cross-compilation is set up.
+                    # linux-arm: Node.js ships no armv7l builds.
+                    - target: macos-x64
+                      # NOT macos-latest: "-latest" is Apple Silicon (arm64),
+                      # where npm would resolve arm64 native optional deps into
+                      # a "macos-x64" zip. NOT macos-latest-large either (a paid
+                      # larger runner). macos-15-intel is the free-tier Intel
+                      # runner.
+                      os: macos-15-intel
+                    - target: macos-arm64
+                      os: macos-latest
+                    - target: windows-x64
+                      os: windows-latest
+        runs-on: ${{ matrix.os }}
+        timeout-minutes: 90
+        env:
+            NODE_OPTIONS: "--max-old-space-size=4096"
+            TARGET: ${{ matrix.target }}
+            REF_NAME: ${{ github.ref_name }}
+        defaults:
+            run:
+                shell: bash
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@v4
+
+            - name: Set up Node.js
+              uses: actions/setup-node@v4
+              with:
+                  node-version: "24"
+
+            - name: Fetch the app build
+              uses: actions/download-artifact@v4
+              with:
+                  name: app-build
+                  path: build
+
+            # Production dependencies only, resolved on this OS so every
+            # native package is this platform's. Optional peers are not
+            # installed (npm skips them), which keeps the SDK CLI's dev-time
+            # peers out. No separate cleaner: scripts/prune-dist.js (run by
+            # bundle-dist.js on the bundle's copy) strips dev files and foreign
+            # binaries. Every script below uses Node built-ins only.
+            - name: Install production dependencies
+              run: |
+                  ok=
+                  for i in 1 2 3; do
+                    if npm install --omit=dev --no-audit --no-fund --fetch-retries=5 --fetch-retry-mintimeout=20000 --fetch-retry-maxtimeout=120000; then ok=1; break; fi
+                    sleep 15
+                  done
+                  [ -n "$ok" ] || { echo "::error::npm install --omit=dev failed three times"; exit 1; }
+                  npm rebuild
 
             # ── Toolchain for the launcher and window helper ───────────
             #
@@ -220,8 +278,9 @@ jobs:
             # builds two binaries per target: the launcher (`serene-pub` /
             # `Serene Pub.exe`; CGO_ENABLED=0 on Linux/Windows, cgo+Cocoa on
             # macOS) and the window helper (`serene-pub-window[.exe]`,
-            # webview_go, always cgo). This job only provides compilers and
-            # headers; it never runs `go build` itself.
+            # webview_go, always cgo, always on its own OS). This job only
+            # provides compilers and headers; it never runs `go build` itself.
+            # macOS runners carry Xcode's clang and the Cocoa/WebKit SDKs.
             - name: Set up Go
               uses: actions/setup-go@v5
               with:
@@ -235,7 +294,6 @@ jobs:
             # exported here too so the probe below sees what the build sees.
             - name: Install window-helper build dependencies (Linux)
               if: runner.os == 'Linux'
-              shell: bash
               run: |
                   sudo apt-get update
                   sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev
@@ -266,137 +324,50 @@ jobs:
                   & (Join-Path $bin "gcc.exe") --version
                   $bin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
-            - name: Run typecheck
-              # Non-blocking: the codebase currently carries a large pre-existing
-              # type-error backlog (see project history) that predates this gate.
-              # Errors still surface in the log for visibility; revisit making
-              # this blocking again once the backlog is cleared.
-              continue-on-error: true
-              run: npm run check
-
-            - name: Build app
-              run: npm run build
-
             # Info.plist + favicon.icns (macOS) and install-desktop-shortcut.sh
             # (Linux), rendered from dist-assets/ templates into
             # dist/generated/<target>/. Windows has nothing to render: the
             # .exe's icon and version resource come from build.mjs.
             - name: Render release templates and icons
-              run: node scripts/create-executables.js ${{ matrix.target }}
+              run: node scripts/create-executables.js "$TARGET"
 
-            - name: Prepare production dependencies
-              shell: bash
+            # The Node runtime the bundle ships, checked against nodejs.org's
+            # SHASUMS256.txt before it goes anywhere near the zip.
+            - name: Download Node.js runtime for the target
+              env:
+                  NODE_VERSION: v24.18.0
               run: |
-                  # Install production dependencies
-                  npm install --production
-                  npm rebuild
-
-                  # Clean node_modules with modclean, preserving license files
-                  npx modclean --run --patterns="default:safe,default:caution,default:danger" --ignore="**/LICENSE,**/COPYING,**/NOTICE,**/README*,**/COPYRIGHT,**/AUTHORS,**/CONTRIBUTORS"
-
-            - name: Download Node.js runtime for target platform
-              shell: bash
-              run: |
-                  echo "Downloading Node.js for ${{ matrix.target }}..."
+                  case "$TARGET" in
+                    linux-x64)   ARCHIVE="node-$NODE_VERSION-linux-x64.tar.xz" ;;
+                    macos-x64)   ARCHIVE="node-$NODE_VERSION-darwin-x64.tar.gz" ;;
+                    macos-arm64) ARCHIVE="node-$NODE_VERSION-darwin-arm64.tar.gz" ;;
+                    windows-x64) ARCHIVE="node-$NODE_VERSION-win-x64.zip" ;;
+                    *) echo "::error::no Node.js runtime for $TARGET"; exit 1 ;;
+                  esac
                   mkdir -p temp-node
                   cd temp-node
-
-                  case "${{ matrix.target }}" in
-                    linux-x64)
-                      NODE_URL="https://nodejs.org/dist/v24.18.0/node-v24.18.0-linux-x64.tar.xz"
-                      curl -L -o node.tar.xz "$NODE_URL" || { echo "Failed to download"; exit 1; }
-                      tar -xf node.tar.xz
-                      cp node-v24.18.0-linux-x64/bin/node ../node
-                      ;;
-                    linux-arm64)
-                      NODE_URL="https://nodejs.org/dist/v24.18.0/node-v24.18.0-linux-arm64.tar.xz"
-                      curl -L -o node.tar.xz "$NODE_URL" || { echo "Failed to download"; exit 1; }
-                      tar -xf node.tar.xz
-                      cp node-v24.18.0-linux-arm64/bin/node ../node
-                      ;;
-                    linux-ppc64)
-                      NODE_URL="https://nodejs.org/dist/v24.18.0/node-v24.18.0-linux-ppc64le.tar.xz"
-                      curl -L -o node.tar.xz "$NODE_URL" || { echo "Failed to download"; exit 1; }
-                      tar -xf node.tar.xz
-                      cp node-v24.18.0-linux-ppc64le/bin/node ../node
-                      ;;
-                    macos-x64)
-                      NODE_URL="https://nodejs.org/dist/v24.18.0/node-v24.18.0-darwin-x64.tar.gz"
-                      curl -L -o node.tar.gz "$NODE_URL" || { echo "Failed to download"; exit 1; }
-                      tar -xzf node.tar.gz
-                      cp node-v24.18.0-darwin-x64/bin/node ../node
-                      ;;
-                    macos-arm64)
-                      NODE_URL="https://nodejs.org/dist/v24.18.0/node-v24.18.0-darwin-arm64.tar.gz"
-                      curl -L -o node.tar.gz "$NODE_URL" || { echo "Failed to download"; exit 1; }
-                      tar -xzf node.tar.gz
-                      cp node-v24.18.0-darwin-arm64/bin/node ../node
-                      ;;
-                    windows-x64)
-                      NODE_URL="https://nodejs.org/dist/v24.18.0/node-v24.18.0-win-x64.zip"
-                      curl -L -o node.zip "$NODE_URL" || { echo "Failed to download"; exit 1; }
-                      unzip -q node.zip
-                      cp node-v24.18.0-win-x64/node.exe ../node.exe
-                      ;;
-                    windows-arm64)
-                      NODE_URL="https://nodejs.org/dist/v24.18.0/node-v24.18.0-win-arm64.zip"
-                      curl -L -o node.zip "$NODE_URL" || { echo "Failed to download"; exit 1; }
-                      unzip -q node.zip
-                      cp node-v24.18.0-win-arm64/node.exe ../node.exe
-                      ;;
+                  curl -fsSL --retry 3 -o "$ARCHIVE" "https://nodejs.org/dist/$NODE_VERSION/$ARCHIVE"
+                  curl -fsSL --retry 3 -o SHASUMS256.txt "https://nodejs.org/dist/$NODE_VERSION/SHASUMS256.txt"
+                  grep "  $ARCHIVE\$" SHASUMS256.txt > expected.txt
+                  if command -v sha256sum > /dev/null 2>&1; then sha256sum -c expected.txt; else shasum -a 256 -c expected.txt; fi
+                  DIR="${ARCHIVE%.tar.xz}"; DIR="${DIR%.tar.gz}"; DIR="${DIR%.zip}"
+                  case "$ARCHIVE" in
+                    *.zip) unzip -q "$ARCHIVE"; cp "$DIR/node.exe" ../node.exe ;;
+                    *) tar -xf "$ARCHIVE"; cp "$DIR/bin/node" ../node; chmod +x ../node ;;
                   esac
-
                   cd ..
                   rm -rf temp-node
+                  ls -la node node.exe 2> /dev/null || true
 
-                  # Verify the Node.js binary was downloaded
-                  if [[ "${{ matrix.target }}" == windows-* ]]; then
-                    if [ ! -f "node.exe" ]; then
-                      echo "ERROR: Failed to download node.exe"
-                      exit 1
-                    fi
-                    echo "Downloaded node.exe ($(du -h node.exe | cut -f1))"
-                  else
-                    if [ ! -f "node" ]; then
-                      echo "ERROR: Failed to download node binary"
-                      exit 1
-                    fi
-                    chmod +x node
-                    echo "Downloaded node binary ($(du -h node | cut -f1))"
-                  fi
-
-            # One version source: package.json, baked into the launcher as
-            # main.version. The updater refuses a release whose payload
-            # version differs from its tag (READY.json), so a stable tag that
-            # disagrees with package.json would publish a release nobody can
-            # update to — refuse it here instead. Pre-releases never update
-            # in-app, so for them it is only a warning.
-            #
             # Channel (§C11): `prerelease` for pre-release tags — the launcher
             # then never applies an update — else `portable`, which every zip
-            # is.
+            # is. The tag/package.json check ran in `prepare`.
             - name: Build launcher and window helper for ${{ matrix.target }}
-              shell: bash
               env:
-                  TARGET: ${{ matrix.target }}
-                  REF_NAME: ${{ github.ref_name }}
-                  IS_PRERELEASE: ${{ needs.test.outputs.is_prerelease }}
+                  CHANNEL: ${{ needs.prepare.outputs.channel }}
                   COMMIT: ${{ github.sha }}
               run: |
-                  if [ ! -f launcher/build.mjs ]; then
-                    echo "::error::launcher/build.mjs is missing — the release cannot ship without its launcher"
-                    exit 1
-                  fi
                   VERSION=$(node -p "require('./package.json').version")
-                  if [ "${REF_NAME#v}" != "$VERSION" ]; then
-                    if [ "$IS_PRERELEASE" = "true" ]; then
-                      echo "::warning::tag $REF_NAME does not match package.json version $VERSION"
-                    else
-                      echo "::error::tag $REF_NAME does not match package.json version $VERSION — the updater would refuse this release"
-                      exit 1
-                    fi
-                  fi
-                  if [ "$IS_PRERELEASE" = "true" ]; then CHANNEL=prerelease; else CHANNEL=portable; fi
                   node launcher/build.mjs --target "$TARGET" --version "$VERSION" \
                     --channel "$CHANNEL" --commit "$COMMIT" --out "dist/launcher/$TARGET"
                   ls -la "dist/launcher/$TARGET"
@@ -411,14 +382,15 @@ jobs:
                     fi
                   fi
 
-            # Fails if dist/launcher/<target>/ lacks either binary — there is
-            # no shim fallback (scripts/bundle-dist.js placeLauncher).
+            # Fails if dist/launcher/<target>/ lacks either binary (no shim
+            # fallback), and on any dependency licence outside the allowlist
+            # (scripts/licenseExpression.js). Writes the Windows bundle's
+            # .cmd/.txt/.env.example with CRLF line endings.
             - name: Bundle for ${{ matrix.target }}
-              run: node scripts/bundle-dist.js ${{ matrix.target }}
+              run: node scripts/bundle-dist.js "$TARGET"
 
             - name: Check dist bundle size
-              shell: bash
-              run: node scripts/check-dist-size.js ${{ matrix.target }}
+              run: node scripts/check-dist-size.js "$TARGET"
 
             # Ad-hoc signature over the finished bundle — after the payload is
             # complete, before zipping; nothing may touch the .app after this.
@@ -428,9 +400,6 @@ jobs:
             # launcher re-signs the same way after an in-app swap (§C8).
             - name: Check and ad-hoc sign the app bundle (macOS)
               if: runner.os == 'macOS'
-              shell: bash
-              env:
-                  TARGET: ${{ matrix.target }}
               run: |
                   APP="$(ls -d dist/serene-pub-*-"$TARGET"/serene-pub/"Serene Pub.app" | head -1)"
                   if [ -z "$APP" ] || [ ! -d "$APP" ]; then
@@ -449,24 +418,20 @@ jobs:
 
             # The archive keeps the version in its FILENAME, but its single
             # top-level entry is the unversioned "serene-pub" directory inside
-            # the staging directory — never the staging directory itself.
-            # Zipping the versioned staging directory is what produced
-            # serene-pub-v0.6.0-linux-x64/serene-pub-0.6.0-linux-x64/<app> for
-            # everyone whose extractor creates a folder named after the
-            # archive. Unversioned is also what makes "extract the new zip over
-            # your old folder" a valid manual upgrade, which is safe now that
-            # .env and the database live in the OS data directory rather than
-            # beside the app.
+            # the staging directory — never the staging directory itself, which
+            # would nest serene-pub-<v>-<target>/<app> for everyone whose
+            # extractor creates a folder named after the archive. Unversioned is
+            # also what makes "extract the new zip over your old folder" a valid
+            # manual upgrade (.env and the database live in the OS data
+            # directory, not beside the app).
             - name: Zip dist directory (Windows)
               if: runner.os == 'Windows'
               shell: pwsh
-              env:
-                  REF_NAME: ${{ github.ref_name }}
               run: |
                   cd dist
-                  $distDir = Get-ChildItem -Directory -Name "serene-pub-*-${{ matrix.target }}" | Select-Object -First 1
+                  $distDir = Get-ChildItem -Directory -Name "serene-pub-*-$env:TARGET" | Select-Object -First 1
                   if (-not $distDir) {
-                    Write-Error "No directory found matching serene-pub-*-${{ matrix.target }}"
+                    Write-Error "No directory found matching serene-pub-*-$env:TARGET"
                     Get-ChildItem
                     exit 1
                   }
@@ -476,96 +441,107 @@ jobs:
                     exit 1
                   }
                   cd $distDir
-                  Compress-Archive -Path "serene-pub" -DestinationPath "../../serene-pub-$env:REF_NAME-${{ matrix.target }}.zip"
+                  Compress-Archive -Path "serene-pub" -DestinationPath "../../serene-pub-$env:REF_NAME-$env:TARGET.zip"
 
-            # Same single unversioned top-level entry as the Windows step
-            # above — see the comment there for why.
+            # Same single unversioned top-level entry as the Windows step above.
+            # Linux also gets a .tar.gz, as the local release recipe made.
             - name: Zip dist directory (Unix)
               if: runner.os != 'Windows'
-              shell: bash
-              env:
-                  REF_NAME: ${{ github.ref_name }}
               run: |
-                  cd dist
-                  DIST_DIR=$(ls -d serene-pub-*-${{ matrix.target }} 2>/dev/null | head -1)
-                  if [ -z "$DIST_DIR" ]; then
-                    echo "Error: No directory found matching serene-pub-*-${{ matrix.target }}"
-                    ls -la
-                    exit 1
-                  fi
-                  if [ ! -d "$DIST_DIR/serene-pub" ]; then
-                    echo "Error: $DIST_DIR does not contain a serene-pub directory (scripts/dist-layout.js)"
-                    ls -la "$DIST_DIR"
+                  DIST_DIR=$(cd dist && ls -d serene-pub-*-"$TARGET" 2> /dev/null | head -1)
+                  if [ -z "$DIST_DIR" ] || [ ! -d "dist/$DIST_DIR/serene-pub" ]; then
+                    echo "::error::no dist/serene-pub-*-$TARGET/serene-pub directory (scripts/dist-layout.js)"
+                    ls -la dist
                     exit 1
                   fi
                   # -y keeps the macOS .app bundle's symlinks as symlinks.
-                  cd "$DIST_DIR"
-                  zip -r -y "../../serene-pub-$REF_NAME-${{ matrix.target }}.zip" serene-pub
+                  (cd "dist/$DIST_DIR" && zip -q -r -y "$GITHUB_WORKSPACE/serene-pub-$REF_NAME-$TARGET.zip" serene-pub)
+                  if [ "$RUNNER_OS" = "Linux" ]; then
+                    tar -czf "serene-pub-$REF_NAME-$TARGET.tar.gz" -C "dist/$DIST_DIR" serene-pub
+                  fi
+                  ls -la serene-pub-*
 
             # §C12: `<zip>.sha256` beside every zip, in sha256sum's format
             # ("<64 lowercase hex>  <zip name>\n", ASCII, no BOM). The in-app
             # updater refuses a release without it. Written by one Node
             # implementation on every runner (no pwsh encoding defaults),
-            # then checked with the platform's own tool.
-            - name: Write the zip's checksum
-              shell: bash
-              env:
-                  REF_NAME: ${{ github.ref_name }}
-                  TARGET: ${{ matrix.target }}
+            # then checked with the platform's own tool. checksums-<target>.txt
+            # feeds the release's SHA256SUMS (the publish job).
+            - name: Write the checksums
               run: |
                   ZIP="serene-pub-$REF_NAME-$TARGET.zip"
                   node scripts/bundle-dist.js --checksum "$ZIP"
-                  if command -v sha256sum > /dev/null 2>&1; then
-                    sha256sum -c "$ZIP.sha256"
-                  else
-                    shasum -a 256 -c "$ZIP.sha256"
-                  fi
+                  if command -v sha256sum > /dev/null 2>&1; then SUM="sha256sum"; else SUM="shasum -a 256"; fi
+                  $SUM -c "$ZIP.sha256"
+                  cp "$ZIP.sha256" "checksums-$TARGET.txt"
+                  TGZ="serene-pub-$REF_NAME-$TARGET.tar.gz"
+                  if [ -f "$TGZ" ]; then $SUM "$TGZ" >> "checksums-$TARGET.txt"; fi
+                  cat "checksums-$TARGET.txt"
+
+            - name: Keep the checksums for SHA256SUMS
+              uses: actions/upload-artifact@v4
+              with:
+                  name: checksums-${{ matrix.target }}
+                  path: checksums-${{ matrix.target }}.txt
+                  retention-days: 5
 
             # ── Pre-releases ship portable zips ONLY ───────────────────
             #
-            # Nothing is gated here today because nothing needs gating: the
-            # steps above (launcher build, bundle, macOS ad-hoc signature, zip,
-            # checksum) all make the portable artifact, and a zip IS the
-            # portable artifact. A pre-release zip's launcher is built with
-            # channel=prerelease, so it never applies an update. There is no
-            # installer, .dmg or AppImage job to switch off yet.
+            # A pre-release zip's launcher is built with channel=prerelease, so
+            # it never applies an update. There is no installer, .dmg or
+            # AppImage job yet. When one is added it goes BELOW this comment
+            # and carries `if: needs.prepare.outputs.prerelease == 'false'`
+            # (combined with its platform condition): an installed build looks
+            # and behaves like a production one, which a pre-release must not.
+            # A new artifact the updater should consume needs its own .sha256.
             #
-            # When one is added, it goes BELOW this comment and carries:
-            #
-            #     if: needs.test.outputs.is_prerelease == 'false'
-            #
-            # (combined with the platform condition it needs anyway, e.g.
-            # `if: runner.os == 'Windows' && needs.test.outputs.is_prerelease == 'false'`).
-            # A pre-release or release candidate must not put an installer in
-            # anyone's hands: an installed build looks and behaves like a
-            # production one — Start Menu entry, file associations, an
-            # uninstaller — which is exactly the impression these builds must
-            # not give. Extracting a zip does not.
-            #
-            # ⚠ Two things to know before wiring that up:
-            #
-            #  1. `is_prerelease` here AGREES with the predicate the app uses.
-            #     isPrereleaseVersion() in src/lib/shared/utils/releaseChannel.ts
-            #     applies the same rule as the branches above: no suffix or
-            #     `-beta` is a release (beta is a maturity label, not a release
-            #     stage), everything else — including any unrecognised suffix —
-            #     is a pre-release. So a beta tag publishes as a full GitHub
-            #     release AND runs unwatermarked with update checks on, and a
-            #     gated installer job would correctly build for it. Keep the two
-            #     in step: if betas should ever be denied an installer anyway,
-            #     gate that job on a separate output rather than changing what
-            #     `prerelease:` tells GitHub below.
-            #  2. `files:` uses globs, so a gated step that does not run just
-            #     contributes no file — the upload step itself needs no
-            #     condition. A new artifact still needs its own `.sha256`
-            #     (and a pattern here) if the updater is ever to consume it.
+            # ⚠ The prerelease rule here (any suffix, including -beta) is
+            # stricter than the app's own isPrereleaseVersion()
+            # (src/lib/shared/utils/releaseChannel.ts) and the launcher's
+            # (launcher/internal/version), which still treat `-beta` as a
+            # release. Settle that before tagging a -beta.
             - name: Upload release assets
-              uses: softprops/action-gh-release@v2
-              with:
-                  name: ${{ needs.test.outputs.title }}
-                  files: |
-                      serene-pub-*.zip
-                      serene-pub-*.zip.sha256
-                  prerelease: ${{ needs.test.outputs.is_prerelease }}
               env:
-                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+                  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+                  GH_REPO: ${{ github.repository }}
+              run: |
+                  FILES=(serene-pub-"$REF_NAME"-"$TARGET".zip serene-pub-"$REF_NAME"-"$TARGET".zip.sha256)
+                  if [ -f "serene-pub-$REF_NAME-$TARGET.tar.gz" ]; then FILES+=("serene-pub-$REF_NAME-$TARGET.tar.gz"); fi
+                  for i in 1 2 3; do
+                    gh release upload "$REF_NAME" "${FILES[@]}" --clobber && exit 0
+                    sleep 20
+                  done
+                  echo "::error::could not upload ${FILES[*]} to release $REF_NAME"
+                  exit 1
+
+    publish:
+        # Runs only when every desktop build above succeeded: SHA256SUMS, then
+        # the draft goes public. A failed target leaves the release a draft
+        # (with whatever was uploaded) for a maintainer to finish or delete.
+        needs: [prepare, build-and-release]
+        runs-on: ubuntu-latest
+        timeout-minutes: 15
+        permissions:
+            contents: write
+        steps:
+            - name: Fetch the checksums
+              uses: actions/download-artifact@v4
+              with:
+                  pattern: checksums-*
+                  merge-multiple: true
+                  path: checksums
+
+            - name: Upload SHA256SUMS and publish the release
+              env:
+                  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+                  GH_REPO: ${{ github.repository }}
+                  REF_NAME: ${{ github.ref_name }}
+                  PRERELEASE: ${{ needs.prepare.outputs.prerelease }}
+                  MAKE_LATEST: ${{ needs.prepare.outputs.make_latest }}
+              run: |
+                  cat checksums/*.txt | sort -k 2 > SHA256SUMS
+                  cat SHA256SUMS
+                  gh release upload "$REF_NAME" SHA256SUMS --clobber
+                  # Pre-releases never become "Latest"; a plain release does.
+                  gh release edit "$REF_NAME" --draft=false --prerelease="$PRERELEASE" --latest="$MAKE_LATEST"
+                  gh release view "$REF_NAME" --json name,isDraft,isPrerelease,url,assets --jq '{name, isDraft, isPrerelease, url, assets: [.assets[].name]}'

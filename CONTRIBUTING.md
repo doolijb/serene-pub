@@ -16,12 +16,24 @@ For anything beyond a small fix, please [open an issue](https://github.com/dooli
 ### Steps
 
 1. Fork and clone the repo
-2. Clone the SDK repo (`serene-pub-sdk`) **beside** it, so the two folders are siblings. The app's `@serene-pub/*` packages resolve to `../serene-pub-sdk/<package>` through `file:` links
-3. `npm i` to install dependencies, then `npm run sdk:build` to build the SDK packages (run it again after any change in the SDK repo)
-4. `npm run dev` to start the dev server (or `npm run dev:host` to bind it for access from other devices on your network)
-5. Visit [http://localhost:5173](http://localhost:5173)
+2. `npm i` to install dependencies. The `@serene-pub/*` SDK packages come from npm, at the exact version `package.json` pins
+3. `npm run dev` to start the dev server (or `npm run dev:host` to bind it for access from other devices on your network)
+4. Visit [http://localhost:5173](http://localhost:5173)
 
 The app runs against an embedded PGlite (Postgres-compatible) database by default — nothing else needs to be installed or running to get a working instance up.
+
+`npm run build` also needs the SDK's guides, which the in-app docs compile and no npm package carries: clone [serene-pub-sdk](https://github.com/SerenePub/serene-pub-sdk) **beside** this repo, so the two folders are siblings (`git clone --branch v<pinned version> https://github.com/SerenePub/serene-pub-sdk.git ../serene-pub-sdk`), or point `SERENE_PUB_SDK_DIR` at a checkout. Without it the docs compile stops on links to the guides. The dev server logs that and carries on.
+
+### Working on the SDK and the app together
+
+With `serene-pub-sdk` checked out beside this repo:
+
+1. In `serene-pub-sdk`: `npm i`, then from this repo `npm run sdk:build` to build its packages
+2. `npm run sdk:link` swaps the installed `node_modules/@serene-pub/*` for symlinks to `../serene-pub-sdk/<package>`. `package.json` is not touched, and it warns when the checkout's version differs from the pinned one (CI and releases always install the pinned version)
+3. After an SDK change, `npm run sdk:build` again, with the dev server stopped. Linked packages resolve to the SDK's built `dist/`
+4. To go back to the published copies, `npm run sdk:unlink` (it removes the links, never the checkout), then `npm install`. A plain `npm install` keeps a link while the checkout's version matches the pin, and replaces it with the published copy once they differ
+
+`SERENE_PUB_SDK_DIR` links a checkout somewhere else.
 
 ## Project Structure
 
@@ -35,7 +47,7 @@ Serene Pub is a SvelteKit app. A few starting points if you're getting oriented:
 
 ## Adding a Dependency
 
-`dependencies` is what the **built server** loads from `node_modules` at runtime, and it is exactly what the desktop bundles and the Docker image ship. adapter-node leaves those imports external and bundles everything else into `build/`. Anything only the browser uses (icons, editors, UI widgets), and every build, test or type-only tool, goes in `devDependencies`. Svelte component libraries count as browser-only: Vite compiles them into the server build. Some packages are loaded by name or path at runtime, where no import statement in `build/` shows them: the in-app component compiler's toolchain, the plugin and script sandboxes, and PGlite through drizzle. Those stay in `dependencies`, and `scripts/prune-dist.test.ts` lists them.
+`dependencies` is what the **built server** loads from `node_modules` at runtime, and it is exactly what the desktop bundles and the Docker image ship. adapter-node leaves those imports external and bundles everything else into `build/`. The `@serene-pub/*` packages are the exception: `vite.config.ts` bundles them into `build/` whether installed or linked, and they stay in `dependencies` because the component compiler loads the CLI by path at runtime. Pin each one to the same exact version, never a range: there is no lockfile, so a range drifts to the next SDK pre-release. Anything only the browser uses (icons, editors, UI widgets), and every build, test or type-only tool, goes in `devDependencies`. Svelte component libraries count as browser-only: Vite compiles them into the server build. Some packages are loaded by name or path at runtime, where no import statement in `build/` shows them: the in-app component compiler's toolchain, the plugin and script sandboxes, and PGlite through drizzle. Those stay in `dependencies`, and `scripts/prune-dist.test.ts` lists them.
 
 ## Database Changes
 
@@ -91,6 +103,19 @@ go down. After you lower a file's count, `npm run comments:ratchet` records the 
 ## Documentation
 
 If your change affects user-facing behavior, update the relevant page under `docs/` in the same PR — that's the source both the in-app Docs browser and the website docs (`npm run docs:site`) are built from. Keeping docs and code in the same PR avoids the docs drifting out of sync with what actually shipped.
+
+## Releases
+
+Every release is built by GitHub Actions from a tag; nothing is built on a developer's machine.
+
+1. **SDK first.** Tag `v<version>` in [serene-pub-sdk](https://github.com/SerenePub/serene-pub-sdk). Its `publish.yml` publishes the packages to npm (under `next` for a pre-release) and makes its GitHub release. See its `RELEASING.md`.
+2. **Pin it here.** Set every `@serene-pub/*` entry in `package.json` to that exact version, set the app's `version`, and add `docs/release-notes/<version>.md` if the release has notes.
+3. **Tag the app** `v<version>` and push the tag. Three workflows build from it and attach to one GitHub release, which whichever starts first creates as a draft:
+    - `release.yml`: the desktop zips for Windows, macOS (Intel and Apple chip) and Linux, each with its launcher, `.zip.sha256` and `SHA256SUMS`. When every desktop build has succeeded it publishes the draft. A failed target leaves it a draft.
+    - `docker.yml`: the `linux/amd64` and `linux/arm64` image on `ghcr.io`, plus a `docker-compose.yml` pinned to it.
+    - `build-android.yml`: the APK. It is signed only when the `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS` and `ANDROID_KEY_PASSWORD` secrets are set. Otherwise it is uploaded as `…-android-unsigned.apk`, which Android will not install.
+
+The release body is `docs/release-notes/<version>.md` with its links pointed at the tag, or GitHub's generated notes when there is none. A plain `vX.Y.Z` is a release. Any suffix (`-pr-N`, `-rc-N`, `-alpha`, `-beta`, `-dev`) makes a pre-release, which never becomes the repository's "Latest" release or the Docker `latest` tag, and whose launcher never updates itself (`scripts/release-meta.mjs`).
 
 ## Pull Requests
 

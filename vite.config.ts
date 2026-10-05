@@ -217,19 +217,34 @@ export default defineConfig({
 		extensions: [".mjs", ".js", ".ts", ".jsx", ".tsx", ".json", ".svelte"],
 		/**
 		 * The SDK's template checker (`@serene-pub/sdk/template-check`) parses
-		 * with `handlebars` and `liquidjs`. The SDK is a `file:` link, so a bare
-		 * import in it would resolve against the SDK's own node_modules and put
-		 * a SECOND copy of each engine in every bundle that lints a template.
-		 * Resolve both from the app, the copy the renderers already use.
+		 * with `handlebars` and `liquidjs`. When the SDK is linked to a sibling
+		 * checkout (`npm run sdk:link`), a bare import in it would resolve
+		 * against the SDK's own node_modules and put a SECOND copy of each
+		 * engine in every bundle that lints a template. Resolve both from the
+		 * app, the copy the renderers already use. With the published packages
+		 * installed this changes nothing: npm already hoists one copy.
 		 */
 		dedupe: ["handlebars", "liquidjs", "@remote-dom/core"]
 	},
+	ssr: {
+		/**
+		 * Bundle every @serene-pub package into the server build, installed or
+		 * linked alike: the build the app has always shipped, since Vite never
+		 * externalizes a linked package. Left external, an installed SDK is
+		 * loaded from node_modules at runtime instead, and Rollup then drops
+		 * the imports behind a re-exported external in a dynamically imported
+		 * module's namespace (plugins/hookCtx.ts → "hookCtxGrants is not
+		 * defined" at build analysis). component-client and controls also
+		 * publish TypeScript source, which Node will not load from node_modules.
+		 */
+		noExternal: [/^@serene-pub\//]
+	},
 	/**
-	 * The UI worker's runtime (`@serene-pub/component-client`, a `file:` link)
-	 * imports these. A linked package is served as source, so Vite only meets
-	 * them when a session first mounts a widget — it then optimises them and
-	 * force-reloads the page mid-render. Pre-bundle them at startup instead.
-	 * Dev only; a production build has no optimiser.
+	 * The UI worker's runtime (`@serene-pub/component-client`) imports these.
+	 * A linked package (`npm run sdk:link`) is served as source, so Vite only
+	 * meets them when a session first mounts a widget — it then optimises them
+	 * and force-reloads the page mid-render. Pre-bundle them at startup
+	 * instead. Dev only; a production build has no optimiser.
 	 */
 	optimizeDeps: {
 		include: ["@remote-dom/core/polyfill", "@remote-dom/core/elements"]

@@ -20,11 +20,12 @@
  * The SDK owns the vocabulary, the resolution, the caching, the fallback and —
  * critically — the rule that **loading is async and counting is sync** (see
  * `@serene-pub/sdk/tokenizers`). What it cannot own is the `import()` itself.
- * The SDK is consumed through a `file:` link to a sibling checkout, so a bare
- * specifier written inside it resolves against *that* tree, where these four
- * packages are not installed and must never be: they are ~69 MB, an author who
- * installed the SDK to write one node definition should not download a BPE merge
- * table, and the app already carries them for the legacy path.
+ * The SDK does not depend on these four packages and must never: they are
+ * ~69 MB, an author who installed the SDK to write one node definition should
+ * not download a BPE merge table, and the app already carries them for the
+ * legacy path. Linked to a sibling checkout (`npm run sdk:link`), a bare
+ * specifier written inside the SDK resolves against *that* tree, where they are
+ * not installed.
  *
  * So core registers eight loaders and passes an id. `defineTokenizer` is the
  * same seam `defineWireFormat` already is.

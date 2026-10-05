@@ -22,17 +22,17 @@ The first startup runs database migrations automatically and creates the built-i
 
 ## Image tags
 
-| Tag          | What you get                                         |
-| ------------ | ---------------------------------------------------- |
-| `latest`     | Latest **stable** or **beta** release                |
-| `1`, `1.2`   | Latest stable or beta within that major / minor line |
-| `1.2.3`      | Exact stable version                                 |
-| `1.2.3-beta` | Beta release                                         |
-| `1.2.3-rc-1` | Pre-release — release candidate                      |
-| `1.2.3-pr-5` | Pre-release build                                    |
+| Tag          | What you get                                  |
+| ------------ | --------------------------------------------- |
+| `latest`     | Latest **stable** release                     |
+| `1`, `1.2`   | Latest stable release in that major / minor line |
+| `1.2.3`      | Exact stable version                          |
+| `1.2.3-rc-1` | Pre-release — release candidate               |
+| `1.2.3-pr-5` | Pre-release build                             |
+| `1.2.3-beta` | Pre-release — beta                            |
 
-**`latest`, major, and minor aliases are updated on stable and beta releases.**  
-Release candidates (`-rc-*`) and pre-release builds (`-pr-*`) are published but never assigned to `latest`, so pinning to `latest` will not pull those builds.
+**`latest`, major, and minor aliases are updated on stable releases only.**  
+Every tag with a suffix (`-pr-*`, `-rc-*`, `-beta`, `-alpha`, `-dev`) is a pre-release: it is published under its exact version and never assigned to `latest` or an alias, so pinning to `latest` will not pull those builds.
 
 To pin to an exact version (recommended for production):
 
@@ -193,7 +193,14 @@ Simplest option — [`docker-compose.dev.yml`](docker-compose.dev.yml) builds fr
 docker compose -f docker-compose.dev.yml up -d --build
 ```
 
-Or by hand:
+The build compiles the in-app docs, which link to the SDK's guides. No npm package carries those, so put a checkout of [serene-pub-sdk](https://github.com/SerenePub/serene-pub-sdk), at the version `package.json` pins for `@serene-pub/sdk`, in the build context as `.serene-pub-sdk` first:
+
+```bash
+git clone --depth 1 --branch v$(node -p "require('./package.json').dependencies['@serene-pub/sdk']") \
+  https://github.com/SerenePub/serene-pub-sdk.git .serene-pub-sdk
+```
+
+It is read during the build and never copied into the image. Then build by hand:
 
 ```bash
 docker build -t serene-pub:local .

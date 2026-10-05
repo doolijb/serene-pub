@@ -53,9 +53,9 @@ function copyRecursive(src, dest) {
 	// existsSync follows symlinks, so a dangling one is skipped here rather
 	// than throwing further down.
 	if (!fs.existsSync(src)) return
-	// statSync, not lstatSync: npm installs a `file:` dependency as a SYMLINK
-	// to a directory (this repo has several — @serene-pub/* point at the
-	// sibling SDK checkout), and lstat reports those as not-a-directory, so
+	// statSync, not lstatSync: a linked package is a SYMLINK to a directory
+	// (`npm run sdk:link` points @serene-pub/* at the sibling SDK checkout),
+	// and lstat reports those as not-a-directory, so
 	// the copy fell through to copyFileSync and died with EISDIR. A shipped
 	// node_modules has to contain real files anyway: a symlink out of the
 	// bundle is dangling the moment the zip is extracted on another machine.
@@ -147,6 +147,25 @@ function placeFile(src, dest, executable) {
 	fs.mkdirSync(path.dirname(dest), { recursive: true })
 	fs.copyFileSync(src, dest)
 	if (executable) fs.chmodSync(dest, 0o755)
+}
+
+/**
+ * The Windows bundle's own text files — run.cmd, INSTRUCTIONS.txt and
+ * .env.example — always ship with CRLF line endings, whatever the checkout
+ * gave us. git stores them with LF, so a Linux build box and a Windows runner
+ * (core.autocrlf) would otherwise ship different bytes; cmd.exe misparses
+ * labels and multi-line blocks in an LF batch file.
+ */
+export const WINDOWS_CRLF_FILES =
+	/(\.(cmd|bat)|^INSTRUCTIONS\.txt|^\.env\.example)$/
+
+/** placeFile for a text file, rewritten to CRLF line endings. */
+function placeCrlf(src, dest) {
+	fs.mkdirSync(path.dirname(dest), { recursive: true })
+	fs.writeFileSync(
+		dest,
+		fs.readFileSync(src, "utf8").replace(/\r?\n/g, "\r\n")
+	)
 }
 
 /**
@@ -261,8 +280,10 @@ export function assembleShell({
 		// the top level because a legacy .env is looked for at the install
 		// root (preloadEnv.js, via SERENE_PUB_INSTALL_ROOT); its own text
 		// points the reader at the OS data directory, which is better still.
-		if (fs.existsSync(src))
-			placeFile(src, path.join(bundleRoot, file), false)
+		if (!fs.existsSync(src)) continue
+		if (!posix && WINDOWS_CRLF_FILES.test(file))
+			placeCrlf(src, path.join(bundleRoot, file))
+		else placeFile(src, path.join(bundleRoot, file), false)
 	}
 
 	if (platform === "linux") {
@@ -306,6 +327,13 @@ export function assembleShell({
 	for (const runFile of fs
 		.readdirSync(appAssetsDir)
 		.filter((f) => f.startsWith("run."))) {
+		if (!posix && WINDOWS_CRLF_FILES.test(runFile)) {
+			placeCrlf(
+				path.join(appAssetsDir, runFile),
+				path.join(payloadDir, runFile)
+			)
+			continue
+		}
 		placeFile(
 			path.join(appAssetsDir, runFile),
 			path.join(payloadDir, runFile),

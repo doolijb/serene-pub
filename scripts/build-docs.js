@@ -40,8 +40,16 @@ const pkg = JSON.parse(
 	fs.readFileSync(path.join(appRoot, "package.json"), "utf8")
 )
 
-/** The SDK checkout the reference pages are rendered from, beside this repo. */
-const SDK_REPO_DIR = path.resolve(appRoot, "../serene-pub-sdk")
+/**
+ * The SDK checkout the reference pages are rendered from: beside this repo, or
+ * wherever SERENE_PUB_SDK_DIR points. The published packages carry no guides,
+ * so a build with the SDK installed from npm still needs this checkout (CI
+ * clones it at the pinned version: .github/actions/sdk-docs).
+ */
+const SDK_REPO_DIR = path.resolve(
+	appRoot,
+	process.env.SERENE_PUB_SDK_DIR || "../serene-pub-sdk"
+)
 
 /**
  * The TypeDoc API reference, written by the SDK's own build (`docs:api`, which
@@ -317,9 +325,9 @@ const ASSET_BUDGET_BYTES = 6 * 1024 * 1024
 
 /**
  * The SDK checkout's current commit, for the "rendered from" line on reference
- * pages. Best-effort: the SDK resolves by `file:` link and a packaged install
- * (or a checkout with no git dir) has no commit to report, which is not a
- * reason to fail a docs build.
+ * pages. Best-effort: a copy with no git dir (CI's SDK docs content, a source
+ * archive) has no commit to report, which is not a reason to fail a docs
+ * build.
  */
 function sdkCommit() {
 	try {
@@ -483,8 +491,10 @@ export async function buildDocs({ watch = false, profile = "app" } = {}) {
 	const hasSdkGuides = fs.existsSync(SDK_GUIDES_DIR)
 	if (!hasSdkGuides) {
 		console.warn(
-			`[docs] no SDK guides at ${SDK_GUIDES_DIR} — the SDK checkout beside ` +
-				`this repo has none; compiling without them.`
+			`[docs] no SDK guides at ${SDK_GUIDES_DIR}; compiling without them. ` +
+				`App pages link to them, so expect broken-link errors: clone ` +
+				`https://github.com/SerenePub/serene-pub-sdk at v<the @serene-pub/sdk version ` +
+				`package.json pins> beside this repo, or point SERENE_PUB_SDK_DIR at a checkout.`
 		)
 	}
 

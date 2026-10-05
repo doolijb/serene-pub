@@ -1,0 +1,85 @@
+name: SDK docs content
+description: >
+    The in-app docs compile the SDK's guides, executed examples and playground,
+    which no published @serene-pub package carries. This clones
+    SerenePub/serene-pub-sdk at the exact version package.json pins, builds the
+    generated parts (best effort), copies what the docs build reads into
+    `dest`, and exports SERENE_PUB_SDK_DIR for scripts/build-docs.js. Linux
+    runners only. The app's dependencies still come from npm; nothing here is
+    linked into node_modules.
+inputs:
+    dest:
+        description: Where the content lands, absolute or relative to the workspace (default $RUNNER_TEMP/serene-pub-sdk)
+        required: false
+        default: ""
+    build:
+        description: Also build the executed examples and the playground ("true"/"false"). Guides alone are enough for the docs to compile.
+        required: false
+        default: "true"
+outputs:
+    dir:
+        description: Absolute path of the content (also exported as SERENE_PUB_SDK_DIR)
+        value: ${{ steps.place.outputs.dir }}
+    sdk_version:
+        description: The SDK version cloned
+        value: ${{ steps.clone.outputs.sdk_version }}
+runs:
+    using: composite
+    steps:
+        - name: Clone the SDK at the pinned version
+          id: clone
+          shell: bash
+          run: |
+              SDK_VERSION=$(node -p "require('./package.json').dependencies['@serene-pub/sdk'] || ''")
+              if ! [[ "$SDK_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+                echo "::error::package.json must pin @serene-pub/sdk to an exact version (found '$SDK_VERSION')"
+                exit 1
+              fi
+              SRC="$RUNNER_TEMP/serene-pub-sdk-src"
+              rm -rf "$SRC"
+              for i in 1 2 3; do
+                git clone --quiet --depth 1 --branch "v$SDK_VERSION" https://github.com/SerenePub/serene-pub-sdk.git "$SRC" && break
+                rm -rf "$SRC"
+                sleep 15
+              done
+              if [ ! -d "$SRC/guides" ]; then
+                echo "::error::could not clone SerenePub/serene-pub-sdk at v$SDK_VERSION (or it has no guides/)"
+                exit 1
+              fi
+              echo "sdk_version=$SDK_VERSION" >> "$GITHUB_OUTPUT"
+              echo "src=$SRC" >> "$GITHUB_OUTPUT"
+
+        # The same install and build the SDK's own publish.yml runs. Best effort:
+        # without them the docs still compile, minus the executed-example pages
+        # and with playground blocks left static — so a failure is a warning.
+        - name: Build the executed examples and the playground
+          if: inputs.build == 'true'
+          shell: bash
+          working-directory: ${{ steps.clone.outputs.src }}
+          run: |
+              if ( for i in 1 2 3; do npm install --no-audit --no-fund && exit 0 || sleep 15; done; exit 1 ) \
+                && node scripts/release.mjs clean && npm run build; then
+                echo "SDK built: docs/generated and playground/dist are ready"
+              else
+                echo "::warning::the SDK build failed; the docs ship without its executed examples and playground"
+              fi
+
+        - name: Place the docs content
+          id: place
+          shell: bash
+          env:
+              DEST: ${{ inputs.dest }}
+              SRC: ${{ steps.clone.outputs.src }}
+          run: |
+              DEST="${DEST:-$RUNNER_TEMP/serene-pub-sdk}"
+              case "$DEST" in /*) ;; *) DEST="$GITHUB_WORKSPACE/$DEST" ;; esac
+              rm -rf "$DEST"
+              mkdir -p "$DEST/docs" "$DEST/playground"
+              cp -R "$SRC/guides" "$DEST/guides"
+              cp "$SRC/package.json" "$DEST/package.json"
+              if [ -d "$SRC/docs/generated" ]; then cp -R "$SRC/docs/generated" "$DEST/docs/generated"; fi
+              if [ -d "$SRC/playground/dist" ]; then cp -R "$SRC/playground/dist" "$DEST/playground/dist"; fi
+              echo "SERENE_PUB_SDK_DIR=$DEST" >> "$GITHUB_ENV"
+              echo "dir=$DEST" >> "$GITHUB_OUTPUT"
+              echo "SDK docs content in $DEST:"
+              ls "$DEST" "$DEST/docs" "$DEST/playground"

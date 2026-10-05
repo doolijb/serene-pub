@@ -1,50 +1,59 @@
 name: Docker
 
+# Builds the multi-arch image for every tag and attaches docker-compose.dist.yml
+# (pinned to that image) to the tag's GitHub release — the same release
+# release.yml and build-android.yml attach to.
+#
+# Tags (scripts/release-meta.mjs — a plain vX.Y.Z is a release, ANY suffix is a
+# pre-release, as in release.yml and build-android.yml):
+#
+#   Release     (v1.2.3)          → 1.2.3, 1.2, 1, latest
+#   Pre-release (v1.2.3-pr-5)     → 1.2.3-pr-5 only
+#   Pre-release (v1.2.3-beta)     → 1.2.3-beta only
+#
+# so `latest`, `1` and `1.2` always resolve to a release image.
 on:
     push:
         tags:
+            # Matches suffixed tags too: the last * takes "0-pr-1".
             - "v*.*.*"
-            - "v*.*.*-dev"
-            - "v*.*.*-alpha"
-            - "v*.*.*-beta"
-            - "v*.*.*-pr-*"
-            - "v*.*.*-rc-*"
+
+permissions:
+    contents: read
 
 jobs:
     build-and-push:
         runs-on: ubuntu-latest
+        timeout-minutes: 240
         permissions:
-            contents: write
-            packages: write
+            contents: write # attaches docker-compose.yml to the release
+            packages: write # pushes to ghcr.io
 
         steps:
             - name: Checkout
               uses: actions/checkout@v4
 
-            # -------------------------------------------------------
-            # Determine whether this tag is a stable release.
-            # Stable = vX.Y.Z or vX.Y.Z-beta (beta is a release, not a pre-release).
-            # Only stable releases receive the `latest` tag and the
-            # short major/minor convenience aliases (e.g. "1", "1.2").
-            # -------------------------------------------------------
-            - name: Classify release
-              id: classify
+            - name: Set up Node.js
+              uses: actions/setup-node@v4
+              with:
+                  node-version: "24"
+
+            # Never interpolate ${{ github.ref_name }} directly into a run:
+            # script body (script injection via a crafted tag name) — every
+            # step reads it from env.
+            - name: Classify the tag
+              id: meta
               env:
-                  # Never interpolate ${{ github.ref_name }} directly into a
-                  # run: script body — see release.yml's identical fix for
-                  # why (script-injection via a crafted tag name).
                   REF_NAME: ${{ github.ref_name }}
-              run: |
-                  TAG="$REF_NAME"
-                  VERSION="${TAG#v}"
-                  if [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-beta)?$ ]]; then
-                    echo "stable=true" >> "$GITHUB_OUTPUT"
-                    echo "compose_tag=latest" >> "$GITHUB_OUTPUT"
-                  else
-                    echo "stable=false" >> "$GITHUB_OUTPUT"
-                    echo "compose_tag=$VERSION" >> "$GITHUB_OUTPUT"
-                  fi
-                  echo "Tag: $TAG  →  stable=$( [[ $TAG =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-beta)?$ ]] && echo true || echo false )"
+              run: node scripts/release-meta.mjs classify "$REF_NAME"
+
+            # The in-app docs compile the SDK's guides, which no npm package
+            # carries. Placed inside the build context, where the Dockerfile
+            # looks for them (.serene-pub-sdk); never copied into the image.
+            - name: SDK docs content
+              uses: ./.github/actions/sdk-docs
+              with:
+                  dest: .serene-pub-sdk
 
             - name: Set up QEMU (multi-platform support)
               uses: docker/setup-qemu-action@v3
@@ -59,31 +68,19 @@ jobs:
                   username: ${{ github.actor }}
                   password: ${{ secrets.GITHUB_TOKEN }}
 
-            # -------------------------------------------------------
-            # Tag strategy:
-            #
-            #   Stable  (v1.2.3)          → 1.2.3, 1.2, 1, latest
-            #   Stable  (v1.2.3-beta)     → 1.2.3-beta, 1.2, 1, latest
-            #   Pre-release (v1.2.3-rc-1) → 1.2.3-rc-1         only
-            #   Pre-release (v1.2.3-pr-5) → 1.2.3-pr-5         only
-            #
-            # Beta is treated as a stable release — it receives `latest`
-            # and the short major/minor aliases.
-            # The major (1) and minor (1.2) aliases are omitted for
-            # pre-releases so that "latest", "1", and "1.2" always
-            # resolve to a stable image.
-            # -------------------------------------------------------
+            # The exact version always; `latest` and the short major/minor
+            # aliases only for a release.
             - name: Generate Docker metadata
-              id: meta
+              id: docker_meta
               uses: docker/metadata-action@v5
               with:
                   images: ghcr.io/${{ github.repository }}
                   flavor: |
-                      latest=${{ steps.classify.outputs.stable }}
+                      latest=${{ steps.meta.outputs.make_latest }}
                   tags: |
                       type=semver,pattern={{version}}
-                      type=semver,pattern={{major}}.{{minor}},enable=${{ steps.classify.outputs.stable }}
-                      type=semver,pattern={{major}},enable=${{ steps.classify.outputs.stable }}
+                      type=semver,pattern={{major}}.{{minor}},enable=${{ steps.meta.outputs.make_latest }}
+                      type=semver,pattern={{major}},enable=${{ steps.meta.outputs.make_latest }}
 
             - name: Build and push image
               uses: docker/build-push-action@v6
@@ -91,29 +88,36 @@ jobs:
                   context: .
                   platforms: linux/amd64,linux/arm64
                   push: true
-                  tags: ${{ steps.meta.outputs.tags }}
-                  labels: ${{ steps.meta.outputs.labels }}
+                  tags: ${{ steps.docker_meta.outputs.tags }}
+                  labels: ${{ steps.docker_meta.outputs.labels }}
                   # Layer cache via GitHub Actions cache (speeds up repeat builds)
                   cache-from: type=gha
                   cache-to: type=gha,mode=max
 
-            - name: Publish docker-compose.dist.yml to release
+            - name: Publish docker-compose.dist.yml to the release
               env:
                   GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-                  # Both derive from the pushed tag (COMPOSE_TAG is the
-                  # classify step's parsed version, still attacker-influenced
-                  # content) — never interpolate ${{ }} expressions directly
-                  # into a run: script body, since GitHub substitutes them as
-                  # raw text before bash parses the script. Routing through
-                  # env: makes both safe, ordinary shell variable expansions.
+                  GH_REPO: ${{ github.repository }}
                   REF_NAME: ${{ github.ref_name }}
-                  COMPOSE_TAG: ${{ steps.classify.outputs.compose_tag }}
+                  VERSION: ${{ steps.meta.outputs.version }}
+                  MAKE_LATEST: ${{ steps.meta.outputs.make_latest }}
               run: |
-                  sed "s|ghcr.io/doolijb/serene-pub:latest|ghcr.io/doolijb/serene-pub:$COMPOSE_TAG|" \
-                    docker-compose.dist.yml > /tmp/docker-compose.yml
-                  # Retry a few times — release.yml may still be creating the release
+                  if [ "$MAKE_LATEST" = "true" ]; then IMAGE_TAG=latest; else IMAGE_TAG="$VERSION"; fi
+                  # The tag is attacker-influenced text headed into a sed
+                  # replacement: allow only what a version can contain.
+                  if ! [[ "$IMAGE_TAG" =~ ^[0-9A-Za-z._-]+$ ]]; then
+                    echo "::error::refusing image tag '$IMAGE_TAG'"
+                    exit 1
+                  fi
+                  IMAGE="ghcr.io/$(tr '[:upper:]' '[:lower:]' <<< "$GH_REPO")"
+                  sed "s|ghcr.io/doolijb/serene-pub:latest|$IMAGE:$IMAGE_TAG|" \
+                    docker-compose.dist.yml > "$RUNNER_TEMP/docker-compose.yml"
+                  grep -n "image:" "$RUNNER_TEMP/docker-compose.yml"
+                  bash scripts/ensure-release.sh "$REF_NAME"
                   for i in 1 2 3 4 5; do
-                    gh release upload "$REF_NAME" /tmp/docker-compose.yml --clobber && break
+                    gh release upload "$REF_NAME" "$RUNNER_TEMP/docker-compose.yml" --clobber && exit 0
                     echo "Attempt $i failed, retrying in 30s..."
                     sleep 30
                   done
+                  echo "::error::could not attach docker-compose.yml to release $REF_NAME"
+                  exit 1

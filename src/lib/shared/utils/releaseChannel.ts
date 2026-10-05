@@ -87,9 +87,11 @@ export function releaseChannelRank(type: string | null): number {
  * `beta` is on the release side, and only by exact match — `-beta-2` is not
  * `-beta`, so it too falls closed.
  *
- * Agrees with .github/workflows/release.yml, which marks `-beta` tags as
- * `is_prerelease=false` on GitHub and routes every unrecognised suffix to its
- * own fail-closed branch. There is one rule here, not two that can drift.
+ * ⚠ The release workflows disagree for `-beta`: scripts/release-meta.mjs
+ * (release.yml, docker.yml, build-android.yml) makes ANY suffix a GitHub
+ * pre-release with a `prerelease` launcher channel, matching the SDK's
+ * publish.yml (2026-10-04). Until the owner rules which side moves, do not tag
+ * a `-beta`. For every other suffix the two agree.
  *
  * Deliberately NOT built on parseVersion()/releaseChannelRank(): those only
  * understand the suffix shapes this project has actually shipped
