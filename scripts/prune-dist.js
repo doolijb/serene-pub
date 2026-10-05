@@ -17,6 +17,7 @@
 //
 // Nothing here changes behavior — only removes files nothing reads.
 
+import crypto from "crypto"
 import fs from "fs"
 import path from "path"
 
@@ -41,6 +42,42 @@ function rmDirsNamed(dir, name) {
 		const p = path.join(dir, entry.name)
 		if (entry.name === name) rm(p)
 		else rmDirsNamed(p, name)
+	}
+}
+
+/**
+ * onnxruntime-node 1.30 ships darwin/arm64's library twice —
+ * libonnxruntime.1.30.0.dylib and libonnxruntime.1.dylib, byte-identical
+ * (the symlink is flattened in the npm tarball), 44.6 MB each. Of each set of
+ * identical files in one platform/arch directory, keep the one the native
+ * binding names (it links @rpath/libonnxruntime.1.dylib) and remove the rest;
+ * when the binding names none of them, keep the shortest name.
+ */
+function dedupeOrtLibraries(archPath) {
+	if (!fs.existsSync(archPath) || !fs.lstatSync(archPath).isDirectory()) return
+	const files = fs
+		.readdirSync(archPath, { withFileTypes: true })
+		.filter((e) => e.isFile())
+		.map((e) => path.join(archPath, e.name))
+	const binding = files.find((p) => p.endsWith(".node"))
+	const bindingBytes = binding ? fs.readFileSync(binding) : null
+	const groups = new Map()
+	for (const p of files) {
+		if (p === binding) continue
+		const size = fs.statSync(p).size
+		const hash = crypto.createHash("sha256").update(fs.readFileSync(p)).digest("hex")
+		const key = `${size}:${hash}`
+		groups.set(key, [...(groups.get(key) ?? []), p])
+	}
+	for (const group of groups.values()) {
+		if (group.length < 2) continue
+		const named = bindingBytes
+			? group.filter((p) => bindingBytes.includes(Buffer.from(path.basename(p))))
+			: []
+		const keep = (named.length ? named : group).sort(
+			(a, b) => path.basename(a).length - path.basename(b).length
+		)[0]
+		for (const p of group) if (p !== keep) rm(p)
 	}
 }
 
@@ -95,6 +132,13 @@ export function pruneDist(outDir, target) {
 				name === "dxcompiler.dll" ||
 				name === "dxil.dll"
 		)
+		for (const platformDir of fs.readdirSync(ortBinRoot)) {
+			const platformPath = path.join(ortBinRoot, platformDir)
+			if (!fs.lstatSync(platformPath).isDirectory()) continue
+			for (const archDir of fs.readdirSync(platformPath)) {
+				dedupeOrtLibraries(path.join(platformPath, archDir))
+			}
+		}
 	}
 
 	// 3. onnxruntime-web is only reachable via @huggingface/transformers'

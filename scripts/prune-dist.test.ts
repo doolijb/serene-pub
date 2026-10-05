@@ -19,14 +19,17 @@ afterEach(() => {
 })
 
 /** A scratch payload: path → file contents (an object is written as JSON). */
-function payload(files: Record<string, string | object>): (p: string) => boolean {
+function payload(
+	files: Record<string, string | object>,
+	target = { name: "linux-x64", platform: "linux", arch: "x64" }
+): (p: string) => boolean {
 	const root = mkdtempSync(join(tmpdir(), "sp-prune16-"))
 	dirs.push(root)
 	for (const [p, body] of Object.entries(files)) {
 		mkdirSync(dirname(join(root, p)), { recursive: true })
 		writeFileSync(join(root, p), typeof body === "string" ? body : JSON.stringify(body))
 	}
-	pruneDist(root, { name: "linux-x64", platform: "linux", arch: "x64" })
+	pruneDist(root, target)
 	return (p) => existsSync(join(root, p))
 }
 
@@ -275,6 +278,27 @@ describe("rules 1, 3b, 3c: what a fresh CI install adds", () => {
 			`${ort}/win32`
 		])
 			expect(at(gone), gone).toBe(false)
+	})
+
+	test("onnxruntime-node 1.30's duplicate macOS library goes; the copy the binding links stays", () => {
+		const lib = "x".repeat(64)
+		const at = payload(
+			{
+				"node_modules/onnxruntime-node/package.json": pj("onnxruntime-node", { main: "./dist/index.js" }),
+				"node_modules/onnxruntime-node/dist/index.js": "x",
+				"node_modules/onnxruntime-node/bin/napi-v6/darwin/arm64/onnxruntime_binding.node":
+					"\0@rpath/libonnxruntime.1.dylib\0@loader_path\0",
+				"node_modules/onnxruntime-node/bin/napi-v6/darwin/arm64/libonnxruntime.1.30.0.dylib": lib,
+				"node_modules/onnxruntime-node/bin/napi-v6/darwin/arm64/libonnxruntime.1.dylib": lib,
+				"node_modules/onnxruntime-node/bin/napi-v6/darwin/arm64/libother.dylib": "y".repeat(64)
+			},
+			{ name: "macos-arm64", platform: "darwin", arch: "arm64" }
+		)
+		const ort = "node_modules/onnxruntime-node/bin/napi-v6/darwin/arm64"
+		expect(at(`${ort}/onnxruntime_binding.node`)).toBe(true)
+		expect(at(`${ort}/libonnxruntime.1.dylib`)).toBe(true)
+		expect(at(`${ort}/libother.dylib`)).toBe(true)
+		expect(at(`${ort}/libonnxruntime.1.30.0.dylib`)).toBe(false)
 	})
 
 	test("the docs compiler a production install drags in as cli's optional peer goes, with its orphans", () => {
