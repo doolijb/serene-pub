@@ -39,7 +39,13 @@ launcher is `CGO_ENABLED=0` on Linux/Windows (static; cross-builds from any host
 The window helper always needs cgo **on its own OS**: Linux `libgtk-3-dev libwebkit2gtk-4.1-dev`,
 Windows a MinGW-w64 gcc, macOS Xcode CLT. On a box without them pass `--no-window` (release CI
 must not). Windows resources (icon, version) come from `go tool goversioninfo` (pinned in
-`go.mod`); the `.syso` is generated and deleted per build.
+`go.mod`) for both binaries; the `.syso` is generated and deleted per build. The helper's icon
+is also its `IDI_APPLICATION`, which webview loads for the window and taskbar.
+
+On Linux the helper names itself `serene-pub` (WM_CLASS, matching the desktop entry), gives the
+window `build/client/icon-x256.png`, and points WebKit at a fontconfig file without WOFF fonts
+(`~/.cache/serene-pub/webkit-fontconfig.conf`): WebKitGTK 2.52 hangs on system WOFF fonts, such
+as Zorin OS's OpenDyslexic, and the window stays empty. See `cmd/serene-pub-window/fontconfig_linux.go`.
 
 ## Test
 

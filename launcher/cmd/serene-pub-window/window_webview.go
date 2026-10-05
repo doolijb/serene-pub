@@ -18,6 +18,7 @@ func show(a args) int {
 		fmt.Fprintln(os.Stderr, "serene-pub-window: no webview runtime")
 		return exitNoRuntime
 	}
+	preparePlatform()
 	w := webview.New(false)
 	if w == nil || nativeHandle(w) == 0 {
 		// webview_create returned NULL: the runtime is missing or unusable.
@@ -25,6 +26,7 @@ func show(a args) int {
 		return exitNoRuntime
 	}
 	defer w.Destroy()
+	decorateWindow(w.Window())
 	w.SetTitle(a.title)
 	w.SetSize(a.width, a.height, webview.HintNone)
 	w.Navigate(a.url)

@@ -45,6 +45,7 @@
 		"bundle": "node scripts/bundle-dist.js",
 		"dist": "npm run build && npm run bundle",
 		"create-executables": "node scripts/create-executables.js",
+		"android:icons": "node scripts/android-icons.js",
 		"android:prepare": "node scripts/build-android.js",
 		"android:build": "cd android && ./gradlew assembleRelease",
 		"android:build:debug": "cd android && ./gradlew assembleDebug",

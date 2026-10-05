@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Written by scripts/android-icons.js: the web app's theme-color. -->
+<resources>
+    <color name="ic_launcher_background">#1B2338</color>
+</resources>

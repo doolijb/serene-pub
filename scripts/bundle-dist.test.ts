@@ -476,6 +476,7 @@ describe("create-executables", () => {
 		)
 		expect(entry).toContain(`Icon=${real}/${LINUX_ICON_RELATIVE_PATH}\n`)
 		expect(entry).toContain(`Path=${real}\n`)
+		expect(entry).toContain("StartupWMClass=serene-pub\n")
 		expect(fs.existsSync(path.join(staticDir, "icon-x256.png"))).toBe(true)
 	})
 })

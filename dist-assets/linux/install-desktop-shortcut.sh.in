@@ -37,6 +37,9 @@ ESCAPED_DIR="$(escape_exec_value "$DIR")"
 # aside and a new one moved to the same path), and the icon then always
 # matches the installed version. build/client is where SvelteKit copies
 # static/, so this is the same file the web app serves as its icon.
+# StartupWMClass= is the window helper's WM_CLASS (programName in
+# launcher/cmd/serene-pub-window/platform_linux.go), so docks show the app's
+# window under this entry.
 cat > "$DESKTOP_FILE" <<EOF
 [Desktop Entry]
 Version=1.0
@@ -48,6 +51,7 @@ Icon=$DIR/@ICON_PATH@
 Terminal=false
 Categories=Network;Chat;
 StartupNotify=false
+StartupWMClass=serene-pub
 Path=$DIR
 EOF
 

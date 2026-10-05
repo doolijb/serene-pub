@@ -8,7 +8,7 @@
 // Produces exactly (contract §C7):
 //   linux-x64    serene-pub (CGO_ENABLED=0, static)      serene-pub-window (cgo, WebKitGTK 4.1)
 //   windows-x64  Serene Pub.exe (CGO_ENABLED=0,          serene-pub-window.exe (cgo/MinGW,
-//                -H=windowsgui, icon + version resource)  -H=windowsgui)
+//                -H=windowsgui, icon + version resource)  -H=windowsgui, icon + version resource)
 //   macos-*      serene-pub (cgo, Cocoa)                  serene-pub-window (cgo, WebKit)
 // all with -trimpath -ldflags "-s -w -X main.version/channel/target/commit".
 //
@@ -78,31 +78,39 @@ const ldX = [
 ].join(" ")
 const baseEnv = { GOOS: t.goos, GOARCH: t.goarch }
 
+// Windows: the icon + version resource, as a .syso the next `go build` of that
+// command links in. goversioninfo also writes the icon as IDI_APPLICATION
+// (32512), which is what the window helper's webview loads for its window and
+// taskbar icon. Returns the .syso path; the caller removes it.
+function windowsResource(cmd) {
+	const syso = path.join(here, "cmd", cmd, `resource_windows_${t.goarch}.syso`)
+	const [maj, min, pat] = args.version.split(/[.-]/).map((n) => parseInt(n, 10))
+	go(
+		[
+			"tool", "goversioninfo", "-64",
+			"-icon", path.join(here, "assets", "icon.ico"),
+			"-o", syso,
+			"-ver-major", String(maj), "-ver-minor", String(min), "-ver-patch", String(pat), "-ver-build", "0",
+			"-product-ver-major", String(maj), "-product-ver-minor", String(min), "-product-ver-patch", String(pat), "-product-ver-build", "0",
+			"-file-version", args.version, "-product-version", args.version,
+			path.join(here, "cmd", cmd, "versioninfo.json")
+		],
+		{} // host tool: no GOOS/GOARCH
+	)
+	return syso
+}
+
 // ---- launcher ---------------------------------------------------------------
-const syso = path.join(here, "cmd", "serene-pub", `resource_windows_${t.goarch}.syso`)
+let syso = ""
 try {
-	if (t.goos === "windows") {
-		const [maj, min, pat] = args.version.split(/[.-]/).map((n) => parseInt(n, 10))
-		go(
-			[
-				"tool", "goversioninfo", "-64",
-				"-icon", path.join(here, "assets", "icon.ico"),
-				"-o", syso,
-				"-ver-major", String(maj), "-ver-minor", String(min), "-ver-patch", String(pat), "-ver-build", "0",
-				"-product-ver-major", String(maj), "-product-ver-minor", String(min), "-product-ver-patch", String(pat), "-product-ver-build", "0",
-				"-file-version", args.version, "-product-version", args.version,
-				path.join(here, "cmd", "serene-pub", "versioninfo.json")
-			],
-			{} // host tool: no GOOS/GOARCH
-		)
-	}
+	if (t.goos === "windows") syso = windowsResource("serene-pub")
 	const ldflags = `-s -w ${ldX}${t.goos === "windows" ? " -H=windowsgui" : ""}`
 	go(["build", "-trimpath", "-ldflags", ldflags, "-o", path.join(outDir, t.launcher), "./cmd/serene-pub"], {
 		...baseEnv,
 		CGO_ENABLED: t.launcherCgo ? "1" : "0"
 	})
 } finally {
-	fs.rmSync(syso, { force: true })
+	if (syso) fs.rmSync(syso, { force: true })
 }
 
 // ---- window helper ----------------------------------------------------------
@@ -119,7 +127,13 @@ if (!args.window) {
 		}
 	}
 	const ldflags = `-s -w ${ldX}${t.goos === "windows" ? " -H=windowsgui" : ""}`
-	go(["build", "-trimpath", "-tags", "window", "-ldflags", ldflags, "-o", path.join(outDir, t.helper), "./cmd/serene-pub-window"], env)
+	let helperSyso = ""
+	try {
+		if (t.goos === "windows") helperSyso = windowsResource("serene-pub-window")
+		go(["build", "-trimpath", "-tags", "window", "-ldflags", ldflags, "-o", path.join(outDir, t.helper), "./cmd/serene-pub-window"], env)
+	} finally {
+		if (helperSyso) fs.rmSync(helperSyso, { force: true })
+	}
 }
 
 for (const f of [t.launcher, t.helper]) {
