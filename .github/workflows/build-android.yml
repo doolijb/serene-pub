@@ -39,7 +39,11 @@ jobs:
                   MAX=0; AT=""
                   for t in $(git tag -l 'v*'); do
                       [ "$t" = "$REF_NAME" ] && continue
-                      c=$(git show "$t:android/versionCode.txt" 2>/dev/null | tr -dc '0-9')
+                      # Tags from before the Android build have no versionCode.txt; skip
+                      # them here, because under `-e -o pipefail` a failing `git show`
+                      # inside the substitution ends the step (exit 128).
+                      git cat-file -e "$t:android/versionCode.txt" 2>/dev/null || continue
+                      c=$(git show "$t:android/versionCode.txt" | tr -dc '0-9')
                       if [ -n "$c" ] && [ "$c" -gt "$MAX" ]; then MAX=$c; AT=$t; fi
                   done
                   echo "versionCode $CUR; highest earlier release $MAX ($AT)"
